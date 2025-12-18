@@ -139,7 +139,7 @@ impl MultiShard {
                             .aggregate(
                                 self.route.aggregate(),
                                 &self.decoder,
-                                self.route.rewrite_plan(),
+                                self.route.aggregate_rewrite_plan(),
                             )
                             .map_err(Error::from)?;
 
@@ -176,7 +176,7 @@ impl MultiShard {
                 if self.counters.row_description == self.shards {
                     // Only send it to the client once all shards sent it,
                     // so we don't get early requests from clients.
-                    let plan = self.route.rewrite_plan();
+                    let plan = self.route.aggregate_rewrite_plan();
                     if plan.drop_columns().is_empty() {
                         forward = Some(message);
                     } else {

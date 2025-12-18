@@ -36,6 +36,7 @@ pub mod timeouts;
 pub(crate) use sticky::Sticky;
 
 /// Frontend client.
+#[derive(Debug)]
 pub struct Client {
     addr: SocketAddr,
     stream: Stream,
@@ -323,7 +324,7 @@ impl Client {
     }
 
     #[cfg(test)]
-    pub fn new_test(stream: Stream, addr: SocketAddr, params: Parameters) -> Self {
+    pub fn new_test(stream: Stream, params: Parameters) -> Self {
         use crate::config::config;
 
         let mut connect_params = Parameters::default();
@@ -332,14 +333,16 @@ impl Client {
         connect_params.merge(params);
 
         let id = BackendKeyData::new();
+        let mut prepared_statements = PreparedStatements::new();
+        prepared_statements.level = config().config.general.prepared_statements;
 
         Self {
             stream,
-            addr,
+            addr: SocketAddr::from(([127, 0, 0, 1], 1234)),
             id,
             comms: ClientComms::new(&id),
             streaming: false,
-            prepared_statements: PreparedStatements::new(),
+            prepared_statements,
             connect_params: connect_params.clone(),
             admin: false,
             transaction: None,
@@ -450,7 +453,9 @@ impl Client {
         message: Message,
     ) -> Result<(), Error> {
         let mut context = QueryEngineContext::new(self);
-        query_engine.server_message(&mut context, message).await?;
+        query_engine
+            .process_server_message(&mut context, message)
+            .await?;
         self.transaction = context.transaction();
 
         Ok(())
@@ -496,7 +501,7 @@ impl Client {
     /// This ensures we don't check out a connection from the pool until the client
     /// sent a complete request.
     async fn buffer(&mut self, state: State) -> Result<BufferEvent, Error> {
-        self.client_request.messages.clear();
+        self.client_request.clear();
 
         // Only start timer once we receive the first message.
         let mut timer = None;
@@ -507,7 +512,7 @@ impl Client {
         self.prepared_statements.level = config.prepared_statements();
         self.timeouts = Timeouts::from_config(&config.config.general);
 
-        while !self.client_request.full() {
+        while !self.client_request.is_complete() {
             let idle_timeout = self
                 .timeouts
                 .client_idle_timeout(&state, &self.client_request);

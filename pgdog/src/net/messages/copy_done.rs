@@ -1,6 +1,6 @@
 use super::{code, prelude::*};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct CopyDone;
 
 impl FromBytes for CopyDone {

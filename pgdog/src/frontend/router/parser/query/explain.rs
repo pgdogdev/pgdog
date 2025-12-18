@@ -1,11 +1,9 @@
-use crate::frontend::router::parser::cache::CachedAst;
-
 use super::*;
 
 impl QueryParser {
     pub(super) fn explain(
         &mut self,
-        cached_ast: &CachedAst,
+        cached_ast: &Ast,
         stmt: &ExplainStmt,
         context: &mut QueryParserContext,
     ) -> Result<Command, Error> {
@@ -28,7 +26,12 @@ impl QueryParser {
 
             _ => {
                 // For other statement types, route to all shards
-                Ok(Command::Query(Route::write(None)))
+                context
+                    .shards_calculator
+                    .push(ShardWithPriority::new_table(Shard::All));
+                Ok(Command::Query(Route::write(
+                    context.shards_calculator.shard(),
+                )))
             }
         };
 
@@ -49,9 +52,12 @@ mod tests {
     use crate::backend::Cluster;
     use crate::config::{self, config};
     use crate::frontend::client::Sticky;
-    use crate::frontend::{ClientRequest, PreparedStatements, RouterContext};
-    use crate::net::messages::{Bind, Parameter, Parse, Query};
-    use crate::net::Parameters;
+    use crate::frontend::router::Ast;
+    use crate::frontend::{BufferedQuery, ClientRequest, PreparedStatements, RouterContext};
+    use crate::net::{
+        messages::{Bind, Parameter, Parse, Query},
+        Parameters,
+    };
     use bytes::Bytes;
     use std::sync::Once;
 
@@ -67,14 +73,20 @@ mod tests {
     // Helper function to route a plain SQL statement and return its `Route`.
     fn route(sql: &str) -> Route {
         enable_expanded_explain();
-        let buffer = ClientRequest::from(vec![Query::new(sql).into()]);
-
         let cluster = Cluster::new_test();
         let mut stmts = PreparedStatements::default();
-        let params = Parameters::default();
 
-        let ctx = RouterContext::new(&buffer, &cluster, &mut stmts, &params, None, Sticky::new())
-            .unwrap();
+        let ast = Ast::new(
+            &BufferedQuery::Query(Query::new(sql)),
+            &cluster.sharding_schema(),
+            &mut stmts,
+        )
+        .unwrap();
+        let mut buffer = ClientRequest::from(vec![Query::new(sql).into()]);
+        buffer.ast = Some(ast);
+
+        let params = Parameters::default();
+        let ctx = RouterContext::new(&buffer, &cluster, &params, None, Sticky::new()).unwrap();
 
         match QueryParser::default().parse(ctx).unwrap().clone() {
             Command::Query(route) => route,
@@ -95,14 +107,21 @@ mod tests {
             .collect::<Vec<_>>();
 
         let bind = Bind::new_params("", &parameters);
-        let buffer: ClientRequest = vec![parse_msg.into(), bind.into()].into();
 
         let cluster = Cluster::new_test();
         let mut stmts = PreparedStatements::default();
-        let params = Parameters::default();
 
-        let ctx = RouterContext::new(&buffer, &cluster, &mut stmts, &params, None, Sticky::new())
-            .unwrap();
+        let ast = Ast::new(
+            &BufferedQuery::Prepared(Parse::new_anonymous(sql)),
+            &cluster.sharding_schema(),
+            &mut stmts,
+        )
+        .unwrap();
+        let mut buffer: ClientRequest = vec![parse_msg.into(), bind.into()].into();
+        buffer.ast = Some(ast);
+
+        let params = Parameters::default();
+        let ctx = RouterContext::new(&buffer, &cluster, &params, None, Sticky::new()).unwrap();
 
         match QueryParser::default().parse(ctx).unwrap().clone() {
             Command::Query(route) => route,

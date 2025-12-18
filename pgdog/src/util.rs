@@ -166,6 +166,9 @@ mod test {
 
     #[test]
     fn test_instance_id_format() {
+        unsafe {
+            remove_var("NODE_ID");
+        }
         let id = instance_id();
         assert_eq!(id.len(), 8);
         // All characters should be valid hex digits (0-9, a-f)

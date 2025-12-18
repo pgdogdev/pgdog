@@ -29,7 +29,10 @@ fn get_matched_value<'a>(caps: &'a regex::Captures<'a>) -> Option<&'a str> {
 ///
 /// See [`SHARD`] and [`SHARDING_KEY`] for the style of comment we expect.
 ///
-pub fn comment(query: &str, schema: &ShardingSchema) -> Result<(Shard, Option<Role>), Error> {
+pub fn comment(
+    query: &str,
+    schema: &ShardingSchema,
+) -> Result<(Option<Shard>, Option<Role>), Error> {
     let tokens = scan(query).map_err(Error::PgQuery)?;
     let mut role = None;
 
@@ -48,23 +51,25 @@ pub fn comment(query: &str, schema: &ShardingSchema) -> Result<(Shard, Option<Ro
             if let Some(cap) = SHARDING_KEY.captures(comment) {
                 if let Some(sharding_key) = get_matched_value(&cap) {
                     if let Some(schema) = schema.schemas.get(Some(sharding_key.into())) {
-                        return Ok((schema.shard().into(), role));
+                        return Ok((Some(schema.shard().into()), role));
                     }
                     let ctx = ContextBuilder::infer_from_from_and_config(sharding_key, schema)?
                         .shards(schema.shards)
                         .build()?;
-                    return Ok((ctx.apply()?, role));
+                    return Ok((Some(ctx.apply()?), role));
                 }
             }
             if let Some(cap) = SHARD.captures(comment) {
                 if let Some(shard) = cap.get(1) {
                     return Ok((
-                        shard
-                            .as_str()
-                            .parse::<usize>()
-                            .ok()
-                            .map(Shard::Direct)
-                            .unwrap_or(Shard::All),
+                        Some(
+                            shard
+                                .as_str()
+                                .parse::<usize>()
+                                .ok()
+                                .map(Shard::Direct)
+                                .unwrap_or(Shard::All),
+                        ),
                         role,
                     ));
                 }
@@ -72,7 +77,7 @@ pub fn comment(query: &str, schema: &ShardingSchema) -> Result<(Shard, Option<Ro
         }
     }
 
-    Ok((Shard::All, role))
+    Ok((None, role))
 }
 
 #[cfg(test)]
@@ -169,7 +174,7 @@ mod tests {
 
         let query = "SELECT * FROM users /* pgdog_role: replica pgdog_shard: 2 */";
         let result = comment(query, &schema).unwrap();
-        assert_eq!(result.0, Shard::Direct(2));
+        assert_eq!(result.0, Some(Shard::Direct(2)));
         assert_eq!(result.1, Some(Role::Replica));
     }
 

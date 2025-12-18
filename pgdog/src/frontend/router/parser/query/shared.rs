@@ -18,7 +18,7 @@ impl QueryParser {
         let shard = if shards.len() == 1 {
             shards.iter().next().cloned().unwrap()
         } else {
-            let mut multi = vec![];
+            let mut multi = HashSet::new();
             let mut all = false;
             for shard in shards {
                 match shard {
@@ -26,8 +26,10 @@ impl QueryParser {
                         all = true;
                         break;
                     }
-                    Shard::Direct(v) => multi.push(*v),
-                    Shard::Multi(m) => multi.extend(m),
+                    Shard::Direct(v) => {
+                        multi.insert(*v);
+                    }
+                    Shard::Multi(m) => multi.extend(m.iter()),
                 };
             }
 
@@ -41,7 +43,7 @@ impl QueryParser {
             if all || shards.is_empty() {
                 Shard::All
             } else {
-                Shard::Multi(multi)
+                Shard::Multi(multi.into_iter().collect())
             }
         };
 

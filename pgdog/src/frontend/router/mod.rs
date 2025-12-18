@@ -4,6 +4,7 @@ pub mod cli;
 pub mod context;
 pub mod copy;
 pub mod error;
+pub mod parameter_hints;
 pub mod parser;
 pub mod round_robin;
 pub mod search_path;
@@ -13,10 +14,13 @@ pub use copy::CopyRow;
 pub use error::Error;
 use lazy_static::lazy_static;
 use parser::Shard;
-pub use parser::{Command, QueryParser, Route};
+pub use parser::{Ast, Command, QueryParser, Route};
+
+use crate::frontend::router::parser::ShardWithPriority;
 
 use super::ClientRequest;
 pub use context::RouterContext;
+pub use parameter_hints::ParameterHints;
 pub use search_path::SearchPath;
 pub use sharding::{Lists, Ranges};
 
@@ -74,7 +78,8 @@ impl Router {
     /// Get current route.
     pub fn route(&self) -> &Route {
         lazy_static! {
-            static ref DEFAULT_ROUTE: Route = Route::write(Shard::All);
+            static ref DEFAULT_ROUTE: Route =
+                Route::write(ShardWithPriority::new_default_unset(Shard::All));
         }
 
         match self.command() {
@@ -87,11 +92,6 @@ impl Router {
     pub fn reset(&mut self) {
         self.query_parser = QueryParser::default();
         self.latest_command = Command::default();
-    }
-
-    /// Query parser is inside a transaction.
-    pub fn in_transaction(&self) -> bool {
-        self.query_parser.in_transaction()
     }
 
     /// Get last commmand computed by the query parser.

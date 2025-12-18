@@ -4,8 +4,6 @@ use pg_query::NodeEnum;
 
 use crate::frontend::router::parser::{ExpressionRegistry, Function};
 
-use super::Error;
-
 #[derive(Debug, Clone, PartialEq)]
 pub struct AggregateTarget {
     column: usize,
@@ -123,7 +121,7 @@ fn columns_match(group_by_names: &[&String], select_names: &[&String]) -> bool {
 
 impl Aggregate {
     /// Figure out what aggregates are present and which ones PgDog supports.
-    pub fn parse(stmt: &SelectStmt) -> Result<Self, Error> {
+    pub fn parse(stmt: &SelectStmt) -> Self {
         let mut targets = vec![];
         let mut registry = ExpressionRegistry::new();
         let group_by = stmt
@@ -198,7 +196,7 @@ impl Aggregate {
             }
         }
 
-        Ok(Self { targets, group_by })
+        Self { targets, group_by }
     }
 
     pub fn targets(&self) -> &[AggregateTarget] {
@@ -257,7 +255,7 @@ mod test {
             .unwrap();
         match query.stmt.unwrap().node.unwrap() {
             NodeEnum::SelectStmt(stmt) => {
-                let aggr = Aggregate::parse(&stmt).unwrap();
+                let aggr = Aggregate::parse(&stmt);
                 assert_eq!(
                     aggr.targets().first().unwrap().function,
                     AggregateFunction::Count
@@ -279,7 +277,7 @@ mod test {
             .unwrap();
         match query.stmt.unwrap().node.unwrap() {
             NodeEnum::SelectStmt(stmt) => {
-                let aggr = Aggregate::parse(&stmt).unwrap();
+                let aggr = Aggregate::parse(&stmt);
                 assert_eq!(aggr.targets().len(), 2);
                 let count = &aggr.targets()[0];
                 let avg = &aggr.targets()[1];
@@ -304,7 +302,7 @@ mod test {
             .unwrap();
         match query.stmt.unwrap().node.unwrap() {
             NodeEnum::SelectStmt(stmt) => {
-                let aggr = Aggregate::parse(&stmt).unwrap();
+                let aggr = Aggregate::parse(&stmt);
                 assert_eq!(aggr.targets().len(), 2);
                 let count = &aggr.targets()[0];
                 let avg = &aggr.targets()[1];
@@ -329,7 +327,7 @@ mod test {
             .unwrap();
         match query.stmt.unwrap().node.unwrap() {
             NodeEnum::SelectStmt(stmt) => {
-                let aggr = Aggregate::parse(&stmt).unwrap();
+                let aggr = Aggregate::parse(&stmt);
                 assert_eq!(aggr.targets().len(), 2);
                 let count = &aggr.targets()[0];
                 let avg = &aggr.targets()[1];
@@ -356,7 +354,7 @@ mod test {
         .unwrap();
         match query.stmt.unwrap().node.unwrap() {
             NodeEnum::SelectStmt(stmt) => {
-                let aggr = Aggregate::parse(&stmt).unwrap();
+                let aggr = Aggregate::parse(&stmt);
                 assert_eq!(aggr.targets().len(), 3);
                 assert!(matches!(
                     aggr.targets()[0].function(),
@@ -387,7 +385,7 @@ mod test {
                 .unwrap();
         match query.stmt.unwrap().node.unwrap() {
             NodeEnum::SelectStmt(stmt) => {
-                let aggr = Aggregate::parse(&stmt).unwrap();
+                let aggr = Aggregate::parse(&stmt);
                 assert_eq!(aggr.targets().len(), 3);
                 assert!(matches!(
                     aggr.targets()[0].function(),
@@ -418,7 +416,7 @@ mod test {
                 .unwrap();
         match query.stmt.unwrap().node.unwrap() {
             NodeEnum::SelectStmt(stmt) => {
-                let aggr = Aggregate::parse(&stmt).unwrap();
+                let aggr = Aggregate::parse(&stmt);
                 assert_eq!(aggr.group_by(), &[0, 1]);
                 assert_eq!(aggr.targets().len(), 1);
                 let target = &aggr.targets()[0];
@@ -440,7 +438,7 @@ mod test {
             .unwrap();
         match query.stmt.unwrap().node.unwrap() {
             NodeEnum::SelectStmt(stmt) => {
-                let aggr = Aggregate::parse(&stmt).unwrap();
+                let aggr = Aggregate::parse(&stmt);
                 assert_eq!(aggr.targets().len(), 1);
                 let target = &aggr.targets()[0];
                 assert!(matches!(target.function(), AggregateFunction::Sum));
@@ -461,7 +459,7 @@ mod test {
             .unwrap();
         match query.stmt.unwrap().node.unwrap() {
             NodeEnum::SelectStmt(stmt) => {
-                let aggr = Aggregate::parse(&stmt).unwrap();
+                let aggr = Aggregate::parse(&stmt);
                 assert_eq!(aggr.group_by(), &[0]);
                 assert_eq!(aggr.targets().len(), 1);
                 let target = &aggr.targets()[0];
@@ -485,7 +483,7 @@ mod test {
         .unwrap();
         match query.stmt.unwrap().node.unwrap() {
             NodeEnum::SelectStmt(stmt) => {
-                let aggr = Aggregate::parse(&stmt).unwrap();
+                let aggr = Aggregate::parse(&stmt);
                 assert_eq!(aggr.group_by(), &[1, 2]);
                 assert_eq!(aggr.targets().len(), 1);
                 let target = &aggr.targets()[0];
@@ -509,7 +507,7 @@ mod test {
         .unwrap();
         match query.stmt.unwrap().node.unwrap() {
             NodeEnum::SelectStmt(stmt) => {
-                let aggr = Aggregate::parse(&stmt).unwrap();
+                let aggr = Aggregate::parse(&stmt);
                 assert_eq!(aggr.group_by(), &[1]);
                 assert_eq!(aggr.targets().len(), 1);
                 let target = &aggr.targets()[0];
@@ -533,7 +531,7 @@ mod test {
         .unwrap();
         match query.stmt.unwrap().node.unwrap() {
             NodeEnum::SelectStmt(stmt) => {
-                let aggr = Aggregate::parse(&stmt).unwrap();
+                let aggr = Aggregate::parse(&stmt);
                 assert_eq!(aggr.group_by(), &[0, 1]);
                 assert_eq!(aggr.targets().len(), 1);
                 let target = &aggr.targets()[0];
@@ -555,7 +553,7 @@ mod test {
             .unwrap();
         match query.stmt.unwrap().node.unwrap() {
             NodeEnum::SelectStmt(stmt) => {
-                let aggr = Aggregate::parse(&stmt).unwrap();
+                let aggr = Aggregate::parse(&stmt);
                 let empty: Vec<usize> = vec![];
                 assert_eq!(aggr.group_by(), empty.as_slice());
                 assert_eq!(aggr.targets().len(), 1);
@@ -577,7 +575,7 @@ mod test {
         .unwrap();
         match query.stmt.unwrap().node.unwrap() {
             NodeEnum::SelectStmt(stmt) => {
-                let aggr = Aggregate::parse(&stmt).unwrap();
+                let aggr = Aggregate::parse(&stmt);
                 assert_eq!(aggr.group_by(), &[2]);
                 assert_eq!(aggr.targets().len(), 3);
                 assert!(matches!(
@@ -609,7 +607,7 @@ mod test {
                 .unwrap();
         match query.stmt.unwrap().node.unwrap() {
             NodeEnum::SelectStmt(stmt) => {
-                let aggr = Aggregate::parse(&stmt).unwrap();
+                let aggr = Aggregate::parse(&stmt);
                 assert_eq!(aggr.group_by(), &[0]);
                 assert_eq!(aggr.targets().len(), 1);
             }
@@ -629,7 +627,7 @@ mod test {
                 .unwrap();
         match query.stmt.unwrap().node.unwrap() {
             NodeEnum::SelectStmt(stmt) => {
-                let aggr = Aggregate::parse(&stmt).unwrap();
+                let aggr = Aggregate::parse(&stmt);
                 assert_eq!(aggr.group_by(), &[0]);
                 assert_eq!(aggr.targets().len(), 1);
             }
@@ -650,7 +648,7 @@ mod test {
         .unwrap();
         match query.stmt.unwrap().node.unwrap() {
             NodeEnum::SelectStmt(stmt) => {
-                let aggr = Aggregate::parse(&stmt).unwrap();
+                let aggr = Aggregate::parse(&stmt);
                 assert_eq!(aggr.group_by(), &[0]);
                 assert_eq!(aggr.targets().len(), 1);
             }

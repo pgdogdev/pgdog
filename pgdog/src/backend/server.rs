@@ -323,6 +323,10 @@ impl Server {
             HandleResult::Forward => [Some(message), None],
         };
 
+        for message in queue.iter().flatten() {
+            trace!("{:#?} >>> [{}]", message, self.addr());
+        }
+
         for message in queue.into_iter().flatten() {
             match self.stream().send(message).await {
                 Ok(sent) => self.stats.send(sent),
@@ -454,6 +458,8 @@ impl Server {
             _ => (),
         }
 
+        trace!("{:#?} <<< [{}]", message, self.addr());
+
         Ok(message)
     }
 
@@ -584,7 +590,7 @@ impl Server {
     }
 
     pub fn copy_mode(&self) -> bool {
-        self.prepared_statements.copy_mode()
+        self.prepared_statements.is_copy_mode()
     }
 
     /// Server is still inside a transaction.
@@ -1753,7 +1759,6 @@ pub mod test {
         let mut server = test_server().await;
         let mut params = Parameters::default();
         params.insert("application_name", "test_sync_params");
-        println!("server state: {}", server.stats().state);
         let changed = server
             .link_client(&BackendKeyData::new(), &params, None)
             .await

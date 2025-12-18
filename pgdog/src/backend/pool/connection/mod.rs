@@ -293,7 +293,7 @@ impl Connection {
         router: &mut Router,
         streaming: bool,
     ) -> Result<(), Error> {
-        if client_request.copy() && !streaming {
+        if client_request.is_copy() && !streaming {
             let rows = router
                 .copy_data(client_request)
                 .map_err(|e| Error::Router(e.to_string()))?;
@@ -386,7 +386,7 @@ impl Connection {
     }
 
     /// Get connected servers addresses.
-    pub(crate) fn addr(&mut self) -> Result<Vec<&Address>, Error> {
+    pub(crate) fn addr(&self) -> Result<Vec<&Address>, Error> {
         Ok(match self.binding {
             Binding::Direct(Some(ref server)) => vec![server.addr()],
             Binding::MultiShard(ref servers, _) => servers.iter().map(|s| s.addr()).collect(),
@@ -399,7 +399,7 @@ impl Connection {
     /// Get cluster if any.
     #[inline]
     pub(crate) fn cluster(&self) -> Result<&Cluster, Error> {
-        self.cluster.as_ref().ok_or(Error::NotConnected)
+        self.cluster.as_ref().ok_or(Error::ClusterNotConnected)
     }
 
     /// Pooler is in session mode.

@@ -23,7 +23,10 @@ use crate::{
             two_pc::{TwoPcGuard, TwoPcTransaction},
             TwoPcPhase,
         },
-        router::{parser::Shard, Route},
+        router::{
+            parser::{Shard, ShardWithPriority},
+            Route,
+        },
     },
 };
 
@@ -195,7 +198,10 @@ impl Manager {
         };
 
         connection
-            .connect(&Request::default(), &Route::write(Shard::All))
+            .connect(
+                &Request::default(),
+                &Route::write(ShardWithPriority::new_override_transaction(Shard::All)),
+            )
             .await?;
         connection.two_pc(&transaction.to_string(), phase).await?;
         connection.disconnect();

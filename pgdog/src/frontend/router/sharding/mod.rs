@@ -129,11 +129,11 @@ pub(crate) fn shard_binary(
     match data_type {
         DataType::Bigint => i64::decode(bytes, Format::Binary)
             .ok()
-            .map(|i| Shard::direct(bigint(i) as usize % shards))
+            .map(|i| Shard::new_direct(bigint(i) as usize % shards))
             .unwrap_or(Shard::All),
         DataType::Uuid => Uuid::decode(bytes, Format::Binary)
             .ok()
-            .map(|u| Shard::direct(uuid(u) as usize % shards))
+            .map(|u| Shard::new_direct(uuid(u) as usize % shards))
             .unwrap_or(Shard::All),
         DataType::Vector => Vector::decode(bytes, Format::Binary)
             .ok()

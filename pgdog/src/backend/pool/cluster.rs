@@ -75,6 +75,8 @@ pub struct ShardingSchema {
     pub tables: ShardedTables,
     /// Scemas.
     pub schemas: ShardedSchemas,
+    /// Rewrite config.
+    pub rewrite: Rewrite,
 }
 
 impl ShardingSchema {
@@ -413,6 +415,16 @@ impl Cluster {
         !(self.shards().len() == 1 && (self.read_only() || self.write_only()))
     }
 
+    /// Use the query parser.
+    pub fn use_query_parser(&self) -> bool {
+        self.multi_tenant().is_some()
+            || self.query_parser_enabled()
+            || self.router_needed()
+            || self.dry_run()
+            || self.prepared_statements() == &PreparedStatements::Full
+            || self.pub_sub_enabled()
+    }
+
     /// Multi-tenant config.
     pub fn multi_tenant(&self) -> &Option<MultiTenant> {
         &self.multi_tenant
@@ -431,6 +443,7 @@ impl Cluster {
             shards: self.shards.len(),
             tables: self.sharded_tables.clone(),
             schemas: self.sharded_schemas.clone(),
+            rewrite: self.rewrite.clone(),
         }
     }
 
@@ -526,11 +539,12 @@ impl Cluster {
 mod test {
     use std::{sync::Arc, time::Duration};
 
-    use pgdog_config::OmnishardedTable;
+    use pgdog_config::{OmnishardedTable, ShardedSchema};
 
     use crate::{
         backend::{
             pool::{Address, Config, PoolConfig, ShardConfig},
+            replication::ShardedSchemas,
             Shard, ShardedTables,
         },
         config::{
@@ -597,6 +611,20 @@ mod test {
                         },
                     ],
                 ),
+                sharded_schemas: ShardedSchemas::new(vec![
+                    ShardedSchema {
+                        database: "pgdog".into(),
+                        name: Some("shard_0".into()),
+                        shard: 0,
+                        ..Default::default()
+                    },
+                    ShardedSchema {
+                        database: "pgdog".into(),
+                        name: Some("shard_1".into()),
+                        shard: 1,
+                        ..Default::default()
+                    },
+                ]),
                 shards,
                 identifier,
                 prepared_statements: config.config.general.prepared_statements,

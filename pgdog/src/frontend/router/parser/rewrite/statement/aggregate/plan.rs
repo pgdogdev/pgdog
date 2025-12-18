@@ -1,10 +1,26 @@
+/// Type of aggregate function added to the result set.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HelperKind {
+    /// COUNT(*) or COUNT(name)
     Count,
+    /// SUM(column)
     Sum,
+    /// SUM(POWER(column, 2))
     SumSquares,
 }
 
+impl HelperKind {
+    /// Suffix for the aggregate function.
+    pub fn alias_suffix(&self) -> &'static str {
+        match self {
+            HelperKind::Count => "count",
+            HelperKind::Sum => "sum",
+            HelperKind::SumSquares => "sumsq",
+        }
+    }
+}
+
+/// Context on the aggregate function column added to the result set.
 #[derive(Debug, Clone, PartialEq)]
 pub struct HelperMapping {
     pub target_column: usize,
@@ -17,13 +33,14 @@ pub struct HelperMapping {
 
 /// Plan describing how the proxy rewrites a query and its results.
 #[derive(Debug, Clone, Default, PartialEq)]
-pub struct RewritePlan {
+pub struct AggregateRewritePlan {
     /// Column indexes (0-based) to drop from the row description/results after execution.
     drop_columns: Vec<usize>,
     helpers: Vec<HelperMapping>,
 }
 
-impl RewritePlan {
+impl AggregateRewritePlan {
+    /// Create new no-op aggregate rewrite plan.
     pub fn new() -> Self {
         Self {
             drop_columns: Vec::new(),
@@ -31,6 +48,7 @@ impl RewritePlan {
         }
     }
 
+    /// Is this plan a no-op? Doesn't do anything.
     pub fn is_noop(&self) -> bool {
         self.drop_columns.is_empty() && self.helpers.is_empty()
     }
@@ -56,18 +74,13 @@ impl RewritePlan {
 
 #[derive(Debug, Default, Clone)]
 pub struct RewriteOutput {
-    pub sql: String,
-    pub plan: RewritePlan,
+    pub plan: AggregateRewritePlan,
 }
 
 impl RewriteOutput {
-    pub fn new(sql: String, plan: RewritePlan) -> Self {
-        Self { sql, plan }
+    pub fn new(plan: AggregateRewritePlan) -> Self {
+        Self { plan }
     }
-}
-
-pub trait QueryRewriter {
-    fn rewrite(&self, sql: &str, route: &crate::frontend::router::Route) -> RewriteOutput;
 }
 
 #[cfg(test)]
@@ -76,7 +89,7 @@ mod tests {
 
     #[test]
     fn rewrite_plan_noop() {
-        let plan = RewritePlan::new();
+        let plan = AggregateRewritePlan::new();
         assert!(plan.is_noop());
         assert!(plan.drop_columns().is_empty());
         assert!(plan.helpers().is_empty());
@@ -84,7 +97,7 @@ mod tests {
 
     #[test]
     fn rewrite_plan_drop_columns() {
-        let mut plan = RewritePlan::new();
+        let mut plan = AggregateRewritePlan::new();
         plan.add_drop_column(1);
         plan.add_drop_column(4);
         assert_eq!(plan.drop_columns(), &[1, 4]);
@@ -92,7 +105,7 @@ mod tests {
 
     #[test]
     fn rewrite_plan_helpers() {
-        let mut plan = RewritePlan::new();
+        let mut plan = AggregateRewritePlan::new();
         plan.add_helper(HelperMapping {
             target_column: 0,
             helper_column: 1,
@@ -115,6 +128,5 @@ mod tests {
     fn rewrite_output_defaults() {
         let output = RewriteOutput::default();
         assert!(output.plan.is_noop());
-        assert!(output.sql.is_empty());
     }
 }

@@ -1,7 +1,6 @@
 use bytes::Bytes;
 
 use crate::{
-    frontend::router::parser::RewritePlan,
     net::messages::{Parse, RowDescription},
     stats::memory::MemoryUsage,
 };
@@ -15,13 +14,13 @@ fn global_name(counter: usize) -> String {
     format!("__pgdog_{}", counter)
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Statement {
     parse: Parse,
+    rewrite: Option<Parse>,
     row_description: Option<RowDescription>,
     #[allow(dead_code)]
     version: usize,
-    rewrite_plan: Option<RewritePlan>,
     cache_key: CacheKey,
     evict_on_close: bool,
 }
@@ -57,7 +56,7 @@ impl Statement {
 /// with different data types, we can't re-use it and
 /// need to plan a new one.
 ///
-#[derive(Debug, Clone, PartialEq, Hash, Eq)]
+#[derive(Debug, Clone, PartialEq, Hash, Eq, Default)]
 pub struct CacheKey {
     pub query: Bytes,
     pub data_types: Bytes,
@@ -171,11 +170,8 @@ impl GlobalCache {
                 name.clone(),
                 Statement {
                     parse,
-                    row_description: None,
-                    version: 0,
-                    rewrite_plan: None,
                     cache_key,
-                    evict_on_close: false,
+                    ..Default::default()
                 },
             );
 
@@ -210,15 +206,20 @@ impl GlobalCache {
             name.clone(),
             Statement {
                 parse,
-                row_description: None,
                 version: self.versions,
-                rewrite_plan: None,
                 cache_key: key,
-                evict_on_close: false,
+                ..Default::default()
             },
         );
 
         name
+    }
+
+    /// Rewrite prepared statement in the global cache.
+    pub fn rewrite(&mut self, parse: &Parse) {
+        if let Some(stmt) = self.names.get_mut(parse.name()) {
+            stmt.rewrite = Some(parse.clone());
+        }
     }
 
     /// Client sent a Describe for a prepared statement and received a RowDescription.
@@ -231,31 +232,7 @@ impl GlobalCache {
         }
     }
 
-    pub fn update_and_set_rewrite_plan(
-        &mut self,
-        name: &str,
-        sql: &str,
-        plan: RewritePlan,
-    ) -> bool {
-        if let Some(statement) = self.names.get_mut(name) {
-            statement.parse.set_query(sql);
-            if !plan.is_noop() {
-                statement.evict_on_close = !plan.helpers().is_empty();
-                statement.rewrite_plan = Some(plan);
-            } else {
-                statement.evict_on_close = false;
-                statement.rewrite_plan = None;
-            }
-            true
-        } else {
-            false
-        }
-    }
-
-    pub fn rewrite_plan(&self, name: &str) -> Option<RewritePlan> {
-        self.names.get(name).and_then(|s| s.rewrite_plan.clone())
-    }
-
+    /// Clear the global cache.
     pub fn reset(&mut self) {
         self.statements.clear();
         self.names.clear();
@@ -278,6 +255,25 @@ impl GlobalCache {
     /// or to inspect the original query.
     pub fn parse(&self, name: &str) -> Option<Parse> {
         self.names.get(name).map(|p| p.parse.clone())
+    }
+
+    /// Get the rewritten Parse statement.
+    ///
+    /// Used for preparing this statement on a server connection.
+    ///
+    pub fn rewritten_parse(&self, name: &str) -> Option<Parse> {
+        self.names
+            .get(name)
+            .map(|p| p.rewrite.clone().unwrap_or(p.parse.clone()))
+    }
+
+    /// Returns true if this prepared statement has been
+    /// rewritten by the rewrite engine.
+    pub fn is_rewritten(&self, name: &str) -> bool {
+        self.names
+            .get(name)
+            .map(|p| p.rewrite.is_some())
+            .unwrap_or_default()
     }
 
     /// Get the RowDescription message for the prepared statement.
@@ -423,34 +419,6 @@ mod test {
         assert_eq!(cache.close_unused(20), 1);
         assert_eq!(cache.close_unused(19), 0);
         assert_eq!(cache.len(), 20);
-    }
-
-    #[test]
-    fn test_update_query_reuses_cache_key() {
-        let mut cache = GlobalCache::default();
-        let parse = Parse::named("__sqlx_1", "SELECT 1");
-        let (is_new, name) = cache.insert(&parse);
-        assert!(is_new);
-
-        assert!(cache.update_and_set_rewrite_plan(
-            &name,
-            "SELECT 1 ORDER BY 1",
-            RewritePlan::default()
-        ));
-
-        let key = cache
-            .statements()
-            .keys()
-            .next()
-            .expect("statement key missing");
-        assert_eq!(key.query().unwrap(), "SELECT 1");
-        assert_eq!(cache.query(&name).unwrap(), "SELECT 1 ORDER BY 1");
-
-        let parse_again = Parse::named("__sqlx_2", "SELECT 1");
-        let (is_new_again, reused_name) = cache.insert(&parse_again);
-        assert!(!is_new_again);
-        assert_eq!(reused_name, name);
-        assert_eq!(cache.len(), 1);
     }
 
     #[test]

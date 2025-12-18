@@ -204,3 +204,108 @@ pub fn load_test_replicas() {
     set(config).unwrap();
     init().unwrap();
 }
+
+#[cfg(test)]
+pub fn load_test_sharded() {
+    use pgdog_config::ShardedSchema;
+
+    use crate::backend::databases::init;
+
+    let mut config = ConfigAndUsers::default();
+    config.config.general.min_pool_size = 0;
+    config.config.databases = vec![
+        Database {
+            name: "pgdog".into(),
+            host: "127.0.0.1".into(),
+            port: 5432,
+            role: Role::Primary,
+            database_name: Some("shard_0".into()),
+            shard: 0,
+            ..Default::default()
+        },
+        Database {
+            name: "pgdog".into(),
+            host: "127.0.0.1".into(),
+            port: 5432,
+            role: Role::Replica,
+            read_only: Some(true),
+            database_name: Some("shard_0".into()),
+            shard: 0,
+            ..Default::default()
+        },
+        Database {
+            name: "pgdog".into(),
+            host: "127.0.0.1".into(),
+            port: 5432,
+            role: Role::Primary,
+            database_name: Some("shard_1".into()),
+            shard: 1,
+            ..Default::default()
+        },
+        Database {
+            name: "pgdog".into(),
+            host: "127.0.0.1".into(),
+            port: 5432,
+            role: Role::Replica,
+            read_only: Some(true),
+            database_name: Some("shard_1".into()),
+            shard: 1,
+            ..Default::default()
+        },
+    ];
+    config.config.sharded_tables = vec![
+        ShardedTable {
+            database: "pgdog".into(),
+            name: Some("sharded".into()),
+            column: "id".into(),
+            ..Default::default()
+        },
+        ShardedTable {
+            database: "pgdog".into(),
+            name: Some("sharded_varchar".into()),
+            column: "id_varchar".into(),
+            data_type: DataType::Varchar,
+            ..Default::default()
+        },
+        ShardedTable {
+            database: "pgdog".into(),
+            name: Some("sharded_uuid".into()),
+            column: "id_uuid".into(),
+            data_type: DataType::Uuid,
+            ..Default::default()
+        },
+    ];
+    config.config.sharded_schemas = vec![
+        ShardedSchema {
+            database: "pgdog".into(),
+            name: Some("acustomer".into()),
+            shard: 0,
+            ..Default::default()
+        },
+        ShardedSchema {
+            database: "pgdog".into(),
+            name: Some("bcustomer".into()),
+            shard: 1,
+            ..Default::default()
+        },
+        ShardedSchema {
+            database: "pgdog".into(),
+            name: Some("all".into()),
+            all: true,
+            ..Default::default()
+        },
+    ];
+    config.config.rewrite.enabled = true;
+    config.config.rewrite.split_inserts = RewriteMode::Rewrite;
+    config.config.rewrite.shard_key = RewriteMode::Rewrite;
+    config.config.general.load_balancing_strategy = LoadBalancingStrategy::RoundRobin;
+    config.users.users = vec![User {
+        name: "pgdog".into(),
+        database: "pgdog".into(),
+        password: Some("pgdog".into()),
+        ..Default::default()
+    }];
+
+    set(config).unwrap();
+    init().unwrap();
+}

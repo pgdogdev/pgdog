@@ -4,7 +4,10 @@ use crate::{
         pool::{Connection, Request},
     },
     config,
-    frontend::router::{parser::Shard, Route},
+    frontend::router::{
+        parser::{Shard, ShardWithPriority},
+        Route,
+    },
     logger,
     net::Protocol,
 };
@@ -20,9 +23,12 @@ async fn test_cleanup_transaction_phase_one() {
     let transaction = two_pc.transaction();
 
     let mut conn = Connection::new(cluster.user(), cluster.name(), false, &None).unwrap();
-    conn.connect(&Request::default(), &Route::write(Shard::All))
-        .await
-        .unwrap();
+    conn.connect(
+        &Request::default(),
+        &Route::write(ShardWithPriority::new_default_unset(Shard::All)),
+    )
+    .await
+    .unwrap();
 
     conn.execute("BEGIN").await.unwrap();
     conn.execute("CREATE TABLE test_cleanup_transaction_phase_one(id BIGINT)")
@@ -53,9 +59,12 @@ async fn test_cleanup_transaction_phase_one() {
     let transactions = Manager::get().transactions();
     assert!(transactions.is_empty());
 
-    conn.connect(&Request::default(), &Route::write(Shard::All))
-        .await
-        .unwrap();
+    conn.connect(
+        &Request::default(),
+        &Route::write(ShardWithPriority::new_default_unset(Shard::All)),
+    )
+    .await
+    .unwrap();
 
     let two_pc = conn
         .execute("SELECT * FROM pg_prepared_xacts")
@@ -84,9 +93,12 @@ async fn test_cleanup_transaction_phase_two() {
     let transaction = two_pc.transaction();
 
     let mut conn = Connection::new(cluster.user(), cluster.name(), false, &None).unwrap();
-    conn.connect(&Request::default(), &Route::write(Shard::All))
-        .await
-        .unwrap();
+    conn.connect(
+        &Request::default(),
+        &Route::write(ShardWithPriority::new_default_unset(Shard::All)),
+    )
+    .await
+    .unwrap();
 
     conn.execute("BEGIN").await.unwrap();
     conn.execute("CREATE TABLE test_cleanup_transaction_phase_two(id BIGINT)")
@@ -122,9 +134,12 @@ async fn test_cleanup_transaction_phase_two() {
     let transactions = Manager::get().transactions();
     assert!(transactions.is_empty());
 
-    conn.connect(&Request::default(), &Route::write(Shard::All))
-        .await
-        .unwrap();
+    conn.connect(
+        &Request::default(),
+        &Route::write(ShardWithPriority::new_default_unset(Shard::All)),
+    )
+    .await
+    .unwrap();
 
     let two_pc = conn
         .execute("SELECT * FROM pg_prepared_xacts")
