@@ -29,7 +29,7 @@ impl QueryParser {
                     Shard::Direct(v) => {
                         multi.insert(*v);
                     }
-                    Shard::Multi(m) => multi.extend(m.into_iter()),
+                    Shard::Multi(m) => multi.extend(m.iter()),
                 };
             }
 
