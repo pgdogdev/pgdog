@@ -595,7 +595,9 @@ fn test_transaction() {
         cluster.clone()
     );
     match route {
-        Command::Set { name, value, local } => {
+        Command::Set {
+            name, value, local, ..
+        } => {
             assert_eq!(name, "application_name");
             assert_eq!(value.as_str().unwrap(), "test");
             assert!(!cluster.read_only());

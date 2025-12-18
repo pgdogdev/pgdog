@@ -128,11 +128,7 @@ impl QueryParser {
             }
         }
 
-        debug!(
-            "query router decision: {:#?} (shard: {:#?})",
-            command,
-            context.shards_calculator.peek(),
-        );
+        debug!("query router decision: {:#?}", command);
 
         self.attach_explain(&mut command);
 

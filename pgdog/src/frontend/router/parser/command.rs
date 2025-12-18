@@ -27,6 +27,7 @@ pub enum Command {
         name: String,
         value: ParameterValue,
         local: bool,
+        route: Route,
     },
     PreparedStatement(Prepare),
     InternalField {
@@ -61,6 +62,7 @@ impl Command {
         match self {
             Self::Query(route) => route,
             Self::ShardKeyRewrite(plan) => plan.route(),
+            Self::Set { route, .. } => route,
             _ => &DEFAULT_ROUTE,
         }
     }
