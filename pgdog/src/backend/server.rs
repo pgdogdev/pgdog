@@ -2450,4 +2450,38 @@ pub mod test {
             "state should be Error after detecting desync"
         )
     }
+
+    #[tokio::test]
+    async fn test_reset_clears_client_params() {
+        let mut server = test_server().await;
+        let mut params = Parameters::default();
+        params.insert("application_name", "test_reset");
+
+        // Sync params to server
+        let changed = server
+            .link_client(&BackendKeyData::new(), &params, None)
+            .await
+            .unwrap();
+        assert_eq!(changed, 1);
+
+        // Same params should not need re-sync
+        let changed = server
+            .link_client(&BackendKeyData::new(), &params, None)
+            .await
+            .unwrap();
+        assert_eq!(changed, 0);
+
+        // Execute RESET ALL which clears client_params
+        server.execute("RESET ALL").await.unwrap();
+
+        // Now link_client should need to re-sync because client_params was cleared
+        let changed = server
+            .link_client(&BackendKeyData::new(), &params, None)
+            .await
+            .unwrap();
+        assert!(
+            changed > 0,
+            "expected re-sync after RESET ALL cleared client_params"
+        );
+    }
 }
