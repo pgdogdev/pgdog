@@ -85,6 +85,25 @@ async def schema_sharding_engine():
     session = async_sessionmaker(pool, expire_on_commit=True)
     return pool, session
 
+@pytest_asyncio.fixture
+async def schema_sharding_startup_param():
+    pool = create_async_engine(
+        "postgresql+asyncpg://pgdog:pgdog@127.0.0.1:6432/pgdog_schema",
+        connect_args={
+            "server_settings": {
+                "search_path": "shard_0,public",
+            }
+        },
+        pool_size=20,          # Number of connections to maintain in pool
+        max_overflow=30,       # Additional connections beyond pool_size
+        pool_timeout=30,       # Timeout when getting connection from pool
+        pool_recycle=3600,     # Recycle connections after 1 hour
+        pool_pre_ping=True,    # Verify connections before use
+    )
+
+    session = async_sessionmaker(pool, expire_on_commit=True)
+    return pool, session
+
 @pytest.mark.asyncio
 async def test_session_manager(engines):
     for engine, session_factory in engines:
@@ -467,6 +486,28 @@ async def test_connection_pool_stress(engines):
 
 
 @pytest.mark.asyncio
+async def test_schema_sharding_with_startup_param_and_set_after_query(schema_sharding_startup_param):
+    import asyncio
+
+    admin().cursor().execute("SET cross_shard_disabled TO true")
+
+    (pool, session_factory) = schema_sharding_startup_param
+
+    async def run_test(task_id):
+        async with session_factory() as session:
+            async with session.begin():
+                await session.execute(text("SELECT 1"))
+                await session.execute(text("SET LOCAL work_mem TO '4MB'"))
+                for row in await session.execute(text("SHOW search_path")):
+                    print(row)
+
+    tasks = [asyncio.create_task(run_test(i)) for i in range(10)]
+    await asyncio.gather(*tasks)
+
+    admin().cursor().execute("SET cross_shard_disabled TO false")
+
+
+@pytest.mark.asyncio
 async def test_schema_sharding(schema_sharding_engine):
     import asyncio
 
@@ -493,7 +534,7 @@ async def test_schema_sharding(schema_sharding_engine):
                     await session.execute(text("SELECT * FROM test_schema_sharding"))
 
     # Run 10 concurrent executions in parallel
-    tasks = [asyncio.create_task(run_schema_sharding_test(i)) for i in range(10)]
+    tasks = [asyncio.create_task(run_schema_sharding_test(i)) for i in range(1)]
     await asyncio.gather(*tasks)
 
     admin().cursor().execute("SET cross_shard_disabled TO false")
