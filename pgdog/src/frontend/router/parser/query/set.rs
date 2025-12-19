@@ -13,15 +13,18 @@ impl QueryParser {
         stmt: &VariableSetStmt,
         context: &QueryParserContext,
     ) -> Result<Command, Error> {
+        let transaction_state = stmt.name.starts_with("TRANSACTION");
         let value = Self::parse_set_value(stmt)?;
 
         if let Some(value) = value {
-            return Ok(Command::Set {
-                name: stmt.name.to_string(),
-                value,
-                local: stmt.is_local,
-                route: Route::write(context.shards_calculator.shard()),
-            });
+            if !transaction_state {
+                return Ok(Command::Set {
+                    name: stmt.name.to_string(),
+                    value,
+                    local: stmt.is_local,
+                    route: Route::write(context.shards_calculator.shard()),
+                });
+            }
         }
 
         Ok(Command::Query(
