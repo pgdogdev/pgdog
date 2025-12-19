@@ -210,7 +210,7 @@ impl QueryEngine {
                 }
 
                 if context.params.commit() {
-                    self.comms.update_params(&context.params);
+                    self.comms.update_params(context.params);
                 }
             }
             Command::RollbackTransaction { extended } => {
