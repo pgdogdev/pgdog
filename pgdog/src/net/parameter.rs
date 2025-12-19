@@ -247,15 +247,21 @@ impl Parameters {
     }
 
     /// Commit params we saved during the transaction.
-    pub fn commit(&mut self) {
+    pub fn commit(&mut self) -> bool {
         debug!(
             "saved {} in-transaction params",
             self.transaction_params.len()
         );
+        let changed = !self.transaction_params.is_empty();
+
         self.params
             .extend(std::mem::take(&mut self.transaction_params));
         self.transaction_local_params.clear();
-        self.hash = Self::compute_hash(&self.params);
+
+        if changed {
+            self.hash = Self::compute_hash(&self.params);
+        }
+        changed
     }
 
     /// Remove any params we saved during the transaction.
@@ -535,7 +541,7 @@ mod test {
         params.insert_transaction("search_path", "transaction", false);
         params.insert_transaction("timezone", "local_tz", true);
 
-        params.commit();
+        assert!(params.commit());
 
         // Transaction param should be committed to regular params
         assert_eq!(

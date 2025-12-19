@@ -209,7 +209,9 @@ impl QueryEngine {
                     self.end_not_connected(context, false, *extended).await?
                 }
 
-                context.params.commit();
+                if context.params.commit() {
+                    self.comms.update_params(context.params);
+                }
             }
             Command::RollbackTransaction { extended } => {
                 if self.backend.connected() || *extended {
@@ -242,14 +244,8 @@ impl QueryEngine {
             Command::Set {
                 name, value, local, ..
             } => {
-                // FIXME: parameters set in between statements inside a transaction won't
-                // be recorded in the client parameters.
-                if self.backend.connected() {
-                    self.execute(context).await?;
-                } else {
-                    self.set(context, name.clone(), value.clone(), *local)
-                        .await?;
-                }
+                self.set(context, name.clone(), value.clone(), *local)
+                    .await?;
             }
             Command::Copy(_) => self.execute(context).await?,
             Command::ShardKeyRewrite(plan) => {
