@@ -242,14 +242,8 @@ impl QueryEngine {
             Command::Set {
                 name, value, local, ..
             } => {
-                // FIXME: parameters set in between statements inside a transaction won't
-                // be recorded in the client parameters.
-                if self.backend.connected() {
-                    self.execute(context).await?;
-                } else {
-                    self.set(context, name.clone(), value.clone(), *local)
-                        .await?;
-                }
+                self.set(context, name.clone(), value.clone(), *local)
+                    .await?;
             }
             Command::Copy(_) => self.execute(context).await?,
             Command::ShardKeyRewrite(plan) => {

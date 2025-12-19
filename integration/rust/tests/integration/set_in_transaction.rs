@@ -37,6 +37,10 @@ async fn run_set_in_transaction_reset_after_commit() {
         new_timeout
     );
 
+    conn.execute("SET statement_timeout TO '1234s'")
+        .await
+        .unwrap();
+
     conn.execute("COMMIT").await.unwrap();
 
     // Verify lock_timeout is preserved after commit
@@ -51,6 +55,15 @@ async fn run_set_in_transaction_reset_after_commit() {
     assert_eq!(
         timeout_after_commit, new_timeout,
         "lock_timeout should be preserved after commit"
+    );
+
+    let statement_timeout: String = sqlx::query_scalar("SHOW statement_timeout")
+        .fetch_one(&mut *conn)
+        .await
+        .unwrap();
+    assert_eq!(
+        statement_timeout, "1234s",
+        "statement_timeout should be captured after query inside transaction",
     );
 }
 
