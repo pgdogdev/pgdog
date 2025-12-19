@@ -1,4 +1,4 @@
-use std::fmt::Debug;
+use std::{fmt::Debug, ops::Deref};
 
 use bytes::{BufMut, Bytes, BytesMut};
 use tokio::{
@@ -7,10 +7,10 @@ use tokio::{
 };
 
 use crate::{
-    backend::databases::shutdown,
-    config::{load_test_replicas, load_test_sharded},
+    backend::databases::{reload_from_existing, shutdown},
+    config::{config, load_test_replicas, load_test_sharded, set},
     frontend::{client::query_engine::QueryEngine, Client},
-    net::{Message, Parameters, Protocol, Stream},
+    net::{ErrorResponse, Message, Parameters, Protocol, Stream},
 };
 
 /// Try to convert a Message to the specified type.
@@ -49,7 +49,10 @@ pub struct TestClient {
 impl TestClient {
     /// Create new test client after the login phase
     /// is complete.
-    pub async fn new(params: Parameters) -> Self {
+    ///
+    /// Config needs to be loaded.
+    ///
+    async fn new(params: Parameters) -> Self {
         let addr = "127.0.0.1:0".to_string();
         let conn_addr = addr.clone();
         let stream = TcpListener::bind(&conn_addr).await.unwrap();
@@ -73,30 +76,45 @@ impl TestClient {
         }
     }
 
-    pub async fn new_sharded(params: Parameters) -> Self {
+    /// New sharded client with parameters.
+    pub(crate) async fn new_sharded(params: Parameters) -> Self {
         load_test_sharded();
         Self::new(params).await
     }
 
-    pub async fn new_replicas(params: Parameters) -> Self {
+    /// New client with replicas but not sharded.
+    #[allow(dead_code)]
+    pub(crate) async fn new_replicas(params: Parameters) -> Self {
         load_test_replicas();
         Self::new(params).await
     }
 
+    /// New client with cross-shard-queries disabled.
+    pub(crate) async fn new_cross_shard_disabled(params: Parameters) -> Self {
+        load_test_sharded();
+
+        let mut config = config().deref().clone();
+        config.config.general.cross_shard_disabled = true;
+        set(config).unwrap();
+        reload_from_existing().unwrap();
+
+        Self::new(params).await
+    }
+
     /// Send message to client.
-    pub async fn send(&mut self, message: impl Protocol) {
+    pub(crate) async fn send(&mut self, message: impl Protocol) {
         let message = message.to_bytes().expect("message to convert to bytes");
         self.conn.write_all(&message).await.expect("write_all");
         self.conn.flush().await.expect("flush");
     }
 
-    pub async fn send_simple(&mut self, message: impl Protocol) {
+    pub(crate) async fn send_simple(&mut self, message: impl Protocol) {
         self.send(message).await;
         self.process().await;
     }
 
     /// Read a message received from the servers.
-    pub async fn read(&mut self) -> Message {
+    pub(crate) async fn read(&mut self) -> Message {
         let code = self.conn.read_u8().await.expect("code");
         let len = self.conn.read_i32().await.expect("len");
         let mut rest = vec![0u8; len as usize - 4];
@@ -111,17 +129,19 @@ impl TestClient {
     }
 
     /// Inspect engine state.
-    pub fn engine(&mut self) -> &mut QueryEngine {
+    #[allow(dead_code)]
+    pub(crate) fn engine(&mut self) -> &mut QueryEngine {
         &mut self.engine
     }
 
     /// Inspect client state.
-    pub fn client(&mut self) -> &mut Client {
+    pub(crate) fn client(&mut self) -> &mut Client {
         &mut self.client
     }
 
     /// Process a request.
-    pub async fn process(&mut self) {
+    pub(crate) async fn process(&mut self) {
+        self.engine.set_test_mode(false);
         self.client
             .buffer(self.engine.stats().state)
             .await
@@ -130,6 +150,27 @@ impl TestClient {
             .client_messages(&mut self.engine)
             .await
             .expect("engine");
+        self.engine.set_test_mode(true);
+    }
+
+    /// Read all messages until an expected last message.
+    pub(crate) async fn read_until(&mut self, code: char) -> Result<Vec<Message>, ErrorResponse> {
+        let mut result = vec![];
+        loop {
+            let message = self.read().await;
+            result.push(message.clone());
+
+            if message.code() == code {
+                break;
+            }
+
+            if message.code() == 'E' && code != 'E' {
+                let error = ErrorResponse::try_from(message).unwrap();
+                return Err(error);
+            }
+        }
+
+        Ok(result)
     }
 }
 
