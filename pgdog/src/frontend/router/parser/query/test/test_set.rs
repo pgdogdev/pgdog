@@ -17,3 +17,23 @@ fn test_set_comment() {
         command,
     );
 }
+
+#[test]
+fn test_set_transaction_level() {
+    let mut test = QueryParserTest::new();
+
+    for query in [
+        "SET TRANSACTION SNAPSHOT '00000003-0000001B-1'",
+        "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ",
+        "set transaction isolation level repeatable read",
+        "set transaction snapshot '00000003-0000001B-1'",
+        "SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL SERIALIZABLE",
+    ] {
+        let command = test.execute(vec![Query::new(query).into()]);
+        assert!(
+            matches!(command.clone(), Command::Query(_)),
+            "{:#?}",
+            command
+        );
+    }
+}
