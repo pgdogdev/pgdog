@@ -209,7 +209,9 @@ impl QueryEngine {
                     self.end_not_connected(context, false, *extended).await?
                 }
 
-                context.params.commit();
+                if context.params.commit() {
+                    self.comms.update_params(&context.params);
+                }
             }
             Command::RollbackTransaction { extended } => {
                 if self.backend.connected() || *extended {

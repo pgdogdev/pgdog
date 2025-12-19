@@ -37,9 +37,20 @@ async fn run_set_in_transaction_reset_after_commit() {
         new_timeout
     );
 
+    conn.execute("SELECT 1").await.unwrap();
+
     conn.execute("SET statement_timeout TO '1234s'")
         .await
         .unwrap();
+
+    let statement_timeout: String = sqlx::query_scalar("SHOW statement_timeout")
+        .fetch_one(&mut *conn)
+        .await
+        .unwrap();
+    assert_eq!(
+        statement_timeout, "1234s",
+        "statement_timeout should be 1234s inside transaction",
+    );
 
     conn.execute("COMMIT").await.unwrap();
 
@@ -69,12 +80,6 @@ async fn run_set_in_transaction_reset_after_commit() {
 
 #[tokio::test]
 async fn test_set_in_transaction_reset_after_commit() {
-    let admin = admin_sqlx().await;
-    admin
-        .execute("SET cross_shard_disabled TO true")
-        .await
-        .unwrap();
-
     let mut handles = Vec::new();
     for _ in 0..10 {
         handles.push(tokio::spawn(run_set_in_transaction_reset_after_commit()));
@@ -82,11 +87,6 @@ async fn test_set_in_transaction_reset_after_commit() {
     for handle in handles {
         handle.await.unwrap();
     }
-
-    admin
-        .execute("SET cross_shard_disabled TO false")
-        .await
-        .unwrap();
 }
 
 async fn run_set_in_transaction_reset_after_rollback() {

@@ -19,7 +19,11 @@ impl QueryEngine {
             self.comms.update_params(context.params);
         }
 
-        self.fake_command_response(context, "SET").await?;
+        if self.backend.connected() {
+            self.execute(context).await?;
+        } else {
+            self.fake_command_response(context, "SET").await?;
+        }
 
         Ok(())
     }

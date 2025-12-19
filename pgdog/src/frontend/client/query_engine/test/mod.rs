@@ -12,6 +12,7 @@ mod rewrite_extended;
 mod rewrite_insert_split;
 mod rewrite_simple_prepared;
 mod set;
+mod set_schema_sharding;
 
 pub(super) fn test_client() -> Client {
     load_test();
