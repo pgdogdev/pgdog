@@ -12,12 +12,14 @@ pub mod insert;
 pub mod plan;
 pub mod simple_prepared;
 pub mod unique_id;
+pub mod update;
 pub mod visitor;
 
 pub use error::Error;
 pub use insert::InsertSplit;
 pub use plan::RewritePlan;
 pub use simple_prepared::SimplePreparedResult;
+pub use update::*;
 
 /// Statement rewrite engine context.
 #[derive(Debug)]

@@ -110,6 +110,14 @@ impl Ast {
         })
     }
 
+    /// Create new AST from a parse result.
+    pub fn from_parse_result(parse_result: ParseResult) -> Self {
+        Self {
+            cached: true,
+            inner: Arc::new(AstInner::new(parse_result)),
+        }
+    }
+
     /// Get the reference to the AST.
     pub fn parse_result(&self) -> &ParseResult {
         &self.ast
