@@ -5,7 +5,7 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("{0}")]
-    Parse(#[from] ParseIntError),
+    ParseInt(String),
 
     #[error("{0}")]
     Size(#[from] TryFromSliceError),

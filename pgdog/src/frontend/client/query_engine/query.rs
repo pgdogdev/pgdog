@@ -77,6 +77,12 @@ impl QueryEngine {
                     self.process_server_message(context, message).await?;
                 }
             }
+
+            Some(RewriteResult::ShardingKeyUpdate(sharding_key_update)) => {
+                multi_step::UpdateMulti::new(self, sharding_key_update)
+                    .execute(context)
+                    .await?;
+            }
         }
 
         Ok(())

@@ -1,5 +1,6 @@
 //! Bind (F) message.
 use crate::net::c_string_buf_len;
+use pg_query::protobuf::Param;
 use uuid::Uuid;
 
 use super::code;
@@ -115,6 +116,10 @@ impl<'a> ParameterWithFormat<'a> {
 
     pub fn is_null(&self) -> bool {
         self.parameter.len < 0
+    }
+
+    pub fn parameter(&self) -> &Parameter {
+        &self.parameter
     }
 }
 

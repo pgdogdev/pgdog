@@ -73,6 +73,7 @@ impl QueryEngine {
         )?;
         match self.router.query(router_context) {
             Ok(command) => {
+                context.client_request.route = Some(command.route().clone());
                 trace!(
                     "routing {:#?} to {:#?}",
                     context.client_request.messages,

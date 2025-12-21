@@ -173,15 +173,18 @@ impl QueryEngine {
         self.pending_explain = None;
 
         let command = self.router.command();
-        let mut route = command.route().clone();
 
-        if let Some(trace) = route.take_explain() {
+        if let Some(trace) = context
+            .client_request
+            .route
+            .as_mut()
+            .ok_or(Error::NoRoute)?
+            .take_explain()
+        {
             if config().config.general.expanded_explain {
                 self.pending_explain = Some(ExplainResponseState::new(trace));
             }
         }
-
-        context.client_request.route = Some(route);
 
         match command {
             Command::InternalField { name, value } => {

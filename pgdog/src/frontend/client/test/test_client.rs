@@ -1,6 +1,7 @@
 use std::{fmt::Debug, ops::Deref};
 
 use bytes::{BufMut, Bytes, BytesMut};
+use pgdog_config::RewriteMode;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
@@ -9,7 +10,10 @@ use tokio::{
 use crate::{
     backend::databases::{reload_from_existing, shutdown},
     config::{config, load_test_replicas, load_test_sharded, set},
-    frontend::{client::query_engine::QueryEngine, Client},
+    frontend::{
+        client::query_engine::{QueryEngine, QueryEngineContext},
+        Client,
+    },
     net::{ErrorResponse, Message, Parameters, Protocol, Stream},
 };
 
@@ -41,9 +45,9 @@ macro_rules! expect_message {
 /// Test client.
 #[derive(Debug)]
 pub struct TestClient {
-    client: Client,
-    engine: QueryEngine,
-    conn: TcpStream,
+    pub(crate) client: Client,
+    pub(crate) engine: QueryEngine,
+    pub(crate) conn: TcpStream,
 }
 
 impl TestClient {
@@ -101,6 +105,21 @@ impl TestClient {
         Self::new(params).await
     }
 
+    /// Create client that will rewrite all queries.
+    pub(crate) async fn new_rewrites(params: Parameters) -> Self {
+        load_test_sharded();
+
+        let mut config = config().deref().clone();
+        config.config.rewrite.enabled = true;
+        config.config.rewrite.shard_key = RewriteMode::Rewrite;
+        config.config.rewrite.split_inserts = RewriteMode::Rewrite;
+
+        set(config).unwrap();
+        reload_from_existing().unwrap();
+
+        Self::new(params).await
+    }
+
     /// Send message to client.
     pub(crate) async fn send(&mut self, message: impl Protocol) {
         let message = message.to_bytes().expect("message to convert to bytes");
@@ -129,7 +148,6 @@ impl TestClient {
     }
 
     /// Inspect engine state.
-    #[allow(dead_code)]
     pub(crate) fn engine(&mut self) -> &mut QueryEngine {
         &mut self.engine
     }
@@ -137,6 +155,11 @@ impl TestClient {
     /// Inspect client state.
     pub(crate) fn client(&mut self) -> &mut Client {
         &mut self.client
+    }
+
+    /// Get query engine context.
+    pub(crate) fn context(&mut self) -> QueryEngineContext<'_> {
+        QueryEngineContext::new(self.client())
     }
 
     /// Process a request.

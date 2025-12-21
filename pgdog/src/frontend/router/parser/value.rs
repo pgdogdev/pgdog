@@ -17,7 +17,6 @@ pub enum Value<'a> {
     Null,
     Placeholder(i32),
     Vector(Vector),
-    Function(&'a str),
 }
 
 impl Value<'_> {
@@ -28,6 +27,11 @@ impl Value<'_> {
             Self::Vector(vector) => Some(vector),
             _ => None,
         }
+    }
+
+    /// Return true if the value is NULL.
+    pub(crate) fn is_null(&self) -> bool {
+        matches!(self, Self::Null)
     }
 }
 
@@ -54,8 +58,12 @@ impl<'a> From<&'a AConst> for Value<'a> {
             }
             Some(Val::Boolval(b)) => Value::Boolean(b.boolval),
             Some(Val::Ival(i)) => Value::Integer(i.ival as i64),
-            Some(Val::Fval(Float { fval })) => Value::Float(fval.as_str()),
-            _ => Value::Null,
+            Some(Val::Fval(Float { fval })) => match fval.parse::<i64>() {
+                Ok(i) => Value::Integer(i), // Integers over 2.2B and under -2.2B are sent as "floats"
+                Err(_) => Value::Float(fval.as_str()),
+            },
+            Some(Val::Bsval(bsval)) => Value::String(bsval.bsval.as_str()),
+            None => Value::Null,
         }
     }
 }
@@ -75,16 +83,6 @@ impl<'a> TryFrom<&'a Option<NodeEnum>> for Value<'a> {
         match value {
             Some(NodeEnum::AConst(a_const)) => Ok(a_const.into()),
             Some(NodeEnum::ParamRef(param_ref)) => Ok(Value::Placeholder(param_ref.number)),
-            Some(NodeEnum::FuncCall(func)) => {
-                if let Some(Node {
-                    node: Some(NodeEnum::String(sval)),
-                }) = func.funcname.first()
-                {
-                    Ok(Value::Function(&sval.sval))
-                } else {
-                    Ok(Value::Null)
-                }
-            }
             Some(NodeEnum::TypeCast(cast)) => {
                 if let Some(ref arg) = cast.arg {
                     Value::try_from(&arg.node)
@@ -92,7 +90,8 @@ impl<'a> TryFrom<&'a Option<NodeEnum>> for Value<'a> {
                     Ok(Value::Null)
                 }
             }
-            _ => Ok(Value::Null),
+
+            _ => Err(()),
         }
     }
 }

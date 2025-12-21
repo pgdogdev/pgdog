@@ -17,9 +17,9 @@ pub mod visitor;
 
 pub use error::Error;
 pub use insert::InsertSplit;
-pub use plan::RewritePlan;
+pub(crate) use plan::RewritePlan;
 pub use simple_prepared::SimplePreparedResult;
-pub use update::*;
+pub(crate) use update::*;
 
 /// Statement rewrite engine context.
 #[derive(Debug)]
@@ -103,17 +103,15 @@ impl<'a> StatementRewrite<'a> {
                 None => Ok(None),
             }
         })?;
-        // }
 
-        // if self.schema.rewrite.enabled {
         self.rewrite_aggregates(&mut plan)?;
-        // }
 
         if self.rewritten {
             plan.stmt = Some(self.stmt.deparse()?);
         }
 
         self.split_insert(&mut plan)?;
+        self.sharding_key_update(&mut plan)?;
 
         Ok(plan)
     }

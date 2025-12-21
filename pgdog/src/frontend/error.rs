@@ -62,6 +62,9 @@ pub enum Error {
 
     #[error("multi-tuple insert requires multi-shard binding")]
     MultiShardRequired,
+
+    #[error("sharding key updates are forbidden")]
+    ShardingKeyUpdateForbidden,
 }
 
 impl Error {

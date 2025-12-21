@@ -1,15 +1,25 @@
 use thiserror::Error;
 
-use crate::unique_id;
-
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("unique_id generation failed: {0}")]
-    UniqueId(#[from] unique_id::Error),
+    UniqueId(#[from] crate::unique_id::Error),
 
     #[error("pg_query: {0}")]
     PgQuery(#[from] pg_query::Error),
 
     #[error("cache: {0}")]
     Cache(String),
+
+    #[error("sharding key update can only be a value assignment, e.g. id = $1")]
+    UnsupportedShardingKeyUpdate,
+
+    #[error("net: {0}")]
+    Net(#[from] crate::net::Error),
+
+    #[error("missing parameter: ${0}")]
+    MissingParameter(u16),
+
+    #[error("empty query")]
+    EmptyQuery,
 }
