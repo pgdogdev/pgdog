@@ -167,10 +167,13 @@ async fn test_row_same_shard() {
     client.engine.execute(&mut context).await.unwrap();
 
     let cmd = client.read().await;
-    let rfq = client.read().await;
 
-    expect_message!(cmd, CommandComplete);
-    expect_message!(rfq, ReadyForQuery);
+    assert_eq!(
+        CommandComplete::try_from(cmd).unwrap().command(),
+        "UPDATE 1"
+    );
+
+    expect_message!(client.read().await, ReadyForQuery);
 
     client.send_simple(Query::new("ROLLBACK")).await;
     assert!(

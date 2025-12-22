@@ -1,15 +1,3 @@
-use std::{collections::HashMap, string::String as StdString};
-
-use crate::{
-    config::{RewriteMode, ShardedTable},
-    frontend::router::{
-        parser::where_clause::TablesSource,
-        sharding::{ContextBuilder, Value as ShardingValue},
-    },
-};
-use pg_query::protobuf::ColumnRef;
-
-use super::shared::ConvergeAlgorithm;
 use super::*;
 
 impl QueryParser {
