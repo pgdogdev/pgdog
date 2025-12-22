@@ -57,7 +57,7 @@ pub enum Error {
     #[error("rewrite: {0}")]
     Rewrite(#[from] crate::frontend::router::parser::rewrite::statement::Error),
 
-    #[error("couldn't determine route for statement")]
+    #[error("query has no route")]
     NoRoute,
 
     #[error("multi-tuple insert requires multi-shard binding")]

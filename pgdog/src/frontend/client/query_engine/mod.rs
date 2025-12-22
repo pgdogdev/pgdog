@@ -176,10 +176,10 @@ impl QueryEngine {
 
         if let Some(trace) = context
             .client_request
-            .route
+            .route // Admin commands don't have a route.
             .as_mut()
-            .ok_or(Error::NoRoute)?
-            .take_explain()
+            .map(|route| route.take_explain())
+            .flatten()
         {
             if config().config.general.expanded_explain {
                 self.pending_explain = Some(ExplainResponseState::new(trace));

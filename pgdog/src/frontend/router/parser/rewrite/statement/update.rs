@@ -260,6 +260,8 @@ impl Insert {
 }
 
 impl<'a> StatementRewrite<'a> {
+    /// Create a plan for shardking key updates, if we suspect there is one
+    /// in the query.
     pub(super) fn sharding_key_update(&mut self, plan: &mut RewritePlan) -> Result<(), Error> {
         if self.schema.shards == 1 || self.schema.rewrite.shard_key == RewriteMode::Ignore {
             return Ok(());
