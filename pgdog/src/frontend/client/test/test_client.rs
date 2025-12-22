@@ -20,6 +20,7 @@ use crate::{
 #[macro_export]
 macro_rules! expect_message {
     ($message:expr, $ty:ty) => {{
+        use crate::net::Protocol;
         let message: crate::net::Message = $message;
         match <$ty as TryFrom<crate::net::Message>>::try_from(message.clone()) {
             Ok(val) => val,

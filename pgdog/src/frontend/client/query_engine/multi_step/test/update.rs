@@ -1,4 +1,7 @@
+use rand::{thread_rng, Rng};
+
 use crate::{
+    expect_message,
     frontend::{
         client::{
             query_engine::{multi_step::UpdateMulti, QueryEngineContext},
@@ -6,7 +9,10 @@ use crate::{
         },
         ClientRequest,
     },
-    net::{bind::Parameter, Bind, Execute, Parameters, Parse, Query, Sync},
+    net::{
+        bind::Parameter, Bind, CommandComplete, Execute, Parameters, Parse, Query, ReadyForQuery,
+        Sync,
+    },
 };
 
 use super::super::super::Error;
@@ -115,23 +121,30 @@ async fn test_row_same_shard() {
     crate::logger();
     let mut client = TestClient::new_rewrites(Parameters::default()).await;
 
+    let id = thread_rng().gen::<i64>();
+
     client
-        .send_simple(Query::new(
-            "INSERT INTO sharded (id, value) VALUES (123456, 'test value')",
-        ))
+        .send_simple(Query::new(format!(
+            "INSERT INTO sharded (id, value) VALUES ({id}, 'test value')",
+            id = id
+        )))
         .await;
+    client.read_until('Z').await.unwrap();
 
     // Start a transaction.
     client.send_simple(Query::new("BEGIN")).await;
+    client.read_until('Z').await.unwrap();
 
     assert!(
         client.client.in_transaction(),
         "client should be in transaction"
     );
 
-    client.client.client_request = ClientRequest::from(vec![Query::new(
-        "UPDATE sharded SET id = 123457 WHERE value = 'test value'",
-    )
+    client.client.client_request = ClientRequest::from(vec![Query::new(format!(
+        "UPDATE sharded SET id = {} WHERE value = 'test value' AND id = {}",
+        id + 1,
+        id
+    ))
     .into()]);
 
     let mut context = QueryEngineContext::new(&mut client.client);
@@ -153,9 +166,17 @@ async fn test_row_same_shard() {
     client.engine.route_query(&mut context).await.unwrap();
     client.engine.execute(&mut context).await.unwrap();
 
+    let cmd = client.read().await;
+    let rfq = client.read().await;
+
+    expect_message!(cmd, CommandComplete);
+    expect_message!(rfq, ReadyForQuery);
+
     client.send_simple(Query::new("ROLLBACK")).await;
     assert!(
         !client.client.in_transaction(),
         "client should not be in transaction"
     );
+
+    client.read_until('Z').await.unwrap();
 }

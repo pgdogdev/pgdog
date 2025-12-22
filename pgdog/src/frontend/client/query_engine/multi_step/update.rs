@@ -103,7 +103,12 @@ impl<'a> UpdateMulti<'a> {
             }
 
             self.delete_row(context).await?;
-            self.execute_internal(context, &mut request).await
+            self.execute_internal(context, &mut request).await?;
+            self.engine
+                .fake_command_response(context, "UPDATE 1")
+                .await?;
+
+            Ok(())
         }
     }
 

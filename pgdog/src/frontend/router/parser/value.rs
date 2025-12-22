@@ -76,10 +76,16 @@ impl<'a> From<&'a AConst> for Value<'a> {
             }
             Some(Val::Boolval(b)) => Value::Boolean(b.boolval),
             Some(Val::Ival(i)) => Value::Integer(i.ival as i64),
-            Some(Val::Fval(Float { fval })) => match fval.parse::<i64>() {
-                Ok(i) => Value::Integer(i), // Integers over 2.2B and under -2.2B are sent as "floats"
-                Err(_) => Value::Float(fval.as_str()),
-            },
+            Some(Val::Fval(Float { fval })) => {
+                if fval.contains(".") {
+                    Value::Float(fval.as_str())
+                } else {
+                    match fval.parse::<i64>() {
+                        Ok(i) => Value::Integer(i), // Integers over 2.2B and under -2.2B are sent as "floats"
+                        Err(_) => Value::Float(fval.as_str()),
+                    }
+                }
+            }
             Some(Val::Bsval(bsval)) => Value::String(bsval.bsval.as_str()),
             None => Value::Null,
         }
