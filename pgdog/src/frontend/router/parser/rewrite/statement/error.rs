@@ -22,4 +22,7 @@ pub enum Error {
 
     #[error("empty query")]
     EmptyQuery,
+
+    #[error("missing column: ${0}")]
+    MissingColumn(usize),
 }

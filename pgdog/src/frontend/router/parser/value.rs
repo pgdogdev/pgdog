@@ -1,5 +1,7 @@
 //! Value extracted from a query.
 
+use std::fmt::Display;
+
 use pg_query::{
     protobuf::{a_const::Val, *},
     NodeEnum,
@@ -19,6 +21,27 @@ pub enum Value<'a> {
     Vector(Vector),
 }
 
+impl Display for Value<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::String(s) => write!(f, "'{}'", s.replace("'", "''")),
+            Self::Integer(i) => write!(f, "{}", i),
+            Self::Float(s) => write!(f, "{}", s),
+            Self::Null => write!(f, "NULL"),
+            Self::Boolean(b) => write!(f, "{}", if *b { "true" } else { "false" }),
+            Self::Vector(v) => write!(
+                f,
+                "{}",
+                v.iter()
+                    .map(|v| v.to_string())
+                    .collect::<Vec<_>>()
+                    .join(",")
+            ),
+            Self::Placeholder(p) => write!(f, "${}", p),
+        }
+    }
+}
+
 impl Value<'_> {
     /// Get vector if it's a vector.
     #[cfg(test)]
@@ -27,11 +50,6 @@ impl Value<'_> {
             Self::Vector(vector) => Some(vector),
             _ => None,
         }
-    }
-
-    /// Return true if the value is NULL.
-    pub(crate) fn is_null(&self) -> bool {
-        matches!(self, Self::Null)
     }
 }
 

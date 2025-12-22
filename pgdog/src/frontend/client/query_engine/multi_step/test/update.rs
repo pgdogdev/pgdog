@@ -109,3 +109,53 @@ async fn test_update_check_extended() {
     .await
     .unwrap();
 }
+
+#[tokio::test]
+async fn test_row_same_shard() {
+    crate::logger();
+    let mut client = TestClient::new_rewrites(Parameters::default()).await;
+
+    client
+        .send_simple(Query::new(
+            "INSERT INTO sharded (id, value) VALUES (123456, 'test value')",
+        ))
+        .await;
+
+    // Start a transaction.
+    client.send_simple(Query::new("BEGIN")).await;
+
+    assert!(
+        client.client.in_transaction(),
+        "client should be in transaction"
+    );
+
+    client.client.client_request = ClientRequest::from(vec![Query::new(
+        "UPDATE sharded SET id = 123457 WHERE value = 'test value'",
+    )
+    .into()]);
+
+    let mut context = QueryEngineContext::new(&mut client.client);
+
+    client.engine.parse_and_rewrite(&mut context).await.unwrap();
+
+    assert!(
+        context
+            .client_request
+            .ast
+            .as_ref()
+            .expect("ast to exist")
+            .rewrite_plan
+            .sharding_key_update
+            .is_some(),
+        "sharding key update should exist on the request"
+    );
+
+    client.engine.route_query(&mut context).await.unwrap();
+    client.engine.execute(&mut context).await.unwrap();
+
+    client.send_simple(Query::new("ROLLBACK")).await;
+    assert!(
+        !client.client.in_transaction(),
+        "client should not be in transaction"
+    );
+}

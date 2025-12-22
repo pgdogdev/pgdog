@@ -3,7 +3,7 @@ use thiserror::Error;
 use crate::net::ErrorResponse;
 
 #[derive(Debug, Error)]
-pub(crate) enum Error {
+pub enum Error {
     #[error("{0}")]
     Update(#[from] UpdateError),
 
@@ -27,7 +27,7 @@ pub(crate) enum Error {
 }
 
 #[derive(Debug, Error)]
-pub(crate) enum UpdateError {
+pub enum UpdateError {
     #[error("sharding key updates are forbidden")]
     Disabled,
 
@@ -36,9 +36,6 @@ pub(crate) enum UpdateError {
 
     #[error("intermediate query has no route")]
     NoRoute,
-
-    #[error("no rows matched update filter")]
-    NoRows,
 
     #[error("more than one row ({0}) matched update filter")]
     TooManyRows(usize),

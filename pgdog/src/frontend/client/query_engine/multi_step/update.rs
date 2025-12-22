@@ -37,34 +37,37 @@ impl<'a> UpdateMulti<'a> {
         let mut check = self.rewrite.check.build_request(&context.client_request)?;
         self.route(&mut check, context)?;
 
+        // The new row is on the same shard as the old row
+        // and we know this from the statement itself, e.g.
+        //
+        // UPDATE my_table SET shard_key = $1 WHERE shard_key = $2
+        //
+        // This is very likely if the number of shards is low or
+        // you're using an ORM that puts all record columns
+        // into the SET clause.
+        //
         if self.is_same_shard(context)? {
             // Serve original request as-is.
-            self.engine
-                .backend
-                .handle_client_request(
-                    &context.client_request,
-                    &mut self.engine.router,
-                    self.engine.streaming,
-                )
-                .await?;
+            self.execute_original(context).await?;
 
-            while self.engine.backend.has_more_messages() {
-                let message = self.engine.read_server_message(context).await?;
-                self.engine.process_server_message(context, message).await?;
-            }
-
-            return Ok(());
-        }
-
-        if self.engine.backend.cluster()?.rewrite().shard_key == RewriteMode::Error {
-            self.engine
-                .error_response(context, ErrorResponse::from_err(&UpdateError::Disabled))
-                .await?;
             return Ok(());
         }
 
         if !self.engine.backend.is_multishard() {
             return Err(UpdateError::TransactionRequired.into());
+        }
+
+        // Fetch the old row from whatever shard it is on.
+        let row = self.fetch_row(context).await?;
+
+        if let Some(row) = row {
+            self.insert_row(context, row).await?;
+        } else {
+            // This happens, but the UPDATE's WHERE clause
+            // doesn't match any rows, so this whole thing is a no-op.
+            self.engine
+                .fake_command_response(context, "UPDATE 0")
+                .await?;
         }
 
         Ok(())
@@ -82,7 +85,26 @@ impl<'a> UpdateMulti<'a> {
         )?;
         self.route(&mut request, context)?;
 
-        self.execute_internal(context, &mut request).await
+        let original_shard = context.client_request.route().shard();
+        let new_shard = request.route().shard();
+
+        // The new row maps to the same shard as the old row.
+        // We don't need to do the multi-step UPDATE anymore.
+        // Forward the original request as-is.
+        if original_shard.is_direct() && new_shard == original_shard {
+            self.execute_original(context).await
+        } else {
+            // Check if we are allowed to do this operation by the config.
+            if self.engine.backend.cluster()?.rewrite().shard_key == RewriteMode::Error {
+                self.engine
+                    .error_response(context, ErrorResponse::from_err(&UpdateError::Disabled))
+                    .await?;
+                return Ok(());
+            }
+
+            self.delete_row(context).await?;
+            self.execute_internal(context, &mut request).await
+        }
     }
 
     async fn execute_internal(
@@ -101,6 +123,28 @@ impl<'a> UpdateMulti<'a> {
             if message.code() == 'E' {
                 return Err(Error::Execution(ErrorResponse::try_from(message)?));
             }
+        }
+
+        Ok(())
+    }
+
+    async fn execute_original(
+        &mut self,
+        context: &mut QueryEngineContext<'_>,
+    ) -> Result<(), Error> {
+        // Serve original request as-is.
+        self.engine
+            .backend
+            .handle_client_request(
+                &context.client_request,
+                &mut self.engine.router,
+                self.engine.streaming,
+            )
+            .await?;
+
+        while self.engine.backend.has_more_messages() {
+            let message = self.engine.read_server_message(context).await?;
+            self.engine.process_server_message(context, message).await?;
         }
 
         Ok(())

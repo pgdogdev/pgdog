@@ -110,10 +110,10 @@ pub(crate) struct Inner {
 /// Partially built INSERT statement.
 #[derive(Debug, Clone)]
 pub(crate) struct Insert {
-    pub(crate) table: Option<RangeVar>,
+    pub(super) table: Option<RangeVar>,
     /// Mapping of column name to `column name = value` from
     /// the original UPDATE statement.
-    pub(crate) mapping: HashMap<String, Node>,
+    pub(super) mapping: HashMap<String, UpdateValue>,
 }
 
 impl Insert {
@@ -131,10 +131,24 @@ impl Insert {
         let mut bind = Bind::new_statement("");
         let mut columns = vec![];
         let mut values = vec![];
+        let mut columns_str = vec![];
+        let mut values_str = vec![];
 
         for (idx, field) in row_description.iter().enumerate() {
+            columns_str.push(format!(r#""{}""#, field.name.replace("\"", "\"\""))); // Escape "
+
             if let Some(value) = self.mapping.get(&field.name) {
-                let value = Value::try_from(value).expect("value");
+                let value = match value {
+                    UpdateValue::Value(value) => {
+                        values_str.push(format!("${}", idx + 1));
+                        Value::try_from(value).unwrap() // SAFETY: We check that the value is valid.
+                    }
+                    UpdateValue::Expr(expr) => {
+                        values_str.push(expr.clone());
+                        continue;
+                    }
+                };
+
                 match value {
                     Value::Placeholder(number) => {
                         let param = params
@@ -165,8 +179,15 @@ impl Insert {
                     Value::Null => bind.push_param(Parameter::new_null(), Format::Text),
                 }
             } else {
-                let value = data_row.column(idx).expect("data row to have column");
-                bind.push_param(Parameter::new(&value), Format::Text);
+                let value = data_row.get_raw(idx).ok_or(Error::MissingColumn(idx))?;
+
+                if value.is_null() {
+                    bind.push_param(Parameter::new_null(), Format::Text);
+                } else {
+                    bind.push_param(Parameter::new(&value), Format::Text);
+                }
+
+                values_str.push(format!("${}", idx + 1));
             }
 
             columns.push(Node {
@@ -204,14 +225,37 @@ impl Insert {
             ..Default::default()
         };
 
-        let insert = parse_result(NodeEnum::InsertStmt(Box::new(insert)));
+        let table = self.table.as_ref().map(|table| Table::from(table)).unwrap(); // SAFETY: We check that UPDATE has a table.
 
-        Ok(ClientRequest::from(vec![
-            ProtocolMessage::from(Parse::new_anonymous(&insert.deparse()?)),
+        // This is probably one of the few places in the code where
+        // we shouldn't use the parser. It's quicker to concatenate strings
+        // than to call pg_query::deparse because of the Protobuf (de)ser.
+        //
+        // TODO: Replace protobuf (de)ser with native mappings and use the
+        // parser again.
+        //
+        let stmt = format!(
+            "INSERT INTO {} ({}) VALUES ({})",
+            table,
+            columns_str.join(", "),
+            values_str.join(", ")
+        );
+
+        // Build the AST to be used with the router.
+        // It's identical to the string-generated statement above.
+        let insert = parse_result(NodeEnum::InsertStmt(Box::new(insert)));
+        let insert = pg_query::ParseResult::new(insert, "".into());
+
+        let ast = Ast::from_parse_result(insert);
+
+        let mut req = ClientRequest::from(vec![
+            ProtocolMessage::from(Parse::new_anonymous(&stmt)),
             bind.into(),
             Execute::new().into(),
             Sync.into(),
-        ]))
+        ]);
+        req.ast = Some(ast);
+        Ok(req)
     }
 }
 
@@ -232,6 +276,9 @@ impl<'a> StatementRewrite<'a> {
         let stmt = if let Some(NodeEnum::UpdateStmt(stmt)) = stmt {
             stmt
         } else {
+            // TODO: Handle EXPLAIN ANALYZE which needs to execute.
+            // We could return a combined plan for all 3 queries
+            // we need to execute.
             return Ok(());
         };
 
@@ -318,6 +365,12 @@ fn rewrite_params(parse_result: &mut ParseResult) -> Result<Vec<u16>, Error> {
         .collect())
 }
 
+#[derive(Debug, Clone)]
+pub(super) enum UpdateValue {
+    Value(Node),
+    Expr(String), // We deparse the expression because we can't handle it yet.
+}
+
 /// # Example
 ///
 /// ```
@@ -333,23 +386,29 @@ fn rewrite_params(parse_result: &mut ParseResult) -> Result<Vec<u16>, Error> {
 ///
 /// This allows us to build a partial INSERT statement.
 ///
-fn res_targets_to_insert_res_targets(stmt: &UpdateStmt) -> HashMap<String, Node> {
-    stmt.target_list
-        .iter()
-        .map(|target| {
-            let mut name = String::new();
-            let mut value: Option<Box<Node>> = None;
-
-            if let Some(ref node) = target.node {
-                if let NodeEnum::ResTarget(ref target) = node {
-                    value = target.val.clone();
-                    name = target.name.clone();
-                }
+fn res_targets_to_insert_res_targets(
+    stmt: &UpdateStmt,
+) -> Result<HashMap<String, UpdateValue>, Error> {
+    let mut result = HashMap::new();
+    for target in &stmt.target_list {
+        if let Some(ref node) = target.node {
+            if let NodeEnum::ResTarget(ref target) = node {
+                let valid = target
+                    .val
+                    .as_ref()
+                    .map(|value| Value::try_from(&value.node).is_ok())
+                    .unwrap_or_default();
+                let value = if valid {
+                    UpdateValue::Value(*target.val.clone().unwrap())
+                } else {
+                    UpdateValue::Expr(target.val.as_ref().unwrap().deparse()?)
+                };
+                result.insert(target.name.clone(), value);
             }
+        }
+    }
 
-            (name, *value.unwrap()) // SAFETY: We check that all ResTargets have a value.
-        })
-        .collect()
+    Ok(result)
 }
 
 /// Convert a ResTarget (from UPDATE SET clause) to an AExpr equality expression.
@@ -481,7 +540,7 @@ fn create_stmts(stmt: &UpdateStmt, new_value: &ResTarget) -> Result<ShardingKeyU
             check,
             insert: Insert {
                 table: stmt.relation.clone(),
-                mapping: res_targets_to_insert_res_targets(stmt),
+                mapping: res_targets_to_insert_res_targets(stmt)?,
             },
         }),
     })

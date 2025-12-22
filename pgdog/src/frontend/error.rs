@@ -39,7 +39,7 @@ pub enum Error {
     #[error("{0}")]
     PreparedStatements(#[from] super::prepared_statements::Error),
 
-    #[error("prepared staatement \"{0}\" is missing")]
+    #[error("prepared statement \"{0}\" is missing")]
     MissingPreparedStatement(String),
 
     #[error("query timeout")]
