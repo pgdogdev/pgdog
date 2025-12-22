@@ -65,6 +65,9 @@ pub enum Error {
 
     #[error("sharding key updates are forbidden")]
     ShardingKeyUpdateForbidden,
+
+    #[error("multi: {0}")]
+    Multi(#[from] crate::frontend::client::query_engine::multi_step::error::Error),
 }
 
 impl Error {

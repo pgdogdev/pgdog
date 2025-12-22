@@ -6,15 +6,21 @@ use crate::{
         router::parser::rewrite::statement::ShardingKeyUpdate,
         ClientRequest, Command, Router, RouterContext,
     },
-    net::ErrorResponse,
+    net::{DataRow, ErrorResponse, Protocol, RowDescription},
 };
 
-use super::super::Error;
+use super::{Error, UpdateError};
+
+#[derive(Debug, Clone, Default)]
+pub(super) struct Row {
+    data_row: DataRow,
+    row_description: RowDescription,
+}
 
 #[derive(Debug)]
 pub(crate) struct UpdateMulti<'a> {
-    rewrite: ShardingKeyUpdate,
-    engine: &'a mut QueryEngine,
+    pub(super) rewrite: ShardingKeyUpdate,
+    pub(super) engine: &'a mut QueryEngine,
 }
 
 impl<'a> UpdateMulti<'a> {
@@ -52,19 +58,99 @@ impl<'a> UpdateMulti<'a> {
 
         if self.engine.backend.cluster()?.rewrite().shard_key == RewriteMode::Error {
             self.engine
-                .error_response(
-                    context,
-                    ErrorResponse::from_err(&Error::ShardingKeyUpdateForbidden),
-                )
+                .error_response(context, ErrorResponse::from_err(&UpdateError::Disabled))
                 .await?;
             return Ok(());
         }
 
         if !self.engine.backend.is_multishard() {
-            return Err(Error::MultiShardRequired);
+            return Err(UpdateError::TransactionRequired.into());
         }
 
         Ok(())
+    }
+
+    pub(super) async fn insert_row(
+        &mut self,
+        context: &mut QueryEngineContext<'_>,
+        row: Row,
+    ) -> Result<(), Error> {
+        let mut request = self.rewrite.insert.build_request(
+            &context.client_request,
+            &row.row_description,
+            &row.data_row,
+        )?;
+        self.route(&mut request, context)?;
+
+        self.execute_internal(context, &mut request).await
+    }
+
+    async fn execute_internal(
+        &mut self,
+        context: &mut QueryEngineContext<'_>,
+        request: &mut ClientRequest,
+    ) -> Result<(), Error> {
+        self.engine
+            .backend
+            .handle_client_request(request, &mut Router::default(), false)
+            .await?;
+
+        while self.engine.backend.has_more_messages() {
+            let message = self.engine.read_server_message(context).await?;
+
+            if message.code() == 'E' {
+                return Err(Error::Execution(ErrorResponse::try_from(message)?));
+            }
+        }
+
+        Ok(())
+    }
+
+    pub(super) async fn delete_row(
+        &mut self,
+        context: &mut QueryEngineContext<'_>,
+    ) -> Result<(), Error> {
+        let mut request = self.rewrite.delete.build_request(&context.client_request)?;
+        self.route(&mut request, context)?;
+
+        self.execute_internal(context, &mut request).await
+    }
+
+    pub(super) async fn fetch_row(
+        &mut self,
+        context: &mut QueryEngineContext<'_>,
+    ) -> Result<Option<Row>, Error> {
+        let mut request = self.rewrite.select.build_request(&context.client_request)?;
+        self.route(&mut request, context)?;
+
+        self.engine
+            .backend
+            .handle_client_request(&mut request, &mut Router::default(), false)
+            .await?;
+
+        let mut row = Row::default();
+        let mut rows = 0;
+
+        while self.engine.backend.has_more_messages() {
+            let message = self.engine.read_server_message(context).await?;
+            match message.code() {
+                'D' => {
+                    row.data_row = DataRow::try_from(message)?;
+                    rows += 1;
+                }
+                'T' => row.row_description = RowDescription::try_from(message)?,
+                'E' => return Err(Error::Execution(ErrorResponse::try_from(message)?)),
+                _ => (),
+            }
+        }
+
+        match rows {
+            0 => return Ok(None),
+            1 => (),
+            n => return Err(UpdateError::TooManyRows(n).into()),
+        }
+
+        Ok(Some(row))
     }
 
     /// Returns true if the new sharding key resides on the same shard
@@ -103,7 +189,7 @@ impl<'a> UpdateMulti<'a> {
         if let Command::Query(route) = command {
             request.route = Some(route.clone());
         } else {
-            return Err(Error::NoRoute);
+            return Err(UpdateError::NoRoute.into());
         }
 
         Ok(())

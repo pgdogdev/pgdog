@@ -1,7 +1,9 @@
+pub(crate) mod error;
 pub mod insert;
 pub mod state;
 pub mod update;
 
+pub(crate) use error::{Error, UpdateError};
 pub(crate) use insert::InsertMulti;
 pub use state::{CommandType, MultiServerState};
 pub(crate) use update::UpdateMulti;

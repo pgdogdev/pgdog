@@ -10,10 +10,7 @@ use tokio::{
 use crate::{
     backend::databases::{reload_from_existing, shutdown},
     config::{config, load_test_replicas, load_test_sharded, set},
-    frontend::{
-        client::query_engine::{QueryEngine, QueryEngineContext},
-        Client,
-    },
+    frontend::{client::query_engine::QueryEngine, Client},
     net::{ErrorResponse, Message, Parameters, Protocol, Stream},
 };
 
@@ -147,19 +144,9 @@ impl TestClient {
         Message::new(payload.freeze()).backend()
     }
 
-    /// Inspect engine state.
-    pub(crate) fn engine(&mut self) -> &mut QueryEngine {
-        &mut self.engine
-    }
-
     /// Inspect client state.
     pub(crate) fn client(&mut self) -> &mut Client {
         &mut self.client
-    }
-
-    /// Get query engine context.
-    pub(crate) fn context(&mut self) -> QueryEngineContext<'_> {
-        QueryEngineContext::new(self.client())
     }
 
     /// Process a request.

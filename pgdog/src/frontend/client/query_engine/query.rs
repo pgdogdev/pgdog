@@ -384,9 +384,18 @@ impl QueryEngine {
     pub(super) async fn error_response(
         &mut self,
         context: &mut QueryEngineContext<'_>,
-        error: ErrorResponse,
+        mut error: ErrorResponse,
     ) -> Result<(), Error> {
         error!("{:?} [{:?}]", error.message, context.stream.peer_addr());
+
+        // Attach query context.
+        if error.detail.is_none() {
+            let query = context
+                .client_request
+                .query()?
+                .map(|q| q.query().to_owned());
+            error.detail = Some(query.unwrap_or_default());
+        }
 
         self.hooks.on_engine_error(context, &error)?;
 

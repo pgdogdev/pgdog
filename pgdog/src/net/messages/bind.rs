@@ -1,6 +1,5 @@
 //! Bind (F) message.
 use crate::net::c_string_buf_len;
-use pg_query::protobuf::Param;
 use uuid::Uuid;
 
 use super::code;
