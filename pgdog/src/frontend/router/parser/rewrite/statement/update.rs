@@ -397,11 +397,11 @@ pub(super) enum UpdateValue {
 
 /// # Example
 ///
-/// ```
+/// ```ignore
 /// UPDATE sharded SET id = $1, email = $2 WHERE id = $3 AND user_id = $4
 /// ```
 ///
-/// ```
+/// ```ignore
 /// [
 ///   ("id", (id, $1)),
 ///   ("email", (email, $2))
