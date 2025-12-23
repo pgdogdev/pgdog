@@ -1,4 +1,5 @@
 use pgdog_config::RewriteMode;
+use tracing::debug;
 
 use crate::{
     frontend::{
@@ -48,17 +49,41 @@ impl<'a> UpdateMulti<'a> {
         //
         if self.is_same_shard(context)? {
             // Serve original request as-is.
+            debug!("[update] row is on the same shard");
             self.execute_original(context).await?;
 
             return Ok(());
         }
 
         if !self.engine.backend.is_multishard() {
-            return Err(UpdateError::TransactionRequired.into());
+            self.engine
+                .error_response(
+                    context,
+                    ErrorResponse::from_err(&UpdateError::TransactionRequired),
+                )
+                .await?;
+            return Ok(());
         }
 
         // Fetch the old row from whatever shard it is on.
-        let row = self.fetch_row(context).await?;
+        let row = match self.fetch_row(context).await {
+            Ok(row) => row,
+            Err(err) => {
+                // These are recoverable with a ROLLBACK.
+                if matches!(
+                    err,
+                    Error::Update(UpdateError::TooManyRows(_)) | Error::Execution(_)
+                ) {
+                    self.engine
+                        .error_response(context, ErrorResponse::from_err(&err))
+                        .await?;
+                    return Ok(());
+                } else {
+                    // These are bad, disconnecting the client.
+                    return Err(err.into());
+                }
+            }
+        };
 
         if let Some(row) = row {
             self.insert_row(context, row).await?;
@@ -92,8 +117,10 @@ impl<'a> UpdateMulti<'a> {
         // We don't need to do the multi-step UPDATE anymore.
         // Forward the original request as-is.
         if original_shard.is_direct() && new_shard == original_shard {
+            debug!("[update] selected row is on the same shard");
             self.execute_original(context).await
         } else {
+            debug!("[update] executing multi-shard insert/delete");
             // Check if we are allowed to do this operation by the config.
             if self.engine.backend.cluster()?.rewrite().shard_key == RewriteMode::Error {
                 self.engine

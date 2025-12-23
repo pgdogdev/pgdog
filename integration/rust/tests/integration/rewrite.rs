@@ -157,9 +157,11 @@ async fn update_moves_row_between_shards() {
     assert_eq!(count_on_shard(&pool, 0, 1).await, 1, "row on shard 0");
     assert_eq!(count_on_shard(&pool, 1, 1).await, 0, "no row on shard 1");
 
+    let mut txn = pool.begin().await.unwrap();
     let update = format!("UPDATE {TEST_TABLE} SET id = 11 WHERE id = 1");
-    let result = pool.execute(update.as_str()).await.expect("rewrite update");
+    let result = txn.execute(update.as_str()).await.expect("rewrite update");
     assert_eq!(result.rows_affected(), 1, "exactly one row updated");
+    txn.commit().await.unwrap();
 
     assert_eq!(
         count_on_shard(&pool, 0, 1).await,
@@ -195,8 +197,10 @@ async fn update_rejects_multiple_rows() {
         .await
         .expect("insert second row");
 
+    let mut txn = pool.begin().await.unwrap();
+
     let update = format!("UPDATE {TEST_TABLE} SET id = 11 WHERE id IN (1, 2)");
-    let err = pool
+    let err = txn
         .execute(update.as_str())
         .await
         .expect_err("expected multi-row rewrite to fail");
@@ -206,10 +210,11 @@ async fn update_rejects_multiple_rows() {
     assert!(
         db_err
             .message()
-            .contains("updating multiple rows is not supported when updating the sharding key"),
+            .contains("more than one row (2) matched update filter"),
         "unexpected error message: {}",
         db_err.message()
     );
+    txn.rollback().await.unwrap();
 
     assert_eq!(
         count_on_shard(&pool, 0, 1).await,
@@ -231,7 +236,7 @@ async fn update_rejects_multiple_rows() {
 }
 
 #[tokio::test]
-async fn update_rejects_transactions() {
+async fn update_expects_transactions() {
     let admin = admin_sqlx().await;
     let _guard = RewriteConfigGuard::enable(admin.clone()).await;
 
@@ -246,25 +251,22 @@ async fn update_rejects_transactions() {
         .expect("insert initial row");
 
     let mut conn = pool.acquire().await.expect("acquire connection");
-    conn.execute("BEGIN").await.expect("begin transaction");
 
     let update = format!("UPDATE {TEST_TABLE} SET id = 11 WHERE id = 1");
     let err = conn
         .execute(update.as_str())
         .await
-        .expect_err("rewrite inside transaction must fail");
+        .expect_err("an open transaction is required for a multi-shard row update");
     let db_err = err
         .as_database_error()
         .expect("expected database error from proxy");
     assert!(
         db_err
             .message()
-            .contains("shard key rewrites must run outside explicit transactions"),
+            .contains("an open transaction is required for a multi-shard row update"),
         "unexpected error message: {}",
         db_err.message()
     );
-
-    conn.execute("ROLLBACK").await.ok();
 
     drop(conn);
 
