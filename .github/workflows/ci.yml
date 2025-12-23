@@ -8,13 +8,16 @@ on:
 
 jobs:
   fmt:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
           override: true
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ${{ hashFiles('**/Cargo.lock') }}
       - name: Install CMake 3.31
         run: |
           sudo apt update && sudo apt install mold -y
@@ -27,25 +30,43 @@ jobs:
         working-directory: pgdog
         run: cargo clippy
   build:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
           override: true
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ${{ hashFiles('**/Cargo.lock') }}
       - name: Install CMake 3.31
         run: |
           sudo apt update && sudo apt install mold -y
           sudo apt remove cmake
           sudo pip3 install cmake==3.31.6
           cmake --version
+      - name: Cargo fetch
+        run: cargo fetch
       - name: Build
         run: cargo build
-      - name: Check release
-        run: cargo check --release
+      - name: Build release
+        run: cargo build --release
+      - name: Package build outputs
+        run: |
+          mkdir -p artifacts/release
+          if [ -f target/release/pgdog ]; then
+            cp target/release/pgdog artifacts/release/
+          fi
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: pgdog-release-${{ github.sha }}
+          path: artifacts/release
+          if-no-files-found: error
   tests:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    needs: build
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions-rs/toolchain@v1
@@ -53,9 +74,12 @@ jobs:
           toolchain: stable
           override: true
           components: llvm-tools-preview
-      - uses: useblacksmith/rust-cache@v3
+      - uses: Swatinem/rust-cache@v2
         with:
-          prefix-key: "v1" # Change this when updating tooling
+          shared-key: ${{ hashFiles('**/Cargo.lock') }}
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest@0.9.78,cargo-llvm-cov@0.6.10
       - name: Setup PostgreSQL
         run: |
           sudo service postgresql start
@@ -69,20 +93,13 @@ jobs:
           sudo apt remove -y cmake
           sudo pip3 install cmake==3.31.6
           cmake --version
-          cargo install cargo-nextest --version "0.9.78" --locked
           bash integration/toxi/setup.sh
-      - name: Install test dependencies
-        run: cargo install cargo-nextest --version "0.9.78" --locked
-      - name: Install coverage tooling
-        run: cargo install cargo-llvm-cov --locked --version "0.6.10"
       - name: Run tests with coverage
         env:
           RUSTFLAGS: "-C link-dead-code"
         run: |
           cargo llvm-cov clean --workspace
           cargo llvm-cov nextest --lcov --output-path lcov.info --no-fail-fast --test-threads=1 --filter-expr "package(pgdog) | package(pgdog-config) | package(pgdog-vector)"
-      - name: Run documentation tests
-        run: cargo test --doc
       # Requires CODECOV_TOKEN secret for upload
       - uses: codecov/codecov-action@v4
         env:
@@ -91,11 +108,27 @@ jobs:
           files: lcov.info
           flags: unit
           fail_ci_if_error: true
-  integration:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
-    timeout-minutes: 30
-    env:
-      LLVM_PROFILE_FILE: ${{ github.workspace }}/target/llvm-cov-target/profiles/pgdog-%p-%m.profraw
+  doc-tests:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ${{ hashFiles('**/Cargo.lock') }}
+      - name: Install mold linker
+        run: |
+          sudo apt update
+          sudo apt install -y mold
+      - name: Run documentation tests
+        run: cargo test --doc
+  integration-prepare:
+    needs: build
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions-rs/toolchain@v1
@@ -103,30 +136,12 @@ jobs:
           toolchain: stable
           override: true
           components: llvm-tools-preview
-      - uses: useblacksmith/rust-cache@v3
+      - uses: Swatinem/rust-cache@v2
         with:
-          prefix-key: release-1
-      - name: Setup dependencies
-        run: |
-          sudo service postgresql start
-          sudo -u postgres createuser --superuser --login $USER
-          sudo -u postgres createdb $USER
-          sudo -u postgres psql -c 'ALTER SYSTEM SET max_connections TO 1000;'
-          sudo -u postgres psql -c 'ALTER SYSTEM SET max_prepared_transactions TO 1000;'
-          sudo -u postgres psql -c 'ALTER SYSTEM SET wal_level TO logical;'
-          sudo service postgresql restart
-          bash integration/setup.sh
-          sudo apt update && sudo apt install -y python3-virtualenv mold
-          sudo gem install bundler
-          sudo apt remove -y cmake
-          sudo pip3 install cmake==3.31.6
-          cmake --version
-          cargo install cargo-nextest --version "0.9.78" --locked
-          bash integration/toxi/setup.sh
-          sudo curl -SL https://github.com/docker/compose/releases/download/v2.36.1/docker-compose-linux-x86_64 -o /usr/local/bin/docker-compose
-          sudo chmod +x /usr/local/bin/docker-compose
-      - name: Install coverage tooling
-        run: cargo install cargo-llvm-cov --locked --version "0.6.10"
+          shared-key: ${{ hashFiles('**/Cargo.lock') }}
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov@0.6.10
       - name: Prepare instrumented PgDog build
         env:
           RUSTFLAGS: "-C link-dead-code"
@@ -142,43 +157,186 @@ jobs:
             echo "Instrumented PgDog binary not found" >&2
             exit 1
           fi
-          echo "Using instrumented binary at $BIN_PATH"
-          echo "PGDOG_BIN=$(realpath "$BIN_PATH")" >> "$GITHUB_ENV"
-      - name: pgbench
-        run: bash integration/pgbench/run.sh
-      - name: schema-sync
-        run: bash integration/schema_sync/run.sh
-      - name: Go
-        run: bash integration/go/run.sh
-      - name: JavaScript
-        run: bash integration/js/pg_tests/run.sh
-      - name: Ruby
-        run: bash integration/ruby/run.sh
-      - name: Java
-        run: bash integration/java/run.sh
-      - name: SQL
-        run: bash integration/sql/run.sh
-      - name: Toxi
-        run: bash integration/toxi/run.sh
-      - name: Rust
-        run: bash integration/rust/run.sh
-      - name: Stop shared PgDog
-        run: bash -lc 'source integration/common.sh; stop_pgdog'
-      - name: Data sync
-        run: bash integration/copy_data/dev.sh
-      - name: Python
-        run: bash integration/python/run.sh
-      - name: Load balancer
-        run: bash integration/load_balancer/run.sh
-      - name: More complex stuff
-        run: bash integration/complex/run.sh
-      - name: Dry run
-        run: bash integration/dry_run/run.sh
-      - name: Ensure PgDog stopped
+          mkdir -p integration-artifacts
+          cp "$BIN_PATH" integration-artifacts/pgdog
+      - name: Upload instrumented artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-instrumented-${{ github.sha }}
+          path: |
+            integration-artifacts/pgdog
+            target/llvm-cov-target
+
+  integration-suite:
+    needs: integration-prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        suite:
+          - name: pgbench
+            script: integration/pgbench/run.sh
+            id: pgbench
+          - name: schema-sync
+            script: integration/schema_sync/run.sh
+            id: schema_sync
+          - name: go
+            script: integration/go/run.sh
+            id: go
+          - name: js
+            script: integration/js/pg_tests/run.sh
+            id: js_pg_tests
+          - name: ruby
+            script: integration/ruby/run.sh
+            id: ruby
+          - name: java
+            script: integration/java/run.sh
+            id: java
+          - name: sql
+            script: integration/sql/run.sh
+            id: sql
+          - name: toxi
+            script: integration/toxi/run.sh
+            id: toxi
+          - name: rust
+            script: integration/rust/run.sh
+            id: rust
+          - name: copy-data
+            script: integration/copy_data/dev.sh
+            id: copy_data
+          - name: python
+            script: integration/python/run.sh
+            id: python
+          - name: load-balancer
+            script: integration/load_balancer/run.sh
+            id: load_balancer
+          - name: complex
+            script: integration/complex/run.sh
+            id: complex
+          - name: dry-run
+            script: integration/dry_run/run.sh
+            id: dry_run
+    env:
+      LLVM_PROFILE_FILE: ${{ format('{0}/profiles/{1}-%p-%m.profraw', github.workspace, matrix.suite.id) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ${{ hashFiles('**/Cargo.lock') }}
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest@0.9.78
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov@0.6.10
+      - uses: actions/download-artifact@v4
+        with:
+          name: integration-instrumented-${{ github.sha }}
+          path: instrumentation
+      - name: Restore instrumented binary
         run: |
-          if pgrep -x pgdog > /dev/null; then
-            killall -TERM pgdog
-            sleep 5
+          mkdir -p target/llvm-cov-target
+          if [ -d instrumentation/target/llvm-cov-target ]; then
+            cp -R instrumentation/target/llvm-cov-target/* target/llvm-cov-target/
+          fi
+          mkdir -p target/release
+          if [ -f instrumentation/integration-artifacts/pgdog ]; then
+            cp instrumentation/integration-artifacts/pgdog target/release/pgdog
+            chmod +x target/release/pgdog
+            echo "PGDOG_BIN=$(realpath target/release/pgdog)" >> "$GITHUB_ENV"
+          fi
+          mkdir -p profiles
+          touch profiles/.keep
+      - name: Setup dependencies
+        run: |
+          sudo service postgresql start
+          sudo -u postgres createuser --superuser --login $USER
+          sudo -u postgres createdb $USER
+          sudo -u postgres psql -c 'ALTER SYSTEM SET max_connections TO 1000;'
+          sudo -u postgres psql -c 'ALTER SYSTEM SET max_prepared_transactions TO 1000;'
+          sudo -u postgres psql -c 'ALTER SYSTEM SET wal_level TO logical;'
+          sudo service postgresql restart
+          bash integration/setup.sh
+          sudo apt update && sudo apt install -y python3-virtualenv mold
+          sudo gem install bundler
+          sudo apt remove -y cmake
+          sudo pip3 install cmake==3.31.6
+          cmake --version
+          bash integration/toxi/setup.sh
+          sudo curl -SL https://github.com/docker/compose/releases/download/v2.36.1/docker-compose-linux-x86_64 -o /usr/local/bin/docker-compose
+          sudo chmod +x /usr/local/bin/docker-compose
+          python3 -m venv integration/python/venv
+          source integration/python/venv/bin/activate
+          pip install --upgrade pip
+          pip install -r integration/python/requirements.txt
+          deactivate
+      - name: Run ${{ matrix.suite.name }} suite
+        run: bash ${{ matrix.suite.script }}
+      - name: Upload coverage profiles
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-profiles-${{ matrix.suite.id }}-${{ github.sha }}
+          path: profiles
+          if-no-files-found: ignore
+
+  integration-coverage:
+    needs:
+      - integration-prepare
+      - integration-suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ${{ hashFiles('**/Cargo.lock') }}
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov@0.6.10
+      - uses: actions/download-artifact@v4
+        with:
+          name: integration-instrumented-${{ github.sha }}
+          path: instrumentation
+      - name: Restore instrumentation target
+        run: |
+          mkdir -p target/llvm-cov-target
+          if [ -d instrumentation/target/llvm-cov-target ]; then
+            cp -R instrumentation/target/llvm-cov-target/* target/llvm-cov-target/
+          fi
+          mkdir -p target/release
+      - uses: actions/download-artifact@v4
+        with:
+          name: pgdog-release-${{ github.sha }}
+          path: artifacts/release
+      - name: Restore release binaries
+        run: |
+          mkdir -p target/release
+          if [ -d artifacts/release ]; then
+            cp -R artifacts/release/* target/release/
+            chmod +x target/release/pgdog || true
+          fi
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: ${{ format('integration-profiles-*-{0}', github.sha) }}
+          path: profiles
+          merge-multiple: true
+      - name: Prepare coverage profiles
+        run: |
+          mkdir -p target/llvm-cov-target/profiles
+          if find profiles -name '*.profraw' -print -quit | grep -q .; then
+            find profiles -name '*.profraw' -print0 | while IFS= read -r -d '' file; do
+              cp "$file" target/llvm-cov-target/profiles/
+            done
           fi
       - name: Generate integration coverage report
         run: cargo llvm-cov report --release --package pgdog --lcov --output-path integration.lcov
@@ -191,7 +349,8 @@ jobs:
           flags: integration
           fail_ci_if_error: true
   plugin-unit-tests:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    needs: build
+    runs-on: ubuntu-latest
     continue-on-error: true
     timeout-minutes: 30
     steps:
@@ -200,21 +359,23 @@ jobs:
         with:
           toolchain: stable
           override: true
-      - uses: useblacksmith/rust-cache@v3
+      - uses: Swatinem/rust-cache@v2
         with:
-          prefix-key: "plugin-unit-v1"
+          shared-key: ${{ hashFiles('**/Cargo.lock') }}
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest@0.9.78
       - name: Install CMake 3.31
         run: |
           sudo apt-get install -y mold
           sudo apt remove cmake
           sudo pip3 install cmake==3.31.6
           cmake --version
-      - name: Install test dependencies
-        run: cargo install cargo-nextest --version "0.9.78" --locked
       - name: Run plugin unit tests
         run: cargo nextest run -E 'package(pgdog-example-plugin)' --no-fail-fast
   plugin-integration-tests:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    needs: build
+    runs-on: ubuntu-latest
     continue-on-error: true
     timeout-minutes: 30
     steps:
@@ -223,9 +384,22 @@ jobs:
         with:
           toolchain: stable
           override: true
-      - uses: useblacksmith/rust-cache@v3
+      - uses: Swatinem/rust-cache@v2
         with:
-          prefix-key: "plugin-integration-v1"
+          shared-key: ${{ hashFiles('**/Cargo.lock') }}
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest@0.9.78
+      - uses: actions/download-artifact@v4
+        with:
+          name: pgdog-release-${{ github.sha }}
+          path: artifacts/release
+      - name: Restore release binary
+        run: |
+          if [ -f artifacts/release/pgdog ]; then
+            mkdir -p target/release
+            cp artifacts/release/pgdog target/release/
+          fi
       - name: Setup PostgreSQL
         run: |
           sudo service postgresql start
@@ -239,7 +413,6 @@ jobs:
           sudo apt remove -y cmake
           sudo pip3 install cmake==3.31.6
           cmake --version
-          cargo install cargo-nextest --version "0.9.78" --locked
       - name: Build plugin
         run: |
           cargo build --release
