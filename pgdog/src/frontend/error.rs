@@ -66,7 +66,9 @@ pub enum Error {
     #[error("sharding key updates are forbidden")]
     ShardingKeyUpdateForbidden,
 
-    #[error("multi: {0}")]
+    // FIXME: layer errors better so we don't have
+    // to reach so deep into a module.
+    #[error("{0}")]
     Multi(#[from] crate::frontend::client::query_engine::multi_step::error::Error),
 }
 

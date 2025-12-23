@@ -183,3 +183,46 @@ async fn test_row_same_shard() {
 
     client.read_until('Z').await.unwrap();
 }
+
+#[tokio::test]
+async fn test_no_rows_updated() {
+    let mut client = TestClient::new_rewrites(Parameters::default()).await;
+    let id = thread_rng().gen::<i64>();
+
+    // Transaction not required because
+    // it'll check for existing row first (on the same shard).
+    client
+        .send_simple(Query::new(format!(
+            "UPDATE sharded SET id = {} WHERE id = {}",
+            id,
+            id + 1
+        )))
+        .await;
+    let cc = client.read().await;
+    expect_message!(cc.clone(), CommandComplete);
+    assert_eq!(CommandComplete::try_from(cc).unwrap().command(), "UPDATE 0");
+    expect_message!(client.read().await, ReadyForQuery);
+}
+
+#[tokio::test]
+async fn test_transaction_required() {
+    let mut client = TestClient::new_rewrites(Parameters::default()).await;
+
+    client
+        .send_simple(Query::new(format!(
+            "INSERT INTO sharded (id) VALUES (1) ON CONFLICT(id) DO NOTHING",
+        )))
+        .await;
+    client.read_until('Z').await.unwrap();
+
+    let err = client
+        .try_send_simple(Query::new(format!(
+            "UPDATE sharded SET id = 11 WHERE id = 1",
+        )))
+        .await
+        .expect_err("expected shard key update to fail without a transaction");
+    assert_eq!(
+        err.to_string(),
+        "sharding key update must be executed inside a transaction"
+    );
+}

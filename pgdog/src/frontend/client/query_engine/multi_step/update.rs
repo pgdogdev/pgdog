@@ -55,25 +55,12 @@ impl<'a> UpdateMulti<'a> {
             return Ok(());
         }
 
-        if !self.engine.backend.is_multishard() {
-            self.engine
-                .error_response(
-                    context,
-                    ErrorResponse::from_err(&UpdateError::TransactionRequired),
-                )
-                .await?;
-            return Ok(());
-        }
-
         // Fetch the old row from whatever shard it is on.
         let row = match self.fetch_row(context).await {
             Ok(row) => row,
             Err(err) => {
                 // These are recoverable with a ROLLBACK.
-                if matches!(
-                    err,
-                    Error::Update(UpdateError::TooManyRows(_)) | Error::Execution(_)
-                ) {
+                if matches!(err, Error::Update(_) | Error::Execution(_)) {
                     self.engine
                         .error_response(context, ErrorResponse::from_err(&err))
                         .await?;
@@ -121,12 +108,21 @@ impl<'a> UpdateMulti<'a> {
             self.execute_original(context).await
         } else {
             debug!("[update] executing multi-shard insert/delete");
+
             // Check if we are allowed to do this operation by the config.
             if self.engine.backend.cluster()?.rewrite().shard_key == RewriteMode::Error {
                 self.engine
                     .error_response(context, ErrorResponse::from_err(&UpdateError::Disabled))
                     .await?;
                 return Ok(());
+            }
+
+            if !context.in_transaction() && !self.engine.backend.is_multishard()
+            // Do this check at the last possible moment.
+            // Just in case we change how transactions are
+            // routed in the future.
+            {
+                return Err(UpdateError::TransactionRequired.into());
             }
 
             self.delete_row(context).await?;

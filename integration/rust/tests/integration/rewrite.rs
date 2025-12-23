@@ -210,7 +210,7 @@ async fn update_rejects_multiple_rows() {
     assert!(
         db_err
             .message()
-            .contains("more than one row (2) matched update filter"),
+            .contains("sharding key update changes more than one row (2)"),
         "unexpected error message: {}",
         db_err.message()
     );
@@ -256,14 +256,14 @@ async fn update_expects_transactions() {
     let err = conn
         .execute(update.as_str())
         .await
-        .expect_err("an open transaction is required for a multi-shard row update");
+        .expect_err("sharding key update must be executed inside a transaction");
     let db_err = err
         .as_database_error()
         .expect("expected database error from proxy");
     assert!(
         db_err
             .message()
-            .contains("an open transaction is required for a multi-shard row update"),
+            .contains("sharding key update must be executed inside a transaction"),
         "unexpected error message: {}",
         db_err.message()
     );

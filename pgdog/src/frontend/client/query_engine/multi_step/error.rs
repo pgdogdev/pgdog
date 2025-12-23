@@ -31,13 +31,13 @@ pub enum UpdateError {
     #[error("sharding key updates are forbidden")]
     Disabled,
 
-    #[error("an open transaction is required for a multi-shard row update")]
+    #[error("sharding key update must be executed inside a transaction")]
     TransactionRequired,
 
-    #[error("intermediate query has no route")]
+    #[error("sharding key update intermediate query has no route")]
     NoRoute,
 
-    #[error("more than one row ({0}) matched update filter")]
+    #[error("sharding key update changes more than one row ({0})")]
     TooManyRows(usize),
 }
 

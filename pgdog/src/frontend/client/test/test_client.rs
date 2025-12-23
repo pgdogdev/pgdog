@@ -126,8 +126,15 @@ impl TestClient {
     }
 
     pub(crate) async fn send_simple(&mut self, message: impl Protocol) {
+        self.try_send_simple(message).await.unwrap()
+    }
+
+    pub(crate) async fn try_send_simple(
+        &mut self,
+        message: impl Protocol,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         self.send(message).await;
-        self.process().await;
+        self.try_process().await
     }
 
     /// Read a message received from the servers.
@@ -151,17 +158,13 @@ impl TestClient {
     }
 
     /// Process a request.
-    pub(crate) async fn process(&mut self) {
+    pub(crate) async fn try_process(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         self.engine.set_test_mode(false);
-        self.client
-            .buffer(self.engine.stats().state)
-            .await
-            .expect("buffer");
-        self.client
-            .client_messages(&mut self.engine)
-            .await
-            .expect("engine");
+        self.client.buffer(self.engine.stats().state).await?;
+        self.client.client_messages(&mut self.engine).await?;
         self.engine.set_test_mode(true);
+
+        Ok(())
     }
 
     /// Read all messages until an expected last message.
