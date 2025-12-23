@@ -11,8 +11,8 @@ pub enum Error {
     #[error("cache: {0}")]
     Cache(String),
 
-    #[error("sharding key update can only be a value assignment, e.g. id = $1")]
-    UnsupportedShardingKeyUpdate,
+    #[error("sharding key assignment unsupported: {0}")]
+    UnsupportedShardingKeyUpdate(String),
 
     #[error("net: {0}")]
     Net(#[from] crate::net::Error),
@@ -25,4 +25,7 @@ pub enum Error {
 
     #[error("missing column: ${0}")]
     MissingColumn(usize),
+
+    #[error("WHERE clause is required")]
+    WhereClauseMissing,
 }

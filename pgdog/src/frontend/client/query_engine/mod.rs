@@ -251,9 +251,6 @@ impl QueryEngine {
                     .await?;
             }
             Command::Copy(_) => self.execute(context).await?,
-            Command::ShardKeyRewrite(plan) => {
-                self.shard_key_rewrite(context, *plan.clone()).await?
-            }
             Command::Deallocate => self.deallocate(context).await?,
             Command::Discard { extended } => self.discard(context, *extended).await?,
             command => self.unknown_command(context, command.clone()).await?,

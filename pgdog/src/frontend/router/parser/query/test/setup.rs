@@ -2,7 +2,7 @@ use std::ops::Deref;
 
 use crate::{
     backend::Cluster,
-    config::{self, config, ReadWriteStrategy, RewriteMode},
+    config::{self, config, ReadWriteStrategy},
     frontend::{
         client::{Sticky, TransactionType},
         router::{
@@ -71,18 +71,6 @@ impl QueryParserTest {
     /// Set the read/write strategy on the cluster.
     pub(crate) fn with_read_write_strategy(mut self, strategy: ReadWriteStrategy) -> Self {
         self.cluster.set_read_write_strategy(strategy);
-        self
-    }
-
-    /// Set the shard key rewrite mode for this test.
-    /// Must be called before execute() since it recreates the cluster with new config.
-    pub(crate) fn with_rewrite_mode(mut self, mode: RewriteMode) -> Self {
-        let mut updated = config().deref().clone();
-        updated.config.rewrite.shard_key = mode;
-        updated.config.rewrite.enabled = true;
-        config::set(updated).unwrap();
-        // Recreate cluster with the new config
-        self.cluster = Cluster::new_test();
         self
     }
 

@@ -285,6 +285,11 @@ impl<'a> StatementRewrite<'a> {
         };
 
         if let Some(value) = self.sharding_key_update_check(stmt)? {
+            // Without a WHERE clause, this is a huge
+            // cross-shard rewrite.
+            if stmt.where_clause.is_none() {
+                return Err(Error::WhereClauseMissing);
+            }
             plan.sharding_key_update = Some(create_stmts(stmt, value)?);
         }
 
@@ -327,7 +332,22 @@ impl<'a> StatementRewrite<'a> {
                     if supported {
                         Ok(Some(res))
                     } else {
-                        Err(Error::UnsupportedShardingKeyUpdate)
+                        // FIXME:
+                        //
+                        // We can technically support this. We can inject this into
+                        // the `SELECT` statement we use to pull the existing row
+                        // and use the computed value for assignment.
+                        //
+                        let expr = res
+                            .val
+                            .as_ref()
+                            .map(|node| deparse_expr(node))
+                            .transpose()?
+                            .unwrap_or_else(|| "<unknown>".to_string());
+                        Err(Error::UnsupportedShardingKeyUpdate(format!(
+                            "\"{}\" = {}",
+                            res.name, expr
+                        )))
                     }
                 } else {
                     Ok(None)
@@ -469,6 +489,27 @@ fn parse_result(node: NodeEnum) -> ParseResult {
         }],
         ..Default::default()
     }
+}
+
+/// Deparse an expression node by wrapping it in a SELECT statement.
+fn deparse_expr(node: &Node) -> Result<String, Error> {
+    let select = SelectStmt {
+        target_list: vec![Node {
+            node: Some(NodeEnum::ResTarget(Box::new(ResTarget {
+                val: Some(Box::new(node.clone())),
+                ..Default::default()
+            }))),
+        }],
+        limit_option: LimitOption::Default.try_into().unwrap(),
+        op: SetOperation::SetopNone.try_into().unwrap(),
+        ..Default::default()
+    };
+    let result = parse_result(NodeEnum::SelectStmt(Box::new(select)));
+    let deparsed = pg_query::ParseResult::new(result, "".into()).deparse()?;
+    Ok(deparsed
+        .strip_prefix("SELECT ")
+        .unwrap_or(&deparsed)
+        .to_string())
 }
 
 fn create_stmts(stmt: &UpdateStmt, new_value: &ResTarget) -> Result<ShardingKeyUpdate, Error> {
@@ -855,5 +896,106 @@ mod test {
             .unwrap();
         assert_eq!(result.check.stmt, "SELECT * FROM sharded WHERE id = $1");
         assert_eq!(result.check.params, vec![1]);
+    }
+
+    #[test]
+    fn test_unsupported_assignment() {
+        let result = run_test("UPDATE sharded SET id = random() WHERE id = $1");
+        assert!(matches!(
+            result,
+            Err(Error::UnsupportedShardingKeyUpdate(msg)) if msg == "\"id\" = random()"
+        ));
+    }
+
+    #[test]
+    fn test_unsupported_assignment_arithmetic_add() {
+        let result = run_test("UPDATE sharded SET id = id + 1 WHERE id = $1");
+        assert!(matches!(
+            result,
+            Err(Error::UnsupportedShardingKeyUpdate(msg)) if msg == "\"id\" = id + 1"
+        ));
+    }
+
+    #[test]
+    fn test_unsupported_assignment_arithmetic_multiply() {
+        let result = run_test("UPDATE sharded SET id = id * 2 WHERE id = $1");
+        assert!(matches!(
+            result,
+            Err(Error::UnsupportedShardingKeyUpdate(msg)) if msg == "\"id\" = id * 2"
+        ));
+    }
+
+    #[test]
+    fn test_unsupported_assignment_arithmetic_with_param() {
+        let result = run_test("UPDATE sharded SET id = id + $2 WHERE id = $1");
+        assert!(matches!(
+            result,
+            Err(Error::UnsupportedShardingKeyUpdate(msg)) if msg == "\"id\" = id + $2"
+        ));
+    }
+
+    #[test]
+    fn test_unsupported_assignment_now() {
+        let result = run_test("UPDATE sharded SET id = now() WHERE id = $1");
+        assert!(matches!(
+            result,
+            Err(Error::UnsupportedShardingKeyUpdate(msg)) if msg == "\"id\" = now()"
+        ));
+    }
+
+    #[test]
+    fn test_unsupported_assignment_coalesce() {
+        let result = run_test("UPDATE sharded SET id = coalesce(id, 0) WHERE id = $1");
+        assert!(matches!(
+            result,
+            Err(Error::UnsupportedShardingKeyUpdate(msg)) if msg == "\"id\" = COALESCE(id, 0)"
+        ));
+    }
+
+    #[test]
+    fn test_unsupported_assignment_case() {
+        let result =
+            run_test("UPDATE sharded SET id = CASE WHEN id > 0 THEN 1 ELSE 0 END WHERE id = $1");
+        assert!(matches!(
+            result,
+            Err(Error::UnsupportedShardingKeyUpdate(msg)) if msg == "\"id\" = CASE WHEN id > 0 THEN 1 ELSE 0 END"
+        ));
+    }
+
+    #[test]
+    fn test_unsupported_assignment_subquery() {
+        let result =
+            run_test("UPDATE sharded SET id = (SELECT max(id) FROM sharded) WHERE id = $1");
+        assert!(matches!(
+            result,
+            Err(Error::UnsupportedShardingKeyUpdate(msg)) if msg == "\"id\" = (SELECT max(id) FROM sharded)"
+        ));
+    }
+
+    #[test]
+    fn test_unsupported_assignment_column_reference() {
+        let result = run_test("UPDATE sharded SET id = other_column WHERE id = $1");
+        assert!(matches!(
+            result,
+            Err(Error::UnsupportedShardingKeyUpdate(msg)) if msg == "\"id\" = other_column"
+        ));
+    }
+
+    #[test]
+    fn test_unsupported_assignment_concat() {
+        let result = run_test("UPDATE sharded SET id = id || '_suffix' WHERE id = $1");
+        assert!(matches!(
+            result,
+            Err(Error::UnsupportedShardingKeyUpdate(msg)) if msg == "\"id\" = id || '_suffix'"
+        ));
+    }
+
+    #[test]
+    fn test_unsupported_assignment_negation() {
+        let result = run_test("UPDATE sharded SET id = -id WHERE id = $1");
+        assert!(matches!(
+            result,
+            Err(Error::UnsupportedShardingKeyUpdate(msg)) if msg == "\"id\" = - id"
+        ));
     }
 }

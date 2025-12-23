@@ -14,9 +14,17 @@ impl QueryParser {
         );
         let shard = parser.shard()?;
         if let Some(shard) = shard {
+            if let Some(recorder) = self.recorder_mut() {
+                recorder.record_entry(
+                    Some(shard.clone()),
+                    "UPDATE matched WHERE clause for sharding key",
+                );
+            }
             context
                 .shards_calculator
                 .push(ShardWithPriority::new_table(shard));
+        } else if let Some(recorder) = self.recorder_mut() {
+            recorder.record_entry(None, "UPDATE fell back to broadcast");
         }
 
         Ok(Command::Query(Route::write(
