@@ -10,8 +10,8 @@ use crate::{
         ClientRequest,
     },
     net::{
-        bind::Parameter, Bind, CommandComplete, Execute, Parameters, Parse, Query, ReadyForQuery,
-        Sync,
+        bind::Parameter, Bind, CommandComplete, DataRow, Describe, Execute, Flush, Parameters,
+        Parse, Protocol, Query, ReadyForQuery, RowDescription, Sync, TransactionState,
     },
 };
 
@@ -225,4 +225,211 @@ async fn test_transaction_required() {
         err.to_string(),
         "sharding key update must be executed inside a transaction"
     );
+}
+
+#[tokio::test]
+async fn test_move_rows_simple() {
+    let mut client = TestClient::new_rewrites(Parameters::default()).await;
+
+    client
+        .send_simple(Query::new(format!(
+            "INSERT INTO sharded (id) VALUES (1) ON CONFLICT(id) DO NOTHING",
+        )))
+        .await;
+    client.read_until('Z').await.unwrap();
+
+    client.send_simple(Query::new("BEGIN")).await;
+    client.read_until('Z').await.unwrap();
+
+    client
+        .try_send_simple(Query::new(
+            "UPDATE sharded SET id = 11 WHERE id = 1 RETURNING id",
+        ))
+        .await
+        .unwrap();
+
+    let reply = client.read_until('Z').await.unwrap();
+
+    reply
+        .into_iter()
+        .zip(['T', 'D', 'C', 'Z'])
+        .for_each(|(message, code)| {
+            assert_eq!(message.code(), code);
+            match code {
+                'C' => assert_eq!(
+                    CommandComplete::try_from(message).unwrap().command(),
+                    "UPDATE 1"
+                ),
+                'Z' => assert!(
+                    ReadyForQuery::try_from(message).unwrap().state().unwrap()
+                        == TransactionState::InTrasaction
+                ),
+                'T' => assert_eq!(
+                    RowDescription::try_from(message)
+                        .unwrap()
+                        .field(0)
+                        .unwrap()
+                        .name,
+                    "id"
+                ),
+                'D' => assert_eq!(
+                    DataRow::try_from(message).unwrap().column(0).unwrap(),
+                    "11".as_bytes()
+                ),
+                _ => unreachable!(),
+            }
+        });
+}
+
+#[tokio::test]
+async fn test_move_rows_extended() {
+    let mut client = TestClient::new_rewrites(Parameters::default()).await;
+
+    client
+        .send_simple(Query::new(format!(
+            "INSERT INTO sharded (id) VALUES (1) ON CONFLICT(id) DO NOTHING",
+        )))
+        .await;
+    client.read_until('Z').await.unwrap();
+
+    client.send_simple(Query::new("BEGIN")).await;
+    client.read_until('Z').await.unwrap();
+
+    client
+        .send(Parse::new_anonymous(
+            "UPDATE sharded SET id = $2 WHERE id = $1 RETURNING id",
+        ))
+        .await;
+    client
+        .send(Bind::new_params(
+            "",
+            &[
+                Parameter::new("1".as_bytes()),
+                Parameter::new("11".as_bytes()),
+            ],
+        ))
+        .await;
+    client.send(Execute::new()).await;
+    client.send(Sync).await;
+    client.try_process().await.unwrap();
+
+    let reply = client.read_until('Z').await.unwrap();
+
+    reply
+        .into_iter()
+        .zip(['1', '2', 'D', 'C', 'Z'])
+        .for_each(|(message, code)| {
+            assert_eq!(message.code(), code);
+            match code {
+                'C' => assert_eq!(
+                    CommandComplete::try_from(message).unwrap().command(),
+                    "UPDATE 1"
+                ),
+                'Z' => assert!(
+                    ReadyForQuery::try_from(message).unwrap().state().unwrap()
+                        == TransactionState::InTrasaction
+                ),
+                'T' => assert_eq!(
+                    RowDescription::try_from(message)
+                        .unwrap()
+                        .field(0)
+                        .unwrap()
+                        .name,
+                    "id"
+                ),
+                'D' => assert_eq!(
+                    DataRow::try_from(message).unwrap().column(0).unwrap(),
+                    "11".as_bytes()
+                ),
+                '1' | '2' => (),
+                _ => unreachable!(),
+            }
+        });
+}
+
+#[tokio::test]
+async fn test_move_rows_prepared() {
+    crate::logger();
+    let mut client = TestClient::new_rewrites(Parameters::default()).await;
+
+    client
+        .send_simple(Query::new(format!(
+            "INSERT INTO sharded (id) VALUES (1) ON CONFLICT(id) DO NOTHING",
+        )))
+        .await;
+    client.read_until('Z').await.unwrap();
+
+    client.send_simple(Query::new("BEGIN")).await;
+    client.read_until('Z').await.unwrap();
+
+    client
+        .send(Parse::named(
+            "__test_1",
+            "UPDATE sharded SET id = $2 WHERE id = $1 RETURNING id",
+        ))
+        .await;
+    client.send(Describe::new_statement("__test_1")).await;
+    client.send(Flush).await;
+    client.try_process().await.unwrap();
+
+    let reply = client.read_until('T').await.unwrap();
+
+    reply
+        .into_iter()
+        .zip(['1', 't', 'T'])
+        .for_each(|(message, code)| {
+            assert_eq!(message.code(), code);
+
+            match code {
+                'T' => assert_eq!(
+                    RowDescription::try_from(message)
+                        .unwrap()
+                        .field(0)
+                        .unwrap()
+                        .name,
+                    "id"
+                ),
+
+                't' | '1' => (),
+                _ => unreachable!(),
+            }
+        });
+
+    client
+        .send(Bind::new_params(
+            "__test_1",
+            &[
+                Parameter::new("1".as_bytes()),
+                Parameter::new("11".as_bytes()),
+            ],
+        ))
+        .await;
+    client.send(Execute::new()).await;
+    client.send(Sync).await;
+    client.try_process().await.unwrap();
+
+    let reply = client.read_until('Z').await.unwrap();
+
+    reply
+        .into_iter()
+        .zip(['2', 'D', 'C', 'Z'])
+        .for_each(|(message, code)| {
+            assert_eq!(message.code(), code);
+            match code {
+                'C' => assert_eq!(
+                    CommandComplete::try_from(message).unwrap().command(),
+                    "UPDATE 1"
+                ),
+                'Z' => assert!(
+                    ReadyForQuery::try_from(message).unwrap().state().unwrap()
+                        == TransactionState::InTrasaction
+                ),
+                'D' => assert_eq!(
+                    DataRow::try_from(message).unwrap().column(0).unwrap(),
+                    "11".as_bytes()
+                ),
+                '1' | '2' => (),
+                _ => unreachable!(),
+            }
+        });
 }

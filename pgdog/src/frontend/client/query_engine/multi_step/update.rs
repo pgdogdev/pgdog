@@ -7,10 +7,10 @@ use crate::{
         router::parser::rewrite::statement::ShardingKeyUpdate,
         ClientRequest, Command, Router, RouterContext,
     },
-    net::{DataRow, ErrorResponse, Protocol, RowDescription},
+    net::{CommandComplete, DataRow, ErrorResponse, Protocol, ReadyForQuery, RowDescription},
 };
 
-use super::{Error, UpdateError};
+use super::{Error, ForwardCheck, UpdateError};
 
 #[derive(Debug, Clone, Default)]
 pub(super) struct Row {
@@ -126,30 +126,47 @@ impl<'a> UpdateMulti<'a> {
             }
 
             self.delete_row(context).await?;
-            self.execute_internal(context, &mut request).await?;
+            self.execute_internal(context, &mut request, self.rewrite.insert.is_returning())
+                .await?;
+
             self.engine
-                .fake_command_response(context, "UPDATE 1")
+                .process_server_message(context, CommandComplete::new("UPDATE 1").message()?) // We only allow to update one row at a time.
+                .await?;
+            self.engine
+                .process_server_message(
+                    context,
+                    ReadyForQuery::in_transaction(context.in_transaction()).message()?,
+                )
                 .await?;
 
             Ok(())
         }
     }
 
+    /// Execute request and return messages to the client if forward_reply is true.
     async fn execute_internal(
         &mut self,
         context: &mut QueryEngineContext<'_>,
         request: &mut ClientRequest,
+        forward_reply: bool,
     ) -> Result<(), Error> {
         self.engine
             .backend
             .handle_client_request(request, &mut Router::default(), false)
             .await?;
 
+        let mut checker = ForwardCheck::new(&context.client_request);
+
         while self.engine.backend.has_more_messages() {
             let message = self.engine.read_server_message(context).await?;
+            let code = message.code();
 
-            if message.code() == 'E' {
+            if code == 'E' {
                 return Err(Error::Execution(ErrorResponse::try_from(message)?));
+            }
+
+            if forward_reply && checker.forward(code) {
+                self.engine.process_server_message(context, message).await?;
             }
         }
 
@@ -185,7 +202,7 @@ impl<'a> UpdateMulti<'a> {
         let mut request = self.rewrite.delete.build_request(&context.client_request)?;
         self.route(&mut request, context)?;
 
-        self.execute_internal(context, &mut request).await
+        self.execute_internal(context, &mut request, false).await
     }
 
     pub(super) async fn fetch_row(

@@ -19,7 +19,7 @@ use crate::{
         BufferedQuery, ClientRequest,
     },
     net::{
-        bind::Parameter, Bind, DataRow, Execute, Flush, Format, FromDataType, Parse,
+        bind::Parameter, Bind, DataRow, Describe, Execute, Flush, Format, FromDataType, Parse,
         ProtocolMessage, Query, RowDescription, Sync,
     },
 };
@@ -64,6 +64,7 @@ impl Statement {
             }
             BufferedQuery::Prepared(_) => {
                 request.push(Parse::new_anonymous(&self.stmt).into());
+                request.push(Describe::new_statement("").into());
                 if let Some(params) = params {
                     request.push(self.rewrite_bind(&params)?.into());
                     request.push(Execute::new().into());
@@ -114,6 +115,10 @@ pub(crate) struct Insert {
     /// Mapping of column name to `column name = value` from
     /// the original UPDATE statement.
     pub(super) mapping: HashMap<String, UpdateValue>,
+    /// Return columns.
+    pub(super) returning_list: Vec<Node>,
+    /// Returning list deparsed.
+    pub(super) returnin_list_deparsed: Option<String>,
 }
 
 impl Insert {
@@ -223,6 +228,7 @@ impl Insert {
                     ..Default::default()
                 }))),
             })),
+            returning_list: self.returning_list.clone(),
             r#override: OverridingKind::OverridingNotSet.try_into().unwrap(),
             ..Default::default()
         };
@@ -237,10 +243,15 @@ impl Insert {
         // parser again.
         //
         let stmt = format!(
-            "INSERT INTO {} ({}) VALUES ({})",
+            "INSERT INTO {} ({}) VALUES ({}){}",
             table,
             columns_str.join(", "),
-            values_str.join(", ")
+            values_str.join(", "),
+            if let Some(ref returning_list) = self.returnin_list_deparsed {
+                format!("RETURNING {}", returning_list)
+            } else {
+                "".into()
+            }
         );
 
         // Build the AST to be used with the router.
@@ -252,12 +263,18 @@ impl Insert {
 
         let mut req = ClientRequest::from(vec![
             ProtocolMessage::from(Parse::new_anonymous(&stmt)),
+            Describe::new_statement("").into(), // So we get both T and t,
             bind.into(),
             Execute::new().into(),
             Sync.into(),
         ]);
         req.ast = Some(ast);
         Ok(req)
+    }
+
+    /// Do we have to return the rows to the client?
+    pub(crate) fn is_returning(&self) -> bool {
+        !self.returning_list.is_empty() && self.returnin_list_deparsed.is_some()
     }
 }
 
@@ -495,23 +512,34 @@ fn parse_result(node: NodeEnum) -> ParseResult {
 
 /// Deparse an expression node by wrapping it in a SELECT statement.
 fn deparse_expr(node: &Node) -> Result<String, Error> {
-    let select = SelectStmt {
-        target_list: vec![Node {
-            node: Some(NodeEnum::ResTarget(Box::new(ResTarget {
-                val: Some(Box::new(node.clone())),
-                ..Default::default()
-            }))),
-        }],
+    Ok(deparse_list(&[Node {
+        node: Some(NodeEnum::ResTarget(Box::new(ResTarget {
+            val: Some(Box::new(node.clone())),
+            ..Default::default()
+        }))),
+    }])?
+    .unwrap()) // SAFETY: we are not passing in an empty list.
+}
+
+/// Deparse a list of expressions by wrapping them into a SELECT statement.
+fn deparse_list(list: &[Node]) -> Result<Option<String>, Error> {
+    if list.is_empty() {
+        return Ok(None);
+    }
+
+    let stmt = SelectStmt {
+        target_list: list.to_vec(),
         limit_option: LimitOption::Default.try_into().unwrap(),
         op: SetOperation::SetopNone.try_into().unwrap(),
         ..Default::default()
     };
-    let result = parse_result(NodeEnum::SelectStmt(Box::new(select)));
-    let deparsed = pg_query::ParseResult::new(result, "".into()).deparse()?;
-    Ok(deparsed
+    let string = parse_result(NodeEnum::SelectStmt(Box::new(stmt)))
+        .deparse()?
         .strip_prefix("SELECT ")
-        .unwrap_or(&deparsed)
-        .to_string())
+        .unwrap_or_default()
+        .to_string();
+
+    Ok(Some(string))
 }
 
 fn create_stmts(stmt: &UpdateStmt, new_value: &ResTarget) -> Result<ShardingKeyUpdate, Error> {
@@ -586,6 +614,8 @@ fn create_stmts(stmt: &UpdateStmt, new_value: &ResTarget) -> Result<ShardingKeyU
             insert: Insert {
                 table: stmt.relation.clone(),
                 mapping: res_targets_to_insert_res_targets(stmt)?,
+                returning_list: stmt.returning_list.clone(),
+                returnin_list_deparsed: deparse_list(&stmt.returning_list)?,
             },
         }),
     })
@@ -660,6 +690,7 @@ mod test {
             "SELECT * FROM sharded WHERE email = $1 AND name = $2"
         );
         assert_eq!(result.select.params, vec![2, 3]);
+        assert!(!result.insert.is_returning());
     }
 
     #[test]
@@ -999,5 +1030,22 @@ mod test {
             result,
             Err(Error::UnsupportedShardingKeyUpdate(msg)) if msg == "\"id\" = - id"
         ));
+    }
+
+    #[test]
+    fn test_return_rows() {
+        let result = run_test("UPDATE sharded SET id = $1 WHERE id = $2 RETURNING *")
+            .unwrap()
+            .unwrap();
+        assert_eq!(result.insert.returnin_list_deparsed, Some("*".into()));
+
+        let result =
+            run_test("UPDATE sharded SET id = $1 WHERE id = $2 RETURNING id, email, random()")
+                .unwrap()
+                .unwrap();
+        assert_eq!(
+            result.insert.returnin_list_deparsed,
+            Some("id, email, random()".into())
+        );
     }
 }
