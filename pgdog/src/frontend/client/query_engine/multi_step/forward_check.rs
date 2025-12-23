@@ -1,15 +1,11 @@
 use fnv::FnvHashSet as HashSet;
 
-use crate::{
-    frontend::ClientRequest,
-    net::{Protocol, ProtocolMessage},
-};
+use crate::{frontend::ClientRequest, net::Protocol};
 
 #[derive(Debug, Clone)]
 pub(crate) struct ForwardCheck {
     codes: HashSet<char>,
     sent: HashSet<char>,
-    anonymous_extended: bool,
     describe: bool,
 }
 
@@ -21,11 +17,6 @@ impl ForwardCheck {
     pub(crate) fn new(request: &ClientRequest) -> Self {
         Self {
             codes: request.iter().map(|m| m.code()).collect(),
-            anonymous_extended: request
-                .iter()
-                .find(|m| m.code() == 'P')
-                .map(|m| matches!(m, ProtocolMessage::Parse(parse) if parse.anonymous()))
-                .unwrap_or_default(),
             describe: request.iter().find(|m| m.code() == 'D').is_some(),
             sent: HashSet::default(),
         }
@@ -37,11 +28,7 @@ impl ForwardCheck {
             '1' => self.codes.contains(&'P'), // ParseComplete
             '2' => self.codes.contains(&'B'), // BindComplete
             'D' | 'E' => true,                // DataRow
-            'T' => {
-                self.anonymous_extended
-                    || self.describe && !self.sent.contains(&'T')
-                    || self.codes.contains(&'Q')
-            }
+            'T' => self.describe && !self.sent.contains(&'T') || self.codes.contains(&'Q'),
             't' => self.describe && !self.sent.contains(&'t'),
             _ => false,
         };

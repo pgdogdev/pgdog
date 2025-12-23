@@ -329,14 +329,6 @@ async fn test_move_rows_extended() {
                     ReadyForQuery::try_from(message).unwrap().state().unwrap()
                         == TransactionState::InTrasaction
                 ),
-                'T' => assert_eq!(
-                    RowDescription::try_from(message)
-                        .unwrap()
-                        .field(0)
-                        .unwrap()
-                        .name,
-                    "id"
-                ),
                 'D' => assert_eq!(
                     DataRow::try_from(message).unwrap().column(0).unwrap(),
                     "11".as_bytes()
