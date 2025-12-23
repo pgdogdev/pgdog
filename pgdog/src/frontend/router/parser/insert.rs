@@ -57,6 +57,17 @@ impl<'a> Insert<'a> {
         vec![]
     }
 
+    /// Calculate the number of tuples in the statement.
+    pub fn num_tuples(&self) -> usize {
+        if let Some(select) = &self.stmt.select_stmt {
+            if let Some(NodeEnum::SelectStmt(stmt)) = &select.node {
+                return stmt.values_lists.len();
+            }
+        }
+
+        0
+    }
+
     /// Get the sharding key for the statement.
     pub fn shard(
         &'a self,
@@ -77,7 +88,7 @@ impl<'a> Insert<'a> {
             }
         }
 
-        if tuples.len() != 1 {
+        if self.num_tuples() != 1 {
             debug!("multiple tuples in an INSERT statement");
             return Ok(Shard::All);
         }
@@ -104,14 +115,6 @@ impl<'a> Insert<'a> {
                     Value::Integer(int) => {
                         let ctx = ContextBuilder::new(key.table)
                             .data(*int)
-                            .shards(schema.shards)
-                            .build()?;
-                        return Ok(ctx.apply()?);
-                    }
-
-                    Value::Float(float) => {
-                        let ctx = ContextBuilder::new(key.table)
-                            .data(*float)
                             .shards(schema.shards)
                             .build()?;
                         return Ok(ctx.apply()?);

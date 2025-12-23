@@ -1,4 +1,5 @@
 use tokio::time::timeout;
+use tracing::trace;
 
 use crate::{
     frontend::{
@@ -226,6 +227,8 @@ impl QueryEngine {
 
         // Do this before flushing, because flushing can take time.
         self.cleanup_backend(context);
+
+        trace!("{:#?} >>> {:?}", message, context.stream.peer_addr());
 
         if flush {
             context.stream.send_flush(&message).await?;

@@ -64,18 +64,17 @@ mod tests {
         for target in &update.target_list {
             if let Some(NodeEnum::ResTarget(res)) = &target.node {
                 if let Some(val) = &res.val {
-                    if let Ok(value) = Value::try_from(&val.node) {
-                        match value {
-                            Value::Float(f) => {
-                                assert_eq!(f, "50.00");
-                                found_decimal = true;
-                            }
-                            Value::String(s) => {
-                                assert_eq!(s, "completed");
-                                found_string = true;
-                            }
-                            _ => {}
+                    let value = Value::try_from(&val.node).unwrap();
+                    match value {
+                        Value::Float(f) => {
+                            assert_eq!(f, 50.0);
+                            found_decimal = true;
                         }
+                        Value::String(s) => {
+                            assert_eq!(s, "completed");
+                            found_string = true;
+                        }
+                        _ => {}
                     }
                 }
             }
@@ -108,14 +107,13 @@ mod tests {
         for target in &update.target_list {
             if let Some(NodeEnum::ResTarget(res)) = &target.node {
                 if let Some(val) = &res.val {
-                    if let Ok(value) = Value::try_from(&val.node) {
-                        match value {
-                            Value::String(s) => {
-                                assert_eq!(s, "50.00");
-                                found_string = true;
-                            }
-                            _ => {}
+                    let value = Value::try_from(&val.node).unwrap();
+                    match value {
+                        Value::String(s) => {
+                            assert_eq!(s, "50.00");
+                            found_string = true;
                         }
+                        _ => {}
                     }
                 }
             }

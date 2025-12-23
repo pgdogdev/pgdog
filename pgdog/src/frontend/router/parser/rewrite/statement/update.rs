@@ -163,8 +163,10 @@ impl Insert {
                         bind.push_param(Parameter::new(int.to_string().as_bytes()), Format::Text)
                     }
 
-                    Value::String(s) | Value::Float(s) => {
-                        bind.push_param(Parameter::new(s.as_bytes()), Format::Text)
+                    Value::String(s) => bind.push_param(Parameter::new(s.as_bytes()), Format::Text),
+
+                    Value::Float(f) => {
+                        bind.push_param(Parameter::new(f.to_string().as_bytes()), Format::Text)
                     }
 
                     Value::Boolean(b) => bind.push_param(

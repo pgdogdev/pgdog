@@ -999,7 +999,7 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
 
                                     if self.schema.tables().get_table(column).is_some() {
                                         // Try to extract the value directly
-                                        if let Ok(value) = Value::try_from(&value_node.node) {
+                                        if let Ok(value) = Value::try_from(value_node) {
                                             if let Some(shard) =
                                                 self.compute_shard_with_ctx(column, value, ctx)?
                                             {

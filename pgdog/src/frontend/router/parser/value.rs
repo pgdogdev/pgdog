@@ -14,7 +14,7 @@ use crate::net::{messages::Vector, vector::str_to_vector};
 pub enum Value<'a> {
     String(&'a str),
     Integer(i64),
-    Float(&'a str),
+    Float(f64),
     Boolean(bool),
     Null,
     Placeholder(i32),
@@ -78,11 +78,15 @@ impl<'a> From<&'a AConst> for Value<'a> {
             Some(Val::Ival(i)) => Value::Integer(i.ival as i64),
             Some(Val::Fval(Float { fval })) => {
                 if fval.contains(".") {
-                    Value::Float(fval.as_str())
+                    if let Ok(float) = fval.parse() {
+                        Value::Float(float)
+                    } else {
+                        Value::String(fval.as_str())
+                    }
                 } else {
                     match fval.parse::<i64>() {
                         Ok(i) => Value::Integer(i), // Integers over 2.2B and under -2.2B are sent as "floats"
-                        Err(_) => Value::Float(fval.as_str()),
+                        Err(_) => Value::String(fval.as_str()),
                     }
                 }
             }
@@ -104,19 +108,39 @@ impl<'a> TryFrom<&'a Option<NodeEnum>> for Value<'a> {
     type Error = ();
 
     fn try_from(value: &'a Option<NodeEnum>) -> Result<Self, Self::Error> {
-        match value {
-            Some(NodeEnum::AConst(a_const)) => Ok(a_const.into()),
-            Some(NodeEnum::ParamRef(param_ref)) => Ok(Value::Placeholder(param_ref.number)),
+        Ok(match value {
+            Some(NodeEnum::AConst(a_const)) => a_const.into(),
+            Some(NodeEnum::ParamRef(param_ref)) => Value::Placeholder(param_ref.number),
             Some(NodeEnum::TypeCast(cast)) => {
                 if let Some(ref arg) = cast.arg {
-                    Value::try_from(&arg.node)
+                    Value::try_from(&arg.node)?
                 } else {
-                    Ok(Value::Null)
+                    Value::Null
                 }
             }
 
-            _ => Err(()),
-        }
+            Some(NodeEnum::AExpr(expr)) => {
+                if expr.kind() == AExprKind::AexprOp {
+                    if let Some(Node {
+                        node: Some(NodeEnum::String(pg_query::protobuf::String { sval })),
+                    }) = expr.name.first()
+                    {
+                        if sval == "-" {
+                            if let Some(ref node) = expr.rexpr {
+                                let value = Value::try_from(&node.node)?;
+                                if let Value::Float(float) = value {
+                                    return Ok(Value::Float(-float));
+                                }
+                            }
+                        }
+                    }
+                }
+
+                return Err(());
+            }
+
+            _ => return Err(()),
+        })
     }
 }
 
@@ -138,5 +162,35 @@ mod test {
         };
         let vector = Value::try_from(&node).unwrap();
         assert_eq!(vector.vector().unwrap()[0], 1.0.into());
+    }
+
+    #[test]
+    fn test_negative_numeric_with_cast() {
+        let stmt =
+            pg_query::parse("INSERT INTO t (id, val) VALUES (2, -987654321.123456789::NUMERIC)")
+                .unwrap();
+
+        let insert = match stmt.protobuf.stmts[0].stmt.as_ref().unwrap().node.as_ref() {
+            Some(NodeEnum::InsertStmt(insert)) => insert,
+            _ => panic!("expected InsertStmt"),
+        };
+
+        let select = insert.select_stmt.as_ref().unwrap();
+        let values = match select.node.as_ref() {
+            Some(NodeEnum::SelectStmt(s)) => &s.values_lists,
+            _ => panic!("expected SelectStmt"),
+        };
+
+        // values_lists[0] is a List node containing the tuple items
+        let tuple = match values[0].node.as_ref() {
+            Some(NodeEnum::List(list)) => &list.items,
+            _ => panic!("expected List"),
+        };
+
+        // Second value in the VALUES tuple is our negative numeric
+        let neg_numeric_node = &tuple[1];
+        let value = Value::try_from(&neg_numeric_node.node).unwrap();
+
+        assert_eq!(value, Value::Float(-987654321.123456789));
     }
 }
