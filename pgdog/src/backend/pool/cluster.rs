@@ -544,7 +544,7 @@ impl Cluster {
 mod test {
     use std::{sync::Arc, time::Duration};
 
-    use pgdog_config::{OmnishardedTable, ShardedSchema};
+    use pgdog_config::{ConfigAndUsers, OmnishardedTable, ShardedSchema};
 
     use crate::{
         backend::{
@@ -553,7 +553,7 @@ mod test {
             Shard, ShardedTables,
         },
         config::{
-            config, DataType, Hasher, LoadBalancingStrategy, ReadWriteSplit, ReadWriteStrategy,
+            DataType, Hasher, LoadBalancingStrategy, ReadWriteSplit, ReadWriteStrategy,
             ShardedTable,
         },
     };
@@ -561,8 +561,7 @@ mod test {
     use super::{Cluster, DatabaseUser};
 
     impl Cluster {
-        pub fn new_test() -> Self {
-            let config = config();
+        pub fn new_test(config: &ConfigAndUsers) -> Self {
             let identifier = Arc::new(DatabaseUser {
                 user: "pgdog".into(),
                 database: "pgdog".into(),
@@ -643,8 +642,8 @@ mod test {
             }
         }
 
-        pub fn new_test_single_shard() -> Cluster {
-            let mut cluster = Self::new_test();
+        pub fn new_test_single_shard(config: &ConfigAndUsers) -> Cluster {
+            let mut cluster = Self::new_test(config);
             cluster.shards.pop();
 
             cluster

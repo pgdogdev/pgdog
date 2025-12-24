@@ -299,6 +299,7 @@ impl ListShards {
 }
 
 #[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Eq, Hash, Default)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum QueryParserLevel {
     On,
     #[default]

@@ -21,6 +21,7 @@ use crate::net::messages::Query;
 
 pub mod setup;
 
+pub mod test_bypass;
 pub mod test_comments;
 pub mod test_ddl;
 pub mod test_delete;
@@ -40,7 +41,7 @@ pub mod test_transaction;
 
 fn parse_query(query: &str) -> Command {
     let mut query_parser = QueryParser::default();
-    let cluster = Cluster::new_test();
+    let cluster = Cluster::new_test(&config());
     let ast = Ast::new(
         &BufferedQuery::Query(Query::new(query)),
         &cluster.sharding_schema(),
@@ -65,7 +66,7 @@ macro_rules! command {
     ($query:expr, $in_transaction:expr) => {{
         let query = $query;
         let mut query_parser = QueryParser::default();
-        let cluster = Cluster::new_test();
+        let cluster = Cluster::new_test(&crate::config::config());
         let mut ast = Ast::new(
             &BufferedQuery::Query(Query::new($query)),
             &cluster.sharding_schema(),
@@ -149,7 +150,12 @@ macro_rules! query_parser {
     }};
 
     ($qp:expr, $query:expr, $in_transaction:expr) => {
-        query_parser!($qp, $query, $in_transaction, Cluster::new_test())
+        query_parser!(
+            $qp,
+            $query,
+            $in_transaction,
+            Cluster::new_test(&crate::config::config())
+        )
     };
 }
 
@@ -168,7 +174,7 @@ macro_rules! parse {
             })
             .collect::<Vec<_>>();
         let bind = Bind::new_params_codes($name, &params, $codes);
-        let cluster = Cluster::new_test();
+        let cluster = Cluster::new_test(&crate::config::config());
         let ast = Ast::new(
             &BufferedQuery::Prepared(Parse::new_anonymous($query)),
             &cluster.sharding_schema(),
@@ -404,7 +410,7 @@ fn test_set() {
     }
 
     let query_str = r#"SET statement_timeout TO 1"#;
-    let cluster = Cluster::new_test();
+    let cluster = Cluster::new_test(&config());
     let mut prep_stmts = PreparedStatements::default();
     let buffered_query = BufferedQuery::Query(Query::new(query_str));
     let mut ast = Ast::new(&buffered_query, &cluster.sharding_schema(), &mut prep_stmts).unwrap();
@@ -452,7 +458,7 @@ fn test_transaction() {
         _ => panic!("not a select"),
     }
 
-    let mut cluster = Cluster::new_test();
+    let mut cluster = Cluster::new_test(&config());
     cluster.set_read_write_strategy(ReadWriteStrategy::Aggressive);
     let command = query_parser!(
         QueryParser::default(),
@@ -530,7 +536,7 @@ fn test_cte() {
 fn test_function_begin() {
     let (cmd, mut qp) = command!("BEGIN");
     assert!(matches!(cmd, Command::StartTransaction { .. }));
-    let cluster = Cluster::new_test();
+    let cluster = Cluster::new_test(&config());
     let mut prep_stmts = PreparedStatements::default();
     let query_str = "SELECT
 	ROW(t1.*) AS tt1,
@@ -606,7 +612,7 @@ fn test_limit_offset() {
 
 #[test]
 fn test_close_direct_one_shard() {
-    let cluster = Cluster::new_test_single_shard();
+    let cluster = Cluster::new_test_single_shard(&config());
     let mut qp = QueryParser::default();
 
     let buf: ClientRequest = vec![Close::named("test").into(), Sync.into()].into();
@@ -663,9 +669,9 @@ fn test_commit_prepared() {
 fn test_dry_run_simple() {
     let mut config = config().deref().clone();
     config.config.general.dry_run = true;
-    config::set(config).unwrap();
+    config::set(config.clone()).unwrap();
 
-    let cluster = Cluster::new_test_single_shard();
+    let cluster = Cluster::new_test_single_shard(&config);
     let command = query_parser!(
         QueryParser::default(),
         Query::new("/* pgdog_sharding_key: 1234 */ SELECT * FROM sharded"),

@@ -299,6 +299,8 @@ impl CopyParser {
 mod test {
     use pg_query::parse;
 
+    use crate::config::config;
+
     use super::*;
 
     #[test]
@@ -372,7 +374,7 @@ mod test {
             _ => panic!("not a copy"),
         };
 
-        let mut copy = CopyParser::new(&copy, &Cluster::new_test()).unwrap();
+        let mut copy = CopyParser::new(&copy, &Cluster::new_test(&config())).unwrap();
 
         let rows = copy.shard(&[copy_data]).unwrap();
         assert_eq!(rows.len(), 3);

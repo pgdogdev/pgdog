@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 
+use crate::config::config;
 use crate::frontend::router::parser::{Cache, Shard};
 use crate::frontend::Command;
 
@@ -16,7 +17,7 @@ fn test_show_shards() {
 
 #[test]
 fn test_close_direct_single_shard() {
-    let mut test = QueryParserTest::new_single_shard();
+    let mut test = QueryParserTest::new_single_shard(&config());
 
     let command = test.execute(vec![Close::named("test").into(), Sync.into()]);
 
@@ -28,7 +29,7 @@ fn test_close_direct_single_shard() {
 
 #[test]
 fn test_dry_run_simple() {
-    let mut test = QueryParserTest::new_single_shard().with_dry_run();
+    let mut test = QueryParserTest::new_single_shard(&config()).with_dry_run();
 
     let command = test.execute(vec![Query::new(
         "/* pgdog_sharding_key: 1234 */ SELECT * FROM sharded",
