@@ -43,10 +43,10 @@ impl<'a> UpdateMulti<'a> {
                     self.engine
                         .error_response(context, ErrorResponse::from_err(&err))
                         .await?;
-                    return Ok(());
+                    Ok(())
                 } else {
                     // These are bad, disconnecting the client.
-                    return Err(err.into());
+                    Err(err)
                 }
             }
         }
@@ -57,7 +57,7 @@ impl<'a> UpdateMulti<'a> {
         &mut self,
         context: &mut QueryEngineContext<'_>,
     ) -> Result<(), Error> {
-        let mut check = self.rewrite.check.build_request(&context.client_request)?;
+        let mut check = self.rewrite.check.build_request(context.client_request)?;
         self.route(&mut check, context)?;
 
         // The new row is on the same shard as the old row
@@ -100,7 +100,7 @@ impl<'a> UpdateMulti<'a> {
         row: Row,
     ) -> Result<(), Error> {
         let mut request = self.rewrite.insert.build_request(
-            &context.client_request,
+            context.client_request,
             &row.row_description,
             &row.data_row,
         )?;
@@ -168,7 +168,7 @@ impl<'a> UpdateMulti<'a> {
             .handle_client_request(request, &mut Router::default(), false)
             .await?;
 
-        let mut checker = ForwardCheck::new(&context.client_request);
+        let mut checker = ForwardCheck::new(context.client_request);
 
         while self.engine.backend.has_more_messages() {
             let message = self.engine.read_server_message(context).await?;
@@ -194,7 +194,7 @@ impl<'a> UpdateMulti<'a> {
         self.engine
             .backend
             .handle_client_request(
-                &context.client_request,
+                context.client_request,
                 &mut self.engine.router,
                 self.engine.streaming,
             )
@@ -212,7 +212,7 @@ impl<'a> UpdateMulti<'a> {
         &mut self,
         context: &mut QueryEngineContext<'_>,
     ) -> Result<(), Error> {
-        let mut request = self.rewrite.delete.build_request(&context.client_request)?;
+        let mut request = self.rewrite.delete.build_request(context.client_request)?;
         self.route(&mut request, context)?;
 
         self.execute_request_internal(context, &mut request, false)
@@ -223,7 +223,7 @@ impl<'a> UpdateMulti<'a> {
         &mut self,
         context: &mut QueryEngineContext<'_>,
     ) -> Result<Option<Row>, Error> {
-        let mut request = self.rewrite.select.build_request(&context.client_request)?;
+        let mut request = self.rewrite.select.build_request(context.client_request)?;
         self.route(&mut request, context)?;
 
         self.engine
@@ -262,7 +262,7 @@ impl<'a> UpdateMulti<'a> {
     /// This is an optimization to avoid doing a multi-shard UPDATE when
     /// we don't have to.
     pub(super) fn is_same_shard(&self, context: &QueryEngineContext<'_>) -> Result<bool, Error> {
-        let mut check = self.rewrite.check.build_request(&context.client_request)?;
+        let mut check = self.rewrite.check.build_request(context.client_request)?;
         self.route(&mut check, context)?;
 
         let new_shard = check.route().shard();

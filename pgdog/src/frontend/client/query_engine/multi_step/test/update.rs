@@ -223,9 +223,13 @@ async fn test_transaction_required() {
 async fn test_move_rows_simple() {
     let mut client = TestClient::new_rewrites(Parameters::default()).await;
 
+    let shard_0_id = client.random_id_for_shard(0);
+    let shard_1_id = client.random_id_for_shard(1);
+
     client
         .send_simple(Query::new(format!(
-            "INSERT INTO sharded (id) VALUES (1) ON CONFLICT(id) DO NOTHING",
+            "INSERT INTO sharded (id) VALUES ({}) ON CONFLICT(id) DO NOTHING",
+            shard_0_id
         )))
         .await;
     client.read_until('Z').await.unwrap();
@@ -234,14 +238,16 @@ async fn test_move_rows_simple() {
     client.read_until('Z').await.unwrap();
 
     client
-        .try_send_simple(Query::new(
-            "UPDATE sharded SET id = 11 WHERE id = 1 RETURNING id",
-        ))
+        .try_send_simple(Query::new(format!(
+            "UPDATE sharded SET id = {} WHERE id = {} RETURNING id",
+            shard_1_id, shard_0_id
+        )))
         .await
         .unwrap();
 
     let reply = client.read_until('Z').await.unwrap();
 
+    let shard_1_id_str = shard_1_id.to_string();
     reply
         .into_iter()
         .zip(['T', 'D', 'C', 'Z'])
@@ -266,7 +272,7 @@ async fn test_move_rows_simple() {
                 ),
                 'D' => assert_eq!(
                     DataRow::try_from(message).unwrap().column(0).unwrap(),
-                    "11".as_bytes()
+                    shard_1_id_str.as_bytes()
                 ),
                 _ => unreachable!(),
             }
@@ -277,9 +283,13 @@ async fn test_move_rows_simple() {
 async fn test_move_rows_extended() {
     let mut client = TestClient::new_rewrites(Parameters::default()).await;
 
+    let shard_0_id = client.random_id_for_shard(0);
+    let shard_1_id = client.random_id_for_shard(1);
+
     client
         .send_simple(Query::new(format!(
-            "INSERT INTO sharded (id) VALUES (1) ON CONFLICT(id) DO NOTHING",
+            "INSERT INTO sharded (id) VALUES ({}) ON CONFLICT(id) DO NOTHING",
+            shard_0_id
         )))
         .await;
     client.read_until('Z').await.unwrap();
@@ -296,8 +306,8 @@ async fn test_move_rows_extended() {
         .send(Bind::new_params(
             "",
             &[
-                Parameter::new("1".as_bytes()),
-                Parameter::new("11".as_bytes()),
+                Parameter::new(shard_0_id.to_string().as_bytes()),
+                Parameter::new(shard_1_id.to_string().as_bytes()),
             ],
         ))
         .await;
@@ -307,6 +317,7 @@ async fn test_move_rows_extended() {
 
     let reply = client.read_until('Z').await.unwrap();
 
+    let shard_1_id_str = shard_1_id.to_string();
     reply
         .into_iter()
         .zip(['1', '2', 'D', 'C', 'Z'])
@@ -323,7 +334,7 @@ async fn test_move_rows_extended() {
                 ),
                 'D' => assert_eq!(
                     DataRow::try_from(message).unwrap().column(0).unwrap(),
-                    "11".as_bytes()
+                    shard_1_id_str.as_bytes()
                 ),
                 '1' | '2' => (),
                 _ => unreachable!(),
@@ -336,9 +347,13 @@ async fn test_move_rows_prepared() {
     crate::logger();
     let mut client = TestClient::new_rewrites(Parameters::default()).await;
 
+    let shard_0_id = client.random_id_for_shard(0);
+    let shard_1_id = client.random_id_for_shard(1);
+
     client
         .send_simple(Query::new(format!(
-            "INSERT INTO sharded (id) VALUES (1) ON CONFLICT(id) DO NOTHING",
+            "INSERT INTO sharded (id) VALUES ({}) ON CONFLICT(id) DO NOTHING",
+            shard_0_id
         )))
         .await;
     client.read_until('Z').await.unwrap();
@@ -383,8 +398,8 @@ async fn test_move_rows_prepared() {
         .send(Bind::new_params(
             "__test_1",
             &[
-                Parameter::new("1".as_bytes()),
-                Parameter::new("11".as_bytes()),
+                Parameter::new(shard_0_id.to_string().as_bytes()),
+                Parameter::new(shard_1_id.to_string().as_bytes()),
             ],
         ))
         .await;
@@ -394,6 +409,7 @@ async fn test_move_rows_prepared() {
 
     let reply = client.read_until('Z').await.unwrap();
 
+    let shard_1_id_str = shard_1_id.to_string();
     reply
         .into_iter()
         .zip(['2', 'D', 'C', 'Z'])
@@ -410,7 +426,7 @@ async fn test_move_rows_prepared() {
                 ),
                 'D' => assert_eq!(
                     DataRow::try_from(message).unwrap().column(0).unwrap(),
-                    "11".as_bytes()
+                    shard_1_id_str.as_bytes()
                 ),
                 '1' | '2' => (),
                 _ => unreachable!(),
@@ -462,4 +478,94 @@ async fn test_same_shard_binary() {
                 );
             }
         });
+}
+
+#[tokio::test]
+async fn test_update_with_expr() {
+    // Test that UPDATE with expression columns (not simple values) works correctly.
+    // This validates the bind parameter alignment fix where expression columns
+    // don't consume bind parameter slots.
+    //
+    // Note: Expressions that reference the original row's columns (like COALESCE(value, 'default'))
+    // won't work because they're inserted literally into the INSERT statement where those
+    // columns don't exist. Only standalone expressions like 'prefix' || 'suffix' work.
+    let mut client = TestClient::new_rewrites(Parameters::default()).await;
+
+    // Use random IDs to avoid conflicts with other tests
+    let shard_0_id = client.random_id_for_shard(0);
+    let shard_1_id = client.random_id_for_shard(1);
+
+    // Insert a row into shard 0
+    client
+        .send_simple(Query::new(format!(
+            "INSERT INTO sharded (id, value) VALUES ({}, 'original') ON CONFLICT(id) DO UPDATE SET value = 'original'",
+            shard_0_id
+        )))
+        .await;
+    client.read_until('Z').await.unwrap();
+
+    client.send_simple(Query::new("BEGIN")).await;
+    client.read_until('Z').await.unwrap();
+
+    // UPDATE that moves row to different shard with an expression column.
+    // Use a standalone expression that doesn't reference any columns.
+    client
+        .try_send_simple(Query::new(format!(
+            "UPDATE sharded SET id = {}, value = 'prefix' || '_suffix' WHERE id = {} RETURNING id, value",
+            shard_1_id, shard_0_id
+        )))
+        .await
+        .unwrap();
+
+    let reply = client.read_until('Z').await.unwrap();
+
+    let shard_1_id_str = shard_1_id.to_string();
+    reply
+        .into_iter()
+        .zip(['T', 'D', 'C', 'Z'])
+        .for_each(|(message, code)| {
+            assert_eq!(message.code(), code);
+            match code {
+                'C' => assert_eq!(
+                    CommandComplete::try_from(message).unwrap().command(),
+                    "UPDATE 1"
+                ),
+                'Z' => assert!(
+                    ReadyForQuery::try_from(message).unwrap().state().unwrap()
+                        == TransactionState::InTrasaction
+                ),
+                'T' => {
+                    let rd = RowDescription::try_from(message).unwrap();
+                    assert_eq!(rd.field(0).unwrap().name, "id");
+                    assert_eq!(rd.field(1).unwrap().name, "value");
+                }
+                'D' => {
+                    let dr = DataRow::try_from(message).unwrap();
+                    assert_eq!(dr.column(0).unwrap(), shard_1_id_str.as_bytes());
+                    // The value should be 'prefix_suffix' from the expression
+                    assert_eq!(dr.column(1).unwrap(), "prefix_suffix".as_bytes());
+                }
+                _ => unreachable!(),
+            }
+        });
+
+    client.send_simple(Query::new("COMMIT")).await;
+    client.read_until('Z').await.unwrap();
+
+    // Verify the row was actually moved to the new shard with correct values
+    client
+        .send_simple(Query::new(format!(
+            "SELECT id, value FROM sharded WHERE id = {}",
+            shard_1_id
+        )))
+        .await;
+    let reply = client.read_until('Z').await.unwrap();
+
+    let data_row = reply
+        .iter()
+        .find(|m| m.code() == 'D')
+        .expect("should have data row");
+    let dr = DataRow::try_from(data_row.clone()).unwrap();
+    assert_eq!(dr.column(0).unwrap(), shard_1_id_str.as_bytes());
+    assert_eq!(dr.column(1).unwrap(), "prefix_suffix".as_bytes());
 }
