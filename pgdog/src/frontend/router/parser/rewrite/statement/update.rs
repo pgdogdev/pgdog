@@ -66,7 +66,7 @@ impl Statement {
                 request.push(Parse::new_anonymous(&self.stmt).into());
                 request.push(Describe::new_statement("").into());
                 if let Some(params) = params {
-                    request.push(self.rewrite_bind(&params)?.into());
+                    request.push(self.rewrite_bind(params)?.into());
                     request.push(Execute::new().into());
                     request.push(Sync.into());
                 } else {
@@ -194,7 +194,7 @@ impl Insert {
                 if value.is_null() {
                     bind.push_param(Parameter::new_null(), Format::Text);
                 } else {
-                    bind.push_param(Parameter::new(&value), Format::Text);
+                    bind.push_param(Parameter::new(value), Format::Text);
                 }
 
                 values_str.push(format!("${}", bind_idx + 1));
@@ -209,7 +209,7 @@ impl Insert {
 
             values.push(Node {
                 node: Some(NodeEnum::ParamRef(ParamRef {
-                    number: bind_idx as i32 + 1,
+                    number: bind_idx + 1,
                     ..Default::default()
                 })),
             });
@@ -224,9 +224,9 @@ impl Insert {
                 node: Some(NodeEnum::SelectStmt(Box::new(SelectStmt {
                     target_list: vec![],
                     from_clause: vec![],
-                    limit_option: LimitOption::Default.try_into().unwrap(),
+                    limit_option: LimitOption::Default.into(),
                     where_clause: None,
-                    op: SetOperation::SetopNone.try_into().unwrap(),
+                    op: SetOperation::SetopNone.into(),
                     values_lists: vec![Node {
                         node: Some(NodeEnum::List(List { items: values })),
                     }],
@@ -234,11 +234,11 @@ impl Insert {
                 }))),
             })),
             returning_list: self.returning_list.clone(),
-            r#override: OverridingKind::OverridingNotSet.try_into().unwrap(),
+            r#override: OverridingKind::OverridingNotSet.into(),
             ..Default::default()
         };
 
-        let table = self.table.as_ref().map(|table| Table::from(table)).unwrap(); // SAFETY: We check that UPDATE has a table.
+        let table = self.table.as_ref().map(Table::from).unwrap(); // SAFETY: We check that UPDATE has a table.
 
         // This is probably one of the few places in the code where
         // we shouldn't use the parser. It's quicker to concatenate strings
@@ -295,8 +295,7 @@ impl<'a> StatementRewrite<'a> {
             .stmt
             .stmts
             .first()
-            .map(|stmt| stmt.stmt.as_ref().map(|stmt| stmt.node.as_ref()))
-            .flatten()
+            .and_then(|stmt| stmt.stmt.as_ref().map(|stmt| stmt.node.as_ref()))
             .flatten();
 
         let stmt = if let Some(NodeEnum::UpdateStmt(stmt)) = stmt {
@@ -534,8 +533,8 @@ fn deparse_list(list: &[Node]) -> Result<Option<String>, Error> {
 
     let stmt = SelectStmt {
         target_list: list.to_vec(),
-        limit_option: LimitOption::Default.try_into().unwrap(),
-        op: SetOperation::SetopNone.try_into().unwrap(),
+        limit_option: LimitOption::Default.into(),
+        op: SetOperation::SetopNone.into(),
         ..Default::default()
     };
     let string = parse_result(NodeEnum::SelectStmt(Box::new(stmt)))
@@ -553,9 +552,9 @@ fn create_stmts(stmt: &UpdateStmt, new_value: &ResTarget) -> Result<ShardingKeyU
         from_clause: vec![Node {
             node: Some(NodeEnum::RangeVar(stmt.relation.clone().unwrap())), // SAFETY: we checked the UPDATE stmt has a table name.
         }],
-        limit_option: LimitOption::Default.try_into().unwrap(),
+        limit_option: LimitOption::Default.into(),
         where_clause: stmt.where_clause.clone(),
-        op: SetOperation::SetopNone.try_into().unwrap(),
+        op: SetOperation::SetopNone.into(),
         ..Default::default()
     };
 
@@ -583,7 +582,7 @@ fn create_stmts(stmt: &UpdateStmt, new_value: &ResTarget) -> Result<ShardingKeyU
     let delete = pg_query::ParseResult::new(delete, "".into());
 
     let delete = Statement {
-        stmt: delete.deparse()?.into(),
+        stmt: delete.deparse()?,
         ast: Ast::from_parse_result(delete),
         params,
     };
@@ -593,11 +592,11 @@ fn create_stmts(stmt: &UpdateStmt, new_value: &ResTarget) -> Result<ShardingKeyU
         from_clause: vec![Node {
             node: Some(NodeEnum::RangeVar(stmt.relation.clone().unwrap())), // SAFETY: we checked the UPDATE stmt has a table name.
         }],
-        limit_option: LimitOption::Default.try_into().unwrap(),
+        limit_option: LimitOption::Default.into(),
         where_clause: Some(Box::new(Node {
-            node: Some(NodeEnum::AExpr(Box::new(res_target_to_a_expr(&new_value)))),
+            node: Some(NodeEnum::AExpr(Box::new(res_target_to_a_expr(new_value)))),
         })),
-        op: SetOperation::SetopNone.try_into().unwrap(),
+        op: SetOperation::SetopNone.into(),
         ..Default::default()
     };
 
