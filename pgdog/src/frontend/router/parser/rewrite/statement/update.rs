@@ -139,13 +139,14 @@ impl Insert {
         let mut columns_str = vec![];
         let mut values_str = vec![];
 
-        for (idx, field) in row_description.iter().enumerate() {
+        let mut bind_idx = 0;
+        for (row_idx, field) in row_description.iter().enumerate() {
             columns_str.push(format!(r#""{}""#, field.name.replace("\"", "\"\""))); // Escape "
 
             if let Some(value) = self.mapping.get(&field.name) {
                 let value = match value {
                     UpdateValue::Value(value) => {
-                        values_str.push(format!("${}", idx + 1));
+                        values_str.push(format!("${}", bind_idx + 1));
                         Value::try_from(value).unwrap() // SAFETY: We check that the value is valid.
                     }
                     UpdateValue::Expr(expr) => {
@@ -186,7 +187,9 @@ impl Insert {
                     Value::Null => bind.push_param(Parameter::new_null(), Format::Text),
                 }
             } else {
-                let value = data_row.get_raw(idx).ok_or(Error::MissingColumn(idx))?;
+                let value = data_row
+                    .get_raw(row_idx)
+                    .ok_or(Error::MissingColumn(row_idx))?;
 
                 if value.is_null() {
                     bind.push_param(Parameter::new_null(), Format::Text);
@@ -194,7 +197,7 @@ impl Insert {
                     bind.push_param(Parameter::new(&value), Format::Text);
                 }
 
-                values_str.push(format!("${}", idx + 1));
+                values_str.push(format!("${}", bind_idx + 1));
             }
 
             columns.push(Node {
@@ -206,10 +209,12 @@ impl Insert {
 
             values.push(Node {
                 node: Some(NodeEnum::ParamRef(ParamRef {
-                    number: idx as i32 + 1,
+                    number: bind_idx as i32 + 1,
                     ..Default::default()
                 })),
             });
+
+            bind_idx += 1;
         }
 
         let insert = InsertStmt {
@@ -442,7 +447,7 @@ fn res_targets_to_insert_res_targets(
                 let value = if valid {
                     UpdateValue::Value(*target.val.clone().unwrap())
                 } else {
-                    UpdateValue::Expr(target.val.as_ref().unwrap().deparse()?)
+                    UpdateValue::Expr(deparse_expr(target.val.as_ref().unwrap())?)
                 };
                 result.insert(target.name.clone(), value);
             }
@@ -627,6 +632,7 @@ mod test {
     use pgdog_config::{Rewrite, ShardedTable};
 
     use crate::backend::{replication::ShardedSchemas, ShardedTables};
+    use crate::net::messages::row_description::Field;
 
     use super::*;
 
@@ -1046,6 +1052,112 @@ mod test {
         assert_eq!(
             result.insert.returnin_list_deparsed,
             Some("id, email, random()".into())
+        );
+    }
+
+    #[test]
+    fn test_res_targets_to_insert_res_targets_expr_branch() {
+        // Test that expression assignments (non-simple values) are deparsed correctly
+        // and stored as UpdateValue::Expr in the insert mapping.
+        let result = run_test("UPDATE sharded SET id = $1, email = random() WHERE id = $2")
+            .unwrap()
+            .unwrap();
+
+        // The id column should be UpdateValue::Value (simple parameter)
+        let id_value = result.insert.mapping.get("id").unwrap();
+        assert!(matches!(id_value, UpdateValue::Value(_)));
+
+        // The email column should be UpdateValue::Expr with the deparsed expression
+        let email_value = result.insert.mapping.get("email").unwrap();
+        match email_value {
+            UpdateValue::Expr(expr) => assert_eq!(expr, "random()"),
+            _ => panic!("Expected UpdateValue::Expr for email"),
+        }
+    }
+
+    #[test]
+    fn test_res_targets_to_insert_res_targets_expr_arithmetic() {
+        // Test arithmetic expressions are deparsed correctly
+        let result = run_test("UPDATE sharded SET id = $1, counter = counter + 1 WHERE id = $2")
+            .unwrap()
+            .unwrap();
+
+        let counter_value = result.insert.mapping.get("counter").unwrap();
+        match counter_value {
+            UpdateValue::Expr(expr) => assert_eq!(expr, "counter + 1"),
+            _ => panic!("Expected UpdateValue::Expr for counter"),
+        }
+    }
+
+    #[test]
+    fn test_res_targets_to_insert_res_targets_expr_coalesce() {
+        // Test COALESCE expressions are deparsed correctly
+        let result =
+            run_test("UPDATE sharded SET id = $1, name = COALESCE(name, 'default') WHERE id = $2")
+                .unwrap()
+                .unwrap();
+
+        let name_value = result.insert.mapping.get("name").unwrap();
+        match name_value {
+            UpdateValue::Expr(expr) => assert_eq!(expr, "COALESCE(name, 'default')"),
+            _ => panic!("Expected UpdateValue::Expr for name"),
+        }
+    }
+
+    #[test]
+    fn test_insert_build_request_with_expr_column() {
+        // Test that INSERT statement is built correctly when there are expression columns.
+        // The expression should appear directly in the VALUES clause.
+        // Use literal values (not placeholders) to avoid needing bind parameters.
+        let result = run_test("UPDATE sharded SET id = 42, email = random() WHERE id = 1")
+            .unwrap()
+            .unwrap();
+
+        // Create a mock row description matching the SELECT * result
+        let row_description = RowDescription::new(&[
+            Field::bigint("id"),
+            Field::text("email"),
+            Field::text("other_col"),
+        ]);
+
+        // Create a mock data row with values for columns not in the UPDATE SET clause
+        let mut data_row = DataRow::new();
+        data_row.add("1"); // id - will be overwritten by mapping
+        data_row.add("old@example.com"); // email - will be overwritten by mapping
+        data_row.add("other_value"); // other_col - from existing row
+
+        // Create a simple query request (not prepared statement)
+        let request = ClientRequest::from(vec![ProtocolMessage::from(Query::new(
+            "UPDATE sharded SET id = 42, email = random() WHERE id = 1",
+        ))]);
+
+        let insert_request = result
+            .insert
+            .build_request(&request, &row_description, &data_row)
+            .unwrap();
+
+        // Get the query from the request to verify the INSERT statement
+        let query = insert_request.query().unwrap().unwrap();
+        let stmt = query.query();
+
+        // The INSERT should contain the expression random() directly in VALUES
+        assert!(
+            stmt.contains("random()"),
+            "INSERT statement should contain the expression: {}",
+            stmt
+        );
+        // Verify it's an INSERT statement
+        assert!(
+            stmt.starts_with("INSERT INTO"),
+            "Should be an INSERT statement: {}",
+            stmt
+        );
+        // Verify parameter numbering is correct: $1 for id, random() for email, $2 for other_col
+        // (not $3, which would be wrong if we used row index instead of bind param index)
+        assert!(
+            stmt.contains("$1") && stmt.contains("$2") && !stmt.contains("$3"),
+            "Parameter numbering should be sequential without gaps: {}",
+            stmt
         );
     }
 }
