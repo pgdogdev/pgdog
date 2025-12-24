@@ -154,17 +154,29 @@ impl QueryParser {
         );
 
         if !use_parser {
+            if context.shards > 1 {
+                return Err(Error::QueryParserRequired);
+            }
+
+            let shard = ShardWithPriority::new_override_parser_disabled(Shard::Direct(0));
+
             // Cluster is read-only and only has one shard.
             if context.read_only {
-                return Ok(Command::Query(Route::read(
-                    ShardWithPriority::new_override_parser_disabled(Shard::Direct(0)),
-                )));
+                return Ok(Command::Query(Route::read(shard)));
             }
             // Cluster doesn't have replicas and has only one shard.
-            if context.write_only {
-                return Ok(Command::Query(Route::write(
-                    ShardWithPriority::new_override_parser_disabled(Shard::Direct(0)),
-                )));
+            else if context.write_only {
+                return Ok(Command::Query(Route::write(shard)));
+
+            // The role is specified in the connection parameter (pgdog.role).
+            } else if let Some(role) = context.router_context.parameter_hints.compute_role() {
+                return Ok(Command::Query(match role {
+                    Role::Replica => Route::read(shard),
+                    Role::Primary | Role::Auto => Route::write(shard),
+                }));
+            // Default to primary.
+            } else {
+                return Ok(Command::Query(Route::write(shard)));
             }
         }
 

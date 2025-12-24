@@ -297,3 +297,11 @@ impl ListShards {
         }
     }
 }
+
+#[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Eq, Hash, Default)]
+pub enum QueryParserLevel {
+    On,
+    #[default]
+    Auto,
+    Off,
+}

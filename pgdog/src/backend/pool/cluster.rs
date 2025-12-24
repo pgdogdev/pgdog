@@ -1,7 +1,7 @@
 //! A collection of replicas and a primary.
 
 use parking_lot::{Mutex, RwLock};
-use pgdog_config::{PreparedStatements, Rewrite, RewriteMode};
+use pgdog_config::{PreparedStatements, QueryParserLevel, Rewrite, RewriteMode};
 use std::{
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -62,7 +62,7 @@ pub struct Cluster {
     dry_run: bool,
     expanded_explain: bool,
     pub_sub_channel_size: usize,
-    query_parser_enabled: bool,
+    query_parser: QueryParserLevel,
     connection_recovery: ConnectionRecovery,
 }
 
@@ -130,7 +130,7 @@ pub struct ClusterConfig<'a> {
     pub dry_run: bool,
     pub expanded_explain: bool,
     pub pub_sub_channel_size: usize,
-    pub query_parser_enabled: bool,
+    pub query_parser: QueryParserLevel,
     pub connection_recovery: ConnectionRecovery,
     pub lsn_check_interval: Duration,
 }
@@ -176,7 +176,7 @@ impl<'a> ClusterConfig<'a> {
             dry_run: general.dry_run,
             expanded_explain: general.expanded_explain,
             pub_sub_channel_size: general.pub_sub_channel_size,
-            query_parser_enabled: general.query_parser_enabled,
+            query_parser: general.query_parser,
             connection_recovery: general.connection_recovery,
             lsn_check_interval: Duration::from_millis(general.lsn_check_interval),
         }
@@ -208,7 +208,7 @@ impl Cluster {
             dry_run,
             expanded_explain,
             pub_sub_channel_size,
-            query_parser_enabled,
+            query_parser,
             connection_recovery,
             lsn_check_interval,
         } = config;
@@ -254,7 +254,7 @@ impl Cluster {
             dry_run,
             expanded_explain,
             pub_sub_channel_size,
-            query_parser_enabled,
+            query_parser,
             connection_recovery,
         }
     }
@@ -349,8 +349,8 @@ impl Cluster {
         &self.rewrite
     }
 
-    pub fn query_parser_enabled(&self) -> bool {
-        self.query_parser_enabled
+    pub fn query_parser(&self) -> QueryParserLevel {
+        self.query_parser
     }
 
     pub fn prepared_statements(&self) -> &PreparedStatements {
@@ -417,12 +417,17 @@ impl Cluster {
 
     /// Use the query parser.
     pub fn use_query_parser(&self) -> bool {
-        self.multi_tenant().is_some()
-            || self.query_parser_enabled()
-            || self.router_needed()
-            || self.dry_run()
-            || self.prepared_statements() == &PreparedStatements::Full
-            || self.pub_sub_enabled()
+        match self.query_parser() {
+            QueryParserLevel::Off => return false,
+            QueryParserLevel::On => return true,
+            QueryParserLevel::Auto => {
+                self.multi_tenant().is_some()
+                    || self.router_needed()
+                    || self.dry_run()
+                    || self.prepared_statements() == &PreparedStatements::Full
+                    || self.pub_sub_enabled()
+            }
+        }
     }
 
     /// Multi-tenant config.
@@ -630,7 +635,7 @@ mod test {
                 prepared_statements: config.config.general.prepared_statements,
                 dry_run: config.config.general.dry_run,
                 expanded_explain: config.config.general.expanded_explain,
-                query_parser_enabled: config.config.general.query_parser_enabled,
+                query_parser: config.config.general.query_parser,
                 rewrite: config.config.rewrite.clone(),
                 two_phase_commit: config.config.general.two_phase_commit,
                 two_phase_commit_auto: config.config.general.two_phase_commit_auto.unwrap_or(false),
