@@ -17,7 +17,7 @@ impl ForwardCheck {
     pub(crate) fn new(request: &ClientRequest) -> Self {
         Self {
             codes: request.iter().map(|m| m.code()).collect(),
-            describe: request.iter().find(|m| m.code() == 'D').is_some(),
+            describe: request.iter().any(|m| m.code() == 'D'),
             sent: HashSet::default(),
         }
     }

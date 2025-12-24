@@ -178,8 +178,7 @@ impl QueryEngine {
             .client_request
             .route // Admin commands don't have a route.
             .as_mut()
-            .map(|route| route.take_explain())
-            .flatten()
+            .and_then(|route| route.take_explain())
         {
             if config().config.general.expanded_explain {
                 self.pending_explain = Some(ExplainResponseState::new(trace));

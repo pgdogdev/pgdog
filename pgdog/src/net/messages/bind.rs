@@ -118,7 +118,7 @@ impl<'a> ParameterWithFormat<'a> {
     }
 
     pub fn parameter(&self) -> &Parameter {
-        &self.parameter
+        self.parameter
     }
 }
 
