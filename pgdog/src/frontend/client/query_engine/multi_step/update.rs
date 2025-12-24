@@ -35,6 +35,28 @@ impl<'a> UpdateMulti<'a> {
         &mut self,
         context: &mut QueryEngineContext<'_>,
     ) -> Result<(), Error> {
+        match self.execute_internal(context).await {
+            Ok(()) => Ok(()),
+            Err(err) => {
+                // These are recoverable with a ROLLBACK.
+                if matches!(err, Error::Update(_) | Error::Execution(_)) {
+                    self.engine
+                        .error_response(context, ErrorResponse::from_err(&err))
+                        .await?;
+                    return Ok(());
+                } else {
+                    // These are bad, disconnecting the client.
+                    return Err(err.into());
+                }
+            }
+        }
+    }
+
+    /// Execute sharding key update, if needed.
+    pub(super) async fn execute_internal(
+        &mut self,
+        context: &mut QueryEngineContext<'_>,
+    ) -> Result<(), Error> {
         let mut check = self.rewrite.check.build_request(&context.client_request)?;
         self.route(&mut check, context)?;
 
@@ -56,21 +78,7 @@ impl<'a> UpdateMulti<'a> {
         }
 
         // Fetch the old row from whatever shard it is on.
-        let row = match self.fetch_row(context).await {
-            Ok(row) => row,
-            Err(err) => {
-                // These are recoverable with a ROLLBACK.
-                if matches!(err, Error::Update(_) | Error::Execution(_)) {
-                    self.engine
-                        .error_response(context, ErrorResponse::from_err(&err))
-                        .await?;
-                    return Ok(());
-                } else {
-                    // These are bad, disconnecting the client.
-                    return Err(err.into());
-                }
-            }
-        };
+        let row = self.fetch_row(context).await?;
 
         if let Some(row) = row {
             self.insert_row(context, row).await?;
@@ -85,6 +93,7 @@ impl<'a> UpdateMulti<'a> {
         Ok(())
     }
 
+    /// Create row.
     pub(super) async fn insert_row(
         &mut self,
         context: &mut QueryEngineContext<'_>,
@@ -126,8 +135,12 @@ impl<'a> UpdateMulti<'a> {
             }
 
             self.delete_row(context).await?;
-            self.execute_internal(context, &mut request, self.rewrite.insert.is_returning())
-                .await?;
+            self.execute_request_internal(
+                context,
+                &mut request,
+                self.rewrite.insert.is_returning(),
+            )
+            .await?;
 
             self.engine
                 .process_server_message(context, CommandComplete::new("UPDATE 1").message()?) // We only allow to update one row at a time.
@@ -144,7 +157,7 @@ impl<'a> UpdateMulti<'a> {
     }
 
     /// Execute request and return messages to the client if forward_reply is true.
-    async fn execute_internal(
+    async fn execute_request_internal(
         &mut self,
         context: &mut QueryEngineContext<'_>,
         request: &mut ClientRequest,
@@ -202,7 +215,8 @@ impl<'a> UpdateMulti<'a> {
         let mut request = self.rewrite.delete.build_request(&context.client_request)?;
         self.route(&mut request, context)?;
 
-        self.execute_internal(context, &mut request, false).await
+        self.execute_request_internal(context, &mut request, false)
+            .await
     }
 
     pub(super) async fn fetch_row(

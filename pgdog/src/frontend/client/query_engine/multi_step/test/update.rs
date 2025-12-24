@@ -10,8 +10,9 @@ use crate::{
         ClientRequest,
     },
     net::{
-        bind::Parameter, Bind, CommandComplete, DataRow, Describe, Execute, Flush, Parameters,
-        Parse, Protocol, Query, ReadyForQuery, RowDescription, Sync, TransactionState,
+        bind::Parameter, Bind, CommandComplete, DataRow, Describe, ErrorResponse, Execute, Flush,
+        Format, Parameters, Parse, Protocol, Query, ReadyForQuery, RowDescription, Sync,
+        TransactionState,
     },
 };
 
@@ -117,33 +118,24 @@ async fn test_update_check_extended() {
 }
 
 #[tokio::test]
-async fn test_row_same_shard() {
+async fn test_row_same_shard_no_transaction() {
     crate::logger();
     let mut client = TestClient::new_rewrites(Parameters::default()).await;
 
-    let id = thread_rng().gen::<i64>();
+    let shard_0 = client.random_id_for_shard(0);
+    let shard_0_1 = client.random_id_for_shard(0);
 
     client
         .send_simple(Query::new(format!(
-            "INSERT INTO sharded (id, value) VALUES ({id}, 'test value')",
-            id = id
+            "INSERT INTO sharded (id, value) VALUES ({}, 'test value')",
+            shard_0
         )))
         .await;
     client.read_until('Z').await.unwrap();
 
-    // Start a transaction.
-    client.send_simple(Query::new("BEGIN")).await;
-    client.read_until('Z').await.unwrap();
-
-    assert!(
-        client.client.in_transaction(),
-        "client should be in transaction"
-    );
-
     client.client.client_request = ClientRequest::from(vec![Query::new(format!(
         "UPDATE sharded SET id = {} WHERE value = 'test value' AND id = {}",
-        id + 1,
-        id
+        shard_0_1, shard_0
     ))
     .into()]);
 
@@ -174,14 +166,6 @@ async fn test_row_same_shard() {
     );
 
     expect_message!(client.read().await, ReadyForQuery);
-
-    client.send_simple(Query::new("ROLLBACK")).await;
-    assert!(
-        !client.client.in_transaction(),
-        "client should not be in transaction"
-    );
-
-    client.read_until('Z').await.unwrap();
 }
 
 #[tokio::test]
@@ -208,23 +192,31 @@ async fn test_no_rows_updated() {
 async fn test_transaction_required() {
     let mut client = TestClient::new_rewrites(Parameters::default()).await;
 
+    let shard_0 = client.random_id_for_shard(0);
+    let shard_1 = client.random_id_for_shard(1);
+
     client
         .send_simple(Query::new(format!(
-            "INSERT INTO sharded (id) VALUES (1) ON CONFLICT(id) DO NOTHING",
+            "INSERT INTO sharded (id) VALUES ({}) ON CONFLICT(id) DO NOTHING",
+            shard_0
         )))
         .await;
     client.read_until('Z').await.unwrap();
 
-    let err = client
-        .try_send_simple(Query::new(format!(
-            "UPDATE sharded SET id = 11 WHERE id = 1",
+    client
+        .send_simple(Query::new(format!(
+            "UPDATE sharded SET id = {} WHERE id = {}",
+            shard_1, shard_0
         )))
-        .await
-        .expect_err("expected shard key update to fail without a transaction");
+        .await;
+    let err = ErrorResponse::try_from(client.read().await).expect("expected error");
     assert_eq!(
-        err.to_string(),
+        err.message,
         "sharding key update must be executed inside a transaction"
     );
+    // Connection still good.
+    client.send_simple(Query::new("SELECT 1")).await;
+    client.read_until('Z').await.unwrap();
 }
 
 #[tokio::test]
@@ -422,6 +414,52 @@ async fn test_move_rows_prepared() {
                 ),
                 '1' | '2' => (),
                 _ => unreachable!(),
+            }
+        });
+}
+
+#[tokio::test]
+async fn test_same_shard_binary() {
+    let mut client = TestClient::new_rewrites(Parameters::default()).await;
+    let id = client.random_id_for_shard(0);
+    client
+        .send_simple(Query::new(format!(
+            "INSERT INTO sharded (id) VALUES ({})",
+            id
+        )))
+        .await;
+    client.read_until('Z').await.unwrap();
+    let id_2 = client.random_id_for_shard(0);
+    client
+        .send(Parse::new_anonymous(
+            "UPDATE sharded SET id = $1 WHERE id = $2 RETURNING *",
+        ))
+        .await;
+    client
+        .send(Bind::new_params_codes(
+            "",
+            &[
+                Parameter::new(&id_2.to_be_bytes()),
+                Parameter::new(&id.to_be_bytes()),
+            ],
+            &[Format::Binary],
+        ))
+        .await;
+    client.send(Execute::new()).await;
+    client.send(Sync).await;
+    client.try_process().await.unwrap();
+    let messages = client.read_until('Z').await.unwrap();
+
+    messages
+        .into_iter()
+        .zip(['1', '2', 'D', 'C', 'Z'])
+        .for_each(|(message, code)| {
+            assert_eq!(message.code(), code);
+            if message.code() == 'C' {
+                assert_eq!(
+                    CommandComplete::try_from(message).unwrap().command(),
+                    "UPDATE 1"
+                );
             }
         });
 }

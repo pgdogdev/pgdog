@@ -2,6 +2,7 @@ use std::{fmt::Debug, ops::Deref};
 
 use bytes::{BufMut, Bytes, BytesMut};
 use pgdog_config::RewriteMode;
+use rand::{thread_rng, Rng};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
@@ -10,7 +11,11 @@ use tokio::{
 use crate::{
     backend::databases::{reload_from_existing, shutdown},
     config::{config, load_test_replicas, load_test_sharded, set},
-    frontend::{client::query_engine::QueryEngine, Client},
+    frontend::{
+        client::query_engine::QueryEngine,
+        router::{parser::Shard, sharding::ContextBuilder},
+        Client,
+    },
     net::{ErrorResponse, Message, Parameters, Protocol, Stream},
 };
 
@@ -125,10 +130,12 @@ impl TestClient {
         self.conn.flush().await.expect("flush");
     }
 
+    /// Send a simple query and panic on any errors.
     pub(crate) async fn send_simple(&mut self, message: impl Protocol) {
         self.try_send_simple(message).await.unwrap()
     }
 
+    /// Try to send a simple query and return the error, if any.
     pub(crate) async fn try_send_simple(
         &mut self,
         message: impl Protocol,
@@ -185,6 +192,26 @@ impl TestClient {
         }
 
         Ok(result)
+    }
+
+    /// Generate a random ID for a given shard.
+    pub(crate) fn random_id_for_shard(&mut self, shard: usize) -> i64 {
+        let cluster = self.engine.backend().cluster().unwrap().clone();
+
+        loop {
+            let id: i64 = thread_rng().gen();
+            let calc = ContextBuilder::new(cluster.sharded_tables().first().unwrap())
+                .data(id)
+                .shards(cluster.shards().len())
+                .build()
+                .unwrap()
+                .apply()
+                .unwrap();
+
+            if calc == Shard::Direct(shard) {
+                return id;
+            }
+        }
     }
 }
 
