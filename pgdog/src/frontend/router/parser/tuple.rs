@@ -20,8 +20,23 @@ impl<'a> TryFrom<&'a List> for Tuple<'a> {
         let mut values = vec![];
 
         for value in &value.items {
-            let value = value.try_into()?;
-            values.push(value);
+            if let Ok(value) = Value::try_from(value) {
+                values.push(value);
+            } else {
+                // FIXME:
+                //
+                // This basically makes all values we can't parse NULL.
+                // Normally, the result of that is the query is sent to all
+                // shards, quietly.
+                //
+                // I think the right thing here is to throw an error,
+                // but more likely it'll be a value we don't actually need for sharding.
+                //
+                // We should check if its value we actually need and only then
+                // throw an error.
+                //
+                values.push(Value::Null);
+            }
         }
 
         Ok(Self { values })

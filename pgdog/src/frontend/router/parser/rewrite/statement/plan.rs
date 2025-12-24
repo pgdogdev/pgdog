@@ -4,7 +4,7 @@ use crate::net::{Bind, Parse, ProtocolMessage, Query};
 use crate::unique_id::UniqueId;
 
 use super::insert::build_split_requests;
-use super::{aggregate::AggregateRewritePlan, Error, InsertSplit};
+use super::{aggregate::AggregateRewritePlan, Error, InsertSplit, ShardingKeyUpdate};
 
 /// Statement rewrite plan.
 ///
@@ -35,12 +35,17 @@ pub struct RewritePlan {
     /// Position in the result where the count(*) or count(name)
     /// functions are added.
     pub(crate) aggregates: AggregateRewritePlan,
+
+    /// Sharding key is being updated, we need to execute
+    /// a multi-step plan.
+    pub(crate) sharding_key_update: Option<ShardingKeyUpdate>,
 }
 
 #[derive(Debug, Clone)]
-pub enum RewriteResult {
+pub(crate) enum RewriteResult {
     InPlace,
     InsertSplit(Vec<ClientRequest>),
+    ShardingKeyUpdate(ShardingKeyUpdate),
 }
 
 impl RewritePlan {
@@ -106,16 +111,15 @@ impl RewritePlan {
             return Ok(RewriteResult::InsertSplit(requests));
         }
 
-        Ok(RewriteResult::InPlace)
-    }
+        if let Some(sharding_key_update) = &self.sharding_key_update {
+            if request.is_executable() {
+                return Ok(RewriteResult::ShardingKeyUpdate(
+                    sharding_key_update.clone(),
+                ));
+            }
+        }
 
-    /// Rewrite plan doesn't do anything.
-    #[allow(dead_code)]
-    pub(crate) fn no_op(&self) -> bool {
-        self.stmt.is_none()
-            && self.prepares.is_empty()
-            && self.aggregates.is_noop()
-            && self.insert_split.is_empty()
+        Ok(RewriteResult::InPlace)
     }
 }
 

@@ -173,15 +173,18 @@ impl QueryEngine {
         self.pending_explain = None;
 
         let command = self.router.command();
-        let mut route = command.route().clone();
 
-        if let Some(trace) = route.take_explain() {
+        if let Some(trace) = context
+            .client_request
+            .route // Admin commands don't have a route.
+            .as_mut()
+            .map(|route| route.take_explain())
+            .flatten()
+        {
             if config().config.general.expanded_explain {
                 self.pending_explain = Some(ExplainResponseState::new(trace));
             }
         }
-
-        context.client_request.route = Some(route);
 
         match command {
             Command::InternalField { name, value } => {
@@ -248,9 +251,6 @@ impl QueryEngine {
                     .await?;
             }
             Command::Copy(_) => self.execute(context).await?,
-            Command::ShardKeyRewrite(plan) => {
-                self.shard_key_rewrite(context, *plan.clone()).await?
-            }
             Command::Deallocate => self.deallocate(context).await?,
             Command::Discard { extended } => self.discard(context, *extended).await?,
             command => self.unknown_command(context, command.clone()).await?,

@@ -8,7 +8,7 @@ use crate::{
         context::RouterContext,
         parser::{OrderBy, Shard},
         round_robin,
-        sharding::{Centroids, ContextBuilder, Value as ShardingValue},
+        sharding::{Centroids, ContextBuilder},
     },
     net::{
         messages::{Bind, Vector},

@@ -11,7 +11,7 @@ use crate::frontend::router::parser::ShardsWithPriority;
 use crate::net::Bind;
 use crate::{
     backend::ShardingSchema,
-    config::{MultiTenant, ReadWriteStrategy, RewriteMode},
+    config::{MultiTenant, ReadWriteStrategy},
     frontend::{BufferedQuery, RouterContext},
 };
 
@@ -44,8 +44,6 @@ pub struct QueryParserContext<'a> {
     pub(super) dry_run: bool,
     /// Expanded EXPLAIN annotations enabled?
     pub(super) expanded_explain: bool,
-    /// How to handle sharding-key updates.
-    pub(super) shard_key_update_mode: RewriteMode,
     /// Shards calculator.
     pub(super) shards_calculator: ShardsWithPriority,
 }
@@ -70,7 +68,6 @@ impl<'a> QueryParserContext<'a> {
             multi_tenant: router_context.cluster.multi_tenant(),
             dry_run: router_context.cluster.dry_run(),
             expanded_explain: router_context.cluster.expanded_explain(),
-            shard_key_update_mode: router_context.cluster.rewrite().shard_key,
             router_context,
             shards_calculator,
         })
@@ -142,9 +139,5 @@ impl<'a> QueryParserContext<'a> {
 
     pub(super) fn expanded_explain(&self) -> bool {
         self.expanded_explain
-    }
-
-    pub(super) fn shard_key_update_mode(&self) -> RewriteMode {
-        self.shard_key_update_mode
     }
 }

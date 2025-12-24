@@ -2481,4 +2481,28 @@ pub mod test {
             "expected re-sync after RESET ALL cleared client_params"
         );
     }
+
+    #[tokio::test]
+    async fn test_error_decoding() {
+        let mut server = test_server().await;
+        let err = server
+            .execute(Query::new("SELECT * FROM test_error_decoding"))
+            .await
+            .expect_err("expected this query to fail");
+        assert!(
+            matches!(err, Error::ExecutionError(_)),
+            "expected execution error"
+        );
+        if let Error::ExecutionError(err) = err {
+            assert_eq!(
+                err.message,
+                "relation \"test_error_decoding\" does not exist"
+            );
+            assert_eq!(err.severity, "ERROR");
+            assert_eq!(err.code, "42P01");
+            assert_eq!(err.context, None);
+            assert_eq!(err.routine, Some("parserOpenTable".into())); // Might break in the future.
+            assert_eq!(err.detail, None);
+        }
+    }
 }

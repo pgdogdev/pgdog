@@ -116,6 +116,10 @@ impl<'a> ParameterWithFormat<'a> {
     pub fn is_null(&self) -> bool {
         self.parameter.len < 0
     }
+
+    pub fn parameter(&self) -> &Parameter {
+        &self.parameter
+    }
 }
 
 /// Bind (F) message.

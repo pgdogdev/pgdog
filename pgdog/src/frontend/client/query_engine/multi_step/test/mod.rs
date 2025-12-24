@@ -7,6 +7,7 @@ use crate::{
 
 pub mod prepared;
 pub mod simple;
+pub mod update;
 
 async fn truncate_table(table: &str, stream: &mut TcpStream) {
     let query = Query::new(format!("TRUNCATE {}", table))

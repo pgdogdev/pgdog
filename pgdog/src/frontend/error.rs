@@ -39,7 +39,7 @@ pub enum Error {
     #[error("{0}")]
     PreparedStatements(#[from] super::prepared_statements::Error),
 
-    #[error("prepared staatement \"{0}\" is missing")]
+    #[error("prepared statement \"{0}\" is missing")]
     MissingPreparedStatement(String),
 
     #[error("query timeout")]
@@ -57,11 +57,19 @@ pub enum Error {
     #[error("rewrite: {0}")]
     Rewrite(#[from] crate::frontend::router::parser::rewrite::statement::Error),
 
-    #[error("couldn't determine route for statement")]
+    #[error("query has no route")]
     NoRoute,
 
     #[error("multi-tuple insert requires multi-shard binding")]
     MultiShardRequired,
+
+    #[error("sharding key updates are forbidden")]
+    ShardingKeyUpdateForbidden,
+
+    // FIXME: layer errors better so we don't have
+    // to reach so deep into a module.
+    #[error("{0}")]
+    Multi(#[from] crate::frontend::client::query_engine::multi_step::error::Error),
 }
 
 impl Error {

@@ -111,7 +111,10 @@ impl<'a> Value<'a> {
         if self.data_type == DataType::Bigint {
             match self.data {
                 Data::Integer(int) => Ok(Some(int)),
-                Data::Text(text) => Ok(Some(text.parse()?)),
+                Data::Text(text) => Ok(Some(
+                    text.parse()
+                        .map_err(|_| Error::ParseInt(text.to_string()))?,
+                )),
                 Data::Binary(data) => match data.len() {
                     2 => Ok(Some(i16::from_be_bytes(data.try_into()?) as i64)),
                     4 => Ok(Some(i32::from_be_bytes(data.try_into()?) as i64)),
@@ -153,7 +156,12 @@ impl<'a> Value<'a> {
     pub fn hash(&self, hasher: Hasher) -> Result<Option<u64>, Error> {
         match self.data_type {
             DataType::Bigint => match self.data {
-                Data::Text(text) => Ok(Some(hasher.bigint(text.parse()?))),
+                Data::Text(text) => Ok(Some(
+                    hasher.bigint(
+                        text.parse()
+                            .map_err(|_| Error::ParseInt(text.to_string()))?,
+                    ),
+                )),
                 Data::Binary(data) => Ok(Some(hasher.bigint(match data.len() {
                     2 => i16::from_be_bytes(data.try_into()?) as i64,
                     4 => i32::from_be_bytes(data.try_into()?) as i64,
