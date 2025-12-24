@@ -5,8 +5,6 @@ use crate::{
 };
 use lazy_static::lazy_static;
 
-use super::rewrite::ShardKeyRewritePlan;
-
 #[derive(Debug, Clone)]
 pub enum Command {
     Query(Route),
@@ -48,7 +46,6 @@ pub enum Command {
         shard: Shard,
     },
     Unlisten(String),
-    ShardKeyRewrite(Box<ShardKeyRewritePlan>),
     UniqueId,
 }
 
@@ -61,7 +58,6 @@ impl Command {
 
         match self {
             Self::Query(route) => route,
-            Self::ShardKeyRewrite(plan) => plan.route(),
             Self::Set { route, .. } => route,
             _ => &DEFAULT_ROUTE,
         }
@@ -117,12 +113,6 @@ impl Command {
             Command::Query(mut query) => {
                 query.set_shard_mut(ShardWithPriority::new_override_dry_run(Shard::Direct(0)));
                 Command::Query(query)
-            }
-
-            Command::ShardKeyRewrite(plan) => {
-                let mut route = plan.route().clone();
-                route.set_shard_mut(ShardWithPriority::new_override_dry_run(Shard::Direct(0)));
-                Command::Query(route)
             }
 
             Command::Copy(_) => Command::Query(Route::write(

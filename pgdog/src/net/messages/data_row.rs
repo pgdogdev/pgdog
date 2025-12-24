@@ -52,6 +52,10 @@ impl Data {
             is_null: true,
         }
     }
+
+    pub(crate) fn is_null(&self) -> bool {
+        self.is_null
+    }
 }
 
 /// DataRow message.
@@ -252,6 +256,11 @@ impl DataRow {
     pub fn get<T: FromDataType>(&self, index: usize, format: Format) -> Option<T> {
         self.column(index)
             .and_then(|col| T::decode(&col, format).ok())
+    }
+
+    /// Get raw column data.
+    pub(crate) fn get_raw(&self, index: usize) -> Option<&Data> {
+        self.columns.get(index)
     }
 
     /// Get column at index given row description.

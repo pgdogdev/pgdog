@@ -10,7 +10,7 @@ use super::*;
 impl QueryEngine {
     /// Respond to a command sent by the client
     /// in a way that won't make it suspicious.
-    pub async fn fake_command_response(
+    pub(crate) async fn fake_command_response(
         &mut self,
         context: &mut QueryEngineContext<'_>,
         command: &str,

@@ -1,10 +1,7 @@
-use std::{
-    ops::Deref,
-    sync::{Mutex, MutexGuard},
-};
+use std::ops::Deref;
 
 use crate::{
-    config::{self, config, ConfigAndUsers, RewriteMode},
+    config::{self, config},
     net::{
         messages::{parse::Parse, Parameter},
         Close, Format, Parameters, Sync,
@@ -24,14 +21,13 @@ use crate::net::messages::Query;
 
 pub mod setup;
 
-static CONFIG_LOCK: Mutex<()> = Mutex::new(());
 pub mod test_comments;
 pub mod test_ddl;
 pub mod test_delete;
 pub mod test_dml;
 pub mod test_explain;
 pub mod test_functions;
-pub mod test_rewrite;
+pub mod test_insert;
 pub mod test_rr;
 pub mod test_schema_sharding;
 pub mod test_search_path;
@@ -41,33 +37,6 @@ pub mod test_sharding;
 pub mod test_special;
 pub mod test_subqueries;
 pub mod test_transaction;
-
-struct ConfigModeGuard {
-    original: ConfigAndUsers,
-}
-
-impl ConfigModeGuard {
-    fn set(mode: RewriteMode) -> Self {
-        let original = config().deref().clone();
-        let mut updated = original.clone();
-        updated.config.rewrite.shard_key = mode;
-        updated.config.rewrite.enabled = true;
-        config::set(updated).unwrap();
-        Self { original }
-    }
-}
-
-impl Drop for ConfigModeGuard {
-    fn drop(&mut self) {
-        config::set(self.original.clone()).unwrap();
-    }
-}
-
-fn lock_config_mode() -> MutexGuard<'static, ()> {
-    CONFIG_LOCK
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-}
 
 fn parse_query(query: &str) -> Command {
     let mut query_parser = QueryParser::default();
@@ -235,58 +204,6 @@ macro_rules! parse {
     };
 }
 
-fn parse_with_parameters(query: &str) -> Result<Command, Error> {
-    let cluster = Cluster::new_test();
-    let mut ast = Ast::new(
-        &BufferedQuery::Query(Query::new(query)),
-        &cluster.sharding_schema(),
-        &mut PreparedStatements::default(),
-    )
-    .unwrap();
-    ast.cached = false; // Simple protocol queries are not cached
-    let mut client_request: ClientRequest = vec![Query::new(query).into()].into();
-    client_request.ast = Some(ast);
-    let client_params = Parameters::default();
-    let router_context = RouterContext::new(
-        &client_request,
-        &cluster,
-        &client_params,
-        None,
-        Sticky::new(),
-    )
-    .unwrap();
-    QueryParser::default().parse(router_context)
-}
-
-fn parse_with_bind(query: &str, params: &[&[u8]]) -> Result<Command, Error> {
-    let cluster = Cluster::new_test();
-    let parse = Parse::new_anonymous(query);
-    let params = params
-        .iter()
-        .map(|value| Parameter::new(value))
-        .collect::<Vec<_>>();
-    let bind = crate::net::messages::Bind::new_params("", &params);
-    let ast = Ast::new(
-        &BufferedQuery::Prepared(Parse::new_anonymous(query)),
-        &cluster.sharding_schema(),
-        &mut PreparedStatements::default(),
-    )
-    .unwrap();
-    let mut client_request: ClientRequest = vec![parse.into(), bind.into()].into();
-    client_request.ast = Some(ast);
-    let client_params = Parameters::default();
-    let router_context = RouterContext::new(
-        &client_request,
-        &cluster,
-        &client_params,
-        None,
-        Sticky::new(),
-    )
-    .unwrap();
-
-    QueryParser::default().parse(router_context)
-}
-
 #[test]
 fn test_insert() {
     let route = parse!(
@@ -350,49 +267,6 @@ fn test_select_for_update() {
     assert!(matches!(route.shard(), Shard::Direct(_)));
     assert!(route.is_write());
 }
-
-// #[test]
-// fn test_prepared_avg_rewrite_plan() {
-//     let route = parse!(
-//         "avg_test",
-//         "SELECT AVG(price) FROM menu",
-//         Vec::<Vec<u8>>::new()
-//     );
-
-//     assert!(!route.rewrite_plan().is_noop());
-//     assert_eq!(route.rewrite_plan().drop_columns(), &[1]);
-//     let rewritten = route
-//         .rewritten_sql()
-//         .expect("rewrite should produce SQL for prepared average");
-//     assert!(
-//         rewritten.to_lowercase().contains("count"),
-//         "helper COUNT should be injected"
-//     );
-// }
-
-// #[test]
-// fn test_prepared_stddev_rewrite_plan() {
-//     let route = parse!(
-//         "stddev_test",
-//         "SELECT STDDEV(price) FROM menu",
-//         Vec::<Vec<u8>>::new()
-//     );
-
-//     assert!(!route.rewrite_plan().is_noop());
-//     assert_eq!(route.rewrite_plan().drop_columns(), &[1, 2, 3]);
-//     let helpers = route.rewrite_plan().helpers();
-//     assert_eq!(helpers.len(), 3);
-//     let kinds: Vec<HelperKind> = helpers.iter().map(|h| h.kind).collect();
-//     assert!(kinds.contains(&HelperKind::Count));
-//     assert!(kinds.contains(&HelperKind::Sum));
-//     assert!(kinds.contains(&HelperKind::SumSquares));
-
-//     let rewritten = route
-//         .rewritten_sql()
-//         .expect("rewrite should produce SQL for prepared stddev");
-//     assert!(rewritten.to_lowercase().contains("sum"));
-//     assert!(rewritten.to_lowercase().contains("count"));
-// }
 
 #[test]
 fn test_omni() {
@@ -612,187 +486,6 @@ fn test_transaction() {
 fn test_insert_do_update() {
     let route = query!("INSERT INTO foo (id) VALUES ($1::UUID) ON CONFLICT (id) DO UPDATE SET id = excluded.id RETURNING id");
     assert!(route.is_write())
-}
-
-#[test]
-fn update_sharding_key_errors_by_default() {
-    let _lock = lock_config_mode();
-    let _guard = ConfigModeGuard::set(RewriteMode::Error);
-
-    let query = "UPDATE sharded SET id = id + 1 WHERE id = 1";
-    let cluster = Cluster::new_test();
-    let mut prep_stmts = PreparedStatements::default();
-    let buffered_query = BufferedQuery::Query(Query::new(query));
-    let mut ast = Ast::new(&buffered_query, &cluster.sharding_schema(), &mut prep_stmts).unwrap();
-    ast.cached = false;
-    let mut client_request: ClientRequest = vec![Query::new(query).into()].into();
-    client_request.ast = Some(ast);
-    let params = Parameters::default();
-    let router_context =
-        RouterContext::new(&client_request, &cluster, &params, None, Sticky::new()).unwrap();
-
-    let result = QueryParser::default().parse(router_context);
-    assert!(
-        matches!(result, Err(Error::ShardKeyUpdateViolation { .. })),
-        "{result:?}"
-    );
-}
-
-#[test]
-fn update_sharding_key_ignore_mode_allows() {
-    let _lock = lock_config_mode();
-    let _guard = ConfigModeGuard::set(RewriteMode::Ignore);
-
-    let query = "UPDATE sharded SET id = id + 1 WHERE id = 1";
-    let cluster = Cluster::new_test();
-    let mut prep_stmts = PreparedStatements::default();
-    let buffered_query = BufferedQuery::Query(Query::new(query));
-    let mut ast = Ast::new(&buffered_query, &cluster.sharding_schema(), &mut prep_stmts).unwrap();
-    ast.cached = false;
-    let mut client_request: ClientRequest = vec![Query::new(query).into()].into();
-    client_request.ast = Some(ast);
-    let params = Parameters::default();
-    let router_context =
-        RouterContext::new(&client_request, &cluster, &params, None, Sticky::new()).unwrap();
-
-    let command = QueryParser::default().parse(router_context).unwrap();
-    assert!(matches!(command, Command::Query(_)));
-}
-
-#[test]
-fn update_sharding_key_rewrite_mode_not_supported() {
-    let _lock = lock_config_mode();
-    let _guard = ConfigModeGuard::set(RewriteMode::Rewrite);
-
-    let query = "UPDATE sharded SET id = id + 1 WHERE id = 1";
-    let cluster = Cluster::new_test();
-    let mut prep_stmts = PreparedStatements::default();
-    let buffered_query = BufferedQuery::Query(Query::new(query));
-    let mut ast = Ast::new(&buffered_query, &cluster.sharding_schema(), &mut prep_stmts).unwrap();
-    ast.cached = false;
-    let mut client_request: ClientRequest = vec![Query::new(query).into()].into();
-    client_request.ast = Some(ast);
-    let params = Parameters::default();
-    let router_context =
-        RouterContext::new(&client_request, &cluster, &params, None, Sticky::new()).unwrap();
-
-    let result = QueryParser::default().parse(router_context);
-    assert!(
-        matches!(result, Err(Error::ShardKeyRewriteNotSupported { .. })),
-        "{result:?}"
-    );
-}
-
-#[test]
-fn update_sharding_key_rewrite_plan_detected() {
-    let _lock = lock_config_mode();
-    let _guard = ConfigModeGuard::set(RewriteMode::Rewrite);
-
-    let query = "UPDATE sharded SET id = 11 WHERE id = 1";
-    let cluster = Cluster::new_test();
-    let mut prep_stmts = PreparedStatements::default();
-    let buffered_query = BufferedQuery::Query(Query::new(query));
-    let mut ast = Ast::new(&buffered_query, &cluster.sharding_schema(), &mut prep_stmts).unwrap();
-    ast.cached = false;
-    let mut client_request: ClientRequest = vec![Query::new(query).into()].into();
-    client_request.ast = Some(ast);
-    let params = Parameters::default();
-    let router_context =
-        RouterContext::new(&client_request, &cluster, &params, None, Sticky::new()).unwrap();
-
-    let command = QueryParser::default().parse(router_context).unwrap();
-    match command {
-        Command::ShardKeyRewrite(plan) => {
-            assert_eq!(plan.table().name, "sharded");
-            assert_eq!(plan.assignments().len(), 1);
-            let assignment = &plan.assignments()[0];
-            assert_eq!(assignment.column(), "id");
-            assert!(matches!(assignment.value(), AssignmentValue::Integer(11)));
-        }
-        other => panic!("expected shard key rewrite plan, got {other:?}"),
-    }
-}
-
-#[test]
-fn update_sharding_key_rewrite_computes_new_shard() {
-    let _lock = lock_config_mode();
-    let _guard = ConfigModeGuard::set(RewriteMode::Rewrite);
-
-    let command =
-        parse_with_parameters("UPDATE sharded SET id = 11 WHERE id = 1").expect("expected command");
-
-    let plan = match command {
-        Command::ShardKeyRewrite(plan) => plan,
-        other => panic!("expected shard key rewrite plan, got {other:?}"),
-    };
-
-    assert!(plan.new_shard().is_some(), "new shard should be computed");
-}
-
-#[test]
-fn update_sharding_key_rewrite_requires_parameter_values() {
-    let _lock = lock_config_mode();
-    let _guard = ConfigModeGuard::set(RewriteMode::Rewrite);
-
-    let result = parse_with_parameters("UPDATE sharded SET id = $1 WHERE id = 1");
-
-    assert!(
-        matches!(result, Err(Error::MissingParameter(1))),
-        "{result:?}"
-    );
-}
-
-#[test]
-fn update_sharding_key_rewrite_parameter_assignment_succeeds() {
-    let _lock = lock_config_mode();
-    let _guard = ConfigModeGuard::set(RewriteMode::Rewrite);
-
-    let command = parse_with_bind("UPDATE sharded SET id = $1 WHERE id = 1", &[b"11"])
-        .expect("expected rewrite command");
-
-    match command {
-        Command::ShardKeyRewrite(plan) => {
-            assert!(
-                plan.new_shard().is_some(),
-                "expected computed destination shard"
-            );
-            assert_eq!(plan.assignments().len(), 1);
-            assert!(matches!(
-                plan.assignments()[0].value(),
-                AssignmentValue::Parameter(1)
-            ));
-        }
-        other => panic!("expected shard key rewrite plan, got {other:?}"),
-    }
-}
-
-#[test]
-fn update_sharding_key_rewrite_self_assignment_falls_back() {
-    let _lock = lock_config_mode();
-    let _guard = ConfigModeGuard::set(RewriteMode::Rewrite);
-
-    let command =
-        parse_with_parameters("UPDATE sharded SET id = id WHERE id = 1").expect("expected command");
-
-    match command {
-        Command::Query(route) => {
-            assert!(matches!(route.shard(), Shard::Direct(_)));
-        }
-        other => panic!("expected standard update route, got {other:?}"),
-    }
-}
-
-#[test]
-fn update_sharding_key_rewrite_null_assignment_not_supported() {
-    let _lock = lock_config_mode();
-    let _guard = ConfigModeGuard::set(RewriteMode::Rewrite);
-
-    let result = parse_with_parameters("UPDATE sharded SET id = NULL WHERE id = 1");
-
-    assert!(
-        matches!(result, Err(Error::ShardKeyRewriteNotSupported { .. })),
-        "{result:?}"
-    );
 }
 
 #[test]

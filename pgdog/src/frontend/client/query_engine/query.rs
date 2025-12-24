@@ -1,4 +1,5 @@
 use tokio::time::timeout;
+use tracing::trace;
 
 use crate::{
     frontend::{
@@ -76,6 +77,12 @@ impl QueryEngine {
                     let message = self.read_server_message(context).await?;
                     self.process_server_message(context, message).await?;
                 }
+            }
+
+            Some(RewriteResult::ShardingKeyUpdate(sharding_key_update)) => {
+                multi_step::UpdateMulti::new(self, sharding_key_update)
+                    .execute(context)
+                    .await?;
             }
         }
 
@@ -220,6 +227,8 @@ impl QueryEngine {
 
         // Do this before flushing, because flushing can take time.
         self.cleanup_backend(context);
+
+        trace!("{:#?} >>> {:?}", message, context.stream.peer_addr());
 
         if flush {
             context.stream.send_flush(&message).await?;
@@ -378,9 +387,18 @@ impl QueryEngine {
     pub(super) async fn error_response(
         &mut self,
         context: &mut QueryEngineContext<'_>,
-        error: ErrorResponse,
+        mut error: ErrorResponse,
     ) -> Result<(), Error> {
         error!("{:?} [{:?}]", error.message, context.stream.peer_addr());
+
+        // Attach query context.
+        if error.detail.is_none() {
+            let query = context
+                .client_request
+                .query()?
+                .map(|q| q.query().to_owned());
+            error.detail = Some(query.unwrap_or_default());
+        }
 
         self.hooks.on_engine_error(context, &error)?;
 

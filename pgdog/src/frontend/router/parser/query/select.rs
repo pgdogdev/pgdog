@@ -234,7 +234,7 @@ impl QueryParser {
                                                         Value::Vector(vec) => vector = Some(vec),
                                                         _ => (),
                                                     }
-                                                };
+                                                }
 
                                                 if let Ok(col) = Column::try_from(&e.node) {
                                                     column = Some(col.name.to_owned());

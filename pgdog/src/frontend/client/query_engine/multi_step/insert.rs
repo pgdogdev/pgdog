@@ -58,16 +58,16 @@ impl<'a> InsertMulti<'a> {
         }
 
         for request in self.requests.iter() {
-            self.engine.backend.send(request).await?;
+            self.engine
+                .backend
+                .handle_client_request(request, &mut self.engine.router, self.engine.streaming)
+                .await?;
 
             while self.engine.backend.has_more_messages() {
-                let message = self.engine.read_server_message(context).await.unwrap();
+                let message = self.engine.read_server_message(context).await?;
 
                 if self.state.forward(&message)? {
-                    self.engine
-                        .process_server_message(context, message)
-                        .await
-                        .unwrap();
+                    self.engine.process_server_message(context, message).await?;
                 }
             }
         }
@@ -75,15 +75,13 @@ impl<'a> InsertMulti<'a> {
         if let Some(cc) = self.state.command_complete(CommandType::Insert) {
             self.engine
                 .process_server_message(context, cc.message()?)
-                .await
-                .unwrap();
+                .await?;
         }
 
         if let Some(rfq) = self.state.ready_for_query(context.in_transaction()) {
             self.engine
                 .process_server_message(context, rfq.message()?)
-                .await
-                .unwrap();
+                .await?;
         }
 
         Ok(self.state.error())

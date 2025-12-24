@@ -17,7 +17,7 @@ pub fn count_params(ast: &mut ParseResult) -> u16 {
 
 /// Recursively visit and potentially mutate all nodes in the AST.
 /// The callback returns Ok(Some(new_node)) to replace, Ok(None) to keep, or Err to abort.
-pub fn visit_and_mutate_nodes<F, E>(ast: &mut ParseResult, mut callback: F) -> Result<(), E>
+pub(super) fn visit_and_mutate_nodes<F, E>(ast: &mut ParseResult, mut callback: F) -> Result<(), E>
 where
     F: FnMut(&mut Node) -> Result<Option<Node>, E>,
 {
@@ -29,7 +29,7 @@ where
     Ok(())
 }
 
-fn visit_and_mutate_node<F, E>(node: &mut Node, callback: &mut F) -> Result<(), E>
+pub(super) fn visit_and_mutate_node<F, E>(node: &mut Node, callback: &mut F) -> Result<(), E>
 where
     F: FnMut(&mut Node) -> Result<Option<Node>, E>,
 {
@@ -47,7 +47,10 @@ where
     visit_and_mutate_children(inner, callback)
 }
 
-fn visit_and_mutate_children<F, E>(node: &mut NodeEnum, callback: &mut F) -> Result<(), E>
+pub(super) fn visit_and_mutate_children<F, E>(
+    node: &mut NodeEnum,
+    callback: &mut F,
+) -> Result<(), E>
 where
     F: FnMut(&mut Node) -> Result<Option<Node>, E>,
 {

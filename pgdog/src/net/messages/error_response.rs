@@ -3,14 +3,13 @@ use std::fmt::Display;
 
 use std::time::Duration;
 
-use crate::net::c_string_buf;
-
 use super::prelude::*;
+use crate::net::{c_string_buf, code};
 
 /// ErrorResponse (B) message.
 #[derive(Debug, Clone)]
 pub struct ErrorResponse {
-    severity: String,
+    pub severity: String,
     pub code: String,
     pub message: String,
     pub detail: Option<String>,
@@ -206,6 +205,8 @@ impl Display for ErrorResponse {
 
 impl FromBytes for ErrorResponse {
     fn from_bytes(mut bytes: Bytes) -> Result<Self, Error> {
+        code!(bytes, 'E');
+
         let _len = bytes.get_i32();
 
         let mut error_response = ErrorResponse::default();
