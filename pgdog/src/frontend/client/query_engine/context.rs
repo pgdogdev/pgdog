@@ -100,9 +100,4 @@ impl<'a> QueryEngineContext<'a> {
     pub fn in_error(&self) -> bool {
         self.transaction.map(|t| t.error()).unwrap_or_default()
     }
-
-    /// Executing a cross-shard INSERT.
-    pub fn in_cross_shard_insert(&self) -> bool {
-        matches!(self.rewrite_result, Some(RewriteResult::InsertSplit(_)))
-    }
 }

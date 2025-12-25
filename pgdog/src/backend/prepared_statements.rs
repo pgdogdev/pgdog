@@ -263,8 +263,8 @@ impl PreparedStatements {
     }
 
     /// The server connection is in COPY mode.
-    pub(crate) fn is_copy_mode(&self) -> bool {
-        self.state.copy_mode()
+    pub(crate) fn in_copy_mode(&self) -> bool {
+        self.state.in_copy_mode()
     }
 
     fn check_prepared(&mut self, name: &str) -> Result<Option<ProtocolMessage>, Error> {

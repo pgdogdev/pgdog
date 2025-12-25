@@ -70,7 +70,7 @@ impl QueryEngine {
                     .await?;
 
                 while self.backend.has_more_messages()
-                    && !self.backend.copy_mode()
+                    && !self.backend.in_copy_mode()
                     && !self.streaming
                     && !self.test_mode.enabled
                 {
