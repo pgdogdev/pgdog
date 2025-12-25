@@ -145,6 +145,10 @@ impl Command for Set {
                 config.config.general.tls_client_required = Self::from_json(&self.value)?;
             }
 
+            "query_parser" => {
+                config.config.general.query_parser = Self::from_json(&self.value)?;
+            }
+
             _ => return Err(Error::Syntax),
         }
 

@@ -198,6 +198,7 @@ mod test {
 
     use crate::{
         backend::{pool::Request, replication::publisher::PublicationTable},
+        config::config,
         frontend::router::parser::binary::{header::Header, Data, Tuple},
     };
 
@@ -214,7 +215,7 @@ mod test {
         };
 
         let copy = CopyStatement::new(&table, &["id".into(), "value".into()]);
-        let cluster = Cluster::new_test();
+        let cluster = Cluster::new_test(&config());
         cluster.launch();
 
         cluster

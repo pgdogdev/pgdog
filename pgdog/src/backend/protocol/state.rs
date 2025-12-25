@@ -191,7 +191,7 @@ impl ProtocolState {
         }
     }
 
-    pub(crate) fn copy_mode(&self) -> bool {
+    pub(crate) fn in_copy_mode(&self) -> bool {
         self.queue.front() == Some(&ExecutionItem::Code(ExecutionCode::Copy))
     }
 
@@ -522,10 +522,10 @@ mod test {
         state.add('Z'); // ReadyForQuery
 
         // Check copy_mode before consuming the message
-        assert!(state.copy_mode());
+        assert!(state.in_copy_mode());
         assert_eq!(state.action('G').unwrap(), Action::Forward);
         // After consuming 'G', we're no longer in copy mode (it's popped from queue)
-        assert!(!state.copy_mode());
+        assert!(!state.in_copy_mode());
         // CopyData messages ('d') would be sent here but aren't tracked
         assert_eq!(state.action('C').unwrap(), Action::Forward);
         assert_eq!(state.action('Z').unwrap(), Action::Forward);
@@ -782,17 +782,17 @@ mod test {
     #[test]
     fn test_copy_mode_detection() {
         let mut state = ProtocolState::default();
-        assert!(!state.copy_mode());
+        assert!(!state.in_copy_mode());
 
         state.add('G'); // CopyInResponse
         state.add('C'); // CommandComplete
-        assert!(state.copy_mode());
+        assert!(state.in_copy_mode());
 
         assert_eq!(state.action('G').unwrap(), Action::Forward);
-        assert!(!state.copy_mode()); // No longer at front
+        assert!(!state.in_copy_mode()); // No longer at front
 
         assert_eq!(state.action('C').unwrap(), Action::Forward);
-        assert!(!state.copy_mode());
+        assert!(!state.in_copy_mode());
     }
 
     #[test]

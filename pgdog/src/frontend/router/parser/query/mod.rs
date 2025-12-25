@@ -135,6 +135,44 @@ impl QueryParser {
         Ok(command)
     }
 
+    /// Bypass the query parser if we can.
+    fn query_parser_bypass(context: &mut QueryParserContext) -> Option<Route> {
+        let shard = context.shards_calculator.shard();
+
+        if !shard.is_direct() && context.shards > 1 {
+            return None;
+        }
+
+        if !shard.is_direct() {
+            context
+                .shards_calculator
+                .push(ShardWithPriority::new_override_parser_disabled(
+                    Shard::Direct(0),
+                ));
+        }
+
+        let shard = context.shards_calculator.shard();
+
+        // Cluster is read-only and only has one shard.
+        if context.read_only {
+            Some(Route::read(shard))
+        }
+        // Cluster doesn't have replicas and has only one shard.
+        else if context.write_only {
+            Some(Route::write(shard))
+
+        // The role is specified in the connection parameter (pgdog.role).
+        } else if let Some(role) = context.router_context.parameter_hints.compute_role() {
+            Some(match role {
+                Role::Replica => Route::read(shard),
+                Role::Primary | Role::Auto => Route::write(shard),
+            })
+        // Default to primary.
+        } else {
+            Some(Route::write(shard))
+        }
+    }
+
     /// Parse a query and return a command that tells us what to do with it.
     ///
     /// # Arguments
@@ -154,17 +192,12 @@ impl QueryParser {
         );
 
         if !use_parser {
-            // Cluster is read-only and only has one shard.
-            if context.read_only {
-                return Ok(Command::Query(Route::read(
-                    ShardWithPriority::new_override_parser_disabled(Shard::Direct(0)),
-                )));
-            }
-            // Cluster doesn't have replicas and has only one shard.
-            if context.write_only {
-                return Ok(Command::Query(Route::write(
-                    ShardWithPriority::new_override_parser_disabled(Shard::Direct(0)),
-                )));
+            // Try to figure out where we can send the query without
+            // parsing SQL.
+            if let Some(route) = Self::query_parser_bypass(context) {
+                return Ok(Command::Query(route));
+            } else {
+                return Err(Error::QueryParserRequired);
             }
         }
 

@@ -586,8 +586,8 @@ impl Server {
         self.prepared_statements.has_more_messages() || self.streaming
     }
 
-    pub fn copy_mode(&self) -> bool {
-        self.prepared_statements.is_copy_mode()
+    pub fn in_copy_mode(&self) -> bool {
+        self.prepared_statements.in_copy_mode()
     }
 
     /// Server is still inside a transaction.

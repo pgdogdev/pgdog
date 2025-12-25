@@ -3,7 +3,7 @@
 use thiserror::Error;
 
 use super::rewrite::statement::Error as RewriteError;
-use crate::{config::RewriteMode, frontend::router::sharding};
+use crate::frontend::router::sharding;
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -70,31 +70,6 @@ pub enum Error {
     #[error("regex error")]
     RegexError,
 
-    #[error(
-        "updating sharding key columns ({columns}) on table \"{table}\" is not allowed when rewrite.shard_key={mode}"
-    )]
-    ShardKeyUpdateViolation {
-        table: String,
-        columns: String,
-        mode: RewriteMode,
-    },
-
-    #[error(
-        "rewrite.shard_key=\"rewrite\" is not yet supported for table \"{table}\" (columns: {columns})"
-    )]
-    ShardKeyRewriteNotSupported { table: String, columns: String },
-
-    #[error("internal shard key rewrite invariant violated: {reason}")]
-    ShardKeyRewriteInvariant { reason: String },
-
-    #[error(
-        "multi-row INSERT into sharded table \"{table}\" is not supported when rewrite.split_inserts={mode}"
-    )]
-    ShardedMultiRowInsert { table: String, mode: RewriteMode },
-
-    #[error("multi-row INSERT into sharded table \"{table}\" cannot be rewritten: {reason}")]
-    SplitInsertNotSupported { table: String, reason: String },
-
     #[error("cross-shard truncate not supported when schema-sharding is used")]
     CrossShardTruncateSchemaSharding,
 
@@ -115,4 +90,7 @@ pub enum Error {
 
     #[error("rewrite: {0}")]
     Rewrite(#[from] RewriteError),
+
+    #[error("sharded databases require the query parser to be enabled")]
+    QueryParserRequired,
 }

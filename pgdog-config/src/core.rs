@@ -7,7 +7,7 @@ use tracing::{info, warn};
 use crate::sharding::ShardedSchema;
 use crate::{
     EnumeratedDatabase, Memory, OmnishardedTable, PassthoughAuth, PreparedStatements,
-    ReadWriteSplit, RewriteMode, Role,
+    QueryParserLevel, ReadWriteSplit, RewriteMode, Role,
 };
 
 use super::database::Database;
@@ -293,7 +293,7 @@ impl Config {
         mappings
     }
 
-    pub fn check(&self) {
+    pub fn check(&mut self) {
         // Check databases.
         let mut duplicate_dbs = HashSet::new();
         for database in self.databases.clone() {
@@ -317,7 +317,9 @@ impl Config {
             pooler_mode: Option<PoolerMode>,
             role: Role,
             role_warned: bool,
+            parser_warned: bool,
             have_replicas: bool,
+            sharded: bool,
         }
 
         // Check identical configs.
@@ -341,6 +343,20 @@ impl Config {
                 if !existing.have_replicas {
                     existing.have_replicas = database.role == Role::Replica;
                 }
+                if !existing.sharded {
+                    existing.sharded = database.shard > 0;
+                }
+
+                if (existing.sharded || existing.have_replicas)
+                    && self.general.query_parser == QueryParserLevel::Off
+                    && !existing.parser_warned
+                {
+                    existing.parser_warned = true;
+                    warn!(
+                        r#"database "{}" may need the query parser for load balancing/sharding, but it's disabled"#,
+                        database.name
+                    );
+                }
             } else {
                 checks.insert(
                     database.name.clone(),
@@ -348,7 +364,9 @@ impl Config {
                         pooler_mode: database.pooler_mode,
                         role: database.role,
                         role_warned: false,
+                        parser_warned: false,
                         have_replicas: database.role == Role::Replica,
+                        sharded: database.shard > 0,
                     },
                 );
             }
@@ -381,13 +399,15 @@ impl Config {
 
         if !self.general.two_phase_commit && self.rewrite.enabled {
             if self.rewrite.shard_key == RewriteMode::Rewrite {
-                warn!("rewrite.shard_key=rewrite will apply non-atomic shard-key rewrites; enabling two_phase_commit is strongly recommended"
-                    );
+                warn!(
+                    r#"rewrite.shard_key = "rewrite" may apply non-atomic sharding key rewrites; enabling "two_phase_commit" is strongly recommended"#
+                );
             }
 
             if self.rewrite.split_inserts == RewriteMode::Rewrite {
-                warn!("rewrite.split_inserts=rewrite may commit partial multi-row INSERTs; enabling two_phase_commit is strongly recommended"
-                    );
+                warn!(
+                    r#"rewrite.split_inserts = "rewrite" may commit partial multi-row inserts; enabling "two_phase_commit" is strongly recommended"#
+                );
             }
         }
 
@@ -396,10 +416,15 @@ impl Config {
                 && self.general.read_write_split == ReadWriteSplit::ExcludePrimary
             {
                 warn!(
-                    r#"database "{}" has no replicas and read_write_split is set to "{}", read queries will not be served"#,
+                    r#"database "{}" has no replicas and "read_write_split" is set to "{}": read queries will be rejected"#,
                     database, self.general.read_write_split
                 );
             }
+        }
+
+        if self.general.query_parser_enabled {
+            warn!(r#""query_parser_enabled" is deprecated, use "query_parser" = "on" instead"#);
+            self.general.query_parser = QueryParserLevel::On;
         }
     }
 
