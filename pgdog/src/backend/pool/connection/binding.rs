@@ -429,11 +429,11 @@ impl Binding {
         matches!(self, Binding::Direct(Some(_)))
     }
 
-    pub fn copy_mode(&self) -> bool {
+    pub fn in_copy_mode(&self) -> bool {
         match self {
             Binding::Admin(_) => false,
-            Binding::MultiShard(ref servers, _state) => servers.iter().all(|s| s.copy_mode()),
-            Binding::Direct(Some(ref server)) => server.copy_mode(),
+            Binding::MultiShard(ref servers, _state) => servers.iter().all(|s| s.in_copy_mode()),
+            Binding::Direct(Some(ref server)) => server.in_copy_mode(),
             _ => false,
         }
     }

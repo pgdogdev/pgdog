@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use crate::pooling::ConnectionRecovery;
+use crate::QueryParserLevel;
 
 use super::auth::{AuthType, PassthoughAuth};
 use super::database::{LoadBalancingStrategy, ReadWriteSplit, ReadWriteStrategy};
@@ -96,6 +97,9 @@ pub struct General {
     /// Parse Queries override.
     #[serde(default = "General::query_parser_enabled")]
     pub query_parser_enabled: bool,
+    /// Query parser.
+    #[serde(default)]
+    pub query_parser: QueryParserLevel,
     /// Limit on the number of prepared statements in the server cache.
     #[serde(default = "General::prepared_statements_limit")]
     pub prepared_statements_limit: usize,
@@ -219,6 +223,7 @@ impl Default for General {
             openmetrics_namespace: Self::openmetrics_namespace(),
             prepared_statements: Self::prepared_statements(),
             query_parser_enabled: Self::query_parser_enabled(),
+            query_parser: QueryParserLevel::default(),
             prepared_statements_limit: Self::prepared_statements_limit(),
             query_cache_limit: Self::query_cache_limit(),
             passthrough_auth: Self::default_passthrough_auth(),

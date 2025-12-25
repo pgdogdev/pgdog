@@ -31,6 +31,7 @@ impl QueryParser {
 #[cfg(test)]
 mod test_show {
     use crate::backend::Cluster;
+    use crate::config::config;
     use crate::frontend::client::Sticky;
     use crate::frontend::router::parser::Shard;
     use crate::frontend::router::{Ast, QueryParser};
@@ -40,7 +41,7 @@ mod test_show {
 
     #[test]
     fn show_runs_on_a_direct_shard_round_robin() {
-        let c = Cluster::new_test();
+        let c = Cluster::new_test(&config());
         let mut parser = QueryParser::default();
 
         // First call

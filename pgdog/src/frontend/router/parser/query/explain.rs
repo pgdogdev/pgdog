@@ -73,7 +73,7 @@ mod tests {
     // Helper function to route a plain SQL statement and return its `Route`.
     fn route(sql: &str) -> Route {
         enable_expanded_explain();
-        let cluster = Cluster::new_test();
+        let cluster = Cluster::new_test(&config());
         let mut stmts = PreparedStatements::default();
 
         let ast = Ast::new(
@@ -108,7 +108,7 @@ mod tests {
 
         let bind = Bind::new_params("", &parameters);
 
-        let cluster = Cluster::new_test();
+        let cluster = Cluster::new_test(&config());
         let mut stmts = PreparedStatements::default();
 
         let ast = Ast::new(

@@ -597,7 +597,7 @@ mod test {
 
     #[tokio::test]
     async fn test_pg_dump_execute() {
-        let cluster = Cluster::new_test_single_shard();
+        let cluster = Cluster::new_test_single_shard(&config());
         let _pg_dump = PgDump::new(&cluster, "test_pg_dump_execute");
     }
 

@@ -1,5 +1,7 @@
 use std::ops::Deref;
 
+use pgdog_config::ConfigAndUsers;
+
 use crate::{
     backend::Cluster,
     config::{self, config, ReadWriteStrategy},
@@ -30,7 +32,12 @@ pub(crate) struct QueryParserTest {
 impl QueryParserTest {
     /// Create a new test with default settings (no transaction, default cluster).
     pub(crate) fn new() -> Self {
-        let cluster = Cluster::new_test();
+        Self::new_with_config(&config())
+    }
+
+    /// Create a test with a single-shard cluster.
+    pub(crate) fn new_single_shard(config: &ConfigAndUsers) -> Self {
+        let cluster = Cluster::new_test_single_shard(config);
 
         Self {
             cluster,
@@ -43,9 +50,9 @@ impl QueryParserTest {
         }
     }
 
-    /// Create a test with a single-shard cluster.
-    pub(crate) fn new_single_shard() -> Self {
-        let cluster = Cluster::new_test_single_shard();
+    /// Create new test with specific general settings.
+    pub(crate) fn new_with_config(config: &ConfigAndUsers) -> Self {
+        let cluster = Cluster::new_test(config);
 
         Self {
             cluster,
@@ -80,7 +87,7 @@ impl QueryParserTest {
         updated.config.general.dry_run = true;
         config::set(updated).unwrap();
         // Recreate cluster with the new config
-        self.cluster = Cluster::new_test();
+        self.cluster = Cluster::new_test(&config());
         self
     }
 
@@ -93,6 +100,8 @@ impl QueryParserTest {
         self.params.insert(name, value);
         self
     }
+
+    /// Startup parameters.
 
     /// Execute a request and return the command (panics on error).
     pub(crate) fn execute(&mut self, request: Vec<ProtocolMessage>) -> Command {
