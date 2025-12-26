@@ -22,6 +22,7 @@ pub mod setup_schema;
 pub mod show_client_memory;
 pub mod show_clients;
 pub mod show_config;
+pub mod show_config_file;
 pub mod show_instance_id;
 pub mod show_lists;
 pub mod show_mirrors;
