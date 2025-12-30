@@ -517,6 +517,8 @@ impl Client {
                 .timeouts
                 .client_idle_timeout(&state, &self.client_request);
 
+            println!("{} {}", state, self.client_request.is_empty());
+
             let message =
                 match timeout(idle_timeout, self.stream_buffer.read(&mut self.stream)).await {
                     Err(_) => {

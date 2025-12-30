@@ -6,6 +6,7 @@ pub mod cross_shard_disabled;
 pub mod distinct;
 pub mod explain;
 pub mod fake_transactions;
+pub mod idle_in_transaction;
 pub mod maintenance_mode;
 pub mod notify;
 pub mod per_stmt_routing;

@@ -64,3 +64,27 @@ impl Timeouts {
         }
     }
 }
+
+#[cfg(test)]
+mod test {
+
+    use crate::{config::config, net::Query};
+
+    use super::*;
+
+    #[test]
+    fn test_idle_in_transaction_timeout() {
+        let config = config(); // Will be default.
+        let timeout = Timeouts::from_config(&config.config.general);
+
+        let actual = timeout.client_idle_timeout(&State::IdleInTransaction, &ClientRequest::new());
+        assert_eq!(actual, timeout.idle_in_transaction_timeout);
+        assert_eq!(actual.as_millis(), u64::MAX.into());
+
+        let actual = timeout.client_idle_timeout(
+            &State::IdleInTransaction,
+            &ClientRequest::from(vec![Query::new("SELECT 1").into()]),
+        );
+        assert_eq!(actual, Duration::MAX);
+    }
+}
