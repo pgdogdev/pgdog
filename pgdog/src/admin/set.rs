@@ -149,6 +149,10 @@ impl Command for Set {
                 config.config.general.query_parser = Self::from_json(&self.value)?;
             }
 
+            "client_idle_in_transaction_timeout" => {
+                config.config.general.client_idle_in_transaction_timeout = self.value.parse()?;
+            }
+
             _ => return Err(Error::Syntax),
         }
 
