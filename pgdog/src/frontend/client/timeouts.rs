@@ -6,6 +6,7 @@ use crate::{config::General, frontend::ClientRequest, state::State};
 pub struct Timeouts {
     pub(super) query_timeout: Duration,
     pub(super) client_idle_timeout: Duration,
+    pub(super) idle_in_transaction_timeout: Duration,
 }
 
 impl Default for Timeouts {
@@ -13,6 +14,7 @@ impl Default for Timeouts {
         Self {
             query_timeout: Duration::MAX,
             client_idle_timeout: Duration::MAX,
+            idle_in_transaction_timeout: Duration::MAX,
         }
     }
 }
@@ -22,6 +24,7 @@ impl Timeouts {
         Self {
             query_timeout: general.query_timeout(),
             client_idle_timeout: general.client_idle_timeout(),
+            idle_in_transaction_timeout: general.client_idle_in_transaction_timeout(),
         }
     }
 
@@ -48,6 +51,15 @@ impl Timeouts {
                     Duration::MAX
                 }
             }
+            State::IdleInTransaction => {
+                // Client is sending the request, don't fire.
+                if !client_request.messages.is_empty() {
+                    Duration::MAX
+                } else {
+                    self.idle_in_transaction_timeout
+                }
+            }
+
             _ => Duration::MAX,
         }
     }

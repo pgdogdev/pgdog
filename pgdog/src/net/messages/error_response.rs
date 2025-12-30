@@ -4,7 +4,10 @@ use std::fmt::Display;
 use std::time::Duration;
 
 use super::prelude::*;
-use crate::net::{c_string_buf, code};
+use crate::{
+    net::{c_string_buf, code},
+    state::State,
+};
 
 /// ErrorResponse (B) message.
 #[derive(Debug, Clone)]
@@ -50,7 +53,7 @@ impl ErrorResponse {
     }
 
     pub fn client_login_timeout(timeout: Duration) -> ErrorResponse {
-        let mut error = Self::client_idle_timeout(timeout);
+        let mut error = Self::client_idle_timeout(timeout, &State::Active);
         error.message = "client login timeout".into();
         error.detail = Some(format!(
             "client_login_timeout of {}ms expired",
@@ -89,13 +92,25 @@ impl ErrorResponse {
         }
     }
 
-    pub fn client_idle_timeout(duration: Duration) -> ErrorResponse {
+    pub fn client_idle_timeout(duration: Duration, state: &State) -> ErrorResponse {
         ErrorResponse {
             severity: "FATAL".into(),
             code: "57P05".into(),
-            message: "disconnecting idle client".into(),
+            message: format!(
+                "disconnecting {} client",
+                if state == &State::IdleInTransaction {
+                    "idle in transaction"
+                } else {
+                    "idle"
+                }
+            ),
             detail: Some(format!(
-                "client_idle_timeout of {}ms expired",
+                "{} of {}ms expired",
+                if state == &State::IdleInTransaction {
+                    "client_idle_in_transaction_timeout"
+                } else {
+                    "client_idle_timeout"
+                },
                 duration.as_millis()
             )),
             context: None,

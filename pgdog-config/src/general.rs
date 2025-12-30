@@ -135,6 +135,9 @@ pub struct General {
     /// Client idle timeout.
     #[serde(default = "General::default_client_idle_timeout")]
     pub client_idle_timeout: u64,
+    /// Client idle in transaction timeout.
+    #[serde(default = "General::default_client_idle_in_transaction_timeout")]
+    pub client_idle_in_transaction_timeout: u64,
     /// Server lifetime.
     #[serde(default = "General::server_lifetime")]
     pub server_lifetime: u64,
@@ -236,6 +239,7 @@ impl Default for General {
             dry_run: Self::dry_run(),
             idle_timeout: Self::idle_timeout(),
             client_idle_timeout: Self::default_client_idle_timeout(),
+            client_idle_in_transaction_timeout: Self::default_client_idle_in_transaction_timeout(),
             mirror_queue: Self::mirror_queue(),
             mirror_exposure: Self::mirror_exposure(),
             auth_type: Self::auth_type(),
@@ -364,6 +368,13 @@ impl General {
         )
     }
 
+    fn default_client_idle_in_transaction_timeout() -> u64 {
+        Self::env_or_default(
+            "PGDOG_CLIENT_IDLE_IN_TRANSACTION_TIMEOUT",
+            Duration::MAX.as_millis() as u64,
+        )
+    }
+
     fn default_query_timeout() -> u64 {
         Self::env_or_default("PGDOG_QUERY_TIMEOUT", Duration::MAX.as_millis() as u64)
     }
@@ -382,6 +393,10 @@ impl General {
 
     pub fn connect_attempt_delay(&self) -> Duration {
         Duration::from_millis(self.connect_attempt_delay)
+    }
+
+    pub fn client_idle_in_transaction_timeout(&self) -> Duration {
+        Duration::from_millis(self.client_idle_in_transaction_timeout)
     }
 
     fn load_balancing_strategy() -> LoadBalancingStrategy {
