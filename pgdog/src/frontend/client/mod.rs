@@ -521,7 +521,7 @@ impl Client {
                 match timeout(idle_timeout, self.stream_buffer.read(&mut self.stream)).await {
                     Err(_) => {
                         self.stream
-                            .fatal(ErrorResponse::client_idle_timeout(idle_timeout))
+                            .fatal(ErrorResponse::client_idle_timeout(idle_timeout, &state))
                             .await?;
                         return Ok(BufferEvent::DisconnectAbrupt);
                     }

@@ -44,6 +44,14 @@ pub async fn connections_sqlx() -> Vec<Pool<Postgres>> {
     pools
 }
 
+pub async fn connection_sqlx_direct() -> Pool<Postgres> {
+    PgPoolOptions::new()
+        .max_connections(1)
+        .connect("postgres://pgdog:pgdog@127.0.0.1:5432/pgdog?application_name=sqlx_direct")
+        .await
+        .unwrap()
+}
+
 #[derive(Debug, PartialEq, Clone)]
 pub struct Backend {
     pub pid: i32,
