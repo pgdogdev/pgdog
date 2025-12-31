@@ -8,8 +8,6 @@ members = [
 ]
 resolver = "2"
 
-# [patch.crates-io]
-# tokio = { path = "../tokio/tokio" }
 
 [profile.release]
 codegen-units = 1

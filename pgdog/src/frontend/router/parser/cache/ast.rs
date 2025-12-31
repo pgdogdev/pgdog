@@ -1,3 +1,4 @@
+use pg_query::parse_raw;
 use pg_query::{parse, protobuf::ObjectType, NodeEnum, NodeRef, ParseResult};
 use std::fmt::Debug;
 use std::{collections::HashSet, ops::Deref};
@@ -68,7 +69,7 @@ impl Ast {
         schema: &ShardingSchema,
         prepared_statements: &mut PreparedStatements,
     ) -> Result<Self, Error> {
-        let mut ast = parse(query).map_err(Error::PgQuery)?;
+        let mut ast = parse_raw(query).map_err(Error::PgQuery)?;
         let (comment_shard, comment_role) = comment(query, schema)?;
         let fingerprint = Fingerprint::new(query).map_err(Error::PgQuery)?;
 

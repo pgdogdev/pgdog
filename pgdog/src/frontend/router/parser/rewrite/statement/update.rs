@@ -502,7 +502,7 @@ fn select_star() -> Vec<Node> {
 
 fn parse_result(node: NodeEnum) -> ParseResult {
     ParseResult {
-        version: 170005,
+        version: pg_query::PG_VERSION_NUM as i32,
         stmts: vec![RawStmt {
             stmt: Some(Box::new(Node {
                 node: Some(node),
