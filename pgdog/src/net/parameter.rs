@@ -103,9 +103,9 @@ impl Display for ParameterValue {
             };
 
             if value.is_empty() || value.contains("\"") {
-                format!("'{}'", value)
+                format!("'{}'", value.replace("'", "''"))
             } else {
-                format!(r#""{}""#, value)
+                format!(r#""{}""#, value.replace("\"", "\"\""))
             }
         }
         match self {
@@ -453,6 +453,7 @@ impl From<&Parameters> for Vec<Parameter> {
 
 #[cfg(test)]
 mod test {
+    use crate::backend::server::test::test_server;
     use crate::net::parameter::ParameterValue;
     use crate::net::ToBytes;
 
@@ -699,5 +700,48 @@ mod test {
 
         // After clear, hash should be reset to match empty Parameters
         assert!(params.identical(&Parameters::default()));
+    }
+
+    #[tokio::test]
+    async fn test_escape_chars() {
+        let mut server = test_server().await;
+
+        for quote in ["'", "\""] {
+            let base = r#"my_app_nameQUOTE;CREATE/**/TABLE/**/poc_table_two/**/(dummy_column/**/INTEGER);SET/**/application_name/**/TO/**/QUOTEyour_app_name"#;
+            let param = base.replace("QUOTE", quote);
+            // Postgres truncates identifiers.
+            let truncated =
+                r#"my_app_nameQUOTE;CREATE/**/TABLE/**/poc_table_two/**/(dummy_column/"#
+                    .replace("QUOTE", quote);
+
+            let mut params = Parameters::default();
+            params.insert("application_name", param.clone());
+
+            let query = params.set_queries(false).first().unwrap().clone();
+
+            assert!(query.query().contains(&param));
+
+            server.execute(query).await.unwrap();
+
+            let param: Vec<String> = server.fetch_all("SHOW application_name").await.unwrap();
+            let param = param.first().unwrap().clone();
+
+            assert_eq!(param, truncated);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_set_with_server() {
+        let mut server = test_server().await;
+
+        let mut params = Parameters::default();
+        params.insert("application_name", "test_set_with_server");
+
+        let query = params.set_queries(false).first().unwrap().clone();
+        server.execute(query).await.unwrap();
+
+        let param: Vec<String> = server.fetch_all("SHOW application_name").await.unwrap();
+        let param = param.first().unwrap();
+        assert_eq!(param, "test_set_with_server");
     }
 }
