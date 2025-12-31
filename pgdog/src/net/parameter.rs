@@ -729,4 +729,19 @@ mod test {
             assert_eq!(param, truncated);
         }
     }
+
+    #[tokio::test]
+    async fn test_set_with_server() {
+        let mut server = test_server().await;
+
+        let mut params = Parameters::default();
+        params.insert("application_name", "test_set_with_server");
+
+        let query = params.set_queries(false).first().unwrap().clone();
+        server.execute(query).await.unwrap();
+
+        let param: Vec<String> = server.fetch_all("SHOW application_name").await.unwrap();
+        let param = param.first().unwrap();
+        assert_eq!(param, "test_set_with_server");
+    }
 }
