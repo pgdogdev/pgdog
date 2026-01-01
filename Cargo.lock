@@ -2356,7 +2356,7 @@ dependencies = [
 [[package]]
 name = "pg_query"
 version = "6.1.1"
-source = "git+https://github.com/pgdogdev/pg_query.rs.git?branch=levkk-bypass-protobuf#9554ab369030a416eb921ac474118f011834db3d"
+source = "git+https://github.com/pgdogdev/pg_query.rs.git?rev=8722f9e#8722f9e32ed72ab1c4c049bb6d136545c6b5189e"
 dependencies = [
  "bindgen 0.66.1",
  "cc",

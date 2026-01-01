@@ -2,6 +2,7 @@
 
 use pg_query::protobuf::ParseResult;
 use pg_query::Node;
+use pgdog_config::QueryParserEngine;
 
 use crate::backend::ShardingSchema;
 use crate::frontend::PreparedStatements;
@@ -107,7 +108,10 @@ impl<'a> StatementRewrite<'a> {
         self.rewrite_aggregates(&mut plan)?;
 
         if self.rewritten {
-            plan.stmt = Some(self.stmt.deparse()?);
+            plan.stmt = Some(match self.schema.query_parser_engine {
+                QueryParserEngine::PgQueryProtobuf => self.stmt.deparse(),
+                QueryParserEngine::PgQueryRaw => self.stmt.deparse_raw(),
+            }?);
         }
 
         self.split_insert(&mut plan)?;

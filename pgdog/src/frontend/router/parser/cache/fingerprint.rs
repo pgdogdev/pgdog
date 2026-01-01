@@ -1,6 +1,7 @@
 use std::{fmt::Debug, ops::Deref};
 
-use pg_query::fingerprint;
+use pg_query::{fingerprint, fingerprint_raw};
+use pgdog_config::QueryParserEngine;
 
 /// Query fingerprint.
 pub struct Fingerprint {
@@ -9,9 +10,12 @@ pub struct Fingerprint {
 
 impl Fingerprint {
     /// Fingerprint a query.
-    pub(crate) fn new(query: &str) -> Result<Self, pg_query::Error> {
+    pub(crate) fn new(query: &str, engine: QueryParserEngine) -> Result<Self, pg_query::Error> {
         Ok(Self {
-            fingerprint: fingerprint(query)?,
+            fingerprint: match engine {
+                QueryParserEngine::PgQueryProtobuf => fingerprint(query),
+                QueryParserEngine::PgQueryRaw => fingerprint_raw(query),
+            }?,
         })
     }
 }

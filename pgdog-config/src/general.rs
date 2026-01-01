@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use crate::pooling::ConnectionRecovery;
-use crate::QueryParserLevel;
+use crate::{QueryParserEngine, QueryParserLevel};
 
 use super::auth::{AuthType, PassthoughAuth};
 use super::database::{LoadBalancingStrategy, ReadWriteSplit, ReadWriteStrategy};
@@ -100,6 +100,9 @@ pub struct General {
     /// Query parser.
     #[serde(default)]
     pub query_parser: QueryParserLevel,
+    /// Query parser engine.
+    #[serde(default)]
+    pub query_parser_engine: QueryParserEngine,
     /// Limit on the number of prepared statements in the server cache.
     #[serde(default = "General::prepared_statements_limit")]
     pub prepared_statements_limit: usize,
@@ -227,6 +230,7 @@ impl Default for General {
             prepared_statements: Self::prepared_statements(),
             query_parser_enabled: Self::query_parser_enabled(),
             query_parser: QueryParserLevel::default(),
+            query_parser_engine: QueryParserEngine::default(),
             prepared_statements_limit: Self::prepared_statements_limit(),
             query_cache_limit: Self::query_cache_limit(),
             passthrough_auth: Self::default_passthrough_auth(),

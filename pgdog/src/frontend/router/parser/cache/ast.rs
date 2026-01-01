@@ -1,5 +1,6 @@
 use pg_query::parse_raw;
 use pg_query::{parse, protobuf::ObjectType, NodeEnum, NodeRef, ParseResult};
+use pgdog_config::QueryParserEngine;
 use std::fmt::Debug;
 use std::{collections::HashSet, ops::Deref};
 
@@ -69,9 +70,14 @@ impl Ast {
         schema: &ShardingSchema,
         prepared_statements: &mut PreparedStatements,
     ) -> Result<Self, Error> {
-        let mut ast = parse_raw(query).map_err(Error::PgQuery)?;
+        let mut ast = match schema.query_parser_engine {
+            QueryParserEngine::PgQueryProtobuf => parse(query),
+            QueryParserEngine::PgQueryRaw => parse_raw(query),
+        }
+        .map_err(Error::PgQuery)?;
         let (comment_shard, comment_role) = comment(query, schema)?;
-        let fingerprint = Fingerprint::new(query).map_err(Error::PgQuery)?;
+        let fingerprint =
+            Fingerprint::new(query, schema.query_parser_engine).map_err(Error::PgQuery)?;
 
         // Don't rewrite statements that will be
         // sent to a direct shard.
