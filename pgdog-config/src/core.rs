@@ -7,7 +7,7 @@ use tracing::{info, warn};
 use crate::sharding::ShardedSchema;
 use crate::{
     EnumeratedDatabase, Memory, OmnishardedTable, PassthoughAuth, PreparedStatements,
-    QueryParserLevel, ReadWriteSplit, RewriteMode, Role,
+    QueryParserEngine, QueryParserLevel, ReadWriteSplit, RewriteMode, Role,
 };
 
 use super::database::Database;
@@ -425,6 +425,15 @@ impl Config {
         if self.general.query_parser_enabled {
             warn!(r#""query_parser_enabled" is deprecated, use "query_parser" = "on" instead"#);
             self.general.query_parser = QueryParserLevel::On;
+        }
+
+        if self.general.query_parser_engine == QueryParserEngine::PgQueryRaw {
+            if self.memory.stack_size < 32 * 1024 * 1024 {
+                self.memory.stack_size = 32 * 1024 * 1024;
+                warn!(
+                    r#""pg_query_raw" parser engine requires a large thread stack, setting it to 32MiB for each Tokio worker"#
+                );
+            }
         }
     }
 
