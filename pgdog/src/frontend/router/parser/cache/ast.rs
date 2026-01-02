@@ -1,5 +1,5 @@
+use pg_query::parse_raw;
 use pg_query::{parse, protobuf::ObjectType, NodeEnum, NodeRef, ParseResult};
-use pg_query::{parse_raw, parse_raw_with_stack};
 use pgdog_config::QueryParserEngine;
 use std::fmt::Debug;
 use std::{collections::HashSet, ops::Deref};
