@@ -18,8 +18,8 @@ query_cache_limit = 500
 pub_sub_channel_size = 4098
 two_phase_commit = false
 healthcheck_port = 8080
-# tls_certificate = "integration/tls/cert.pem"
-# tls_private_key = "integration/tls/key.pem"
+tls_certificate = "integration/tls/cert.pem"
+tls_private_key = "integration/tls/key.pem"
 query_parser_engine = "pg_query_raw"
 
 [memory]
