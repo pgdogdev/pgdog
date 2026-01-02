@@ -1,7 +1,8 @@
 use pg_query::{Error as PgQueryError, NodeEnum};
+use pgdog_config::QueryParserEngine;
 
-use crate::frontend::PreparedStatements;
 use crate::net::Parse;
+use crate::{backend::ShardingSchema, frontend::PreparedStatements};
 
 use super::{Error, StatementRewrite};
 
@@ -48,7 +49,7 @@ impl StatementRewrite<'_> {
         for stmt in &mut self.stmt.stmts {
             if let Some(ref mut node) = stmt.stmt {
                 if let Some(ref mut inner) = node.node {
-                    match rewrite_single_prepared(inner, self.prepared_statements)? {
+                    match rewrite_single_prepared(inner, self.prepared_statements, self.schema)? {
                         SimplePreparedRewrite::Prepared => {
                             result.rewritten = true;
                         }
@@ -70,6 +71,7 @@ impl StatementRewrite<'_> {
 fn rewrite_single_prepared(
     node: &mut NodeEnum,
     prepared_statements: &mut PreparedStatements,
+    schema: &ShardingSchema,
 ) -> Result<SimplePreparedRewrite, Error> {
     match node {
         NodeEnum::PrepareStmt(stmt) => {
@@ -78,9 +80,12 @@ fn rewrite_single_prepared(
                 .as_ref()
                 .ok_or(Error::PgQuery(PgQueryError::Parse(
                     "missing query in PREPARE".into(),
-                )))?
-                .deparse()
-                .map_err(Error::PgQuery)?;
+                )))?;
+            let query = match schema.query_parser_engine {
+                QueryParserEngine::PgQueryProtobuf => query.deparse(),
+                QueryParserEngine::PgQueryRaw => query.deparse_raw(),
+            }
+            .map_err(Error::PgQuery)?;
 
             let mut parse = Parse::named(&stmt.name, &query);
             prepared_statements.insert_anyway(&mut parse);
@@ -116,7 +121,6 @@ fn rewrite_single_prepared(
 mod tests {
     use super::super::{RewritePlan, StatementRewrite, StatementRewriteContext};
     use super::*;
-    use crate::backend::replication::{ShardedSchemas, ShardedTables};
     use crate::backend::ShardingSchema;
     use crate::config::PreparedStatements as PreparedStatementsLevel;
     use pg_query::parse;
@@ -136,12 +140,11 @@ mod tests {
                 ps,
                 schema: ShardingSchema {
                     shards: 1,
-                    tables: ShardedTables::default(),
-                    schemas: ShardedSchemas::default(),
                     rewrite: Rewrite {
                         enabled: true,
                         ..Default::default()
                     },
+                    ..Default::default()
                 },
             }
         }

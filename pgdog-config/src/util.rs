@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use rand::{distributions::Alphanumeric, Rng};
+use rand::{distr::Alphanumeric, Rng};
 
 pub fn human_duration_optional(duration: Option<Duration>) -> String {
     if let Some(duration) = duration {
@@ -46,7 +46,7 @@ pub fn human_duration(duration: Duration) -> String {
 
 /// Generate a random string of length n.
 pub fn random_string(n: usize) -> String {
-    rand::thread_rng()
+    rand::rng()
         .sample_iter(&Alphanumeric)
         .take(n)
         .map(char::from)

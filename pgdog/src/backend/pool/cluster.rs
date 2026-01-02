@@ -1,7 +1,7 @@
 //! A collection of replicas and a primary.
 
 use parking_lot::{Mutex, RwLock};
-use pgdog_config::{PreparedStatements, QueryParserLevel, Rewrite, RewriteMode};
+use pgdog_config::{PreparedStatements, QueryParserEngine, QueryParserLevel, Rewrite, RewriteMode};
 use std::{
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -64,6 +64,7 @@ pub struct Cluster {
     pub_sub_channel_size: usize,
     query_parser: QueryParserLevel,
     connection_recovery: ConnectionRecovery,
+    query_parser_engine: QueryParserEngine,
 }
 
 /// Sharding configuration from the cluster.
@@ -77,6 +78,8 @@ pub struct ShardingSchema {
     pub schemas: ShardedSchemas,
     /// Rewrite config.
     pub rewrite: Rewrite,
+    /// Query parser engine.
+    pub query_parser_engine: QueryParserEngine,
 }
 
 impl ShardingSchema {
@@ -131,6 +134,7 @@ pub struct ClusterConfig<'a> {
     pub expanded_explain: bool,
     pub pub_sub_channel_size: usize,
     pub query_parser: QueryParserLevel,
+    pub query_parser_engine: QueryParserEngine,
     pub connection_recovery: ConnectionRecovery,
     pub lsn_check_interval: Duration,
 }
@@ -177,6 +181,7 @@ impl<'a> ClusterConfig<'a> {
             expanded_explain: general.expanded_explain,
             pub_sub_channel_size: general.pub_sub_channel_size,
             query_parser: general.query_parser,
+            query_parser_engine: general.query_parser_engine,
             connection_recovery: general.connection_recovery,
             lsn_check_interval: Duration::from_millis(general.lsn_check_interval),
         }
@@ -211,6 +216,7 @@ impl Cluster {
             query_parser,
             connection_recovery,
             lsn_check_interval,
+            query_parser_engine,
         } = config;
 
         let identifier = Arc::new(DatabaseUser {
@@ -256,6 +262,7 @@ impl Cluster {
             pub_sub_channel_size,
             query_parser,
             connection_recovery,
+            query_parser_engine,
         }
     }
 
@@ -449,6 +456,7 @@ impl Cluster {
             tables: self.sharded_tables.clone(),
             schemas: self.sharded_schemas.clone(),
             rewrite: self.rewrite.clone(),
+            query_parser_engine: self.query_parser_engine,
         }
     }
 

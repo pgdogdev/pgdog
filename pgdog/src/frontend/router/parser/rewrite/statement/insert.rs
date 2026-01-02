@@ -1,5 +1,5 @@
 use pg_query::{Node, NodeEnum};
-use pgdog_config::RewriteMode;
+use pgdog_config::{QueryParserEngine, RewriteMode};
 
 use crate::frontend::router::parser::Cache;
 use crate::frontend::router::Ast;
@@ -234,7 +234,11 @@ impl StatementRewrite<'_> {
             }
         }
 
-        let stmt = ast.deparse()?;
+        let stmt = match self.schema.query_parser_engine {
+            QueryParserEngine::PgQueryProtobuf => ast.deparse(),
+            QueryParserEngine::PgQueryRaw => ast.deparse_raw(),
+        }?;
+
         Ok((params, stmt))
     }
 
@@ -295,7 +299,6 @@ mod tests {
     use pgdog_config::Rewrite;
 
     use super::*;
-    use crate::backend::replication::{ShardedSchemas, ShardedTables};
     use crate::backend::ShardingSchema;
     use crate::frontend::router::parser::StatementRewriteContext;
     use crate::frontend::PreparedStatements;
@@ -303,13 +306,12 @@ mod tests {
     fn default_schema() -> ShardingSchema {
         ShardingSchema {
             shards: 2,
-            tables: ShardedTables::default(),
-            schemas: ShardedSchemas::default(),
             rewrite: Rewrite {
                 enabled: true,
                 split_inserts: RewriteMode::Rewrite,
                 ..Default::default()
             },
+            ..Default::default()
         }
     }
 

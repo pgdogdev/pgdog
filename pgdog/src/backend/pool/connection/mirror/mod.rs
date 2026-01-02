@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use rand::{thread_rng, Rng};
+use rand::{rng, Rng};
 use tokio::select;
 use tokio::time::{sleep, Instant};
 use tokio::{spawn, sync::mpsc::*};

@@ -1,4 +1,4 @@
-use rand::{thread_rng, Rng};
+use rand::{rng, Rng};
 
 use crate::{
     expect_message,
@@ -171,7 +171,7 @@ async fn test_row_same_shard_no_transaction() {
 #[tokio::test]
 async fn test_no_rows_updated() {
     let mut client = TestClient::new_rewrites(Parameters::default()).await;
-    let id = thread_rng().gen::<i64>();
+    let id = rng().random::<i64>();
 
     // Transaction not required because
     // it'll check for existing row first (on the same shard).

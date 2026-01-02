@@ -7,6 +7,7 @@ use pg_query::{
     protobuf::{AlterTableType, ConstrType, ObjectType, ParseResult},
     NodeEnum,
 };
+use pgdog_config::QueryParserEngine;
 use regex::Regex;
 use tracing::{info, trace, warn};
 
@@ -16,6 +17,20 @@ use crate::{
     config::config,
     frontend::router::parser::{sequence::Sequence, Column, Table},
 };
+
+fn deparse_node(node: NodeEnum) -> Result<String, pg_query::Error> {
+    match config().config.general.query_parser_engine {
+        QueryParserEngine::PgQueryProtobuf => node.deparse(),
+        QueryParserEngine::PgQueryRaw => node.deparse_raw(),
+    }
+}
+
+fn parse(query: &str) -> Result<pg_query::ParseResult, pg_query::Error> {
+    match config().config.general.query_parser_engine {
+        QueryParserEngine::PgQueryProtobuf => pg_query::parse(query),
+        QueryParserEngine::PgQueryRaw => pg_query::parse_raw(query),
+    }
+}
 
 use tokio::process::Command;
 
@@ -117,7 +132,7 @@ impl PgDump {
         let cleaned = Self::clean(&original);
         trace!("[pg_dump (clean)] {}", cleaned);
 
-        let stmts = pg_query::parse(&cleaned)?.protobuf;
+        let stmts = parse(&cleaned)?.protobuf;
 
         Ok(PgDumpOutput {
             stmts,
@@ -222,7 +237,7 @@ impl PgDumpOutput {
                             let sql = {
                                 let mut stmt = stmt.clone();
                                 stmt.if_not_exists = true;
-                                NodeEnum::CreateStmt(stmt).deparse()?
+                                deparse_node(NodeEnum::CreateStmt(stmt))?
                             };
                             if state == SyncState::PreData {
                                 // CREATE TABLE is always good.
@@ -235,7 +250,7 @@ impl PgDumpOutput {
                         NodeEnum::CreateSeqStmt(stmt) => {
                             let mut stmt = stmt.clone();
                             stmt.if_not_exists = true;
-                            let sql = NodeEnum::CreateSeqStmt(stmt).deparse()?;
+                            let sql = deparse_node(NodeEnum::CreateSeqStmt(stmt))?;
                             if state == SyncState::PreData {
                                 // Bring sequences over.
                                 result.push(sql.into());
@@ -245,7 +260,7 @@ impl PgDumpOutput {
                         NodeEnum::CreateExtensionStmt(stmt) => {
                             let mut stmt = stmt.clone();
                             stmt.if_not_exists = true;
-                            let sql = NodeEnum::CreateExtensionStmt(stmt).deparse()?;
+                            let sql = deparse_node(NodeEnum::CreateExtensionStmt(stmt))?;
                             if state == SyncState::PreData {
                                 result.push(sql.into());
                             }
@@ -254,7 +269,7 @@ impl PgDumpOutput {
                         NodeEnum::CreateSchemaStmt(stmt) => {
                             let mut stmt = stmt.clone();
                             stmt.if_not_exists = true;
-                            let sql = NodeEnum::CreateSchemaStmt(stmt).deparse()?;
+                            let sql = deparse_node(NodeEnum::CreateSchemaStmt(stmt))?;
                             if state == SyncState::PreData {
                                 result.push(sql.into());
                             }
@@ -399,7 +414,7 @@ impl PgDumpOutput {
                             stmt.replace = true;
 
                             if state == SyncState::PreData {
-                                result.push(NodeEnum::CreateTrigStmt(stmt).deparse()?.into());
+                                result.push(deparse_node(NodeEnum::CreateTrigStmt(stmt))?.into());
                             }
                         }
 
@@ -446,7 +461,7 @@ impl PgDumpOutput {
                                         .map(|relation| relation.inh) // ONLY used for partitioned tables, which can't be created concurrently.
                                         .unwrap_or(false);
                                     stmt.if_not_exists = true;
-                                    NodeEnum::IndexStmt(stmt).deparse()?
+                                    deparse_node(NodeEnum::IndexStmt(stmt))?
                                 };
 
                                 let table =
@@ -466,7 +481,7 @@ impl PgDumpOutput {
 
                             if state == SyncState::PreData {
                                 result.push(Statement::Other {
-                                    sql: NodeEnum::ViewStmt(stmt).deparse()?,
+                                    sql: deparse_node(NodeEnum::ViewStmt(stmt))?,
                                     idempotent: true,
                                 });
                             }
@@ -478,7 +493,7 @@ impl PgDumpOutput {
 
                             if state == SyncState::PreData {
                                 result.push(Statement::Other {
-                                    sql: NodeEnum::CreateTableAsStmt(stmt).deparse()?,
+                                    sql: deparse_node(NodeEnum::CreateTableAsStmt(stmt))?,
                                     idempotent: true,
                                 });
                             }
@@ -490,7 +505,7 @@ impl PgDumpOutput {
 
                             if state == SyncState::PreData {
                                 result.push(Statement::Other {
-                                    sql: NodeEnum::CreateFunctionStmt(stmt).deparse()?,
+                                    sql: deparse_node(NodeEnum::CreateFunctionStmt(stmt))?,
                                     idempotent: true,
                                 });
                             }

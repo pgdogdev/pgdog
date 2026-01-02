@@ -11,9 +11,11 @@ use std::{
 
 use once_cell::sync::Lazy;
 use pg_query::{
+    parse_raw,
     protobuf::{InsertStmt, ParseResult},
     NodeEnum,
 };
+use pgdog_config::QueryParserEngine;
 use tracing::{debug, trace};
 
 use super::super::{publisher::Table, Error};
@@ -74,8 +76,12 @@ impl Statement {
         &self.parse
     }
 
-    fn new(query: &str) -> Result<Self, Error> {
-        let ast = pg_query::parse(query)?.protobuf;
+    fn new(query: &str, query_parser_engine: QueryParserEngine) -> Result<Self, Error> {
+        let ast = match query_parser_engine {
+            QueryParserEngine::PgQueryProtobuf => pg_query::parse(query),
+            QueryParserEngine::PgQueryRaw => parse_raw(query),
+        }?
+        .protobuf;
         let name = statement_name();
         Ok(Self {
             ast,
@@ -138,10 +144,17 @@ pub struct StreamSubscriber {
 
     // Bytes sharded
     bytes_sharded: usize,
+
+    // Query parser engine.
+    query_parser_engine: QueryParserEngine,
 }
 
 impl StreamSubscriber {
-    pub fn new(cluster: &Cluster, tables: &[Table]) -> Self {
+    pub fn new(
+        cluster: &Cluster,
+        tables: &[Table],
+        query_parser_engine: QueryParserEngine,
+    ) -> Self {
         let cluster = cluster.logical_stream();
         Self {
             cluster,
@@ -165,6 +178,7 @@ impl StreamSubscriber {
             lsn: 0, // Unknown,
             bytes_sharded: 0,
             lsn_changed: true,
+            query_parser_engine,
         }
     }
 
@@ -396,10 +410,10 @@ impl StreamSubscriber {
                 return Ok(());
             }
 
-            let insert = Statement::new(&table.insert(false))?;
-            let upsert = Statement::new(&table.insert(true))?;
-            let update = Statement::new(&table.update())?;
-            let delete = Statement::new(&table.delete())?;
+            let insert = Statement::new(&table.insert(false), self.query_parser_engine)?;
+            let upsert = Statement::new(&table.insert(true), self.query_parser_engine)?;
+            let update = Statement::new(&table.update(), self.query_parser_engine)?;
+            let delete = Statement::new(&table.delete(), self.query_parser_engine)?;
 
             for server in &mut self.connections {
                 for stmt in &[&insert, &upsert, &update, &delete] {

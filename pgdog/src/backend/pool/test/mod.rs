@@ -98,7 +98,7 @@ async fn test_concurrency() {
         let pool = pool.clone();
         tracker.spawn(async move {
             let _conn = pool.get(&Request::default()).await.unwrap();
-            let duration = rand::thread_rng().gen_range(0..10);
+            let duration = rand::rng().random_range(0..10);
             sleep(Duration::from_millis(duration)).await;
         });
     }
@@ -131,7 +131,7 @@ async fn test_concurrency_with_gas() {
         let pool = pool.clone();
         tracker.spawn(async move {
             let _conn = pool.get(&Request::default()).await.unwrap();
-            let duration = rand::thread_rng().gen_range(0..10);
+            let duration = rand::rng().random_range(0..10);
             assert!(pool.lock().checked_out() > 0);
             assert!(pool.lock().total() <= 10);
             sleep(Duration::from_millis(duration)).await;

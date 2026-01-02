@@ -11,6 +11,9 @@ resolver = "2"
 # [patch.crates-io]
 # tokio = { path = "../tokio/tokio" }
 
+# [patch."https://github.com/pgdogdev/pg_query.rs.git"]
+# pg_query = { path = "../pg_query.rs" }
+
 [profile.release]
 codegen-units = 1
 lto = true

@@ -1,4 +1,5 @@
-use pg_query::{parse, protobuf::ObjectType, NodeEnum, NodeRef, ParseResult};
+use pg_query::{parse, parse_raw, protobuf::ObjectType, NodeEnum, NodeRef, ParseResult};
+use pgdog_config::QueryParserEngine;
 use std::fmt::Debug;
 use std::{collections::HashSet, ops::Deref};
 
@@ -68,9 +69,14 @@ impl Ast {
         schema: &ShardingSchema,
         prepared_statements: &mut PreparedStatements,
     ) -> Result<Self, Error> {
-        let mut ast = parse(query).map_err(Error::PgQuery)?;
+        let mut ast = match schema.query_parser_engine {
+            QueryParserEngine::PgQueryProtobuf => parse(query),
+            QueryParserEngine::PgQueryRaw => parse_raw(query),
+        }
+        .map_err(Error::PgQuery)?;
         let (comment_shard, comment_role) = comment(query, schema)?;
-        let fingerprint = Fingerprint::new(query).map_err(Error::PgQuery)?;
+        let fingerprint =
+            Fingerprint::new(query, schema.query_parser_engine).map_err(Error::PgQuery)?;
 
         // Don't rewrite statements that will be
         // sent to a direct shard.
@@ -101,8 +107,12 @@ impl Ast {
     }
 
     /// Record new AST entry, without rewriting or comment-routing.
-    pub fn new_record(query: &str) -> Result<Self, Error> {
-        let ast = parse(query).map_err(Error::PgQuery)?;
+    pub fn new_record(query: &str, query_parser_engine: QueryParserEngine) -> Result<Self, Error> {
+        let ast = match query_parser_engine {
+            QueryParserEngine::PgQueryProtobuf => parse(query),
+            QueryParserEngine::PgQueryRaw => parse_raw(query),
+        }
+        .map_err(Error::PgQuery)?;
 
         Ok(Self {
             cached: true,

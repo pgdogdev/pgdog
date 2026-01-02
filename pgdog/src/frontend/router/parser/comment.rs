@@ -1,5 +1,7 @@
 use once_cell::sync::Lazy;
+use pg_query::scan_raw;
 use pg_query::{protobuf::Token, scan};
+use pgdog_config::QueryParserEngine;
 use regex::Regex;
 
 use crate::backend::ShardingSchema;
@@ -33,7 +35,11 @@ pub fn comment(
     query: &str,
     schema: &ShardingSchema,
 ) -> Result<(Option<Shard>, Option<Role>), Error> {
-    let tokens = scan(query).map_err(Error::PgQuery)?;
+    let tokens = match schema.query_parser_engine {
+        QueryParserEngine::PgQueryProtobuf => scan(query),
+        QueryParserEngine::PgQueryRaw => scan_raw(query),
+    }
+    .map_err(Error::PgQuery)?;
     let mut role = None;
 
     for token in tokens.tokens.iter() {

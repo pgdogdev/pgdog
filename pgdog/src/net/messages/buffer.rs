@@ -179,15 +179,15 @@ mod test {
         spawn(async move {
             let mut conn = TcpStream::connect(addr).await.unwrap();
             use rand::{rngs::StdRng, Rng, SeedableRng};
-            let mut rng = StdRng::from_entropy();
+            let mut rng = StdRng::from_os_rng();
 
             for i in 0..5000 {
                 let msg = Sync.to_bytes().unwrap();
                 conn.write_all(&msg).await.unwrap();
 
-                let query_len = rng.gen_range(10..=1000);
+                let query_len = rng.random_range(10..=1000);
                 let query: String = (0..query_len)
-                    .map(|_| rng.sample(rand::distributions::Alphanumeric) as char)
+                    .map(|_| rng.sample(rand::distr::Alphanumeric) as char)
                     .collect();
 
                 let msg = Parse::named(format!("test_{}", i), &query)
