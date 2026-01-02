@@ -2381,7 +2381,7 @@ dependencies = [
 [[package]]
 name = "pg_query"
 version = "6.1.1"
-source = "git+https://github.com/pgdogdev/pg_query.rs.git?rev=55cd0ee0adb4f62edfb9c2afe7fbad526de25b0c#55cd0ee0adb4f62edfb9c2afe7fbad526de25b0c"
+source = "git+https://github.com/pgdogdev/pg_query.rs.git?rev=4f79b92fe4d630b1f253f27f13c9096c77530fd6#4f79b92fe4d630b1f253f27f13c9096c77530fd6"
 dependencies = [
  "bindgen 0.66.1",
  "cc",
@@ -2398,7 +2398,7 @@ dependencies = [
 
 [[package]]
 name = "pgdog"
-version = "0.1.21"
+version = "0.1.22"
 dependencies = [
  "arc-swap",
  "async-trait",
