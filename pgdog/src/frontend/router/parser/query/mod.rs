@@ -439,7 +439,11 @@ impl QueryParser {
             // Record statement in cache with normalized parameters.
             if !statement.cached {
                 let query = context.query()?.query();
-                Cache::get().record_normalized(query, command.route())?;
+                Cache::get().record_normalized(
+                    query,
+                    command.route(),
+                    context.sharding_schema.query_parser_engine,
+                )?;
             }
             Ok(command.dry_run())
         } else {

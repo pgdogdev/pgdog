@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
+use pgdog_config::QueryParserEngine;
 use tokio::{select, spawn};
 use tracing::{debug, error, info};
 
@@ -27,15 +28,22 @@ pub struct Publisher {
     tables: HashMap<usize, Vec<Table>>,
     /// Replication slots.
     slots: HashMap<usize, ReplicationSlot>,
+    /// Query parser engine.
+    query_parser_engine: QueryParserEngine,
 }
 
 impl Publisher {
-    pub fn new(cluster: &Cluster, publication: &str) -> Self {
+    pub fn new(
+        cluster: &Cluster,
+        publication: &str,
+        query_parser_engine: QueryParserEngine,
+    ) -> Self {
         Self {
             cluster: cluster.clone(),
             publication: publication.to_string(),
             tables: HashMap::new(),
             slots: HashMap::new(),
+            query_parser_engine,
         }
     }
 
@@ -44,7 +52,8 @@ impl Publisher {
         for (number, shard) in self.cluster.shards().iter().enumerate() {
             // Load tables from publication.
             let mut primary = shard.primary(&Request::default()).await?;
-            let tables = Table::load(&self.publication, &mut primary).await?;
+            let tables =
+                Table::load(&self.publication, &mut primary, self.query_parser_engine).await?;
 
             self.tables.insert(number, tables);
         }
@@ -103,7 +112,7 @@ impl Publisher {
                 .get(&number)
                 .ok_or(Error::NoReplicationTables(number))?;
             // Handles the logical replication stream messages.
-            let mut stream = StreamSubscriber::new(dest, tables);
+            let mut stream = StreamSubscriber::new(dest, tables, self.query_parser_engine);
 
             // Take ownership of the slot for replication.
             let mut slot = self
@@ -182,7 +191,8 @@ impl Publisher {
 
         for (number, shard) in self.cluster.shards().iter().enumerate() {
             let mut primary = shard.primary(&Request::default()).await?;
-            let tables = Table::load(&self.publication, &mut primary).await?;
+            let tables =
+                Table::load(&self.publication, &mut primary, self.query_parser_engine).await?;
 
             let include_primary = !shard.has_replicas();
             let replicas = shard

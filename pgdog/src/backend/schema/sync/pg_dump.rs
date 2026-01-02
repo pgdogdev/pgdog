@@ -25,6 +25,13 @@ fn deparse_node(node: NodeEnum) -> Result<String, pg_query::Error> {
     }
 }
 
+fn parse(query: &str) -> Result<pg_query::ParseResult, pg_query::Error> {
+    match config().config.general.query_parser_engine {
+        QueryParserEngine::PgQueryProtobuf => pg_query::parse(query),
+        QueryParserEngine::PgQueryRaw => pg_query::parse_raw(query),
+    }
+}
+
 use tokio::process::Command;
 
 #[derive(Debug, Clone)]
@@ -125,7 +132,7 @@ impl PgDump {
         let cleaned = Self::clean(&original);
         trace!("[pg_dump (clean)] {}", cleaned);
 
-        let stmts = pg_query::parse(&cleaned)?.protobuf;
+        let stmts = parse(&cleaned)?.protobuf;
 
         Ok(PgDumpOutput {
             stmts,
