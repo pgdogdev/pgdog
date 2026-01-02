@@ -302,5 +302,3 @@ from_message!(ReadyForQuery);
 from_message!(RowDescription);
 from_message!(Sync);
 from_message!(Terminate);
-
-pub(crate) use from_message;
