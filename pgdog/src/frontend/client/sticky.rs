@@ -2,7 +2,7 @@
 //! default routing behavior determined by the query parser.
 
 use pgdog_config::Role;
-use rand::{thread_rng, Rng};
+use rand::{rng, Rng};
 
 use crate::net::{parameter::ParameterValue, Parameters};
 
@@ -49,7 +49,7 @@ impl Sticky {
         });
 
         Self {
-            omni_index: thread_rng().gen_range(1..usize::MAX),
+            omni_index: rng().random_range(1..usize::MAX),
             role,
         }
     }

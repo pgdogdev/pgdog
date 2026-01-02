@@ -276,7 +276,7 @@ impl LoadBalancer {
         }
 
         match self.lb_strategy {
-            Random => candidates.shuffle(&mut rand::thread_rng()),
+            Random => candidates.shuffle(&mut rand::rng()),
             RoundRobin => {
                 let first = self.round_robin.fetch_add(1, Ordering::Relaxed) % candidates.len();
                 let mut reshuffled = vec![];

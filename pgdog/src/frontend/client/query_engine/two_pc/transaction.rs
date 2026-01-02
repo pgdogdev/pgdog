@@ -1,4 +1,4 @@
-use rand::{thread_rng, Rng};
+use rand::{rng, Rng};
 use std::fmt::Display;
 
 #[derive(Debug, Clone, Copy, PartialEq, Hash, Eq)]
@@ -8,7 +8,7 @@ impl TwoPcTransaction {
     pub(crate) fn new() -> Self {
         // Transactions have random identifiers,
         // so multiple instances of PgDog don't create an identical transaction.
-        Self(thread_rng().gen())
+        Self(rng().random_range(0..usize::MAX))
     }
 }
 
