@@ -2,7 +2,7 @@ use std::{fmt::Debug, ops::Deref};
 
 use bytes::{BufMut, Bytes, BytesMut};
 use pgdog_config::RewriteMode;
-use rand::{thread_rng, Rng};
+use rand::{rng, Rng};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
@@ -199,7 +199,7 @@ impl TestClient {
         let cluster = self.engine.backend().cluster().unwrap().clone();
 
         loop {
-            let id: i64 = thread_rng().gen();
+            let id: i64 = rng().random();
             let calc = ContextBuilder::new(cluster.sharded_tables().first().unwrap())
                 .data(id)
                 .shards(cluster.shards().len())

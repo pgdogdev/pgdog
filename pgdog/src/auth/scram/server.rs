@@ -52,7 +52,7 @@ impl AuthenticationProvider for UserPassword {
     fn get_password_for(&self, _user: &str) -> Option<PasswordInfo> {
         // TODO: This is slow. We should move it to its own thread pool.
         let iterations = 4096;
-        let salt = rand::thread_rng().gen::<[u8; 16]>().to_vec();
+        let salt = rand::rng().random::<[u8; 16]>().to_vec();
         let hash = hash_password(&self.password, NonZeroU32::new(iterations).unwrap(), &salt);
         Some(PasswordInfo::new(hash.to_vec(), iterations as u16, salt))
     }

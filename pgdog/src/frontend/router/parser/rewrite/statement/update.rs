@@ -8,7 +8,7 @@ use pg_query::{
     },
     Node, NodeEnum,
 };
-use pgdog_config::RewriteMode;
+use pgdog_config::{QueryParserEngine, RewriteMode};
 
 use crate::{
     frontend::{
@@ -313,7 +313,8 @@ impl<'a> StatementRewrite<'a> {
             if stmt.where_clause.is_none() {
                 return Err(Error::WhereClauseMissing);
             }
-            plan.sharding_key_update = Some(create_stmts(stmt, value)?);
+            plan.sharding_key_update =
+                Some(create_stmts(stmt, value, self.schema.query_parser_engine)?);
         }
 
         Ok(())
@@ -364,7 +365,7 @@ impl<'a> StatementRewrite<'a> {
                         let expr = res
                             .val
                             .as_ref()
-                            .map(|node| deparse_expr(node))
+                            .map(|node| deparse_expr(node, self.schema.query_parser_engine))
                             .transpose()?
                             .unwrap_or_else(|| "<unknown>".to_string());
                         Err(Error::UnsupportedShardingKeyUpdate(format!(
@@ -433,6 +434,7 @@ pub(super) enum UpdateValue {
 ///
 fn res_targets_to_insert_res_targets(
     stmt: &UpdateStmt,
+    query_parser_engine: QueryParserEngine,
 ) -> Result<HashMap<String, UpdateValue>, Error> {
     let mut result = HashMap::new();
     for target in &stmt.target_list {
@@ -446,7 +448,10 @@ fn res_targets_to_insert_res_targets(
                 let value = if valid {
                     UpdateValue::Value(*target.val.clone().unwrap())
                 } else {
-                    UpdateValue::Expr(deparse_expr(target.val.as_ref().unwrap())?)
+                    UpdateValue::Expr(deparse_expr(
+                        target.val.as_ref().unwrap(),
+                        query_parser_engine,
+                    )?)
                 };
                 result.insert(target.name.clone(), value);
             }
@@ -502,7 +507,7 @@ fn select_star() -> Vec<Node> {
 
 fn parse_result(node: NodeEnum) -> ParseResult {
     ParseResult {
-        version: 170005,
+        version: pg_query::PG_VERSION_NUM as i32,
         stmts: vec![RawStmt {
             stmt: Some(Box::new(Node {
                 node: Some(node),
@@ -515,18 +520,24 @@ fn parse_result(node: NodeEnum) -> ParseResult {
 }
 
 /// Deparse an expression node by wrapping it in a SELECT statement.
-fn deparse_expr(node: &Node) -> Result<String, Error> {
-    Ok(deparse_list(&[Node {
-        node: Some(NodeEnum::ResTarget(Box::new(ResTarget {
-            val: Some(Box::new(node.clone())),
-            ..Default::default()
-        }))),
-    }])?
+fn deparse_expr(node: &Node, query_parser_engine: QueryParserEngine) -> Result<String, Error> {
+    Ok(deparse_list(
+        &[Node {
+            node: Some(NodeEnum::ResTarget(Box::new(ResTarget {
+                val: Some(Box::new(node.clone())),
+                ..Default::default()
+            }))),
+        }],
+        query_parser_engine,
+    )?
     .unwrap()) // SAFETY: we are not passing in an empty list.
 }
 
 /// Deparse a list of expressions by wrapping them into a SELECT statement.
-fn deparse_list(list: &[Node]) -> Result<Option<String>, Error> {
+fn deparse_list(
+    list: &[Node],
+    query_parser_engine: QueryParserEngine,
+) -> Result<Option<String>, Error> {
     if list.is_empty() {
         return Ok(None);
     }
@@ -537,16 +548,23 @@ fn deparse_list(list: &[Node]) -> Result<Option<String>, Error> {
         op: SetOperation::SetopNone.into(),
         ..Default::default()
     };
-    let string = parse_result(NodeEnum::SelectStmt(Box::new(stmt)))
-        .deparse()?
-        .strip_prefix("SELECT ")
-        .unwrap_or_default()
-        .to_string();
+    let result = parse_result(NodeEnum::SelectStmt(Box::new(stmt)));
+    let string = match query_parser_engine {
+        QueryParserEngine::PgQueryProtobuf => result.deparse()?,
+        QueryParserEngine::PgQueryRaw => result.deparse_raw()?,
+    }
+    .strip_prefix("SELECT ")
+    .unwrap_or_default()
+    .to_string();
 
     Ok(Some(string))
 }
 
-fn create_stmts(stmt: &UpdateStmt, new_value: &ResTarget) -> Result<ShardingKeyUpdate, Error> {
+fn create_stmts(
+    stmt: &UpdateStmt,
+    new_value: &ResTarget,
+    query_parser_engine: QueryParserEngine,
+) -> Result<ShardingKeyUpdate, Error> {
     let select = SelectStmt {
         target_list: select_star(),
         from_clause: vec![Node {
@@ -564,7 +582,10 @@ fn create_stmts(stmt: &UpdateStmt, new_value: &ResTarget) -> Result<ShardingKeyU
     let select = pg_query::ParseResult::new(select, "".into());
 
     let select = Statement {
-        stmt: select.deparse()?,
+        stmt: match query_parser_engine {
+            QueryParserEngine::PgQueryProtobuf => select.deparse()?,
+            QueryParserEngine::PgQueryRaw => select.deparse_raw()?,
+        },
         ast: Ast::from_parse_result(select),
         params,
     };
@@ -582,7 +603,10 @@ fn create_stmts(stmt: &UpdateStmt, new_value: &ResTarget) -> Result<ShardingKeyU
     let delete = pg_query::ParseResult::new(delete, "".into());
 
     let delete = Statement {
-        stmt: delete.deparse()?,
+        stmt: match query_parser_engine {
+            QueryParserEngine::PgQueryProtobuf => delete.deparse()?,
+            QueryParserEngine::PgQueryRaw => delete.deparse_raw()?,
+        },
         ast: Ast::from_parse_result(delete),
         params,
     };
@@ -605,7 +629,10 @@ fn create_stmts(stmt: &UpdateStmt, new_value: &ResTarget) -> Result<ShardingKeyU
     let check = pg_query::ParseResult::new(check, "".into());
 
     let check = Statement {
-        stmt: check.deparse()?,
+        stmt: match query_parser_engine {
+            QueryParserEngine::PgQueryProtobuf => check.deparse()?,
+            QueryParserEngine::PgQueryRaw => check.deparse_raw()?,
+        },
         ast: Ast::from_parse_result(check),
         params,
     };
@@ -617,9 +644,9 @@ fn create_stmts(stmt: &UpdateStmt, new_value: &ResTarget) -> Result<ShardingKeyU
             check,
             insert: Insert {
                 table: stmt.relation.clone(),
-                mapping: res_targets_to_insert_res_targets(stmt)?,
+                mapping: res_targets_to_insert_res_targets(stmt, query_parser_engine)?,
                 returning_list: stmt.returning_list.clone(),
-                returnin_list_deparsed: deparse_list(&stmt.returning_list)?,
+                returnin_list_deparsed: deparse_list(&stmt.returning_list, query_parser_engine)?,
             },
         }),
     })
@@ -653,6 +680,7 @@ mod test {
                 shard_key: RewriteMode::Rewrite,
                 ..Default::default()
             },
+            ..Default::default()
         }
     }
 

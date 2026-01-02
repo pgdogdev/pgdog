@@ -2,6 +2,8 @@
 
 use std::time::Duration;
 
+use pgdog_config::QueryParserEngine;
+
 use crate::backend::pool::Address;
 use crate::backend::replication::publisher::progress::Progress;
 use crate::backend::replication::publisher::Lsn;
@@ -26,10 +28,16 @@ pub struct Table {
     pub columns: Vec<PublicationTableColumn>,
     /// Table data as of this LSN.
     pub lsn: Lsn,
+    /// Query parser engine.
+    pub query_parser_engine: QueryParserEngine,
 }
 
 impl Table {
-    pub async fn load(publication: &str, server: &mut Server) -> Result<Vec<Self>, Error> {
+    pub async fn load(
+        publication: &str,
+        server: &mut Server,
+        query_parser_engine: QueryParserEngine,
+    ) -> Result<Vec<Self>, Error> {
         let tables = PublicationTable::load(publication, server).await?;
         let mut results = vec![];
 
@@ -43,6 +51,7 @@ impl Table {
                 identity,
                 columns,
                 lsn: Lsn::default(),
+                query_parser_engine,
             });
         }
 
@@ -181,7 +190,7 @@ impl Table {
 
         // Create new standalone connection for the copy.
         // let mut server = Server::connect(source, ServerOptions::new_replication()).await?;
-        let mut copy_sub = CopySubscriber::new(copy.statement(), dest)?;
+        let mut copy_sub = CopySubscriber::new(copy.statement(), dest, self.query_parser_engine)?;
         copy_sub.connect().await?;
 
         // Create sync slot.
@@ -232,6 +241,7 @@ impl Table {
 mod test {
 
     use crate::backend::replication::logical::publisher::test::setup_publication;
+    use crate::config::config;
 
     use super::*;
 
@@ -240,9 +250,13 @@ mod test {
         crate::logger();
 
         let mut publication = setup_publication().await;
-        let tables = Table::load("publication_test", &mut publication.server)
-            .await
-            .unwrap();
+        let tables = Table::load(
+            "publication_test",
+            &mut publication.server,
+            config().config.general.query_parser_engine,
+        )
+        .await
+        .unwrap();
 
         assert_eq!(tables.len(), 2);
 

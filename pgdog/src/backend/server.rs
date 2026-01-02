@@ -2236,16 +2236,16 @@ pub mod test {
     #[tokio::test]
     async fn test_drain_chaos() {
         use crate::net::bind::Parameter;
-        use rand::{thread_rng, Rng};
+        use rand::Rng;
 
         let mut server = test_server().await;
-        let mut rng = thread_rng();
+        let mut rng = rand::rng();
 
         for iteration in 0..1000 {
             let name = format!("chaos_test_{}", iteration);
-            let use_sync = rng.gen_bool(0.5);
+            let use_sync = rng.random_bool(0.5);
 
-            if rng.gen_bool(0.2) {
+            if rng.random_bool(0.2) {
                 let bad_parse = Parse::named(&name, "SELECT invalid syntax");
                 server
                     .send(
@@ -2260,7 +2260,7 @@ pub mod test {
                     .await
                     .unwrap();
 
-                let messages_to_read = rng.gen_range(0..=1);
+                let messages_to_read = rng.random_range(0..=1);
                 for _ in 0..messages_to_read {
                     let _ = server.read().await;
                 }
@@ -2304,7 +2304,7 @@ pub mod test {
                 } else {
                     vec!['1', '2', 'D', 'C']
                 };
-                let messages_to_read = rng.gen_range(0..expected_messages.len());
+                let messages_to_read = rng.random_range(0..expected_messages.len());
 
                 for i in 0..messages_to_read {
                     let msg = server.read().await.unwrap();

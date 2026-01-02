@@ -116,7 +116,6 @@ mod tests {
     use pgdog_config::Rewrite;
 
     use super::*;
-    use crate::backend::replication::{ShardedSchemas, ShardedTables};
     use crate::backend::ShardingSchema;
     use crate::frontend::router::parser::StatementRewriteContext;
     use crate::frontend::PreparedStatements;
@@ -124,12 +123,11 @@ mod tests {
     fn default_schema() -> ShardingSchema {
         ShardingSchema {
             shards: 1,
-            tables: ShardedTables::default(),
-            schemas: ShardedSchemas::default(),
             rewrite: Rewrite {
                 enabled: true,
                 ..Default::default()
             },
+            ..Default::default()
         }
     }
 

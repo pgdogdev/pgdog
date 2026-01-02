@@ -41,8 +41,8 @@ impl BackendKeyData {
     /// Create new random BackendKeyData (B) message.
     pub fn new() -> Self {
         Self {
-            pid: rand::thread_rng().gen(),
-            secret: rand::thread_rng().gen(),
+            pid: rand::rng().random(),
+            secret: rand::rng().random(),
         }
     }
 
@@ -52,7 +52,7 @@ impl BackendKeyData {
     pub fn new_client() -> Self {
         Self {
             pid: next_counter(),
-            secret: rand::thread_rng().gen(),
+            secret: rand::rng().random(),
         }
     }
 }

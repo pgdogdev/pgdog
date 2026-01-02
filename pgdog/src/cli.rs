@@ -10,7 +10,7 @@ use tracing::{error, info};
 use crate::backend::schema::sync::config::ShardConfig;
 use crate::backend::schema::sync::pg_dump::{PgDump, SyncState};
 use crate::backend::{databases::databases, replication::logical::Publisher};
-use crate::config::{Config, Users};
+use crate::config::{config, Config, Users};
 use crate::frontend::router::cli::RouterCli;
 
 /// PgDog is a PostgreSQL pooler, proxy, load balancer and query router.
@@ -252,7 +252,11 @@ pub async fn data_sync(commands: Commands) -> Result<(), Box<dyn std::error::Err
             return Ok(());
         };
 
-    let mut publication = Publisher::new(&source, &publication);
+    let mut publication = Publisher::new(
+        &source,
+        &publication,
+        config().config.general.query_parser_engine,
+    );
     if replicate_only {
         if let Err(err) = publication.replicate(&destination, replication_slot).await {
             error!("{}", err);

@@ -3,7 +3,7 @@
 use chrono::{DateTime, Local, Utc};
 use once_cell::sync::Lazy;
 use pgdog_plugin::comp;
-use rand::{distributions::Alphanumeric, Rng};
+use rand::{distr::Alphanumeric, Rng};
 use std::{env, num::ParseIntError, ops::Deref, time::Duration};
 
 use crate::net::Parameters; // 0.8
@@ -67,7 +67,7 @@ pub fn postgres_now() -> i64 {
 
 /// Generate a random string of length n.
 pub fn random_string(n: usize) -> String {
-    rand::thread_rng()
+    rand::rng()
         .sample_iter(&Alphanumeric)
         .take(n)
         .map(char::from)
@@ -79,10 +79,10 @@ static INSTANCE_ID: Lazy<String> = Lazy::new(|| {
     if let Ok(node_id) = env::var("NODE_ID") {
         node_id
     } else {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         (0..8)
             .map(|_| {
-                let n: u8 = rng.gen_range(0..16);
+                let n: u8 = rng.random_range(0..16);
                 format!("{:x}", n)
             })
             .collect()

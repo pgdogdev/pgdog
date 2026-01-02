@@ -1,5 +1,5 @@
 mod insert {
-    use rand::{thread_rng, Rng};
+    use rand::{rng, Rng};
     use tokio::{io::AsyncWriteExt, spawn};
 
     use crate::{
@@ -23,7 +23,7 @@ mod insert {
         let values = (0..5)
             .into_iter()
             .map(|_| {
-                let val = thread_rng().gen::<i64>();
+                let val = rng().random::<i64>();
                 (format!("'val_{}'", val), val)
             })
             .map(|tuple| format!("({}, {})", tuple.1, tuple.0))
