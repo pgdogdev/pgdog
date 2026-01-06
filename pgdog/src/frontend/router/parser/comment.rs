@@ -228,4 +228,29 @@ mod tests {
         let result = comment(query, &schema).unwrap();
         assert_eq!(result.1, None);
     }
+
+    #[test]
+    fn test_sharding_key_with_schema_name() {
+        use crate::backend::replication::ShardedSchemas;
+        use crate::backend::ShardedTables;
+        use pgdog_config::sharding::ShardedSchema;
+
+        let sales_schema = ShardedSchema {
+            database: "test".to_string(),
+            name: Some("sales".to_string()),
+            shard: 1,
+            all: false,
+        };
+
+        let schema = ShardingSchema {
+            shards: 2,
+            tables: ShardedTables::new(vec![], vec![]),
+            schemas: ShardedSchemas::new(vec![sales_schema]),
+            ..Default::default()
+        };
+
+        let query = "SELECT * FROM users /* pgdog_sharding_key: sales */";
+        let result = comment(query, &schema).unwrap();
+        assert_eq!(result.0, Some(Shard::Direct(1)));
+    }
 }
