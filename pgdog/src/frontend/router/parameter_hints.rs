@@ -36,6 +36,8 @@ impl ParameterHints<'_> {
         shards: &mut ShardsWithPriority,
         sharding_schema: &ShardingSchema,
     ) -> Result<(), Error> {
+        let mut schema_sharder = SchemaSharder::default();
+
         if let Some(ParameterValue::Integer(val)) = self.pgdog_shard {
             shards.push(ShardWithPriority::new_set(Shard::Direct(*val as usize)));
         }
@@ -45,15 +47,22 @@ impl ParameterHints<'_> {
             }
         }
         if let Some(ParameterValue::String(val)) = self.pgdog_sharding_key {
-            let ctx = ContextBuilder::infer_from_from_and_config(val.as_str(), sharding_schema)?
-                .shards(sharding_schema.shards)
-                .build()?;
-            let shard = ctx.apply()?;
-            shards.push(ShardWithPriority::new_set(shard));
+            if sharding_schema.schemas.is_empty() {
+                let ctx =
+                    ContextBuilder::infer_from_from_and_config(val.as_str(), sharding_schema)?
+                        .shards(sharding_schema.shards)
+                        .build()?;
+                let shard = ctx.apply()?;
+                shards.push(ShardWithPriority::new_set(shard));
+            } else {
+                schema_sharder.resolve(Some(Schema::from(val.as_str())), &sharding_schema.schemas);
+
+                if let Some((shard, _)) = schema_sharder.get() {
+                    shards.push(ShardWithPriority::new_set(shard.clone()));
+                }
+            }
         }
         if let Some(search_path) = self.search_path {
-            let mut schema_sharder = SchemaSharder::default();
-
             match search_path {
                 ParameterValue::String(search_path) => {
                     let schema = Schema::from(search_path.as_str());
@@ -87,5 +96,69 @@ impl ParameterHints<'_> {
 
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::backend::replication::ShardedSchemas;
+    use pgdog_config::sharding::ShardedSchema;
+
+    fn make_sharding_schema(schemas: &[(&str, usize)]) -> ShardingSchema {
+        let sharded_schemas: Vec<ShardedSchema> = schemas
+            .iter()
+            .map(|(name, shard)| ShardedSchema {
+                database: "test".to_string(),
+                name: Some(name.to_string()),
+                shard: *shard,
+                all: false,
+            })
+            .collect();
+
+        ShardingSchema {
+            shards: schemas.len(),
+            schemas: ShardedSchemas::new(sharded_schemas),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn test_sharding_key_with_schema_name() {
+        let sharding_schema = make_sharding_schema(&[("sales", 1)]);
+
+        let sharding_key = ParameterValue::String("sales".to_string());
+        let hints = ParameterHints {
+            search_path: None,
+            pgdog_shard: None,
+            pgdog_sharding_key: Some(&sharding_key),
+            pgdog_role: None,
+        };
+
+        let mut shards = ShardsWithPriority::default();
+        hints.compute_shard(&mut shards, &sharding_schema).unwrap();
+
+        let result = shards.shard();
+        assert_eq!(*result, Shard::Direct(1));
+    }
+
+    #[test]
+    fn test_sharding_key_takes_priority_over_search_path() {
+        let sharding_schema = make_sharding_schema(&[("sales", 0), ("inventory", 1)]);
+
+        let sharding_key = ParameterValue::String("sales".to_string());
+        let search_path = ParameterValue::String("inventory".to_string());
+        let hints = ParameterHints {
+            search_path: Some(&search_path),
+            pgdog_shard: None,
+            pgdog_sharding_key: Some(&sharding_key),
+            pgdog_role: None,
+        };
+
+        let mut shards = ShardsWithPriority::default();
+        hints.compute_shard(&mut shards, &sharding_schema).unwrap();
+
+        let result = shards.shard();
+        assert_eq!(*result, Shard::Direct(0));
     }
 }
