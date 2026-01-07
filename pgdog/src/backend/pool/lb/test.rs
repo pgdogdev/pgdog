@@ -1039,3 +1039,36 @@ async fn test_monitor_unbans_all_when_second_target_becomes_unhealthy_after_firs
 
     replicas.shutdown();
 }
+
+#[tokio::test]
+async fn test_least_active_connections_prefers_pool_with_fewer_checked_out() {
+    let pool_config1 = create_test_pool_config("127.0.0.1", 5432);
+    let pool_config2 = create_test_pool_config("localhost", 5432);
+
+    let replicas = LoadBalancer::new(
+        &None,
+        &[pool_config1, pool_config2],
+        LoadBalancingStrategy::LeastActiveConnections,
+        ReadWriteSplit::IncludePrimary,
+    );
+    replicas.launch();
+
+    let request = Request::default();
+
+    // Get first connection and hold it
+    let conn1 = replicas.get(&request).await.unwrap();
+    let first_pool_id = conn1.pool.id();
+
+    // Now first pool has 1 checked out, second pool has 0.
+    // LeastActiveConnections should select the pool with 0 checked out.
+    let conn2 = replicas.get(&request).await.unwrap();
+    let second_pool_id = conn2.pool.id();
+
+    // conn2 should come from a different pool (the one with 0 checked out)
+    assert_ne!(
+        first_pool_id, second_pool_id,
+        "LeastActiveConnections should select the pool with fewer checked-out connections"
+    );
+
+    replicas.shutdown();
+}
