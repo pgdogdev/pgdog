@@ -1,10 +1,12 @@
 //! Shard COPY stream from one source
 //! between N shards.
 
-use pg_query::NodeEnum;
+use pg_query::{parse_raw, NodeEnum};
+use pgdog_config::QueryParserEngine;
+use tracing::debug;
 
 use crate::{
-    backend::{replication::subscriber::ParallelConnection, Cluster},
+    backend::{replication::subscriber::ParallelConnection, Cluster, ConnectReason},
     config::Role,
     frontend::router::parser::{CopyParser, Shard},
     net::{CopyData, CopyDone, ErrorResponse, FromBytes, Protocol, Query, ToBytes},
@@ -33,8 +35,17 @@ impl CopySubscriber {
     /// 1. What kind of encoding we use.
     /// 2. Which column is used for sharding.
     ///
-    pub fn new(copy_stmt: &CopyStatement, cluster: &Cluster) -> Result<Self, Error> {
-        let stmt = pg_query::parse(copy_stmt.clone().copy_in().as_str())?;
+    pub fn new(
+        copy_stmt: &CopyStatement,
+        cluster: &Cluster,
+        query_parser_engine: QueryParserEngine,
+    ) -> Result<Self, Error> {
+        let stmt = match query_parser_engine {
+            QueryParserEngine::PgQueryProtobuf => {
+                pg_query::parse(copy_stmt.clone().copy_in().as_str())
+            }
+            QueryParserEngine::PgQueryRaw => parse_raw(copy_stmt.clone().copy_in().as_str()),
+        }?;
         let stmt = stmt
             .protobuf
             .stmts
@@ -47,9 +58,7 @@ impl CopySubscriber {
             .as_ref()
             .ok_or(Error::MissingData)?;
         let copy = if let NodeEnum::CopyStmt(stmt) = stmt {
-            CopyParser::new(stmt, cluster)
-                .map_err(|_| Error::MissingData)?
-                .ok_or(Error::MissingData)?
+            CopyParser::new(stmt, cluster).map_err(|_| Error::MissingData)?
         } else {
             return Err(Error::MissingData);
         };
@@ -74,7 +83,7 @@ impl CopySubscriber {
                 .find(|(role, _)| role == &Role::Primary)
                 .ok_or(Error::NoPrimary)?
                 .1
-                .standalone()
+                .standalone(ConnectReason::Replication)
                 .await?;
             servers.push(ParallelConnection::new(primary)?);
         }
@@ -102,6 +111,8 @@ impl CopySubscriber {
         }
 
         for server in &mut self.connections {
+            debug!("{} [{}]", stmt.query(), server.addr());
+
             server.send_one(&stmt.clone().into()).await?;
             server.flush().await?;
 
@@ -196,7 +207,8 @@ mod test {
     use bytes::Bytes;
 
     use crate::{
-        backend::pool::Request,
+        backend::{pool::Request, replication::publisher::PublicationTable},
+        config::config,
         frontend::router::parser::binary::{header::Header, Data, Tuple},
     };
 
@@ -206,8 +218,14 @@ mod test {
     async fn test_subscriber() {
         crate::logger();
 
-        let copy = CopyStatement::new("pgdog", "sharded", &["id".into(), "value".into()]);
-        let cluster = Cluster::new_test();
+        let table = PublicationTable {
+            schema: "pgdog".into(),
+            name: "sharded".into(),
+            ..Default::default()
+        };
+
+        let copy = CopyStatement::new(&table, &["id".into(), "value".into()]);
+        let cluster = Cluster::new_test(&config());
         cluster.launch();
 
         cluster
@@ -220,7 +238,9 @@ mod test {
             .await
             .unwrap();
 
-        let mut subscriber = CopySubscriber::new(&copy, &cluster).unwrap();
+        let mut subscriber =
+            CopySubscriber::new(&copy, &cluster, config().config.general.query_parser_engine)
+                .unwrap();
         subscriber.start_copy().await.unwrap();
 
         let header = CopyData::new(&Header::new().to_bytes().unwrap());

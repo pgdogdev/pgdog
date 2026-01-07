@@ -45,7 +45,7 @@ async fn healthcheck(
             .into_iter()
             .flatten()
             .collect::<Vec<_>>();
-        pools.iter().all(|p| p.banned())
+        pools.iter().all(|p| !p.healthy())
     });
 
     let response = if broken { "down" } else { "up" };

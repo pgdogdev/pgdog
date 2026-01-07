@@ -9,15 +9,17 @@ use parking_lot::lock_api::MutexGuard;
 use parking_lot::{Mutex, RawMutex};
 use tracing::{debug, error, info, warn};
 
+use crate::backend::replication::ShardedSchemas;
 use crate::config::PoolerMode;
 use crate::frontend::client::query_engine::two_pc::Manager;
 use crate::frontend::router::parser::Cache;
+use crate::frontend::router::sharding::mapping::mapping_valid;
 use crate::frontend::router::sharding::Mapping;
 use crate::frontend::PreparedStatements;
 use crate::{
     backend::pool::PoolConfig,
     config::{config, load, ConfigAndUsers, ManualQuery, Role},
-    net::messages::BackendKeyData,
+    net::{messages::BackendKeyData, tls},
 };
 
 use super::{
@@ -44,7 +46,7 @@ pub fn databases() -> Arc<Databases> {
 }
 
 /// Replace databases pooler-wide.
-pub fn replace_databases(new_databases: Databases, reload: bool) {
+pub fn replace_databases(new_databases: Databases, reload: bool) -> Result<(), Error> {
     // Order of operations is important
     // to ensure zero downtime for clients.
     let old_databases = databases();
@@ -52,29 +54,49 @@ pub fn replace_databases(new_databases: Databases, reload: bool) {
     reload_notify::started();
     if reload {
         // Move whatever connections we can over to new pools.
-        old_databases.move_conns_to(&new_databases);
+        old_databases.move_conns_to(&new_databases)?;
     }
     new_databases.launch();
     DATABASES.store(new_databases);
     old_databases.shutdown();
     reload_notify::done();
+
+    Ok(())
 }
 
 /// Re-create all connections.
-pub fn reconnect() {
-    replace_databases(databases().duplicate(), false);
+pub fn reconnect() -> Result<(), Error> {
+    let config = config();
+    let databases = from_config(&config);
+
+    replace_databases(databases, false)?;
+    Ok(())
+}
+
+/// Re-create databases from existing config,
+/// preserving connections.
+pub fn reload_from_existing() -> Result<(), Error> {
+    let _lock = lock();
+
+    let config = config();
+    let databases = from_config(&config);
+
+    replace_databases(databases, true)?;
+    Ok(())
 }
 
 /// Initialize the databases for the first time.
-pub fn init() {
+pub fn init() -> Result<(), Error> {
     let config = config();
-    replace_databases(from_config(&config), false);
+    replace_databases(from_config(&config), false)?;
 
     // Resize query cache
     Cache::resize(config.config.general.query_cache_limit);
 
     // Start two-pc manager.
     let _monitor = Manager::get();
+
+    Ok(())
 }
 
 /// Shutdown all databases.
@@ -88,7 +110,9 @@ pub fn reload() -> Result<(), Error> {
     let new_config = load(&old_config.config_path, &old_config.users_path)?;
     let databases = from_config(&new_config);
 
-    replace_databases(databases, true);
+    replace_databases(databases, true)?;
+
+    tls::reload()?;
 
     // Remove any unused prepared statements.
     PreparedStatements::global()
@@ -168,6 +192,15 @@ impl ToUser for (&str, Option<&str>) {
         User {
             user: self.0.to_string(),
             database: self.1.map_or(self.0.to_string(), |d| d.to_string()),
+        }
+    }
+}
+
+impl ToUser for &pgdog_config::User {
+    fn to_user(&self) -> User {
+        User {
+            user: self.name.clone(),
+            database: self.database.clone(),
         }
     }
 }
@@ -289,34 +322,20 @@ impl Databases {
 
     /// Move all connections we can from old databases config to new
     /// databases config.
-    pub(crate) fn move_conns_to(&self, destination: &Databases) -> usize {
+    pub(crate) fn move_conns_to(&self, destination: &Databases) -> Result<usize, Error> {
         let mut moved = 0;
         for (user, cluster) in &self.databases {
             let dest = destination.databases.get(user);
 
             if let Some(dest) = dest {
                 if cluster.can_move_conns_to(dest) {
-                    cluster.move_conns_to(dest);
+                    cluster.move_conns_to(dest)?;
                     moved += 1;
                 }
             }
         }
 
-        moved
-    }
-
-    /// Create new identical databases.
-    fn duplicate(&self) -> Databases {
-        Self {
-            databases: self
-                .databases
-                .iter()
-                .map(|(k, v)| (k.clone(), v.duplicate()))
-                .collect(),
-            manual_queries: self.manual_queries.clone(),
-            mirrors: self.mirrors.clone(),
-            mirror_configs: self.mirror_configs.clone(),
-        }
+        Ok(moved)
     }
 
     /// Shutdown all pools.
@@ -363,84 +382,89 @@ pub(crate) fn new_pool(
     let sharded_tables = config.sharded_tables();
     let omnisharded_tables = config.omnisharded_tables();
     let sharded_mappings = config.sharded_mappings();
+    let sharded_schemas = config.sharded_schemas();
     let general = &config.general;
     let databases = config.databases();
-    let shards = databases.get(&user.database);
 
-    if let Some(shards) = shards {
-        let mut shard_configs = vec![];
-        for user_databases in shards {
-            let has_single_replica = user_databases.len() == 1;
-            let primary = user_databases
-                .iter()
-                .find(|d| d.role == Role::Primary)
-                .map(|primary| PoolConfig {
-                    address: Address::new(primary, user),
-                    config: Config::new(general, primary, user, has_single_replica),
-                });
-            let replicas = user_databases
-                .iter()
-                .filter(|d| d.role == Role::Replica)
-                .map(|replica| PoolConfig {
-                    address: Address::new(replica, user),
-                    config: Config::new(general, replica, user, has_single_replica),
-                })
-                .collect::<Vec<_>>();
+    let shards = databases.get(&user.database).cloned()?;
 
-            shard_configs.push(ClusterShardConfig { primary, replicas });
-        }
+    let mut shard_configs = vec![];
+    for user_databases in shards {
+        let has_single_replica = user_databases.len() == 1;
+        let primary = user_databases
+            .iter()
+            .find(|d| d.role == Role::Primary)
+            .map(|primary| PoolConfig {
+                address: Address::new(primary, user, primary.number),
+                config: Config::new(general, primary, user, has_single_replica),
+            });
+        let replicas = user_databases
+            .iter()
+            .filter(|d| matches!(d.role, Role::Replica | Role::Auto)) // Auto role is assumed read-only until proven otherwise.
+            .map(|replica| PoolConfig {
+                address: Address::new(replica, user, replica.number),
+                config: Config::new(general, replica, user, has_single_replica),
+            })
+            .collect::<Vec<_>>();
 
-        let mut sharded_tables = sharded_tables
-            .get(&user.database)
-            .cloned()
-            .unwrap_or(vec![]);
+        shard_configs.push(ClusterShardConfig { primary, replicas });
+    }
 
-        for sharded_table in &mut sharded_tables {
-            let mappings = sharded_mappings.get(&(
-                sharded_table.database.clone(),
-                sharded_table.column.clone(),
-                sharded_table.name.clone(),
-            ));
+    let mut sharded_tables = sharded_tables
+        .get(&user.database)
+        .cloned()
+        .unwrap_or_default();
+    let sharded_schemas = sharded_schemas
+        .get(&user.database)
+        .cloned()
+        .unwrap_or_default();
 
-            if let Some(mappings) = mappings {
-                sharded_table.mapping = Mapping::new(mappings);
+    for sharded_table in &mut sharded_tables {
+        let mappings = sharded_mappings.get(&(
+            sharded_table.database.clone(),
+            sharded_table.column.clone(),
+            sharded_table.name.clone(),
+        ));
 
-                if let Some(ref mapping) = sharded_table.mapping {
-                    if !mapping.valid() {
-                        warn!(
-                            "sharded table name=\"{}\", column=\"{}\" has overlapping ranges",
-                            sharded_table.name.as_ref().unwrap_or(&String::from("")),
-                            sharded_table.column
-                        );
-                    }
+        if let Some(mappings) = mappings {
+            sharded_table.mapping = Mapping::new(mappings);
+
+            if let Some(ref mapping) = sharded_table.mapping {
+                if !mapping_valid(mapping) {
+                    warn!(
+                        "sharded table name=\"{}\", column=\"{}\" has overlapping ranges",
+                        sharded_table.name.as_ref().unwrap_or(&String::from("")),
+                        sharded_table.column
+                    );
                 }
             }
         }
-
-        let omnisharded_tables = omnisharded_tables
-            .get(&user.database)
-            .cloned()
-            .unwrap_or(vec![]);
-        let sharded_tables = ShardedTables::new(sharded_tables, omnisharded_tables);
-
-        let cluster_config = ClusterConfig::new(
-            general,
-            user,
-            &shard_configs,
-            sharded_tables,
-            config.multi_tenant(),
-        );
-
-        Some((
-            User {
-                user: user.name.clone(),
-                database: user.database.clone(),
-            },
-            Cluster::new(cluster_config),
-        ))
-    } else {
-        None
     }
+
+    let omnisharded_tables = omnisharded_tables
+        .get(&user.database)
+        .cloned()
+        .unwrap_or(vec![]);
+    let sharded_tables = ShardedTables::new(sharded_tables, omnisharded_tables);
+    let sharded_schemas = ShardedSchemas::new(sharded_schemas);
+
+    let cluster_config = ClusterConfig::new(
+        general,
+        user,
+        &shard_configs,
+        sharded_tables,
+        config.multi_tenant(),
+        sharded_schemas,
+        &config.rewrite,
+    );
+
+    Some((
+        User {
+            user: user.name.clone(),
+            database: user.database.clone(),
+        },
+        Cluster::new(cluster_config),
+    ))
 }
 
 /// Load databases from config.
@@ -617,6 +641,7 @@ mod tests {
                     ..Default::default()
                 },
             ],
+            ..Default::default()
         };
 
         let databases = from_config(&ConfigAndUsers {
@@ -691,6 +716,7 @@ mod tests {
                 },
                 // Note: user2 missing for dest_db - this should disable mirroring
             ],
+            ..Default::default()
         };
 
         let databases = from_config(&ConfigAndUsers {
@@ -760,6 +786,7 @@ mod tests {
                     ..Default::default()
                 },
             ],
+            ..Default::default()
         };
 
         let databases = from_config(&ConfigAndUsers {
@@ -837,6 +864,7 @@ mod tests {
                     ..Default::default()
                 },
             ],
+            ..Default::default()
         };
 
         let databases = from_config(&ConfigAndUsers {
@@ -929,6 +957,7 @@ mod tests {
                     ..Default::default()
                 },
             ],
+            ..Default::default()
         };
 
         let databases = from_config(&ConfigAndUsers {
@@ -1006,6 +1035,7 @@ mod tests {
                     ..Default::default()
                 },
             ],
+            ..Default::default()
         };
 
         let databases = from_config(&ConfigAndUsers {
@@ -1056,7 +1086,10 @@ mod tests {
         }];
 
         // No users at all
-        let users = crate::config::Users { users: vec![] };
+        let users = crate::config::Users {
+            users: vec![],
+            ..Default::default()
+        };
 
         let databases = from_config(&ConfigAndUsers {
             config: config.clone(),
@@ -1083,6 +1116,7 @@ mod tests {
                 },
                 // No user for dest_db!
             ],
+            ..Default::default()
         };
 
         let databases_partial = from_config(&ConfigAndUsers {
@@ -1110,6 +1144,7 @@ mod tests {
                 },
                 // No user for source_db!
             ],
+            ..Default::default()
         };
 
         let databases_dest_only = from_config(&ConfigAndUsers {

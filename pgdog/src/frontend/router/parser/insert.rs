@@ -31,7 +31,7 @@ impl<'a> Insert<'a> {
             .cols
             .iter()
             .map(Column::try_from)
-            .collect::<Result<Vec<Column<'a>>, ()>>()
+            .collect::<Result<Vec<Column<'a>>, Error>>()
             .ok()
             .unwrap_or(vec![])
     }
@@ -57,6 +57,17 @@ impl<'a> Insert<'a> {
         vec![]
     }
 
+    /// Calculate the number of tuples in the statement.
+    pub fn num_tuples(&self) -> usize {
+        if let Some(select) = &self.stmt.select_stmt {
+            if let Some(NodeEnum::SelectStmt(stmt)) = &select.node {
+                return stmt.values_lists.len();
+            }
+        }
+
+        0
+    }
+
     /// Get the sharding key for the statement.
     pub fn shard(
         &'a self,
@@ -66,27 +77,37 @@ impl<'a> Insert<'a> {
         let tables = Tables::new(schema);
         let columns = self.columns();
         let table = self.table();
+        let tuples = self.tuples();
+
         let key = table.and_then(|table| tables.key(table, &columns));
+
+        if let Some(table) = table {
+            // Schema-based routing.
+            if let Some(schema) = schema.schemas.get(table.schema()) {
+                return Ok(schema.shard().into());
+            }
+        }
+
+        if self.num_tuples() != 1 {
+            debug!("multiple tuples in an INSERT statement");
+            return Ok(Shard::All);
+        }
 
         if let Some(key) = key {
             if let Some(bind) = bind {
                 if let Ok(Some(param)) = bind.parameter(key.position) {
-                    // Arrays not supported as sharding keys at the moment.
-                    let value = ShardingValue::from_param(&param, key.table.data_type)?;
-                    let ctx = ContextBuilder::new(key.table)
-                        .value(value)
-                        .shards(schema.shards)
-                        .build()?;
-                    return Ok(ctx.apply()?);
+                    if param.is_null() {
+                        return Ok(Shard::All);
+                    } else {
+                        // Arrays not supported as sharding keys at the moment.
+                        let value = ShardingValue::from_param(&param, key.table.data_type)?;
+                        let ctx = ContextBuilder::new(key.table)
+                            .value(value)
+                            .shards(schema.shards)
+                            .build()?;
+                        return Ok(ctx.apply()?);
+                    }
                 }
-            }
-
-            let tuples = self.tuples();
-
-            // TODO: support rewriting INSERTs to run against multiple shards.
-            if tuples.len() != 1 {
-                debug!("multiple tuples in an INSERT statement");
-                return Ok(Shard::All);
             }
 
             if let Some(value) = tuples.first().and_then(|tuple| tuple.get(key.position)) {
@@ -130,6 +151,7 @@ mod test {
     use crate::config::ShardedTable;
     use crate::net::bind::Parameter;
     use crate::net::Format;
+    use bytes::Bytes;
 
     use super::super::Value;
     use super::*;
@@ -231,6 +253,7 @@ mod test {
                 ],
                 vec![],
             ),
+            ..Default::default()
         };
 
         match &select.node {
@@ -243,7 +266,7 @@ mod test {
                     "",
                     &[Parameter {
                         len: 1,
-                        data: "3".as_bytes().to_vec(),
+                        data: "3".as_bytes().into(),
                     }],
                 );
 
@@ -254,7 +277,7 @@ mod test {
                     "",
                     &[Parameter {
                         len: 8,
-                        data: 234_i64.to_be_bytes().to_vec(),
+                        data: Bytes::copy_from_slice(&234_i64.to_be_bytes()),
                     }],
                     &[Format::Binary],
                 );
@@ -304,6 +327,34 @@ mod test {
             }
 
             _ => panic!("not a select"),
+        }
+    }
+
+    #[test]
+    fn test_null_sharding_key_routes_to_all() {
+        let query = parse("INSERT INTO sharded (id, value) VALUES ($1, 'test')").unwrap();
+        let select = query.protobuf.stmts.first().unwrap().stmt.as_ref().unwrap();
+        let schema = ShardingSchema {
+            shards: 3,
+            tables: ShardedTables::new(
+                vec![ShardedTable {
+                    name: Some("sharded".into()),
+                    column: "id".into(),
+                    ..Default::default()
+                }],
+                vec![],
+            ),
+            ..Default::default()
+        };
+
+        match &select.node {
+            Some(NodeEnum::InsertStmt(stmt)) => {
+                let insert = Insert::new(stmt);
+                let bind = Bind::new_params("", &[Parameter::new_null()]);
+                let shard = insert.shard(&schema, Some(&bind)).unwrap();
+                assert!(matches!(shard, Shard::All));
+            }
+            _ => panic!("not an insert"),
         }
     }
 }

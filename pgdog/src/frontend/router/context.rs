@@ -1,14 +1,16 @@
-use super::Error;
+use super::{Error, ParameterHints};
 use crate::{
     backend::Cluster,
-    frontend::{client::TransactionType, BufferedQuery, ClientRequest, PreparedStatements},
+    frontend::{
+        client::{Sticky, TransactionType},
+        router::Ast,
+        BufferedQuery, ClientRequest,
+    },
     net::{Bind, Parameters},
 };
 
 #[derive(Debug)]
 pub struct RouterContext<'a> {
-    /// Prepared statements.
-    pub prepared_statements: &'a mut PreparedStatements,
     /// Bound parameters to the query.
     pub bind: Option<&'a Bind>,
     /// Query we're looking it.
@@ -16,7 +18,7 @@ pub struct RouterContext<'a> {
     /// Cluster configuration.
     pub cluster: &'a Cluster,
     /// Client parameters, e.g. search_path.
-    pub params: &'a Parameters,
+    pub parameter_hints: ParameterHints<'a>,
     /// Client inside transaction,
     pub transaction: Option<TransactionType>,
     /// Currently executing COPY statement.
@@ -25,30 +27,38 @@ pub struct RouterContext<'a> {
     pub executable: bool,
     /// Two-pc enabled
     pub two_pc: bool,
+    /// Sticky omnisharded index.
+    pub sticky: Sticky,
+    /// Extended protocol.
+    pub extended: bool,
+    /// AST.
+    pub ast: Option<Ast>,
 }
 
 impl<'a> RouterContext<'a> {
     pub fn new(
         buffer: &'a ClientRequest,
         cluster: &'a Cluster,
-        stmt: &'a mut PreparedStatements,
         params: &'a Parameters,
         transaction: Option<TransactionType>,
+        sticky: Sticky,
     ) -> Result<Self, Error> {
         let query = buffer.query()?;
         let bind = buffer.parameters()?;
-        let copy_mode = buffer.copy();
+        let copy_mode = buffer.is_copy();
 
         Ok(Self {
-            query,
             bind,
-            params,
-            prepared_statements: stmt,
+            parameter_hints: ParameterHints::from(params),
             cluster,
             transaction,
             copy_mode,
-            executable: buffer.executable(),
+            executable: buffer.is_executable(),
             two_pc: cluster.two_pc_enabled(),
+            sticky,
+            extended: matches!(query, Some(BufferedQuery::Prepared(_))) || bind.is_some(),
+            query,
+            ast: buffer.ast.clone(),
         })
     }
 

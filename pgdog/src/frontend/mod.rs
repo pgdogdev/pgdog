@@ -18,9 +18,9 @@ pub mod stats;
 pub use buffered_query::BufferedQuery;
 pub use client::Client;
 pub use client_request::ClientRequest;
-pub use comms::Comms;
+pub use comms::{ClientComms, Comms};
 pub use connected_client::ConnectedClient;
-pub use error::Error;
+pub(crate) use error::Error;
 pub use prepared_statements::{PreparedStatements, Rewrite};
 #[cfg(debug_assertions)]
 pub use query_logger::QueryLogger;

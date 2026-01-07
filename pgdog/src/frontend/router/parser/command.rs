@@ -24,10 +24,14 @@ pub enum Command {
     Set {
         name: String,
         value: ParameterValue,
+        local: bool,
+        route: Route,
     },
     PreparedStatement(Prepare),
-    Rewrite(String),
-    Shards(usize),
+    InternalField {
+        name: String,
+        value: String,
+    },
     Deallocate,
     Discard {
         extended: bool,
@@ -42,17 +46,19 @@ pub enum Command {
         shard: Shard,
     },
     Unlisten(String),
-    SetRoute(Route),
+    UniqueId,
 }
 
 impl Command {
     pub fn route(&self) -> &Route {
         lazy_static! {
-            static ref DEFAULT_ROUTE: Route = Route::write(Shard::All);
+            static ref DEFAULT_ROUTE: Route =
+                Route::write(ShardWithPriority::new_default_unset(Shard::All));
         }
 
         match self {
             Self::Query(route) => route,
+            Self::Set { route, .. } => route,
             _ => &DEFAULT_ROUTE,
         }
     }
@@ -60,7 +66,9 @@ impl Command {
 
 impl Default for Command {
     fn default() -> Self {
-        Command::Query(Route::write(Shard::All))
+        Command::Query(Route::write(ShardWithPriority::new_default_unset(
+            Shard::All,
+        )))
     }
 }
 
@@ -103,11 +111,13 @@ impl Command {
     pub(crate) fn dry_run(self) -> Self {
         match self {
             Command::Query(mut query) => {
-                query.set_shard_mut(0);
+                query.set_shard_mut(ShardWithPriority::new_override_dry_run(Shard::Direct(0)));
                 Command::Query(query)
             }
 
-            Command::Copy(_) => Command::Query(Route::write(Some(0))),
+            Command::Copy(_) => Command::Query(Route::write(
+                ShardWithPriority::new_override_dry_run(Shard::Direct(0)),
+            )),
             _ => self,
         }
     }

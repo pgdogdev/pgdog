@@ -6,7 +6,7 @@ use pg_query::{
 };
 use std::fmt::{Display, Formatter, Result as FmtResult};
 
-use super::Table;
+use super::{Error, Table};
 use crate::util::escape_identifier;
 
 /// Column name extracted from a query.
@@ -44,9 +44,7 @@ impl<'a> Column<'a> {
     pub fn to_owned(&self) -> OwnedColumn {
         OwnedColumn::from(*self)
     }
-}
 
-impl<'a> Column<'a> {
     pub fn from_string(string: &'a Node) -> Result<Self, ()> {
         match &string.node {
             Some(NodeEnum::String(protobuf::String { sval })) => Ok(Self {
@@ -55,6 +53,14 @@ impl<'a> Column<'a> {
             }),
 
             _ => Err(()),
+        }
+    }
+
+    /// Fully-qualify this column with a table.
+    pub fn qualify(&mut self, table: Table<'a>) {
+        if self.table.is_none() {
+            self.table = Some(table.name);
+            self.schema = table.schema;
         }
     }
 }
@@ -114,7 +120,7 @@ impl<'a> From<&'a OwnedColumn> for Column<'a> {
 }
 
 impl<'a> TryFrom<&'a Node> for Column<'a> {
-    type Error = ();
+    type Error = Error;
 
     fn try_from(value: &'a Node) -> Result<Self, Self::Error> {
         Column::try_from(&value.node)
@@ -122,7 +128,7 @@ impl<'a> TryFrom<&'a Node> for Column<'a> {
 }
 
 impl<'a> TryFrom<&'a Option<NodeEnum>> for Column<'a> {
-    type Error = ();
+    type Error = Error;
 
     fn try_from(value: &'a Option<NodeEnum>) -> Result<Self, Self::Error> {
         fn from_node(node: &Node) -> Option<&str> {
@@ -133,12 +139,15 @@ impl<'a> TryFrom<&'a Option<NodeEnum>> for Column<'a> {
             }
         }
 
-        fn from_slice<'a>(nodes: &'a [Node]) -> Result<Column<'a>, ()> {
+        fn from_slice<'a>(nodes: &'a [Node]) -> Result<Column<'a>, Error> {
             match nodes.len() {
                 3 => {
                     let schema = nodes.first().and_then(from_node);
                     let table = nodes.get(1).and_then(from_node);
-                    let name = nodes.get(2).and_then(from_node).ok_or(())?;
+                    let name = nodes
+                        .get(2)
+                        .and_then(from_node)
+                        .ok_or(Error::ColumnDecode)?;
 
                     Ok(Column {
                         schema,
@@ -149,7 +158,10 @@ impl<'a> TryFrom<&'a Option<NodeEnum>> for Column<'a> {
 
                 2 => {
                     let table = nodes.first().and_then(from_node);
-                    let name = nodes.get(1).and_then(from_node).ok_or(())?;
+                    let name = nodes
+                        .get(1)
+                        .and_then(from_node)
+                        .ok_or(Error::ColumnDecode)?;
 
                     Ok(Column {
                         schema: None,
@@ -159,7 +171,10 @@ impl<'a> TryFrom<&'a Option<NodeEnum>> for Column<'a> {
                 }
 
                 1 => {
-                    let name = nodes.first().and_then(from_node).ok_or(())?;
+                    let name = nodes
+                        .first()
+                        .and_then(from_node)
+                        .ok_or(Error::ColumnDecode)?;
 
                     Ok(Column {
                         name,
@@ -167,7 +182,7 @@ impl<'a> TryFrom<&'a Option<NodeEnum>> for Column<'a> {
                     })
                 }
 
-                _ => Err(()),
+                _ => Err(Error::ColumnDecode),
             }
         }
 
@@ -186,26 +201,36 @@ impl<'a> TryFrom<&'a Option<NodeEnum>> for Column<'a> {
                     if let Some(ref node) = list.arg {
                         Ok(Column::try_from(&node.node)?)
                     } else {
-                        Err(())
+                        Err(Error::ColumnDecode)
                     }
                 } else {
-                    Err(())
+                    Err(Error::ColumnDecode)
                 }
             }
 
-            _ => Err(()),
+            _ => Err(Error::ColumnDecode),
         }
     }
 }
 
 impl<'a> TryFrom<&Option<&'a Node>> for Column<'a> {
-    type Error = ();
+    type Error = Error;
 
     fn try_from(value: &Option<&'a Node>) -> Result<Self, Self::Error> {
         if let Some(value) = value {
             (*value).try_into()
         } else {
-            Err(())
+            Err(Error::ColumnDecode)
+        }
+    }
+}
+
+impl<'a> From<&'a str> for Column<'a> {
+    fn from(value: &'a str) -> Self {
+        Column {
+            name: value,
+            table: None,
+            schema: None,
         }
     }
 }
@@ -214,7 +239,7 @@ impl<'a> TryFrom<&Option<&'a Node>> for Column<'a> {
 mod test {
     use pg_query::{parse, NodeEnum};
 
-    use super::Column;
+    use super::{Column, Error};
 
     #[test]
     fn test_column() {
@@ -226,7 +251,7 @@ mod test {
                     .cols
                     .iter()
                     .map(Column::try_from)
-                    .collect::<Result<Vec<Column>, ()>>()
+                    .collect::<Result<Vec<Column>, Error>>()
                     .unwrap();
                 assert_eq!(
                     columns,

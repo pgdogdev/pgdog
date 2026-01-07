@@ -3,14 +3,16 @@ use std::fmt::Display;
 
 use std::time::Duration;
 
-use crate::net::c_string_buf;
-
 use super::prelude::*;
+use crate::{
+    net::{c_string_buf, code},
+    state::State,
+};
 
 /// ErrorResponse (B) message.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ErrorResponse {
-    severity: String,
+    pub severity: String,
     pub code: String,
     pub message: String,
     pub detail: Option<String>,
@@ -50,25 +52,65 @@ impl ErrorResponse {
         }
     }
 
-    pub fn cross_shard_disabled() -> ErrorResponse {
+    pub fn client_login_timeout(timeout: Duration) -> ErrorResponse {
+        let mut error = Self::client_idle_timeout(timeout, &State::Active);
+        error.message = "client login timeout".into();
+        error.detail = Some(format!(
+            "client_login_timeout of {}ms expired",
+            timeout.as_millis()
+        ));
+
+        error
+    }
+
+    pub fn cross_shard_disabled(query: Option<&str>) -> ErrorResponse {
         ErrorResponse {
             severity: "ERROR".into(),
             code: "58000".into(),
             message: "cross-shard queries are disabled".into(),
-            detail: Some("query doesn't have a sharding key".into()),
+            detail: Some(format!(
+                "query doesn't have a sharding key{}",
+                if let Some(query) = query {
+                    format!(": {}", query)
+                } else {
+                    "".into()
+                }
+            )),
             context: None,
             file: None,
             routine: None,
         }
     }
 
-    pub fn client_idle_timeout(duration: Duration) -> ErrorResponse {
+    pub fn transaction_statement_mode() -> ErrorResponse {
+        ErrorResponse {
+            severity: "ERROR".into(),
+            code: "58000".into(),
+            message: "transaction control statements are not supported in statement pooler mode"
+                .into(),
+            ..Default::default()
+        }
+    }
+
+    pub fn client_idle_timeout(duration: Duration, state: &State) -> ErrorResponse {
         ErrorResponse {
             severity: "FATAL".into(),
             code: "57P05".into(),
-            message: "disconnecting idle client".into(),
+            message: format!(
+                "disconnecting {} client",
+                if state == &State::IdleInTransaction {
+                    "idle in transaction"
+                } else {
+                    "idle"
+                }
+            ),
             detail: Some(format!(
-                "client_idle_timeout of {}ms expired",
+                "{} of {}ms expired",
+                if state == &State::IdleInTransaction {
+                    "client_idle_in_transaction_timeout"
+                } else {
+                    "client_idle_timeout"
+                },
                 duration.as_millis()
             )),
             context: None,
@@ -78,11 +120,14 @@ impl ErrorResponse {
     }
 
     /// Connection error.
-    pub fn connection() -> ErrorResponse {
+    pub fn connection(user: &str, database: &str) -> ErrorResponse {
         ErrorResponse {
             severity: "ERROR".into(),
             code: "58000".into(),
-            message: "connection pool is down".into(),
+            message: format!(
+                r#"connection pool for user "{}" and database "{}" is down"#,
+                user, database
+            ),
             detail: None,
             context: None,
             file: None,
@@ -108,6 +153,18 @@ impl ErrorResponse {
             severity: "ERROR".into(),
             code: "42601".into(),
             message: err.into(),
+            detail: None,
+            context: None,
+            file: None,
+            routine: None,
+        }
+    }
+
+    pub fn tls_required() -> ErrorResponse {
+        Self {
+            severity: "FATAL".into(),
+            code: "08004".into(),
+            message: "only TLS connections are allowed".into(),
             detail: None,
             context: None,
             file: None,
@@ -163,6 +220,8 @@ impl Display for ErrorResponse {
 
 impl FromBytes for ErrorResponse {
     fn from_bytes(mut bytes: Bytes) -> Result<Self, Error> {
+        code!(bytes, 'E');
+
         let _len = bytes.get_i32();
 
         let mut error_response = ErrorResponse::default();

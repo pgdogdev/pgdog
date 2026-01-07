@@ -1,15 +1,18 @@
 use crate::{
-    backend::pool::connection::mirror::Mirror,
+    backend::pool::{connection::mirror::Mirror, stats::MemoryStats},
     frontend::{
-        client::{timeouts::Timeouts, TransactionType},
+        client::{timeouts::Timeouts, Sticky, TransactionType},
+        router::parser::rewrite::statement::plan::RewriteResult,
         Client, ClientRequest, PreparedStatements,
     },
-    net::{Parameters, Stream},
-    stats::memory::MemoryUsage,
+    net::{BackendKeyData, Parameters, Stream},
 };
 
+#[allow(dead_code)]
 /// Context passed to the query engine to execute a query.
 pub struct QueryEngineContext<'a> {
+    /// Client ID running the query.
+    pub(super) id: &'a BackendKeyData,
     /// Prepared statements cache.
     pub(super) prepared_statements: &'a mut PreparedStatements,
     /// Client session parameters.
@@ -27,18 +30,23 @@ pub struct QueryEngineContext<'a> {
     /// Cross shard  queries are disabled.
     pub(super) cross_shard_disabled: Option<bool>,
     /// Client memory usage.
-    pub(super) memory_usage: usize,
+    pub(super) memory_stats: MemoryStats,
     /// Is the client an admin.
     pub(super) admin: bool,
     /// Executing rollback statement.
     pub(super) rollback: bool,
+    /// Sticky config:
+    pub(super) sticky: Sticky,
+    /// Rewrite result.
+    pub(super) rewrite_result: Option<RewriteResult>,
 }
 
 impl<'a> QueryEngineContext<'a> {
     pub fn new(client: &'a mut Client) -> Self {
-        let memory_usage = client.memory_usage();
+        let memory_stats = client.memory_stats();
 
         Self {
+            id: &client.id,
             prepared_statements: &mut client.prepared_statements,
             params: &mut client.params,
             client_request: &mut client.client_request,
@@ -46,10 +54,12 @@ impl<'a> QueryEngineContext<'a> {
             transaction: client.transaction,
             timeouts: client.timeouts,
             cross_shard_disabled: None,
-            memory_usage,
+            memory_stats,
             admin: client.admin,
             requests_left: 0,
             rollback: false,
+            sticky: client.sticky,
+            rewrite_result: None,
         }
     }
 
@@ -62,6 +72,7 @@ impl<'a> QueryEngineContext<'a> {
     /// Create context from mirror.
     pub fn new_mirror(mirror: &'a mut Mirror, buffer: &'a mut ClientRequest) -> Self {
         Self {
+            id: &mirror.id,
             prepared_statements: &mut mirror.prepared_statements,
             params: &mut mirror.params,
             client_request: buffer,
@@ -69,10 +80,12 @@ impl<'a> QueryEngineContext<'a> {
             transaction: mirror.transaction,
             timeouts: mirror.timeouts,
             cross_shard_disabled: None,
-            memory_usage: 0,
+            memory_stats: MemoryStats::default(),
             admin: false,
             requests_left: 0,
             rollback: false,
+            sticky: Sticky::new(),
+            rewrite_result: None,
         }
     }
 

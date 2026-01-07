@@ -4,26 +4,30 @@
 //! into idempotent prepared statements.
 //!
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
+    fmt::Display,
     sync::atomic::{AtomicUsize, Ordering},
 };
 
 use once_cell::sync::Lazy;
 use pg_query::{
+    parse_raw,
     protobuf::{InsertStmt, ParseResult},
     NodeEnum,
 };
-use tracing::trace;
+use pgdog_config::QueryParserEngine;
+use tracing::{debug, trace};
 
 use super::super::{publisher::Table, Error};
+use super::StreamContext;
 use crate::{
-    backend::{Cluster, Server, ShardingSchema},
+    backend::{Cluster, ConnectReason, Server},
     config::Role,
-    frontend::router::parser::{Insert, Shard},
+    frontend::router::parser::Shard,
     net::{
         replication::{
-            xlog_data::XLogPayload, Commit as XLogCommit, Insert as XLogInsert, Relation,
-            StatusUpdate,
+            xlog_data::XLogPayload, Commit as XLogCommit, Delete as XLogDelete,
+            Insert as XLogInsert, Relation, StatusUpdate, Update as XLogUpdate,
         },
         Bind, CopyData, ErrorResponse, Execute, Flush, FromBytes, Parse, Protocol, Sync, ToBytes,
     },
@@ -46,37 +50,47 @@ struct Key {
     name: String,
 }
 
+impl Display for Key {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, r#""{}"."{}""#, self.schema, self.name)
+    }
+}
+
 #[derive(Default, Debug, Clone)]
 struct Statements {
-    #[allow(dead_code)]
     insert: Statement,
-    upsert: Statement,
     #[allow(dead_code)]
+    upsert: Statement,
     update: Statement,
+    delete: Statement,
 }
 
 #[derive(Default, Debug, Clone)]
 struct Statement {
-    name: String,
-    query: String,
     ast: ParseResult,
+    parse: Parse,
 }
 
 impl Statement {
-    fn parse(&self) -> Parse {
-        Parse::named(&self.name, &self.query)
+    fn parse(&self) -> &Parse {
+        &self.parse
     }
 
-    fn new(query: &str) -> Result<Self, Error> {
-        let ast = pg_query::parse(query)?.protobuf;
+    fn new(query: &str, query_parser_engine: QueryParserEngine) -> Result<Self, Error> {
+        let ast = match query_parser_engine {
+            QueryParserEngine::PgQueryProtobuf => pg_query::parse(query),
+            QueryParserEngine::PgQueryRaw => parse_raw(query),
+        }?
+        .protobuf;
+        let name = statement_name();
         Ok(Self {
-            name: statement_name(),
-            query: query.to_string(),
             ast,
+            parse: Parse::named(name, query.to_string()),
         })
     }
 
     #[allow(clippy::borrowed_box)]
+    #[allow(dead_code)]
     fn insert(&self) -> Option<&Box<InsertStmt>> {
         self.ast
             .stmts
@@ -95,15 +109,15 @@ impl Statement {
             .flatten()
             .flatten()
     }
-}
 
+    fn query(&self) -> &str {
+        self.parse.query()
+    }
+}
 #[derive(Debug)]
 pub struct StreamSubscriber {
     /// Destination cluster.
     cluster: Cluster,
-
-    /// Sharding schema.
-    sharding_schema: ShardingSchema,
 
     // Relation markers sent by the publisher.
     // Happens once per connection.
@@ -114,6 +128,9 @@ pub struct StreamSubscriber {
 
     // Statements
     statements: HashMap<i32, Statements>,
+
+    // Partitioned tables dedup.
+    partitioned_dedup: HashSet<Key>,
 
     // LSNs for each table
     table_lsns: HashMap<i32, i64>,
@@ -127,15 +144,23 @@ pub struct StreamSubscriber {
 
     // Bytes sharded
     bytes_sharded: usize,
+
+    // Query parser engine.
+    query_parser_engine: QueryParserEngine,
 }
 
 impl StreamSubscriber {
-    pub fn new(cluster: &Cluster, tables: &[Table]) -> Self {
+    pub fn new(
+        cluster: &Cluster,
+        tables: &[Table],
+        query_parser_engine: QueryParserEngine,
+    ) -> Self {
+        let cluster = cluster.logical_stream();
         Self {
-            cluster: cluster.clone(),
-            sharding_schema: cluster.sharding_schema(),
+            cluster,
             relations: HashMap::new(),
             statements: HashMap::new(),
+            partitioned_dedup: HashSet::new(),
             table_lsns: HashMap::new(),
             tables: tables
                 .iter()
@@ -153,6 +178,7 @@ impl StreamSubscriber {
             lsn: 0, // Unknown,
             bytes_sharded: 0,
             lsn_changed: true,
+            query_parser_engine,
         }
     }
 
@@ -167,7 +193,7 @@ impl StreamSubscriber {
                 .find(|(r, _)| r == &Role::Primary)
                 .ok_or(Error::NoPrimary)?
                 .1
-                .standalone()
+                .standalone(ConnectReason::Replication)
                 .await?;
             conns.push(primary);
         }
@@ -231,31 +257,99 @@ impl StreamSubscriber {
     // Convert Insert into an idempotent "upsert" and apply it to
     // the right shard(s).
     async fn insert(&mut self, insert: XLogInsert) -> Result<(), Error> {
-        if let Some(table_lsn) = self.table_lsns.get(&insert.oid) {
-            // Don't apply change if table is ahead.
-            if self.lsn < *table_lsn {
-                return Ok(());
-            }
+        if self.lsn_applied(&insert.oid) {
+            return Ok(());
         }
 
         if let Some(statements) = self.statements.get(&insert.oid) {
             // Convert TupleData into a Bind message. We can now insert that tuple
             // using a prepared statement.
-            let bind = insert.tuple_data.to_bind(&statements.upsert.name);
+            let mut context =
+                StreamContext::new(&self.cluster, &insert.tuple_data, statements.insert.parse());
+            let bind = context.bind().clone();
+            let shard = context.shard()?;
 
-            // Upserts are idempotent. Even if we rewind the stream,
-            // we are able to replay changes we already applied safely.
-            if let Some(upsert) = statements.upsert.insert() {
-                let upsert = Insert::new(upsert);
-                let val = upsert.shard(&self.sharding_schema, Some(&bind))?;
-                self.send(&val, &bind).await?;
-            }
-
-            // Update table LSN.
-            self.table_lsns.insert(insert.oid, self.lsn);
+            self.send(&shard, &bind).await?;
         }
 
+        // Update table LSN.
+        self.table_lsns.insert(insert.oid, self.lsn);
+
         Ok(())
+    }
+
+    async fn update(&mut self, update: XLogUpdate) -> Result<(), Error> {
+        if self.lsn_applied(&update.oid) {
+            return Ok(());
+        }
+
+        if let Some(statements) = self.statements.get(&update.oid) {
+            // Primary key update.
+            //
+            // Convert it into a delete of the old row
+            // and an insert with the new row.
+            if let Some(key) = update.key {
+                let delete = XLogDelete {
+                    key: Some(key),
+                    oid: update.oid,
+                    old: None,
+                };
+                let insert = XLogInsert {
+                    xid: None,
+                    oid: update.oid,
+                    tuple_data: update.new,
+                };
+                self.delete(delete).await?;
+                self.insert(insert).await?;
+            } else {
+                let mut context =
+                    StreamContext::new(&self.cluster, &update.new, statements.update.parse());
+                let bind = context.bind().clone();
+                let shard = context.shard()?;
+
+                self.send(&shard, &bind).await?;
+            }
+        }
+
+        // Update table LSN.
+        self.table_lsns.insert(update.oid, self.lsn);
+
+        Ok(())
+    }
+
+    async fn delete(&mut self, delete: XLogDelete) -> Result<(), Error> {
+        if self.lsn_applied(&delete.oid) {
+            return Ok(());
+        }
+
+        if let Some(statements) = self.statements.get(&delete.oid) {
+            // Convert TupleData into a Bind message. We can now insert that tuple
+            // using a prepared statement.
+            if let Some(key) = delete.key_non_null() {
+                let mut context =
+                    StreamContext::new(&self.cluster, &key, statements.delete.parse());
+                let bind = context.bind().clone();
+                let shard = context.shard()?;
+
+                self.send(&shard, &bind).await?;
+            }
+        }
+
+        // Update table LSN.
+        self.table_lsns.insert(delete.oid, self.lsn);
+
+        Ok(())
+    }
+
+    fn lsn_applied(&self, oid: &i32) -> bool {
+        if let Some(table_lsn) = self.table_lsns.get(oid) {
+            // Don't apply change if table is ahead.
+            if self.lsn < *table_lsn {
+                return true;
+            }
+        }
+
+        false
     }
 
     // Handle Commit message.
@@ -280,7 +374,7 @@ impl StreamSubscriber {
                     }
                     'Z' => break,
                     '2' | 'C' => continue,
-                    c => return Err(Error::OutOfSync(c)),
+                    c => return Err(Error::CommitOutOfSync(c)),
                 }
             }
         }
@@ -303,12 +397,40 @@ impl StreamSubscriber {
         if let Some(table) = table {
             // Prepare queries for this table. Prepared statements
             // are much faster.
-            let insert = Statement::new(&table.insert(false))?;
-            let upsert = Statement::new(&table.insert(true))?;
+
+            table.valid()?;
+
+            let dest_key = Key {
+                schema: table.table.destination_schema().to_string(),
+                name: table.table.destination_name().to_string(),
+            };
+
+            if self.partitioned_dedup.contains(&dest_key) {
+                debug!("queries for table {} already prepared", dest_key);
+                return Ok(());
+            }
+
+            let insert = Statement::new(&table.insert(false), self.query_parser_engine)?;
+            let upsert = Statement::new(&table.insert(true), self.query_parser_engine)?;
+            let update = Statement::new(&table.update(), self.query_parser_engine)?;
+            let delete = Statement::new(&table.delete(), self.query_parser_engine)?;
 
             for server in &mut self.connections {
+                for stmt in &[&insert, &upsert, &update, &delete] {
+                    debug!("preparing \"{}\" [{}]", stmt.query(), server.addr());
+                }
+
                 server
-                    .send(&vec![insert.parse().into(), upsert.parse().into(), Sync.into()].into())
+                    .send(
+                        &vec![
+                            insert.parse().clone().into(),
+                            upsert.parse().clone().into(),
+                            update.parse().clone().into(),
+                            delete.parse().clone().into(),
+                            Sync.into(),
+                        ]
+                        .into(),
+                    )
                     .await?;
             }
 
@@ -325,7 +447,7 @@ impl StreamSubscriber {
                         }
                         'Z' => break,
                         '1' => continue,
-                        c => return Err(Error::OutOfSync(c)),
+                        c => return Err(Error::RelationOutOfSync(c)),
                     }
                 }
             }
@@ -335,13 +457,15 @@ impl StreamSubscriber {
                 Statements {
                     insert,
                     upsert,
-                    update: Statement::default(),
+                    update,
+                    delete,
                 },
             );
 
             // Only record tables we expect to stream changes for.
             self.table_lsns.insert(relation.oid, table.lsn.lsn);
             self.relations.insert(relation.oid, relation);
+            self.partitioned_dedup.insert(dest_key);
         }
 
         Ok(())
@@ -362,6 +486,8 @@ impl StreamSubscriber {
             if let Some(payload) = xlog.payload() {
                 match payload {
                     XLogPayload::Insert(insert) => self.insert(insert).await?,
+                    XLogPayload::Update(update) => self.update(update).await?,
+                    XLogPayload::Delete(delete) => self.delete(delete).await?,
                     XLogPayload::Commit(commit) => {
                         self.commit(commit).await?;
                         status_update = Some(self.status_update());

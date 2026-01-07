@@ -11,7 +11,7 @@ services:
     environment:
       RUST_LOG: debug
   shard_0:
-    image: postgres:17
+    image: postgres:18
     environment:
       POSTGRES_PASSWORD: postgres
     volumes:
@@ -19,7 +19,7 @@ services:
     networks:
       - postgres
   shard_1:
-    image: postgres:17
+    image: postgres:18
     environment:
       POSTGRES_PASSWORD: postgres
     networks:
@@ -27,7 +27,7 @@ services:
     volumes:
       - ./docker/setup.sql:/docker-entrypoint-initdb.d/setup.sql
   shard_2:
-    image: postgres:17
+    image: postgres:18
     environment:
       POSTGRES_PASSWORD: postgres
     networks:

@@ -13,122 +13,58 @@ impl QueryParser {
         stmt: &VariableSetStmt,
         context: &QueryParserContext,
     ) -> Result<Command, Error> {
-        match stmt.name.as_str() {
-            "pgdog.shard" => {
-                if self.in_transaction {
-                    let node = stmt
-                        .args
-                        .first()
-                        .ok_or(Error::SetShard)?
-                        .node
-                        .as_ref()
-                        .ok_or(Error::SetShard)?;
-                    if let NodeEnum::AConst(AConst {
-                        val: Some(a_const::Val::Ival(Integer { ival })),
-                        ..
-                    }) = node
-                    {
-                        return Ok(Command::SetRoute(
-                            Route::write(Some(*ival as usize)).set_read(context.read_only),
-                        ));
-                    }
-                } else {
-                    return Err(Error::RequiresTransaction);
-                }
+        let transaction_state = stmt.name.starts_with("TRANSACTION");
+        let value = Self::parse_set_value(stmt)?;
+
+        if let Some(value) = value {
+            if !transaction_state {
+                return Ok(Command::Set {
+                    name: stmt.name.to_string(),
+                    value,
+                    local: stmt.is_local,
+                    route: Route::write(context.shards_calculator.shard()),
+                });
             }
+        }
 
-            "pgdog.sharding_key" => {
-                if self.in_transaction {
-                    let node = stmt
-                        .args
-                        .first()
-                        .ok_or(Error::SetShard)?
-                        .node
-                        .as_ref()
-                        .ok_or(Error::SetShard)?;
+        Ok(Command::Query(
+            Route::write(context.shards_calculator.shard().clone()).with_read(context.read_only),
+        ))
+    }
 
-                    if let NodeEnum::AConst(AConst {
-                        val: Some(Val::Sval(String { sval })),
-                        ..
-                    }) = node
-                    {
-                        let shard = if context.sharding_schema.shards > 1 {
-                            let ctx = ContextBuilder::infer_from_from_and_config(
-                                sval.as_str(),
-                                &context.sharding_schema,
-                            )?
-                            .shards(context.shards)
-                            .build()?;
-                            ctx.apply()?
-                        } else {
-                            Shard::Direct(0)
-                        };
-                        return Ok(Command::SetRoute(
-                            Route::write(shard).set_read(context.read_only),
-                        ));
-                    }
-                } else {
-                    return Err(Error::RequiresTransaction);
-                }
-            }
+    pub fn parse_set_value(stmt: &VariableSetStmt) -> Result<Option<ParameterValue>, Error> {
+        let mut value = vec![];
 
-            // TODO: Handle SET commands for updating client
-            // params without touching the server.
-            name => {
-                if !self.in_transaction {
-                    let mut value = vec![];
-
-                    for node in &stmt.args {
-                        if let Some(NodeEnum::AConst(AConst { val: Some(val), .. })) = &node.node {
-                            match val {
-                                Val::Sval(String { sval }) => {
-                                    value.push(sval.to_string());
-                                }
-
-                                Val::Ival(Integer { ival }) => {
-                                    value.push(ival.to_string());
-                                }
-
-                                Val::Fval(Float { fval }) => {
-                                    value.push(fval.to_string());
-                                }
-
-                                Val::Boolval(Boolean { boolval }) => {
-                                    value.push(boolval.to_string());
-                                }
-
-                                _ => (),
-                            }
-                        }
+        for node in &stmt.args {
+            if let Some(NodeEnum::AConst(AConst { val: Some(val), .. })) = &node.node {
+                match val {
+                    Val::Sval(String { sval }) => {
+                        value.push(sval.to_string());
                     }
 
-                    match value.len() {
-                        0 => (),
-                        1 => {
-                            return Ok(Command::Set {
-                                name: name.to_string(),
-                                value: ParameterValue::String(value.pop().unwrap()),
-                            })
-                        }
-                        _ => {
-                            return Ok(Command::Set {
-                                name: name.to_string(),
-                                value: ParameterValue::Tuple(value),
-                            })
-                        }
+                    Val::Ival(Integer { ival }) => {
+                        value.push(ival.to_string());
                     }
+
+                    Val::Fval(Float { fval }) => {
+                        value.push(fval.to_string());
+                    }
+
+                    Val::Boolval(Boolean { boolval }) => {
+                        value.push(boolval.to_string());
+                    }
+
+                    _ => (),
                 }
             }
         }
 
-        let shard = if let Shard::Direct(_) = self.shard {
-            self.shard.clone()
-        } else {
-            Shard::All
+        let value = match value.len() {
+            0 => None,
+            1 => Some(ParameterValue::String(value.pop().unwrap())),
+            _ => Some(ParameterValue::Tuple(value)),
         };
 
-        Ok(Command::Query(
-            Route::write(shard).set_read(context.read_only),
-        ))
+        Ok(value)
     }
 }

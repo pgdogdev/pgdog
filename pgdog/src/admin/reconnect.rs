@@ -21,7 +21,7 @@ impl Command for Reconnect {
     }
 
     async fn execute(&self) -> Result<Vec<Message>, Error> {
-        reconnect();
+        reconnect()?;
         Ok(vec![])
     }
 }

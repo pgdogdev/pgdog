@@ -22,7 +22,7 @@ impl<'a> Client<'a> {
         Self {
             password,
             user,
-            salt: rand::thread_rng().gen(),
+            salt: rand::rng().random(),
         }
     }
 

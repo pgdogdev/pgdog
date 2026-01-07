@@ -33,8 +33,17 @@ pub enum Error {
     #[error("server not connected")]
     NotConnected,
 
+    #[error("direct-to-shard not connected")]
+    DirectToShardNotConnected,
+
+    #[error("multi-shard not connected")]
+    MultiShardNotConnected,
+
     #[error("multi shard copy not connected")]
     CopyNotConnected,
+
+    #[error("cluster not connected")]
+    ClusterNotConnected,
 
     #[error("{0}")]
     Pool(#[from] crate::backend::pool::Error),
@@ -84,6 +93,9 @@ pub enum Error {
     #[error("protocol is out of sync")]
     ProtocolOutOfSync,
 
+    #[error("rollback left server in inconsistent state")]
+    RollbackFailed,
+
     #[error("decoder is missing required data to decode row")]
     DecoderRowError,
 
@@ -116,6 +128,9 @@ pub enum Error {
 
     #[error("2pc commit supported with multi-shard binding only")]
     TwoPcMultiShardOnly,
+
+    #[error("unsupported aggregation {function}: {reason}")]
+    UnsupportedAggregation { function: String, reason: String },
 }
 
 impl From<crate::frontend::Error> for Error {

@@ -6,7 +6,7 @@ use super::{
     Protocol, Query, Sync, ToBytes,
 };
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ProtocolMessage {
     Bind(Bind),
     Parse(Parse),
@@ -29,6 +29,17 @@ impl ProtocolMessage {
             self,
             Bind(_) | Parse(_) | Describe(_) | Execute(_) | Sync(_) | Close(_)
         )
+    }
+
+    pub fn anonymous(&self) -> bool {
+        use ProtocolMessage::*;
+
+        match self {
+            Bind(bind) => bind.anonymous(),
+            Parse(parse) => parse.anonymous(),
+            Describe(describe) => describe.anonymous(),
+            _ => false,
+        }
     }
 
     pub fn len(&self) -> usize {
@@ -93,7 +104,9 @@ impl ToBytes for ProtocolMessage {
             Self::Bind(bind) => bind.to_bytes(),
             Self::Parse(parse) => parse.to_bytes(),
             Self::Describe(describe) => describe.to_bytes(),
-            Self::Prepare { statement, .. } => Query::new(statement).to_bytes(),
+            Self::Prepare { statement, name } => {
+                Query::new(format!("PREPARE {} AS {}", name, statement)).to_bytes()
+            }
             Self::Execute(execute) => execute.to_bytes(),
             Self::Close(close) => close.to_bytes(),
             Self::Query(query) => query.to_bytes(),

@@ -106,6 +106,11 @@ tls_certificate = "relative/or/absolute/path/to/certificate.pem"
 # Path to PEM-encoded TLS certificate private key
 tls_private_key = "relative/or/absolute/path/to/private_key.pem"
 
+# Require clients to use TLS when connecting
+#
+# Default: false
+tls_client_required = false
+
 # TLS mode for Postgres server connections.
 #
 # Default: disabled
@@ -126,6 +131,12 @@ tls_server_ca_certificate = "relative/or/absolute/path/to/certificate.pem"
 #
 # Default: 60 seconds
 shutdown_timeout = 60_000
+
+# How long to wait for active connections to be forcibly terminated
+# after shutdown_timeout expires.
+#
+# Default: disabled
+shutdown_termination_timeout = 60_000
 
 # OpenMetrics server port.
 #
@@ -152,6 +163,13 @@ openmetrics_namespace = "pgdog_"
 #
 # Default: extended
 prepared_statements = "extended"
+
+# Will override the default and enable query parsing. This can be useful if
+# you don't have a primary/replica, have one shard, and don't want
+# prepared_statements = 'full' but still want to enable query parsing
+# in order to synchronise your clients `set` commands for instance.
+# NOTE: true enables, and false will just fallback to default behaviour.
+query_parser_enabled = true
 
 # Limit on the number of prepared statements active on
 # any Postgres server connection.
@@ -316,6 +334,11 @@ port = 5432
 
 # Role set to replica.
 role = "replica"
+
+[rewrite]
+enabled = false
+shard_key = "ignore"
+split_inserts = "error"
 
 #
 # TCP tweaks.

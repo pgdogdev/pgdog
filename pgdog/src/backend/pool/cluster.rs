@@ -1,26 +1,34 @@
 //! A collection of replicas and a primary.
 
 use parking_lot::{Mutex, RwLock};
-use std::sync::Arc;
+use pgdog_config::{PreparedStatements, QueryParserEngine, QueryParserLevel, Rewrite, RewriteMode};
+use std::{
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
 use tokio::spawn;
 use tracing::{error, info};
 
 use crate::{
     backend::{
         databases::{databases, User as DatabaseUser},
-        replication::{ReplicationConfig, ShardedColumn},
+        replication::{ReplicationConfig, ShardedSchemas},
         Schema, ShardedTables,
     },
     config::{
-        General, MultiTenant, PoolerMode, ReadWriteSplit, ReadWriteStrategy, ShardedTable, User,
+        ConnectionRecovery, General, MultiTenant, PoolerMode, ReadWriteSplit, ReadWriteStrategy,
+        ShardedTable, User,
     },
     net::{messages::BackendKeyData, Query},
 };
 
-use super::{Address, Config, Error, Guard, MirrorStats, Request, Shard};
+use super::{Address, Config, Error, Guard, MirrorStats, Request, Shard, ShardConfig};
 use crate::config::LoadBalancingStrategy;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 /// Database configuration.
 pub struct PoolConfig {
     /// Database address.
@@ -38,16 +46,25 @@ pub struct Cluster {
     password: String,
     pooler_mode: PoolerMode,
     sharded_tables: ShardedTables,
+    sharded_schemas: ShardedSchemas,
     replication_sharding: Option<String>,
     schema: Arc<RwLock<Schema>>,
     multi_tenant: Option<MultiTenant>,
     rw_strategy: ReadWriteStrategy,
-    rw_split: ReadWriteSplit,
     schema_admin: bool,
     stats: Arc<Mutex<MirrorStats>>,
     cross_shard_disabled: bool,
     two_phase_commit: bool,
     two_phase_commit_auto: bool,
+    online: Arc<AtomicBool>,
+    rewrite: Rewrite,
+    prepared_statements: PreparedStatements,
+    dry_run: bool,
+    expanded_explain: bool,
+    pub_sub_channel_size: usize,
+    query_parser: QueryParserLevel,
+    connection_recovery: ConnectionRecovery,
+    query_parser_engine: QueryParserEngine,
 }
 
 /// Sharding configuration from the cluster.
@@ -57,6 +74,12 @@ pub struct ShardingSchema {
     pub shards: usize,
     /// Sharded tables.
     pub tables: ShardedTables,
+    /// Scemas.
+    pub schemas: ShardedSchemas,
+    /// Rewrite config.
+    pub rewrite: Rewrite,
+    /// Query parser engine.
+    pub query_parser_engine: QueryParserEngine,
 }
 
 impl ShardingSchema {
@@ -65,12 +88,29 @@ impl ShardingSchema {
     }
 }
 
+#[derive(Debug)]
 pub struct ClusterShardConfig {
     pub primary: Option<PoolConfig>,
     pub replicas: Vec<PoolConfig>,
 }
 
+impl ClusterShardConfig {
+    pub fn pooler_mode(&self) -> PoolerMode {
+        // One of these will exist.
+
+        if let Some(ref primary) = self.primary {
+            return primary.config.pooler_mode;
+        }
+
+        self.replicas
+            .first()
+            .map(|replica| replica.config.pooler_mode)
+            .unwrap_or_default()
+    }
+}
+
 /// Cluster creation config.
+#[derive(Debug)]
 pub struct ClusterConfig<'a> {
     pub name: &'a str,
     pub shards: &'a [ClusterShardConfig],
@@ -87,6 +127,16 @@ pub struct ClusterConfig<'a> {
     pub cross_shard_disabled: bool,
     pub two_pc: bool,
     pub two_pc_auto: bool,
+    pub sharded_schemas: ShardedSchemas,
+    pub rewrite: &'a Rewrite,
+    pub prepared_statements: &'a PreparedStatements,
+    pub dry_run: bool,
+    pub expanded_explain: bool,
+    pub pub_sub_channel_size: usize,
+    pub query_parser: QueryParserLevel,
+    pub query_parser_engine: QueryParserEngine,
+    pub connection_recovery: ConnectionRecovery,
+    pub lsn_check_interval: Duration,
 }
 
 impl<'a> ClusterConfig<'a> {
@@ -96,13 +146,20 @@ impl<'a> ClusterConfig<'a> {
         shards: &'a [ClusterShardConfig],
         sharded_tables: ShardedTables,
         multi_tenant: &'a Option<MultiTenant>,
+        sharded_schemas: ShardedSchemas,
+        rewrite: &'a Rewrite,
     ) -> Self {
+        let pooler_mode = shards
+            .first()
+            .map(|shard| shard.pooler_mode())
+            .unwrap_or(user.pooler_mode.unwrap_or(general.pooler_mode));
+
         Self {
             name: &user.database,
             password: user.password(),
             user: &user.name,
             replication_sharding: user.replication_sharding.clone(),
-            pooler_mode: user.pooler_mode.unwrap_or(general.pooler_mode),
+            pooler_mode,
             lb_strategy: general.load_balancing_strategy,
             shards,
             sharded_tables,
@@ -117,6 +174,16 @@ impl<'a> ClusterConfig<'a> {
             two_pc_auto: user
                 .two_phase_commit_auto
                 .unwrap_or(general.two_phase_commit_auto.unwrap_or(false)), // Disable by default.
+            sharded_schemas,
+            rewrite,
+            prepared_statements: &general.prepared_statements,
+            dry_run: general.dry_run,
+            expanded_explain: general.expanded_explain,
+            pub_sub_channel_size: general.pub_sub_channel_size,
+            query_parser: general.query_parser,
+            query_parser_engine: general.query_parser_engine,
+            connection_recovery: general.connection_recovery,
+            lsn_check_interval: Duration::from_millis(general.lsn_check_interval),
         }
     }
 }
@@ -140,31 +207,73 @@ impl Cluster {
             cross_shard_disabled,
             two_pc,
             two_pc_auto,
+            sharded_schemas,
+            rewrite,
+            prepared_statements,
+            dry_run,
+            expanded_explain,
+            pub_sub_channel_size,
+            query_parser,
+            connection_recovery,
+            lsn_check_interval,
+            query_parser_engine,
         } = config;
 
+        let identifier = Arc::new(DatabaseUser {
+            user: user.to_owned(),
+            database: name.to_owned(),
+        });
+
         Self {
-            identifier: Arc::new(DatabaseUser {
-                user: user.to_owned(),
-                database: name.to_owned(),
-            }),
+            identifier: identifier.clone(),
             shards: shards
                 .iter()
-                .map(|config| Shard::new(&config.primary, &config.replicas, lb_strategy, rw_split))
+                .enumerate()
+                .map(|(number, config)| {
+                    Shard::new(ShardConfig {
+                        number,
+                        primary: &config.primary,
+                        replicas: &config.replicas,
+                        lb_strategy,
+                        rw_split,
+                        identifier: identifier.clone(),
+                        lsn_check_interval,
+                    })
+                })
                 .collect(),
             password: password.to_owned(),
             pooler_mode,
             sharded_tables,
+            sharded_schemas,
             replication_sharding,
             schema: Arc::new(RwLock::new(Schema::default())),
             multi_tenant: multi_tenant.clone(),
             rw_strategy,
-            rw_split,
             schema_admin,
             stats: Arc::new(Mutex::new(MirrorStats::default())),
             cross_shard_disabled,
             two_phase_commit: two_pc && shards.len() > 1,
             two_phase_commit_auto: two_pc_auto && shards.len() > 1,
+            online: Arc::new(AtomicBool::new(false)),
+            rewrite: rewrite.clone(),
+            prepared_statements: *prepared_statements,
+            dry_run,
+            expanded_explain,
+            pub_sub_channel_size,
+            query_parser,
+            connection_recovery,
+            query_parser_engine,
         }
+    }
+
+    /// Change config to work with logical replication streaming.
+    pub fn logical_stream(&self) -> Self {
+        let mut cluster = self.clone();
+        // Disable rewrites, we are only sending valid statements.
+        cluster.rewrite.enabled = false;
+        cluster.rewrite.shard_key = RewriteMode::Ignore;
+        cluster.rewrite.split_inserts = RewriteMode::Ignore;
+        cluster
     }
 
     /// Get a connection to a primary of the given shard.
@@ -190,34 +299,12 @@ impl Cluster {
     }
 
     /// Move connections from cluster to another, saving them.
-    pub(crate) fn move_conns_to(&self, other: &Cluster) {
+    pub(crate) fn move_conns_to(&self, other: &Cluster) -> Result<(), Error> {
         for (from, to) in self.shards.iter().zip(other.shards.iter()) {
-            from.move_conns_to(to);
+            from.move_conns_to(to)?;
         }
-    }
 
-    /// Create new identical cluster connection pool.
-    ///
-    /// This will allocate new server connections. Use when reloading configuration
-    /// and you expect to drop the current Cluster entirely.
-    pub fn duplicate(&self) -> Self {
-        Self {
-            identifier: self.identifier.clone(),
-            shards: self.shards.iter().map(|s| s.duplicate()).collect(),
-            password: self.password.clone(),
-            pooler_mode: self.pooler_mode,
-            sharded_tables: self.sharded_tables.clone(),
-            replication_sharding: self.replication_sharding.clone(),
-            schema: self.schema.clone(),
-            multi_tenant: self.multi_tenant.clone(),
-            rw_strategy: self.rw_strategy,
-            rw_split: self.rw_split,
-            schema_admin: self.schema_admin,
-            stats: Arc::new(Mutex::new(MirrorStats::default())),
-            cross_shard_disabled: self.cross_shard_disabled,
-            two_phase_commit: self.two_phase_commit,
-            two_phase_commit_auto: self.two_phase_commit_auto,
-        }
+        Ok(())
     }
 
     /// Cancel a query executed by one of the shards.
@@ -264,9 +351,33 @@ impl Cluster {
         self.sharded_tables.tables()
     }
 
-    /// Find sharded column position, if the table and columns match the configuration.
-    pub fn sharded_column(&self, table: &str, columns: &[&str]) -> Option<ShardedColumn> {
-        self.sharded_tables.sharded_column(table, columns)
+    /// Get query rewrite config.
+    pub fn rewrite(&self) -> &Rewrite {
+        &self.rewrite
+    }
+
+    pub fn query_parser(&self) -> QueryParserLevel {
+        self.query_parser
+    }
+
+    pub fn prepared_statements(&self) -> &PreparedStatements {
+        &self.prepared_statements
+    }
+
+    pub fn connection_recovery(&self) -> &ConnectionRecovery {
+        &self.connection_recovery
+    }
+
+    pub fn dry_run(&self) -> bool {
+        self.dry_run
+    }
+
+    pub fn expanded_explain(&self) -> bool {
+        self.expanded_explain
+    }
+
+    pub fn pub_sub_enabled(&self) -> bool {
+        self.pub_sub_channel_size > 0
     }
 
     /// A cluster is read_only if zero shards have a primary.
@@ -311,6 +422,21 @@ impl Cluster {
         !(self.shards().len() == 1 && (self.read_only() || self.write_only()))
     }
 
+    /// Use the query parser.
+    pub fn use_query_parser(&self) -> bool {
+        match self.query_parser() {
+            QueryParserLevel::Off => return false,
+            QueryParserLevel::On => return true,
+            QueryParserLevel::Auto => {
+                self.multi_tenant().is_some()
+                    || self.router_needed()
+                    || self.dry_run()
+                    || self.prepared_statements() == &PreparedStatements::Full
+                    || self.pub_sub_enabled()
+            }
+        }
+    }
+
     /// Multi-tenant config.
     pub fn multi_tenant(&self) -> &Option<MultiTenant> {
         &self.multi_tenant
@@ -328,6 +454,9 @@ impl Cluster {
         ShardingSchema {
             shards: self.shards.len(),
             tables: self.sharded_tables.clone(),
+            schemas: self.sharded_schemas.clone(),
+            rewrite: self.rewrite.clone(),
+            query_parser_engine: self.query_parser_engine,
         }
     }
 
@@ -388,6 +517,8 @@ impl Cluster {
                 }
             });
         }
+
+        self.online.store(true, Ordering::Relaxed);
     }
 
     /// Shutdown the connection pools.
@@ -395,6 +526,12 @@ impl Cluster {
         for shard in self.shards() {
             shard.shutdown();
         }
+
+        self.online.store(false, Ordering::Relaxed);
+    }
+
+    pub(crate) fn online(&self) -> bool {
+        self.online.load(Ordering::Relaxed)
     }
 
     /// Execute a query on every primary in the cluster.
@@ -413,11 +550,16 @@ impl Cluster {
 
 #[cfg(test)]
 mod test {
-    use std::sync::Arc;
+    use std::{sync::Arc, time::Duration};
+
+    use pgdog_config::{ConfigAndUsers, OmnishardedTable, ShardedSchema};
 
     use crate::{
-        backend::pool::{Address, Config, PoolConfig},
-        backend::{Shard, ShardedTables},
+        backend::{
+            pool::{Address, Config, PoolConfig, ShardConfig},
+            replication::ShardedSchemas,
+            Shard, ShardedTables,
+        },
         config::{
             DataType, Hasher, LoadBalancingStrategy, ReadWriteSplit, ReadWriteStrategy,
             ShardedTable,
@@ -427,7 +569,35 @@ mod test {
     use super::{Cluster, DatabaseUser};
 
     impl Cluster {
-        pub fn new_test() -> Self {
+        pub fn new_test(config: &ConfigAndUsers) -> Self {
+            let identifier = Arc::new(DatabaseUser {
+                user: "pgdog".into(),
+                database: "pgdog".into(),
+            });
+            let primary = &Some(PoolConfig {
+                address: Address::new_test(),
+                config: Config::default(),
+            });
+            let replicas = &[PoolConfig {
+                address: Address::new_test(),
+                config: Config::default(),
+            }];
+
+            let shards = (0..2)
+                .into_iter()
+                .map(|number| {
+                    Shard::new(ShardConfig {
+                        number,
+                        primary,
+                        replicas,
+                        lb_strategy: LoadBalancingStrategy::Random,
+                        rw_split: ReadWriteSplit::IncludePrimary,
+                        identifier: identifier.clone(),
+                        lsn_check_interval: Duration::MAX,
+                    })
+                })
+                .collect::<Vec<_>>();
+
             Cluster {
                 sharded_tables: ShardedTables::new(
                     vec![ShardedTable {
@@ -440,46 +610,48 @@ mod test {
                         centroids_path: None,
                         centroid_probes: 1,
                         hasher: Hasher::Postgres,
-                        mapping: None,
+                        ..Default::default()
                     }],
-                    vec!["sharded_omni".into()],
+                    vec![
+                        OmnishardedTable {
+                            name: "sharded_omni".into(),
+                            sticky_routing: false,
+                        },
+                        OmnishardedTable {
+                            name: "sharded_omni_sticky".into(),
+                            sticky_routing: true,
+                        },
+                    ],
                 ),
-                shards: vec![
-                    Shard::new(
-                        &Some(PoolConfig {
-                            address: Address::new_test(),
-                            config: Config::default(),
-                        }),
-                        &[PoolConfig {
-                            address: Address::new_test(),
-                            config: Config::default(),
-                        }],
-                        LoadBalancingStrategy::Random,
-                        ReadWriteSplit::default(),
-                    ),
-                    Shard::new(
-                        &Some(PoolConfig {
-                            address: Address::new_test(),
-                            config: Config::default(),
-                        }),
-                        &[PoolConfig {
-                            address: Address::new_test(),
-                            config: Config::default(),
-                        }],
-                        LoadBalancingStrategy::Random,
-                        ReadWriteSplit::default(),
-                    ),
-                ],
-                identifier: Arc::new(DatabaseUser {
-                    user: "pgdog".into(),
-                    database: "pgdog".into(),
-                }),
+                sharded_schemas: ShardedSchemas::new(vec![
+                    ShardedSchema {
+                        database: "pgdog".into(),
+                        name: Some("shard_0".into()),
+                        shard: 0,
+                        ..Default::default()
+                    },
+                    ShardedSchema {
+                        database: "pgdog".into(),
+                        name: Some("shard_1".into()),
+                        shard: 1,
+                        ..Default::default()
+                    },
+                ]),
+                shards,
+                identifier,
+                prepared_statements: config.config.general.prepared_statements,
+                dry_run: config.config.general.dry_run,
+                expanded_explain: config.config.general.expanded_explain,
+                query_parser: config.config.general.query_parser,
+                rewrite: config.config.rewrite.clone(),
+                two_phase_commit: config.config.general.two_phase_commit,
+                two_phase_commit_auto: config.config.general.two_phase_commit_auto.unwrap_or(false),
                 ..Default::default()
             }
         }
 
-        pub fn new_test_single_shard() -> Cluster {
-            let mut cluster = Self::new_test();
+        pub fn new_test_single_shard(config: &ConfigAndUsers) -> Cluster {
+            let mut cluster = Self::new_test(config);
             cluster.shards.pop();
 
             cluster

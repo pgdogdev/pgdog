@@ -33,7 +33,12 @@ impl Command for ShowConfig {
         // Reflection using JSON.
         let general = serde_json::to_value(&config.config.general)?;
         let tcp = serde_json::to_value(config.config.tcp.clone())?;
-        let objects = [("", general.as_object()), ("tcp_", tcp.as_object())];
+        let memory = serde_json::to_value(config.config.memory.clone())?;
+        let objects = [
+            ("", general.as_object()),
+            ("tcp_", tcp.as_object()),
+            ("memory_", memory.as_object()),
+        ];
 
         for (prefix, object) in objects.iter() {
             if let Some(object) = object {

@@ -6,6 +6,7 @@ use pgdog::backend::pool::dns_cache::DnsCache;
 use pgdog::cli::{self, Commands};
 use pgdog::config::{self, config};
 use pgdog::frontend::listener::Listener;
+use pgdog::frontend::prepared_statements;
 use pgdog::plugin;
 use pgdog::stats;
 use pgdog::util::pgdog_version;
@@ -14,13 +15,6 @@ use tokio::runtime::Builder;
 use tracing::{error, info};
 
 use std::process::exit;
-
-#[cfg(not(target_env = "msvc"))]
-use tikv_jemallocator::Jemalloc;
-
-#[cfg(not(target_env = "msvc"))]
-#[global_allocator]
-static GLOBAL: Jemalloc = Jemalloc;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = cli::Cli::parse();
@@ -83,17 +77,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let runtime = match config.config.general.workers {
         0 => {
             let mut binding = Builder::new_current_thread();
-            binding.enable_all();
+            binding
+                .enable_all()
+                .thread_stack_size(config.config.memory.stack_size);
             binding
         }
         workers => {
-            info!("spawning {} workers", workers);
             let mut builder = Builder::new_multi_thread();
-            builder.worker_threads(workers).enable_all();
+            builder
+                .worker_threads(workers)
+                .enable_all()
+                .thread_stack_size(config.config.memory.stack_size);
             builder
         }
     }
     .build()?;
+
+    info!(
+        "spawning {} threads (stack size: {}MiB)",
+        config.config.general.workers,
+        config.config.memory.stack_size / 1024 / 1024
+    );
 
     runtime.block_on(async move { pgdog(args.command).await })?;
 
@@ -106,7 +110,7 @@ async fn pgdog(command: Option<Commands>) -> Result<(), Box<dyn std::error::Erro
     net::tls::load()?;
 
     // Load databases and connect if needed.
-    databases::init();
+    databases::init()?;
 
     let general = &config::config().config.general;
 
@@ -128,6 +132,7 @@ async fn pgdog(command: Option<Commands>) -> Result<(), Box<dyn std::error::Erro
     }
 
     let stats_logger = stats::StatsLogger::new();
+    prepared_statements::start_maintenance();
 
     if general.dry_run {
         stats_logger.spawn();
@@ -146,17 +151,27 @@ async fn pgdog(command: Option<Commands>) -> Result<(), Box<dyn std::error::Erro
         Some(ref command) => {
             if let Commands::DataSync { .. } = command {
                 info!("🔄 entering data sync mode");
-                cli::data_sync(command.clone()).await?;
+                if let Err(err) = cli::data_sync(command.clone()).await {
+                    error!("{}", err);
+                }
             }
 
             if let Commands::SchemaSync { .. } = command {
                 info!("🔄 entering schema sync mode");
-                cli::schema_sync(command.clone()).await?;
+                if let Err(err) = cli::schema_sync(command.clone()).await {
+                    error!("{}", err);
+                }
             }
 
             if let Commands::Setup { database } = command {
                 info!("🔄 entering setup mode");
                 cli::setup(database).await?;
+            }
+
+            if let Commands::Route { .. } = command {
+                if let Err(err) = cli::route(command.clone()).await {
+                    error!("{}", err);
+                }
             }
         }
     }

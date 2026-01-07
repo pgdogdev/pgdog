@@ -95,8 +95,8 @@ impl PreparedStatements {
                     let message = self.check_prepared(bind.statement())?;
                     match message {
                         Some(message) => {
-                            self.state.add_ignore('1', bind.statement());
-                            self.prepared(bind.statement());
+                            self.state.add_ignore('1');
+                            self.parses.push_back(bind.statement().to_string());
                             self.state.add('2');
                             return Ok(HandleResult::Prepend(message));
                         }
@@ -115,8 +115,8 @@ impl PreparedStatements {
 
                     match message {
                         Some(message) => {
-                            self.state.add_ignore('1', describe.statement());
-                            self.prepared(describe.statement());
+                            self.state.add_ignore('1');
+                            self.parses.push_back(describe.statement().to_string());
                             self.state.add(ExecutionCode::DescriptionOrNothing); // t
                             self.state.add(ExecutionCode::DescriptionOrNothing); // T
                             return Ok(HandleResult::Prepend(message));
@@ -156,7 +156,6 @@ impl PreparedStatements {
                         self.state.add_simulated(ParseComplete.message()?);
                         return Ok(HandleResult::Drop);
                     } else {
-                        self.prepared(parse.name());
                         self.state.add('1');
                         self.parses.push_back(parse.name().to_string());
                     }
@@ -175,7 +174,16 @@ impl PreparedStatements {
                     self.state.add('3');
                 }
             }
-            ProtocolMessage::Prepare { .. } => (),
+            ProtocolMessage::Prepare { name, .. } => {
+                if self.contains(name) {
+                    return Ok(HandleResult::Drop);
+                } else {
+                    self.parses.push_back(name.clone());
+                    self.state.add_ignore('C');
+                    self.state.add_ignore('Z');
+                    return Ok(HandleResult::Forward);
+                }
+            }
             ProtocolMessage::CopyDone(_) => {
                 self.state.action('c')?;
             }
@@ -198,14 +206,11 @@ impl PreparedStatements {
         // Cleanup prepared statements state.
         match code {
             'E' => {
-                let parse = self.parses.pop_front();
-                let describe = self.describes.pop_front();
-                if let Some(parse) = parse {
-                    self.remove(&parse);
-                }
-                if let Some(describe) = describe {
-                    self.remove(&describe);
-                }
+                // Backend ignored any subsequent extended commands.
+                // These prepared statements have not been prepared, even if they
+                // are syntactically valid.
+                self.describes.clear();
+                self.parses.clear();
             }
 
             'T' => {
@@ -222,16 +227,18 @@ impl PreparedStatements {
                 self.describes.pop_front();
             }
 
-            '1' => {
-                self.parses.pop_front();
+            '1' | 'C' => {
+                if let Some(name) = self.parses.pop_front() {
+                    self.prepared(&name);
+                }
             }
 
             'G' => {
                 self.state.prepend('G'); // Next thing we'll see is a CopyFail or CopyDone.
             }
 
-            'c' | 'f' => {
-                // Backend told us the copy failed or succeeded.
+            // Backend told us the copy is done.
+            'c' => {
                 self.state.action(code)?;
             }
 
@@ -240,12 +247,6 @@ impl PreparedStatements {
 
         match action {
             Action::Ignore => Ok(false),
-            Action::ForwardAndRemove(names) => {
-                for name in names {
-                    self.remove(&name);
-                }
-                Ok(true)
-            }
             Action::Forward => Ok(true),
         }
     }
@@ -255,16 +256,19 @@ impl PreparedStatements {
         self.state.done() && self.parses.is_empty() && self.describes.is_empty()
     }
 
+    /// The server connection has more messages to send
+    /// to the client.
     pub(crate) fn has_more_messages(&self) -> bool {
         self.state.has_more_messages()
     }
 
-    pub(crate) fn copy_mode(&self) -> bool {
-        self.state.copy_mode()
+    /// The server connection is in COPY mode.
+    pub(crate) fn in_copy_mode(&self) -> bool {
+        self.state.in_copy_mode()
     }
 
     fn check_prepared(&mut self, name: &str) -> Result<Option<ProtocolMessage>, Error> {
-        if !self.contains(name) {
+        if !self.contains(name) && !self.parses.iter().any(|s| s == name) {
             let parse = self.parse(name);
             if let Some(parse) = parse {
                 Ok(Some(ProtocolMessage::Parse(parse)))
@@ -295,7 +299,7 @@ impl PreparedStatements {
     /// Get the Parse message stored in the global prepared statements
     /// cache for this statement.
     pub(crate) fn parse(&self, name: &str) -> Option<Parse> {
-        self.global_cache.read().parse(name)
+        self.global_cache.read().rewritten_parse(name)
     }
 
     /// Get the globally stored RowDescription for this prepared statement,

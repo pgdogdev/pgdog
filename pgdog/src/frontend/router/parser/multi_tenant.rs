@@ -8,7 +8,7 @@ use crate::{
         router::parser::{where_clause::TablesSource, Table, WhereClause},
         SearchPath,
     },
-    net::Parameters,
+    net::parameter::ParameterValue,
 };
 
 pub struct MultiTenantCheck<'a> {
@@ -16,7 +16,7 @@ pub struct MultiTenantCheck<'a> {
     config: &'a MultiTenant,
     schema: Schema,
     ast: &'a ParseResult,
-    parameters: &'a Parameters,
+    search_path: Option<&'a ParameterValue>,
 }
 
 impl<'a> MultiTenantCheck<'a> {
@@ -25,13 +25,13 @@ impl<'a> MultiTenantCheck<'a> {
         config: &'a MultiTenant,
         schema: Schema,
         ast: &'a ParseResult,
-        parameters: &'a Parameters,
+        search_path: Option<&'a ParameterValue>,
     ) -> Self {
         Self {
             config,
             schema,
             ast,
-            parameters,
+            search_path,
             user,
         }
     }
@@ -79,7 +79,7 @@ impl<'a> MultiTenantCheck<'a> {
     }
 
     fn check(&self, table: Table, where_clause: Option<WhereClause>) -> Result<(), Error> {
-        let search_path = SearchPath::new(self.user, self.parameters, &self.schema);
+        let search_path = SearchPath::new(self.user, self.search_path, &self.schema);
         let schemas = search_path.resolve();
 
         for schema in schemas {
@@ -104,5 +104,65 @@ impl<'a> MultiTenantCheck<'a> {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::backend::schema::{columns::Column, Relation, Schema};
+    use std::collections::HashMap;
+
+    fn schema_with_tenant_column(column: &str) -> Schema {
+        let mut columns = HashMap::new();
+        columns.insert(
+            column.to_string(),
+            Column {
+                table_catalog: "catalog".into(),
+                table_schema: "public".into(),
+                table_name: "accounts".into(),
+                column_name: column.into(),
+                column_default: String::new(),
+                is_nullable: false,
+                data_type: "bigint".into(),
+            },
+        );
+
+        let relation = Relation::test_table("public", "accounts", columns);
+        let mut relations = HashMap::new();
+        relations.insert(("public".into(), "accounts".into()), relation);
+
+        Schema::from_parts(vec!["$user".into(), "public".into()], relations)
+    }
+
+    #[test]
+    fn multi_tenant_check_passes_with_matching_filter() {
+        let schema = schema_with_tenant_column("tenant_id");
+        let ast = pg_query::parse("SELECT * FROM accounts WHERE tenant_id = 1")
+            .expect("parse select statement");
+        let config = MultiTenant {
+            column: "tenant_id".into(),
+        };
+
+        let check = MultiTenantCheck::new("alice", &config, schema, &ast, None);
+        assert!(check.run().is_ok());
+    }
+
+    #[test]
+    fn multi_tenant_check_requires_tenant_column_in_filter() {
+        let schema = schema_with_tenant_column("tenant_id");
+        let ast = pg_query::parse("SELECT * FROM accounts WHERE other_id = 1")
+            .expect("parse select statement");
+        let config = MultiTenant {
+            column: "tenant_id".into(),
+        };
+
+        let check = MultiTenantCheck::new("alice", &config, schema, &ast, None);
+        let err = check
+            .run()
+            .expect_err("expected tenant id validation error");
+        matches!(err, Error::MultiTenantId)
+            .then_some(())
+            .expect("should return multi-tenant id error");
     }
 }

@@ -83,10 +83,6 @@ impl CanonicalExpr {
                     .collect::<Vec<_>>();
 
                 if func.agg_distinct {
-                    // DISTINCT aggregate arguments form a set, so sort them to
-                    // ensure canonical equality across permutations. Non-DISTINCT
-                    // functions must retain argument order because most built-ins
-                    // are not commutative.
                     args.sort();
                 }
 
@@ -248,15 +244,5 @@ mod tests {
         let distinct = registry.intern(&targets[0]);
         let regular = registry.intern(&targets[1]);
         assert_ne!(distinct, regular);
-    }
-
-    #[test]
-    fn registry_preserves_argument_order_for_functions() {
-        let mut registry = ExpressionRegistry::new();
-        let targets = extract_targets("SELECT substr(name, 1, 2), substr(name, 2, 1) FROM menu");
-        assert_eq!(targets.len(), 2);
-        let first = registry.intern(&targets[0]);
-        let second = registry.intern(&targets[1]);
-        assert_ne!(first, second);
     }
 }

@@ -1,45 +1,31 @@
 //! Configuration.
 
 // Submodules
-pub mod auth;
 pub mod convert;
 pub mod core;
 pub mod database;
 pub mod error;
 pub mod general;
+pub mod memory;
 pub mod networking;
 pub mod overrides;
 pub mod pooling;
 pub mod replication;
+pub mod rewrite;
 pub mod sharding;
-pub mod url;
 pub mod users;
 
-// Re-export from error module
-pub use error::Error;
-
-// Re-export from overrides module
-pub use overrides::Overrides;
-
-// Re-export core configuration types
 pub use core::{Config, ConfigAndUsers};
-
-// Re-export from general module
+pub use database::{Database, Role};
+pub use error::Error;
 pub use general::General;
-
-// Re-export from auth module
-pub use auth::{AuthType, PassthoughAuth};
-
-// Re-export from pooling module
-pub use pooling::{PoolerMode, PreparedStatements, Stats};
-
-// Re-export from database module
-pub use database::{Database, LoadBalancingStrategy, ReadWriteSplit, ReadWriteStrategy, Role};
-
-// Re-export from networking module
+pub use memory::*;
 pub use networking::{MultiTenant, Tcp, TlsVerifyMode};
-
-// Re-export from users module
+pub use overrides::Overrides;
+pub use pgdog_config::auth::{AuthType, PassthoughAuth};
+pub use pgdog_config::{LoadBalancingStrategy, ReadWriteSplit, ReadWriteStrategy};
+pub use pooling::{ConnectionRecovery, PoolerMode, PreparedStatements, Stats};
+pub use rewrite::{Rewrite, RewriteMode};
 pub use users::{Admin, Plugin, User, Users};
 
 // Re-export from sharding module
@@ -95,6 +81,8 @@ pub fn from_urls(urls: &[String]) -> Result<ConfigAndUsers, Error> {
 /// Extract all database URLs from the environment and
 /// create the config.
 pub fn from_env() -> Result<ConfigAndUsers, Error> {
+    let _lock = LOCK.lock();
+
     let mut urls = vec![];
     let mut index = 1;
     while let Ok(url) = env::var(format!("PGDOG_DATABASE_URL_{}", index)) {
@@ -103,10 +91,26 @@ pub fn from_env() -> Result<ConfigAndUsers, Error> {
     }
 
     if urls.is_empty() {
-        Err(Error::NoDbsInEnv)
-    } else {
-        from_urls(&urls)
+        return Err(Error::NoDbsInEnv);
     }
+
+    let mut config = (*config()).clone();
+    config = config.databases_from_urls(&urls)?;
+
+    // Extract mirroring configuration
+    let mut mirror_strs = vec![];
+    let mut index = 1;
+    while let Ok(mirror_str) = env::var(format!("PGDOG_MIRRORING_{}", index)) {
+        mirror_strs.push(mirror_str);
+        index += 1;
+    }
+
+    if !mirror_strs.is_empty() {
+        config = config.mirroring_from_strings(&mirror_strs)?;
+    }
+
+    CONFIG.store(Arc::new(config.clone()));
+    Ok(config)
 }
 
 /// Override some settings.
@@ -140,6 +144,11 @@ pub fn overrides(overrides: Overrides) {
 // Test helper functions
 #[cfg(test)]
 pub fn load_test() {
+    load_test_with_pooler_mode(PoolerMode::Transaction)
+}
+
+#[cfg(test)]
+pub fn load_test_with_pooler_mode(pooler_mode: PoolerMode) {
     use crate::backend::databases::init;
 
     let mut config = ConfigAndUsers::default();
@@ -147,17 +156,19 @@ pub fn load_test() {
         name: "pgdog".into(),
         host: "127.0.0.1".into(),
         port: 5432,
+        pooler_mode: Some(pooler_mode),
         ..Default::default()
     }];
     config.users.users = vec![User {
         name: "pgdog".into(),
         database: "pgdog".into(),
         password: Some("pgdog".into()),
+        pooler_mode: Some(pooler_mode),
         ..Default::default()
     }];
 
     set(config).unwrap();
-    init();
+    init().unwrap();
 }
 
 #[cfg(test)]
@@ -191,5 +202,110 @@ pub fn load_test_replicas() {
     }];
 
     set(config).unwrap();
-    init();
+    init().unwrap();
+}
+
+#[cfg(test)]
+pub fn load_test_sharded() {
+    use pgdog_config::ShardedSchema;
+
+    use crate::backend::databases::init;
+
+    let mut config = ConfigAndUsers::default();
+    config.config.general.min_pool_size = 0;
+    config.config.databases = vec![
+        Database {
+            name: "pgdog".into(),
+            host: "127.0.0.1".into(),
+            port: 5432,
+            role: Role::Primary,
+            database_name: Some("shard_0".into()),
+            shard: 0,
+            ..Default::default()
+        },
+        Database {
+            name: "pgdog".into(),
+            host: "127.0.0.1".into(),
+            port: 5432,
+            role: Role::Replica,
+            read_only: Some(true),
+            database_name: Some("shard_0".into()),
+            shard: 0,
+            ..Default::default()
+        },
+        Database {
+            name: "pgdog".into(),
+            host: "127.0.0.1".into(),
+            port: 5432,
+            role: Role::Primary,
+            database_name: Some("shard_1".into()),
+            shard: 1,
+            ..Default::default()
+        },
+        Database {
+            name: "pgdog".into(),
+            host: "127.0.0.1".into(),
+            port: 5432,
+            role: Role::Replica,
+            read_only: Some(true),
+            database_name: Some("shard_1".into()),
+            shard: 1,
+            ..Default::default()
+        },
+    ];
+    config.config.sharded_tables = vec![
+        ShardedTable {
+            database: "pgdog".into(),
+            name: Some("sharded".into()),
+            column: "id".into(),
+            ..Default::default()
+        },
+        ShardedTable {
+            database: "pgdog".into(),
+            name: Some("sharded_varchar".into()),
+            column: "id_varchar".into(),
+            data_type: DataType::Varchar,
+            ..Default::default()
+        },
+        ShardedTable {
+            database: "pgdog".into(),
+            name: Some("sharded_uuid".into()),
+            column: "id_uuid".into(),
+            data_type: DataType::Uuid,
+            ..Default::default()
+        },
+    ];
+    config.config.sharded_schemas = vec![
+        ShardedSchema {
+            database: "pgdog".into(),
+            name: Some("acustomer".into()),
+            shard: 0,
+            ..Default::default()
+        },
+        ShardedSchema {
+            database: "pgdog".into(),
+            name: Some("bcustomer".into()),
+            shard: 1,
+            ..Default::default()
+        },
+        ShardedSchema {
+            database: "pgdog".into(),
+            name: Some("all".into()),
+            all: true,
+            ..Default::default()
+        },
+    ];
+    config.config.rewrite.enabled = true;
+    config.config.rewrite.split_inserts = RewriteMode::Rewrite;
+    config.config.rewrite.shard_key = RewriteMode::Rewrite;
+    config.config.general.load_balancing_strategy = LoadBalancingStrategy::RoundRobin;
+    config.users.users = vec![User {
+        name: "pgdog".into(),
+        database: "pgdog".into(),
+        password: Some("pgdog".into()),
+        ..Default::default()
+    }];
+
+    set(config).unwrap();
+    init().unwrap();
 }

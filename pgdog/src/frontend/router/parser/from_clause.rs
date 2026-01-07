@@ -3,7 +3,7 @@ use pg_query::{Node, NodeEnum};
 use super::*;
 
 /// Handle FROM <table/join> clause.
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub struct FromClause<'a> {
     nodes: &'a [Node],
 }
@@ -63,5 +63,38 @@ impl<'a> FromClause<'a> {
         }
 
         None
+    }
+
+    /// Get all tables from the FROM clause.
+    pub fn tables(&'a self) -> Vec<Table<'a>> {
+        let mut tables = vec![];
+
+        fn tables_recursive(node: &Node) -> Vec<Table<'_>> {
+            let mut tables = vec![];
+            match node.node {
+                Some(NodeEnum::RangeVar(ref range_var)) => {
+                    tables.push(Table::from(range_var));
+                }
+
+                Some(NodeEnum::JoinExpr(ref join)) => {
+                    if let Some(ref node) = join.larg {
+                        tables.extend(tables_recursive(node));
+                    }
+                    if let Some(ref node) = join.rarg {
+                        tables.extend(tables_recursive(node));
+                    }
+                }
+
+                _ => (),
+            }
+
+            tables
+        }
+
+        for node in self.nodes {
+            tables.extend(tables_recursive(node));
+        }
+
+        tables
     }
 }

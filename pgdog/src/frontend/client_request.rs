@@ -1,12 +1,16 @@
 //! ClientRequest (messages buffer).
+//!
+//! Contains exactly one request.
+//!
 use std::ops::{Deref, DerefMut};
 
 use lazy_static::lazy_static;
+use regex::Regex;
 
 use crate::{
-    frontend::router::parser::RewritePlan,
+    frontend::router::Ast,
     net::{
-        messages::{Bind, CopyData, Protocol, Query},
+        messages::{Bind, CopyData, Protocol},
         Error, Flush, ProtocolMessage,
     },
     stats::memory::MemoryUsage,
@@ -16,11 +20,17 @@ use super::{router::Route, PreparedStatements};
 
 pub use super::BufferedQuery;
 
-/// Message buffer.
+/// Client request, containing exactly one query.
 #[derive(Debug, Clone)]
 pub struct ClientRequest {
+    /// Messages, e.g. Query, or Parse, Bind, Execute, etc.
     pub messages: Vec<ProtocolMessage>,
+    /// The route this request will take in our query engine.
+    /// When the request is created, this is not known yet.
+    /// The QueryEngine will set the route once it handles the request.
     pub route: Option<Route>,
+    /// The statement AST, if we parsed the request with our query parser.
+    pub ast: Option<Ast>,
 }
 
 impl MemoryUsage for ClientRequest {
@@ -28,6 +38,7 @@ impl MemoryUsage for ClientRequest {
     fn memory_usage(&self) -> usize {
         // ProtocolMessage uses memory allocated by BytesMut (mostly).
         self.messages.capacity() * std::mem::size_of::<ProtocolMessage>()
+            + std::mem::size_of::<Option<Ast>>()
     }
 }
 
@@ -43,12 +54,20 @@ impl ClientRequest {
         Self {
             messages: Vec::with_capacity(5),
             route: None,
+            ast: None,
         }
     }
 
-    /// The buffer is full and the client won't send any more messages
-    /// until it gets a reply, or we don't want to buffer the data in memory.
-    pub fn full(&self) -> bool {
+    /// Remove any saved state from the request.
+    pub fn clear(&mut self) {
+        self.messages.clear();
+        self.route = None;
+        self.ast = None;
+    }
+
+    /// We received a complete request and we are ready to
+    /// send it to the query engine.
+    pub fn is_complete(&self) -> bool {
         if let Some(message) = self.messages.last() {
             // Flush (F) | Sync (F) | Query (F) | CopyDone (F) | CopyFail (F)
             if matches!(message.code(), 'H' | 'S' | 'Q' | 'c' | 'f') {
@@ -108,6 +127,28 @@ impl ClientRequest {
         Ok(None)
     }
 
+    /// Quick and cheap way to find out if this
+    /// request is starting a transaction.
+    pub fn is_begin(&self) -> bool {
+        lazy_static! {
+            static ref BEGIN: Regex = Regex::new("(?i)^BEGIN").unwrap();
+        }
+
+        for message in &self.messages {
+            let query = match message {
+                ProtocolMessage::Parse(parse) => parse.query(),
+                ProtocolMessage::Query(query) => query.query(),
+                _ => continue,
+            };
+
+            if BEGIN.is_match(query) {
+                return true;
+            }
+        }
+
+        false
+    }
+
     /// If this buffer contains bound parameters, retrieve them.
     pub fn parameters(&self) -> Result<Option<&Bind>, Error> {
         for message in &self.messages {
@@ -139,11 +180,12 @@ impl ClientRequest {
         Self {
             messages,
             route: self.route.clone(),
+            ast: self.ast.clone(),
         }
     }
 
     /// The buffer has COPY messages.
-    pub fn copy(&self) -> bool {
+    pub fn is_copy(&self) -> bool {
         self.messages
             .last()
             .map(|m| m.code() == 'd' || m.code() == 'c')
@@ -152,44 +194,20 @@ impl ClientRequest {
 
     /// The client is setting state on the connection
     /// which we can no longer ignore.
-    pub(crate) fn executable(&self) -> bool {
+    pub(crate) fn is_executable(&self) -> bool {
         self.messages
             .iter()
             .any(|m| ['E', 'Q', 'B'].contains(&m.code()))
     }
 
     /// Rewrite query in buffer.
-    pub fn rewrite(&mut self, query: &str) -> Result<(), Error> {
+    pub fn rewrite(&mut self, request: &[ProtocolMessage]) -> Result<(), Error> {
         if self.messages.iter().any(|c| c.code() != 'Q') {
             return Err(Error::OnlySimpleForRewrites);
         }
         self.messages.clear();
-        self.messages.push(Query::new(query).into());
+        self.messages.extend(request.to_vec());
         Ok(())
-    }
-
-    /// Rewrite prepared statement SQL before sending it to the backend.
-    pub fn rewrite_prepared(
-        &mut self,
-        query: &str,
-        prepared: &mut PreparedStatements,
-        plan: &RewritePlan,
-    ) -> bool {
-        let mut updated = false;
-
-        for message in self.messages.iter_mut() {
-            if let ProtocolMessage::Parse(parse) = message {
-                parse.set_query(query);
-                let name = parse.name().to_owned();
-                let _ = prepared.update_query(&name, query);
-                if !plan.is_noop() {
-                    prepared.set_rewrite_plan(&name, plan.clone());
-                }
-                updated = true;
-            }
-        }
-
-        updated
     }
 
     /// Get the route for this client request.
@@ -279,6 +297,7 @@ impl From<Vec<ProtocolMessage>> for ClientRequest {
         ClientRequest {
             messages,
             route: None,
+            ast: None,
         }
     }
 }
@@ -299,7 +318,7 @@ impl DerefMut for ClientRequest {
 
 #[cfg(test)]
 mod test {
-    use crate::net::{Describe, Execute, Parse, Sync};
+    use crate::net::{Describe, Execute, Parse, Query, Sync};
 
     use super::*;
 
@@ -465,5 +484,17 @@ mod test {
         assert_eq!(second_slice[1].code(), 'E'); // Execute
         assert_eq!(second_slice[2].code(), 'H'); // Flush
         assert_eq!(second_slice[3].code(), 'S'); // Sync
+    }
+
+    #[test]
+    fn test_detect_begin() {
+        for query in [
+            ProtocolMessage::Query(Query::new("begin")),
+            ProtocolMessage::Query(Query::new("BEGIN WORK REPEATABLE READ")),
+            ProtocolMessage::Parse(Parse::new_anonymous("BEGIN")),
+        ] {
+            let req = ClientRequest::from(vec![query]);
+            assert!(req.is_begin());
+        }
     }
 }

@@ -2,7 +2,7 @@
 
 use crate::{
     frontend::{client::query_engine::TwoPcPhase, ClientRequest},
-    net::{parameter::Parameters, ProtocolMessage},
+    net::{parameter::Parameters, BackendKeyData, ProtocolMessage, Query},
     state::State,
 };
 
@@ -97,6 +97,7 @@ impl Binding {
                             }
 
                             let message = server.read().await?;
+
                             read = true;
                             if let Some(message) = state.forward(message)? {
                                 return Ok(message);
@@ -127,7 +128,7 @@ impl Binding {
                 if let Some(server) = server {
                     server.send(client_request).await
                 } else {
-                    Err(Error::NotConnected)
+                    Err(Error::DirectToShardNotConnected)
                 }
             }
 
@@ -251,7 +252,10 @@ impl Binding {
     }
 
     /// Execute a query on all servers.
-    pub async fn execute(&mut self, query: &str) -> Result<Vec<Message>, Error> {
+    pub async fn execute(
+        &mut self,
+        query: impl Into<Query> + Clone,
+    ) -> Result<Vec<Message>, Error> {
         let mut result = vec![];
         match self {
             Binding::Direct(Some(ref mut server)) => {
@@ -259,7 +263,9 @@ impl Binding {
             }
 
             Binding::MultiShard(ref mut servers, _) => {
-                let futures = servers.iter_mut().map(|server| server.execute(query));
+                let futures = servers
+                    .iter_mut()
+                    .map(|server| server.execute(query.clone()));
                 let results = join_all(futures).await;
 
                 for server_result in results {
@@ -273,65 +279,73 @@ impl Binding {
         Ok(result)
     }
 
+    pub(crate) async fn two_pc_on_guards(
+        servers: &mut [Guard],
+        name: &str,
+        phase: TwoPcPhase,
+    ) -> Result<(), Error> {
+        let skip_missing = matches!(phase, TwoPcPhase::Phase2 | TwoPcPhase::Rollback);
+
+        let mut futures = Vec::new();
+        for (shard, server) in servers.iter_mut().enumerate() {
+            let shard_name = format!("{}_{}", name, shard);
+
+            let query = match phase {
+                TwoPcPhase::Phase1 => format!("PREPARE TRANSACTION '{}'", shard_name),
+                TwoPcPhase::Phase2 => format!("COMMIT PREPARED '{}'", shard_name),
+                TwoPcPhase::Rollback => format!("ROLLBACK PREPARED '{}'", shard_name),
+            };
+
+            futures.push(server.execute(query));
+        }
+
+        let results = join_all(futures).await;
+
+        for (shard, result) in results.into_iter().enumerate() {
+            match result {
+                Err(Error::ExecutionError(err)) => {
+                    if !(skip_missing && err.code == "42704") {
+                        return Err(Error::ExecutionError(err));
+                    }
+                }
+                Err(err) => return Err(err),
+                Ok(_) => {
+                    if phase == TwoPcPhase::Phase2 {
+                        servers[shard].stats_mut().transaction_2pc();
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     /// Execute two-phase commit transaction control statements.
     pub async fn two_pc(&mut self, name: &str, phase: TwoPcPhase) -> Result<(), Error> {
         match self {
             Binding::MultiShard(ref mut servers, _) => {
-                let skip_missing = match phase {
-                    TwoPcPhase::Phase1 => false,
-                    TwoPcPhase::Phase2 | TwoPcPhase::Rollback => true,
-                };
-
-                // Build futures for all servers
-                let mut futures = Vec::new();
-                for (shard, server) in servers.iter_mut().enumerate() {
-                    // Each shard has its own transaction name.
-                    // This is to make this work on sharded databases that use the same
-                    // database underneath.
-                    let shard_name = format!("{}_{}", name, shard);
-
-                    let query = match phase {
-                        TwoPcPhase::Phase1 => format!("PREPARE TRANSACTION '{}'", shard_name),
-                        TwoPcPhase::Phase2 => format!("COMMIT PREPARED '{}'", shard_name),
-                        TwoPcPhase::Rollback => format!("ROLLBACK PREPARED '{}'", shard_name),
-                    };
-
-                    futures.push(server.execute(query));
-                }
-
-                // Execute all operations in parallel
-                let results = join_all(futures).await;
-
-                // Process results and handle errors
-                for (shard, result) in results.into_iter().enumerate() {
-                    match result {
-                        Err(Error::ExecutionError(err)) => {
-                            // Undefined object, transaction doesn't exist.
-                            if !(skip_missing && err.code == "42704") {
-                                return Err(Error::ExecutionError(err));
-                            }
-                        }
-                        Err(err) => return Err(err),
-                        Ok(_) => {
-                            if phase == TwoPcPhase::Phase2 {
-                                servers[shard].stats_mut().transaction_2pc();
-                            }
-                        }
-                    }
-                }
-
-                Ok(())
+                Self::two_pc_on_guards(servers, name, phase).await
             }
 
             _ => Err(Error::TwoPcMultiShardOnly),
         }
     }
 
-    pub async fn link_client(&mut self, params: &Parameters) -> Result<usize, Error> {
+    /// Link client to server.
+    pub async fn link_client(
+        &mut self,
+        id: &BackendKeyData,
+        params: &Parameters,
+        transaction_start_stmt: Option<&str>,
+    ) -> Result<usize, Error> {
         match self {
-            Binding::Direct(Some(ref mut server)) => server.link_client(params).await,
+            Binding::Direct(Some(ref mut server)) => {
+                server.link_client(id, params, transaction_start_stmt).await
+            }
             Binding::MultiShard(ref mut servers, _) => {
-                let futures = servers.iter_mut().map(|server| server.link_client(params));
+                let futures = servers
+                    .iter_mut()
+                    .map(|server| server.link_client(id, params, transaction_start_stmt));
                 let results = join_all(futures).await;
 
                 let mut max = 0;
@@ -348,6 +362,17 @@ impl Binding {
         }
     }
 
+    /// Handle transaction end.
+    pub fn transaction_params_hook(&mut self, rollback: bool) {
+        match self {
+            Binding::Direct(Some(ref mut server)) => server.transaction_params_hook(rollback),
+            Binding::MultiShard(ref mut servers, _) => servers
+                .iter_mut()
+                .for_each(|server| server.transaction_params_hook(rollback)),
+            _ => (),
+        }
+    }
+
     pub fn changed_params(&mut self) -> Parameters {
         match self {
             Binding::Direct(Some(ref mut server)) => server.changed_params().clone(),
@@ -359,6 +384,18 @@ impl Binding {
                 }
             }
             _ => Parameters::default(),
+        }
+    }
+
+    /// Reset changed params on all servers, disabling parameter tracking
+    /// for this request.
+    pub fn reset_changed_params(&mut self) {
+        match self {
+            Binding::Direct(Some(ref mut server)) => server.reset_changed_params(),
+            Binding::MultiShard(ref mut servers, _) => servers
+                .iter_mut()
+                .for_each(|server| server.reset_changed_params()),
+            _ => (),
         }
     }
 
@@ -381,12 +418,41 @@ impl Binding {
         }
     }
 
-    pub fn copy_mode(&self) -> bool {
+    pub fn is_multishard(&self) -> bool {
         match self {
-            Binding::Admin(_) => false,
-            Binding::MultiShard(ref servers, _state) => servers.iter().all(|s| s.copy_mode()),
-            Binding::Direct(Some(ref server)) => server.copy_mode(),
+            Binding::MultiShard(ref servers, _) => !servers.is_empty(),
             _ => false,
         }
+    }
+
+    pub fn is_direct(&self) -> bool {
+        matches!(self, Binding::Direct(Some(_)))
+    }
+
+    pub fn in_copy_mode(&self) -> bool {
+        match self {
+            Binding::Admin(_) => false,
+            Binding::MultiShard(ref servers, _state) => servers.iter().all(|s| s.in_copy_mode()),
+            Binding::Direct(Some(ref server)) => server.in_copy_mode(),
+            _ => false,
+        }
+    }
+
+    /// Number of connected shards.
+    pub fn shards(&self) -> Result<usize, Error> {
+        Ok(match self {
+            Binding::Admin(_) => 1,
+            Binding::Direct(Some(_)) => 1,
+            Binding::MultiShard(ref servers, _) => {
+                if servers.is_empty() {
+                    return Err(Error::MultiShardNotConnected);
+                } else {
+                    servers.len()
+                }
+            }
+            _ => {
+                return Err(Error::NotConnected);
+            }
+        })
     }
 }

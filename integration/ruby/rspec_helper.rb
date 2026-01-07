@@ -31,8 +31,10 @@ def ensure_done
     expect(pool['cl_waiting']).to eq('0')
     expect(pool['out_of_sync']).to eq('0')
   end
+  current_client_id = conn.backend_pid
   clients = conn.exec 'SHOW CLIENTS'
   clients.each do |client|
+    next if client['id'].to_i == current_client_id
     expect(client['state']).to eq('idle')
   end
   servers = conn.exec 'SHOW SERVERS'

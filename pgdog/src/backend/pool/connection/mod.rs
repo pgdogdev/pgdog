@@ -8,7 +8,7 @@ use crate::{
     admin::server::AdminServer,
     backend::{
         databases::{self, databases},
-        reload_notify, PubSubClient,
+        pool, reload_notify, PubSubClient,
     },
     config::{config, PoolerMode, User},
     frontend::{
@@ -100,10 +100,7 @@ impl Connection {
                     debug!("detected configuration reload, reloading cluster");
 
                     // Wait to reload pools until they are ready.
-                    if let Some(wait) = reload_notify::ready() {
-                        wait.await;
-                    }
-                    self.reload()?;
+                    self.safe_reload().await?;
                     return self.try_conn(request, route).await;
                 }
                 Err(err) => {
@@ -203,18 +200,23 @@ impl Connection {
         match &self.binding {
             Binding::Admin(_) => Ok(ParameterStatus::fake()),
             _ => {
-                // Try a replica. If not, try the primary.
-                if self.connect(request, &Route::read(Some(0))).await.is_err() {
-                    self.connect(request, &Route::write(Some(0))).await?;
-                };
-                let mut params = vec![];
-                for param in self.server()?.params().iter() {
-                    if let Some(value) = param.1.as_str() {
-                        params.push(ParameterStatus::from((param.0.as_str(), value)));
+                // Get params from the first database that answers.
+                // Parameters are cached on the pool.
+                for shard in self.cluster()?.shards() {
+                    for pool in shard.pools() {
+                        if let Ok(params) = pool.params(request).await {
+                            let mut result = vec![];
+                            for param in params.iter() {
+                                if let Some(value) = param.1.as_str() {
+                                    result.push(ParameterStatus::from((param.0.as_str(), value)));
+                                }
+                            }
+
+                            return Ok(result);
+                        }
                     }
                 }
-                self.disconnect();
-                Ok(params)
+                Err(Error::Pool(pool::Error::AllReplicasDown))
             }
         }
     }
@@ -224,12 +226,14 @@ impl Connection {
     /// Only await this future inside a `select!`. One of the conditions
     /// suspends this loop indefinitely and expects another `select!` branch
     /// to cancel it.
+    ///
     pub(crate) async fn read(&mut self) -> Result<Message, Error> {
         select! {
             notification = self.pub_sub.recv() => {
                 Ok(notification.ok_or(Error::ProtocolOutOfSync)?.message()?)
             }
 
+            // This is cancel-safe.
             message = self.binding.read() => {
                 message
             }
@@ -289,7 +293,7 @@ impl Connection {
         router: &mut Router,
         streaming: bool,
     ) -> Result<(), Error> {
-        if client_request.copy() && !streaming {
+        if client_request.is_copy() && !streaming {
             let rows = router
                 .copy_data(client_request)
                 .map_err(|e| Error::Router(e.to_string()))?;
@@ -307,8 +311,17 @@ impl Connection {
         Ok(())
     }
 
+    /// Reload synchronized with partial config changes.
+    pub async fn safe_reload(&mut self) -> Result<(), Error> {
+        if let Some(wait) = reload_notify::ready() {
+            wait.await;
+        }
+
+        self.reload()
+    }
+
     /// Fetch the cluster from the global database store.
-    pub(crate) fn reload(&mut self) -> Result<(), Error> {
+    fn reload(&mut self) -> Result<(), Error> {
         match self.binding {
             Binding::Direct(_) | Binding::MultiShard(_, _) => {
                 let user = (self.user.as_str(), self.database.as_str());
@@ -373,7 +386,7 @@ impl Connection {
     }
 
     /// Get connected servers addresses.
-    pub(crate) fn addr(&mut self) -> Result<Vec<&Address>, Error> {
+    pub(crate) fn addr(&self) -> Result<Vec<&Address>, Error> {
         Ok(match self.binding {
             Binding::Direct(Some(ref server)) => vec![server.addr()],
             Binding::MultiShard(ref servers, _) => servers.iter().map(|s| s.addr()).collect(),
@@ -383,36 +396,23 @@ impl Connection {
         })
     }
 
-    /// Get a connected server, if any. If multi-shard, get the first one.
-    #[inline]
-    fn server(&mut self) -> Result<&mut Guard, Error> {
-        Ok(match self.binding {
-            Binding::Direct(ref mut server) => server.as_mut().ok_or(Error::NotConnected)?,
-            Binding::MultiShard(ref mut servers, _) => {
-                servers.first_mut().ok_or(Error::NotConnected)?
-            }
-            _ => return Err(Error::NotConnected),
-        })
-    }
-
     /// Get cluster if any.
     #[inline]
     pub(crate) fn cluster(&self) -> Result<&Cluster, Error> {
-        self.cluster.as_ref().ok_or(Error::NotConnected)
+        self.cluster.as_ref().ok_or(Error::ClusterNotConnected)
     }
 
-    /// Transaction mode pooling.
+    /// Pooler is in session mode.
     #[inline]
-    pub(crate) fn transaction_mode(&self) -> bool {
+    pub(crate) fn session_mode(&self) -> bool {
         self.cluster()
-            .map(|c| c.pooler_mode() == PoolerMode::Transaction)
+            .map(|c| c.pooler_mode() == PoolerMode::Session)
             .unwrap_or(true)
     }
 
-    /// Pooler is in session mod
     #[inline]
-    pub(crate) fn session_mode(&self) -> bool {
-        !self.transaction_mode()
+    pub(crate) fn pooler_mode(&self) -> PoolerMode {
+        self.cluster().map(|c| c.pooler_mode()).unwrap_or_default()
     }
 
     /// This is an admin DB connection.

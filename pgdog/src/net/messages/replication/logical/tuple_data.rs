@@ -74,7 +74,7 @@ impl TupleData {
             .columns
             .iter()
             .map(|c| {
-                if c.data.is_empty() {
+                if c.identifier == Identifier::Null {
                     Parameter::new_null()
                 } else {
                     Parameter::new(&c.data)
@@ -87,7 +87,7 @@ impl TupleData {
 }
 
 /// Explains what's inside the column.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Identifier {
     Format(Format),
     Null,
@@ -126,5 +126,34 @@ impl Column {
 impl FromBytes for TupleData {
     fn from_bytes(mut bytes: Bytes) -> Result<Self, Error> {
         Self::from_buffer(&mut bytes)
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_null_conversion() {
+        let data = TupleData {
+            columns: vec![
+                Column {
+                    identifier: Identifier::Null,
+                    len: 0,
+                    data: Bytes::new(),
+                },
+                Column {
+                    identifier: Identifier::Format(Format::Text),
+                    len: 4,
+                    data: Bytes::from(String::from("1234")),
+                },
+            ],
+        };
+
+        let bind = data.to_bind("__pgdog_1");
+        assert_eq!(bind.statement(), "__pgdog_1");
+        assert!(bind.parameter(0).unwrap().unwrap().is_null());
+        assert!(!bind.parameter(1).unwrap().unwrap().is_null());
+        assert_eq!(bind.parameter(1).unwrap().unwrap().bigint().unwrap(), 1234);
     }
 }

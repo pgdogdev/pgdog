@@ -1,15 +1,20 @@
 //! Tables sharded in the database.
+use pgdog_config::OmnishardedTable;
+
 use crate::{
     config::{DataType, ShardedTable},
-    frontend::router::sharding::Mapping,
+    frontend::router::{parser::Column, sharding::Mapping},
     net::messages::Vector,
 };
-use std::{collections::HashSet, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 #[derive(Default, Debug)]
 struct Inner {
     tables: Vec<ShardedTable>,
-    omnisharded: HashSet<String>,
+    omnisharded: HashMap<String, bool>, // Name <-> sticky routing
     /// This is set only if we have the same sharding scheme
     /// across all tables, i.e., 3 tables with the same data type
     /// and list/range/hash function.
@@ -46,7 +51,7 @@ impl From<&[ShardedTable]> for ShardedTables {
 }
 
 impl ShardedTables {
-    pub fn new(tables: Vec<ShardedTable>, omnisharded_tables: Vec<String>) -> Self {
+    pub fn new(tables: Vec<ShardedTable>, omnisharded_tables: Vec<OmnishardedTable>) -> Self {
         let mut common_mapping = HashSet::new();
         for table in &tables {
             common_mapping.insert((
@@ -69,7 +74,10 @@ impl ShardedTables {
         Self {
             inner: Arc::new(Inner {
                 tables,
-                omnisharded: omnisharded_tables.into_iter().collect(),
+                omnisharded: omnisharded_tables
+                    .into_iter()
+                    .map(|table| (table.name, table.sticky_routing))
+                    .collect(),
                 common_mapping,
             }),
         }
@@ -79,7 +87,7 @@ impl ShardedTables {
         &self.inner.tables
     }
 
-    pub fn omnishards(&self) -> &HashSet<String> {
+    pub fn omnishards(&self) -> &HashMap<String, bool> {
         &self.inner.omnisharded
     }
 
@@ -93,6 +101,35 @@ impl ShardedTables {
         self.tables()
             .iter()
             .find(|t| t.name.as_deref() == Some(name))
+    }
+
+    /// Determine if the column is sharded and return its data type,
+    /// as declared in the schema.
+    pub fn get_table(&self, column: Column<'_>) -> Option<&ShardedTable> {
+        // Only fully-qualified columns can be matched.
+        let table = column.table()?;
+
+        for candidate in &self.inner.tables {
+            if let Some(table_name) = candidate.name.as_ref() {
+                if !table.name_match(table_name) {
+                    continue;
+                }
+            }
+
+            if let Some(schema_name) = candidate.schema.as_ref() {
+                if let Some(schema) = table.schema() {
+                    if schema.name != schema_name {
+                        continue;
+                    }
+                }
+            }
+
+            if column.name == candidate.column {
+                return Some(candidate);
+            }
+        }
+
+        None
     }
 
     /// Find out which column (if any) is sharded in the given table.

@@ -1,5 +1,6 @@
-use crate::frontend::router::parser::cache::CachedAst;
+use crate::frontend::router::parser::cache::Ast;
 use pgdog_plugin::{ReadWrite, Shard as PdShard};
+use std::string::String as StdString;
 
 use super::*;
 
@@ -8,6 +9,7 @@ use super::*;
 pub(super) struct PluginOutput {
     pub(super) shard: Option<Shard>,
     pub(super) read: Option<bool>,
+    pub(super) plugin_name: Option<StdString>,
 }
 
 impl PluginOutput {
@@ -21,7 +23,7 @@ impl QueryParser {
     pub(super) fn plugins(
         &mut self,
         context: &QueryParserContext,
-        statement: &CachedAst,
+        statement: &Ast,
         read: bool,
     ) -> Result<(), Error> {
         // Don't run plugins on Parse only.
@@ -43,12 +45,15 @@ impl QueryParser {
         // The first plugin to returns something, wins.
         debug!("executing {} router plugins", plugins.len());
 
-        let mut context =
-            context.plugin_context(&statement.ast().protobuf, &context.router_context.bind);
+        let mut context = context.plugin_context(
+            &statement.parse_result().protobuf,
+            &context.router_context.bind,
+        );
         context.write_override = if self.write_override || !read { 1 } else { 0 };
 
         for plugin in plugins {
             if let Some(route) = plugin.route(context) {
+                let plugin_name = plugin.name().to_owned();
                 match route.shard.try_into() {
                     Ok(shard) => match shard {
                         PdShard::All => self.plugin_output.shard = Some(Shard::All),
@@ -69,10 +74,21 @@ impl QueryParser {
                     _ => self.plugin_output.read = None,
                 }
 
+                self.plugin_output.plugin_name = Some(plugin_name.clone());
+
                 if self.plugin_output.provided() {
+                    let shard_override = self.plugin_output.shard.clone();
+                    let read_override = self.plugin_output.read;
+                    if let Some(recorder) = self.recorder_mut() {
+                        recorder.record_plugin_override(
+                            plugin_name.clone(),
+                            shard_override,
+                            read_override,
+                        );
+                    }
                     debug!(
                         "plugin \"{}\" returned route [{}, {}]",
-                        plugin.name(),
+                        plugin_name,
                         match self.plugin_output.shard.as_ref() {
                             Some(shard) => format!("shard={}", shard),
                             None => "shard=unknown".to_string(),

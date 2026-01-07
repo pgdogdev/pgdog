@@ -70,30 +70,4 @@ async fn test_ban_unban() {
     }
 
     ensure_client_state("idle").await;
-
-    for (pool, database) in conns
-        .into_iter()
-        .zip(["pgdog", "pgdog_sharded"].into_iter())
-    {
-        for _ in 0..25 {
-            pool.execute("SELECT 1").await.unwrap();
-        }
-
-        ban_unban(database, true, false).await;
-
-        for _ in 0..25 {
-            let err = pool.execute("CREATE TABLE test (id BIGINT)").await;
-            assert!(err.err().unwrap().to_string().contains("pool is banned"));
-        }
-
-        ban_unban(database, false, false).await;
-
-        let mut t = pool.begin().await.unwrap();
-        t.execute("CREATE TABLE test_ban_unban (id BIGINT)")
-            .await
-            .unwrap();
-        t.rollback().await.unwrap();
-
-        pool.close().await;
-    }
 }

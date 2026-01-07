@@ -39,6 +39,9 @@ struct Counters {
     bind_complete: usize,
     command_complete: Option<Message>,
     transaction_error: bool,
+    copy_done: usize,
+    copy_out: usize,
+    copy_data: usize,
 }
 
 /// Multi-shard state.
@@ -99,7 +102,7 @@ impl MultiShard {
                     self.counters.transaction_error = true;
                 }
 
-                forward = if self.counters.ready_for_query % self.shards == 0 {
+                forward = if self.counters.ready_for_query.is_multiple_of(self.shards) {
                     if self.counters.transaction_error {
                         Some(ReadyForQuery::error().message()?)
                     } else {
@@ -124,7 +127,11 @@ impl MultiShard {
                 };
                 self.counters.command_complete_count += 1;
 
-                if self.counters.command_complete_count % self.shards == 0 {
+                if self
+                    .counters
+                    .command_complete_count
+                    .is_multiple_of(self.shards)
+                {
                     self.buffer.full();
 
                     if !self.buffer.is_empty() {
@@ -132,7 +139,7 @@ impl MultiShard {
                             .aggregate(
                                 self.route.aggregate(),
                                 &self.decoder,
-                                self.route.rewrite_plan(),
+                                self.route.aggregate_rewrite_plan(),
                             )
                             .map_err(Error::from)?;
 
@@ -169,7 +176,7 @@ impl MultiShard {
                 if self.counters.row_description == self.shards {
                     // Only send it to the client once all shards sent it,
                     // so we don't get early requests from clients.
-                    let plan = self.route.rewrite_plan();
+                    let plan = self.route.aggregate_rewrite_plan();
                     if plan.drop_columns().is_empty() {
                         forward = Some(message);
                     } else {
@@ -181,7 +188,11 @@ impl MultiShard {
 
             'I' => {
                 self.counters.empty_query_response += 1;
-                if self.counters.empty_query_response % self.shards == 0 {
+                if self
+                    .counters
+                    .empty_query_response
+                    .is_multiple_of(self.shards)
+                {
                     forward = Some(message);
                 }
             }
@@ -193,7 +204,9 @@ impl MultiShard {
                     self.validator.validate_data_row(&data_row)?;
                 }
 
-                if !self.should_buffer() && self.counters.row_description % self.shards == 0 {
+                if !self.should_buffer()
+                    && self.counters.row_description.is_multiple_of(self.shards)
+                {
                     forward = Some(message);
                 } else {
                     self.buffer.add(message).map_err(Error::from)?;
@@ -202,28 +215,28 @@ impl MultiShard {
 
             'G' => {
                 self.counters.copy_in += 1;
-                if self.counters.copy_in % self.shards == 0 {
+                if self.counters.copy_in.is_multiple_of(self.shards) {
                     forward = Some(message);
                 }
             }
 
             'n' => {
                 self.counters.no_data += 1;
-                if self.counters.no_data % self.shards == 0 {
+                if self.counters.no_data.is_multiple_of(self.shards) {
                     forward = Some(message);
                 }
             }
 
             '1' => {
                 self.counters.parse_complete += 1;
-                if self.counters.parse_complete % self.shards == 0 {
+                if self.counters.parse_complete.is_multiple_of(self.shards) {
                     forward = Some(message);
                 }
             }
 
             '3' => {
                 self.counters.close_complete += 1;
-                if self.counters.close_complete % self.shards == 0 {
+                if self.counters.close_complete.is_multiple_of(self.shards) {
                     forward = Some(message);
                 }
             }
@@ -231,14 +244,37 @@ impl MultiShard {
             '2' => {
                 self.counters.bind_complete += 1;
 
-                if self.counters.bind_complete % self.shards == 0 {
+                if self.counters.bind_complete.is_multiple_of(self.shards) {
+                    forward = Some(message);
+                }
+            }
+
+            'c' => {
+                self.counters.copy_done += 1;
+                if self.counters.copy_done.is_multiple_of(self.shards) {
+                    forward = Some(message);
+                }
+            }
+
+            'd' => {
+                self.counters.copy_data += 1;
+                forward = Some(message);
+            }
+
+            'H' => {
+                self.counters.copy_out += 1;
+                if self.counters.copy_out.is_multiple_of(self.shards) {
                     forward = Some(message);
                 }
             }
 
             't' => {
                 self.counters.parameter_description += 1;
-                if self.counters.parameter_description % self.shards == 0 {
+                if self
+                    .counters
+                    .parameter_description
+                    .is_multiple_of(self.shards)
+                {
                     forward = Some(message);
                 }
             }

@@ -4,23 +4,33 @@ use std::{ops::Deref, str::from_utf8};
 
 use lazy_static::lazy_static;
 use pg_query::{
-    protobuf::{AlterTableType, ConstrType, ParseResult},
+    protobuf::{AlterTableType, ConstrType, ObjectType, ParseResult},
     NodeEnum,
 };
+use pgdog_config::QueryParserEngine;
 use regex::Regex;
 use tracing::{info, trace, warn};
 
 use super::{progress::Progress, Error};
 use crate::{
-    backend::{
-        pool::{Address, Request},
-        replication::publisher::PublicationTable,
-        schema::sync::progress::Item,
-        Cluster,
-    },
+    backend::{self, pool::Request, replication::publisher::PublicationTable, Cluster},
     config::config,
     frontend::router::parser::{sequence::Sequence, Column, Table},
 };
+
+fn deparse_node(node: NodeEnum) -> Result<String, pg_query::Error> {
+    match config().config.general.query_parser_engine {
+        QueryParserEngine::PgQueryProtobuf => node.deparse(),
+        QueryParserEngine::PgQueryRaw => node.deparse_raw(),
+    }
+}
+
+fn parse(query: &str) -> Result<pg_query::ParseResult, pg_query::Error> {
+    match config().config.general.query_parser_engine {
+        QueryParserEngine::PgQueryProtobuf => pg_query::parse(query),
+        QueryParserEngine::PgQueryRaw => pg_query::parse_raw(query),
+    }
+}
 
 use tokio::process::Command;
 
@@ -38,16 +48,26 @@ impl PgDump {
         }
     }
 
+    fn clean(source: &str) -> String {
+        lazy_static! {
+            static ref CLEANUP_RE: Regex = Regex::new(r"(?m)^\\(?:un)?restrict.*\n?").unwrap();
+        }
+        let cleaned = CLEANUP_RE.replace_all(source, "");
+
+        cleaned.to_string()
+    }
+
     /// Dump schema from source cluster.
-    pub async fn dump(&self) -> Result<Vec<PgDumpOutput>, Error> {
+    pub async fn dump(&self) -> Result<PgDumpOutput, Error> {
         let mut comparison: Vec<PublicationTable> = vec![];
         let addr = self
             .source
             .shards()
             .first()
             .ok_or(Error::NoDatabases)?
-            .primary_or_replica(&Request::default())
-            .await?
+            .pools()
+            .first()
+            .ok_or(Error::NoDatabases)?
             .addr()
             .clone();
 
@@ -70,58 +90,15 @@ impl PgDump {
                     server.addr(),
                     self.source.name()
                 );
-                continue;
             }
         }
 
-        let mut result = vec![];
-        info!(
-            "dumping schema for {} tables [{}, {}]",
-            comparison.len(),
-            addr,
-            self.source.name()
-        );
-
-        let progress = Progress::new(comparison.len());
-
-        for table in comparison {
-            let cmd = PgDumpCommand {
-                table: table.name.clone(),
-                schema: table.schema.clone(),
-                address: addr.clone(),
-            };
-            progress.next(Item::TableDump {
-                schema: table.schema.clone(),
-                name: table.name.clone(),
-            });
-
-            let dump = cmd.execute().await?;
-            result.push(dump);
+        if comparison.is_empty() {
+            return Err(Error::PublicationNoTables(self.publication.clone()));
         }
 
-        progress.done();
+        info!("dumping schema [{}, {}]", comparison.len(), addr,);
 
-        Ok(result)
-    }
-}
-
-struct PgDumpCommand {
-    table: String,
-    schema: String,
-    address: Address,
-}
-
-impl PgDumpCommand {
-    fn clean(source: &str) -> String {
-        lazy_static! {
-            static ref CLEANUP_RE: Regex = Regex::new(r"(?m)^\\(?:un)?restrict.*\n?").unwrap();
-        }
-        let cleaned = CLEANUP_RE.replace_all(source, "");
-
-        cleaned.to_string()
-    }
-
-    async fn execute(&self) -> Result<PgDumpOutput, Error> {
         let config = config();
         let pg_dump_path = config
             .config
@@ -131,20 +108,16 @@ impl PgDumpCommand {
             .unwrap_or("pg_dump");
 
         let output = Command::new(pg_dump_path)
-            .arg("-t")
-            .arg(&self.table)
-            .arg("-n")
-            .arg(&self.schema)
             .arg("--schema-only")
             .arg("-h")
-            .arg(&self.address.host)
+            .arg(&addr.host)
             .arg("-p")
-            .arg(self.address.port.to_string())
+            .arg(addr.port.to_string())
             .arg("-U")
-            .arg(&self.address.user)
-            .env("PGPASSWORD", &self.address.password)
+            .arg(&addr.user)
+            .env("PGPASSWORD", &addr.password)
             .arg("-d")
-            .arg(&self.address.database_name)
+            .arg(&addr.database_name)
             .output()
             .await?;
 
@@ -159,13 +132,11 @@ impl PgDumpCommand {
         let cleaned = Self::clean(&original);
         trace!("[pg_dump (clean)] {}", cleaned);
 
-        let stmts = pg_query::parse(&cleaned)?.protobuf;
+        let stmts = parse(&cleaned)?.protobuf;
 
         Ok(PgDumpOutput {
             stmts,
             original: cleaned,
-            table: self.table.clone(),
-            schema: self.schema.clone(),
         })
     }
 }
@@ -174,8 +145,6 @@ impl PgDumpCommand {
 pub struct PgDumpOutput {
     stmts: ParseResult,
     original: String,
-    pub table: String,
-    pub schema: String,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq)]
@@ -190,16 +159,17 @@ pub enum Statement<'a> {
     Index {
         table: Table<'a>,
         name: &'a str,
-        sql: &'a str,
+        sql: String,
     },
 
     Table {
         table: Table<'a>,
-        sql: &'a str,
+        sql: String,
     },
 
     Other {
-        sql: &'a str,
+        sql: String,
+        idempotent: bool,
     },
 
     SequenceOwner {
@@ -221,7 +191,7 @@ impl<'a> Deref for Statement<'a> {
             Self::Index { sql, .. } => sql,
             Self::Table { sql, .. } => sql,
             Self::SequenceOwner { sql, .. } => sql,
-            Self::Other { sql } => sql,
+            Self::Other { sql, .. } => sql,
             Self::SequenceSetMax { sql, .. } => sql.as_str(),
         }
     }
@@ -229,7 +199,19 @@ impl<'a> Deref for Statement<'a> {
 
 impl<'a> From<&'a str> for Statement<'a> {
     fn from(value: &'a str) -> Self {
-        Self::Other { sql: value }
+        Self::Other {
+            sql: value.to_string(),
+            idempotent: true,
+        }
+    }
+}
+
+impl<'a> From<String> for Statement<'a> {
+    fn from(value: String) -> Self {
+        Self::Other {
+            sql: value,
+            idempotent: true,
+        }
     }
 }
 
@@ -252,21 +234,44 @@ impl PgDumpOutput {
                 if let Some(ref node) = node.node {
                     match node {
                         NodeEnum::CreateStmt(stmt) => {
+                            let sql = {
+                                let mut stmt = stmt.clone();
+                                stmt.if_not_exists = true;
+                                deparse_node(NodeEnum::CreateStmt(stmt))?
+                            };
                             if state == SyncState::PreData {
                                 // CREATE TABLE is always good.
                                 let table =
                                     stmt.relation.as_ref().map(Table::from).unwrap_or_default();
-                                result.push(Statement::Table {
-                                    table,
-                                    sql: original,
-                                });
+                                result.push(Statement::Table { table, sql });
                             }
                         }
 
-                        NodeEnum::CreateSeqStmt(_) => {
+                        NodeEnum::CreateSeqStmt(stmt) => {
+                            let mut stmt = stmt.clone();
+                            stmt.if_not_exists = true;
+                            let sql = deparse_node(NodeEnum::CreateSeqStmt(stmt))?;
                             if state == SyncState::PreData {
                                 // Bring sequences over.
-                                result.push(original.into());
+                                result.push(sql.into());
+                            }
+                        }
+
+                        NodeEnum::CreateExtensionStmt(stmt) => {
+                            let mut stmt = stmt.clone();
+                            stmt.if_not_exists = true;
+                            let sql = deparse_node(NodeEnum::CreateExtensionStmt(stmt))?;
+                            if state == SyncState::PreData {
+                                result.push(sql.into());
+                            }
+                        }
+
+                        NodeEnum::CreateSchemaStmt(stmt) => {
+                            let mut stmt = stmt.clone();
+                            stmt.if_not_exists = true;
+                            let sql = deparse_node(NodeEnum::CreateSchemaStmt(stmt))?;
+                            if state == SyncState::PreData {
+                                result.push(sql.into());
                             }
                         }
 
@@ -287,24 +292,115 @@ impl PgDumpOutput {
                                                             | ConstrType::ConstrNull
                                                     ) {
                                                         if state == SyncState::PreData {
-                                                            result.push(original.into());
+                                                            result.push(Statement::Other {
+                                                                sql: original.to_string(),
+                                                                idempotent: false,
+                                                            });
                                                         }
                                                     } else if state == SyncState::PostData {
-                                                        result.push(original.into());
+                                                        result.push(Statement::Other {
+                                                            sql: original.to_string(),
+                                                            idempotent: false,
+                                                        });
                                                     }
                                                 }
                                             }
                                         }
+                                        AlterTableType::AtAttachPartition => {
+                                            // Index partitions need to be attached to indexes,
+                                            // which we create in the post-data step.
+                                            match stmt.objtype() {
+                                                ObjectType::ObjectIndex => {
+                                                    if state == SyncState::PostData {
+                                                        result.push(Statement::Other {
+                                                            sql: original.to_string(),
+                                                            idempotent: false,
+                                                        });
+                                                    }
+                                                }
+
+                                                _ => {
+                                                    if state == SyncState::PreData {
+                                                        result.push(Statement::Other {
+                                                            sql: original.to_string(),
+                                                            idempotent: false,
+                                                        });
+                                                    }
+                                                }
+                                            }
+                                        }
+
                                         AlterTableType::AtColumnDefault => {
                                             if state == SyncState::PreData {
                                                 result.push(original.into())
                                             }
                                         }
-                                        AlterTableType::AtChangeOwner => {
-                                            continue; // Don't change owners, for now.
+
+                                        AlterTableType::AtAddIdentity => {
+                                            if state == SyncState::Cutover {
+                                                if let Some(ref node) = cmd.def {
+                                                    if let Some(NodeEnum::Constraint(
+                                                        ref constraint,
+                                                    )) = node.node
+                                                    {
+                                                        for option in &constraint.options {
+                                                            if let Some(NodeEnum::DefElem(
+                                                                ref elem,
+                                                            )) = option.node
+                                                            {
+                                                                if elem.defname == "sequence_name" {
+                                                                    if let Some(ref node) = elem.arg
+                                                                    {
+                                                                        if let Some(
+                                                                            NodeEnum::List(
+                                                                                ref list,
+                                                                            ),
+                                                                        ) = node.node
+                                                                        {
+                                                                            let table = Table::try_from(list).map_err(|_| Error::MissingEntity)?;
+                                                                            let sequence =
+                                                                                Sequence::from(
+                                                                                    table,
+                                                                                );
+                                                                            let table = stmt
+                                                                                .relation
+                                                                                .as_ref()
+                                                                                .map(Table::from);
+                                                                            let schema = table
+                                                                                .and_then(
+                                                                                    |table| {
+                                                                                        table.schema
+                                                                                    },
+                                                                                );
+                                                                            let table = table.map(
+                                                                                |table| table.name,
+                                                                            );
+                                                                            let column = Column {
+                                                                                table,
+                                                                                name: cmd
+                                                                                    .name
+                                                                                    .as_str(),
+                                                                                schema,
+                                                                            };
+                                                                            let sql = sequence.setval_from_column(&column).map_err(|_| Error::MissingEntity)?;
+
+                                                                            result.push(Statement::SequenceSetMax { sequence, sql });
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            } else if state == SyncState::PreData {
+                                                result.push(original.into());
+                                            }
                                         }
+                                        // AlterTableType::AtChangeOwner => {
+                                        //     continue; // Don't change owners, for now.
+                                        // }
                                         _ => {
-                                            if state == SyncState::PostData {
+                                            if state == SyncState::PreData {
                                                 result.push(original.into());
                                             }
                                         }
@@ -312,6 +408,21 @@ impl PgDumpOutput {
                                 }
                             }
                         }
+
+                        NodeEnum::CreateTrigStmt(stmt) => {
+                            let mut stmt = stmt.clone();
+                            stmt.replace = true;
+
+                            if state == SyncState::PreData {
+                                result.push(deparse_node(NodeEnum::CreateTrigStmt(stmt))?.into());
+                            }
+                        }
+
+                        // Skip these.
+                        NodeEnum::CreatePublicationStmt(_)
+                        | NodeEnum::CreateSubscriptionStmt(_)
+                        | NodeEnum::AlterPublicationStmt(_)
+                        | NodeEnum::AlterSubscriptionStmt(_) => (),
 
                         NodeEnum::AlterSeqStmt(stmt) => {
                             if matches!(state, SyncState::PreData | SyncState::Cutover) {
@@ -331,7 +442,7 @@ impl PgDumpOutput {
                                         sequence,
                                         sql: original,
                                     });
-                                } else {
+                                } else if state == SyncState::Cutover {
                                     let sql = sequence
                                         .setval_from_column(&column)
                                         .map_err(|_| Error::MissingEntity)?;
@@ -342,21 +453,90 @@ impl PgDumpOutput {
 
                         NodeEnum::IndexStmt(stmt) => {
                             if state == SyncState::PostData {
+                                let sql = {
+                                    let mut stmt = stmt.clone();
+                                    stmt.concurrent = stmt
+                                        .relation
+                                        .as_ref()
+                                        .map(|relation| relation.inh) // ONLY used for partitioned tables, which can't be created concurrently.
+                                        .unwrap_or(false);
+                                    stmt.if_not_exists = true;
+                                    deparse_node(NodeEnum::IndexStmt(stmt))?
+                                };
+
                                 let table =
                                     stmt.relation.as_ref().map(Table::from).unwrap_or_default();
+
                                 result.push(Statement::Index {
                                     table,
                                     name: stmt.idxname.as_str(),
-                                    sql: original,
+                                    sql,
+                                });
+                            }
+                        }
+
+                        NodeEnum::ViewStmt(stmt) => {
+                            let mut stmt = stmt.clone();
+                            stmt.replace = true;
+
+                            if state == SyncState::PreData {
+                                result.push(Statement::Other {
+                                    sql: deparse_node(NodeEnum::ViewStmt(stmt))?,
+                                    idempotent: true,
+                                });
+                            }
+                        }
+
+                        NodeEnum::CreateTableAsStmt(stmt) => {
+                            let mut stmt = stmt.clone();
+                            stmt.if_not_exists = true;
+
+                            if state == SyncState::PreData {
+                                result.push(Statement::Other {
+                                    sql: deparse_node(NodeEnum::CreateTableAsStmt(stmt))?,
+                                    idempotent: true,
+                                });
+                            }
+                        }
+
+                        NodeEnum::CreateFunctionStmt(stmt) => {
+                            let mut stmt = stmt.clone();
+                            stmt.replace = true;
+
+                            if state == SyncState::PreData {
+                                result.push(Statement::Other {
+                                    sql: deparse_node(NodeEnum::CreateFunctionStmt(stmt))?,
+                                    idempotent: true,
+                                });
+                            }
+                        }
+
+                        NodeEnum::AlterOwnerStmt(stmt) => {
+                            if stmt.object_type() != ObjectType::ObjectPublication
+                                && state == SyncState::PreData
+                            {
+                                result.push(Statement::Other {
+                                    sql: original.to_string(),
+                                    idempotent: true,
+                                });
+                            }
+                        }
+
+                        NodeEnum::CreateEnumStmt(_)
+                        | NodeEnum::CreateDomainStmt(_)
+                        | NodeEnum::CompositeTypeStmt(_) => {
+                            if state == SyncState::PreData {
+                                result.push(Statement::Other {
+                                    sql: original.to_owned(),
+                                    idempotent: false,
                                 });
                             }
                         }
 
                         NodeEnum::VariableSetStmt(_) => continue,
                         NodeEnum::SelectStmt(_) => continue,
-
                         _ => {
-                            if state == SyncState::PostData {
+                            if state == SyncState::PreData {
                                 result.push(original.into());
                             }
                         }
@@ -381,19 +561,37 @@ impl PgDumpOutput {
             let mut primary = shard.primary(&Request::default()).await?;
 
             info!(
-                "syncing schema for \"{}\".\"{}\" into shard {} [{}, {}]",
-                self.schema,
-                self.table,
+                "syncing schema into shard {} [{}, {}]",
                 num,
                 primary.addr(),
                 dest.name()
             );
 
-            let progress = Progress::new(stmts.len());
+            let mut progress = Progress::new(stmts.len());
 
             for stmt in &stmts {
                 progress.next(stmt);
                 if let Err(err) = primary.execute(stmt.deref()).await {
+                    if let backend::Error::ExecutionError(ref err) = err {
+                        let code = &err.code;
+
+                        if let Statement::Other { idempotent, .. } = stmt {
+                            if !idempotent {
+                                if matches!(code.as_str(), "42P16" | "42710" | "42809" | "42P07") {
+                                    warn!("entity already exists, skipping");
+                                    continue;
+                                } else if !ignore_errors {
+                                    return Err(Error::Backend(backend::Error::ExecutionError(
+                                        err.clone(),
+                                    )));
+                                } else {
+                                    warn!("skipping: {}", err);
+                                }
+                            }
+                        }
+                    } else {
+                        return Err(err.into());
+                    }
                     if ignore_errors {
                         warn!("skipping: {}", err);
                     } else {
@@ -410,98 +608,12 @@ impl PgDumpOutput {
 
 #[cfg(test)]
 mod test {
-    use crate::backend::server::test::test_server;
-
     use super::*;
 
     #[tokio::test]
     async fn test_pg_dump_execute() {
-        let mut server = test_server().await;
-
-        let queries = vec![
-            "DROP PUBLICATION IF EXISTS test_pg_dump_execute",
-            "CREATE TABLE IF NOT EXISTS test_pg_dump_execute(id BIGSERIAL PRIMARY KEY, email VARCHAR UNIQUE, created_at TIMESTAMPTZ)",
-            "CREATE INDEX ON test_pg_dump_execute USING btree(created_at)",
-            "CREATE TABLE IF NOT EXISTS test_pg_dump_execute_fk(fk BIGINT NOT NULL REFERENCES test_pg_dump_execute(id), meta JSONB)",
-            "CREATE PUBLICATION test_pg_dump_execute FOR TABLE test_pg_dump_execute, test_pg_dump_execute_fk"
-        ];
-
-        for query in queries {
-            server.execute(query).await.unwrap();
-        }
-
-        let output = PgDumpCommand {
-            table: "test_pg_dump_execute".into(),
-            schema: "pgdog".into(),
-            address: server.addr().clone(),
-        }
-        .execute()
-        .await
-        .unwrap();
-
-        let output_pre = output.statements(SyncState::PreData).unwrap();
-        let output_post = output.statements(SyncState::PostData).unwrap();
-        let output_cutover = output.statements(SyncState::Cutover).unwrap();
-
-        let mut dest = test_server().await;
-        dest.execute("DROP SCHEMA IF EXISTS test_pg_dump_execute_dest CASCADE")
-            .await
-            .unwrap();
-
-        dest.execute("CREATE SCHEMA test_pg_dump_execute_dest")
-            .await
-            .unwrap();
-        dest.execute("SET search_path TO test_pg_dump_execute_dest, public")
-            .await
-            .unwrap();
-
-        for stmt in output_pre {
-            // Hack around us using the same database as destination.
-            // I know, not very elegant.
-            let stmt = stmt.replace("pgdog.", "test_pg_dump_execute_dest.");
-            dest.execute(stmt).await.unwrap();
-        }
-
-        for i in 0..5 {
-            let id = dest.fetch_all::<i64>("INSERT INTO test_pg_dump_execute_dest.test_pg_dump_execute VALUES (DEFAULT, 'test@test', NOW()) RETURNING id")
-                .await
-                .unwrap();
-            assert_eq!(id[0], i + 1); // Sequence has made it over.
-
-            // Unique index didn't make it over.
-        }
-
-        dest.execute("DELETE FROM test_pg_dump_execute_dest.test_pg_dump_execute")
-            .await
-            .unwrap();
-
-        for stmt in output_post {
-            let stmt = stmt.replace("pgdog.", "test_pg_dump_execute_dest.");
-            dest.execute(stmt).await.unwrap();
-        }
-
-        let q = "INSERT INTO test_pg_dump_execute_dest.test_pg_dump_execute VALUES (DEFAULT, 'test@test', NOW()) RETURNING id";
-        assert!(dest.execute(q).await.is_ok());
-        let err = dest.execute(q).await.err().unwrap();
-        assert!(err.to_string().contains(
-            r#"duplicate key value violates unique constraint "test_pg_dump_execute_email_key""#
-        )); // Unique index made it over.
-
-        assert_eq!(output_cutover.len(), 1);
-        for stmt in output_cutover {
-            let stmt = stmt.replace("pgdog.", "test_pg_dump_execute_dest.");
-            assert!(stmt.starts_with("SELECT setval('"));
-            dest.execute(stmt).await.unwrap();
-        }
-
-        dest.execute("DROP SCHEMA test_pg_dump_execute_dest CASCADE")
-            .await
-            .unwrap();
-
-        server
-            .execute("DROP TABLE test_pg_dump_execute CASCADE")
-            .await
-            .unwrap();
+        let cluster = Cluster::new_test_single_shard(&config());
+        let _pg_dump = PgDump::new(&cluster, "test_pg_dump_execute");
     }
 
     #[test]
@@ -557,6 +669,43 @@ ALTER TABLE ONLY public.users
 
 \unrestrict nu6jB5ogH2xGMn2dB3dMyMbSZ2PsVDqB2IaWK6zZVjngeba0UrnmxMy6s63SwzR
 "#;
-        let _parse = pg_query::parse(&PgDumpCommand::clean(&dump)).unwrap();
+        let _parse = pg_query::parse(&PgDump::clean(&dump)).unwrap();
+    }
+
+    #[test]
+    fn test_generated_identity() {
+        let q = "ALTER TABLE public.users ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY (
+            SEQUENCE NAME public.users_id_seq
+            START WITH 1
+            INCREMENT BY 1
+            NO MINVALUE
+            NO MAXVALUE
+            CACHE 1
+        );";
+        let parse = pg_query::parse(q).unwrap();
+        let output = PgDumpOutput {
+            stmts: parse.protobuf,
+            original: q.to_string(),
+        };
+        let statements = output.statements(SyncState::Cutover).unwrap();
+        match statements.first() {
+            Some(Statement::SequenceSetMax { sequence, sql }) => {
+                assert_eq!(sequence.table.name, "users_id_seq");
+                assert_eq!(
+                    sequence.table.schema().map(|schema| schema.name),
+                    Some("public")
+                );
+                assert_eq!(
+                    sql,
+                    r#"SELECT setval('"public"."users_id_seq"', COALESCE((SELECT MAX("id") FROM "public"."users"), 1), true);"#
+                );
+            }
+
+            _ => panic!("not a set sequence max"),
+        }
+        let statements = output.statements(SyncState::PreData).unwrap();
+        assert!(!statements.is_empty());
+        let statements = output.statements(SyncState::PostData).unwrap();
+        assert!(statements.is_empty());
     }
 }

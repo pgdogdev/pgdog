@@ -37,12 +37,19 @@ flags:
     carryforward: true
   integration:
     paths:
-      - integration
+      - pgdog
+      - pgdog-plugin
+      - pgdog-macros
+      - pgdog-plugin-build
+      - plugins
     carryforward: false
 
 ignore:
   - "**/tests/**"
   - "**/examples/**"
   - integration/python/venv
+
+fixes:
+  - "/home/runner/_work/pgdog/pgdog/::"
 
 slack_app: true

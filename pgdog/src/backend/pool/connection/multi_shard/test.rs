@@ -1,4 +1,7 @@
-use crate::net::{DataRow, Field};
+use crate::{
+    frontend::router::parser::{Shard, ShardWithPriority},
+    net::{DataRow, Field},
+};
 
 use super::*;
 
@@ -59,7 +62,10 @@ fn test_inconsistent_data_rows() {
 
 #[test]
 fn test_rd_before_dr() {
-    let mut multi_shard = MultiShard::new(3, &Route::read(None));
+    let mut multi_shard = MultiShard::new(
+        3,
+        &Route::read(ShardWithPriority::new_default_unset(Shard::All)),
+    );
     let rd = RowDescription::new(&[Field::bigint("id")]);
     let mut dr = DataRow::new();
     dr.add(1i64);

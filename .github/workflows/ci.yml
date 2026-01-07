@@ -1,6 +1,10 @@
 name: ci
 on:
   push:
+    branches:
+      - main
+  pull_request:
+    types: [opened, synchronize, reopened]
 
 jobs:
   fmt:
@@ -76,7 +80,7 @@ jobs:
           RUSTFLAGS: "-C link-dead-code"
         run: |
           cargo llvm-cov clean --workspace
-          cargo llvm-cov nextest --lcov --output-path lcov.info --no-fail-fast --test-threads=1 --filter-expr "package(pgdog)"
+          cargo llvm-cov nextest --lcov --output-path lcov.info --no-fail-fast --test-threads=1 --filter-expr "package(pgdog) | package(pgdog-config) | package(pgdog-vector)"
       - name: Run documentation tests
         run: cargo test --doc
       # Requires CODECOV_TOKEN secret for upload
@@ -89,6 +93,7 @@ jobs:
           fail_ci_if_error: true
   integration:
     runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 30
     env:
       LLVM_PROFILE_FILE: ${{ github.workspace }}/target/llvm-cov-target/profiles/pgdog-%p-%m.profraw
     steps:
@@ -108,6 +113,7 @@ jobs:
           sudo -u postgres createdb $USER
           sudo -u postgres psql -c 'ALTER SYSTEM SET max_connections TO 1000;'
           sudo -u postgres psql -c 'ALTER SYSTEM SET max_prepared_transactions TO 1000;'
+          sudo -u postgres psql -c 'ALTER SYSTEM SET wal_level TO logical;'
           sudo service postgresql restart
           bash integration/setup.sh
           sudo apt update && sudo apt install -y python3-virtualenv mold
@@ -140,6 +146,8 @@ jobs:
           echo "PGDOG_BIN=$(realpath "$BIN_PATH")" >> "$GITHUB_ENV"
       - name: pgbench
         run: bash integration/pgbench/run.sh
+      - name: schema-sync
+        run: bash integration/schema_sync/run.sh
       - name: Go
         run: bash integration/go/run.sh
       - name: JavaScript
@@ -156,6 +164,8 @@ jobs:
         run: bash integration/rust/run.sh
       - name: Stop shared PgDog
         run: bash -lc 'source integration/common.sh; stop_pgdog'
+      - name: Data sync
+        run: bash integration/copy_data/dev.sh
       - name: Python
         run: bash integration/python/run.sh
       - name: Load balancer
@@ -164,8 +174,6 @@ jobs:
         run: bash integration/complex/run.sh
       - name: Dry run
         run: bash integration/dry_run/run.sh
-      # - name: Plugins
-      #   run: bash integration/plugins/run.sh
       - name: Ensure PgDog stopped
         run: |
           if pgrep -x pgdog > /dev/null; then
@@ -182,3 +190,61 @@ jobs:
           files: integration.lcov
           flags: integration
           fail_ci_if_error: true
+  plugin-unit-tests:
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    continue-on-error: true
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+      - uses: useblacksmith/rust-cache@v3
+        with:
+          prefix-key: "plugin-unit-v1"
+      - name: Install CMake 3.31
+        run: |
+          sudo apt-get install -y mold
+          sudo apt remove cmake
+          sudo pip3 install cmake==3.31.6
+          cmake --version
+      - name: Install test dependencies
+        run: cargo install cargo-nextest --version "0.9.78" --locked
+      - name: Run plugin unit tests
+        run: cargo nextest run -E 'package(pgdog-example-plugin)' --no-fail-fast
+  plugin-integration-tests:
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    continue-on-error: true
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+      - uses: useblacksmith/rust-cache@v3
+        with:
+          prefix-key: "plugin-integration-v1"
+      - name: Setup PostgreSQL
+        run: |
+          sudo service postgresql start
+          sudo -u postgres createuser --superuser --login $USER
+          sudo -u postgres createdb $USER
+          bash integration/setup.sh
+      - name: Install dependencies
+        run: |
+          sudo apt update && sudo apt install -y python3-virtualenv mold
+          sudo gem install bundler
+          sudo apt remove -y cmake
+          sudo pip3 install cmake==3.31.6
+          cmake --version
+          cargo install cargo-nextest --version "0.9.78" --locked
+      - name: Build plugin
+        run: |
+          cargo build --release
+          pushd plugins/pgdog-example-plugin
+          cargo build --release
+          popd
+      - name: Run plugin integration tests
+        run: bash integration/plugins/run.sh
