@@ -285,7 +285,7 @@ impl LoadBalancer {
                 candidates = reshuffled;
             }
             LeastActiveConnections => {
-                candidates.sort_by_cached_key(|target| target.pool.lock().idle());
+                candidates.sort_by_cached_key(|target| target.pool.lock().checked_out());
             }
         }
 
