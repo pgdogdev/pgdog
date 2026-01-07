@@ -250,8 +250,8 @@ auth_type = "scram"
 # Prevents brute-force authentication attacks by limiting the number
 # of authentication attempts from a single IP address.
 #
-# Default: 10
-auth_rate_limit = 10
+# Default: unlimited (disabled)
+# auth_rate_limit = 10
 
 # Disable cross-shard queries.
 #

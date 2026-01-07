@@ -1,10 +1,6 @@
 //! Rate limiting for authentication attempts.
 
-use governor::{
-    clock::DefaultClock,
-    state::keyed::DefaultKeyedStateStore,
-    Quota, RateLimiter,
-};
+use governor::{clock::DefaultClock, state::keyed::DefaultKeyedStateStore, Quota, RateLimiter};
 use once_cell::sync::Lazy;
 use parking_lot::RwLock;
 use std::net::{IpAddr, Ipv6Addr};
@@ -26,7 +22,16 @@ fn normalize_ip(ip: IpAddr) -> IpAddr {
         IpAddr::V6(v6) => {
             let segments = v6.segments();
             // Keep first 4 segments (64 bits), zero out the rest
-            let masked = Ipv6Addr::new(segments[0], segments[1], segments[2], segments[3], 0, 0, 0, 0);
+            let masked = Ipv6Addr::new(
+                segments[0],
+                segments[1],
+                segments[2],
+                segments[3],
+                0,
+                0,
+                0,
+                0,
+            );
             IpAddr::V6(masked)
         }
     }
@@ -188,7 +193,10 @@ mod tests {
         // Use unique IP to avoid interference from other tests
         let ip: IpAddr = "10.0.0.1".parse().unwrap();
 
-        // Exhaust default limit of 10 on global limiter
+        // Set up a known limit first (don't depend on config defaults)
+        reload(Some(10));
+
+        // Exhaust limit of 10
         for _ in 0..10 {
             assert!(check(ip));
         }
@@ -220,6 +228,12 @@ mod tests {
     fn test_limit_of_one() {
         // Edge case: minimum limit of 1
         let limiter = test_limiter(1);
+        let ip: IpAddr = "192.168.100.2".parse().unwrap();
+
+        assert!(check_with_limiter(&limiter, ip));
+        assert!(!check_with_limiter(&limiter, ip));
+    }
+
     #[test]
     fn test_unlimited_mode_allows_all() {
         // Temporarily set global limiter to None and ensure check() always returns true
@@ -230,11 +244,6 @@ mod tests {
         }
         // Restore to default reasonable limit for other tests
         reload(Some(10));
-    }
-        let ip: IpAddr = "192.168.100.2".parse().unwrap();
-
-        assert!(check_with_limiter(&limiter, ip));
-        assert!(!check_with_limiter(&limiter, ip));
     }
 
     // Note: Time-based recovery test is not included because:
