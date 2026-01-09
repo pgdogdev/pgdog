@@ -4,10 +4,7 @@ use std::fmt::Display;
 use std::time::Duration;
 
 use super::prelude::*;
-use crate::{
-    net::{c_string_buf, code},
-    state::State,
-};
+use crate::{net::c_string_buf, state::State};
 
 /// ErrorResponse (B) message.
 #[derive(Debug, Clone)]
@@ -220,8 +217,7 @@ impl Display for ErrorResponse {
 
 impl FromBytes for ErrorResponse {
     fn from_bytes(mut bytes: Bytes) -> Result<Self, Error> {
-        code!(bytes, 'E');
-
+        let _code = bytes.get_u8();
         let _len = bytes.get_i32();
 
         let mut error_response = ErrorResponse::default();
