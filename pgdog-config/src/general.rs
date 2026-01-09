@@ -368,19 +368,22 @@ impl General {
     fn default_client_idle_timeout() -> u64 {
         Self::env_or_default(
             "PGDOG_CLIENT_IDLE_TIMEOUT",
-            Duration::MAX.as_millis() as u64,
+            crate::MAX_DURATION.as_millis() as u64,
         )
     }
 
     fn default_client_idle_in_transaction_timeout() -> u64 {
         Self::env_or_default(
             "PGDOG_CLIENT_IDLE_IN_TRANSACTION_TIMEOUT",
-            Duration::MAX.as_millis() as u64,
+            crate::MAX_DURATION.as_millis() as u64,
         )
     }
 
     fn default_query_timeout() -> u64 {
-        Self::env_or_default("PGDOG_QUERY_TIMEOUT", Duration::MAX.as_millis() as u64)
+        Self::env_or_default(
+            "PGDOG_QUERY_TIMEOUT",
+            crate::MAX_DURATION.as_millis() as u64,
+        )
     }
 
     pub fn query_timeout(&self) -> Duration {
@@ -447,7 +450,10 @@ impl General {
     }
 
     fn lsn_check_delay() -> u64 {
-        Self::env_or_default("PGDOG_LSN_CHECK_DELAY", Duration::MAX.as_millis() as u64)
+        Self::env_or_default(
+            "PGDOG_LSN_CHECK_DELAY",
+            crate::MAX_DURATION.as_millis() as u64,
+        )
     }
 
     fn read_write_strategy() -> ReadWriteStrategy {
@@ -541,7 +547,7 @@ impl General {
     }
 
     pub fn prepared_statements_limit() -> usize {
-        Self::env_or_default("PGDOG_PREPARED_STATEMENTS_LIMIT", usize::MAX)
+        Self::env_or_default("PGDOG_PREPARED_STATEMENTS_LIMIT", i64::MAX as usize)
     }
 
     pub fn query_cache_limit() -> usize {
@@ -873,7 +879,7 @@ mod tests {
 
         assert_eq!(General::broadcast_port(), General::port() + 1);
         assert_eq!(General::openmetrics_port(), None);
-        assert_eq!(General::prepared_statements_limit(), usize::MAX);
+        assert_eq!(General::prepared_statements_limit(), i64::MAX as usize);
         assert_eq!(General::query_cache_limit(), 50_000);
         assert_eq!(General::connect_attempts(), 1);
         assert_eq!(General::mirror_queue(), 128);
