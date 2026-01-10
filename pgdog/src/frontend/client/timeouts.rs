@@ -67,7 +67,6 @@ impl Timeouts {
 
 #[cfg(test)]
 mod test {
-
     use crate::{config::config, net::Query};
 
     use super::*;
@@ -79,7 +78,7 @@ mod test {
 
         let actual = timeout.client_idle_timeout(&State::IdleInTransaction, &ClientRequest::new());
         assert_eq!(actual, timeout.idle_in_transaction_timeout);
-        assert_eq!(actual.as_millis(), u64::MAX.into());
+        assert_eq!(actual.as_millis(), i64::MAX as u128);
 
         let actual = timeout.client_idle_timeout(
             &State::IdleInTransaction,
