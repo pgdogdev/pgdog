@@ -12,7 +12,7 @@ use super::database::{LoadBalancingStrategy, ReadWriteSplit, ReadWriteStrategy};
 use super::networking::TlsVerifyMode;
 use super::pooling::{PoolerMode, PreparedStatements};
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct General {
     /// Run on this address.

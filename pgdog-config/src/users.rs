@@ -16,7 +16,7 @@ pub struct Plugin {
 }
 
 /// Users and passwords.
-#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Users {
     pub admin: Option<Admin>,

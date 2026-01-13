@@ -40,7 +40,7 @@ impl FromStr for RewriteMode {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Rewrite {
     /// Global rewrite toggle. When disabled, rewrite-specific features remain
