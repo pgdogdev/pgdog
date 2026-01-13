@@ -39,10 +39,6 @@ impl FromStr for PreparedStatements {
     }
 }
 
-/// Empty struct for stats
-#[derive(Serialize, Deserialize, Debug, Clone, Default)]
-pub struct Stats {}
-
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq, Ord, PartialOrd)]
 #[serde(rename_all = "snake_case")]
 pub enum PoolerMode {

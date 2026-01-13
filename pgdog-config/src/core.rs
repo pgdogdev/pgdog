@@ -14,13 +14,13 @@ use super::database::Database;
 use super::error::Error;
 use super::general::General;
 use super::networking::{MultiTenant, Tcp};
-use super::pooling::{PoolerMode, Stats};
+use super::pooling::PoolerMode;
 use super::replication::{MirrorConfig, Mirroring, ReplicaLag, Replication};
 use super::rewrite::Rewrite;
 use super::sharding::{ManualQuery, OmnishardedTables, ShardedMapping, ShardedTable};
 use super::users::{Admin, Plugin, Users};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ConfigAndUsers {
     /// pgdog.toml
     pub config: Config,
@@ -124,7 +124,7 @@ impl Default for ConfigAndUsers {
 }
 
 /// Configuration.
-#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
     /// General configuration.
@@ -134,10 +134,6 @@ pub struct Config {
     /// Rewrite configuration.
     #[serde(default)]
     pub rewrite: Rewrite,
-
-    /// Statistics.
-    #[serde(default)]
-    pub stats: Stats,
 
     /// TCP settings
     #[serde(default)]
