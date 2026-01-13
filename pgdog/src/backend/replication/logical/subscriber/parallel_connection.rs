@@ -10,6 +10,7 @@ use tokio::sync::{
     Notify,
 };
 
+use crate::backend::pool::Address;
 use crate::{
     backend::Server,
     frontend::ClientRequest,
@@ -43,6 +44,7 @@ pub struct ParallelConnection {
     tx: Sender<ParallelMessage>,
     rx: Receiver<ParallelReply>,
     stop: Arc<Notify>,
+    address: Address,
 }
 
 impl ParallelConnection {
@@ -91,6 +93,11 @@ impl ParallelConnection {
         Ok(())
     }
 
+    /// Server address.
+    pub fn addr(&self) -> &Address {
+        &self.address
+    }
+
     // Move server connection into its own Tokio task.
     pub fn new(server: Server) -> Result<Self, Error> {
         // Ideally we don't hardcode these. PgDog
@@ -98,6 +105,7 @@ impl ParallelConnection {
         let (tx1, rx1) = channel(4096);
         let (tx2, rx2) = channel(4096);
         let stop = Arc::new(Notify::new());
+        let address = server.addr().clone();
 
         let listener = Listener {
             stop: stop.clone(),
@@ -113,6 +121,7 @@ impl ParallelConnection {
         });
 
         Ok(Self {
+            address,
             tx: tx1,
             rx: rx2,
             stop,

@@ -1,6 +1,8 @@
 //! Connection pool errors.
 use thiserror::Error;
 
+use crate::net::BackendKeyData;
+
 #[derive(Debug, Error, PartialEq, Clone, Copy)]
 pub enum Error {
     #[error("checkout timeout")]
@@ -59,4 +61,16 @@ pub enum Error {
 
     #[error("pub/sub disabled")]
     PubSubDisabled,
+
+    #[error("pool {0} has no health target")]
+    PoolNoHealthTarget(u64),
+
+    #[error("pool is not healthy")]
+    PoolUnhealthy,
+
+    #[error("checked in untracked connection: {0}")]
+    UntrackedConnCheckin(BackendKeyData),
+
+    #[error("mapping missing: {0}")]
+    MappingMissing(usize),
 }

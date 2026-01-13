@@ -54,7 +54,10 @@ impl Startup {
 
                     let value = c_string(stream).await?;
 
-                    if name == "options" {
+                    if name == "search_path" {
+                        let value = search_path(&value);
+                        params.insert(name, value);
+                    } else if name == "options" {
                         let kvs = value.split("-c");
                         for kv in kvs {
                             let mut nvs = kv.split("=");
@@ -66,6 +69,11 @@ impl Startup {
                                     let name = name.trim().to_string();
                                     let value = value.trim().to_string();
                                     if !name.is_empty() && !value.is_empty() {
+                                        let value = if name == "search_path" {
+                                            search_path(&value)
+                                        } else {
+                                            ParameterValue::from(value)
+                                        };
                                         params.insert(name, value);
                                     }
                                 }
@@ -231,6 +239,14 @@ impl FromBytes for SslReply {
             answer => Err(Error::UnexpectedSslReply(answer)),
         }
     }
+}
+
+fn search_path(value: &str) -> ParameterValue {
+    let value = value
+        .split(",")
+        .map(|value| value.to_string())
+        .collect::<Vec<_>>();
+    ParameterValue::Tuple(value)
 }
 
 #[cfg(test)]

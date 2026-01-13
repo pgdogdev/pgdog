@@ -49,17 +49,17 @@ impl<'a> Healtcheck<'a> {
 
     /// Perform the healtcheck if it's required.
     pub async fn healthcheck(&mut self) -> Result<(), Error> {
-        let healtcheck_age = self.conn.healthcheck_age(self.now);
+        let health_check_age = self.conn.healthcheck_age(self.now);
 
-        if healtcheck_age < self.healthcheck_interval {
+        if health_check_age < self.healthcheck_interval {
             return Ok(());
         }
 
         match timeout(self.healthcheck_timeout, self.conn.healthcheck(";")).await {
             Ok(Ok(())) => Ok(()),
             Ok(Err(err)) => {
-                error!("server error: {} [{}]", err, self.pool.addr());
-                Err(Error::ServerError)
+                error!("health check server error: {} [{}]", err, self.pool.addr());
+                Err(Error::HealthcheckError)
             }
             Err(_) => Err(Error::HealthcheckError),
         }

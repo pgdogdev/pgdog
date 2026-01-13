@@ -52,6 +52,10 @@ impl Data {
             is_null: true,
         }
     }
+
+    pub(crate) fn is_null(&self) -> bool {
+        self.is_null
+    }
 }
 
 /// DataRow message.
@@ -99,6 +103,15 @@ impl ToDataRowColumn for &str {
 impl ToDataRowColumn for i64 {
     fn to_data_row_column(&self) -> Data {
         Bytes::copy_from_slice(self.to_string().as_bytes()).into()
+    }
+}
+
+impl ToDataRowColumn for Option<i64> {
+    fn to_data_row_column(&self) -> Data {
+        match self {
+            Some(value) => ToDataRowColumn::to_data_row_column(value),
+            None => Data::null(),
+        }
     }
 }
 
@@ -243,6 +256,11 @@ impl DataRow {
     pub fn get<T: FromDataType>(&self, index: usize, format: Format) -> Option<T> {
         self.column(index)
             .and_then(|col| T::decode(&col, format).ok())
+    }
+
+    /// Get raw column data.
+    pub(crate) fn get_raw(&self, index: usize) -> Option<&Data> {
+        self.columns.get(index)
     }
 
     /// Get column at index given row description.

@@ -1,5 +1,5 @@
 use crate::{
-    backend::databases::databases,
+    backend::{self, databases::databases},
     net::messages::{DataRow, Field, Protocol, RowDescription},
 };
 
@@ -30,27 +30,30 @@ impl Command for ShowPools {
             Field::numeric("cl_waiting"),
             Field::numeric("sv_idle"),
             Field::numeric("sv_active"),
+            Field::numeric("sv_idle_xact"),
             Field::numeric("sv_total"),
             Field::numeric("maxwait"),
             Field::numeric("maxwait_us"),
             Field::text("pool_mode"),
             Field::bool("paused"),
             Field::bool("banned"),
+            Field::bool("healthy"),
             Field::numeric("errors"),
             Field::numeric("re_synced"),
             Field::numeric("out_of_sync"),
+            Field::numeric("force_closed"),
             Field::bool("online"),
-            Field::text("replica_lag"),
             Field::bool("schema_admin"),
         ]);
         let mut messages = vec![rd.message()?];
         for (user, cluster) in databases().all() {
             for (shard_num, shard) in cluster.shards().iter().enumerate() {
-                for (role, pool) in shard.pools_with_roles() {
+                for (role, ban, pool) in shard.pools_with_roles_and_bans() {
                     let mut row = DataRow::new();
                     let state = pool.state();
                     let maxwait = state.maxwait.as_secs() as i64;
                     let maxwait_us = state.maxwait.subsec_micros() as i64;
+                    let idle_in_transaction = backend::stats::idle_in_transaction(&pool);
 
                     row.add(pool.id() as i64)
                         .add(user.database.as_str())
@@ -62,17 +65,19 @@ impl Command for ShowPools {
                         .add(state.waiting)
                         .add(state.idle)
                         .add(state.checked_out)
+                        .add(idle_in_transaction)
                         .add(state.total)
                         .add(maxwait)
                         .add(maxwait_us)
                         .add(state.pooler_mode.to_string())
                         .add(state.paused)
-                        .add(state.banned)
+                        .add(ban.banned())
+                        .add(pool.healthy())
                         .add(state.errors)
                         .add(state.re_synced)
                         .add(state.out_of_sync)
+                        .add(state.force_close)
                         .add(state.online)
-                        .add(state.replica_lag.simple_display())
                         .add(cluster.schema_admin());
 
                     messages.push(row.message()?);

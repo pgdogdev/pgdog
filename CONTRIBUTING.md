@@ -4,6 +4,7 @@ Contributions are welcome. If you see a bug, feel free to submit a PR with a fix
 
 ## Necessary crates - cargo install <name>
 
+(if you use mise, these can be installed with `mise install`)
 - cargo-nextest
 - cargo-watch
 

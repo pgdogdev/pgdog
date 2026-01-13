@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use rand::{thread_rng, Rng};
+use rand::{rng, Rng};
 use tokio::select;
 use tokio::time::{sleep, Instant};
 use tokio::{spawn, sync::mpsc::*};
@@ -13,9 +13,8 @@ use crate::config::{config, ConfigAndUsers};
 use crate::frontend::client::query_engine::{QueryEngine, QueryEngineContext};
 use crate::frontend::client::timeouts::Timeouts;
 use crate::frontend::client::TransactionType;
-use crate::frontend::comms::comms;
-use crate::frontend::PreparedStatements;
-use crate::net::{Parameter, Parameters, Stream};
+use crate::frontend::{ClientComms, PreparedStatements};
+use crate::net::{BackendKeyData, Parameter, Parameters, Stream};
 
 use crate::frontend::ClientRequest;
 
@@ -33,6 +32,8 @@ pub use request::*;
 /// to PgDog.
 #[derive(Debug)]
 pub struct Mirror {
+    /// Random identifier for this mirror connection.
+    pub id: BackendKeyData,
     /// Mirror's prepared statements. Should be similar
     /// to client's statements, if exposure is high.
     pub prepared_statements: PreparedStatements,
@@ -51,10 +52,11 @@ pub struct Mirror {
 impl Mirror {
     fn new(params: &Parameters, config: &ConfigAndUsers) -> Self {
         Self {
+            id: BackendKeyData::new(),
             prepared_statements: PreparedStatements::new(),
             params: params.clone(),
             timeouts: Timeouts::from_config(&config.config.general),
-            stream: Stream::DevNull,
+            stream: Stream::dev_null(),
             transaction: None,
             cross_shard_disabled: config.config.general.cross_shard_disabled,
         }
@@ -90,7 +92,17 @@ impl Mirror {
         ]);
 
         // Same query engine as the client, except with a potentially different database config.
-        let mut query_engine = QueryEngine::new(&params, &comms(), false, &None)?;
+        let mut query_engine = QueryEngine::new(
+            &params,
+            &ClientComms::new(&BackendKeyData::new()),
+            false,
+            &None,
+        )?;
+
+        // Mirror must read server responses to keep the connection synchronized,
+        // so disable test_mode which skips reading responses.
+        #[cfg(test)]
+        query_engine.set_test_mode(false);
 
         // Mirror traffic handler.
         let mut mirror = Self::new(&params, &config);
@@ -210,7 +222,7 @@ mod test {
     #[tokio::test]
     async fn test_mirror() {
         config::load_test();
-        let cluster = Cluster::new_test();
+        let cluster = Cluster::new_test(&config());
         cluster.launch();
         let mut mirror = Mirror::spawn("pgdog", &cluster, None).unwrap();
         let mut conn = cluster.primary(0, &Request::default()).await.unwrap();
@@ -260,7 +272,7 @@ mod test {
     #[tokio::test]
     async fn test_mirror_stats_tracking() {
         config::load_test();
-        let cluster = Cluster::new_test();
+        let cluster = Cluster::new_test(&config());
         cluster.launch();
 
         // Get initial stats

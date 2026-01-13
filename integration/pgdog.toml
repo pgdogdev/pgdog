@@ -11,11 +11,25 @@ read_write_strategy = "aggressive"
 openmetrics_port = 9090
 openmetrics_namespace = "pgdog_"
 prepared_statements_limit = 500
+prepared_statements = "extended"
+expanded_explain = true
 # dns_ttl = 15_000
 query_cache_limit = 500
 pub_sub_channel_size = 4098
 two_phase_commit = false
 healthcheck_port = 8080
+tls_certificate = "integration/tls/cert.pem"
+tls_private_key = "integration/tls/key.pem"
+query_parser_engine = "pg_query_raw"
+
+[memory]
+net_buffer = 8096
+message_buffer = 8096
+
+[rewrite]
+enabled = false
+shard_key = "ignore"
+split_inserts = "error"
 
 # ------------------------------------------------------------------------------
 # ----- Database :: pgdog ------------------------------------------------------
@@ -355,6 +369,37 @@ shard = 1
 [[omnisharded_tables]]
 database = "pgdog_sharded"
 tables = ["sharded_omni"]
+
+# ------------------------------------------------------------------------------
+# ----- Schema-based sharding --------------------------------------------------
+
+[[databases]]
+name = "pgdog_schema"
+host = "127.0.0.1"
+database_name = "shard_0"
+shard = 0
+
+[[databases]]
+name = "pgdog_schema"
+host = "127.0.0.1"
+database_name = "shard_1"
+shard = 1
+
+[[sharded_schemas]]
+database = "pgdog_schema"
+name = "shard_0"
+shard = 0
+
+[[sharded_schemas]]
+database = "pgdog_schema"
+name = "shard_1"
+shard = 1
+
+# By default, all queries go to shard 0
+[[sharded_schemas]]
+database = "pgdog_schema"
+shard = 0
+
 
 # ------------------------------------------------------------------------------
 # ----- Admin ------------------------------------------------------------------

@@ -1,6 +1,6 @@
 use crate::{
     backend::databases,
-    config::{self, config},
+    config::{self, config, RewriteMode},
     frontend::PreparedStatements,
 };
 
@@ -91,6 +91,10 @@ impl Command for Set {
                     .close_unused(config.config.general.prepared_statements_limit);
             }
 
+            "prepared_statements" => {
+                config.config.general.prepared_statements = Self::from_json(&self.value)?;
+            }
+
             "cross_shard_disabled" => {
                 config.config.general.cross_shard_disabled = Self::from_json(&self.value)?;
             }
@@ -103,11 +107,57 @@ impl Command for Set {
                 config.config.general.two_phase_commit_auto = Self::from_json(&self.value)?;
             }
 
+            "rewrite_shard_key_updates" => {
+                config.config.rewrite.shard_key = self
+                    .value
+                    .parse::<RewriteMode>()
+                    .map_err(|_| Error::Syntax)?;
+            }
+
+            "rewrite_split_inserts" => {
+                config.config.rewrite.split_inserts = self
+                    .value
+                    .parse::<RewriteMode>()
+                    .map_err(|_| Error::Syntax)?;
+            }
+
+            "rewrite_enabled" => {
+                config.config.rewrite.enabled = Self::from_json(&self.value)?;
+            }
+
+            "healthcheck_interval" => {
+                config.config.general.healthcheck_interval = self.value.parse()?;
+            }
+
+            "idle_healthcheck_interval" => {
+                config.config.general.idle_healthcheck_interval = self.value.parse()?;
+            }
+
+            "idle_healthcheck_delay" => {
+                config.config.general.idle_healthcheck_delay = self.value.parse()?;
+            }
+
+            "ban_timeout" => {
+                config.config.general.ban_timeout = self.value.parse()?;
+            }
+
+            "tls_client_required" => {
+                config.config.general.tls_client_required = Self::from_json(&self.value)?;
+            }
+
+            "query_parser" => {
+                config.config.general.query_parser = Self::from_json(&self.value)?;
+            }
+
+            "client_idle_in_transaction_timeout" => {
+                config.config.general.client_idle_in_transaction_timeout = self.value.parse()?;
+            }
+
             _ => return Err(Error::Syntax),
         }
 
         config::set(config)?;
-        databases::init();
+        databases::init()?;
 
         Ok(vec![])
     }

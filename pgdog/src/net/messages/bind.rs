@@ -7,6 +7,7 @@ use super::prelude::*;
 use super::Error;
 use super::FromDataType;
 use super::Vector;
+use bytes::BytesMut;
 
 use std::fmt::Debug;
 use std::str::from_utf8;
@@ -34,7 +35,7 @@ pub struct Parameter {
     /// Parameter data length.
     pub len: i32,
     /// Parameter data.
-    pub data: Vec<u8>,
+    pub data: Bytes,
 }
 
 impl Debug for Parameter {
@@ -59,14 +60,14 @@ impl Parameter {
     pub fn new_null() -> Self {
         Self {
             len: -1,
-            data: vec![],
+            data: Bytes::new(),
         }
     }
 
     pub fn new(data: &[u8]) -> Self {
         Self {
             len: data.len() as i32,
-            data: data.to_vec(),
+            data: Bytes::copy_from_slice(data),
         }
     }
 }
@@ -111,6 +112,14 @@ impl<'a> ParameterWithFormat<'a> {
     pub fn data(&'a self) -> &'a [u8] {
         &self.parameter.data
     }
+
+    pub fn is_null(&self) -> bool {
+        self.parameter.len < 0
+    }
+
+    pub fn parameter(&self) -> &Parameter {
+        self.parameter
+    }
 }
 
 /// Bind (F) message.
@@ -124,8 +133,8 @@ pub struct Bind {
     codes: Vec<Format>,
     /// Parameters.
     params: Vec<Parameter>,
-    /// Results format.
-    results: Vec<i16>,
+    /// Results format (raw bytes, 2 bytes per i16).
+    results: Bytes,
     /// Original payload.
     original: Option<Bytes>,
 }
@@ -137,7 +146,7 @@ impl Default for Bind {
             statement: Bytes::from("\0"),
             codes: vec![],
             params: vec![],
-            results: vec![],
+            results: Bytes::new(),
             original: None,
         }
     }
@@ -149,7 +158,7 @@ impl Bind {
             + self.statement.len()
             + self.codes.len() * std::mem::size_of::<i16>() + 2 // num codes
             + self.params.iter().map(|p| p.len()).sum::<usize>() + 2 // num params
-            + self.results.len() * std::mem::size_of::<i16>() + 2 // num results
+            + self.results.len() + 2 // num results (results already stores raw bytes)
             + 4 // len
             + 1 // code
     }
@@ -237,7 +246,11 @@ impl Bind {
         results: &[i16],
     ) -> Self {
         let mut me = Self::new_params_codes(name, params, codes);
-        me.results = results.to_vec();
+        let mut buf = BytesMut::with_capacity(results.len() * 2);
+        for result in results {
+            buf.put_i16(*result);
+        }
+        me.results = buf.freeze();
 
         me
     }
@@ -248,6 +261,47 @@ impl Bind {
 
     pub fn format_codes_raw(&self) -> &Vec<Format> {
         &self.codes
+    }
+
+    /// Push a parameter to the end of the parameter list with the given format.
+    ///
+    /// Handles format codes correctly per PostgreSQL semantics:
+    /// - If codes.len() == 0: all parameters use Text
+    /// - If codes.len() == 1: all parameters use that one format (uniform)
+    /// - If codes.len() == params.len() (and > 1): one-to-one mapping
+    pub fn push_param(&mut self, param: Parameter, format: Format) {
+        if self.codes.len() == 1 {
+            // Uniform format: if new format differs, expand to one-to-one
+            if self.codes[0] != format {
+                let existing_format = self.codes[0];
+                self.codes = vec![existing_format; self.params.len()];
+                self.codes.push(format);
+            }
+            // If format matches, keep uniform (no change to codes)
+        } else if self.codes.len() > 1 && self.codes.len() == self.params.len() {
+            // One-to-one mapping: add the new format
+            self.codes.push(format);
+        } else if self.codes.is_empty() && format == Format::Binary {
+            // No codes (all text): if adding binary, need to expand
+            self.codes = vec![Format::Text; self.params.len()];
+            self.codes.push(Format::Binary);
+        }
+        // If codes.len() == 0 and format is Text, no codes needed
+
+        self.params.push(param);
+        self.original = None;
+    }
+
+    /// Get the effective format for new parameters.
+    pub fn default_param_format(&self) -> Format {
+        if self.codes.len() == 1 {
+            self.codes[0]
+        } else if self.codes.is_empty() {
+            Format::Text
+        } else {
+            // One-to-one mapping: default to Text for new params
+            Format::Text
+        }
     }
 }
 
@@ -262,29 +316,31 @@ impl FromBytes for Bind {
         from_utf8(&portal[0..portal.len() - 1])?;
         from_utf8(&statement[0..statement.len() - 1])?;
 
-        let num_codes = bytes.get_i16();
-        let codes = (0..num_codes)
+        let num_codes = bytes.get_u16();
+        let codes = (0..num_codes as usize)
             .map(|_| match bytes.get_i16() {
                 0 => Format::Text,
                 _ => Format::Binary,
             })
             .collect();
-        let num_params = bytes.get_i16();
-        let params = (0..num_params)
+        let num_params = bytes.get_u16();
+        let params = (0..num_params as usize)
             .map(|_| {
                 let len = bytes.get_i32();
                 let data = if len >= 0 {
-                    let mut data = Vec::with_capacity(len as usize);
-                    (0..len).for_each(|_| data.push(bytes.get_u8()));
-                    data
+                    bytes.split_to(len as usize)
                 } else {
-                    vec![]
+                    Bytes::new()
                 };
                 Parameter { len, data }
             })
             .collect();
         let num_results = bytes.get_i16();
-        let results = (0..num_results).map(|_| bytes.get_i16()).collect();
+        let results = if num_results > 0 {
+            bytes.split_to((num_results * 2) as usize)
+        } else {
+            Bytes::new()
+        };
 
         Ok(Self {
             portal,
@@ -309,22 +365,20 @@ impl ToBytes for Bind {
 
         payload.put(self.portal.clone());
         payload.put(self.statement.clone());
-        payload.put_i16(self.codes.len() as i16);
+        payload.put_u16(self.codes.len() as u16);
         for code in &self.codes {
             payload.put_i16(match code {
                 Format::Text => 0,
                 Format::Binary => 1,
             });
         }
-        payload.put_i16(self.params.len() as i16);
+        payload.put_u16(self.params.len() as u16);
         for param in &self.params {
             payload.put_i32(param.len);
             payload.put(&param.data[..]);
         }
-        payload.put_i16(self.results.len() as i16);
-        for result in &self.results {
-            payload.put_i16(*result);
-        }
+        payload.put_i16((self.results.len() / 2) as i16);
+        payload.put(self.results.clone());
         Ok(payload.freeze())
     }
 }
@@ -358,14 +412,18 @@ mod test {
             params: vec![
                 Parameter {
                     len: 2,
-                    data: vec![0, 1],
+                    data: Bytes::copy_from_slice(&[0, 1]),
                 },
                 Parameter {
                     len: 4,
-                    data: "test".as_bytes().to_vec(),
+                    data: Bytes::from("test"),
                 },
             ],
-            results: vec![0],
+            results: {
+                let mut buf = BytesMut::with_capacity(2);
+                buf.put_i16(0);
+                buf.freeze()
+            },
         };
         let bytes = bind.to_bytes().unwrap();
         let mut original = Bind::from_bytes(bytes.clone()).unwrap();
@@ -400,7 +458,7 @@ mod test {
             statement: "test\0".into(),
             codes: vec![Format::Binary],
             params: vec![Parameter {
-                data: jsonb.as_bytes().to_vec(),
+                data: Bytes::copy_from_slice(jsonb.as_bytes()),
                 len: jsonb.len() as i32,
             }],
             ..Default::default()
@@ -433,5 +491,20 @@ mod test {
             }
             assert_eq!(msg.code(), c);
         }
+    }
+
+    #[test]
+    fn test_large_parameter_count_round_trip() {
+        let count = 35_000;
+        let params: Vec<Parameter> = (0..count).map(|_| Parameter::new_null()).collect();
+        let bind = Bind::new_params("__pgdog_large", &params);
+
+        let bytes = bind.to_bytes().unwrap();
+        let decoded = Bind::from_bytes(bytes.clone()).unwrap();
+
+        assert_eq!(decoded.params_raw().len(), count);
+        assert_eq!(decoded.codes().len(), 0);
+        assert_eq!(decoded.statement(), "__pgdog_large");
+        assert_eq!(bytes.len(), decoded.len());
     }
 }

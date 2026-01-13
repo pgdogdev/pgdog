@@ -1,0 +1,47 @@
+[general]
+checkout_timeout = 1_000
+connect_timeout = 1_000
+ban_timeout = 30_000
+query_timeout = 1_000
+idle_healthcheck_interval = 1_000
+client_login_timeout = 1_000
+load_balancing_algorithm = "round_robin"
+[rewrite]
+enabled = false
+shard_key = "ignore"
+split_inserts = "error"
+
+[[databases]]
+name = "failover"
+host = "127.0.0.1"
+port = 5435
+role = "primary"
+database_name = "pgdog"
+
+[[databases]]
+name = "failover"
+host = "127.0.0.1"
+port = 5436
+role = "replica"
+database_name = "pgdog"
+read_only = true
+
+[[databases]]
+name = "failover"
+host = "127.0.0.1"
+port = 5437
+role = "replica"
+database_name = "pgdog"
+read_only = true
+
+[[databases]]
+name = "failover"
+host = "127.0.0.1"
+port = 5438
+role = "replica"
+database_name = "pgdog"
+read_only = true
+
+[admin]
+password = "pgdog"
+user = "admin"

@@ -1,11 +1,11 @@
-use std::{array::TryFromSliceError, ffi::NulError, num::ParseIntError};
+use std::{array::TryFromSliceError, ffi::NulError};
 
 use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("{0}")]
-    Parse(#[from] ParseIntError),
+    ParseInt(String),
 
     #[error("{0}")]
     Size(#[from] TryFromSliceError),
@@ -39,4 +39,7 @@ pub enum Error {
 
     #[error("sharding key value isn't valid")]
     InvalidValue,
+
+    #[error("config error: {0}")]
+    ConfigError(#[from] pgdog_config::Error),
 }

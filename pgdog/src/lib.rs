@@ -16,12 +16,24 @@ pub mod state;
 pub mod stats;
 #[cfg(feature = "tui")]
 pub mod tui;
+pub mod unique_id;
 pub mod util;
 
 use tracing::level_filters::LevelFilter;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
+#[cfg(test)]
+use std::alloc::System;
 use std::io::IsTerminal;
+
+#[cfg(not(test))]
+#[cfg(not(target_env = "msvc"))]
+#[global_allocator]
+static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
+#[cfg(test)]
+#[global_allocator]
+static GLOBAL: &stats_alloc::StatsAlloc<System> = &stats_alloc::INSTRUMENTED_SYSTEM;
 
 /// Setup the logger, so `info!`, `debug!`
 /// and other macros actually output something.

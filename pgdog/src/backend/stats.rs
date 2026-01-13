@@ -11,6 +11,8 @@ use parking_lot::Mutex;
 use tokio::time::Instant;
 
 use crate::{
+    backend::{pool::stats::MemoryStats, Pool, ServerOptions},
+    config::Memory,
     net::{messages::BackendKeyData, Parameters},
     state::State,
 };
@@ -23,6 +25,17 @@ static STATS: Lazy<Mutex<HashMap<BackendKeyData, ConnectedServer>>> =
 /// Get a copy of latest stats.
 pub fn stats() -> HashMap<BackendKeyData, ConnectedServer> {
     STATS.lock().clone()
+}
+
+/// Get idle-in-transaction server connections for connection pool.
+pub fn idle_in_transaction(pool: &Pool) -> usize {
+    STATS
+        .lock()
+        .values()
+        .filter(|stat| {
+            stat.stats.pool_id == pool.id() && stat.stats.state == State::IdleInTransaction
+        })
+        .count()
 }
 
 /// Update stats to latest version.
@@ -60,11 +73,13 @@ pub struct Counts {
     pub prepared_statements: usize,
     pub query_time: Duration,
     pub transaction_time: Duration,
+    pub idle_in_transaction_time: Duration,
     pub parse: usize,
     pub bind: usize,
     pub healthchecks: usize,
     pub close: usize,
-    pub memory_used: usize,
+    pub cleaned: usize,
+    pub prepared_sync: usize,
 }
 
 impl Add for Counts {
@@ -79,16 +94,18 @@ impl Add for Counts {
             queries: self.queries.saturating_add(rhs.queries),
             rollbacks: self.rollbacks.saturating_add(rhs.rollbacks),
             errors: self.errors.saturating_add(rhs.errors),
-            prepared_statements: self
-                .prepared_statements
-                .saturating_add(rhs.prepared_statements),
+            prepared_statements: rhs.prepared_statements, // It's a gauge.
             query_time: self.query_time.saturating_add(rhs.query_time),
             transaction_time: self.query_time.saturating_add(rhs.transaction_time),
+            idle_in_transaction_time: self
+                .idle_in_transaction_time
+                .saturating_add(rhs.idle_in_transaction_time),
             parse: self.parse.saturating_add(rhs.parse),
             bind: self.bind.saturating_add(rhs.bind),
             healthchecks: self.healthchecks.saturating_add(rhs.healthchecks),
             close: self.close.saturating_add(rhs.close),
-            memory_used: self.memory_used, // It's a gauge.
+            cleaned: self.cleaned.saturating_add(rhs.cleaned),
+            prepared_sync: self.prepared_sync.saturating_add(rhs.prepared_sync),
         }
     }
 }
@@ -104,13 +121,23 @@ pub struct Stats {
     pub created_at_time: SystemTime,
     pub total: Counts,
     pub last_checkout: Counts,
+    pub pool_id: u64,
+    pub client_id: Option<BackendKeyData>,
+    pub memory: MemoryStats,
     query_timer: Option<Instant>,
     transaction_timer: Option<Instant>,
+    idle_in_transaction_timer: Option<Instant>,
 }
 
 impl Stats {
     /// Register new server with statistics.
-    pub fn connect(id: BackendKeyData, addr: &Address, params: &Parameters) -> Self {
+    pub fn connect(
+        id: BackendKeyData,
+        addr: &Address,
+        params: &Parameters,
+        options: &ServerOptions,
+        config: &Memory,
+    ) -> Self {
         let now = Instant::now();
         let stats = Stats {
             id,
@@ -123,6 +150,10 @@ impl Stats {
             last_checkout: Counts::default(),
             query_timer: None,
             transaction_timer: None,
+            pool_id: options.pool_id,
+            client_id: None,
+            memory: MemoryStats::new(config),
+            idle_in_transaction_timer: None,
         };
 
         STATS.lock().insert(
@@ -151,7 +182,8 @@ impl Stats {
         self.update();
     }
 
-    pub fn link_client(&mut self, client_name: &str, server_server: &str) {
+    pub fn link_client(&mut self, client_name: &str, server_server: &str, id: &BackendKeyData) {
+        self.client_id = Some(*id);
         if client_name != server_server {
             let mut guard = STATS.lock();
             if let Some(entry) = guard.get_mut(&self.id) {
@@ -172,6 +204,8 @@ impl Stats {
     /// for stats.
     pub fn set_prepared_statements(&mut self, size: usize) {
         self.total.prepared_statements = size;
+        self.total.prepared_sync += 1;
+        self.last_checkout.prepared_sync += 1;
         self.update();
     }
 
@@ -214,9 +248,14 @@ impl Stats {
     }
 
     /// A query has been completed.
-    pub fn query(&mut self, now: Instant) {
+    pub fn query(&mut self, now: Instant, idle_in_transaction: bool) {
         self.total.queries += 1;
         self.last_checkout.queries += 1;
+
+        if idle_in_transaction {
+            self.idle_in_transaction_timer = Some(now);
+        }
+
         if let Some(query_timer) = self.query_timer.take() {
             let duration = now.duration_since(query_timer);
             self.total.query_time += duration;
@@ -240,6 +279,7 @@ impl Stats {
     }
 
     fn activate(&mut self) {
+        // Client started a query/transaction.
         if self.state == State::Active {
             let now = Instant::now();
             if self.transaction_timer.is_none() {
@@ -247,6 +287,11 @@ impl Stats {
             }
             if self.query_timer.is_none() {
                 self.query_timer = Some(now);
+            }
+            if let Some(idle_in_transaction_timer) = self.idle_in_transaction_timer.take() {
+                let elapsed = now.duration_since(idle_in_transaction_timer);
+                self.last_checkout.idle_in_transaction_time += elapsed;
+                self.total.idle_in_transaction_time += elapsed;
             }
         }
     }
@@ -272,9 +317,14 @@ impl Stats {
     }
 
     #[inline]
-    pub fn memory_used(&mut self, memory: usize) {
-        self.total.memory_used = memory;
-        self.last_checkout.memory_used = memory;
+    pub fn memory_used(&mut self, stats: MemoryStats) {
+        self.memory = stats;
+    }
+
+    #[inline]
+    pub fn cleaned(&mut self) {
+        self.last_checkout.cleaned += 1;
+        self.total.cleaned += 1;
     }
 
     /// Track rollbacks.

@@ -51,11 +51,10 @@ use base64::prelude::*;
 impl AuthenticationProvider for UserPassword {
     fn get_password_for(&self, _user: &str) -> Option<PasswordInfo> {
         let iterations = 4096;
-        let salt = rand::thread_rng().gen::<[u8; 16]>().to_vec();
+        let salt = rand::rng().random::<[u8; 16]>().to_vec();
 
         // Move expensive PBKDF2 computation to blocking thread pool
         // to avoid blocking the async runtime.
-        // Note: Using block_in_place() because AuthenticationProvider trait is synchronous.
         let hash = tokio::task::block_in_place(|| {
             hash_password(
                 &self.password,
@@ -211,6 +210,43 @@ impl Server {
                 c => return Err(Error::UnexpectedMessage(c)),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use base64::engine::general_purpose::STANDARD;
+
+    #[test]
+    fn user_password_provider_generates_info() {
+        let server = Server::new("secret");
+        let provider = match server.provider {
+            Provider::Plain(ref inner) => inner.clone(),
+            _ => unreachable!(),
+        };
+
+        assert!(
+            provider.get_password_for("user").is_some(),
+            "plain provider should produce password info"
+        );
+    }
+
+    #[test]
+    fn hashed_password_provider_parses_scram_hash() {
+        let iterations = std::num::NonZeroU32::new(4096).unwrap();
+        let salt = b"testsalt";
+        let hash = hash_password("secret", iterations, salt);
+        let salt_b64 = STANDARD.encode(salt);
+        let hash_b64 = STANDARD.encode(hash.as_ref());
+        let scram_hash = format!("SCRAM-SHA-256${}:{salt_b64}:${hash_b64}", iterations.get());
+
+        let provider = HashedPassword { hash: scram_hash };
+
+        assert!(
+            provider.get_password_for("user").is_some(),
+            "hashed provider should produce password info"
+        );
     }
 }
 

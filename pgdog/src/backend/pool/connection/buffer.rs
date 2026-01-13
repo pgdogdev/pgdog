@@ -6,7 +6,10 @@ use std::{
 };
 
 use crate::{
-    frontend::router::parser::{Aggregate, DistinctBy, DistinctColumn, OrderBy, RewritePlan},
+    frontend::router::parser::{
+        rewrite::statement::aggregate::AggregateRewritePlan, Aggregate, DistinctBy, DistinctColumn,
+        OrderBy,
+    },
     net::{
         messages::{DataRow, FromBytes, Message, Protocol, ToBytes, Vector},
         Decoder,
@@ -136,7 +139,7 @@ impl Buffer {
         &mut self,
         aggregate: &Aggregate,
         decoder: &Decoder,
-        plan: &RewritePlan,
+        plan: &AggregateRewritePlan,
     ) -> Result<(), super::Error> {
         let buffer: VecDeque<DataRow> = std::mem::take(&mut self.buffer);
         let mut rows = if aggregate.is_empty() {
@@ -158,7 +161,7 @@ impl Buffer {
         Ok(())
     }
 
-    fn drop_helper_columns(rows: &mut VecDeque<DataRow>, plan: &RewritePlan) {
+    fn drop_helper_columns(rows: &mut VecDeque<DataRow>, plan: &AggregateRewritePlan) {
         if plan.drop_columns().is_empty() {
             return;
         }
@@ -274,7 +277,7 @@ mod test {
             buf.add(dr.message().unwrap()).unwrap();
         }
 
-        buf.aggregate(&agg, &Decoder::from(&rd), &RewritePlan::new())
+        buf.aggregate(&agg, &Decoder::from(&rd), &AggregateRewritePlan::default())
             .unwrap();
         buf.full();
 
@@ -301,7 +304,7 @@ mod test {
             }
         }
 
-        buf.aggregate(&agg, &Decoder::from(&rd), &RewritePlan::new())
+        buf.aggregate(&agg, &Decoder::from(&rd), &AggregateRewritePlan::default())
             .unwrap();
         buf.full();
 

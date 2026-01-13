@@ -1,4 +1,8 @@
-use crate::{frontend::PreparedStatements, stats::memory::MemoryUsage};
+use crate::{
+    frontend::PreparedStatements,
+    net::{data_row::Data, ToDataRowColumn},
+    stats::memory::MemoryUsage,
+};
 
 use super::prelude::*;
 
@@ -20,11 +24,15 @@ impl Command for ShowPreparedStatements {
         let mut messages = vec![RowDescription::new(&[
             Field::text("name"),
             Field::text("statement"),
+            Field::text("rewrite"),
             Field::numeric("used_by"),
             Field::numeric("memory_used"),
         ])
         .message()?];
         for (key, stmt) in statements.statements() {
+            let name = stmt.name();
+            let rewrite = statements.rewritten_parse(&name).ok_or(Error::Empty)?;
+            let rewritten = statements.is_rewritten(&name);
             let name_memory = statements
                 .names()
                 .get(&stmt.name())
@@ -33,6 +41,11 @@ impl Command for ShowPreparedStatements {
             let mut dr = DataRow::new();
             dr.add(stmt.name())
                 .add(key.query()?)
+                .add(if rewritten {
+                    rewrite.query().to_data_row_column()
+                } else {
+                    Data::null()
+                })
                 .add(stmt.used)
                 .add(name_memory);
             messages.push(dr.message()?);

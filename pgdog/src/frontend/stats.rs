@@ -3,7 +3,7 @@
 use std::time::{Duration, SystemTime};
 use tokio::time::Instant;
 
-use crate::state::State;
+use crate::{backend::pool::stats::MemoryStats, state::State};
 
 /// Client statistics.
 #[derive(Copy, Clone, Debug)]
@@ -37,7 +37,7 @@ pub struct Stats {
     pub last_request: SystemTime,
     /// Number of bytes used by the stream buffer, where all the messages
     /// are stored until they are processed.
-    pub memory_used: usize,
+    pub memory_stats: MemoryStats,
     /// Number of prepared statements in the local cache.
     pub prepared_statements: usize,
     /// Client is locked to a particular server.
@@ -69,7 +69,7 @@ impl Stats {
             query_timer: now,
             wait_timer: now,
             last_request: SystemTime::now(),
-            memory_used: 0,
+            memory_stats: MemoryStats::default(),
             prepared_statements: 0,
             locked: false,
         }
@@ -127,8 +127,8 @@ impl Stats {
         self.bytes_sent += bytes;
     }
 
-    pub(super) fn memory_used(&mut self, memory: usize) {
-        self.memory_used = memory;
+    pub(super) fn memory_used(&mut self, memory: MemoryStats) {
+        self.memory_stats = memory;
     }
 
     pub(super) fn idle(&mut self, in_transaction: bool) {

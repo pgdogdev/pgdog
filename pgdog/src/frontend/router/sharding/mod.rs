@@ -3,7 +3,10 @@ use uuid::Uuid;
 use crate::{
     backend::ShardingSchema,
     config::{DataType, ShardedTable},
-    net::messages::{Format, FromDataType, ParameterWithFormat, Vector},
+    net::{
+        messages::{Format, FromDataType, ParameterWithFormat, Vector},
+        vector::str_to_vector,
+    },
 };
 
 // pub mod context;
@@ -19,6 +22,7 @@ pub mod list;
 pub mod mapping;
 pub mod operator;
 pub mod range;
+pub mod schema;
 pub mod tables;
 #[cfg(test)]
 pub mod test;
@@ -30,6 +34,7 @@ pub use context_builder::*;
 pub use error::Error;
 pub use hasher::Hasher;
 pub use operator::*;
+pub use schema::SchemaSharder;
 pub use tables::*;
 pub use value::*;
 pub use vector::{Centroids, Distance};
@@ -102,9 +107,13 @@ pub(crate) fn shard_value(
             .ok()
             .map(Shard::Direct)
             .unwrap_or(Shard::All),
-        DataType::Vector => Vector::try_from(value)
+        DataType::Vector => str_to_vector(value)
             .ok()
-            .map(|v| Centroids::from(centroids).shard(&v, shards, centroid_probes))
+            .map(|v| {
+                Centroids::from(centroids)
+                    .shard(&v, shards, centroid_probes)
+                    .into()
+            })
             .unwrap_or(Shard::All),
         DataType::Varchar => Shard::Direct(varchar(value.as_bytes()) as usize % shards),
     }
@@ -120,15 +129,19 @@ pub(crate) fn shard_binary(
     match data_type {
         DataType::Bigint => i64::decode(bytes, Format::Binary)
             .ok()
-            .map(|i| Shard::direct(bigint(i) as usize % shards))
+            .map(|i| Shard::new_direct(bigint(i) as usize % shards))
             .unwrap_or(Shard::All),
         DataType::Uuid => Uuid::decode(bytes, Format::Binary)
             .ok()
-            .map(|u| Shard::direct(uuid(u) as usize % shards))
+            .map(|u| Shard::new_direct(uuid(u) as usize % shards))
             .unwrap_or(Shard::All),
         DataType::Vector => Vector::decode(bytes, Format::Binary)
             .ok()
-            .map(|v| Centroids::from(centroids).shard(&v, shards, centroid_probes))
+            .map(|v| {
+                Centroids::from(centroids)
+                    .shard(&v, shards, centroid_probes)
+                    .into()
+            })
             .unwrap_or(Shard::All),
         DataType::Varchar => Shard::Direct(varchar(bytes) as usize % shards),
     }

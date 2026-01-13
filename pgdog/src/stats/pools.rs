@@ -1,4 +1,4 @@
-use crate::backend::databases::databases;
+use crate::backend::{self, databases::databases};
 
 use super::{Measurement, Metric, OpenMetric};
 
@@ -61,10 +61,24 @@ impl Pools {
         let mut avg_received = vec![];
         let mut total_xact_time = vec![];
         let mut avg_xact_time = vec![];
+        let mut total_idle_xact_time = vec![];
+        let mut avg_idle_xact_time = vec![];
         let mut total_query_time = vec![];
         let mut avg_query_time = vec![];
         let mut total_close = vec![];
         let mut avg_close = vec![];
+        let mut total_server_errors = vec![];
+        let mut avg_server_errors = vec![];
+        let mut total_cleaned = vec![];
+        let mut avg_cleaned = vec![];
+        let mut total_rollbacks = vec![];
+        let mut avg_rollbacks = vec![];
+        let mut total_connect_time = vec![];
+        let mut avg_connect_time = vec![];
+        let mut total_connect_count = vec![];
+        let mut avg_connect_count = vec![];
+        let mut total_sv_xact_idle = vec![];
+
         for (user, cluster) in databases().all() {
             for (shard_num, shard) in cluster.shards().iter().enumerate() {
                 for (role, pool) in shard.pools_with_roles() {
@@ -172,6 +186,16 @@ impl Pools {
                         measurement: averages.xact_time.as_millis().into(),
                     });
 
+                    total_idle_xact_time.push(Measurement {
+                        labels: labels.clone(),
+                        measurement: totals.idle_xact_time.as_millis().into(),
+                    });
+
+                    avg_idle_xact_time.push(Measurement {
+                        labels: labels.clone(),
+                        measurement: averages.idle_xact_time.as_millis().into(),
+                    });
+
                     total_query_time.push(Measurement {
                         labels: labels.clone(),
                         measurement: totals.query_time.as_millis().into(),
@@ -190,6 +214,61 @@ impl Pools {
                     avg_close.push(Measurement {
                         labels: labels.clone(),
                         measurement: averages.close.into(),
+                    });
+
+                    total_server_errors.push(Measurement {
+                        labels: labels.clone(),
+                        measurement: totals.errors.into(),
+                    });
+
+                    avg_server_errors.push(Measurement {
+                        labels: labels.clone(),
+                        measurement: averages.errors.into(),
+                    });
+
+                    total_cleaned.push(Measurement {
+                        labels: labels.clone(),
+                        measurement: totals.cleaned.into(),
+                    });
+
+                    avg_cleaned.push(Measurement {
+                        labels: labels.clone(),
+                        measurement: averages.cleaned.into(),
+                    });
+
+                    total_rollbacks.push(Measurement {
+                        labels: labels.clone(),
+                        measurement: totals.rollbacks.into(),
+                    });
+
+                    avg_rollbacks.push(Measurement {
+                        labels: labels.clone(),
+                        measurement: averages.rollbacks.into(),
+                    });
+
+                    total_connect_time.push(Measurement {
+                        labels: labels.clone(),
+                        measurement: totals.connect_time.as_millis().into(),
+                    });
+
+                    avg_connect_time.push(Measurement {
+                        labels: labels.clone(),
+                        measurement: averages.connect_time.as_millis().into(),
+                    });
+
+                    total_connect_count.push(Measurement {
+                        labels: labels.clone(),
+                        measurement: totals.connect_count.into(),
+                    });
+
+                    avg_connect_count.push(Measurement {
+                        labels: labels.clone(),
+                        measurement: averages.connect_count.into(),
+                    });
+
+                    total_sv_xact_idle.push(Measurement {
+                        labels: labels.clone(),
+                        measurement: backend::stats::idle_in_transaction(&pool).into(),
                     });
                 }
             }
@@ -341,6 +420,22 @@ impl Pools {
         }));
 
         metrics.push(Metric::new(PoolMetric {
+            name: "total_idle_xact_time".into(),
+            measurements: total_idle_xact_time,
+            help: "Total time spent idling inside transactions.".into(),
+            unit: None,
+            metric_type: Some("counter".into()),
+        }));
+
+        metrics.push(Metric::new(PoolMetric {
+            name: "avg_idle_xact_time".into(),
+            measurements: avg_idle_xact_time,
+            help: "Average time spent idling inside transactions.".into(),
+            unit: None,
+            metric_type: None,
+        }));
+
+        metrics.push(Metric::new(PoolMetric {
             name: "total_query_time".into(),
             measurements: total_query_time,
             help: "Total time spent executing queries.".into(),
@@ -372,7 +467,152 @@ impl Pools {
             metric_type: None,
         }));
 
+        metrics.push(Metric::new(PoolMetric {
+            name: "total_server_errors".into(),
+            measurements: total_server_errors,
+            help: "Total number of errors returned by server connections.".into(),
+            unit: None,
+            metric_type: Some("counter".into()),
+        }));
+
+        metrics.push(Metric::new(PoolMetric {
+            name: "avg_server_errors".into(),
+            measurements: avg_server_errors,
+            help: "Average number of errors returned by server connections.".into(),
+            unit: None,
+            metric_type: None,
+        }));
+
+        metrics.push(Metric::new(PoolMetric {
+            name: "total_cleaned".into(),
+            measurements: total_cleaned,
+            help: "Total number of times server connections were cleaned from client parameters."
+                .into(),
+            unit: None,
+            metric_type: Some("counter".into()),
+        }));
+
+        metrics.push(Metric::new(PoolMetric {
+            name: "avg_cleaned".into(),
+            measurements: avg_cleaned,
+            help: "Average number of times server connections were cleaned from client parameters."
+                .into(),
+            unit: None,
+            metric_type: None,
+        }));
+
+        metrics.push(Metric::new(PoolMetric {
+            name: "total_rollbacks".into(),
+            measurements: total_rollbacks,
+            help:
+                "Total number of abandoned transactions that had to be rolled back automatically."
+                    .into(),
+            unit: None,
+            metric_type: Some("counter".into()),
+        }));
+
+        metrics.push(Metric::new(PoolMetric {
+            name: "avg_rollbacks".into(),
+            measurements: avg_rollbacks,
+            help:
+                "Average number of abandoned transactions that had to be rolled back automatically."
+                    .into(),
+            unit: None,
+            metric_type: None,
+        }));
+
+        metrics.push(Metric::new(PoolMetric {
+            name: "total_connect_time".into(),
+            measurements: total_connect_time,
+            help: "Total time spent connecting to servers.".into(),
+            unit: None,
+            metric_type: Some("counter".into()),
+        }));
+
+        metrics.push(Metric::new(PoolMetric {
+            name: "avg_connect_time".into(),
+            measurements: avg_connect_time,
+            help: "Average time spent connecting to servers.".into(),
+            unit: None,
+            metric_type: None,
+        }));
+
+        metrics.push(Metric::new(PoolMetric {
+            name: "total_connect_count".into(),
+            measurements: total_connect_count,
+            help: "Total number of connections established to servers.".into(),
+            unit: None,
+            metric_type: Some("counter".into()),
+        }));
+
+        metrics.push(Metric::new(PoolMetric {
+            name: "avg_connect_count".into(),
+            measurements: avg_connect_count,
+            help: "Average number of connections established to servers.".into(),
+            unit: None,
+            metric_type: None,
+        }));
+
+        metrics.push(Metric::new(PoolMetric {
+            name: "sv_idle_xact".into(),
+            measurements: total_sv_xact_idle,
+            help: "Servers currently idle in transaction.".into(),
+            unit: None,
+            metric_type: None,
+        }));
+
         Pools { metrics }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::config::{self, ConfigAndUsers};
+
+    use super::*;
+
+    #[test]
+    fn pool_metric_defaults_to_gauge() {
+        let metric = PoolMetric {
+            name: "cl_waiting".into(),
+            measurements: vec![Measurement {
+                labels: vec![],
+                measurement: 3usize.into(),
+            }],
+            help: "Waiting clients per pool".into(),
+            unit: None,
+            metric_type: None,
+        };
+
+        assert_eq!(metric.metric_type(), "gauge");
+        assert!(metric.unit().is_none());
+        assert_eq!(metric.help(), Some("Waiting clients per pool".into()));
+    }
+
+    #[test]
+    fn pool_metric_renders_labels_and_unit() {
+        config::set(ConfigAndUsers::default()).unwrap();
+
+        let metric = PoolMetric {
+            name: "sv_active".into(),
+            measurements: vec![Measurement {
+                labels: vec![
+                    ("user".into(), "alice".into()),
+                    ("database".into(), "app".into()),
+                ],
+                measurement: 5usize.into(),
+            }],
+            help: "Active servers per pool".into(),
+            unit: Some("connections".into()),
+            metric_type: Some("gauge".into()),
+        };
+
+        let rendered = Metric::new(metric).to_string();
+        let lines: Vec<&str> = rendered.lines().collect();
+        assert_eq!(lines[0], "# TYPE sv_active gauge");
+        assert_eq!(lines[1], "# UNIT sv_active connections");
+        assert_eq!(lines[2], "# HELP sv_active Active servers per pool");
+        assert_eq!(lines[3], "sv_active{user=\"alice\",database=\"app\"} 5");
     }
 }
 

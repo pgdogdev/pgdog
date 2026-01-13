@@ -1,11 +1,12 @@
 use bytes::Bytes;
 
 use crate::{
-    frontend::router::parser::RewritePlan,
     net::messages::{Parse, RowDescription},
     stats::memory::MemoryUsage,
 };
 use std::{collections::hash_map::HashMap, str::from_utf8};
+
+use fnv::FnvHashSet as HashSet;
 
 // Format the globally unique prepared statement
 // name based on the counter.
@@ -13,12 +14,15 @@ fn global_name(counter: usize) -> String {
     format!("__pgdog_{}", counter)
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Statement {
     parse: Parse,
+    rewrite: Option<Parse>,
     row_description: Option<RowDescription>,
+    #[allow(dead_code)]
     version: usize,
-    rewrite_plan: Option<RewritePlan>,
+    cache_key: CacheKey,
+    evict_on_close: bool,
 }
 
 impl MemoryUsage for Statement {
@@ -30,8 +34,8 @@ impl MemoryUsage for Statement {
             } else {
                 0
             }
-            // Rewrite plans are small; treat as zero-cost for now.
-            + 0
+            + self.cache_key.memory_usage()
+            + self.evict_on_close.memory_usage()
     }
 }
 
@@ -41,11 +45,7 @@ impl Statement {
     }
 
     fn cache_key(&self) -> CacheKey {
-        CacheKey {
-            query: self.parse.query_ref(),
-            data_types: self.parse.data_types_ref(),
-            version: self.version,
-        }
+        self.cache_key.clone()
     }
 }
 
@@ -56,7 +56,7 @@ impl Statement {
 /// with different data types, we can't re-use it and
 /// need to plan a new one.
 ///
-#[derive(Debug, Clone, PartialEq, Hash, Eq)]
+#[derive(Debug, Clone, PartialEq, Hash, Eq, Default)]
 pub struct CacheKey {
     pub query: Bytes,
     pub data_types: Bytes,
@@ -112,6 +112,7 @@ impl CachedStmt {
 pub struct GlobalCache {
     statements: HashMap<CacheKey, CachedStmt>,
     names: HashMap<String, Statement>,
+    unused: HashSet<usize>,
     counter: usize,
     versions: usize,
 }
@@ -123,6 +124,7 @@ impl MemoryUsage for GlobalCache {
             + self.names.memory_usage()
             + self.counter.memory_usage()
             + self.versions.memory_usage()
+            + self.unused.len() * std::mem::size_of::<usize>()
     }
 }
 
@@ -140,6 +142,9 @@ impl GlobalCache {
         };
 
         if let Some(entry) = self.statements.get_mut(&parse_key) {
+            if entry.used == 0 {
+                self.unused.remove(&entry.counter);
+            }
             entry.used += 1;
             (false, global_name(entry.counter))
         } else {
@@ -147,14 +152,14 @@ impl GlobalCache {
             let name = global_name(self.counter);
             let parse = parse.rename(&name);
 
-            let parse_key = CacheKey {
+            let cache_key = CacheKey {
                 query: parse.query_ref(),
                 data_types: parse.data_types_ref(),
                 version: 0,
             };
 
             self.statements.insert(
-                parse_key,
+                cache_key.clone(),
                 CachedStmt {
                     counter: self.counter,
                     used: 1,
@@ -165,9 +170,8 @@ impl GlobalCache {
                 name.clone(),
                 Statement {
                     parse,
-                    row_description: None,
-                    version: 0,
-                    rewrite_plan: None,
+                    cache_key,
+                    ..Default::default()
                 },
             );
 
@@ -202,13 +206,20 @@ impl GlobalCache {
             name.clone(),
             Statement {
                 parse,
-                row_description: None,
                 version: self.versions,
-                rewrite_plan: None,
+                cache_key: key,
+                ..Default::default()
             },
         );
 
         name
+    }
+
+    /// Rewrite prepared statement in the global cache.
+    pub fn rewrite(&mut self, parse: &Parse) {
+        if let Some(stmt) = self.names.get_mut(parse.name()) {
+            stmt.rewrite = Some(parse.clone());
+        }
     }
 
     /// Client sent a Describe for a prepared statement and received a RowDescription.
@@ -221,35 +232,11 @@ impl GlobalCache {
         }
     }
 
-    pub fn update_query(&mut self, name: &str, sql: &str) -> bool {
-        if let Some(statement) = self.names.get_mut(name) {
-            let old_key = statement.cache_key();
-            let cached = self.statements.remove(&old_key);
-            statement.parse.set_query(sql);
-            let new_key = statement.cache_key();
-            if let Some(entry) = cached {
-                self.statements.insert(new_key, entry);
-            }
-            true
-        } else {
-            false
-        }
-    }
-
-    pub fn set_rewrite_plan(&mut self, name: &str, plan: RewritePlan) {
-        if let Some(statement) = self.names.get_mut(name) {
-            statement.rewrite_plan = Some(plan);
-        }
-    }
-
-    pub fn rewrite_plan(&self, name: &str) -> Option<RewritePlan> {
-        self.names.get(name).and_then(|s| s.rewrite_plan.clone())
-    }
-
-    #[cfg(test)]
+    /// Clear the global cache.
     pub fn reset(&mut self) {
         self.statements.clear();
         self.names.clear();
+        self.unused.clear();
         self.counter = 0;
         self.versions = 0;
     }
@@ -268,6 +255,25 @@ impl GlobalCache {
     /// or to inspect the original query.
     pub fn parse(&self, name: &str) -> Option<Parse> {
         self.names.get(name).map(|p| p.parse.clone())
+    }
+
+    /// Get the rewritten Parse statement.
+    ///
+    /// Used for preparing this statement on a server connection.
+    ///
+    pub fn rewritten_parse(&self, name: &str) -> Option<Parse> {
+        self.names
+            .get(name)
+            .map(|p| p.rewrite.clone().unwrap_or(p.parse.clone()))
+    }
+
+    /// Returns true if this prepared statement has been
+    /// rewritten by the rewrite engine.
+    pub fn is_rewritten(&self, name: &str) -> bool {
+        self.names
+            .get(name)
+            .map(|p| p.rewrite.is_some())
+            .unwrap_or_default()
     }
 
     /// Get the RowDescription message for the prepared statement.
@@ -289,46 +295,38 @@ impl GlobalCache {
     }
 
     /// Close prepared statement.
-    pub fn close(&mut self, name: &str, capacity: usize) -> bool {
-        let used = if let Some(stmt) = self.names.get(name) {
-            if let Some(stmt) = self.statements.get_mut(&stmt.cache_key()) {
-                stmt.used = stmt.used.saturating_sub(1);
-                stmt.used > 0
-            } else {
-                false
-            }
-        } else {
-            false
-        };
+    pub fn close(&mut self, name: &str) {
+        if let Some(statement) = self.names.get(name) {
+            let key = statement.cache_key();
 
-        if !used && self.len() > capacity {
-            self.remove(name);
-            true
-        } else {
-            false
+            if let Some(entry) = self.statements.get_mut(&key) {
+                entry.used = entry.used.saturating_sub(1);
+                if entry.used == 0 && statement.evict_on_close {
+                    self.remove(name);
+                } else if entry.used == 0 {
+                    self.unused.insert(entry.counter);
+                }
+            }
         }
     }
 
     /// Close all unused statements exceeding capacity.
     pub fn close_unused(&mut self, capacity: usize) -> usize {
-        let mut remove = self.statements.len() as i64 - capacity as i64;
-        let mut to_remove = vec![];
-        for stmt in self.statements.values() {
-            if remove <= 0 {
-                break;
-            }
-
-            if stmt.used == 0 {
-                to_remove.push(stmt.name());
-                remove -= 1;
-            }
+        if capacity == 0 {
+            let removed = self.len();
+            self.reset();
+            return removed;
         }
 
-        for name in &to_remove {
-            self.remove(name);
+        let over = self.len().saturating_sub(capacity);
+        let remove = self.unused.iter().take(over).copied().collect::<Vec<_>>();
+
+        for counter in &remove {
+            self.unused.remove(counter);
+            self.remove(&global_name(*counter));
         }
 
-        to_remove.len()
+        remove.len()
     }
 
     /// Remove statement from global cache.
@@ -343,6 +341,9 @@ impl GlobalCache {
         if let Some(stmt) = self.names.get(name) {
             if let Some(stmt) = self.statements.get_mut(&stmt.cache_key()) {
                 stmt.used = stmt.used.saturating_sub(1);
+                if stmt.used == 0 {
+                    self.unused.insert(stmt.counter);
+                }
             }
         }
     }
@@ -380,21 +381,21 @@ mod test {
         assert_eq!(entry.used, 26);
 
         for _ in 0..25 {
-            cache.close("__pgdog_1", 0);
+            cache.close("__pgdog_1");
         }
 
         let entry = cache.statements.get(&stmt.cache_key()).unwrap();
         assert_eq!(entry.used, 1);
+        assert!(cache.unused.is_empty());
 
-        cache.close("__pgdog_1", 0);
-        assert!(cache.statements.is_empty());
-        assert!(cache.names.is_empty());
+        cache.close("__pgdog_1");
+        let entry = cache.statements.get(&stmt.cache_key()).unwrap();
+        assert_eq!(entry.used, 0);
+        assert!(cache.unused.contains(&1)); // __pgdog_1
 
         let name = cache.insert_anyway(&parse);
-        cache.close(&name, 0);
-
-        assert!(cache.names.is_empty());
-        assert!(cache.statements.is_empty());
+        cache.close(&name);
+        assert!(cache.unused.contains(&2)); // __pgdog_2
     }
 
     #[test]
@@ -409,11 +410,8 @@ mod test {
             names.push(name);
         }
 
-        assert_eq!(cache.close_unused(0), 0);
-
         for name in &names[0..5] {
-            assert!(!cache.close(name, 25)); // Won't close because
-                                             // capacity is enough to keep unused around.
+            cache.close(name);
         }
 
         assert_eq!(cache.close_unused(26), 0);
@@ -421,5 +419,197 @@ mod test {
         assert_eq!(cache.close_unused(20), 1);
         assert_eq!(cache.close_unused(19), 0);
         assert_eq!(cache.len(), 20);
+    }
+
+    #[test]
+    fn test_reuse_statement_after_becomes_unused() {
+        let mut cache = GlobalCache::default();
+        let parse = Parse::named("test", "SELECT $1");
+
+        let (new, name) = cache.insert(&parse);
+        assert!(new);
+        assert_eq!(cache.len(), 1);
+
+        cache.close(&name);
+        let stmt = cache.names.get(&name).unwrap().clone();
+        let entry = cache.statements.get(&stmt.cache_key()).unwrap();
+        assert_eq!(entry.used, 0);
+        assert!(cache.unused.contains(&1));
+
+        let (new_again, name_again) = cache.insert(&parse);
+        assert!(!new_again);
+        assert_eq!(name, name_again);
+        assert!(!cache.unused.contains(&1));
+
+        let entry = cache.statements.get(&stmt.cache_key()).unwrap();
+        assert_eq!(entry.used, 1);
+    }
+
+    #[test]
+    fn test_close_nonexistent_statement() {
+        let mut cache = GlobalCache::default();
+        let parse = Parse::named("test", "SELECT 1");
+        cache.insert(&parse);
+
+        cache.close("__pgdog_999");
+        assert_eq!(cache.len(), 1);
+        assert!(cache.unused.is_empty());
+    }
+
+    #[test]
+    fn test_close_unused_with_capacity_zero() {
+        let mut cache = GlobalCache::default();
+
+        for i in 0..10 {
+            let parse = Parse::named("test", format!("SELECT {}", i));
+            let (_, name) = cache.insert(&parse);
+            cache.close(&name);
+        }
+
+        assert_eq!(cache.len(), 10);
+        assert_eq!(cache.unused.len(), 10);
+
+        let removed = cache.close_unused(0);
+        assert_eq!(removed, 10);
+        assert_eq!(cache.len(), 0);
+        assert!(cache.unused.is_empty());
+        assert!(cache.names.is_empty());
+        assert!(cache.statements.is_empty());
+    }
+
+    #[test]
+    fn test_close_unused_when_nothing_unused() {
+        let mut cache = GlobalCache::default();
+
+        for i in 0..10 {
+            let parse = Parse::named("test", format!("SELECT {}", i));
+            cache.insert(&parse);
+        }
+
+        assert_eq!(cache.len(), 10);
+        assert!(cache.unused.is_empty());
+
+        let removed = cache.close_unused(5);
+        assert_eq!(removed, 0);
+        assert_eq!(cache.len(), 10);
+    }
+
+    #[test]
+    fn test_decrement_marks_as_unused() {
+        let mut cache = GlobalCache::default();
+        let parse = Parse::named("test", "SELECT 1");
+
+        let (_, name) = cache.insert(&parse);
+        cache.insert(&parse);
+        cache.insert(&parse);
+
+        let stmt = cache.names.get(&name).unwrap().clone();
+        let entry = cache.statements.get(&stmt.cache_key()).unwrap();
+        assert_eq!(entry.used, 3);
+
+        cache.decrement(&name);
+        let entry = cache.statements.get(&stmt.cache_key()).unwrap();
+        assert_eq!(entry.used, 2);
+        assert!(cache.unused.is_empty());
+
+        cache.decrement(&name);
+        cache.decrement(&name);
+        let entry = cache.statements.get(&stmt.cache_key()).unwrap();
+        assert_eq!(entry.used, 0);
+        assert!(cache.unused.contains(&1));
+
+        cache.decrement(&name);
+        let entry = cache.statements.get(&stmt.cache_key()).unwrap();
+        assert_eq!(entry.used, 0);
+    }
+
+    #[test]
+    fn test_both_maps_cleaned_up_on_removal() {
+        let mut cache = GlobalCache::default();
+        let mut names = vec![];
+
+        for i in 0..5 {
+            let parse = Parse::named("test", format!("SELECT {}", i));
+            let (_, name) = cache.insert(&parse);
+            names.push(name);
+        }
+
+        assert_eq!(cache.len(), 5);
+        assert_eq!(cache.statements.len(), 5);
+        assert_eq!(cache.names.len(), 5);
+
+        for name in &names {
+            cache.close(name);
+        }
+
+        assert_eq!(cache.unused.len(), 5);
+
+        cache.close_unused(0);
+
+        assert_eq!(cache.len(), 0);
+        assert_eq!(cache.statements.len(), 0);
+        assert_eq!(cache.names.len(), 0);
+        assert_eq!(cache.unused.len(), 0);
+
+        for name in &names {
+            assert!(cache.parse(name).is_none());
+            assert!(cache.query(name).is_none());
+        }
+    }
+
+    #[test]
+    fn test_complex_interleaved_operations() {
+        let mut cache = GlobalCache::default();
+
+        let parse1 = Parse::named("test", "SELECT 1");
+        let parse2 = Parse::named("test", "SELECT 2");
+        let parse3 = Parse::named("test", "SELECT 3");
+
+        let (_, name1) = cache.insert(&parse1);
+        let (_, name2) = cache.insert(&parse2);
+        let (_, name3) = cache.insert(&parse3);
+
+        cache.insert(&parse1);
+        cache.insert(&parse1);
+
+        assert_eq!(cache.len(), 3);
+
+        cache.close(&name1);
+        cache.close(&name2);
+        cache.close(&name3);
+
+        assert_eq!(cache.unused.len(), 2);
+        assert!(cache.unused.contains(&2));
+        assert!(cache.unused.contains(&3));
+        assert!(!cache.unused.contains(&1));
+
+        cache.close(&name1);
+        cache.close(&name1);
+        assert_eq!(cache.unused.len(), 3);
+        assert!(cache.unused.contains(&1));
+
+        cache.close_unused(2);
+        assert_eq!(cache.len(), 2);
+
+        let parse_exists = cache.parse(&name1).is_some();
+        let parse_new = Parse::named("test", "SELECT 99");
+        let (is_new, new_name) = cache.insert(&parse_new);
+        assert!(is_new);
+
+        cache.close(&new_name);
+        assert_eq!(cache.unused.len(), 3);
+
+        cache.close_unused(1);
+        assert_eq!(cache.len(), 1);
+
+        if parse_exists {
+            assert!(cache.parse(&name1).is_some());
+        }
+
+        cache.close_unused(0);
+        assert_eq!(cache.len(), 0);
+        assert!(cache.statements.is_empty());
+        assert!(cache.names.is_empty());
+        assert!(cache.unused.is_empty());
     }
 }

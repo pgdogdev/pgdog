@@ -1,7 +1,8 @@
 use std::time::{Duration, Instant};
 
+use pgdog_config::PoolerMode;
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt, BufStream},
+    io::{AsyncRead, AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
     time::timeout,
 };
@@ -10,20 +11,27 @@ use bytes::{Buf, BufMut, BytesMut};
 
 use crate::{
     backend::databases::databases,
-    config::{config, load_test, load_test_replicas, set, Role},
+    config::{
+        config, load_test, load_test_replicas, load_test_sharded, load_test_with_pooler_mode, set,
+        PreparedStatements, Role,
+    },
     frontend::{
         client::{BufferEvent, QueryEngine},
-        Client,
+        prepared_statements, Client,
     },
     net::{
         bind::Parameter, Bind, Close, CommandComplete, DataRow, Describe, ErrorResponse, Execute,
-        Field, Flush, Format, FromBytes, Parse, Protocol, Query, ReadyForQuery, RowDescription,
-        Sync, Terminate, ToBytes,
+        Field, Flush, Format, FromBytes, Message, Parameters, Parse, Protocol, Query,
+        ReadyForQuery, RowDescription, Sync, Terminate, ToBytes,
     },
     state::State,
 };
 
 use super::Stream;
+
+pub mod target_session_attrs;
+pub mod test_client;
+pub use test_client::TestClient;
 
 //
 // cargo nextest runs these in separate processes.
@@ -40,18 +48,37 @@ pub async fn test_client(replicas: bool) -> (TcpStream, Client) {
     parallel_test_client().await
 }
 
+/// Load test client with 4 databases (2 shards, 1 replica each).
+pub async fn test_client_sharded() -> (TcpStream, Client) {
+    load_test_sharded();
+
+    parallel_test_client().await
+}
+
+pub async fn test_client_with_params(params: Parameters, replicas: bool) -> (TcpStream, Client) {
+    if replicas {
+        load_test_replicas();
+    } else {
+        load_test();
+    }
+
+    parallel_test_client_with_params(params).await
+}
+
 pub async fn parallel_test_client() -> (TcpStream, Client) {
+    parallel_test_client_with_params(Parameters::default()).await
+}
+
+pub async fn parallel_test_client_with_params(params: Parameters) -> (TcpStream, Client) {
     let addr = "127.0.0.1:0".to_string();
     let conn_addr = addr.clone();
     let stream = TcpListener::bind(&conn_addr).await.unwrap();
     let port = stream.local_addr().unwrap().port();
     let connect_handle = tokio::spawn(async move {
-        let (stream, addr) = stream.accept().await.unwrap();
+        let (stream, _) = stream.accept().await.unwrap();
+        let stream = Stream::plain(stream, 4096);
 
-        let stream = BufStream::new(stream);
-        let stream = Stream::Plain(stream);
-
-        Client::new_test(stream, addr)
+        Client::new_test(stream, params)
     });
 
     let conn = TcpStream::connect(&format!("127.0.0.1:{}", port))
@@ -70,6 +97,55 @@ macro_rules! new_client {
 
         (conn, client, engine)
     }};
+}
+
+pub fn buffer(messages: &[impl ToBytes]) -> BytesMut {
+    let mut buf = BytesMut::new();
+    for message in messages {
+        buf.put(message.to_bytes().unwrap());
+    }
+    buf
+}
+
+/// Read a series of messages from the stream and make sure
+/// they arrive in the right order.
+pub async fn read_messages(stream: &mut (impl AsyncRead + Unpin), codes: &[char]) -> Vec<Message> {
+    let mut result = vec![];
+    let mut error = false;
+
+    for code in codes {
+        let c = stream.read_u8().await.unwrap();
+
+        if c as char != *code {
+            if c as char == 'E' {
+                error = true;
+            } else {
+                panic!("got message code {}, expected {}", c as char, *code);
+            }
+        }
+
+        let len = stream.read_i32().await.unwrap();
+        let mut data = vec![0u8; len as usize - 4];
+        stream.read_exact(&mut data).await.unwrap();
+
+        let mut message = BytesMut::new();
+        message.put_u8(c);
+        message.put_i32(len);
+        message.put_slice(&data);
+
+        let message = Message::new(message.freeze());
+
+        if error {
+            panic!(
+                "{:#}",
+                ErrorResponse::from_bytes(message.to_bytes().unwrap()).unwrap()
+            );
+        } else {
+            result.push(message);
+        }
+    }
+
+    result
 }
 
 macro_rules! buffer {
@@ -307,8 +383,8 @@ async fn test_client_with_replicas() {
             client.run().await.unwrap();
         });
         let buf = buffer!(
-            { Parse::new_anonymous("SELECT * FROM test_client_with_replicas") },
-            { Bind::new_statement("") },
+            { Parse::named("test", "SELECT * FROM test_client_with_replicas") },
+            { Bind::new_statement("test") },
             { Execute::new() },
             { Sync }
         );
@@ -380,6 +456,7 @@ async fn test_client_with_replicas() {
                 assert!(state.stats.counts.healthchecks <= idle + 1); // TODO: same
                 pool_sent -= (healthcheck_len_sent * state.stats.counts.healthchecks) as isize;
             }
+            Role::Auto => unreachable!("role auto"),
         }
     }
 
@@ -447,7 +524,6 @@ async fn test_transaction_state() {
 
     assert!(client.transaction.is_some());
     assert!(engine.router().route().is_write());
-    assert!(engine.router().in_transaction());
 
     conn.write_all(&buffer!(
         { Parse::named("test", "SELECT $1") },
@@ -462,7 +538,6 @@ async fn test_transaction_state() {
 
     assert!(client.transaction.is_some());
     assert!(engine.router().route().is_write());
-    assert!(engine.router().in_transaction());
 
     for c in ['1', 't', 'T', 'Z'] {
         let msg = engine.backend().read().await.unwrap();
@@ -479,7 +554,7 @@ async fn test_transaction_state() {
                 "test",
                 &[Parameter {
                     len: 1,
-                    data: "1".as_bytes().to_vec(),
+                    data: "1".as_bytes().into(),
                 }],
             )
         },
@@ -503,7 +578,6 @@ async fn test_transaction_state() {
 
     assert!(client.transaction.is_some());
     assert!(engine.router().route().is_write());
-    assert!(engine.router().in_transaction());
 
     conn.write_all(&buffer!({ Query::new("COMMIT") }))
         .await
@@ -526,6 +600,8 @@ async fn test_transaction_state() {
 
 #[tokio::test]
 async fn test_close_parse() {
+    crate::logger();
+
     let (mut conn, mut client, mut engine) = new_client!(true);
 
     conn.write_all(&buffer!({ Close::named("test") }, { Sync }))
@@ -699,4 +775,187 @@ async fn test_parse_describe_flush_bind_execute_close_sync() {
         .unwrap();
 
     handle.await.unwrap();
+}
+
+#[tokio::test]
+async fn test_client_login_timeout() {
+    use crate::config::config;
+    use tokio::time::sleep;
+
+    crate::logger();
+    load_test();
+
+    let mut config = (*config()).clone();
+    config.config.general.client_login_timeout = 100;
+    set(config).unwrap();
+
+    let addr = "127.0.0.1:0".to_string();
+    let stream = TcpListener::bind(&addr).await.unwrap();
+    let port = stream.local_addr().unwrap().port();
+
+    let handle = tokio::spawn(async move {
+        let (stream, addr) = stream.accept().await.unwrap();
+        let stream = Stream::plain(stream, 4096);
+
+        let mut params = crate::net::parameter::Parameters::default();
+        params.insert("user", "pgdog");
+        params.insert("database", "pgdog");
+
+        Client::spawn(stream, params, addr, crate::config::config()).await
+    });
+
+    let conn = TcpStream::connect(&format!("127.0.0.1:{}", port))
+        .await
+        .unwrap();
+
+    sleep(Duration::from_millis(150)).await;
+
+    drop(conn);
+
+    handle.await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn test_statement_mode() {
+    crate::logger();
+
+    load_test_with_pooler_mode(PoolerMode::Statement);
+    let (mut conn, mut client) = parallel_test_client().await;
+
+    let _ = tokio::spawn(async move {
+        client.run().await.unwrap();
+    });
+
+    let req = buffer!({ Query::new("BEGIN") });
+    conn.write_all(&req).await.unwrap();
+
+    let msgs = read!(conn, ['E', 'Z']);
+    let error = ErrorResponse::from_bytes(msgs[0].clone().freeze()).unwrap();
+    assert_eq!(error.code, "58000");
+}
+
+#[tokio::test]
+async fn test_client_login_timeout_does_not_affect_queries() {
+    crate::logger();
+    load_test();
+
+    let mut config = (*config()).clone();
+    config.config.general.client_login_timeout = 100;
+    set(config).unwrap();
+
+    let (mut conn, mut client, _) = new_client!(false);
+
+    let handle = tokio::spawn(async move {
+        client.run().await.unwrap();
+    });
+
+    tokio::time::sleep(Duration::from_millis(150)).await;
+
+    let buf = buffer!({ Query::new("SELECT pg_sleep(0.2)") });
+    conn.write_all(&buf).await.unwrap();
+
+    let msgs = read!(conn, ['T', 'D', 'C', 'Z']);
+    assert_eq!(msgs[0][0] as char, 'T');
+    assert_eq!(msgs[3][0] as char, 'Z');
+
+    conn.write_all(&buffer!({ Terminate })).await.unwrap();
+    handle.await.unwrap();
+}
+
+#[tokio::test]
+async fn test_anon_prepared_statements() {
+    crate::logger();
+    load_test();
+
+    let (mut conn, mut client, _) = new_client!(false);
+
+    let mut c = (*config()).clone();
+    c.config.general.prepared_statements = PreparedStatements::ExtendedAnonymous;
+    set(c).unwrap();
+
+    let handle = tokio::spawn(async move {
+        client.run().await.unwrap();
+    });
+
+    conn.write_all(&buffer!(
+        { Parse::new_anonymous("SELECT 1") },
+        { Bind::new_params("", &[]) },
+        { Execute::new() },
+        { Sync }
+    ))
+    .await
+    .unwrap();
+
+    let _ = read!(conn, ['1', '2', 'D', 'C', 'Z']);
+
+    {
+        let cache = prepared_statements::PreparedStatements::global();
+        let read = cache.read();
+        assert!(!read.is_empty());
+    }
+
+    conn.write_all(&buffer!({ Terminate })).await.unwrap();
+    handle.await.unwrap();
+}
+
+#[tokio::test]
+async fn test_anon_prepared_statements_extended() {
+    crate::logger();
+    load_test();
+
+    let (mut conn, mut client, _) = new_client!(false);
+
+    let mut c = (*config()).clone();
+    c.config.general.prepared_statements = PreparedStatements::Extended;
+    set(c).unwrap();
+
+    let handle = tokio::spawn(async move {
+        client.run().await.unwrap();
+    });
+
+    conn.write_all(&buffer!(
+        { Parse::new_anonymous("SELECT 1") },
+        { Bind::new_params("", &[]) },
+        { Execute::new() },
+        { Sync }
+    ))
+    .await
+    .unwrap();
+
+    let _ = read!(conn, ['1', '2', 'D', 'C', 'Z']);
+
+    {
+        let cache = prepared_statements::PreparedStatements::global();
+        let read = cache.read();
+        assert!(read.is_empty());
+    }
+
+    conn.write_all(&buffer!({ Terminate })).await.unwrap();
+    handle.await.unwrap();
+}
+
+#[tokio::test]
+async fn test_query_timeout() {
+    crate::logger();
+    load_test();
+
+    let (mut conn, mut client, mut engine) = new_client!(false);
+
+    let mut c = (*config()).clone();
+    c.config.general.query_timeout = 50;
+    set(c).unwrap();
+
+    engine.set_test_mode(false);
+
+    let buf = buffer!({ Query::new("SELECT pg_sleep(0.2)") });
+    conn.write_all(&buf).await.unwrap();
+
+    client.buffer(State::Idle).await.unwrap();
+    let result = client.client_messages(&mut engine).await;
+
+    assert!(result.is_err());
+
+    let pools = databases().cluster(("pgdog", "pgdog")).unwrap().shards()[0].pools();
+    let state = pools[0].state();
+    assert_eq!(state.force_close, 1);
 }

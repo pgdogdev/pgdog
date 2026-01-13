@@ -1,3 +1,10 @@
+[general]
+
+[rewrite]
+enabled = false
+shard_key = "ignore"
+split_inserts = "error"
+
 [[plugins]]
 name = "pgdog_example_plugin"
 

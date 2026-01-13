@@ -4,6 +4,8 @@ use std::io::ErrorKind;
 
 use thiserror::Error;
 
+use crate::unique_id;
+
 /// Frontend error.
 #[derive(Debug, Error)]
 pub enum Error {
@@ -37,7 +39,7 @@ pub enum Error {
     #[error("{0}")]
     PreparedStatements(#[from] super::prepared_statements::Error),
 
-    #[error("prepared staatement \"{0}\" is missing")]
+    #[error("prepared statement \"{0}\" is missing")]
     MissingPreparedStatement(String),
 
     #[error("query timeout")]
@@ -45,6 +47,29 @@ pub enum Error {
 
     #[error("join error")]
     Join(#[from] tokio::task::JoinError),
+
+    #[error("unique id: {0}")]
+    UniqueId(#[from] unique_id::Error),
+
+    #[error("parser: {0}")]
+    Parser(#[from] crate::frontend::router::parser::Error),
+
+    #[error("rewrite: {0}")]
+    Rewrite(#[from] crate::frontend::router::parser::rewrite::statement::Error),
+
+    #[error("query has no route")]
+    NoRoute,
+
+    #[error("multi-tuple insert requires multi-shard binding")]
+    MultiShardRequired,
+
+    #[error("sharding key updates are forbidden")]
+    ShardingKeyUpdateForbidden,
+
+    // FIXME: layer errors better so we don't have
+    // to reach so deep into a module.
+    #[error("{0}")]
+    Multi(#[from] crate::frontend::client::query_engine::multi_step::error::Error),
 }
 
 impl Error {

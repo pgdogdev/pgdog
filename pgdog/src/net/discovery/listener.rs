@@ -42,7 +42,7 @@ impl Listener {
     /// Create new listener.
     fn new() -> Self {
         Self {
-            id: rand::thread_rng().gen(),
+            id: rand::rng().random(),
             inner: Arc::new(Mutex::new(Inner {
                 peers: HashMap::new(),
             })),

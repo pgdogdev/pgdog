@@ -44,6 +44,7 @@ impl Command for ShowServers {
         Ok(Self {
             row: NamedRow::new(
                 &[
+                    Field::bigint("pool_id"),
                     Field::text("database"),
                     Field::text("user"),
                     Field::text("addr"),
@@ -52,6 +53,7 @@ impl Command for ShowServers {
                     Field::text("connect_time"),
                     Field::text("request_time"),
                     Field::numeric("remote_pid"),
+                    // Field::bigint("client_id"),
                     Field::numeric("transactions"),
                     Field::numeric("queries"),
                     Field::numeric("rollbacks"),
@@ -62,7 +64,6 @@ impl Command for ShowServers {
                     Field::numeric("bytes_sent"),
                     Field::numeric("age"),
                     Field::text("application_name"),
-                    Field::text("memory_used"),
                 ],
                 &mandatory,
             ),
@@ -77,38 +78,34 @@ impl Command for ShowServers {
         let now_time = SystemTime::now();
 
         for (_, server) in stats {
-            let age = now.duration_since(server.stats.created_at);
-            let request_age = now.duration_since(server.stats.last_used);
+            let stats = server.stats;
+            let age = now.duration_since(stats.created_at);
+            let request_age = now.duration_since(stats.last_used);
             let request_time = now_time - request_age;
 
             let dr = self
                 .row
                 .clone()
+                .add("pool_id", stats.pool_id)
                 .add("database", server.addr.database_name)
                 .add("user", server.addr.user)
                 .add("addr", server.addr.host.as_str())
                 .add("port", server.addr.port.to_string())
-                .add("state", server.stats.state.to_string())
-                .add(
-                    "connect_time",
-                    format_time(server.stats.created_at_time.into()),
-                )
+                .add("state", stats.state.to_string())
+                .add("connect_time", format_time(stats.created_at_time.into()))
                 .add("request_time", format_time(request_time.into()))
-                .add("remote_pid", server.stats.id.pid as i64)
-                .add("transactions", server.stats.total.transactions)
-                .add("queries", server.stats.total.queries)
-                .add("rollbacks", server.stats.total.rollbacks)
-                .add(
-                    "prepared_statements",
-                    server.stats.total.prepared_statements,
-                )
-                .add("healthchecks", server.stats.total.healthchecks)
-                .add("errors", server.stats.total.errors)
-                .add("bytes_received", server.stats.total.bytes_received)
-                .add("bytes_sent", server.stats.total.bytes_sent)
+                .add("remote_pid", stats.id.pid as i64)
+                // .add("client_id", stats.client_id.map(|client| client.pid as i64))
+                .add("transactions", stats.total.transactions)
+                .add("queries", stats.total.queries)
+                .add("rollbacks", stats.total.rollbacks)
+                .add("prepared_statements", stats.total.prepared_statements)
+                .add("healthchecks", stats.total.healthchecks)
+                .add("errors", stats.total.errors)
+                .add("bytes_received", stats.total.bytes_received)
+                .add("bytes_sent", stats.total.bytes_sent)
                 .add("age", age.as_secs() as i64)
                 .add("application_name", server.application_name.as_str())
-                .add("memory_used", server.stats.total.memory_used)
                 .data_row();
             messages.push(dr.message()?);
         }

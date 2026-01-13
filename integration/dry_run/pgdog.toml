@@ -1,6 +1,11 @@
 [general]
 dry_run = true
 
+[rewrite]
+enabled = false
+shard_key = "ignore"
+split_inserts = "error"
+
 [[databases]]
 name = "pgdog"
 host = "127.0.0.1"

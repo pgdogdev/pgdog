@@ -1,28 +1,44 @@
-use crate::frontend::router::parser::where_clause::TablesSource;
-
+use super::StatementParser;
 use super::*;
 
 impl QueryParser {
     pub(super) fn delete(
+        &mut self,
         stmt: &DeleteStmt,
-        context: &QueryParserContext,
+        context: &mut QueryParserContext,
     ) -> Result<Command, Error> {
-        let table = stmt.relation.as_ref().map(Table::from);
+        let shard = StatementParser::from_delete(
+            stmt,
+            context.router_context.bind,
+            &context.sharding_schema,
+            self.recorder_mut(),
+        )
+        .shard()?;
 
-        if let Some(table) = table {
-            let source = TablesSource::from(table);
-            let where_clause = WhereClause::new(&source, &stmt.where_clause);
-
-            if let Some(where_clause) = where_clause {
-                let shards = Self::where_clause(
-                    &context.sharding_schema,
-                    &where_clause,
-                    context.router_context.bind,
-                )?;
-                return Ok(Command::Query(Route::write(Self::converge(shards))));
+        let shard = match shard {
+            Some(shard) => {
+                if let Some(recorder) = self.recorder_mut() {
+                    recorder.record_entry(
+                        Some(shard.clone()),
+                        "DELETE matched WHERE clause for sharding key",
+                    );
+                }
+                shard
             }
-        }
+            None => {
+                if let Some(recorder) = self.recorder_mut() {
+                    recorder.record_entry(None, "DELETE fell back to broadcast");
+                }
+                Shard::default()
+            }
+        };
 
-        Ok(Command::Query(Route::write(None)))
+        context
+            .shards_calculator
+            .push(ShardWithPriority::new_table(shard));
+
+        Ok(Command::Query(Route::write(
+            context.shards_calculator.shard(),
+        )))
     }
 }

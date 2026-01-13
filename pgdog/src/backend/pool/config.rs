@@ -2,6 +2,7 @@
 
 use std::time::Duration;
 
+use pgdog_config::{pooling::ConnectionRecovery, Role};
 use serde::{Deserialize, Serialize};
 
 use crate::config::{Database, General, PoolerMode, User};
@@ -57,6 +58,18 @@ pub struct Config {
     pub read_only: bool,
     /// Maximum prepared statements per connection.
     pub prepared_statements_limit: usize,
+    /// Stats averaging period.
+    pub stats_period: Duration,
+    /// Recovery algo.
+    pub connection_recovery: ConnectionRecovery,
+    /// LSN check interval.
+    pub lsn_check_interval: Duration,
+    /// LSN check timeout.
+    pub lsn_check_timeout: Duration,
+    /// LSN check delay.
+    pub lsn_check_delay: Duration,
+    /// Automatic role detection enabled.
+    pub role_detection: bool,
 }
 
 impl Config {
@@ -182,7 +195,13 @@ impl Config {
                 .read_only
                 .unwrap_or(user.read_only.unwrap_or_default()),
             prepared_statements_limit: general.prepared_statements_limit,
+            stats_period: Duration::from_millis(general.stats_period),
             bannable: !is_only_replica,
+            connection_recovery: general.connection_recovery,
+            lsn_check_interval: Duration::from_millis(general.lsn_check_interval),
+            lsn_check_timeout: Duration::from_millis(general.lsn_check_timeout),
+            lsn_check_delay: Duration::from_millis(general.lsn_check_delay),
+            role_detection: database.role == Role::Auto,
             ..Default::default()
         }
     }
@@ -214,7 +233,61 @@ impl Default for Config {
             pooler_mode: PoolerMode::default(),
             read_only: false,
             prepared_statements_limit: usize::MAX,
+            stats_period: Duration::from_millis(15_000),
             dns_ttl: Duration::from_millis(60_000),
+            connection_recovery: ConnectionRecovery::Recover,
+            lsn_check_interval: Duration::from_millis(5_000),
+            lsn_check_timeout: Duration::from_millis(5_000),
+            lsn_check_delay: Duration::from_millis(5_000),
+            role_detection: false,
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    fn create_database(role: Role) -> Database {
+        Database {
+            name: "test".into(),
+            role,
+            host: "localhost".into(),
+            port: 5432,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn test_role_auto_enables_role_detection() {
+        let general = General::default();
+        let user = User::default();
+        let database = create_database(Role::Auto);
+
+        let config = Config::new(&general, &database, &user, false);
+
+        assert!(config.role_detection);
+    }
+
+    #[test]
+    fn test_role_primary_disables_role_detection() {
+        let general = General::default();
+        let user = User::default();
+        let database = create_database(Role::Primary);
+
+        let config = Config::new(&general, &database, &user, false);
+
+        assert!(!config.role_detection);
+    }
+
+    #[test]
+    fn test_role_replica_disables_role_detection() {
+        let general = General::default();
+        let user = User::default();
+        let database = create_database(Role::Replica);
+
+        let config = Config::new(&general, &database, &user, false);
+
+        assert!(!config.role_detection);
     }
 }

@@ -1,13 +1,63 @@
-use tracing::{error, trace};
+use pgdog_config::PoolerMode;
+use tracing::trace;
 
 use super::*;
 
+#[derive(Debug, Clone)]
+pub enum ClusterCheck {
+    Ok,
+    Offline,
+}
+
 impl QueryEngine {
-    pub(super) async fn route_transaction(
+    /// Get mutable reference to the backend connection.
+    pub fn backend(&mut self) -> &mut Connection {
+        &mut self.backend
+    }
+
+    /// Check that the cluster is still valid and online.
+    pub async fn cluster_check(
+        &mut self,
+        context: &mut QueryEngineContext<'_>,
+    ) -> Result<ClusterCheck, Error> {
+        // Admin doesn't have a cluster.
+        if let Ok(cluster) = self.backend.cluster() {
+            if !context.in_transaction() && !cluster.online() {
+                let identifier = cluster.identifier();
+
+                // Reload cluster config.
+                self.backend.safe_reload().await?;
+
+                if self.backend.cluster().is_ok() {
+                    Ok(ClusterCheck::Ok)
+                } else {
+                    self.error_response(
+                        context,
+                        ErrorResponse::connection(&identifier.user, &identifier.database),
+                    )
+                    .await?;
+                    Ok(ClusterCheck::Offline)
+                }
+            } else {
+                Ok(ClusterCheck::Ok)
+            }
+        } else {
+            Ok(ClusterCheck::Ok)
+        }
+    }
+
+    pub(super) async fn route_query(
         &mut self,
         context: &mut QueryEngineContext<'_>,
     ) -> Result<bool, Error> {
-        // Admin doesn't have a cluster.
+        // Check that we can route this transaction at all.
+        if self.backend.pooler_mode() == PoolerMode::Statement && context.client_request.is_begin()
+        {
+            self.error_response(context, ErrorResponse::transaction_statement_mode())
+                .await?;
+            return Ok(false);
+        }
+
         let cluster = if let Ok(cluster) = self.backend.cluster() {
             cluster
         } else {
@@ -17,28 +67,23 @@ impl QueryEngine {
         let router_context = RouterContext::new(
             context.client_request,
             cluster,
-            context.prepared_statements,
             context.params,
             context.transaction,
+            context.sticky,
         )?;
         match self.router.query(router_context) {
-            Ok(cmd) => {
+            Ok(command) => {
+                context.client_request.route = Some(command.route().clone());
                 trace!(
                     "routing {:#?} to {:#?}",
                     context.client_request.messages,
-                    cmd
+                    command,
                 );
             }
             Err(err) => {
-                error!("{:?} [{:?}]", err, context.stream.peer_addr());
-                let bytes_sent = context
-                    .stream
-                    .error(
-                        ErrorResponse::syntax(err.to_string().as_str()),
-                        context.in_transaction(),
-                    )
+                self.error_response(context, ErrorResponse::syntax(err.to_string().as_str()))
                     .await?;
-                self.stats.sent(bytes_sent);
+
                 return Ok(false);
             }
         }

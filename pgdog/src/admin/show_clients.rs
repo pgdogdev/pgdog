@@ -26,6 +26,7 @@ impl Command for ShowClients {
             .collect::<Vec<&str>>();
 
         let fields = vec![
+            Field::bigint("id"),
             Field::text("user"),
             Field::text("database"),
             Field::text("addr"),
@@ -44,7 +45,6 @@ impl Command for ShowClients {
             Field::numeric("bytes_sent"),
             Field::numeric("errors"),
             Field::text("application_name"),
-            Field::numeric("memory_used"),
             Field::bool("locked"),
             Field::numeric("prepared_statements"),
         ];
@@ -77,6 +77,7 @@ impl Command for ShowClients {
             let row = self
                 .filter
                 .clone()
+                .add("id", client.id.pid as i64)
                 .add("user", user)
                 .add("database", client.paramters.get_default("database", user))
                 .add("addr", client.addr.ip().to_string())
@@ -117,7 +118,6 @@ impl Command for ShowClients {
                     "application_name",
                     client.paramters.get_default("application_name", ""),
                 )
-                .add("memory_used", client.stats.memory_used)
                 .add("locked", client.stats.locked)
                 .add("prepared_statements", client.stats.prepared_statements)
                 .data_row();

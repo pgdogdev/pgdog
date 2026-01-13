@@ -3,6 +3,7 @@ pub mod auth;
 pub mod backend_key;
 pub mod bind;
 pub mod bind_complete;
+pub mod buffer;
 pub mod close;
 pub mod close_complete;
 pub mod command_complete;
@@ -17,6 +18,7 @@ pub mod error_response;
 pub mod execute;
 pub mod flush;
 pub mod hello;
+pub mod no_data;
 pub mod notice_response;
 pub mod notification_response;
 pub mod parameter_description;
@@ -36,6 +38,7 @@ pub use auth::{Authentication, Password};
 pub use backend_key::BackendKeyData;
 pub use bind::{Bind, Format, Parameter, ParameterWithFormat};
 pub use bind_complete::BindComplete;
+pub use buffer::{MessageBuffer, MessageBufferStats};
 pub use close::Close;
 pub use close_complete::CloseComplete;
 pub use command_complete::CommandComplete;
@@ -50,6 +53,7 @@ pub use error_response::ErrorResponse;
 pub use execute::Execute;
 pub use flush::Flush;
 pub use hello::Startup;
+pub use no_data::NoData;
 pub use notice_response::NoticeResponse;
 pub use notification_response::NotificationResponse;
 pub use parameter_description::ParameterDescription;
@@ -257,3 +261,44 @@ macro_rules! code {
 }
 
 pub(crate) use code;
+
+macro_rules! from_message {
+    ($ty:tt) => {
+        impl TryFrom<Message> for $ty {
+            type Error = crate::net::Error;
+
+            fn try_from(message: Message) -> Result<$ty, Self::Error> {
+                <$ty as FromBytes>::from_bytes(message.to_bytes()?)
+            }
+        }
+    };
+}
+
+from_message!(Authentication);
+from_message!(BackendKeyData);
+from_message!(Bind);
+from_message!(BindComplete);
+from_message!(Close);
+from_message!(CloseComplete);
+from_message!(CommandComplete);
+from_message!(CopyData);
+from_message!(CopyDone);
+from_message!(CopyFail);
+from_message!(DataRow);
+from_message!(Describe);
+from_message!(EmptyQueryResponse);
+from_message!(ErrorResponse);
+from_message!(Execute);
+from_message!(Flush);
+from_message!(NoData);
+from_message!(NoticeResponse);
+from_message!(NotificationResponse);
+from_message!(ParameterDescription);
+from_message!(ParameterStatus);
+from_message!(Parse);
+from_message!(ParseComplete);
+from_message!(Query);
+from_message!(ReadyForQuery);
+from_message!(RowDescription);
+from_message!(Sync);
+from_message!(Terminate);

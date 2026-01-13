@@ -33,12 +33,12 @@ impl Debug for Parse {
 }
 
 impl Parse {
+    /// Length in bytes of the message.
     pub fn len(&self) -> usize {
         self.name.len() + self.query.len() + self.data_types.len() + 5
     }
 
     /// New anonymous prepared statement.
-    #[cfg(test)]
     pub fn new_anonymous(query: &str) -> Self {
         Self {
             name: Bytes::from("\0"),

@@ -24,7 +24,7 @@ fi
 export PGPASSWORD='pgdog'
 export PGHOST=127.0.0.1
 export PGPORT=5432
-#export PGUSER='pgdog'
+export PGUSER='pgdog'
 
 for db in pgdog shard_0 shard_1; do
     psql -c "DROP DATABASE $db" || true
@@ -38,7 +38,16 @@ done
 for db in pgdog shard_0 shard_1; do
     for table in sharded sharded_omni; do
             psql -c "DROP TABLE IF EXISTS ${table}" ${db} -U pgdog
-            psql -c "CREATE TABLE IF NOT EXISTS ${table} (id BIGINT PRIMARY KEY, value TEXT)" ${db} -U pgdog
+            psql -c "CREATE TABLE IF NOT EXISTS ${table} (
+                id BIGINT PRIMARY KEY,
+                value TEXT,
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                enabled BOOLEAN DEFAULT false,
+                user_id BIGINT,
+                region_id INTEGER DEFAULT 10,
+                country_id SMALLINT DEFAULT 5,
+                options JSONB DEFAULT '{}'::jsonb
+            )" ${db} -U pgdog
     done
 
     psql -c "CREATE TABLE IF NOT EXISTS sharded_varchar (id_varchar VARCHAR)" ${db} -U pgdog

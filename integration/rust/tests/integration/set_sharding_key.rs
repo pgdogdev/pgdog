@@ -53,12 +53,10 @@ async fn test_single_sharding_function() {
 
 #[tokio::test]
 async fn test_single_sharding_function_rejected() {
-    let mut conns = connections_sqlx().await;
-    {
-        let sharded = &mut conns[1];
-
-        sharded.execute("BEGIN").await.unwrap();
-        let result = sharded.execute("SET pgdog.sharding_key TO '1'").await;
+    for conn in connections_sqlx().await {
+        conn.execute("BEGIN").await.unwrap();
+        conn.execute("SET pgdog.sharding_key TO '1'").await.unwrap();
+        let result = conn.execute("SELECT 1").await;
         assert!(
             result
                 .err()
@@ -67,29 +65,21 @@ async fn test_single_sharding_function_rejected() {
                 .contains("config has more than one sharding function")
         );
     }
-
-    {
-        let normal = &mut conns[0];
-        normal.execute("BEGIN").await.unwrap();
-        let _ = normal
-            .execute("SET pgdog.sharding_key TO '1'")
-            .await
-            .unwrap();
-    }
 }
 
 #[tokio::test]
-async fn test_set_require_begin() {
+async fn test_set_no_require_begin() {
     let conns = connections_sqlx().await;
 
     for conn in conns {
         for query in ["SET pgdog.sharding_key TO '1'", "SET pgdog.shard TO 0"] {
-            let result = conn.execute(query).await.err().unwrap();
-            assert!(
-                result
-                    .to_string()
-                    .contains("this command requires a transaction")
-            );
+            match conn.execute(query).await {
+                Ok(_) => (),
+                Err(err) => assert!(
+                    err.to_string()
+                        .contains("config has more than one sharding function")
+                ),
+            }
         }
     }
 }

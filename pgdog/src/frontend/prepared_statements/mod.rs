@@ -1,12 +1,14 @@
 //! Prepared statements cache.
 
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use once_cell::sync::Lazy;
 use parking_lot::RwLock;
+use tokio::{spawn, time::sleep};
+use tracing::debug;
 
 use crate::{
-    frontend::router::parser::RewritePlan,
+    config::{config, PreparedStatements as PreparedStatementsLevel},
     net::{Parse, ProtocolMessage},
     stats::memory::MemoryUsage,
 };
@@ -17,7 +19,6 @@ pub mod rewrite;
 
 pub use error::Error;
 pub use global_cache::GlobalCache;
-
 pub use rewrite::Rewrite;
 
 static CACHE: Lazy<PreparedStatements> = Lazy::new(PreparedStatements::default);
@@ -26,8 +27,7 @@ static CACHE: Lazy<PreparedStatements> = Lazy::new(PreparedStatements::default);
 pub struct PreparedStatements {
     pub(super) global: Arc<RwLock<GlobalCache>>,
     pub(super) local: HashMap<String, String>,
-    pub(super) enabled: bool,
-    pub(super) capacity: usize,
+    pub(super) level: PreparedStatementsLevel,
     pub(super) memory_used: usize,
 }
 
@@ -35,8 +35,7 @@ impl MemoryUsage for PreparedStatements {
     #[inline]
     fn memory_usage(&self) -> usize {
         self.local.memory_usage()
-            + self.enabled.memory_usage()
-            + self.capacity.memory_usage()
+            + std::mem::size_of::<PreparedStatementsLevel>()
             + std::mem::size_of::<Arc<RwLock<GlobalCache>>>()
     }
 }
@@ -46,8 +45,7 @@ impl Default for PreparedStatements {
         Self {
             global: Arc::new(RwLock::new(GlobalCache::default())),
             local: HashMap::default(),
-            enabled: true,
-            capacity: usize::MAX,
+            level: PreparedStatementsLevel::Extended,
             memory_used: 0,
         }
     }
@@ -97,24 +95,16 @@ impl PreparedStatements {
         parse.rename_fast(&name)
     }
 
-    /// Update stored SQL for a prepared statement after a rewrite.
-    pub fn update_query(&mut self, name: &str, sql: &str) -> bool {
-        self.global.write().update_query(name, sql)
-    }
-
-    /// Store rewrite plan metadata for a prepared statement.
-    pub fn set_rewrite_plan(&mut self, name: &str, plan: RewritePlan) {
-        self.global.write().set_rewrite_plan(name, plan);
-    }
-
-    /// Retrieve stored rewrite plan for a prepared statement, if any.
-    pub fn rewrite_plan(&self, name: &str) -> Option<RewritePlan> {
-        self.global.read().rewrite_plan(name)
-    }
-
     /// Get global statement counter.
     pub fn name(&self, name: &str) -> Option<&String> {
         self.local.get(name)
+    }
+
+    /// Get globally-prepared statement by local name.
+    pub fn parse(&self, name: &str) -> Option<Parse> {
+        self.local
+            .get(name)
+            .and_then(|name| self.global.read().parse(name))
     }
 
     /// Number of prepared statements in the local cache.
@@ -131,7 +121,7 @@ impl PreparedStatements {
     pub fn close(&mut self, name: &str) {
         if let Some(global_name) = self.local.remove(name) {
             {
-                self.global.write().close(&global_name, self.capacity);
+                self.global.write().close(&global_name);
             }
             self.memory_used = self.memory_usage();
         }
@@ -143,7 +133,7 @@ impl PreparedStatements {
             let mut global = self.global.write();
 
             for global_name in self.local.values() {
-                global.close(global_name, self.capacity);
+                global.close(global_name);
             }
         }
 
@@ -155,6 +145,31 @@ impl PreparedStatements {
     pub fn memory_used(&self) -> usize {
         self.memory_used
     }
+
+    /// Set the prepared statements level.
+    #[cfg(test)]
+    pub fn set_level(&mut self, level: PreparedStatementsLevel) {
+        self.level = level;
+    }
+}
+
+/// Run prepared statements maintenance task
+/// every second.
+pub fn start_maintenance() {
+    spawn(async move {
+        debug!("prepared statements cache maintenance started");
+        loop {
+            sleep(Duration::from_secs(1)).await;
+            run_maintenance();
+        }
+    });
+}
+
+/// Check prepared statements cache for overflows
+/// and remove any unused statements exceeding the limit.
+pub fn run_maintenance() {
+    let capacity = config().config.general.prepared_statements_limit;
+    PreparedStatements::global().write().close_unused(capacity);
 }
 
 #[cfg(test)]
@@ -166,7 +181,6 @@ mod test {
     #[test]
     fn test_maybe_rewrite() {
         let mut statements = PreparedStatements::default();
-        statements.capacity = 0;
 
         let mut messages = vec![
             ProtocolMessage::from(Parse::named("__sqlx_1", "SELECT 1")),
@@ -183,7 +197,6 @@ mod test {
         statements.close_all();
 
         assert!(statements.local.is_empty());
-        assert!(statements.global.read().names().is_empty());
 
         let mut messages = vec![
             ProtocolMessage::from(Parse::named("__sqlx_1", "SELECT 1")),
@@ -200,7 +213,6 @@ mod test {
         statements.close("__sqlx_1");
 
         assert!(statements.local.is_empty());
-        assert!(statements.global.read().names().is_empty());
     }
 
     #[test]

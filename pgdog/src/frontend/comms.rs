@@ -1,6 +1,7 @@
 //! Communication to/from connected clients.
 
 use std::net::SocketAddr;
+use std::ops::Deref;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -40,7 +41,6 @@ struct Global {
 #[derive(Clone, Debug)]
 pub struct Comms {
     global: Arc<Global>,
-    id: Option<BackendKeyData>,
 }
 
 impl Default for Comms {
@@ -59,7 +59,6 @@ impl Comms {
                 clients: Mutex::new(HashMap::default()),
                 tracker: TaskTracker::new(),
             }),
-            id: None,
         }
     }
 
@@ -71,15 +70,6 @@ impl Comms {
     /// Number of connected clients.
     pub fn clients_len(&self) -> usize {
         self.global.clients.lock().len()
-    }
-
-    pub fn clients_memory(&self) -> usize {
-        self.global
-            .clients
-            .lock()
-            .values()
-            .map(|v| v.stats.memory_used)
-            .sum::<usize>()
     }
 
     pub fn tracker(&self) -> &TaskTracker {
@@ -97,39 +87,31 @@ impl Comms {
     }
 
     /// New client connected.
-    pub fn connect(&mut self, id: &BackendKeyData, addr: SocketAddr, params: &Parameters) -> Self {
+    pub fn connect(&self, id: &BackendKeyData, addr: SocketAddr, params: &Parameters) {
         self.global
             .clients
             .lock()
-            .insert(*id, ConnectedClient::new(addr, params));
-        self.id = Some(*id);
-        self.clone()
+            .insert(*id, ConnectedClient::new(id, addr, params));
     }
 
     /// Update client parameters.
-    pub fn update_params(&self, params: &Parameters) {
-        if let Some(id) = self.id {
-            let mut guard = self.global.clients.lock();
-            if let Some(entry) = guard.get_mut(&id) {
-                entry.paramters = params.clone();
-            }
+    pub fn update_params(&self, id: &BackendKeyData, params: Parameters) {
+        let mut guard = self.global.clients.lock();
+        if let Some(entry) = guard.get_mut(id) {
+            entry.paramters = params;
         }
     }
 
     /// Client disconnected.
-    pub fn disconnect(&mut self) {
-        if let Some(id) = self.id.take() {
-            self.global.clients.lock().remove(&id);
-        }
+    pub fn disconnect(&self, id: &BackendKeyData) {
+        self.global.clients.lock().remove(id);
     }
 
     /// Update stats.
-    pub fn stats(&self, stats: Stats) {
-        if let Some(ref id) = self.id {
-            let mut guard = self.global.clients.lock();
-            if let Some(entry) = guard.get_mut(id) {
-                entry.stats = stats;
-            }
+    pub fn update_stats(&self, id: &BackendKeyData, stats: Stats) {
+        let mut guard = self.global.clients.lock();
+        if let Some(entry) = guard.get_mut(id) {
+            entry.stats = stats;
         }
     }
 
@@ -149,8 +131,43 @@ impl Comms {
     pub fn offline(&self) -> bool {
         self.global.offline.load(Ordering::Relaxed)
     }
+}
 
-    pub fn client_id(&self) -> BackendKeyData {
-        self.id.unwrap_or_default()
+#[derive(Debug, Clone)]
+pub struct ClientComms {
+    comms: Comms,
+    id: BackendKeyData,
+}
+
+impl Deref for ClientComms {
+    type Target = Comms;
+
+    fn deref(&self) -> &Self::Target {
+        &self.comms
+    }
+}
+
+impl ClientComms {
+    pub fn disconnect(&self) {
+        self.comms.disconnect(&self.id);
+    }
+
+    pub fn update_stats(&self, stats: Stats) {
+        self.comms.update_stats(&self.id, stats);
+    }
+
+    pub fn new(id: &BackendKeyData) -> Self {
+        Self {
+            id: *id,
+            comms: comms(),
+        }
+    }
+
+    pub fn connect(&self, addr: SocketAddr, params: &Parameters) {
+        self.comms.connect(&self.id, addr, params)
+    }
+
+    pub fn update_params(&self, params: &Parameters) {
+        self.comms.update_params(&self.id, params.clone());
     }
 }

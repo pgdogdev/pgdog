@@ -2,6 +2,8 @@
 
 use std::time::Duration;
 
+use pgdog_config::QueryParserEngine;
+
 use crate::backend::pool::Address;
 use crate::backend::replication::publisher::progress::Progress;
 use crate::backend::replication::publisher::Lsn;
@@ -26,10 +28,16 @@ pub struct Table {
     pub columns: Vec<PublicationTableColumn>,
     /// Table data as of this LSN.
     pub lsn: Lsn,
+    /// Query parser engine.
+    pub query_parser_engine: QueryParserEngine,
 }
 
 impl Table {
-    pub async fn load(publication: &str, server: &mut Server) -> Result<Vec<Self>, Error> {
+    pub async fn load(
+        publication: &str,
+        server: &mut Server,
+        query_parser_engine: QueryParserEngine,
+    ) -> Result<Vec<Self>, Error> {
         let tables = PublicationTable::load(publication, server).await?;
         let mut results = vec![];
 
@@ -43,10 +51,20 @@ impl Table {
                 identity,
                 columns,
                 lsn: Lsn::default(),
+                query_parser_engine,
             });
         }
 
         Ok(results)
+    }
+
+    /// Check that the table supports replication.
+    pub fn valid(&self) -> Result<(), Error> {
+        if !self.columns.iter().any(|c| c.identity) {
+            return Err(Error::NoPrimaryKey(self.table.clone()));
+        }
+
+        Ok(())
     }
 
     /// Upsert record into table.
@@ -91,7 +109,59 @@ impl Table {
 
         format!(
             "INSERT INTO \"{}\".\"{}\" {} {} {}",
-            self.table.schema, self.table.name, names, values, on_conflict
+            self.table.destination_schema(),
+            self.table.destination_name(),
+            names,
+            values,
+            on_conflict
+        )
+    }
+
+    /// Update record in table.
+    pub fn update(&self) -> String {
+        let set_clause = self
+            .columns
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| !c.identity)
+            .map(|(i, c)| format!("\"{}\" = ${}", c.name, i + 1))
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        let where_clause = self
+            .columns
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| c.identity)
+            .map(|(i, c)| format!("\"{}\" = ${}", c.name, i + 1))
+            .collect::<Vec<_>>()
+            .join(" AND ");
+
+        format!(
+            "UPDATE \"{}\".\"{}\" SET {} WHERE {}",
+            self.table.destination_schema(),
+            self.table.destination_name(),
+            set_clause,
+            where_clause
+        )
+    }
+
+    /// Delete record from table.
+    pub fn delete(&self) -> String {
+        let where_clause = self
+            .columns
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| c.identity)
+            .map(|(i, c)| format!("\"{}\" = ${}", c.name, i + 1))
+            .collect::<Vec<_>>()
+            .join(" AND ");
+
+        format!(
+            "DELETE FROM \"{}\".\"{}\" WHERE {}",
+            self.table.destination_schema(),
+            self.table.destination_name(),
+            where_clause
         )
     }
 
@@ -120,7 +190,7 @@ impl Table {
 
         // Create new standalone connection for the copy.
         // let mut server = Server::connect(source, ServerOptions::new_replication()).await?;
-        let mut copy_sub = CopySubscriber::new(copy.statement(), dest)?;
+        let mut copy_sub = CopySubscriber::new(copy.statement(), dest, self.query_parser_engine)?;
         copy_sub.connect().await?;
 
         // Create sync slot.
@@ -171,6 +241,7 @@ impl Table {
 mod test {
 
     use crate::backend::replication::logical::publisher::test::setup_publication;
+    use crate::config::config;
 
     use super::*;
 
@@ -179,15 +250,25 @@ mod test {
         crate::logger();
 
         let mut publication = setup_publication().await;
-        let tables = Table::load("publication_test", &mut publication.server)
-            .await
-            .unwrap();
+        let tables = Table::load(
+            "publication_test",
+            &mut publication.server,
+            config().config.general.query_parser_engine,
+        )
+        .await
+        .unwrap();
 
         assert_eq!(tables.len(), 2);
 
         for table in tables {
             let upsert = table.insert(true);
             assert!(pg_query::parse(&upsert).is_ok());
+
+            let update = table.update();
+            assert!(pg_query::parse(&update).is_ok());
+
+            let delete = table.delete();
+            assert!(pg_query::parse(&delete).is_ok());
         }
 
         publication.cleanup().await;

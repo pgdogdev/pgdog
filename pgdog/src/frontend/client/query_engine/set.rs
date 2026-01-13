@@ -1,4 +1,4 @@
-use crate::net::{parameter::ParameterValue, CommandComplete, Protocol, ReadyForQuery};
+use crate::net::parameter::ParameterValue;
 
 use super::*;
 
@@ -8,43 +8,22 @@ impl QueryEngine {
         context: &mut QueryEngineContext<'_>,
         name: String,
         value: ParameterValue,
+        local: bool,
     ) -> Result<(), Error> {
-        context.params.insert(name, value);
-        self.comms.update_params(context.params);
+        if context.in_transaction() {
+            context
+                .params
+                .insert_transaction(name, value.clone(), local);
+        } else {
+            context.params.insert(name, value.clone());
+            self.comms.update_params(context.params);
+        }
 
-        let bytes_sent = context
-            .stream
-            .send_many(&[
-                CommandComplete::from_str("SET").message()?.backend(),
-                ReadyForQuery::in_transaction(context.in_transaction())
-                    .message()?
-                    .backend(),
-            ])
-            .await?;
-
-        self.stats.sent(bytes_sent);
-
-        Ok(())
-    }
-
-    pub(crate) async fn set_route(
-        &mut self,
-        context: &mut QueryEngineContext<'_>,
-        route: Route,
-    ) -> Result<(), Error> {
-        self.set_route = Some(route);
-
-        let bytes_sent = context
-            .stream
-            .send_many(&[
-                CommandComplete::from_str("SET").message()?.backend(),
-                ReadyForQuery::in_transaction(context.in_transaction())
-                    .message()?
-                    .backend(),
-            ])
-            .await?;
-
-        self.stats.sent(bytes_sent);
+        if self.backend.connected() {
+            self.execute(context).await?;
+        } else {
+            self.fake_command_response(context, "SET").await?;
+        }
 
         Ok(())
     }

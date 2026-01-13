@@ -1,7 +1,9 @@
 //! Startup parameter.
+use bytes::{BufMut, Bytes, BytesMut};
+use tracing::debug;
 
 use std::{
-    collections::BTreeMap,
+    collections::{btree_map, BTreeMap},
     fmt::Display,
     hash::{DefaultHasher, Hash, Hasher},
     ops::{Deref, DerefMut},
@@ -9,7 +11,7 @@ use std::{
 
 use once_cell::sync::Lazy;
 
-use crate::stats::memory::MemoryUsage;
+use crate::{net::ToBytes, stats::memory::MemoryUsage};
 
 use super::{messages::Query, Error};
 
@@ -19,10 +21,11 @@ static IMMUTABLE_PARAMS: Lazy<Vec<String>> = Lazy::new(|| {
         String::from("user"),
         String::from("client_encoding"),
         String::from("replication"),
+        String::from("pgdog.role"),
+        String::from("pgdog.shard"),
+        String::from("pgdog.sharding_key"),
     ])
 });
-
-// static IMMUTABLE_PARAMS: &[&str] = &["database", "user", "client_encoding"];
 
 /// Startup parameter.
 #[derive(Debug, Clone, PartialEq)]
@@ -30,14 +33,14 @@ pub struct Parameter {
     /// Parameter name.
     pub name: String,
     /// Parameter value.
-    pub value: String,
+    pub value: ParameterValue,
 }
 
 impl<T: ToString> From<(T, T)> for Parameter {
     fn from(value: (T, T)) -> Self {
         Self {
             name: value.0.to_string(),
-            value: value.1.to_string(),
+            value: ParameterValue::String(value.1.to_string()),
         }
     }
 }
@@ -52,6 +55,28 @@ pub struct MergeResult {
 pub enum ParameterValue {
     String(String),
     Tuple(Vec<String>),
+    Integer(i32),
+}
+
+impl ToBytes for ParameterValue {
+    fn to_bytes(&self) -> Result<Bytes, Error> {
+        let mut bytes = BytesMut::new();
+        match self {
+            Self::String(string) => bytes.put_slice(string.as_bytes()),
+            Self::Tuple(ref values) => {
+                let values = values
+                    .iter()
+                    .map(|value| value.as_bytes().to_vec())
+                    .collect::<Vec<_>>()
+                    .join(", ".as_bytes());
+                bytes.put(Bytes::from(values));
+            }
+            Self::Integer(integer) => bytes.put_slice(integer.to_string().as_bytes()),
+        }
+        bytes.put_u8(0);
+
+        Ok(bytes.freeze())
+    }
 }
 
 impl MemoryUsage for ParameterValue {
@@ -60,22 +85,40 @@ impl MemoryUsage for ParameterValue {
         match self {
             Self::String(v) => v.memory_usage(),
             Self::Tuple(vals) => vals.memory_usage(),
+            Self::Integer(int) => int.memory_usage(),
         }
     }
 }
 
 impl Display for ParameterValue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        fn quote(value: &str) -> String {
+            let value = if value.starts_with("\"") && value.ends_with("\"") {
+                let mut value = value.to_string();
+                value.remove(0);
+                value.pop();
+                value
+            } else {
+                value.to_string()
+            };
+
+            if value.is_empty() || value.contains("\"") {
+                format!("'{}'", value.replace("'", "''"))
+            } else {
+                format!(r#""{}""#, value.replace("\"", "\"\""))
+            }
+        }
         match self {
-            Self::String(s) => write!(f, "'{}'", s),
+            Self::String(s) => write!(f, "{}", quote(s)),
             Self::Tuple(t) => write!(
                 f,
                 "{}",
                 t.iter()
-                    .map(|s| format!("'{}'", s))
+                    .map(|s| quote(s).to_string())
                     .collect::<Vec<_>>()
                     .join(", ")
             ),
+            Self::Integer(int) => write!(f, "{}", int),
         }
     }
 }
@@ -104,8 +147,32 @@ impl ParameterValue {
 /// List of parameters.
 #[derive(Default, Debug, Clone, PartialEq)]
 pub struct Parameters {
+    /// Save parameters set at connection startup & set with `SET` command
+    /// outside a transaction.
     params: BTreeMap<String, ParameterValue>,
+    /// Save parameters set with `SET` inside a transaction. These will
+    /// need to be rolled back or saved depending on if the transaction is
+    /// rolled back or not.
+    transaction_params: BTreeMap<String, ParameterValue>,
+    /// Parameters set with `SET LOCAL`. These need to be thrown away no matter
+    /// what but we need to intercept them for databases that have cross shard
+    /// queries disabled.
+    transaction_local_params: BTreeMap<String, ParameterValue>,
+    /// Hash of `params` to avoid syncing params between clients and servers
+    /// when they are the same.
     hash: u64,
+}
+
+impl Display for Parameters {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let output = self
+            .params
+            .iter()
+            .map(|(k, v)| format!("{}={}", k, v))
+            .collect::<Vec<_>>()
+            .join(", ");
+        write!(f, "{}", output)
+    }
 }
 
 impl MemoryUsage for Parameters {
@@ -121,6 +188,8 @@ impl From<BTreeMap<String, ParameterValue>> for Parameters {
         Self {
             params: value,
             hash,
+            transaction_params: BTreeMap::new(),
+            transaction_local_params: BTreeMap::new(),
         }
     }
 }
@@ -138,6 +207,67 @@ impl Parameters {
         self.hash = Self::compute_hash(&self.params);
 
         result
+    }
+
+    /// Recompute hash when params are cleared.
+    pub fn clear(&mut self) {
+        self.params.clear();
+        self.hash = Self::compute_hash(&self.params);
+    }
+
+    /// Get parameter.
+    pub fn get(&self, name: &str) -> Option<&ParameterValue> {
+        if let Some(param) = self.transaction_local_params.get(name) {
+            Some(param)
+        } else if let Some(param) = self.transaction_params.get(name) {
+            Some(param)
+        } else {
+            self.params.get(name)
+        }
+    }
+
+    /// Get an iterator over in-transaction params.
+    pub fn in_transaction_iter(&self) -> btree_map::Iter<'_, String, ParameterValue> {
+        self.transaction_params.iter()
+    }
+
+    /// Insert a parameter, but only for the duration of the transaction.
+    pub fn insert_transaction(
+        &mut self,
+        name: impl ToString,
+        value: impl Into<ParameterValue>,
+        local: bool,
+    ) -> Option<ParameterValue> {
+        let name = name.to_string().to_lowercase();
+        if local {
+            self.transaction_local_params.insert(name, value.into())
+        } else {
+            self.transaction_params.insert(name, value.into())
+        }
+    }
+
+    /// Commit params we saved during the transaction.
+    pub fn commit(&mut self) -> bool {
+        debug!(
+            "saved {} in-transaction params",
+            self.transaction_params.len()
+        );
+        let changed = !self.transaction_params.is_empty();
+
+        self.params
+            .extend(std::mem::take(&mut self.transaction_params));
+        self.transaction_local_params.clear();
+
+        if changed {
+            self.hash = Self::compute_hash(&self.params);
+        }
+        changed
+    }
+
+    /// Remove any params we saved during the transaction.
+    pub fn rollback(&mut self) {
+        self.transaction_params.clear();
+        self.transaction_local_params.clear();
     }
 
     fn compute_hash(params: &BTreeMap<String, ParameterValue>) -> u64 {
@@ -176,11 +306,38 @@ impl Parameters {
         self.hash == other.hash
     }
 
-    pub fn set_queries(&self) -> Vec<Query> {
-        self.params
-            .iter()
-            .map(|(name, value)| Query::new(format!(r#"SET "{}" TO {}"#, name, value)))
-            .collect()
+    /// Generate SET queries to change server state.
+    ///
+    /// # Arguments
+    ///
+    /// * `transaction`: Generate `SET` statements from in-transaction params only.
+    ///
+    pub fn set_queries(&self, transaction_only: bool) -> Vec<Query> {
+        fn query(name: &str, value: &ParameterValue, local: bool) -> Query {
+            let set = if local { "SET LOCAL" } else { "SET" };
+            Query::new(format!(r#"{} "{}" TO {}"#, set, name, value))
+        }
+
+        if transaction_only {
+            let mut sets = self
+                .transaction_params
+                .iter()
+                .map(|(key, value)| query(key, value, false))
+                .collect::<Vec<_>>();
+
+            sets.extend(
+                self.transaction_local_params
+                    .iter()
+                    .map(|(key, value)| query(key, value, true)),
+            );
+
+            sets
+        } else {
+            self.params
+                .iter()
+                .map(|(key, value)| query(key, value, false))
+                .collect()
+        }
     }
 
     pub fn reset_queries(&self) -> Vec<Query> {
@@ -218,6 +375,36 @@ impl Parameters {
         self.get(name)
             .map_or(default_value, |p| p.as_str().unwrap_or(default_value))
     }
+
+    /// Merge other into self.
+    pub fn merge(&mut self, other: Self) {
+        self.params.extend(other.params);
+        self.transaction_params.extend(other.transaction_params);
+        self.transaction_local_params
+            .extend(other.transaction_local_params);
+        Self::compute_hash(&self.params);
+    }
+
+    /// Copy params set inside the transaction.
+    pub fn copy_in_transaction(&mut self, other: &Self) {
+        self.transaction_params.extend(
+            other
+                .transaction_params
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone())),
+        );
+        self.transaction_local_params.extend(
+            other
+                .transaction_local_params
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone())),
+        );
+    }
+
+    /// Get search_path, if set.
+    pub fn search_path(&self) -> Option<&ParameterValue> {
+        self.get("search_path")
+    }
 }
 
 impl Deref for Parameters {
@@ -238,10 +425,15 @@ impl From<Vec<Parameter>> for Parameters {
     fn from(value: Vec<Parameter>) -> Self {
         let params = value
             .into_iter()
-            .map(|p| (p.name, ParameterValue::String(p.value)))
+            .map(|p| (p.name, p.value))
             .collect::<BTreeMap<_, _>>();
         let hash = Self::compute_hash(&params);
-        Self { params, hash }
+        Self {
+            params,
+            hash,
+            transaction_params: BTreeMap::new(),
+            transaction_local_params: BTreeMap::new(),
+        }
     }
 }
 
@@ -251,7 +443,7 @@ impl From<&Parameters> for Vec<Parameter> {
         for (key, value) in &val.params {
             result.push(Parameter {
                 name: key.to_string(),
-                value: value.to_string(),
+                value: value.clone(),
             });
         }
 
@@ -261,7 +453,9 @@ impl From<&Parameters> for Vec<Parameter> {
 
 #[cfg(test)]
 mod test {
+    use crate::backend::server::test::test_server;
     use crate::net::parameter::ParameterValue;
+    use crate::net::ToBytes;
 
     use super::Parameters;
 
@@ -282,5 +476,272 @@ mod test {
         assert!(!same);
 
         assert!(Parameters::default().identical(&Parameters::default()));
+    }
+
+    #[test]
+    fn test_insert_transaction_non_local() {
+        let mut params = Parameters::default();
+        params.insert("application_name", "test");
+        params.insert_transaction("search_path", "public", false);
+
+        // Transaction param should be accessible via get
+        assert_eq!(
+            params.get("search_path"),
+            Some(&ParameterValue::String("public".into()))
+        );
+
+        // Regular param should still be accessible
+        assert_eq!(
+            params.get("application_name"),
+            Some(&ParameterValue::String("test".into()))
+        );
+    }
+
+    #[test]
+    fn test_insert_transaction_local() {
+        let mut params = Parameters::default();
+        params.insert_transaction("search_path", "public", true);
+
+        // Local param should be accessible via get
+        assert_eq!(
+            params.get("search_path"),
+            Some(&ParameterValue::String("public".into()))
+        );
+    }
+
+    #[test]
+    fn test_get_priority_local_over_transaction() {
+        let mut params = Parameters::default();
+        params.insert("search_path", "base");
+        params.insert_transaction("search_path", "transaction", false);
+        params.insert_transaction("search_path", "local", true);
+
+        // Local should take priority
+        assert_eq!(
+            params.get("search_path"),
+            Some(&ParameterValue::String("local".into()))
+        );
+    }
+
+    #[test]
+    fn test_get_priority_transaction_over_regular() {
+        let mut params = Parameters::default();
+        params.insert("search_path", "base");
+        params.insert_transaction("search_path", "transaction", false);
+
+        // Transaction should take priority over regular
+        assert_eq!(
+            params.get("search_path"),
+            Some(&ParameterValue::String("transaction".into()))
+        );
+    }
+
+    #[test]
+    fn test_commit_clears_local_params() {
+        let mut params = Parameters::default();
+        params.insert_transaction("search_path", "transaction", false);
+        params.insert_transaction("timezone", "local_tz", true);
+
+        assert!(params.commit());
+
+        // Transaction param should be committed to regular params
+        assert_eq!(
+            params.get("search_path"),
+            Some(&ParameterValue::String("transaction".into()))
+        );
+
+        // Local param should be cleared (not committed)
+        assert_eq!(params.get("timezone"), None);
+    }
+
+    #[test]
+    fn test_rollback_clears_both_transaction_and_local() {
+        let mut params = Parameters::default();
+        params.insert("base", "value");
+        params.insert_transaction("search_path", "transaction", false);
+        params.insert_transaction("timezone", "local_tz", true);
+
+        params.rollback();
+
+        // Both transaction and local params should be cleared
+        assert_eq!(params.get("search_path"), None);
+        assert_eq!(params.get("timezone"), None);
+
+        // Base param should remain
+        assert_eq!(
+            params.get("base"),
+            Some(&ParameterValue::String("value".into()))
+        );
+    }
+
+    #[test]
+    fn test_set_queries_transaction_only_includes_set_local() {
+        let mut params = Parameters::default();
+        params.insert_transaction("search_path", "public", false);
+        params.insert_transaction("timezone", "UTC", true);
+
+        let queries = params.set_queries(true);
+
+        assert_eq!(queries.len(), 2);
+
+        // Check that we have both SET and SET LOCAL queries
+        let query_strings: Vec<String> = queries.iter().map(|q| q.query().to_string()).collect();
+
+        assert!(query_strings
+            .iter()
+            .any(|q| q.contains("SET \"search_path\"") && !q.contains("SET LOCAL")));
+        assert!(query_strings.iter().any(|q| q.contains("SET LOCAL")));
+    }
+
+    #[test]
+    fn test_copy_in_transaction() {
+        let mut source = Parameters::default();
+        source.insert_transaction("search_path", "public", false);
+        source.insert_transaction("timezone", "UTC", true);
+
+        let mut dest = Parameters::default();
+        dest.copy_in_transaction(&source);
+
+        // Both transaction and local params should be copied
+        assert_eq!(
+            dest.get("search_path"),
+            Some(&ParameterValue::String("public".into()))
+        );
+        assert_eq!(
+            dest.get("timezone"),
+            Some(&ParameterValue::String("UTC".into()))
+        );
+    }
+
+    #[test]
+    fn test_parameter_value_to_bytes_string() {
+        let value = ParameterValue::String("test".into());
+        let bytes = value.to_bytes().unwrap();
+
+        assert_eq!(&bytes[..], b"test\0");
+    }
+
+    #[test]
+    fn test_parameter_value_to_bytes_tuple() {
+        let value = ParameterValue::Tuple(vec!["a".into(), "b".into()]);
+        let bytes = value.to_bytes().unwrap();
+
+        assert_eq!(&bytes[..], b"a, b\0");
+    }
+
+    #[test]
+    fn test_parameter_value_display_string() {
+        let value = ParameterValue::String("test".into());
+        assert_eq!(format!("{}", value), r#""test""#);
+    }
+
+    #[test]
+    fn test_parameter_value_display_tuple() {
+        let value = ParameterValue::Tuple(vec!["$user".into(), "public".into()]);
+        assert_eq!(format!("{}", value), r#""$user", "public""#);
+    }
+
+    #[test]
+    fn test_parameter_value_display_already_quoted() {
+        // If value is already quoted, it should strip quotes and re-quote
+        let value = ParameterValue::String(r#""already quoted""#.into());
+        assert_eq!(format!("{}", value), r#""already quoted""#);
+    }
+
+    #[test]
+    fn test_merge_includes_local_params() {
+        let mut params1 = Parameters::default();
+        params1.insert("base", "value");
+
+        let mut params2 = Parameters::default();
+        params2.insert_transaction("search_path", "public", false);
+        params2.insert_transaction("timezone", "UTC", true);
+
+        params1.merge(params2);
+
+        // All params should be merged
+        assert_eq!(
+            params1.get("base"),
+            Some(&ParameterValue::String("value".into()))
+        );
+        assert_eq!(
+            params1.get("search_path"),
+            Some(&ParameterValue::String("public".into()))
+        );
+        assert_eq!(
+            params1.get("timezone"),
+            Some(&ParameterValue::String("UTC".into()))
+        );
+    }
+
+    #[test]
+    fn test_json_parameter_value() {
+        assert_eq!(
+            ParameterValue::String(r#"{"sampling_state":"1","span_id":"2a9abb846bb02bfe","trace_id":"6b9e798174650d2f6e8262ec175f241f"}"#.into()).to_string(),
+            r#"'{"sampling_state":"1","span_id":"2a9abb846bb02bfe","trace_id":"6b9e798174650d2f6e8262ec175f241f"}'"#
+        );
+    }
+
+    #[test]
+    fn test_empty_parameter_value() {
+        assert_eq!(ParameterValue::String("".into()).to_string(), "''");
+    }
+
+    #[test]
+    fn test_clear_resets_hash() {
+        let mut params = Parameters::default();
+        params.insert("application_name", "test_app");
+        params.insert("TimeZone", "UTC");
+
+        // Verify params are not identical to empty (hash differs)
+        assert!(!params.identical(&Parameters::default()));
+
+        params.clear();
+
+        // After clear, hash should be reset to match empty Parameters
+        assert!(params.identical(&Parameters::default()));
+    }
+
+    #[tokio::test]
+    async fn test_escape_chars() {
+        let mut server = test_server().await;
+
+        for quote in ["'", "\""] {
+            let base = r#"my_app_nameQUOTE;CREATE/**/TABLE/**/poc_table_two/**/(dummy_column/**/INTEGER);SET/**/application_name/**/TO/**/QUOTEyour_app_name"#;
+            let param = base.replace("QUOTE", quote);
+            // Postgres truncates identifiers.
+            let truncated =
+                r#"my_app_nameQUOTE;CREATE/**/TABLE/**/poc_table_two/**/(dummy_column/"#
+                    .replace("QUOTE", quote);
+
+            let mut params = Parameters::default();
+            params.insert("application_name", param.clone());
+
+            let query = params.set_queries(false).first().unwrap().clone();
+
+            assert!(query.query().contains(&param));
+
+            server.execute(query).await.unwrap();
+
+            let param: Vec<String> = server.fetch_all("SHOW application_name").await.unwrap();
+            let param = param.first().unwrap().clone();
+
+            assert_eq!(param, truncated);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_set_with_server() {
+        let mut server = test_server().await;
+
+        let mut params = Parameters::default();
+        params.insert("application_name", "test_set_with_server");
+
+        let query = params.set_queries(false).first().unwrap().clone();
+        server.execute(query).await.unwrap();
+
+        let param: Vec<String> = server.fetch_all("SHOW application_name").await.unwrap();
+        let param = param.first().unwrap();
+        assert_eq!(param, "test_set_with_server");
     }
 }

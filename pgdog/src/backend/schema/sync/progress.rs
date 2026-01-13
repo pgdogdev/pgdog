@@ -1,12 +1,10 @@
 use std::fmt::Display;
-use std::sync::Arc;
-use tokio::sync::Notify;
+use tokio::sync::mpsc;
 use tokio::time::Instant;
 use tokio::{select, spawn};
 use tracing::info;
 
 use super::Statement;
-use parking_lot::Mutex;
 
 #[derive(Clone)]
 pub enum Item {
@@ -23,17 +21,11 @@ pub enum Item {
         schema: String,
         name: String,
     },
-    // SequenceOwner {
-    //     sequence: String,
-    //     owner: String,
-    // },
     Other {
         sql: String,
     },
 }
 
-// Remove pg_dump comments.
-// Only for displaying purposes! Don't use for executing queries.
 fn no_comments(sql: &str) -> String {
     let mut output = String::new();
     for line in sql.lines() {
@@ -44,7 +36,23 @@ fn no_comments(sql: &str) -> String {
         output.push('\n');
     }
 
-    output.trim().to_string()
+    let result = output.trim().replace("\n", " ");
+
+    let mut prev_space = false;
+    let mut collapsed = String::new();
+    for c in result.chars() {
+        if c == ' ' {
+            if !prev_space {
+                collapsed.push(c);
+                prev_space = true;
+            }
+        } else {
+            collapsed.push(c);
+            prev_space = false;
+        }
+    }
+
+    collapsed
 }
 
 impl Default for Item {
@@ -87,16 +95,12 @@ impl Item {
 impl From<&Statement<'_>> for Item {
     fn from(value: &Statement<'_>) -> Self {
         match value {
-            Statement::Index { table, name, .. } => Item::Index {
-                schema: table.schema.as_ref().unwrap_or(&"").to_string(),
-                table: table.name.to_string(),
-                name: name.to_string(),
-            },
+            Statement::Index { sql, .. } => Item::Other { sql: sql.clone() },
             Statement::Table { table, .. } => Item::Table {
                 schema: table.schema.as_ref().unwrap_or(&"").to_string(),
                 name: table.name.to_string(),
             },
-            Statement::Other { sql } => Item::Other {
+            Statement::Other { sql, .. } => Item::Other {
                 sql: sql.to_string(),
             },
             Statement::SequenceOwner { sql, .. } => Item::Other {
@@ -109,85 +113,54 @@ impl From<&Statement<'_>> for Item {
     }
 }
 
-struct ItemTracker {
-    item: Item,
-    timer: Instant,
-}
-
-impl ItemTracker {
-    fn new() -> Self {
-        Self {
-            item: Item::default(),
-            timer: Instant::now(),
-        }
-    }
-}
-
-struct Comms {
-    updated: Notify,
-    shutdown: Notify,
-}
-impl Comms {
-    fn new() -> Self {
-        Self {
-            updated: Notify::new(),
-            shutdown: Notify::new(),
-        }
-    }
+enum Message {
+    Next(Item),
+    Shutdown,
 }
 
 #[derive(Clone)]
 pub struct Progress {
-    item: Arc<Mutex<ItemTracker>>,
-    comms: Arc<Comms>,
-    total: usize,
+    tx: mpsc::UnboundedSender<Message>,
+    timer: Instant,
 }
 
 impl Progress {
     pub fn new(total: usize) -> Self {
-        let me = Self {
-            item: Arc::new(Mutex::new(ItemTracker::new())),
-            comms: Arc::new(Comms::new()),
-            total,
-        };
-
-        let task = me.clone();
+        let (tx, rx) = mpsc::unbounded_channel();
+        let timer = Instant::now();
 
         spawn(async move {
-            task.listen().await;
+            Self::listen(rx, total).await;
         });
 
-        me
+        Self { tx, timer }
     }
 
-    pub fn done(&self) {
-        let elapsed = self.item.lock().timer.elapsed();
-
+    pub fn done(&mut self) {
+        let elapsed = self.timer.elapsed();
         info!("finished in {:.3}s", elapsed.as_secs_f64());
+        self.timer = Instant::now();
     }
 
     pub fn next(&self, item: impl Into<Item>) {
-        {
-            let mut guard = self.item.lock();
-            guard.item = item.into().clone();
-            guard.timer = Instant::now();
-        }
-        self.comms.updated.notify_one();
+        let _ = self.tx.send(Message::Next(item.into()));
     }
 
-    async fn listen(&self) {
+    async fn listen(mut rx: mpsc::UnboundedReceiver<Message>, total: usize) {
         let mut counter = 1;
 
         loop {
             select! {
-                _ = self.comms.updated.notified() => {
-                    let item = self.item.lock().item.clone();
-                    info!("[{}/{}] {} {}", counter, self.total, item.action(), item);
-                    counter += 1;
-                }
-
-                _ = self.comms.shutdown.notified() => {
-                    break;
+                msg = rx.recv() => {
+                    match msg {
+                        Some(Message::Next(item)) => {
+                            info!("[{}/{}] {} {}", counter, total, item.action(), item);
+                            counter += 1;
+                        }
+                        Some(Message::Shutdown) | None => {
+                            break;
+                        }
+                    }
                 }
             }
         }
@@ -196,6 +169,6 @@ impl Progress {
 
 impl Drop for Progress {
     fn drop(&mut self) {
-        self.comms.shutdown.notify_one();
+        let _ = self.tx.send(Message::Shutdown);
     }
 }

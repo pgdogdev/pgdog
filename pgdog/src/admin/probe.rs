@@ -2,7 +2,7 @@ use tokio::time::{timeout, Duration, Instant};
 use url::Url;
 
 use crate::{
-    backend::{pool::Address, Server, ServerOptions},
+    backend::{pool::Address, ConnectReason, Server, ServerOptions},
     config::config,
 };
 
@@ -30,6 +30,7 @@ impl Command for Probe {
             Server::connect(
                 &Address::try_from(self.url.clone()).map_err(|_| Error::InvalidAddress)?,
                 ServerOptions::default(),
+                ConnectReason::Probe,
             ),
         )
         .await?

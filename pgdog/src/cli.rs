@@ -5,12 +5,13 @@ use clap::{Parser, Subcommand};
 use std::fs::read_to_string;
 use thiserror::Error;
 use tokio::{select, signal::ctrl_c};
-use tracing::error;
+use tracing::{error, info};
 
 use crate::backend::schema::sync::config::ShardConfig;
 use crate::backend::schema::sync::pg_dump::{PgDump, SyncState};
 use crate::backend::{databases::databases, replication::logical::Publisher};
-use crate::config::{Config, Users};
+use crate::config::{config, Config, Users};
+use crate::frontend::router::cli::RouterCli;
 
 /// PgDog is a PostgreSQL pooler, proxy, load balancer and query router.
 #[derive(Parser, Debug)]
@@ -55,6 +56,21 @@ pub enum Commands {
         path: Option<PathBuf>,
     },
 
+    /// Execute the router on the queries.
+    Route {
+        /// User in users.toml.
+        #[arg(short, long)]
+        user: String,
+
+        /// Database in pgdog.toml.
+        #[arg(short, long)]
+        database: String,
+
+        /// Path to the file containing the queries.
+        #[arg(short, long)]
+        file: PathBuf,
+    },
+
     /// Check configuration files for errors.
     Configcheck,
 
@@ -64,9 +80,7 @@ pub enum Commands {
         /// Source database name.
         #[arg(long)]
         from_database: String,
-        /// Source user name.
-        #[arg(long)]
-        from_user: String,
+
         /// Publication name.
         #[arg(long)]
         publication: String,
@@ -74,13 +88,18 @@ pub enum Commands {
         /// Destination database.
         #[arg(long)]
         to_database: String,
-        /// Destination user name.
-        #[arg(long)]
-        to_user: String,
 
         /// Replicate or copy data over.
         #[arg(long, default_value = "false")]
-        replicate: bool,
+        replicate_only: bool,
+
+        /// Replicate or copy data over.
+        #[arg(long, default_value = "false")]
+        sync_only: bool,
+
+        /// Name of the replication slot to create/use.
+        #[arg(long)]
+        replication_slot: Option<String>,
     },
 
     /// Copy schema from source to destination cluster.
@@ -107,6 +126,10 @@ pub enum Commands {
         /// Data sync has been complete.
         #[arg(long)]
         data_sync_complete: bool,
+
+        /// Execute cutover statements.
+        #[arg(long)]
+        cutover: bool,
     },
 
     /// Perform cluster configuration steps
@@ -204,31 +227,43 @@ pub fn config_check(
 }
 
 pub async fn data_sync(commands: Commands) -> Result<(), Box<dyn std::error::Error>> {
-    let (source, destination, publication, replicate) = if let Commands::DataSync {
-        from_database,
-        from_user,
-        to_database,
-        to_user,
-        publication,
-        replicate,
-    } = commands
-    {
-        let source = databases().cluster((from_user.as_str(), from_database.as_str()))?;
-        let dest = databases().cluster((to_user.as_str(), to_database.as_str()))?;
+    let (source, destination, publication, replicate_only, sync_only, replication_slot) =
+        if let Commands::DataSync {
+            from_database,
+            to_database,
+            publication,
+            replicate_only,
+            sync_only,
+            replication_slot,
+        } = commands
+        {
+            let source = databases().schema_owner(&from_database)?;
+            let dest = databases().schema_owner(&to_database)?;
 
-        (source, dest, publication, replicate)
-    } else {
-        return Ok(());
-    };
+            (
+                source,
+                dest,
+                publication,
+                replicate_only,
+                sync_only,
+                replication_slot,
+            )
+        } else {
+            return Ok(());
+        };
 
-    let mut publication = Publisher::new(&source, &publication);
-    if replicate {
-        if let Err(err) = publication.replicate(&destination).await {
+    let mut publication = Publisher::new(
+        &source,
+        &publication,
+        config().config.general.query_parser_engine,
+    );
+    if replicate_only {
+        if let Err(err) = publication.replicate(&destination, replication_slot).await {
             error!("{}", err);
         }
     } else {
         select! {
-            result = publication.data_sync(&destination) => {
+            result = publication.data_sync(&destination, !sync_only, replication_slot) => {
                 if let Err(err) = result {
                     error!("{}", err);
                 }
@@ -244,7 +279,7 @@ pub async fn data_sync(commands: Commands) -> Result<(), Box<dyn std::error::Err
 
 #[allow(clippy::print_stdout)]
 pub async fn schema_sync(commands: Commands) -> Result<(), Box<dyn std::error::Error>> {
-    let (source, destination, publication, dry_run, ignore_errors, data_sync_complete) =
+    let (source, destination, publication, dry_run, ignore_errors, data_sync_complete, cutover) =
         if let Commands::SchemaSync {
             from_database,
             to_database,
@@ -252,6 +287,7 @@ pub async fn schema_sync(commands: Commands) -> Result<(), Box<dyn std::error::E
             dry_run,
             ignore_errors,
             data_sync_complete,
+            cutover,
         } = commands
         {
             let source = databases().schema_owner(&from_database)?;
@@ -264,6 +300,7 @@ pub async fn schema_sync(commands: Commands) -> Result<(), Box<dyn std::error::E
                 dry_run,
                 ignore_errors,
                 data_sync_complete,
+                cutover,
             )
         } else {
             return Ok(());
@@ -273,6 +310,8 @@ pub async fn schema_sync(commands: Commands) -> Result<(), Box<dyn std::error::E
     let output = dump.dump().await?;
     let state = if data_sync_complete {
         SyncState::PostData
+    } else if cutover {
+        SyncState::Cutover
     } else {
         SyncState::PreData
     };
@@ -281,15 +320,13 @@ pub async fn schema_sync(commands: Commands) -> Result<(), Box<dyn std::error::E
         ShardConfig::sync_all(&destination).await?;
     }
 
-    for output in output {
-        if dry_run {
-            let queries = output.statements(state)?;
-            for query in queries {
-                println!("{}", query.deref());
-            }
-        } else {
-            output.restore(&destination, ignore_errors, state).await?;
+    if dry_run {
+        let queries = output.statements(state)?;
+        for query in queries {
+            println!("{}", query.deref());
         }
+    } else {
+        output.restore(&destination, ignore_errors, state).await?;
     }
 
     Ok(())
@@ -300,6 +337,24 @@ pub async fn setup(database: &str) -> Result<(), Box<dyn std::error::Error>> {
     let schema_owner = databases.schema_owner(database)?;
 
     ShardConfig::sync_all(&schema_owner).await?;
+
+    Ok(())
+}
+
+pub async fn route(commands: Commands) -> Result<(), Box<dyn std::error::Error>> {
+    if let Commands::Route {
+        user,
+        database,
+        file,
+    } = commands
+    {
+        let cli = RouterCli::new(&database, &user, file).await?;
+        let cmds = cli.run()?;
+
+        for cmd in cmds {
+            info!("{:?}", cmd);
+        }
+    }
 
     Ok(())
 }

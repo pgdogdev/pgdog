@@ -58,6 +58,19 @@ impl Schema {
         })
     }
 
+    #[cfg(test)]
+    pub(crate) fn from_parts(
+        search_path: Vec<String>,
+        relations: HashMap<(String, String), Relation>,
+    ) -> Self {
+        Self {
+            inner: Arc::new(Inner {
+                search_path,
+                relations,
+            }),
+        }
+    }
+
     /// Load schema from primary database.
     pub async fn from_cluster(cluster: &Cluster, shard: usize) -> Result<Self, Error> {
         let mut primary = cluster.primary(shard, &Request::default()).await?;

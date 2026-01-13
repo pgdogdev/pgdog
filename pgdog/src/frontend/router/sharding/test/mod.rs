@@ -1,6 +1,6 @@
 use std::{collections::HashSet, str::from_utf8};
 
-use rand::{seq::SliceRandom, thread_rng};
+use rand::seq::SliceRandom;
 
 use crate::{
     backend::server::test::test_server,
@@ -17,7 +17,7 @@ async fn test_shard_varchar() {
     let mut server = test_server().await;
     let inserts = (0..100)
         .map(|i| {
-            words.shuffle(&mut thread_rng());
+            words.shuffle(&mut rand::rng());
             let word = words.first().unwrap();
 
             Query::new(format!(
@@ -124,7 +124,7 @@ async fn test_binary_encoding() {
                     "",
                     &[Parameter {
                         len: 5,
-                        data: "test1".as_bytes().to_vec(),
+                        data: "test1".as_bytes().into(),
                     }],
                     &[Format::Binary],
                     &[1],

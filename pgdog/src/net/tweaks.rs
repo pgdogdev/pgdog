@@ -21,6 +21,12 @@ pub fn tweak(socket: &TcpStream) -> Result<()> {
     if let Some(interval) = config.interval() {
         params = params.with_interval(interval);
     }
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "freebsd",
+        target_os = "fuchsia",
+        target_os = "illumos"
+    ))]
     if let Some(retries) = config.retries() {
         params = params.with_retries(retries);
     }

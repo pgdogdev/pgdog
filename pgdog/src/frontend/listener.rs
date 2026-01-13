@@ -20,10 +20,7 @@ use tokio::{select, spawn};
 
 use tracing::{error, info, warn};
 
-use super::{
-    comms::{comms, Comms},
-    Client, Error,
-};
+use super::{comms::comms, Client, Error};
 
 /// Client connections listener and handler.
 #[derive(Debug, Clone)]
@@ -45,21 +42,18 @@ impl Listener {
     pub async fn listen(&mut self) -> Result<(), Error> {
         info!("🐕 PgDog listening on {}", self.addr);
         let listener = TcpListener::bind(&self.addr).await?;
-        let comms = comms();
-        let shutdown_signal = comms.shutting_down();
+        let shutdown_signal = comms().shutting_down();
         let mut sighup = Sighup::new()?;
 
         loop {
-            let comms = comms.clone();
-
             select! {
                 connection = listener.accept() => {
+                   let comms = comms();
                    let (stream, addr) = connection?;
                    let offline = comms.offline();
 
-                   let client_comms = comms.clone();
                    let future = async move {
-                       match Self::handle_client(stream, addr, client_comms).await {
+                       match Self::handle_client(stream, addr).await {
                            Ok(_) => (),
                            Err(err) => if !err.disconnect() {
                                error!("client crashed: {:?}", err);
@@ -117,8 +111,9 @@ impl Listener {
         let shutdown_timeout = config().config.general.shutdown_timeout();
 
         info!(
-            "waiting up to {:.3}s for clients to finish transactions",
-            shutdown_timeout.as_secs_f64()
+            "waiting up to {:.3}s for {} clients to finish transactions",
+            shutdown_timeout.as_secs_f64(),
+            comms().tracker().len(),
         );
 
         let comms = comms();
@@ -131,15 +126,39 @@ impl Listener {
                 "terminating {} client connections due to shutdown timeout",
                 comms.tracker().len()
             );
+
+            // If a shutdown termination timeout is configured, enforce it here.
+            // This will ensure that we don't wait indefinitely for databases to respond.
+            if let Some(termination_timeout) =
+                config().config.general.shutdown_termination_timeout()
+            {
+                // Shutdown timeout elapsed; cancel any still-running queries before tearing pools down.
+                let cancel_futures = comms.clients().into_keys().map(|id| async move {
+                    if let Err(err) = databases().cancel(&id).await {
+                        error!(?id, "cancel request failed during shutdown: {err}");
+                    }
+                });
+                let cancel_all = futures::future::join_all(cancel_futures);
+
+                if timeout(termination_timeout, cancel_all).await.is_err() {
+                    error!(
+                        "forced shutdown: abandoning {} outstanding cancel requests after waiting {:.3}s" ,
+                        comms.clients().len(),
+                        termination_timeout.as_secs_f64()
+                    );
+                }
+            }
         }
 
         self.shutdown.notify_waiters();
     }
 
-    async fn handle_client(stream: TcpStream, addr: SocketAddr, comms: Comms) -> Result<(), Error> {
+    async fn handle_client(stream: TcpStream, addr: SocketAddr) -> Result<(), Error> {
         tweak(&stream)?;
+        let config = config();
 
-        let mut stream = Stream::plain(stream);
+        let mut stream = Stream::plain(stream, config.config.memory.net_buffer);
+
         let tls = acceptor();
 
         loop {
@@ -159,11 +178,14 @@ impl Listener {
 
             match startup {
                 Startup::Ssl => {
-                    if let Some(tls) = tls {
+                    if let Some(tls) = tls.as_ref() {
                         stream.send_flush(&SslReply::Yes).await?;
                         let plain = stream.take()?;
                         let cipher = tls.accept(plain).await?;
-                        stream = Stream::tls(tokio_rustls::TlsStream::Server(cipher));
+                        stream = Stream::tls(
+                            tokio_rustls::TlsStream::Server(cipher),
+                            config.config.memory.net_buffer,
+                        );
                     } else {
                         stream.send_flush(&SslReply::No).await?;
                     }
@@ -175,7 +197,7 @@ impl Listener {
                 }
 
                 Startup::Startup { params } => {
-                    Client::spawn(stream, params, addr, comms).await?;
+                    Client::spawn(stream, params, addr, config).await?;
                     break;
                 }
 

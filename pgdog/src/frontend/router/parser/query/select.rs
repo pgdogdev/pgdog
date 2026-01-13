@@ -1,6 +1,9 @@
-use crate::frontend::router::parser::{from_clause::FromClause, where_clause::TablesSource};
+use crate::frontend::router::parser::{
+    cache::Ast, from_clause::FromClause, where_clause::TablesSource,
+};
 
 use super::*;
+use shared::ConvergeAlgorithm;
 
 impl QueryParser {
     /// Handle SELECT statement.
@@ -12,6 +15,7 @@ impl QueryParser {
     ///
     pub(super) fn select(
         &mut self,
+        cached_ast: &Ast,
         stmt: &SelectStmt,
         context: &mut QueryParserContext,
     ) -> Result<Command, Error> {
@@ -27,31 +31,42 @@ impl QueryParser {
             writes.writes = true;
         }
 
-        if matches!(self.shard, Shard::Direct(_)) {
+        // Early return for any direct-to-shard queries.
+        if context.shards_calculator.shard().is_direct() {
             return Ok(Command::Query(
-                Route::read(self.shard.clone()).set_write(writes),
+                Route::read(context.shards_calculator.shard().clone()).with_write(writes),
             ));
         }
 
+        let mut shards = HashSet::new();
+
+        let shard = StatementParser::from_select(
+            stmt,
+            context.router_context.bind,
+            &context.sharding_schema,
+            self.recorder_mut(),
+        )
+        .shard()?;
+
+        if let Some(shard) = shard {
+            shards.insert(shard);
+        }
+
         // `SELECT NOW()`, `SELECT 1`, etc.
-        if stmt.from_clause.is_empty() {
+        if shards.is_empty() && stmt.from_clause.is_empty() {
+            context
+                .shards_calculator
+                .push(ShardWithPriority::new_rr_no_table(Shard::Direct(
+                    round_robin::next() % context.shards,
+                )));
+
             return Ok(Command::Query(
-                Route::read(Some(round_robin::next() % context.shards)).set_write(writes),
+                Route::read(context.shards_calculator.shard().clone()).with_write(writes),
             ));
         }
 
         let order_by = Self::select_sort(&stmt.sort_clause, context.router_context.bind);
-        let mut shards = HashSet::new();
         let from_clause = TablesSource::from(FromClause::new(&stmt.from_clause));
-        let where_clause = WhereClause::new(&from_clause, &stmt.where_clause);
-
-        if let Some(ref where_clause) = where_clause {
-            shards = Self::where_clause(
-                &context.sharding_schema,
-                &where_clause,
-                context.router_context.bind,
-            )?;
-        }
 
         // Shard by vector in ORDER BY clause.
         for order in &order_by {
@@ -62,66 +77,90 @@ impl QueryParser {
                             || table.name.as_deref() == from_clause.table_name())
                     {
                         let centroids = Centroids::from(&table.centroids);
-                        shards.insert(centroids.shard(
-                            vector,
-                            context.shards,
-                            table.centroid_probes,
-                        ));
+                        let shard: Shard = centroids
+                            .shard(vector, context.shards, table.centroid_probes)
+                            .into();
+                        if let Some(recorder) = self.recorder_mut() {
+                            recorder.record_entry(
+                                Some(shard.clone()),
+                                format!("ORDER BY vector distance on {}", column_name),
+                            );
+                        }
+                        shards.insert(shard);
                     }
                 }
             }
         }
 
-        let shard = Self::converge(shards);
-        let aggregates = Aggregate::parse(stmt)?;
+        let shard = Self::converge(&shards, ConvergeAlgorithm::default());
+        let aggregates = Aggregate::parse(stmt);
         let limit = LimitClause::new(stmt, context.router_context.bind).limit_offset()?;
         let distinct = Distinct::new(stmt).distinct()?;
 
-        let mut query = Route::select(shard, order_by, aggregates, limit, distinct);
+        context
+            .shards_calculator
+            .push(ShardWithPriority::new_table(shard));
 
-        let mut omni = false;
+        let mut query = Route::select(
+            context.shards_calculator.shard().clone(),
+            order_by,
+            aggregates,
+            limit,
+            distinct,
+        );
+
+        // Omnisharded tables check.
         if query.is_all_shards() {
-            if let Some(name) = from_clause.table_name() {
-                omni = context.sharding_schema.tables.omnishards().contains(name);
-            }
-        }
+            let tables = from_clause.tables();
+            let mut sticky = false;
+            let omni = tables.iter().all(|table| {
+                let is_sticky = context.sharding_schema.tables.omnishards().get(table.name);
 
-        if omni {
-            query.set_shard_mut(round_robin::next() % context.shards);
+                if let Some(is_sticky) = is_sticky {
+                    if *is_sticky {
+                        sticky = true;
+                    }
+                    true
+                } else {
+                    false
+                }
+            });
+
+            if omni {
+                let shard = if sticky {
+                    context.router_context.sticky.omni_index
+                } else {
+                    round_robin::next()
+                } % context.shards;
+
+                context
+                    .shards_calculator
+                    .push(ShardWithPriority::new_rr_omni(Shard::Direct(shard)));
+
+                query.set_shard_mut(context.shards_calculator.shard().clone());
+
+                if let Some(recorder) = self.recorder_mut() {
+                    recorder.record_entry(
+                        Some(shard.into()),
+                        format!(
+                            "SELECT matched omnisharded tables: {}",
+                            tables
+                                .iter()
+                                .map(|table| table.name)
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        ),
+                    );
+                }
+            }
         }
 
         // Only rewrite if query is cross-shard.
         if query.is_cross_shard() && context.shards > 1 {
-            if let Some(buffered_query) = context.router_context.query.as_ref() {
-                let rewrite =
-                    RewriteEngine::new().rewrite_select(buffered_query.query(), query.aggregate());
-                if !rewrite.plan.is_noop() {
-                    if let BufferedQuery::Prepared(parse) = buffered_query {
-                        let name = parse.name().to_owned();
-                        {
-                            let prepared = context.prepared_statements();
-                            prepared.set_rewrite_plan(&name, rewrite.plan.clone());
-                            prepared.update_query(&name, &rewrite.sql);
-                        }
-                    }
-                    query.set_rewrite(rewrite.plan, rewrite.sql);
-                } else if let BufferedQuery::Prepared(parse) = buffered_query {
-                    let name = parse.name().to_owned();
-                    let stored_plan = {
-                        let prepared = context.prepared_statements();
-                        prepared.rewrite_plan(&name)
-                    };
-                    if let Some(plan) = stored_plan {
-                        if !plan.is_noop() {
-                            query.clear_rewrite();
-                            *query.rewrite_plan_mut() = plan;
-                        }
-                    }
-                }
-            }
+            query.with_aggregate_rewrite_plan_mut(cached_ast.rewrite_plan.aggregates.clone());
         }
 
-        Ok(Command::Query(query.set_write(writes)))
+        Ok(Command::Query(query.with_write(writes)))
     }
 
     /// Handle the `ORDER BY` clause of a `SELECT` statement.
@@ -195,7 +234,7 @@ impl QueryParser {
                                                         Value::Vector(vec) => vector = Some(vec),
                                                         _ => (),
                                                     }
-                                                };
+                                                }
 
                                                 if let Ok(col) = Column::try_from(&e.node) {
                                                     column = Some(col.name.to_owned());
