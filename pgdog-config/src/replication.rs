@@ -11,7 +11,7 @@ struct RawReplicaLag {
     max_age: Option<u64>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ReplicaLag {
     pub check_interval: Duration,
     pub max_age: Duration,
@@ -119,7 +119,7 @@ impl Default for Replication {
 }
 
 /// Mirroring configuration.
-#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Mirroring {
     /// Source database name to mirror from.

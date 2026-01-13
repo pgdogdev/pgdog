@@ -27,7 +27,7 @@ pub use general::General;
 pub use memory::*;
 pub use networking::{MultiTenant, Tcp, TlsVerifyMode};
 pub use overrides::Overrides;
-pub use pooling::{PoolerMode, PreparedStatements, Stats};
+pub use pooling::{PoolerMode, PreparedStatements};
 pub use replication::*;
 pub use rewrite::{Rewrite, RewriteMode};
 pub use sharding::*;
