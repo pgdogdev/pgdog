@@ -194,6 +194,11 @@ pub struct General {
     /// Minimum ID for unique ID generator.
     #[serde(default)]
     pub unique_id_min: u64,
+    /// Authentication rate limit (attempts per minute per IP).
+    ///
+    /// None means unlimited (rate limiting disabled by default).
+    #[serde(default = "General::auth_rate_limit")]
+    pub auth_rate_limit: Option<u32>,
 }
 
 impl Default for General {
@@ -262,6 +267,7 @@ impl Default for General {
             lsn_check_timeout: Self::lsn_check_timeout(),
             lsn_check_delay: Self::lsn_check_delay(),
             unique_id_min: u64::default(),
+            auth_rate_limit: Self::auth_rate_limit(),
         }
     }
 }
@@ -623,6 +629,16 @@ impl General {
     /// Support for LISTEN/NOTIFY.
     pub fn pub_sub_enabled(&self) -> bool {
         self.pub_sub_channel_size > 0
+    }
+
+    pub fn auth_rate_limit() -> Option<u32> {
+        match std::env::var("PGDOG_AUTH_RATE_LIMIT") {
+            Ok(s) => s
+                .parse::<u32>()
+                .ok()
+                .and_then(|v| if v == 0 { None } else { Some(v) }),
+            Err(_) => None,
+        }
     }
 }
 

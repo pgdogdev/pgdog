@@ -50,10 +50,19 @@ use base64::prelude::*;
 
 impl AuthenticationProvider for UserPassword {
     fn get_password_for(&self, _user: &str) -> Option<PasswordInfo> {
-        // TODO: This is slow. We should move it to its own thread pool.
         let iterations = 4096;
         let salt = rand::rng().random::<[u8; 16]>().to_vec();
-        let hash = hash_password(&self.password, NonZeroU32::new(iterations).unwrap(), &salt);
+
+        // Move expensive PBKDF2 computation to blocking thread pool
+        // to avoid blocking the async runtime.
+        let hash = tokio::task::block_in_place(|| {
+            hash_password(
+                &self.password,
+                NonZeroU32::new(iterations).expect("PBKDF2 iterations must be non-zero"),
+                &salt,
+            )
+        });
+
         Some(PasswordInfo::new(hash.to_vec(), iterations as u16, salt))
     }
 }
@@ -251,6 +260,15 @@ mod test {
             .to_string();
         let hashed = HashedPassword { hash };
         let info = hashed.get_password_for("user");
+        assert!(info.is_some());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_user_password_get_password_for_blocking_ok() {
+        let plain = UserPassword {
+            password: "secret".to_string(),
+        };
+        let info = plain.get_password_for("user");
         assert!(info.is_some());
     }
 }
