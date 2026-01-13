@@ -8,7 +8,7 @@ use timeouts::Timeouts;
 use tokio::{select, spawn, time::timeout};
 use tracing::{debug, enabled, error, info, trace, Level as LogLevel};
 
-use super::{ClientRequest, Comms, Error, PreparedStatements};
+use super::{ClientRequest, Error, PreparedStatements};
 use crate::auth::{md5, rate_limit, scram::Server};
 use crate::backend::maintenance_mode;
 use crate::backend::pool::stats::MemoryStats;
