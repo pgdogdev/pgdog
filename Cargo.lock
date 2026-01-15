@@ -2398,7 +2398,7 @@ dependencies = [
 
 [[package]]
 name = "pgdog"
-version = "0.1.24"
+version = "0.1.25"
 dependencies = [
  "arc-swap",
  "async-trait",
@@ -3182,6 +3182,7 @@ dependencies = [
  "libc",
  "ordered-float",
  "parking_lot",
+ "rand 0.9.2",
  "reqwest",
  "serde_json",
  "serial_test",

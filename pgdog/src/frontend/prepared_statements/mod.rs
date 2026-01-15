@@ -10,7 +10,6 @@ use tracing::debug;
 use crate::{
     config::{config, PreparedStatements as PreparedStatementsLevel},
     net::{Parse, ProtocolMessage},
-    stats::memory::MemoryUsage,
 };
 
 pub mod error;
@@ -23,21 +22,18 @@ pub use rewrite::Rewrite;
 
 static CACHE: Lazy<PreparedStatements> = Lazy::new(PreparedStatements::default);
 
+/// Approximate memory used by a String.
+#[inline]
+fn str_mem(s: &str) -> usize {
+    s.len() + std::mem::size_of::<String>()
+}
+
 #[derive(Clone, Debug)]
 pub struct PreparedStatements {
     pub(super) global: Arc<RwLock<GlobalCache>>,
     pub(super) local: HashMap<String, String>,
     pub(super) level: PreparedStatementsLevel,
     pub(super) memory_used: usize,
-}
-
-impl MemoryUsage for PreparedStatements {
-    #[inline]
-    fn memory_usage(&self) -> usize {
-        self.local.memory_usage()
-            + std::mem::size_of::<PreparedStatementsLevel>()
-            + std::mem::size_of::<Arc<RwLock<GlobalCache>>>()
-    }
 }
 
 impl Default for PreparedStatements {
@@ -72,16 +68,20 @@ impl PreparedStatements {
     /// Register prepared statement with the global cache.
     pub fn insert(&mut self, parse: &mut Parse) {
         let (_new, name) = { self.global.write().insert(parse) };
-        let existed = self.local.insert(parse.name().to_owned(), name.clone());
-        self.memory_used = self.memory_usage();
+        let key = parse.name();
+        let existed = self.local.insert(key.to_owned(), name.clone());
 
         // Client prepared it again because it got an error the first time.
         // We can check if this is a new statement first, but this is an error
         // condition which happens very infrequently, so we optimize for the happy path.
-        if existed.is_some() {
-            {
-                self.global.write().decrement(&name);
-            }
+        if let Some(old_value) = existed {
+            // Key already existed, only value changed.
+            self.memory_used = self.memory_used.saturating_sub(str_mem(&old_value));
+            self.memory_used += str_mem(&name);
+            self.global.write().decrement(&name);
+        } else {
+            // New entry.
+            self.memory_used += str_mem(key) + str_mem(&name);
         }
 
         parse.rename_fast(&name)
@@ -90,8 +90,18 @@ impl PreparedStatements {
     /// Insert statement into the cache bypassing duplicate checks.
     pub fn insert_anyway(&mut self, parse: &mut Parse) {
         let name = { self.global.write().insert_anyway(parse) };
-        self.local.insert(parse.name().to_owned(), name.clone());
-        self.memory_used = self.memory_usage();
+        let key = parse.name();
+        let existed = self.local.insert(key.to_owned(), name.clone());
+
+        if let Some(old_value) = existed {
+            // Key already existed, only value changed.
+            self.memory_used = self.memory_used.saturating_sub(str_mem(&old_value));
+            self.memory_used += str_mem(&name);
+        } else {
+            // New entry.
+            self.memory_used += str_mem(key) + str_mem(&name);
+        }
+
         parse.rename_fast(&name)
     }
 
@@ -120,10 +130,10 @@ impl PreparedStatements {
     /// Remove prepared statement from local cache.
     pub fn close(&mut self, name: &str) {
         if let Some(global_name) = self.local.remove(name) {
-            {
-                self.global.write().close(&global_name);
-            }
-            self.memory_used = self.memory_usage();
+            self.global.write().close(&global_name);
+            self.memory_used = self
+                .memory_used
+                .saturating_sub(str_mem(name) + str_mem(&global_name));
         }
     }
 
@@ -138,7 +148,7 @@ impl PreparedStatements {
         }
 
         self.local.clear();
-        self.memory_used = self.memory_usage();
+        self.memory_used = 0;
     }
 
     /// How much memory is used, approx.
