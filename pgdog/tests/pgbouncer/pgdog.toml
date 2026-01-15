@@ -1,6 +1,7 @@
 [general]
 workers = 2
 min_pool_size = 0
+prepared_statements_limit = 500
 
 [[databases]]
 name = "pgdog"
