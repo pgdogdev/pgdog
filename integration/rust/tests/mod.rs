@@ -1,3 +1,4 @@
+pub mod bench;
 pub mod integration;
 pub mod sqlx;
 pub mod stats;

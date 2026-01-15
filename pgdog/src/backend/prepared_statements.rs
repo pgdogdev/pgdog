@@ -10,7 +10,6 @@ use crate::{
         Close, CloseComplete, FromBytes, Message, ParseComplete, Protocol, ProtocolMessage,
         ToBytes,
     },
-    stats::memory::MemoryUsage,
 };
 
 use super::Error;
@@ -18,6 +17,12 @@ use super::{
     protocol::{state::Action, ProtocolState},
     state::ExecutionCode,
 };
+
+/// Approximate memory used by a String.
+#[inline]
+fn str_mem(s: &str) -> usize {
+    s.len() + std::mem::size_of::<String>()
+}
 
 #[derive(Debug, Clone)]
 pub enum HandleResult {
@@ -42,18 +47,6 @@ pub struct PreparedStatements {
     describes: VecDeque<String>,
     capacity: usize,
     memory_used: usize,
-}
-
-impl MemoryUsage for PreparedStatements {
-    #[inline]
-    fn memory_usage(&self) -> usize {
-        self.local_cache.memory_usage()
-            + self.parses.memory_usage()
-            + self.describes.memory_usage()
-            + self.capacity.memory_usage()
-            + std::mem::size_of::<Arc<RwLock<GlobalCache>>>()
-            + self.state.memory_usage()
-    }
 }
 
 impl Default for PreparedStatements {
@@ -287,8 +280,8 @@ impl PreparedStatements {
 
     /// Indicate this statement is prepared on the connection.
     pub fn prepared(&mut self, name: &str) {
+        self.memory_used += str_mem(name);
         self.local_cache.push(name.to_owned(), ());
-        self.memory_used = self.memory_usage();
     }
 
     /// How much memory is used by this structure, approx.
@@ -321,16 +314,19 @@ impl PreparedStatements {
     /// This should only be done when a statement has been closed,
     /// or failed to parse.
     pub(crate) fn remove(&mut self, name: &str) -> bool {
-        let exists = self.local_cache.pop(name).is_some();
-        self.memory_used = self.memory_usage();
-        exists
+        if self.local_cache.pop(name).is_some() {
+            self.memory_used = self.memory_used.saturating_sub(str_mem(name));
+            true
+        } else {
+            false
+        }
     }
 
     /// Indicate all prepared statements have been removed
     /// from the server connection.
     pub fn clear(&mut self) {
         self.local_cache.clear();
-        self.memory_used = self.memory_usage();
+        self.memory_used = 0;
     }
 
     /// Get current extended protocol state.
@@ -366,11 +362,8 @@ impl PreparedStatements {
 
             if let Some((name, _)) = candidate {
                 close.push(Close::named(&name));
+                self.memory_used = self.memory_used.saturating_sub(str_mem(&name));
             }
-        }
-
-        if !close.is_empty() {
-            self.memory_used = self.memory_usage();
         }
 
         close
