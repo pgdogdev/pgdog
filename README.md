@@ -398,32 +398,9 @@ cargo build --release
 It's important to use the release profile if you're deploying to production or want to run
 performance benchmarks.
 
-### Configuration
-
-PgDog has two configuration files:
-
-* `pgdog.toml` which contains general settings and PostgreSQL servers information
-* `users.toml` for users and passwords
-
-
-**`pgdog.toml`**
-
-```toml
-[[databases]]
-name = "pgdog"
-host = "127.0.0.1"
-```
-
-**`users.toml`**
-
-```toml
-[[users]]
-name = "pgdog"
-password = "pgdog"
-database = "pgdog"
-```
-
 ### Monitoring
+
+&#128216; **[Metrics](https://docs.pgdog.dev/features/metrics/)**
 
 PgDog exposes both the standard PgBouncer-style admin database and an OpenMetrics endpoint. The admin database isn't 100% compatible,
 so we recommend you use OpenMetrics for monitoring. Example Datadog configuration and dashboard are [included](examples/datadog).
