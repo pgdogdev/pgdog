@@ -8,11 +8,11 @@
 
 [![CI](https://github.com/levkk/pgdog/actions/workflows/ci.yml/badge.svg)](https://github.com/levkk/pgdog/actions/workflows/ci.yml)
 
-PgDog is a proxy for scaling PostgreSQL. It supports connection pooling, load balancing queries, and sharding entire databases. Written in Rust, PgDog is fast, secure and can manage thousands of connections on commodity hardware.
+PgDog is a proxy for scaling PostgreSQL. It supports connection pooling, load balancing queries and sharding entire databases. Written in Rust, PgDog is fast, secure and can manage thousands of connections on commodity hardware.
 
 ## Documentation
 
-&#128216; PgDog documentation can be **[found here](https://docs.pgdog.dev/)**. Any questions? Join our **[Discord](https://discord.com/invite/CcBZkjSJdd)**.
+&#128216; PgDog documentation can be **[found here](https://docs.pgdog.dev/)**. Any questions? Chat with us on **[Discord](https://discord.com/invite/CcBZkjSJdd)**.
 
 ## Quick start
 
@@ -353,7 +353,15 @@ Currently, support for certain SQL features in cross-shard queries is limited. H
 
 &#128216; **[Copy](https://docs.pgdog.dev/features/sharding/cross-shard-queries/copy/)**
 
-PgDog has a text, CSV & binary parser and can split rows sent via `COPY` command between all shards automatically. This allows clients to ingest data into sharded PostgreSQL without preprocessing.
+PgDog has a text, CSV & binary parser and can split rows sent via `COPY` command between all shards automatically. This allows clients to ingest data into sharded PostgreSQL without preprocessing
+
+**Example**
+
+```sql
+COPY orders (id, user_id, amount) FROM STDIN CSV HEADER;
+```
+
+Columns must be specified in the `COPY` statement, so PgDog can infer the sharding key automatically, but are optional in the data file.
 
 
 #### Consistency (two-phase commit)
