@@ -69,7 +69,7 @@ PgDog is an application layer (OSI Level 7) load balancer for PostgreSQL. It und
 
 &#128216; **[Load balancer](https://docs.pgdog.dev/features/load-balancer/)**
 
-**Example**:
+**Example**
 
 ```toml
 [[databases]]
@@ -107,7 +107,7 @@ SELECT * FROM users LIMIT 1;
 COMMIT;
 ```
 
-&#128216; **[Load balancer + Transactions](https://docs.pgdog.dev/features/load-balancer/transactions/)**
+&#128216; **[Load balancer & transactions](https://docs.pgdog.dev/features/load-balancer/transactions/)**
 
 #### Failover
 
@@ -115,7 +115,7 @@ PgDog keeps track of Postgres replication and can automatically redirect writes 
 
 &#128216; **[Failover](https://docs.pgdog.dev/features/load-balancer/replication-failover/)**
 
-**Example**:
+**Example**
 
 To enable failover, set all database `role` attributes to `auto`:
 
