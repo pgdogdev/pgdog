@@ -101,7 +101,7 @@ PgDog uses [`pg_query`](https://github.com/pganalyze/pg_query.rs), which bundles
 
 Transactions can execute multiple statements, so in a primary & replica configuration, PgDog routes them to the primary. Clients however can indicate a transaction is read-only, in which case PgDog will send it to a replica, for example:
 
-```sql
+```postgresql
 BEGIN READ ONLY;
 SELECT * FROM users LIMIT 1;
 COMMIT;
@@ -166,7 +166,7 @@ PgDog has two main sharding algorithms:
 
 ##### Partition-based sharding
 
-Partition-based sharding functions are taken directly from Postgres source code. This choice intentionally allows to shard data both with PgDog and with Postgres [foreign tables](https://www.postgresql.org/docs/current/sql-createforeigntable.html) and [`postgres_fdw`](https://www.postgresql.org/docs/current/postgres-fdw.html), which should help with migrating over to PgDog.
+Partition-based sharding functions are taken directly from Postgres source code. This choice intetionally allows to shard data both with PgDog and with Postgres [foreign tables](https://www.postgresql.org/docs/current/sql-createforeigntable.html) and [`postgres_fdw`](https://www.postgresql.org/docs/current/postgres-fdw.html), which should help with migrating over to PgDog.
 
 **Examples**
 
@@ -198,7 +198,7 @@ values = [5, 6, 7, 8]
 shard = 1
 ```
 
-For range-based sharding, replace `values` with a range, e.g.:
+For range-based sharding, replace `values` with a range, e.g.,:
 
 ```toml
 start = 0
@@ -227,14 +227,14 @@ shard = 1
 
 Queries that refer to `customer_a` schema will be sent to shard 0, for example:
 
-```sql
+```postgresql
 INSERT INTO customer_a.orders (id, user_id, amount)
 VALUES ($1, $2, $3);
 ```
 
 Tables have to be fully qualified or the schema must be set in the `search_path` session variable:
 
-```sql
+```postgresql
 SET search_path TO public, customer_a;
 -- All subsequent queries will be sent to shard 0.
 SELECT * FROM orders LIMIT 1;
@@ -250,7 +250,7 @@ Queries that contain a sharding key are sent to one database only. This is the b
 
 **Example**:
 
-```sql
+```postgresql
 -- user_id is the sharding key.
 SELECT * FROM users WHERE user_id = $1;
 ```
@@ -259,19 +259,19 @@ SELECT * FROM users WHERE user_id = $1;
 
 #### Cross-shard queries
 
-Queries with multiple sharding keys or without one are sent to all databases and results are post-processed and assembled in memory. PgDog then sends the final result to the client.
+Queries with multiple sharding keys or without one are sent to all databases are results are post-processed and assembled in memory. PgDog then sends the final result to the client.
 
 &#128216; **[Cross-shard queries](https://docs.pgdog.dev/features/sharding/cross-shard-queries/)**
 
-Currently, support for certain SQL features in cross-shard queries is limited. However, the list of supported ones keeps growing:
+Currently, support for certain SQL features in cross-shard queries is limited. Howver, the list of supported ones keeps growing:
 
 | Feature | Supported | Notes |
 |-|-|-|
 | Aggregates | Partial | `count`, `min`, `max`, `stddev`, `variance`, `sum`, `avg` are supported. |
 | `ORDER BY` | Partial | Column in `ORDER BY` clause must be present in the result set. |
 | `GROUP BY` | Partial | Same as `ORDER BY`, referenced columns must be present in result set. |
-| Multi-tuple `INSERT` | Supported | |
-| Sharding key `UPDATE` | Supported | |
+| Multi-tuple `INSERT` | Supported | PgDog generates one statement per tuple and executes them automatically. |
+| Sharding key `UPDATE` | Supported | PgDog generates a `SELECT`, `INSERT` and `DELETE` statements and execute them automatically. |
 | Subqueries | No | The same subquery is executed on all shards. |
 | CTEs | No | The same CTE is executed on all shards. |
 
@@ -288,16 +288,16 @@ PgDog ships with a text, CSV & binary `COPY` parser and can split rows sent via 
 
 #### Consistency (two-phase transactions)
 
-To make sure cross-shard writes are atomic, PgDog supports Postgres' [two-phase transactions](https://www.postgresql.org/docs/current/two-phase.html). When enabled, PgDog will handle `COMMIT` statements sent by clients and execute the 2pc exchange on their behalf:
+To make sure cross-shard writes are atomic, PgDog supports Postgres' [two-phase transactions](https://www.postgresql.org/docs/current/two-phase.html). When enabled, PgDog will handle `COMMIT` statements sent by clients and execute the 2pc exhange on their behalf:
 
-```sql
+```postgresql
 PREPARE TRANSACTION '__pgdog_unique_id';
 COMMIT PREPARED '__pgdog_unique_id';
 ```
 
 In case the client disconnects or Postgres crashes during the 2pc exchange, PgDog will automatically rollback the prepared transaction:
 
-```sql
+```postgresql
 ROLLBACK PREPARED '__pgdog_unique_id';
 ```
 
@@ -307,7 +307,7 @@ ROLLBACK PREPARED '__pgdog_unique_id';
 
 While applications can use `UUID` (v4 and now v7) to generate unique primary keys, PgDog supports generating unique `BIGINT` identifiers, without using a sequence:
 
-```sql
+```postgresql
 SELECT pgdog.unique_id();
 ```
 
@@ -370,7 +370,7 @@ database = "pgdog"
 
 If you'd like to try this out, you can set it up like so:
 
-```sql
+```postgresql
 CREATE DATABASE pgdog;
 CREATE USER pgdog PASSWORD 'pgdog' LOGIN;
 ```
@@ -408,7 +408,7 @@ password = "pgdog"
 
 And finally, to make it work locally, create the required databases:
 
-```sql
+```postgresql
 CREATE DATABASE shard_0;
 CREATE DATABASE shard_1;
 
