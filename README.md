@@ -8,11 +8,11 @@
 
 [![CI](https://github.com/levkk/pgdog/actions/workflows/ci.yml/badge.svg)](https://github.com/levkk/pgdog/actions/workflows/ci.yml)
 
-PgDog is a transaction pooler and logical replication manager that can shard PostgreSQL. Written in Rust, PgDog is fast, secure and can manage hundreds of databases and hundreds of thousands of connections.
+PgDog is a proxy for scaling PostgreSQL. It supports connection pooling, load balancing queries and sharding entire databases. Written in Rust, PgDog is fast, secure and can manage thousands of connections on commodity hardware.
 
 ## Documentation
 
-&#128216; PgDog documentation can be **[found here](https://docs.pgdog.dev/)**. Any questions? Join our **[Discord](https://discord.com/invite/CcBZkjSJdd)**.
+&#128216; PgDog documentation can be **[found here](https://docs.pgdog.dev/)**. Any questions? Chat with us on **[Discord](https://discord.com/invite/CcBZkjSJdd)**.
 
 ## Quick start
 
@@ -84,9 +84,9 @@ database = "pgdog"
 password = "hunter2"
 ```
 
-If a database in `pgdog.toml` doesn't have a user in `users.toml`, the connection pool for that database will not be created and users won't be able to connect to it.
+If a database in `pgdog.toml` doesn't have a user in `users.toml`, the connection pool for that database will not be created and users won't be able to connect.
 
-If you'd like to try it out, configure the database and user like so:
+If you'd like to try it out locally, create the database and user like so:
 
 ```sql
 CREATE DATABASE pgdog;
@@ -101,6 +101,8 @@ Like PgBouncer, PgDog supports transaction (and session) pooling, allowing
 thousands of clients to use just a few PostgreSQL server connections.
 
 Unlike PgBouncer, PgDog can parse and handle `SET` statements and startup options, ensuring session state is set correctly when sharing server connections between clients with different parameters.
+
+PgDog also has more advanced connection recovery options, like automatic abandoned transaction rollbacks and connection re-synchronization to avoid churning server connections during an application crash.
 
 ### Load balancer
 
@@ -351,7 +353,15 @@ Currently, support for certain SQL features in cross-shard queries is limited. H
 
 &#128216; **[Copy](https://docs.pgdog.dev/features/sharding/cross-shard-queries/copy/)**
 
-PgDog has a text, CSV & binary parser and can split rows sent via `COPY` command between all shards automatically. This allows clients to ingest data into sharded PostgreSQL without preprocessing.
+PgDog has a text, CSV & binary parser and can split rows sent via `COPY` command between all shards automatically. This allows clients to ingest data into sharded PostgreSQL without preprocessing
+
+**Example**
+
+```sql
+COPY orders (id, user_id, amount) FROM STDIN CSV HEADER;
+```
+
+Columns must be specified in the `COPY` statement, so PgDog can infer the sharding key automatically, but are optional in the data file.
 
 
 #### Consistency (two-phase commit)
@@ -379,11 +389,68 @@ SELECT pgdog.unique_id();
 
 This uses a timestamp-based algorithm, can produce millions of unique numbers per second and doesn't require an expensive cross-shard index to guarantee uniqueness.
 
+#### Shard key updates
+
+PgDog supports changing the sharding key for a row online. Under the hood, it will execute 3 statements to make it happen:
+
+1. `SELECT` to get the entire row from its original shard
+2. `INSERT` to write the new, changed row to the new shard
+3. `DELETE` to remove it from the old shard
+
+This happens automatically, and the client can retrieve the new row as normal:
+
+```sql
+UPDATE orders SET user_id = 5 WHERE user_id = 1 RETURNING *;
+-- This will return the new row
+```
+
+Note: Only one row can be updated at a time and if a query attempts to update multiple, PgDog will abort the transaction.
+
+To enable shard key updates, add this to `pgdog.toml`:
+
+```toml
+[rewrite]
+enabled = true
+shard_key = "rewrite" # options: ignore (possible data loss), error (block shard key update)
+```
+
+#### Multi-tuple inserts
+
+PgDog can handle multi-tuple `INSERT` queries by sending each tuple to the right shard, e.g.:
+
+```sql
+INSERT INTO payments
+    (id, user_id, amount) -- user_id is the sharding key
+VALUES
+(pgdog.unique_id(), 1, 25.00), -- Tuples go to different shards
+(pgdog.unique_id(), 5, 55.0); -- Each tuple gets a unique primary key because unique ID function is invoked twice
+```
+
+This happens automatically, if enabled:
+
+```toml
+[rewrite]
+enabled = true
+split_inserts = "rewrite" # other options: ignore, error
+```
+
 #### Re-sharding
 
-&#128216; **[Re-sharding](https://docs.pgdog.dev/features/sharding/resharding/)**
+- &#128216; **[Re-sharding](https://docs.pgdog.dev/features/sharding/resharding/)**
+- &#128216; **[Schema sync](https://docs.pgdog.dev/features/sharding/resharding/schema/)**
+- &#128216; **[Data sync](https://docs.pgdog.dev/features/sharding/resharding/hash/)**
 
 PgDog understands the PostgreSQL logical replication protocol and can orchestrate data splits between databases, in the background and without downtime. This allows to shard existing databases and add more shards to existing clusters in production, without impacting database operations.
+
+The re-sharding process is done in 5 steps:
+
+1. Create new empty cluster with the desired number of shards
+2. Configure it in `pgdog.toml` and run `schema-sync` command to copy table schemas to the new databases
+3. Run `data-sync` command to copy and re-shard table data with logical replication (tables are copied in parallel)
+4. While keeping previous command running (it streams row updates in real-time), run `schema-sync --data-sync-complete` to create secondary indexes on the new databases (much faster to do this after data is copied)
+5. Cutover traffic to new cluster with `MAINTENANCE ON`, `RELOAD`, `MAINTENANCE OFF` command sequence
+
+Cutover can be done atomically with multiple PgDog containers because `RELOAD` doesn't resume traffic, `MAINTENANCE OFF` does, so the config is the same in all containers before queries are resumed. No complex synchronization tooling like etcd or  Zookeeper is required.
 
 
 ## Running PgDog locally
