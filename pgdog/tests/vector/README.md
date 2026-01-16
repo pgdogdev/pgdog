@@ -6,7 +6,7 @@ This demo uses [Cohere/wikipedia](https://huggingface.co/datasets/Cohere/wikiped
 
 Install [pgvector](https://github.com/pgvector/pgvector) into your shards. Make sure to run:
 
-```postgresql
+```sql
 CREATE EXTENSION vector;
 ```
 
