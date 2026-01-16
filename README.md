@@ -8,7 +8,7 @@
 
 [![CI](https://github.com/levkk/pgdog/actions/workflows/ci.yml/badge.svg)](https://github.com/levkk/pgdog/actions/workflows/ci.yml)
 
-PgDog is a transaction pooler and logical replication manager that can shard PostgreSQL. Written in Rust, PgDog is fast, secure and can manage hundreds of databases and hundreds of thousands of connections.
+PgDog is a proxy for scaling PostgreSQL. It supports connection pooling, load balancing read/write queries and sharding databases. Written in Rust, PgDog is fast, secure and can manage hundreds of databases and thousands of connections.
 
 ## Documentation
 
