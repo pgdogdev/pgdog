@@ -84,9 +84,9 @@ database = "pgdog"
 password = "hunter2"
 ```
 
-If a database in `pgdog.toml` doesn't have a user in `users.toml`, the connection pool for that database will not be created and users won't be able to connect to it.
+If a database in `pgdog.toml` doesn't have a user in `users.toml`, the connection pool for that database will not be created and users won't be able to connect.
 
-If you'd like to try it out, configure the database and user like so:
+If you'd like to try it out locally, create the database and user like so:
 
 ```sql
 CREATE DATABASE pgdog;
@@ -101,6 +101,8 @@ Like PgBouncer, PgDog supports transaction (and session) pooling, allowing
 thousands of clients to use just a few PostgreSQL server connections.
 
 Unlike PgBouncer, PgDog can parse and handle `SET` statements and startup options, ensuring session state is set correctly when sharing server connections between clients with different parameters.
+
+PgDog also has more advanced connection recovery options, like automatic abandoned transaction rollbacks and connection re-synchronization to avoid churning server connections during an application crash.
 
 ### Load balancer
 
