@@ -379,11 +379,68 @@ SELECT pgdog.unique_id();
 
 This uses a timestamp-based algorithm, can produce millions of unique numbers per second and doesn't require an expensive cross-shard index to guarantee uniqueness.
 
+#### Shard key updates
+
+PgDog supports changing the sharding key for a row online. Under the hood, it will execute 3 statements to make it happen:
+
+1. `SELECT` to get the entire row from its original shard
+2. `INSERT` to write the new, changed row to the new shard
+3. `DELETE` to remove it from the old shard
+
+This happens automatically, and the client can retrieve the new row as normal:
+
+```sql
+UPDATE orders SET user_id = 5 WHERE user_id = 1 RETURNING *;
+-- This will return the new row
+```
+
+Note: Only one row can be updated at a time and if a query attempts to update multiple, PgDog will abort the transaction.
+
+To enable shard key updates, add this to `pgdog.toml`:
+
+```toml
+[rewrite]
+enabled = true
+shard_key = "rewrite" # options: ignore (possible data loss), error (block shard key update)
+```
+
+#### Multi-tuple inserts
+
+PgDog can handle multi-tuple `INSERT` queries by sending each tuple to the right shard, e.g.:
+
+```sql
+INSERT INTO payments
+    (id, user_id, amount) -- user_id is the sharding key
+VALUES
+(pgdog.unique_id(), 1, 25.00), -- Tuples go to different shards
+(pgdog.unique_id(), 5, 55.0); -- Each tuple gets a unique primary key because unique ID function is invoked twice
+```
+
+This happens automatically, if enabled:
+
+```toml
+[rewrite]
+enabled = true
+split_inserts = "rewrite" # other options: ignore, error
+```
+
 #### Re-sharding
 
-&#128216; **[Re-sharding](https://docs.pgdog.dev/features/sharding/resharding/)**
+- &#128216; **[Re-sharding](https://docs.pgdog.dev/features/sharding/resharding/)**
+- &#128216; **[Schema sync](https://docs.pgdog.dev/features/sharding/resharding/schema/)**
+- &#128216; **[Data sync](https://docs.pgdog.dev/features/sharding/resharding/hash/)**
 
 PgDog understands the PostgreSQL logical replication protocol and can orchestrate data splits between databases, in the background and without downtime. This allows to shard existing databases and add more shards to existing clusters in production, without impacting database operations.
+
+The re-sharding process is done in 5 steps:
+
+1. Create new empty cluster with the desired number of shards
+2. Configure it in `pgdog.toml` and run `schema-sync` command to copy table schemas to the new databases
+3. Run `data-sync` command to copy and re-shard table data with logical replication (tables are copied in parallel)
+4. While keeping previous command running (it streams row updates in real-time), run `schema-sync --data-sync-complete` to create secondary indexes on the new databases (much faster to do this after data is copied)
+5. Cutover traffic to new cluster with `MAINTENANCE ON`, `RELOAD`, `MAINTENANCE OFF` command sequence
+
+Cutover can be done atomically with multiple PgDog containers because `RELOAD` doesn't resume traffic, `MAINTENANCE OFF` does, so the config is the same in all containers before queries are resumed. No complex synchronization tooling like etcd or  Zookeeper is required.
 
 
 ## Running PgDog locally
