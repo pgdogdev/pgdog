@@ -101,7 +101,7 @@ PgDog uses [`pg_query`](https://github.com/pganalyze/pg_query.rs), which bundles
 
 Transactions can execute multiple statements, so in a primary & replica configuration, PgDog routes them to the primary. Clients however can indicate a transaction is read-only, in which case PgDog will send it to a replica, for example:
 
-```postgresql
+```sql
 BEGIN READ ONLY;
 SELECT * FROM users LIMIT 1;
 COMMIT;
@@ -227,14 +227,14 @@ shard = 1
 
 Queries that refer to `customer_a` schema will be sent to shard 0, for example:
 
-```postgresql
+```sql
 INSERT INTO customer_a.orders (id, user_id, amount)
 VALUES ($1, $2, $3);
 ```
 
 Tables have to be fully qualified or the schema must be set in the `search_path` session variable:
 
-```postgresql
+```sql
 SET search_path TO public, customer_a;
 -- All subsequent queries will be sent to shard 0.
 SELECT * FROM orders LIMIT 1;
@@ -250,7 +250,7 @@ Queries that contain a sharding key are sent to one database only. This is the b
 
 **Example**:
 
-```postgresql
+```sql
 -- user_id is the sharding key.
 SELECT * FROM users WHERE user_id = $1;
 ```
@@ -290,14 +290,14 @@ PgDog ships with a text, CSV & binary `COPY` parser and can split rows sent via 
 
 To make sure cross-shard writes are atomic, PgDog supports Postgres' [two-phase transactions](https://www.postgresql.org/docs/current/two-phase.html). When enabled, PgDog will handle `COMMIT` statements sent by clients and execute the 2pc exchange on their behalf:
 
-```postgresql
+```sql
 PREPARE TRANSACTION '__pgdog_unique_id';
 COMMIT PREPARED '__pgdog_unique_id';
 ```
 
 In case the client disconnects or Postgres crashes during the 2pc exchange, PgDog will automatically rollback the prepared transaction:
 
-```postgresql
+```sql
 ROLLBACK PREPARED '__pgdog_unique_id';
 ```
 
@@ -307,7 +307,7 @@ ROLLBACK PREPARED '__pgdog_unique_id';
 
 While applications can use `UUID` (v4 and now v7) to generate unique primary keys, PgDog supports generating unique `BIGINT` identifiers, without using a sequence:
 
-```postgresql
+```sql
 SELECT pgdog.unique_id();
 ```
 
@@ -370,7 +370,7 @@ database = "pgdog"
 
 If you'd like to try this out, you can set it up like so:
 
-```postgresql
+```sql
 CREATE DATABASE pgdog;
 CREATE USER pgdog PASSWORD 'pgdog' LOGIN;
 ```
@@ -408,7 +408,7 @@ password = "pgdog"
 
 And finally, to make it work locally, create the required databases:
 
-```postgresql
+```sql
 CREATE DATABASE shard_0;
 CREATE DATABASE shard_1;
 
