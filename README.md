@@ -33,10 +33,10 @@ You can try PgDog quickly using Docker. Install [Docker Compose](https://docs.do
 docker-compose up
 ```
 
-It will take a few minutes to build PgDog from source and launch the containers. Once started, you can connect to PgDog with psql (or any other PostgreSQL client):
+Once started, you can connect to PgDog with psql or any other PostgreSQL client:
 
 ```
-PGPASSWORD=postgres psql -h 127.0.0.1 -p 6432 -U postgres gssencmode=disable
+PGPASSWORD=postgres psql -h 127.0.0.1 -p 6432 -U postgres
 ```
 
 The demo comes with 3 shards and 2 sharded tables:
@@ -49,27 +49,69 @@ SELECT * FROM users WHERE id = 1;
 SELECT * FROM payments WHERE user_id = 1;
 ```
 
-### Monitoring
-
-PgDog exposes both the standard PgBouncer-style admin database and an OpenMetrics endpoint. The admin database isn't 100% compatible,
-so we recommend you use OpenMetrics for monitoring. Example Datadog configuration and dashboard are [included](examples/datadog).
-
 ## Features
+
+&#128216; **[Configuration](https://docs.pgdog.dev/configuration/)**
+
+All PgDog features are configurable and can be turned on and off. PgDog requires 2 configuration files to operate:
+
+1. `pgdog.toml`: hosts, sharding configuration, and other settings
+2. `users.toml`: usernames and passwords
+
+### Example
+
+Most options have reasonable defaults, so a basic configuration for a single user
+and database running on the same machine is pretty short:
+
+**`pgdog.toml`**
+
+```toml
+[general]
+port = 6432
+default_pool_size = 10
+
+[[databases]]
+name = "pgdog"
+host = "127.0.0.1"
+```
+
+**`users.toml`**
+
+```toml
+[[users]]
+name = "alice"
+database = "pgdog"
+password = "hunter2"
+```
+
+If a database in `pgdog.toml` doesn't have a user in `users.toml`, the connection pool for that database will not be created and users won't be able to connect to it.
+
+If you'd like to try it out, configure the database and user like so:
+
+```sql
+CREATE DATABASE pgdog;
+CREATE USER pgdog PASSWORD 'pgdog' LOGIN;
+```
 
 ### Transaction pooling
 
-Like PgBouncer, PgDog supports transaction (and session) pooling, allowing
-100,000s of clients to use just a few PostgreSQL server connections.
-
 &#128216; **[Transactions](https://docs.pgdog.dev/features/transaction-mode)**
+
+Like PgBouncer, PgDog supports transaction (and session) pooling, allowing
+thousands of clients to use just a few PostgreSQL server connections.
+
+Unlike PgBouncer, PgDog can parse and handle `SET` statements and startup options, ensuring session state is set correctly when sharing server connections between clients with different parameters.
 
 ### Load balancer
 
-PgDog is an application layer (OSI Level 7) load balancer for PostgreSQL. It understands the Postgres protocol, can proxy multiple replicas (and primary) and distributes transactions evenly between databases. It supports multiple strategies, like round robin, random and least active connections.
-
 &#128216; **[Load balancer](https://docs.pgdog.dev/features/load-balancer/)**
 
+PgDog is an application layer (OSI Level 7) load balancer for PostgreSQL. It understands the Postgres protocol, can proxy multiple replicas (and primary) and distributes transactions evenly between databases. The load balancer supports 3 strategies: round robin, random and least active connections.
+
+
 **Example**
+
+The load balancer is enabled automatically when a database has more than one host:
 
 ```toml
 [[databases]]
@@ -83,41 +125,50 @@ host = "10.0.0.2"
 role = "replica"
 ```
 
-#### Healthchecks
-
-PgDog maintains a real-time list of healthy hosts. When a database fails a healthcheck, it's removed from the active rotation and queries are re-routed to other replicas. This works like an HTTP load balancer, except it's for your database.
-
-Healthchecks maximize database availability and protect against bad network connections, temporary hardware failures or misconfiguration.
+#### Health checks
 
 &#128216; **[Healthchecks](https://docs.pgdog.dev/features/load-balancer/healthchecks/)**
 
-#### Single endpoint
 
-PgDog uses [`pg_query`](https://github.com/pganalyze/pg_query.rs), which bundles the PostgreSQL native parser. By parsing queries, PgDog can detect write queries (e.g. `INSERT`, `UPDATE`, `CREATE TABLE`, etc.) and send them to the primary, leaving the replicas to serve reads (`SELECT`). This allows applications to connect to one PgDog deployment for both reads and writes.
+PgDog maintains a real-time list of healthy hosts. When a database fails a health check, it's removed from the active rotation and queries are re-routed to other replicas. This works like an HTTP load balancer, except it's for your database.
+
+Health checks maximize database availability and protect against bad network connections, temporary hardware failures or misconfiguration.
+
+
+#### Single endpoint
 
 &#128216; **[Single endpoint](https://docs.pgdog.dev/features/load-balancer/#single-endpoint)**
 
+
+PgDog uses [`pg_query`](https://github.com/pganalyze/pg_query.rs), which includes the PostgreSQL native parser. By parsing queries, PgDog can detect writes (e.g. `INSERT`, `UPDATE`, `CREATE TABLE`, etc.) and send them to the primary, leaving the replicas to serve reads (`SELECT`). This allows applications to connect to the same PgDog deployment for both reads and writes.
+
+
 ##### Transactions
 
-Transactions can execute multiple statements, so in a primary & replica configuration, PgDog routes them to the primary. Clients however can indicate a transaction is read-only, in which case PgDog will send it to a replica, for example:
+&#128216; **[Load balancer & transactions](https://docs.pgdog.dev/features/load-balancer/transactions/)**
+
+
+Transactions can execute multiple statements, so in a primary & replica configuration, PgDog routes them to the primary. Clients can indicate a transaction is read-only, in which case PgDog will send it to a replica:
 
 ```sql
 BEGIN READ ONLY;
+-- This goes to a replica.
 SELECT * FROM users LIMIT 1;
 COMMIT;
 ```
 
-&#128216; **[Load balancer & transactions](https://docs.pgdog.dev/features/load-balancer/transactions/)**
 
 #### Failover
 
-PgDog keeps track of Postgres replication and can automatically redirect writes to a different database if a replica is promoted. This doesn't replace tools like Patroni which actually orchestrate failovers, but you can use PgDog alongside Patroni (or AWS RDS, or any other managed Postgres host), to gracefully failover live traffic.
-
 &#128216; **[Failover](https://docs.pgdog.dev/features/load-balancer/replication-failover/)**
+
+
+PgDog monitors Postgres replication state and can automatically redirect writes to a different database if a replica is promoted. This doesn't replace tools like Patroni that actually orchestrate failovers. You can use PgDog alongside Patroni (or AWS RDS or other managed Postgres host), to gracefully failover live traffic.
+
 
 **Example**
 
-To enable failover, set all database `role` attributes to `auto`:
+To enable failover, set all database `role` attributes to `auto` and enable replication monitoring (`lsn_check_delay` setting):
 
 ```toml
 [general]
@@ -136,11 +187,15 @@ role = "auto"
 
 ### Sharding
 
-PgDog is able to handle databases with multiple shards by routing queries automatically to one or more databases. By using the PostgreSQL parser, PgDog understands queries, extracts sharding keys and determines the best routing strategy for each query.
+&#128216; **[Sharding](https://docs.pgdog.dev/features/sharding/)**
 
-For cross-shard queries, PgDog assembles and transforms results in memory, sending them all to the client as if they are coming from a single database.
+PgDog is able to manage databases with multiple shards. By using the PostgreSQL parser, PgDog extracts sharding keys and determines the best routing strategy for each query.
+
+For cross-shard queries, PgDog assembles and transforms results in memory, sending all rows to the client as if they are coming from a single database.
 
 **Example**
+
+Configuring multiple hosts for the same database with different shard numbers (`shard` setting) enables sharding:
 
 ```toml
 [[databases]]
@@ -154,23 +209,24 @@ host = "10.0.0.2"
 shard = 1
 ```
 
-&#128216; **[Sharding](https://docs.pgdog.dev/features/sharding/)**
-
+Note: read below for how to configure query routing. At least one sharded table is required for sharding to work as expected.
 
 #### Sharding functions
 
+&#128216; **[Sharding functions](https://docs.pgdog.dev/features/sharding/sharding-functions/)**
+
 PgDog has two main sharding algorithms:
 
-1. Using PostgreSQL partition functions (`HASH`, `LIST`, `RANGE`)
+1. PostgreSQL partition functions (`HASH`, `LIST`, `RANGE`)
 2. Using schemas
 
 ##### Partition-based sharding
 
-Partition-based sharding functions are taken directly from Postgres source code. This choice intetionally allows to shard data both with PgDog and with Postgres [foreign tables](https://www.postgresql.org/docs/current/sql-createforeigntable.html) and [`postgres_fdw`](https://www.postgresql.org/docs/current/postgres-fdw.html), which should help with migrating over to PgDog.
+Partition-based sharding functions are taken directly from Postgres source code. This choice intentionally allows to shard data both with PgDog and with Postgres [foreign tables](https://www.postgresql.org/docs/current/sql-createforeigntable.html) and [`postgres_fdw`](https://www.postgresql.org/docs/current/postgres-fdw.html).
 
 **Examples**
 
-The `PARTITION BY HASH` algorithm is used by default:
+The `PARTITION BY HASH` algorithm is used by default when configuring sharded tables:
 
 ```toml
 [[sharded_tables]]
@@ -178,13 +234,15 @@ database = "prod"
 column = "user_id"
 ```
 
-List-based sharding (analogous to `PARTITION BY LIST`) can be configured as follows:
+List-based sharding (same as `PARTITION BY LIST` in Postgres) can be configured as follows:
 
 ```toml
+# Sharded table definition still required.
 [[sharded_tables]]
 database = "prod"
 column = "user_id"
 
+# Value-specific shard mappings.
 [[sharded_mapping]]
 database = "prod"
 column = "user_id"
@@ -198,20 +256,22 @@ values = [5, 6, 7, 8]
 shard = 1
 ```
 
-For range-based sharding, replace `values` with a range, e.g.,:
+For range-based sharding, replace the `values` setting with a range, for example:
 
 ```toml
-start = 0
-end = 5
+start = 0 # include
+end = 5 # exclusive
 ```
 
-&#128216; **[Sharding functions](https://docs.pgdog.dev/features/sharding/sharding-functions/)**
-
 ##### Schema-based sharding
+
+&#128216; **[Schema-based sharding](https://docs.pgdog.dev/configuration/pgdog.toml/sharded_schemas/)**
 
 Schema-based sharding works on the basis of PostgreSQL schemas. Tables under the same schema are placed on the same shard and all queries that refer to those tables are routed to that shard automatically.
 
 **Example**
+
+Configuring sharded schemas uses a different configuration from sharded tables:
 
 ```toml
 [[sharded_schemas]]
@@ -225,14 +285,14 @@ name = "customer_b"
 shard = 1
 ```
 
-Queries that refer to `customer_a` schema will be sent to shard 0, for example:
+Queries that refer tables in schema `customer_a` will be sent to shard 0. For example, a query that refers to a table by its fully-qualified name will be sent to one shard only:
 
 ```sql
 INSERT INTO customer_a.orders (id, user_id, amount)
 VALUES ($1, $2, $3);
 ```
 
-Tables have to be fully qualified or the schema must be set in the `search_path` session variable:
+Alternatively, the schema name can be specified in the `search_path` session variable:
 
 ```sql
 SET search_path TO public, customer_a;
@@ -240,11 +300,20 @@ SET search_path TO public, customer_a;
 SELECT * FROM orders LIMIT 1;
 ```
 
-You can set the `search_path` for the duration of a single transaction, using `SET LOCAL`, ensuring only that transaction is sent to the desired shard.
+You can also set the `search_path` for the duration of a single transaction, using `SET LOCAL`, ensuring only that transaction is sent to the desired shard:
 
-&#128216; **[Schema-based sharding](https://docs.pgdog.dev/configuration/pgdog.toml/sharded_schemas/)**
+```sql
+-- The entire transaction will be sent to shard 1.
+BEGIN;
+SET LOCAL search_path TO public, customer_b;
+SELECT * FROM orders LIMIT 1;
+COMMIT;
+```
 
 #### Direct-to-shard queries
+
+&#128216; **[Direct-to-shard queries](https://docs.pgdog.dev/features/sharding/query-routing/)**
+
 
 Queries that contain a sharding key are sent to one database only. This is the best case scenario for sharded databases, since the load is uniformly distributed across the cluster.
 
@@ -255,15 +324,17 @@ Queries that contain a sharding key are sent to one database only. This is the b
 SELECT * FROM users WHERE user_id = $1;
 ```
 
-&#128216; **[Direct-to-shard queries](https://docs.pgdog.dev/features/sharding/query-routing/)**
-
 #### Cross-shard queries
 
-Queries with multiple sharding keys or without one are sent to all databases are results are post-processed and assembled in memory. PgDog then sends the final result to the client.
+- &#128216; **[Cross-shard queries](https://docs.pgdog.dev/features/sharding/cross-shard-queries/)**
+- &#128216; **[SELECT](https://docs.pgdog.dev/features/sharding/cross-shard-queries/select/)**
+- &#128216; **[INSERT](https://docs.pgdog.dev/features/sharding/cross-shard-queries/insert/)**
+- &#128216; **[UPDATE and DELETE](https://docs.pgdog.dev/features/sharding/cross-shard-queries/update/)**
+- &#128216; **[DDL](https://docs.pgdog.dev/features/sharding/cross-shard-queries/ddl/)**
 
-&#128216; **[Cross-shard queries](https://docs.pgdog.dev/features/sharding/cross-shard-queries/)**
+Queries with multiple sharding keys or without one are sent to all databases and results are post-processed and assembled in memory. PgDog then sends the final result to the client.
 
-Currently, support for certain SQL features in cross-shard queries is limited. Howver, the list of supported ones keeps growing:
+Currently, support for certain SQL features in cross-shard queries is limited. However, the list of supported ones keeps growing:
 
 | Feature | Supported | Notes |
 |-|-|-|
@@ -275,59 +346,45 @@ Currently, support for certain SQL features in cross-shard queries is limited. H
 | Subqueries | No | The same subquery is executed on all shards. |
 | CTEs | No | The same CTE is executed on all shards. |
 
-- &#128216; **[`SELECT`](https://docs.pgdog.dev/features/sharding/cross-shard-queries/select/)**
-- &#128216; **[`INSERT`](https://docs.pgdog.dev/features/sharding/cross-shard-queries/insert/)**
-- &#128216; **[`UPDATE` and `DELETE`](https://docs.pgdog.dev/features/sharding/cross-shard-queries/update/)**
-- &#128216; **[DDL](https://docs.pgdog.dev/features/sharding/cross-shard-queries/ddl/)**
 
 #### Using `COPY`
 
-PgDog ships with a text, CSV & binary `COPY` parser and can split rows sent via `COPY` command between all shards automatically. This allows clients to ingest data into sharded PostgreSQL without preprocessing.
-
 &#128216; **[Copy](https://docs.pgdog.dev/features/sharding/cross-shard-queries/copy/)**
 
-#### Consistency (two-phase transactions)
+PgDog has a text, CSV & binary parser and can split rows sent via `COPY` command between all shards automatically. This allows clients to ingest data into sharded PostgreSQL without preprocessing.
 
-To make sure cross-shard writes are atomic, PgDog supports Postgres' [two-phase transactions](https://www.postgresql.org/docs/current/two-phase.html). When enabled, PgDog will handle `COMMIT` statements sent by clients and execute the 2pc exhange on their behalf:
+
+#### Consistency (two-phase commit)
+
+&#128216; **[Two-phase commit](https://docs.pgdog.dev/features/sharding/2pc/)**
+
+To make sure cross-shard writes are atomic, PgDog supports Postgres' [two-phase transactions](https://www.postgresql.org/docs/current/two-phase.html). When enabled, PgDog handles `COMMIT` statements sent by clients by executing the 2pc exchange on their behalf:
 
 ```sql
 PREPARE TRANSACTION '__pgdog_unique_id';
 COMMIT PREPARED '__pgdog_unique_id';
 ```
 
-In case the client disconnects or Postgres crashes during the 2pc exchange, PgDog will automatically rollback the prepared transaction:
-
-```sql
-ROLLBACK PREPARED '__pgdog_unique_id';
-```
-
-&#128216; **[Two-phase commit](https://docs.pgdog.dev/features/sharding/2pc/)**
+In case the client disconnects or Postgres crashes, PgDog will automatically rollback the transaction if it's in phase I and commit it if it's in phase II.
 
 #### Unique identifiers
 
-While applications can use `UUID` (v4 and now v7) to generate unique primary keys, PgDog supports generating unique `BIGINT` identifiers, without using a sequence:
+&#128216; **[Unique IDs](https://docs.pgdog.dev/features/sharding/unique-ids/)**
+
+While applications can use `UUID` (v4 and now v7) to generate unique primary keys, PgDog supports creating unique `BIGINT` identifiers, without using a sequence:
 
 ```sql
 SELECT pgdog.unique_id();
 ```
 
-This uses the Snowflake-like timestamp-based algorithm and can produce millions of unique numbers per second.
-
-&#128216; **[Unique IDs](https://docs.pgdog.dev/features/sharding/unique-ids/)**
+This uses a timestamp-based algorithm, can produce millions of unique numbers per second and doesn't require an expensive cross-shard index to guarantee uniqueness.
 
 #### Re-sharding
 
-PgDog understands the PostgreSQL logical replication protocol and can split data between databases in the background and without downtime. This allows to shard existing databases and add more shards to existing clusters in production, without impacting database operations.
-
 &#128216; **[Re-sharding](https://docs.pgdog.dev/features/sharding/resharding/)**
 
-### Configuration
+PgDog understands the PostgreSQL logical replication protocol and can orchestrate data splits between databases, in the background and without downtime. This allows to shard existing databases and add more shards to existing clusters in production, without impacting database operations.
 
-PgDog is highly configurable and most aspects of its operation can be tweaked at runtime, without having
-to restart the process or break connections. If you've used PgBouncer (or PgCat) before, the options
-will be familiar. If not, they are documented with examples.
-
-&#128216; **[Configuration](https://docs.pgdog.dev/configuration/)**
 
 ## Running PgDog locally
 
@@ -348,8 +405,6 @@ PgDog has two configuration files:
 * `pgdog.toml` which contains general settings and PostgreSQL servers information
 * `users.toml` for users and passwords
 
-Most options have reasonable defaults, so a basic configuration for a single user
-and database running on the same machine is pretty short:
 
 **`pgdog.toml`**
 
@@ -368,12 +423,10 @@ password = "pgdog"
 database = "pgdog"
 ```
 
-If you'd like to try this out, you can set it up like so:
+### Monitoring
 
-```sql
-CREATE DATABASE pgdog;
-CREATE USER pgdog PASSWORD 'pgdog' LOGIN;
-```
+PgDog exposes both the standard PgBouncer-style admin database and an OpenMetrics endpoint. The admin database isn't 100% compatible,
+so we recommend you use OpenMetrics for monitoring. Example Datadog configuration and dashboard are [included](examples/datadog).
 
 #### Try sharding
 
@@ -393,9 +446,13 @@ name = "pgdog_sharded"
 host = "127.0.0.1"
 database_name = "shard_1"
 shard = 1
+
+[[sharded_tables]]
+database = "pgdog_sharded"
+column = "user_id"
 ```
 
-Don't forget to specify a user:
+Don't forget to configure a user:
 
 **`users.toml`**
 
@@ -441,18 +498,18 @@ cargo run --release -- -d postgres://user:pass@localhost:5432/db1 -d postgres://
 You can connect to PgDog with `psql` or any other PostgreSQL client:
 
 ```bash
-psql "postgres://pgdog:pgdog@127.0.0.1:6432/pgdog?gssencmode=disable"
+psql postgres://pgdog:pgdog@127.0.0.1:6432/pgdog
 ```
 
 ## &#128678; Status &#128678;
 
-PgDog is used in production and at scale. Most features are stable, while some are experimental. Check [documentation](https://docs.pgdog.dev/features/) for more details.
+PgDog is used in production and at scale. Most features are stable, while some are experimental. Check [documentation](https://docs.pgdog.dev/features/) for more details. New sharding features are added almost weekly.
 
 ## Performance
 
-PgDog does its best to minimize its impact on overall database performance. Using Rust and Tokio is a great start for a fast network proxy, but additional care is also taken to perform as few operations as possible while moving data between client and server sockets. Some benchmarks are provided to help set a baseline.
-
 &#128216; **[Architecture & benchmarks](https://docs.pgdog.dev/architecture/)**
+
+PgDog is heavily optimized for performance. We use Rust, [Tokio](https://tokio.rs/), [bytes crate](https://docs.rs/bytes/latest/bytes/) to avoid unnecessary memory allocations, and profile for performance regressions on a regular basis.
 
 ## License
 
