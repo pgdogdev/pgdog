@@ -224,6 +224,7 @@ pub struct State {
     /// Pool has no idle connections.
     pub empty: bool,
     /// Pool configuration.
+    #[serde(skip)]
     pub config: Config,
     /// The pool is paused.
     pub paused: bool,
@@ -250,7 +251,7 @@ pub struct State {
 }
 
 /// Pool configuration.
-#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Default)]
 pub struct Config {
     /// Minimum connections that should be in the pool.
     pub min: usize,
