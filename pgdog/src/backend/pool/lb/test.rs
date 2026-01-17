@@ -19,10 +19,12 @@ fn create_test_pool_config(host: &str, port: u16) -> PoolConfig {
             ..Default::default()
         },
         config: Config {
-            max: 1,
-            checkout_timeout: Duration::from_millis(1000),
-            ban_timeout: Duration::from_millis(100),
-            ..Default::default()
+            inner: pgdog_stats::Config {
+                max: 1,
+                checkout_timeout: Duration::from_millis(1000),
+                ban_timeout: Duration::from_millis(100),
+                ..Config::default().inner
+            },
         },
         ..Default::default()
     }
@@ -693,10 +695,12 @@ async fn test_monitor_does_not_ban_with_zero_ban_timeout() {
             ..Default::default()
         },
         config: Config {
-            max: 1,
-            checkout_timeout: Duration::from_millis(1000),
-            ban_timeout: Duration::ZERO,
-            ..Default::default()
+            inner: pgdog_stats::Config {
+                max: 1,
+                checkout_timeout: Duration::from_millis(1000),
+                ban_timeout: Duration::ZERO,
+                ..Config::default().inner
+            },
         },
         ..Default::default()
     };
@@ -711,10 +715,12 @@ async fn test_monitor_does_not_ban_with_zero_ban_timeout() {
             ..Default::default()
         },
         config: Config {
-            max: 1,
-            checkout_timeout: Duration::from_millis(1000),
-            ban_timeout: Duration::ZERO,
-            ..Default::default()
+            inner: pgdog_stats::Config {
+                max: 1,
+                checkout_timeout: Duration::from_millis(1000),
+                ban_timeout: Duration::ZERO,
+                ..Config::default().inner
+            },
         },
         ..Default::default()
     };

@@ -1,6 +1,9 @@
 //! Pool configuration.
 
-use std::time::Duration;
+use std::{
+    ops::{Deref, DerefMut},
+    time::Duration,
+};
 
 use pgdog_config::{pooling::ConnectionRecovery, Role};
 use serde::{Deserialize, Serialize};
@@ -10,66 +13,21 @@ use crate::config::{Database, General, PoolerMode, User};
 /// Pool configuration.
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq)]
 pub struct Config {
-    /// Minimum connections that should be in the pool.
-    pub min: usize,
-    /// Maximum connections allowed in the pool.
-    pub max: usize,
-    /// How long to wait for a connection before giving up.
-    pub checkout_timeout: Duration, // ms
-    /// Interval duration of DNS cache refresh.
-    pub dns_ttl: Duration, // ms
-    /// Close connections that have been idle for longer than this.
-    pub idle_timeout: Duration, // ms
-    /// How long to wait for connections to be created.
-    pub connect_timeout: Duration, // ms
-    /// How many times to attempt a connection before returning an error.
-    pub connect_attempts: u64,
-    /// How long to wait between connection attempts.
-    pub connect_attempt_delay: Duration,
-    /// How long a connection can be open.
-    pub max_age: Duration,
-    /// Can this pool be banned from serving traffic?
-    pub bannable: bool,
-    /// Healtheck timeout.
-    pub healthcheck_timeout: Duration, // ms
-    /// Healtcheck interval.
-    pub healthcheck_interval: Duration, // ms
-    /// Idle healthcheck interval.
-    pub idle_healthcheck_interval: Duration, // ms
-    /// Idle healthcheck delay.
-    pub idle_healthcheck_delay: Duration, // ms
-    /// Read timeout (dangerous).
-    pub read_timeout: Duration, // ms
-    /// Write timeout (dangerous).
-    pub write_timeout: Duration, // ms
-    /// Query timeout (dangerous).
-    pub query_timeout: Duration, // ms
-    /// Max ban duration.
-    pub ban_timeout: Duration, // ms
-    /// Rollback timeout for dirty connections.
-    pub rollback_timeout: Duration,
-    /// Statement timeout
-    pub statement_timeout: Option<Duration>,
-    /// Replication mode.
-    pub replication_mode: bool,
-    /// Pooler mode.
-    pub pooler_mode: PoolerMode,
-    /// Read only mode.
-    pub read_only: bool,
-    /// Maximum prepared statements per connection.
-    pub prepared_statements_limit: usize,
-    /// Stats averaging period.
-    pub stats_period: Duration,
-    /// Recovery algo.
-    pub connection_recovery: ConnectionRecovery,
-    /// LSN check interval.
-    pub lsn_check_interval: Duration,
-    /// LSN check timeout.
-    pub lsn_check_timeout: Duration,
-    /// LSN check delay.
-    pub lsn_check_delay: Duration,
-    /// Automatic role detection enabled.
-    pub role_detection: bool,
+    pub(crate) inner: pgdog_stats::Config,
+}
+
+impl Deref for Config {
+    type Target = pgdog_stats::Config;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl DerefMut for Config {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.inner
+    }
 }
 
 impl Config {
@@ -137,72 +95,60 @@ impl Config {
         self.query_timeout
     }
 
-    /// Default config for a primary.
-    ///
-    /// The ban is ignored by the shard router
-    /// if the primary is used for writes.
-    ///
-    /// The ban is taken into account if the primary
-    /// is used for reads.
-    pub fn default_primary() -> Self {
-        Self {
-            bannable: true,
-            ..Default::default()
-        }
-    }
-
     /// Create from database/user configuration.
     pub fn new(general: &General, database: &Database, user: &User, is_only_replica: bool) -> Self {
-        Config {
-            min: database
-                .min_pool_size
-                .unwrap_or(user.min_pool_size.unwrap_or(general.min_pool_size)),
-            max: database
-                .pool_size
-                .unwrap_or(user.pool_size.unwrap_or(general.default_pool_size)),
-            max_age: Duration::from_millis(
-                database
-                    .server_lifetime
-                    .unwrap_or(user.server_lifetime.unwrap_or(general.server_lifetime)),
-            ),
-            healthcheck_interval: Duration::from_millis(general.healthcheck_interval),
-            idle_healthcheck_interval: Duration::from_millis(general.idle_healthcheck_interval),
-            idle_healthcheck_delay: Duration::from_millis(general.idle_healthcheck_delay),
-            healthcheck_timeout: Duration::from_millis(general.healthcheck_timeout),
-            ban_timeout: Duration::from_millis(general.ban_timeout),
-            rollback_timeout: Duration::from_millis(general.rollback_timeout),
-            statement_timeout: if let Some(statement_timeout) = database.statement_timeout {
-                Some(statement_timeout)
-            } else {
-                user.statement_timeout
-            }
-            .map(Duration::from_millis),
-            replication_mode: user.replication_mode,
-            pooler_mode: database
-                .pooler_mode
-                .unwrap_or(user.pooler_mode.unwrap_or(general.pooler_mode)),
-            connect_timeout: Duration::from_millis(general.connect_timeout),
-            connect_attempts: general.connect_attempts,
-            connect_attempt_delay: general.connect_attempt_delay(),
-            query_timeout: Duration::from_millis(general.query_timeout),
-            checkout_timeout: Duration::from_millis(general.checkout_timeout),
-            idle_timeout: Duration::from_millis(
-                database
-                    .idle_timeout
-                    .unwrap_or(user.idle_timeout.unwrap_or(general.idle_timeout)),
-            ),
-            read_only: database
-                .read_only
-                .unwrap_or(user.read_only.unwrap_or_default()),
-            prepared_statements_limit: general.prepared_statements_limit,
-            stats_period: Duration::from_millis(general.stats_period),
-            bannable: !is_only_replica,
-            connection_recovery: general.connection_recovery,
-            lsn_check_interval: Duration::from_millis(general.lsn_check_interval),
-            lsn_check_timeout: Duration::from_millis(general.lsn_check_timeout),
-            lsn_check_delay: Duration::from_millis(general.lsn_check_delay),
-            role_detection: database.role == Role::Auto,
-            ..Default::default()
+        Self {
+            inner: pgdog_stats::Config {
+                min: database
+                    .min_pool_size
+                    .unwrap_or(user.min_pool_size.unwrap_or(general.min_pool_size)),
+                max: database
+                    .pool_size
+                    .unwrap_or(user.pool_size.unwrap_or(general.default_pool_size)),
+                max_age: Duration::from_millis(
+                    database
+                        .server_lifetime
+                        .unwrap_or(user.server_lifetime.unwrap_or(general.server_lifetime)),
+                ),
+                healthcheck_interval: Duration::from_millis(general.healthcheck_interval),
+                idle_healthcheck_interval: Duration::from_millis(general.idle_healthcheck_interval),
+                idle_healthcheck_delay: Duration::from_millis(general.idle_healthcheck_delay),
+                healthcheck_timeout: Duration::from_millis(general.healthcheck_timeout),
+                ban_timeout: Duration::from_millis(general.ban_timeout),
+                rollback_timeout: Duration::from_millis(general.rollback_timeout),
+                statement_timeout: if let Some(statement_timeout) = database.statement_timeout {
+                    Some(statement_timeout)
+                } else {
+                    user.statement_timeout
+                }
+                .map(Duration::from_millis),
+                replication_mode: user.replication_mode,
+                pooler_mode: database
+                    .pooler_mode
+                    .unwrap_or(user.pooler_mode.unwrap_or(general.pooler_mode)),
+                connect_timeout: Duration::from_millis(general.connect_timeout),
+                connect_attempts: general.connect_attempts,
+                connect_attempt_delay: general.connect_attempt_delay(),
+                query_timeout: Duration::from_millis(general.query_timeout),
+                checkout_timeout: Duration::from_millis(general.checkout_timeout),
+                idle_timeout: Duration::from_millis(
+                    database
+                        .idle_timeout
+                        .unwrap_or(user.idle_timeout.unwrap_or(general.idle_timeout)),
+                ),
+                read_only: database
+                    .read_only
+                    .unwrap_or(user.read_only.unwrap_or_default()),
+                prepared_statements_limit: general.prepared_statements_limit,
+                stats_period: Duration::from_millis(general.stats_period),
+                bannable: !is_only_replica,
+                connection_recovery: general.connection_recovery,
+                lsn_check_interval: Duration::from_millis(general.lsn_check_interval),
+                lsn_check_timeout: Duration::from_millis(general.lsn_check_timeout),
+                lsn_check_delay: Duration::from_millis(general.lsn_check_delay),
+                role_detection: database.role == Role::Auto,
+                ..Default::default()
+            },
         }
     }
 }
@@ -210,36 +156,7 @@ impl Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            min: 1,
-            max: 10,
-            checkout_timeout: Duration::from_millis(5_000),
-            idle_timeout: Duration::from_millis(60_000),
-            connect_timeout: Duration::from_millis(5_000),
-            connect_attempts: 1,
-            connect_attempt_delay: Duration::from_millis(10),
-            max_age: Duration::from_millis(24 * 3600 * 1000),
-            bannable: true,
-            healthcheck_timeout: Duration::from_millis(5_000),
-            healthcheck_interval: Duration::from_millis(30_000),
-            idle_healthcheck_interval: Duration::from_millis(5_000),
-            idle_healthcheck_delay: Duration::from_millis(5_000),
-            read_timeout: Duration::MAX,
-            write_timeout: Duration::MAX,
-            query_timeout: Duration::MAX,
-            ban_timeout: Duration::from_secs(300),
-            rollback_timeout: Duration::from_secs(5),
-            statement_timeout: None,
-            replication_mode: false,
-            pooler_mode: PoolerMode::default(),
-            read_only: false,
-            prepared_statements_limit: usize::MAX,
-            stats_period: Duration::from_millis(15_000),
-            dns_ttl: Duration::from_millis(60_000),
-            connection_recovery: ConnectionRecovery::Recover,
-            lsn_check_interval: Duration::from_millis(5_000),
-            lsn_check_timeout: Duration::from_millis(5_000),
-            lsn_check_delay: Duration::from_millis(5_000),
-            role_detection: false,
+            inner: pgdog_stats::Config::default(),
         }
     }
 }

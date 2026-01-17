@@ -314,10 +314,12 @@ mod test {
         crate::logger();
 
         let config = Config {
-            max: 1,
-            min: 0,
-            rollback_timeout: Duration::from_millis(100),
-            ..Default::default()
+            inner: pgdog_stats::Config {
+                max: 1,
+                min: 0,
+                rollback_timeout: Duration::from_millis(100),
+                ..Config::default().inner
+            },
         };
 
         let pool = Pool::new(&PoolConfig {

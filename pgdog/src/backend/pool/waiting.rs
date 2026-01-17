@@ -137,10 +137,12 @@ mod tests {
     #[tokio::test]
     async fn test_timeout_removes_waiter() {
         let config = crate::backend::pool::Config {
-            max: 1,
-            min: 1,
-            checkout_timeout: Duration::from_millis(10),
-            ..Default::default()
+            inner: pgdog_stats::Config {
+                max: 1,
+                min: 1,
+                checkout_timeout: Duration::from_millis(10),
+                ..crate::backend::pool::Config::default().inner
+            },
         };
 
         let pool = Pool::new(&crate::backend::pool::PoolConfig {

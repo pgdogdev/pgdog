@@ -81,6 +81,13 @@ pub struct LsnStats {
     pub aurora: bool,
 }
 
+impl LsnStats {
+    /// Stats contain real data.
+    pub fn valid(&self) -> bool {
+        self.aurora || self.lsn.lsn > 0
+    }
+}
+
 impl Default for LsnStats {
     fn default() -> Self {
         Self {
