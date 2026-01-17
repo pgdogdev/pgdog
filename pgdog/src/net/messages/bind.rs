@@ -13,21 +13,7 @@ use std::fmt::Debug;
 use std::str::from_utf8;
 use std::str::from_utf8_unchecked;
 
-#[derive(PartialEq, Debug, Copy, Clone, PartialOrd, Ord, Eq)]
-#[repr(C)]
-pub enum Format {
-    Text = 0,
-    Binary = 1,
-}
-
-impl From<Format> for i16 {
-    fn from(val: Format) -> Self {
-        match val {
-            Format::Text => 0,
-            Format::Binary => 1,
-        }
-    }
-}
+pub use pgdog_postgres_types::Format;
 
 /// Parameter data.
 #[derive(Clone, PartialEq, PartialOrd, Ord, Eq)]

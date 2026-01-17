@@ -64,6 +64,8 @@ dashmap = "6"
 derive_builder = "0.20.2"
 pgdog-config = { path = "../pgdog-config" }
 pgdog-vector = { path = "../pgdog-vector" }
+pgdog-stats = { path = "../pgdog-stats" }
+pgdog-postgres-types = { path = "../pgdog-postgres-types"}
 
 [target.'cfg(not(target_env = "msvc"))'.dependencies]
 tikv-jemallocator = "0.6"

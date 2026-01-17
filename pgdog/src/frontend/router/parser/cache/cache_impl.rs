@@ -3,6 +3,7 @@ use once_cell::sync::Lazy;
 use pg_query::normalize;
 use pgdog_config::QueryParserEngine;
 use std::collections::HashMap;
+use std::time::Duration;
 
 use parking_lot::Mutex;
 use std::sync::Arc;
@@ -26,6 +27,8 @@ pub struct Stats {
     pub direct: usize,
     /// Multi-shard queries.
     pub multi: usize,
+    /// Parse time.
+    pub parse_time: Duration,
 }
 
 impl Stats {
@@ -118,10 +121,12 @@ impl Cache {
 
         // Parse query without holding lock.
         let entry = Ast::new(query, schema, prepared_statements)?;
+        let parse_time = entry.stats.lock().parse_time;
 
         let mut guard = self.inner.lock();
         guard.queries.put(query.query().to_string(), entry.clone());
         guard.stats.misses += 1;
+        guard.stats.parse_time += parse_time;
 
         Ok(entry)
     }
@@ -136,6 +141,12 @@ impl Cache {
     ) -> Result<Ast, Error> {
         let mut entry = Ast::new(query, schema, prepared_statements)?;
         entry.cached = false;
+
+        let parse_time = entry.stats.lock().parse_time;
+
+        let mut guard = self.inner.lock();
+        guard.stats.misses += 1;
+        guard.stats.parse_time += parse_time;
         Ok(entry)
     }
 

@@ -18,6 +18,9 @@ pub enum Error {
     #[error("net: {0}")]
     Net(#[from] crate::net::Error),
 
+    #[error("type: {0}")]
+    Type(#[from] pgdog_postgres_types::Error),
+
     #[error("transaction not started")]
     TransactionNotStarted,
 
