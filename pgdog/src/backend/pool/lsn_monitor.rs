@@ -89,7 +89,7 @@ impl LsnStats {
 
     /// Stats contain real data.
     pub fn valid(&self) -> bool {
-        self.aurora || self.lsn.lsn > 0
+        self.inner.valid()
     }
 }
 
