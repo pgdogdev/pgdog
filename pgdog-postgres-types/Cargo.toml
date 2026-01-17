@@ -7,7 +7,6 @@ edition = "2024"
 chrono = "0.4"
 bytes = "*"
 thiserror = "*"
-tokio-rustls = "*"
 uuid = "*"
 serde = { version = "*", features = ["derive"]}
 pgdog-vector = { path = "../pgdog-vector" }
