@@ -452,6 +452,13 @@ The re-sharding process is done in 5 steps:
 
 Cutover can be done atomically with multiple PgDog containers because `RELOAD` doesn't resume traffic, `MAINTENANCE OFF` does, so the config is the same in all containers before queries are resumed. No complex synchronization tooling like etcd or  Zookeeper is required.
 
+### Monitoring
+
+&#128216; **[Metrics](https://docs.pgdog.dev/features/metrics/)**
+
+PgDog exposes both the standard PgBouncer-style admin database and an OpenMetrics endpoint. The admin database isn't 100% compatible,
+so we recommend you use OpenMetrics for monitoring. Example Datadog configuration and dashboard are [included](examples/datadog).
+
 
 ## Running PgDog locally
 
@@ -464,13 +471,6 @@ cargo build --release
 
 It's important to use the release profile if you're deploying to production or want to run
 performance benchmarks.
-
-### Monitoring
-
-&#128216; **[Metrics](https://docs.pgdog.dev/features/metrics/)**
-
-PgDog exposes both the standard PgBouncer-style admin database and an OpenMetrics endpoint. The admin database isn't 100% compatible,
-so we recommend you use OpenMetrics for monitoring. Example Datadog configuration and dashboard are [included](examples/datadog).
 
 #### Try sharding
 
