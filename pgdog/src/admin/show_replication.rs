@@ -1,4 +1,4 @@
-use tokio::time::Instant;
+use std::time::SystemTime;
 
 use crate::{
     backend::databases::databases,
@@ -38,7 +38,7 @@ impl Command for ShowReplication {
             Field::text("pg_is_in_recovery"),
         ]);
         let mut messages = vec![rd.message()?];
-        let now = Instant::now();
+        let now = SystemTime::now();
         for (user, cluster) in databases().all() {
             for (shard_num, shard) in cluster.shards().iter().enumerate() {
                 for (role, _ban, pool) in shard.pools_with_roles_and_bans() {
@@ -46,7 +46,9 @@ impl Command for ShowReplication {
                     let state = pool.state();
 
                     let valid = state.lsn_stats.valid();
-                    let lsn_age = now.duration_since(state.lsn_stats.fetched);
+                    let lsn_age = now
+                        .duration_since(state.lsn_stats.fetched)
+                        .unwrap_or_default();
 
                     row.add(pool.id() as i64)
                         .add(user.database.as_str())

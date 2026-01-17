@@ -5,14 +5,11 @@ use std::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc,
     },
-    time::Duration,
+    time::{Duration, SystemTime},
 };
 
 use rand::seq::SliceRandom;
-use tokio::{
-    sync::Notify,
-    time::{timeout, Instant},
-};
+use tokio::{sync::Notify, time::timeout};
 use tracing::warn;
 
 use crate::config::{LoadBalancingStrategy, ReadWriteSplit, Role};
@@ -160,7 +157,7 @@ impl LoadBalancer {
         // The old primary is still part of the config and will be demoted
         // to replica. If it's down, it will be banned from serving traffic.
         //
-        let now = Instant::now();
+        let now = SystemTime::now();
         targets.sort_by_cached_key(|target| target.0.lsn_age(now));
 
         let primary = targets

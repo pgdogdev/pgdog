@@ -73,6 +73,12 @@ impl QueryCache {
                 gauge: true,
             }),
             Metric::new(QueryCacheMetric {
+                name: "query_cache_parse_time".into(),
+                help: "Time spent parsing queries due to cache misses".into(),
+                value: self.stats.parse_time.as_millis() as usize,
+                gauge: false,
+            }),
+            Metric::new(QueryCacheMetric {
                 name: "prepared_statements".into(),
                 help: "Number of prepared statements in the cache".into(),
                 value: self.prepared_statements,
@@ -115,6 +121,8 @@ impl OpenMetric for QueryCacheMetric {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use crate::config::{self, ConfigAndUsers};
 
     use super::*;
@@ -154,6 +162,7 @@ mod tests {
                 misses: 2,
                 direct: 3,
                 multi: 4,
+                parse_time: Duration::ZERO,
             },
             len: 5,
             prepared_statements: 6,
@@ -170,6 +179,7 @@ mod tests {
                 "query_cache_direct".to_string(),
                 "query_cache_cross".to_string(),
                 "query_cache_size".to_string(),
+                "query_cache_parse_time".to_string(),
                 "prepared_statements".to_string(),
                 "prepared_statements_memory_used".to_string(),
             ]

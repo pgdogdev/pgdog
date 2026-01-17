@@ -9,9 +9,12 @@ use crate::{backend::stats::Counts as BackendCounts, config::Memory, net::Messag
 
 use std::{
     iter::Sum,
-    ops::{Add, Div, Sub},
+    ops::{Add, Deref, DerefMut, Div, Sub},
     time::Duration,
 };
+
+use pgdog_stats::pool::Counts as StatsCounts;
+use pgdog_stats::pool::Stats as StatsStats;
 
 /// Pool statistics.
 ///
@@ -19,78 +22,34 @@ use std::{
 ///
 #[derive(Debug, Clone, Default, Copy)]
 pub struct Counts {
-    /// Number of committed transactions.
-    pub xact_count: usize,
-    /// Number of transactions committed with 2-phase commit.
-    pub xact_2pc_count: usize,
-    /// Number of executed queries.
-    pub query_count: usize,
-    /// How many times a server has been given to a client.
-    /// In transaction mode, this equals to `xact_count`.
-    pub server_assignment_count: usize,
-    /// Number of bytes received by server connections.
-    pub received: usize,
-    /// Number of bytes sent to server connections.
-    pub sent: usize,
-    /// Total duration of all transactions.
-    pub xact_time: Duration,
-    /// Total time spent idling inside transactions.
-    pub idle_xact_time: Duration,
-    /// Total time spent executing queries.
-    pub query_time: Duration,
-    /// Total time clients spent waiting for a connection from the pool.
-    pub wait_time: Duration,
-    /// Total count of Parse messages sent to server connections.
-    pub parse_count: usize,
-    /// Total count of Bind messages sent to server connections.
-    pub bind_count: usize,
-    /// Number of times the pool had to rollback unfinished transactions.
-    pub rollbacks: usize,
-    /// Number of times the pool sent the health check query.
-    pub healthchecks: usize,
-    /// Total count of Close messages sent to server connections.
-    pub close: usize,
-    /// Total number of network-related errors detected on server connections.
-    pub errors: usize,
-    /// Total number of server connections that were cleaned after a dirty session.
-    pub cleaned: usize,
-    /// Total number of times servers had to synchronize prepared statements from Postgres'
-    /// pg_prepared_statements view.
-    pub prepared_sync: usize,
-    /// Total time spent creating server connections.
-    pub connect_time: Duration,
-    /// Total number of times the pool attempted to create server connections.
-    pub connect_count: usize,
+    inner: StatsCounts,
+}
+
+impl Deref for Counts {
+    type Target = StatsCounts;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl DerefMut for Counts {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.inner
+    }
+}
+
+impl From<StatsCounts> for Counts {
+    fn from(value: pgdog_stats::pool::Counts) -> Self {
+        Counts { inner: value }
+    }
 }
 
 impl Sub for Counts {
     type Output = Counts;
 
     fn sub(self, rhs: Self) -> Self::Output {
-        Self {
-            xact_count: self.xact_count.saturating_sub(rhs.xact_count),
-            xact_2pc_count: self.xact_2pc_count.saturating_sub(rhs.xact_2pc_count),
-            query_count: self.query_count.saturating_sub(rhs.query_count),
-            server_assignment_count: self
-                .server_assignment_count
-                .saturating_sub(rhs.server_assignment_count),
-            received: self.received.saturating_sub(rhs.received),
-            sent: self.sent.saturating_sub(rhs.sent),
-            xact_time: self.xact_time.saturating_sub(rhs.xact_time),
-            idle_xact_time: self.idle_xact_time.saturating_sub(rhs.idle_xact_time),
-            query_time: self.query_time.saturating_sub(rhs.query_time),
-            wait_time: self.wait_time.saturating_sub(rhs.wait_time),
-            parse_count: self.parse_count.saturating_sub(rhs.parse_count),
-            bind_count: self.bind_count.saturating_sub(rhs.bind_count),
-            rollbacks: self.rollbacks.saturating_sub(rhs.rollbacks),
-            healthchecks: self.healthchecks.saturating_sub(rhs.healthchecks),
-            close: self.close.saturating_sub(rhs.close),
-            errors: self.errors.saturating_sub(rhs.errors),
-            cleaned: self.cleaned.saturating_sub(rhs.cleaned),
-            prepared_sync: self.prepared_sync.saturating_sub(rhs.prepared_sync),
-            connect_time: self.connect_time.saturating_sub(rhs.connect_time),
-            connect_count: self.connect_count.saturating_sub(rhs.connect_count),
-        }
+        (self.inner - rhs.inner).into()
     }
 }
 
@@ -98,42 +57,15 @@ impl Div<usize> for Counts {
     type Output = Counts;
 
     fn div(self, rhs: usize) -> Self::Output {
-        Self {
-            xact_count: self.xact_count.checked_div(rhs).unwrap_or(0),
-            xact_2pc_count: self.xact_2pc_count.checked_div(rhs).unwrap_or(0),
-            query_count: self.query_count.checked_div(rhs).unwrap_or(0),
-            server_assignment_count: self.server_assignment_count.checked_div(rhs).unwrap_or(0),
-            received: self.received.checked_div(rhs).unwrap_or(0),
-            sent: self.sent.checked_div(rhs).unwrap_or(0),
-            xact_time: self.xact_time.checked_div(rhs as u32).unwrap_or_default(),
-            idle_xact_time: self
-                .idle_xact_time
-                .checked_div(rhs as u32)
-                .unwrap_or_default(),
-            query_time: self.query_time.checked_div(rhs as u32).unwrap_or_default(),
-            wait_time: self.wait_time.checked_div(rhs as u32).unwrap_or_default(),
-            parse_count: self.parse_count.checked_div(rhs).unwrap_or(0),
-            bind_count: self.bind_count.checked_div(rhs).unwrap_or(0),
-            rollbacks: self.rollbacks.checked_div(rhs).unwrap_or(0),
-            healthchecks: self.healthchecks.checked_div(rhs).unwrap_or(0),
-            close: self.close.checked_div(rhs).unwrap_or(0),
-            errors: self.errors.checked_div(rhs).unwrap_or(0),
-            cleaned: self.cleaned.checked_div(rhs).unwrap_or(0),
-            prepared_sync: self.prepared_sync.checked_div(rhs).unwrap_or(0),
-            connect_time: self
-                .connect_time
-                .checked_div(rhs as u32)
-                .unwrap_or_default(),
-            connect_count: self.connect_count.checked_div(rhs).unwrap_or(0),
-        }
+        (self.inner / rhs).into()
     }
 }
 
-impl Add<BackendCounts> for Counts {
-    type Output = Counts;
+impl Add<BackendCounts> for StatsCounts {
+    type Output = StatsCounts;
 
     fn add(self, rhs: BackendCounts) -> Self::Output {
-        Counts {
+        StatsCounts {
             xact_count: self.xact_count + rhs.transactions,
             xact_2pc_count: self.xact_2pc_count + rhs.transactions_2pc,
             query_count: self.query_count + rhs.queries,
@@ -173,83 +105,33 @@ impl Add for Counts {
     type Output = Counts;
 
     fn add(self, rhs: Self) -> Self::Output {
-        Counts {
-            xact_count: self.xact_count.saturating_add(rhs.xact_count),
-            xact_2pc_count: self.xact_2pc_count.saturating_add(rhs.xact_2pc_count),
-            query_count: self.query_count.saturating_add(rhs.query_count),
-            server_assignment_count: self
-                .server_assignment_count
-                .saturating_add(rhs.server_assignment_count),
-            received: self.received.saturating_add(rhs.received),
-            sent: self.sent.saturating_add(rhs.sent),
-            xact_time: self.xact_time.saturating_add(rhs.xact_time),
-            idle_xact_time: self.idle_xact_time.saturating_add(rhs.idle_xact_time),
-            query_time: self.query_time.saturating_add(rhs.query_time),
-            wait_time: self.wait_time.saturating_add(rhs.wait_time),
-            parse_count: self.parse_count.saturating_add(rhs.parse_count),
-            bind_count: self.bind_count.saturating_add(rhs.bind_count),
-            rollbacks: self.rollbacks.saturating_add(rhs.rollbacks),
-            healthchecks: self.healthchecks.saturating_add(rhs.healthchecks),
-            close: self.close.saturating_add(rhs.close),
-            errors: self.errors.saturating_add(rhs.errors),
-            cleaned: self.cleaned.saturating_add(rhs.cleaned),
-            prepared_sync: self.prepared_sync.saturating_add(rhs.prepared_sync),
-            connect_count: self.connect_count.saturating_add(rhs.connect_count),
-            connect_time: self.connect_time.saturating_add(rhs.connect_time),
-        }
+        (self.inner + rhs.inner).into()
     }
 }
 
 #[derive(Debug, Clone, Default, Copy)]
 pub struct Stats {
-    // Total counts.
-    pub counts: Counts,
-    /// Counts since last average calculation.
-    last_counts: Counts,
-    // Average counts.
-    pub averages: Counts,
+    inner: StatsStats,
+}
+
+impl Deref for Stats {
+    type Target = StatsStats;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl DerefMut for Stats {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.inner
+    }
 }
 
 impl Stats {
     /// Calculate averages.
     pub fn calc_averages(&mut self, time: Duration) {
-        let secs = time.as_secs() as usize;
-        if secs > 0 {
-            let diff = self.counts - self.last_counts;
-            self.averages = diff / secs;
-            self.averages.query_time = diff.query_time
-                / diff
-                    .query_count
-                    .try_into()
-                    .unwrap_or(u32::MAX)
-                    .clamp(1, u32::MAX);
-            self.averages.xact_time = diff.xact_time
-                / diff
-                    .xact_count
-                    .try_into()
-                    .unwrap_or(u32::MAX)
-                    .clamp(1, u32::MAX);
-            self.averages.wait_time = diff.wait_time
-                / diff
-                    .server_assignment_count
-                    .try_into()
-                    .unwrap_or(u32::MAX)
-                    .clamp(1, u32::MAX);
-            self.averages.connect_time = diff.connect_time
-                / diff
-                    .connect_count
-                    .try_into()
-                    .unwrap_or(u32::MAX)
-                    .clamp(1, u32::MAX);
-            let queries_in_xact = diff
-                .query_count
-                .wrapping_sub(diff.xact_count)
-                .clamp(1, u32::MAX as usize);
-            self.averages.idle_xact_time =
-                diff.idle_xact_time / queries_in_xact.try_into().unwrap_or(u32::MAX);
-
-            self.last_counts = self.counts;
-        }
+        self.inner.calc_averages(time);
     }
 }
 
@@ -290,7 +172,7 @@ mod tests {
 
     #[test]
     fn test_add_trait() {
-        let a = Counts {
+        let a: Counts = StatsCounts {
             xact_count: 10,
             xact_2pc_count: 5,
             query_count: 20,
@@ -311,9 +193,10 @@ mod tests {
             prepared_sync: 7,
             connect_time: Duration::from_secs(1),
             connect_count: 8,
-        };
+        }
+        .into();
 
-        let b = Counts {
+        let b: Counts = StatsCounts {
             xact_count: 5,
             xact_2pc_count: 3,
             query_count: 10,
@@ -334,7 +217,8 @@ mod tests {
             prepared_sync: 3,
             connect_time: Duration::from_secs(2),
             connect_count: 4,
-        };
+        }
+        .into();
 
         let result = a + b;
 
@@ -362,7 +246,7 @@ mod tests {
 
     #[test]
     fn test_sub_trait() {
-        let a = Counts {
+        let a: Counts = StatsCounts {
             xact_count: 10,
             xact_2pc_count: 5,
             query_count: 20,
@@ -383,9 +267,10 @@ mod tests {
             prepared_sync: 7,
             connect_time: Duration::from_secs(3),
             connect_count: 8,
-        };
+        }
+        .into();
 
-        let b = Counts {
+        let b: Counts = StatsCounts {
             xact_count: 5,
             xact_2pc_count: 3,
             query_count: 10,
@@ -406,7 +291,8 @@ mod tests {
             prepared_sync: 3,
             connect_time: Duration::from_secs(1),
             connect_count: 4,
-        };
+        }
+        .into();
 
         let result = a - b;
 
@@ -434,17 +320,19 @@ mod tests {
 
     #[test]
     fn test_sub_trait_saturating() {
-        let a = Counts {
+        let a: Counts = StatsCounts {
             xact_count: 5,
             bind_count: 3,
             ..Default::default()
-        };
+        }
+        .into();
 
-        let b = Counts {
+        let b: Counts = StatsCounts {
             xact_count: 10,
             bind_count: 5,
             ..Default::default()
-        };
+        }
+        .into();
 
         let result = a - b;
 
@@ -454,7 +342,7 @@ mod tests {
 
     #[test]
     fn test_div_trait() {
-        let a = Counts {
+        let a: Counts = StatsCounts {
             xact_count: 10,
             xact_2pc_count: 6,
             query_count: 20,
@@ -475,7 +363,8 @@ mod tests {
             prepared_sync: 9,
             connect_time: Duration::from_secs(8),
             connect_count: 4,
-        };
+        }
+        .into();
 
         let result = a / 2;
 
@@ -503,11 +392,12 @@ mod tests {
 
     #[test]
     fn test_div_by_zero() {
-        let a = Counts {
+        let a: Counts = StatsCounts {
             xact_count: 10,
             xact_time: Duration::from_secs(10),
             ..Default::default()
-        };
+        }
+        .into();
 
         let result = a / 0;
 
@@ -517,7 +407,7 @@ mod tests {
 
     #[test]
     fn test_add_backend_counts() {
-        let pool_counts = Counts {
+        let pool_counts: Counts = StatsCounts {
             xact_count: 10,
             xact_2pc_count: 5,
             query_count: 20,
@@ -538,7 +428,8 @@ mod tests {
             prepared_sync: 7,
             connect_time: Duration::from_secs(1),
             connect_count: 8,
-        };
+        }
+        .into();
 
         let backend_counts = BackendCounts {
             bytes_sent: 500,
@@ -560,7 +451,7 @@ mod tests {
             prepared_sync: 5,
         };
 
-        let result = pool_counts + backend_counts;
+        let result = pool_counts.inner + backend_counts;
 
         assert_eq!(result.xact_count, 15);
         assert_eq!(result.xact_2pc_count, 7);

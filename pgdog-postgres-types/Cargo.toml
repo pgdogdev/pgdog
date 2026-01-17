@@ -1,0 +1,14 @@
+[package]
+name = "pgdog-postgres-types"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+chrono = "0.4"
+bytes = "*"
+thiserror = "*"
+tokio-rustls = "*"
+uuid = "*"
+serde = { version = "*", features = ["derive"]}
+pgdog-vector = { path = "../pgdog-vector" }
+rust_decimal = { version = "1.36", features = ["db-postgres"] }
