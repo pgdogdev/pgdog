@@ -179,6 +179,7 @@ mod tests {
                 "query_cache_direct".to_string(),
                 "query_cache_cross".to_string(),
                 "query_cache_size".to_string(),
+                "query_cache_parse_time".to_string(),
                 "prepared_statements".to_string(),
                 "prepared_statements_memory_used".to_string(),
             ]
