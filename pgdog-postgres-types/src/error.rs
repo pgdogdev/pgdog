@@ -3,63 +3,14 @@
 use std::array::TryFromSliceError;
 
 use thiserror::Error;
-use tokio_rustls::rustls;
 
 #[derive(Debug, Error)]
 pub enum Error {
-    #[error("io: {0}")]
-    Io(#[from] std::io::Error),
-
-    #[error("connection closed by peer")]
-    UnexpectedEof,
-
-    #[error("unsupported startup request: {0}")]
-    UnsupportedStartup(i32),
-
-    #[error("unexpected TLS request")]
-    UnexpectedTlsRequest,
-
-    #[error("connection is not sending messages")]
-    ConnectionDown,
-
-    #[error("unexpected message, expected {0} got {1}")]
-    UnexpectedMessage(char, char),
-
     #[error("unexpected payload")]
     UnexpectedPayload,
 
     #[error("data type not supported for encoding")]
     UnsupportedDataTypeForEncoding,
-
-    #[error("CommandComplete contains no row counts")]
-    CommandCompleteNoRows,
-
-    #[error("unexpected replication meta message: {0}")]
-    UnexpectedReplicationMetaMessage(char),
-
-    #[error("unsupported authentication: {0}")]
-    UnsupportedAuthentication(i32),
-
-    #[error("unexpected ssl request reply: {0}")]
-    UnexpectedSslReply(char),
-
-    #[error("{0}")]
-    TlsCertificate(#[from] rustls::pki_types::pem::Error),
-
-    #[error("{0}")]
-    Rustls(#[from] rustls::Error),
-
-    #[error("\"{0}\" parameter is missing")]
-    MissingParameter(String),
-
-    #[error("incorrect parameter format code: {0}")]
-    IncorrectParameterFormatCode(i16),
-
-    #[error("unknown tuple data identifier: {0}")]
-    UnknownTupleDataIdentifier(char),
-
-    #[error("unknown transaction state identifier: {0}")]
-    UnknownTransactionStateIdentifier(char),
 
     #[error("not text encoding")]
     NotTextEncoding,
@@ -87,9 +38,6 @@ pub enum Error {
 
     #[error("invalid timestamp components")]
     InvalidTimestamp,
-
-    #[error("only simple protocols supported for rewrites")]
-    OnlySimpleForRewrites,
 
     #[error("array has {0} dimensions, only 1 is supported")]
     ArrayDimensions(usize),
