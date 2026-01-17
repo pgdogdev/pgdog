@@ -1,6 +1,7 @@
 use pg_query::{parse, parse_raw, protobuf::ObjectType, NodeEnum, NodeRef, ParseResult};
 use pgdog_config::QueryParserEngine;
 use std::fmt::Debug;
+use std::time::Instant;
 use std::{collections::HashSet, ops::Deref};
 
 use parking_lot::Mutex;
@@ -69,6 +70,7 @@ impl Ast {
         schema: &ShardingSchema,
         prepared_statements: &mut PreparedStatements,
     ) -> Result<Self, Error> {
+        let now = Instant::now();
         let mut ast = match schema.query_parser_engine {
             QueryParserEngine::PgQueryProtobuf => parse(query),
             QueryParserEngine::PgQueryRaw => parse_raw(query),
@@ -93,10 +95,14 @@ impl Ast {
             RewritePlan::default()
         };
 
+        let elapsed = now.elapsed();
+        let mut stats = Stats::new();
+        stats.parse_time += elapsed;
+
         Ok(Self {
             cached: true,
             inner: Arc::new(AstInner {
-                stats: Mutex::new(Stats::new()),
+                stats: Mutex::new(stats),
                 comment_shard,
                 comment_role,
                 ast,

@@ -2,7 +2,7 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use rand::Rng;
 use tokio::spawn;
@@ -644,7 +644,7 @@ async fn test_lsn_monitor() {
         "Offset bytes should be greater than 0"
     );
 
-    let age = stats.lsn_age(Instant::now());
+    let age = stats.lsn_age(SystemTime::now());
     assert!(
         age < Duration::from_millis(300),
         "LSN stats age should be recent, got {:?}",

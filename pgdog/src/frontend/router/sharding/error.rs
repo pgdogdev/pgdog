@@ -42,4 +42,7 @@ pub enum Error {
 
     #[error("config error: {0}")]
     ConfigError(#[from] pgdog_config::Error),
+
+    #[error("{0}")]
+    TypeError(#[from] pgdog_postgres_types::Error),
 }

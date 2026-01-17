@@ -1,17 +1,20 @@
-use std::time::Duration;
+use std::{
+    ops::{Deref, DerefMut},
+    time::{Duration, SystemTime},
+};
 
 use tokio::{
     select, spawn,
-    time::{interval, sleep, timeout, Instant},
+    time::{interval, sleep, timeout},
 };
 use tracing::{debug, error, trace};
 
-use crate::{
-    backend::replication::publisher::Lsn,
-    net::{DataRow, Format, TimestampTz},
-};
+use crate::net::DataRow;
 
 use super::*;
+use pgdog_postgres_types::Format;
+
+use pgdog_stats::LsnStats as StatsLsnStats;
 
 static AURORA_DETECTION_QUERY: &str = "SELECT aurora_version()";
 
@@ -53,39 +56,35 @@ SELECT
 ";
 
 /// LSN information.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct LsnStats {
-    /// pg_is_in_recovery()
-    pub replica: bool,
-    /// Replay LSN on replica, current LSN on primary.
-    pub lsn: Lsn,
-    /// LSN position in bytes from 0.
-    pub offset_bytes: i64,
-    /// Server timestamp.
-    pub timestamp: TimestampTz,
-    /// Our timestamp.
-    pub fetched: Instant,
-    /// Running on Aurora.
-    pub aurora: bool,
+    inner: StatsLsnStats,
 }
 
-impl Default for LsnStats {
-    fn default() -> Self {
-        Self {
-            replica: true, // Replica unless proven otherwise.
-            lsn: Lsn::default(),
-            offset_bytes: 0,
-            timestamp: TimestampTz::default(),
-            fetched: Instant::now(),
-            aurora: false,
-        }
+impl Deref for LsnStats {
+    type Target = StatsLsnStats;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl DerefMut for LsnStats {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.inner
+    }
+}
+
+impl From<StatsLsnStats> for LsnStats {
+    fn from(value: StatsLsnStats) -> Self {
+        Self { inner: value }
     }
 }
 
 impl LsnStats {
     /// How old the stats are.
-    pub fn lsn_age(&self, now: Instant) -> Duration {
-        now.duration_since(self.fetched)
+    pub fn lsn_age(&self, now: SystemTime) -> Duration {
+        now.duration_since(self.fetched).unwrap_or_default()
     }
 
     /// Stats contain real data.
@@ -93,16 +92,18 @@ impl LsnStats {
         self.aurora || self.lsn.lsn > 0
     }
 }
+
 impl LsnStats {
     fn from_row(value: DataRow, aurora: bool) -> Self {
-        Self {
+        StatsLsnStats {
             replica: value.get(0, Format::Text).unwrap_or_default(),
             lsn: value.get(1, Format::Text).unwrap_or_default(),
             offset_bytes: value.get(2, Format::Text).unwrap_or_default(),
             timestamp: value.get(3, Format::Text).unwrap_or_default(),
-            fetched: Instant::now(),
+            fetched: SystemTime::now(),
             aurora,
         }
+        .into()
     }
 }
 
@@ -216,16 +217,20 @@ impl LsnMonitor {
 mod test {
     use super::*;
 
+    use pgdog_postgres_types::TimestampTz;
+    use pgdog_stats::Lsn;
+
     #[test]
     fn test_aurora_stats_valid_with_zero_lsn() {
-        let stats = LsnStats {
+        let stats: LsnStats = StatsLsnStats {
             replica: true,
             lsn: Lsn::default(),
             offset_bytes: 0,
             timestamp: TimestampTz::default(),
-            fetched: Instant::now(),
+            fetched: SystemTime::now(),
             aurora: true,
-        };
+        }
+        .into();
 
         assert!(
             stats.valid(),
@@ -235,14 +240,15 @@ mod test {
 
     #[test]
     fn test_non_aurora_stats_invalid_with_zero_lsn() {
-        let stats = LsnStats {
+        let stats: LsnStats = StatsLsnStats {
             replica: true,
             lsn: Lsn::default(),
             offset_bytes: 0,
             timestamp: TimestampTz::default(),
-            fetched: Instant::now(),
+            fetched: SystemTime::now(),
             aurora: false,
-        };
+        }
+        .into();
 
         assert!(
             !stats.valid(),

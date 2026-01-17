@@ -2425,6 +2425,8 @@ dependencies = [
  "pg_query",
  "pgdog-config",
  "pgdog-plugin",
+ "pgdog-postgres-types",
+ "pgdog-stats",
  "pgdog-vector",
  "pin-project",
  "rand 0.9.2",
@@ -2506,6 +2508,30 @@ name = "pgdog-plugin-build"
 version = "0.1.1"
 dependencies = [
  "toml 0.9.5",
+]
+
+[[package]]
+name = "pgdog-postgres-types"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "chrono",
+ "pgdog-vector",
+ "rust_decimal",
+ "serde",
+ "thiserror 1.0.69",
+ "tokio-rustls",
+ "uuid",
+]
+
+[[package]]
+name = "pgdog-stats"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "pgdog-config",
+ "pgdog-postgres-types",
+ "serde",
 ]
 
 [[package]]

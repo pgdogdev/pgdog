@@ -3,71 +3,15 @@ use crate::{
     backend::{self, pool::Address, ConnectReason, Server, ServerOptions},
     net::{
         replication::StatusUpdate, CopyData, CopyDone, DataRow, ErrorResponse, Format, FromBytes,
-        FromDataType, Protocol, Query, ToBytes,
+        Protocol, Query, ToBytes,
     },
     util::random_string,
 };
-use bytes::Bytes;
 use std::{fmt::Display, str::FromStr, time::Duration};
 use tokio::time::timeout;
 use tracing::{debug, trace};
 
-#[derive(Debug, Clone, Default, Copy, Eq, PartialEq, Ord, PartialOrd)]
-pub struct Lsn {
-    pub high: i64,
-    pub low: i64,
-    pub lsn: i64,
-}
-
-impl Lsn {
-    /// Get LSN from the 64-bit representation.
-    pub fn from_i64(lsn: i64) -> Self {
-        let high = ((lsn >> 32) as u32) as i64;
-        let low = ((lsn & 0xFFFF_FFFF) as u32) as i64;
-        Self { high, low, lsn }
-    }
-}
-
-impl FromDataType for Lsn {
-    fn decode(bytes: &[u8], encoding: Format) -> Result<Self, crate::net::Error> {
-        let val = String::decode(bytes, encoding)?;
-        Self::from_str(&val).map_err(|_| crate::net::Error::NotPgLsn)
-    }
-
-    fn encode(&self, encoding: Format) -> Result<bytes::Bytes, crate::net::Error> {
-        match encoding {
-            Format::Text => Ok(Bytes::from(self.to_string())),
-            Format::Binary => todo!(),
-        }
-    }
-}
-
-impl FromStr for Lsn {
-    type Err = Error;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        // This is not the right formula to get the LSN number but
-        // it survives (de)serialization which is all we care about.
-        //
-        // TODO: maybe just save it as a string?
-        let mut parts = s.split("/");
-        let high = parts.next().ok_or(Error::LsnDecode)?;
-        let high = i64::from_str_radix(high, 16)?;
-
-        let low = parts.next().ok_or(Error::LsnDecode)?;
-        let low = i64::from_str_radix(low, 16)?;
-
-        let lsn = (high << 32) + low;
-
-        Ok(Self { lsn, high, low })
-    }
-}
-
-impl Display for Lsn {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:X}/{:X}", self.high, self.low)
-    }
-}
+pub use pgdog_stats::Lsn;
 
 #[derive(Debug, Clone, Copy)]
 pub enum Snapshot {

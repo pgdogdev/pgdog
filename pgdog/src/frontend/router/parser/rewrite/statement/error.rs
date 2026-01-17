@@ -28,4 +28,7 @@ pub enum Error {
 
     #[error("WHERE clause is required")]
     WhereClauseMissing,
+
+    #[error("{0}")]
+    Type(#[from] pgdog_postgres_types::Error),
 }

@@ -99,4 +99,7 @@ pub enum Error {
 
     #[error("not a pg_lsn")]
     NotPgLsn,
+
+    #[error("{0}")]
+    TypeError(#[from] pgdog_postgres_types::Error),
 }

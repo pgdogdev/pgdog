@@ -1,0 +1,10 @@
+[package]
+name = "pgdog-stats"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+serde = {version = "*", features = ["derive"]}
+pgdog-config = { path = "../pgdog-config" }
+pgdog-postgres-types = { path = "../pgdog-postgres-types" }
+bytes = "*"
