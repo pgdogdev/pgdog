@@ -1,47 +1,30 @@
-use std::time::Duration;
+use std::{
+    ops::{Deref, DerefMut},
+    time::Duration,
+};
 
-use crate::config::PoolerMode;
 use tokio::time::Instant;
 
-use super::{Config, LsnStats, Pool, Stats};
+use super::Pool;
 
 /// Pool state.
 #[derive(Debug)]
 pub struct State {
-    /// Number of connections checked out.
-    pub checked_out: usize,
-    /// Number of idle connections.
-    pub idle: usize,
-    /// Total number of connections managed by the pool.
-    pub total: usize,
-    /// Is the pool online?
-    pub online: bool,
-    /// Pool has no idle connections.
-    pub empty: bool,
-    /// Pool configuration.
-    pub config: Config,
-    /// The pool is paused.
-    pub paused: bool,
-    /// Number of clients waiting for a connection.
-    pub waiting: usize,
-    /// Errors.
-    pub errors: usize,
-    /// Out of sync
-    pub out_of_sync: usize,
-    /// Re-synced servers.
-    pub re_synced: usize,
-    /// Statistics
-    pub stats: Stats,
-    /// Max wait.
-    pub maxwait: Duration,
-    /// Pool mode
-    pub pooler_mode: PoolerMode,
-    /// Lag
-    pub replica_lag: Duration,
-    /// Force closed.
-    pub force_close: usize,
-    /// LSN stats.
-    pub lsn_stats: LsnStats,
+    inner: pgdog_stats::State,
+}
+
+impl Deref for State {
+    type Target = pgdog_stats::State;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl DerefMut for State {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.inner
+    }
 }
 
 impl State {
@@ -51,28 +34,30 @@ impl State {
         let guard = pool.lock();
 
         State {
-            checked_out: guard.checked_out(),
-            idle: guard.idle(),
-            total: guard.total(),
-            online: guard.online,
-            empty: guard.idle() == 0,
-            config: guard.config,
-            paused: guard.paused,
-            waiting: guard.waiting.len(),
-            errors: guard.errors,
-            out_of_sync: guard.out_of_sync,
-            re_synced: guard.re_synced,
-            stats: guard.stats,
-            maxwait: guard
-                .waiting
-                .iter()
-                .next()
-                .map(|req| now.duration_since(req.request.created_at))
-                .unwrap_or(Duration::ZERO),
-            pooler_mode: guard.config().pooler_mode,
-            replica_lag: guard.replica_lag,
-            force_close: guard.force_close,
-            lsn_stats,
+            inner: pgdog_stats::State {
+                checked_out: guard.checked_out(),
+                idle: guard.idle(),
+                total: guard.total(),
+                online: guard.online,
+                empty: guard.idle() == 0,
+                config: *guard.config,
+                paused: guard.paused,
+                waiting: guard.waiting.len(),
+                errors: guard.errors,
+                out_of_sync: guard.out_of_sync,
+                re_synced: guard.re_synced,
+                stats: *guard.stats,
+                maxwait: guard
+                    .waiting
+                    .iter()
+                    .next()
+                    .map(|req| now.duration_since(req.request.created_at))
+                    .unwrap_or(Duration::ZERO),
+                pooler_mode: guard.config().pooler_mode,
+                replica_lag: guard.replica_lag,
+                force_close: guard.force_close,
+                lsn_stats: *lsn_stats,
+            },
         }
     }
 }

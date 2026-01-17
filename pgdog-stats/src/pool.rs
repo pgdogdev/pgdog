@@ -251,7 +251,7 @@ pub struct State {
 }
 
 /// Pool configuration.
-#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Default)]
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq)]
 pub struct Config {
     /// Minimum connections that should be in the pool.
     pub min: usize,
@@ -313,4 +313,41 @@ pub struct Config {
     pub lsn_check_delay: Duration,
     /// Automatic role detection enabled.
     pub role_detection: bool,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            min: 1,
+            max: 10,
+            checkout_timeout: Duration::from_millis(5_000),
+            idle_timeout: Duration::from_millis(60_000),
+            connect_timeout: Duration::from_millis(5_000),
+            connect_attempts: 1,
+            connect_attempt_delay: Duration::from_millis(10),
+            max_age: Duration::from_millis(24 * 3600 * 1000),
+            bannable: true,
+            healthcheck_timeout: Duration::from_millis(5_000),
+            healthcheck_interval: Duration::from_millis(30_000),
+            idle_healthcheck_interval: Duration::from_millis(5_000),
+            idle_healthcheck_delay: Duration::from_millis(5_000),
+            read_timeout: Duration::MAX,
+            write_timeout: Duration::MAX,
+            query_timeout: Duration::MAX,
+            ban_timeout: Duration::from_secs(300),
+            rollback_timeout: Duration::from_secs(5),
+            statement_timeout: None,
+            replication_mode: false,
+            pooler_mode: PoolerMode::default(),
+            read_only: false,
+            prepared_statements_limit: usize::MAX,
+            stats_period: Duration::from_millis(15_000),
+            dns_ttl: Duration::from_millis(60_000),
+            connection_recovery: ConnectionRecovery::Recover,
+            lsn_check_interval: Duration::from_millis(5_000),
+            lsn_check_timeout: Duration::from_millis(5_000),
+            lsn_check_delay: Duration::from_millis(5_000),
+            role_detection: false,
+        }
+    }
 }
