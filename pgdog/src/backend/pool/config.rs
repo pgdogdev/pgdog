@@ -5,13 +5,13 @@ use std::{
     time::Duration,
 };
 
-use pgdog_config::{pooling::ConnectionRecovery, Role};
+use pgdog_config::Role;
 use serde::{Deserialize, Serialize};
 
-use crate::config::{Database, General, PoolerMode, User};
+use crate::config::{Database, General, User};
 
 /// Pool configuration.
-#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq)]
+#[derive(Debug, Default, Serialize, Deserialize, Clone, Copy, PartialEq)]
 pub struct Config {
     pub(crate) inner: pgdog_stats::Config,
 }
@@ -149,14 +149,6 @@ impl Config {
                 role_detection: database.role == Role::Auto,
                 ..Default::default()
             },
-        }
-    }
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            inner: pgdog_stats::Config::default(),
         }
     }
 }
