@@ -1,3 +1,4 @@
+pub mod admin_termination;
 pub mod auth;
 pub mod avg;
 pub mod ban;
