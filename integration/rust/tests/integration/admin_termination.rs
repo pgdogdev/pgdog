@@ -1,4 +1,4 @@
-use rust::setup::{connection_sqlx_direct, connections_sqlx};
+use rust::setup::{admin_sqlx, connection_sqlx_direct, connections_sqlx};
 use sqlx::{Executor, Row};
 
 /// Test that PgDog gracefully handles connections terminated by administrator command.
@@ -9,6 +9,15 @@ use sqlx::{Executor, Row};
 async fn test_admin_termination_retry() {
     let conns = connections_sqlx().await;
     let pool = &conns[0];
+
+    // Connect to PgDog admin database to configure healthcheck
+    let pgdog_admin = admin_sqlx().await;
+
+    // Set healthcheck_interval to 0 to force healthcheck on every connection checkout
+    pgdog_admin
+        .execute("SET healthcheck_interval TO 0")
+        .await
+        .unwrap();
 
     // First, establish a connection and verify it works
     let result = pool.fetch_one("SELECT 1 as num").await.unwrap();
@@ -26,12 +35,14 @@ async fn test_admin_termination_retry() {
     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
     // Get all backend PIDs connected to the database from the pooler
+    // The pooler passes through the client's application_name, which is "sqlx"
     let pids: Vec<i32> = admin_pool
         .fetch_all(
             "SELECT pid FROM pg_stat_activity 
              WHERE datname = 'pgdog' 
-             AND application_name LIKE '%pgdog%'
-             AND state = 'idle'",
+             AND application_name = 'sqlx'
+             AND state = 'idle'
+             AND pid != pg_backend_pid()",
         )
         .await
         .unwrap()
@@ -39,7 +50,10 @@ async fn test_admin_termination_retry() {
         .map(|row| row.get("pid"))
         .collect();
 
-    assert!(!pids.is_empty(), "Should have at least one idle connection");
+    assert!(
+        !pids.is_empty(),
+        "Should have at least one idle connection from the pooler"
+    );
 
     // Terminate one of the backend connections
     let pid_to_terminate = pids[0];
@@ -75,4 +89,7 @@ async fn test_admin_termination_retry() {
     // Verify the pool is still healthy and can execute queries
     let final_result = pool.fetch_one("SELECT 42 as answer").await.unwrap();
     assert_eq!(final_result.get::<i32, _>("answer"), 42);
+
+    // Reset PgDog settings to avoid affecting other tests
+    pgdog_admin.execute("RELOAD").await.unwrap();
 }
