@@ -58,10 +58,32 @@ impl<'a> Healtcheck<'a> {
         match timeout(self.healthcheck_timeout, self.conn.healthcheck(";")).await {
             Ok(Ok(())) => Ok(()),
             Ok(Err(err)) => {
-                error!("health check server error: {} [{}]", err, self.pool.addr());
+                // Check if this is an administrator command termination
+                if Self::is_admin_termination(&err) {
+                    error!(
+                        "connection terminated by administrator command [{}]",
+                        self.pool.addr()
+                    );
+                } else {
+                    error!("health check server error: {} [{}]", err, self.pool.addr());
+                }
                 Err(Error::HealthcheckError)
             }
             Err(_) => Err(Error::HealthcheckError),
+        }
+    }
+
+    /// Check if the error is caused by administrator termination.
+    fn is_admin_termination(err: &crate::backend::Error) -> bool {
+        use crate::backend::Error;
+        match err {
+            Error::ExecutionError(error_response) => {
+                error_response.code == "57P01"
+                    && error_response
+                        .message
+                        .contains("terminating connection due to administrator command")
+            }
+            _ => false,
         }
     }
 }
