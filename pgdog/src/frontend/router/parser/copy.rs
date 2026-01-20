@@ -224,7 +224,12 @@ impl CopyParser {
                         // Totally broken.
                         let record = record?;
 
-                        let shard = if let Some(table) = &self.sharded_table {
+                        // pg_dump text format uses `\.` as end-of-copy marker.
+                        let is_end_marker = record.len() == 1 && record.get(0) == Some("\\.");
+
+                        let shard = if is_end_marker {
+                            Shard::All
+                        } else if let Some(table) = &self.sharded_table {
                             let key = record
                                 .get(self.sharded_column)
                                 .ok_or(Error::NoShardingColumn)?;
@@ -408,6 +413,34 @@ mod test {
         assert_eq!(sharded[0].message().data(), b"\"5\",\"hello\"\n");
         assert_eq!(sharded[1].message().data(), b"\"10\",NULL\n");
         assert_eq!(sharded[2].message().data(), b"\"15\",\"world\"\n");
+    }
+
+    #[test]
+    fn test_copy_text_pg_dump_end_marker() {
+        // pg_dump generates text format COPY with `\.` as end-of-copy marker.
+        // This marker should be sent to all shards without extracting a sharding key.
+        let copy = "COPY sharded (id, value) FROM STDIN";
+        let stmt = parse(copy).unwrap();
+        let stmt = stmt.protobuf.stmts.first().unwrap();
+        let copy = match stmt.stmt.clone().unwrap().node.unwrap() {
+            NodeEnum::CopyStmt(copy) => copy,
+            _ => panic!("not a copy"),
+        };
+
+        let mut copy = CopyParser::new(&copy, &Cluster::new_test(&config())).unwrap();
+
+        let one = CopyData::new("1\tAlice\n".as_bytes());
+        let two = CopyData::new("6\tBob\n".as_bytes());
+        let end_marker = CopyData::new("\\.\n".as_bytes());
+
+        let sharded = copy.shard(&[one, two, end_marker]).unwrap();
+        assert_eq!(sharded.len(), 3);
+        assert_eq!(sharded[0].message().data(), b"1\tAlice\n");
+        assert_eq!(sharded[0].shard(), &Shard::Direct(0));
+        assert_eq!(sharded[1].message().data(), b"6\tBob\n");
+        assert_eq!(sharded[1].shard(), &Shard::Direct(1));
+        assert_eq!(sharded[2].message().data(), b"\\.\n");
+        assert_eq!(sharded[2].shard(), &Shard::All);
     }
 
     #[test]
