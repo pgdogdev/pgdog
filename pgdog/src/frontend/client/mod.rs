@@ -572,9 +572,11 @@ impl Client {
     /// Get client memory stats.
     pub fn memory_stats(&self) -> MemoryStats {
         MemoryStats {
-            buffer: *self.stream_buffer.stats(),
-            prepared_statements: self.prepared_statements.memory_used(),
-            stream: self.stream.memory_usage(),
+            inner: pgdog_stats::MemoryStats {
+                buffer: *self.stream_buffer.stats(),
+                prepared_statements: self.prepared_statements.memory_used(),
+                stream: self.stream.memory_usage(),
+            },
         }
     }
 }

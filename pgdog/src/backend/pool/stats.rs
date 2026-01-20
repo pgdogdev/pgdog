@@ -5,7 +5,7 @@
 //! and in Prometheus metrics.
 //!
 
-use crate::{backend::stats::Counts as BackendCounts, config::Memory, net::MessageBufferStats};
+use crate::config::Memory;
 
 use std::{
     iter::Sum,
@@ -13,8 +13,10 @@ use std::{
     time::Duration,
 };
 
+use pgdog_stats::memory::MemoryStats as StatsMemoryStats;
 use pgdog_stats::pool::Counts as StatsCounts;
 use pgdog_stats::pool::Stats as StatsStats;
+use pgdog_stats::MessageBufferStats;
 
 /// Pool statistics.
 ///
@@ -58,35 +60,6 @@ impl Div<usize> for Counts {
 
     fn div(self, rhs: usize) -> Self::Output {
         (self.inner / rhs).into()
-    }
-}
-
-impl Add<BackendCounts> for StatsCounts {
-    type Output = StatsCounts;
-
-    fn add(self, rhs: BackendCounts) -> Self::Output {
-        StatsCounts {
-            xact_count: self.xact_count + rhs.transactions,
-            xact_2pc_count: self.xact_2pc_count + rhs.transactions_2pc,
-            query_count: self.query_count + rhs.queries,
-            server_assignment_count: self.server_assignment_count,
-            received: self.received + rhs.bytes_received,
-            sent: self.sent + rhs.bytes_sent,
-            query_time: self.query_time + rhs.query_time,
-            xact_time: self.xact_time + rhs.transaction_time,
-            idle_xact_time: self.idle_xact_time + rhs.idle_in_transaction_time,
-            wait_time: self.wait_time,
-            parse_count: self.parse_count + rhs.parse,
-            bind_count: self.bind_count + rhs.bind,
-            rollbacks: self.rollbacks + rhs.rollbacks,
-            healthchecks: self.healthchecks + rhs.healthchecks,
-            close: self.close + rhs.close,
-            errors: self.errors + rhs.errors,
-            cleaned: self.cleaned + rhs.cleaned,
-            prepared_sync: self.prepared_sync + rhs.prepared_sync,
-            connect_count: self.connect_count,
-            connect_time: self.connect_time,
-        }
     }
 }
 
@@ -139,24 +112,35 @@ impl Stats {
 /// by clients and servers.
 #[derive(Debug, Clone, Default, Copy)]
 pub struct MemoryStats {
-    /// Message buffer stats.
-    pub buffer: MessageBufferStats,
-    /// Memory used by prepared statements.
-    pub prepared_statements: usize,
-    /// Memory used by the network stream buffer.
-    pub stream: usize,
+    pub inner: StatsMemoryStats,
+}
+
+impl Deref for MemoryStats {
+    type Target = StatsMemoryStats;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl DerefMut for MemoryStats {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.inner
+    }
 }
 
 impl MemoryStats {
     /// Create new memory stats tracker.
     pub fn new(config: &Memory) -> Self {
         Self {
-            buffer: MessageBufferStats {
-                bytes_alloc: config.message_buffer,
-                ..Default::default()
+            inner: StatsMemoryStats {
+                buffer: MessageBufferStats {
+                    bytes_alloc: config.message_buffer,
+                    ..Default::default()
+                },
+                prepared_statements: 0,
+                stream: config.net_buffer,
             },
-            prepared_statements: 0,
-            stream: config.net_buffer,
         }
     }
 
@@ -431,7 +415,7 @@ mod tests {
         }
         .into();
 
-        let backend_counts = BackendCounts {
+        let backend_counts = pgdog_stats::server::Counts {
             bytes_sent: 500,
             bytes_received: 300,
             transactions: 5,
