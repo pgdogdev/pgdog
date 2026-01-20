@@ -1,47 +1,35 @@
 //! Frontend client statistics.
 
-use std::time::{Duration, SystemTime};
+use std::{
+    ops::{Deref, DerefMut},
+    time::{Duration, SystemTime},
+};
 use tokio::time::Instant;
 
 use crate::{backend::pool::stats::MemoryStats, state::State};
+use pgdog_stats::client::Stats as StatsStats;
 
 /// Client statistics.
 #[derive(Copy, Clone, Debug)]
 pub struct Stats {
-    /// Bytes sent over network.
-    pub bytes_sent: usize,
-    /// Bytes received over network.
-    pub bytes_received: usize,
-    /// Transactions served.
-    pub transactions: usize,
-    /// Two-pc transactions.
-    pub transactions_2pc: usize,
-    /// Queries served.
-    pub queries: usize,
-    /// Errors.
-    pub errors: usize,
-    /// Total transaction time.
-    pub transaction_time: Duration,
-    /// Last transaction time.
-    pub last_transaction_time: Duration,
-    /// Total query time.
-    pub query_time: Duration,
-    /// Total wait time.
-    pub wait_time: Duration,
-    /// Current client state.
-    pub state: State,
+    inner: StatsStats,
     transaction_timer: Instant,
     query_timer: Instant,
     wait_timer: Instant,
-    /// Last time this client sent a query.
-    pub last_request: SystemTime,
-    /// Number of bytes used by the stream buffer, where all the messages
-    /// are stored until they are processed.
-    pub memory_stats: MemoryStats,
-    /// Number of prepared statements in the local cache.
-    pub prepared_statements: usize,
-    /// Client is locked to a particular server.
-    pub locked: bool,
+}
+
+impl Deref for Stats {
+    type Target = StatsStats;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl DerefMut for Stats {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.inner
+    }
 }
 
 impl Default for Stats {
@@ -54,31 +42,17 @@ impl Stats {
     pub(super) fn new() -> Self {
         let now = Instant::now();
         Self {
-            bytes_sent: 0,
-            bytes_received: 0,
-            transactions: 0,
-            transactions_2pc: 0,
-            queries: 0,
-            errors: 0,
-            transaction_time: Duration::from_secs(0),
-            last_transaction_time: Duration::from_secs(0),
-            query_time: Duration::from_secs(0),
-            wait_time: Duration::from_secs(0),
-            state: State::Idle,
+            inner: StatsStats::new(),
             transaction_timer: now,
             query_timer: now,
             wait_timer: now,
-            last_request: SystemTime::now(),
-            memory_stats: MemoryStats::default(),
-            prepared_statements: 0,
-            locked: false,
         }
     }
 
     pub(super) fn transaction(&mut self, two_pc: bool) {
         self.last_transaction_time = self.transaction_timer.elapsed();
         self.transactions += 1;
-        self.transaction_time += self.last_transaction_time;
+        self.inner.transaction_time += self.inner.last_transaction_time;
         if two_pc {
             self.transactions_2pc += 1;
         }
@@ -93,7 +67,7 @@ impl Stats {
     pub(super) fn query(&mut self) {
         let now = Instant::now();
         self.queries += 1;
-        self.query_time += now.duration_since(self.query_timer);
+        self.inner.query_time += now.duration_since(self.query_timer);
         self.query_timer = now;
     }
 
@@ -128,7 +102,7 @@ impl Stats {
     }
 
     pub(super) fn memory_used(&mut self, memory: MemoryStats) {
-        self.memory_stats = memory;
+        self.memory_stats = *memory;
     }
 
     pub(super) fn idle(&mut self, in_transaction: bool) {

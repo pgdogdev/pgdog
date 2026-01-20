@@ -1,9 +1,10 @@
 //! Cancel-safe and memory-efficient
 //! read buffer for Postgres messages.
 
-use std::{io::Cursor, ops::Add};
+use std::io::Cursor;
 
 use bytes::{Buf, BytesMut};
+use pgdog_stats::MessageBufferStats;
 use tokio::io::AsyncReadExt;
 
 use crate::net::stream::eof;
@@ -132,27 +133,6 @@ impl MessageBuffer {
         stream: &mut (impl Unpin + AsyncReadExt),
     ) -> Result<Message, Error> {
         self.read_internal(stream).await
-    }
-}
-
-#[derive(Debug, Copy, Clone, Default)]
-pub struct MessageBufferStats {
-    pub reallocs: usize,
-    pub reclaims: usize,
-    pub bytes_used: usize,
-    pub bytes_alloc: usize,
-}
-
-impl Add for MessageBufferStats {
-    type Output = Self;
-
-    fn add(self, rhs: Self) -> Self::Output {
-        Self {
-            reallocs: rhs.reallocs + self.reallocs,
-            reclaims: rhs.reclaims + self.reclaims,
-            bytes_used: rhs.bytes_used + self.bytes_used,
-            bytes_alloc: rhs.bytes_alloc + self.bytes_alloc,
-        }
     }
 }
 
