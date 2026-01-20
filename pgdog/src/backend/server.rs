@@ -963,13 +963,15 @@ impl Server {
     #[inline]
     pub fn memory_stats(&self) -> MemoryStats {
         MemoryStats {
-            buffer: *self.stream_buffer.stats(),
-            prepared_statements: self.prepared_statements.memory_used(),
-            stream: self
-                .stream
-                .as_ref()
-                .map(|s| s.memory_usage())
-                .unwrap_or_default(),
+            inner: pgdog_stats::MemoryStats {
+                buffer: *self.stream_buffer.stats(),
+                prepared_statements: self.prepared_statements.memory_used(),
+                stream: self
+                    .stream
+                    .as_ref()
+                    .map(|s| s.memory_usage())
+                    .unwrap_or_default(),
+            },
         }
     }
 }

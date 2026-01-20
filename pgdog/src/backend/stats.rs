@@ -1,13 +1,11 @@
 //! Keep track of server stats.
 
-use std::{
-    ops::Add,
-    time::{Duration, SystemTime},
-};
+use std::ops::{Deref, DerefMut};
 
 use fnv::FnvHashMap as HashMap;
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
+pub use pgdog_stats::server::Counts;
 use tokio::time::Instant;
 
 use crate::{
@@ -60,73 +58,32 @@ pub struct ConnectedServer {
     pub client: Option<BackendKeyData>,
 }
 
-/// Server connection stats.
-#[derive(Copy, Clone, Debug, Default)]
-pub struct Counts {
-    pub bytes_sent: usize,
-    pub bytes_received: usize,
-    pub transactions: usize,
-    pub transactions_2pc: usize,
-    pub queries: usize,
-    pub rollbacks: usize,
-    pub errors: usize,
-    pub prepared_statements: usize,
-    pub query_time: Duration,
-    pub transaction_time: Duration,
-    pub idle_in_transaction_time: Duration,
-    pub parse: usize,
-    pub bind: usize,
-    pub healthchecks: usize,
-    pub close: usize,
-    pub cleaned: usize,
-    pub prepared_sync: usize,
-}
-
-impl Add for Counts {
-    type Output = Counts;
-
-    fn add(self, rhs: Self) -> Self::Output {
-        Counts {
-            bytes_sent: self.bytes_sent.saturating_add(rhs.bytes_sent),
-            bytes_received: self.bytes_received.saturating_add(rhs.bytes_received),
-            transactions: self.transactions.saturating_add(rhs.transactions),
-            transactions_2pc: self.transactions_2pc.saturating_add(rhs.transactions_2pc),
-            queries: self.queries.saturating_add(rhs.queries),
-            rollbacks: self.rollbacks.saturating_add(rhs.rollbacks),
-            errors: self.errors.saturating_add(rhs.errors),
-            prepared_statements: rhs.prepared_statements, // It's a gauge.
-            query_time: self.query_time.saturating_add(rhs.query_time),
-            transaction_time: self.query_time.saturating_add(rhs.transaction_time),
-            idle_in_transaction_time: self
-                .idle_in_transaction_time
-                .saturating_add(rhs.idle_in_transaction_time),
-            parse: self.parse.saturating_add(rhs.parse),
-            bind: self.bind.saturating_add(rhs.bind),
-            healthchecks: self.healthchecks.saturating_add(rhs.healthchecks),
-            close: self.close.saturating_add(rhs.close),
-            cleaned: self.cleaned.saturating_add(rhs.cleaned),
-            prepared_sync: self.prepared_sync.saturating_add(rhs.prepared_sync),
-        }
-    }
-}
-
 /// Server statistics.
 #[derive(Copy, Clone, Debug)]
 pub struct Stats {
+    inner: pgdog_stats::server::Stats,
     pub id: BackendKeyData,
-    pub state: State,
     pub last_used: Instant,
     pub last_healthcheck: Option<Instant>,
     pub created_at: Instant,
-    pub created_at_time: SystemTime,
-    pub total: Counts,
-    pub last_checkout: Counts,
-    pub pool_id: u64,
     pub client_id: Option<BackendKeyData>,
-    pub memory: MemoryStats,
     query_timer: Option<Instant>,
     transaction_timer: Option<Instant>,
     idle_in_transaction_timer: Option<Instant>,
+}
+
+impl Deref for Stats {
+    type Target = pgdog_stats::server::Stats;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl DerefMut for Stats {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.inner
+    }
 }
 
 impl Stats {
@@ -139,22 +96,20 @@ impl Stats {
         config: &Memory,
     ) -> Self {
         let now = Instant::now();
-        let stats = Stats {
+        let mut stats = Stats {
+            inner: pgdog_stats::server::Stats::default(),
             id,
-            state: State::Idle,
             last_used: now,
             last_healthcheck: None,
             created_at: now,
-            created_at_time: SystemTime::now(),
-            total: Counts::default(),
-            last_checkout: Counts::default(),
             query_timer: None,
             transaction_timer: None,
-            pool_id: options.pool_id,
             client_id: None,
-            memory: MemoryStats::new(config),
             idle_in_transaction_timer: None,
         };
+
+        stats.inner.memory = *MemoryStats::new(config);
+        stats.inner.pool_id = options.pool_id;
 
         STATS.lock().insert(
             id,
@@ -318,7 +273,7 @@ impl Stats {
 
     #[inline]
     pub fn memory_used(&mut self, stats: MemoryStats) {
-        self.memory = stats;
+        self.memory = *stats;
     }
 
     #[inline]
