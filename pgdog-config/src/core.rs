@@ -765,6 +765,7 @@ password = "users_admin_password"
 [general]
 host = "0.0.0.0"
 port = 6432
+system_catalogs_omnisharded = false
 
 [[databases]]
 name = "db1"
