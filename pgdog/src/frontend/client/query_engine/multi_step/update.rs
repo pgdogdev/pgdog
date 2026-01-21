@@ -126,11 +126,12 @@ impl<'a> UpdateMulti<'a> {
                 return Ok(());
             }
 
-            if !context.in_transaction() && !self.engine.backend.is_multishard()
+            if !context.in_transaction() || !self.engine.backend.is_multishard()
             // Do this check at the last possible moment.
             // Just in case we change how transactions are
             // routed in the future.
             {
+                self.engine.cleanup_backend(context);
                 return Err(UpdateError::TransactionRequired.into());
             }
 
