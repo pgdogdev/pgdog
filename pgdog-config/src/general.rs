@@ -194,6 +194,9 @@ pub struct General {
     /// Minimum ID for unique ID generator.
     #[serde(default)]
     pub unique_id_min: u64,
+    /// System catalogs are omnisharded?
+    #[serde(default = "General::default_system_catalogs_omnisharded")]
+    pub system_catalogs_omnisharded: bool,
 }
 
 impl Default for General {
@@ -262,6 +265,7 @@ impl Default for General {
             lsn_check_timeout: Self::lsn_check_timeout(),
             lsn_check_delay: Self::lsn_check_delay(),
             unique_id_min: u64::default(),
+            system_catalogs_omnisharded: Self::default_system_catalogs_omnisharded(),
         }
     }
 }
@@ -419,6 +423,10 @@ impl General {
 
     fn default_shutdown_timeout() -> u64 {
         Self::env_or_default("PGDOG_SHUTDOWN_TIMEOUT", 60_000)
+    }
+
+    fn default_system_catalogs_omnisharded() -> bool {
+        Self::env_or_default("PGDOG_SYSTEM_CATALOGS_OMNISHARDED", true)
     }
 
     fn default_shutdown_termination_timeout() -> Option<u64> {

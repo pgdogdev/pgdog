@@ -241,6 +241,46 @@ impl Config {
             }
         }
 
+        let databases = self
+            .databases
+            .iter()
+            .map(|database| database.name.clone())
+            .collect::<HashSet<_>>();
+
+        // Automatically configure system catalogs
+        // as omnisharded.
+        if self.general.system_catalogs_omnisharded {
+            for database in databases {
+                let entry = tables.entry(database).or_insert_with(Vec::new);
+
+                for table in [
+                    "pg_class",
+                    "pg_attribute",
+                    "pg_attrdef",
+                    "pg_index",
+                    "pg_constraint",
+                    "pg_namespace",
+                    "pg_database",
+                    "pg_tablespace",
+                    "pg_type",
+                    "pg_proc",
+                    "pg_operator",
+                    "pg_cast",
+                    "pg_enum",
+                    "pg_range",
+                    "pg_authid",
+                    "pg_am",
+                ] {
+                    if entry.iter().find(|t| t.name == table).is_none() {
+                        entry.push(OmnishardedTable {
+                            name: table.to_string(),
+                            sticky_routing: true,
+                        });
+                    }
+                }
+            }
+        }
+
         tables
     }
 
@@ -725,6 +765,7 @@ password = "users_admin_password"
 [general]
 host = "0.0.0.0"
 port = 6432
+system_catalogs_omnisharded = false
 
 [[databases]]
 name = "db1"
@@ -771,5 +812,67 @@ tables = ["table_x"]
         assert_eq!(db2_tables.len(), 1);
         assert_eq!(db2_tables[0].name, "table_x");
         assert!(!db2_tables[0].sticky_routing);
+    }
+
+    #[test]
+    fn test_omnisharded_tables_system_catalogs() {
+        // Test with system_catalogs_omnisharded = true
+        let source_enabled = r#"
+[general]
+host = "0.0.0.0"
+port = 6432
+system_catalogs_omnisharded = true
+
+[[databases]]
+name = "db1"
+host = "127.0.0.1"
+port = 5432
+
+[[omnisharded_tables]]
+database = "db1"
+tables = ["my_table"]
+"#;
+
+        let config: Config = toml::from_str(source_enabled).unwrap();
+        let tables = config.omnisharded_tables();
+        let db1_tables = tables.get("db1").unwrap();
+
+        // Should include my_table plus system catalogs
+        assert!(db1_tables.iter().any(|t| t.name == "my_table"));
+        assert!(db1_tables.iter().any(|t| t.name == "pg_class"));
+        assert!(db1_tables.iter().any(|t| t.name == "pg_attribute"));
+        assert!(db1_tables.iter().any(|t| t.name == "pg_namespace"));
+        assert!(db1_tables.iter().any(|t| t.name == "pg_type"));
+
+        // System catalogs should have sticky_routing = true
+        let pg_class = db1_tables.iter().find(|t| t.name == "pg_class").unwrap();
+        assert!(pg_class.sticky_routing);
+
+        // Test with system_catalogs_omnisharded = false
+        let source_disabled = r#"
+[general]
+host = "0.0.0.0"
+port = 6432
+system_catalogs_omnisharded = false
+
+[[databases]]
+name = "db1"
+host = "127.0.0.1"
+port = 5432
+
+[[omnisharded_tables]]
+database = "db1"
+tables = ["my_table"]
+"#;
+
+        let config: Config = toml::from_str(source_disabled).unwrap();
+        let tables = config.omnisharded_tables();
+        let db1_tables = tables.get("db1").unwrap();
+
+        // Should only include my_table, no system catalogs
+        assert_eq!(db1_tables.len(), 1);
+        assert_eq!(db1_tables[0].name, "my_table");
+        assert!(!db1_tables.iter().any(|t| t.name == "pg_class"));
+        assert!(!db1_tables.iter().any(|t| t.name == "pg_attribute"));
     }
 }
