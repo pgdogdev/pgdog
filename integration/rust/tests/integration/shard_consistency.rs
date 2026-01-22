@@ -1,4 +1,4 @@
-use rust::setup::connections_sqlx;
+use rust::setup::{admin_sqlx, connections_sqlx};
 use sqlx::{Executor, Row};
 
 #[tokio::test]
@@ -15,13 +15,15 @@ async fn shard_consistency_validator() -> Result<(), Box<dyn std::error::Error>>
     // Create different table schemas on each shard to trigger validator errors
     // Shard 0: table with 2 columns (id, name)
     sharded
-        .execute("/* pgdog_shard: 0 */ CREATE TABLE shard_test (id BIGINT PRIMARY KEY, name VARCHAR(100))")
+        .execute("/* pgdog_shard: 0 */ CREATE TABLE shard_test (id BIGINT PRIMARY KEY, name VARCHAR(100), customer_id BIGINT)")
         .await?;
 
     // Shard 1: table with 3 columns (id, name, extra) - different column count
     sharded
-        .execute("/* pgdog_shard: 1 */ CREATE TABLE shard_test (id BIGINT PRIMARY KEY, name VARCHAR(100), extra TEXT)")
+        .execute("/* pgdog_shard: 1 */ CREATE TABLE shard_test (id BIGINT PRIMARY KEY, name VARCHAR(100), extra TEXT, customer_id BIGINT)")
         .await?;
+
+    admin_sqlx().await.execute("RELOAD").await?;
 
     // Insert some test data on each shard
     sharded
@@ -76,13 +78,15 @@ async fn shard_consistency_validator_column_names() -> Result<(), Box<dyn std::e
     // Create tables with same column count but different column names
     // Shard 0: columns named (id, name)
     sharded
-        .execute("/* pgdog_shard: 0 */ CREATE TABLE shard_name_test (id BIGINT PRIMARY KEY, name VARCHAR(100))")
+        .execute("/* pgdog_shard: 0 */ CREATE TABLE shard_name_test (id BIGINT PRIMARY KEY, name VARCHAR(100), customer_id BIGINT)")
         .await?;
 
     // Shard 1: columns named (id, username) - different column name
     sharded
-        .execute("/* pgdog_shard: 1 */ CREATE TABLE shard_name_test (id BIGINT PRIMARY KEY, username VARCHAR(100))")
+        .execute("/* pgdog_shard: 1 */ CREATE TABLE shard_name_test (id BIGINT PRIMARY KEY, username VARCHAR(100), customer_id BIGINT)")
         .await?;
+
+    admin_sqlx().await.execute("RELOAD").await?;
 
     // Insert test data
     sharded
@@ -138,8 +142,10 @@ async fn shard_consistency_validator_success() -> Result<(), Box<dyn std::error:
 
     // Create identical table schemas on both shards
     sharded
-        .execute("CREATE TABLE shard_consistent_test (id BIGINT PRIMARY KEY, name VARCHAR(100))")
+        .execute("CREATE TABLE shard_consistent_test (id BIGINT PRIMARY KEY, name VARCHAR(100), customer_id BIGINT)")
         .await?;
+
+    admin_sqlx().await.execute("RELOAD").await?;
 
     // Insert test data
     sharded
@@ -190,8 +196,10 @@ async fn shard_consistency_data_row_validator_prepared_statement()
     // Create tables with same schema but we'll query them differently to trigger DataRow validation
     // Both tables have same structure so RowDescription will match initially
     sharded
-        .execute("CREATE TABLE shard_datarow_test (id BIGINT PRIMARY KEY, name VARCHAR(100), extra TEXT DEFAULT 'default')")
+        .execute("CREATE TABLE shard_datarow_test (id BIGINT PRIMARY KEY, name VARCHAR(100), extra TEXT DEFAULT 'default', customer_id BIGINT)")
         .await?;
+
+    admin_sqlx().await.execute("RELOAD").await?;
 
     // Insert test data
     sharded
@@ -208,12 +216,14 @@ async fn shard_consistency_data_row_validator_prepared_statement()
 
     // Actually, let's create a simpler test - use views with different column counts
     sharded
-        .execute("/* pgdog_shard: 0 */ CREATE VIEW datarow_view AS SELECT id, name FROM shard_datarow_test")
+        .execute("/* pgdog_shard: 0 */ CREATE VIEW datarow_view AS SELECT id, name, customer_id FROM shard_datarow_test")
         .await?;
 
     sharded
-        .execute("/* pgdog_shard: 1 */ CREATE VIEW datarow_view AS SELECT id, name, extra FROM shard_datarow_test")
+        .execute("/* pgdog_shard: 1 */ CREATE VIEW datarow_view AS SELECT id, name, extra, customer_id FROM shard_datarow_test")
         .await?;
+
+    admin_sqlx().await.execute("RELOAD").await?;
 
     // Now prepare a statement against the views
     let result = sharded

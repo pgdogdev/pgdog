@@ -1,0 +1,5 @@
+[[users]]
+name = "pgdog"
+password = "pgdog"
+database = "pgdog"
+schema_admin = true

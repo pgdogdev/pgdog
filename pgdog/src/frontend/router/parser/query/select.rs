@@ -40,25 +40,46 @@ impl QueryParser {
 
         let mut shards = HashSet::new();
 
-        let shard = StatementParser::from_select(
-            stmt,
-            context.router_context.bind,
-            &context.sharding_schema,
-            self.recorder_mut(),
-        )
-        .shard()?;
+        let (shard, is_sharded, tables) = {
+            let mut statement_parser = StatementParser::from_select(
+                stmt,
+                context.router_context.bind,
+                &context.sharding_schema,
+                self.recorder_mut(),
+            );
+
+            let shard = statement_parser.shard()?;
+
+            if shard.is_some() {
+                (shard, true, vec![])
+            } else {
+                (
+                    None,
+                    statement_parser.is_sharded(
+                        &context.router_context.schema,
+                        context.router_context.cluster.user(),
+                        context.router_context.parameter_hints.search_path,
+                    ),
+                    statement_parser.extract_tables(),
+                )
+            }
+        };
 
         if let Some(shard) = shard {
             shards.insert(shard);
         }
 
-        // `SELECT NOW()`, `SELECT 1`, etc.
+        // SELECT NOW(), SELECT 1
         if shards.is_empty() && stmt.from_clause.is_empty() {
+            let shard = Shard::Direct(round_robin::next() % context.shards);
+
+            if let Some(recorder) = self.recorder_mut() {
+                recorder.record_entry(Some(shard.clone()), format!("SELECT omnishard no table"));
+            }
+
             context
                 .shards_calculator
-                .push(ShardWithPriority::new_rr_no_table(Shard::Direct(
-                    round_robin::next() % context.shards,
-                )));
+                .push(ShardWithPriority::new_rr_no_table(shard));
 
             return Ok(Command::Query(
                 Route::read(context.shards_calculator.shard().clone()).with_write(writes),
@@ -97,9 +118,49 @@ impl QueryParser {
         let limit = LimitClause::new(stmt, context.router_context.bind).limit_offset()?;
         let distinct = Distinct::new(stmt).distinct()?;
 
-        context
-            .shards_calculator
-            .push(ShardWithPriority::new_table(shard));
+        if let Some(shard) = shard {
+            debug!("direct-to-shard {}", shard);
+
+            context
+                .shards_calculator
+                .push(ShardWithPriority::new_table(shard));
+        } else if is_sharded {
+            debug!("table is sharded, but no sharding key detected");
+
+            context
+                .shards_calculator
+                .push(ShardWithPriority::new_table(Shard::All));
+        } else {
+            debug!(
+                "table is not sharded, defaulting to omnisharded (schema loaded: {})",
+                context.router_context.schema.is_loaded()
+            );
+
+            // Omnisharded by default.
+            let sticky = tables.iter().any(|table| {
+                context
+                    .sharding_schema
+                    .tables()
+                    .is_omnisharded_sticky(table.name)
+                    == Some(true)
+            });
+
+            let (rr_index, explain) = if sticky {
+                (context.router_context.sticky.omni_index, "sticky")
+            } else {
+                (round_robin::next(), "round robin")
+            };
+
+            let shard = Shard::Direct(rr_index % context.shards);
+
+            if let Some(recorder) = self.recorder_mut() {
+                recorder.record_entry(Some(shard.clone()), format!("SELECT omnishard {}", explain));
+            }
+
+            context
+                .shards_calculator
+                .push(ShardWithPriority::new_rr_omni(shard));
+        }
 
         let mut query = Route::select(
             context.shards_calculator.shard().clone(),
@@ -108,52 +169,6 @@ impl QueryParser {
             limit,
             distinct,
         );
-
-        // Omnisharded tables check.
-        if query.is_all_shards() {
-            let tables = from_clause.tables();
-            let mut sticky = false;
-            let omni = tables.iter().all(|table| {
-                let is_sticky = context.sharding_schema.tables.omnishards().get(table.name);
-
-                if let Some(is_sticky) = is_sticky {
-                    if *is_sticky {
-                        sticky = true;
-                    }
-                    true
-                } else {
-                    false
-                }
-            });
-
-            if omni {
-                let shard = if sticky {
-                    context.router_context.sticky.omni_index
-                } else {
-                    round_robin::next()
-                } % context.shards;
-
-                context
-                    .shards_calculator
-                    .push(ShardWithPriority::new_rr_omni(Shard::Direct(shard)));
-
-                query.set_shard_mut(context.shards_calculator.shard().clone());
-
-                if let Some(recorder) = self.recorder_mut() {
-                    recorder.record_entry(
-                        Some(shard.into()),
-                        format!(
-                            "SELECT matched omnisharded tables: {}",
-                            tables
-                                .iter()
-                                .map(|table| table.name)
-                                .collect::<Vec<_>>()
-                                .join(", ")
-                        ),
-                    );
-                }
-            }
-        }
 
         // Only rewrite if query is cross-shard.
         if query.is_cross_shard() && context.shards > 1 {

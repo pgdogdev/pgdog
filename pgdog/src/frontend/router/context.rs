@@ -1,6 +1,6 @@
 use super::{Error, ParameterHints};
 use crate::{
-    backend::Cluster,
+    backend::{Cluster, Schema},
     frontend::{
         client::{Sticky, TransactionType},
         router::Ast,
@@ -33,6 +33,8 @@ pub struct RouterContext<'a> {
     pub extended: bool,
     /// AST.
     pub ast: Option<Ast>,
+    /// Schema.
+    pub schema: Schema,
 }
 
 impl<'a> RouterContext<'a> {
@@ -59,6 +61,7 @@ impl<'a> RouterContext<'a> {
             extended: matches!(query, Some(BufferedQuery::Prepared(_))) || bind.is_some(),
             query,
             ast: buffer.ast.clone(),
+            schema: cluster.schema(),
         })
     }
 

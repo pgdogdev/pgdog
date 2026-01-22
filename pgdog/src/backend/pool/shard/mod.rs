@@ -3,13 +3,14 @@
 use std::ops::Deref;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, OnceCell};
 use tokio::{select, spawn, sync::Notify};
-use tracing::debug;
+use tracing::{debug, info};
 
 use crate::backend::databases::User;
 use crate::backend::pool::lb::ban::Ban;
 use crate::backend::PubSubListener;
+use crate::backend::Schema;
 use crate::config::{config, LoadBalancingStrategy, ReadWriteSplit, Role};
 use crate::net::messages::BackendKeyData;
 use crate::net::NotificationResponse;
@@ -124,6 +125,20 @@ impl Shard {
         }
     }
 
+    /// Load schema from the shard's primary.
+    pub async fn update_schema(&self) -> Result<(), crate::backend::Error> {
+        let mut server = self.primary_or_replica(&Request::default()).await?;
+        let schema = Schema::load(&mut server).await?;
+        info!(
+            "loaded schema for {} tables on shard {} [{}]",
+            schema.tables().len(),
+            self.number(),
+            server.addr()
+        );
+        let _ = self.schema.set(schema);
+        Ok(())
+    }
+
     /// Bring every pool online.
     pub fn launch(&self) {
         self.lb.launch();
@@ -206,6 +221,11 @@ impl Shard {
         &self.identifier
     }
 
+    /// Get currently loaded schema for this shard.
+    pub fn schema(&self) -> Schema {
+        self.schema.get().cloned().unwrap_or_default()
+    }
+
     /// Re-detect primary/replica roles and re-build
     /// the shard routing logic.
     pub fn redetect_roles(&self) -> bool {
@@ -230,6 +250,7 @@ pub struct ShardInner {
     comms: Arc<ShardComms>,
     pub_sub: Option<PubSubListener>,
     identifier: Arc<User>,
+    schema: Arc<OnceCell<Schema>>,
 }
 
 impl ShardInner {
@@ -261,6 +282,7 @@ impl ShardInner {
             comms,
             pub_sub,
             identifier,
+            schema: Arc::new(OnceCell::new()),
         }
     }
 }

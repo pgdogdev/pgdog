@@ -114,7 +114,7 @@ fn test_omni_sharded_table_takes_priority() {
 
 #[test]
 fn test_omni_all_tables_must_be_omnisharded() {
-    let q = "SELECT * FROM sharded_omni INNER JOIN not_sharded ON sharded_omni.id = not_sharded.id WHERE sharded_omni = $1";
+    let q = "SELECT * FROM sharded_omni INNER JOIN not_sharded ON sharded_omni.id = not_sharded.id INNER JOIN sharded ON sharded.id = sharded_omni.id WHERE sharded_omni = $1";
 
     let mut test = QueryParserTest::new();
     let command = test.execute(vec![Query::new(q).into()]);

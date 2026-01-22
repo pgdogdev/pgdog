@@ -151,10 +151,11 @@ func TestShardedTwoPc(t *testing.T) {
 		assert.NoError(t, err)
 	}
 
+	// +3 is for schema sync
 	assertShowField(t, "SHOW STATS", "total_xact_2pc_count", 200, "pgdog_2pc", "pgdog_sharded", 0, "primary")
 	assertShowField(t, "SHOW STATS", "total_xact_2pc_count", 200, "pgdog_2pc", "pgdog_sharded", 1, "primary")
-	assertShowField(t, "SHOW STATS", "total_xact_count", 401, "pgdog_2pc", "pgdog_sharded", 0, "primary") // PREPARE, COMMIT for each transaction + TRUNCATE
-	assertShowField(t, "SHOW STATS", "total_xact_count", 401, "pgdog_2pc", "pgdog_sharded", 1, "primary")
+	assertShowField(t, "SHOW STATS", "total_xact_count", 401+3, "pgdog_2pc", "pgdog_sharded", 0, "primary") // PREPARE, COMMIT for each transaction + TRUNCATE
+	assertShowField(t, "SHOW STATS", "total_xact_count", 401+3, "pgdog_2pc", "pgdog_sharded", 1, "primary")
 
 	for i := range 200 {
 		rows, err := conn.Query(

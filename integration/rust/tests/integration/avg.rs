@@ -1,4 +1,4 @@
-use rust::setup::connections_sqlx;
+use rust::setup::{admin_sqlx, connections_sqlx};
 use sqlx::{Connection, Executor, PgConnection, Row};
 
 #[tokio::test]
@@ -17,11 +17,14 @@ async fn avg_merges_with_helper_count() -> Result<(), Box<dyn std::error::Error>
 
     for shard in [0, 1] {
         let comment = format!(
-            "/* pgdog_shard: {} */ CREATE TABLE avg_reduce_test(price DOUBLE PRECISION)",
+            "/* pgdog_shard: {} */ CREATE TABLE avg_reduce_test(price DOUBLE PRECISION, customer_id BIGINT)",
             shard
         );
         sharded.execute(comment.as_str()).await?;
     }
+
+    // Make sure sharded table is loaded in schema.
+    admin_sqlx().await.execute("RELOAD").await?;
 
     // Insert data on each shard so the query spans multiple shards.
     sharded
@@ -73,11 +76,13 @@ async fn avg_without_helper_should_still_merge() -> Result<(), Box<dyn std::erro
 
     for shard in [0, 1] {
         let comment = format!(
-            "/* pgdog_shard: {} */ CREATE TABLE avg_rewrite_expectation(price DOUBLE PRECISION)",
+            "/* pgdog_shard: {} */ CREATE TABLE avg_rewrite_expectation(price DOUBLE PRECISION, customer_id BIGINT)",
             shard
         );
         sharded.execute(comment.as_str()).await?;
     }
+
+    admin_sqlx().await.execute("RELOAD").await?;
 
     sharded
         .execute(
@@ -145,11 +150,13 @@ async fn avg_multiple_columns_should_merge() -> Result<(), Box<dyn std::error::E
 
     for shard in [0, 1] {
         let comment = format!(
-            "/* pgdog_shard: {} */ CREATE TABLE avg_multi_column(price DOUBLE PRECISION, discount DOUBLE PRECISION)",
+            "/* pgdog_shard: {} */ CREATE TABLE avg_multi_column(price DOUBLE PRECISION, discount DOUBLE PRECISION, customer_id BIGINT)",
             shard
         );
         sharded.execute(comment.as_str()).await?;
     }
+
+    admin_sqlx().await.execute("RELOAD").await?;
 
     sharded
         .execute(
@@ -231,11 +238,13 @@ async fn avg_prepared_statement_should_merge() -> Result<(), Box<dyn std::error:
 
     for shard in [0, 1] {
         let comment = format!(
-            "/* pgdog_shard: {} */ CREATE TABLE avg_prepared_params(price DOUBLE PRECISION)",
+            "/* pgdog_shard: {} */ CREATE TABLE avg_prepared_params(price DOUBLE PRECISION, customer_id BIGINT)",
             shard
         );
         sharded.execute(comment.as_str()).await?;
     }
+
+    admin_sqlx().await.execute("RELOAD").await?;
 
     sharded
         .execute(
