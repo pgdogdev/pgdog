@@ -12,9 +12,12 @@ use super::{
     Value,
 };
 use crate::{
-    backend::ShardingSchema,
-    frontend::router::{parser::Shard, sharding::ContextBuilder, sharding::SchemaSharder},
-    net::Bind,
+    backend::{Schema, ShardingSchema},
+    frontend::router::{
+        parser::Shard,
+        sharding::{ContextBuilder, SchemaSharder},
+    },
+    net::{parameter::ParameterValue, Bind},
 };
 
 /// Context for searching a SELECT statement, tracking table aliases.
@@ -288,8 +291,57 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
         Ok(None)
     }
 
+    /// Check that the query references a table that contains a sharded
+    /// column. This check is needed in case sharded tables config
+    /// doesn't specify a table name and should short-circuit if it does.
+    pub fn is_sharded(
+        &self,
+        db_schema: &Schema,
+        user: &str,
+        search_path: Option<&ParameterValue>,
+    ) -> bool {
+        let sharded_tables = self.schema.tables.tables();
+
+        // Separate configs with explicit table names from those without
+        let (named, nameless): (Vec<_>, Vec<_>) =
+            sharded_tables.iter().partition(|t| t.name.is_some());
+
+        let tables = self.extract_tables();
+
+        for table in &tables {
+            // Check named sharded table configs (fast path, no schema lookup needed)
+            for config in &named {
+                if let Some(ref name) = config.name {
+                    if table.name == name {
+                        // Also check schema match if specified in config
+                        if let Some(ref config_schema) = config.schema {
+                            if table.schema != Some(config_schema.as_str()) {
+                                continue;
+                            }
+                        }
+                        return true;
+                    }
+                }
+            }
+
+            // Check nameless configs by looking up the table in the db schema
+            // to see if it has the sharding column
+            if !nameless.is_empty() {
+                if let Some(relation) = db_schema.table(*table, user, search_path) {
+                    for config in &nameless {
+                        if relation.has_column(&config.column) {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+
+        false
+    }
+
     /// Extract all tables referenced in the statement.
-    fn extract_tables(&self) -> Vec<Table<'a>> {
+    pub fn extract_tables(&self) -> Vec<Table<'a>> {
         let mut tables = Vec::new();
         match self.stmt {
             Statement::Select(stmt) => self.extract_tables_from_select(stmt, &mut tables),

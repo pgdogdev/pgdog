@@ -1,4 +1,4 @@
-use rust::setup::connections_sqlx;
+use rust::setup::{admin_sqlx, connections_sqlx};
 use sqlx::{Acquire, Executor, Row};
 
 #[tokio::test]
@@ -11,6 +11,8 @@ async fn per_stmt_routing() -> Result<(), Box<dyn std::error::Error>> {
             "CREATE TABLE IF NOT EXISTS per_stmt_routing (customer_id BIGINT PRIMARY KEY, value VARCHAR)",
         )
         .await?;
+
+    admin_sqlx().await.execute("RELOAD").await?;
 
     sharded.execute("TRUNCATE TABLE per_stmt_routing").await?;
 

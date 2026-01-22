@@ -1,3 +1,4 @@
+use crate::frontend::router::parser::route::RoundRobinReason;
 use crate::frontend::router::parser::{route::ShardSource, Shard};
 use crate::net::parameter::ParameterValue;
 
@@ -30,15 +31,19 @@ fn test_select_from_shard_1_schema() {
 }
 
 #[test]
-fn test_select_from_unsharded_schema_goes_to_all() {
+fn test_select_from_unsharded_schema_goes_to_rr() {
     let mut test = QueryParserTest::new();
 
     let command = test.execute(vec![
         Query::new("SELECT * FROM public.users WHERE id = 1").into()
     ]);
 
-    // Unknown schema goes to all shards
-    assert_eq!(command.route().shard(), &Shard::All);
+    // Unknown schema goes to omnisharded
+    assert!(matches!(command.route().shard(), &Shard::Direct(_)));
+    assert_eq!(
+        command.route().shard_with_priority().source(),
+        &ShardSource::RoundRobin(RoundRobinReason::Omni)
+    );
 }
 
 // --- INSERT queries with schema-qualified tables ---

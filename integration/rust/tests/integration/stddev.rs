@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
 use ordered_float::OrderedFloat;
-use rust::setup::{connections_sqlx, connections_tokio};
+use rust::setup::{admin_sqlx, connections_sqlx, connections_tokio};
 use sqlx::{Connection, Executor, PgConnection, Row, postgres::PgPool};
 
 const SHARD_URLS: [&str; 2] = [
@@ -55,7 +55,7 @@ async fn stddev_pop_merges_with_helpers() -> Result<(), Box<dyn std::error::Erro
     reset_table(
         &sharded,
         "stddev_pop_reduce_test",
-        "(price DOUBLE PRECISION)",
+        "(price DOUBLE PRECISION, customer_id BIGINT)",
     )
     .await?;
 
@@ -106,7 +106,7 @@ async fn stddev_samp_aliases_should_merge() -> Result<(), Box<dyn std::error::Er
     reset_table(
         &sharded,
         "stddev_sample_reduce_test",
-        "(price DOUBLE PRECISION)",
+        "(price DOUBLE PRECISION, customer_id BIGINT)",
     )
     .await?;
 
@@ -157,7 +157,12 @@ async fn variance_variants_should_merge() -> Result<(), Box<dyn std::error::Erro
     let conns = connections_sqlx().await;
     let sharded = conns.get(1).cloned().unwrap();
 
-    reset_table(&sharded, "variance_reduce_test", "(price DOUBLE PRECISION)").await?;
+    reset_table(
+        &sharded,
+        "variance_reduce_test",
+        "(price DOUBLE PRECISION, customer_id BIGINT)",
+    )
+    .await?;
 
     seed_stat_data(
         &sharded,
@@ -222,7 +227,7 @@ async fn stddev_multiple_columns_should_merge() -> Result<(), Box<dyn std::error
     reset_table(
         &sharded,
         "stddev_multi_column",
-        "(price DOUBLE PRECISION, discount DOUBLE PRECISION)",
+        "(price DOUBLE PRECISION, discount DOUBLE PRECISION, customer_id BIGINT)",
     )
     .await?;
 
@@ -290,7 +295,7 @@ async fn stddev_prepared_statement_should_merge() -> Result<(), Box<dyn std::err
     reset_table(
         &sharded,
         "stddev_prepared_params",
-        "(price DOUBLE PRECISION)",
+        "(price DOUBLE PRECISION, customer_id BIGINT)",
     )
     .await?;
 
@@ -358,7 +363,7 @@ async fn stddev_distinct_should_error_until_supported() -> Result<(), Box<dyn st
     reset_table(
         &sharded,
         "stddev_distinct_error",
-        "(price DOUBLE PRECISION)",
+        "(price DOUBLE PRECISION, customer_id BIGINT)",
     )
     .await?;
 
@@ -396,7 +401,12 @@ async fn stddev_distinct_future_expectation() -> Result<(), Box<dyn std::error::
     let conns = connections_sqlx().await;
     let sharded = conns.get(1).cloned().unwrap();
 
-    reset_table(&sharded, "stddev_distinct_test", "(price DOUBLE PRECISION)").await?;
+    reset_table(
+        &sharded,
+        "stddev_distinct_test",
+        "(price DOUBLE PRECISION, customer_id BIGINT)",
+    )
+    .await?;
 
     seed_stat_data(
         &sharded,
@@ -455,6 +465,8 @@ async fn reset_table(pool: &PgPool, table: &str, schema: &str) -> Result<(), sql
         );
         pool.execute(create_stmt.as_str()).await?;
     }
+
+    admin_sqlx().await.execute("RELOAD").await?;
 
     Ok(())
 }

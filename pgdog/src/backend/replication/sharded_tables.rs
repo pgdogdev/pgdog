@@ -91,6 +91,10 @@ impl ShardedTables {
         &self.inner.omnisharded
     }
 
+    pub fn is_omnisharded_sticky(&self, name: &str) -> Option<bool> {
+        self.omnishards().get(name).cloned()
+    }
+
     /// The deployment has only one sharded table.
     pub fn common_mapping(&self) -> &Option<CommonMapping> {
         &self.inner.common_mapping

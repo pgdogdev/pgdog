@@ -334,8 +334,9 @@ fn test_omni() {
         assert!(matches!(shard, Shard::Direct(_)));
     }
 
-    // Test that all tables have to be omnisharded.
-    let q = "SELECT * FROM sharded_omni INNER JOIN not_sharded ON sharded_omni.id = not_sharded.id WHERE sharded_omni = $1";
+    // If a sharded table is joined to an omnisharded table,
+    // the query goes to all shards, not round robin
+    let q = "SELECT * FROM sharded_omni INNER JOIN not_sharded ON sharded_omni.id = not_sharded.id INNER JOIN sharded ON sharded.id = sharded_omni.id WHERE sharded_omni = $1";
     let route = query!(q);
     assert!(matches!(route.shard(), Shard::All));
 }

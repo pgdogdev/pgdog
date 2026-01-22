@@ -318,5 +318,86 @@ BEGIN
 END;
 $body$ LANGUAGE plpgsql;
 
+-- Globally unique 64-bit ID generator (Snowflake-like).
+-- Bit allocation: 41 timestamp + 10 node + 12 sequence = 63 bits (keeps sign bit clear)
+-- The sequence stores (elapsed_ms << 12) | sequence_within_ms, allowing
+-- automatic reset of the sequence counter when the millisecond changes.
+CREATE SEQUENCE IF NOT EXISTS pgdog.unique_id_seq;
+
+CREATE OR REPLACE FUNCTION pgdog.unique_id(id_offset BIGINT DEFAULT 0) RETURNS BIGINT AS $body$
+DECLARE
+    sequence_bits CONSTANT INTEGER := 12;
+    node_bits CONSTANT INTEGER := 10;
+    max_node_id CONSTANT INTEGER := (1 << node_bits) - 1;         -- 1023
+    max_sequence CONSTANT INTEGER := (1 << sequence_bits) - 1;    -- 4095
+    max_timestamp CONSTANT BIGINT := (1::bigint << 41) - 1;
+    pgdog_epoch CONSTANT BIGINT := 1764184395000;  -- Wednesday, November 26, 2025 11:13:15 AM GMT-08:00
+    node_shift CONSTANT INTEGER := sequence_bits;  -- 12
+    timestamp_shift CONSTANT INTEGER := sequence_bits + node_bits;  -- 22
+
+    node_id INTEGER;
+    now_ms BIGINT;
+    elapsed BIGINT;
+    min_combined BIGINT;
+    combined_seq BIGINT;
+    seq INTEGER;
+    timestamp_part BIGINT;
+    node_part BIGINT;
+    base_id BIGINT;
+BEGIN
+    -- Get node_id from pgdog.config.shard
+    SELECT pgdog.config.shard INTO node_id FROM pgdog.config;
+
+    IF node_id IS NULL THEN
+        RAISE EXCEPTION 'pgdog.config.shard not set';
+    END IF;
+
+    IF node_id < 0 OR node_id > max_node_id THEN
+        RAISE EXCEPTION 'shard must be between 0 and %', max_node_id;
+    END IF;
+
+    LOOP
+        -- Get next combined sequence value
+        combined_seq := nextval('pgdog.unique_id_seq');
+
+        -- Get current time in milliseconds since Unix epoch
+        now_ms := (EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint;
+        elapsed := now_ms - pgdog_epoch;
+
+        IF elapsed < 0 THEN
+            RAISE EXCEPTION 'Clock is before PgDog epoch (November 26, 2025)';
+        END IF;
+
+        -- Minimum valid combined value for current millisecond
+        min_combined := elapsed << 12;
+
+        -- If sequence is at or ahead of current time, we're good
+        IF combined_seq >= min_combined THEN
+            EXIT;
+        END IF;
+
+        -- Sequence is behind current time, advance it
+        PERFORM setval('pgdog.unique_id_seq', min_combined, false);
+    END LOOP;
+
+    -- Decompose the combined sequence value
+    seq := (combined_seq & max_sequence)::integer;
+    elapsed := combined_seq >> 12;
+
+    IF elapsed > max_timestamp THEN
+        RAISE EXCEPTION 'Timestamp overflow: % > %', elapsed, max_timestamp;
+    END IF;
+
+    -- Compose the ID: timestamp | node | sequence
+    timestamp_part := elapsed << timestamp_shift;
+    node_part := node_id::bigint << node_shift;
+    base_id := timestamp_part | node_part | seq;
+
+    RETURN base_id + id_offset;
+END;
+$body$ LANGUAGE plpgsql;
+
+GRANT USAGE ON SEQUENCE pgdog.unique_id_seq TO PUBLIC;
+
 -- Allow functions to be executed by anyone.
 GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA pgdog TO PUBLIC;

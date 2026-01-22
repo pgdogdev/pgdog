@@ -13,9 +13,11 @@ pub(super) enum ConvergeAlgorithm {
 
 impl QueryParser {
     /// Converge to a single route given multiple shards.
-    pub(super) fn converge(shards: &HashSet<Shard>, algorithm: ConvergeAlgorithm) -> Shard {
-        let shard = if shards.len() == 1 {
-            shards.iter().next().cloned().unwrap()
+    pub(super) fn converge(shards: &HashSet<Shard>, algorithm: ConvergeAlgorithm) -> Option<Shard> {
+        let shard = if shards.is_empty() {
+            None
+        } else if shards.len() == 1 {
+            shards.iter().next().cloned()
         } else {
             let mut multi = HashSet::new();
             let mut all = false;
@@ -35,15 +37,15 @@ impl QueryParser {
             if algorithm == ConvergeAlgorithm::FirstDirect {
                 let direct = shards.iter().find(|shard| shard.is_direct());
                 if let Some(direct) = direct {
-                    return direct.clone();
+                    return Some(direct.clone());
                 }
             }
 
-            if all || shards.is_empty() {
+            Some(if all || shards.is_empty() {
                 Shard::All
             } else {
                 Shard::Multi(multi.into_iter().collect())
-            }
+            })
         };
 
         shard
@@ -60,10 +62,10 @@ mod tests {
         let shards = HashSet::from([Shard::Direct(5)]);
 
         let result = QueryParser::converge(&shards, ConvergeAlgorithm::AllFirstElseMulti);
-        assert_eq!(result, Shard::Direct(5));
+        assert_eq!(result, Some(Shard::Direct(5)));
 
         let result = QueryParser::converge(&shards, ConvergeAlgorithm::FirstDirect);
-        assert_eq!(result, Shard::Direct(5));
+        assert_eq!(result, Some(Shard::Direct(5)));
     }
 
     #[test]
@@ -71,10 +73,10 @@ mod tests {
         let shards = HashSet::from([Shard::All]);
 
         let result = QueryParser::converge(&shards, ConvergeAlgorithm::AllFirstElseMulti);
-        assert_eq!(result, Shard::All);
+        assert_eq!(result, Some(Shard::All));
 
         let result = QueryParser::converge(&shards, ConvergeAlgorithm::FirstDirect);
-        assert_eq!(result, Shard::All);
+        assert_eq!(result, Some(Shard::All));
     }
 
     #[test]
@@ -82,10 +84,10 @@ mod tests {
         let shards = HashSet::from([Shard::Multi(vec![1, 2, 3])]);
 
         let result = QueryParser::converge(&shards, ConvergeAlgorithm::AllFirstElseMulti);
-        assert_eq!(result, Shard::Multi(vec![1, 2, 3]));
+        assert_eq!(result, Some(Shard::Multi(vec![1, 2, 3])));
 
         let result = QueryParser::converge(&shards, ConvergeAlgorithm::FirstDirect);
-        assert_eq!(result, Shard::Multi(vec![1, 2, 3]));
+        assert_eq!(result, Some(Shard::Multi(vec![1, 2, 3])));
     }
 
     #[test]
@@ -94,7 +96,7 @@ mod tests {
 
         let result = QueryParser::converge(&shards, ConvergeAlgorithm::AllFirstElseMulti);
         match result {
-            Shard::Multi(mut v) => {
+            Some(Shard::Multi(mut v)) => {
                 v.sort();
                 assert_eq!(v, vec![1, 2]);
             }
@@ -108,7 +110,7 @@ mod tests {
 
         let result = QueryParser::converge(&shards, ConvergeAlgorithm::FirstDirect);
         assert!(
-            matches!(result, Shard::Direct(1) | Shard::Direct(2)),
+            matches!(result, Some(Shard::Direct(1)) | Some(Shard::Direct(2))),
             "expected Direct(1) or Direct(2), got {:?}",
             result
         );
@@ -119,7 +121,7 @@ mod tests {
         let shards = HashSet::from([Shard::All, Shard::Direct(1)]);
 
         let result = QueryParser::converge(&shards, ConvergeAlgorithm::AllFirstElseMulti);
-        assert_eq!(result, Shard::All);
+        assert_eq!(result, Some(Shard::All));
     }
 
     #[test]
@@ -127,18 +129,18 @@ mod tests {
         let shards = HashSet::from([Shard::All, Shard::Direct(1)]);
 
         let result = QueryParser::converge(&shards, ConvergeAlgorithm::FirstDirect);
-        assert_eq!(result, Shard::Direct(1));
+        assert_eq!(result, Some(Shard::Direct(1)));
     }
 
     #[test]
-    fn empty_set_returns_all() {
+    fn empty_set_returns_none() {
         let shards = HashSet::new();
 
         let result = QueryParser::converge(&shards, ConvergeAlgorithm::AllFirstElseMulti);
-        assert_eq!(result, Shard::All);
+        assert_eq!(result, None);
 
         let result = QueryParser::converge(&shards, ConvergeAlgorithm::FirstDirect);
-        assert_eq!(result, Shard::All);
+        assert_eq!(result, None);
     }
 
     #[test]
@@ -147,7 +149,7 @@ mod tests {
 
         let result = QueryParser::converge(&shards, ConvergeAlgorithm::AllFirstElseMulti);
         match result {
-            Shard::Multi(mut v) => {
+            Some(Shard::Multi(mut v)) => {
                 v.sort();
                 assert_eq!(v, vec![1, 2, 3]);
             }
@@ -160,7 +162,7 @@ mod tests {
         let shards = HashSet::from([Shard::Multi(vec![1, 2]), Shard::Direct(3)]);
 
         let result = QueryParser::converge(&shards, ConvergeAlgorithm::FirstDirect);
-        assert_eq!(result, Shard::Direct(3));
+        assert_eq!(result, Some(Shard::Direct(3)));
     }
 
     #[test]
@@ -168,6 +170,6 @@ mod tests {
         let shards = HashSet::from([Shard::All, Shard::Multi(vec![1, 2])]);
 
         let result = QueryParser::converge(&shards, ConvergeAlgorithm::FirstDirect);
-        assert_eq!(result, Shard::All);
+        assert_eq!(result, Some(Shard::All));
     }
 }

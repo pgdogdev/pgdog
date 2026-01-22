@@ -83,9 +83,7 @@ impl<'a> MultiTenantCheck<'a> {
         let schemas = search_path.resolve();
 
         for schema in schemas {
-            let schema_table = self
-                .schema
-                .get(&(schema.to_owned(), table.name.to_string()));
+            let schema_table = self.schema.get(schema, table.name);
             if let Some(schema_table) = schema_table {
                 let has_tenant_id = schema_table.columns().contains_key(&self.config.column);
                 if !has_tenant_id {
