@@ -17,7 +17,6 @@ pub struct Relation {
     pub owner: String,
     pub persistence: String,
     pub access_method: String,
-    pub size: usize,
     pub description: String,
     pub oid: i32,
     pub columns: HashMap<String, Column>,
@@ -32,9 +31,8 @@ impl From<DataRow> for Relation {
             owner: value.get_text(3).unwrap_or_default(),
             persistence: value.get_text(4).unwrap_or_default(),
             access_method: value.get_text(5).unwrap_or_default(),
-            size: value.get_int(6, true).unwrap_or_default() as usize,
-            description: value.get_text(7).unwrap_or_default(),
-            oid: value.get::<i32>(8, Format::Text).unwrap_or_default(),
+            description: value.get_text(6).unwrap_or_default(),
+            oid: value.get::<i32>(7, Format::Text).unwrap_or_default(),
             columns: HashMap::new(),
         }
     }
@@ -96,6 +94,10 @@ impl Relation {
     pub fn columns(&self) -> &HashMap<String, Column> {
         &self.columns
     }
+
+    pub fn has_column(&self, name: &str) -> bool {
+        self.columns.contains_key(name)
+    }
 }
 
 #[cfg(test)]
@@ -108,7 +110,6 @@ impl Relation {
             owner: String::new(),
             persistence: String::new(),
             access_method: String::new(),
-            size: 0,
             description: String::new(),
             oid: 0,
             columns,

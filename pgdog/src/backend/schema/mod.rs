@@ -10,13 +10,18 @@ use tracing::debug;
 pub use relation::Relation;
 
 use super::{pool::Request, Cluster, Error, Server};
+use crate::frontend::router::parser::Table;
+use crate::net::parameter::ParameterValue;
 
 static SETUP: &str = include_str!("setup.sql");
+
+/// Schema name -> Table name -> Relation
+type Relations = HashMap<String, HashMap<String, Relation>>;
 
 #[derive(Debug, Default)]
 struct Inner {
     search_path: Vec<String>,
-    relations: HashMap<(String, String), Relation>,
+    relations: Relations,
 }
 
 /// Load schema from database.
@@ -28,16 +33,13 @@ pub struct Schema {
 impl Schema {
     /// Load schema from a server connection.
     pub async fn load(server: &mut Server) -> Result<Self, Error> {
-        let relations = Relation::load(server)
-            .await?
-            .into_iter()
-            .map(|relation| {
-                (
-                    (relation.schema().to_owned(), relation.name.clone()),
-                    relation,
-                )
-            })
-            .collect();
+        let mut relations: Relations = HashMap::new();
+        for relation in Relation::load(server).await? {
+            relations
+                .entry(relation.schema().to_owned())
+                .or_default()
+                .insert(relation.name.clone(), relation);
+        }
 
         let search_path = server
             .fetch_all::<String>("SHOW search_path")
@@ -58,23 +60,26 @@ impl Schema {
         })
     }
 
+    /// The schema has been loaded from the database.
+    pub(crate) fn is_loaded(&self) -> bool {
+        !self.inner.relations.is_empty()
+    }
+
     #[cfg(test)]
     pub(crate) fn from_parts(
         search_path: Vec<String>,
         relations: HashMap<(String, String), Relation>,
     ) -> Self {
+        let mut nested: Relations = HashMap::new();
+        for ((schema, name), relation) in relations {
+            nested.entry(schema).or_default().insert(name, relation);
+        }
         Self {
             inner: Arc::new(Inner {
                 search_path,
-                relations,
+                relations: nested,
             }),
         }
-    }
-
-    /// Load schema from primary database.
-    pub async fn from_cluster(cluster: &Cluster, shard: usize) -> Result<Self, Error> {
-        let mut primary = cluster.primary(shard, &Request::default()).await?;
-        Self::load(&mut primary).await
     }
 
     /// Install PgDog functions and schema.
@@ -145,19 +150,58 @@ impl Schema {
     }
 
     /// Get table by name.
-    pub fn table(&self, name: &str, schema: Option<&str>) -> Option<&Relation> {
-        let schema = schema.unwrap_or("public");
-        self.inner
-            .relations
-            .get(&(name.to_string(), schema.to_string()))
+    ///
+    /// If the table has an explicit schema, looks up in that schema directly.
+    /// Otherwise, iterates through the search_path to find the first match.
+    pub fn table(
+        &self,
+        table: Table<'_>,
+        user: &str,
+        search_path: Option<&ParameterValue>,
+    ) -> Option<&Relation> {
+        if let Some(schema) = table.schema {
+            return self.get(schema, table.name);
+        }
+
+        for schema in self.resolve_search_path(user, search_path) {
+            if let Some(relation) = self.get(schema, table.name) {
+                return Some(relation);
+            }
+        }
+
+        None
     }
 
-    /// Get all indices.
+    /// Get a relation by schema and table name.
+    pub fn get(&self, schema: &str, name: &str) -> Option<&Relation> {
+        self.inner
+            .relations
+            .get(schema)
+            .and_then(|tables| tables.get(name))
+    }
+
+    fn resolve_search_path<'a>(
+        &'a self,
+        user: &'a str,
+        search_path: Option<&'a ParameterValue>,
+    ) -> Vec<&'a str> {
+        let path: &[String] = match search_path {
+            Some(ParameterValue::Tuple(overriden)) => overriden.as_slice(),
+            _ => &self.inner.search_path,
+        };
+
+        path.iter()
+            .map(|p| if p == "$user" { user } else { p.as_str() })
+            .collect()
+    }
+
+    /// Get all tables.
     pub fn tables(&self) -> Vec<&Relation> {
         self.inner
             .relations
             .values()
-            .filter(|value| value.is_table())
+            .flat_map(|tables| tables.values())
+            .filter(|relation| relation.is_table())
             .collect()
     }
 
@@ -166,7 +210,8 @@ impl Schema {
         self.inner
             .relations
             .values()
-            .filter(|value| value.is_sequence())
+            .flat_map(|tables| tables.values())
+            .filter(|relation| relation.is_sequence())
             .collect()
     }
 
@@ -177,7 +222,7 @@ impl Schema {
 }
 
 impl Deref for Schema {
-    type Target = HashMap<(String, String), Relation>;
+    type Target = Relations;
 
     fn deref(&self) -> &Self::Target {
         &self.inner.relations
@@ -186,7 +231,12 @@ impl Deref for Schema {
 
 #[cfg(test)]
 mod test {
+    use std::collections::HashMap;
+
     use crate::backend::pool::Request;
+    use crate::backend::schema::relation::Relation;
+    use crate::frontend::router::parser::Table;
+    use crate::net::parameter::ParameterValue;
 
     use super::super::pool::test::pool;
     use super::Schema;
@@ -207,7 +257,14 @@ mod test {
             .find(|seq| seq.schema() == "pgdog")
             .cloned()
             .unwrap();
-        assert_eq!(seq.name, "validator_bigint_id_seq");
+        assert!(
+            matches!(
+                seq.name.as_str(),
+                "unique_id_seq" | "validator_bigint_id_seq"
+            ),
+            "{}",
+            seq.name
+        );
 
         let server_ok = conn.fetch_all::<i32>("SELECT 1 AS one").await.unwrap();
         assert_eq!(server_ok.first().unwrap().clone(), 1);
@@ -217,5 +274,147 @@ mod test {
             .await
             .unwrap();
         assert!(debug.first().unwrap().contains("PgDog Debug"));
+    }
+
+    #[test]
+    fn test_resolve_search_path_default() {
+        let schema = Schema::from_parts(vec!["$user".into(), "public".into()], HashMap::new());
+
+        let resolved = schema.resolve_search_path("alice", None);
+        assert_eq!(resolved, vec!["alice", "public"]);
+    }
+
+    #[test]
+    fn test_resolve_search_path_override() {
+        let schema = Schema::from_parts(vec!["$user".into(), "public".into()], HashMap::new());
+
+        let override_path = ParameterValue::Tuple(vec!["custom".into(), "other".into()]);
+        let resolved = schema.resolve_search_path("alice", Some(&override_path));
+        assert_eq!(resolved, vec!["custom", "other"]);
+    }
+
+    #[test]
+    fn test_resolve_search_path_override_with_user() {
+        let schema = Schema::from_parts(vec!["public".into()], HashMap::new());
+
+        let override_path = ParameterValue::Tuple(vec!["$user".into(), "app".into()]);
+        let resolved = schema.resolve_search_path("bob", Some(&override_path));
+        assert_eq!(resolved, vec!["bob", "app"]);
+    }
+
+    #[test]
+    fn test_table_with_explicit_schema() {
+        let relations: HashMap<(String, String), Relation> = HashMap::from([
+            (
+                ("myschema".into(), "users".into()),
+                Relation::test_table("myschema", "users", HashMap::new()),
+            ),
+            (
+                ("public".into(), "users".into()),
+                Relation::test_table("public", "users", HashMap::new()),
+            ),
+        ]);
+        let schema = Schema::from_parts(vec!["$user".into(), "public".into()], relations);
+
+        let table = Table {
+            name: "users",
+            schema: Some("myschema"),
+            alias: None,
+        };
+
+        let result = schema.table(table, "alice", None);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().schema(), "myschema");
+    }
+
+    #[test]
+    fn test_table_search_path_lookup() {
+        let relations: HashMap<(String, String), Relation> = HashMap::from([(
+            ("public".into(), "orders".into()),
+            Relation::test_table("public", "orders", HashMap::new()),
+        )]);
+        let schema = Schema::from_parts(vec!["$user".into(), "public".into()], relations);
+
+        let table = Table {
+            name: "orders",
+            schema: None,
+            alias: None,
+        };
+
+        // User schema "alice" doesn't have "orders", but "public" does
+        let result = schema.table(table, "alice", None);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().schema(), "public");
+    }
+
+    #[test]
+    fn test_table_found_in_user_schema() {
+        let relations: HashMap<(String, String), Relation> = HashMap::from([
+            (
+                ("alice".into(), "settings".into()),
+                Relation::test_table("alice", "settings", HashMap::new()),
+            ),
+            (
+                ("public".into(), "settings".into()),
+                Relation::test_table("public", "settings", HashMap::new()),
+            ),
+        ]);
+        let schema = Schema::from_parts(vec!["$user".into(), "public".into()], relations);
+
+        let table = Table {
+            name: "settings",
+            schema: None,
+            alias: None,
+        };
+
+        // Should find in "alice" schema first (due to $user)
+        let result = schema.table(table, "alice", None);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().schema(), "alice");
+    }
+
+    #[test]
+    fn test_table_not_found() {
+        let relations: HashMap<(String, String), Relation> = HashMap::from([(
+            ("public".into(), "users".into()),
+            Relation::test_table("public", "users", HashMap::new()),
+        )]);
+        let schema = Schema::from_parts(vec!["$user".into(), "public".into()], relations);
+
+        let table = Table {
+            name: "nonexistent",
+            schema: None,
+            alias: None,
+        };
+
+        let result = schema.table(table, "alice", None);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_table_with_overridden_search_path() {
+        let relations: HashMap<(String, String), Relation> = HashMap::from([
+            (
+                ("custom".into(), "data".into()),
+                Relation::test_table("custom", "data", HashMap::new()),
+            ),
+            (
+                ("public".into(), "data".into()),
+                Relation::test_table("public", "data", HashMap::new()),
+            ),
+        ]);
+        let schema = Schema::from_parts(vec!["$user".into(), "public".into()], relations);
+
+        let table = Table {
+            name: "data",
+            schema: None,
+            alias: None,
+        };
+
+        // Override search_path to look in "custom" first
+        let override_path = ParameterValue::Tuple(vec!["custom".into(), "public".into()]);
+        let result = schema.table(table, "alice", Some(&override_path));
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().schema(), "custom");
     }
 }

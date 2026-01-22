@@ -1,4 +1,5 @@
-use rust::setup::connections_tokio;
+use rust::setup::{admin_sqlx, connections_tokio};
+use sqlx::Executor;
 use tokio_postgres::SimpleQueryMessage;
 
 #[tokio::test]
@@ -16,11 +17,13 @@ async fn explain_routing_annotations_surface() -> Result<(), Box<dyn std::error:
 
     for shard in [0, 1] {
         let create = format!(
-            "/* pgdog_shard: {} */ CREATE TABLE explain_avg_test(price DOUBLE PRECISION)",
+            "/* pgdog_shard: {} */ CREATE TABLE explain_avg_test(price DOUBLE PRECISION, customer_id BIGINT)",
             shard
         );
         sharded.simple_query(create.as_str()).await?;
     }
+
+    admin_sqlx().await.execute("RELOAD").await?;
 
     sharded
         .simple_query(

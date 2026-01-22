@@ -1,4 +1,5 @@
-use crate::frontend::router::parser::Shard;
+use crate::frontend::router::parser::route::RoundRobinReason;
+use crate::frontend::router::parser::{route::ShardSource, Shard};
 use crate::net::parameter::ParameterValue;
 
 use super::setup::{QueryParserTest, *};
@@ -186,7 +187,7 @@ fn test_search_path_shard_at_end_still_matches() {
 // --- search_path with no sharded schema routes to all ---
 
 #[test]
-fn test_search_path_no_sharded_schema_routes_to_all() {
+fn test_search_path_no_sharded_schema_routes_to_rr() {
     let mut test = QueryParserTest::new().with_param(
         "search_path",
         ParameterValue::Tuple(vec!["$user".into(), "public".into(), "pg_catalog".into()]),
@@ -194,11 +195,15 @@ fn test_search_path_no_sharded_schema_routes_to_all() {
 
     let command = test.execute(vec![Query::new("SELECT * FROM users WHERE id = 1").into()]);
 
-    assert_eq!(command.route().shard(), &Shard::All);
+    assert!(matches!(command.route().shard(), &Shard::Direct(_)));
+    assert_eq!(
+        command.route().shard_with_priority().source(),
+        &ShardSource::RoundRobin(RoundRobinReason::Omni)
+    );
 }
 
 #[test]
-fn test_search_path_only_system_schemas_routes_to_all() {
+fn test_search_path_only_system_schemas_routes_to_rr() {
     let mut test = QueryParserTest::new().with_param(
         "search_path",
         ParameterValue::Tuple(vec![
@@ -210,7 +215,11 @@ fn test_search_path_only_system_schemas_routes_to_all() {
 
     let command = test.execute(vec![Query::new("SELECT * FROM users WHERE id = 1").into()]);
 
-    assert_eq!(command.route().shard(), &Shard::All);
+    assert!(matches!(command.route().shard(), &Shard::Direct(_)));
+    assert_eq!(
+        command.route().shard_with_priority().source(),
+        &ShardSource::RoundRobin(RoundRobinReason::Omni)
+    );
 }
 
 // --- search_path routing for DDL ---
