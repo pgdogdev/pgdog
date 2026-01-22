@@ -467,7 +467,10 @@ impl Cluster {
     }
 
     fn load_schema(&self) -> bool {
-        self.shards.len() > 1 || self.multi_tenant().is_some()
+        self.shards.len() > 1
+            && self.sharded_schemas.is_empty()
+            && !self.sharded_tables.tables().is_empty()
+            || self.multi_tenant().is_some()
     }
 
     /// Get currently loaded schema from shard 0.
@@ -602,8 +605,8 @@ mod test {
             Shard, ShardedTables,
         },
         config::{
-            DataType, Hasher, LoadBalancingStrategy, ReadWriteSplit, ReadWriteStrategy,
-            ShardedTable,
+            DataType, Hasher, LoadBalancingStrategy, MultiTenant, ReadWriteSplit,
+            ReadWriteStrategy, ShardedTable,
         },
     };
 
@@ -701,5 +704,170 @@ mod test {
         pub fn set_read_write_strategy(&mut self, rw_strategy: ReadWriteStrategy) {
             self.rw_strategy = rw_strategy;
         }
+    }
+
+    #[test]
+    fn test_load_schema_multiple_shards_empty_schemas_with_tables() {
+        let config = ConfigAndUsers::default();
+        let mut cluster = Cluster::new_test(&config);
+        cluster.sharded_schemas = ShardedSchemas::default();
+
+        assert!(cluster.load_schema());
+    }
+
+    #[test]
+    fn test_load_schema_multiple_shards_with_schemas() {
+        let config = ConfigAndUsers::default();
+        let cluster = Cluster::new_test(&config);
+
+        assert!(!cluster.load_schema());
+    }
+
+    #[test]
+    fn test_load_schema_multiple_shards_empty_tables() {
+        let config = ConfigAndUsers::default();
+        let mut cluster = Cluster::new_test(&config);
+        cluster.sharded_schemas = ShardedSchemas::default();
+        cluster.sharded_tables = ShardedTables::default();
+
+        assert!(!cluster.load_schema());
+    }
+
+    #[test]
+    fn test_load_schema_single_shard() {
+        let config = ConfigAndUsers::default();
+        let mut cluster = Cluster::new_test_single_shard(&config);
+        cluster.sharded_schemas = ShardedSchemas::default();
+
+        assert!(!cluster.load_schema());
+    }
+
+    #[test]
+    fn test_load_schema_with_multi_tenant() {
+        let config = ConfigAndUsers::default();
+        let mut cluster = Cluster::new_test_single_shard(&config);
+        cluster.multi_tenant = Some(MultiTenant {
+            column: "tenant_id".into(),
+        });
+
+        assert!(cluster.load_schema());
+    }
+
+    #[test]
+    fn test_load_schema_multi_tenant_overrides_other_conditions() {
+        let config = ConfigAndUsers::default();
+        let mut cluster = Cluster::new_test(&config);
+        cluster.sharded_tables = ShardedTables::default();
+        cluster.multi_tenant = Some(MultiTenant {
+            column: "tenant_id".into(),
+        });
+
+        assert!(cluster.load_schema());
+    }
+
+    #[tokio::test]
+    async fn test_launch_sets_online() {
+        let config = ConfigAndUsers::default();
+        let cluster = Cluster::new_test(&config);
+
+        assert!(!cluster.online());
+        cluster.launch();
+        assert!(cluster.online());
+    }
+
+    #[tokio::test]
+    async fn test_shutdown_sets_offline() {
+        let config = ConfigAndUsers::default();
+        let cluster = Cluster::new_test(&config);
+
+        cluster.launch();
+        assert!(cluster.online());
+        cluster.shutdown();
+        assert!(!cluster.online());
+    }
+
+    #[tokio::test]
+    async fn test_launch_schema_loading_idempotent() {
+        use std::sync::atomic::Ordering;
+        use tokio::time::{sleep, Duration};
+
+        let config = ConfigAndUsers::default();
+        let mut cluster = Cluster::new_test(&config);
+        cluster.sharded_schemas = ShardedSchemas::default();
+
+        assert!(cluster.load_schema());
+
+        cluster.launch();
+        cluster.wait_schema_loaded().await;
+
+        let count_after_first = cluster.readiness.schemas_loaded.load(Ordering::SeqCst);
+        assert_eq!(count_after_first, cluster.shards.len());
+
+        // Second launch should not spawn additional schema loading tasks
+        cluster.launch();
+        sleep(Duration::from_millis(50)).await;
+
+        let count_after_second = cluster.readiness.schemas_loaded.load(Ordering::SeqCst);
+        assert_eq!(count_after_second, count_after_first);
+    }
+
+    #[tokio::test]
+    async fn test_wait_schema_loaded_returns_immediately_when_not_needed() {
+        let config = ConfigAndUsers::default();
+        let cluster = Cluster::new_test(&config);
+
+        // load_schema() returns false because sharded_schemas is not empty
+        assert!(!cluster.load_schema());
+
+        // Should return immediately without waiting
+        cluster.wait_schema_loaded().await;
+    }
+
+    #[tokio::test]
+    async fn test_wait_schema_loaded_fast_path_when_already_loaded() {
+        use std::sync::atomic::Ordering;
+
+        let config = ConfigAndUsers::default();
+        let mut cluster = Cluster::new_test(&config);
+        cluster.sharded_schemas = ShardedSchemas::default();
+
+        assert!(cluster.load_schema());
+
+        // Simulate that all schemas have been loaded
+        cluster
+            .readiness
+            .schemas_loaded
+            .store(cluster.shards.len(), Ordering::SeqCst);
+
+        // Should return immediately via fast path
+        cluster.wait_schema_loaded().await;
+    }
+
+    #[tokio::test]
+    async fn test_wait_schema_loaded_waits_for_notification() {
+        use std::sync::atomic::Ordering;
+        use tokio::time::{timeout, Duration};
+
+        let config = ConfigAndUsers::default();
+        let mut cluster = Cluster::new_test(&config);
+        cluster.sharded_schemas = ShardedSchemas::default();
+
+        assert!(cluster.load_schema());
+
+        let readiness = cluster.readiness.clone();
+        let shards_count = cluster.shards.len();
+
+        // Spawn a task that will complete schema loading after a short delay
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            readiness
+                .schemas_loaded
+                .store(shards_count, Ordering::SeqCst);
+            readiness.schemas_ready.notify_waiters();
+        });
+
+        // Should wait for notification and complete within timeout
+        let result = timeout(Duration::from_millis(100), cluster.wait_schema_loaded()).await;
+        assert!(result.is_ok());
     }
 }
