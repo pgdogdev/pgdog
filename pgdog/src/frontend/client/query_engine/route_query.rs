@@ -50,13 +50,12 @@ impl QueryEngine {
             // Make sure schema is loaded before we throw traffic
             // at it. This matters for sharded deployments only.
             if let Ok(cluster) = self.backend.cluster() {
-                cluster.wait_schema_loaded().await;
-                // timeout(
-                //     context.timeouts.query_timeout(&State::Active),
-                //     cluster.wait_schema_loaded(),
-                // )
-                // .await
-                // .map_err(|_| Error::SchemaLoad)?;
+                timeout(
+                    context.timeouts.query_timeout(&State::Active),
+                    cluster.wait_schema_loaded(),
+                )
+                .await
+                .map_err(|_| Error::SchemaLoad)?;
             }
             res
         } else {

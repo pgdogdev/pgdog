@@ -222,7 +222,7 @@ func executeTimeoutTest(t *testing.T) {
 		c := make(chan int, 1)
 
 		go func() {
-			err := pgSleepOneSecond(conn, ctx)
+			err := pgSleepTwoSecond(conn, ctx)
 			assert.NotNil(t, err)
 
 			defer conn.Close(context.Background())
@@ -240,8 +240,8 @@ func executeTimeoutTest(t *testing.T) {
 }
 
 // Sleep for 1 second.
-func pgSleepOneSecond(conn *pgx.Conn, ctx context.Context) (err error) {
-	_, err = conn.Exec(ctx, "SELECT pg_sleep(1)")
+func pgSleepTwoSecond(conn *pgx.Conn, ctx context.Context) (err error) {
+	_, err = conn.Exec(ctx, "SELECT pg_sleep(2)")
 	return err
 }
 
