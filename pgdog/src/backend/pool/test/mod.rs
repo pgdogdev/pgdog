@@ -440,7 +440,7 @@ async fn test_prepared_statements_limit() {
             || guard.prepared_statements_mut().contains("__pgdog_98")
     );
     assert_eq!(guard.prepared_statements_mut().len(), 2);
-    assert_eq!(guard.stats().total.prepared_statements, 2); // stats are accurate.
+    assert_eq!(guard.stats().total().prepared_statements, 2); // stats are accurate.
 
     let pool = pool_with_prepared_capacity(100);
 
@@ -468,14 +468,14 @@ async fn test_prepared_statements_limit() {
     let mut guard = pool.get(&Request::default()).await.unwrap();
     assert!(guard.prepared_statements_mut().contains("__pgdog_99"));
     assert_eq!(guard.prepared_statements_mut().len(), 100);
-    assert_eq!(guard.stats().total.prepared_statements, 100); // stats are accurate.
+    assert_eq!(guard.stats().total().prepared_statements, 100); // stats are accurate.
 
     // Let's make sure Postgres agreees.
     guard.sync_prepared_statements().await.unwrap();
 
     assert!(guard.prepared_statements_mut().contains("__pgdog_99"));
     assert_eq!(guard.prepared_statements_mut().len(), 100);
-    assert_eq!(guard.stats().total.prepared_statements, 100); // stats are accurate.
+    assert_eq!(guard.stats().total().prepared_statements, 100); // stats are accurate.
 }
 
 #[tokio::test]
@@ -612,7 +612,7 @@ async fn test_move_conns_to() {
     assert_eq!(source.lock().total(), 0);
     let new_pool_id = destination.id();
     for conn in destination.lock().idle_conns() {
-        assert_eq!(conn.stats().pool_id, new_pool_id);
+        assert_eq!(conn.stats().pool_id(), new_pool_id);
     }
 
     drop(conn2);

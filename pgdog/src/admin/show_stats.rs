@@ -1,5 +1,6 @@
 //! SHOW STATS.
 use crate::backend::databases::databases;
+use crate::util::millis;
 
 use super::prelude::*;
 
@@ -83,17 +84,17 @@ impl Command for ShowStats {
                             .add(stat.server_assignment_count)
                             .add(stat.received)
                             .add(stat.sent)
-                            .add(stat.xact_time.as_millis() as u64)
-                            .add(stat.idle_xact_time.as_millis() as u64)
-                            .add(stat.query_time.as_millis() as u64)
-                            .add(stat.wait_time.as_millis() as u64)
+                            .add(millis(stat.xact_time))
+                            .add(millis(stat.idle_xact_time))
+                            .add(millis(stat.query_time))
+                            .add(millis(stat.wait_time))
                             .add(stat.parse_count)
                             .add(stat.bind_count)
                             .add(stat.close)
                             .add(stat.errors)
                             .add(stat.cleaned)
                             .add(stat.rollbacks)
-                            .add(stat.connect_time.as_millis() as u64)
+                            .add(millis(stat.connect_time))
                             .add(stat.connect_count);
                     }
 

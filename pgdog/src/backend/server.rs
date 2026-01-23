@@ -329,7 +329,7 @@ impl Server {
 
         for message in queue.into_iter().flatten() {
             match self.stream().send(message).await {
-                Ok(sent) => self.stats.send(sent),
+                Ok(sent) => self.stats.send(sent, message.code() as u8),
                 Err(err) => {
                     self.stats.state(State::Error);
                     return Err(err.into());
@@ -381,7 +381,7 @@ impl Server {
                                 err,
                                 message.code(),
                                 self.prepared_statements.state(),
-                                self.stats.state,
+                                self.stats.get_state(),
                             );
                             return Err(err);
                         }
@@ -395,7 +395,7 @@ impl Server {
             }
         };
 
-        self.stats.receive(message.len());
+        self.stats.receive(message.len(), message.code() as u8);
 
         match message.code() {
             'Z' => {
@@ -570,15 +570,15 @@ impl Server {
     /// Server can execute a query.
     pub fn in_sync(&self) -> bool {
         matches!(
-            self.stats().state,
+            self.stats().get_state(),
             State::Idle | State::IdleInTransaction | State::TransactionError
         )
     }
 
-    /// Server is done executing all queries and isz
+    /// Server is done executing all queries and is
     /// not inside a transaction.
     pub fn can_check_in(&self) -> bool {
-        self.stats().state == State::Idle
+        self.stats().get_state() == State::Idle
     }
 
     /// Server hasn't sent all messages yet.
@@ -599,7 +599,7 @@ impl Server {
     /// The server connection permanently failed.
     #[inline]
     pub fn error(&self) -> bool {
-        self.stats().state == State::Error
+        self.stats().get_state() == State::Error
     }
 
     /// Did the schema change and prepared statements are broken.
@@ -620,7 +620,7 @@ impl Server {
 
     /// Close the connection, don't do any recovery.
     pub fn force_close(&self) -> bool {
-        self.stats().state == State::ForceClose || self.io_in_progress()
+        self.stats().get_state() == State::ForceClose || self.io_in_progress()
     }
 
     /// Server parameters.
@@ -870,19 +870,19 @@ impl Server {
     /// How old this connection is.
     #[inline]
     pub fn age(&self, instant: Instant) -> Duration {
-        instant.duration_since(self.stats().created_at)
+        instant.duration_since(self.stats().created_at())
     }
 
     /// How long this connection has been idle.
     #[inline]
     pub fn idle_for(&self, instant: Instant) -> Duration {
-        instant.duration_since(self.stats().last_used)
+        instant.duration_since(self.stats().last_used())
     }
 
     /// How long has it been since the last connection healthcheck.
     #[inline]
     pub fn healthcheck_age(&self, instant: Instant) -> Duration {
-        if let Some(last_healthcheck) = self.stats().last_healthcheck {
+        if let Some(last_healthcheck) = self.stats().last_healthcheck() {
             instant.duration_since(last_healthcheck)
         } else {
             Duration::MAX
@@ -983,7 +983,7 @@ impl Drop for Server {
             info!(
                 "closing server connection [{}, state: {}, reason: {}]",
                 self.addr,
-                self.stats.state,
+                self.stats.get_state(),
                 self.disconnect_reason.take().unwrap_or_default(),
             );
 
@@ -1173,7 +1173,7 @@ pub mod test {
 
             assert!(server.done());
             assert_eq!(
-                server.stats().total.idle_in_transaction_time,
+                server.stats().total().idle_in_transaction_time,
                 Duration::ZERO
             );
         }
@@ -1561,7 +1561,7 @@ pub mod test {
         }
 
         assert!(!server.done()); // We're not in sync (extended protocol)
-        assert_eq!(server.stats().state, State::Idle);
+        assert_eq!(server.stats().get_state(), State::Idle);
         assert!(server.prepared_statements.state().queue().is_empty()); // Queue is empty
         assert!(!server.prepared_statements.state().in_sync());
 
@@ -2009,26 +2009,26 @@ pub mod test {
     async fn test_query_stats() {
         let mut server = test_server().await;
 
-        assert_eq!(server.stats().last_checkout.queries, 0);
-        assert_eq!(server.stats().last_checkout.transactions, 0);
+        assert_eq!(server.stats().last_checkout().queries, 0);
+        assert_eq!(server.stats().last_checkout().transactions, 0);
 
         for i in 1..26 {
             server.execute("SELECT 1").await.unwrap();
 
-            assert_eq!(server.stats().last_checkout.queries, i);
-            assert_eq!(server.stats().last_checkout.transactions, i);
-            assert_eq!(server.stats().total.queries, i);
-            assert_eq!(server.stats().total.transactions, i);
+            assert_eq!(server.stats().last_checkout().queries, i);
+            assert_eq!(server.stats().last_checkout().transactions, i);
+            assert_eq!(server.stats().total().queries, i);
+            assert_eq!(server.stats().total().transactions, i);
         }
 
         let counts = server.stats_mut().reset_last_checkout();
         assert_eq!(counts.queries, 25);
         assert_eq!(counts.transactions, 25);
 
-        assert_eq!(server.stats().last_checkout.queries, 0);
-        assert_eq!(server.stats().last_checkout.transactions, 0);
-        assert_eq!(server.stats().total.queries, 25);
-        assert_eq!(server.stats().total.transactions, 25);
+        assert_eq!(server.stats().last_checkout().queries, 0);
+        assert_eq!(server.stats().last_checkout().transactions, 0);
+        assert_eq!(server.stats().total().queries, 25);
+        assert_eq!(server.stats().total().transactions, 25);
 
         for i in 1..26 {
             server.execute("BEGIN").await.unwrap();
@@ -2036,17 +2036,17 @@ pub mod test {
             server.execute("SELECT 2").await.unwrap();
             server.execute("COMMIT").await.unwrap();
 
-            assert_eq!(server.stats().last_checkout.queries, i * 4);
-            assert_eq!(server.stats().last_checkout.transactions, i);
-            assert_eq!(server.stats().total.queries, 25 + (i * 4));
-            assert_eq!(server.stats().total.transactions, 25 + i);
+            assert_eq!(server.stats().last_checkout().queries, i * 4);
+            assert_eq!(server.stats().last_checkout().transactions, i);
+            assert_eq!(server.stats().total().queries, 25 + (i * 4));
+            assert_eq!(server.stats().total().transactions, 25 + i);
         }
 
         let counts = server.stats_mut().reset_last_checkout();
         assert_eq!(counts.queries, 25 * 4);
         assert_eq!(counts.transactions, 25);
-        assert_eq!(server.stats().total.queries, 25 + (25 * 4));
-        assert_eq!(server.stats().total.transactions, 25 + 25);
+        assert_eq!(server.stats().total().queries, 25 + (25 * 4));
+        assert_eq!(server.stats().total().transactions, 25 + 25);
     }
 
     #[tokio::test]
@@ -2328,17 +2328,17 @@ pub mod test {
 
         server.execute("SELECT 1").await.unwrap();
         assert_eq!(
-            server.stats().total.idle_in_transaction_time,
+            server.stats().total().idle_in_transaction_time,
             Duration::ZERO,
         );
         assert_eq!(
-            server.stats().last_checkout.idle_in_transaction_time,
+            server.stats().last_checkout().idle_in_transaction_time,
             Duration::ZERO,
         );
 
         server.execute("BEGIN").await.unwrap();
         assert_eq!(
-            server.stats().total.idle_in_transaction_time,
+            server.stats().total().idle_in_transaction_time,
             Duration::ZERO,
         );
 
@@ -2347,7 +2347,7 @@ pub mod test {
 
         server.execute("SELECT 2").await.unwrap();
 
-        let idle_time = server.stats().total.idle_in_transaction_time;
+        let idle_time = server.stats().total().idle_in_transaction_time;
         assert!(
             idle_time >= Duration::from_millis(50),
             "Expected idle time >= 50ms, got {:?}",
@@ -2363,7 +2363,7 @@ pub mod test {
 
         server.execute("COMMIT").await.unwrap();
 
-        let final_idle_time = server.stats().total.idle_in_transaction_time;
+        let final_idle_time = server.stats().total().idle_in_transaction_time;
         assert!(
             final_idle_time >= Duration::from_millis(150),
             "Expected final idle time >= 150ms, got {:?}",
@@ -2377,7 +2377,7 @@ pub mod test {
 
         server.execute("SELECT 3").await.unwrap();
         assert_eq!(
-            server.stats().total.idle_in_transaction_time,
+            server.stats().total().idle_in_transaction_time,
             final_idle_time,
         );
     }
@@ -2445,7 +2445,7 @@ pub mod test {
             "protocol should be out of sync"
         );
         assert!(
-            server.stats().state == State::Error,
+            server.stats().get_state() == State::Error,
             "state should be Error after detecting desync"
         )
     }

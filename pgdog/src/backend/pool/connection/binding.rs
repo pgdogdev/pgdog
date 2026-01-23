@@ -238,14 +238,18 @@ impl Binding {
             Binding::Direct(Some(server)) => {
                 debug!(
                     "server is in \"{}\" state [{}]",
-                    server.stats().state,
+                    server.stats().get_state(),
                     server.addr()
                 );
-                server.stats().state == state
+                server.stats().get_state() == state
             }
             Binding::MultiShard(servers, _) => servers.iter().all(|s| {
-                debug!("server is in \"{}\" state [{}]", s.stats().state, s.addr());
-                s.stats().state == state
+                debug!(
+                    "server is in \"{}\" state [{}]",
+                    s.stats().get_state(),
+                    s.addr()
+                );
+                s.stats().get_state() == state
             }),
             _ => true,
         }
