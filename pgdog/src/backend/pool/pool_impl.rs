@@ -226,7 +226,9 @@ impl Pool {
         let counts = {
             let stats = server.stats_mut();
             stats.clear_client_id();
-            stats.reset_last_checkout()
+            let counts = stats.reset_last_checkout();
+            stats.update();
+            counts
         };
 
         // Check everything and maybe check the connection

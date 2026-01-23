@@ -53,7 +53,7 @@ impl Command for ShowServers {
                     Field::text("connect_time"),
                     Field::text("request_time"),
                     Field::numeric("remote_pid"),
-                    // Field::bigint("client_id"),
+                    Field::bigint("client_id"),
                     Field::numeric("transactions"),
                     Field::numeric("queries"),
                     Field::numeric("rollbacks"),
@@ -99,7 +99,10 @@ impl Command for ShowServers {
                 )
                 .add("request_time", format_time(request_time.into()))
                 .add("remote_pid", server.stats.id.pid as i64)
-                // .add("client_id", server.stats.client_id.map(|client| client.pid as i64))
+                .add(
+                    "client_id",
+                    server.stats.client_id.map(|client| client.pid as i64),
+                )
                 .add("transactions", server.stats.total.transactions)
                 .add("queries", server.stats.total.queries)
                 .add("rollbacks", server.stats.total.rollbacks)

@@ -17,7 +17,7 @@ function admin() {
 # - protocol: simple|extended|prepared
 #
 function bench() {
-    PGPASSWORD=pgdog pgbench -h 127.0.0.1 -p 6432 -U pgdog pgdog --protocol ${1:-simple} -t 100000 -c 10 -P 1 -S
+    PGPASSWORD=pgdog pgbench -h 127.0.0.1 -p 6432 -U pgdog pgdog --protocol ${1:-simple} -t 100000000 -c 10 -P 1 -S
 }
 
 function bench_init() {
