@@ -1126,6 +1126,7 @@ mod test {
                     },
                 ],
                 vec![],
+                false,
             ),
             ..Default::default()
         };
@@ -1859,6 +1860,7 @@ mod test {
                     ..Default::default()
                 }],
                 vec![],
+                false,
             ),
             schemas: ShardedSchemas::new(vec![
                 ShardedSchema {
