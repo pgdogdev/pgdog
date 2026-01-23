@@ -19,6 +19,7 @@ struct Inner {
     /// across all tables, i.e., 3 tables with the same data type
     /// and list/range/hash function.
     common_mapping: Option<CommonMapping>,
+    omnisharded_sticky: bool,
 }
 
 #[derive(Debug)]
@@ -46,12 +47,16 @@ impl Default for ShardedTables {
 
 impl From<&[ShardedTable]> for ShardedTables {
     fn from(value: &[ShardedTable]) -> Self {
-        Self::new(value.to_vec(), vec![])
+        Self::new(value.to_vec(), vec![], false)
     }
 }
 
 impl ShardedTables {
-    pub fn new(tables: Vec<ShardedTable>, omnisharded_tables: Vec<OmnishardedTable>) -> Self {
+    pub fn new(
+        tables: Vec<ShardedTable>,
+        omnisharded_tables: Vec<OmnishardedTable>,
+        omnisharded_sticky: bool,
+    ) -> Self {
         let mut common_mapping = HashSet::new();
         for table in &tables {
             common_mapping.insert((
@@ -79,6 +84,7 @@ impl ShardedTables {
                     .map(|table| (table.name, table.sticky_routing))
                     .collect(),
                 common_mapping,
+                omnisharded_sticky,
             }),
         }
     }
@@ -93,6 +99,10 @@ impl ShardedTables {
 
     pub fn is_omnisharded_sticky(&self, name: &str) -> Option<bool> {
         self.omnishards().get(name).cloned()
+    }
+
+    pub fn is_omnisharded_sticky_default(&self) -> bool {
+        self.inner.omnisharded_sticky
     }
 
     /// The deployment has only one sharded table.

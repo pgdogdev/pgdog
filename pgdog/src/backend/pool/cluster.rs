@@ -666,6 +666,7 @@ mod test {
                             sticky_routing: true,
                         },
                     ],
+                    config.config.general.omnisharded_sticky,
                 ),
                 sharded_schemas: ShardedSchemas::new(vec![
                     ShardedSchema {

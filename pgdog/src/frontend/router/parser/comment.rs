@@ -159,7 +159,7 @@ mod tests {
 
         let schema = ShardingSchema {
             shards: 2,
-            tables: ShardedTables::new(vec![], vec![]),
+            tables: ShardedTables::new(vec![], vec![], false),
             ..Default::default()
         };
 
@@ -174,7 +174,7 @@ mod tests {
 
         let schema = ShardingSchema {
             shards: 3,
-            tables: ShardedTables::new(vec![], vec![]),
+            tables: ShardedTables::new(vec![], vec![], false),
             ..Default::default()
         };
 
@@ -190,7 +190,7 @@ mod tests {
 
         let schema = ShardingSchema {
             shards: 2,
-            tables: ShardedTables::new(vec![], vec![]),
+            tables: ShardedTables::new(vec![], vec![], false),
             ..Default::default()
         };
 
@@ -205,7 +205,7 @@ mod tests {
 
         let schema = ShardingSchema {
             shards: 2,
-            tables: ShardedTables::new(vec![], vec![]),
+            tables: ShardedTables::new(vec![], vec![], false),
             ..Default::default()
         };
 
@@ -220,7 +220,7 @@ mod tests {
 
         let schema = ShardingSchema {
             shards: 2,
-            tables: ShardedTables::new(vec![], vec![]),
+            tables: ShardedTables::new(vec![], vec![], false),
             ..Default::default()
         };
 
@@ -244,7 +244,7 @@ mod tests {
 
         let schema = ShardingSchema {
             shards: 2,
-            tables: ShardedTables::new(vec![], vec![]),
+            tables: ShardedTables::new(vec![], vec![], false),
             schemas: ShardedSchemas::new(vec![sales_schema]),
             ..Default::default()
         };

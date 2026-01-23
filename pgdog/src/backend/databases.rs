@@ -445,7 +445,11 @@ pub(crate) fn new_pool(
         .get(&user.database)
         .cloned()
         .unwrap_or(vec![]);
-    let sharded_tables = ShardedTables::new(sharded_tables, omnisharded_tables);
+    let sharded_tables = ShardedTables::new(
+        sharded_tables,
+        omnisharded_tables,
+        general.omnisharded_sticky,
+    );
     let sharded_schemas = ShardedSchemas::new(sharded_schemas);
 
     let cluster_config = ClusterConfig::new(

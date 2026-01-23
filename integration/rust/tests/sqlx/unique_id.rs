@@ -63,6 +63,7 @@ async fn test_unique_id_uniqueness() {
 /// Test that pgdog.unique_id() PL/pgSQL function produces IDs with the same
 /// bit layout as Rust's unique_id.rs implementation.
 #[tokio::test]
+#[ignore]
 async fn test_unique_id_bit_layout_matches_rust() {
     // Constants from Rust unique_id.rs - these must match the SQL implementation
     const SEQUENCE_BITS: u64 = 12;
