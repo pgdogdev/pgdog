@@ -145,7 +145,12 @@ impl QueryParser {
                     == Some(true)
             });
 
-            let (rr_index, explain) = if sticky {
+            let (rr_index, explain) = if sticky
+                || context
+                    .sharding_schema
+                    .tables()
+                    .is_omnisharded_sticky_default()
+            {
                 (context.router_context.sticky.omni_index, "sticky")
             } else {
                 (round_robin::next(), "round robin")

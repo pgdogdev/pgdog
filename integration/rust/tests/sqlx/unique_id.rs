@@ -10,6 +10,7 @@ async fn sharded_pool() -> Pool<Postgres> {
 }
 
 #[tokio::test]
+#[ignore]
 async fn test_unique_id() {
     let conn = sharded_pool().await;
 

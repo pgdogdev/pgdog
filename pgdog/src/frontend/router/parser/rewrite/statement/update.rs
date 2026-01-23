@@ -673,6 +673,7 @@ mod test {
                     ..Default::default()
                 }],
                 vec![],
+                false,
             ),
             schemas: ShardedSchemas::new(vec![]),
             rewrite: Rewrite {

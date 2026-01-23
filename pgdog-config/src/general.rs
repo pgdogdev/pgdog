@@ -197,6 +197,9 @@ pub struct General {
     /// System catalogs are omnisharded?
     #[serde(default = "General::default_system_catalogs_omnisharded")]
     pub system_catalogs_omnisharded: bool,
+    /// Omnisharded queries are sticky by default.
+    #[serde(default)]
+    pub omnisharded_sticky: bool,
 }
 
 impl Default for General {
@@ -266,6 +269,7 @@ impl Default for General {
             lsn_check_delay: Self::lsn_check_delay(),
             unique_id_min: u64::default(),
             system_catalogs_omnisharded: Self::default_system_catalogs_omnisharded(),
+            omnisharded_sticky: bool::default(),
         }
     }
 }
