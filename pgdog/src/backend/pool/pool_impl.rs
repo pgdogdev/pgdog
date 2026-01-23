@@ -220,12 +220,12 @@ impl Pool {
         let now = if server.pooler_mode() == &PoolerMode::Session {
             Instant::now()
         } else {
-            server.stats().last_used
+            server.stats().last_used()
         };
 
         let counts = {
             let stats = server.stats_mut();
-            stats.client_id = None;
+            stats.clear_client_id();
             stats.reset_last_checkout()
         };
 

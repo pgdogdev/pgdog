@@ -96,7 +96,7 @@ impl Guard {
             } else {
                 debug!(
                     "[cleanup] no cleanup needed, server in \"{}\" state [{}]",
-                    server.stats().state,
+                    server.stats().get_state(),
                     server.addr(),
                 );
                 if let Err(err) = pool.checkin(server) {
@@ -120,7 +120,7 @@ impl Guard {
                 // Receive whatever data the client left before disconnecting.
                 debug!(
                     "[cleanup] draining data from \"{}\" server [{}]",
-                    server.stats().state,
+                    server.stats().get_state(),
                     server.addr()
                 );
                 server.drain().await?;
@@ -138,7 +138,7 @@ impl Guard {
             if conn_recovery.can_rollback() {
                 debug!(
                     "[cleanup] rolling back server transaction, in \"{}\" state [{}]",
-                    server.stats().state,
+                    server.stats().get_state(),
                     server.addr(),
                 );
                 server.rollback().await?;
@@ -152,7 +152,7 @@ impl Guard {
             debug!(
                 "[cleanup] running {} cleanup queries, server in \"{}\" state [{}]",
                 cleanup.len(),
-                server.stats().state,
+                server.stats().get_state(),
                 server.addr()
             );
             server.execute_batch(cleanup.queries()).await?;
@@ -180,7 +180,7 @@ impl Guard {
         if sync_prepared {
             debug!(
                 "[cleanup] syncing prepared statements, server in \"{}\" state [{}]",
-                server.stats().state,
+                server.stats().get_state(),
                 server.addr()
             );
             server.sync_prepared_statements().await?;
@@ -510,7 +510,7 @@ mod test {
             .unwrap();
 
         use crate::state::State;
-        assert_eq!(server.stats().state, State::ForceClose);
+        assert_eq!(server.stats().get_state(), State::ForceClose);
         assert!(server.needs_drain());
     }
 
@@ -556,7 +556,7 @@ mod test {
             .unwrap();
 
         use crate::state::State;
-        assert_eq!(server.stats().state, State::ForceClose);
+        assert_eq!(server.stats().get_state(), State::ForceClose);
         assert!(server.needs_drain());
     }
 
@@ -669,7 +669,7 @@ mod test {
             .unwrap();
 
         use crate::state::State;
-        assert_eq!(server.stats().state, State::ForceClose);
+        assert_eq!(server.stats().get_state(), State::ForceClose);
         assert!(server.in_transaction());
     }
 
@@ -730,7 +730,7 @@ mod test {
             .unwrap();
 
         use crate::state::State;
-        assert_eq!(server.stats().state, State::ForceClose);
+        assert_eq!(server.stats().get_state(), State::ForceClose);
         assert!(server.needs_drain());
         assert!(server.in_transaction());
     }

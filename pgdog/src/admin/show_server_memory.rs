@@ -38,15 +38,14 @@ impl Command for ShowServerMemory {
         let stats = stats();
         for (_, server) in stats {
             let mut row = DataRow::new();
-            let stats = server.stats;
-            let memory = &stats.memory;
+            let memory = &server.stats.memory;
 
-            row.add(stats.pool_id as i64)
+            row.add(server.stats.pool_id as i64)
                 .add(server.addr.database_name.as_str())
                 .add(server.addr.user.as_str())
                 .add(server.addr.host.as_str())
                 .add(server.addr.port as i64)
-                .add(stats.id.pid as i64)
+                .add(server.stats.id.pid as i64)
                 .add(memory.buffer.reallocs as i64)
                 .add(memory.buffer.reclaims as i64)
                 .add(memory.buffer.bytes_used as i64)

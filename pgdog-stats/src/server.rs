@@ -95,6 +95,8 @@ pub struct Stats {
     pub last_checkout: Counts,
     pub pool_id: u64,
     pub memory: MemoryStats,
+    pub last_sent: u8,
+    pub last_received: u8,
 }
 
 impl Default for Stats {
@@ -106,6 +108,8 @@ impl Default for Stats {
             last_checkout: Counts::default(),
             pool_id: 0,
             memory: MemoryStats::default(),
+            last_sent: 0,
+            last_received: 0,
         }
     }
 }
