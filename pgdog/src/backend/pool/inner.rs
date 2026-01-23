@@ -293,7 +293,7 @@ impl Inner {
         let taken = std::mem::take(&mut self.taken);
 
         for conn in idle.iter_mut() {
-            conn.stats_mut().pool_id = destination.id();
+            conn.stats_mut().set_pool_id(destination.id());
         }
 
         (idle, taken)
@@ -319,8 +319,8 @@ impl Inner {
             result.replenish = false;
             // Prevents deadlocks.
             if moved.id() != self.id {
-                server.stats_mut().pool_id = moved.id();
-                server.stats_mut().update();
+                server.stats_mut().set_pool_id(moved.id());
+                server.stats().update();
                 moved.lock().maybe_check_in(server, now, stats)?;
                 return Ok(result);
             }

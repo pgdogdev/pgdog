@@ -12,6 +12,11 @@ pub fn format_time(time: DateTime<Local>) -> String {
     time.format("%Y-%m-%d %H:%M:%S%.3f %Z").to_string()
 }
 
+/// Convert Duration to milliseconds with 3 decimal places precision.
+pub fn millis(duration: Duration) -> f64 {
+    (duration.as_secs_f64() * 1_000_000.0).round() / 1000.0
+}
+
 pub fn human_duration_optional(duration: Option<Duration>) -> String {
     if let Some(duration) = duration {
         human_duration(duration)

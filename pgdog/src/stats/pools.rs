@@ -1,4 +1,5 @@
 use crate::backend::{self, databases::databases};
+use crate::util::millis;
 
 use super::{Measurement, Metric, OpenMetric};
 
@@ -178,32 +179,32 @@ impl Pools {
 
                     total_xact_time.push(Measurement {
                         labels: labels.clone(),
-                        measurement: totals.xact_time.as_millis().into(),
+                        measurement: millis(totals.xact_time).into(),
                     });
 
                     avg_xact_time.push(Measurement {
                         labels: labels.clone(),
-                        measurement: averages.xact_time.as_millis().into(),
+                        measurement: millis(averages.xact_time).into(),
                     });
 
                     total_idle_xact_time.push(Measurement {
                         labels: labels.clone(),
-                        measurement: totals.idle_xact_time.as_millis().into(),
+                        measurement: millis(totals.idle_xact_time).into(),
                     });
 
                     avg_idle_xact_time.push(Measurement {
                         labels: labels.clone(),
-                        measurement: averages.idle_xact_time.as_millis().into(),
+                        measurement: millis(averages.idle_xact_time).into(),
                     });
 
                     total_query_time.push(Measurement {
                         labels: labels.clone(),
-                        measurement: totals.query_time.as_millis().into(),
+                        measurement: millis(totals.query_time).into(),
                     });
 
                     avg_query_time.push(Measurement {
                         labels: labels.clone(),
-                        measurement: averages.query_time.as_millis().into(),
+                        measurement: millis(averages.query_time).into(),
                     });
 
                     total_close.push(Measurement {
@@ -248,12 +249,12 @@ impl Pools {
 
                     total_connect_time.push(Measurement {
                         labels: labels.clone(),
-                        measurement: totals.connect_time.as_millis().into(),
+                        measurement: millis(totals.connect_time).into(),
                     });
 
                     avg_connect_time.push(Measurement {
                         labels: labels.clone(),
-                        measurement: averages.connect_time.as_millis().into(),
+                        measurement: millis(averages.connect_time).into(),
                     });
 
                     total_connect_count.push(Measurement {
