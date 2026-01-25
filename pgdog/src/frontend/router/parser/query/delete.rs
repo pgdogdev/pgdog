@@ -6,16 +6,10 @@ impl QueryParser {
         stmt: &DeleteStmt,
         context: &mut QueryParserContext,
     ) -> Result<Command, Error> {
-        let schema_lookup = SchemaLookupContext::new(
-            Some(&context.router_context.schema),
-            context.router_context.cluster.user(),
-            context.router_context.parameter_hints.search_path,
-        );
         let shard = StatementParser::from_delete(
             stmt,
             context.router_context.bind,
             &context.sharding_schema,
-            schema_lookup,
             self.recorder_mut(),
         )
         .shard()?;
