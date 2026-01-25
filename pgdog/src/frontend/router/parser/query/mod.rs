@@ -507,10 +507,17 @@ impl QueryParser {
         stmt: &InsertStmt,
         context: &mut QueryParserContext,
     ) -> Result<Command, Error> {
-        let insert = Insert::new(stmt);
-        context.shards_calculator.push(ShardWithPriority::new_table(
-            insert.shard(&context.sharding_schema, context.router_context.bind)?,
-        ));
+        let mut parser = StatementParser::from_insert(
+            stmt,
+            context.router_context.bind,
+            &context.sharding_schema,
+            self.recorder_mut(),
+        );
+        let shard = parser.shard()?.unwrap_or(Shard::All);
+
+        context
+            .shards_calculator
+            .push(ShardWithPriority::new_table(shard.clone()));
         let shard = context.shards_calculator.shard();
 
         if let Some(recorder) = self.recorder_mut() {
