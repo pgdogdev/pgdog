@@ -1,4 +1,3 @@
-use super::StatementParser;
 use super::*;
 
 impl QueryParser {
