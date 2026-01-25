@@ -13,6 +13,7 @@ use super::{
 };
 use crate::{
     backend::{Schema, ShardingSchema},
+    config::ShardedTable,
     frontend::router::{
         parser::Shard,
         round_robin,
@@ -166,10 +167,37 @@ enum Statement<'a> {
     Insert(&'a InsertStmt),
 }
 
+/// Context for looking up tables in the loaded database schema.
+/// Used to validate that tables actually have sharding columns.
+#[derive(Clone, Copy, Default)]
+pub struct SchemaLookupContext<'a> {
+    /// The loaded database schema
+    pub loaded_schema: Option<&'a Schema>,
+    /// User name for search_path resolution (e.g., $user schema)
+    pub user: &'a str,
+    /// Search path override from connection parameters
+    pub search_path: Option<&'a ParameterValue>,
+}
+
+impl<'a> SchemaLookupContext<'a> {
+    pub fn new(
+        loaded_schema: Option<&'a Schema>,
+        user: &'a str,
+        search_path: Option<&'a ParameterValue>,
+    ) -> Self {
+        Self {
+            loaded_schema,
+            user,
+            search_path,
+        }
+    }
+}
+
 pub struct StatementParser<'a, 'b, 'c> {
     stmt: Statement<'a>,
     bind: Option<&'b Bind>,
     schema: &'b ShardingSchema,
+    schema_lookup: SchemaLookupContext<'b>,
     recorder: Option<&'c mut ExplainRecorder>,
 }
 
@@ -178,12 +206,14 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
         stmt: Statement<'a>,
         bind: Option<&'b Bind>,
         schema: &'b ShardingSchema,
+        schema_lookup: SchemaLookupContext<'b>,
         recorder: Option<&'c mut ExplainRecorder>,
     ) -> Self {
         Self {
             stmt,
             bind,
             schema,
+            schema_lookup,
             recorder,
         }
     }
@@ -192,36 +222,64 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
         stmt: &'a SelectStmt,
         bind: Option<&'b Bind>,
         schema: &'b ShardingSchema,
+        schema_lookup: SchemaLookupContext<'b>,
         recorder: Option<&'c mut ExplainRecorder>,
     ) -> Self {
-        Self::new(Statement::Select(stmt), bind, schema, recorder)
+        Self::new(
+            Statement::Select(stmt),
+            bind,
+            schema,
+            schema_lookup,
+            recorder,
+        )
     }
 
     pub fn from_update(
         stmt: &'a UpdateStmt,
         bind: Option<&'b Bind>,
         schema: &'b ShardingSchema,
+        schema_lookup: SchemaLookupContext<'b>,
         recorder: Option<&'c mut ExplainRecorder>,
     ) -> Self {
-        Self::new(Statement::Update(stmt), bind, schema, recorder)
+        Self::new(
+            Statement::Update(stmt),
+            bind,
+            schema,
+            schema_lookup,
+            recorder,
+        )
     }
 
     pub fn from_delete(
         stmt: &'a DeleteStmt,
         bind: Option<&'b Bind>,
         schema: &'b ShardingSchema,
+        schema_lookup: SchemaLookupContext<'b>,
         recorder: Option<&'c mut ExplainRecorder>,
     ) -> Self {
-        Self::new(Statement::Delete(stmt), bind, schema, recorder)
+        Self::new(
+            Statement::Delete(stmt),
+            bind,
+            schema,
+            schema_lookup,
+            recorder,
+        )
     }
 
     pub fn from_insert(
         stmt: &'a InsertStmt,
         bind: Option<&'b Bind>,
         schema: &'b ShardingSchema,
+        schema_lookup: SchemaLookupContext<'b>,
         recorder: Option<&'c mut ExplainRecorder>,
     ) -> Self {
-        Self::new(Statement::Insert(stmt), bind, schema, recorder)
+        Self::new(
+            Statement::Insert(stmt),
+            bind,
+            schema,
+            schema_lookup,
+            recorder,
+        )
     }
 
     /// Record a sharding key match.
@@ -246,13 +304,38 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
         raw: &'a RawStmt,
         bind: Option<&'b Bind>,
         schema: &'b ShardingSchema,
+        schema_lookup: SchemaLookupContext<'b>,
         recorder: Option<&'c mut ExplainRecorder>,
     ) -> Result<Self, Error> {
         match raw.stmt.as_ref().and_then(|n| n.node.as_ref()) {
-            Some(NodeEnum::SelectStmt(stmt)) => Ok(Self::from_select(stmt, bind, schema, recorder)),
-            Some(NodeEnum::UpdateStmt(stmt)) => Ok(Self::from_update(stmt, bind, schema, recorder)),
-            Some(NodeEnum::DeleteStmt(stmt)) => Ok(Self::from_delete(stmt, bind, schema, recorder)),
-            Some(NodeEnum::InsertStmt(stmt)) => Ok(Self::from_insert(stmt, bind, schema, recorder)),
+            Some(NodeEnum::SelectStmt(stmt)) => Ok(Self::from_select(
+                stmt,
+                bind,
+                schema,
+                schema_lookup,
+                recorder,
+            )),
+            Some(NodeEnum::UpdateStmt(stmt)) => Ok(Self::from_update(
+                stmt,
+                bind,
+                schema,
+                schema_lookup,
+                recorder,
+            )),
+            Some(NodeEnum::DeleteStmt(stmt)) => Ok(Self::from_delete(
+                stmt,
+                bind,
+                schema,
+                schema_lookup,
+                recorder,
+            )),
+            Some(NodeEnum::InsertStmt(stmt)) => Ok(Self::from_insert(
+                stmt,
+                bind,
+                schema,
+                schema_lookup,
+                recorder,
+            )),
             _ => Err(Error::NotASelect),
         }
     }
@@ -595,12 +678,55 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
         }
     }
 
+    /// Find sharded table config for a column.
+    /// Named configs (with explicit table names) are used directly.
+    /// Column-only configs require loaded schema validation to verify the table has the column.
+    fn get_sharded_table(
+        &self,
+        column: Column<'a>,
+        ctx_table: Option<Table<'a>>,
+    ) -> Option<&ShardedTable> {
+        // Try named table configs first - these don't need schema validation
+        if let Some(sharded_table) = self.schema.tables().get_table(column) {
+            if sharded_table.name.is_some() {
+                return Some(sharded_table);
+            }
+        }
+
+        // Check if a column-only config exists before probing schema
+        let Some(column_only_config) = self
+            .schema
+            .tables
+            .tables()
+            .iter()
+            .find(|t| t.name.is_none() && t.column == column.name)
+        else {
+            return None;
+        };
+
+        // Validate against loaded schema
+        let loaded_schema = self.schema_lookup.loaded_schema?;
+        let table = ctx_table.or_else(|| column.table())?;
+        let relation = loaded_schema.table(
+            table,
+            self.schema_lookup.user,
+            self.schema_lookup.search_path,
+        )?;
+
+        if !relation.has_column(column.name) {
+            return None;
+        }
+
+        Some(column_only_config)
+    }
+
     fn compute_shard(
         &mut self,
         column: Column<'a>,
         value: Value<'a>,
+        ctx_table: Option<Table<'a>>,
     ) -> Result<Option<Shard>, Error> {
-        if let Some(table) = self.schema.tables().get_table(column) {
+        if let Some(table) = self.get_sharded_table(column, ctx_table) {
             let context = ContextBuilder::new(table);
             let shard = match value {
                 Value::Placeholder(pos) => {
@@ -760,7 +886,7 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
                             // parse array literals or parameters, so route to all shards.
                             if is_any
                                 && matches!(values, SearchResult::Value(_))
-                                && self.schema.tables().get_table(column).is_some()
+                                && self.get_sharded_table(column, ctx.table).is_some()
                             {
                                 return Ok(SearchResult::Match(Shard::All));
                             }
@@ -934,7 +1060,7 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
             column
         };
 
-        let shard = self.compute_shard(resolved_column, value.clone())?;
+        let shard = self.compute_shard(resolved_column, value.clone(), ctx.table)?;
         if let Some(ref shard) = shard {
             self.record_sharding_key(shard, resolved_column, &value);
         }
@@ -1055,7 +1181,7 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
                                         schema: ctx.table.and_then(|t| t.schema),
                                     };
 
-                                    if self.schema.tables().get_table(column).is_some() {
+                                    if self.get_sharded_table(column, ctx.table).is_some() {
                                         if let Some(ref val) = target.val {
                                             if let Ok(value) = Value::try_from(val.as_ref()) {
                                                 if let Some(shard) =
@@ -1117,7 +1243,7 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
                                         schema: ctx.table.and_then(|t| t.schema),
                                     };
 
-                                    if self.schema.tables().get_table(column).is_some() {
+                                    if self.get_sharded_table(column, ctx.table).is_some() {
                                         // Try to extract the value directly
                                         if let Ok(value) = Value::try_from(value_node) {
                                             if let Some(shard) =
@@ -1165,6 +1291,73 @@ mod test {
 
     use super::*;
 
+    /// Create a mock loaded schema with tables that have the sharding columns.
+    fn make_default_test_loaded_schema() -> Schema {
+        use crate::backend::schema::columns::Column as SchemaColumn;
+        use crate::backend::schema::Relation;
+
+        fn make_column(schema: &str, table: &str, name: &str) -> SchemaColumn {
+            SchemaColumn {
+                table_catalog: "test".to_string(),
+                table_schema: schema.to_string(),
+                table_name: table.to_string(),
+                column_name: name.to_string(),
+                column_default: String::new(),
+                is_nullable: false,
+                data_type: "bigint".to_string(),
+            }
+        }
+
+        // Tables that have the sharded_id column (for column-only config)
+        let mut other_columns = std::collections::HashMap::new();
+        other_columns.insert(
+            "sharded_id".to_string(),
+            make_column("public", "other", "sharded_id"),
+        );
+        other_columns.insert("id".to_string(), make_column("public", "other", "id"));
+
+        let mut third_columns = std::collections::HashMap::new();
+        third_columns.insert(
+            "sharded_id".to_string(),
+            make_column("public", "third", "sharded_id"),
+        );
+        third_columns.insert("y".to_string(), make_column("public", "third", "y"));
+
+        let mut sharded_columns = std::collections::HashMap::new();
+        sharded_columns.insert("id".to_string(), make_column("public", "sharded", "id"));
+        sharded_columns.insert(
+            "parent_id".to_string(),
+            make_column("public", "sharded", "parent_id"),
+        );
+
+        let mut list_table_columns = std::collections::HashMap::new();
+        list_table_columns.insert(
+            "list_id".to_string(),
+            make_column("public", "list_table", "list_id"),
+        );
+
+        let relations: HashMap<(String, String), Relation> = HashMap::from([
+            (
+                ("public".into(), "other".into()),
+                Relation::test_table("public", "other", other_columns),
+            ),
+            (
+                ("public".into(), "third".into()),
+                Relation::test_table("public", "third", third_columns),
+            ),
+            (
+                ("public".into(), "sharded".into()),
+                Relation::test_table("public", "sharded", sharded_columns),
+            ),
+            (
+                ("public".into(), "list_table".into()),
+                Relation::test_table("public", "list_table", list_table_columns),
+            ),
+        ]);
+
+        Schema::from_parts(vec!["public".into()], relations)
+    }
+
     fn run_test(stmt: &str, bind: Option<&Bind>) -> Result<Option<Shard>, Error> {
         let schema = ShardingSchema {
             shards: 3,
@@ -1203,6 +1396,8 @@ mod test {
             ),
             ..Default::default()
         };
+        let loaded_schema = make_default_test_loaded_schema();
+        let schema_lookup = SchemaLookupContext::new(Some(&loaded_schema), "test_user", None);
         let raw = pg_query::parse(stmt)
             .unwrap()
             .protobuf
@@ -1210,7 +1405,7 @@ mod test {
             .first()
             .cloned()
             .unwrap();
-        let mut parser = StatementParser::from_raw(&raw, bind, &schema, None)?;
+        let mut parser = StatementParser::from_raw(&raw, bind, &schema, schema_lookup, None)?;
         parser.shard()
     }
 
@@ -2024,6 +2219,7 @@ mod test {
             ]),
             ..Default::default()
         };
+        let schema_lookup = SchemaLookupContext::default();
         let raw = pg_query::parse(stmt)
             .unwrap()
             .protobuf
@@ -2031,7 +2227,7 @@ mod test {
             .first()
             .cloned()
             .unwrap();
-        let mut parser = StatementParser::from_raw(&raw, bind, &schema, None)?;
+        let mut parser = StatementParser::from_raw(&raw, bind, &schema, schema_lookup, None)?;
         parser.shard()
     }
 
@@ -2121,5 +2317,248 @@ mod test {
         let result2 = run_test_with_schemas("SELECT * FROM inventory.items", None).unwrap();
         assert_eq!(result1, Some(Shard::Direct(1)));
         assert_eq!(result2, Some(Shard::Direct(2)));
+    }
+
+    // Column-only sharded table detection tests (using loaded schema)
+
+    fn run_test_with_loaded_schema(
+        stmt: &str,
+        bind: Option<&Bind>,
+        loaded_schema: &Schema,
+    ) -> Result<Option<Shard>, Error> {
+        // Use column-only sharded table config (no table name)
+        let schema = ShardingSchema {
+            shards: 3,
+            tables: ShardedTables::new(
+                vec![ShardedTable {
+                    column: "tenant_id".into(),
+                    // No table name - column-only config
+                    ..Default::default()
+                }],
+                vec![],
+                false,
+            ),
+            ..Default::default()
+        };
+        let schema_lookup = SchemaLookupContext::new(Some(loaded_schema), "test_user", None);
+        let raw = pg_query::parse(stmt)
+            .unwrap()
+            .protobuf
+            .stmts
+            .first()
+            .cloned()
+            .unwrap();
+        let mut parser = StatementParser::from_raw(&raw, bind, &schema, schema_lookup, None)?;
+        parser.shard()
+    }
+
+    fn make_test_schema() -> Schema {
+        use crate::backend::schema::columns::Column as SchemaColumn;
+        use crate::backend::schema::Relation;
+
+        let mut columns = std::collections::HashMap::new();
+        columns.insert(
+            "tenant_id".to_string(),
+            SchemaColumn {
+                table_catalog: "test".to_string(),
+                table_schema: "public".to_string(),
+                table_name: "users".to_string(),
+                column_name: "tenant_id".to_string(),
+                column_default: String::new(),
+                is_nullable: false,
+                data_type: "bigint".to_string(),
+            },
+        );
+        columns.insert(
+            "name".to_string(),
+            SchemaColumn {
+                table_catalog: "test".to_string(),
+                table_schema: "public".to_string(),
+                table_name: "users".to_string(),
+                column_name: "name".to_string(),
+                column_default: String::new(),
+                is_nullable: true,
+                data_type: "text".to_string(),
+            },
+        );
+
+        let relations: HashMap<(String, String), Relation> = HashMap::from([(
+            ("public".into(), "users".into()),
+            Relation::test_table("public", "users", columns),
+        )]);
+
+        Schema::from_parts(vec!["public".into()], relations)
+    }
+
+    #[test]
+    fn test_column_only_select_with_loaded_schema() {
+        let loaded_schema = make_test_schema();
+        let result = run_test_with_loaded_schema(
+            "SELECT * FROM users WHERE tenant_id = 1",
+            None,
+            &loaded_schema,
+        )
+        .unwrap();
+        assert!(
+            result.is_some(),
+            "Should detect sharding key via loaded schema"
+        );
+    }
+
+    #[test]
+    fn test_column_only_select_with_alias() {
+        let loaded_schema = make_test_schema();
+        let result = run_test_with_loaded_schema(
+            "SELECT * FROM users u WHERE u.tenant_id = 1",
+            None,
+            &loaded_schema,
+        )
+        .unwrap();
+        assert!(
+            result.is_some(),
+            "Should detect sharding key with alias via loaded schema"
+        );
+    }
+
+    #[test]
+    fn test_column_only_select_bound_param() {
+        let loaded_schema = make_test_schema();
+        let bind = Bind::new_params("", &[Parameter::new(b"42")]);
+        let result = run_test_with_loaded_schema(
+            "SELECT * FROM users WHERE tenant_id = $1",
+            Some(&bind),
+            &loaded_schema,
+        )
+        .unwrap();
+        assert!(
+            result.is_some(),
+            "Should detect sharding key via loaded schema with bound param"
+        );
+    }
+
+    #[test]
+    fn test_column_only_update_with_loaded_schema() {
+        let loaded_schema = make_test_schema();
+        let result = run_test_with_loaded_schema(
+            "UPDATE users SET name = 'foo' WHERE tenant_id = 1",
+            None,
+            &loaded_schema,
+        )
+        .unwrap();
+        assert!(
+            result.is_some(),
+            "Should detect sharding key in UPDATE via loaded schema"
+        );
+    }
+
+    #[test]
+    fn test_column_only_delete_with_loaded_schema() {
+        let loaded_schema = make_test_schema();
+        let result = run_test_with_loaded_schema(
+            "DELETE FROM users WHERE tenant_id = 1",
+            None,
+            &loaded_schema,
+        )
+        .unwrap();
+        assert!(
+            result.is_some(),
+            "Should detect sharding key in DELETE via loaded schema"
+        );
+    }
+
+    #[test]
+    fn test_column_only_insert_with_loaded_schema() {
+        let loaded_schema = make_test_schema();
+        let result = run_test_with_loaded_schema(
+            "INSERT INTO users (tenant_id, name) VALUES (1, 'foo')",
+            None,
+            &loaded_schema,
+        )
+        .unwrap();
+        assert!(
+            result.is_some(),
+            "Should detect sharding key in INSERT via loaded schema"
+        );
+    }
+
+    #[test]
+    fn test_column_only_table_not_in_loaded_schema() {
+        let loaded_schema = make_test_schema();
+        // 'unknown_table' is not in the loaded schema
+        let result = run_test_with_loaded_schema(
+            "SELECT * FROM unknown_table WHERE tenant_id = 1",
+            None,
+            &loaded_schema,
+        )
+        .unwrap();
+        assert!(
+            result.is_none(),
+            "Should not detect sharding key for table not in loaded schema"
+        );
+    }
+
+    #[test]
+    fn test_column_only_column_not_in_table() {
+        use crate::backend::schema::Relation;
+
+        // Create a table without the tenant_id column
+        let columns_map: std::collections::HashMap<
+            String,
+            crate::backend::schema::columns::Column,
+        > = std::collections::HashMap::new();
+        let relations: HashMap<(String, String), Relation> = HashMap::from([(
+            ("public".into(), "other".into()),
+            Relation::test_table("public", "other", columns_map),
+        )]);
+        let loaded_schema = Schema::from_parts(vec!["public".into()], relations);
+
+        let result = run_test_with_loaded_schema(
+            "SELECT * FROM other WHERE tenant_id = 1",
+            None,
+            &loaded_schema,
+        )
+        .unwrap();
+        assert!(
+            result.is_none(),
+            "Should not detect sharding key when column not in table, got {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_column_only_without_loaded_schema_returns_none() {
+        // Use the regular run_test which passes None for loaded_schema
+        // With column-only config and no loaded schema, it should NOT detect the key
+        let schema = ShardingSchema {
+            shards: 3,
+            tables: ShardedTables::new(
+                vec![ShardedTable {
+                    column: "tenant_id".into(),
+                    // No table name - column-only config
+                    ..Default::default()
+                }],
+                vec![],
+                false,
+            ),
+            ..Default::default()
+        };
+        let raw = pg_query::parse("SELECT * FROM some_table WHERE tenant_id = 1")
+            .unwrap()
+            .protobuf
+            .stmts
+            .first()
+            .cloned()
+            .unwrap();
+        // No loaded schema passed
+        let schema_lookup = SchemaLookupContext::default();
+        let mut parser =
+            StatementParser::from_raw(&raw, None, &schema, schema_lookup, None).unwrap();
+        let result = parser.shard().unwrap();
+        // Without loaded schema, column-only config can still match via get_table
+        // but only if there's no table name in the config
+        assert!(
+            result.is_none(),
+            "Without loaded schema, column-only config should not match unknown table"
+        );
     }
 }
