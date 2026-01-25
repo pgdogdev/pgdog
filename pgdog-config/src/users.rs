@@ -1,5 +1,4 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::env;
 use tracing::warn;
 
@@ -26,18 +25,6 @@ pub struct Users {
 }
 
 impl Users {
-    /// Organize users by database name.
-    pub fn users(&self) -> HashMap<String, Vec<User>> {
-        let mut users = HashMap::new();
-
-        for user in &self.users {
-            let entry = users.entry(user.database.clone()).or_insert_with(Vec::new);
-            entry.push(user.clone());
-        }
-
-        users
-    }
-
     pub fn check(&mut self, config: &Config) {
         for user in &mut self.users {
             if user.password().is_empty() {
@@ -49,12 +36,34 @@ impl Users {
                 }
 
                 if let Some(min_pool_size) = user.min_pool_size {
-                    if min_pool_size > 0 {
-                        warn!("user \"{}\" (database \"{}\") doesn't have a password configured, \
-                            so we can't connect to the server to maintain min_pool_size of {}; setting it to 0", user.name, user.database, min_pool_size);
-                        user.min_pool_size = Some(0);
+                    let databases = if user.database.is_empty() {
+                        user.databases.clone()
+                    } else {
+                        vec![user.database.clone()]
+                    };
+
+                    for database in databases {
+                        if min_pool_size > 0 {
+                            warn!("user \"{}\" (database \"{}\") doesn't have a password configured, \
+                            so we can't connect to the server to maintain min_pool_size of {}; setting it to 0", user.name, database, min_pool_size);
+                            user.min_pool_size = Some(0);
+                        }
                     }
                 }
+            }
+
+            if !user.database.is_empty() && !user.databases.is_empty() {
+                warn!(
+                    r#"user "{}" is configured for both "database" and "databases", defaulting to "database""#,
+                    user.name
+                );
+            }
+
+            if user.all_databases && (!user.databases.is_empty() || !user.database.is_empty()) {
+                warn!(
+                    r#"user "{}" is configured for "all_databases" and specific databases, defaulting to "all_databases""#,
+                    user.name
+                );
             }
         }
     }
@@ -67,7 +76,14 @@ pub struct User {
     /// User name.
     pub name: String,
     /// Database name, from pgdog.toml.
+    #[serde(default)]
     pub database: String,
+    /// List of databases the user has access to.
+    #[serde(default)]
+    pub databases: Vec<String>,
+    /// User belongs to all databases
+    #[serde(default)]
+    pub all_databases: bool,
     /// User's password.
     pub password: Option<String>,
     /// Pool size for this user pool, overriding `default_pool_size`.
