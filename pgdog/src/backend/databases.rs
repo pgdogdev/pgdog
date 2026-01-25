@@ -196,14 +196,14 @@ impl ToUser for (&str, Option<&str>) {
     }
 }
 
-impl ToUser for &pgdog_config::User {
-    fn to_user(&self) -> User {
-        User {
-            user: self.name.clone(),
-            database: self.database.clone(),
-        }
-    }
-}
+// impl ToUser for &pgdog_config::User {
+//     fn to_user(&self) -> User {
+//         User {
+//             user: self.name.clone(),
+//             database: self.database.clone(),
+//         }
+//     }
+// }
 
 /// Databases.
 #[derive(Default, Clone)]
@@ -375,10 +375,7 @@ impl Databases {
     }
 }
 
-pub(crate) fn new_pool(
-    user: &crate::config::User,
-    config: &crate::config::Config,
-) -> Option<(User, Cluster)> {
+fn new_pool(user: &crate::config::User, config: &crate::config::Config) -> Option<(User, Cluster)> {
     let sharded_tables = config.sharded_tables();
     let omnisharded_tables = config.omnisharded_tables();
     let sharded_mappings = config.sharded_mappings();
@@ -476,8 +473,42 @@ pub fn from_config(config: &ConfigAndUsers) -> Databases {
     let mut databases = HashMap::new();
 
     for user in &config.users.users {
-        if let Some((user, cluster)) = new_pool(user, &config.config) {
-            databases.insert(user, cluster);
+        let users = if user.databases.is_empty() && !user.all_databases {
+            vec![user.clone()]
+        } else if user.all_databases {
+            let mut user = user.clone();
+            user.databases.clear(); // all_databases takes priority
+
+            config
+                .config
+                .databases()
+                .into_keys()
+                .map(|database| {
+                    let mut user = user.clone();
+                    user.database = database;
+                    user
+                })
+                .collect()
+        } else {
+            let mut user = user.clone();
+            let databases = user.databases.clone();
+            user.databases.clear();
+
+            // User is mapped to multiple databases.
+            databases
+                .into_iter()
+                .map(|database| {
+                    let mut user = user.clone();
+                    user.database = database;
+                    user
+                })
+                .collect::<Vec<_>>()
+        };
+
+        for user in users {
+            if let Some((user, cluster)) = new_pool(&user, &config.config) {
+                databases.insert(user, cluster);
+            }
         }
     }
 
@@ -1164,5 +1195,378 @@ mod tests {
             mirror_config_dest_only.is_none(),
             "Mirror config should not be precomputed when source has no users"
         );
+    }
+
+    #[test]
+    fn test_user_all_databases_creates_pools_for_all_dbs() {
+        let mut config = Config::default();
+
+        config.databases = vec![
+            Database {
+                name: "db1".to_string(),
+                host: "localhost".to_string(),
+                port: 5432,
+                role: Role::Primary,
+                ..Default::default()
+            },
+            Database {
+                name: "db2".to_string(),
+                host: "localhost".to_string(),
+                port: 5433,
+                role: Role::Primary,
+                ..Default::default()
+            },
+            Database {
+                name: "db3".to_string(),
+                host: "localhost".to_string(),
+                port: 5434,
+                role: Role::Primary,
+                ..Default::default()
+            },
+        ];
+
+        let users = crate::config::Users {
+            users: vec![crate::config::User {
+                name: "admin_user".to_string(),
+                all_databases: true,
+                password: Some("pass".to_string()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let databases = from_config(&ConfigAndUsers {
+            config,
+            users,
+            config_path: std::path::PathBuf::new(),
+            users_path: std::path::PathBuf::new(),
+        });
+
+        // User should have pools for all three databases
+        assert!(
+            databases.cluster(("admin_user", "db1")).is_ok(),
+            "admin_user should have access to db1"
+        );
+        assert!(
+            databases.cluster(("admin_user", "db2")).is_ok(),
+            "admin_user should have access to db2"
+        );
+        assert!(
+            databases.cluster(("admin_user", "db3")).is_ok(),
+            "admin_user should have access to db3"
+        );
+
+        // Verify exactly 3 pools were created
+        assert_eq!(databases.all().len(), 3);
+    }
+
+    #[test]
+    fn test_user_multiple_databases_creates_pools_for_specified_dbs() {
+        let mut config = Config::default();
+
+        config.databases = vec![
+            Database {
+                name: "db1".to_string(),
+                host: "localhost".to_string(),
+                port: 5432,
+                role: Role::Primary,
+                ..Default::default()
+            },
+            Database {
+                name: "db2".to_string(),
+                host: "localhost".to_string(),
+                port: 5433,
+                role: Role::Primary,
+                ..Default::default()
+            },
+            Database {
+                name: "db3".to_string(),
+                host: "localhost".to_string(),
+                port: 5434,
+                role: Role::Primary,
+                ..Default::default()
+            },
+        ];
+
+        let users = crate::config::Users {
+            users: vec![crate::config::User {
+                name: "limited_user".to_string(),
+                databases: vec!["db1".to_string(), "db3".to_string()],
+                password: Some("pass".to_string()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let databases = from_config(&ConfigAndUsers {
+            config,
+            users,
+            config_path: std::path::PathBuf::new(),
+            users_path: std::path::PathBuf::new(),
+        });
+
+        // User should have pools for db1 and db3 only
+        assert!(
+            databases.cluster(("limited_user", "db1")).is_ok(),
+            "limited_user should have access to db1"
+        );
+        assert!(
+            databases.cluster(("limited_user", "db3")).is_ok(),
+            "limited_user should have access to db3"
+        );
+        assert!(
+            databases.cluster(("limited_user", "db2")).is_err(),
+            "limited_user should NOT have access to db2"
+        );
+
+        // Verify exactly 2 pools were created
+        assert_eq!(databases.all().len(), 2);
+    }
+
+    #[test]
+    fn test_all_databases_takes_priority_over_databases_list() {
+        let mut config = Config::default();
+
+        config.databases = vec![
+            Database {
+                name: "db1".to_string(),
+                host: "localhost".to_string(),
+                port: 5432,
+                role: Role::Primary,
+                ..Default::default()
+            },
+            Database {
+                name: "db2".to_string(),
+                host: "localhost".to_string(),
+                port: 5433,
+                role: Role::Primary,
+                ..Default::default()
+            },
+            Database {
+                name: "db3".to_string(),
+                host: "localhost".to_string(),
+                port: 5434,
+                role: Role::Primary,
+                ..Default::default()
+            },
+        ];
+
+        // User has both all_databases=true AND specific databases set
+        let users = crate::config::Users {
+            users: vec![crate::config::User {
+                name: "mixed_user".to_string(),
+                all_databases: true,
+                databases: vec!["db1".to_string()], // Should be ignored
+                password: Some("pass".to_string()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let databases = from_config(&ConfigAndUsers {
+            config,
+            users,
+            config_path: std::path::PathBuf::new(),
+            users_path: std::path::PathBuf::new(),
+        });
+
+        // all_databases should take priority - user gets all 3 databases
+        assert!(
+            databases.cluster(("mixed_user", "db1")).is_ok(),
+            "mixed_user should have access to db1"
+        );
+        assert!(
+            databases.cluster(("mixed_user", "db2")).is_ok(),
+            "mixed_user should have access to db2"
+        );
+        assert!(
+            databases.cluster(("mixed_user", "db3")).is_ok(),
+            "mixed_user should have access to db3"
+        );
+
+        assert_eq!(databases.all().len(), 3);
+    }
+
+    #[test]
+    fn test_new_pool_returns_none_for_nonexistent_database() {
+        let config = Config::default(); // No databases configured
+
+        let user = crate::config::User {
+            name: "test_user".to_string(),
+            database: "nonexistent_db".to_string(),
+            password: Some("pass".to_string()),
+            ..Default::default()
+        };
+
+        let result = new_pool(&user, &config);
+        assert!(
+            result.is_none(),
+            "new_pool should return None when database doesn't exist"
+        );
+    }
+
+    #[test]
+    fn test_user_with_single_database_creates_one_pool() {
+        let mut config = Config::default();
+
+        config.databases = vec![
+            Database {
+                name: "db1".to_string(),
+                host: "localhost".to_string(),
+                port: 5432,
+                role: Role::Primary,
+                ..Default::default()
+            },
+            Database {
+                name: "db2".to_string(),
+                host: "localhost".to_string(),
+                port: 5433,
+                role: Role::Primary,
+                ..Default::default()
+            },
+        ];
+
+        let users = crate::config::Users {
+            users: vec![crate::config::User {
+                name: "single_db_user".to_string(),
+                database: "db1".to_string(),
+                password: Some("pass".to_string()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let databases = from_config(&ConfigAndUsers {
+            config,
+            users,
+            config_path: std::path::PathBuf::new(),
+            users_path: std::path::PathBuf::new(),
+        });
+
+        assert!(
+            databases.cluster(("single_db_user", "db1")).is_ok(),
+            "single_db_user should have access to db1"
+        );
+        assert!(
+            databases.cluster(("single_db_user", "db2")).is_err(),
+            "single_db_user should NOT have access to db2"
+        );
+
+        assert_eq!(databases.all().len(), 1);
+    }
+
+    #[test]
+    fn test_multiple_users_with_different_database_access() {
+        let mut config = Config::default();
+
+        config.databases = vec![
+            Database {
+                name: "db1".to_string(),
+                host: "localhost".to_string(),
+                port: 5432,
+                role: Role::Primary,
+                ..Default::default()
+            },
+            Database {
+                name: "db2".to_string(),
+                host: "localhost".to_string(),
+                port: 5433,
+                role: Role::Primary,
+                ..Default::default()
+            },
+            Database {
+                name: "db3".to_string(),
+                host: "localhost".to_string(),
+                port: 5434,
+                role: Role::Primary,
+                ..Default::default()
+            },
+        ];
+
+        let users = crate::config::Users {
+            users: vec![
+                crate::config::User {
+                    name: "admin".to_string(),
+                    all_databases: true,
+                    password: Some("pass".to_string()),
+                    ..Default::default()
+                },
+                crate::config::User {
+                    name: "limited".to_string(),
+                    databases: vec!["db1".to_string(), "db2".to_string()],
+                    password: Some("pass".to_string()),
+                    ..Default::default()
+                },
+                crate::config::User {
+                    name: "single".to_string(),
+                    database: "db3".to_string(),
+                    password: Some("pass".to_string()),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+
+        let databases = from_config(&ConfigAndUsers {
+            config,
+            users,
+            config_path: std::path::PathBuf::new(),
+            users_path: std::path::PathBuf::new(),
+        });
+
+        // Admin has all 3 databases
+        assert!(databases.cluster(("admin", "db1")).is_ok());
+        assert!(databases.cluster(("admin", "db2")).is_ok());
+        assert!(databases.cluster(("admin", "db3")).is_ok());
+
+        // Limited has db1 and db2
+        assert!(databases.cluster(("limited", "db1")).is_ok());
+        assert!(databases.cluster(("limited", "db2")).is_ok());
+        assert!(databases.cluster(("limited", "db3")).is_err());
+
+        // Single has only db3
+        assert!(databases.cluster(("single", "db1")).is_err());
+        assert!(databases.cluster(("single", "db2")).is_err());
+        assert!(databases.cluster(("single", "db3")).is_ok());
+
+        // Total pools: admin(3) + limited(2) + single(1) = 6
+        assert_eq!(databases.all().len(), 6);
+    }
+
+    #[test]
+    fn test_databases_list_with_nonexistent_database_skipped() {
+        let mut config = Config::default();
+
+        config.databases = vec![Database {
+            name: "db1".to_string(),
+            host: "localhost".to_string(),
+            port: 5432,
+            role: Role::Primary,
+            ..Default::default()
+        }];
+
+        // User requests access to both existing and non-existing databases
+        let users = crate::config::Users {
+            users: vec![crate::config::User {
+                name: "test_user".to_string(),
+                databases: vec!["db1".to_string(), "nonexistent".to_string()],
+                password: Some("pass".to_string()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let databases = from_config(&ConfigAndUsers {
+            config,
+            users,
+            config_path: std::path::PathBuf::new(),
+            users_path: std::path::PathBuf::new(),
+        });
+
+        // Should only create pool for db1, nonexistent is silently skipped
+        assert!(databases.cluster(("test_user", "db1")).is_ok());
+        assert!(databases.cluster(("test_user", "nonexistent")).is_err());
+
+        assert_eq!(databases.all().len(), 1);
     }
 }
