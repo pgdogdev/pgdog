@@ -256,6 +256,12 @@ where
             }
         }
 
+        NodeEnum::ExplainStmt(stmt) => {
+            if let Some(query) = &mut stmt.query {
+                visit_and_mutate_node(query, callback)?;
+            }
+        }
+
         _ => (),
     }
 

@@ -167,11 +167,24 @@ enum Statement<'a> {
     Insert(&'a InsertStmt),
 }
 
+/// Context for looking up table columns from the database schema.
+/// Used for INSERT statements without explicit column lists.
+pub struct SchemaLookupContext<'a> {
+    /// The loaded database schema.
+    pub db_schema: &'a Schema,
+    /// The database user (for resolving $user in search_path).
+    pub user: &'a str,
+    /// The search_path parameter (for table resolution).
+    pub search_path: Option<&'a ParameterValue>,
+}
+
 pub struct StatementParser<'a, 'b, 'c> {
     stmt: Statement<'a>,
     bind: Option<&'b Bind>,
     schema: &'b ShardingSchema,
     recorder: Option<&'c mut ExplainRecorder>,
+    /// Optional schema lookup context for INSERT without column list.
+    schema_lookup: Option<SchemaLookupContext<'b>>,
 }
 
 impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
@@ -186,7 +199,14 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
             bind,
             schema,
             recorder,
+            schema_lookup: None,
         }
+    }
+
+    /// Set the schema lookup context for INSERT without column list.
+    pub fn with_schema_lookup(mut self, ctx: SchemaLookupContext<'b>) -> Self {
+        self.schema_lookup = Some(ctx);
+        self
     }
 
     pub fn from_select(
@@ -600,10 +620,27 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
     /// Named configs (with explicit table names) match specific table+column.
     /// Column-only configs match any table with that column name.
     fn get_sharded_table(&self, column: Column<'a>) -> Option<&ShardedTable> {
+        self.get_sharded_table_by_name(column.name, column.table, column.schema)
+    }
+
+    /// Find sharded table config by column name (for INSERT without column list).
+    fn get_sharded_table_by_name(
+        &self,
+        column_name: &str,
+        table_name: Option<&str>,
+        schema: Option<&str>,
+    ) -> Option<&ShardedTable> {
         // Try named table configs first
-        if let Some(sharded_table) = self.schema.tables().get_table(column) {
-            if sharded_table.name.is_some() {
-                return Some(sharded_table);
+        if let Some(table_name) = table_name {
+            let column = Column {
+                name: column_name,
+                table: Some(table_name),
+                schema,
+            };
+            if let Some(sharded_table) = self.schema.tables().get_table(column) {
+                if sharded_table.name.is_some() {
+                    return Some(sharded_table);
+                }
             }
         }
 
@@ -612,7 +649,7 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
             .tables
             .tables()
             .iter()
-            .find(|t| t.name.is_none() && t.column == column.name)
+            .find(|t| t.name.is_none() && t.column == column_name)
     }
 
     fn compute_shard(
@@ -620,7 +657,17 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
         column: Column<'a>,
         value: Value<'a>,
     ) -> Result<Option<Shard>, Error> {
-        if let Some(table) = self.get_sharded_table(column) {
+        let sharded_table = self.get_sharded_table(column);
+        self.compute_shard_for_table(sharded_table, value)
+    }
+
+    /// Compute shard for a given sharded table config and value.
+    fn compute_shard_for_table(
+        &self,
+        sharded_table: Option<&ShardedTable>,
+        value: Value<'a>,
+    ) -> Result<Option<Shard>, Error> {
+        if let Some(table) = sharded_table {
             let context = ContextBuilder::new(table);
             let shard = match value {
                 Value::Placeholder(pos) => {
@@ -1031,6 +1078,36 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
         Ok(SearchResult::None)
     }
 
+    /// Get column names from the INSERT statement, or look them up from schema if not specified.
+    fn get_insert_columns<'d>(&self, stmt: &'d InsertStmt, ctx: &SearchContext<'_>) -> Vec<String> {
+        // First try to get columns from the INSERT statement itself
+        let cols: Vec<String> = stmt
+            .cols
+            .iter()
+            .filter_map(|node| match &node.node {
+                Some(NodeEnum::ResTarget(target)) => Some(target.name.clone()),
+                _ => None,
+            })
+            .collect();
+
+        if !cols.is_empty() {
+            return cols;
+        }
+
+        // No columns specified in INSERT, try to look them up from schema
+        if let (Some(table), Some(ref schema_lookup)) = (ctx.table, &self.schema_lookup) {
+            if let Some(relation) =
+                schema_lookup
+                    .db_schema
+                    .table(table, schema_lookup.user, schema_lookup.search_path)
+            {
+                return relation.column_names().map(String::from).collect();
+            }
+        }
+
+        vec![]
+    }
+
     /// Search an INSERT statement for sharding keys.
     fn search_insert_stmt(
         &mut self,
@@ -1044,15 +1121,8 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
             }
         }
 
-        // Get the column names from INSERT INTO table (col1, col2, ...)
-        let columns: Vec<&str> = stmt
-            .cols
-            .iter()
-            .filter_map(|node| match &node.node {
-                Some(NodeEnum::ResTarget(target)) => Some(target.name.as_str()),
-                _ => None,
-            })
-            .collect();
+        // Get the column names from INSERT INTO table (col1, col2, ...) or from schema
+        let columns = self.get_insert_columns(stmt, ctx);
 
         // Handle different INSERT forms
         if let Some(ref select_node) = stmt.select_stmt {
@@ -1069,17 +1139,19 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
                         for (pos, target_node) in select_stmt.target_list.iter().enumerate() {
                             if let Some(NodeEnum::ResTarget(ref target)) = target_node.node {
                                 if let Some(column_name) = columns.get(pos) {
-                                    let column = Column {
-                                        name: column_name,
-                                        table: ctx.table.map(|t| t.name),
-                                        schema: ctx.table.and_then(|t| t.schema),
-                                    };
+                                    let table_name = ctx.table.map(|t| t.name);
+                                    let table_schema = ctx.table.and_then(|t| t.schema);
+                                    let sharded_table = self.get_sharded_table_by_name(
+                                        column_name.as_str(),
+                                        table_name,
+                                        table_schema,
+                                    );
 
-                                    if self.get_sharded_table(column).is_some() {
+                                    if sharded_table.is_some() {
                                         if let Some(ref val) = target.val {
                                             if let Ok(value) = Value::try_from(val.as_ref()) {
-                                                if let Some(shard) =
-                                                    self.compute_shard_with_ctx(column, value, ctx)?
+                                                if let Some(shard) = self
+                                                    .compute_shard_for_table(sharded_table, value)?
                                                 {
                                                     return Ok(SearchResult::Match(shard));
                                                 }
@@ -1110,16 +1182,6 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
             }
         }
 
-        // Get the column names from INSERT INTO table (col1, col2, ...)
-        let columns: Vec<&str> = stmt
-            .cols
-            .iter()
-            .filter_map(|node| match &node.node {
-                Some(NodeEnum::ResTarget(target)) => Some(target.name.as_str()),
-                _ => None,
-            })
-            .collect();
-
         // The select_stmt field contains either VALUES or a SELECT subquery
         if let Some(ref select_node) = stmt.select_stmt {
             if let Some(NodeEnum::SelectStmt(ref select_stmt)) = select_node.node {
@@ -1131,17 +1193,19 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
                             for (pos, value_node) in list.items.iter().enumerate() {
                                 // Check if this position corresponds to a sharding key column
                                 if let Some(column_name) = columns.get(pos) {
-                                    let column = Column {
-                                        name: column_name,
-                                        table: ctx.table.map(|t| t.name),
-                                        schema: ctx.table.and_then(|t| t.schema),
-                                    };
+                                    let table_name = ctx.table.map(|t| t.name);
+                                    let table_schema = ctx.table.and_then(|t| t.schema);
+                                    let sharded_table = self.get_sharded_table_by_name(
+                                        column_name.as_str(),
+                                        table_name,
+                                        table_schema,
+                                    );
 
-                                    if self.get_sharded_table(column).is_some() {
+                                    if sharded_table.is_some() {
                                         // Try to extract the value directly
                                         if let Ok(value) = Value::try_from(value_node) {
                                             if let Some(shard) =
-                                                self.compute_shard_with_ctx(column, value, ctx)?
+                                                self.compute_shard_for_table(sharded_table, value)?
                                             {
                                                 return Ok(SearchResult::Match(shard));
                                             }
@@ -2250,6 +2314,114 @@ mod test {
             result.is_none(),
             "Column-only config should not match different column, got {:?}",
             result
+        );
+    }
+
+    // INSERT without column list tests
+    use crate::backend::schema::columns::Column as SchemaColumn;
+    use crate::backend::schema::Relation;
+    use indexmap::IndexMap;
+
+    fn make_test_schema_with_relation() -> crate::backend::Schema {
+        let mut columns = IndexMap::new();
+        columns.insert(
+            "id".to_string(),
+            SchemaColumn {
+                table_catalog: "test".into(),
+                table_schema: "public".into(),
+                table_name: "sharded".into(),
+                column_name: "id".into(),
+                column_default: String::new(),
+                is_nullable: false,
+                data_type: "bigint".into(),
+                ordinal_position: 1,
+            },
+        );
+        columns.insert(
+            "name".to_string(),
+            SchemaColumn {
+                table_catalog: "test".into(),
+                table_schema: "public".into(),
+                table_name: "sharded".into(),
+                column_name: "name".into(),
+                column_default: String::new(),
+                is_nullable: true,
+                data_type: "text".into(),
+                ordinal_position: 2,
+            },
+        );
+        let relation = Relation::test_table("public", "sharded", columns);
+        let relations = HashMap::from([(("public".into(), "sharded".into()), relation)]);
+        crate::backend::Schema::from_parts(vec!["public".into()], relations)
+    }
+
+    fn run_test_with_schema_lookup(
+        stmt: &str,
+        bind: Option<&Bind>,
+    ) -> Result<Option<Shard>, Error> {
+        let sharding_schema = ShardingSchema {
+            shards: 3,
+            tables: ShardedTables::new(
+                vec![ShardedTable {
+                    column: "id".into(),
+                    name: Some("sharded".into()),
+                    ..Default::default()
+                }],
+                vec![],
+                false,
+            ),
+            ..Default::default()
+        };
+        let db_schema = make_test_schema_with_relation();
+        let schema_lookup = SchemaLookupContext {
+            db_schema: &db_schema,
+            user: "test",
+            search_path: None,
+        };
+        let raw = pg_query::parse(stmt)
+            .unwrap()
+            .protobuf
+            .stmts
+            .first()
+            .cloned()
+            .unwrap();
+        let mut parser = StatementParser::from_raw(&raw, bind, &sharding_schema, None)?
+            .with_schema_lookup(schema_lookup);
+        parser.shard()
+    }
+
+    #[test]
+    fn test_insert_without_column_list() {
+        // INSERT INTO sharded VALUES (1, 'test') should find sharding key from schema
+        let result = run_test_with_schema_lookup("INSERT INTO sharded VALUES (1, 'test')", None);
+        assert!(
+            result.as_ref().unwrap().is_some(),
+            "Should detect sharding key in INSERT without column list, got: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_insert_without_column_list_bound_param() {
+        // INSERT INTO sharded VALUES ($1, $2) with bound params
+        let bind = Bind::new_params("", &[Parameter::new(b"1"), Parameter::new(b"test")]);
+        let result =
+            run_test_with_schema_lookup("INSERT INTO sharded VALUES ($1, $2)", Some(&bind));
+        assert!(
+            result.as_ref().unwrap().is_some(),
+            "Should detect sharding key in INSERT without column list (bound param), got: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_insert_without_column_list_null_key() {
+        // INSERT INTO sharded VALUES (NULL, 'test') should broadcast
+        let result = run_test_with_schema_lookup("INSERT INTO sharded VALUES (NULL, 'test')", None);
+        assert_eq!(
+            result.unwrap(),
+            Some(Shard::All),
+            "NULL sharding key should broadcast"
         );
     }
 }

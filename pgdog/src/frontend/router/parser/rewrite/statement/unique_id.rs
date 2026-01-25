@@ -475,4 +475,46 @@ mod tests {
         );
         assert_eq!(plan.unique_ids, 2);
     }
+
+    #[test]
+    fn test_rewrite_explain_insert_select() {
+        let mut ast = pg_query::parse("EXPLAIN INSERT INTO t (id) SELECT pgdog.unique_id() FROM s")
+            .unwrap()
+            .protobuf;
+        let mut ps = PreparedStatements::default();
+        let schema = default_schema();
+        let mut rewrite = StatementRewrite::new(StatementRewriteContext {
+            stmt: &mut ast,
+            extended: true,
+            prepared: false,
+            prepared_statements: &mut ps,
+            schema: &schema,
+        });
+        let plan = rewrite.maybe_rewrite().unwrap();
+
+        let sql = ast.deparse().unwrap();
+        assert_eq!(sql, "EXPLAIN INSERT INTO t (id) SELECT $1::bigint FROM s");
+        assert_eq!(plan.unique_ids, 1);
+    }
+
+    #[test]
+    fn test_rewrite_explain_select() {
+        let mut ast = pg_query::parse("EXPLAIN SELECT pgdog.unique_id()")
+            .unwrap()
+            .protobuf;
+        let mut ps = PreparedStatements::default();
+        let schema = default_schema();
+        let mut rewrite = StatementRewrite::new(StatementRewriteContext {
+            stmt: &mut ast,
+            extended: true,
+            prepared: false,
+            prepared_statements: &mut ps,
+            schema: &schema,
+        });
+        let plan = rewrite.maybe_rewrite().unwrap();
+
+        let sql = ast.deparse().unwrap();
+        assert_eq!(sql, "EXPLAIN SELECT $1::bigint");
+        assert_eq!(plan.unique_ids, 1);
+    }
 }

@@ -14,6 +14,7 @@ pub struct Column {
     pub column_default: String,
     pub is_nullable: bool,
     pub data_type: String,
+    pub ordinal_position: i32,
 }
 
 impl Column {
@@ -37,6 +38,7 @@ impl Column {
 
 impl From<DataRow> for Column {
     fn from(value: DataRow) -> Self {
+        use crate::net::messages::Format;
         Self {
             table_catalog: value.get_text(0).unwrap_or_default(),
             table_schema: value.get_text(1).unwrap_or_default(),
@@ -45,6 +47,7 @@ impl From<DataRow> for Column {
             column_default: value.get_text(4).unwrap_or_default(),
             is_nullable: value.get_text(5).unwrap_or_default() == "true",
             data_type: value.get_text(6).unwrap_or_default(),
+            ordinal_position: value.get::<i32>(7, Format::Text).unwrap_or(0),
         }
     }
 }

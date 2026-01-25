@@ -507,12 +507,18 @@ impl QueryParser {
         stmt: &InsertStmt,
         context: &mut QueryParserContext,
     ) -> Result<Command, Error> {
+        let schema_lookup = SchemaLookupContext {
+            db_schema: &context.router_context.schema,
+            user: context.router_context.cluster.user(),
+            search_path: context.router_context.parameter_hints.search_path,
+        };
         let mut parser = StatementParser::from_insert(
             stmt,
             context.router_context.bind,
             &context.sharding_schema,
             self.recorder_mut(),
-        );
+        )
+        .with_schema_lookup(schema_lookup);
         let shard = parser.shard()?.unwrap_or(Shard::All);
 
         context
