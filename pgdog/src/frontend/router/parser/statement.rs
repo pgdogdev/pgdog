@@ -2335,6 +2335,7 @@ mod test {
                 is_nullable: false,
                 data_type: "bigint".into(),
                 ordinal_position: 1,
+                is_primary_key: true,
             },
         );
         columns.insert(
@@ -2348,6 +2349,7 @@ mod test {
                 is_nullable: true,
                 data_type: "text".into(),
                 ordinal_position: 2,
+                is_primary_key: false,
             },
         );
         let relation = Relation::test_table("public", "sharded", columns);

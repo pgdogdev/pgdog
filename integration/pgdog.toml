@@ -30,6 +30,7 @@ message_buffer = 8096
 enabled = false
 shard_key = "ignore"
 split_inserts = "error"
+# require_primary_key = "rewrite"
 
 # ------------------------------------------------------------------------------
 # ----- Database :: pgdog ------------------------------------------------------

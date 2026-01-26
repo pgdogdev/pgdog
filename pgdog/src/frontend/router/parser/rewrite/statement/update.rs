@@ -657,10 +657,15 @@ mod test {
     use pg_query::parse;
     use pgdog_config::{Rewrite, ShardedTable};
 
+    use crate::backend::schema::Schema;
     use crate::backend::{replication::ShardedSchemas, ShardedTables};
     use crate::net::messages::row_description::Field;
 
     use super::*;
+
+    fn default_db_schema() -> Schema {
+        Schema::default()
+    }
 
     fn default_schema() -> ShardingSchema {
         ShardingSchema {
@@ -688,14 +693,18 @@ mod test {
     fn run_test(query: &str) -> Result<Option<ShardingKeyUpdate>, Error> {
         let mut stmt = parse(query)?;
         let schema = default_schema();
+        let db_schema = default_db_schema();
         let mut stmts = PreparedStatements::new();
 
         let ctx = StatementRewriteContext {
             stmt: &mut stmt.protobuf,
             schema: &schema,
+            db_schema: &db_schema,
             extended: true,
             prepared: false,
             prepared_statements: &mut stmts,
+            user: "",
+            search_path: None,
         };
         let mut plan = RewritePlan::default();
         StatementRewrite::new(ctx).sharding_key_update(&mut plan)?;

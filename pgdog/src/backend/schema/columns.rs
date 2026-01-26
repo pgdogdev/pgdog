@@ -15,6 +15,7 @@ pub struct Column {
     pub is_nullable: bool,
     pub data_type: String,
     pub ordinal_position: i32,
+    pub is_primary_key: bool,
 }
 
 impl Column {
@@ -48,6 +49,7 @@ impl From<DataRow> for Column {
             is_nullable: value.get_text(5).unwrap_or_default() == "true",
             data_type: value.get_text(6).unwrap_or_default(),
             ordinal_position: value.get::<i32>(7, Format::Text).unwrap_or(0),
+            is_primary_key: value.get_text(8).unwrap_or_default() == "true",
         }
     }
 }

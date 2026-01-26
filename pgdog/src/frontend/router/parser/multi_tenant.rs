@@ -125,6 +125,7 @@ mod tests {
                 is_nullable: false,
                 data_type: "bigint".into(),
                 ordinal_position: 1,
+                is_primary_key: false,
             },
         );
 

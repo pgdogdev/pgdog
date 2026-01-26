@@ -59,8 +59,7 @@ impl Command for ShowQueryCache {
 #[cfg(test)]
 mod test {
     use crate::{
-        backend::ShardingSchema,
-        frontend::{BufferedQuery, PreparedStatements},
+        frontend::{router::parser::AstContext, BufferedQuery, PreparedStatements},
         net::{FromBytes, Parse, ToBytes},
     };
 
@@ -70,6 +69,7 @@ mod test {
     async fn test_show_query_cache() {
         let cache = Cache::get();
         let mut prepared_statements = PreparedStatements::default();
+        let ctx = AstContext::empty();
 
         for q in 0..5 {
             cache
@@ -77,7 +77,7 @@ mod test {
                     &BufferedQuery::Prepared(Parse::new_anonymous(
                         format!("SELECT $1::bigint, {}", q).as_str(),
                     )),
-                    &ShardingSchema::default(),
+                    &ctx,
                     &mut prepared_statements,
                 )
                 .unwrap();

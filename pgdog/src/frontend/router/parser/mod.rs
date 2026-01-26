@@ -35,7 +35,7 @@ pub use expression::ExpressionRegistry;
 
 pub use aggregate::{Aggregate, AggregateFunction, AggregateTarget};
 pub use binary::BinaryStream;
-pub use cache::{Ast, Cache};
+pub use cache::{Ast, AstContext, Cache};
 pub use column::{Column, OwnedColumn};
 pub use command::Command;
 pub use context::QueryParserContext;

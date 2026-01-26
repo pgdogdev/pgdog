@@ -8,7 +8,7 @@ use crate::{
     frontend::{
         client::{Sticky, TransactionType},
         router::{
-            parser::{Cache, Error},
+            parser::{AstContext, Cache, Error},
             QueryParser,
         },
         ClientRequest, Command, PreparedStatements, RouterContext,
@@ -133,12 +133,9 @@ impl QueryParserTest {
 
         // Some requests (like Close) don't have a query
         if let Ok(Some(buffered_query)) = request.query() {
+            let ctx = AstContext::from_cluster(&self.cluster, &self.params);
             let ast = Cache::get()
-                .query(
-                    &buffered_query,
-                    &self.cluster.sharding_schema(),
-                    &mut self.prepared,
-                )
+                .query(&buffered_query, &ctx, &mut self.prepared)
                 .unwrap();
             request.ast = Some(ast);
         }

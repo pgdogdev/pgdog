@@ -53,6 +53,12 @@ pub struct Rewrite {
     /// Policy for handling multi-row INSERT statements that target sharded tables.
     #[serde(default = "Rewrite::default_split_inserts")]
     pub split_inserts: RewriteMode,
+    /// Policy for handling INSERT statements missing a BIGINT primary key.
+    /// - ignore: Allow the INSERT without modification
+    /// - error: Return an error if a BIGINT primary key is missing
+    /// - rewrite: Auto-inject pgdog.unique_id() for missing BIGINT primary keys
+    #[serde(default = "Rewrite::default_require_primary_key")]
+    pub require_primary_key: RewriteMode,
 }
 
 impl Default for Rewrite {
@@ -61,6 +67,7 @@ impl Default for Rewrite {
             enabled: false,
             shard_key: Self::default_shard_key(),
             split_inserts: Self::default_split_inserts(),
+            require_primary_key: Self::default_require_primary_key(),
         }
     }
 }
@@ -72,5 +79,9 @@ impl Rewrite {
 
     const fn default_split_inserts() -> RewriteMode {
         RewriteMode::Error
+    }
+
+    const fn default_require_primary_key() -> RewriteMode {
+        RewriteMode::Ignore
     }
 }

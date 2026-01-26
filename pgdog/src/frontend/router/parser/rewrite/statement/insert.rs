@@ -160,6 +160,7 @@ impl StatementRewrite<'_> {
 
         // Now create Ast for each split (needs mutable borrow of prepared_statements)
         let cache = Cache::get();
+        let ctx = self.ast_context();
         for (params, stmt) in splits {
             let query = if self.extended {
                 BufferedQuery::Prepared(Parse::named("", &stmt))
@@ -167,7 +168,7 @@ impl StatementRewrite<'_> {
                 BufferedQuery::Query(Query::new(&stmt))
             };
             let ast = cache
-                .query(&query, self.schema, self.prepared_statements)
+                .query(&query, &ctx, self.prepared_statements)
                 .map_err(|e| Error::Cache(e.to_string()))?;
 
             // If this is a named prepared statement, register the split in the global cache
@@ -299,9 +300,14 @@ mod tests {
     use pgdog_config::Rewrite;
 
     use super::*;
+    use crate::backend::schema::Schema;
     use crate::backend::ShardingSchema;
     use crate::frontend::router::parser::StatementRewriteContext;
     use crate::frontend::PreparedStatements;
+
+    fn default_db_schema() -> Schema {
+        Schema::default()
+    }
 
     fn default_schema() -> ShardingSchema {
         ShardingSchema {
@@ -319,12 +325,16 @@ mod tests {
         let mut ast = pg_query::parse(sql).unwrap().protobuf;
         let mut prepared = PreparedStatements::default();
         let schema = default_schema();
+        let db_schema = default_db_schema();
         let mut rewriter = StatementRewrite::new(StatementRewriteContext {
             stmt: &mut ast,
             extended: false,
             prepared: false,
             prepared_statements: &mut prepared,
             schema: &schema,
+            db_schema: &db_schema,
+            user: "",
+            search_path: None,
         });
         let mut plan = RewritePlan::default();
         rewriter.split_insert(&mut plan).unwrap();

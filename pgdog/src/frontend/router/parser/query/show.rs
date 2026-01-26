@@ -49,7 +49,10 @@ mod test_show {
         let mut ast = Ast::new(
             &BufferedQuery::Query(Query::new(query)),
             &c.sharding_schema(),
+            &c.schema(),
             &mut PreparedStatements::default(),
+            "",
+            None,
         )
         .unwrap();
         ast.cached = false;
@@ -67,7 +70,10 @@ mod test_show {
         let mut ast = Ast::new(
             &BufferedQuery::Query(Query::new(query)),
             &c.sharding_schema(),
+            &c.schema(),
             &mut PreparedStatements::default(),
+            "",
+            None,
         )
         .unwrap();
         ast.cached = false;
