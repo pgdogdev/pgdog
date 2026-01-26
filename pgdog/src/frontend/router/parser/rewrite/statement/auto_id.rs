@@ -18,7 +18,7 @@ impl StatementRewrite<'_> {
     /// This runs BEFORE unique_id replacement so injected function calls
     /// will be processed by the unique_id rewriter.
     pub(super) fn inject_auto_id(&mut self, plan: &mut RewritePlan) -> Result<(), Error> {
-        let mode = self.schema.rewrite.require_primary_key;
+        let mode = self.schema.rewrite.primary_key;
 
         if mode == RewriteMode::Ignore || self.schema.shards == 1 {
             return Ok(());
@@ -278,7 +278,7 @@ mod tests {
     fn sharding_schema_with_mode(mode: RewriteMode) -> ShardingSchema {
         ShardingSchema {
             rewrite: Rewrite {
-                require_primary_key: mode,
+                primary_key: mode,
                 ..Default::default()
             },
             ..Default::default()

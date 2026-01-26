@@ -42,7 +42,7 @@ async fn test_auto_id_rewrite_mode_injects_id() {
     prepare_auto_id_table(&pool, &admin).await;
 
     admin
-        .execute("SET rewrite_require_primary_key TO rewrite")
+        .execute("SET rewrite_primary_key TO rewrite")
         .await
         .unwrap();
 
@@ -96,7 +96,7 @@ async fn test_auto_id_error_mode_rejects_missing_pk() {
     assert!(check.0 > 0, "Table should exist with columns");
 
     admin
-        .execute("SET rewrite_require_primary_key TO error")
+        .execute("SET rewrite_primary_key TO error")
         .await
         .unwrap();
 
@@ -129,7 +129,7 @@ async fn test_auto_id_ignore_mode_allows_missing_pk() {
     prepare_auto_id_table(&pool, &admin).await;
 
     admin
-        .execute("SET rewrite_require_primary_key TO ignore")
+        .execute("SET rewrite_primary_key TO ignore")
         .await
         .unwrap();
 
@@ -161,7 +161,7 @@ async fn test_auto_id_with_explicit_pk_no_injection() {
     prepare_auto_id_table(&pool, &admin).await;
 
     admin
-        .execute("SET rewrite_require_primary_key TO rewrite")
+        .execute("SET rewrite_primary_key TO rewrite")
         .await
         .unwrap();
 
@@ -201,7 +201,7 @@ async fn test_auto_id_multi_row_insert() {
     prepare_auto_id_table(&pool, &admin).await;
 
     admin
-        .execute("SET rewrite_require_primary_key TO rewrite")
+        .execute("SET rewrite_primary_key TO rewrite")
         .await
         .unwrap();
     admin

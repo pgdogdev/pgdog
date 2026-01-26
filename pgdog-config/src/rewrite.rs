@@ -58,7 +58,7 @@ pub struct Rewrite {
     /// - error: Return an error if a BIGINT primary key is missing
     /// - rewrite: Auto-inject pgdog.unique_id() for missing BIGINT primary keys
     #[serde(default = "Rewrite::default_require_primary_key")]
-    pub require_primary_key: RewriteMode,
+    pub primary_key: RewriteMode,
 }
 
 impl Default for Rewrite {
@@ -67,7 +67,7 @@ impl Default for Rewrite {
             enabled: false,
             shard_key: Self::default_shard_key(),
             split_inserts: Self::default_split_inserts(),
-            require_primary_key: Self::default_require_primary_key(),
+            primary_key: Self::default_require_primary_key(),
         }
     }
 }

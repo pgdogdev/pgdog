@@ -121,8 +121,8 @@ impl Command for Set {
                     .map_err(|_| Error::Syntax)?;
             }
 
-            "rewrite_require_primary_key" => {
-                config.config.rewrite.require_primary_key = self
+            "rewrite_primary_key" => {
+                config.config.rewrite.primary_key = self
                     .value
                     .parse::<RewriteMode>()
                     .map_err(|_| Error::Syntax)?;
