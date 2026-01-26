@@ -32,6 +32,6 @@ pub enum Error {
     #[error("{0}")]
     Type(#[from] pgdog_postgres_types::Error),
 
-    #[error("INSERT into '{table}' missing primary key column(s): {}", columns.join(", "))]
-    MissingPrimaryKey { table: String, columns: Vec<String> },
+    #[error("primary key is missing")]
+    MissingPrimaryKey,
 }

@@ -112,7 +112,7 @@ async fn test_auto_id_error_mode_rejects_missing_pk() {
         .as_database_error()
         .expect("expected database error from proxy");
     assert!(
-        db_err.message().contains("missing primary key"),
+        db_err.message().contains("primary key is missing"),
         "expected missing primary key error, got: {}",
         db_err.message()
     );

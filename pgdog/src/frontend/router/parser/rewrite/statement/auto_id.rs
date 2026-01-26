@@ -78,10 +78,7 @@ impl StatementRewrite<'_> {
 
         match mode {
             RewriteMode::Error => {
-                return Err(Error::MissingPrimaryKey {
-                    table: table_name,
-                    columns: missing_columns.iter().map(|s| s.to_string()).collect(),
-                });
+                return Err(Error::MissingPrimaryKey);
             }
             RewriteMode::Rewrite => {
                 for column in missing_columns {
