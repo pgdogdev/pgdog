@@ -29,7 +29,6 @@ impl StatementRewrite<'_> {
         let Some(table) = self.get_insert_table() else {
             return Ok(());
         };
-        let table_name = table.name.to_string();
 
         let Some(relation) = self.db_schema.table(table, self.user, self.search_path) else {
             return Ok(());
@@ -394,7 +393,7 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(
-            err.to_string().contains("missing primary key"),
+            err.to_string().contains("primary key missing"),
             "Expected MissingPrimaryKey error, got: {}",
             err
         );
