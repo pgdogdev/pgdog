@@ -21,6 +21,9 @@ pub struct RewritePlan {
     /// Number of unique IDs to append to the Bind message.
     pub(crate) unique_ids: u16,
 
+    /// Number of auto-injected primary key columns with pgdog.unique_id().
+    pub(crate) auto_id_injected: u16,
+
     /// Rewritten SQL statement.
     pub(crate) stmt: Option<String>,
 

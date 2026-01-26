@@ -109,10 +109,11 @@ impl<'a> MultiTenantCheck<'a> {
 mod tests {
     use super::*;
     use crate::backend::schema::{columns::Column, Relation, Schema};
+    use indexmap::IndexMap;
     use std::collections::HashMap;
 
     fn schema_with_tenant_column(column: &str) -> Schema {
-        let mut columns = HashMap::new();
+        let mut columns = IndexMap::new();
         columns.insert(
             column.to_string(),
             Column {
@@ -123,6 +124,8 @@ mod tests {
                 column_default: String::new(),
                 is_nullable: false,
                 data_type: "bigint".into(),
+                ordinal_position: 1,
+                is_primary_key: false,
             },
         );
 

@@ -121,6 +121,13 @@ impl Command for Set {
                     .map_err(|_| Error::Syntax)?;
             }
 
+            "rewrite_primary_key" => {
+                config.config.rewrite.primary_key = self
+                    .value
+                    .parse::<RewriteMode>()
+                    .map_err(|_| Error::Syntax)?;
+            }
+
             "rewrite_enabled" => {
                 config.config.rewrite.enabled = Self::from_json(&self.value)?;
             }

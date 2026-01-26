@@ -110,7 +110,7 @@ impl Schema {
                     .iter()
                     .filter(|table| table.schema() != "pgdog")
                 {
-                    let column_match = schema_table.columns.values().find(|column| {
+                    let column_match = schema_table.columns().values().find(|column| {
                         column.column_name == table.column && column.data_type == "bigint"
                     });
                     if let Some(column_match) = column_match {
@@ -233,6 +233,8 @@ impl Deref for Schema {
 mod test {
     use std::collections::HashMap;
 
+    use indexmap::IndexMap;
+
     use crate::backend::pool::Request;
     use crate::backend::schema::relation::Relation;
     use crate::frontend::router::parser::Table;
@@ -307,11 +309,11 @@ mod test {
         let relations: HashMap<(String, String), Relation> = HashMap::from([
             (
                 ("myschema".into(), "users".into()),
-                Relation::test_table("myschema", "users", HashMap::new()),
+                Relation::test_table("myschema", "users", IndexMap::new()),
             ),
             (
                 ("public".into(), "users".into()),
-                Relation::test_table("public", "users", HashMap::new()),
+                Relation::test_table("public", "users", IndexMap::new()),
             ),
         ]);
         let schema = Schema::from_parts(vec!["$user".into(), "public".into()], relations);
@@ -331,7 +333,7 @@ mod test {
     fn test_table_search_path_lookup() {
         let relations: HashMap<(String, String), Relation> = HashMap::from([(
             ("public".into(), "orders".into()),
-            Relation::test_table("public", "orders", HashMap::new()),
+            Relation::test_table("public", "orders", IndexMap::new()),
         )]);
         let schema = Schema::from_parts(vec!["$user".into(), "public".into()], relations);
 
@@ -352,11 +354,11 @@ mod test {
         let relations: HashMap<(String, String), Relation> = HashMap::from([
             (
                 ("alice".into(), "settings".into()),
-                Relation::test_table("alice", "settings", HashMap::new()),
+                Relation::test_table("alice", "settings", IndexMap::new()),
             ),
             (
                 ("public".into(), "settings".into()),
-                Relation::test_table("public", "settings", HashMap::new()),
+                Relation::test_table("public", "settings", IndexMap::new()),
             ),
         ]);
         let schema = Schema::from_parts(vec!["$user".into(), "public".into()], relations);
@@ -377,7 +379,7 @@ mod test {
     fn test_table_not_found() {
         let relations: HashMap<(String, String), Relation> = HashMap::from([(
             ("public".into(), "users".into()),
-            Relation::test_table("public", "users", HashMap::new()),
+            Relation::test_table("public", "users", IndexMap::new()),
         )]);
         let schema = Schema::from_parts(vec!["$user".into(), "public".into()], relations);
 
@@ -396,11 +398,11 @@ mod test {
         let relations: HashMap<(String, String), Relation> = HashMap::from([
             (
                 ("custom".into(), "data".into()),
-                Relation::test_table("custom", "data", HashMap::new()),
+                Relation::test_table("custom", "data", IndexMap::new()),
             ),
             (
                 ("public".into(), "data".into()),
-                Relation::test_table("public", "data", HashMap::new()),
+                Relation::test_table("public", "data", IndexMap::new()),
             ),
         ]);
         let schema = Schema::from_parts(vec!["$user".into(), "public".into()], relations);

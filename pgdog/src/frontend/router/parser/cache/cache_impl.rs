@@ -10,8 +10,7 @@ use std::sync::Arc;
 use tracing::debug;
 
 use super::super::{Error, Route};
-use super::Ast;
-use crate::backend::ShardingSchema;
+use super::{Ast, AstContext};
 use crate::frontend::{BufferedQuery, PreparedStatements};
 
 static CACHE: Lazy<Cache> = Lazy::new(Cache::new);
@@ -86,12 +85,12 @@ impl Cache {
     pub fn query(
         &self,
         query: &BufferedQuery,
-        schema: &ShardingSchema,
+        ctx: &AstContext<'_>,
         prepared_statements: &mut PreparedStatements,
     ) -> Result<Ast, Error> {
         match query {
-            BufferedQuery::Prepared(_) => self.parse(query, schema, prepared_statements),
-            BufferedQuery::Query(_) => self.simple(query, schema, prepared_statements),
+            BufferedQuery::Prepared(_) => self.parse(query, ctx, prepared_statements),
+            BufferedQuery::Query(_) => self.simple(query, ctx, prepared_statements),
         }
     }
 
@@ -104,7 +103,7 @@ impl Cache {
     fn parse(
         &self,
         query: &BufferedQuery,
-        schema: &ShardingSchema,
+        ctx: &AstContext<'_>,
         prepared_statements: &mut PreparedStatements,
     ) -> Result<Ast, Error> {
         {
@@ -120,7 +119,7 @@ impl Cache {
         }
 
         // Parse query without holding lock.
-        let entry = Ast::new(query, schema, prepared_statements)?;
+        let entry = Ast::with_context(query, ctx, prepared_statements)?;
         let parse_time = entry.stats.lock().parse_time;
 
         let mut guard = self.inner.lock();
@@ -136,10 +135,10 @@ impl Cache {
     fn simple(
         &self,
         query: &BufferedQuery,
-        schema: &ShardingSchema,
+        ctx: &AstContext<'_>,
         prepared_statements: &mut PreparedStatements,
     ) -> Result<Ast, Error> {
-        let mut entry = Ast::new(query, schema, prepared_statements)?;
+        let mut entry = Ast::with_context(query, ctx, prepared_statements)?;
         entry.cached = false;
 
         let parse_time = entry.stats.lock().parse_time;

@@ -79,7 +79,10 @@ mod tests {
         let ast = Ast::new(
             &BufferedQuery::Query(Query::new(sql)),
             &cluster.sharding_schema(),
+            &cluster.schema(),
             &mut stmts,
+            "",
+            None,
         )
         .unwrap();
         let mut buffer = ClientRequest::from(vec![Query::new(sql).into()]);
@@ -114,7 +117,10 @@ mod tests {
         let ast = Ast::new(
             &BufferedQuery::Prepared(Parse::new_anonymous(sql)),
             &cluster.sharding_schema(),
+            &cluster.schema(),
             &mut stmts,
+            "",
+            None,
         )
         .unwrap();
         let mut buffer: ClientRequest = vec![parse_msg.into(), bind.into()].into();

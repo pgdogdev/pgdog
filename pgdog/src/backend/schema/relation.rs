@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use indexmap::IndexMap;
+
 use super::{columns::Column, Error};
 use crate::{
     backend::Server,
@@ -19,7 +21,8 @@ pub struct Relation {
     pub access_method: String,
     pub description: String,
     pub oid: i32,
-    pub columns: HashMap<String, Column>,
+    /// Columns indexed by name, ordered by ordinal position.
+    columns: IndexMap<String, Column>,
 }
 
 impl From<DataRow> for Relation {
@@ -33,7 +36,7 @@ impl From<DataRow> for Relation {
             access_method: value.get_text(5).unwrap_or_default(),
             description: value.get_text(6).unwrap_or_default(),
             oid: value.get::<i32>(7, Format::Text).unwrap_or_default(),
-            columns: HashMap::new(),
+            columns: IndexMap::new(),
         }
     }
 }
@@ -90,9 +93,14 @@ impl Relation {
         self.type_ == "sequence"
     }
 
-    /// Columns by name.
-    pub fn columns(&self) -> &HashMap<String, Column> {
+    /// Columns by name, in ordinal position order.
+    pub fn columns(&self) -> &IndexMap<String, Column> {
         &self.columns
+    }
+
+    /// Get ordered column names (in ordinal position order).
+    pub fn column_names(&self) -> impl Iterator<Item = &str> {
+        self.columns.keys().map(|s| s.as_str())
     }
 
     pub fn has_column(&self, name: &str) -> bool {
@@ -102,7 +110,7 @@ impl Relation {
 
 #[cfg(test)]
 impl Relation {
-    pub(crate) fn test_table(schema: &str, name: &str, columns: HashMap<String, Column>) -> Self {
+    pub(crate) fn test_table(schema: &str, name: &str, columns: IndexMap<String, Column>) -> Self {
         Self {
             schema: schema.into(),
             name: name.into(),

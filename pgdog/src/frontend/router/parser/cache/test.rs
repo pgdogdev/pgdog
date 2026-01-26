@@ -2,13 +2,17 @@ use pg_query::{normalize, parse};
 use tokio::spawn;
 
 use crate::{
-    backend::ShardingSchema,
+    backend::{schema::Schema, ShardingSchema},
     frontend::{BufferedQuery, PreparedStatements},
     net::{Parse, Query},
 };
 
 use super::*;
 use std::time::{Duration, Instant};
+
+fn test_context() -> AstContext<'static> {
+    AstContext::empty()
+}
 
 #[tokio::test(flavor = "multi_thread")]
 async fn bench_ast_cache() {
@@ -65,12 +69,13 @@ async fn bench_ast_cache() {
         let handle = spawn(async move {
             let mut cached_time = Duration::ZERO;
             let mut prepared_statements = PreparedStatements::default();
+            let ctx = test_context();
             for _ in 0..(times / threads) {
                 let start = Instant::now();
                 Cache::get()
                     .query(
                         &BufferedQuery::Prepared(Parse::new_anonymous(query)),
-                        &ShardingSchema::default(),
+                        &ctx,
                         &mut prepared_statements,
                     )
                     .unwrap();
@@ -108,6 +113,7 @@ fn test_normalize() {
 #[test]
 fn test_tables_list() {
     let mut prepared_statements = PreparedStatements::default();
+    let db_schema = Schema::default();
     for q in [
         "CREATE TABLE private_schema.test (id BIGINT)",
         "SELECT * FROM private_schema.test a INNER JOIN public_schema.test b ON a.id = b.id LIMIT 5",
@@ -115,7 +121,7 @@ fn test_tables_list() {
         "DELETE FROM private_schema.test",
         "DROP TABLE private_schema.test",
     ] {
-        let ast = Ast::new(&BufferedQuery::Query(Query::new(q)), &ShardingSchema::default(), &mut prepared_statements).unwrap();
+        let ast = Ast::new(&BufferedQuery::Query(Query::new(q)), &ShardingSchema::default(), &db_schema, &mut prepared_statements, "", None).unwrap();
         let tables = ast.tables();
         println!("{:?}", tables);
     }
