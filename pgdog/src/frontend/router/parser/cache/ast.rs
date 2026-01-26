@@ -11,8 +11,10 @@ use super::super::{
     comment::comment, Error, Route, Shard, StatementRewrite, StatementRewriteContext, Table,
 };
 use super::{Fingerprint, Stats};
+use crate::backend::schema::Schema;
 use crate::frontend::router::parser::rewrite::statement::RewritePlan;
 use crate::frontend::{BufferedQuery, PreparedStatements};
+use crate::net::parameter::ParameterValue;
 use crate::{backend::ShardingSchema, config::Role};
 
 /// Abstract syntax tree (query) cache entry,
@@ -68,7 +70,10 @@ impl Ast {
     pub fn new(
         query: &BufferedQuery,
         schema: &ShardingSchema,
+        db_schema: &Schema,
         prepared_statements: &mut PreparedStatements,
+        user: &str,
+        search_path: Option<&ParameterValue>,
     ) -> Result<Self, Error> {
         let now = Instant::now();
         let mut ast = match schema.query_parser_engine {
@@ -89,6 +94,9 @@ impl Ast {
                 prepared: query.prepared(),
                 prepared_statements,
                 schema,
+                db_schema,
+                user,
+                search_path,
             })
             .maybe_rewrite()?
         } else {
@@ -110,6 +118,22 @@ impl Ast {
                 fingerprint,
             }),
         })
+    }
+
+    /// Parse statement using AstContext for schema and user information.
+    pub fn with_context(
+        query: &BufferedQuery,
+        ctx: &super::AstContext<'_>,
+        prepared_statements: &mut PreparedStatements,
+    ) -> Result<Self, Error> {
+        Self::new(
+            query,
+            &ctx.sharding_schema,
+            &ctx.db_schema,
+            prepared_statements,
+            ctx.user,
+            ctx.search_path,
+        )
     }
 
     /// Record new AST entry, without rewriting or comment-routing.

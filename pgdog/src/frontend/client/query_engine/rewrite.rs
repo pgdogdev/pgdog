@@ -1,4 +1,7 @@
-use crate::{config::PreparedStatements, frontend::router::parser::Cache};
+use crate::{
+    config::PreparedStatements,
+    frontend::router::parser::{AstContext, Cache},
+};
 
 use super::*;
 
@@ -40,11 +43,9 @@ impl QueryEngine {
 
         let query = context.client_request.query()?;
         if let Some(query) = query {
-            let ast = match Cache::get().query(
-                &query,
-                &self.backend.cluster()?.sharding_schema(),
-                context.prepared_statements,
-            ) {
+            let cluster = self.backend.cluster()?;
+            let ast_ctx = AstContext::from_cluster(cluster, context.params);
+            let ast = match Cache::get().query(&query, &ast_ctx, context.prepared_statements) {
                 Ok(ast) => ast,
                 Err(err) => {
                     self.error_response(context, ErrorResponse::syntax(err.to_string().as_str()))

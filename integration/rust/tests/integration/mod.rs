@@ -1,5 +1,6 @@
 pub mod admin_termination;
 pub mod auth;
+pub mod auto_id;
 pub mod avg;
 pub mod ban;
 pub mod client_ids;

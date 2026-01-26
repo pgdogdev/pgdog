@@ -121,6 +121,7 @@ fn rewrite_single_prepared(
 mod tests {
     use super::super::{RewritePlan, StatementRewrite, StatementRewriteContext};
     use super::*;
+    use crate::backend::schema::Schema;
     use crate::backend::ShardingSchema;
     use crate::config::PreparedStatements as PreparedStatementsLevel;
     use pg_query::parse;
@@ -130,6 +131,7 @@ mod tests {
     struct TestContext {
         ps: PreparedStatements,
         schema: ShardingSchema,
+        db_schema: Schema,
     }
 
     impl TestContext {
@@ -146,6 +148,7 @@ mod tests {
                     },
                     ..Default::default()
                 },
+                db_schema: Schema::default(),
             }
         }
 
@@ -157,6 +160,9 @@ mod tests {
                 prepared: false,
                 prepared_statements: &mut self.ps,
                 schema: &self.schema,
+                db_schema: &self.db_schema,
+                user: "",
+                search_path: None,
             });
             let plan = rewrite.maybe_rewrite()?;
             Ok((ast, plan))

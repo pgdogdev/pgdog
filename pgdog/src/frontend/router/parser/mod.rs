@@ -35,7 +35,7 @@ pub use expression::ExpressionRegistry;
 
 pub use aggregate::{Aggregate, AggregateFunction, AggregateTarget};
 pub use binary::BinaryStream;
-pub use cache::{Ast, Cache};
+pub use cache::{Ast, AstContext, Cache};
 pub use column::{Column, OwnedColumn};
 pub use command::Command;
 pub use context::QueryParserContext;
@@ -56,7 +56,7 @@ pub use rewrite::{
 pub use route::{Route, Shard, ShardWithPriority, ShardsWithPriority};
 pub use schema::Schema;
 pub use sequence::{OwnedSequence, Sequence};
-pub use statement::StatementParser;
+pub use statement::{SchemaLookupContext, StatementParser};
 pub use table::{OwnedTable, Table};
 pub use tuple::Tuple;
 pub use value::Value;

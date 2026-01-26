@@ -31,4 +31,7 @@ pub enum Error {
 
     #[error("{0}")]
     Type(#[from] pgdog_postgres_types::Error),
+
+    #[error("primary key is missing")]
+    MissingPrimaryKey,
 }
