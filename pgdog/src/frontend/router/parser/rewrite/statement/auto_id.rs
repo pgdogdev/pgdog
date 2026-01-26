@@ -1,5 +1,7 @@
 //! Auto-inject pgdog.unique_id() for missing BIGINT primary keys in INSERT statements.
 
+use std::collections::HashSet;
+
 use pg_query::protobuf::{FuncCall, ResTarget, String as PgString};
 use pg_query::{Node, NodeEnum};
 use pgdog_config::RewriteMode;
@@ -10,12 +12,12 @@ use crate::frontend::router::parser::Table;
 impl StatementRewrite<'_> {
     /// Handle missing BIGINT primary key columns in INSERT statements based on config.
     ///
-    /// Behavior depends on `rewrite.require_primary_key` setting:
+    /// Behavior depends on `rewrite.primary_key` setting:
     /// - `ignore`: Do nothing
     /// - `error`: Return an error if a BIGINT primary key is missing
     /// - `rewrite`: Auto-inject pgdog.unique_id() for missing columns
     ///
-    /// This runs BEFORE unique_id replacement so injected function calls
+    /// This runs before unique_id replacement so injected function calls
     /// will be processed by the unique_id rewriter.
     pub(super) fn inject_auto_id(&mut self, plan: &mut RewritePlan) -> Result<(), Error> {
         let mode = self.schema.rewrite.primary_key;
@@ -50,11 +52,7 @@ impl StatementRewrite<'_> {
         // Find which PK columns are missing
         let missing_columns: Vec<&str> = bigint_pk_columns
             .into_iter()
-            .filter(|pk_col| {
-                !insert_columns
-                    .iter()
-                    .any(|c| c.eq_ignore_ascii_case(pk_col))
-            })
+            .filter(|pk_col| !insert_columns.contains(pk_col))
             .collect();
 
         if missing_columns.is_empty() {
@@ -95,15 +93,15 @@ impl StatementRewrite<'_> {
     }
 
     /// Get the column names specified in the INSERT statement.
-    fn get_insert_column_names(&self) -> Vec<String> {
+    fn get_insert_column_names(&self) -> HashSet<&str> {
         let Some(stmt) = self.stmt.stmts.first() else {
-            return Vec::new();
+            return HashSet::new();
         };
         let Some(node) = stmt.stmt.as_ref() else {
-            return Vec::new();
+            return HashSet::new();
         };
         let Some(NodeEnum::InsertStmt(insert)) = node.node.as_ref() else {
-            return Vec::new();
+            return HashSet::new();
         };
 
         insert
@@ -112,7 +110,7 @@ impl StatementRewrite<'_> {
             .filter_map(|col| {
                 if let Some(NodeEnum::ResTarget(res)) = &col.node {
                     if !res.name.is_empty() {
-                        return Some(res.name.clone());
+                        return Some(res.name.as_str());
                     }
                 }
                 None
