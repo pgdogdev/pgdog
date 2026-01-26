@@ -238,3 +238,43 @@ async fn test_auto_id_multi_row_insert() {
 
     cleanup_auto_id_table(&pool).await;
 }
+
+#[tokio::test]
+async fn test_auto_id_default_replaced_with_unique_id() {
+    let admin = admin_sqlx().await;
+    let mut pools = connections_sqlx().await;
+    let pool = pools.swap_remove(1);
+
+    prepare_auto_id_table(&pool, &admin).await;
+
+    admin
+        .execute("SET rewrite_primary_key TO rewrite")
+        .await
+        .unwrap();
+
+    // Insert with DEFAULT as primary key value - should be replaced with unique_id
+    let result = sqlx::query(&format!(
+        "INSERT INTO {AUTO_ID_TABLE} (id, customer_id, name) VALUES (DEFAULT, 600, 'default_test')"
+    ))
+    .execute(&pool)
+    .await;
+
+    assert!(
+        result.is_ok(),
+        "INSERT with DEFAULT id should succeed: {:?}",
+        result.err()
+    );
+
+    let row: (i64, i64, String) = sqlx::query_as(&format!(
+        "SELECT id, customer_id, name FROM {AUTO_ID_TABLE} WHERE customer_id = 600"
+    ))
+    .fetch_one(&pool)
+    .await
+    .expect("fetch inserted row");
+
+    assert!(row.0 > 0, "auto-generated id should be positive");
+    assert_eq!(row.1, 600, "customer_id should be 600");
+    assert_eq!(row.2, "default_test", "name should be 'default_test'");
+
+    cleanup_auto_id_table(&pool).await;
+}

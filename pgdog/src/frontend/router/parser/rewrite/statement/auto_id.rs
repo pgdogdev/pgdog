@@ -1,7 +1,6 @@
 //! Auto-inject pgdog.unique_id() for missing BIGINT primary keys in INSERT statements.
 
-use std::collections::HashSet;
-
+use indexmap::IndexSet;
 use pg_query::protobuf::{FuncCall, ResTarget, String as PgString};
 use pg_query::{Node, NodeEnum};
 use pgdog_config::RewriteMode;
@@ -10,12 +9,13 @@ use super::{Error, RewritePlan, StatementRewrite};
 use crate::frontend::router::parser::Table;
 
 impl StatementRewrite<'_> {
-    /// Handle missing BIGINT primary key columns in INSERT statements based on config.
+    /// Handle BIGINT primary key columns in INSERT statements based on config.
     ///
     /// Behavior depends on `rewrite.primary_key` setting:
     /// - `ignore`: Do nothing
     /// - `error`: Return an error if a BIGINT primary key is missing
-    /// - `rewrite`: Auto-inject pgdog.unique_id() for missing columns
+    /// - `rewrite`: Auto-inject pgdog.unique_id() for missing columns,
+    ///              or replace DEFAULT values with pgdog.unique_id()
     ///
     /// This runs before unique_id replacement so injected function calls
     /// will be processed by the unique_id rewriter.
@@ -29,13 +29,14 @@ impl StatementRewrite<'_> {
         let Some(table) = self.get_insert_table() else {
             return Ok(());
         };
+        let table_name = table.name.to_string();
 
         let Some(relation) = self.db_schema.table(table, self.user, self.search_path) else {
             return Ok(());
         };
 
-        // Get the columns specified in the INSERT (if any)
-        let insert_columns = self.get_insert_column_names();
+        // Get the columns specified in the INSERT (preserving order)
+        let insert_columns: IndexSet<&str> = self.get_insert_column_names_ordered();
 
         // Find BIGINT primary key columns
         let bigint_pk_columns: Vec<&str> = relation
@@ -49,11 +50,27 @@ impl StatementRewrite<'_> {
             return Ok(());
         }
 
+        // Find positions of present PK columns (for DEFAULT replacement)
+        let present_pk_positions: Vec<usize> = bigint_pk_columns
+            .iter()
+            .filter_map(|pk_col| insert_columns.get_index_of(pk_col))
+            .collect();
+
         // Find which PK columns are missing
         let missing_columns: Vec<&str> = bigint_pk_columns
-            .into_iter()
-            .filter(|pk_col| !insert_columns.contains(pk_col))
+            .iter()
+            .filter(|pk_col| !insert_columns.contains(*pk_col))
+            .copied()
             .collect();
+
+        // Replace DEFAULT values with unique_id() for present columns (only in rewrite mode)
+        if mode == RewriteMode::Rewrite {
+            let replaced = self.replace_set_to_default_at_positions(&present_pk_positions);
+            if replaced > 0 {
+                plan.auto_id_injected += replaced as u16;
+                self.rewritten = true;
+            }
+        }
 
         if missing_columns.is_empty() {
             return Ok(());
@@ -62,7 +79,7 @@ impl StatementRewrite<'_> {
         match mode {
             RewriteMode::Error => {
                 return Err(Error::MissingPrimaryKey {
-                    table: table.name.to_string(),
+                    table: table_name,
                     columns: missing_columns.iter().map(|s| s.to_string()).collect(),
                 });
             }
@@ -92,16 +109,16 @@ impl StatementRewrite<'_> {
         None
     }
 
-    /// Get the column names specified in the INSERT statement.
-    fn get_insert_column_names(&self) -> HashSet<&str> {
+    /// Get the column names specified in the INSERT statement, preserving order.
+    fn get_insert_column_names_ordered(&self) -> IndexSet<&str> {
         let Some(stmt) = self.stmt.stmts.first() else {
-            return HashSet::new();
+            return IndexSet::new();
         };
         let Some(node) = stmt.stmt.as_ref() else {
-            return HashSet::new();
+            return IndexSet::new();
         };
         let Some(NodeEnum::InsertStmt(insert)) = node.node.as_ref() else {
-            return HashSet::new();
+            return IndexSet::new();
         };
 
         insert
@@ -116,6 +133,43 @@ impl StatementRewrite<'_> {
                 None
             })
             .collect()
+    }
+
+    /// Replace SetToDefault nodes at the specified column positions with pgdog.unique_id().
+    fn replace_set_to_default_at_positions(&mut self, positions: &[usize]) -> usize {
+        let Some(stmt) = self.stmt.stmts.first_mut() else {
+            return 0;
+        };
+        let Some(node) = stmt.stmt.as_mut() else {
+            return 0;
+        };
+        let Some(NodeEnum::InsertStmt(insert)) = node.node.as_mut() else {
+            return 0;
+        };
+        let Some(select) = insert.select_stmt.as_mut() else {
+            return 0;
+        };
+        let Some(NodeEnum::SelectStmt(select_stmt)) = select.node.as_mut() else {
+            return 0;
+        };
+
+        let mut replaced = 0;
+        let unique_id_call = Self::unique_id_func_call();
+
+        for values_node in &mut select_stmt.values_lists {
+            if let Some(NodeEnum::List(list)) = &mut values_node.node {
+                for &pos in positions {
+                    if pos < list.items.len() {
+                        if let Some(NodeEnum::SetToDefault(_)) = &list.items[pos].node {
+                            list.items[pos] = unique_id_call.clone();
+                            replaced += 1;
+                        }
+                    }
+                }
+            }
+        }
+
+        replaced
     }
 
     /// Inject a column with pgdog.unique_id() as the value.
@@ -137,7 +191,7 @@ impl StatementRewrite<'_> {
                 ..Default::default()
             }))),
         };
-        insert.cols.insert(0, col_node);
+        insert.cols.push(col_node);
 
         // Add pgdog.unique_id() to each values list
         let Some(select) = insert.select_stmt.as_mut() else {
@@ -151,7 +205,7 @@ impl StatementRewrite<'_> {
 
         for values_node in &mut select_stmt.values_lists {
             if let Some(NodeEnum::List(list)) = &mut values_node.node {
-                list.items.insert(0, unique_id_call.clone());
+                list.items.push(unique_id_call.clone());
             }
         }
 
@@ -428,5 +482,50 @@ mod tests {
         );
 
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_replace_default_with_unique_id() {
+        let db_schema = make_schema_with_bigint_pk();
+        let (sql, plan) = rewrite_sql_with_mode(
+            "INSERT INTO users (id, name) VALUES (DEFAULT, 'test')",
+            &db_schema,
+            RewriteMode::Rewrite,
+        )
+        .unwrap();
+
+        // DEFAULT should be replaced with unique_id
+        assert!(!sql.to_uppercase().contains("DEFAULT"));
+        assert!(sql.contains("::bigint")); // value is cast to bigint
+        assert_eq!(plan.unique_ids, 1);
+    }
+
+    #[test]
+    fn test_replace_default_multi_row() {
+        let db_schema = make_schema_with_bigint_pk();
+        let (sql, plan) = rewrite_sql_with_mode(
+            "INSERT INTO users (id, name) VALUES (DEFAULT, 'a'), (DEFAULT, 'b')",
+            &db_schema,
+            RewriteMode::Rewrite,
+        )
+        .unwrap();
+
+        // Both DEFAULT values should be replaced
+        assert!(!sql.to_uppercase().contains("DEFAULT"));
+        assert_eq!(plan.unique_ids, 2);
+    }
+
+    #[test]
+    fn test_error_mode_preserves_default() {
+        let db_schema = make_schema_with_bigint_pk();
+        let (sql, _plan) = rewrite_sql_with_mode(
+            "INSERT INTO users (id, name) VALUES (DEFAULT, 'test')",
+            &db_schema,
+            RewriteMode::Error,
+        )
+        .unwrap();
+
+        // DEFAULT should NOT be replaced in error mode
+        assert!(sql.to_uppercase().contains("DEFAULT"));
     }
 }
