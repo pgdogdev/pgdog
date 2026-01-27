@@ -22,6 +22,7 @@ pub mod list;
 pub mod mapping;
 pub mod operator;
 pub mod range;
+pub mod sampler;
 pub mod schema;
 pub mod tables;
 #[cfg(test)]

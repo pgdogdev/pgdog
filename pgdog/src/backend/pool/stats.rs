@@ -177,6 +177,8 @@ mod tests {
             prepared_sync: 7,
             connect_time: Duration::from_secs(1),
             connect_count: 8,
+            reads: 25,
+            writes: 50,
         }
         .into();
 
@@ -201,6 +203,8 @@ mod tests {
             prepared_sync: 3,
             connect_time: Duration::from_secs(2),
             connect_count: 4,
+            reads: 10,
+            writes: 20,
         }
         .into();
 
@@ -226,6 +230,8 @@ mod tests {
         assert_eq!(result.prepared_sync, 10);
         assert_eq!(result.connect_time, Duration::from_secs(3));
         assert_eq!(result.connect_count, 12);
+        assert_eq!(result.reads, 35);
+        assert_eq!(result.writes, 70);
     }
 
     #[test]
@@ -251,6 +257,8 @@ mod tests {
             prepared_sync: 7,
             connect_time: Duration::from_secs(3),
             connect_count: 8,
+            reads: 25,
+            writes: 50,
         }
         .into();
 
@@ -275,6 +283,8 @@ mod tests {
             prepared_sync: 3,
             connect_time: Duration::from_secs(1),
             connect_count: 4,
+            reads: 10,
+            writes: 20,
         }
         .into();
 
@@ -300,6 +310,8 @@ mod tests {
         assert_eq!(result.prepared_sync, 4);
         assert_eq!(result.connect_time, Duration::from_secs(2));
         assert_eq!(result.connect_count, 4);
+        assert_eq!(result.reads, 15);
+        assert_eq!(result.writes, 30);
     }
 
     #[test]
@@ -347,6 +359,8 @@ mod tests {
             prepared_sync: 9,
             connect_time: Duration::from_secs(8),
             connect_count: 4,
+            reads: 10,
+            writes: 20,
         }
         .into();
 
@@ -372,6 +386,8 @@ mod tests {
         assert_eq!(result.prepared_sync, 4);
         assert_eq!(result.connect_time, Duration::from_secs(4));
         assert_eq!(result.connect_count, 2);
+        assert_eq!(result.reads, 5);
+        assert_eq!(result.writes, 10);
     }
 
     #[test]
@@ -412,6 +428,8 @@ mod tests {
             prepared_sync: 7,
             connect_time: Duration::from_secs(1),
             connect_count: 8,
+            reads: 10,
+            writes: 25,
         }
         .into();
 
@@ -457,6 +475,8 @@ mod tests {
         assert_eq!(result.prepared_sync, 12);
         assert_eq!(result.connect_count, 8);
         assert_eq!(result.connect_time, Duration::from_secs(1));
+        assert_eq!(result.reads, 10);
+        assert_eq!(result.writes, 25);
     }
 
     #[test]

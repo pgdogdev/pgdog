@@ -56,6 +56,10 @@ pub struct Counts {
     pub connect_time: Duration,
     /// Total number of times the pool attempted to create server connections.
     pub connect_count: usize,
+    /// Number of read transactions.
+    pub reads: usize,
+    /// Number of write transactions.
+    pub writes: usize,
 }
 
 impl Sub for Counts {
@@ -85,6 +89,8 @@ impl Sub for Counts {
             prepared_sync: self.prepared_sync.saturating_sub(rhs.prepared_sync),
             connect_time: self.connect_time.saturating_sub(rhs.connect_time),
             connect_count: self.connect_count.saturating_sub(rhs.connect_count),
+            reads: self.reads.saturating_sub(rhs.reads),
+            writes: self.writes.saturating_sub(rhs.writes),
         }
     }
 }
@@ -116,6 +122,8 @@ impl Add for Counts {
             prepared_sync: self.prepared_sync.saturating_add(rhs.prepared_sync),
             connect_count: self.connect_count.saturating_add(rhs.connect_count),
             connect_time: self.connect_time.saturating_add(rhs.connect_time),
+            reads: self.reads.saturating_add(rhs.reads),
+            writes: self.writes.saturating_add(rhs.writes),
         }
     }
 }
@@ -151,6 +159,8 @@ impl Div<usize> for Counts {
                 .checked_div(rhs as u32)
                 .unwrap_or_default(),
             connect_count: self.connect_count.checked_div(rhs).unwrap_or(0),
+            reads: self.reads.checked_div(rhs).unwrap_or(0),
+            writes: self.writes.checked_div(rhs).unwrap_or(0),
         }
     }
 }
@@ -203,6 +213,14 @@ impl Stats {
                 .clamp(1, u32::MAX as usize);
             self.averages.idle_xact_time =
                 diff.idle_xact_time / queries_in_xact.try_into().unwrap_or(u32::MAX);
+            self.averages
+                .reads
+                .checked_div(diff.xact_count)
+                .unwrap_or_default();
+            self.averages
+                .writes
+                .checked_div(diff.xact_count)
+                .unwrap_or_default();
 
             self.last_counts = self.counts;
         }
