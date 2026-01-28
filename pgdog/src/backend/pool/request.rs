@@ -7,19 +7,29 @@ use crate::net::messages::BackendKeyData;
 pub struct Request {
     pub id: BackendKeyData,
     pub created_at: Instant,
+    pub read: bool,
 }
 
 impl Request {
-    pub fn new(id: BackendKeyData) -> Self {
+    pub fn new(id: BackendKeyData, read: bool) -> Self {
         Self {
             id,
             created_at: Instant::now(),
+            read,
+        }
+    }
+
+    pub fn unrouted(id: BackendKeyData) -> Self {
+        Self {
+            id,
+            created_at: Instant::now(),
+            read: false,
         }
     }
 }
 
 impl Default for Request {
     fn default() -> Self {
-        Self::new(BackendKeyData::new())
+        Self::unrouted(BackendKeyData::new())
     }
 }

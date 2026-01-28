@@ -99,7 +99,7 @@ mod tests {
 
         for i in 0..num_tasks {
             let pool_clone = pool.clone();
-            let request = Request::new(BackendKeyData::new());
+            let request = Request::unrouted(BackendKeyData::new());
             let mut waiting = Waiting::new(pool_clone, &request).unwrap();
 
             let wait_task = tokio::spawn(async move { waiting.wait().await });
@@ -162,7 +162,7 @@ mod tests {
 
         let _conn = pool.get(&Request::default()).await.unwrap();
 
-        let request = Request::new(BackendKeyData::new());
+        let request = Request::unrouted(BackendKeyData::new());
         let waiter_pool = pool.clone();
         let get_conn = async move {
             let mut waiting = Waiting::new(waiter_pool.clone(), &request).unwrap();
