@@ -15,7 +15,7 @@ use crate::{
     backend::{Schema, ShardingSchema},
     config::ShardedTable,
     frontend::router::{
-        parser::Shard,
+        parser::{ee::ParserHooks, Shard},
         round_robin,
         sharding::{ContextBuilder, SchemaSharder, Tables},
     },
@@ -185,6 +185,7 @@ pub struct StatementParser<'a, 'b, 'c> {
     recorder: Option<&'c mut ExplainRecorder>,
     /// Optional schema lookup context for INSERT without column list.
     schema_lookup: Option<SchemaLookupContext<'b>>,
+    hooks: ParserHooks,
 }
 
 impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
@@ -200,6 +201,7 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
             schema,
             recorder,
             schema_lookup: None,
+            hooks: ParserHooks::default(),
         }
     }
 
@@ -247,6 +249,9 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
 
     /// Record a sharding key match.
     fn record_sharding_key(&mut self, shard: &Shard, column: Column<'_>, value: &Value<'_>) {
+        self.hooks
+            .record_sharding_key(shard, &column, value, &self.bind);
+
         if let Some(recorder) = self.recorder.as_mut() {
             let col_str = if let Some(table) = column.table {
                 format!("{}.{}", table, column.name)
@@ -306,6 +311,7 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
                     Some(shard.clone()),
                     format!("matched schema {}", schema_name),
                 );
+                self.hooks.record_sharded_schema(&shard, schema_name);
             }
             return Ok(Some(shard));
         }
