@@ -4,7 +4,7 @@ use super::parser::Error;
 use crate::{
     backend::ShardingSchema,
     frontend::router::{
-        parser::{Schema, Shard, ShardWithPriority, ShardsWithPriority},
+        parser::{ee::ParserHooks, Schema, Shard, ShardWithPriority, ShardsWithPriority},
         sharding::{ContextBuilder, SchemaSharder},
     },
     net::{parameter::ParameterValue, Parameters},
@@ -16,6 +16,7 @@ pub struct ParameterHints<'a> {
     pub pgdog_shard: Option<&'a ParameterValue>,
     pub pgdog_sharding_key: Option<&'a ParameterValue>,
     pub pgdog_role: Option<&'a ParameterValue>,
+    hooks: ParserHooks,
 }
 
 impl<'a> From<&'a Parameters> for ParameterHints<'a> {
@@ -25,6 +26,7 @@ impl<'a> From<&'a Parameters> for ParameterHints<'a> {
             pgdog_shard: value.get("pgdog.shard"),
             pgdog_role: value.get("pgdog.role"),
             pgdog_sharding_key: value.get("pgdog.sharding_key"),
+            hooks: ParserHooks::default(),
         }
     }
 }
@@ -39,11 +41,15 @@ impl ParameterHints<'_> {
         let mut schema_sharder = SchemaSharder::default();
 
         if let Some(ParameterValue::Integer(val)) = self.pgdog_shard {
-            shards.push(ShardWithPriority::new_set(Shard::Direct(*val as usize)));
+            let shard = Shard::Direct(*val as usize);
+            self.hooks.record_set_shard(&shard);
+            shards.push(ShardWithPriority::new_set(shard));
         }
         if let Some(ParameterValue::String(val)) = self.pgdog_shard {
             if let Ok(shard) = val.parse() {
-                shards.push(ShardWithPriority::new_set(Shard::Direct(shard)));
+                let shard = Shard::Direct(shard);
+                self.hooks.record_set_shard(&shard);
+                shards.push(ShardWithPriority::new_set(shard));
             }
         }
         if let Some(ParameterValue::String(val)) = self.pgdog_sharding_key {
@@ -53,12 +59,14 @@ impl ParameterHints<'_> {
                         .shards(sharding_schema.shards)
                         .build()?;
                 let shard = ctx.apply()?;
+                self.hooks.record_set_sharding_key(&shard, &val);
                 shards.push(ShardWithPriority::new_set(shard));
             } else {
                 schema_sharder.resolve(Some(Schema::from(val.as_str())), &sharding_schema.schemas);
 
-                if let Some((shard, _)) = schema_sharder.get() {
-                    shards.push(ShardWithPriority::new_set(shard.clone()));
+                if let Some((shard, schema)) = schema_sharder.get() {
+                    self.hooks.record_sharded_schema(&shard, schema);
+                    shards.push(ShardWithPriority::new_set(shard));
                 }
             }
         }
@@ -79,7 +87,8 @@ impl ParameterHints<'_> {
             }
 
             if let Some((shard, schema)) = schema_sharder.get() {
-                shards.push(ShardWithPriority::new_search_path(shard.clone(), schema));
+                self.hooks.record_sharded_schema(&shard, schema);
+                shards.push(ShardWithPriority::new_search_path(shard, schema));
             }
         }
         Ok(())
@@ -87,7 +96,7 @@ impl ParameterHints<'_> {
 
     /// Compute role from parameter value.
     pub(crate) fn compute_role(&self) -> Option<Role> {
-        match self.pgdog_role {
+        let role = match self.pgdog_role {
             Some(ParameterValue::String(val)) => match val.as_str() {
                 "replica" => Some(Role::Replica),
                 "primary" => Some(Role::Primary),
@@ -95,7 +104,13 @@ impl ParameterHints<'_> {
             },
 
             _ => None,
+        };
+
+        if let Some(role) = &role {
+            self.hooks.record_set_role(role);
         }
+
+        role
     }
 }
 
@@ -133,6 +148,7 @@ mod tests {
             pgdog_shard: None,
             pgdog_sharding_key: Some(&sharding_key),
             pgdog_role: None,
+            hooks: ParserHooks::default(),
         };
 
         let mut shards = ShardsWithPriority::default();
@@ -153,6 +169,7 @@ mod tests {
             pgdog_shard: None,
             pgdog_sharding_key: Some(&sharding_key),
             pgdog_role: None,
+            hooks: ParserHooks::default(),
         };
 
         let mut shards = ShardsWithPriority::default();
