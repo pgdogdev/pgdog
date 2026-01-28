@@ -78,6 +78,10 @@ impl Pools {
         let mut avg_connect_time = vec![];
         let mut total_connect_count = vec![];
         let mut avg_connect_count = vec![];
+        let mut total_reads = vec![];
+        let mut avg_reads = vec![];
+        let mut total_writes = vec![];
+        let mut avg_writes = vec![];
         let mut total_sv_xact_idle = vec![];
 
         for (user, cluster) in databases().all() {
@@ -265,6 +269,26 @@ impl Pools {
                     avg_connect_count.push(Measurement {
                         labels: labels.clone(),
                         measurement: averages.connect_count.into(),
+                    });
+
+                    total_reads.push(Measurement {
+                        labels: labels.clone(),
+                        measurement: totals.reads.into(),
+                    });
+
+                    avg_reads.push(Measurement {
+                        labels: labels.clone(),
+                        measurement: averages.reads.into(),
+                    });
+
+                    total_writes.push(Measurement {
+                        labels: labels.clone(),
+                        measurement: totals.writes.into(),
+                    });
+
+                    avg_writes.push(Measurement {
+                        labels: labels.clone(),
+                        measurement: averages.writes.into(),
                     });
 
                     total_sv_xact_idle.push(Measurement {
@@ -550,6 +574,38 @@ impl Pools {
             name: "avg_connect_count".into(),
             measurements: avg_connect_count,
             help: "Average number of connections established to servers.".into(),
+            unit: None,
+            metric_type: None,
+        }));
+
+        metrics.push(Metric::new(PoolMetric {
+            name: "total_reads".into(),
+            measurements: total_reads,
+            help: "Total number of read transactions.".into(),
+            unit: None,
+            metric_type: Some("counter".into()),
+        }));
+
+        metrics.push(Metric::new(PoolMetric {
+            name: "avg_reads".into(),
+            measurements: avg_reads,
+            help: "Average number of read transactions per statistics period.".into(),
+            unit: None,
+            metric_type: None,
+        }));
+
+        metrics.push(Metric::new(PoolMetric {
+            name: "total_writes".into(),
+            measurements: total_writes,
+            help: "Total number of write transactions.".into(),
+            unit: None,
+            metric_type: Some("counter".into()),
+        }));
+
+        metrics.push(Metric::new(PoolMetric {
+            name: "avg_writes".into(),
+            measurements: avg_writes,
+            help: "Average number of write transactions per statistics period.".into(),
             unit: None,
             metric_type: None,
         }));

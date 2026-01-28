@@ -54,6 +54,8 @@ impl Add<Counts> for PoolCounts {
             prepared_sync: self.prepared_sync + rhs.prepared_sync,
             connect_count: self.connect_count,
             connect_time: self.connect_time,
+            writes: self.writes,
+            reads: self.reads,
         }
     }
 }

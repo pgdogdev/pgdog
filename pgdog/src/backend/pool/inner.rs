@@ -1107,7 +1107,7 @@ mod test {
 
         // Same client ID for both requests
         let client_id = BackendKeyData::new();
-        let request = Request::new(client_id);
+        let request = Request::unrouted(client_id);
 
         // Check out first connection
         let conn1 = inner

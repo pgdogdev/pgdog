@@ -257,7 +257,7 @@ impl Client {
             return Ok(None);
         }
 
-        let server_params = match conn.parameters(&Request::new(id)).await {
+        let server_params = match conn.parameters(&Request::unrouted(id)).await {
             Ok(params) => params,
             Err(err) => {
                 if err.no_server() {
