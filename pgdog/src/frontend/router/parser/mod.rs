@@ -10,6 +10,7 @@ pub mod context;
 pub mod copy;
 pub mod csv;
 pub mod distinct;
+pub mod ee;
 pub mod error;
 pub mod explain_trace;
 mod expression;
