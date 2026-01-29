@@ -46,34 +46,28 @@ for f in source.sql destination.sql; do
     sed -i.bak '/^\\unrestrict.*$/d' $f
 done
 
-EXPECTED_DIFF=$(cat <<EOF
-1192c1192
+# Expected content changes (without line numbers for portability)
+EXPECTED_CHANGES=$(cat <<EOF
 <     flag_id integer NOT NULL,
----
 >     flag_id bigint NOT NULL,
-1205c1205
 <     setting_id integer NOT NULL,
----
 >     setting_id bigint NOT NULL,
-1240c1240
 <     override_id integer NOT NULL,
----
 >     override_id bigint NOT NULL,
-1242c1242
 <     flag_id integer NOT NULL,
----
 >     flag_id bigint NOT NULL,
 EOF)
 
 diff source.sql destination.sql > diff.txt || true
 
-ACTUAL_DIFF=$(cat diff.txt)
-if [ "$ACTUAL_DIFF" != "$EXPECTED_DIFF" ]; then
+# Extract just the content lines (< and >) for comparison
+ACTUAL_CHANGES=$(grep '^[<>]' diff.txt)
+if [ "$ACTUAL_CHANGES" != "$EXPECTED_CHANGES" ]; then
     echo "Schema diff does not match expected changes"
     echo "=== Expected ==="
-    echo "$EXPECTED_DIFF"
+    echo "$EXPECTED_CHANGES"
     echo "=== Actual ==="
-    echo "$ACTUAL_DIFF"
+    echo "$ACTUAL_CHANGES"
     exit 1
 fi
 
