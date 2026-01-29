@@ -51,7 +51,7 @@ mod test {
 
     #[test]
     fn test_max_duration() {
-        assert!(MAX_DURATION > Duration::from_hours(24 * 7 * 52 * 100)); // 100 years
+        assert!(MAX_DURATION > Duration::from_secs(24 * 7 * 52 * 100 * 3600)); // 100 years
         assert_eq!(MAX_DURATION.as_millis() as i64, i64::MAX);
 
         #[derive(Serialize)]

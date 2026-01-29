@@ -753,7 +753,7 @@ password = "users_admin_password"
 [general]
 host = "0.0.0.0"
 port = 6432
-system_catalogs_omnisharded = false
+system_catalogs = "sharded"
 
 [[databases]]
 name = "db1"
@@ -809,7 +809,7 @@ tables = ["table_x"]
 [general]
 host = "0.0.0.0"
 port = 6432
-system_catalogs_omnisharded = true
+system_catalogs = "omnisharded_sticky"
 
 [[databases]]
 name = "db1"
@@ -836,12 +836,12 @@ tables = ["my_table"]
         let pg_class = db1_tables.iter().find(|t| t.name == "pg_class").unwrap();
         assert!(pg_class.sticky_routing);
 
-        // Test with system_catalogs_omnisharded = false
+        // Test with system_catalogs = "sharded" (no omnisharding)
         let source_disabled = r#"
 [general]
 host = "0.0.0.0"
 port = 6432
-system_catalogs_omnisharded = false
+system_catalogs = "sharded"
 
 [[databases]]
 name = "db1"
