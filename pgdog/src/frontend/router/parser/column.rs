@@ -10,7 +10,7 @@ use super::{Error, Table};
 use crate::util::escape_identifier;
 
 /// Column name extracted from a query.
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct Column<'a> {
     /// Column name.
     pub name: &'a str,
