@@ -1,5 +1,5 @@
 //! Tables sharded in the database.
-use pgdog_config::OmnishardedTable;
+use pgdog_config::{OmnishardedTable, SystemCatalogsBehavior};
 
 use crate::{
     config::{DataType, ShardedTable},
@@ -20,6 +20,7 @@ struct Inner {
     /// and list/range/hash function.
     common_mapping: Option<CommonMapping>,
     omnisharded_sticky: bool,
+    system_catalogs: SystemCatalogsBehavior,
 }
 
 #[derive(Debug)]
@@ -47,7 +48,12 @@ impl Default for ShardedTables {
 
 impl From<&[ShardedTable]> for ShardedTables {
     fn from(value: &[ShardedTable]) -> Self {
-        Self::new(value.to_vec(), vec![], false)
+        Self::new(
+            value.to_vec(),
+            vec![],
+            false,
+            SystemCatalogsBehavior::default(),
+        )
     }
 }
 
@@ -56,6 +62,7 @@ impl ShardedTables {
         tables: Vec<ShardedTable>,
         omnisharded_tables: Vec<OmnishardedTable>,
         omnisharded_sticky: bool,
+        system_catalogs: SystemCatalogsBehavior,
     ) -> Self {
         let mut common_mapping = HashSet::new();
         for table in &tables {
@@ -85,6 +92,7 @@ impl ShardedTables {
                     .collect(),
                 common_mapping,
                 omnisharded_sticky,
+                system_catalogs,
             }),
         }
     }
@@ -103,6 +111,11 @@ impl ShardedTables {
 
     pub fn is_omnisharded_sticky_default(&self) -> bool {
         self.inner.omnisharded_sticky
+    }
+
+    /// System catalogs are to be joined across shards.
+    pub fn is_system_catalog_sharded(&self) -> bool {
+        self.inner.system_catalogs == SystemCatalogsBehavior::Sharded
     }
 
     /// The deployment has only one sharded table.

@@ -88,6 +88,8 @@ pub fn comment(
 
 #[cfg(test)]
 mod tests {
+    use pgdog_config::SystemCatalogsBehavior;
+
     use super::*;
 
     #[test]
@@ -159,7 +161,7 @@ mod tests {
 
         let schema = ShardingSchema {
             shards: 2,
-            tables: ShardedTables::new(vec![], vec![], false),
+            tables: ShardedTables::new(vec![], vec![], false, SystemCatalogsBehavior::default()),
             ..Default::default()
         };
 
@@ -174,7 +176,7 @@ mod tests {
 
         let schema = ShardingSchema {
             shards: 3,
-            tables: ShardedTables::new(vec![], vec![], false),
+            tables: ShardedTables::new(vec![], vec![], false, SystemCatalogsBehavior::default()),
             ..Default::default()
         };
 
@@ -190,7 +192,7 @@ mod tests {
 
         let schema = ShardingSchema {
             shards: 2,
-            tables: ShardedTables::new(vec![], vec![], false),
+            tables: ShardedTables::new(vec![], vec![], false, SystemCatalogsBehavior::default()),
             ..Default::default()
         };
 
@@ -205,7 +207,7 @@ mod tests {
 
         let schema = ShardingSchema {
             shards: 2,
-            tables: ShardedTables::new(vec![], vec![], false),
+            tables: ShardedTables::new(vec![], vec![], false, SystemCatalogsBehavior::default()),
             ..Default::default()
         };
 
@@ -220,7 +222,7 @@ mod tests {
 
         let schema = ShardingSchema {
             shards: 2,
-            tables: ShardedTables::new(vec![], vec![], false),
+            tables: ShardedTables::new(vec![], vec![], false, SystemCatalogsBehavior::default()),
             ..Default::default()
         };
 
@@ -244,7 +246,7 @@ mod tests {
 
         let schema = ShardingSchema {
             shards: 2,
-            tables: ShardedTables::new(vec![], vec![], false),
+            tables: ShardedTables::new(vec![], vec![], false, SystemCatalogsBehavior::default()),
             schemas: ShardedSchemas::new(vec![sales_schema]),
             ..Default::default()
         };

@@ -192,6 +192,8 @@ impl<'a> ContextBuilder<'a> {
 
 #[cfg(test)]
 mod test {
+    use pgdog_config::SystemCatalogsBehavior;
+
     use crate::{
         backend::ShardedTables,
         config::{FlexibleType, ShardedMapping, ShardedMappingKind},
@@ -212,6 +214,7 @@ mod test {
                 }],
                 vec![],
                 false,
+                SystemCatalogsBehavior::default(),
             ),
             ..Default::default()
         };
@@ -243,6 +246,7 @@ mod test {
                 }],
                 vec![],
                 false,
+                SystemCatalogsBehavior::default(),
             ),
             ..Default::default()
         };
@@ -275,6 +279,7 @@ mod test {
                 }],
                 vec![],
                 false,
+                SystemCatalogsBehavior::default(),
             ),
             ..Default::default()
         };

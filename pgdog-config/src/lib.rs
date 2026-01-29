@@ -12,6 +12,7 @@ pub mod pooling;
 pub mod replication;
 pub mod rewrite;
 pub mod sharding;
+pub mod system_catalogs;
 pub mod url;
 pub mod users;
 pub mod util;
@@ -31,6 +32,7 @@ pub use pooling::{PoolerMode, PreparedStatements};
 pub use replication::*;
 pub use rewrite::{Rewrite, RewriteMode};
 pub use sharding::*;
+pub use system_catalogs::system_catalogs;
 pub use users::{Admin, Plugin, User, Users};
 
 use std::time::Duration;

@@ -6,8 +6,9 @@ use tracing::{info, warn};
 
 use crate::sharding::ShardedSchema;
 use crate::{
-    EnumeratedDatabase, Memory, OmnishardedTable, PassthoughAuth, PreparedStatements,
-    QueryParserEngine, QueryParserLevel, ReadWriteSplit, RewriteMode, Role,
+    system_catalogs, EnumeratedDatabase, Memory, OmnishardedTable, PassthoughAuth,
+    PreparedStatements, QueryParserEngine, QueryParserLevel, ReadWriteSplit, RewriteMode, Role,
+    SystemCatalogsBehavior,
 };
 
 use super::database::Database;
@@ -249,32 +250,19 @@ impl Config {
 
         // Automatically configure system catalogs
         // as omnisharded.
-        if self.general.system_catalogs_omnisharded {
+        if self.general.system_catalogs != SystemCatalogsBehavior::Sharded {
+            let sticky_routing = matches!(
+                self.general.system_catalogs,
+                SystemCatalogsBehavior::OmnishardedSticky
+            );
             for database in databases {
                 let entry = tables.entry(database).or_insert_with(Vec::new);
 
-                for table in [
-                    "pg_class",
-                    "pg_attribute",
-                    "pg_attrdef",
-                    "pg_index",
-                    "pg_constraint",
-                    "pg_namespace",
-                    "pg_database",
-                    "pg_tablespace",
-                    "pg_type",
-                    "pg_proc",
-                    "pg_operator",
-                    "pg_cast",
-                    "pg_enum",
-                    "pg_range",
-                    "pg_authid",
-                    "pg_am",
-                ] {
-                    if entry.iter().find(|t| t.name == table).is_none() {
+                for table in system_catalogs() {
+                    if entry.iter().find(|t| t.name == *table).is_none() {
                         entry.push(OmnishardedTable {
                             name: table.to_string(),
-                            sticky_routing: true,
+                            sticky_routing,
                         });
                     }
                 }

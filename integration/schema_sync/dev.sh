@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
-PGDOG_BIN_PATH="${PGDOG_BIN:-${SCRIPT_DIR}/../../target/release/pgdog}"
+PGDOG_BIN_PATH="${PGDOG_BIN:-${SCRIPT_DIR}/../../target/debug/pgdog}"
 pushd ${SCRIPT_DIR}
 
 export PGPASSWORD=pgdog
@@ -45,18 +45,37 @@ for f in source.sql destination.sql; do
     sed -i.bak '/^\\restrict.*$/d' $f
     sed -i.bak '/^\\unrestrict.*$/d' $f
 done
-rm -f source.sql.bak destination.sql.bak
 
-# Verify integer primary keys are rewritten to bigint, and no other differences exist
-DIFF_OUTPUT=$(diff source.sql destination.sql || true)
-echo "$DIFF_OUTPUT" | grep -q 'flag_id integer NOT NULL' || { echo "Expected flag_id integer->bigint rewrite"; exit 1; }
-echo "$DIFF_OUTPUT" | grep -q 'flag_id bigint NOT NULL' || { echo "Expected flag_id integer->bigint rewrite"; exit 1; }
-echo "$DIFF_OUTPUT" | grep -q 'setting_id integer NOT NULL' || { echo "Expected setting_id integer->bigint rewrite"; exit 1; }
-echo "$DIFF_OUTPUT" | grep -q 'setting_id bigint NOT NULL' || { echo "Expected setting_id integer->bigint rewrite"; exit 1; }
-sed -i.bak 's/flag_id integer NOT NULL/flag_id bigint NOT NULL/g' source.sql
-sed -i.bak 's/setting_id integer NOT NULL/setting_id bigint NOT NULL/g' source.sql
-rm -f source.sql.bak
-diff source.sql destination.sql
-rm source.sql
-rm destination.sql
+EXPECTED_DIFF=$(cat <<EOF
+1192c1192
+<     flag_id integer NOT NULL,
+---
+>     flag_id bigint NOT NULL,
+1205c1205
+<     setting_id integer NOT NULL,
+---
+>     setting_id bigint NOT NULL,
+1240c1240
+<     override_id integer NOT NULL,
+---
+>     override_id bigint NOT NULL,
+1242c1242
+<     flag_id integer NOT NULL,
+---
+>     flag_id bigint NOT NULL,
+EOF)
+
+diff source.sql destination.sql > diff.txt || true
+
+ACTUAL_DIFF=$(cat diff.txt)
+if [ "$ACTUAL_DIFF" != "$EXPECTED_DIFF" ]; then
+    echo "Schema diff does not match expected changes"
+    echo "=== Expected ==="
+    echo "$EXPECTED_DIFF"
+    echo "=== Actual ==="
+    echo "$ACTUAL_DIFF"
+    exit 1
+fi
+
+rm source.sql destination.sql diff.txt
 popd
