@@ -9,8 +9,8 @@ use std::{
 use lazy_static::lazy_static;
 use pg_query::{
     protobuf::{
-        AlterTableCmd, AlterTableStmt, AlterTableType, ColumnDef, ConstrType, ObjectType,
-        ParseResult, RangeVar, String as PgString, TypeName,
+        AlterTableCmd, AlterTableStmt, AlterTableType, ColumnDef, ConstrType, Constraint,
+        ObjectType, ParseResult, RangeVar, String as PgString, TypeName,
     },
     Node, NodeEnum,
 };
@@ -44,6 +44,92 @@ fn parse(query: &str) -> Result<pg_query::ParseResult, pg_query::Error> {
     match config().config.general.query_parser_engine {
         QueryParserEngine::PgQueryProtobuf => pg_query::parse(query),
         QueryParserEngine::PgQueryRaw => pg_query::parse_raw(query),
+    }
+}
+
+fn schema_name(relation: &RangeVar) -> &str {
+    if relation.schemaname.is_empty() {
+        "public"
+    } else {
+        relation.schemaname.as_str()
+    }
+}
+
+/// Track primary key columns that are INTEGER types.
+fn track_primary_keys<'a>(
+    cons: &'a Constraint,
+    table: &'a RangeVar,
+    column_types: &HashMap<ColumnTypeKey<'a>, &'a str>,
+    integer_primary_keys: &mut HashSet<Column<'a>>,
+) {
+    let schema = schema_name(table);
+    let table_name = table.relname.as_str();
+
+    for key in &cons.keys {
+        let Some(NodeEnum::String(PgString { sval })) = &key.node else {
+            continue;
+        };
+
+        let col_name = sval.as_str();
+        let key = ColumnTypeKey {
+            schema,
+            table: table_name,
+            column: col_name,
+        };
+
+        if let Some(&type_name) = column_types.get(&key) {
+            if matches!(
+                type_name,
+                "int4" | "int2" | "serial" | "smallserial" | "integer" | "smallint"
+            ) {
+                integer_primary_keys.insert(Column {
+                    name: col_name,
+                    table: Some(table_name),
+                    schema: Some(schema),
+                });
+            }
+        }
+    }
+}
+
+/// Track foreign key columns that reference integer primary keys.
+fn track_foreign_keys<'a>(
+    cons: &'a Constraint,
+    fk_table: &'a RangeVar,
+    integer_primary_keys: &HashSet<Column<'a>>,
+    integer_foreign_keys: &mut HashSet<Column<'a>>,
+) {
+    let Some(ref pk_table) = cons.pktable else {
+        return;
+    };
+
+    let pk_schema = schema_name(pk_table);
+    let pk_table_name = pk_table.relname.as_str();
+    let fk_schema = schema_name(fk_table);
+    let fk_table_name = fk_table.relname.as_str();
+
+    for (pk_attr, fk_attr) in cons.pk_attrs.iter().zip(cons.fk_attrs.iter()) {
+        let (
+            Some(NodeEnum::String(PgString { sval: pk_col })),
+            Some(NodeEnum::String(PgString { sval: fk_col })),
+        ) = (&pk_attr.node, &fk_attr.node)
+        else {
+            continue;
+        };
+
+        let pk_column = Column {
+            name: pk_col.as_str(),
+            table: Some(pk_table_name),
+            schema: Some(pk_schema),
+        };
+
+        if integer_primary_keys.contains(&pk_column) {
+            integer_foreign_keys.insert(Column {
+                name: fk_col.as_str(),
+                table: Some(fk_table_name),
+                schema: Some(fk_schema),
+            });
+        }
     }
 }
 
@@ -236,6 +322,7 @@ impl PgDumpOutput {
     pub fn statements(&self, state: SyncState) -> Result<Vec<Statement<'_>>, Error> {
         let mut result = vec![];
         let mut integer_primary_keys = HashSet::<Column<'_>>::new();
+        let mut integer_foreign_keys = HashSet::<Column<'_>>::new();
         let mut column_types: HashMap<ColumnTypeKey<'_>, &str> = HashMap::new();
 
         for stmt in &self.stmts.stmts {
@@ -341,62 +428,40 @@ impl PgDumpOutput {
                                                             | ConstrType::ConstrNotnull
                                                             | ConstrType::ConstrNull
                                                     ) {
-                                                        // Track INTEGER primary keys
                                                         if cons.contype()
                                                             == ConstrType::ConstrPrimary
                                                         {
                                                             if let Some(ref relation) =
                                                                 stmt.relation
                                                             {
-                                                                let schema = if relation
-                                                                    .schemaname
-                                                                    .is_empty()
-                                                                {
-                                                                    "public"
-                                                                } else {
-                                                                    relation.schemaname.as_str()
-                                                                };
-                                                                let table_name =
-                                                                    relation.relname.as_str();
-
-                                                                for key in &cons.keys {
-                                                                    if let Some(NodeEnum::String(
-                                                                        PgString { sval },
-                                                                    )) = &key.node
-                                                                    {
-                                                                        let col_name =
-                                                                            sval.as_str();
-                                                                        let key = ColumnTypeKey {
-                                                                            schema,
-                                                                            table: table_name,
-                                                                            column: col_name,
-                                                                        };
-                                                                        if let Some(&type_name) =
-                                                                            column_types.get(&key)
-                                                                        {
-                                                                            // Check for INTEGER types: int4, int2, serial, smallserial
-                                                                            if matches!(
-                                                                                type_name,
-                                                                                "int4"
-                                                                                    | "int2"
-                                                                                    | "serial"
-                                                                                    | "smallserial"
-                                                                                    | "integer"
-                                                                                    | "smallint"
-                                                                            ) {
-                                                                                integer_primary_keys.insert(Column {
-                                                                                    name: col_name,
-                                                                                    table: Some(table_name),
-                                                                                    schema: Some(schema),
-                                                                                });
-                                                                            }
-                                                                        }
-                                                                    }
-                                                                }
+                                                                track_primary_keys(
+                                                                    cons,
+                                                                    relation,
+                                                                    &column_types,
+                                                                    &mut integer_primary_keys,
+                                                                );
                                                             }
                                                         }
 
                                                         if state == SyncState::PreData {
+                                                            result.push(Statement::Other {
+                                                                sql: original.to_string(),
+                                                                idempotent: false,
+                                                            });
+                                                        }
+                                                    } else if cons.contype()
+                                                        == ConstrType::ConstrForeign
+                                                    {
+                                                        if let Some(ref relation) = stmt.relation {
+                                                            track_foreign_keys(
+                                                                cons,
+                                                                relation,
+                                                                &integer_primary_keys,
+                                                                &mut integer_foreign_keys,
+                                                            );
+                                                        }
+
+                                                        if state == SyncState::PostData {
                                                             result.push(Statement::Other {
                                                                 sql: original.to_string(),
                                                                 idempotent: false,
@@ -650,9 +715,12 @@ impl PgDumpOutput {
             }
         }
 
-        // Convert INTEGER primary keys to BIGINT
+        // Convert INTEGER primary keys and their referencing foreign keys to BIGINT
         if state == SyncState::PreData {
-            for column in &integer_primary_keys {
+            for column in integer_primary_keys
+                .iter()
+                .chain(integer_foreign_keys.iter())
+            {
                 let alter_stmt = AlterTableStmt {
                     relation: Some(RangeVar {
                         schemaname: column.schema.unwrap_or("public").to_owned(),
@@ -890,6 +958,44 @@ ALTER TABLE test ADD CONSTRAINT id_pkey PRIMARY KEY (id);"#;
         assert_eq!(
             statements[2].deref(),
             "ALTER TABLE public.test ALTER COLUMN id TYPE bigint"
+        );
+    }
+
+    #[test]
+    fn test_bigint_rewrite_foreign_key() {
+        let query = r#"
+CREATE TABLE parent (id INTEGER, name TEXT);
+CREATE TABLE child (id INTEGER, parent_id INTEGER);
+ALTER TABLE parent ADD CONSTRAINT parent_pkey PRIMARY KEY (id);
+ALTER TABLE child ADD CONSTRAINT child_parent_fk FOREIGN KEY (parent_id) REFERENCES parent(id);"#;
+
+        let output = PgDumpOutput {
+            stmts: parse(query).unwrap().protobuf,
+            original: query.to_owned(),
+        };
+
+        let statements = output.statements(SyncState::PreData).unwrap();
+        assert_eq!(statements.len(), 5);
+
+        assert_eq!(
+            statements[0].deref(),
+            "CREATE TABLE IF NOT EXISTS parent (id int, name text)"
+        );
+        assert_eq!(
+            statements[1].deref(),
+            "CREATE TABLE IF NOT EXISTS child (id int, parent_id int)"
+        );
+        assert_eq!(
+            statements[2].deref(),
+            "\nALTER TABLE parent ADD CONSTRAINT parent_pkey PRIMARY KEY (id)"
+        );
+        assert_eq!(
+            statements[3].deref(),
+            "ALTER TABLE public.parent ALTER COLUMN id TYPE bigint"
+        );
+        assert_eq!(
+            statements[4].deref(),
+            "ALTER TABLE public.child ALTER COLUMN parent_id TYPE bigint"
         );
     }
 }

@@ -6,8 +6,9 @@ use tracing::{info, warn};
 
 use crate::sharding::ShardedSchema;
 use crate::{
-    EnumeratedDatabase, Memory, OmnishardedTable, PassthoughAuth, PreparedStatements,
-    QueryParserEngine, QueryParserLevel, ReadWriteSplit, RewriteMode, Role,
+    system_catalogs, EnumeratedDatabase, Memory, OmnishardedTable, PassthoughAuth,
+    PreparedStatements, QueryParserEngine, QueryParserLevel, ReadWriteSplit, RewriteMode, Role,
+    SystemCatalogsBehavior,
 };
 
 use super::database::Database;
@@ -249,32 +250,19 @@ impl Config {
 
         // Automatically configure system catalogs
         // as omnisharded.
-        if self.general.system_catalogs_omnisharded {
+        if self.general.system_catalogs != SystemCatalogsBehavior::Sharded {
+            let sticky_routing = matches!(
+                self.general.system_catalogs,
+                SystemCatalogsBehavior::OmnishardedSticky
+            );
             for database in databases {
                 let entry = tables.entry(database).or_insert_with(Vec::new);
 
-                for table in [
-                    "pg_class",
-                    "pg_attribute",
-                    "pg_attrdef",
-                    "pg_index",
-                    "pg_constraint",
-                    "pg_namespace",
-                    "pg_database",
-                    "pg_tablespace",
-                    "pg_type",
-                    "pg_proc",
-                    "pg_operator",
-                    "pg_cast",
-                    "pg_enum",
-                    "pg_range",
-                    "pg_authid",
-                    "pg_am",
-                ] {
-                    if entry.iter().find(|t| t.name == table).is_none() {
+                for table in system_catalogs() {
+                    if entry.iter().find(|t| t.name == *table).is_none() {
                         entry.push(OmnishardedTable {
                             name: table.to_string(),
-                            sticky_routing: true,
+                            sticky_routing,
                         });
                     }
                 }
@@ -765,7 +753,7 @@ password = "users_admin_password"
 [general]
 host = "0.0.0.0"
 port = 6432
-system_catalogs_omnisharded = false
+system_catalogs = "sharded"
 
 [[databases]]
 name = "db1"
@@ -821,7 +809,7 @@ tables = ["table_x"]
 [general]
 host = "0.0.0.0"
 port = 6432
-system_catalogs_omnisharded = true
+system_catalogs = "omnisharded_sticky"
 
 [[databases]]
 name = "db1"
@@ -848,12 +836,12 @@ tables = ["my_table"]
         let pg_class = db1_tables.iter().find(|t| t.name == "pg_class").unwrap();
         assert!(pg_class.sticky_routing);
 
-        // Test with system_catalogs_omnisharded = false
+        // Test with system_catalogs = "sharded" (no omnisharding)
         let source_disabled = r#"
 [general]
 host = "0.0.0.0"
 port = 6432
-system_catalogs_omnisharded = false
+system_catalogs = "sharded"
 
 [[databases]]
 name = "db1"

@@ -13,6 +13,7 @@ url = "2"
 uuid = { version = "1", features = ["v4", "serde"] }
 rand = "*"
 pgdog-vector = { path = "../pgdog-vector" }
+once_cell = "*"
 
 [dev-dependencies]
 tempfile = "3.23.0"

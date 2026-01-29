@@ -45,18 +45,31 @@ for f in source.sql destination.sql; do
     sed -i.bak '/^\\restrict.*$/d' $f
     sed -i.bak '/^\\unrestrict.*$/d' $f
 done
-rm -f source.sql.bak destination.sql.bak
 
-# Verify integer primary keys are rewritten to bigint, and no other differences exist
-DIFF_OUTPUT=$(diff source.sql destination.sql || true)
-echo "$DIFF_OUTPUT" | grep -q 'flag_id integer NOT NULL' || { echo "Expected flag_id integer->bigint rewrite"; exit 1; }
-echo "$DIFF_OUTPUT" | grep -q 'flag_id bigint NOT NULL' || { echo "Expected flag_id integer->bigint rewrite"; exit 1; }
-echo "$DIFF_OUTPUT" | grep -q 'setting_id integer NOT NULL' || { echo "Expected setting_id integer->bigint rewrite"; exit 1; }
-echo "$DIFF_OUTPUT" | grep -q 'setting_id bigint NOT NULL' || { echo "Expected setting_id integer->bigint rewrite"; exit 1; }
-sed -i.bak 's/flag_id integer NOT NULL/flag_id bigint NOT NULL/g' source.sql
-sed -i.bak 's/setting_id integer NOT NULL/setting_id bigint NOT NULL/g' source.sql
-rm -f source.sql.bak
-diff source.sql destination.sql
-rm source.sql
-rm destination.sql
+# Expected content changes (without line numbers for portability)
+EXPECTED_CHANGES=$(cat <<EOF
+<     flag_id integer NOT NULL,
+>     flag_id bigint NOT NULL,
+<     setting_id integer NOT NULL,
+>     setting_id bigint NOT NULL,
+<     override_id integer NOT NULL,
+>     override_id bigint NOT NULL,
+<     flag_id integer NOT NULL,
+>     flag_id bigint NOT NULL,
+EOF)
+
+diff source.sql destination.sql > diff.txt || true
+
+# Extract just the content lines (< and >) for comparison
+ACTUAL_CHANGES=$(grep '^[<>]' diff.txt)
+if [ "$ACTUAL_CHANGES" != "$EXPECTED_CHANGES" ]; then
+    echo "Schema diff does not match expected changes"
+    echo "=== Expected ==="
+    echo "$EXPECTED_CHANGES"
+    echo "=== Actual ==="
+    echo "$ACTUAL_CHANGES"
+    exit 1
+fi
+
+rm source.sql destination.sql diff.txt
 popd

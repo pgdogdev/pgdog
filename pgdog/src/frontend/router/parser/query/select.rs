@@ -3,6 +3,7 @@ use crate::frontend::router::parser::{
 };
 
 use super::*;
+use pgdog_config::system_catalogs;
 use shared::ConvergeAlgorithm;
 
 impl QueryParser {
@@ -131,40 +132,60 @@ impl QueryParser {
                 .shards_calculator
                 .push(ShardWithPriority::new_table(Shard::All));
         } else {
-            debug!(
-                "table is not sharded, defaulting to omnisharded (schema loaded: {})",
-                context.router_context.schema.is_loaded()
-            );
+            let system_catalog_sharded = context
+                .sharding_schema
+                .tables()
+                .is_system_catalog_sharded()
+                .then(|| {
+                    tables
+                        .iter()
+                        .any(|table| system_catalogs().contains(&table.name))
+                })
+                .unwrap_or_default();
 
-            // Omnisharded by default.
-            let sticky = tables.iter().any(|table| {
+            if system_catalog_sharded {
+                debug!("system catalog sharded");
+
                 context
-                    .sharding_schema
-                    .tables()
-                    .is_omnisharded_sticky(table.name)
-                    == Some(true)
-            });
-
-            let (rr_index, explain) = if sticky
-                || context
-                    .sharding_schema
-                    .tables()
-                    .is_omnisharded_sticky_default()
-            {
-                (context.router_context.sticky.omni_index, "sticky")
+                    .shards_calculator
+                    .push(ShardWithPriority::new_table(Shard::All));
             } else {
-                (round_robin::next(), "round robin")
-            };
+                debug!(
+                    "table is not sharded, defaulting to omnisharded (schema loaded: {})",
+                    context.router_context.schema.is_loaded()
+                );
 
-            let shard = Shard::Direct(rr_index % context.shards);
+                // Omnisharded by default.
+                let sticky = tables.iter().any(|table| {
+                    context
+                        .sharding_schema
+                        .tables()
+                        .is_omnisharded_sticky(table.name)
+                        == Some(true)
+                });
 
-            if let Some(recorder) = self.recorder_mut() {
-                recorder.record_entry(Some(shard.clone()), format!("SELECT omnishard {}", explain));
+                let (rr_index, explain) = if sticky
+                    || context
+                        .sharding_schema
+                        .tables()
+                        .is_omnisharded_sticky_default()
+                {
+                    (context.router_context.sticky.omni_index, "sticky")
+                } else {
+                    (round_robin::next(), "round robin")
+                };
+
+                let shard = Shard::Direct(rr_index % context.shards);
+
+                if let Some(recorder) = self.recorder_mut() {
+                    recorder
+                        .record_entry(Some(shard.clone()), format!("SELECT omnishard {}", explain));
+                }
+
+                context
+                    .shards_calculator
+                    .push(ShardWithPriority::new_rr_omni(shard));
             }
-
-            context
-                .shards_calculator
-                .push(ShardWithPriority::new_rr_omni(shard));
         }
 
         let mut query = Route::select(

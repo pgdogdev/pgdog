@@ -446,6 +446,7 @@ fn new_pool(user: &crate::config::User, config: &crate::config::Config) -> Optio
         sharded_tables,
         omnisharded_tables,
         general.omnisharded_sticky,
+        general.system_catalogs,
     );
     let sharded_schemas = ShardedSchemas::new(sharded_schemas);
 

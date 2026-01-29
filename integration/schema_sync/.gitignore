@@ -1,1 +1,5 @@
 .claude
+destination.sql
+source.sql
+*.bak
+diff.txt
