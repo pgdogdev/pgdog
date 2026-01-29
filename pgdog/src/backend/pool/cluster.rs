@@ -596,7 +596,7 @@ impl Cluster {
 mod test {
     use std::{sync::Arc, time::Duration};
 
-    use pgdog_config::{ConfigAndUsers, OmnishardedTable, ShardedSchema, SystemCatalogsBehavior};
+    use pgdog_config::{ConfigAndUsers, OmnishardedTable, ShardedSchema};
 
     use crate::{
         backend::{
@@ -667,7 +667,7 @@ mod test {
                         },
                     ],
                     config.config.general.omnisharded_sticky,
-                    SystemCatalogsBehavior::default(),
+                    config.config.general.system_catalogs,
                 ),
                 sharded_schemas: ShardedSchemas::new(vec![
                     ShardedSchema {
