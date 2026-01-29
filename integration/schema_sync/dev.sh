@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
-PGDOG_BIN_PATH="${PGDOG_BIN:-${SCRIPT_DIR}/../../target/debug/pgdog}"
+PGDOG_BIN_PATH="${PGDOG_BIN:-${SCRIPT_DIR}/../../target/release/pgdog}"
 pushd ${SCRIPT_DIR}
 
 export PGPASSWORD=pgdog
