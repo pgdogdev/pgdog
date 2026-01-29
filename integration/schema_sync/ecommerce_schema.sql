@@ -992,3 +992,16 @@ COMMENT ON TABLE core.users IS 'User accounts with role-based access control';
 COMMENT ON TABLE inventory.products IS 'Product catalog with full-text search capabilities';
 COMMENT ON TABLE sales.orders IS 'Customer orders partitioned by creation date';
 COMMENT ON TABLE inventory.stock_levels IS 'Inventory levels partitioned by warehouse';
+
+-- Simple tables with integer primary keys
+CREATE TABLE core.settings (
+  setting_id SERIAL PRIMARY KEY,
+  setting_key VARCHAR(100) NOT NULL UNIQUE,
+  setting_value TEXT
+);
+
+CREATE TABLE core.feature_flags (
+  flag_id INTEGER PRIMARY KEY,
+  flag_name VARCHAR(100) NOT NULL UNIQUE,
+  is_enabled BOOLEAN NOT NULL DEFAULT FALSE
+);
