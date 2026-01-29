@@ -1005,3 +1005,12 @@ CREATE TABLE core.feature_flags (
   flag_name VARCHAR(100) NOT NULL UNIQUE,
   is_enabled BOOLEAN NOT NULL DEFAULT FALSE
 );
+
+CREATE TABLE core.user_feature_overrides (
+  override_id SERIAL PRIMARY KEY,
+  user_id BIGINT NOT NULL REFERENCES core.users(user_id) ON DELETE CASCADE,
+  flag_id INTEGER NOT NULL REFERENCES core.feature_flags(flag_id) ON DELETE CASCADE,
+  is_enabled BOOLEAN NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(user_id, flag_id)
+);

@@ -12,6 +12,7 @@ pub mod pooling;
 pub mod replication;
 pub mod rewrite;
 pub mod sharding;
+pub mod system_catalogs;
 pub mod url;
 pub mod users;
 pub mod util;
@@ -31,6 +32,7 @@ pub use pooling::{PoolerMode, PreparedStatements};
 pub use replication::*;
 pub use rewrite::{Rewrite, RewriteMode};
 pub use sharding::*;
+pub use system_catalogs::system_catalogs;
 pub use users::{Admin, Plugin, User, Users};
 
 use std::time::Duration;
@@ -49,7 +51,7 @@ mod test {
 
     #[test]
     fn test_max_duration() {
-        assert!(MAX_DURATION > Duration::from_hours(24 * 7 * 52 * 100)); // 100 years
+        assert!(MAX_DURATION > Duration::from_secs(24 * 7 * 52 * 100 * 3600)); // 100 years
         assert_eq!(MAX_DURATION.as_millis() as i64, i64::MAX);
 
         #[derive(Serialize)]

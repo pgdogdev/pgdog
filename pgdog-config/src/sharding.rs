@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::collections::{hash_map::DefaultHasher, HashSet};
 use std::hash::{Hash, Hasher as StdHasher};
 use std::path::PathBuf;
+use std::str::FromStr;
 use tracing::{info, warn};
 
 use super::error::Error;
@@ -313,4 +314,25 @@ pub enum QueryParserEngine {
     #[default]
     PgQueryProtobuf,
     PgQueryRaw,
+}
+
+#[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Eq, Hash, Default)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub enum SystemCatalogsBehavior {
+    Omnisharded,
+    #[default]
+    OmnishardedSticky,
+    Sharded,
+}
+
+impl FromStr for SystemCatalogsBehavior {
+    type Err = ();
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s.to_lowercase().as_str() {
+            "omnisharded" => Self::Omnisharded,
+            "omnisharded_sticky" => Self::OmnishardedSticky,
+            "sharded" => Self::Sharded,
+            _ => return Err(()),
+        })
+    }
 }

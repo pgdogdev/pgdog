@@ -667,6 +667,7 @@ mod test {
                         },
                     ],
                     config.config.general.omnisharded_sticky,
+                    config.config.general.system_catalogs,
                 ),
                 sharded_schemas: ShardedSchemas::new(vec![
                     ShardedSchema {

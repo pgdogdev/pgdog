@@ -679,6 +679,7 @@ mod test {
                 }],
                 vec![],
                 false,
+                pgdog_config::SystemCatalogsBehavior::default(),
             ),
             schemas: ShardedSchemas::new(vec![]),
             rewrite: Rewrite {

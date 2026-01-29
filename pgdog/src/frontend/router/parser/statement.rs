@@ -1248,7 +1248,10 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
 
 #[cfg(test)]
 mod test {
-    use pgdog_config::{FlexibleType, Mapping, ShardedMapping, ShardedMappingKind, ShardedTable};
+    use pgdog_config::{
+        FlexibleType, Mapping, ShardedMapping, ShardedMappingKind, ShardedTable,
+        SystemCatalogsBehavior,
+    };
 
     use crate::backend::ShardedTables;
     use crate::net::messages::{Bind, Parameter};
@@ -1290,6 +1293,7 @@ mod test {
                 ],
                 vec![],
                 false,
+                SystemCatalogsBehavior::default(),
             ),
             ..Default::default()
         };
@@ -2097,6 +2101,7 @@ mod test {
                 }],
                 vec![],
                 false,
+                SystemCatalogsBehavior::default(),
             ),
             schemas: ShardedSchemas::new(vec![
                 ShardedSchema {
@@ -2227,6 +2232,7 @@ mod test {
                 }],
                 vec![],
                 false,
+                SystemCatalogsBehavior::default(),
             ),
             ..Default::default()
         };
@@ -2377,6 +2383,7 @@ mod test {
                 }],
                 vec![],
                 false,
+                SystemCatalogsBehavior::default(),
             ),
             ..Default::default()
         };
