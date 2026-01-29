@@ -42,10 +42,18 @@ pg_dump \
     --no-publications pgdog2 > destination.sql
 
 for f in source.sql destination.sql; do
-    sed -i '/^\\restrict.*$/d' $f
-    sed -i '/^\\unrestrict.*$/d' $f
+    sed -i '' '/^\\restrict.*$/d' $f
+    sed -i '' '/^\\unrestrict.*$/d' $f
 done
 
+# Verify integer primary keys are rewritten to bigint, and no other differences exist
+DIFF_OUTPUT=$(diff source.sql destination.sql || true)
+echo "$DIFF_OUTPUT" | grep -q 'flag_id integer NOT NULL' || { echo "Expected flag_id integer->bigint rewrite"; exit 1; }
+echo "$DIFF_OUTPUT" | grep -q 'flag_id bigint NOT NULL' || { echo "Expected flag_id integer->bigint rewrite"; exit 1; }
+echo "$DIFF_OUTPUT" | grep -q 'setting_id integer NOT NULL' || { echo "Expected setting_id integer->bigint rewrite"; exit 1; }
+echo "$DIFF_OUTPUT" | grep -q 'setting_id bigint NOT NULL' || { echo "Expected setting_id integer->bigint rewrite"; exit 1; }
+sed -i '' 's/flag_id integer NOT NULL/flag_id bigint NOT NULL/g' source.sql
+sed -i '' 's/setting_id integer NOT NULL/setting_id bigint NOT NULL/g' source.sql
 diff source.sql destination.sql
 rm source.sql
 rm destination.sql
