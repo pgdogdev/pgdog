@@ -1,6 +1,7 @@
 use once_cell::sync::Lazy;
+use pg_query::protobuf::ScanResult;
 use pg_query::scan_raw;
-use pg_query::{protobuf::Token, scan};
+use pg_query::{protobuf::ScanToken, protobuf::Token, scan};
 use pgdog_config::QueryParserEngine;
 use regex::Regex;
 
@@ -84,6 +85,20 @@ pub fn comment(
     }
 
     Ok((None, role))
+}
+
+pub fn remove_comments(query: &str, engine: QueryParserEngine) -> Result<ScanResult, Error> {
+    let mut result = match engine {
+        QueryParserEngine::PgQueryProtobuf => scan(query),
+        QueryParserEngine::PgQueryRaw => scan_raw(query),
+    }
+    .map_err(Error::PgQuery)?;
+
+    result
+        .tokens
+        .retain(|st| st.token != Token::CComment as i32 && st.token != Token::SqlComment as i32);
+
+    Ok(result)
 }
 
 #[cfg(test)]
