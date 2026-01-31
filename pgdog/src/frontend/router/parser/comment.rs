@@ -110,7 +110,7 @@ pub fn remove_comments(query: &str, engine: QueryParserEngine) -> Result<String,
         .tokens
         .iter()
         .filter(|st| st.token == Token::CComment as i32 || st.token == Token::SqlComment as i32)
-        .map(|t| (t.start as usize, t.end as usize))
+        .map(|st| (st.start as usize, st.end as usize))
         .collect();
 
     let mut filtered_query = String::with_capacity(query.len());
