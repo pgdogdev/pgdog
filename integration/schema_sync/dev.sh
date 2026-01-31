@@ -51,8 +51,75 @@ for f in source.sql destination.sql; do
     sed -i.bak '/^\\unrestrict.*$/d' $f
 done
 
-# Expected content changes (without line numbers for portability)
-EXPECTED_CHANGES=$(cat <<EOF
+# Expected content changes for PostgreSQL < 15 (no named NOT NULL constraints)
+EXPECTED_PG14=$(cat <<EOF
+<     document_id integer NOT NULL,
+>     document_id bigint NOT NULL,
+<     event_id integer NOT NULL,
+>     event_id bigint NOT NULL,
+<     flag_id integer NOT NULL,
+>     flag_id bigint NOT NULL,
+<     override_id integer NOT NULL,
+>     override_id bigint NOT NULL,
+<     flag_id integer NOT NULL,
+>     flag_id bigint NOT NULL,
+<     notification_id integer NOT NULL,
+>     notification_id bigint NOT NULL,
+<     session_id integer NOT NULL,
+>     session_id bigint NOT NULL,
+<     session_id integer DEFAULT nextval('core.session_data_session_id_seq'::regclass) NOT NULL,
+>     session_id bigint DEFAULT nextval('core.session_data_session_id_seq'::regclass) NOT NULL,
+<     session_id integer DEFAULT nextval('core.session_data_session_id_seq'::regclass) NOT NULL,
+>     session_id bigint DEFAULT nextval('core.session_data_session_id_seq'::regclass) NOT NULL,
+<     session_id integer DEFAULT nextval('core.session_data_session_id_seq'::regclass) NOT NULL,
+>     session_id bigint DEFAULT nextval('core.session_data_session_id_seq'::regclass) NOT NULL,
+<     session_id integer DEFAULT nextval('core.session_data_session_id_seq'::regclass) NOT NULL,
+>     session_id bigint DEFAULT nextval('core.session_data_session_id_seq'::regclass) NOT NULL,
+<     setting_id integer NOT NULL,
+>     setting_id bigint NOT NULL,
+<     price_history_id integer NOT NULL,
+>     price_history_id bigint NOT NULL,
+<     category_id integer NOT NULL,
+>     category_id bigint NOT NULL,
+<     price_history_id integer DEFAULT nextval('inventory.price_history_price_history_id_seq'::regclass) NOT NULL,
+>     price_history_id bigint DEFAULT nextval('inventory.price_history_price_history_id_seq'::regclass) NOT NULL,
+<     category_id integer NOT NULL,
+>     category_id bigint NOT NULL,
+<     price_history_id integer DEFAULT nextval('inventory.price_history_price_history_id_seq'::regclass) NOT NULL,
+>     price_history_id bigint DEFAULT nextval('inventory.price_history_price_history_id_seq'::regclass) NOT NULL,
+<     category_id integer NOT NULL,
+>     category_id bigint NOT NULL,
+<     price_history_id integer DEFAULT nextval('inventory.price_history_price_history_id_seq'::regclass) NOT NULL,
+>     price_history_id bigint DEFAULT nextval('inventory.price_history_price_history_id_seq'::regclass) NOT NULL,
+<     category_id integer NOT NULL,
+>     category_id bigint NOT NULL,
+<     price_history_id integer DEFAULT nextval('inventory.price_history_price_history_id_seq'::regclass) NOT NULL,
+>     price_history_id bigint DEFAULT nextval('inventory.price_history_price_history_id_seq'::regclass) NOT NULL,
+<     category_id integer NOT NULL,
+>     category_id bigint NOT NULL,
+<     ticket_id integer NOT NULL,
+>     ticket_id bigint NOT NULL,
+<     ticket_id integer DEFAULT nextval('sales.ticket_queue_ticket_id_seq'::regclass) NOT NULL,
+>     ticket_id bigint DEFAULT nextval('sales.ticket_queue_ticket_id_seq'::regclass) NOT NULL,
+<     ticket_id integer DEFAULT nextval('sales.ticket_queue_ticket_id_seq'::regclass) NOT NULL,
+>     ticket_id bigint DEFAULT nextval('sales.ticket_queue_ticket_id_seq'::regclass) NOT NULL,
+<     ticket_id integer DEFAULT nextval('sales.ticket_queue_ticket_id_seq'::regclass) NOT NULL,
+>     ticket_id bigint DEFAULT nextval('sales.ticket_queue_ticket_id_seq'::regclass) NOT NULL,
+<     ticket_id integer DEFAULT nextval('sales.ticket_queue_ticket_id_seq'::regclass) NOT NULL,
+>     ticket_id bigint DEFAULT nextval('sales.ticket_queue_ticket_id_seq'::regclass) NOT NULL,
+< ALTER TABLE ONLY inventory.price_history ATTACH PARTITION inventory.price_history_cat_0_100 FOR VALUES FROM (0) TO (100);
+> ALTER TABLE ONLY inventory.price_history ATTACH PARTITION inventory.price_history_cat_0_100 FOR VALUES FROM ('0') TO ('100');
+< ALTER TABLE ONLY inventory.price_history ATTACH PARTITION inventory.price_history_cat_100_200 FOR VALUES FROM (100) TO (200);
+> ALTER TABLE ONLY inventory.price_history ATTACH PARTITION inventory.price_history_cat_100_200 FOR VALUES FROM ('100') TO ('200');
+< ALTER TABLE ONLY inventory.price_history ATTACH PARTITION inventory.price_history_cat_200_300 FOR VALUES FROM (200) TO (300);
+> ALTER TABLE ONLY inventory.price_history ATTACH PARTITION inventory.price_history_cat_200_300 FOR VALUES FROM ('200') TO ('300');
+< ALTER TABLE ONLY inventory.price_history ATTACH PARTITION inventory.price_history_cat_300_plus FOR VALUES FROM (300) TO (MAXVALUE);
+> ALTER TABLE ONLY inventory.price_history ATTACH PARTITION inventory.price_history_cat_300_plus FOR VALUES FROM ('300') TO (MAXVALUE);
+EOF
+)
+
+# Expected content changes for PostgreSQL 15+ (named NOT NULL constraints)
+EXPECTED_PG15=$(cat <<EOF
 <     document_id integer NOT NULL,
 >     document_id bigint NOT NULL,
 <     event_id integer NOT NULL,
@@ -122,10 +189,12 @@ diff source.sql destination.sql > diff.txt || true
 
 # Extract just the content lines (< and >) for comparison
 ACTUAL_CHANGES=$(grep '^[<>]' diff.txt)
-if [ "$ACTUAL_CHANGES" != "$EXPECTED_CHANGES" ]; then
+if [ "$ACTUAL_CHANGES" != "$EXPECTED_PG14" ] && [ "$ACTUAL_CHANGES" != "$EXPECTED_PG15" ]; then
     echo "Schema diff does not match expected changes"
-    echo "=== Expected ==="
-    echo "$EXPECTED_CHANGES"
+    echo "=== Expected (PG < 15) ==="
+    echo "$EXPECTED_PG14"
+    echo "=== Expected (PG 15+) ==="
+    echo "$EXPECTED_PG15"
     echo "=== Actual ==="
     echo "$ACTUAL_CHANGES"
     exit 1
