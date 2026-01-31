@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/assert"
@@ -262,6 +263,9 @@ func TestShardedTwoPcAutoOnError(t *testing.T) {
 
 	assertShowField(t, "SHOW STATS", "total_xact_2pc_count", 0, "pgdog_2pc", "pgdog_sharded", 0, "primary")
 	assertShowField(t, "SHOW STATS", "total_xact_2pc_count", 0, "pgdog_2pc", "pgdog_sharded", 1, "primary")
+
+	// Give the pool an extra second to warm up.
+	time.Sleep(1 * time.Second)
 
 	// Attempt explicit transaction with non-existent table that would require 2PC
 	for i := range 25 {
