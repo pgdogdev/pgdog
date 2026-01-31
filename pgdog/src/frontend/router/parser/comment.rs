@@ -1,7 +1,6 @@
 use once_cell::sync::Lazy;
-use pg_query::protobuf::ScanResult;
 use pg_query::scan_raw;
-use pg_query::{protobuf::ScanToken, protobuf::Token, scan};
+use pg_query::{protobuf::Token, scan};
 use pgdog_config::QueryParserEngine;
 use regex::Regex;
 
@@ -87,18 +86,49 @@ pub fn comment(
     Ok((None, role))
 }
 
-pub fn remove_comments(query: &str, engine: QueryParserEngine) -> Result<ScanResult, Error> {
-    let mut result = match engine {
+pub fn has_comments(query: &str, engine: QueryParserEngine) -> Result<bool, Error> {
+    let result = match engine {
         QueryParserEngine::PgQueryProtobuf => scan(query),
         QueryParserEngine::PgQueryRaw => scan_raw(query),
     }
     .map_err(Error::PgQuery)?;
 
-    result
+    Ok(result
         .tokens
-        .retain(|st| st.token != Token::CComment as i32 && st.token != Token::SqlComment as i32);
+        .iter()
+        .any(|st| st.token == Token::CComment as i32 || st.token == Token::SqlComment as i32))
+}
 
-    Ok(result)
+pub fn remove_comments(query: &str, engine: QueryParserEngine) -> Result<String, Error> {
+    let result = match engine {
+        QueryParserEngine::PgQueryProtobuf => scan(query),
+        QueryParserEngine::PgQueryRaw => scan_raw(query),
+    }
+    .map_err(Error::PgQuery)?;
+
+    let comment_ranges: Vec<(usize, usize)> = result
+        .tokens
+        .iter()
+        .filter(|st| st.token == Token::CComment as i32 || st.token == Token::SqlComment as i32)
+        .map(|t| (t.start as usize, t.end as usize))
+        .collect();
+
+    let mut filtered_query = String::with_capacity(query.len());
+    let mut cursor = 0usize;
+
+    for (start, end) in comment_ranges {
+        if cursor < start {
+            filtered_query.push_str(&query[cursor..start]);
+        }
+
+        cursor = end;
+    }
+
+    if cursor < query.len() {
+        filtered_query.push_str(&query[cursor..]);
+    }
+
+    Ok(filtered_query.trim().to_string())
 }
 
 #[cfg(test)]
