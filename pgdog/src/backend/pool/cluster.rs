@@ -2,7 +2,8 @@
 
 use parking_lot::Mutex;
 use pgdog_config::{
-    LoadSchema, PreparedStatements, QueryParserEngine, QueryParserLevel, Rewrite, RewriteMode,
+    CrossShardBackend, LoadSchema, PreparedStatements, QueryParserEngine, QueryParserLevel,
+    Rewrite, RewriteMode,
 };
 use std::{
     sync::{
@@ -17,6 +18,7 @@ use tracing::{error, info};
 use crate::{
     backend::{
         databases::{databases, User as DatabaseUser},
+        fdw::FdwLoadBalancer,
         pool::ee::schema_changed_hook,
         replication::{ReplicationConfig, ShardedSchemas},
         Schema, ShardedTables,
@@ -78,6 +80,10 @@ pub struct Cluster {
     query_parser_engine: QueryParserEngine,
     reload_schema_on_ddl: bool,
     load_schema: LoadSchema,
+    lb_strategy: LoadBalancingStrategy,
+    rw_split: ReadWriteSplit,
+    fdw_lb: Option<FdwLoadBalancer>,
+    cross_shard_backend: CrossShardBackend,
 }
 
 /// Sharding configuration from the cluster.
@@ -153,6 +159,7 @@ pub struct ClusterConfig<'a> {
     pub lsn_check_interval: Duration,
     pub reload_schema_on_ddl: bool,
     pub load_schema: LoadSchema,
+    pub cross_shard_backend: CrossShardBackend,
 }
 
 impl<'a> ClusterConfig<'a> {
@@ -203,6 +210,7 @@ impl<'a> ClusterConfig<'a> {
             lsn_check_interval: Duration::from_millis(general.lsn_check_interval),
             reload_schema_on_ddl: general.reload_schema_on_ddl,
             load_schema: general.load_schema,
+            cross_shard_backend: general.cross_shard_backend,
         }
     }
 }
@@ -239,6 +247,7 @@ impl Cluster {
             query_parser_engine,
             reload_schema_on_ddl,
             load_schema,
+            cross_shard_backend,
         } = config;
 
         let identifier = Arc::new(DatabaseUser {
@@ -246,7 +255,7 @@ impl Cluster {
             database: name.to_owned(),
         });
 
-        Self {
+        let mut cluster = Self {
             identifier: identifier.clone(),
             shards: shards
                 .iter()
@@ -287,7 +296,17 @@ impl Cluster {
             query_parser_engine,
             reload_schema_on_ddl,
             load_schema,
+            lb_strategy,
+            rw_split,
+            fdw_lb: None,
+            cross_shard_backend,
+        };
+
+        if cross_shard_backend.need_fdw() && cluster.shards().len() > 1 {
+            cluster.fdw_lb = FdwLoadBalancer::new(&cluster).ok();
         }
+
+        cluster
     }
 
     /// Change config to work with logical replication streaming.
@@ -310,6 +329,37 @@ impl Cluster {
     pub async fn replica(&self, shard: usize, request: &Request) -> Result<Guard, Error> {
         let shard = self.shards.get(shard).ok_or(Error::NoShard(shard))?;
         shard.replica(request).await
+    }
+
+    /// Get a connection from the primary fdw conn pool.
+    pub async fn primary_fdw(&self, request: &Request) -> Result<Guard, Error> {
+        if let Some(ref lb) = self.fdw_lb {
+            Ok(lb.primary().ok_or(Error::NoPrimary)?.get(request).await?)
+        } else {
+            Err(Error::NoFdw)
+        }
+    }
+
+    /// Get a connection from one of the replica fdw pools.
+    pub async fn replica_fdw(&self, request: &Request) -> Result<Guard, Error> {
+        if let Some(ref lb) = self.fdw_lb {
+            lb.get(request).await
+        } else {
+            Err(Error::NoFdw)
+        }
+    }
+
+    /// Get a connection to either a primary or a replica.
+    pub async fn primary_or_replica(
+        &self,
+        shard: usize,
+        request: &Request,
+    ) -> Result<Guard, Error> {
+        self.shards
+            .get(shard)
+            .ok_or(Error::NoShard(shard))?
+            .primary_or_replica(request)
+            .await
     }
 
     /// The two clusters have the same databases.
@@ -343,6 +393,16 @@ impl Cluster {
     /// Get all shards.
     pub fn shards(&self) -> &[Shard] {
         &self.shards
+    }
+
+    /// Get the load balancing strategy.
+    pub fn lb_strategy(&self) -> LoadBalancingStrategy {
+        self.lb_strategy
+    }
+
+    /// Get the read/write split strategy.
+    pub fn rw_split(&self) -> ReadWriteSplit {
+        self.rw_split
     }
 
     /// Get the password the user should use to connect to the database.
@@ -428,6 +488,22 @@ impl Cluster {
         }
 
         true
+    }
+
+    pub fn cross_shard_backend(&self) -> CrossShardBackend {
+        self.cross_shard_backend
+    }
+
+    pub fn fdw_pools(
+        &self,
+    ) -> Option<Vec<(crate::config::Role, super::lb::ban::Ban, super::Pool)>> {
+        self.fdw_lb
+            .as_ref()
+            .map(|lb| lb.pools_with_roles_and_bans())
+    }
+
+    pub fn fdw_fallback_enabled(&self) -> bool {
+        self.cross_shard_backend().need_fdw()
     }
 
     /// This database/user pair is responsible for schema management.
@@ -533,6 +609,10 @@ impl Cluster {
     pub(crate) fn launch(&self) {
         for shard in self.shards() {
             shard.launch();
+        }
+
+        if let Some(ref fdw_lb) = self.fdw_lb {
+            fdw_lb.launch();
         }
 
         // Only spawn schema loading once per cluster, even if launch() is called multiple times.
@@ -679,10 +759,7 @@ mod test {
                         name: Some("sharded".into()),
                         column: "id".into(),
                         primary: true,
-                        centroids: vec![],
                         data_type: DataType::Bigint,
-                        centroids_path: None,
-                        centroid_probes: 1,
                         hasher: Hasher::Postgres,
                         ..Default::default()
                     }],
@@ -735,6 +812,10 @@ mod test {
 
         pub fn set_read_write_strategy(&mut self, rw_strategy: ReadWriteStrategy) {
             self.rw_strategy = rw_strategy;
+        }
+
+        pub fn set_cross_shard_backend(&mut self, backend: pgdog_config::CrossShardBackend) {
+            self.cross_shard_backend = backend;
         }
     }
 

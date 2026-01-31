@@ -225,7 +225,9 @@ impl QueryParser {
         calculator.push(ShardWithPriority::new_table(shard));
 
         Ok(Command::Query(
-            Route::write(calculator.shard()).with_schema_changed(schema_changed),
+            Route::write(calculator.shard())
+                .with_schema_changed(schema_changed)
+                .with_ddl(true),
         ))
     }
 

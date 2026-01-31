@@ -1,5 +1,5 @@
 use pg_query::{parse, parse_raw, protobuf::ObjectType, NodeEnum, NodeRef, ParseResult};
-use pgdog_config::QueryParserEngine;
+use pgdog_config::{CrossShardBackend, QueryParserEngine};
 use std::fmt::Debug;
 use std::time::Instant;
 use std::{collections::HashSet, ops::Deref};
@@ -12,6 +12,7 @@ use super::super::{
 };
 use super::{Fingerprint, Stats};
 use crate::backend::schema::Schema;
+use crate::frontend::router::parser::comment::CommentRoute;
 use crate::frontend::router::parser::rewrite::statement::RewritePlan;
 use crate::frontend::{BufferedQuery, PreparedStatements};
 use crate::net::parameter::ParameterValue;
@@ -41,6 +42,8 @@ pub struct AstInner {
     pub rewrite_plan: RewritePlan,
     /// Fingerprint.
     pub fingerprint: Fingerprint,
+    /// Cross-shard backend.
+    pub cross_shard_backend: Option<CrossShardBackend>,
 }
 
 impl AstInner {
@@ -53,6 +56,7 @@ impl AstInner {
             comment_shard: None,
             rewrite_plan: RewritePlan::default(),
             fingerprint: Fingerprint::default(),
+            cross_shard_backend: None,
         }
     }
 }
@@ -81,7 +85,11 @@ impl Ast {
             QueryParserEngine::PgQueryRaw => parse_raw(query),
         }
         .map_err(Error::PgQuery)?;
-        let (comment_shard, comment_role) = comment(query, schema)?;
+        let CommentRoute {
+            shard: comment_shard,
+            role: comment_role,
+            cross_shard_backend,
+        } = comment(query, schema)?;
         let fingerprint =
             Fingerprint::new(query, schema.query_parser_engine).map_err(Error::PgQuery)?;
 
@@ -116,6 +124,7 @@ impl Ast {
                 ast,
                 rewrite_plan,
                 fingerprint,
+                cross_shard_backend,
             }),
         })
     }

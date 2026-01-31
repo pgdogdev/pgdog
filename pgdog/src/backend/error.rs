@@ -134,6 +134,18 @@ pub enum Error {
 
     #[error("unsupported aggregation {function}: {reason}")]
     UnsupportedAggregation { function: String, reason: String },
+
+    #[error("{0}")]
+    ForeignTable(#[from] crate::backend::schema::postgres_fdw::Error),
+
+    #[error("fdw: {0}")]
+    Fdw(Box<crate::backend::fdw::Error>),
+}
+
+impl From<crate::backend::fdw::Error> for Error {
+    fn from(value: crate::backend::fdw::Error) -> Self {
+        Self::Fdw(Box::new(value))
+    }
 }
 
 impl From<crate::frontend::Error> for Error {

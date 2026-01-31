@@ -13,7 +13,7 @@ WORKDIR /build
 RUN rm /bin/sh && ln -s /bin/bash /bin/sh
 RUN source ~/.cargo/env && \
     if [ "$(uname -m)" = "aarch64" ] || [ "$(uname -m)" = "arm64" ]; then \
-        export RUSTFLAGS="-Ctarget-feature=+lse"; \
+    export RUSTFLAGS="-Ctarget-feature=+lse"; \
     fi && \
     cd pgdog && \
     cargo build --release
@@ -31,10 +31,13 @@ RUN install -d /usr/share/postgresql-common/pgdg && \
     . /etc/os-release && \
     sh -c "echo 'deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $VERSION_CODENAME-pgdg main' > /etc/apt/sources.list.d/pgdg.list"
 
-RUN apt update && apt install -y postgresql-client-${PSQL_VERSION}
+RUN apt update && apt install -y postgresql-${PSQL_VERSION} && \
+    systemctl disable postgresql
 
 COPY --from=builder /build/target/release/pgdog /usr/local/bin/pgdog
 
+RUN mkdir -p /pgdog && chown postgres:postgres /pgdog
 WORKDIR /pgdog
+USER postgres
 STOPSIGNAL SIGINT
 CMD ["/usr/local/bin/pgdog"]

@@ -32,10 +32,17 @@ impl QueryParser {
             writes.writes = true;
         }
 
+        let fdw_fallback = cached_ast
+            .cross_shard_backend
+            .map(|backend| backend.need_fdw())
+            .unwrap_or_default();
+
         // Early return for any direct-to-shard queries.
         if context.shards_calculator.shard().is_direct() {
             return Ok(Command::Query(
-                Route::read(context.shards_calculator.shard().clone()).with_write(writes),
+                Route::read(context.shards_calculator.shard().clone())
+                    .with_write(writes)
+                    .with_fdw_fallback(fdw_fallback),
             ));
         }
 
@@ -200,6 +207,8 @@ impl QueryParser {
         if query.is_cross_shard() && context.shards > 1 {
             query.with_aggregate_rewrite_plan_mut(cached_ast.rewrite_plan.aggregates.clone());
         }
+
+        query.set_fdw_fallback(fdw_fallback);
 
         Ok(Command::Query(query.with_write(writes)))
     }

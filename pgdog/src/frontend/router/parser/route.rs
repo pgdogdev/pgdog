@@ -90,6 +90,8 @@ pub struct Route {
     rollback_savepoint: bool,
     search_path_driven: bool,
     schema_changed: bool,
+    fdw_fallback: bool,
+    ddl: bool,
 }
 
 impl Display for Route {
@@ -140,6 +142,15 @@ impl Route {
         }
     }
 
+    /// Create new fdw fallback route.
+    pub fn fdw_fallback() -> Self {
+        Self {
+            shard: ShardWithPriority::new_override_fdw_fallback(),
+            fdw_fallback: true,
+            ..Default::default()
+        }
+    }
+
     /// Returns true if this is a query that
     /// can be sent to a replica.
     pub fn is_read(&self) -> bool {
@@ -150,6 +161,10 @@ impl Route {
     /// to a primary.
     pub fn is_write(&self) -> bool {
         !self.is_read()
+    }
+
+    pub fn set_fdw_fallback(&mut self, fallback: bool) {
+        self.fdw_fallback = fallback;
     }
 
     /// Get shard if any.
@@ -178,6 +193,10 @@ impl Route {
         self.is_all_shards() || self.is_multi_shard()
     }
 
+    pub fn is_fdw_fallback(&self) -> bool {
+        self.fdw_fallback
+    }
+
     pub fn order_by(&self) -> &[OrderBy] {
         &self.order_by
     }
@@ -199,6 +218,11 @@ impl Route {
         self
     }
 
+    pub fn with_fdw_fallback(mut self, fdw_fallback: bool) -> Self {
+        self.set_fdw_fallback(fdw_fallback);
+        self
+    }
+
     pub fn set_schema_changed(&mut self, changed: bool) {
         self.schema_changed = changed;
     }
@@ -210,6 +234,15 @@ impl Route {
     pub fn with_schema_changed(mut self, changed: bool) -> Self {
         self.schema_changed = changed;
         self
+    }
+
+    pub fn with_ddl(mut self, ddl: bool) -> Self {
+        self.ddl = ddl;
+        self
+    }
+
+    pub fn is_ddl(&self) -> bool {
+        self.ddl
     }
 
     pub fn set_search_path_driven_mut(&mut self, schema_driven: bool) {
@@ -345,6 +378,7 @@ pub enum OverrideReason {
     Transaction,
     OnlyOneShard,
     RewriteUpdate,
+    FdwFallback,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Ord, PartialOrd)]
@@ -423,6 +457,13 @@ impl ShardWithPriority {
         Self {
             shard,
             source: ShardSource::Override(OverrideReason::OnlyOneShard),
+        }
+    }
+
+    pub fn new_override_fdw_fallback() -> Self {
+        Self {
+            shard: Shard::Direct(0),
+            source: ShardSource::Override(OverrideReason::FdwFallback),
         }
     }
 

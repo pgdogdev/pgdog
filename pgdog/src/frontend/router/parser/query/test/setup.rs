@@ -1,6 +1,6 @@
 use std::ops::Deref;
 
-use pgdog_config::ConfigAndUsers;
+use pgdog_config::{ConfigAndUsers, CrossShardBackend};
 
 use crate::{
     backend::Cluster,
@@ -101,7 +101,12 @@ impl QueryParserTest {
         self
     }
 
-    /// Startup parameters.
+    /// Enable FDW fallback (sets cross_shard_backend to Hybrid).
+    pub(crate) fn with_fdw_fallback(mut self) -> Self {
+        self.cluster
+            .set_cross_shard_backend(CrossShardBackend::Hybrid);
+        self
+    }
 
     /// Execute a request and return the command (panics on error).
     pub(crate) fn execute(&mut self, request: Vec<ProtocolMessage>) -> Command {
