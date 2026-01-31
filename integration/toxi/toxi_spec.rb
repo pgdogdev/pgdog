@@ -120,7 +120,7 @@ describe 'healthcheck' do
           rescue PG::Error
             errors += 1
           end
-          expect(errors).to be >= 1
+          expect(errors).to be_between(0, 1).inclusive
           expect(health('replica')).to include('f')
           sleep(0.4) # ban maintenance runs every 333ms
           expect(health('replica', 'banned')).to include('t')

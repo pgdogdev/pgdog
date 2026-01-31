@@ -494,6 +494,9 @@ mod tests {
 
         stats.counts.idle_xact_time = Duration::from_millis(250);
 
+        stats.counts.reads = 30;
+        stats.counts.writes = 20;
+
         stats.calc_averages(Duration::from_secs(1));
 
         assert_eq!(stats.averages.query_time, Duration::from_millis(50));
@@ -502,6 +505,9 @@ mod tests {
         assert_eq!(stats.averages.connect_time, Duration::from_millis(50));
         // idle_xact_time is divided by (query_count - xact_count) = 10 - 5 = 5
         assert_eq!(stats.averages.idle_xact_time, Duration::from_millis(50));
+        // reads/writes: first divided by secs (30/1=30, 20/1=20), then by xact_count (30/5=6, 20/5=4)
+        assert_eq!(stats.averages.reads, 6);
+        assert_eq!(stats.averages.writes, 4);
     }
 
     #[test]

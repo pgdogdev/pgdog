@@ -213,14 +213,8 @@ impl Stats {
                 .clamp(1, u32::MAX as usize);
             self.averages.idle_xact_time =
                 diff.idle_xact_time / queries_in_xact.try_into().unwrap_or(u32::MAX);
-            self.averages
-                .reads
-                .checked_div(diff.xact_count)
-                .unwrap_or_default();
-            self.averages
-                .writes
-                .checked_div(diff.xact_count)
-                .unwrap_or_default();
+            self.averages.reads = diff.reads.checked_div(diff.xact_count).unwrap_or_default();
+            self.averages.writes = diff.writes.checked_div(diff.xact_count).unwrap_or_default();
 
             self.last_counts = self.counts;
         }
