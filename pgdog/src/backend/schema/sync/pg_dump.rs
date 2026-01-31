@@ -8,10 +8,7 @@ use std::{
 
 use lazy_static::lazy_static;
 use pg_query::{
-    protobuf::{
-        AlterTableCmd, AlterTableStmt, AlterTableType, ColumnDef, ConstrType, Constraint,
-        ObjectType, ParseResult, RangeVar, String as PgString, TypeName,
-    },
+    protobuf::{AlterTableType, ConstrType, ObjectType, ParseResult, RangeVar, String as PgString},
     Node, NodeEnum,
 };
 use pgdog_config::QueryParserEngine;
@@ -52,84 +49,6 @@ fn schema_name(relation: &RangeVar) -> &str {
         "public"
     } else {
         relation.schemaname.as_str()
-    }
-}
-
-/// Track primary key columns that are INTEGER types.
-fn track_primary_keys<'a>(
-    cons: &'a Constraint,
-    table: &'a RangeVar,
-    column_types: &HashMap<ColumnTypeKey<'a>, &'a str>,
-    integer_primary_keys: &mut HashSet<Column<'a>>,
-) {
-    let schema = schema_name(table);
-    let table_name = table.relname.as_str();
-
-    for key in &cons.keys {
-        let Some(NodeEnum::String(PgString { sval })) = &key.node else {
-            continue;
-        };
-
-        let col_name = sval.as_str();
-        let key = ColumnTypeKey {
-            schema,
-            table: table_name,
-            column: col_name,
-        };
-
-        if let Some(&type_name) = column_types.get(&key) {
-            if matches!(
-                type_name,
-                "int4" | "int2" | "serial" | "smallserial" | "integer" | "smallint"
-            ) {
-                integer_primary_keys.insert(Column {
-                    name: col_name,
-                    table: Some(table_name),
-                    schema: Some(schema),
-                });
-            }
-        }
-    }
-}
-
-/// Track foreign key columns that reference integer primary keys.
-fn track_foreign_keys<'a>(
-    cons: &'a Constraint,
-    fk_table: &'a RangeVar,
-    integer_primary_keys: &HashSet<Column<'a>>,
-    integer_foreign_keys: &mut HashSet<Column<'a>>,
-) {
-    let Some(ref pk_table) = cons.pktable else {
-        return;
-    };
-
-    let pk_schema = schema_name(pk_table);
-    let pk_table_name = pk_table.relname.as_str();
-    let fk_schema = schema_name(fk_table);
-    let fk_table_name = fk_table.relname.as_str();
-
-    for (pk_attr, fk_attr) in cons.pk_attrs.iter().zip(cons.fk_attrs.iter()) {
-        let (
-            Some(NodeEnum::String(PgString { sval: pk_col })),
-            Some(NodeEnum::String(PgString { sval: fk_col })),
-        ) = (&pk_attr.node, &fk_attr.node)
-        else {
-            continue;
-        };
-
-        let pk_column = Column {
-            name: pk_col.as_str(),
-            table: Some(pk_table_name),
-            schema: Some(pk_schema),
-        };
-
-        if integer_primary_keys.contains(&pk_column) {
-            integer_foreign_keys.insert(Column {
-                name: fk_col.as_str(),
-                table: Some(fk_table_name),
-                schema: Some(fk_schema),
-            });
-        }
     }
 }
 
@@ -317,13 +236,213 @@ impl<'a> From<String> for Statement<'a> {
 }
 
 impl PgDumpOutput {
+    /// Get integer primary key columns (columns that are part of PRIMARY KEY
+    /// constraints and have integer types like int4, int2, serial, etc.).
+    pub fn integer_primary_key_columns(&self) -> HashSet<Column<'_>> {
+        let column_types = self.column_types();
+        let mut result = HashSet::new();
+
+        for stmt in &self.stmts.stmts {
+            let Some(ref node) = stmt.stmt else {
+                continue;
+            };
+            let Some(NodeEnum::AlterTableStmt(ref alter_stmt)) = node.node else {
+                continue;
+            };
+
+            let Some(ref relation) = alter_stmt.relation else {
+                continue;
+            };
+
+            for cmd in &alter_stmt.cmds {
+                let Some(NodeEnum::AlterTableCmd(ref cmd)) = cmd.node else {
+                    continue;
+                };
+
+                if cmd.subtype() != AlterTableType::AtAddConstraint {
+                    continue;
+                }
+
+                let Some(ref def) = cmd.def else {
+                    continue;
+                };
+
+                let Some(NodeEnum::Constraint(ref cons)) = def.node else {
+                    continue;
+                };
+
+                if cons.contype() != ConstrType::ConstrPrimary {
+                    continue;
+                }
+
+                let schema = schema_name(relation);
+                let table_name = relation.relname.as_str();
+
+                for key in &cons.keys {
+                    let Some(NodeEnum::String(PgString { sval })) = &key.node else {
+                        continue;
+                    };
+
+                    let col_name = sval.as_str();
+                    let type_key = ColumnTypeKey {
+                        schema,
+                        table: table_name,
+                        column: col_name,
+                    };
+
+                    let is_integer = column_types
+                        .get(&type_key)
+                        .map(|t| {
+                            matches!(
+                                *t,
+                                "int4" | "int2" | "serial" | "smallserial" | "integer" | "smallint"
+                            )
+                        })
+                        .unwrap_or(false);
+
+                    if is_integer {
+                        result.insert(Column {
+                            name: col_name,
+                            table: Some(table_name),
+                            schema: Some(schema),
+                        });
+                    }
+                }
+            }
+        }
+
+        result
+    }
+
+    /// Get integer foreign key columns (FK columns that reference integer PKs).
+    pub fn integer_foreign_key_columns(&self) -> HashSet<Column<'_>> {
+        let integer_pks = self.integer_primary_key_columns();
+        let mut result = HashSet::new();
+
+        for stmt in &self.stmts.stmts {
+            let Some(ref node) = stmt.stmt else {
+                continue;
+            };
+            let Some(NodeEnum::AlterTableStmt(ref alter_stmt)) = node.node else {
+                continue;
+            };
+
+            let Some(ref fk_table) = alter_stmt.relation else {
+                continue;
+            };
+
+            for cmd in &alter_stmt.cmds {
+                let Some(NodeEnum::AlterTableCmd(ref cmd)) = cmd.node else {
+                    continue;
+                };
+
+                if cmd.subtype() != AlterTableType::AtAddConstraint {
+                    continue;
+                }
+
+                let Some(ref def) = cmd.def else {
+                    continue;
+                };
+
+                let Some(NodeEnum::Constraint(ref cons)) = def.node else {
+                    continue;
+                };
+
+                if cons.contype() != ConstrType::ConstrForeign {
+                    continue;
+                }
+
+                let Some(ref pk_table) = cons.pktable else {
+                    continue;
+                };
+
+                let pk_schema = schema_name(pk_table);
+                let pk_table_name = pk_table.relname.as_str();
+                let fk_schema = schema_name(fk_table);
+                let fk_table_name = fk_table.relname.as_str();
+
+                for (pk_attr, fk_attr) in cons.pk_attrs.iter().zip(cons.fk_attrs.iter()) {
+                    let (
+                        Some(NodeEnum::String(PgString { sval: pk_col })),
+                        Some(NodeEnum::String(PgString { sval: fk_col })),
+                    ) = (&pk_attr.node, &fk_attr.node)
+                    else {
+                        continue;
+                    };
+
+                    let pk_column = Column {
+                        name: pk_col.as_str(),
+                        table: Some(pk_table_name),
+                        schema: Some(pk_schema),
+                    };
+
+                    if integer_pks.contains(&pk_column) {
+                        result.insert(Column {
+                            name: fk_col.as_str(),
+                            table: Some(fk_table_name),
+                            schema: Some(fk_schema),
+                        });
+                    }
+                }
+            }
+        }
+
+        result
+    }
+
+    /// Get all column types from CREATE TABLE statements.
+    fn column_types(&self) -> HashMap<ColumnTypeKey<'_>, &str> {
+        let mut result = HashMap::new();
+
+        for stmt in &self.stmts.stmts {
+            let Some(ref node) = stmt.stmt else {
+                continue;
+            };
+            let Some(NodeEnum::CreateStmt(ref create_stmt)) = node.node else {
+                continue;
+            };
+
+            let Some(ref relation) = create_stmt.relation else {
+                continue;
+            };
+
+            let schema = schema_name(relation);
+            let table_name = relation.relname.as_str();
+
+            for elt in &create_stmt.table_elts {
+                if let Some(NodeEnum::ColumnDef(col_def)) = &elt.node {
+                    if let Some(ref type_name) = col_def.type_name {
+                        if let Some(last_name) = type_name.names.last() {
+                            if let Some(NodeEnum::String(PgString { sval })) = &last_name.node {
+                                result.insert(
+                                    ColumnTypeKey {
+                                        schema,
+                                        table: table_name,
+                                        column: col_def.colname.as_str(),
+                                    },
+                                    sval.as_str(),
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        result
+    }
+
     /// Get schema statements to execute before data sync,
     /// e.g., CREATE TABLE, primary key.
     pub fn statements(&self, state: SyncState) -> Result<Vec<Statement<'_>>, Error> {
         let mut result = vec![];
-        let mut integer_primary_keys = HashSet::<Column<'_>>::new();
-        let mut integer_foreign_keys = HashSet::<Column<'_>>::new();
-        let mut column_types: HashMap<ColumnTypeKey<'_>, &str> = HashMap::new();
+
+        // Get integer PK and FK columns that need bigint conversion
+        let columns_to_convert: HashSet<Column<'_>> = self
+            .integer_primary_key_columns()
+            .union(&self.integer_foreign_key_columns())
+            .copied()
+            .collect();
 
         for stmt in &self.stmts.stmts {
             let (_, original_start) = self
@@ -337,49 +456,53 @@ impl PgDumpOutput {
             if let Some(ref node) = stmt.stmt {
                 if let Some(ref node) = node.node {
                     match node {
-                        NodeEnum::CreateStmt(stmt) => {
-                            let sql = {
-                                let mut stmt = stmt.clone();
-                                stmt.if_not_exists = true;
-                                deparse_node(NodeEnum::CreateStmt(stmt))?
-                            };
+                        NodeEnum::CreateStmt(create_stmt) => {
+                            let mut stmt = create_stmt.clone();
+                            stmt.if_not_exists = true;
 
-                            // Track column types for later PRIMARY KEY detection
-                            if let Some(ref relation) = stmt.relation {
-                                let schema = if relation.schemaname.is_empty() {
-                                    "public"
+                            // Get table info
+                            let (schema, table_name) =
+                                if let Some(ref relation) = create_stmt.relation {
+                                    (schema_name(relation), relation.relname.as_str())
                                 } else {
-                                    relation.schemaname.as_str()
+                                    ("public", "")
                                 };
-                                let table_name = relation.relname.as_str();
 
-                                for elt in &stmt.table_elts {
-                                    if let Some(NodeEnum::ColumnDef(col_def)) = &elt.node {
-                                        if let Some(ref type_name) = col_def.type_name {
-                                            // Get the last element of the type name (e.g., "int4" from ["pg_catalog", "int4"])
-                                            if let Some(last_name) = type_name.names.last() {
-                                                if let Some(NodeEnum::String(PgString { sval })) =
-                                                    &last_name.node
-                                                {
-                                                    column_types.insert(
-                                                        ColumnTypeKey {
-                                                            schema,
-                                                            table: table_name,
-                                                            column: col_def.colname.as_str(),
-                                                        },
-                                                        sval.as_str(),
-                                                    );
-                                                }
-                                            }
+                            // Convert integer PK/FK columns to bigint
+                            for elt in &mut stmt.table_elts {
+                                if let Some(NodeEnum::ColumnDef(ref mut col_def)) = elt.node {
+                                    let col = Column {
+                                        name: col_def.colname.as_str(),
+                                        table: Some(table_name),
+                                        schema: Some(schema),
+                                    };
+
+                                    if columns_to_convert.contains(&col) {
+                                        if let Some(ref mut type_name) = col_def.type_name {
+                                            type_name.names = vec![
+                                                Node {
+                                                    node: Some(NodeEnum::String(PgString {
+                                                        sval: "pg_catalog".to_owned(),
+                                                    })),
+                                                },
+                                                Node {
+                                                    node: Some(NodeEnum::String(PgString {
+                                                        sval: "int8".to_owned(),
+                                                    })),
+                                                },
+                                            ];
                                         }
                                     }
                                 }
                             }
 
                             if state == SyncState::PreData {
-                                // CREATE TABLE is always good.
-                                let table =
-                                    stmt.relation.as_ref().map(Table::from).unwrap_or_default();
+                                let sql = deparse_node(NodeEnum::CreateStmt(stmt))?;
+                                let table = create_stmt
+                                    .relation
+                                    .as_ref()
+                                    .map(Table::from)
+                                    .unwrap_or_default();
                                 result.push(Statement::Table { table, sql });
                             }
                         }
@@ -428,21 +551,8 @@ impl PgDumpOutput {
                                                             | ConstrType::ConstrNotnull
                                                             | ConstrType::ConstrNull
                                                     ) {
-                                                        if cons.contype()
-                                                            == ConstrType::ConstrPrimary
-                                                        {
-                                                            if let Some(ref relation) =
-                                                                stmt.relation
-                                                            {
-                                                                track_primary_keys(
-                                                                    cons,
-                                                                    relation,
-                                                                    &column_types,
-                                                                    &mut integer_primary_keys,
-                                                                );
-                                                            }
-                                                        }
-
+                                                        // Integer PKs are already tracked and converted
+                                                        // to bigint in CreateStmt handler
                                                         if state == SyncState::PreData {
                                                             result.push(Statement::Other {
                                                                 sql: original.to_string(),
@@ -452,15 +562,8 @@ impl PgDumpOutput {
                                                     } else if cons.contype()
                                                         == ConstrType::ConstrForeign
                                                     {
-                                                        if let Some(ref relation) = stmt.relation {
-                                                            track_foreign_keys(
-                                                                cons,
-                                                                relation,
-                                                                &integer_primary_keys,
-                                                                &mut integer_foreign_keys,
-                                                            );
-                                                        }
-
+                                                        // FK columns referencing integer PKs are
+                                                        // computed from fk_columns at the end
                                                         if state == SyncState::PostData {
                                                             result.push(Statement::Other {
                                                                 sql: original.to_string(),
@@ -715,60 +818,6 @@ impl PgDumpOutput {
             }
         }
 
-        // Convert INTEGER primary keys and their referencing foreign keys to BIGINT
-        if state == SyncState::PreData {
-            for column in integer_primary_keys
-                .iter()
-                .chain(integer_foreign_keys.iter())
-            {
-                let alter_stmt = AlterTableStmt {
-                    relation: Some(RangeVar {
-                        schemaname: column.schema.unwrap_or("public").to_owned(),
-                        relname: column.table.unwrap_or_default().to_owned(),
-                        inh: true,
-                        relpersistence: "p".to_owned(),
-                        ..Default::default()
-                    }),
-                    cmds: vec![Node {
-                        node: Some(NodeEnum::AlterTableCmd(Box::new(AlterTableCmd {
-                            subtype: AlterTableType::AtAlterColumnType.into(),
-                            name: column.name.to_owned(),
-                            def: Some(Box::new(Node {
-                                node: Some(NodeEnum::ColumnDef(Box::new(ColumnDef {
-                                    type_name: Some(TypeName {
-                                        names: vec![
-                                            Node {
-                                                node: Some(NodeEnum::String(PgString {
-                                                    sval: "pg_catalog".to_owned(),
-                                                })),
-                                            },
-                                            Node {
-                                                node: Some(NodeEnum::String(PgString {
-                                                    sval: "int8".to_owned(),
-                                                })),
-                                            },
-                                        ],
-                                        typemod: -1,
-                                        ..Default::default()
-                                    }),
-                                    ..Default::default()
-                                }))),
-                            })),
-                            behavior: pg_query::protobuf::DropBehavior::DropRestrict.into(),
-                            ..Default::default()
-                        }))),
-                    }],
-                    objtype: ObjectType::ObjectTable.into(),
-                    ..Default::default()
-                };
-                let sql = deparse_node(NodeEnum::AlterTableStmt(alter_stmt))?;
-                result.push(Statement::Other {
-                    sql,
-                    idempotent: true,
-                });
-            }
-        }
-
         Ok(result)
     }
 
@@ -934,6 +983,125 @@ ALTER TABLE ONLY public.users
     }
 
     #[test]
+    fn test_integer_primary_key_columns() {
+        let query = r#"
+CREATE TABLE users (id INTEGER, name TEXT);
+ALTER TABLE users ADD CONSTRAINT users_pkey PRIMARY KEY (id);"#;
+
+        let output = PgDumpOutput {
+            stmts: parse(query).unwrap().protobuf,
+            original: query.to_owned(),
+        };
+
+        let pk_columns = output.integer_primary_key_columns();
+
+        // Should have one integer primary key column
+        assert_eq!(pk_columns.len(), 1);
+        assert!(pk_columns.contains(&Column {
+            name: "id",
+            table: Some("users"),
+            schema: Some("public"),
+        }));
+    }
+
+    #[test]
+    fn test_non_integer_pk_excluded() {
+        let query = r#"
+CREATE TABLE users (id UUID, name TEXT);
+ALTER TABLE users ADD CONSTRAINT users_pkey PRIMARY KEY (id);"#;
+
+        let output = PgDumpOutput {
+            stmts: parse(query).unwrap().protobuf,
+            original: query.to_owned(),
+        };
+
+        let pk_columns = output.integer_primary_key_columns();
+
+        // UUID primary key should not be included
+        assert_eq!(pk_columns.len(), 0);
+    }
+
+    #[test]
+    fn test_integer_foreign_key_columns() {
+        let query = r#"
+CREATE TABLE parent (id INTEGER, name TEXT);
+CREATE TABLE child (id INTEGER, parent_id INTEGER);
+ALTER TABLE parent ADD CONSTRAINT parent_pkey PRIMARY KEY (id);
+ALTER TABLE child ADD CONSTRAINT child_parent_fk FOREIGN KEY (parent_id) REFERENCES parent(id);"#;
+
+        let output = PgDumpOutput {
+            stmts: parse(query).unwrap().protobuf,
+            original: query.to_owned(),
+        };
+
+        let fk_columns = output.integer_foreign_key_columns();
+
+        // Should have one integer FK column
+        assert_eq!(fk_columns.len(), 1);
+        assert!(fk_columns.contains(&Column {
+            name: "parent_id",
+            table: Some("child"),
+            schema: Some("public"),
+        }));
+    }
+
+    #[test]
+    fn test_integer_foreign_key_columns_composite() {
+        let query = r#"
+CREATE TABLE parent (id1 INTEGER, id2 INTEGER, name TEXT);
+CREATE TABLE child (id INTEGER, parent_id1 INTEGER, parent_id2 INTEGER);
+ALTER TABLE parent ADD CONSTRAINT parent_pkey PRIMARY KEY (id1, id2);
+ALTER TABLE child ADD CONSTRAINT child_parent_fk FOREIGN KEY (parent_id1, parent_id2) REFERENCES parent(id1, id2);"#;
+
+        let output = PgDumpOutput {
+            stmts: parse(query).unwrap().protobuf,
+            original: query.to_owned(),
+        };
+
+        let fk_columns = output.integer_foreign_key_columns();
+
+        // Should have two integer FK columns
+        assert_eq!(fk_columns.len(), 2);
+        assert!(fk_columns.contains(&Column {
+            name: "parent_id1",
+            table: Some("child"),
+            schema: Some("public"),
+        }));
+        assert!(fk_columns.contains(&Column {
+            name: "parent_id2",
+            table: Some("child"),
+            schema: Some("public"),
+        }));
+    }
+
+    #[test]
+    fn test_integer_primary_key_columns_composite() {
+        let query = r#"
+CREATE TABLE order_items (order_id INTEGER, item_id INTEGER, quantity INTEGER);
+ALTER TABLE order_items ADD CONSTRAINT order_items_pkey PRIMARY KEY (order_id, item_id);"#;
+
+        let output = PgDumpOutput {
+            stmts: parse(query).unwrap().protobuf,
+            original: query.to_owned(),
+        };
+
+        let pk_columns = output.integer_primary_key_columns();
+
+        // Should have two integer primary key columns
+        assert_eq!(pk_columns.len(), 2);
+        assert!(pk_columns.contains(&Column {
+            name: "order_id",
+            table: Some("order_items"),
+            schema: Some("public"),
+        }));
+        assert!(pk_columns.contains(&Column {
+            name: "item_id",
+            table: Some("order_items"),
+            schema: Some("public"),
+        }));
+    }
+
+    #[test]
     fn test_bigint_rewrite() {
         let query = r#"
 CREATE TABLE test (id INTEGER, value TEXT);
@@ -945,19 +1113,16 @@ ALTER TABLE test ADD CONSTRAINT id_pkey PRIMARY KEY (id);"#;
         };
 
         let statements = output.statements(SyncState::PreData).unwrap();
-        assert_eq!(statements.len(), 3);
+        assert_eq!(statements.len(), 2);
 
+        // Integer PK column should be converted to bigint directly in CREATE TABLE
         assert_eq!(
             statements[0].deref(),
-            "CREATE TABLE IF NOT EXISTS test (id int, value text)"
+            "CREATE TABLE IF NOT EXISTS test (id bigint, value text)"
         );
         assert_eq!(
             statements[1].deref(),
             "\nALTER TABLE test ADD CONSTRAINT id_pkey PRIMARY KEY (id)"
-        );
-        assert_eq!(
-            statements[2].deref(),
-            "ALTER TABLE public.test ALTER COLUMN id TYPE bigint"
         );
     }
 
@@ -975,27 +1140,21 @@ ALTER TABLE child ADD CONSTRAINT child_parent_fk FOREIGN KEY (parent_id) REFEREN
         };
 
         let statements = output.statements(SyncState::PreData).unwrap();
-        assert_eq!(statements.len(), 5);
+        assert_eq!(statements.len(), 3);
 
+        // PK column converted to bigint in CREATE TABLE
         assert_eq!(
             statements[0].deref(),
-            "CREATE TABLE IF NOT EXISTS parent (id int, name text)"
+            "CREATE TABLE IF NOT EXISTS parent (id bigint, name text)"
         );
+        // FK column also converted to bigint in CREATE TABLE
         assert_eq!(
             statements[1].deref(),
-            "CREATE TABLE IF NOT EXISTS child (id int, parent_id int)"
+            "CREATE TABLE IF NOT EXISTS child (id int, parent_id bigint)"
         );
         assert_eq!(
             statements[2].deref(),
             "\nALTER TABLE parent ADD CONSTRAINT parent_pkey PRIMARY KEY (id)"
-        );
-        assert_eq!(
-            statements[3].deref(),
-            "ALTER TABLE public.parent ALTER COLUMN id TYPE bigint"
-        );
-        assert_eq!(
-            statements[4].deref(),
-            "ALTER TABLE public.child ALTER COLUMN parent_id TYPE bigint"
         );
     }
 }
