@@ -7,16 +7,15 @@ use tokio::{
 use super::Error;
 
 #[derive(Debug, Clone)]
-pub(crate) struct ConfigParser {
+pub(crate) struct PostgresConfig {
     path: PathBuf,
     content: String,
 }
 
-impl ConfigParser {
+impl PostgresConfig {
     /// Load configuration from path.
-    pub(crate) async fn load(path: impl AsRef<Path>) -> Result<Self, Error> {
+    pub(crate) async fn new(path: impl AsRef<Path>) -> Result<Self, Error> {
         let path = PathBuf::from(path.as_ref());
-        // let content = read_to_string(&path).await?;
 
         Ok(Self {
             path,

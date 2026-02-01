@@ -13,6 +13,7 @@ use nix::{
 
 use once_cell::sync::Lazy;
 use regex::Regex;
+use tempfile::TempDir;
 use tokio::{
     fs::remove_dir_all,
     io::{AsyncBufReadExt, BufReader},
@@ -28,7 +29,7 @@ use crate::backend::{
     ConnectReason, Pool, Server, ServerOptions,
 };
 
-use super::{ConfigParser, Error};
+use super::{Error, PostgresConfig};
 
 static LOG_PREFIX: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"^(LOG|WARNING|ERROR|FATAL|PANIC|DEBUG\d?|INFO|NOTICE):\s+").unwrap());
@@ -61,27 +62,32 @@ impl PostgresProcessAsync {
     }
 }
 
+#[derive(Debug, Clone)]
 pub(crate) struct PostgresProcess {
     postres: PathBuf,
     initdb: PathBuf,
     initdb_dir: PathBuf,
-    socket_dir: PathBuf,
     notify: Arc<Notify>,
     port: u16,
 }
 
 impl PostgresProcess {
-    pub(crate) fn new(initdb_path: impl AsRef<Path>, port: u16) -> Self {
+    pub(crate) fn new(initdb_path: Option<&Path>, port: u16) -> Result<Self, Error> {
         let notify = Arc::new(Notify::new());
 
-        Self {
+        let initdb_path = if let Some(path) = initdb_path {
+            path.to_owned()
+        } else {
+            TempDir::new()?.keep()
+        };
+
+        Ok(Self {
             postres: PathBuf::from("postgres"),
             initdb: PathBuf::from("initdb"),
-            socket_dir: PathBuf::from("/tmp"),
-            initdb_dir: initdb_path.as_ref().to_owned(),
+            initdb_dir: initdb_path,
             notify,
             port,
-        }
+        })
     }
 
     /// Setup and launch Postgres process.
@@ -105,7 +111,7 @@ impl PostgresProcess {
         }
 
         // Configure Postgres.
-        ConfigParser::load(&self.initdb_dir.join("postgresql.conf"))
+        PostgresConfig::new(&self.initdb_dir.join("postgresql.conf"))
             .await?
             .configure_and_save(self.port)
             .await?;
@@ -114,7 +120,7 @@ impl PostgresProcess {
             .arg("-D")
             .arg(&self.initdb_dir)
             .arg("-k")
-            .arg(&self.socket_dir)
+            .arg(&self.initdb_dir)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()?;
@@ -168,7 +174,6 @@ impl PostgresProcess {
                             let line = LOG_PREFIX.replace(&line, "");
                             info!("[fdw/subprocess] {}", line.trim());
                         }
-
                     }
                 }
             }
@@ -236,15 +241,12 @@ impl PostgresProcess {
 mod test {
 
     use super::*;
-    use tempfile::TempDir;
 
     #[tokio::test]
     async fn test_postgres_process() {
         crate::logger();
 
-        let initdb = TempDir::new().unwrap();
-
-        let mut process = PostgresProcess::new(initdb.path(), 6000);
+        let mut process = PostgresProcess::new(None, 6000).unwrap();
 
         process.launch().await.unwrap();
         process.wait_ready().await.unwrap();
