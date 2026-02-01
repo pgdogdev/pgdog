@@ -1,6 +1,6 @@
-pub mod config_parser;
 pub mod error;
 pub mod postgres;
+pub mod postgres_config;
 
-pub(crate) use config_parser::ConfigParser;
 pub use error::Error;
+pub(crate) use postgres_config::PostgresConfig;

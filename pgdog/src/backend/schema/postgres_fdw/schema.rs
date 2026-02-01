@@ -1,8 +1,11 @@
 //! Foreign table schema query and data structures.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
-use crate::{backend::Server, net::messages::DataRow};
+use crate::{
+    backend::{schema::postgres_fdw::create_foreign_table, Server},
+    net::messages::DataRow,
+};
 
 /// Query to fetch table and column information needed for CREATE FOREIGN TABLE statements.
 pub static FOREIGN_TABLE_SCHEMA: &str = include_str!("postgres_fdw.sql");
@@ -52,6 +55,25 @@ impl ForeignTableSchema {
         Ok(Self {
             tables: ForeignTableColumn::load(server).await?,
         })
+    }
+
+    pub(crate) async fn setup(&self, server: &mut Server) -> Result<(), super::super::Error> {
+        let mut schemas = HashSet::new();
+
+        for ((schema, table), columns) in &self.tables {
+            if !schemas.contains(schema) {
+                server
+                    .execute(&format!(
+                        "CREATE SCHEMA IF NOT EXISTS {}",
+                        super::quote_identifier(&schema)
+                    ))
+                    .await?;
+                schemas.insert(schema.clone());
+            }
+
+            // let table = create_foreign_table(&columns, server_name, sharded_tables);
+        }
+        Ok(())
     }
 }
 

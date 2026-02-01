@@ -37,7 +37,7 @@ impl PartitionStrategy {
 }
 
 /// Quote an identifier if needed (simple Postgres-style quoting).
-fn quote_identifier(name: &str) -> String {
+pub(super) fn quote_identifier(name: &str) -> String {
     let needs_quoting = name.is_empty()
         || !name.starts_with(|c: char| c.is_ascii_lowercase() || c == '_')
         || name.starts_with('_') && name.chars().nth(1).is_some_and(|c| c.is_ascii_digit())
