@@ -313,6 +313,15 @@ impl ListShards {
             Ok(None)
         }
     }
+
+    /// Get all values that map to a specific shard.
+    pub fn values_for_shard(&self, shard: usize) -> Vec<&FlexibleType> {
+        self.mapping
+            .iter()
+            .filter(|(_, &s)| s == shard)
+            .map(|(v, _)| v)
+            .collect()
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Eq, Hash, Default)]

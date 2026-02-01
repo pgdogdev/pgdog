@@ -1,9 +1,10 @@
 //! Foreign table schema query and data structures.
 
 use std::collections::{HashMap, HashSet};
+use tracing::info;
 
 use crate::{
-    backend::{schema::postgres_fdw::create_foreign_table, Server},
+    backend::{schema::postgres_fdw::create_foreign_table, Server, ShardingSchema},
     net::messages::DataRow,
 };
 
@@ -57,8 +58,13 @@ impl ForeignTableSchema {
         })
     }
 
-    pub(crate) async fn setup(&self, server: &mut Server) -> Result<(), super::super::Error> {
+    pub(crate) async fn setup(
+        &self,
+        server: &mut Server,
+        sharding_schema: &ShardingSchema,
+    ) -> Result<(), super::super::Error> {
         let mut schemas = HashSet::new();
+        let mut tables = HashSet::new();
 
         for ((schema, table), columns) in &self.tables {
             if !schemas.contains(schema) {
@@ -71,18 +77,21 @@ impl ForeignTableSchema {
                 schemas.insert(schema.clone());
             }
 
-            // let table = create_foreign_table(&columns, server_name, sharded_tables);
+            let dedup = (schema.clone(), table.clone());
+            if !tables.contains(&dedup) {
+                let statements = create_foreign_table(columns, sharding_schema)?;
+                for sql in statements {
+                    info!("[fdw::setup] {} [{}]", sql, server.addr());
+                    server.execute(&sql).await?;
+                }
+                tables.insert(dedup);
+            }
         }
         Ok(())
     }
 }
 
 impl ForeignTableColumn {
-    /// Check if this column is a stored generated column.
-    pub(super) fn is_generated(&self) -> bool {
-        self.generated == "s"
-    }
-
     /// Check if this column has a collation.
     pub(super) fn has_collation(&self) -> bool {
         !self.collation_name.is_empty() && !self.collation_schema.is_empty()

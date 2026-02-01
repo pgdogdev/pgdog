@@ -1,5 +1,5 @@
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     path::{Path, PathBuf},
     process::Stdio,
     sync::Arc,
@@ -14,6 +14,7 @@ use nix::{
 
 use once_cell::sync::Lazy;
 use pgdog_config::Role;
+use rand::random_range;
 use regex::Regex;
 use tempfile::TempDir;
 use tokio::{
@@ -28,7 +29,7 @@ use tracing::{error, info, warn};
 
 use crate::backend::{
     pool::{Address, Request},
-    schema::postgres_fdw::ForeignTableSchema,
+    schema::postgres_fdw::{quote_identifier, ForeignTableSchema},
     Cluster, ConnectReason, Server, ServerOptions,
 };
 
@@ -73,6 +74,7 @@ pub(crate) struct PostgresProcess {
     notify: Arc<Notify>,
     port: u16,
     databases: HashSet<String>,
+    users: HashSet<String>,
     pid: Option<i32>,
 }
 
@@ -93,6 +95,7 @@ impl PostgresProcess {
             notify,
             port,
             databases: HashSet::new(),
+            users: HashSet::new(),
             pid: None,
         })
     }
@@ -194,42 +197,137 @@ impl PostgresProcess {
         Ok(())
     }
 
-    /// Setup the Postgres database for usage with cluster.
-    pub(crate) async fn configure(&mut self, cluster: &Cluster) -> Result<(), Error> {
-        let database = cluster.identifier().database.clone();
-        let mut connection = self.admin_connection().await?;
+    fn pools_to_databases(
+        cluster: &Cluster,
+        shard: usize,
+    ) -> Result<Vec<(String, Address)>, Error> {
+        let mut replica = 0;
 
-        connection
-            .execute("CREATE EXTENSION IF NOT EXISTS postgres_fdw")
-            .await?;
+        let shard = cluster
+            .shards()
+            .get(shard)
+            .ok_or(Error::ShardsHostsMismatch)?;
 
-        if !self.databases.contains(&database) {
-            connection
-                .execute(format!(r#"CREATE DATABASE "{}""#, database))
-                .await?;
-            for (number, shard) in cluster.shards().iter().enumerate() {
-                let primary = shard
+        Ok(shard
+            .pools_with_roles()
+            .iter()
+            .map(|(role, pool)| {
+                let database = match role {
+                    Role::Primary => format!("{}_p", cluster.identifier().database),
+                    _ => {
+                        replica += 1;
+                        format!("{}_r{}", cluster.identifier().database, replica)
+                    }
+                };
+                (database, pool.addr().clone())
+            })
+            .collect())
+    }
+
+    async fn setup_databases(&mut self, cluster: &Cluster) -> Result<bool, Error> {
+        let hosts: Vec<_> = cluster
+            .shards()
+            .iter()
+            .map(|shard| {
+                let mut roles: Vec<_> = shard
                     .pools_with_roles()
-                    .into_iter()
-                    .find(|(role, _)| role == &Role::Primary)
-                    .map(|(_, pool)| pool.addr().clone());
-                if let Some(primary) = primary {
-                    connection
-                        .execute(&format!(
-                            r#"CREATE SERVER "shard_{}"
-                            FOREIGN DATA WRAPPER postgres_fdw
-                            OPTIONS (host '{}', port '{}', dbname '{}')"#,
-                            number, primary.host, primary.port, primary.database_name,
-                        ))
-                        .await?;
-                }
+                    .iter()
+                    .map(|(role, _)| role)
+                    .cloned()
+                    .collect();
+                roles.sort();
+                roles
+            })
+            .collect();
+        let identical = hosts.windows(2).all(|w| w.get(0) == w.get(1));
+        if !identical {
+            return Err(Error::ShardsHostsMismatch);
+        }
+
+        let mut admin_connection = self.admin_connection().await?;
+        let mut created = false;
+
+        for (database, _) in Self::pools_to_databases(cluster, 0)? {
+            if !self.databases.contains(&database) {
+                admin_connection
+                    .execute(format!(
+                        r#"CREATE DATABASE {}"#,
+                        quote_identifier(&database)
+                    ))
+                    .await?;
+                created = true;
             }
-            let schema = {
-                let mut server = cluster.primary_or_replica(0, &Request::default()).await?;
-                ForeignTableSchema::load(&mut server).await?
-            };
-            schema.setup(&mut connection).await?;
-            self.databases.insert(database);
+        }
+
+        Ok(created)
+    }
+
+    /// Create the same load-balancing and sharding setup we have in pgdog.toml
+    /// for this cluster.
+    pub(crate) async fn configure(&mut self, cluster: &Cluster) -> Result<(), Error> {
+        if !self.setup_databases(cluster).await? {
+            return Ok(());
+        }
+
+        let sharding_schema = cluster.sharding_schema();
+
+        let schema = {
+            // TODO: Double check schemas are identical on all shards.
+            let shard = random_range(0..sharding_schema.shards);
+            let mut server = cluster
+                .primary_or_replica(shard, &Request::default())
+                .await?;
+            ForeignTableSchema::load(&mut server).await?
+        };
+
+        // Setup persistent connections.
+        let mut connections = HashMap::new();
+
+        // We checked that all shards have the same number of replicas.
+        let databases: Vec<_> = Self::pools_to_databases(cluster, 0)?
+            .into_iter()
+            .map(|(database, _)| database)
+            .collect();
+
+        for database in &databases {
+            let mut connection = self.connection("postgres", database).await?;
+
+            connection
+                .execute("CREATE EXTENSION IF NOT EXISTS postgres_fdw")
+                .await?;
+
+            connections.insert(database.clone(), connection);
+        }
+
+        for (number, _) in cluster.shards().iter().enumerate() {
+            for (database, address) in Self::pools_to_databases(cluster, number)? {
+                let connection = connections.get_mut(&database).expect("connection is gone");
+
+                connection
+                    .execute(format!(
+                        r#"CREATE SERVER IF NOT EXISTS "shard_{}"
+                                FOREIGN DATA WRAPPER postgres_fdw
+                                OPTIONS (host '{}', port '{}', dbname '{}')"#,
+                        number, address.host, address.port, address.database_name,
+                    ))
+                    .await?;
+
+                connection
+                    .execute(format!(
+                        r#"
+                            CREATE USER MAPPING IF NOT EXISTS
+                            FOR postgres
+                            SERVER "shard_{}"
+                            OPTIONS (user '{}', password '{}')"#,
+                        number, address.user, address.password
+                    ))
+                    .await?;
+            }
+        }
+
+        for database in &databases {
+            let mut connection = connections.get_mut(database).expect("connection is gone");
+            schema.setup(&mut connection, &sharding_schema).await?;
         }
 
         Ok(())
@@ -289,11 +387,11 @@ impl Drop for PostgresProcess {
             #[cfg(unix)]
             {
                 if let Err(err) = kill(Pid::from_raw(pid), Signal::SIGKILL) {
-                    error!("[fdw] dirty shutdown failed: {}", err);
+                    error!("[fdw] dirty shutdown error: {}", err);
                 }
 
                 if let Err(err) = std::fs::remove_dir_all(&self.initdb_dir) {
-                    error!("[fdw] dirty shutdown clean-up error: {}", err);
+                    error!("[fdw] dirty shutdown cleanup error: {}", err);
                 }
             }
         }
@@ -313,13 +411,26 @@ mod test {
         let cluster = Cluster::new_test(&config());
         cluster.launch();
 
-        let mut process = PostgresProcess::new(None, 6000).unwrap();
+        let mut process = PostgresProcess::new(None, 45012).unwrap();
 
         process.launch().await.unwrap();
         process.wait_ready().await.unwrap();
         process.configure(&cluster).await.unwrap();
         let mut server = process.admin_connection().await.unwrap();
-        server.execute("SELECT 1").await.unwrap();
+        let backends = server
+            .fetch_all::<String>("SELECT backend_type::text FROM pg_stat_activity ORDER BY 1")
+            .await
+            .unwrap();
+        assert_eq!(
+            backends,
+            [
+                "background writer",
+                "checkpointer",
+                "client backend",
+                "walwriter"
+            ]
+        );
+
         server
             .execute("CREATE TABLE test (id BIGINT)")
             .await

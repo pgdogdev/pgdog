@@ -37,6 +37,7 @@ impl PostgresConfig {
 
     /// Configure default settings we need off/on.
     pub(crate) async fn configure_and_save(&mut self, port: u16) -> Result<(), Error> {
+        // Disable logical replication workers.
         self.set("max_logical_replication_workers", "0");
         self.set("max_sync_workers_per_subscription", "0");
         self.set("max_parallel_apply_workers_per_subscription", "0");
@@ -46,10 +47,15 @@ impl PostgresConfig {
         self.set("log_connections", "on");
         self.set("log_disconnections", "on");
         self.set("log_statement", "ddl");
+        // Disable autovacuum. This is safe, this database doesn't write anything locally.
+        self.set("autovacuum", "off");
+        // Make the background writer do nothing.
+        self.set("bgwriter_lru_maxpages", "0");
+        self.set("bgwriter_delay", "10s");
+        // Disable async io workers.
+        self.set("io_method", "sync");
 
         self.save().await?;
-
-        println!("{}", read_to_string(&self.path).await.unwrap());
 
         Ok(())
     }

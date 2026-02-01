@@ -19,4 +19,7 @@ pub enum Error {
 
     #[error("nix: {0}")]
     Nix(#[from] nix::Error),
+
+    #[error("shards don't have the same number of replicas/primary")]
+    ShardsHostsMismatch,
 }
