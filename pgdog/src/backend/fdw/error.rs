@@ -11,6 +11,9 @@ pub enum Error {
     #[error("backend: {0}")]
     Backend(#[from] crate::backend::Error),
 
+    #[error("pool: {0}")]
+    Pool(#[from] crate::backend::pool::Error),
+
     #[error("postgres didn't launch in time")]
     Timeout(#[from] tokio::time::error::Elapsed),
 

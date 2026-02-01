@@ -37,7 +37,7 @@ impl PartitionStrategy {
 }
 
 /// Quote an identifier if needed (simple Postgres-style quoting).
-pub(super) fn quote_identifier(name: &str) -> String {
+pub(crate) fn quote_identifier(name: &str) -> String {
     let needs_quoting = name.is_empty()
         || !name.starts_with(|c: char| c.is_ascii_lowercase() || c == '_')
         || name.starts_with('_') && name.chars().nth(1).is_some_and(|c| c.is_ascii_digit())
@@ -211,6 +211,9 @@ impl<'a> ForeignTableBuilder<'a> {
 /// All columns must belong to the same table. The server_name is the foreign server
 /// to reference in the statement. If the table is found in sharded_tables configuration,
 /// adds the appropriate PARTITION BY clause (HASH, LIST, or RANGE).
+///
+/// TODO: handle partitioned tables by creating the partitions
+/// and sharding the child tables using our partition algorithm.
 pub fn create_foreign_table(
     columns: &[ForeignTableColumn],
     server_name: &str,

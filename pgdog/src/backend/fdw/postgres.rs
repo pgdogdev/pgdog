@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     path::{Path, PathBuf},
     process::Stdio,
     sync::Arc,
@@ -12,6 +13,7 @@ use nix::{
 };
 
 use once_cell::sync::Lazy;
+use pgdog_config::Role;
 use regex::Regex;
 use tempfile::TempDir;
 use tokio::{
@@ -22,11 +24,12 @@ use tokio::{
     sync::Notify,
     time::{sleep, timeout},
 };
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use crate::backend::{
-    pool::{Address, Config, PoolConfig},
-    ConnectReason, Pool, Server, ServerOptions,
+    pool::{Address, Request},
+    schema::postgres_fdw::ForeignTableSchema,
+    Cluster, ConnectReason, Server, ServerOptions,
 };
 
 use super::{Error, PostgresConfig};
@@ -69,6 +72,8 @@ pub(crate) struct PostgresProcess {
     initdb_dir: PathBuf,
     notify: Arc<Notify>,
     port: u16,
+    databases: HashSet<String>,
+    pid: Option<i32>,
 }
 
 impl PostgresProcess {
@@ -87,6 +92,8 @@ impl PostgresProcess {
             initdb_dir: initdb_path,
             notify,
             port,
+            databases: HashSet::new(),
+            pid: None,
         })
     }
 
@@ -125,6 +132,8 @@ impl PostgresProcess {
             .stderr(Stdio::piped())
             .spawn()?;
 
+        self.pid = child.id().map(|pid| pid as i32);
+
         let mut process = PostgresProcessAsync {
             child,
             notify: self.notify.clone(),
@@ -162,6 +171,7 @@ impl PostgresProcess {
 
                     _ = process.child.wait() => {
                         error!("[fdw] postgres shut down unexpectedly");
+                        break;
                     }
 
                     res = reader.read_line(&mut line) => {
@@ -172,7 +182,7 @@ impl PostgresProcess {
 
                         if !line.is_empty() {
                             let line = LOG_PREFIX.replace(&line, "");
-                            info!("[fdw/subprocess] {}", line.trim());
+                            info!("[fdw::subprocess] {}", line.trim());
                         }
                     }
                 }
@@ -184,9 +194,55 @@ impl PostgresProcess {
         Ok(())
     }
 
+    /// Setup the Postgres database for usage with cluster.
+    pub(crate) async fn configure(&mut self, cluster: &Cluster) -> Result<(), Error> {
+        let database = cluster.identifier().database.clone();
+        let mut connection = self.admin_connection().await?;
+
+        connection
+            .execute("CREATE EXTENSION IF NOT EXISTS postgres_fdw")
+            .await?;
+
+        if !self.databases.contains(&database) {
+            connection
+                .execute(format!(r#"CREATE DATABASE "{}""#, database))
+                .await?;
+            for (number, shard) in cluster.shards().iter().enumerate() {
+                let primary = shard
+                    .pools_with_roles()
+                    .into_iter()
+                    .find(|(role, _)| role == &Role::Primary)
+                    .map(|(_, pool)| pool.addr().clone());
+                if let Some(primary) = primary {
+                    connection
+                        .execute(&format!(
+                            r#"CREATE SERVER "shard_{}"
+                            FOREIGN DATA WRAPPER postgres_fdw
+                            OPTIONS (host '{}', port '{}', dbname '{}')"#,
+                            number, primary.host, primary.port, primary.database_name,
+                        ))
+                        .await?;
+                }
+            }
+            let schema = {
+                let mut server = cluster.primary_or_replica(0, &Request::default()).await?;
+                ForeignTableSchema::load(&mut server).await?
+            };
+            schema.setup(&mut connection).await?;
+            self.databases.insert(database);
+        }
+
+        Ok(())
+    }
+
     /// Create server connection.
-    pub(crate) async fn connection(&self) -> Result<Server, Error> {
-        let address = self.address();
+    pub(crate) async fn admin_connection(&self) -> Result<Server, Error> {
+        self.connection("postgres", "postgres").await
+    }
+
+    /// Get a connection with the user and database.
+    pub(crate) async fn connection(&self, user: &str, database: &str) -> Result<Server, Error> {
+        let address = self.address(user, database);
 
         let server =
             Server::connect(&address, ServerOptions::default(), ConnectReason::Other).await?;
@@ -194,27 +250,14 @@ impl PostgresProcess {
         Ok(server)
     }
 
-    fn address(&self) -> Address {
+    fn address(&self, user: &str, database: &str) -> Address {
         Address {
             host: "127.0.0.1".into(),
-            port: 6000,
-            user: "postgres".into(),
-            database_name: "postgres".into(),
+            port: self.port,
+            user: user.into(),
+            database_name: database.into(),
             ..Default::default()
         }
-    }
-
-    /// Connection pool that connections directly to the server.
-    pub(crate) fn pool(&self) -> Pool {
-        Pool::new(&PoolConfig {
-            address: self.address(),
-            config: Config {
-                inner: pgdog_stats::Config {
-                    max: 10,
-                    ..Default::default()
-                },
-            },
-        })
     }
 
     /// Wait until process is ready and accepting connections.
@@ -225,32 +268,57 @@ impl PostgresProcess {
     }
 
     async fn wait_ready_internal(&self) {
-        while let Err(_) = self.connection().await {
+        while let Err(_) = self.admin_connection().await {
             sleep(Duration::from_millis(100)).await;
             continue;
         }
     }
 
-    pub(crate) async fn stop(&self) {
+    pub(crate) async fn stop(&mut self) {
         self.notify.notify_one();
         self.notify.notified().await;
+        self.pid.take();
+    }
+}
+
+impl Drop for PostgresProcess {
+    fn drop(&mut self) {
+        if let Some(pid) = self.pid.take() {
+            warn!("[fdw] dirty shutdown initiated");
+
+            #[cfg(unix)]
+            {
+                if let Err(err) = kill(Pid::from_raw(pid), Signal::SIGKILL) {
+                    error!("[fdw] dirty shutdown failed: {}", err);
+                }
+
+                if let Err(err) = std::fs::remove_dir_all(&self.initdb_dir) {
+                    error!("[fdw] dirty shutdown clean-up error: {}", err);
+                }
+            }
+        }
     }
 }
 
 #[cfg(test)]
 mod test {
 
+    use crate::config::config;
+
     use super::*;
 
     #[tokio::test]
     async fn test_postgres_process() {
         crate::logger();
+        let cluster = Cluster::new_test(&config());
+        cluster.launch();
 
         let mut process = PostgresProcess::new(None, 6000).unwrap();
 
         process.launch().await.unwrap();
         process.wait_ready().await.unwrap();
-        let mut server = process.connection().await.unwrap();
+        process.configure(&cluster).await.unwrap();
+        let mut server = process.admin_connection().await.unwrap();
         server.execute("SELECT 1").await.unwrap();
         server
             .execute("CREATE TABLE test (id BIGINT)")

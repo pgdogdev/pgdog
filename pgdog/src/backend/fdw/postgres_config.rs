@@ -43,6 +43,9 @@ impl PostgresConfig {
         self.set("port", &port.to_string());
         self.set("max_connections", "100");
         self.set("log_line_prefix", "''");
+        self.set("log_connections", "on");
+        self.set("log_disconnections", "on");
+        self.set("log_statement", "ddl");
 
         self.save().await?;
 

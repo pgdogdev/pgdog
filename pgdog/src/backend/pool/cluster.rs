@@ -299,6 +299,19 @@ impl Cluster {
         shard.replica(request).await
     }
 
+    /// Get a connection to either a primary or a replica.
+    pub async fn primary_or_replica(
+        &self,
+        shard: usize,
+        request: &Request,
+    ) -> Result<Guard, Error> {
+        self.shards
+            .get(shard)
+            .ok_or(Error::NoShard(shard))?
+            .primary_or_replica(request)
+            .await
+    }
+
     /// The two clusters have the same databases.
     pub(crate) fn can_move_conns_to(&self, other: &Cluster) -> bool {
         self.shards.len() == other.shards.len()
