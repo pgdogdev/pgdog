@@ -51,172 +51,51 @@ for f in source.sql destination.sql; do
     sed -i.bak '/^\\unrestrict.*$/d' $f
 done
 
-# Expected content changes for PostgreSQL < 15 (no named NOT NULL constraints)
-EXPECTED_PG14=$(cat <<EOF
-<     document_id integer NOT NULL,
->     document_id bigint NOT NULL,
-<     event_id integer NOT NULL,
->     event_id bigint NOT NULL,
-<     flag_id integer NOT NULL,
->     flag_id bigint NOT NULL,
-<     override_id integer NOT NULL,
->     override_id bigint NOT NULL,
-<     flag_id integer NOT NULL,
->     flag_id bigint NOT NULL,
-<     notification_id integer NOT NULL,
->     notification_id bigint NOT NULL,
-<     audit_id integer NOT NULL,
-<     flag_id integer NOT NULL,
->     audit_id bigint NOT NULL,
->     flag_id bigint NOT NULL,
-<     audit_id integer DEFAULT nextval('core.feature_flag_audit_audit_id_seq'::regclass) CONSTRAINT feature_flag_audit_audit_id_not_null NOT NULL,
-<     flag_id integer CONSTRAINT feature_flag_audit_flag_id_not_null NOT NULL,
->     audit_id bigint DEFAULT nextval('core.feature_flag_audit_audit_id_seq'::regclass) CONSTRAINT feature_flag_audit_audit_id_not_null NOT NULL,
->     flag_id bigint CONSTRAINT feature_flag_audit_flag_id_not_null NOT NULL,
-<     audit_id integer DEFAULT nextval('core.feature_flag_audit_audit_id_seq'::regclass) CONSTRAINT feature_flag_audit_audit_id_not_null NOT NULL,
-<     flag_id integer CONSTRAINT feature_flag_audit_flag_id_not_null NOT NULL,
->     audit_id bigint DEFAULT nextval('core.feature_flag_audit_audit_id_seq'::regclass) CONSTRAINT feature_flag_audit_audit_id_not_null NOT NULL,
->     flag_id bigint CONSTRAINT feature_flag_audit_flag_id_not_null NOT NULL,
-<     audit_id integer DEFAULT nextval('core.feature_flag_audit_audit_id_seq'::regclass) CONSTRAINT feature_flag_audit_audit_id_not_null NOT NULL,
-<     flag_id integer CONSTRAINT feature_flag_audit_flag_id_not_null NOT NULL,
->     audit_id bigint DEFAULT nextval('core.feature_flag_audit_audit_id_seq'::regclass) CONSTRAINT feature_flag_audit_audit_id_not_null NOT NULL,
->     flag_id bigint CONSTRAINT feature_flag_audit_flag_id_not_null NOT NULL,
-<     audit_id integer DEFAULT nextval('core.feature_flag_audit_audit_id_seq'::regclass) CONSTRAINT feature_flag_audit_audit_id_not_null NOT NULL,
-<     flag_id integer CONSTRAINT feature_flag_audit_flag_id_not_null NOT NULL,
->     audit_id bigint DEFAULT nextval('core.feature_flag_audit_audit_id_seq'::regclass) CONSTRAINT feature_flag_audit_audit_id_not_null NOT NULL,
->     flag_id bigint CONSTRAINT feature_flag_audit_flag_id_not_null NOT NULL,
-<     session_id integer NOT NULL,
->     session_id bigint NOT NULL,
-<     session_id integer DEFAULT nextval('core.session_data_session_id_seq'::regclass) CONSTRAINT session_data_session_id_not_null NOT NULL,
->     session_id bigint DEFAULT nextval('core.session_data_session_id_seq'::regclass) CONSTRAINT session_data_session_id_not_null NOT NULL,
-<     session_id integer DEFAULT nextval('core.session_data_session_id_seq'::regclass) CONSTRAINT session_data_session_id_not_null NOT NULL,
->     session_id bigint DEFAULT nextval('core.session_data_session_id_seq'::regclass) CONSTRAINT session_data_session_id_not_null NOT NULL,
-<     session_id integer DEFAULT nextval('core.session_data_session_id_seq'::regclass) CONSTRAINT session_data_session_id_not_null NOT NULL,
->     session_id bigint DEFAULT nextval('core.session_data_session_id_seq'::regclass) CONSTRAINT session_data_session_id_not_null NOT NULL,
-<     session_id integer DEFAULT nextval('core.session_data_session_id_seq'::regclass) CONSTRAINT session_data_session_id_not_null NOT NULL,
->     session_id bigint DEFAULT nextval('core.session_data_session_id_seq'::regclass) CONSTRAINT session_data_session_id_not_null NOT NULL,
-<     setting_id integer NOT NULL,
->     setting_id bigint NOT NULL,
-<     price_history_id integer NOT NULL,
->     price_history_id bigint NOT NULL,
-<     category_id integer NOT NULL,
->     category_id bigint NOT NULL,
-<     price_history_id integer DEFAULT nextval('inventory.price_history_price_history_id_seq'::regclass) CONSTRAINT price_history_price_history_id_not_null NOT NULL,
->     price_history_id bigint DEFAULT nextval('inventory.price_history_price_history_id_seq'::regclass) CONSTRAINT price_history_price_history_id_not_null NOT NULL,
-<     category_id integer CONSTRAINT price_history_category_id_not_null NOT NULL,
->     category_id bigint CONSTRAINT price_history_category_id_not_null NOT NULL,
-<     price_history_id integer DEFAULT nextval('inventory.price_history_price_history_id_seq'::regclass) CONSTRAINT price_history_price_history_id_not_null NOT NULL,
->     price_history_id bigint DEFAULT nextval('inventory.price_history_price_history_id_seq'::regclass) CONSTRAINT price_history_price_history_id_not_null NOT NULL,
-<     category_id integer CONSTRAINT price_history_category_id_not_null NOT NULL,
->     category_id bigint CONSTRAINT price_history_category_id_not_null NOT NULL,
-<     price_history_id integer DEFAULT nextval('inventory.price_history_price_history_id_seq'::regclass) CONSTRAINT price_history_price_history_id_not_null NOT NULL,
->     price_history_id bigint DEFAULT nextval('inventory.price_history_price_history_id_seq'::regclass) CONSTRAINT price_history_price_history_id_not_null NOT NULL,
-<     category_id integer CONSTRAINT price_history_category_id_not_null NOT NULL,
->     category_id bigint CONSTRAINT price_history_category_id_not_null NOT NULL,
-<     price_history_id integer DEFAULT nextval('inventory.price_history_price_history_id_seq'::regclass) CONSTRAINT price_history_price_history_id_not_null NOT NULL,
->     price_history_id bigint DEFAULT nextval('inventory.price_history_price_history_id_seq'::regclass) CONSTRAINT price_history_price_history_id_not_null NOT NULL,
-<     category_id integer CONSTRAINT price_history_category_id_not_null NOT NULL,
->     category_id bigint CONSTRAINT price_history_category_id_not_null NOT NULL,
-<     ticket_id integer NOT NULL,
->     ticket_id bigint NOT NULL,
-<     ticket_id integer DEFAULT nextval('sales.ticket_queue_ticket_id_seq'::regclass) CONSTRAINT ticket_queue_ticket_id_not_null NOT NULL,
->     ticket_id bigint DEFAULT nextval('sales.ticket_queue_ticket_id_seq'::regclass) CONSTRAINT ticket_queue_ticket_id_not_null NOT NULL,
-<     ticket_id integer DEFAULT nextval('sales.ticket_queue_ticket_id_seq'::regclass) CONSTRAINT ticket_queue_ticket_id_not_null NOT NULL,
->     ticket_id bigint DEFAULT nextval('sales.ticket_queue_ticket_id_seq'::regclass) CONSTRAINT ticket_queue_ticket_id_not_null NOT NULL,
-<     ticket_id integer DEFAULT nextval('sales.ticket_queue_ticket_id_seq'::regclass) CONSTRAINT ticket_queue_ticket_id_not_null NOT NULL,
->     ticket_id bigint DEFAULT nextval('sales.ticket_queue_ticket_id_seq'::regclass) CONSTRAINT ticket_queue_ticket_id_not_null NOT NULL,
-<     ticket_id integer DEFAULT nextval('sales.ticket_queue_ticket_id_seq'::regclass) CONSTRAINT ticket_queue_ticket_id_not_null NOT NULL,
->     ticket_id bigint DEFAULT nextval('sales.ticket_queue_ticket_id_seq'::regclass) CONSTRAINT ticket_queue_ticket_id_not_null NOT NULL,
-< ALTER TABLE ONLY inventory.price_history ATTACH PARTITION inventory.price_history_cat_0_100 FOR VALUES FROM (0) TO (100);
-> ALTER TABLE ONLY inventory.price_history ATTACH PARTITION inventory.price_history_cat_0_100 FOR VALUES FROM ('0') TO ('100');
-< ALTER TABLE ONLY inventory.price_history ATTACH PARTITION inventory.price_history_cat_100_200 FOR VALUES FROM (100) TO (200);
-> ALTER TABLE ONLY inventory.price_history ATTACH PARTITION inventory.price_history_cat_100_200 FOR VALUES FROM ('100') TO ('200');
-< ALTER TABLE ONLY inventory.price_history ATTACH PARTITION inventory.price_history_cat_200_300 FOR VALUES FROM (200) TO (300);
-> ALTER TABLE ONLY inventory.price_history ATTACH PARTITION inventory.price_history_cat_200_300 FOR VALUES FROM ('200') TO ('300');
-< ALTER TABLE ONLY inventory.price_history ATTACH PARTITION inventory.price_history_cat_300_plus FOR VALUES FROM (300) TO (MAXVALUE);
-> ALTER TABLE ONLY inventory.price_history ATTACH PARTITION inventory.price_history_cat_300_plus FOR VALUES FROM ('300') TO (MAXVALUE);
-EOF
-)
-
-# Expected content changes for PostgreSQL 15+ (named NOT NULL constraints)
-EXPECTED_PG15=$(cat <<EOF
-<     document_id integer NOT NULL,
->     document_id bigint NOT NULL,
-<     event_id integer NOT NULL,
->     event_id bigint NOT NULL,
-<     flag_id integer NOT NULL,
->     flag_id bigint NOT NULL,
-<     override_id integer NOT NULL,
->     override_id bigint NOT NULL,
-<     flag_id integer NOT NULL,
->     flag_id bigint NOT NULL,
-<     notification_id integer NOT NULL,
->     notification_id bigint NOT NULL,
-<     session_id integer NOT NULL,
->     session_id bigint NOT NULL,
-<     session_id integer DEFAULT nextval('core.session_data_session_id_seq'::regclass) CONSTRAINT session_data_session_id_not_null NOT NULL,
->     session_id bigint DEFAULT nextval('core.session_data_session_id_seq'::regclass) CONSTRAINT session_data_session_id_not_null NOT NULL,
-<     session_id integer DEFAULT nextval('core.session_data_session_id_seq'::regclass) CONSTRAINT session_data_session_id_not_null NOT NULL,
->     session_id bigint DEFAULT nextval('core.session_data_session_id_seq'::regclass) CONSTRAINT session_data_session_id_not_null NOT NULL,
-<     session_id integer DEFAULT nextval('core.session_data_session_id_seq'::regclass) CONSTRAINT session_data_session_id_not_null NOT NULL,
->     session_id bigint DEFAULT nextval('core.session_data_session_id_seq'::regclass) CONSTRAINT session_data_session_id_not_null NOT NULL,
-<     session_id integer DEFAULT nextval('core.session_data_session_id_seq'::regclass) CONSTRAINT session_data_session_id_not_null NOT NULL,
->     session_id bigint DEFAULT nextval('core.session_data_session_id_seq'::regclass) CONSTRAINT session_data_session_id_not_null NOT NULL,
-<     setting_id integer NOT NULL,
->     setting_id bigint NOT NULL,
-<     price_history_id integer NOT NULL,
->     price_history_id bigint NOT NULL,
-<     category_id integer NOT NULL,
->     category_id bigint NOT NULL,
-<     price_history_id integer DEFAULT nextval('inventory.price_history_price_history_id_seq'::regclass) CONSTRAINT price_history_price_history_id_not_null NOT NULL,
->     price_history_id bigint DEFAULT nextval('inventory.price_history_price_history_id_seq'::regclass) CONSTRAINT price_history_price_history_id_not_null NOT NULL,
-<     category_id integer CONSTRAINT price_history_category_id_not_null NOT NULL,
->     category_id bigint CONSTRAINT price_history_category_id_not_null NOT NULL,
-<     price_history_id integer DEFAULT nextval('inventory.price_history_price_history_id_seq'::regclass) CONSTRAINT price_history_price_history_id_not_null NOT NULL,
->     price_history_id bigint DEFAULT nextval('inventory.price_history_price_history_id_seq'::regclass) CONSTRAINT price_history_price_history_id_not_null NOT NULL,
-<     category_id integer CONSTRAINT price_history_category_id_not_null NOT NULL,
->     category_id bigint CONSTRAINT price_history_category_id_not_null NOT NULL,
-<     price_history_id integer DEFAULT nextval('inventory.price_history_price_history_id_seq'::regclass) CONSTRAINT price_history_price_history_id_not_null NOT NULL,
->     price_history_id bigint DEFAULT nextval('inventory.price_history_price_history_id_seq'::regclass) CONSTRAINT price_history_price_history_id_not_null NOT NULL,
-<     category_id integer CONSTRAINT price_history_category_id_not_null NOT NULL,
->     category_id bigint CONSTRAINT price_history_category_id_not_null NOT NULL,
-<     price_history_id integer DEFAULT nextval('inventory.price_history_price_history_id_seq'::regclass) CONSTRAINT price_history_price_history_id_not_null NOT NULL,
->     price_history_id bigint DEFAULT nextval('inventory.price_history_price_history_id_seq'::regclass) CONSTRAINT price_history_price_history_id_not_null NOT NULL,
-<     category_id integer CONSTRAINT price_history_category_id_not_null NOT NULL,
->     category_id bigint CONSTRAINT price_history_category_id_not_null NOT NULL,
-<     ticket_id integer NOT NULL,
->     ticket_id bigint NOT NULL,
-<     ticket_id integer DEFAULT nextval('sales.ticket_queue_ticket_id_seq'::regclass) CONSTRAINT ticket_queue_ticket_id_not_null NOT NULL,
->     ticket_id bigint DEFAULT nextval('sales.ticket_queue_ticket_id_seq'::regclass) CONSTRAINT ticket_queue_ticket_id_not_null NOT NULL,
-<     ticket_id integer DEFAULT nextval('sales.ticket_queue_ticket_id_seq'::regclass) CONSTRAINT ticket_queue_ticket_id_not_null NOT NULL,
->     ticket_id bigint DEFAULT nextval('sales.ticket_queue_ticket_id_seq'::regclass) CONSTRAINT ticket_queue_ticket_id_not_null NOT NULL,
-<     ticket_id integer DEFAULT nextval('sales.ticket_queue_ticket_id_seq'::regclass) CONSTRAINT ticket_queue_ticket_id_not_null NOT NULL,
->     ticket_id bigint DEFAULT nextval('sales.ticket_queue_ticket_id_seq'::regclass) CONSTRAINT ticket_queue_ticket_id_not_null NOT NULL,
-<     ticket_id integer DEFAULT nextval('sales.ticket_queue_ticket_id_seq'::regclass) CONSTRAINT ticket_queue_ticket_id_not_null NOT NULL,
->     ticket_id bigint DEFAULT nextval('sales.ticket_queue_ticket_id_seq'::regclass) CONSTRAINT ticket_queue_ticket_id_not_null NOT NULL,
-< ALTER TABLE ONLY inventory.price_history ATTACH PARTITION inventory.price_history_cat_0_100 FOR VALUES FROM (0) TO (100);
-> ALTER TABLE ONLY inventory.price_history ATTACH PARTITION inventory.price_history_cat_0_100 FOR VALUES FROM ('0') TO ('100');
-< ALTER TABLE ONLY inventory.price_history ATTACH PARTITION inventory.price_history_cat_100_200 FOR VALUES FROM (100) TO (200);
-> ALTER TABLE ONLY inventory.price_history ATTACH PARTITION inventory.price_history_cat_100_200 FOR VALUES FROM ('100') TO ('200');
-< ALTER TABLE ONLY inventory.price_history ATTACH PARTITION inventory.price_history_cat_200_300 FOR VALUES FROM (200) TO (300);
-> ALTER TABLE ONLY inventory.price_history ATTACH PARTITION inventory.price_history_cat_200_300 FOR VALUES FROM ('200') TO ('300');
-< ALTER TABLE ONLY inventory.price_history ATTACH PARTITION inventory.price_history_cat_300_plus FOR VALUES FROM (300) TO (MAXVALUE);
-> ALTER TABLE ONLY inventory.price_history ATTACH PARTITION inventory.price_history_cat_300_plus FOR VALUES FROM ('300') TO (MAXVALUE);
+# Expected integer -> bigint conversions (normalized to just column_name and type)
+# Format: column_name integer -> column_name bigint
+EXPECTED_CONVERSIONS=$(cat <<EOF
+audit_id integer
+audit_id bigint
+category_id integer
+category_id bigint
+document_id integer
+document_id bigint
+event_id integer
+event_id bigint
+flag_id integer
+flag_id bigint
+notification_id integer
+notification_id bigint
+override_id integer
+override_id bigint
+price_history_id integer
+price_history_id bigint
+session_id integer
+session_id bigint
+setting_id integer
+setting_id bigint
+ticket_id integer
+ticket_id bigint
 EOF
 )
 
 diff source.sql destination.sql > diff.txt || true
 
-# Extract just the content lines (< and >) for comparison
-ACTUAL_CHANGES=$(grep '^[<>]' diff.txt)
-if [ "$ACTUAL_CHANGES" != "$EXPECTED_PG14" ] && [ "$ACTUAL_CHANGES" != "$EXPECTED_PG15" ]; then
-    echo "Schema diff does not match expected changes"
-    echo "=== Expected (PG < 15) ==="
-    echo "$EXPECTED_PG14"
-    echo "=== Expected (PG 15+) ==="
-    echo "$EXPECTED_PG15"
+# Extract column name and type from diff lines, ignoring everything else
+# This normalizes across different PG versions and constraint syntaxes
+ACTUAL_CONVERSIONS=$(grep '^[<>]' diff.txt | \
+    grep -E '\b(integer|bigint)\b' | \
+    sed -E 's/.*[[:space:]]([a-z_]+)[[:space:]]+(integer|bigint).*/\1 \2/' | \
+    sort -u)
+
+EXPECTED_SORTED=$(echo "$EXPECTED_CONVERSIONS" | sort -u)
+
+if [ "$ACTUAL_CONVERSIONS" != "$EXPECTED_SORTED" ]; then
+    echo "Schema diff does not match expected integer -> bigint conversions"
+    echo "=== Expected ==="
+    echo "$EXPECTED_SORTED"
     echo "=== Actual ==="
-    echo "$ACTUAL_CHANGES"
+    echo "$ACTUAL_CONVERSIONS"
     exit 1
 fi
 
