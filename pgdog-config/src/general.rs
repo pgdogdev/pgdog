@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use crate::pooling::ConnectionRecovery;
-use crate::{QueryParserEngine, QueryParserLevel, SystemCatalogsBehavior};
+use crate::{CopyFormat, QueryParserEngine, QueryParserLevel, SystemCatalogsBehavior};
 
 use super::auth::{AuthType, PassthoughAuth};
 use super::database::{LoadBalancingStrategy, ReadWriteSplit, ReadWriteStrategy};
@@ -200,6 +200,9 @@ pub struct General {
     /// Omnisharded queries are sticky by default.
     #[serde(default)]
     pub omnisharded_sticky: bool,
+    /// Copy format used for resharding.
+    #[serde(default)]
+    pub resharding_copy_format: CopyFormat,
 }
 
 impl Default for General {
@@ -270,6 +273,7 @@ impl Default for General {
             unique_id_min: u64::default(),
             system_catalogs: Self::default_system_catalogs(),
             omnisharded_sticky: bool::default(),
+            resharding_copy_format: CopyFormat::default(),
         }
     }
 }
