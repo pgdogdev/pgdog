@@ -46,7 +46,7 @@ impl PostgresConfig {
         self.set("log_line_prefix", "''");
         self.set("log_connections", "on");
         self.set("log_disconnections", "on");
-        self.set("log_statement", "ddl");
+        // self.set("log_statement", "off");
         // Disable autovacuum. This is safe, this database doesn't write anything locally.
         self.set("autovacuum", "off");
         // Make the background writer do nothing.

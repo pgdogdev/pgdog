@@ -1,6 +1,9 @@
 pub mod error;
+pub mod launcher;
 pub mod postgres;
 pub mod postgres_config;
 
 pub use error::Error;
+pub(crate) use launcher::PostgresLauncher;
+pub(crate) use postgres::PostgresProcess;
 pub(crate) use postgres_config::PostgresConfig;

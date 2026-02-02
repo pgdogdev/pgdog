@@ -1,7 +1,7 @@
 //! Foreign table schema query and data structures.
 
 use std::collections::{HashMap, HashSet};
-use tracing::info;
+use tracing::debug;
 
 use crate::{
     backend::{schema::postgres_fdw::create_foreign_table, Server, ShardingSchema},
@@ -81,7 +81,7 @@ impl ForeignTableSchema {
             if !tables.contains(&dedup) {
                 let statements = create_foreign_table(columns, sharding_schema)?;
                 for sql in statements {
-                    info!("[fdw::setup] {} [{}]", sql, server.addr());
+                    debug!("[fdw::setup] {} [{}]", sql, server.addr());
                     server.execute(&sql).await?;
                 }
                 tables.insert(dedup);

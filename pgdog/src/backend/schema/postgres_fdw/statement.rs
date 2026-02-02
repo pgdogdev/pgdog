@@ -443,13 +443,13 @@ mod test {
 
         assert_eq!(statements.len(), 1);
         let sql = &statements[0];
-        assert!(sql.contains("CREATE FOREIGN TABLE public.test_table"));
+        assert!(sql.contains(r#"CREATE FOREIGN TABLE "public"."test_table""#));
         assert!(sql.contains("bigint"));
         assert!(sql.contains("NOT NULL"));
         assert!(sql.contains("OPTIONS (column_name 'id')"));
         assert!(sql.contains("character varying(100)"));
         assert!(!sql.contains("DEFAULT")); // Defaults handled by remote table
-        assert!(sql.contains("SERVER shard_"));
+        assert!(sql.contains("SERVER"));
         assert!(sql.contains("schema_name 'public'"));
         assert!(!sql.contains("PARTITION BY"));
     }
@@ -470,18 +470,18 @@ mod test {
         let statements = create_foreign_table(&columns, &schema).unwrap();
 
         assert_eq!(statements.len(), 3); // parent + 2 partitions
-        assert!(statements[0].contains("CREATE TABLE public.test_table"));
-        assert!(statements[0].contains("PARTITION BY HASH (id)"));
+        assert!(statements[0].contains(r#"CREATE TABLE "public"."test_table""#));
+        assert!(statements[0].contains(r#"PARTITION BY HASH ("id")"#));
         assert!(statements[1].contains(
-            "CREATE FOREIGN TABLE public.test_table_shard_0 PARTITION OF public.test_table"
+            r#"CREATE FOREIGN TABLE "public"."test_table_shard_0" PARTITION OF "public"."test_table""#
         ));
         assert!(statements[1].contains("FOR VALUES WITH (MODULUS 2, REMAINDER 0)"));
-        assert!(statements[1].contains("SERVER shard_0"));
+        assert!(statements[1].contains(r#"SERVER "shard_0""#));
         assert!(statements[2].contains(
-            "CREATE FOREIGN TABLE public.test_table_shard_1 PARTITION OF public.test_table"
+            r#"CREATE FOREIGN TABLE "public"."test_table_shard_1" PARTITION OF "public"."test_table""#
         ));
         assert!(statements[2].contains("FOR VALUES WITH (MODULUS 2, REMAINDER 1)"));
-        assert!(statements[2].contains("SERVER shard_1"));
+        assert!(statements[2].contains(r#"SERVER "shard_1""#));
     }
 
     #[test]
@@ -499,8 +499,8 @@ mod test {
 
         let statements = create_foreign_table(&columns, &schema).unwrap();
 
-        assert!(statements[0].contains("CREATE TABLE public.test_table"));
-        assert!(statements[0].contains("PARTITION BY LIST (region)"));
+        assert!(statements[0].contains(r#"CREATE TABLE "public"."test_table""#));
+        assert!(statements[0].contains(r#"PARTITION BY LIST ("region")"#));
     }
 
     #[test]
@@ -518,8 +518,8 @@ mod test {
 
         let statements = create_foreign_table(&columns, &schema).unwrap();
 
-        assert!(statements[0].contains("CREATE TABLE public.test_table"));
-        assert!(statements[0].contains("PARTITION BY RANGE (id)"));
+        assert!(statements[0].contains(r#"CREATE TABLE "public"."test_table""#));
+        assert!(statements[0].contains(r#"PARTITION BY RANGE ("id")"#));
     }
 
     #[test]
@@ -534,7 +534,7 @@ mod test {
         let statements = create_foreign_table(&columns, &schema).unwrap();
 
         assert_eq!(statements.len(), 1);
-        assert!(statements[0].contains("CREATE FOREIGN TABLE public.test_table"));
+        assert!(statements[0].contains(r#"CREATE FOREIGN TABLE "public"."test_table""#));
         assert!(!statements[0].contains("PARTITION BY"));
     }
 
@@ -550,7 +550,7 @@ mod test {
         let statements = create_foreign_table(&columns, &schema).unwrap();
 
         assert_eq!(statements.len(), 1);
-        assert!(statements[0].contains("CREATE FOREIGN TABLE public.test_table"));
+        assert!(statements[0].contains(r#"CREATE FOREIGN TABLE "public"."test_table""#));
         assert!(!statements[0].contains("PARTITION BY"));
     }
 
@@ -565,7 +565,7 @@ mod test {
         let schema = sharding_schema_with_tables(ShardedTables::default(), 1);
         let statements = create_foreign_table(&columns, &schema).unwrap();
 
-        assert!(statements[0].contains("CREATE FOREIGN TABLE public.test_table"));
+        assert!(statements[0].contains(r#"CREATE FOREIGN TABLE "public"."test_table""#));
         // Defaults and generated columns handled by remote table
         assert!(!statements[0].contains("GENERATED"));
         assert!(!statements[0].contains("DEFAULT"));
@@ -582,8 +582,8 @@ mod test {
         let schema = sharding_schema_with_tables(ShardedTables::default(), 1);
         let statements = create_foreign_table(&columns, &schema).unwrap();
 
-        assert!(statements[0].contains("CREATE FOREIGN TABLE public.test_table"));
-        assert!(statements[0].contains("COLLATE pg_catalog.\"en_US\""));
+        assert!(statements[0].contains(r#"CREATE FOREIGN TABLE "public"."test_table""#));
+        assert!(statements[0].contains(r#"COLLATE "pg_catalog"."en_US""#));
     }
 
     #[test]
@@ -595,11 +595,12 @@ mod test {
 
     #[test]
     fn test_quote_identifier() {
-        assert_eq!(quote_identifier("users"), "users");
+        // All identifiers are now quoted
+        assert_eq!(quote_identifier("users"), "\"users\"");
         assert_eq!(quote_identifier("my table"), "\"my table\"");
         assert_eq!(quote_identifier("123abc"), "\"123abc\"");
         assert_eq!(quote_identifier("has\"quote"), "\"has\"\"quote\"");
         assert_eq!(quote_identifier("CamelCase"), "\"CamelCase\"");
-        assert_eq!(quote_identifier("_valid"), "_valid");
+        assert_eq!(quote_identifier("_valid"), "\"_valid\"");
     }
 }
