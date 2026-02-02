@@ -52,6 +52,59 @@ fn schema_name(relation: &RangeVar) -> &str {
     }
 }
 
+fn is_integer_type(type_name: &str) -> bool {
+    matches!(
+        type_name,
+        "int4" | "int2" | "serial" | "smallserial" | "integer" | "smallint"
+    )
+}
+
+/// Determine if a column should be converted to bigint.
+///
+/// A column should be converted if:
+/// 1. It's in the columns_to_convert set (PK/FK that references integer PK), OR
+/// 2. It's a child partition column where the parent has bigint and child has integer
+fn should_convert_to_bigint<'a>(
+    col: &Column<'a>,
+    col_type_name: Option<&pg_query::protobuf::TypeName>,
+    columns_to_convert: &HashSet<Column<'a>>,
+    parent_table: Option<&Table<'a>>,
+    parent_column_types: &HashMap<(Table<'a>, &str), &'static str>,
+) -> bool {
+    // Check if this column is directly marked for conversion (PK/FK)
+    if columns_to_convert.contains(col) {
+        return true;
+    }
+
+    // Check if this is a child partition where parent has bigint
+    let Some(parent) = parent_table else {
+        return false;
+    };
+
+    let Some(&parent_type) = parent_column_types.get(&(*parent, col.name)) else {
+        return false;
+    };
+
+    if parent_type != "int8" {
+        return false;
+    }
+
+    // Parent has bigint, check if child has integer type
+    let Some(type_name) = col_type_name else {
+        return false;
+    };
+
+    let Some(last) = type_name.names.last() else {
+        return false;
+    };
+
+    let Some(NodeEnum::String(PgString { sval })) = &last.node else {
+        return false;
+    };
+
+    is_integer_type(sval.as_str())
+}
+
 use tokio::process::Command;
 
 #[derive(Debug, Clone)]
@@ -292,12 +345,7 @@ impl PgDumpOutput {
 
                     let is_integer = column_types
                         .get(&type_key)
-                        .map(|t| {
-                            matches!(
-                                *t,
-                                "int4" | "int2" | "serial" | "smallserial" | "integer" | "smallint"
-                            )
-                        })
+                        .map(|t| is_integer_type(t))
                         .unwrap_or(false);
 
                     if is_integer {
@@ -390,6 +438,136 @@ impl PgDumpOutput {
         result
     }
 
+    /// Get partitioned parent tables (tables with PARTITION BY).
+    fn partitioned_tables(&self) -> HashSet<Table<'_>> {
+        let mut result = HashSet::new();
+
+        for stmt in &self.stmts.stmts {
+            let Some(ref node) = stmt.stmt else {
+                continue;
+            };
+            let Some(NodeEnum::CreateStmt(ref create_stmt)) = node.node else {
+                continue;
+            };
+
+            // Tables with partspec are partitioned parent tables
+            if create_stmt.partspec.is_some() {
+                if let Some(ref relation) = create_stmt.relation {
+                    result.insert(Table::from(relation));
+                }
+            }
+        }
+
+        result
+    }
+
+    /// Get parent-child relationships from ATTACH PARTITION statements.
+    /// Returns a map from child table to parent table.
+    fn partition_parents(&self) -> HashMap<Table<'_>, Table<'_>> {
+        let mut result = HashMap::new();
+
+        for stmt in &self.stmts.stmts {
+            let Some(ref node) = stmt.stmt else {
+                continue;
+            };
+            let Some(NodeEnum::AlterTableStmt(ref alter_stmt)) = node.node else {
+                continue;
+            };
+
+            let Some(ref parent_relation) = alter_stmt.relation else {
+                continue;
+            };
+
+            for cmd in &alter_stmt.cmds {
+                let Some(NodeEnum::AlterTableCmd(ref cmd)) = cmd.node else {
+                    continue;
+                };
+
+                if cmd.subtype() != AlterTableType::AtAttachPartition {
+                    continue;
+                }
+
+                let Some(ref def) = cmd.def else {
+                    continue;
+                };
+
+                let Some(NodeEnum::PartitionCmd(ref partition_cmd)) = def.node else {
+                    continue;
+                };
+
+                let Some(ref child_relation) = partition_cmd.name else {
+                    continue;
+                };
+
+                let parent = Table::from(parent_relation);
+                let child = Table::from(child_relation);
+                result.insert(child, parent);
+            }
+        }
+
+        result
+    }
+
+    /// Get column types for partitioned parent tables after bigint conversion.
+    /// Returns a map from (parent_table, column_name) to the converted type.
+    fn partitioned_parent_column_types(
+        &self,
+        columns_to_convert: &HashSet<Column<'_>>,
+    ) -> HashMap<(Table<'_>, &str), &'static str> {
+        let mut result = HashMap::new();
+        let partitioned = self.partitioned_tables();
+
+        for stmt in &self.stmts.stmts {
+            let Some(ref node) = stmt.stmt else {
+                continue;
+            };
+            let Some(NodeEnum::CreateStmt(ref create_stmt)) = node.node else {
+                continue;
+            };
+
+            let Some(ref relation) = create_stmt.relation else {
+                continue;
+            };
+
+            let table = Table::from(relation);
+            if !partitioned.contains(&table) {
+                continue;
+            }
+
+            let schema = table.schema().map(|s| s.name).unwrap_or("public");
+            let table_name = table.name;
+
+            for elt in &create_stmt.table_elts {
+                if let Some(NodeEnum::ColumnDef(ref col_def)) = elt.node {
+                    let col = Column {
+                        name: col_def.colname.as_str(),
+                        table: Some(table_name),
+                        schema: Some(schema),
+                    };
+
+                    // Check if this column needs conversion
+                    if columns_to_convert.contains(&col) {
+                        result.insert((table, col_def.colname.as_str()), "int8");
+                    } else if let Some(ref type_name) = col_def.type_name {
+                        if let Some(last_name) = type_name.names.last() {
+                            if let Some(NodeEnum::String(PgString { sval })) = &last_name.node {
+                                // Store original type for non-converted columns
+                                let type_str: &'static str = match sval.as_str() {
+                                    "int4" => "int4",
+                                    "int8" => "int8",
+                                    _ => continue, // Only track integer types
+                                };
+                                result.insert((table, col_def.colname.as_str()), type_str);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        result
+    }
+
     /// Get all column types from CREATE TABLE statements.
     fn column_types(&self) -> HashMap<ColumnTypeKey<'_>, &str> {
         let mut result = HashMap::new();
@@ -444,6 +622,10 @@ impl PgDumpOutput {
             .copied()
             .collect();
 
+        // Get partitioned parent column types and parent-child relationships
+        let parent_column_types = self.partitioned_parent_column_types(&columns_to_convert);
+        let partition_parents = self.partition_parents();
+
         for stmt in &self.stmts.stmts {
             let (_, original_start) = self
                 .original
@@ -461,12 +643,16 @@ impl PgDumpOutput {
                             stmt.if_not_exists = true;
 
                             // Get table info
-                            let (schema, table_name) =
-                                if let Some(ref relation) = create_stmt.relation {
-                                    (schema_name(relation), relation.relname.as_str())
-                                } else {
-                                    ("public", "")
-                                };
+                            let table = create_stmt
+                                .relation
+                                .as_ref()
+                                .map(Table::from)
+                                .unwrap_or_default();
+                            let schema = table.schema().map(|s| s.name).unwrap_or("public");
+                            let table_name = table.name;
+
+                            // Check if this table is a child partition
+                            let parent_table = partition_parents.get(&table);
 
                             // Convert integer PK/FK columns to bigint
                             for elt in &mut stmt.table_elts {
@@ -477,7 +663,13 @@ impl PgDumpOutput {
                                         schema: Some(schema),
                                     };
 
-                                    if columns_to_convert.contains(&col) {
+                                    if should_convert_to_bigint(
+                                        &col,
+                                        col_def.type_name.as_ref(),
+                                        &columns_to_convert,
+                                        parent_table,
+                                        &parent_column_types,
+                                    ) {
                                         if let Some(ref mut type_name) = col_def.type_name {
                                             type_name.names = vec![
                                                 Node {
@@ -498,11 +690,6 @@ impl PgDumpOutput {
 
                             if state == SyncState::PreData {
                                 let sql = deparse_node(NodeEnum::CreateStmt(stmt))?;
-                                let table = create_stmt
-                                    .relation
-                                    .as_ref()
-                                    .map(Table::from)
-                                    .unwrap_or_default();
                                 result.push(Statement::Table { table, sql });
                             }
                         }
@@ -580,11 +767,22 @@ impl PgDumpOutput {
                                             }
                                         }
                                         AlterTableType::AtAttachPartition => {
-                                            // Index partitions need to be attached to indexes,
-                                            // which we create in the post-data step.
                                             match stmt.objtype() {
+                                                // Index partitions need to be attached to indexes,
+                                                // which we create in the post-data step.
                                                 ObjectType::ObjectIndex => {
                                                     if state == SyncState::PostData {
+                                                        result.push(Statement::Other {
+                                                            sql: original.to_string(),
+                                                            idempotent: false,
+                                                        });
+                                                    }
+                                                }
+
+                                                // Table partitions are attached in pre-data
+                                                // after the partition tables are created.
+                                                ObjectType::ObjectTable => {
+                                                    if state == SyncState::PreData {
                                                         result.push(Statement::Other {
                                                             sql: original.to_string(),
                                                             idempotent: false,
@@ -1155,6 +1353,93 @@ ALTER TABLE child ADD CONSTRAINT child_parent_fk FOREIGN KEY (parent_id) REFEREN
         assert_eq!(
             statements[2].deref(),
             "\nALTER TABLE parent ADD CONSTRAINT parent_pkey PRIMARY KEY (id)"
+        );
+    }
+
+    #[test]
+    fn test_attach_partition() {
+        // pg_dump generates ATTACH PARTITION for partitioned tables
+        let query = r#"
+CREATE TABLE parent (id INTEGER, created_at DATE) PARTITION BY RANGE (created_at);
+CREATE TABLE parent_2024 (id INTEGER, created_at DATE);
+ALTER TABLE ONLY parent ATTACH PARTITION parent_2024 FOR VALUES FROM ('2024-01-01') TO ('2025-01-01');"#;
+
+        let output = PgDumpOutput {
+            stmts: parse(query).unwrap().protobuf,
+            original: query.to_owned(),
+        };
+
+        let pre_data = output.statements(SyncState::PreData).unwrap();
+        let post_data = output.statements(SyncState::PostData).unwrap();
+
+        // CREATE TABLEs should be in pre-data
+        assert_eq!(pre_data.len(), 3);
+
+        // ATTACH PARTITION for tables should be in pre-data, not post-data
+        assert!(pre_data[2].deref().contains("ATTACH PARTITION"));
+
+        // No statements in post-data for table partitions
+        assert!(post_data.is_empty());
+    }
+
+    #[test]
+    fn test_partitioned_child_inherits_bigint_from_parent() {
+        // pg_dump generates FK constraints only for parent tables, not child partitions.
+        // When parent has integer columns converted to bigint (via PK/FK),
+        // child partitions should also have those columns converted.
+        let query = r#"
+CREATE TABLE users (id INTEGER);
+CREATE TABLE orders (id INTEGER, user_id INTEGER, created_at DATE) PARTITION BY RANGE (created_at);
+CREATE TABLE orders_2024 (id INTEGER, user_id INTEGER, created_at DATE);
+ALTER TABLE users ADD CONSTRAINT users_pkey PRIMARY KEY (id);
+ALTER TABLE orders ADD CONSTRAINT orders_pkey PRIMARY KEY (id);
+ALTER TABLE orders ADD CONSTRAINT orders_user_fk FOREIGN KEY (user_id) REFERENCES users(id);
+ALTER TABLE ONLY orders ATTACH PARTITION orders_2024 FOR VALUES FROM ('2024-01-01') TO ('2025-01-01');"#;
+
+        let output = PgDumpOutput {
+            stmts: parse(query).unwrap().protobuf,
+            original: query.to_owned(),
+        };
+
+        let statements = output.statements(SyncState::PreData).unwrap();
+
+        // Find the parent table statement
+        let parent_stmt = statements
+            .iter()
+            .find(|s| (&**s).contains("orders") && !(&**s).contains("orders_2024"))
+            .expect("should find parent table");
+
+        // Parent should have id and user_id converted to bigint
+        let parent_sql: &str = parent_stmt;
+        assert!(
+            parent_sql.contains("id bigint"),
+            "parent id should be bigint: {}",
+            parent_sql
+        );
+        assert!(
+            parent_sql.contains("user_id bigint"),
+            "parent user_id should be bigint: {}",
+            parent_sql
+        );
+
+        // Find the child table statement
+        let child_stmt = statements
+            .iter()
+            .find(|s| (&**s).contains("orders_2024"))
+            .expect("should find child table");
+
+        // Child should also have id and user_id converted to bigint
+        // because parent has them as bigint
+        let child_sql: &str = child_stmt;
+        assert!(
+            child_sql.contains("id bigint"),
+            "child id should be bigint: {}",
+            child_sql
+        );
+        assert!(
+            child_sql.contains("user_id bigint"),
+            "child user_id should be bigint: {}",
+            child_sql
         );
     }
 }
