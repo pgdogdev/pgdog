@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::collections::{hash_map::DefaultHasher, HashSet};
+use std::fmt::Display;
 use std::hash::{Hash, Hasher as StdHasher};
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -334,5 +335,22 @@ impl FromStr for SystemCatalogsBehavior {
             "sharded" => Self::Sharded,
             _ => return Err(()),
         })
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Eq, Hash, Default)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub enum CopyFormat {
+    Text,
+    #[default]
+    Binary,
+}
+
+impl Display for CopyFormat {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Binary => write!(f, "binary"),
+            Self::Text => write!(f, "text"),
+        }
     }
 }
