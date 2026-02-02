@@ -2,6 +2,8 @@
 //! Generate COPY statement for table synchronization.
 //!
 
+use pgdog_config::CopyFormat;
+
 use super::publisher::PublicationTable;
 
 /// COPY statement generator.
@@ -9,6 +11,7 @@ use super::publisher::PublicationTable;
 pub struct CopyStatement {
     table: PublicationTable,
     columns: Vec<String>,
+    copy_format: CopyFormat,
 }
 
 impl CopyStatement {
@@ -20,10 +23,15 @@ impl CopyStatement {
     /// * `table`: Name of the table.
     /// * `columns`: Table column names.
     ///
-    pub fn new(table: &PublicationTable, columns: &[String]) -> CopyStatement {
+    pub fn new(
+        table: &PublicationTable,
+        columns: &[String],
+        copy_format: CopyFormat,
+    ) -> CopyStatement {
         CopyStatement {
             table: table.clone(),
             columns: columns.to_vec(),
+            copy_format,
         }
     }
 
@@ -56,7 +64,7 @@ impl CopyStatement {
     // Generate the statement.
     fn copy(&self, out: bool) -> String {
         format!(
-            r#"COPY "{}"."{}" ({}) {} WITH (FORMAT binary)"#,
+            r#"COPY "{}"."{}" ({}) {} WITH (FORMAT {})"#,
             self.schema_name(out),
             self.table_name(out),
             self.columns
@@ -64,7 +72,8 @@ impl CopyStatement {
                 .map(|c| format!(r#""{}""#, c))
                 .collect::<Vec<_>>()
                 .join(", "),
-            if out { "TO STDOUT" } else { "FROM STDIN" }
+            if out { "TO STDOUT" } else { "FROM STDIN" },
+            self.copy_format
         )
     }
 }
@@ -81,7 +90,7 @@ mod test {
             ..Default::default()
         };
 
-        let copy = CopyStatement::new(&table, &["id".into(), "email".into()]);
+        let copy = CopyStatement::new(&table, &["id".into(), "email".into()], CopyFormat::Binary);
         let copy_in = copy.copy_in();
         assert_eq!(
             copy_in,
@@ -101,7 +110,7 @@ mod test {
             ..Default::default()
         };
 
-        let copy = CopyStatement::new(&table, &["id".into(), "email".into()]);
+        let copy = CopyStatement::new(&table, &["id".into(), "email".into()], CopyFormat::Binary);
         let copy_in = copy.copy_in();
         assert_eq!(
             copy_in,

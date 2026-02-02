@@ -2,6 +2,7 @@ use crate::{
     backend::Server,
     net::{CopyData, ErrorResponse, FromBytes, Protocol, Query, ToBytes},
 };
+use pgdog_config::CopyFormat;
 use tracing::{debug, trace};
 
 use super::{
@@ -15,7 +16,7 @@ pub struct Copy {
 }
 
 impl Copy {
-    pub fn new(table: &Table) -> Self {
+    pub fn new(table: &Table, copy_format: CopyFormat) -> Self {
         let stmt = CopyStatement::new(
             &table.table,
             &table
@@ -23,6 +24,7 @@ impl Copy {
                 .iter()
                 .map(|c| c.name.clone())
                 .collect::<Vec<_>>(),
+            copy_format,
         );
 
         Self { stmt }
