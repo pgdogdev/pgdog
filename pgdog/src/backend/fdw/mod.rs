@@ -1,3 +1,4 @@
+pub mod bins;
 pub mod error;
 pub mod launcher;
 pub mod postgres;

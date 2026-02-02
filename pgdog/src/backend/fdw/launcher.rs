@@ -42,7 +42,7 @@ impl PostgresLauncher {
     }
 
     async fn run(&self) -> Result<(), Error> {
-        let mut process = PostgresProcess::new(None, 45000)?;
+        let mut process = PostgresProcess::new(None, 45000).await?;
         let waiter = process.notify();
 
         process.launch().await?;

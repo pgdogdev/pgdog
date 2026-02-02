@@ -1,3 +1,5 @@
+use std::num::ParseFloatError;
+
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -7,6 +9,9 @@ pub enum Error {
 
     #[error("initdb failed")]
     InitDb,
+
+    #[error("pg_config failed")]
+    PgConfig,
 
     #[error("backend: {0}")]
     Backend(#[from] crate::backend::Error),
@@ -22,4 +27,7 @@ pub enum Error {
 
     #[error("shards don't have the same number of replicas/primary")]
     ShardsHostsMismatch,
+
+    #[error("error parsing postgres version")]
+    PostgresVersion(#[from] ParseFloatError),
 }

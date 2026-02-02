@@ -33,7 +33,7 @@ use crate::backend::{
     Cluster, ConnectReason, Pool, Server, ServerOptions,
 };
 
-use super::{Error, PostgresConfig};
+use super::{bins::Bins, Error, PostgresConfig};
 
 static LOG_PREFIX: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"^(LOG|WARNING|ERROR|FATAL|PANIC|DEBUG\d?|INFO|NOTICE):\s+").unwrap());
@@ -76,10 +76,11 @@ pub(crate) struct PostgresProcess {
     databases: HashSet<String>,
     users: HashSet<String>,
     pid: Option<i32>,
+    version: f32,
 }
 
 impl PostgresProcess {
-    pub(crate) fn new(initdb_path: Option<&Path>, port: u16) -> Result<Self, Error> {
+    pub(crate) async fn new(initdb_path: Option<&Path>, port: u16) -> Result<Self, Error> {
         let notify = Arc::new(Notify::new());
 
         let initdb_path = if let Some(path) = initdb_path {
@@ -88,21 +89,28 @@ impl PostgresProcess {
             TempDir::new()?.keep()
         };
 
+        let bins = Bins::new().await?;
+
         Ok(Self {
-            postres: PathBuf::from("postgres"),
-            initdb: PathBuf::from("initdb"),
+            postres: bins.postgres,
+            initdb: bins.initdb,
             initdb_dir: initdb_path,
             notify,
             port,
             databases: HashSet::new(),
             users: HashSet::new(),
             pid: None,
+            version: bins.version,
         })
     }
 
     /// Setup and launch Postgres process.
     pub(crate) async fn launch(&mut self) -> Result<(), Error> {
-        info!("[fdw] initializing \"{}\"", self.initdb_dir.display());
+        info!(
+            "[fdw] initializing \"{}\" (PostgreSQL {})",
+            self.initdb_dir.display(),
+            self.version
+        );
 
         let process = Command::new(&self.initdb)
             .arg("-D")
@@ -123,7 +131,7 @@ impl PostgresProcess {
         // Configure Postgres.
         PostgresConfig::new(&self.initdb_dir.join("postgresql.conf"))
             .await?
-            .configure_and_save(self.port)
+            .configure_and_save(self.port, self.version)
             .await?;
 
         let child = Command::new(&self.postres)
@@ -482,7 +490,7 @@ mod test {
                 .unwrap();
         }
 
-        let mut process = PostgresProcess::new(None, 45012).unwrap();
+        let mut process = PostgresProcess::new(None, 45012).await.unwrap();
 
         process.launch().await.unwrap();
         process.wait_ready().await.unwrap();

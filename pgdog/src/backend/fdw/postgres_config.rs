@@ -36,13 +36,21 @@ impl PostgresConfig {
     }
 
     /// Configure default settings we need off/on.
-    pub(crate) async fn configure_and_save(&mut self, port: u16) -> Result<(), Error> {
+    pub(crate) async fn configure_and_save(
+        &mut self,
+        port: u16,
+        version: f32,
+    ) -> Result<(), Error> {
+        // Make it accessible via psql for debugging.
+        self.set("listen_addresses", "'0.0.0.0'");
+        self.set("port", &port.to_string());
+
         // Disable logical replication workers.
         self.set("max_logical_replication_workers", "0");
         self.set("max_sync_workers_per_subscription", "0");
         self.set("max_parallel_apply_workers_per_subscription", "0");
-        self.set("port", &port.to_string());
-        self.set("max_connections", "100");
+
+        self.set("max_connections", "1000");
         self.set("log_line_prefix", "''");
         self.set("log_connections", "on");
         self.set("log_disconnections", "on");
@@ -52,8 +60,11 @@ impl PostgresConfig {
         // Make the background writer do nothing.
         self.set("bgwriter_lru_maxpages", "0");
         self.set("bgwriter_delay", "10s");
-        // Disable async io workers.
-        self.set("io_method", "sync");
+
+        if version >= 18.0 {
+            // Disable async io workers.
+            self.set("io_method", "sync");
+        }
 
         self.save().await?;
 
