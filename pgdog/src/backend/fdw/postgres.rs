@@ -64,6 +64,15 @@ impl PostgresProcessAsync {
 
         Ok(())
     }
+
+    /// Force stop immediately.
+    async fn force_stop(&mut self) -> Result<(), Error> {
+        self.child.kill().await?;
+        self.child.wait().await?;
+        remove_dir_all(&self.initdb_dir).await?;
+
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -133,6 +142,11 @@ impl PostgresProcess {
             .await?
             .configure_and_save(self.port, self.version)
             .await?;
+
+        info!(
+            "[fdw] launching PostgreSQL {} on 0.0.0.0:{}",
+            self.version, self.port
+        );
 
         let child = Command::new(&self.postres)
             .arg("-D")
@@ -319,9 +333,9 @@ impl PostgresProcess {
         let new_database = self.setup_databases(cluster).await?;
 
         info!(
-            "[fdw] setting up {} (new={})",
+            "[fdw] setting up database={} user={}",
             cluster.identifier().database,
-            new_database
+            cluster.identifier().user,
         );
 
         let sharding_schema = cluster.sharding_schema();
@@ -430,8 +444,8 @@ impl PostgresProcess {
     }
 
     /// Wait until process is ready and accepting connections.
-    pub(crate) async fn wait_ready(&self) -> Result<(), Error> {
-        timeout(Duration::from_millis(5000), self.wait_ready_internal()).await?;
+    pub(crate) async fn wait_ready(&self, launch_timeout: Duration) -> Result<(), Error> {
+        timeout(launch_timeout, self.wait_ready_internal()).await?;
 
         Ok(())
     }
@@ -443,9 +457,14 @@ impl PostgresProcess {
         }
     }
 
-    pub(crate) async fn stop(&mut self) {
+    pub(crate) async fn stop_wait(&mut self) {
         self.notify.notify_one();
         self.notify.notified().await;
+        self.pid.take();
+    }
+
+    pub(crate) fn request_stop(&mut self) {
+        self.notify.notify_one();
         self.pid.take();
     }
 }
@@ -493,7 +512,7 @@ mod test {
         let mut process = PostgresProcess::new(None, 45012).await.unwrap();
 
         process.launch().await.unwrap();
-        process.wait_ready().await.unwrap();
+        process.wait_ready(Duration::from_secs(5)).await.unwrap();
         process.configure(&cluster).await.unwrap();
         let mut server = process.admin_connection().await.unwrap();
         let backends = server
@@ -517,7 +536,7 @@ mod test {
             .await
             .unwrap();
 
-        process.stop().await;
+        process.stop_wait().await;
 
         {
             let mut primary = cluster.primary(0, &Request::default()).await.unwrap();
