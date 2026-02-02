@@ -6,14 +6,14 @@ use std::{
     },
 };
 
-use crate::config::config;
+use crate::{backend::databases::databases, config::config};
 
 use super::{Error, PostgresProcess};
 use once_cell::sync::Lazy;
 use tokio::{
     select, spawn,
     sync::Notify,
-    time::{sleep, timeout, Duration},
+    time::{sleep, Duration},
 };
 use tracing::{error, info};
 
@@ -63,6 +63,19 @@ impl PostgresLauncher {
         LAUNCHER.clone()
     }
 
+    /// Start the launcher.
+    ///
+    /// Idempontent.
+    pub(crate) fn launch(&self) {
+        let online = self.online.load(Ordering::Relaxed);
+
+        if online {
+            return;
+        }
+
+        self.launch_blue_green();
+    }
+
     fn spawn(&self) {
         let launcher = self.clone();
 
@@ -73,7 +86,12 @@ impl PostgresLauncher {
                 launcher.restart.notified().await;
             }
 
-            launcher.online.store(true, Ordering::Relaxed);
+            let online = launcher.online.load(Ordering::Relaxed);
+
+            if !online {
+                launcher.ready_signal.notify_waiters();
+                return;
+            }
 
             loop {
                 info!(
@@ -101,6 +119,11 @@ impl PostgresLauncher {
         self.restart.notify_waiters();
     }
 
+    pub(crate) async fn shutdown_wait(&self) {
+        self.shutdown();
+        self.wait_ready().await
+    }
+
     /// Trigger blue/green deployment.
     pub(crate) fn launch_blue_green(&self) {
         let fdw = config().config.fdw;
@@ -113,27 +136,26 @@ impl PostgresLauncher {
 
         self.port.store(port, Ordering::Relaxed);
         self.ready.store(false, Ordering::Relaxed);
+        self.online.store(true, Ordering::Relaxed);
         self.restart.notify_waiters();
     }
 
     /// Wait for Postgres to be ready.
-    pub(crate) async fn wait_ready(&self, launch_timeout: Duration) -> Result<(), Error> {
+    pub(crate) async fn wait_ready(&self) {
         let ready = self.ready.load(Ordering::Relaxed);
 
         if ready {
-            return Ok(());
+            return;
         }
 
         let waiter = self.ready_signal.notified();
         let ready = self.ready.load(Ordering::Relaxed);
 
         if ready {
-            return Ok(());
+            return;
         }
 
-        timeout(launch_timeout, waiter).await?;
-
-        Ok(())
+        waiter.await;
     }
 
     fn mark_ready(&self) {
@@ -147,7 +169,13 @@ impl PostgresLauncher {
         let waiter = process.notify();
 
         process.launch().await?;
-        process.wait_ready(Duration::MAX).await?;
+        process.wait_ready().await;
+
+        for cluster in databases().all().values() {
+            if cluster.shards().len() > 1 {
+                process.configure(cluster).await?;
+            }
+        }
 
         self.mark_ready();
 
@@ -155,10 +183,8 @@ impl PostgresLauncher {
             _ = self.restart.notified() => {
                 let online = self.online.load(Ordering::Relaxed);
                 if online {
-                    println!("requesting stop");
                     process.request_stop();
                 } else {
-                    println!("waiting for stop");
                     process.stop_wait().await;
                     self.mark_ready();
                 }
@@ -181,54 +207,33 @@ mod test {
     #[tokio::test]
     async fn test_postgres_blue_green() {
         crate::logger();
+        let mut address = Address {
+            host: "127.0.0.1".into(),
+            port: 6433,
+            user: "postgres".into(),
+            database_name: "postgres".into(),
+            ..Default::default()
+        };
 
         let launcher = PostgresLauncher::get();
-        sleep(Duration::from_millis(10)).await;
         launcher.launch_blue_green();
-        launcher
-            .wait_ready(Duration::from_millis(5000))
-            .await
-            .unwrap();
-        let conn = Server::connect(
-            &Address {
-                host: "127.0.0.1".into(),
-                port: 6433,
-                user: "postgres".into(),
-                database_name: "postgres".into(),
-                ..Default::default()
-            },
-            ServerOptions::default(),
-            ConnectReason::default(),
-        )
-        .await
-        .unwrap();
+        launcher.wait_ready().await;
+        let mut conn =
+            Server::connect(&address, ServerOptions::default(), ConnectReason::default())
+                .await
+                .unwrap();
+        conn.execute("SELECT 1").await.unwrap();
         drop(conn);
         launcher.launch_blue_green();
-        launcher
-            .wait_ready(Duration::from_millis(5000))
-            .await
-            .unwrap();
-        // let conn = Server::connect(
-        //     &Address {
-        //         host: "127.0.0.1".into(),
-        //         port: 6434,
-        //         user: "postgres".into(),
-        //         ..Default::default()
-        //     },
-        //     ServerOptions::default(),
-        //     ConnectReason::default(),
-        // )
-        // .await
-        // .unwrap();
+        launcher.wait_ready().await;
+
+        address.port = 6434;
+        let mut conn =
+            Server::connect(&address, ServerOptions::default(), ConnectReason::default())
+                .await
+                .unwrap();
+        conn.execute("SELECT 1").await.unwrap();
         launcher.shutdown();
-        launcher
-            .wait_ready(Duration::from_millis(5000))
-            .await
-            .unwrap();
-        // launcher.launch_blue_green();
-        // launcher
-        //     .wait_ready(Duration::from_millis(5000))
-        //     .await
-        //     .unwrap();
+        launcher.wait_ready().await;
     }
 }

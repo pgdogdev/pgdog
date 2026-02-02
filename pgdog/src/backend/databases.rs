@@ -9,6 +9,7 @@ use parking_lot::lock_api::MutexGuard;
 use parking_lot::{Mutex, RawMutex};
 use tracing::{debug, error, info, warn};
 
+use crate::backend::fdw::PostgresLauncher;
 use crate::backend::replication::ShardedSchemas;
 use crate::config::PoolerMode;
 use crate::frontend::client::query_engine::two_pc::Manager;
@@ -95,6 +96,11 @@ pub fn init() -> Result<(), Error> {
 
     // Start two-pc manager.
     let _monitor = Manager::get();
+
+    // Start postgres_fdw compatibility engine.
+    if config.config.fdw.enabled {
+        PostgresLauncher::get().launch();
+    }
 
     Ok(())
 }

@@ -8,6 +8,9 @@ use crate::{
     net::messages::DataRow,
 };
 
+use super::custom_types::CustomTypes;
+use super::extensions::Extensions;
+
 /// Query to fetch table and column information needed for CREATE FOREIGN TABLE statements.
 pub static FOREIGN_TABLE_SCHEMA: &str = include_str!("postgres_fdw.sql");
 
@@ -49,12 +52,19 @@ impl From<DataRow> for ForeignTableColumn {
 #[derive(Debug, Clone)]
 pub struct ForeignTableSchema {
     tables: HashMap<(String, String), Vec<ForeignTableColumn>>,
+    extensions: Extensions,
+    custom_types: CustomTypes,
 }
 
 impl ForeignTableSchema {
     pub(crate) async fn load(server: &mut Server) -> Result<Self, super::super::Error> {
+        let tables = ForeignTableColumn::load(server).await?;
+        let extensions = Extensions::load(server).await?;
+        let custom_types = CustomTypes::load(server).await?;
         Ok(Self {
-            tables: ForeignTableColumn::load(server).await?,
+            tables,
+            extensions,
+            custom_types,
         })
     }
 
@@ -63,6 +73,12 @@ impl ForeignTableSchema {
         server: &mut Server,
         sharding_schema: &ShardingSchema,
     ) -> Result<(), super::super::Error> {
+        // Create extensions first (types may depend on them)
+        self.extensions.setup(server).await?;
+
+        // Create custom types (enums, domains, composite types)
+        self.custom_types.setup(server).await?;
+
         let mut schemas = HashSet::new();
         let mut tables = HashSet::new();
 
@@ -88,6 +104,16 @@ impl ForeignTableSchema {
             }
         }
         Ok(())
+    }
+
+    /// Get the extensions.
+    pub fn extensions(&self) -> &Extensions {
+        &self.extensions
+    }
+
+    /// Get the custom types.
+    pub fn custom_types(&self) -> &CustomTypes {
+        &self.custom_types
     }
 }
 

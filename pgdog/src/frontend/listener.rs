@@ -5,6 +5,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use crate::backend::databases::{databases, reload, shutdown};
+use crate::backend::fdw::PostgresLauncher;
 use crate::config::config;
 use crate::frontend::client::query_engine::two_pc::Manager;
 use crate::net::messages::BackendKeyData;
@@ -151,6 +152,10 @@ impl Listener {
         }
 
         self.shutdown.notify_waiters();
+
+        if let Err(_) = timeout(shutdown_timeout, PostgresLauncher::get().shutdown_wait()).await {
+            error!("[fdw] graceful shutdown failed");
+        }
     }
 
     async fn handle_client(stream: TcpStream, addr: SocketAddr) -> Result<(), Error> {

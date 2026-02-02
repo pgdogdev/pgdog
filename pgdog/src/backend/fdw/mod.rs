@@ -1,6 +1,7 @@
 pub mod bins;
 pub mod error;
 pub mod launcher;
+pub mod lb;
 pub mod postgres;
 pub mod postgres_config;
 

@@ -1,10 +1,14 @@
 //! Schema information for creating foreign tables via postgres_fdw.
 
+mod custom_types;
 mod error;
+mod extensions;
 mod schema;
 mod statement;
 
+pub use custom_types::{CustomType, CustomTypeKind, CustomTypes, CUSTOM_TYPES_QUERY};
 pub use error::Error;
+pub use extensions::{Extension, Extensions, EXTENSIONS_QUERY};
 pub use schema::{ForeignTableColumn, ForeignTableSchema, FOREIGN_TABLE_SCHEMA};
 pub use statement::{create_foreign_table, ForeignTableBuilder, PartitionStrategy};
 

@@ -1,0 +1,18 @@
+[fdw]
+enabled = true
+
+[[databases]]
+name = "pgdog"
+shard = 0
+host = "127.0.0.1"
+database_name = "shard_0_fdw"
+
+[[databases]]
+name = "pgdog"
+shard = 1
+host = "127.0.0.1"
+database_name = "shard_1_fdw"
+
+[[sharded_tables]]
+column = "user_id"
+database = "pgdog"

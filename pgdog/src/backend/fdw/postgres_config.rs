@@ -1,8 +1,5 @@
 use std::path::{Path, PathBuf};
-use tokio::{
-    fs::{read_to_string, File},
-    io::AsyncWriteExt,
-};
+use tokio::{fs::File, io::AsyncWriteExt};
 
 use super::Error;
 

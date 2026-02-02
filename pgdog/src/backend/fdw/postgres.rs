@@ -23,7 +23,7 @@ use tokio::{
     process::{Child, Command},
     select, spawn,
     sync::Notify,
-    time::{sleep, timeout},
+    time::{sleep, Instant},
 };
 use tracing::{error, info, warn};
 
@@ -42,11 +42,18 @@ struct PostgresProcessAsync {
     child: Child,
     initdb_dir: PathBuf,
     notify: Arc<Notify>,
+    version: f32,
+    port: u16,
 }
 
 impl PostgresProcessAsync {
     /// Stop Postgres and cleanup.
     async fn stop(&mut self) -> Result<(), Error> {
+        warn!(
+            "[fdw] stopping PostgreSQL {} running on 0.0.0.0:{}",
+            self.version, self.port
+        );
+
         #[cfg(unix)]
         {
             let pid = self.child.id().expect("child has no pid") as i32;
@@ -163,6 +170,8 @@ impl PostgresProcess {
             child,
             notify: self.notify.clone(),
             initdb_dir: self.initdb_dir.clone(),
+            port: self.port,
+            version: self.version,
         };
 
         spawn(async move {
@@ -254,24 +263,17 @@ impl PostgresProcess {
         cluster: &Cluster,
         shard: usize,
     ) -> Result<Vec<(String, Address)>, Error> {
-        let mut replica = 0;
-
         let shard = cluster
             .shards()
             .get(shard)
             .ok_or(Error::ShardsHostsMismatch)?;
 
         Ok(shard
-            .pools_with_roles()
+            .pools()
             .iter()
-            .map(|(role, pool)| {
-                let database = match role {
-                    Role::Primary => format!("{}_p", cluster.identifier().database),
-                    _ => {
-                        replica += 1;
-                        format!("{}_r{}", cluster.identifier().database, replica)
-                    }
-                };
+            .enumerate()
+            .map(|(number, pool)| {
+                let database = format!("{}_{}", cluster.identifier().database, number);
                 (database, pool.addr().clone())
             })
             .collect())
@@ -331,6 +333,7 @@ impl PostgresProcess {
     /// for this cluster.
     pub(crate) async fn configure(&mut self, cluster: &Cluster) -> Result<(), Error> {
         let new_database = self.setup_databases(cluster).await?;
+        let now = Instant::now();
 
         info!(
             "[fdw] setting up database={} user={}",
@@ -415,6 +418,15 @@ impl PostgresProcess {
             }
         }
 
+        let elapsed = now.elapsed();
+
+        info!(
+            "[fdw] setup complete for database={} user={} in {:.3}ms",
+            cluster.identifier().database,
+            cluster.identifier().user,
+            elapsed.as_secs_f32() * 1000.0,
+        );
+
         Ok(())
     }
 
@@ -444,10 +456,8 @@ impl PostgresProcess {
     }
 
     /// Wait until process is ready and accepting connections.
-    pub(crate) async fn wait_ready(&self, launch_timeout: Duration) -> Result<(), Error> {
-        timeout(launch_timeout, self.wait_ready_internal()).await?;
-
-        Ok(())
+    pub(crate) async fn wait_ready(&self) {
+        self.wait_ready_internal().await;
     }
 
     async fn wait_ready_internal(&self) {
@@ -512,7 +522,7 @@ mod test {
         let mut process = PostgresProcess::new(None, 45012).await.unwrap();
 
         process.launch().await.unwrap();
-        process.wait_ready(Duration::from_secs(5)).await.unwrap();
+        process.wait_ready().await;
         process.configure(&cluster).await.unwrap();
         let mut server = process.admin_connection().await.unwrap();
         let backends = server
