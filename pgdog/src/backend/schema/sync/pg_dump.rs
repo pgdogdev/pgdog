@@ -580,11 +580,22 @@ impl PgDumpOutput {
                                             }
                                         }
                                         AlterTableType::AtAttachPartition => {
-                                            // Index partitions need to be attached to indexes,
-                                            // which we create in the post-data step.
                                             match stmt.objtype() {
+                                                // Index partitions need to be attached to indexes,
+                                                // which we create in the post-data step.
                                                 ObjectType::ObjectIndex => {
                                                     if state == SyncState::PostData {
+                                                        result.push(Statement::Other {
+                                                            sql: original.to_string(),
+                                                            idempotent: false,
+                                                        });
+                                                    }
+                                                }
+
+                                                // Table partitions are attached in pre-data
+                                                // after the partition tables are created.
+                                                ObjectType::ObjectTable => {
+                                                    if state == SyncState::PreData {
                                                         result.push(Statement::Other {
                                                             sql: original.to_string(),
                                                             idempotent: false,
@@ -1156,5 +1167,31 @@ ALTER TABLE child ADD CONSTRAINT child_parent_fk FOREIGN KEY (parent_id) REFEREN
             statements[2].deref(),
             "\nALTER TABLE parent ADD CONSTRAINT parent_pkey PRIMARY KEY (id)"
         );
+    }
+
+    #[test]
+    fn test_attach_partition() {
+        // pg_dump generates ATTACH PARTITION for partitioned tables
+        let query = r#"
+CREATE TABLE parent (id INTEGER, created_at DATE) PARTITION BY RANGE (created_at);
+CREATE TABLE parent_2024 (id INTEGER, created_at DATE);
+ALTER TABLE ONLY parent ATTACH PARTITION parent_2024 FOR VALUES FROM ('2024-01-01') TO ('2025-01-01');"#;
+
+        let output = PgDumpOutput {
+            stmts: parse(query).unwrap().protobuf,
+            original: query.to_owned(),
+        };
+
+        let pre_data = output.statements(SyncState::PreData).unwrap();
+        let post_data = output.statements(SyncState::PostData).unwrap();
+
+        // CREATE TABLEs should be in pre-data
+        assert_eq!(pre_data.len(), 3);
+
+        // ATTACH PARTITION for tables should be in pre-data, not post-data
+        assert!(pre_data[2].deref().contains("ATTACH PARTITION"));
+
+        // No statements in post-data for table partitions
+        assert!(post_data.is_empty());
     }
 }
