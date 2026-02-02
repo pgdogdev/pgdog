@@ -259,7 +259,7 @@ impl PostgresProcess {
             .collect())
     }
 
-    fn pools_to_databases(
+    pub(super) fn pools_to_databases(
         cluster: &Cluster,
         shard: usize,
     ) -> Result<Vec<(String, Address)>, Error> {
@@ -284,13 +284,12 @@ impl PostgresProcess {
             .shards()
             .iter()
             .map(|shard| {
-                let mut roles: Vec<_> = shard
+                let roles: Vec<_> = shard
                     .pools_with_roles()
                     .iter()
                     .map(|(role, _)| role)
                     .cloned()
                     .collect();
-                roles.sort();
                 roles
             })
             .collect();
