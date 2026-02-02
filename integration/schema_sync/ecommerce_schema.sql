@@ -1239,3 +1239,37 @@ CREATE TABLE sales.ticket_queue_closed PARTITION OF sales.ticket_queue
 CREATE INDEX idx_ticket_queue_user ON sales.ticket_queue(user_id);
 CREATE INDEX idx_ticket_queue_assigned ON sales.ticket_queue(assigned_to);
 CREATE INDEX idx_ticket_queue_priority ON sales.ticket_queue(priority, created_at);
+
+-- ============================================================================
+-- PARTITIONED TABLE WITH FK TO INTEGER PK
+-- Tests that child partitions inherit bigint conversion for FK columns
+-- ============================================================================
+
+-- Partitioned table with FK to integer PK table (core.feature_flags.flag_id)
+-- pg_dump only generates FK constraints for the parent table, not child partitions,
+-- so the schema sync needs to detect that child partitions should also have
+-- their flag_id column converted to bigint.
+CREATE TABLE core.feature_flag_audit (
+  audit_id SERIAL,
+  flag_id INTEGER NOT NULL REFERENCES core.feature_flags(flag_id) ON DELETE CASCADE,
+  user_id BIGINT REFERENCES core.users(user_id) ON DELETE SET NULL,
+  action VARCHAR(50) NOT NULL,
+  old_value BOOLEAN,
+  new_value BOOLEAN,
+  audit_date DATE NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (audit_id, audit_date)
+) PARTITION BY RANGE (audit_date);
+
+CREATE TABLE core.feature_flag_audit_2025_q1 PARTITION OF core.feature_flag_audit
+  FOR VALUES FROM ('2025-01-01') TO ('2025-04-01');
+CREATE TABLE core.feature_flag_audit_2025_q2 PARTITION OF core.feature_flag_audit
+  FOR VALUES FROM ('2025-04-01') TO ('2025-07-01');
+CREATE TABLE core.feature_flag_audit_2025_q3 PARTITION OF core.feature_flag_audit
+  FOR VALUES FROM ('2025-07-01') TO ('2025-10-01');
+CREATE TABLE core.feature_flag_audit_2025_q4 PARTITION OF core.feature_flag_audit
+  FOR VALUES FROM ('2025-10-01') TO ('2026-01-01');
+
+CREATE INDEX idx_feature_flag_audit_flag ON core.feature_flag_audit(flag_id);
+CREATE INDEX idx_feature_flag_audit_user ON core.feature_flag_audit(user_id);
+CREATE INDEX idx_feature_flag_audit_date ON core.feature_flag_audit(audit_date);
