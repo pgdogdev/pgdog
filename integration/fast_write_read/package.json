@@ -1,0 +1,13 @@
+{
+  "name": "fast_write_read",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "pg": "^8.14.1",
+    "sequelize": "^6.37.5"
+  }
+}
