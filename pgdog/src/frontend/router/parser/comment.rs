@@ -11,11 +11,12 @@ use crate::frontend::router::sharding::ContextBuilder;
 use super::super::parser::Shard;
 use super::Error;
 
-static SHARD: Lazy<Regex> = Lazy::new(|| Regex::new(r#"pgdog_shard: *([0-9]+)"#).unwrap());
-static SHARDING_KEY: Lazy<Regex> = Lazy::new(|| {
+pub static SHARD: Lazy<Regex> = Lazy::new(|| Regex::new(r#"pgdog_shard: *([0-9]+)"#).unwrap());
+pub static SHARDING_KEY: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r#"pgdog_sharding_key: *(?:"([^"]*)"|'([^']*)'|([0-9a-zA-Z-]+))"#).unwrap()
 });
-static ROLE: Lazy<Regex> = Lazy::new(|| Regex::new(r#"pgdog_role: *(primary|replica)"#).unwrap());
+pub static ROLE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r#"pgdog_role: *(primary|replica)"#).unwrap());
 
 fn get_matched_value<'a>(caps: &'a regex::Captures<'a>) -> Option<&'a str> {
     caps.get(1)
@@ -99,17 +100,32 @@ pub fn has_comments(query: &str, engine: QueryParserEngine) -> Result<bool, Erro
         .any(|st| st.token == Token::CComment as i32 || st.token == Token::SqlComment as i32))
 }
 
-pub fn remove_comments(query: &str, engine: QueryParserEngine) -> Result<String, Error> {
+pub fn remove_comments(
+    query: &str,
+    engine: QueryParserEngine,
+    except: Option<&[&Regex]>,
+) -> Result<String, Error> {
     let result = match engine {
         QueryParserEngine::PgQueryProtobuf => scan(query),
         QueryParserEngine::PgQueryRaw => scan_raw(query),
     }
     .map_err(Error::PgQuery)?;
 
-    let comment_ranges: Vec<(usize, usize)> = result
+    let tokens_to_remove = result
         .tokens
         .iter()
         .filter(|st| st.token == Token::CComment as i32 || st.token == Token::SqlComment as i32)
+        .filter(|st| {
+            if let Some(except) = except {
+                let text = &query[st.start as usize..st.end as usize];
+
+                !except.iter().any(|re| re.is_match(text))
+            } else {
+                true
+            }
+        });
+
+    let comment_ranges: Vec<(usize, usize)> = tokens_to_remove
         .map(|st| (st.start as usize, st.end as usize))
         .collect();
 
