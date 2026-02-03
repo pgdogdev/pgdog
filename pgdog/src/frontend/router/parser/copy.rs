@@ -484,6 +484,65 @@ mod test {
     }
 
     #[test]
+    fn test_copy_text_composite_type_sharded() {
+        // Test the same composite type but with sharding enabled (using the sharded table from config)
+        let copy = "COPY sharded (id, value) FROM STDIN";
+        let stmt = parse(copy).unwrap();
+        let stmt = stmt.protobuf.stmts.first().unwrap();
+        let copy = match stmt.stmt.clone().unwrap().node.unwrap() {
+            NodeEnum::CopyStmt(copy) => copy,
+            _ => panic!("not a copy"),
+        };
+
+        let mut copy = CopyParser::new(&copy, &Cluster::new_test(&config())).unwrap();
+
+        // Row where the value contains a composite type with commas and quotes
+        let row = CopyData::new(b"1\t(,Annapolis,Maryland,\"United States\",)\n");
+        let sharded = copy.shard(&[row]).unwrap();
+
+        assert_eq!(sharded.len(), 1);
+
+        // The output should preserve the quotes exactly
+        assert_eq!(
+            sharded[0].message().data(),
+            b"1\t(,Annapolis,Maryland,\"United States\",)\n",
+            "Composite type quotes should be preserved in sharded COPY"
+        );
+    }
+
+    #[test]
+    fn test_copy_explicit_text_format() {
+        // Test with explicit FORMAT text (like during resharding)
+        let copy = r#"COPY "public"."entity_values" ("id", "value_location") FROM STDIN WITH (FORMAT text)"#;
+        let stmt = parse(copy).unwrap();
+        let stmt = stmt.protobuf.stmts.first().unwrap();
+        let copy_stmt = match stmt.stmt.clone().unwrap().node.unwrap() {
+            NodeEnum::CopyStmt(copy) => copy,
+            _ => panic!("not a copy"),
+        };
+
+        let mut copy = CopyParser::new(&copy_stmt, &Cluster::default()).unwrap();
+
+        // Verify it's using tab delimiter (text format default)
+        assert_eq!(
+            copy.delimiter(),
+            '\t',
+            "Text format should use tab delimiter"
+        );
+
+        // Row with composite type
+        let row = CopyData::new(b"1\t(,Annapolis,Maryland,\"United States\",)\n");
+        let sharded = copy.shard(&[row]).unwrap();
+
+        assert_eq!(sharded.len(), 1);
+        assert_eq!(
+            sharded[0].message().data(),
+            b"1\t(,Annapolis,Maryland,\"United States\",)\n",
+            "Explicit FORMAT text should preserve quotes"
+        );
+    }
+
+    #[test]
     fn test_copy_binary() {
         let copy = "COPY sharded (id, value) FROM STDIN (FORMAT 'binary')";
         let stmt = parse(copy).unwrap();
