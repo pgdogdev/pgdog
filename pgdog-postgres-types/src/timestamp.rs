@@ -67,7 +67,7 @@ impl Display for Timestamp {
         )?;
 
         if let Some(offset) = self.offset {
-            write!(f, "{}{}", if offset > 0 { "+" } else { "-" }, offset)?;
+            write!(f, "{:+03}", offset)?;
         }
 
         Ok(())
@@ -665,5 +665,113 @@ mod test {
 
         assert!(d1 < d2);
         assert_eq!(d1.partial_cmp(&d2), Some(std::cmp::Ordering::Less));
+    }
+
+    #[test]
+    fn test_display_offset_formatting() {
+        let ts_utc = Timestamp {
+            year: 2024,
+            month: 1,
+            day: 15,
+            hour: 12,
+            minute: 30,
+            second: 45,
+            micros: 123456,
+            offset: Some(0),
+            special: None,
+        };
+        assert_eq!(ts_utc.to_string(), "2024-01-15 12:30:45.123456+00");
+
+        let ts_positive = Timestamp {
+            year: 2024,
+            month: 1,
+            day: 15,
+            hour: 12,
+            minute: 30,
+            second: 45,
+            micros: 0,
+            offset: Some(5),
+            special: None,
+        };
+        assert_eq!(ts_positive.to_string(), "2024-01-15 12:30:45.000000+05");
+
+        let ts_negative = Timestamp {
+            year: 2024,
+            month: 1,
+            day: 15,
+            hour: 12,
+            minute: 30,
+            second: 45,
+            micros: 0,
+            offset: Some(-8),
+            special: None,
+        };
+        assert_eq!(ts_negative.to_string(), "2024-01-15 12:30:45.000000-08");
+
+        let ts_no_offset = Timestamp {
+            year: 2024,
+            month: 1,
+            day: 15,
+            hour: 12,
+            minute: 30,
+            second: 45,
+            micros: 0,
+            offset: None,
+            special: None,
+        };
+        assert_eq!(ts_no_offset.to_string(), "2024-01-15 12:30:45.000000");
+    }
+
+    #[test]
+    fn test_datum_timestamp_encode() {
+        use super::super::Datum;
+
+        let ts = Timestamp {
+            year: 2024,
+            month: 6,
+            day: 15,
+            hour: 10,
+            minute: 30,
+            second: 0,
+            micros: 0,
+            offset: None,
+            special: None,
+        };
+
+        let datum = Datum::Timestamp(ts);
+        let encoded = datum.encode(Format::Text).unwrap();
+        assert_eq!(
+            std::str::from_utf8(&encoded).unwrap(),
+            "2024-06-15 10:30:00.000000"
+        );
+    }
+
+    #[test]
+    fn test_datum_timestamp_encode_binary() {
+        use super::super::Datum;
+
+        let ts = Timestamp {
+            year: 2024,
+            month: 6,
+            day: 15,
+            hour: 10,
+            minute: 30,
+            second: 0,
+            micros: 0,
+            offset: None,
+            special: None,
+        };
+
+        let datum = Datum::Timestamp(ts.clone());
+        let encoded = datum.encode(Format::Binary).unwrap();
+
+        let decoded = Timestamp::decode(&encoded, Format::Binary).unwrap();
+        assert_eq!(decoded.year, ts.year);
+        assert_eq!(decoded.month, ts.month);
+        assert_eq!(decoded.day, ts.day);
+        assert_eq!(decoded.hour, ts.hour);
+        assert_eq!(decoded.minute, ts.minute);
+        assert_eq!(decoded.second, ts.second);
+        assert_eq!(decoded.micros, ts.micros);
     }
 }
