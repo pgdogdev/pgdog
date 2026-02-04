@@ -250,7 +250,7 @@ impl Server {
             addr,
             auth_type,
             connect_reason,
-            if stream.is_tls() { "🔓" } else { "" },
+            if stream.is_tls() { "🔒" } else { "" },
         );
 
         let mut server = Server {
