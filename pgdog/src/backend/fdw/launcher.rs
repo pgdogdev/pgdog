@@ -174,6 +174,8 @@ impl PostgresLauncher {
             }
         }
 
+        process.configuration_complete();
+
         self.send(LauncherEvent::Ready);
 
         loop {
@@ -194,6 +196,8 @@ impl PostgresLauncher {
                                     }
                                 }
                             }
+
+                            process.configuration_complete();
                         }
 
                         Ok(_) => continue,

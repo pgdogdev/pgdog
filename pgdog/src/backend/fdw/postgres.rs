@@ -365,9 +365,10 @@ impl PostgresProcess {
         let first_setup = !self.configured_databases.contains(&cluster_db);
 
         info!(
-            "[fdw] setting up database={} user={}",
+            "[fdw] setting up database={} user={} initial={}",
             cluster.identifier().database,
             cluster.identifier().user,
+            first_setup,
         );
 
         let sharding_schema = cluster.sharding_schema();
@@ -461,6 +462,10 @@ impl PostgresProcess {
         );
 
         Ok(())
+    }
+
+    pub(crate) fn configuration_complete(&mut self) {
+        self.configured_databases.clear();
     }
 
     /// Create server connection.
