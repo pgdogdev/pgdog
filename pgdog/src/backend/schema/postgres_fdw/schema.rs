@@ -99,7 +99,10 @@ impl ForeignTableSchema {
         // Drop and recreate servers (must happen after schema drop, before foreign table creation)
         for srv in servers {
             server
-                .execute(format!(r#"DROP SERVER IF EXISTS "shard_{}" CASCADE"#, srv.shard_num))
+                .execute(format!(
+                    r#"DROP SERVER IF EXISTS "shard_{}" CASCADE"#,
+                    srv.shard_num
+                ))
                 .await?;
 
             server
