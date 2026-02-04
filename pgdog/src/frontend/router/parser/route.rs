@@ -90,6 +90,7 @@ pub struct Route {
     rollback_savepoint: bool,
     search_path_driven: bool,
     schema_changed: bool,
+    fdw_fallback: bool,
 }
 
 impl Display for Route {
@@ -140,6 +141,15 @@ impl Route {
         }
     }
 
+    /// Create new fdw fallback route.
+    pub fn fdw_fallback() -> Self {
+        Self {
+            shard: ShardWithPriority::new_override_fdw_fallback(),
+            fdw_fallback: true,
+            ..Default::default()
+        }
+    }
+
     /// Returns true if this is a query that
     /// can be sent to a replica.
     pub fn is_read(&self) -> bool {
@@ -150,6 +160,10 @@ impl Route {
     /// to a primary.
     pub fn is_write(&self) -> bool {
         !self.is_read()
+    }
+
+    pub fn is_fdw_fallback(&self) -> bool {
+        self.fdw_fallback
     }
 
     /// Get shard if any.
@@ -345,6 +359,7 @@ pub enum OverrideReason {
     Transaction,
     OnlyOneShard,
     RewriteUpdate,
+    FdwFallback,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Ord, PartialOrd)]
@@ -423,6 +438,13 @@ impl ShardWithPriority {
         Self {
             shard,
             source: ShardSource::Override(OverrideReason::OnlyOneShard),
+        }
+    }
+
+    pub fn new_override_fdw_fallback() -> Self {
+        Self {
+            shard: Shard::Direct(0),
+            source: ShardSource::Override(OverrideReason::FdwFallback),
         }
     }
 

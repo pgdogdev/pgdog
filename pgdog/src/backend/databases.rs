@@ -89,6 +89,12 @@ pub fn reload_from_existing() -> Result<(), Error> {
 /// Initialize the databases for the first time.
 pub fn init() -> Result<(), Error> {
     let config = config();
+
+    // Start postgres_fdw compatibility engine.
+    if config.config.fdw.enabled {
+        PostgresLauncher::get().launch();
+    }
+
     replace_databases(from_config(&config), false)?;
 
     // Resize query cache
@@ -96,11 +102,6 @@ pub fn init() -> Result<(), Error> {
 
     // Start two-pc manager.
     let _monitor = Manager::get();
-
-    // Start postgres_fdw compatibility engine.
-    if config.config.fdw.enabled {
-        PostgresLauncher::get().launch();
-    }
 
     Ok(())
 }

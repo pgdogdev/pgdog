@@ -2,7 +2,6 @@ use std::{
     collections::{HashMap, HashSet},
     path::{Path, PathBuf},
     process::Stdio,
-    sync::Arc,
     time::Duration,
 };
 
@@ -22,7 +21,7 @@ use tokio::{
     io::{AsyncBufReadExt, BufReader},
     process::{Child, Command},
     select, spawn,
-    sync::Notify,
+    sync::watch,
     time::{sleep, Instant},
 };
 use tracing::{error, info, warn};
@@ -30,7 +29,7 @@ use tracing::{error, info, warn};
 use crate::backend::{
     pool::{Address, Config, PoolConfig, Request},
     schema::postgres_fdw::{quote_identifier, ForeignTableSchema},
-    Cluster, ConnectReason, Pool, Server, ServerOptions,
+    Cluster, ConnectReason, Server, ServerOptions,
 };
 
 use super::{bins::Bins, Error, PostgresConfig};
@@ -41,7 +40,8 @@ static LOG_PREFIX: Lazy<Regex> =
 struct PostgresProcessAsync {
     child: Child,
     initdb_dir: PathBuf,
-    notify: Arc<Notify>,
+    shutdown: watch::Receiver<bool>,
+    shutdown_complete: watch::Sender<bool>,
     version: f32,
     port: u16,
 }
@@ -83,11 +83,20 @@ impl PostgresProcessAsync {
 }
 
 #[derive(Debug, Clone)]
+pub(crate) struct FdwBackend {
+    pub(crate) config: Config,
+    pub(crate) address: Address,
+    pub(crate) database_name: String,
+    pub(crate) role: Role,
+}
+
+#[derive(Debug)]
 pub(crate) struct PostgresProcess {
     postres: PathBuf,
     initdb: PathBuf,
     initdb_dir: PathBuf,
-    notify: Arc<Notify>,
+    shutdown: watch::Sender<bool>,
+    shutdown_complete: watch::Sender<bool>,
     port: u16,
     databases: HashSet<String>,
     users: HashSet<String>,
@@ -97,8 +106,6 @@ pub(crate) struct PostgresProcess {
 
 impl PostgresProcess {
     pub(crate) async fn new(initdb_path: Option<&Path>, port: u16) -> Result<Self, Error> {
-        let notify = Arc::new(Notify::new());
-
         let initdb_path = if let Some(path) = initdb_path {
             path.to_owned()
         } else {
@@ -107,11 +114,15 @@ impl PostgresProcess {
 
         let bins = Bins::new().await?;
 
+        let (shutdown, _) = watch::channel(false);
+        let (shutdown_complete, _) = watch::channel(false);
+
         Ok(Self {
             postres: bins.postgres,
             initdb: bins.initdb,
             initdb_dir: initdb_path,
-            notify,
+            shutdown,
+            shutdown_complete,
             port,
             databases: HashSet::new(),
             users: HashSet::new(),
@@ -155,20 +166,25 @@ impl PostgresProcess {
             self.version, self.port
         );
 
-        let child = Command::new(&self.postres)
-            .arg("-D")
+        let mut cmd = Command::new(&self.postres);
+        cmd.arg("-D")
             .arg(&self.initdb_dir)
             .arg("-k")
             .arg(&self.initdb_dir)
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()?;
+            .stderr(Stdio::piped());
+
+        #[cfg(unix)]
+        cmd.process_group(0); // Prevent sigint from terminal.
+
+        let child = cmd.spawn()?;
 
         self.pid = child.id().map(|pid| pid as i32);
 
         let mut process = PostgresProcessAsync {
             child,
-            notify: self.notify.clone(),
+            shutdown: self.shutdown.subscribe(),
+            shutdown_complete: self.shutdown_complete.clone(),
             initdb_dir: self.initdb_dir.clone(),
             port: self.port,
             version: self.version,
@@ -196,11 +212,13 @@ impl PostgresProcess {
             loop {
                 let mut line = String::new();
                 select! {
-                    _ = process.notify.notified() => {
-                        if let Err(err) = process.stop().await {
-                            error!("[fdw] shutdown error: {}", err);
+                    _ = process.shutdown.changed() => {
+                        if *process.shutdown.borrow() {
+                            if let Err(err) = process.stop().await {
+                                error!("[fdw] shutdown error: {}", err);
+                            }
+                            break;
                         }
-                        break;
                     }
 
                     _ = process.child.wait() => {
@@ -222,59 +240,66 @@ impl PostgresProcess {
                 }
             }
 
-            process.notify.notify_waiters();
+            let _ = process.shutdown_complete.send(true);
         });
 
         Ok(())
     }
 
-    /// Access the notify channel.
-    pub(super) fn notify(&self) -> Arc<Notify> {
-        self.notify.clone()
+    /// Get a receiver for shutdown completion notification.
+    pub(super) fn shutdown_receiver(&self) -> watch::Receiver<bool> {
+        self.shutdown_complete.subscribe()
     }
 
-    pub(super) fn connection_pools(&self, cluster: &Cluster) -> Result<Vec<Pool>, Error> {
-        Ok(Self::pools_to_databases(cluster, 0)?
+    pub(crate) fn connection_pool_configs(
+        port: u16,
+        cluster: &Cluster,
+    ) -> Result<Vec<(Role, PoolConfig)>, Error> {
+        Ok(Self::pools_to_fdw_backends(cluster, 0)?
             .into_iter()
-            .map(|(database, _)| {
+            .enumerate()
+            .map(|(database_number, backend)| {
                 let address = Address {
                     host: "127.0.0.1".into(),
-                    port: self.port,
-                    database_name: database.clone(),
+                    port,
+                    database_name: backend.database_name.clone(),
                     password: "".into(), // We use trust
                     user: cluster.identifier().user.clone(),
-                    database_number: 0,
+                    database_number,
                 };
 
-                Pool::new(&PoolConfig {
-                    address,
-                    config: Config {
-                        inner: pgdog_stats::Config {
-                            max: 10,
-                            ..Default::default()
-                        },
+                (
+                    backend.role,
+                    PoolConfig {
+                        address,
+                        config: backend.config,
                     },
-                })
+                )
             })
             .collect())
     }
 
-    pub(super) fn pools_to_databases(
+    pub(super) fn pools_to_fdw_backends(
         cluster: &Cluster,
         shard: usize,
-    ) -> Result<Vec<(String, Address)>, Error> {
+    ) -> Result<Vec<FdwBackend>, Error> {
         let shard = cluster
             .shards()
             .get(shard)
             .ok_or(Error::ShardsHostsMismatch)?;
 
         Ok(shard
-            .pools()
-            .iter()
+            .pools_with_roles()
+            .into_iter()
             .enumerate()
-            .map(|(number, pool)| {
-                let database = format!("{}_{}", cluster.identifier().database, number);
-                (database, pool.addr().clone())
+            .map(|(number, (role, pool))| {
+                let database_name = format!("{}_{}", cluster.identifier().database, number);
+                FdwBackend {
+                    config: pool.config().clone(),
+                    address: pool.addr().clone(),
+                    database_name,
+                    role,
+                }
             })
             .collect())
     }
@@ -301,12 +326,12 @@ impl PostgresProcess {
         let mut admin_connection = self.admin_connection().await?;
         let mut created = false;
 
-        for (database, _) in Self::pools_to_databases(cluster, 0)? {
-            if !self.databases.contains(&database) {
+        for backend in Self::pools_to_fdw_backends(cluster, 0)? {
+            if !self.databases.contains(&backend.database_name) {
                 admin_connection
                     .execute(format!(
                         r#"CREATE DATABASE {}"#,
-                        quote_identifier(&database)
+                        quote_identifier(&backend.database_name)
                     ))
                     .await?;
                 created = true;
@@ -355,9 +380,9 @@ impl PostgresProcess {
         let mut connections = HashMap::new();
 
         // We checked that all shards have the same number of replicas.
-        let databases: Vec<_> = Self::pools_to_databases(cluster, 0)?
+        let databases: Vec<_> = Self::pools_to_fdw_backends(cluster, 0)?
             .into_iter()
-            .map(|(database, _)| database)
+            .map(|backend| backend.database_name)
             .collect();
 
         for database in &databases {
@@ -374,8 +399,11 @@ impl PostgresProcess {
         }
 
         for (number, _) in cluster.shards().iter().enumerate() {
-            for (database, address) in Self::pools_to_databases(cluster, number)? {
-                let identifier = (cluster.identifier().user.clone(), database.clone());
+            for backend in Self::pools_to_fdw_backends(cluster, number)? {
+                let identifier = (
+                    cluster.identifier().user.clone(),
+                    backend.database_name.clone(),
+                );
                 let connection = connections
                     .get_mut(&identifier)
                     .expect("connection is gone");
@@ -386,7 +414,10 @@ impl PostgresProcess {
                             r#"CREATE SERVER IF NOT EXISTS "shard_{}"
                                 FOREIGN DATA WRAPPER postgres_fdw
                                 OPTIONS (host '{}', port '{}', dbname '{}')"#,
-                            number, address.host, address.port, address.database_name,
+                            number,
+                            backend.address.host,
+                            backend.address.port,
+                            backend.address.database_name,
                         ))
                         .await?;
                 }
@@ -400,8 +431,8 @@ impl PostgresProcess {
                             OPTIONS (user '{}', password '{}')"#,
                         quote_identifier(&identifier.0),
                         number,
-                        address.user,
-                        address.password
+                        backend.address.user,
+                        backend.address.password
                     ))
                     .await?;
             }
@@ -467,13 +498,34 @@ impl PostgresProcess {
     }
 
     pub(crate) async fn stop_wait(&mut self) {
-        self.notify.notify_one();
-        self.notify.notified().await;
+        let mut receiver = self.shutdown_complete.subscribe();
+
+        // Check if already complete (process may have exited).
+        if *receiver.borrow() {
+            self.pid.take();
+            return;
+        }
+
+        // Signal shutdown.
+        self.shutdown.send_modify(|v| *v = true);
+
+        // Wait for shutdown to complete.
+        while receiver.changed().await.is_ok() {
+            if *receiver.borrow() {
+                break;
+            }
+        }
         self.pid.take();
     }
 
     pub(crate) fn request_stop(&mut self) {
-        self.notify.notify_one();
+        self.shutdown.send_modify(|v| *v = true);
+        self.pid.take();
+    }
+
+    /// Clear the pid to prevent dirty shutdown warning.
+    /// Used when the process has already exited.
+    pub(crate) fn clear_pid(&mut self) {
         self.pid.take();
     }
 }
@@ -481,7 +533,7 @@ impl PostgresProcess {
 impl Drop for PostgresProcess {
     fn drop(&mut self) {
         if let Some(pid) = self.pid.take() {
-            warn!("[fdw] dirty shutdown initiated");
+            warn!("[fdw] dirty shutdown initiated for pid {}", pid);
 
             #[cfg(unix)]
             {
@@ -539,7 +591,7 @@ mod test {
             ]
         );
 
-        let mut server = process.connection("pgdog", "pgdog_p").await.unwrap();
+        let mut server = process.connection("pgdog", "pgdog_0").await.unwrap();
         server
             .execute("SELECT * FROM pgdog.test_postgres_process")
             .await

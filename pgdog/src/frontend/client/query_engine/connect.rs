@@ -1,3 +1,4 @@
+use lazy_static::lazy_static;
 use tokio::time::timeout;
 
 use crate::frontend::router::parser::ShardWithPriority;
@@ -29,6 +30,15 @@ impl QueryEngine {
         }
 
         let connect_route = connect_route.unwrap_or(context.client_request.route());
+        let connect_route = if context.params.is_postgres_fdw() {
+            lazy_static! {
+                static ref FDW_ROUTE: Route = Route::fdw_fallback();
+            }
+
+            &FDW_ROUTE
+        } else {
+            connect_route
+        };
 
         let request = Request::new(*context.id, connect_route.is_read());
 

@@ -151,11 +151,11 @@ impl Listener {
             }
         }
 
-        self.shutdown.notify_waiters();
-
         if let Err(_) = timeout(shutdown_timeout, PostgresLauncher::get().shutdown_wait()).await {
             error!("[fdw] graceful shutdown failed");
         }
+
+        self.shutdown.notify_waiters();
     }
 
     async fn handle_client(stream: TcpStream, addr: SocketAddr) -> Result<(), Error> {
