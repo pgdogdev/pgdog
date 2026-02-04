@@ -24,9 +24,11 @@ impl QueryParser {
         calculator: &mut ShardsWithPriority,
     ) -> Result<Command, Error> {
         let mut shard = Shard::All;
+        let mut schema_changed = false;
 
         match node {
             Some(NodeEnum::CreateStmt(stmt)) => {
+                schema_changed = true;
                 shard = Self::shard_ddl_table(&stmt.relation, schema)?.unwrap_or(Shard::All);
             }
 
@@ -45,6 +47,7 @@ impl QueryParser {
                             shard = schema.shard().into();
                         }
                     }
+                    schema_changed = true;
                 }
 
                 ObjectType::ObjectSchema => {
@@ -73,10 +76,12 @@ impl QueryParser {
             }
 
             Some(NodeEnum::ViewStmt(stmt)) => {
+                schema_changed = true;
                 shard = Self::shard_ddl_table(&stmt.view, schema)?.unwrap_or(Shard::All);
             }
 
             Some(NodeEnum::CreateTableAsStmt(stmt)) => {
+                schema_changed = true;
                 if let Some(into) = &stmt.into {
                     shard = Self::shard_ddl_table(&into.rel, schema)?.unwrap_or(Shard::All);
                 }
@@ -113,6 +118,7 @@ impl QueryParser {
             }
 
             Some(NodeEnum::AlterTableStmt(stmt)) => {
+                schema_changed = true;
                 shard = Self::shard_ddl_table(&stmt.relation, schema)?.unwrap_or(Shard::All);
             }
 
@@ -218,7 +224,9 @@ impl QueryParser {
 
         calculator.push(ShardWithPriority::new_table(shard));
 
-        Ok(Command::Query(Route::write(calculator.shard())))
+        Ok(Command::Query(
+            Route::write(calculator.shard()).with_schema_changed(schema_changed),
+        ))
     }
 
     pub(super) fn shard_ddl_table(
@@ -288,6 +296,7 @@ mod test {
         let mut calculator = ShardsWithPriority::default();
         let command = QueryParser::shard_ddl(&root, &test_schema(), &mut calculator).unwrap();
         assert_eq!(command.route().shard(), &Shard::Direct(0));
+        assert!(command.route().is_schema_changed());
     }
 
     #[test]
@@ -296,6 +305,7 @@ mod test {
         let mut calculator = ShardsWithPriority::default();
         let command = QueryParser::shard_ddl(&root, &test_schema(), &mut calculator).unwrap();
         assert_eq!(command.route().shard(), &Shard::All);
+        assert!(command.route().is_schema_changed());
     }
 
     #[test]
@@ -304,6 +314,7 @@ mod test {
         let mut calculator = ShardsWithPriority::default();
         let command = QueryParser::shard_ddl(&root, &test_schema(), &mut calculator).unwrap();
         assert_eq!(command.route().shard(), &Shard::All);
+        assert!(command.route().is_schema_changed());
     }
 
     #[test]
@@ -312,6 +323,7 @@ mod test {
         let mut calculator = ShardsWithPriority::default();
         let command = QueryParser::shard_ddl(&root, &test_schema(), &mut calculator).unwrap();
         assert_eq!(command.route().shard(), &Shard::Direct(1));
+        assert!(!command.route().is_schema_changed());
     }
 
     #[test]
@@ -320,6 +332,7 @@ mod test {
         let mut calculator = ShardsWithPriority::default();
         let command = QueryParser::shard_ddl(&root, &test_schema(), &mut calculator).unwrap();
         assert_eq!(command.route().shard(), &Shard::All);
+        assert!(!command.route().is_schema_changed());
     }
 
     #[test]
@@ -328,6 +341,7 @@ mod test {
         let mut calculator = ShardsWithPriority::default();
         let command = QueryParser::shard_ddl(&root, &test_schema(), &mut calculator).unwrap();
         assert_eq!(command.route().shard(), &Shard::Direct(0));
+        assert!(command.route().is_schema_changed());
     }
 
     #[test]
@@ -336,6 +350,7 @@ mod test {
         let mut calculator = ShardsWithPriority::default();
         let command = QueryParser::shard_ddl(&root, &test_schema(), &mut calculator).unwrap();
         assert_eq!(command.route().shard(), &Shard::All);
+        assert!(command.route().is_schema_changed());
     }
 
     #[test]
@@ -344,6 +359,7 @@ mod test {
         let mut calculator = ShardsWithPriority::default();
         let command = QueryParser::shard_ddl(&root, &test_schema(), &mut calculator).unwrap();
         assert_eq!(command.route().shard(), &Shard::Direct(1));
+        assert!(command.route().is_schema_changed());
     }
 
     #[test]
@@ -352,6 +368,7 @@ mod test {
         let mut calculator = ShardsWithPriority::default();
         let command = QueryParser::shard_ddl(&root, &test_schema(), &mut calculator).unwrap();
         assert_eq!(command.route().shard(), &Shard::Direct(0));
+        assert!(command.route().is_schema_changed());
     }
 
     #[test]
@@ -360,6 +377,7 @@ mod test {
         let mut calculator = ShardsWithPriority::default();
         let command = QueryParser::shard_ddl(&root, &test_schema(), &mut calculator).unwrap();
         assert_eq!(command.route().shard(), &Shard::Direct(1));
+        assert!(command.route().is_schema_changed());
     }
 
     #[test]
@@ -368,6 +386,7 @@ mod test {
         let mut calculator = ShardsWithPriority::default();
         let command = QueryParser::shard_ddl(&root, &test_schema(), &mut calculator).unwrap();
         assert_eq!(command.route().shard(), &Shard::Direct(0));
+        assert!(!command.route().is_schema_changed());
     }
 
     #[test]
@@ -376,6 +395,7 @@ mod test {
         let mut calculator = ShardsWithPriority::default();
         let command = QueryParser::shard_ddl(&root, &test_schema(), &mut calculator).unwrap();
         assert_eq!(command.route().shard(), &Shard::All);
+        assert!(!command.route().is_schema_changed());
     }
 
     #[test]
@@ -384,6 +404,7 @@ mod test {
         let mut calculator = ShardsWithPriority::default();
         let command = QueryParser::shard_ddl(&root, &test_schema(), &mut calculator).unwrap();
         assert_eq!(command.route().shard(), &Shard::Direct(0));
+        assert!(!command.route().is_schema_changed());
     }
 
     #[test]
@@ -392,6 +413,7 @@ mod test {
         let mut calculator = ShardsWithPriority::default();
         let command = QueryParser::shard_ddl(&root, &test_schema(), &mut calculator).unwrap();
         assert_eq!(command.route().shard(), &Shard::All);
+        assert!(!command.route().is_schema_changed());
     }
 
     #[test]
@@ -400,11 +422,13 @@ mod test {
         let mut calculator = ShardsWithPriority::default();
         let command = QueryParser::shard_ddl(&root, &test_schema(), &mut calculator).unwrap();
         assert_eq!(command.route().shard(), &Shard::Direct(1));
+        assert!(!command.route().is_schema_changed());
 
         let root = parse_stmt("CREATE UNIQUE INDEX test_idx ON shard_1.test (id)");
         let mut calculator = ShardsWithPriority::default();
         let command = QueryParser::shard_ddl(&root, &test_schema(), &mut calculator).unwrap();
         assert_eq!(command.route().shard(), &Shard::Direct(1));
+        assert!(!command.route().is_schema_changed());
     }
 
     #[test]
@@ -419,6 +443,7 @@ mod test {
         let mut calculator = ShardsWithPriority::default();
         let command = QueryParser::shard_ddl(&root, &test_schema(), &mut calculator).unwrap();
         assert_eq!(command.route().shard(), &Shard::Direct(1));
+        assert!(!command.route().is_schema_changed());
     }
 
     #[test]
@@ -427,6 +452,7 @@ mod test {
         let mut calculator = ShardsWithPriority::default();
         let command = QueryParser::shard_ddl(&root, &test_schema(), &mut calculator).unwrap();
         assert_eq!(command.route().shard(), &Shard::All);
+        assert!(!command.route().is_schema_changed());
     }
 
     #[test]
@@ -435,6 +461,7 @@ mod test {
         let mut calculator = ShardsWithPriority::default();
         let command = QueryParser::shard_ddl(&root, &test_schema(), &mut calculator).unwrap();
         assert_eq!(command.route().shard(), &Shard::Direct(0));
+        assert!(command.route().is_schema_changed());
     }
 
     #[test]
@@ -443,6 +470,7 @@ mod test {
         let mut calculator = ShardsWithPriority::default();
         let command = QueryParser::shard_ddl(&root, &test_schema(), &mut calculator).unwrap();
         assert_eq!(command.route().shard(), &Shard::All);
+        assert!(command.route().is_schema_changed());
     }
 
     #[test]
@@ -451,6 +479,7 @@ mod test {
         let mut calculator = ShardsWithPriority::default();
         let command = QueryParser::shard_ddl(&root, &test_schema(), &mut calculator).unwrap();
         assert_eq!(command.route().shard(), &Shard::Direct(1));
+        assert!(command.route().is_schema_changed());
     }
 
     #[test]
@@ -459,6 +488,7 @@ mod test {
         let mut calculator = ShardsWithPriority::default();
         let command = QueryParser::shard_ddl(&root, &test_schema(), &mut calculator).unwrap();
         assert_eq!(command.route().shard(), &Shard::All);
+        assert!(command.route().is_schema_changed());
     }
 
     #[test]
@@ -467,6 +497,7 @@ mod test {
         let mut calculator = ShardsWithPriority::default();
         let command = QueryParser::shard_ddl(&root, &test_schema(), &mut calculator).unwrap();
         assert_eq!(command.route().shard(), &Shard::Direct(1));
+        assert!(!command.route().is_schema_changed());
     }
 
     #[test]
@@ -477,6 +508,7 @@ mod test {
         let mut calculator = ShardsWithPriority::default();
         let command = QueryParser::shard_ddl(&root, &test_schema(), &mut calculator).unwrap();
         assert_eq!(command.route().shard(), &Shard::Direct(0));
+        assert!(!command.route().is_schema_changed());
     }
 
     #[test]
@@ -487,6 +519,7 @@ mod test {
         let mut calculator = ShardsWithPriority::default();
         let command = QueryParser::shard_ddl(&root, &test_schema(), &mut calculator).unwrap();
         assert_eq!(command.route().shard(), &Shard::All);
+        assert!(!command.route().is_schema_changed());
     }
 
     #[test]
@@ -495,6 +528,7 @@ mod test {
         let mut calculator = ShardsWithPriority::default();
         let command = QueryParser::shard_ddl(&root, &test_schema(), &mut calculator).unwrap();
         assert_eq!(command.route().shard(), &Shard::Direct(1));
+        assert!(!command.route().is_schema_changed());
     }
 
     #[test]
@@ -503,22 +537,27 @@ mod test {
         let mut calculator = ShardsWithPriority::default();
         let command = QueryParser::shard_ddl(&root, &test_schema(), &mut calculator).unwrap();
         assert_eq!(command.route().shard(), &Shard::All);
+        assert!(!command.route().is_schema_changed());
     }
 
     #[test]
     fn test_alter_owner_sharded() {
+        // Note: ALTER TABLE ... OWNER TO is parsed as AlterTableStmt, not AlterOwnerStmt
         let root = parse_stmt("ALTER TABLE shard_0.test OWNER TO new_owner");
         let mut calculator = ShardsWithPriority::default();
         let command = QueryParser::shard_ddl(&root, &test_schema(), &mut calculator).unwrap();
         assert_eq!(command.route().shard(), &Shard::Direct(0));
+        assert!(command.route().is_schema_changed());
     }
 
     #[test]
     fn test_alter_owner_unsharded() {
+        // Note: ALTER TABLE ... OWNER TO is parsed as AlterTableStmt, not AlterOwnerStmt
         let root = parse_stmt("ALTER TABLE public.test OWNER TO new_owner");
         let mut calculator = ShardsWithPriority::default();
         let command = QueryParser::shard_ddl(&root, &test_schema(), &mut calculator).unwrap();
         assert_eq!(command.route().shard(), &Shard::All);
+        assert!(command.route().is_schema_changed());
     }
 
     #[test]
@@ -527,6 +566,7 @@ mod test {
         let mut calculator = ShardsWithPriority::default();
         let command = QueryParser::shard_ddl(&root, &test_schema(), &mut calculator).unwrap();
         assert_eq!(command.route().shard(), &Shard::Direct(1));
+        assert!(!command.route().is_schema_changed());
     }
 
     #[test]
@@ -535,6 +575,7 @@ mod test {
         let mut calculator = ShardsWithPriority::default();
         let command = QueryParser::shard_ddl(&root, &test_schema(), &mut calculator).unwrap();
         assert_eq!(command.route().shard(), &Shard::All);
+        assert!(!command.route().is_schema_changed());
     }
 
     #[test]
@@ -543,6 +584,7 @@ mod test {
         let mut calculator = ShardsWithPriority::default();
         let command = QueryParser::shard_ddl(&root, &test_schema(), &mut calculator).unwrap();
         assert_eq!(command.route().shard(), &Shard::Direct(0));
+        assert!(command.route().is_schema_changed());
     }
 
     #[test]
@@ -551,6 +593,7 @@ mod test {
         let mut calculator = ShardsWithPriority::default();
         let command = QueryParser::shard_ddl(&root, &test_schema(), &mut calculator).unwrap();
         assert_eq!(command.route().shard(), &Shard::All);
+        assert!(command.route().is_schema_changed());
     }
 
     #[test]
@@ -559,6 +602,7 @@ mod test {
         let mut calculator = ShardsWithPriority::default();
         let command = QueryParser::shard_ddl(&root, &test_schema(), &mut calculator).unwrap();
         assert_eq!(command.route().shard(), &Shard::Direct(1));
+        assert!(!command.route().is_schema_changed());
     }
 
     #[test]
@@ -567,6 +611,7 @@ mod test {
         let mut calculator = ShardsWithPriority::default();
         let command = QueryParser::shard_ddl(&root, &test_schema(), &mut calculator).unwrap();
         assert_eq!(command.route().shard(), &Shard::All);
+        assert!(!command.route().is_schema_changed());
     }
 
     #[test]
@@ -575,6 +620,7 @@ mod test {
         let mut calculator = ShardsWithPriority::default();
         let command = QueryParser::shard_ddl(&root, &test_schema(), &mut calculator).unwrap();
         assert_eq!(command.route().shard(), &Shard::Direct(0));
+        assert!(!command.route().is_schema_changed());
     }
 
     #[test]
@@ -583,6 +629,7 @@ mod test {
         let mut calculator = ShardsWithPriority::default();
         let command = QueryParser::shard_ddl(&root, &test_schema(), &mut calculator).unwrap();
         assert_eq!(command.route().shard(), &Shard::All);
+        assert!(!command.route().is_schema_changed());
     }
 
     #[test]
@@ -591,6 +638,7 @@ mod test {
         let mut calculator = ShardsWithPriority::default();
         let command = QueryParser::shard_ddl(&root, &test_schema(), &mut calculator).unwrap();
         assert_eq!(command.route().shard(), &Shard::All);
+        assert!(!command.route().is_schema_changed());
     }
 
     #[test]
@@ -599,6 +647,7 @@ mod test {
         let mut calculator = ShardsWithPriority::default();
         let command = QueryParser::shard_ddl(&root, &test_schema(), &mut calculator).unwrap();
         assert_eq!(command.route().shard(), &Shard::Direct(0));
+        assert!(!command.route().is_schema_changed());
     }
 
     #[test]
@@ -607,6 +656,7 @@ mod test {
         let mut calculator = ShardsWithPriority::default();
         let command = QueryParser::shard_ddl(&root, &test_schema(), &mut calculator).unwrap();
         assert_eq!(command.route().shard(), &Shard::All);
+        assert!(!command.route().is_schema_changed());
     }
 
     #[test]
@@ -615,6 +665,7 @@ mod test {
         let mut calculator = ShardsWithPriority::default();
         let command = QueryParser::shard_ddl(&root, &test_schema(), &mut calculator).unwrap();
         assert_eq!(command.route().shard(), &Shard::Direct(0));
+        assert!(!command.route().is_schema_changed());
     }
 
     #[test]
@@ -631,5 +682,6 @@ mod test {
         let mut calculator = ShardsWithPriority::default();
         let command = QueryParser::shard_ddl(&root, &test_schema(), &mut calculator).unwrap();
         assert_eq!(command.route().shard(), &Shard::All);
+        assert!(!command.route().is_schema_changed());
     }
 }
