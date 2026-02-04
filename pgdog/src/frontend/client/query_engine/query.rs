@@ -1,7 +1,8 @@
 use tokio::time::timeout;
-use tracing::trace;
+use tracing::{info, trace};
 
 use crate::{
+    backend::databases::reload_from_existing,
     frontend::{
         client::TransactionType,
         router::parser::{explain_trace::ExplainTrace, rewrite::statement::plan::RewriteResult},
@@ -226,7 +227,7 @@ impl QueryEngine {
         self.stats.sent(message.len());
 
         // Do this before flushing, because flushing can take time.
-        self.cleanup_backend(context);
+        self.cleanup_backend(context)?;
 
         trace!("{:#?} >>> {:?}", message, context.stream.peer_addr());
 
@@ -272,7 +273,10 @@ impl QueryEngine {
         Ok(())
     }
 
-    pub(super) fn cleanup_backend(&mut self, context: &mut QueryEngineContext<'_>) {
+    pub(super) fn cleanup_backend(
+        &mut self,
+        context: &mut QueryEngineContext<'_>,
+    ) -> Result<(), Error> {
         if self.backend.done() {
             let changed_params = self.backend.changed_params();
 
@@ -280,6 +284,21 @@ impl QueryEngine {
             // Flushing can take a minute and we don't want to block the connection from being reused.
             if !self.backend.session_mode() && context.requests_left == 0 {
                 self.backend.disconnect();
+            }
+
+            // Detect schema change and relaod the config so we get new schema.
+            if self.router.schema_changed()
+                && self
+                    .backend
+                    .cluster()
+                    .map(|cluster| cluster.reload_schema())
+                    .unwrap_or_default()
+            {
+                info!(
+                    "schema change detected, reloading config [{}]",
+                    self.backend.cluster()?.identifier(),
+                );
+                reload_from_existing()?;
             }
 
             self.router.reset();
@@ -299,6 +318,8 @@ impl QueryEngine {
                 self.comms.update_params(context.params);
             }
         }
+
+        Ok(())
     }
 
     // Perform cross-shard check.

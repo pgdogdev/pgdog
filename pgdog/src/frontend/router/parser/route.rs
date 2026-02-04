@@ -89,6 +89,7 @@ pub struct Route {
     explain: Option<ExplainTrace>,
     rollback_savepoint: bool,
     search_path_driven: bool,
+    schema_changed: bool,
 }
 
 impl Display for Route {
@@ -195,6 +196,19 @@ impl Route {
 
     pub fn with_shard(mut self, shard: ShardWithPriority) -> Self {
         self.set_shard_mut(shard);
+        self
+    }
+
+    pub fn set_schema_changed(&mut self, changed: bool) {
+        self.schema_changed = changed;
+    }
+
+    pub fn is_schema_changed(&self) -> bool {
+        self.schema_changed
+    }
+
+    pub fn with_schema_changed(mut self, changed: bool) -> Self {
+        self.schema_changed = changed;
         self
     }
 

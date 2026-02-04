@@ -250,7 +250,7 @@ impl Server {
             addr,
             auth_type,
             connect_reason,
-            if stream.is_tls() { "🔓" } else { "" },
+            if stream.is_tls() { "🔒" } else { "" },
         );
 
         let mut server = Server {
@@ -2506,5 +2506,150 @@ pub mod test {
             assert_eq!(err.routine, Some("parserOpenTable".into())); // Might break in the future.
             assert_eq!(err.detail, None);
         }
+    }
+    #[tokio::test]
+    async fn test_copy_text_composite_type_roundtrip() {
+        use crate::frontend::router::parser::{CopyFormat, CsvStream};
+
+        let mut server = test_server().await;
+
+        server.execute("BEGIN").await.unwrap();
+
+        // Create the composite type and tables
+        server
+            .execute(
+                "CREATE TYPE test_location_rt AS (
+                    street varchar,
+                    city varchar,
+                    state varchar,
+                    country varchar,
+                    postal_code varchar
+                )",
+            )
+            .await
+            .unwrap();
+
+        server
+            .execute(
+                "CREATE TABLE test_copy_source (
+                    id INTEGER,
+                    value_location test_location_rt
+                )",
+            )
+            .await
+            .unwrap();
+
+        server
+            .execute(
+                "CREATE TABLE test_copy_dest (
+                    id INTEGER,
+                    value_location test_location_rt
+                )",
+            )
+            .await
+            .unwrap();
+
+        // Insert a record with the composite type containing quotes
+        server
+            .execute(
+                "INSERT INTO test_copy_source VALUES (1, ROW(NULL, 'Annapolis', 'Maryland', 'United States', NULL)::test_location_rt)",
+            )
+            .await
+            .unwrap();
+
+        // COPY the data out in TEXT format
+        server
+            .send(&vec![Query::from("COPY test_copy_source TO STDOUT").into()].into())
+            .await
+            .unwrap();
+
+        // Read CopyOutResponse
+        let msg = server.read().await.unwrap();
+        assert_eq!(msg.code(), 'H', "Expected CopyOutResponse");
+
+        // Read CopyData messages until CopyDone
+        let mut copy_data = Vec::new();
+        loop {
+            let msg = server.read().await.unwrap();
+            match msg.code() {
+                'd' => {
+                    // CopyData from server - extract the data portion (skip header)
+                    let cd = CopyData::try_from(msg).unwrap();
+                    copy_data.extend_from_slice(cd.data());
+                }
+                'c' => {
+                    // CopyDone
+                    break;
+                }
+                _ => panic!("Unexpected message code: {}", msg.code()),
+            }
+        }
+
+        // Read CommandComplete and ReadyForQuery
+        let msg = server.read().await.unwrap();
+        assert_eq!(msg.code(), 'C');
+        let msg = server.read().await.unwrap();
+        assert_eq!(msg.code(), 'Z');
+
+        // Parse the data through CsvStream (simulating what PgDog does)
+        let mut csv_stream = CsvStream::new('\t', false, CopyFormat::Text, "\\N");
+        csv_stream.write(&copy_data);
+
+        let record = csv_stream.record().unwrap().expect("Should have a record");
+
+        // The composite type field should contain quotes around "United States"
+        let location_field = record.get(1).expect("Should have location field");
+        assert!(
+            location_field.contains("\"United States\""),
+            "Location field should contain quoted 'United States': {}",
+            location_field
+        );
+
+        // Re-serialize and COPY back in
+        let output = record.to_string();
+
+        // COPY the data into the destination table
+        server
+            .send(&vec![Query::from("COPY test_copy_dest FROM STDIN").into()].into())
+            .await
+            .unwrap();
+
+        let msg = server.read().await.unwrap();
+        assert_eq!(msg.code(), 'G', "Expected CopyInResponse");
+
+        // Send the parsed and re-serialized data
+        server
+            .send(&vec![CopyData::new(output.as_bytes()).into(), CopyDone.into()].into())
+            .await
+            .unwrap();
+
+        // Read response
+        let msg = server.read().await.unwrap();
+        assert_eq!(
+            msg.code(),
+            'C',
+            "Expected CommandComplete but got: {:?}",
+            msg
+        );
+
+        let msg = server.read().await.unwrap();
+        assert_eq!(msg.code(), 'Z');
+
+        // Verify the data was inserted correctly by reading it back
+        server
+            .send(&vec![Query::from("SELECT * FROM test_copy_dest").into()].into())
+            .await
+            .unwrap();
+
+        let msg = server.read().await.unwrap();
+        assert_eq!(msg.code(), 'T');
+        let msg = server.read().await.unwrap();
+        assert_eq!(msg.code(), 'D', "Should have a data row");
+        let msg = server.read().await.unwrap();
+        assert_eq!(msg.code(), 'C');
+        let msg = server.read().await.unwrap();
+        assert_eq!(msg.code(), 'Z');
+
+        server.execute("ROLLBACK").await.unwrap();
     }
 }

@@ -220,6 +220,8 @@ impl Datum {
             Datum::Float(f) => f.encode(format),
             Datum::Double(d) => d.encode(format),
             Datum::Numeric(n) => n.encode(format),
+            Datum::Timestamp(t) => t.encode(format),
+            Datum::TimestampTz(tz) => tz.encode(format),
             Datum::Null => Ok(Bytes::new()),
             _ => Err(Error::UnsupportedDataTypeForEncoding),
         }

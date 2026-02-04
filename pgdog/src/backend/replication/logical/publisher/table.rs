@@ -9,6 +9,7 @@ use crate::backend::replication::publisher::progress::Progress;
 use crate::backend::replication::publisher::Lsn;
 
 use crate::backend::{Cluster, Server};
+use crate::config::config;
 use crate::net::replication::StatusUpdate;
 
 use super::super::{subscriber::CopySubscriber, Error};
@@ -186,7 +187,7 @@ impl Table {
         // Sync data using COPY.
         // Publisher uses COPY [...] TO STDOUT.
         // Subscriber uses COPY [...] FROM STDIN.
-        let copy = Copy::new(self);
+        let copy = Copy::new(self, config().config.general.resharding_copy_format);
 
         // Create new standalone connection for the copy.
         // let mut server = Server::connect(source, ServerOptions::new_replication()).await?;

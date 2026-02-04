@@ -29,6 +29,7 @@ pub use sharding::{Lists, Ranges};
 pub struct Router {
     query_parser: QueryParser,
     latest_command: Command,
+    schema_changed: bool,
 }
 
 impl Default for Router {
@@ -43,6 +44,7 @@ impl Router {
         Self {
             query_parser: QueryParser::default(),
             latest_command: Command::default(),
+            schema_changed: false,
         }
     }
 
@@ -60,6 +62,13 @@ impl Router {
 
         let command = self.query_parser.parse(context)?;
         self.latest_command = command;
+
+        if let Command::Query(ref route) = self.latest_command {
+            if route.is_schema_changed() {
+                self.schema_changed = true;
+            }
+        }
+
         Ok(&self.latest_command)
     }
 
@@ -92,10 +101,16 @@ impl Router {
     pub fn reset(&mut self) {
         self.query_parser = QueryParser::default();
         self.latest_command = Command::default();
+        self.schema_changed = false;
     }
 
     /// Get last commmand computed by the query parser.
     pub fn command(&self) -> &Command {
         &self.latest_command
+    }
+
+    /// Has the schema been altered?
+    pub fn schema_changed(&self) -> bool {
+        self.schema_changed
     }
 }

@@ -294,7 +294,7 @@ impl Client {
                 } else {
                     auth_type.to_string()
                 },
-                if stream.is_tls() { "🔓" } else { "" }
+                if stream.is_tls() { "🔒" } else { "" }
             );
         }
 
