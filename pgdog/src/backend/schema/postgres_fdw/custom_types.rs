@@ -1,6 +1,5 @@
 //! Custom type definitions (enums, domains, composite types) for foreign tables.
 
-use std::collections::HashSet;
 use std::fmt::Write;
 
 use crate::net::messages::DataRow;
@@ -180,21 +179,8 @@ impl CustomTypes {
         &self,
         server: &mut crate::backend::Server,
     ) -> Result<(), crate::backend::Error> {
-        let mut created_schemas = HashSet::new();
-
         for custom_type in &self.types {
-            if !created_schemas.contains(&custom_type.schema_name) {
-                server
-                    .execute(&format!(
-                        "CREATE SCHEMA IF NOT EXISTS {}",
-                        quote_identifier(&custom_type.schema_name)
-                    ))
-                    .await?;
-                created_schemas.insert(custom_type.schema_name.clone());
-            }
-
             let stmt = custom_type.create_statement()?;
-
             tracing::debug!("[fdw::setup] {} [{}]", stmt, server.addr());
             server.execute(&stmt).await?;
         }

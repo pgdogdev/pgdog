@@ -76,23 +76,17 @@ impl ForeignTableSchema {
         // Create extensions first (types may depend on them)
         self.extensions.setup(server).await?;
 
+        server.execute("BEGIN").await?;
+
+        // Drop and recreate managed schemas (CASCADE drops tables and types)
+        self.drop_schemas(server).await?;
+        self.create_schemas(server).await?;
+
         // Create custom types (enums, domains, composite types)
         self.custom_types.setup(server).await?;
 
-        let mut schemas = HashSet::new();
         let mut tables = HashSet::new();
-
         for ((schema, table), columns) in &self.tables {
-            if !schemas.contains(schema) {
-                server
-                    .execute(&format!(
-                        "CREATE SCHEMA IF NOT EXISTS {}",
-                        super::quote_identifier(&schema)
-                    ))
-                    .await?;
-                schemas.insert(schema.clone());
-            }
-
             let dedup = (schema.clone(), table.clone());
             if !tables.contains(&dedup) {
                 let statements = create_foreign_table(columns, sharding_schema)?;
@@ -103,6 +97,8 @@ impl ForeignTableSchema {
                 tables.insert(dedup);
             }
         }
+
+        server.execute("COMMIT").await?;
         Ok(())
     }
 
@@ -114,6 +110,46 @@ impl ForeignTableSchema {
     /// Get the custom types.
     pub fn custom_types(&self) -> &CustomTypes {
         &self.custom_types
+    }
+
+    /// Collect unique schemas from tables and custom types.
+    fn schemas(&self) -> HashSet<String> {
+        self.tables
+            .keys()
+            .map(|(s, _)| s.clone())
+            .chain(
+                self.custom_types
+                    .types()
+                    .iter()
+                    .map(|t| t.schema_name.clone()),
+            )
+            .collect()
+    }
+
+    /// Drop schemas we manage (with CASCADE to drop tables and types).
+    async fn drop_schemas(&self, server: &mut Server) -> Result<(), super::super::Error> {
+        for schema in &self.schemas() {
+            server
+                .execute(&format!(
+                    "DROP SCHEMA IF EXISTS {} CASCADE",
+                    super::quote_identifier(schema)
+                ))
+                .await?;
+        }
+        Ok(())
+    }
+
+    /// Create schemas we manage.
+    async fn create_schemas(&self, server: &mut Server) -> Result<(), super::super::Error> {
+        for schema in &self.schemas() {
+            server
+                .execute(&format!(
+                    "CREATE SCHEMA {}",
+                    super::quote_identifier(schema)
+                ))
+                .await?;
+        }
+        Ok(())
     }
 }
 

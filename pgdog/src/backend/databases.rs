@@ -626,8 +626,8 @@ mod tests {
     use super::*;
     use crate::config::{Config, ConfigAndUsers, Database, Role};
 
-    #[test]
-    fn test_mirror_user_isolation() {
+    #[tokio::test]
+    async fn test_mirror_user_isolation() {
         // Test that each user gets their own mirror cluster
         let mut config = Config::default();
 
@@ -707,8 +707,8 @@ mod tests {
         assert_eq!(bob_mirrors[0].name(), "db1_mirror");
     }
 
-    #[test]
-    fn test_mirror_user_mismatch_handling() {
+    #[tokio::test]
+    async fn test_mirror_user_mismatch_handling() {
         // Test that mirroring is disabled gracefully when users don't match
         let mut config = Config::default();
 
@@ -783,8 +783,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_precomputed_mirror_configs() {
+    #[tokio::test]
+    async fn test_precomputed_mirror_configs() {
         // Test that mirror configs are precomputed correctly during initialization
         let mut config = Config::default();
         config.general.mirror_queue = 100;
@@ -860,8 +860,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_mirror_config_with_global_defaults() {
+    #[tokio::test]
+    async fn test_mirror_config_with_global_defaults() {
         // Test that global defaults are used when mirror-specific values aren't provided
         let mut config = Config::default();
         config.general.mirror_queue = 150;
@@ -933,8 +933,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_mirror_config_partial_overrides() {
+    #[tokio::test]
+    async fn test_mirror_config_partial_overrides() {
         // Test that we can override just queue or just exposure
         let mut config = Config::default();
         config.general.mirror_queue = 100;
@@ -1033,8 +1033,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_invalid_mirror_not_precomputed() {
+    #[tokio::test]
+    async fn test_invalid_mirror_not_precomputed() {
         // Test that invalid mirror configs (user mismatch) are not precomputed
         let mut config = Config::default();
 
@@ -1096,8 +1096,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_mirror_config_no_users() {
+    #[tokio::test]
+    async fn test_mirror_config_no_users() {
         // Test that mirror configs without any users are not precomputed
         let mut config = Config::default();
         config.general.mirror_queue = 100;
@@ -1205,8 +1205,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_user_all_databases_creates_pools_for_all_dbs() {
+    #[tokio::test]
+    async fn test_user_all_databases_creates_pools_for_all_dbs() {
         let mut config = Config::default();
 
         config.databases = vec![
@@ -1268,8 +1268,8 @@ mod tests {
         assert_eq!(databases.all().len(), 3);
     }
 
-    #[test]
-    fn test_user_multiple_databases_creates_pools_for_specified_dbs() {
+    #[tokio::test]
+    async fn test_user_multiple_databases_creates_pools_for_specified_dbs() {
         let mut config = Config::default();
 
         config.databases = vec![
@@ -1331,8 +1331,8 @@ mod tests {
         assert_eq!(databases.all().len(), 2);
     }
 
-    #[test]
-    fn test_all_databases_takes_priority_over_databases_list() {
+    #[tokio::test]
+    async fn test_all_databases_takes_priority_over_databases_list() {
         let mut config = Config::default();
 
         config.databases = vec![
@@ -1413,8 +1413,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_user_with_single_database_creates_one_pool() {
+    #[tokio::test]
+    async fn test_user_with_single_database_creates_one_pool() {
         let mut config = Config::default();
 
         config.databases = vec![
@@ -1463,8 +1463,8 @@ mod tests {
         assert_eq!(databases.all().len(), 1);
     }
 
-    #[test]
-    fn test_multiple_users_with_different_database_access() {
+    #[tokio::test]
+    async fn test_multiple_users_with_different_database_access() {
         let mut config = Config::default();
 
         config.databases = vec![
@@ -1541,8 +1541,8 @@ mod tests {
         assert_eq!(databases.all().len(), 6);
     }
 
-    #[test]
-    fn test_databases_list_with_nonexistent_database_skipped() {
+    #[tokio::test]
+    async fn test_databases_list_with_nonexistent_database_skipped() {
         let mut config = Config::default();
 
         config.databases = vec![Database {
