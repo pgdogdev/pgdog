@@ -203,6 +203,9 @@ pub struct General {
     /// Copy format used for resharding.
     #[serde(default)]
     pub resharding_copy_format: CopyFormat,
+    /// Trigger a schema reload on DDL like CREATE TABLE.
+    #[serde(default = "General::reload_schema_on_ddl")]
+    pub reload_schema_on_ddl: bool,
 }
 
 impl Default for General {
@@ -274,6 +277,7 @@ impl Default for General {
             system_catalogs: Self::default_system_catalogs(),
             omnisharded_sticky: bool::default(),
             resharding_copy_format: CopyFormat::default(),
+            reload_schema_on_ddl: Self::reload_schema_on_ddl(),
         }
     }
 }
@@ -338,6 +342,10 @@ impl General {
 
     fn healthcheck_interval() -> u64 {
         Self::env_or_default("PGDOG_HEALTHCHECK_INTERVAL", 30_000)
+    }
+
+    fn reload_schema_on_ddl() -> bool {
+        Self::env_bool_or_default("PGDOG_SCHEMA_RELOAD_ON_DDL", true)
     }
 
     fn idle_healthcheck_interval() -> u64 {
