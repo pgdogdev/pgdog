@@ -466,7 +466,7 @@ impl Cluster {
         }
     }
 
-    fn load_schema(&self) -> bool {
+    pub fn load_schema(&self) -> bool {
         self.shards.len() > 1
             && self.sharded_schemas.is_empty()
             && !self.sharded_tables.tables().is_empty()

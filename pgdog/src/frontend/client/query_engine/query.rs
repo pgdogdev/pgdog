@@ -287,7 +287,13 @@ impl QueryEngine {
             }
 
             // Detect schema change and relaod the config so we get new schema.
-            if self.router.schema_changed() {
+            if self.router.schema_changed()
+                && self
+                    .backend
+                    .cluster()
+                    .map(|cluster| cluster.load_schema())
+                    .unwrap_or_default()
+            {
                 info!(
                     "schema change detected, reloading config [{}]",
                     self.backend.cluster()?.identifier(),
