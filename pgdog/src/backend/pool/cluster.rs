@@ -15,6 +15,7 @@ use tracing::{error, info};
 use crate::{
     backend::{
         databases::{databases, User as DatabaseUser},
+        fdw::FdwLoadBalancer,
         replication::{ReplicationConfig, ShardedSchemas},
         Schema, ShardedTables,
     },
@@ -73,6 +74,9 @@ pub struct Cluster {
     connection_recovery: ConnectionRecovery,
     query_parser_engine: QueryParserEngine,
     reload_schema_on_ddl: bool,
+    lb_strategy: LoadBalancingStrategy,
+    rw_split: ReadWriteSplit,
+    fdw_lb: Option<FdwLoadBalancer>,
 }
 
 /// Sharding configuration from the cluster.
@@ -235,7 +239,7 @@ impl Cluster {
             database: name.to_owned(),
         });
 
-        Self {
+        let mut cluster = Self {
             identifier: identifier.clone(),
             shards: shards
                 .iter()
@@ -274,7 +278,14 @@ impl Cluster {
             connection_recovery,
             query_parser_engine,
             reload_schema_on_ddl,
-        }
+            lb_strategy,
+            rw_split,
+            fdw_lb: None,
+        };
+
+        cluster.fdw_lb = FdwLoadBalancer::new(&cluster).ok();
+
+        cluster
     }
 
     /// Change config to work with logical replication streaming.
@@ -297,6 +308,24 @@ impl Cluster {
     pub async fn replica(&self, shard: usize, request: &Request) -> Result<Guard, Error> {
         let shard = self.shards.get(shard).ok_or(Error::NoShard(shard))?;
         shard.replica(request).await
+    }
+
+    /// Get a connection from the primary fdw conn pool.
+    pub async fn primary_fdw(&self, request: &Request) -> Result<Guard, Error> {
+        if let Some(ref lb) = self.fdw_lb {
+            Ok(lb.primary().ok_or(Error::NoPrimary)?.get(request).await?)
+        } else {
+            Err(Error::NoFdw)
+        }
+    }
+
+    /// Get a connection from one of the replica fdw pools.
+    pub async fn replica_fdw(&self, request: &Request) -> Result<Guard, Error> {
+        if let Some(ref lb) = self.fdw_lb {
+            lb.get(request).await
+        } else {
+            Err(Error::NoFdw)
+        }
     }
 
     /// Get a connection to either a primary or a replica.
@@ -343,6 +372,16 @@ impl Cluster {
     /// Get all shards.
     pub fn shards(&self) -> &[Shard] {
         &self.shards
+    }
+
+    /// Get the load balancing strategy.
+    pub fn lb_strategy(&self) -> LoadBalancingStrategy {
+        self.lb_strategy
+    }
+
+    /// Get the read/write split strategy.
+    pub fn rw_split(&self) -> ReadWriteSplit {
+        self.rw_split
     }
 
     /// Get the password the user should use to connect to the database.
@@ -528,6 +567,10 @@ impl Cluster {
     pub(crate) fn launch(&self) {
         for shard in self.shards() {
             shard.launch();
+        }
+
+        if let Some(ref fdw_lb) = self.fdw_lb {
+            fdw_lb.launch();
         }
 
         // Only spawn schema loading once per cluster, even if launch() is called multiple times.

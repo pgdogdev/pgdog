@@ -73,6 +73,7 @@ impl PostgresProcessAsync {
     }
 
     /// Force stop immediately.
+    #[allow(dead_code)]
     async fn force_stop(&mut self) -> Result<(), Error> {
         self.child.kill().await?;
         self.child.wait().await?;

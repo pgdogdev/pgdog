@@ -1,22 +1,57 @@
+use std::sync::Arc;
+
+use pgdog_config::Role;
+use tokio::spawn;
+
+use crate::backend::fdw::PostgresLauncher;
+use crate::backend::pool::{Guard, Request};
 use crate::backend::{Cluster, LoadBalancer, Pool};
 
 use super::Error;
 use super::PostgresProcess;
 
+#[derive(Clone, Debug)]
 pub(crate) struct FdwLoadBalancer {
-    lb: LoadBalancer,
+    lb: Arc<LoadBalancer>,
 }
 
 impl FdwLoadBalancer {
     pub(crate) fn new(cluster: &Cluster) -> Result<Self, Error> {
-        // We check that all shards have identical configs
-        // before enabling this feature.
-        let pools = PostgresProcess::pools_to_databases(cluster, 0)?;
-        let pools = cluster
-            .shards()
-            .get(0)
-            .ok_or(Error::ShardsHostsMismatch)?
-            .pools_with_roles();
-        todo!()
+        let port = PostgresLauncher::get().port();
+        let configs = PostgresProcess::connection_pool_configs(port, cluster)?;
+        let primary = configs
+            .iter()
+            .find(|p| p.0 == Role::Primary)
+            .map(|p| Pool::new(&p.1));
+        let addrs: Vec<_> = configs.iter().map(|c| c.1.clone()).collect();
+
+        let lb = Arc::new(LoadBalancer::new(
+            &primary,
+            &addrs,
+            cluster.lb_strategy(),
+            cluster.rw_split(),
+        ));
+
+        Ok(Self { lb })
+    }
+
+    pub(crate) fn launch(&self) {
+        let lb = self.lb.clone();
+        spawn(async move {
+            let launcher = PostgresLauncher::get();
+            launcher.wait_ready().await;
+            lb.launch();
+        });
+    }
+
+    pub(crate) fn primary(&self) -> Option<Pool> {
+        self.lb.primary().cloned()
+    }
+
+    pub(crate) async fn get(
+        &self,
+        request: &Request,
+    ) -> Result<Guard, crate::backend::pool::Error> {
+        self.lb.get(request).await
     }
 }
