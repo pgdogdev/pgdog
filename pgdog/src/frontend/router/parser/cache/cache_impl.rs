@@ -11,6 +11,7 @@ use tracing::debug;
 
 use super::super::{Error, Route};
 use super::{Ast, AstContext};
+use crate::frontend::router::parser::comment;
 use crate::frontend::{BufferedQuery, PreparedStatements};
 
 static CACHE: Lazy<Cache> = Lazy::new(Cache::new);
@@ -114,6 +115,27 @@ impl Cache {
             });
             if let Some(ast) = ast {
                 guard.stats.hits += 1;
+                return Ok(ast);
+            }
+        }
+
+        if comment::has_comments(query.query(), ctx.sharding_schema.query_parser_engine)? {
+            // Check cache again after removing comments.
+            let filtered_query = comment::remove_comments(
+                query.query(),
+                ctx.sharding_schema.query_parser_engine,
+                Some(&[&*comment::SHARD, &*comment::SHARDING_KEY, &*comment::ROLE]),
+            )?;
+
+            let mut guard = self.inner.lock();
+            let ast = guard.queries.get_mut(&filtered_query).map(|entry| {
+                entry.stats.lock().hits += 1;
+                entry.clone()
+            });
+
+            if let Some(ast) = ast {
+                guard.stats.hits += 1;
+
                 return Ok(ast);
             }
         }
