@@ -111,40 +111,41 @@ pub fn remove_comments(
     }
     .map_err(Error::PgQuery)?;
 
-    let tokens_to_remove = result
-        .tokens
-        .iter()
-        .filter(|st| st.token == Token::CComment as i32 || st.token == Token::SqlComment as i32)
-        .filter(|st| {
-            if let Some(except) = except {
-                let text = &query[st.start as usize..st.end as usize];
+    let mut out = String::with_capacity(query.len());
 
-                !except.iter().any(|re| re.is_match(text))
-            } else {
-                true
+    for st in &result.tokens {
+        let start = st.start as usize;
+        let end = st.end as usize;
+
+        match st.token {
+            t if t == Token::CComment as i32 => {
+                let comment = &query[start..end];
+
+                if let Some(except) = except {
+                    let rewritten = keep_only_matching(comment, except);
+
+                    out.push_str(&rewritten);
+                }
             }
-        });
-
-    let comment_ranges: Vec<(usize, usize)> = tokens_to_remove
-        .map(|st| (st.start as usize, st.end as usize))
-        .collect();
-
-    let mut filtered_query = String::with_capacity(query.len());
-    let mut cursor = 0usize;
-
-    for (start, end) in comment_ranges {
-        if cursor < start {
-            filtered_query.push_str(&query[cursor..start]);
+            _ => {
+                out.push_str(&query[start..end]);
+            }
         }
-
-        cursor = end;
     }
 
-    if cursor < query.len() {
-        filtered_query.push_str(&query[cursor..]);
+    Ok(out)
+}
+
+fn keep_only_matching(comment: &str, regs: &[&Regex]) -> String {
+    let mut out = String::new();
+
+    for reg in regs {
+        for m in reg.find_iter(comment) {
+            out.push_str(m.as_str());
+        }
     }
 
-    Ok(filtered_query.trim().to_string())
+    out
 }
 
 #[cfg(test)]
