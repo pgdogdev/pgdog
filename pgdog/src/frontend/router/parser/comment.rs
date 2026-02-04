@@ -111,11 +111,14 @@ pub fn remove_comments(
     }
     .map_err(Error::PgQuery)?;
 
+    let mut cursor = 0;
     let mut out = String::with_capacity(query.len());
 
     for st in &result.tokens {
         let start = st.start as usize;
         let end = st.end as usize;
+
+        out.push_str(&query[cursor..start]);
 
         match st.token {
             t if t == Token::CComment as i32 => {
@@ -131,6 +134,12 @@ pub fn remove_comments(
                 out.push_str(&query[start..end]);
             }
         }
+
+        cursor = end;
+    }
+
+    if cursor < query.len() {
+        out.push_str(&query[cursor..]);
     }
 
     Ok(out)
