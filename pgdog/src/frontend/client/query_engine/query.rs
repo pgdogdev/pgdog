@@ -291,7 +291,7 @@ impl QueryEngine {
                 && self
                     .backend
                     .cluster()
-                    .map(|cluster| cluster.load_schema())
+                    .map(|cluster| cluster.reload_schema())
                     .unwrap_or_default()
             {
                 info!(
