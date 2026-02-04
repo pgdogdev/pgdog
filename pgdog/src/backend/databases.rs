@@ -121,6 +121,9 @@ pub fn reload() -> Result<(), Error> {
 
     tls::reload()?;
 
+    // Reconfigure FDW with new schema.
+    PostgresLauncher::get().reconfigure();
+
     // Remove any unused prepared statements.
     PreparedStatements::global()
         .write()

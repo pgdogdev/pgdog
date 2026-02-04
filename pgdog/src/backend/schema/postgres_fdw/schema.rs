@@ -10,6 +10,19 @@ use crate::{
 
 use super::custom_types::CustomTypes;
 use super::extensions::Extensions;
+use super::quote_identifier;
+
+/// Server definition for FDW setup.
+#[derive(Debug, Clone)]
+pub struct FdwServerDef {
+    pub shard_num: usize,
+    pub host: String,
+    pub port: u16,
+    pub database_name: String,
+    pub user: String,
+    pub password: String,
+    pub mapping_user: String,
+}
 
 /// Query to fetch table and column information needed for CREATE FOREIGN TABLE statements.
 pub static FOREIGN_TABLE_SCHEMA: &str = include_str!("postgres_fdw.sql");
@@ -68,10 +81,12 @@ impl ForeignTableSchema {
         })
     }
 
+    /// Full setup: creates servers, schemas, types, and tables.
     pub(crate) async fn setup(
         &self,
         server: &mut Server,
         sharding_schema: &ShardingSchema,
+        servers: &[FdwServerDef],
     ) -> Result<(), super::super::Error> {
         // Create extensions first (types may depend on them)
         self.extensions.setup(server).await?;
@@ -80,6 +95,36 @@ impl ForeignTableSchema {
 
         // Drop and recreate managed schemas (CASCADE drops tables and types)
         self.drop_schemas(server).await?;
+
+        // Drop and recreate servers (must happen after schema drop, before foreign table creation)
+        for srv in servers {
+            server
+                .execute(format!(r#"DROP SERVER IF EXISTS "shard_{}" CASCADE"#, srv.shard_num))
+                .await?;
+
+            server
+                .execute(format!(
+                    r#"CREATE SERVER "shard_{}"
+                        FOREIGN DATA WRAPPER postgres_fdw
+                        OPTIONS (host '{}', port '{}', dbname '{}')"#,
+                    srv.shard_num, srv.host, srv.port, srv.database_name,
+                ))
+                .await?;
+
+            server
+                .execute(format!(
+                    r#"CREATE USER MAPPING
+                        FOR {}
+                        SERVER "shard_{}"
+                        OPTIONS (user '{}', password '{}')"#,
+                    quote_identifier(&srv.mapping_user),
+                    srv.shard_num,
+                    srv.user,
+                    srv.password,
+                ))
+                .await?;
+        }
+
         self.create_schemas(server).await?;
 
         // Create custom types (enums, domains, composite types)
@@ -99,6 +144,28 @@ impl ForeignTableSchema {
         }
 
         server.execute("COMMIT").await?;
+        Ok(())
+    }
+
+    /// Add user mappings only (for additional users on an already-configured database).
+    pub(crate) async fn setup_user_mappings(
+        server: &mut Server,
+        servers: &[FdwServerDef],
+    ) -> Result<(), super::super::Error> {
+        for srv in servers {
+            server
+                .execute(format!(
+                    r#"CREATE USER MAPPING IF NOT EXISTS
+                        FOR {}
+                        SERVER "shard_{}"
+                        OPTIONS (user '{}', password '{}')"#,
+                    quote_identifier(&srv.mapping_user),
+                    srv.shard_num,
+                    srv.user,
+                    srv.password,
+                ))
+                .await?;
+        }
         Ok(())
     }
 

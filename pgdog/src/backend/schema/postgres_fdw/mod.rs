@@ -9,7 +9,7 @@ mod statement;
 pub use custom_types::{CustomType, CustomTypeKind, CustomTypes, CUSTOM_TYPES_QUERY};
 pub use error::Error;
 pub use extensions::{Extension, Extensions, EXTENSIONS_QUERY};
-pub use schema::{ForeignTableColumn, ForeignTableSchema, FOREIGN_TABLE_SCHEMA};
+pub use schema::{FdwServerDef, ForeignTableColumn, ForeignTableSchema, FOREIGN_TABLE_SCHEMA};
 pub use statement::{create_foreign_table, ForeignTableBuilder, PartitionStrategy};
 
 pub(crate) use statement::quote_identifier;

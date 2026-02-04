@@ -1,7 +1,7 @@
 use std::{
     ops::Deref,
     sync::{
-        atomic::{AtomicBool, AtomicU16, Ordering},
+        atomic::{AtomicBool, Ordering},
         Arc,
     },
 };
@@ -12,12 +12,24 @@ use super::{Error, PostgresProcess};
 use once_cell::sync::Lazy;
 use tokio::{
     select, spawn,
-    sync::watch,
+    sync::broadcast,
     time::{sleep, Duration},
 };
-use tracing::{error, info, warn};
+use tracing::{error, info};
 
 static LAUNCHER: Lazy<PostgresLauncher> = Lazy::new(PostgresLauncher::new);
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum LauncherEvent {
+    // Commands
+    Start,
+    Shutdown,
+    Reconfigure,
+
+    // Status
+    Ready,
+    ShutdownComplete,
+}
 
 #[derive(Debug, Clone)]
 pub struct PostgresLauncher {
@@ -34,41 +46,24 @@ impl Deref for PostgresLauncher {
 
 #[derive(Debug)]
 pub struct Inner {
-    /// Incremented to trigger restart/shutdown check in the spawn loop.
-    restart_trigger: watch::Sender<u64>,
-    /// Whether the launcher should be running.
-    online: AtomicBool,
-    /// True when shutdown has been requested (used to detect early shutdown).
-    shutdown_requested: AtomicBool,
-    /// Current blue/green port.
-    port: AtomicU16,
-    /// True when postgres is ready to accept connections.
-    ready: watch::Sender<bool>,
-    /// True when shutdown is complete.
-    shutdown_complete: watch::Sender<bool>,
+    events: broadcast::Sender<LauncherEvent>,
+    ready: AtomicBool,
 }
 
 impl PostgresLauncher {
     fn new() -> Self {
-        let fdw = config().config.fdw;
-        let port = AtomicU16::new(fdw.blue_port);
-
-        let (restart_trigger, _) = watch::channel(0u64);
-        let (ready, _) = watch::channel(false);
-        let (shutdown_complete, _) = watch::channel(false);
+        let (events, _) = broadcast::channel(16);
 
         let launcher = Self {
             inner: Arc::new(Inner {
-                restart_trigger,
-                online: AtomicBool::new(false),
-                shutdown_requested: AtomicBool::new(false),
-                port,
-                ready,
-                shutdown_complete,
+                events,
+                ready: AtomicBool::new(false),
             }),
         };
 
-        launcher.spawn();
+        // Subscribe before spawning to avoid race condition.
+        let receiver = launcher.events.subscribe();
+        launcher.spawn(receiver);
         launcher
     }
 
@@ -77,200 +72,144 @@ impl PostgresLauncher {
         LAUNCHER.clone()
     }
 
-    /// Get current blue/green port.
+    /// Get configured port.
     pub(crate) fn port(&self) -> u16 {
-        self.port.load(Ordering::Relaxed)
+        config().config.fdw.port
     }
 
-    /// Start the launcher.
-    ///
-    /// Idempontent.
+    /// Start the launcher. Idempotent.
     pub(crate) fn launch(&self) {
-        if self.online.load(Ordering::Relaxed) {
-            return;
-        }
-
-        self.launch_blue_green(false);
+        let _ = self.events.send(LauncherEvent::Start);
     }
 
-    fn spawn(&self) {
-        let launcher = self.clone();
-
-        spawn(async move {
-            let mut restart_receiver = launcher.restart_trigger.subscribe();
-
-            loop {
-                let online = launcher.online.load(Ordering::Relaxed);
-
-                if !online {
-                    // Check if shutdown was already requested before we even started.
-                    if launcher.shutdown_requested.load(Ordering::Acquire) {
-                        launcher.ready.send_modify(|v| *v = true);
-                        launcher.mark_shutdown();
-                        return;
-                    }
-
-                    // Wait for trigger (launch or shutdown).
-                    let _ = restart_receiver.changed().await;
-
-                    // Re-check if this was a shutdown request.
-                    if launcher.shutdown_requested.load(Ordering::Acquire) {
-                        launcher.ready.send_modify(|v| *v = true);
-                        launcher.mark_shutdown();
-                        return;
-                    }
-                }
-
-                info!(
-                    "[fdw] launching fdw backend on 0.0.0.0:{}",
-                    launcher.port.load(Ordering::Relaxed),
-                );
-
-                let had_error = launcher.run(&mut restart_receiver).await.is_err();
-                if had_error {
-                    error!("[fdw] launcher exited with error");
-                }
-
-                let online = launcher.online.load(Ordering::Relaxed);
-                if !online {
-                    break;
-                }
-
-                // Delay retry only on error to prevent tight loops.
-                if had_error {
-                    sleep(Duration::from_millis(1000)).await;
-                }
-            }
-
-            // Signal shutdown complete when exiting the loop.
-            launcher.mark_shutdown();
-        });
+    /// Request reconfiguration.
+    pub(crate) fn reconfigure(&self) {
+        let _ = self.events.send(LauncherEvent::Reconfigure);
     }
 
-    pub(crate) fn shutdown(&self) {
-        self.shutdown_requested.store(true, Ordering::Release);
-        self.online.store(false, Ordering::Relaxed);
-        self.ready.send_modify(|v| *v = false);
-        self.shutdown_complete.send_modify(|v| *v = false);
-        self.restart_trigger.send_modify(|v| *v = v.wrapping_add(1));
-    }
-
+    /// Shutdown and wait for completion.
     pub(crate) async fn shutdown_wait(&self) {
-        self.shutdown();
-        self.wait_shutdown().await;
-    }
-
-    /// Trigger blue/green deployment.
-    pub(crate) fn launch_blue_green(&self, failover: bool) {
-        let fdw = config().config.fdw;
-        let port = self.port.load(Ordering::Relaxed);
-
-        let port = if failover {
-            if port == fdw.blue_port {
-                fdw.green_port
-            } else {
-                fdw.blue_port
-            }
-        } else {
-            port
-        };
-
-        warn!("[fdw] relaunching fdw backend on 0.0.0.0:{}", port);
-
-        self.port.store(port, Ordering::Relaxed);
-        // Use send_modify to ensure value is updated even without receivers.
-        self.ready.send_modify(|v| *v = false);
-        self.shutdown_complete.send_modify(|v| *v = false);
-        self.online.store(true, Ordering::Relaxed);
-        self.restart_trigger.send_modify(|v| *v = v.wrapping_add(1));
+        // Subscribe before sending to avoid race condition.
+        let receiver = self.events.subscribe();
+        let _ = self.events.send(LauncherEvent::Shutdown);
+        Self::wait_for(receiver, LauncherEvent::ShutdownComplete).await;
     }
 
     /// Wait for Postgres to be ready.
     pub(crate) async fn wait_ready(&self) {
-        let mut receiver = self.ready.subscribe();
-
-        // Check current state first.
-        if *receiver.borrow() {
+        // Subscribe first to avoid race with Ready event.
+        let receiver = self.events.subscribe();
+        if self.ready.load(Ordering::Acquire) {
             return;
         }
+        Self::wait_for(receiver, LauncherEvent::Ready).await;
+    }
 
-        // Wait for ready to become true.
-        while receiver.changed().await.is_ok() {
-            if *receiver.borrow() {
-                return;
+    async fn wait_for(mut receiver: broadcast::Receiver<LauncherEvent>, target: LauncherEvent) {
+        loop {
+            match receiver.recv().await {
+                Ok(event) if event == target => return,
+                Ok(_) => continue,
+                Err(broadcast::error::RecvError::Closed) => return,
+                Err(broadcast::error::RecvError::Lagged(_)) => continue,
             }
         }
     }
 
-    fn mark_ready(&self) {
-        self.ready.send_modify(|v| *v = true);
+    fn send(&self, event: LauncherEvent) {
+        match &event {
+            LauncherEvent::Ready => self.ready.store(true, Ordering::Release),
+            LauncherEvent::Start | LauncherEvent::Shutdown => {
+                self.ready.store(false, Ordering::Release)
+            }
+            _ => {}
+        }
+        let _ = self.events.send(event);
     }
 
-    async fn run(&self, restart_receiver: &mut watch::Receiver<u64>) -> Result<(), Error> {
+    fn spawn(&self, receiver: broadcast::Receiver<LauncherEvent>) {
+        let launcher = self.clone();
+
+        spawn(async move {
+            let mut receiver = receiver;
+
+            loop {
+                // Wait for Start or Shutdown.
+                match receiver.recv().await {
+                    Ok(LauncherEvent::Start) => {}
+                    Ok(LauncherEvent::Shutdown) => {
+                        launcher.send(LauncherEvent::Ready);
+                        launcher.send(LauncherEvent::ShutdownComplete);
+                        return;
+                    }
+                    Ok(_) => continue,
+                    Err(broadcast::error::RecvError::Closed) => return,
+                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                }
+
+                info!("[fdw] launching fdw backend on 0.0.0.0:{}", launcher.port());
+
+                match launcher.run(&mut receiver).await {
+                    Ok(()) => return, // Clean shutdown
+                    Err(err) => {
+                        error!("[fdw] launcher error: {}", err);
+                        sleep(Duration::from_millis(1000)).await;
+                    }
+                }
+            }
+        });
+    }
+
+    async fn run(&self, receiver: &mut broadcast::Receiver<LauncherEvent>) -> Result<(), Error> {
         let port = self.port();
         let mut process = PostgresProcess::new(None, port).await?;
         let mut shutdown_receiver = process.shutdown_receiver();
 
-        // Use a closure to ensure process is stopped on any exit path.
-        let result = async {
-            process.launch().await?;
-            process.wait_ready().await;
+        process.launch().await?;
+        process.wait_ready().await;
 
-            for cluster in databases().all().values() {
-                if cluster.shards().len() > 1 {
-                    process.configure(cluster).await?;
-                }
+        for cluster in databases().all().values() {
+            if cluster.shards().len() > 1 {
+                process.configure(cluster).await?;
             }
+        }
 
-            self.mark_ready();
+        self.send(LauncherEvent::Ready);
 
+        loop {
             select! {
-                _ = restart_receiver.changed() => {
-                    let online = self.online.load(Ordering::Relaxed);
-                    if online {
-                        process.request_stop();
-                    } else {
-                        process.stop_wait().await;
+                event = receiver.recv() => {
+                    match event {
+                        Ok(LauncherEvent::Shutdown) => {
+                            process.stop_wait().await;
+                            self.send(LauncherEvent::ShutdownComplete);
+                            return Ok(());
+                        }
+
+                        Ok(LauncherEvent::Reconfigure) => {
+                            for cluster in databases().all().values() {
+                                if cluster.shards().len() > 1 {
+                                    if let Err(err) = process.configure(cluster).await {
+                                        error!("[fdw] reconfigure error: {}", err);
+                                    }
+                                }
+                            }
+                        }
+
+                        Ok(_) => continue,
+                        Err(broadcast::error::RecvError::Closed) => {
+                            process.stop_wait().await;
+                            return Ok(());
+                        }
+                        Err(broadcast::error::RecvError::Lagged(_)) => continue,
                     }
                 }
 
                 _ = shutdown_receiver.changed() => {
-                    // Process exited (possibly unexpectedly).
-                    // Clear pid to prevent dirty shutdown warning since process already exited.
                     process.clear_pid();
+                    self.send(LauncherEvent::ShutdownComplete);
+                    return Err(Error::ProcessExited);
                 }
-            }
-
-            Ok::<(), Error>(())
-        }
-        .await;
-
-        // Ensure process is stopped if we're exiting due to an error.
-        if result.is_err() {
-            process.stop_wait().await;
-        }
-
-        self.mark_shutdown();
-
-        result
-    }
-
-    fn mark_shutdown(&self) {
-        self.shutdown_complete.send_modify(|v| *v = true);
-    }
-
-    async fn wait_shutdown(&self) {
-        let mut receiver = self.shutdown_complete.subscribe();
-
-        // Check current state first.
-        if *receiver.borrow() {
-            return;
-        }
-
-        // Wait for shutdown_complete to become true.
-        while receiver.changed().await.is_ok() {
-            if *receiver.borrow() {
-                return;
             }
         }
     }
@@ -281,43 +220,41 @@ mod test {
     use super::*;
     use crate::backend::{pool::Address, ConnectReason, Server, ServerOptions};
     use crate::config::config;
+    use tokio::time::timeout;
+
+    fn test_launcher() -> PostgresLauncher {
+        let (events, _) = broadcast::channel(16);
+        let launcher = PostgresLauncher {
+            inner: Arc::new(Inner {
+                events,
+                ready: AtomicBool::new(false),
+            }),
+        };
+        let receiver = launcher.events.subscribe();
+        launcher.spawn(receiver);
+        launcher
+    }
 
     #[tokio::test]
-    async fn test_postgres_blue_green() {
-        use tokio::time::timeout;
-
+    async fn test_postgres_launcher() {
         crate::logger();
         let fdw = config().config.fdw;
 
-        let mut address = Address {
+        let address = Address {
             host: "127.0.0.1".into(),
-            port: fdw.blue_port,
+            port: fdw.port,
             user: "postgres".into(),
             database_name: "postgres".into(),
             ..Default::default()
         };
 
         let launcher = PostgresLauncher::get();
-        launcher.launch_blue_green(false);
+        launcher.launch();
 
         timeout(Duration::from_secs(10), launcher.wait_ready())
             .await
-            .expect("timeout waiting for first ready");
+            .expect("timeout waiting for ready");
 
-        let mut conn =
-            Server::connect(&address, ServerOptions::default(), ConnectReason::default())
-                .await
-                .unwrap();
-        conn.execute("SELECT 1").await.unwrap();
-        drop(conn);
-
-        launcher.launch_blue_green(true);
-
-        timeout(Duration::from_secs(10), launcher.wait_ready())
-            .await
-            .expect("timeout waiting for second ready");
-
-        address.port = fdw.green_port;
         let mut conn =
             Server::connect(&address, ServerOptions::default(), ConnectReason::default())
                 .await
@@ -331,34 +268,77 @@ mod test {
 
     #[tokio::test]
     async fn test_shutdown_without_start() {
-        use tokio::time::timeout;
+        let launcher = test_launcher();
 
-        // Test that shutdown_wait() works even if FDW was never started.
-        // This creates a new launcher directly (not the singleton) to avoid
-        // interference from other tests.
-        let (restart_trigger, _) = watch::channel(0u64);
-        let (ready, _) = watch::channel(false);
-        let (shutdown_complete, _) = watch::channel(false);
-
-        let launcher = PostgresLauncher {
-            inner: Arc::new(Inner {
-                restart_trigger,
-                online: AtomicBool::new(false),
-                shutdown_requested: AtomicBool::new(false),
-                port: AtomicU16::new(6433),
-                ready,
-                shutdown_complete,
-            }),
-        };
-
-        launcher.spawn();
-
-        // Give spawn task time to start waiting
+        // Give spawn task time to start waiting.
         sleep(Duration::from_millis(10)).await;
 
-        // Shutdown without ever starting - should not hang
+        // Shutdown without ever starting - should not hang.
         timeout(Duration::from_secs(5), launcher.shutdown_wait())
             .await
             .expect("shutdown_wait() hung when FDW was never started");
+    }
+
+    #[tokio::test]
+    async fn test_wait_ready_no_race() {
+        // Test that wait_ready doesn't miss Ready event due to race condition.
+        // Run multiple iterations to increase chance of hitting race window.
+        for _ in 0..100 {
+            let launcher = test_launcher();
+
+            // Spawn task that sends Ready immediately.
+            let launcher_clone = launcher.clone();
+            spawn(async move {
+                launcher_clone.send(LauncherEvent::Ready);
+            });
+
+            // wait_ready should not hang even if Ready is sent
+            // between subscribe and wait.
+            timeout(Duration::from_millis(100), launcher.wait_ready())
+                .await
+                .expect("wait_ready() missed Ready event - race condition");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_shutdown_wait_no_race() {
+        // Test that shutdown_wait doesn't miss ShutdownComplete due to race.
+        for _ in 0..100 {
+            let launcher = test_launcher();
+
+            // Give spawn task time to start.
+            sleep(Duration::from_millis(1)).await;
+
+            // shutdown_wait sends Shutdown and waits for ShutdownComplete.
+            // The spawn loop should receive Shutdown and send ShutdownComplete.
+            // This should not hang even with tight timing.
+            timeout(Duration::from_millis(100), launcher.shutdown_wait())
+                .await
+                .expect("shutdown_wait() missed ShutdownComplete - race condition");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_concurrent_wait_ready() {
+        // Multiple tasks waiting for Ready concurrently.
+        let launcher = test_launcher();
+
+        let mut handles = vec![];
+        for _ in 0..10 {
+            let l = launcher.clone();
+            handles.push(spawn(async move {
+                timeout(Duration::from_millis(100), l.wait_ready())
+                    .await
+                    .expect("concurrent wait_ready timed out");
+            }));
+        }
+
+        // Small delay then send Ready.
+        sleep(Duration::from_millis(5)).await;
+        launcher.send(LauncherEvent::Ready);
+
+        for handle in handles {
+            handle.await.unwrap();
+        }
     }
 }

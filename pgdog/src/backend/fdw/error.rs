@@ -30,4 +30,7 @@ pub enum Error {
 
     #[error("error parsing postgres version")]
     PostgresVersion(#[from] ParseFloatError),
+
+    #[error("postgres process exited unexpectedly")]
+    ProcessExited,
 }

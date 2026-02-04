@@ -16,3 +16,6 @@ database_name = "shard_1_fdw"
 [[sharded_tables]]
 column = "user_id"
 database = "pgdog"
+
+[admin]
+password = "pgdog"

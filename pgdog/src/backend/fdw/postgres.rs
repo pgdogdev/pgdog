@@ -28,7 +28,7 @@ use tracing::{error, info, warn};
 
 use crate::backend::{
     pool::{Address, Config, PoolConfig, Request},
-    schema::postgres_fdw::{quote_identifier, ForeignTableSchema},
+    schema::postgres_fdw::{quote_identifier, FdwServerDef, ForeignTableSchema},
     Cluster, ConnectReason, Server, ServerOptions,
 };
 
@@ -49,7 +49,7 @@ struct PostgresProcessAsync {
 impl PostgresProcessAsync {
     /// Stop Postgres and cleanup.
     async fn stop(&mut self) -> Result<(), Error> {
-        warn!(
+        info!(
             "[fdw] stopping PostgreSQL {} running on 0.0.0.0:{}",
             self.version, self.port
         );
@@ -67,16 +67,6 @@ impl PostgresProcessAsync {
         self.child.wait().await?;
 
         // Delete data dir, its ephemeral.
-        remove_dir_all(&self.initdb_dir).await?;
-
-        Ok(())
-    }
-
-    /// Force stop immediately.
-    #[allow(dead_code)]
-    async fn force_stop(&mut self) -> Result<(), Error> {
-        self.child.kill().await?;
-        self.child.wait().await?;
         remove_dir_all(&self.initdb_dir).await?;
 
         Ok(())
@@ -99,10 +89,11 @@ pub(crate) struct PostgresProcess {
     shutdown: watch::Sender<bool>,
     shutdown_complete: watch::Sender<bool>,
     port: u16,
-    databases: HashSet<String>,
-    users: HashSet<String>,
     pid: Option<i32>,
     version: f32,
+    /// Tracks which cluster databases have been fully configured.
+    /// Subsequent clusters with the same database only get user mappings.
+    configured_databases: HashSet<String>,
 }
 
 impl PostgresProcess {
@@ -125,10 +116,9 @@ impl PostgresProcess {
             shutdown,
             shutdown_complete,
             port,
-            databases: HashSet::new(),
-            users: HashSet::new(),
             pid: None,
             version: bins.version,
+            configured_databases: HashSet::new(),
         })
     }
 
@@ -305,7 +295,7 @@ impl PostgresProcess {
             .collect())
     }
 
-    async fn setup_databases(&mut self, cluster: &Cluster) -> Result<bool, Error> {
+    async fn setup_databases(&mut self, cluster: &Cluster) -> Result<(), Error> {
         let hosts: Vec<_> = cluster
             .shards()
             .iter()
@@ -325,40 +315,54 @@ impl PostgresProcess {
         }
 
         let mut admin_connection = self.admin_connection().await?;
-        let mut created = false;
 
         for backend in Self::pools_to_fdw_backends(cluster, 0)? {
-            if !self.databases.contains(&backend.database_name) {
+            let exists: Vec<String> = admin_connection
+                .fetch_all(&format!(
+                    "SELECT datname FROM pg_database WHERE datname = '{}'",
+                    backend.database_name.replace('\'', "''")
+                ))
+                .await?;
+
+            if exists.is_empty() {
                 admin_connection
                     .execute(format!(
-                        r#"CREATE DATABASE {}"#,
+                        "CREATE DATABASE {}",
                         quote_identifier(&backend.database_name)
                     ))
                     .await?;
-                created = true;
             }
         }
 
         let user = cluster.identifier().user.clone();
 
-        if !self.users.contains(&user) {
+        let user_exists: Vec<String> = admin_connection
+            .fetch_all(&format!(
+                "SELECT rolname FROM pg_roles WHERE rolname = '{}'",
+                user.replace('\'', "''")
+            ))
+            .await?;
+
+        if user_exists.is_empty() {
             admin_connection
                 .execute(format!(
                     "CREATE USER {} SUPERUSER LOGIN",
-                    quote_identifier(&cluster.identifier().user)
+                    quote_identifier(&user)
                 ))
                 .await?;
-            self.users.insert(user);
         }
 
-        Ok(created)
+        Ok(())
     }
 
     /// Create the same load-balancing and sharding setup we have in pgdog.toml
-    /// for this cluster.
+    /// for this cluster. This function is idempotent.
     pub(crate) async fn configure(&mut self, cluster: &Cluster) -> Result<(), Error> {
-        let new_database = self.setup_databases(cluster).await?;
+        self.setup_databases(cluster).await?;
         let now = Instant::now();
+
+        let cluster_db = cluster.identifier().database.clone();
+        let first_setup = !self.configured_databases.contains(&cluster_db);
 
         info!(
             "[fdw] setting up database={} user={}",
@@ -368,13 +372,15 @@ impl PostgresProcess {
 
         let sharding_schema = cluster.sharding_schema();
 
-        let schema = {
+        let schema = if first_setup {
             // TODO: Double check schemas are identical on all shards.
             let shard = random_range(0..sharding_schema.shards);
             let mut server = cluster
                 .primary_or_replica(shard, &Request::default())
                 .await?;
-            ForeignTableSchema::load(&mut server).await?
+            Some(ForeignTableSchema::load(&mut server).await?)
+        } else {
+            None
         };
 
         // Setup persistent connections.
@@ -390,63 +396,59 @@ impl PostgresProcess {
             let identifier = (cluster.identifier().user.clone(), database.clone());
             let mut connection = self.connection(&identifier.0, database).await?;
 
-            if new_database {
+            if first_setup {
+                // Create extension in a dedicated schema that won't be dropped.
+                // This prevents DROP SCHEMA public CASCADE from removing postgres_fdw and its servers.
                 connection
-                    .execute("CREATE EXTENSION IF NOT EXISTS postgres_fdw")
+                    .execute("CREATE SCHEMA IF NOT EXISTS pgdog_internal")
+                    .await?;
+                connection
+                    .execute("CREATE EXTENSION IF NOT EXISTS postgres_fdw SCHEMA pgdog_internal")
                     .await?;
             }
 
             connections.insert(identifier, connection);
         }
 
-        for (number, _) in cluster.shards().iter().enumerate() {
-            for backend in Self::pools_to_fdw_backends(cluster, number)? {
-                let identifier = (
-                    cluster.identifier().user.clone(),
-                    backend.database_name.clone(),
-                );
-                let connection = connections
-                    .get_mut(&identifier)
-                    .expect("connection is gone");
+        // Build server definitions for each database and run setup
+        let num_pools = Self::pools_to_fdw_backends(cluster, 0)?.len();
+        for pool_position in 0..num_pools {
+            let database = format!("{}_{}", cluster.identifier().database, pool_position);
+            let identifier = (cluster.identifier().user.clone(), database);
+            let mut connection = connections
+                .get_mut(&identifier)
+                .expect("connection is gone");
 
-                if new_database {
-                    connection
-                        .execute(format!(
-                            r#"CREATE SERVER IF NOT EXISTS "shard_{}"
-                                FOREIGN DATA WRAPPER postgres_fdw
-                                OPTIONS (host '{}', port '{}', dbname '{}')"#,
-                            number,
-                            backend.address.host,
-                            backend.address.port,
-                            backend.address.database_name,
-                        ))
-                        .await?;
+            // Collect server definitions for all shards using this pool position
+            let mut server_defs = Vec::new();
+            for (shard_num, _) in cluster.shards().iter().enumerate() {
+                let backends = Self::pools_to_fdw_backends(cluster, shard_num)?;
+                if let Some(backend) = backends.get(pool_position) {
+                    server_defs.push(FdwServerDef {
+                        shard_num,
+                        host: backend.address.host.clone(),
+                        port: backend.address.port,
+                        database_name: backend.address.database_name.clone(),
+                        user: backend.address.user.clone(),
+                        password: backend.address.password.clone(),
+                        mapping_user: cluster.identifier().user.clone(),
+                    });
                 }
+            }
 
-                connection
-                    .execute(format!(
-                        r#"
-                            CREATE USER MAPPING IF NOT EXISTS
-                            FOR {}
-                            SERVER "shard_{}"
-                            OPTIONS (user '{}', password '{}')"#,
-                        quote_identifier(&identifier.0),
-                        number,
-                        backend.address.user,
-                        backend.address.password
-                    ))
+            if first_setup {
+                schema
+                    .as_ref()
+                    .unwrap()
+                    .setup(&mut connection, &sharding_schema, &server_defs)
                     .await?;
+            } else {
+                ForeignTableSchema::setup_user_mappings(&mut connection, &server_defs).await?;
             }
         }
 
-        if new_database {
-            for database in &databases {
-                let identifier = (cluster.identifier().user.clone(), database.clone());
-                let mut connection = connections
-                    .get_mut(&identifier)
-                    .expect("connection is gone");
-                schema.setup(&mut connection, &sharding_schema).await?;
-            }
+        if first_setup {
+            self.configured_databases.insert(cluster_db);
         }
 
         let elapsed = now.elapsed();
@@ -516,11 +518,6 @@ impl PostgresProcess {
                 break;
             }
         }
-        self.pid.take();
-    }
-
-    pub(crate) fn request_stop(&mut self) {
-        self.shutdown.send_modify(|v| *v = true);
         self.pid.take();
     }
 
