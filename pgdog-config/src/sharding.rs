@@ -379,6 +379,44 @@ impl Display for CopyFormat {
     }
 }
 
+#[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Eq, Hash, Default)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub enum CrossShardBackend {
+    #[default]
+    PgDog,
+    Fdw,
+    Hybrid,
+}
+
+impl CrossShardBackend {
+    pub fn need_fdw(&self) -> bool {
+        matches!(self, Self::Fdw | Self::Hybrid)
+    }
+}
+
+impl Display for CrossShardBackend {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::PgDog => write!(f, "pgdog"),
+            Self::Fdw => write!(f, "fdw"),
+            Self::Hybrid => write!(f, "hybrid"),
+        }
+    }
+}
+
+impl FromStr for CrossShardBackend {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "pgdog" => Ok(Self::PgDog),
+            "fdw" => Ok(Self::Fdw),
+            "hybrid" => Ok(Self::Hybrid),
+            _ => Err(()),
+        }
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;

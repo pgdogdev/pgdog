@@ -91,7 +91,7 @@ pub fn init() -> Result<(), Error> {
     let config = config();
 
     // Start postgres_fdw compatibility engine.
-    if config.config.fdw.enabled {
+    if config.config.general.cross_shard_backend.need_fdw() {
         PostgresLauncher::get().launch();
     }
 

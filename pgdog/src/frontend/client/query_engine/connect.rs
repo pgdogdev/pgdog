@@ -30,7 +30,9 @@ impl QueryEngine {
         }
 
         let connect_route = connect_route.unwrap_or(context.client_request.route());
-        let connect_route = if context.params.is_postgres_fdw() {
+        let connect_route = if (context.params.is_postgres_fdw() || connect_route.is_cross_shard())
+            && self.backend.cluster()?.cross_shard_backend().need_fdw()
+        {
             lazy_static! {
                 static ref FDW_ROUTE: Route = Route::fdw_fallback();
             }

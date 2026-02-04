@@ -1,7 +1,10 @@
 //! A collection of replicas and a primary.
 
 use parking_lot::Mutex;
-use pgdog_config::{PreparedStatements, QueryParserEngine, QueryParserLevel, Rewrite, RewriteMode};
+use pgdog_config::{
+    CrossShardBackend, PreparedStatements, QueryParserEngine, QueryParserLevel, Rewrite,
+    RewriteMode,
+};
 use std::{
     sync::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -77,6 +80,7 @@ pub struct Cluster {
     lb_strategy: LoadBalancingStrategy,
     rw_split: ReadWriteSplit,
     fdw_lb: Option<FdwLoadBalancer>,
+    cross_shard_backend: CrossShardBackend,
 }
 
 /// Sharding configuration from the cluster.
@@ -150,6 +154,7 @@ pub struct ClusterConfig<'a> {
     pub connection_recovery: ConnectionRecovery,
     pub lsn_check_interval: Duration,
     pub reload_schema_on_ddl: bool,
+    pub cross_shard_backend: CrossShardBackend,
 }
 
 impl<'a> ClusterConfig<'a> {
@@ -198,6 +203,7 @@ impl<'a> ClusterConfig<'a> {
             connection_recovery: general.connection_recovery,
             lsn_check_interval: Duration::from_millis(general.lsn_check_interval),
             reload_schema_on_ddl: general.reload_schema_on_ddl,
+            cross_shard_backend: general.cross_shard_backend,
         }
     }
 }
@@ -232,6 +238,7 @@ impl Cluster {
             lsn_check_interval,
             query_parser_engine,
             reload_schema_on_ddl,
+            cross_shard_backend,
         } = config;
 
         let identifier = Arc::new(DatabaseUser {
@@ -281,9 +288,12 @@ impl Cluster {
             lb_strategy,
             rw_split,
             fdw_lb: None,
+            cross_shard_backend,
         };
 
-        cluster.fdw_lb = FdwLoadBalancer::new(&cluster).ok();
+        if cross_shard_backend.need_fdw() {
+            cluster.fdw_lb = FdwLoadBalancer::new(&cluster).ok();
+        }
 
         cluster
     }
@@ -463,6 +473,10 @@ impl Cluster {
         }
 
         true
+    }
+
+    pub fn cross_shard_backend(&self) -> CrossShardBackend {
+        self.cross_shard_backend
     }
 
     /// This database/user pair is responsible for schema management.

@@ -3,9 +3,6 @@ use serde::{Deserialize, Serialize};
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Copy)]
 #[serde(deny_unknown_fields)]
 pub struct Fdw {
-    #[serde(default)]
-    pub enabled: bool,
-
     #[serde(default = "default_port")]
     pub port: u16,
 
@@ -16,7 +13,6 @@ pub struct Fdw {
 impl Default for Fdw {
     fn default() -> Self {
         Self {
-            enabled: bool::default(),
             port: default_port(),
             launch_timeout: default_launch_timeout(),
         }
