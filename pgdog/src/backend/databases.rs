@@ -83,6 +83,12 @@ pub fn reload_from_existing() -> Result<(), Error> {
     let databases = from_config(&config);
 
     replace_databases(databases, true)?;
+
+    // Reconfigure FDW with new schema.
+    if config.config.general.cross_shard_backend.need_fdw() {
+        PostgresLauncher::get().reconfigure();
+    }
+
     Ok(())
 }
 
@@ -122,7 +128,24 @@ pub fn reload() -> Result<(), Error> {
     tls::reload()?;
 
     // Reconfigure FDW with new schema.
-    PostgresLauncher::get().reconfigure();
+    match (
+        old_config.config.general.cross_shard_backend.need_fdw(),
+        new_config.config.general.cross_shard_backend.need_fdw(),
+    ) {
+        (true, true) => {
+            PostgresLauncher::get().reconfigure();
+        }
+
+        (false, true) => {
+            PostgresLauncher::get().launch();
+        }
+
+        (true, false) => {
+            PostgresLauncher::get().shutdown();
+        }
+
+        (false, false) => {}
+    }
 
     // Remove any unused prepared statements.
     PreparedStatements::global()

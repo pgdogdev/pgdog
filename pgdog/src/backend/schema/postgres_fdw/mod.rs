@@ -10,6 +10,9 @@ pub use custom_types::{CustomType, CustomTypeKind, CustomTypes, CUSTOM_TYPES_QUE
 pub use error::Error;
 pub use extensions::{Extension, Extensions, EXTENSIONS_QUERY};
 pub use schema::{FdwServerDef, ForeignTableColumn, ForeignTableSchema, FOREIGN_TABLE_SCHEMA};
-pub use statement::{create_foreign_table, ForeignTableBuilder, PartitionStrategy};
+pub use statement::{
+    create_foreign_table, CreateForeignTableResult, ForeignTableBuilder, PartitionStrategy,
+    TypeMismatch,
+};
 
 pub(crate) use statement::quote_identifier;

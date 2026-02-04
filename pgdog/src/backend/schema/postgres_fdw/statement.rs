@@ -5,11 +5,41 @@ use std::fmt::Write;
 use rand::Rng;
 
 use crate::backend::pool::ShardingSchema;
-use crate::config::{FlexibleType, ShardedTable};
+use crate::config::{DataType, FlexibleType, ShardedTable};
 use crate::frontend::router::parser::Column;
 use crate::frontend::router::sharding::Mapping;
 
 use super::{Error, ForeignTableColumn};
+
+/// A type mismatch between a table column and the configured sharding data type.
+#[derive(Debug, Clone)]
+pub struct TypeMismatch {
+    pub schema_name: String,
+    pub table_name: String,
+    pub column_name: String,
+    pub column_type: String,
+    pub configured_type: DataType,
+}
+
+impl std::fmt::Display for TypeMismatch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}.{}.{}: column type '{}' does not match configured data_type '{:?}'",
+            self.schema_name,
+            self.table_name,
+            self.column_name,
+            self.column_type,
+            self.configured_type
+        )
+    }
+}
+
+/// Result of creating foreign table statements.
+pub struct CreateForeignTableResult {
+    pub statements: Vec<String>,
+    pub type_mismatches: Vec<TypeMismatch>,
+}
 
 /// Format a FlexibleType as a SQL literal.
 fn flexible_type_to_sql(value: &FlexibleType) -> String {
@@ -17,6 +47,31 @@ fn flexible_type_to_sql(value: &FlexibleType) -> String {
         FlexibleType::Integer(i) => i.to_string(),
         FlexibleType::Uuid(u) => format!("'{}'", u),
         FlexibleType::String(s) => format!("'{}'", s.replace('\'', "''")),
+    }
+}
+
+/// Check if a PostgreSQL column type string matches the configured DataType.
+fn column_type_matches_data_type(column_type: &str, data_type: DataType) -> bool {
+    let col_lower = column_type.to_lowercase();
+    match data_type {
+        DataType::Bigint => {
+            col_lower.starts_with("bigint")
+                || col_lower.starts_with("int8")
+                || col_lower.starts_with("bigserial")
+                || col_lower.starts_with("serial8")
+                || col_lower.starts_with("integer")
+                || col_lower.starts_with("int4")
+                || col_lower.starts_with("int")
+                || col_lower.starts_with("smallint")
+                || col_lower.starts_with("int2")
+        }
+        DataType::Uuid => col_lower.starts_with("uuid"),
+        DataType::Varchar => {
+            col_lower.starts_with("character varying")
+                || col_lower.starts_with("varchar")
+                || col_lower.starts_with("text")
+        }
+        DataType::Vector => col_lower.starts_with("vector"),
     }
 }
 
@@ -78,6 +133,7 @@ fn qualified_table(schema: &str, table: &str) -> String {
 pub struct ForeignTableBuilder<'a> {
     columns: &'a [ForeignTableColumn],
     sharding_schema: &'a ShardingSchema,
+    type_mismatches: Vec<TypeMismatch>,
 }
 
 impl<'a> ForeignTableBuilder<'a> {
@@ -86,11 +142,13 @@ impl<'a> ForeignTableBuilder<'a> {
         Self {
             columns,
             sharding_schema,
+            type_mismatches: Vec::new(),
         }
     }
 
     /// Find the sharding configuration for this table, if any.
-    fn find_sharded_config(&self) -> Option<&ShardedTable> {
+    /// Records any type mismatches encountered and returns a cloned config.
+    fn find_sharded_config(&mut self) -> Option<ShardedTable> {
         let first = self.columns.first()?;
         let table_name = &first.table_name;
         let schema_name = &first.schema_name;
@@ -103,7 +161,18 @@ impl<'a> ForeignTableBuilder<'a> {
             };
 
             if let Some(sharded) = self.sharding_schema.tables().get_table(column) {
-                return Some(sharded);
+                if !column_type_matches_data_type(&col.column_type, sharded.data_type) {
+                    let mismatch = TypeMismatch {
+                        schema_name: schema_name.clone(),
+                        table_name: table_name.clone(),
+                        column_name: col.column_name.clone(),
+                        column_type: col.column_type.clone(),
+                        configured_type: sharded.data_type,
+                    };
+                    self.type_mismatches.push(mismatch);
+                    continue;
+                }
+                return Some(sharded.clone());
             }
         }
 
@@ -151,16 +220,24 @@ impl<'a> ForeignTableBuilder<'a> {
     }
 
     /// Build the CREATE TABLE / CREATE FOREIGN TABLE statement(s).
-    pub fn build(self) -> Result<Vec<String>, Error> {
+    pub fn build(mut self) -> Result<CreateForeignTableResult, Error> {
         let first = self.columns.first().ok_or(Error::NoColumns)?;
-        let schema_name = &first.schema_name;
-        let table_name = &first.table_name;
+        let schema_name = &first.schema_name.clone();
+        let table_name = &first.table_name.clone();
 
-        if let Some(sharded) = self.find_sharded_config() {
-            self.build_sharded(table_name, schema_name, sharded)
+        let statements = if let Some(sharded) = self.find_sharded_config() {
+            self.build_sharded(table_name, schema_name, &sharded)?
+        } else if !self.type_mismatches.is_empty() {
+            // Skip tables with type mismatches entirely
+            vec![]
         } else {
-            self.build_foreign_table(table_name, schema_name)
-        }
+            self.build_foreign_table(table_name, schema_name)?
+        };
+
+        Ok(CreateForeignTableResult {
+            statements,
+            type_mismatches: self.type_mismatches,
+        })
     }
 
     /// Build a simple foreign table (non-sharded).
@@ -328,11 +405,11 @@ impl<'a> ForeignTableBuilder<'a> {
 /// configuration, creates a partitioned parent table with foreign table partitions
 /// for each shard. Server names are generated as `shard_{n}`.
 ///
-/// Returns a list of SQL statements to execute in order.
+/// Returns statements and any type mismatches encountered.
 pub fn create_foreign_table(
     columns: &[ForeignTableColumn],
     sharding_schema: &ShardingSchema,
-) -> Result<Vec<String>, Error> {
+) -> Result<CreateForeignTableResult, Error> {
     ForeignTableBuilder::new(columns, sharding_schema).build()
 }
 

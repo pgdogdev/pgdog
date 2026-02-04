@@ -1,7 +1,7 @@
 //! Foreign table schema query and data structures.
 
 use std::collections::{HashMap, HashSet};
-use tracing::debug;
+use tracing::{debug, warn};
 
 use crate::{
     backend::{schema::postgres_fdw::create_foreign_table, Server, ShardingSchema},
@@ -11,6 +11,7 @@ use crate::{
 use super::custom_types::CustomTypes;
 use super::extensions::Extensions;
 use super::quote_identifier;
+use super::TypeMismatch;
 
 /// Server definition for FDW setup.
 #[derive(Debug, Clone)]
@@ -134,15 +135,34 @@ impl ForeignTableSchema {
         self.custom_types.setup(server).await?;
 
         let mut tables = HashSet::new();
+        let mut all_type_mismatches: Vec<TypeMismatch> = Vec::new();
+
         for ((schema, table), columns) in &self.tables {
+            // Skip internal PgDog tables
+            if Self::is_internal_table(schema, table) {
+                continue;
+            }
+
             let dedup = (schema.clone(), table.clone());
             if !tables.contains(&dedup) {
-                let statements = create_foreign_table(columns, sharding_schema)?;
-                for sql in statements {
+                let result = create_foreign_table(columns, sharding_schema)?;
+                for sql in &result.statements {
                     debug!("[fdw::setup] {} [{}]", sql, server.addr());
-                    server.execute(&sql).await?;
+                    server.execute(sql).await?;
                 }
+                all_type_mismatches.extend(result.type_mismatches);
                 tables.insert(dedup);
+            }
+        }
+
+        // Log summary of type mismatches if any were found
+        if !all_type_mismatches.is_empty() {
+            warn!(
+                "[fdw] {} table(s) skipped due to sharding config type mismatches:",
+                all_type_mismatches.len()
+            );
+            for mismatch in &all_type_mismatches {
+                warn!("[fdw]   - {}", mismatch);
             }
         }
 
@@ -180,6 +200,11 @@ impl ForeignTableSchema {
     /// Get the custom types.
     pub fn custom_types(&self) -> &CustomTypes {
         &self.custom_types
+    }
+
+    /// Check if a table is an internal PgDog table that shouldn't be exposed via FDW.
+    fn is_internal_table(schema: &str, table: &str) -> bool {
+        schema == "pgdog" && matches!(table, "validator_bigint" | "validator_uuid" | "config")
     }
 
     /// Collect unique schemas from tables and custom types.

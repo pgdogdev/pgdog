@@ -291,7 +291,7 @@ impl Cluster {
             cross_shard_backend,
         };
 
-        if cross_shard_backend.need_fdw() {
+        if cross_shard_backend.need_fdw() && cluster.shards().len() > 1 {
             cluster.fdw_lb = FdwLoadBalancer::new(&cluster).ok();
         }
 

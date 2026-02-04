@@ -122,8 +122,41 @@ impl PostgresProcess {
         })
     }
 
+    /// Kill any existing process listening on the given port.
+    /// This handles orphaned postgres processes from previous crashes.
+    #[cfg(unix)]
+    async fn kill_existing_on_port(port: u16) {
+        // Use fuser to find and kill any process on the port
+        let result = Command::new("fuser")
+            .arg("-k")
+            .arg(format!("{}/tcp", port))
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .await;
+
+        if let Ok(status) = result {
+            if status.success() {
+                warn!(
+                    "[fdw] killed orphaned process on port {} from previous run",
+                    port
+                );
+                // Give it a moment to fully terminate
+                sleep(Duration::from_millis(100)).await;
+            }
+        }
+    }
+
+    #[cfg(not(unix))]
+    async fn kill_existing_on_port(_port: u16) {
+        // Not implemented for non-unix platforms
+    }
+
     /// Setup and launch Postgres process.
     pub(crate) async fn launch(&mut self) -> Result<(), Error> {
+        // Clean up any orphaned postgres from previous crashes
+        Self::kill_existing_on_port(self.port).await;
+
         info!(
             "[fdw] initializing \"{}\" (PostgreSQL {})",
             self.initdb_dir.display(),
@@ -167,6 +200,22 @@ impl PostgresProcess {
 
         #[cfg(unix)]
         cmd.process_group(0); // Prevent sigint from terminal.
+
+        // SAFETY: prctl(PR_SET_PDEATHSIG) is async-signal-safe and doesn't
+        // access any shared state. It tells the kernel to send SIGKILL to
+        // this process when its parent dies, preventing orphaned processes.
+        #[cfg(target_os = "linux")]
+        {
+            #[allow(unused_imports)]
+            use std::os::unix::process::CommandExt;
+            unsafe {
+                cmd.pre_exec(|| {
+                    const PR_SET_PDEATHSIG: nix::libc::c_int = 1;
+                    nix::libc::prctl(PR_SET_PDEATHSIG, nix::libc::SIGKILL);
+                    Ok(())
+                });
+            }
+        }
 
         let child = cmd.spawn()?;
 
@@ -212,8 +261,22 @@ impl PostgresProcess {
                         }
                     }
 
-                    _ = process.child.wait() => {
-                        error!("[fdw] postgres shut down unexpectedly");
+                    exit_status = process.child.wait() => {
+                        // Drain remaining stderr before reporting shutdown
+                        loop {
+                            let mut remaining = String::new();
+                            match reader.read_line(&mut remaining).await {
+                                Ok(0) => break, // EOF
+                                Ok(_) => {
+                                    if !remaining.is_empty() {
+                                        let remaining = LOG_PREFIX.replace(&remaining, "");
+                                        info!("[fdw::subprocess] {}", remaining.trim());
+                                    }
+                                }
+                                Err(_) => break,
+                            }
+                        }
+                        error!("[fdw] postgres shut down unexpectedly, exit status: {:?}", exit_status);
                         break;
                     }
 

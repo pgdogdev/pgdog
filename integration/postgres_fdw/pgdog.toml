@@ -1,5 +1,6 @@
-[fdw]
-enabled = true
+
+[general]
+cross_shard_backend = "fdw"
 
 [[databases]]
 name = "pgdog"

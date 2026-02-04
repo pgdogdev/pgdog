@@ -91,6 +91,7 @@ pub struct Route {
     search_path_driven: bool,
     schema_changed: bool,
     fdw_fallback: bool,
+    ddl: bool,
 }
 
 impl Display for Route {
@@ -192,6 +193,10 @@ impl Route {
         self.is_all_shards() || self.is_multi_shard()
     }
 
+    pub fn use_fdw(&self) -> bool {
+        self.is_cross_shard() && !self.is_ddl()
+    }
+
     pub fn order_by(&self) -> &[OrderBy] {
         &self.order_by
     }
@@ -224,6 +229,15 @@ impl Route {
     pub fn with_schema_changed(mut self, changed: bool) -> Self {
         self.schema_changed = changed;
         self
+    }
+
+    pub fn with_ddl(mut self, ddl: bool) -> Self {
+        self.ddl = ddl;
+        self
+    }
+
+    pub fn is_ddl(&self) -> bool {
+        self.ddl
     }
 
     pub fn set_search_path_driven_mut(&mut self, schema_driven: bool) {

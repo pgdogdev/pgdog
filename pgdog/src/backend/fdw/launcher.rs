@@ -82,6 +82,10 @@ impl PostgresLauncher {
         let _ = self.events.send(LauncherEvent::Start);
     }
 
+    pub(crate) fn shutdown(&self) {
+        let _ = self.events.send(LauncherEvent::Shutdown);
+    }
+
     /// Request reconfiguration.
     pub(crate) fn reconfigure(&self) {
         let _ = self.events.send(LauncherEvent::Reconfigure);

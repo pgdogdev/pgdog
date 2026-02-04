@@ -27,6 +27,7 @@ WHERE
     AND n.nspname <> 'pg_catalog'
     AND n.nspname !~ '^pg_toast'
     AND n.nspname <> 'information_schema'
+    AND NOT (n.nspname = 'pgdog' AND c.relname IN ('validator_bigint', 'validator_uuid', 'config'))
     AND NOT c.relispartition
 ORDER BY
     n.nspname,
