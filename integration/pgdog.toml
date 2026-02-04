@@ -22,6 +22,7 @@ tls_certificate = "integration/tls/cert.pem"
 tls_private_key = "integration/tls/key.pem"
 query_parser_engine = "pg_query_raw"
 system_catalogs = "omnisharded_sticky"
+reload_schema_on_ddl = false
 
 [memory]
 net_buffer = 8096

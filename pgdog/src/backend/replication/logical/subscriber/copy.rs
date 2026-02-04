@@ -224,7 +224,11 @@ mod test {
             ..Default::default()
         };
 
-        let copy = CopyStatement::new(&table, &["id".into(), "value".into()]);
+        let copy = CopyStatement::new(
+            &table,
+            &["id".into(), "value".into()],
+            pgdog_config::CopyFormat::Binary,
+        );
         let cluster = Cluster::new_test(&config());
         cluster.launch();
 

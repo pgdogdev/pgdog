@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use crate::pooling::ConnectionRecovery;
-use crate::{QueryParserEngine, QueryParserLevel, SystemCatalogsBehavior};
+use crate::{CopyFormat, QueryParserEngine, QueryParserLevel, SystemCatalogsBehavior};
 
 use super::auth::{AuthType, PassthoughAuth};
 use super::database::{LoadBalancingStrategy, ReadWriteSplit, ReadWriteStrategy};
@@ -200,6 +200,12 @@ pub struct General {
     /// Omnisharded queries are sticky by default.
     #[serde(default)]
     pub omnisharded_sticky: bool,
+    /// Copy format used for resharding.
+    #[serde(default)]
+    pub resharding_copy_format: CopyFormat,
+    /// Trigger a schema reload on DDL like CREATE TABLE.
+    #[serde(default = "General::reload_schema_on_ddl")]
+    pub reload_schema_on_ddl: bool,
 }
 
 impl Default for General {
@@ -270,6 +276,8 @@ impl Default for General {
             unique_id_min: u64::default(),
             system_catalogs: Self::default_system_catalogs(),
             omnisharded_sticky: bool::default(),
+            resharding_copy_format: CopyFormat::default(),
+            reload_schema_on_ddl: Self::reload_schema_on_ddl(),
         }
     }
 }
@@ -334,6 +342,10 @@ impl General {
 
     fn healthcheck_interval() -> u64 {
         Self::env_or_default("PGDOG_HEALTHCHECK_INTERVAL", 30_000)
+    }
+
+    fn reload_schema_on_ddl() -> bool {
+        Self::env_bool_or_default("PGDOG_SCHEMA_RELOAD_ON_DDL", true)
     }
 
     fn idle_healthcheck_interval() -> u64 {

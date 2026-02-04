@@ -60,7 +60,7 @@ impl QueryEngine {
             self.stats.transaction(true);
 
             // Disconnect from servers.
-            self.cleanup_backend(context);
+            self.cleanup_backend(context)?;
 
             // Tell client we finished the transaction.
             self.end_not_connected(context, true, extended).await?;
@@ -82,7 +82,7 @@ impl QueryEngine {
             self.stats.transaction(true);
 
             // Disconnect from servers.
-            self.cleanup_backend(context);
+            self.cleanup_backend(context)?;
 
             // Tell client we finished the transaction.
             self.end_not_connected(context, false, extended).await?;
