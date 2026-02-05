@@ -332,7 +332,7 @@ impl Pools {
                 labels: vec![],
                 measurement: general.query_cache_limit.into(),
             }],
-            help: "Maximum number of queries stored in cache".into(),
+            help: "Maximum number of queries that can be stored in the cache".into(),
             unit: None,
             metric_type: None,
         }));
