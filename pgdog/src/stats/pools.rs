@@ -321,7 +321,7 @@ impl Pools {
                 labels: vec![],
                 measurement: general.prepared_statements_limit.into(),
             }],
-            help: "Maximum number of prepared statements that are cached".into(),
+            help: "Maximum number of prepared statements that can be cached".into(),
             unit: None,
             metric_type: None,
         }));
