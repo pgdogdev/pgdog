@@ -5,7 +5,7 @@ use std::collections::HashMap;
 
 static COLUMNS: &str = include_str!("columns.sql");
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Column {
     pub table_catalog: String,
     pub table_schema: String,
