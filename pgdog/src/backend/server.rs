@@ -360,11 +360,11 @@ impl Server {
     pub async fn read(&mut self) -> Result<Message, Error> {
         let message = loop {
             if let Some(message) = self.prepared_statements.state_mut().get_simulated() {
-                return Ok(message.backend());
+                return Ok(message.backend(self.id));
             }
             match self.stream_buffer.read(self.stream.as_mut().unwrap()).await {
                 Ok(message) => {
-                    let message = message.stream(self.streaming).backend();
+                    let message = message.stream(self.streaming).backend(self.id);
                     match self.prepared_statements.forward(&message) {
                         Ok(forward) => {
                             if forward {
@@ -1005,7 +1005,7 @@ pub mod test {
 
     impl Default for Server {
         fn default() -> Self {
-            let id = BackendKeyData::default();
+            let id = BackendKeyData::new();
             let addr = Address::default();
             Self {
                 stream: None,

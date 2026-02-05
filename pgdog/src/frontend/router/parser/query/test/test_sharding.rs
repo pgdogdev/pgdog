@@ -121,3 +121,51 @@ fn test_omni_all_tables_must_be_omnisharded() {
 
     assert!(matches!(command.route().shard(), Shard::All));
 }
+
+#[test]
+fn test_omni_flag_set_for_select() {
+    let mut test = QueryParserTest::new();
+    let q = "SELECT * FROM sharded_omni WHERE id = 1";
+    let command = test.execute(vec![Query::new(q).into()]);
+    assert!(command.route().is_omni());
+}
+
+#[test]
+fn test_omni_flag_set_for_update() {
+    let mut test = QueryParserTest::new();
+    let q = "UPDATE sharded_omni SET value = 'test' WHERE id = 1";
+    let command = test.execute(vec![Query::new(q).into()]);
+    assert!(command.route().is_omni());
+}
+
+#[test]
+fn test_omni_flag_set_for_delete() {
+    let mut test = QueryParserTest::new();
+    let q = "DELETE FROM sharded_omni WHERE id = 1";
+    let command = test.execute(vec![Query::new(q).into()]);
+    assert!(command.route().is_omni());
+}
+
+#[test]
+fn test_omni_flag_set_for_insert() {
+    let mut test = QueryParserTest::new();
+    let q = "INSERT INTO sharded_omni (id, value) VALUES (1, 'test')";
+    let command = test.execute(vec![Query::new(q).into()]);
+    assert!(command.route().is_omni());
+}
+
+#[test]
+fn test_omni_flag_not_set_for_regular_sharded() {
+    let mut test = QueryParserTest::new();
+    let q = "SELECT * FROM sharded WHERE id = 1";
+    let command = test.execute(vec![Query::new(q).into()]);
+    assert!(!command.route().is_omni());
+}
+
+#[test]
+fn test_omni_flag_not_set_when_joined_with_sharded() {
+    let mut test = QueryParserTest::new();
+    let q = "SELECT * FROM sharded_omni INNER JOIN sharded ON sharded_omni.id = sharded.id WHERE sharded.id = 5";
+    let command = test.execute(vec![Query::new(q).into()]);
+    assert!(!command.route().is_omni());
+}

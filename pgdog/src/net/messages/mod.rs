@@ -103,9 +103,19 @@ pub trait Protocol: ToBytes + FromBytes + std::fmt::Debug {
 
 #[derive(Clone, PartialEq, Default, Copy, Debug)]
 pub enum Source {
-    Backend,
+    Backend(BackendKeyData),
     #[default]
     Frontend,
+}
+
+impl Source {
+    pub fn backend_id(&self) -> Option<BackendKeyData> {
+        if let Self::Backend(id) = self {
+            Some(*id)
+        } else {
+            None
+        }
+    }
 }
 
 /// PostgreSQL protocol message.
@@ -128,26 +138,26 @@ impl std::fmt::Debug for Message {
         match self.code() {
             'Q' => Query::from_bytes(self.payload()).unwrap().fmt(f),
             'D' => match self.source {
-                Source::Backend => DataRow::from_bytes(self.payload()).unwrap().fmt(f),
+                Source::Backend(_) => DataRow::from_bytes(self.payload()).unwrap().fmt(f),
                 Source::Frontend => Describe::from_bytes(self.payload()).unwrap().fmt(f),
             },
             'P' => Parse::from_bytes(self.payload()).unwrap().fmt(f),
             'B' => Bind::from_bytes(self.payload()).unwrap().fmt(f),
             'S' => match self.source {
                 Source::Frontend => f.debug_struct("Sync").finish(),
-                Source::Backend => ParameterStatus::from_bytes(self.payload()).unwrap().fmt(f),
+                Source::Backend(_) => ParameterStatus::from_bytes(self.payload()).unwrap().fmt(f),
             },
             '1' => ParseComplete::from_bytes(self.payload()).unwrap().fmt(f),
             '2' => BindComplete::from_bytes(self.payload()).unwrap().fmt(f),
             '3' => f.debug_struct("CloseComplete").finish(),
             'E' => match self.source {
                 Source::Frontend => f.debug_struct("Execute").finish(),
-                Source::Backend => ErrorResponse::from_bytes(self.payload()).unwrap().fmt(f),
+                Source::Backend(_) => ErrorResponse::from_bytes(self.payload()).unwrap().fmt(f),
             },
             'T' => RowDescription::from_bytes(self.payload()).unwrap().fmt(f),
             'Z' => ReadyForQuery::from_bytes(self.payload()).unwrap().fmt(f),
             'C' => match self.source {
-                Source::Backend => CommandComplete::from_bytes(self.payload()).unwrap().fmt(f),
+                Source::Backend(_) => CommandComplete::from_bytes(self.payload()).unwrap().fmt(f),
                 Source::Frontend => Close::from_bytes(self.payload()).unwrap().fmt(f),
             },
             'd' => CopyData::from_bytes(self.payload()).unwrap().fmt(f),
@@ -223,8 +233,8 @@ impl Message {
     }
 
     /// This message is coming from the backend.
-    pub fn backend(mut self) -> Self {
-        self.source = Source::Backend;
+    pub fn backend(mut self, id: BackendKeyData) -> Self {
+        self.source = Source::Backend(id);
         self
     }
 
