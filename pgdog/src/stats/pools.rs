@@ -310,7 +310,7 @@ impl Pools {
         metrics.push(Metric::new(PoolMetric {
             name: "max_connections".into(),
             measurements: max_connections,
-            help: "Maximum number of server connections allowed for a pool".into(),
+            help: "Maximum number of allowed server connections".into(),
             unit: None,
             metric_type: None,
         }));
