@@ -455,9 +455,11 @@ mod test {
         table: &str,
         column: &str,
         mapping: Mapping,
+        data_type: DataType,
     ) -> ShardedTable {
         ShardedTable {
             mapping: Some(mapping),
+            data_type,
             ..test_sharded_table(table, column)
         }
     }
@@ -518,8 +520,8 @@ mod test {
         let schema = sharding_schema_with_tables(ShardedTables::default(), 1);
         let statements = create_foreign_table(&columns, &schema).unwrap();
 
-        assert_eq!(statements.len(), 1);
-        let sql = &statements[0];
+        assert_eq!(statements.statements.len(), 1);
+        let sql = &statements.statements[0];
         assert!(sql.contains(r#"CREATE FOREIGN TABLE "public"."test_table""#));
         assert!(sql.contains("bigint"));
         assert!(sql.contains("NOT NULL"));
@@ -546,19 +548,19 @@ mod test {
 
         let statements = create_foreign_table(&columns, &schema).unwrap();
 
-        assert_eq!(statements.len(), 3); // parent + 2 partitions
-        assert!(statements[0].contains(r#"CREATE TABLE "public"."test_table""#));
-        assert!(statements[0].contains(r#"PARTITION BY HASH ("id")"#));
-        assert!(statements[1].contains(
+        assert_eq!(statements.statements.len(), 3); // parent + 2 partitions
+        assert!(statements.statements[0].contains(r#"CREATE TABLE "public"."test_table""#));
+        assert!(statements.statements[0].contains(r#"PARTITION BY HASH ("id")"#));
+        assert!(statements.statements[1].contains(
             r#"CREATE FOREIGN TABLE "public"."test_table_shard_0" PARTITION OF "public"."test_table""#
         ));
-        assert!(statements[1].contains("FOR VALUES WITH (MODULUS 2, REMAINDER 0)"));
-        assert!(statements[1].contains(r#"SERVER "shard_0""#));
-        assert!(statements[2].contains(
+        assert!(statements.statements[1].contains("FOR VALUES WITH (MODULUS 2, REMAINDER 0)"));
+        assert!(statements.statements[1].contains(r#"SERVER "shard_0""#));
+        assert!(statements.statements[2].contains(
             r#"CREATE FOREIGN TABLE "public"."test_table_shard_1" PARTITION OF "public"."test_table""#
         ));
-        assert!(statements[2].contains("FOR VALUES WITH (MODULUS 2, REMAINDER 1)"));
-        assert!(statements[2].contains(r#"SERVER "shard_1""#));
+        assert!(statements.statements[2].contains("FOR VALUES WITH (MODULUS 2, REMAINDER 1)"));
+        assert!(statements.statements[2].contains(r#"SERVER "shard_1""#));
     }
 
     #[test]
@@ -569,6 +571,7 @@ mod test {
             "test_table",
             "region",
             list_mapping(),
+            DataType::Varchar,
         )]
         .as_slice()
         .into();
@@ -576,8 +579,8 @@ mod test {
 
         let statements = create_foreign_table(&columns, &schema).unwrap();
 
-        assert!(statements[0].contains(r#"CREATE TABLE "public"."test_table""#));
-        assert!(statements[0].contains(r#"PARTITION BY LIST ("region")"#));
+        assert!(statements.statements[0].contains(r#"CREATE TABLE "public"."test_table""#));
+        assert!(statements.statements[0].contains(r#"PARTITION BY LIST ("region")"#));
     }
 
     #[test]
@@ -588,6 +591,7 @@ mod test {
             "test_table",
             "id",
             range_mapping(),
+            DataType::Bigint,
         )]
         .as_slice()
         .into();
@@ -595,8 +599,8 @@ mod test {
 
         let statements = create_foreign_table(&columns, &schema).unwrap();
 
-        assert!(statements[0].contains(r#"CREATE TABLE "public"."test_table""#));
-        assert!(statements[0].contains(r#"PARTITION BY RANGE ("id")"#));
+        assert!(statements.statements[0].contains(r#"CREATE TABLE "public"."test_table""#));
+        assert!(statements.statements[0].contains(r#"PARTITION BY RANGE ("id")"#));
     }
 
     #[test]
@@ -610,9 +614,9 @@ mod test {
 
         let statements = create_foreign_table(&columns, &schema).unwrap();
 
-        assert_eq!(statements.len(), 1);
-        assert!(statements[0].contains(r#"CREATE FOREIGN TABLE "public"."test_table""#));
-        assert!(!statements[0].contains("PARTITION BY"));
+        assert_eq!(statements.statements.len(), 1);
+        assert!(statements.statements[0].contains(r#"CREATE FOREIGN TABLE "public"."test_table""#));
+        assert!(!statements.statements[0].contains("PARTITION BY"));
     }
 
     #[test]
@@ -626,9 +630,9 @@ mod test {
 
         let statements = create_foreign_table(&columns, &schema).unwrap();
 
-        assert_eq!(statements.len(), 1);
-        assert!(statements[0].contains(r#"CREATE FOREIGN TABLE "public"."test_table""#));
-        assert!(!statements[0].contains("PARTITION BY"));
+        assert_eq!(statements.statements.len(), 1);
+        assert!(statements.statements[0].contains(r#"CREATE FOREIGN TABLE "public"."test_table""#));
+        assert!(!statements.statements[0].contains("PARTITION BY"));
     }
 
     #[test]
@@ -642,10 +646,10 @@ mod test {
         let schema = sharding_schema_with_tables(ShardedTables::default(), 1);
         let statements = create_foreign_table(&columns, &schema).unwrap();
 
-        assert!(statements[0].contains(r#"CREATE FOREIGN TABLE "public"."test_table""#));
+        assert!(statements.statements[0].contains(r#"CREATE FOREIGN TABLE "public"."test_table""#));
         // Defaults and generated columns handled by remote table
-        assert!(!statements[0].contains("GENERATED"));
-        assert!(!statements[0].contains("DEFAULT"));
+        assert!(!statements.statements[0].contains("GENERATED"));
+        assert!(!statements.statements[0].contains("DEFAULT"));
     }
 
     #[test]
@@ -659,8 +663,8 @@ mod test {
         let schema = sharding_schema_with_tables(ShardedTables::default(), 1);
         let statements = create_foreign_table(&columns, &schema).unwrap();
 
-        assert!(statements[0].contains(r#"CREATE FOREIGN TABLE "public"."test_table""#));
-        assert!(statements[0].contains(r#"COLLATE "pg_catalog"."en_US""#));
+        assert!(statements.statements[0].contains(r#"CREATE FOREIGN TABLE "public"."test_table""#));
+        assert!(statements.statements[0].contains(r#"COLLATE "pg_catalog"."en_US""#));
     }
 
     #[test]
