@@ -146,6 +146,7 @@ pub enum ShardedMappingKind {
     #[default]
     List,
     Range,
+    Default,
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone, Eq, Hash)]
@@ -230,6 +231,7 @@ impl ShardedSchema {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ListShards {
     mapping: HashMap<FlexibleType, usize>,
+    default: Option<usize>,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
@@ -259,7 +261,12 @@ impl Mapping {
             .filter(|m| m.kind == ShardedMappingKind::Range)
             .cloned()
             .collect::<Vec<_>>();
-        let list = mappings.iter().any(|m| m.kind == ShardedMappingKind::List);
+        let list = mappings.iter().any(|m| {
+            matches!(
+                m.kind,
+                ShardedMappingKind::List | ShardedMappingKind::Default
+            )
+        });
 
         if !range.is_empty() {
             Some(Self::Range(range))
@@ -288,12 +295,20 @@ impl ListShards {
             }
         }
 
-        Self { mapping }
+        Self {
+            mapping,
+            default: mappings
+                .iter()
+                .find(|mapping| mapping.kind == ShardedMappingKind::Default)
+                .map(|mapping| mapping.shard),
+        }
     }
 
     pub fn shard(&self, value: &FlexibleType) -> Result<Option<usize>, Error> {
         if let Some(shard) = self.mapping.get(value) {
             Ok(Some(*shard))
+        } else if let Some(default) = self.default {
+            Ok(Some(default))
         } else {
             Ok(None)
         }
@@ -352,5 +367,60 @@ impl Display for CopyFormat {
             Self::Binary => write!(f, "binary"),
             Self::Text => write!(f, "text"),
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_list_shards_with_default() {
+        let mappings = vec![
+            ShardedMapping {
+                values: [FlexibleType::Integer(1), FlexibleType::Integer(2)]
+                    .into_iter()
+                    .collect(),
+                shard: 0,
+                ..Default::default()
+            },
+            ShardedMapping {
+                values: [FlexibleType::Integer(3)].into_iter().collect(),
+                shard: 1,
+                ..Default::default()
+            },
+            ShardedMapping {
+                kind: ShardedMappingKind::Default,
+                shard: 2,
+                ..Default::default()
+            },
+        ];
+
+        let list = ListShards::new(&mappings);
+
+        // Explicitly mapped values go to their configured shard
+        assert_eq!(list.shard(&FlexibleType::Integer(1)).unwrap(), Some(0));
+        assert_eq!(list.shard(&FlexibleType::Integer(2)).unwrap(), Some(0));
+        assert_eq!(list.shard(&FlexibleType::Integer(3)).unwrap(), Some(1));
+
+        // Unmapped values fall back to the default shard
+        assert_eq!(list.shard(&FlexibleType::Integer(999)).unwrap(), Some(2));
+        assert_eq!(list.shard(&FlexibleType::Integer(-1)).unwrap(), Some(2));
+    }
+
+    #[test]
+    fn test_list_shards_without_default() {
+        let mappings = vec![ShardedMapping {
+            values: [FlexibleType::Integer(1)].into_iter().collect(),
+            ..Default::default()
+        }];
+
+        let list = ListShards::new(&mappings);
+
+        // Explicitly mapped value
+        assert_eq!(list.shard(&FlexibleType::Integer(1)).unwrap(), Some(0));
+
+        // Unmapped value returns None when no default
+        assert_eq!(list.shard(&FlexibleType::Integer(999)).unwrap(), None);
     }
 }
