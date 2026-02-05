@@ -338,7 +338,7 @@ impl QueryParser {
 
         // e.g. Parse, Describe, Flush-style flow.
         if !context.router_context.executable {
-            if let Command::Query(ref query) = command {
+            if let Command::Query(ref mut query) = command {
                 if query.is_cross_shard() && statement.rewrite_plan.insert_split.is_empty() {
                     context
                         .shards_calculator
@@ -346,13 +346,11 @@ impl QueryParser {
                             round_robin::next() % context.shards,
                         )));
 
+                    query.set_shard_mut(context.shards_calculator.shard().clone());
+
                     // Since this query isn't executable and we decided
                     // to route it to any shard, we can early return here.
-                    return Ok(Command::Query(
-                        query
-                            .clone()
-                            .with_shard(context.shards_calculator.shard().clone()),
-                    ));
+                    return Ok(command);
                 }
             }
         }

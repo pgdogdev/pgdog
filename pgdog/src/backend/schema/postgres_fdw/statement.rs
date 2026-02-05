@@ -134,6 +134,8 @@ pub struct ForeignTableBuilder<'a> {
     columns: &'a [ForeignTableColumn],
     sharding_schema: &'a ShardingSchema,
     type_mismatches: Vec<TypeMismatch>,
+    /// Child partitions for two-tier partitioning (each Vec is columns for one partition).
+    children: Vec<Vec<ForeignTableColumn>>,
 }
 
 impl<'a> ForeignTableBuilder<'a> {
@@ -143,7 +145,15 @@ impl<'a> ForeignTableBuilder<'a> {
             columns,
             sharding_schema,
             type_mismatches: Vec::new(),
+            children: Vec::new(),
         }
+    }
+
+    /// Add child partitions for two-tier partitioning.
+    /// Each Vec represents columns for one child partition.
+    pub fn with_children(mut self, children: Vec<Vec<ForeignTableColumn>>) -> Self {
+        self.children = children;
+        self
     }
 
     /// Find the sharding configuration for this table, if any.
@@ -309,7 +319,22 @@ impl<'a> ForeignTableBuilder<'a> {
     }
 
     /// Build a sharded table: parent table + foreign table partitions.
+    /// If children partitions exist, creates two-tier partitioning.
     fn build_sharded(
+        &self,
+        table_name: &str,
+        schema_name: &str,
+        sharded: &ShardedTable,
+    ) -> Result<Vec<String>, Error> {
+        if self.children.is_empty() {
+            self.build_sharded_single_tier(table_name, schema_name, sharded)
+        } else {
+            self.build_sharded_two_tier(table_name, schema_name, sharded)
+        }
+    }
+
+    /// Build single-tier sharding: parent table with foreign table partitions.
+    fn build_sharded_single_tier(
         &self,
         table_name: &str,
         schema_name: &str,
@@ -333,6 +358,93 @@ impl<'a> ForeignTableBuilder<'a> {
         statements.push(parent);
 
         // Create foreign table partitions for each shard
+        self.build_foreign_partitions(
+            &mut statements,
+            table_name,
+            schema_name,
+            &qualified_name,
+            sharded,
+        )?;
+
+        Ok(statements)
+    }
+
+    /// Build two-tier sharding: parent table -> intermediate partitions -> foreign table partitions.
+    fn build_sharded_two_tier(
+        &self,
+        table_name: &str,
+        schema_name: &str,
+        sharded: &ShardedTable,
+    ) -> Result<Vec<String>, Error> {
+        let shard_strategy = PartitionStrategy::from_sharded_table(sharded);
+        let mut statements = Vec::new();
+
+        // Get the parent's original partition key (e.g., "RANGE (created_at)")
+        let parent_partition_key = self
+            .columns
+            .first()
+            .map(|c| c.partition_key.as_str())
+            .unwrap_or("");
+
+        // Create parent table with original PARTITION BY
+        let mut parent = String::new();
+        let qualified_name = qualified_table(schema_name, table_name);
+        writeln!(parent, "CREATE TABLE {} (", qualified_name)?;
+        parent.push_str(&self.build_columns()?);
+        parent.push('\n');
+        write!(parent, ") PARTITION BY {}", parent_partition_key)?;
+        statements.push(parent);
+
+        // For each child partition, create an intermediate partition that is itself partitioned
+        for child_columns in &self.children {
+            let Some(first_col) = child_columns.first() else {
+                continue;
+            };
+
+            let child_table_name = &first_col.table_name;
+            let child_schema_name = &first_col.schema_name;
+            let partition_bound = &first_col.partition_bound;
+
+            // Create intermediate partition table (partitioned by hash on shard key)
+            let mut intermediate = String::new();
+            let qualified_child = qualified_table(child_schema_name, child_table_name);
+
+            write!(
+                intermediate,
+                "CREATE TABLE {} PARTITION OF {} ",
+                qualified_child, qualified_name
+            )?;
+            write!(intermediate, "{}", partition_bound)?;
+            write!(
+                intermediate,
+                " PARTITION BY {} ({})",
+                shard_strategy.as_sql(),
+                quote_identifier(&sharded.column)
+            )?;
+            statements.push(intermediate);
+
+            // Create foreign table partitions for this intermediate partition
+            self.build_foreign_partitions(
+                &mut statements,
+                child_table_name,
+                child_schema_name,
+                &qualified_child,
+                sharded,
+            )?;
+        }
+
+        Ok(statements)
+    }
+
+    /// Build foreign table partitions for each shard.
+    fn build_foreign_partitions(
+        &self,
+        statements: &mut Vec<String>,
+        table_name: &str,
+        schema_name: &str,
+        qualified_parent: &str,
+        sharded: &ShardedTable,
+    ) -> Result<(), Error> {
         for shard in 0..self.sharding_schema.shards {
             let mut partition = String::new();
             let partition_table_name = format!("{}_shard_{}", table_name, shard);
@@ -342,13 +454,12 @@ impl<'a> ForeignTableBuilder<'a> {
             write!(
                 partition,
                 "CREATE FOREIGN TABLE {} PARTITION OF {} ",
-                qualified_partition, qualified_name
+                qualified_partition, qualified_parent
             )?;
 
-            // Partition bounds
+            // Partition bounds (always hash for foreign partitions in two-tier)
             match &sharded.mapping {
                 None => {
-                    // Hash partitioning
                     write!(
                         partition,
                         "FOR VALUES WITH (MODULUS {}, REMAINDER {})",
@@ -394,8 +505,7 @@ impl<'a> ForeignTableBuilder<'a> {
 
             statements.push(partition);
         }
-
-        Ok(statements)
+        Ok(())
     }
 }
 
@@ -411,6 +521,24 @@ pub fn create_foreign_table(
     sharding_schema: &ShardingSchema,
 ) -> Result<CreateForeignTableResult, Error> {
     ForeignTableBuilder::new(columns, sharding_schema).build()
+}
+
+/// Generate CREATE FOREIGN TABLE statements with two-tier partitioning.
+///
+/// For sharded tables with existing partitions, creates:
+/// 1. Parent table with PARTITION BY (on shard key)
+/// 2. Intermediate partition tables (with original bounds, further partitioned by shard key)
+/// 3. Foreign table partitions for each shard
+///
+/// Each entry in `children` is columns for one child partition.
+pub fn create_foreign_table_with_children(
+    columns: &[ForeignTableColumn],
+    sharding_schema: &ShardingSchema,
+    children: Vec<Vec<ForeignTableColumn>>,
+) -> Result<CreateForeignTableResult, Error> {
+    ForeignTableBuilder::new(columns, sharding_schema)
+        .with_children(children)
+        .build()
 }
 
 #[cfg(test)]
@@ -432,6 +560,11 @@ mod test {
             generated: String::new(),
             collation_name: String::new(),
             collation_schema: String::new(),
+            is_partition: false,
+            parent_table_name: String::new(),
+            parent_schema_name: String::new(),
+            partition_bound: String::new(),
+            partition_key: String::new(),
         }
     }
 
@@ -683,5 +816,158 @@ mod test {
         assert_eq!(quote_identifier("has\"quote"), "\"has\"\"quote\"");
         assert_eq!(quote_identifier("CamelCase"), "\"CamelCase\"");
         assert_eq!(quote_identifier("_valid"), "\"_valid\"");
+    }
+
+    fn test_partition_column(
+        table_name: &str,
+        name: &str,
+        col_type: &str,
+        parent_table: &str,
+        partition_bound: &str,
+    ) -> ForeignTableColumn {
+        ForeignTableColumn {
+            schema_name: "public".into(),
+            table_name: table_name.into(),
+            column_name: name.into(),
+            column_type: col_type.into(),
+            is_not_null: false,
+            column_default: String::new(),
+            generated: String::new(),
+            collation_name: String::new(),
+            collation_schema: String::new(),
+            is_partition: true,
+            parent_table_name: parent_table.into(),
+            parent_schema_name: "public".into(),
+            partition_bound: partition_bound.into(),
+            partition_key: String::new(),
+        }
+    }
+
+    fn test_partitioned_parent_column(
+        name: &str,
+        col_type: &str,
+        partition_key: &str,
+    ) -> ForeignTableColumn {
+        ForeignTableColumn {
+            partition_key: partition_key.into(),
+            ..test_column(name, col_type)
+        }
+    }
+
+    #[test]
+    fn test_create_foreign_table_two_tier_partitioning() {
+        // Parent table "orders" partitioned by RANGE on date, with children partitioned by hash across shards
+        let parent_columns = vec![
+            test_partitioned_parent_column("id", "bigint", "RANGE (created_at)"),
+            test_partitioned_parent_column("created_at", "date", "RANGE (created_at)"),
+            test_partitioned_parent_column("data", "text", "RANGE (created_at)"),
+        ];
+
+        // Child partitions with their bounds
+        let partition_2024 = vec![
+            test_partition_column(
+                "orders_2024",
+                "id",
+                "bigint",
+                "test_table",
+                "FOR VALUES FROM ('2024-01-01') TO ('2025-01-01')",
+            ),
+            test_partition_column(
+                "orders_2024",
+                "created_at",
+                "date",
+                "test_table",
+                "FOR VALUES FROM ('2024-01-01') TO ('2025-01-01')",
+            ),
+            test_partition_column(
+                "orders_2024",
+                "data",
+                "text",
+                "test_table",
+                "FOR VALUES FROM ('2024-01-01') TO ('2025-01-01')",
+            ),
+        ];
+
+        let partition_2025 = vec![
+            test_partition_column(
+                "orders_2025",
+                "id",
+                "bigint",
+                "test_table",
+                "FOR VALUES FROM ('2025-01-01') TO ('2026-01-01')",
+            ),
+            test_partition_column(
+                "orders_2025",
+                "created_at",
+                "date",
+                "test_table",
+                "FOR VALUES FROM ('2025-01-01') TO ('2026-01-01')",
+            ),
+            test_partition_column(
+                "orders_2025",
+                "data",
+                "text",
+                "test_table",
+                "FOR VALUES FROM ('2025-01-01') TO ('2026-01-01')",
+            ),
+        ];
+
+        let tables: ShardedTables = [test_sharded_table("test_table", "id")].as_slice().into();
+        let schema = sharding_schema_with_tables(tables, 2);
+
+        let result = ForeignTableBuilder::new(&parent_columns, &schema)
+            .with_children(vec![partition_2024, partition_2025])
+            .build()
+            .unwrap();
+
+        // Expected structure:
+        // 1. Parent table with original PARTITION BY RANGE (created_at)
+        // 2. orders_2024 partition (with original bounds) that is itself PARTITION BY HASH
+        // 3. orders_2024_shard_0 foreign table
+        // 4. orders_2024_shard_1 foreign table
+        // 5. orders_2025 partition (with original bounds) that is itself PARTITION BY HASH
+        // 6. orders_2025_shard_0 foreign table
+        // 7. orders_2025_shard_1 foreign table
+        assert_eq!(result.statements.len(), 7);
+
+        // Parent table - uses original partition key (RANGE on date)
+        assert!(result.statements[0].contains(r#"CREATE TABLE "public"."test_table""#));
+        assert!(result.statements[0].contains("PARTITION BY RANGE (created_at)"));
+
+        // orders_2024 intermediate partition
+        assert!(result.statements[1]
+            .contains(r#"CREATE TABLE "public"."orders_2024" PARTITION OF "public"."test_table""#));
+        assert!(result.statements[1].contains("FOR VALUES FROM ('2024-01-01') TO ('2025-01-01')"));
+        assert!(result.statements[1].contains(r#"PARTITION BY HASH ("id")"#));
+
+        // orders_2024_shard_0 foreign table
+        assert!(result.statements[2].contains(
+            r#"CREATE FOREIGN TABLE "public"."orders_2024_shard_0" PARTITION OF "public"."orders_2024""#
+        ));
+        assert!(result.statements[2].contains("FOR VALUES WITH (MODULUS 2, REMAINDER 0)"));
+        assert!(result.statements[2].contains(r#"SERVER "shard_0""#));
+
+        // orders_2024_shard_1 foreign table
+        assert!(result.statements[3].contains(
+            r#"CREATE FOREIGN TABLE "public"."orders_2024_shard_1" PARTITION OF "public"."orders_2024""#
+        ));
+        assert!(result.statements[3].contains("FOR VALUES WITH (MODULUS 2, REMAINDER 1)"));
+        assert!(result.statements[3].contains(r#"SERVER "shard_1""#));
+
+        // orders_2025 intermediate partition
+        assert!(result.statements[4]
+            .contains(r#"CREATE TABLE "public"."orders_2025" PARTITION OF "public"."test_table""#));
+        assert!(result.statements[4].contains("FOR VALUES FROM ('2025-01-01') TO ('2026-01-01')"));
+        assert!(result.statements[4].contains(r#"PARTITION BY HASH ("id")"#));
+
+        // orders_2025_shard_0 foreign table
+        assert!(result.statements[5].contains(
+            r#"CREATE FOREIGN TABLE "public"."orders_2025_shard_0" PARTITION OF "public"."orders_2025""#
+        ));
+
+        // orders_2025_shard_1 foreign table
+        assert!(result.statements[6].contains(
+            r#"CREATE FOREIGN TABLE "public"."orders_2025_shard_1" PARTITION OF "public"."orders_2025""#
+        ));
     }
 }

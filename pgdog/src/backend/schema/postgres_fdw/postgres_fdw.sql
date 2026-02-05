@@ -7,7 +7,12 @@ SELECT
     pg_catalog.pg_get_expr(ad.adbin, ad.adrelid)::text AS column_default,
     a.attgenerated::text AS generated,
     coll.collname::text AS collation_name,
-    collnsp.nspname::text AS collation_schema
+    collnsp.nspname::text AS collation_schema,
+    c.relispartition::text AS is_partition,
+    COALESCE(parent_class.relname, '')::text AS parent_table_name,
+    COALESCE(parent_ns.nspname, '')::text AS parent_schema_name,
+    COALESCE(pg_catalog.pg_get_expr(c.relpartbound, c.oid), '')::text AS partition_bound,
+    COALESCE(pg_catalog.pg_get_partkeydef(c.oid), '')::text AS partition_key
 FROM pg_catalog.pg_class c
 JOIN pg_catalog.pg_namespace n ON
     c.relnamespace = n.oid
@@ -22,13 +27,18 @@ LEFT JOIN pg_catalog.pg_collation coll ON
     coll.oid = a.attcollation
 LEFT JOIN pg_catalog.pg_namespace collnsp ON
     collnsp.oid = coll.collnamespace
+LEFT JOIN pg_catalog.pg_inherits inh ON
+    inh.inhrelid = c.oid
+LEFT JOIN pg_catalog.pg_class parent_class ON
+    parent_class.oid = inh.inhparent
+LEFT JOIN pg_catalog.pg_namespace parent_ns ON
+    parent_ns.oid = parent_class.relnamespace
 WHERE
     c.relkind IN ('r', 'v', 'f', 'm', 'p')
     AND n.nspname <> 'pg_catalog'
     AND n.nspname !~ '^pg_toast'
     AND n.nspname <> 'information_schema'
     AND NOT (n.nspname = 'pgdog' AND c.relname IN ('validator_bigint', 'validator_uuid', 'config'))
-    AND NOT c.relispartition
 ORDER BY
     n.nspname,
     c.relname,

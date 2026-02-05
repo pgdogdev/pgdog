@@ -4,7 +4,10 @@ use std::collections::{HashMap, HashSet};
 use tracing::{debug, warn};
 
 use crate::{
-    backend::{schema::postgres_fdw::create_foreign_table, Server, ShardingSchema},
+    backend::{
+        schema::postgres_fdw::{create_foreign_table, create_foreign_table_with_children},
+        Server, ShardingSchema,
+    },
     net::messages::DataRow,
 };
 
@@ -45,6 +48,16 @@ pub struct ForeignTableColumn {
     pub generated: String,
     pub collation_name: String,
     pub collation_schema: String,
+    /// Whether this table is a partition of another table.
+    pub is_partition: bool,
+    /// Parent table name if this is a partition, empty otherwise.
+    pub parent_table_name: String,
+    /// Parent schema name if this is a partition, empty otherwise.
+    pub parent_schema_name: String,
+    /// Partition bound expression, e.g. "FOR VALUES FROM ('2024-01-01') TO ('2025-01-01')".
+    pub partition_bound: String,
+    /// Partition key definition if this is a partitioned table, e.g. "RANGE (created_at)".
+    pub partition_key: String,
 }
 
 impl From<DataRow> for ForeignTableColumn {
@@ -59,6 +72,11 @@ impl From<DataRow> for ForeignTableColumn {
             generated: value.get_text(6).unwrap_or_default(),
             collation_name: value.get_text(7).unwrap_or_default(),
             collation_schema: value.get_text(8).unwrap_or_default(),
+            is_partition: value.get_text(9).unwrap_or_default() == "true",
+            parent_table_name: value.get_text(10).unwrap_or_default(),
+            parent_schema_name: value.get_text(11).unwrap_or_default(),
+            partition_bound: value.get_text(12).unwrap_or_default(),
+            partition_key: value.get_text(13).unwrap_or_default(),
         }
     }
 }
@@ -134,7 +152,10 @@ impl ForeignTableSchema {
         // Create custom types (enums, domains, composite types)
         self.custom_types.setup(server).await?;
 
-        let mut tables = HashSet::new();
+        // Build a map of parent tables to their child partitions
+        let children_map = self.build_children_map();
+
+        let mut processed_tables = HashSet::new();
         let mut all_type_mismatches: Vec<TypeMismatch> = Vec::new();
 
         for ((schema, table), columns) in &self.tables {
@@ -143,15 +164,36 @@ impl ForeignTableSchema {
                 continue;
             }
 
+            // Skip partitions - they are handled when processing their parent
+            if columns.first().is_some_and(|c| c.is_partition) {
+                continue;
+            }
+
             let dedup = (schema.clone(), table.clone());
-            if !tables.contains(&dedup) {
-                let result = create_foreign_table(columns, sharding_schema)?;
+            if !processed_tables.contains(&dedup) {
+                // Check if this table has child partitions
+                let children = children_map
+                    .get(&dedup)
+                    .map(|child_keys| {
+                        child_keys
+                            .iter()
+                            .filter_map(|key| self.tables.get(key).cloned())
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+
+                let result = if children.is_empty() {
+                    create_foreign_table(columns, sharding_schema)?
+                } else {
+                    create_foreign_table_with_children(columns, sharding_schema, children)?
+                };
+
                 for sql in &result.statements {
                     debug!("[fdw::setup] {} [{}]", sql, server.addr());
                     server.execute(sql).await?;
                 }
                 all_type_mismatches.extend(result.type_mismatches);
-                tables.insert(dedup);
+                processed_tables.insert(dedup);
             }
         }
 
@@ -202,9 +244,35 @@ impl ForeignTableSchema {
         &self.custom_types
     }
 
+    /// Get the tables map (for testing).
+    #[cfg(test)]
+    pub fn tables(&self) -> &HashMap<(String, String), Vec<ForeignTableColumn>> {
+        &self.tables
+    }
+
     /// Check if a table is an internal PgDog table that shouldn't be exposed via FDW.
     fn is_internal_table(schema: &str, table: &str) -> bool {
         schema == "pgdog" && matches!(table, "validator_bigint" | "validator_uuid" | "config")
+    }
+
+    /// Build a map of parent tables to their child partition keys.
+    fn build_children_map(&self) -> HashMap<(String, String), Vec<(String, String)>> {
+        let mut children_map: HashMap<(String, String), Vec<(String, String)>> = HashMap::new();
+
+        for ((schema, table), columns) in &self.tables {
+            if let Some(first_col) = columns.first() {
+                if first_col.is_partition && !first_col.parent_table_name.is_empty() {
+                    let parent_key = (
+                        first_col.parent_schema_name.clone(),
+                        first_col.parent_table_name.clone(),
+                    );
+                    let child_key = (schema.clone(), table.clone());
+                    children_map.entry(parent_key).or_default().push(child_key);
+                }
+            }
+        }
+
+        children_map
     }
 
     /// Collect unique schemas from tables and custom types.
@@ -269,57 +337,5 @@ impl ForeignTableColumn {
         }
 
         Ok(result)
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use super::*;
-    use crate::backend::server::test::test_server;
-
-    #[tokio::test]
-    async fn test_load_foreign_table_schema() {
-        let mut server = test_server().await;
-
-        server
-            .execute("DROP TABLE IF EXISTS test_fdw_schema")
-            .await
-            .unwrap();
-
-        server
-            .execute(
-                "CREATE TABLE test_fdw_schema (
-                    id BIGINT NOT NULL,
-                    name VARCHAR(100) DEFAULT 'unknown',
-                    score NUMERIC(10, 2),
-                    created_at TIMESTAMP NOT NULL DEFAULT now()
-                )",
-            )
-            .await
-            .unwrap();
-
-        let schema = ForeignTableSchema::load(&mut server).await.unwrap();
-        let rows: Vec<_> = schema.tables.into_values().flatten().collect();
-
-        assert!(!rows.is_empty());
-
-        let test_rows: Vec<_> = rows
-            .iter()
-            .filter(|r| r.table_name == "test_fdw_schema")
-            .collect();
-        assert_eq!(test_rows.len(), 4);
-
-        let id_col = test_rows.iter().find(|r| r.column_name == "id").unwrap();
-        assert!(id_col.is_not_null);
-        assert!(id_col.column_default.is_empty());
-
-        let name_col = test_rows.iter().find(|r| r.column_name == "name").unwrap();
-        assert!(!name_col.is_not_null);
-        assert!(!name_col.column_default.is_empty());
-
-        server
-            .execute("DROP TABLE IF EXISTS test_fdw_schema")
-            .await
-            .unwrap();
     }
 }
