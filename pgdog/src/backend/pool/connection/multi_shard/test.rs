@@ -71,11 +71,11 @@ fn test_rd_before_dr() {
     dr.add(1i64);
     for _ in 0..2 {
         let result = multi_shard
-            .forward(rd.message().unwrap().backend())
+            .forward(rd.message().unwrap().backend(BackendKeyData::default()))
             .unwrap();
         assert!(result.is_none()); // dropped
         let result = multi_shard
-            .forward(dr.message().unwrap().backend())
+            .forward(dr.message().unwrap().backend(BackendKeyData::default()))
             .unwrap();
         assert!(result.is_none()); // buffered.
     }
@@ -92,7 +92,7 @@ fn test_rd_before_dr() {
                 CommandComplete::from_str("SELECT 1")
                     .message()
                     .unwrap()
-                    .backend(),
+                    .backend(BackendKeyData::default()),
             )
             .unwrap();
         assert!(result.is_none());
@@ -100,20 +100,23 @@ fn test_rd_before_dr() {
 
     for _ in 0..2 {
         let result = multi_shard.message();
+        let id = BackendKeyData::default();
         assert_eq!(
-            result.map(|m| m.backend()),
-            Some(dr.message().unwrap().backend())
+            result.map(|m| m.backend(id)),
+            Some(dr.message().unwrap().backend(id))
         );
     }
 
-    let result = multi_shard.message().map(|m| m.backend());
+    let result = multi_shard
+        .message()
+        .map(|m| m.backend(BackendKeyData::default()));
     assert_eq!(
         result,
         Some(
             CommandComplete::from_str("SELECT 3")
                 .message()
                 .unwrap()
-                .backend()
+                .backend(BackendKeyData::default())
         )
     );
 

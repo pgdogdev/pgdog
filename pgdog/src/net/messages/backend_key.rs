@@ -17,7 +17,7 @@ fn next_counter() -> i32 {
 }
 
 /// BackendKeyData (B)
-#[derive(Copy, Clone, Debug, Hash, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, Hash, PartialEq, Eq, Default)]
 pub struct BackendKeyData {
     /// Process ID.
     pub pid: i32,
@@ -28,12 +28,6 @@ pub struct BackendKeyData {
 impl Display for BackendKeyData {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "pid={}, secret={}", self.pid, self.secret)
-    }
-}
-
-impl Default for BackendKeyData {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

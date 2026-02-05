@@ -1005,7 +1005,7 @@ pub mod test {
 
     impl Default for Server {
         fn default() -> Self {
-            let id = BackendKeyData::default();
+            let id = BackendKeyData::new();
             let addr = Address::default();
             Self {
                 stream: None,
