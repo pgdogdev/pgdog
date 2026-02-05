@@ -1,10 +1,13 @@
 use std::collections::HashSet;
+use std::ops::Deref;
 
 use crate::config::config;
 use crate::frontend::router::parser::{Cache, Shard};
 use crate::frontend::Command;
 
 use super::setup::{QueryParserTest, *};
+
+use pgdog_config::ShardedTable;
 
 #[test]
 fn test_show_shards() {
@@ -168,4 +171,52 @@ fn test_omni_flag_not_set_when_joined_with_sharded() {
     let q = "SELECT * FROM sharded_omni INNER JOIN sharded ON sharded_omni.id = sharded.id WHERE sharded.id = 5";
     let command = test.execute(vec![Query::new(q).into()]);
     assert!(!command.route().is_omni());
+}
+
+/// Test that omnisharded config overrides sharded table config.
+/// When a table is in both sharded_tables AND omnisharded config,
+/// the omnisharded config should take priority.
+///
+/// Note: Cluster::new_test() hardcodes omnisharded tables (sharded_omni, sharded_omni_sticky)
+/// so we test by adding "sharded_omni" to sharded_tables and verifying omnisharded wins.
+#[test]
+fn test_omnisharded_overrides_sharded_table_config() {
+    // Add "sharded_omni" (which is already in omnisharded config in Cluster::new_test)
+    // to sharded_tables config - omnisharded should still take priority
+    let mut config_with_both = config().deref().clone();
+    config_with_both.config.sharded_tables.push(ShardedTable {
+        database: "pgdog".into(),
+        name: Some("sharded_omni".into()),
+        column: "id".into(),
+        ..Default::default()
+    });
+
+    // Query against "sharded_omni" which is now in BOTH sharded_tables AND omnisharded
+    // Should be treated as omnisharded (round-robin), NOT sharded (deterministic)
+    let q = "SELECT * FROM sharded_omni WHERE id = 1";
+
+    // Run multiple times to verify round-robin behavior (omnisharded)
+    let mut shards_seen = HashSet::new();
+    for _ in 0..10 {
+        let mut test = QueryParserTest::new_with_config(&config_with_both);
+        let command = test.execute(vec![Query::new(q).into()]);
+        match command {
+            Command::Query(route) => {
+                assert!(
+                    route.is_omni(),
+                    "Query against table in both configs should have omni flag (omnisharded wins)"
+                );
+                shards_seen.insert(route.shard().clone());
+            }
+            _ => panic!("Expected Query command"),
+        }
+    }
+
+    // Should see multiple shards due to round-robin (omnisharded behavior)
+    // If sharded config won, we'd see only one shard (deterministic)
+    assert!(
+        shards_seen.len() > 1,
+        "Omnisharded should override sharded config, using round-robin. Saw {:?}",
+        shards_seen
+    );
 }

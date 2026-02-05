@@ -186,6 +186,10 @@ pub struct StatementParser<'a, 'b, 'c> {
     /// Optional schema lookup context for INSERT without column list.
     schema_lookup: Option<SchemaLookupContext<'b>>,
     hooks: ParserHooks,
+    /// Cached extracted tables (None = not yet computed)
+    cached_tables: Option<Vec<Table<'a>>>,
+    /// Cached result of all_omnisharded check (None = not yet computed)
+    all_omnisharded: Option<bool>,
 }
 
 impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
@@ -202,7 +206,37 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
             recorder,
             schema_lookup: None,
             hooks: ParserHooks::default(),
+            cached_tables: None,
+            all_omnisharded: None,
         }
+    }
+
+    /// Get extracted tables, caching the result.
+    fn tables(&mut self) -> &[Table<'a>] {
+        if self.cached_tables.is_none() {
+            self.cached_tables = Some(self.extract_tables());
+        }
+        self.cached_tables.as_ref().unwrap()
+    }
+
+    /// Check if all tables in the query are in the omnisharded config.
+    /// Result is cached after first computation.
+    fn is_all_omnisharded(&mut self) -> bool {
+        if let Some(cached) = self.all_omnisharded {
+            return cached;
+        }
+
+        let omnishards = self.schema.tables.omnishards();
+        let tables = self.tables();
+
+        let result = !omnishards.is_empty()
+            && !tables.is_empty()
+            && tables
+                .iter()
+                .all(|table| omnishards.contains_key(table.name));
+
+        self.all_omnisharded = Some(result);
+        result
     }
 
     /// Set the schema lookup context for INSERT without column list.
@@ -284,6 +318,12 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
     }
 
     pub fn shard(&mut self) -> Result<Option<Shard>, Error> {
+        // Omnisharded config overrides sharded: if all tables are omnisharded,
+        // don't try to find a sharding key - let omnisharded routing handle it
+        if self.is_all_omnisharded() {
+            return Ok(None);
+        }
+
         let result = match self.stmt {
             Statement::Select(stmt) => self.shard_select(stmt),
             Statement::Update(stmt) => self.shard_update(stmt),
@@ -299,9 +339,10 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
         }
 
         // Fallback to schema-based sharding
-        let tables = self.extract_tables();
+        // Ensure tables are cached first
+        let _ = self.tables();
         let mut schema_sharder = SchemaSharder::default();
-        for table in &tables {
+        for table in self.cached_tables.as_ref().unwrap() {
             schema_sharder.resolve(table.schema(), &self.schema.schemas);
         }
 
@@ -323,20 +364,23 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
     /// column. This check is needed in case sharded tables config
     /// doesn't specify a table name and should short-circuit if it does.
     pub fn is_sharded(
-        &self,
+        &mut self,
         db_schema: &Schema,
         user: &str,
         search_path: Option<&ParameterValue>,
     ) -> bool {
+        // Omnisharded config overrides sharded: if all tables are omnisharded, return false
+        if self.is_all_omnisharded() {
+            return false;
+        }
+
         let sharded_tables = self.schema.tables.tables();
 
         // Separate configs with explicit table names from those without
         let (named, nameless): (Vec<_>, Vec<_>) =
             sharded_tables.iter().partition(|t| t.name.is_some());
 
-        let tables = self.extract_tables();
-
-        for table in &tables {
+        for table in self.tables() {
             // Check named sharded table configs (fast path, no schema lookup needed)
             for config in &named {
                 if let Some(ref name) = config.name {
@@ -2437,6 +2481,161 @@ mod test {
             result.unwrap(),
             Some(Shard::All),
             "NULL sharding key should broadcast"
+        );
+    }
+
+    // Omnisharded override tests
+    use pgdog_config::OmnishardedTable;
+
+    fn make_omnisharded_sharding_schema() -> ShardingSchema {
+        // Column-only sharded table config (no table name specified)
+        // This would normally match any table with a "tenant_id" column
+        ShardingSchema {
+            shards: 3,
+            tables: ShardedTables::new(
+                vec![ShardedTable {
+                    column: "tenant_id".into(),
+                    // No table name - column-only config
+                    ..Default::default()
+                }],
+                vec![
+                    OmnishardedTable {
+                        name: "users".into(),
+                        sticky_routing: false,
+                    },
+                    OmnishardedTable {
+                        name: "sessions".into(),
+                        sticky_routing: false,
+                    },
+                ],
+                false,
+                SystemCatalogsBehavior::default(),
+            ),
+            ..Default::default()
+        }
+    }
+
+    fn make_omnisharded_db_schema() -> Schema {
+        // Create a db_schema with tables that have the tenant_id column
+        // This ensures that column-only sharding config would match these tables
+        let mut relations = HashMap::new();
+
+        // Helper to create a table with id and tenant_id columns
+        let make_table = |table_name: &str| {
+            let mut columns = IndexMap::new();
+            columns.insert(
+                "id".to_string(),
+                SchemaColumn {
+                    table_name: table_name.into(),
+                    column_name: "id".into(),
+                    ordinal_position: 1,
+                    is_primary_key: true,
+                    ..Default::default()
+                },
+            );
+            columns.insert(
+                "tenant_id".to_string(),
+                SchemaColumn {
+                    table_name: table_name.into(),
+                    column_name: "tenant_id".into(),
+                    ordinal_position: 2,
+                    ..Default::default()
+                },
+            );
+            Relation::test_table("public", table_name, columns)
+        };
+
+        // "users" table (omnisharded)
+        relations.insert(("public".into(), "users".into()), make_table("users"));
+
+        // "sessions" table (omnisharded)
+        relations.insert(("public".into(), "sessions".into()), make_table("sessions"));
+
+        // "orders" table (NOT omnisharded)
+        relations.insert(("public".into(), "orders".into()), make_table("orders"));
+
+        Schema::from_parts(vec!["public".into()], relations)
+    }
+
+    fn run_is_sharded_test(stmt: &str) -> bool {
+        let schema = make_omnisharded_sharding_schema();
+        let db_schema = make_omnisharded_db_schema();
+        let raw = pg_query::parse(stmt)
+            .unwrap()
+            .protobuf
+            .stmts
+            .first()
+            .cloned()
+            .unwrap();
+        let mut parser = StatementParser::from_raw(&raw, None, &schema, None).unwrap();
+        parser.is_sharded(&db_schema, "test", None)
+    }
+
+    #[test]
+    fn test_omnisharded_overrides_column_only_sharding() {
+        // Table "users" is in omnisharded config and has tenant_id column
+        // Even though column-only config would match, omnisharded should override
+        let result = run_is_sharded_test("SELECT * FROM users WHERE tenant_id = 1");
+        assert!(
+            !result,
+            "Omnisharded table should override column-only sharding config"
+        );
+    }
+
+    #[test]
+    fn test_omnisharded_overrides_for_multiple_omnisharded_tables() {
+        // Both tables are in omnisharded config
+        let result =
+            run_is_sharded_test("SELECT * FROM users u JOIN sessions s ON u.id = s.user_id");
+        assert!(
+            !result,
+            "Query with all omnisharded tables should return false"
+        );
+    }
+
+    #[test]
+    fn test_mixed_omnisharded_and_regular_table_is_sharded() {
+        // "users" is omnisharded, but "orders" is not
+        // Since not all tables are omnisharded, should check sharding config
+        let result = run_is_sharded_test("SELECT * FROM users u JOIN orders o ON u.id = o.user_id");
+        assert!(
+            result,
+            "Query with mixed omnisharded and regular tables should be sharded"
+        );
+    }
+
+    #[test]
+    fn test_non_omnisharded_table_is_sharded() {
+        // Table "orders" is not in omnisharded config and has tenant_id column
+        // Should match the column-only sharding config
+        let result = run_is_sharded_test("SELECT * FROM orders WHERE tenant_id = 1");
+        assert!(
+            result,
+            "Non-omnisharded table with sharding column should be sharded"
+        );
+    }
+
+    #[test]
+    fn test_omnisharded_insert_not_sharded() {
+        let result = run_is_sharded_test("INSERT INTO users (tenant_id, name) VALUES (1, 'test')");
+        assert!(
+            !result,
+            "INSERT into omnisharded table should not be sharded"
+        );
+    }
+
+    #[test]
+    fn test_omnisharded_update_not_sharded() {
+        let result = run_is_sharded_test("UPDATE users SET name = 'test' WHERE tenant_id = 1");
+        assert!(!result, "UPDATE on omnisharded table should not be sharded");
+    }
+
+    #[test]
+    fn test_omnisharded_delete_not_sharded() {
+        let result = run_is_sharded_test("DELETE FROM users WHERE tenant_id = 1");
+        assert!(
+            !result,
+            "DELETE from omnisharded table should not be sharded"
         );
     }
 }
