@@ -64,7 +64,7 @@ impl<'a> InsertMulti<'a> {
                 .await?;
 
             while self.engine.backend.has_more_messages() {
-                let message = self.engine.read_server_message(context).await?;
+                let message = self.engine.read_server_message().await?;
 
                 if self.state.forward(&message)? {
                     self.engine.process_server_message(context, message).await?;
