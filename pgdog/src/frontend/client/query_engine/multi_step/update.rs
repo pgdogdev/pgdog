@@ -172,7 +172,7 @@ impl<'a> UpdateMulti<'a> {
         let mut checker = ForwardCheck::new(context.client_request);
 
         while self.engine.backend.has_more_messages() {
-            let message = self.engine.read_server_message(context).await?;
+            let message = self.engine.read_server_message().await?;
             let code = message.code();
 
             if code == 'E' {
@@ -202,7 +202,7 @@ impl<'a> UpdateMulti<'a> {
             .await?;
 
         while self.engine.backend.has_more_messages() {
-            let message = self.engine.read_server_message(context).await?;
+            let message = self.engine.read_server_message().await?;
             self.engine.process_server_message(context, message).await?;
         }
 
@@ -236,7 +236,7 @@ impl<'a> UpdateMulti<'a> {
         let mut rows = 0;
 
         while self.engine.backend.has_more_messages() {
-            let message = self.engine.read_server_message(context).await?;
+            let message = self.engine.read_server_message().await?;
             match message.code() {
                 'D' => {
                     row.data_row = DataRow::try_from(message)?;
