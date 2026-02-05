@@ -115,7 +115,7 @@ impl QueryEngine {
     pub async fn process_server_message(
         &mut self,
         context: &mut QueryEngineContext<'_>,
-        message: Message,
+        mut message: Message,
     ) -> Result<(), Error> {
         self.streaming = message.streaming();
 
@@ -125,7 +125,6 @@ impl QueryEngine {
         } else {
             None
         };
-        let mut message = message.backend();
         let has_more_messages = self.backend.has_more_messages();
 
         if let Some(bytes) = payload {
