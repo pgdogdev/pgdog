@@ -189,8 +189,7 @@ func TestShardedTwoPcAuto(t *testing.T) {
 		rows, err := conn.Query(context.Background(), "INSERT INTO sharded_omni (id, value) VALUES ($1, $2) RETURNING *", int64(i), fmt.Sprintf("value_%d", i))
 		assert.NoError(t, err)
 
-		// Returns 2 rows
-		assert.True(t, rows.Next())
+		// Returns 1 row
 		assert.True(t, rows.Next())
 		assert.False(t, rows.Next())
 	}
@@ -217,8 +216,7 @@ func TestShardedTwoPcAutoOff(t *testing.T) {
 		rows, err := conn.Query(context.Background(), "INSERT INTO sharded_omni (id, value) VALUES ($1, $2) RETURNING *", int64(i), fmt.Sprintf("value_%d", i))
 		assert.NoError(t, err)
 
-		// Returns 2 rows
-		assert.True(t, rows.Next())
+		// Returns 1 row
 		assert.True(t, rows.Next())
 		assert.False(t, rows.Next())
 	}

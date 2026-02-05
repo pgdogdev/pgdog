@@ -519,11 +519,21 @@ impl QueryParser {
             self.recorder_mut(),
         )
         .with_schema_lookup(schema_lookup);
+
+        let is_sharded = parser.is_sharded(
+            &context.router_context.schema,
+            context.router_context.cluster.user(),
+            context.router_context.parameter_hints.search_path,
+        );
+
         let shard = parser.shard()?.unwrap_or(Shard::All);
 
-        context
-            .shards_calculator
-            .push(ShardWithPriority::new_table(shard.clone()));
+        context.shards_calculator.push(if is_sharded {
+            ShardWithPriority::new_table(shard.clone())
+        } else {
+            ShardWithPriority::new_table_omni(shard)
+        });
+
         let shard = context.shards_calculator.shard();
 
         if let Some(recorder) = self.recorder_mut() {

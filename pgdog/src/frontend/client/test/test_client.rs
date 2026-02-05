@@ -16,7 +16,7 @@ use crate::{
         router::{parser::Shard, sharding::ContextBuilder},
         Client,
     },
-    net::{ErrorResponse, Message, Parameters, Protocol, Stream},
+    net::{BackendKeyData, ErrorResponse, Message, Parameters, Protocol, Stream},
 };
 
 /// Try to convert a Message to the specified type.
@@ -156,7 +156,7 @@ impl TestClient {
         payload.put_i32(len);
         payload.put(Bytes::from(rest));
 
-        Message::new(payload.freeze()).backend()
+        Message::new(payload.freeze()).backend(BackendKeyData::default())
     }
 
     /// Inspect client state.
