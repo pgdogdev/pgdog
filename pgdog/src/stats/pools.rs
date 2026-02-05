@@ -44,6 +44,7 @@ pub struct Pools {
 impl Pools {
     pub fn load() -> Pools {
         let mut metrics = vec![];
+        let mut max_connections = vec![];
         let mut cl_waiting = vec![];
         let mut sv_active = vec![];
         let mut sv_idle = vec![];
@@ -84,6 +85,8 @@ impl Pools {
         let mut avg_writes = vec![];
         let mut total_sv_xact_idle = vec![];
 
+        let general = &crate::config::config().config.general;
+
         for (user, cluster) in databases().all() {
             for (shard_num, shard) in cluster.shards().iter().enumerate() {
                 for (role, pool) in shard.pools_with_roles() {
@@ -96,6 +99,11 @@ impl Pools {
                         ("shard".into(), shard_num.to_string()),
                         ("role".into(), role.to_string()),
                     ];
+
+                    max_connections.push(Measurement {
+                        labels: labels.clone(),
+                        measurement: state.config.max.into(),
+                    });
 
                     cl_waiting.push(Measurement {
                         labels: labels.clone(),
@@ -298,6 +306,36 @@ impl Pools {
                 }
             }
         }
+
+        metrics.push(Metric::new(PoolMetric {
+            name: "max_connections".into(),
+            measurements: max_connections,
+            help: "Maximum number of allowed server connections".into(),
+            unit: None,
+            metric_type: None,
+        }));
+
+        metrics.push(Metric::new(PoolMetric {
+            name: "prepared_statements_limit".into(),
+            measurements: vec![Measurement {
+                labels: vec![],
+                measurement: general.prepared_statements_limit.into(),
+            }],
+            help: "Maximum number of prepared statements that can be cached".into(),
+            unit: None,
+            metric_type: None,
+        }));
+
+        metrics.push(Metric::new(PoolMetric {
+            name: "query_cache_limit".into(),
+            measurements: vec![Measurement {
+                labels: vec![],
+                measurement: general.query_cache_limit.into(),
+            }],
+            help: "Maximum number of queries that can be stored in the cache".into(),
+            unit: None,
+            metric_type: None,
+        }));
 
         metrics.push(Metric::new(PoolMetric {
             name: "cl_waiting".into(),
