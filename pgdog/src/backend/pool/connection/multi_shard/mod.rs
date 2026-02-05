@@ -122,7 +122,10 @@ impl MultiShard {
                 let cc = CommandComplete::from_bytes(message.to_bytes()?)?;
                 let has_rows = if let Some(rows) = cc.rows()? {
                     if self.route.is_omni() {
-                        self.counters.rows = rows;
+                        // Only use the first shard's row count for consistency with DataRow.
+                        if self.counters.command_complete_count == 0 {
+                            self.counters.rows = rows;
+                        }
                     } else {
                         self.counters.rows += rows;
                     }

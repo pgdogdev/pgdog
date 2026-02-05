@@ -302,7 +302,10 @@ impl Route {
 
     /// This route is for an omnisharded table.
     pub fn is_omni(&self) -> bool {
-        self.shard.source() == &ShardSource::Table(TableReason::Omni)
+        matches!(
+            self.shard.source(),
+            ShardSource::Table(TableReason::Omni) | ShardSource::RoundRobin(RoundRobinReason::Omni)
+        )
     }
 }
 
