@@ -383,7 +383,7 @@ impl Display for CopyFormat {
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum CrossShardBackend {
     #[default]
-    PgDog,
+    Pgdog,
     Fdw,
     Hybrid,
 }
@@ -397,7 +397,7 @@ impl CrossShardBackend {
 impl Display for CrossShardBackend {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::PgDog => write!(f, "pgdog"),
+            Self::Pgdog => write!(f, "pgdog"),
             Self::Fdw => write!(f, "fdw"),
             Self::Hybrid => write!(f, "hybrid"),
         }
@@ -409,7 +409,7 @@ impl FromStr for CrossShardBackend {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "pgdog" => Ok(Self::PgDog),
+            "pgdog" => Ok(Self::Pgdog),
             "fdw" => Ok(Self::Fdw),
             "hybrid" => Ok(Self::Hybrid),
             _ => Err(()),
