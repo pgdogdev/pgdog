@@ -36,6 +36,8 @@ RUN apt update && apt install -y postgresql-${PSQL_VERSION} && \
 
 COPY --from=builder /build/target/release/pgdog /usr/local/bin/pgdog
 
+RUN mkdir -p /pgdog && chown postgres:postgres /pgdog
 WORKDIR /pgdog
+USER postgres
 STOPSIGNAL SIGINT
 CMD ["/usr/local/bin/pgdog"]
