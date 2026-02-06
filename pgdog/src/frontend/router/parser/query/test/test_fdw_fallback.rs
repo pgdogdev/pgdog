@@ -309,3 +309,83 @@ fn test_schema_qualified_unsharded_triggers_fallback() {
         "Schema-qualified unsharded table should trigger FDW fallback"
     );
 }
+
+// =============================================================================
+// Window function tests
+// =============================================================================
+
+/// Cross-shard query with window function should trigger FDW fallback
+/// because window functions can't be correctly merged across shards.
+#[test]
+fn test_window_function_cross_shard_triggers_fallback() {
+    let mut test = QueryParserTest::new().with_fdw_fallback();
+
+    // ROW_NUMBER() without sharding key = cross-shard
+    let command = test.execute(vec![Query::new(
+        "SELECT id, ROW_NUMBER() OVER (ORDER BY id) FROM sharded",
+    )
+    .into()]);
+
+    let route = command.route();
+    assert!(
+        route.is_fdw_fallback(),
+        "Cross-shard query with window function should trigger FDW fallback"
+    );
+}
+
+/// Direct-to-shard query with window function should NOT trigger FDW fallback.
+#[test]
+fn test_window_function_single_shard_no_fallback() {
+    let mut test = QueryParserTest::new().with_fdw_fallback();
+
+    // ROW_NUMBER() with sharding key = single shard, no fallback needed
+    let command = test.execute(vec![Query::new(
+        "SELECT id, ROW_NUMBER() OVER (ORDER BY id) FROM sharded WHERE id = 1",
+    )
+    .into()]);
+
+    let route = command.route();
+    assert!(
+        !route.is_fdw_fallback(),
+        "Single-shard query with window function should NOT trigger FDW fallback"
+    );
+}
+
+/// Multiple window functions in cross-shard query should trigger FDW fallback.
+#[test]
+fn test_multiple_window_functions_triggers_fallback() {
+    let mut test = QueryParserTest::new().with_fdw_fallback();
+
+    let command = test.execute(vec![Query::new(
+        "SELECT id,
+                ROW_NUMBER() OVER (ORDER BY id) as rn,
+                RANK() OVER (PARTITION BY email ORDER BY id) as rnk
+         FROM sharded",
+    )
+    .into()]);
+
+    let route = command.route();
+    assert!(
+        route.is_fdw_fallback(),
+        "Cross-shard query with multiple window functions should trigger FDW fallback"
+    );
+}
+
+/// Window function in subquery should trigger FDW fallback for cross-shard.
+#[test]
+fn test_window_function_in_subquery_triggers_fallback() {
+    let mut test = QueryParserTest::new().with_fdw_fallback();
+
+    let command = test.execute(vec![Query::new(
+        "SELECT * FROM (
+            SELECT id, ROW_NUMBER() OVER (ORDER BY id) as rn FROM sharded
+        ) sub WHERE rn <= 10",
+    )
+    .into()]);
+
+    let route = command.route();
+    assert!(
+        route.is_fdw_fallback(),
+        "Cross-shard subquery with window function should trigger FDW fallback"
+    );
+}

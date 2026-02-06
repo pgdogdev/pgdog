@@ -18,12 +18,12 @@ pub(crate) struct FdwFallbackContext<'a> {
 }
 
 impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
-    /// Check if a SELECT statement requires FDW fallback due to CTEs or subqueries
-    /// that reference unsharded tables without proper sharding keys.
+    /// Check if a SELECT statement requires FDW fallback due to CTEs, subqueries,
+    /// or window functions that cannot be correctly executed across shards.
     ///
-    /// A CTE/subquery is considered "safe" if:
-    /// 1. It only references sharded or omnisharded tables, OR
-    /// 2. It contains a sharding key in its WHERE clause (handled by correlation)
+    /// Returns true if:
+    /// 1. CTEs/subqueries reference unsharded tables without sharding keys
+    /// 2. Window functions are present (can't be merged across shards)
     pub(crate) fn needs_fdw_fallback_for_subqueries(
         &self,
         stmt: &SelectStmt,
@@ -34,6 +34,11 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
         // correlated and inherit the sharding context
         if has_sharding_key {
             return false;
+        }
+
+        // Check for window functions in target list
+        if self.has_window_functions(stmt) {
+            return true;
         }
 
         // Check CTEs in WITH clause
@@ -68,6 +73,86 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
         false
     }
 
+    /// Check if a SELECT statement contains window functions.
+    fn has_window_functions(&self, stmt: &SelectStmt) -> bool {
+        for target in &stmt.target_list {
+            if self.node_has_window_function(target) {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Recursively check if a node contains a window function.
+    fn node_has_window_function(&self, node: &Node) -> bool {
+        match &node.node {
+            Some(NodeEnum::ResTarget(res_target)) => {
+                if let Some(ref val) = res_target.val {
+                    return self.node_has_window_function(val);
+                }
+                false
+            }
+            Some(NodeEnum::FuncCall(func)) => {
+                // Window function has an OVER clause
+                func.over.is_some()
+            }
+            Some(NodeEnum::AExpr(a_expr)) => {
+                if let Some(ref lexpr) = a_expr.lexpr {
+                    if self.node_has_window_function(lexpr) {
+                        return true;
+                    }
+                }
+                if let Some(ref rexpr) = a_expr.rexpr {
+                    if self.node_has_window_function(rexpr) {
+                        return true;
+                    }
+                }
+                false
+            }
+            Some(NodeEnum::TypeCast(type_cast)) => {
+                if let Some(ref arg) = type_cast.arg {
+                    return self.node_has_window_function(arg);
+                }
+                false
+            }
+            Some(NodeEnum::CoalesceExpr(coalesce)) => {
+                for arg in &coalesce.args {
+                    if self.node_has_window_function(arg) {
+                        return true;
+                    }
+                }
+                false
+            }
+            Some(NodeEnum::CaseExpr(case_expr)) => {
+                if let Some(ref arg) = case_expr.arg {
+                    if self.node_has_window_function(arg) {
+                        return true;
+                    }
+                }
+                if let Some(ref defresult) = case_expr.defresult {
+                    if self.node_has_window_function(defresult) {
+                        return true;
+                    }
+                }
+                for when in &case_expr.args {
+                    if self.node_has_window_function(when) {
+                        return true;
+                    }
+                }
+                false
+            }
+            Some(NodeEnum::CaseWhen(case_when)) => {
+                if let Some(ref result) = case_when.result {
+                    if self.node_has_window_function(result) {
+                        return true;
+                    }
+                }
+                false
+            }
+            _ => false,
+        }
+    }
+
     /// Recursively check if a SELECT statement needs FDW fallback.
     fn check_select_needs_fallback(&self, stmt: &SelectStmt, ctx: &FdwFallbackContext) -> bool {
         // Handle UNION/INTERSECT/EXCEPT
@@ -80,6 +165,11 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
             if self.check_select_needs_fallback(rarg, ctx) {
                 return true;
             }
+        }
+
+        // Check for window functions
+        if self.has_window_functions(stmt) {
+            return true;
         }
 
         // Check tables in FROM clause
