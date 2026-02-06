@@ -3,6 +3,30 @@ use crate::net::messages::Query;
 use super::setup::*;
 
 // =============================================================================
+// Config verification tests
+// =============================================================================
+
+/// FDW fallback should NOT be triggered when cross_shard_backend is not
+/// configured for FDW (default is Pgdog).
+#[test]
+fn test_fdw_fallback_requires_config() {
+    // Without with_fdw_fallback(), cross_shard_backend defaults to Pgdog
+    let mut test = QueryParserTest::new();
+
+    // This query would normally trigger FDW fallback (OFFSET > 0)
+    let command = test.execute(vec![Query::new(
+        "SELECT * FROM sharded ORDER BY id LIMIT 10 OFFSET 5",
+    )
+    .into()]);
+
+    let route = command.route();
+    assert!(
+        !route.is_fdw_fallback(),
+        "FDW fallback should NOT be triggered when cross_shard_backend is Pgdog (default)"
+    );
+}
+
+// =============================================================================
 // OFFSET tests
 // =============================================================================
 
@@ -11,7 +35,7 @@ use super::setup::*;
 /// fetching all rows first.
 #[test]
 fn test_cross_shard_offset_triggers_fdw_fallback() {
-    let mut test = QueryParserTest::new();
+    let mut test = QueryParserTest::new().with_fdw_fallback();
 
     // This query goes to all shards (no sharding key) with OFFSET
     let command = test.execute(vec![Query::new(
@@ -29,7 +53,7 @@ fn test_cross_shard_offset_triggers_fdw_fallback() {
 /// Cross-shard SELECT with OFFSET = 0 should NOT trigger FDW fallback
 #[test]
 fn test_cross_shard_offset_zero_no_fdw_fallback() {
-    let mut test = QueryParserTest::new();
+    let mut test = QueryParserTest::new().with_fdw_fallback();
 
     let command = test.execute(vec![Query::new(
         "SELECT * FROM sharded ORDER BY id LIMIT 10 OFFSET 0",
@@ -46,7 +70,7 @@ fn test_cross_shard_offset_zero_no_fdw_fallback() {
 /// Direct-to-shard SELECT with OFFSET should NOT trigger FDW fallback
 #[test]
 fn test_direct_shard_offset_no_fdw_fallback() {
-    let mut test = QueryParserTest::new();
+    let mut test = QueryParserTest::new().with_fdw_fallback();
 
     // This query goes to a specific shard (has sharding key)
     let command = test.execute(vec![Query::new(
@@ -69,7 +93,7 @@ fn test_direct_shard_offset_no_fdw_fallback() {
 /// FDW fallback when the main query is cross-shard.
 #[test]
 fn test_cte_unsharded_table_triggers_fdw_fallback() {
-    let mut test = QueryParserTest::new();
+    let mut test = QueryParserTest::new().with_fdw_fallback();
 
     // `users` is not in the sharded tables config, making it "unsharded"
     // The CTE has no sharding key, so this should trigger FDW fallback
@@ -89,7 +113,7 @@ fn test_cte_unsharded_table_triggers_fdw_fallback() {
 /// CTE that only references sharded tables should NOT trigger FDW fallback
 #[test]
 fn test_cte_sharded_table_no_fdw_fallback() {
-    let mut test = QueryParserTest::new();
+    let mut test = QueryParserTest::new().with_fdw_fallback();
 
     // CTE references only the sharded table
     let command = test.execute(vec![Query::new(
@@ -108,7 +132,7 @@ fn test_cte_sharded_table_no_fdw_fallback() {
 /// CTE that only references omnisharded tables should NOT trigger FDW fallback
 #[test]
 fn test_cte_omnisharded_table_no_fdw_fallback() {
-    let mut test = QueryParserTest::new();
+    let mut test = QueryParserTest::new().with_fdw_fallback();
 
     // CTE references only omnisharded table
     let command = test.execute(vec![Query::new(
@@ -132,7 +156,7 @@ fn test_cte_omnisharded_table_no_fdw_fallback() {
 /// should trigger FDW fallback when main query is cross-shard.
 #[test]
 fn test_subquery_unsharded_table_triggers_fdw_fallback() {
-    let mut test = QueryParserTest::new();
+    let mut test = QueryParserTest::new().with_fdw_fallback();
 
     // Subquery references unsharded table without sharding key
     let command = test.execute(vec![Query::new(
@@ -152,7 +176,7 @@ fn test_subquery_unsharded_table_triggers_fdw_fallback() {
 /// FDW fallback (inherits sharding context from outer query).
 #[test]
 fn test_subquery_correlated_no_fdw_fallback() {
-    let mut test = QueryParserTest::new();
+    let mut test = QueryParserTest::new().with_fdw_fallback();
 
     // Correlated subquery references outer query's sharded column
     let command = test.execute(vec![Query::new(
@@ -177,7 +201,7 @@ fn test_subquery_correlated_no_fdw_fallback() {
 /// table) should trigger FDW fallback when there's no sharding key.
 #[test]
 fn test_multiple_ctes_mixed_safe_unsafe_triggers_fallback() {
-    let mut test = QueryParserTest::new();
+    let mut test = QueryParserTest::new().with_fdw_fallback();
 
     // First CTE uses sharded table (safe), second CTE uses unsharded table (unsafe)
     // No sharding key in either CTE, so unsafe CTE triggers FDW fallback
@@ -199,7 +223,7 @@ fn test_multiple_ctes_mixed_safe_unsafe_triggers_fallback() {
 /// should trigger FDW fallback.
 #[test]
 fn test_deeply_nested_subquery_unsharded_triggers_fallback() {
-    let mut test = QueryParserTest::new();
+    let mut test = QueryParserTest::new().with_fdw_fallback();
 
     // Three levels deep: outer query -> subquery -> subquery with unsharded table
     let command = test.execute(vec![Query::new(
@@ -222,7 +246,7 @@ fn test_deeply_nested_subquery_unsharded_triggers_fallback() {
 /// FDW fallback.
 #[test]
 fn test_subquery_join_mixed_tables_triggers_fallback() {
-    let mut test = QueryParserTest::new();
+    let mut test = QueryParserTest::new().with_fdw_fallback();
 
     // Subquery JOINs sharded and unsharded tables
     let command = test.execute(vec![Query::new(
@@ -246,7 +270,7 @@ fn test_subquery_join_mixed_tables_triggers_fallback() {
 fn test_offset_bind_parameter_triggers_fallback() {
     use crate::net::messages::Parameter;
 
-    let mut test = QueryParserTest::new();
+    let mut test = QueryParserTest::new().with_fdw_fallback();
 
     // OFFSET using $1 bind parameter with value 5
     let command = test.execute(vec![
@@ -270,7 +294,7 @@ fn test_offset_bind_parameter_triggers_fallback() {
 /// Schema-qualified unsharded table should still trigger FDW fallback.
 #[test]
 fn test_schema_qualified_unsharded_triggers_fallback() {
-    let mut test = QueryParserTest::new();
+    let mut test = QueryParserTest::new().with_fdw_fallback();
 
     // Using schema-qualified name for unsharded table
     let command = test.execute(vec![Query::new(

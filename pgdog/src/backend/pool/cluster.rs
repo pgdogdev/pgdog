@@ -786,6 +786,10 @@ mod test {
         pub fn set_read_write_strategy(&mut self, rw_strategy: ReadWriteStrategy) {
             self.rw_strategy = rw_strategy;
         }
+
+        pub fn set_cross_shard_backend(&mut self, backend: pgdog_config::CrossShardBackend) {
+            self.cross_shard_backend = backend;
+        }
     }
 
     #[test]
