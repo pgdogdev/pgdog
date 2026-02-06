@@ -8,7 +8,7 @@ use std::{
 use crate::{
     frontend::router::parser::{
         rewrite::statement::aggregate::AggregateRewritePlan, Aggregate, DistinctBy, DistinctColumn,
-        OrderBy,
+        Limit, OrderBy,
     },
     net::{
         messages::{DataRow, FromBytes, Message, Protocol, ToBytes, Vector},
@@ -216,6 +216,23 @@ impl Buffer {
             self.buffer.pop_front().and_then(|s| s.message().ok())
         } else {
             None
+        }
+    }
+
+    /// Execute LIMIT ... OFFSET ...
+    ///
+    /// N.B.: offset is incorrectly calculated at the moment
+    /// because we send it to Postgres as-is.
+    ///
+    /// What we need to do is rewrite LIMIT to be LIMIT + OFFSET,
+    /// overfetch those rows, and then apply the OFFSET to the entire
+    /// result set from all shards.
+    pub(super) fn limit(&mut self, limit: &Limit) {
+        let offset = limit.offset.unwrap_or(0);
+        self.buffer.drain(..offset.min(self.buffer.len()));
+
+        if let Some(limit) = limit.limit {
+            self.buffer.truncate(limit);
         }
     }
 
@@ -500,6 +517,70 @@ mod test {
             let value = dr.get::<String>(0, Format::Text).unwrap();
             assert_eq!(value, expected);
         }
+    }
+
+    #[test]
+    fn test_limit() {
+        let mut buf = Buffer::default();
+
+        for i in 0..10_i64 {
+            let mut dr = DataRow::new();
+            dr.add(i);
+            buf.add(dr.message().unwrap()).unwrap();
+        }
+
+        // LIMIT 5
+        let mut b = buf.clone();
+        b.limit(&Limit {
+            limit: Some(5),
+            offset: None,
+        });
+        assert_eq!(b.len(), 5);
+
+        // OFFSET 3
+        let mut b = buf.clone();
+        b.limit(&Limit {
+            limit: None,
+            offset: Some(3),
+        });
+        assert_eq!(b.len(), 7);
+
+        // LIMIT 4 OFFSET 2
+        let mut b = buf.clone();
+        b.limit(&Limit {
+            limit: Some(4),
+            offset: Some(2),
+        });
+        b.full();
+        assert_eq!(b.len(), 4);
+        for expected in 2..6_i64 {
+            let dr = DataRow::from_bytes(b.take().unwrap().to_bytes().unwrap()).unwrap();
+            assert_eq!(dr.get::<i64>(0, Format::Text).unwrap(), expected);
+        }
+
+        // No limit/offset
+        let mut b = buf.clone();
+        b.limit(&Limit {
+            limit: None,
+            offset: None,
+        });
+        assert_eq!(b.len(), 10);
+
+        // Offset > len
+        let mut b = buf.clone();
+        b.limit(&Limit {
+            limit: None,
+            offset: Some(100),
+        });
+        assert_eq!(b.len(), 0);
+
+        // LIMIT 0
+        let mut b = buf.clone();
+        b.limit(&Limit {
+            limit: Some(0),
+            offset: None,
+        });
+        assert_eq!(b.len(), 0);
     }
 
     #[test]
