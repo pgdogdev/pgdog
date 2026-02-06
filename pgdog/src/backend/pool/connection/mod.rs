@@ -139,7 +139,25 @@ impl Connection {
 
     /// Try to get a connection for the given route.
     async fn try_conn(&mut self, request: &Request, route: &Route) -> Result<(), Error> {
-        if let Shard::Direct(shard) = route.shard() {
+        if route.is_fdw_fallback() {
+            let server = if route.is_read() {
+                self.cluster()?.replica_fdw(request).await?
+            } else {
+                self.cluster()?.primary_fdw(request).await?
+            };
+
+            match &mut self.binding {
+                Binding::Direct(existing) => {
+                    let _ = existing.replace(server);
+                }
+
+                Binding::MultiShard(_, _) => {
+                    self.binding = Binding::Direct(Some(server));
+                }
+
+                _ => (),
+            };
+        } else if let Shard::Direct(shard) = route.shard() {
             let mut server = if route.is_read() {
                 self.cluster()?.replica(*shard, request).await?
             } else {
@@ -329,7 +347,7 @@ impl Connection {
                 if config().config.general.passthrough_auth() && !databases().exists(user) {
                     if let Some(ref passthrough_password) = self.passthrough_password {
                         let new_user = User::new(&self.user, passthrough_password, &self.database);
-                        databases::add(new_user);
+                        databases::add(new_user)?;
                     }
                 }
 

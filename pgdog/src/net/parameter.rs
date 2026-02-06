@@ -405,6 +405,12 @@ impl Parameters {
     pub fn search_path(&self) -> Option<&ParameterValue> {
         self.get("search_path")
     }
+
+    pub fn is_postgres_fdw(&self) -> bool {
+        self.get("pgdog.backend")
+            .map(|p| p.as_str() == Some("fdw"))
+            .unwrap_or_default()
+    }
 }
 
 impl Deref for Parameters {

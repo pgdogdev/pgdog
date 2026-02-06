@@ -175,7 +175,7 @@ impl Client {
             if !exists {
                 let user = user_from_params(&params, &password).ok();
                 if let Some(user) = user {
-                    databases::add(user);
+                    databases::add(user)?;
                 }
             }
             password.password().map(|p| p.to_owned())

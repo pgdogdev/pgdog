@@ -160,6 +160,10 @@ impl Command for Set {
                 config.config.general.client_idle_in_transaction_timeout = self.value.parse()?;
             }
 
+            "cross_shard_backend" => {
+                config.config.general.cross_shard_backend = Self::from_json(&self.value)?;
+            }
+
             _ => return Err(Error::Syntax),
         }
 
