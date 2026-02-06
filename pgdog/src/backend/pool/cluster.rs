@@ -479,6 +479,10 @@ impl Cluster {
         self.cross_shard_backend
     }
 
+    pub fn fdw_fallback_enabled(&self) -> bool {
+        self.cross_shard_backend().need_fdw()
+    }
+
     /// This database/user pair is responsible for schema management.
     pub fn schema_admin(&self) -> bool {
         self.schema_admin

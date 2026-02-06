@@ -1,4 +1,3 @@
-use lazy_static::lazy_static;
 use tokio::time::timeout;
 
 use crate::frontend::router::parser::ShardWithPriority;
@@ -30,26 +29,6 @@ impl QueryEngine {
         }
 
         let connect_route = connect_route.unwrap_or(context.client_request.route());
-
-        // Use fdw backend if:
-        //
-        // 1. The client asked via SET pgdog.backend and the query is NOT DDL or
-        // 2. The query is cross-shard && NOT DDL and
-        // 3. FDW is enabled
-        //
-        let use_fdw = self.backend.cluster()?.cross_shard_backend().need_fdw()
-            && (context.params.is_postgres_fdw() && !connect_route.is_ddl()
-                || connect_route.use_fdw());
-
-        let connect_route = if use_fdw {
-            lazy_static! {
-                static ref FDW_ROUTE: Route = Route::fdw_fallback();
-            }
-
-            &FDW_ROUTE
-        } else {
-            connect_route
-        };
 
         let request = Request::new(*context.id, connect_route.is_read());
 

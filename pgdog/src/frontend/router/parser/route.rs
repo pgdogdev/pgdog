@@ -163,8 +163,8 @@ impl Route {
         !self.is_read()
     }
 
-    pub fn is_fdw_fallback(&self) -> bool {
-        self.fdw_fallback
+    pub fn set_fdw_fallback(&mut self, fallback: bool) {
+        self.fdw_fallback = fallback;
     }
 
     /// Get shard if any.
@@ -193,8 +193,8 @@ impl Route {
         self.is_all_shards() || self.is_multi_shard()
     }
 
-    pub fn use_fdw(&self) -> bool {
-        self.is_cross_shard() && !self.is_ddl()
+    pub fn is_fdw_fallback(&self) -> bool {
+        self.fdw_fallback
     }
 
     pub fn order_by(&self) -> &[OrderBy] {

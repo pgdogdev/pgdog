@@ -24,6 +24,7 @@ use super::{
 mod ddl;
 mod delete;
 mod explain;
+mod fdw_fallback;
 mod plugins;
 mod schema_sharding;
 mod select;
@@ -370,6 +371,14 @@ impl QueryParser {
             let shard = context.shards_calculator.shard();
             if shard.is_direct() {
                 route.set_shard_mut(shard);
+            }
+
+            // User requested fdw backend. Cool, but never for DDL.
+            if context.router_context.parameter_hints.use_fdw_fallback()
+                && !route.is_ddl()
+                && context.router_context.cluster.fdw_fallback_enabled()
+            {
+                route.set_fdw_fallback(true);
             }
         }
 

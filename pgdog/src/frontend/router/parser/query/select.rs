@@ -2,6 +2,7 @@ use crate::frontend::router::parser::{
     cache::Ast, from_clause::FromClause, where_clause::TablesSource,
 };
 
+use super::fdw_fallback::FdwFallbackContext;
 use super::*;
 use pgdog_config::system_catalogs;
 use shared::ConvergeAlgorithm;
@@ -41,7 +42,7 @@ impl QueryParser {
 
         let mut shards = HashSet::new();
 
-        let (shard, is_sharded, tables) = {
+        let (shard, is_sharded, tables, needs_fdw_fallback) = {
             let mut statement_parser = StatementParser::from_select(
                 stmt,
                 context.router_context.bind,
@@ -50,9 +51,22 @@ impl QueryParser {
             );
 
             let shard = statement_parser.shard()?;
+            let has_sharding_key = shard.is_some();
+
+            // Check FDW fallback for CTEs/subqueries
+            let fdw_ctx = FdwFallbackContext {
+                db_schema: &context.router_context.schema,
+                user: context.router_context.cluster.user(),
+                search_path: context.router_context.parameter_hints.search_path,
+            };
+            let needs_fdw = statement_parser.needs_fdw_fallback_for_subqueries(
+                stmt,
+                &fdw_ctx,
+                has_sharding_key,
+            );
 
             if shard.is_some() {
-                (shard, true, vec![])
+                (shard, true, vec![], needs_fdw)
             } else {
                 (
                     None,
@@ -62,6 +76,7 @@ impl QueryParser {
                         context.router_context.parameter_hints.search_path,
                     ),
                     statement_parser.extract_tables(),
+                    needs_fdw,
                 )
             }
         };
@@ -199,6 +214,20 @@ impl QueryParser {
         // Only rewrite if query is cross-shard.
         if query.is_cross_shard() && context.shards > 1 {
             query.with_aggregate_rewrite_plan_mut(cached_ast.rewrite_plan.aggregates.clone());
+
+            if context.router_context.cluster.fdw_fallback_enabled() {
+                // Cross-shard queries with OFFSET > 0 require FDW fallback
+                // because OFFSET cannot be correctly applied across shards.
+                if limit.offset.map(|o| o > 0).unwrap_or(false) {
+                    query.set_fdw_fallback(true);
+                }
+
+                // Cross-shard queries with CTEs or subqueries that reference unsharded
+                // tables without a sharding key require FDW fallback.
+                if needs_fdw_fallback {
+                    query.set_fdw_fallback(true);
+                }
+            }
         }
 
         Ok(Command::Query(query.with_write(writes)))
