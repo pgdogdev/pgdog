@@ -1,6 +1,6 @@
 //! Databases behind pgDog.
 
-use std::collections::{hash_map::Entry, HashMap};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use arc_swap::ArcSwap;
@@ -171,12 +171,18 @@ pub(crate) fn add(user: crate::config::User) -> Result<(), Error> {
     );
 
     let mut config = config().deref().clone();
+    let mut found = false;
     for existing in &mut config.users.users {
         if existing.name == user.name && existing.database == user.database {
+            found = true;
             if existing.password().is_empty() {
                 existing.password = user.password.clone();
             }
         }
+    }
+
+    if !found {
+        config.users.users.push(user);
     }
 
     set(config)?;
