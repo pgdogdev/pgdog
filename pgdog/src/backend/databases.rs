@@ -11,7 +11,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::backend::fdw::PostgresLauncher;
 use crate::backend::replication::ShardedSchemas;
-use crate::config::PoolerMode;
+use crate::config::{set, PoolerMode};
 use crate::frontend::client::query_engine::two_pc::Manager;
 use crate::frontend::router::parser::Cache;
 use crate::frontend::router::sharding::mapping::mapping_valid;
@@ -159,35 +159,32 @@ pub fn reload() -> Result<(), Error> {
 }
 
 /// Add new user to pool.
-pub(crate) fn add(mut user: crate::config::User) {
+pub(crate) fn add(user: crate::config::User) -> Result<(), Error> {
+    use std::ops::Deref;
+
     // One user at a time.
-    let _lock = lock();
+    let lock = lock();
 
     debug!(
         "adding user \"{}\" for database \"{}\" via auth passthrough",
         user.name, user.database
     );
 
-    let config = config();
-    for existing in &config.users.users {
+    let mut config = config().deref().clone();
+    for existing in &mut config.users.users {
         if existing.name == user.name && existing.database == user.database {
-            let mut existing = existing.clone();
-            existing.password = user.password.clone();
-            user = existing;
+            if existing.password().is_empty() {
+                existing.password = user.password.clone();
+            }
         }
     }
-    let pool = new_pool(&user, &config.config);
-    if let Some((user, cluster)) = pool {
-        let databases = (*databases()).clone();
-        let (added, databases) = databases.add(user, cluster);
-        if added {
-            // Launch the new pool (idempotent).
-            databases.launch();
-            // Don't use replace_databases because Arc refers to the same DBs,
-            // and we'll shut them down.
-            DATABASES.store(Arc::new(databases));
-        }
-    }
+
+    set(config)?;
+    drop(lock);
+
+    reload_from_existing()?;
+
+    Ok(())
 }
 
 /// Database/user pair that identifies a database cluster pool.
@@ -229,15 +226,6 @@ impl ToUser for (&str, Option<&str>) {
     }
 }
 
-// impl ToUser for &pgdog_config::User {
-//     fn to_user(&self) -> User {
-//         User {
-//             user: self.name.clone(),
-//             database: self.database.clone(),
-//         }
-//     }
-// }
-
 /// Databases.
 #[derive(Default, Clone)]
 pub struct Databases {
@@ -248,24 +236,6 @@ pub struct Databases {
 }
 
 impl Databases {
-    /// Add new connection pools to the databases.
-    fn add(mut self, user: User, cluster: Cluster) -> (bool, Databases) {
-        match self.databases.entry(user) {
-            Entry::Vacant(e) => {
-                e.insert(cluster);
-                (true, self)
-            }
-            Entry::Occupied(mut e) => {
-                if e.get().password().is_empty() {
-                    e.insert(cluster);
-                    (true, self)
-                } else {
-                    (false, self)
-                }
-            }
-        }
-    }
-
     /// Check if a cluster exists, quickly.
     pub fn exists(&self, user: impl ToUser) -> bool {
         if let Some(cluster) = self.databases.get(&user.to_user()) {

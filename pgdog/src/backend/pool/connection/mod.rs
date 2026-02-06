@@ -347,7 +347,7 @@ impl Connection {
                 if config().config.general.passthrough_auth() && !databases().exists(user) {
                     if let Some(ref passthrough_password) = self.passthrough_password {
                         let new_user = User::new(&self.user, passthrough_password, &self.database);
-                        databases::add(new_user);
+                        databases::add(new_user)?;
                     }
                 }
 
