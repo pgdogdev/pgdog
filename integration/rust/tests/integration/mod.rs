@@ -9,6 +9,7 @@ pub mod distinct;
 pub mod explain;
 pub mod fake_transactions;
 pub mod idle_in_transaction;
+pub mod limit;
 pub mod maintenance_mode;
 pub mod max;
 pub mod notify;
