@@ -1,4 +1,5 @@
 use once_cell::sync::Lazy;
+use pg_query::protobuf::ScanToken;
 use pg_query::scan_raw;
 use pg_query::{protobuf::Token, scan};
 use pgdog_config::QueryParserEngine;
@@ -11,11 +12,12 @@ use crate::frontend::router::sharding::ContextBuilder;
 use super::super::parser::Shard;
 use super::Error;
 
-static SHARD: Lazy<Regex> = Lazy::new(|| Regex::new(r#"pgdog_shard: *([0-9]+)"#).unwrap());
-static SHARDING_KEY: Lazy<Regex> = Lazy::new(|| {
+pub static SHARD: Lazy<Regex> = Lazy::new(|| Regex::new(r#"pgdog_shard: *([0-9]+)"#).unwrap());
+pub static SHARDING_KEY: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r#"pgdog_sharding_key: *(?:"([^"]*)"|'([^']*)'|([0-9a-zA-Z-]+))"#).unwrap()
 });
-static ROLE: Lazy<Regex> = Lazy::new(|| Regex::new(r#"pgdog_role: *(primary|replica)"#).unwrap());
+pub static ROLE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r#"pgdog_role: *(primary|replica)"#).unwrap());
 
 fn get_matched_value<'a>(caps: &'a regex::Captures<'a>) -> Option<&'a str> {
     caps.get(1)
@@ -24,23 +26,26 @@ fn get_matched_value<'a>(caps: &'a regex::Captures<'a>) -> Option<&'a str> {
         .map(|m| m.as_str())
 }
 
-/// Extract shard number from a comment.
+/// Extract shard number from a comment. Additionally returns the entire
+/// comment string if it exists.
 ///
-/// Comment style uses the C-style comments (not SQL comments!)
+/// Comment style for the shard metadata uses the C-style comments (not SQL comments!)
 /// as to allow the comment to appear anywhere in the query.
 ///
 /// See [`SHARD`] and [`SHARDING_KEY`] for the style of comment we expect.
 ///
-pub fn comment(
+pub fn parse_comment(
     query: &str,
     schema: &ShardingSchema,
-) -> Result<(Option<Shard>, Option<Role>), Error> {
+) -> Result<(Option<Shard>, Option<Role>, Option<String>), Error> {
     let tokens = match schema.query_parser_engine {
         QueryParserEngine::PgQueryProtobuf => scan(query),
         QueryParserEngine::PgQueryRaw => scan_raw(query),
     }
     .map_err(Error::PgQuery)?;
+    let mut shard = None;
     let mut role = None;
+    let mut filtered_query = None;
 
     for token in tokens.tokens.iter() {
         if token.token == Token::CComment as i32 {
@@ -57,33 +62,95 @@ pub fn comment(
             if let Some(cap) = SHARDING_KEY.captures(comment) {
                 if let Some(sharding_key) = get_matched_value(&cap) {
                     if let Some(schema) = schema.schemas.get(Some(sharding_key.into())) {
-                        return Ok((Some(schema.shard().into()), role));
+                        shard = Some(schema.shard().into());
+                    } else {
+                        let ctx = ContextBuilder::infer_from_from_and_config(sharding_key, schema)?
+                            .shards(schema.shards)
+                            .build()?;
+                        shard = Some(ctx.apply()?);
                     }
-                    let ctx = ContextBuilder::infer_from_from_and_config(sharding_key, schema)?
-                        .shards(schema.shards)
-                        .build()?;
-                    return Ok((Some(ctx.apply()?), role));
                 }
             }
             if let Some(cap) = SHARD.captures(comment) {
-                if let Some(shard) = cap.get(1) {
-                    return Ok((
-                        Some(
-                            shard
-                                .as_str()
-                                .parse::<usize>()
-                                .ok()
-                                .map(Shard::Direct)
-                                .unwrap_or(Shard::All),
-                        ),
-                        role,
-                    ));
+                if let Some(s) = cap.get(1) {
+                    shard = Some(
+                        s.as_str()
+                            .parse::<usize>()
+                            .ok()
+                            .map(Shard::Direct)
+                            .unwrap_or(Shard::All),
+                    );
                 }
             }
         }
     }
 
-    Ok((None, role))
+    if has_comments(&tokens.tokens) {
+        filtered_query = Some(remove_comments(
+            query,
+            &tokens.tokens,
+            Some(&[&SHARD, &*SHARDING_KEY, &ROLE]),
+        )?);
+    }
+
+    Ok((shard, role, filtered_query))
+}
+
+pub fn has_comments(tokenized_query: &Vec<ScanToken>) -> bool {
+    tokenized_query
+        .iter()
+        .any(|st| st.token == Token::CComment as i32 || st.token == Token::SqlComment as i32)
+}
+
+pub fn remove_comments(
+    query: &str,
+    tokenized_query: &Vec<ScanToken>,
+    except: Option<&[&Regex]>,
+) -> Result<String, Error> {
+    let mut cursor = 0;
+    let mut out = String::with_capacity(query.len());
+
+    for st in tokenized_query {
+        let start = st.start as usize;
+        let end = st.end as usize;
+
+        out.push_str(&query[cursor..start]);
+
+        match st.token {
+            t if t == Token::CComment as i32 => {
+                let comment = &query[start..end];
+
+                if let Some(except) = except {
+                    let rewritten = keep_only_matching(comment, except);
+
+                    out.push_str(&rewritten);
+                }
+            }
+            _ => {
+                out.push_str(&query[start..end]);
+            }
+        }
+
+        cursor = end;
+    }
+
+    if cursor < query.len() {
+        out.push_str(&query[cursor..]);
+    }
+
+    Ok(out)
+}
+
+fn keep_only_matching(comment: &str, regs: &[&Regex]) -> String {
+    let mut out = String::new();
+
+    for reg in regs {
+        for m in reg.find_iter(comment) {
+            out.push_str(m.as_str());
+        }
+    }
+
+    out
 }
 
 #[cfg(test)]
