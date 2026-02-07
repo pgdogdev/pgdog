@@ -2,8 +2,10 @@ use lru::LruCache;
 use once_cell::sync::Lazy;
 use pg_query::normalize;
 use pgdog_config::QueryParserEngine;
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::time::Duration;
+use tracing_subscriber::filter::Filtered;
 
 use parking_lot::Mutex;
 use std::sync::Arc;
@@ -98,6 +100,10 @@ impl Cache {
     /// Parse a statement by either getting it from cache
     /// or using pg_query parser.
     ///
+    /// In the event of cache miss, we retry after removing all comments except
+    /// for pgdog metadata. We retain it for correctness, since a query with
+    /// that metadata must not map to an identical query without it.
+    ///
     /// N.B. There is a race here that allows multiple threads to
     /// parse the same query. That's better imo than locking the data structure
     /// while we parse the query.
@@ -119,33 +125,38 @@ impl Cache {
             }
         }
 
-        if comment::has_comments(query.query(), ctx.sharding_schema.query_parser_engine)? {
-            // Check cache again after removing comments.
-            let filtered_query = comment::remove_comments(
-                query.query(),
-                ctx.sharding_schema.query_parser_engine,
-                Some(&[&*comment::SHARD, &*comment::SHARDING_KEY, &*comment::ROLE]),
-            )?;
+        let (maybe_shard, maybe_role, maybe_filtered_query) =
+            comment::parse_comment(&query, &ctx.sharding_schema)?;
 
+        let query_to_cache: Cow<'_, str>;
+
+        if let Some(filtered_query) = maybe_filtered_query {
+            query_to_cache = Cow::Owned(filtered_query);
+
+            // Check cache again after removing comments from query
             let mut guard = self.inner.lock();
-            let ast = guard.queries.get_mut(&filtered_query).map(|entry| {
+
+            let ast = guard.queries.get_mut(&*query_to_cache).map(|entry| {
                 entry.stats.lock().hits += 1;
                 entry.clone()
             });
 
             if let Some(ast) = ast {
                 guard.stats.hits += 1;
-
                 return Ok(ast);
             }
+        } else {
+            query_to_cache = Cow::Borrowed(query.query());
         }
 
         // Parse query without holding lock.
-        let entry = Ast::with_context(query, ctx, prepared_statements)?;
+        let entry = Ast::with_context(query, ctx, prepared_statements, maybe_shard, maybe_role)?;
         let parse_time = entry.stats.lock().parse_time;
 
         let mut guard = self.inner.lock();
-        guard.queries.put(query.query().to_string(), entry.clone());
+        guard
+            .queries
+            .put(query_to_cache.into_owned(), entry.clone());
         guard.stats.misses += 1;
         guard.stats.parse_time += parse_time;
 
@@ -160,7 +171,10 @@ impl Cache {
         ctx: &AstContext<'_>,
         prepared_statements: &mut PreparedStatements,
     ) -> Result<Ast, Error> {
-        let mut entry = Ast::with_context(query, ctx, prepared_statements)?;
+        let (maybe_shard, maybe_role, _) = comment::parse_comment(&query, &ctx.sharding_schema)?;
+
+        let mut entry =
+            Ast::with_context(query, ctx, prepared_statements, maybe_shard, maybe_role)?;
         entry.cached = false;
 
         let parse_time = entry.stats.lock().parse_time;
