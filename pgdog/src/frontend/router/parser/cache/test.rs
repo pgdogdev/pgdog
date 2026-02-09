@@ -121,7 +121,7 @@ fn test_tables_list() {
         "DELETE FROM private_schema.test",
         "DROP TABLE private_schema.test",
     ] {
-        let ast = Ast::new(&BufferedQuery::Query(Query::new(q)), &ShardingSchema::default(), &db_schema, &mut prepared_statements, "", None).unwrap();
+        let ast = Ast::new(&BufferedQuery::Query(Query::new(q)), &ShardingSchema::default(), &db_schema, &mut prepared_statements, None, None, "", None).unwrap();
         let tables = ast.tables();
         println!("{:?}", tables);
     }
