@@ -5,7 +5,6 @@ use pgdog_config::QueryParserEngine;
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::time::Duration;
-use tracing_subscriber::filter::Filtered;
 
 use parking_lot::Mutex;
 use std::sync::Arc;
