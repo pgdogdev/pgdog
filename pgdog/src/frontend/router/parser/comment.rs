@@ -12,12 +12,11 @@ use crate::frontend::router::sharding::ContextBuilder;
 use super::super::parser::Shard;
 use super::Error;
 
-pub static SHARD: Lazy<Regex> = Lazy::new(|| Regex::new(r#"pgdog_shard: *([0-9]+)"#).unwrap());
-pub static SHARDING_KEY: Lazy<Regex> = Lazy::new(|| {
+static SHARD: Lazy<Regex> = Lazy::new(|| Regex::new(r#"pgdog_shard: *([0-9]+)"#).unwrap());
+static SHARDING_KEY: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r#"pgdog_sharding_key: *(?:"([^"]*)"|'([^']*)'|([0-9a-zA-Z-]+))"#).unwrap()
 });
-pub static ROLE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r#"pgdog_role: *(primary|replica)"#).unwrap());
+static ROLE: Lazy<Regex> = Lazy::new(|| Regex::new(r#"pgdog_role: *(primary|replica)"#).unwrap());
 
 fn get_matched_value<'a>(caps: &'a regex::Captures<'a>) -> Option<&'a str> {
     caps.get(1)
