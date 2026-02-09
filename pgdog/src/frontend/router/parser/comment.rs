@@ -233,7 +233,7 @@ mod tests {
         };
 
         let query = "SELECT * FROM users /* pgdog_role: primary */";
-        let result = comment(query, &schema).unwrap();
+        let result = parse_comment(query, &schema).unwrap();
         assert_eq!(result.1, Some(Role::Primary));
     }
 
@@ -248,7 +248,7 @@ mod tests {
         };
 
         let query = "SELECT * FROM users /* pgdog_role: replica pgdog_shard: 2 */";
-        let result = comment(query, &schema).unwrap();
+        let result = parse_comment(query, &schema).unwrap();
         assert_eq!(result.0, Some(Shard::Direct(2)));
         assert_eq!(result.1, Some(Role::Replica));
     }
@@ -264,7 +264,7 @@ mod tests {
         };
 
         let query = "SELECT * FROM users /* pgdog_role: replica */";
-        let result = comment(query, &schema).unwrap();
+        let result = parse_comment(query, &schema).unwrap();
         assert_eq!(result.1, Some(Role::Replica));
     }
 
@@ -279,7 +279,7 @@ mod tests {
         };
 
         let query = "SELECT * FROM users /* pgdog_role: invalid */";
-        let result = comment(query, &schema).unwrap();
+        let result = parse_comment(query, &schema).unwrap();
         assert_eq!(result.1, None);
     }
 
@@ -294,7 +294,7 @@ mod tests {
         };
 
         let query = "SELECT * FROM users";
-        let result = comment(query, &schema).unwrap();
+        let result = parse_comment(query, &schema).unwrap();
         assert_eq!(result.1, None);
     }
 
@@ -319,7 +319,7 @@ mod tests {
         };
 
         let query = "SELECT * FROM users /* pgdog_sharding_key: sales */";
-        let result = comment(query, &schema).unwrap();
+        let result = parse_comment(query, &schema).unwrap();
         assert_eq!(result.0, Some(Shard::Direct(1)));
     }
 }

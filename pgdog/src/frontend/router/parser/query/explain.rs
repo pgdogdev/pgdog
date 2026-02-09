@@ -81,6 +81,38 @@ mod tests {
             &cluster.sharding_schema(),
             &cluster.schema(),
             &mut stmts,
+            None,
+            None,
+            "",
+            None,
+        )
+        .unwrap();
+        let mut buffer = ClientRequest::from(vec![Query::new(sql).into()]);
+        buffer.ast = Some(ast);
+
+        let params = Parameters::default();
+        let ctx = RouterContext::new(&buffer, &cluster, &params, None, Sticky::new()).unwrap();
+
+        match QueryParser::default().parse(ctx).unwrap().clone() {
+            Command::Query(route) => route,
+            _ => panic!("expected Query command"),
+        }
+    }
+
+    fn route_comment(sql: &str) -> Route {
+        enable_expanded_explain();
+        let cluster = Cluster::new_test(&config());
+        let mut stmts = PreparedStatements::default();
+
+        let (shard, role, _) = comment::parse_comment(sql, &cluster.sharding_schema()).unwrap();
+
+        let ast = Ast::new(
+            &BufferedQuery::Query(Query::new(sql)),
+            &cluster.sharding_schema(),
+            &cluster.schema(),
+            &mut stmts,
+            shard,
+            role,
             "",
             None,
         )
@@ -119,6 +151,8 @@ mod tests {
             &cluster.sharding_schema(),
             &cluster.schema(),
             &mut stmts,
+            None,
+            None,
             "",
             None,
         )
@@ -244,7 +278,7 @@ mod tests {
 
     #[test]
     fn test_explain_with_comment_override() {
-        let r = route("/* pgdog_shard: 5 */ EXPLAIN SELECT * FROM sharded");
+        let r = route_comment("/* pgdog_shard: 5 */ EXPLAIN SELECT * FROM sharded");
         assert_eq!(r.shard(), &Shard::Direct(5));
         let lines = r.explain().unwrap().render_lines();
         assert_eq!(lines[3], "  Shard 5: manual override to shard=5");
