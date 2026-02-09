@@ -12,6 +12,7 @@ pub mod idle_in_transaction;
 pub mod limit;
 pub mod maintenance_mode;
 pub mod max;
+pub mod multi_set;
 pub mod notify;
 pub mod per_stmt_routing;
 pub mod prepared;

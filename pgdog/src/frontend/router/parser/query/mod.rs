@@ -247,13 +247,22 @@ impl QueryParser {
             .run()?;
         }
 
+        let stmts = &statement.parse_result().protobuf.stmts;
+
+        // Handle multi-statement SET commands (e.g. "SET x TO 1; SET y TO 2").
+        if stmts.len() > 1 {
+            if let Some(command) = self.try_multi_set(stmts, context)? {
+                return Ok(command);
+            }
+        }
+
         //
         // Get the root AST node.
         //
         // We don't expect clients to send multiple queries. If they do
         // only the first one is used for routing.
         //
-        let root = statement.parse_result().protobuf.stmts.first();
+        let root = stmts.first();
 
         let root = if let Some(root) = root {
             root.stmt.as_ref().ok_or(Error::EmptyQuery)?
