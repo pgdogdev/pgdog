@@ -157,5 +157,78 @@ CREATE TABLE copy_data.with_identity(
 INSERT INTO copy_data.with_identity (tenant_id)
 SELECT floor(random() * 10000)::bigint FROM generate_series(1, 10000);
 
+CREATE TABLE IF NOT EXISTS copy_data.address (
+    street TEXT,
+    city TEXT,
+    state VARCHAR,
+    country VARCHAR,
+    zip TEXT
+);
+
+CREATE TABLE IF NOT EXISTS copy_data.customers (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    name VARCHAR NOT NULL,
+    address copy_data.address
+);
+
+TRUNCATE TABLE copy_data.customers;
+
+INSERT INTO copy_data.customers (tenant_id, name, address)
+SELECT
+    ((gs.id - 1) % 20) + 1 AS tenant_id,
+    CASE WHEN random() < 0.1 THEN format('Customer "%s" Jr.', gs.id)
+         ELSE format('Customer %s', gs.id)
+    END AS name,
+    CASE
+        WHEN random() < 0.1 THEN NULL
+        WHEN random() < 0.2 THEN ROW(
+            format('%s Main St', gs.id),
+            NULL,
+            NULL,
+            NULL,
+            NULL
+        )::copy_data.address
+        WHEN random() < 0.3 THEN ROW(
+            NULL,
+            (ARRAY['New York', 'Los Angeles', 'Chicago', 'Houston', 'Phoenix'])[floor(random() * 5 + 1)::int],
+            NULL,
+            NULL,
+            NULL
+        )::copy_data.address
+        WHEN random() < 0.4 THEN ROW(
+            NULL,
+            NULL,
+            NULL,
+            NULL,
+            lpad(floor(random() * 99999)::int::text, 5, '0')
+        )::copy_data.address
+        WHEN random() < 0.5 THEN ROW(
+            format('%s "Main" St', gs.id),
+            'New "York"',
+            'New York',
+            'United States',
+            lpad(floor(random() * 99999)::int::text, 5, '0')
+        )::copy_data.address
+        ELSE ROW(
+            format('%s Main St', gs.id),
+            (ARRAY['New York', 'Los Angeles', 'Chicago', 'Houston', 'Phoenix'])[floor(random() * 5 + 1)::int],
+            'CA',
+            'United States',
+            lpad(floor(random() * 99999)::int::text, 5, '0')
+        )::copy_data.address
+    END AS address
+FROM generate_series(1, 10000) AS gs(id);
+
+INSERT INTO copy_data.customers (tenant_id, name, address)
+VALUES (1, 'Customer with " quote', ROW('123 Main St', 'Boston', 'MA', 'United States', '02101')::copy_data.address);
+
+-- Entry with empty street field and trailing quote to trigger edge cases
+INSERT INTO copy_data.customers (tenant_id, name, address)
+VALUES (2, 'Annapolis Customer', ROW(NULL, 'Annapolis', 'Maryland', 'United States"', NULL)::copy_data.address);
+
+INSERT INTO copy_data.customers (tenant_id, name, address)
+VALUES (3, 'Quote in country', ROW(NULL, 'Annapolis', 'Maryland', 'United States', NULL)::copy_data.address);
+
 DROP PUBLICATION IF EXISTS pgdog;
 CREATE PUBLICATION pgdog FOR TABLES IN SCHEMA copy_data;
