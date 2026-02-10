@@ -82,6 +82,27 @@ fn test_multi_statement_no_set_falls_through() {
 }
 
 #[test]
+fn test_set_multi_statement_with_timezone_interval() {
+    let mut test = QueryParserTest::new();
+
+    let command = test.execute(vec![Query::new(
+        "SET client_min_messages TO warning;SET TIME ZONE INTERVAL '+00:00' HOUR TO MINUTE",
+    )
+    .into()]);
+
+    match command {
+        Command::Set { ref params, .. } => {
+            assert_eq!(params.len(), 2);
+            assert_eq!(params[0].name, "client_min_messages");
+            assert_eq!(params[0].value, ParameterValue::String("warning".into()));
+            assert_eq!(params[1].name, "timezone");
+            assert_eq!(params[1].value, ParameterValue::String("+00:00".into()));
+        }
+        _ => panic!("expected Command::Set, got {command:#?}"),
+    }
+}
+
+#[test]
 fn test_set_transaction_level() {
     let mut test = QueryParserTest::new();
 

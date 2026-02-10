@@ -25,6 +25,27 @@ async fn test_multi_set_simple_protocol() {
 }
 
 #[tokio::test]
+async fn test_multi_set_with_timezone_interval() {
+    for conn in connections_tokio().await {
+        conn.batch_execute(
+            "SET client_min_messages TO warning;SET TIME ZONE INTERVAL '+00:00' HOUR TO MINUTE",
+        )
+        .await
+        .unwrap();
+
+        let rows = conn.simple_query("SHOW client_min_messages").await.unwrap();
+        assert_eq!(extract_simple_query_value(&rows), "warning");
+
+        let rows = conn.simple_query("SHOW timezone").await.unwrap();
+        let tz = extract_simple_query_value(&rows);
+        assert!(
+            tz.contains("00:00") || tz == "UTC" || tz == "Etc/UTC",
+            "expected UTC-equivalent timezone, got {tz}",
+        );
+    }
+}
+
+#[tokio::test]
 async fn test_multi_set_mixed_returns_error() {
     for conn in connections_tokio().await {
         let err = conn

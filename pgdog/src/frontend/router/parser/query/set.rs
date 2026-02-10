@@ -62,14 +62,16 @@ impl QueryParser {
                 .ok_or(Error::EmptyQuery)?;
 
             match node {
-                NodeEnum::VariableSetStmt(stmt) => match Self::parse_set_param(stmt)? {
-                    Some(param) => {
+                NodeEnum::VariableSetStmt(stmt) => {
+                    if stmt.name.starts_with("TRANSACTION") {
+                        has_other = true;
+                    } else {
                         has_set = true;
-                        params.push(param);
+                        if let Some(param) = Self::parse_set_param(stmt)? {
+                            params.push(param);
+                        }
                     }
-                    // SET TRANSACTION etc. — treat as non-SET
-                    None => has_other = true,
-                },
+                }
                 _ => has_other = true,
             }
 
@@ -92,26 +94,27 @@ impl QueryParser {
         let mut value = vec![];
 
         for node in &stmt.args {
-            if let Some(NodeEnum::AConst(AConst { val: Some(val), .. })) = &node.node {
-                match val {
-                    Val::Sval(String { sval }) => {
-                        value.push(sval.to_string());
-                    }
-
-                    Val::Ival(Integer { ival }) => {
-                        value.push(ival.to_string());
-                    }
-
-                    Val::Fval(Float { fval }) => {
-                        value.push(fval.to_string());
-                    }
-
-                    Val::Boolval(Boolean { boolval }) => {
-                        value.push(boolval.to_string());
-                    }
-
+            match &node.node {
+                Some(NodeEnum::AConst(AConst { val: Some(val), .. })) => match val {
+                    Val::Sval(String { sval }) => value.push(sval.to_string()),
+                    Val::Ival(Integer { ival }) => value.push(ival.to_string()),
+                    Val::Fval(Float { fval }) => value.push(fval.to_string()),
+                    Val::Boolval(Boolean { boolval }) => value.push(boolval.to_string()),
                     _ => (),
+                },
+                // e.g. SET TIME ZONE INTERVAL '+00:00' HOUR TO MINUTE
+                Some(NodeEnum::TypeCast(tc)) => {
+                    if let Some(ref arg) = tc.arg {
+                        if let Some(NodeEnum::AConst(AConst {
+                            val: Some(Val::Sval(String { ref sval })),
+                            ..
+                        })) = arg.node
+                        {
+                            value.push(sval.to_string());
+                        }
+                    }
                 }
+                _ => (),
             }
         }
 
