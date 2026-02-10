@@ -378,9 +378,9 @@ fn test_set() {
         command!("SET TIME ZONE 'UTC'"),
     ] {
         match command {
-            Command::Set { name, value, .. } => {
-                assert_eq!(name, "timezone");
-                assert_eq!(value, ParameterValue::from("UTC"));
+            Command::Set { params, .. } => {
+                assert_eq!(params[0].name, "timezone");
+                assert_eq!(params[0].value, ParameterValue::from("UTC"));
             }
             _ => panic!("not a set"),
         };
@@ -388,9 +388,9 @@ fn test_set() {
 
     let (command, _) = command!("SET statement_timeout TO 3000");
     match command {
-        Command::Set { name, value, .. } => {
-            assert_eq!(name, "statement_timeout");
-            assert_eq!(value, ParameterValue::from("3000"));
+        Command::Set { params, .. } => {
+            assert_eq!(params[0].name, "statement_timeout");
+            assert_eq!(params[0].value, ParameterValue::from("3000"));
         }
         _ => panic!("not a set"),
     };
@@ -399,9 +399,9 @@ fn test_set() {
     // The server will report an error on synchronization.
     let (command, _) = command!("SET is_superuser TO true");
     match command {
-        Command::Set { name, value, .. } => {
-            assert_eq!(name, "is_superuser");
-            assert_eq!(value, ParameterValue::from("true"));
+        Command::Set { params, .. } => {
+            assert_eq!(params[0].name, "is_superuser");
+            assert_eq!(params[0].value, ParameterValue::from("true"));
         }
         _ => panic!("not a set"),
     };
@@ -416,10 +416,10 @@ fn test_set() {
 
     let (command, _) = command!("SET search_path TO \"$user\", public, \"APPLES\"");
     match command {
-        Command::Set { name, value, .. } => {
-            assert_eq!(name, "search_path");
+        Command::Set { params, .. } => {
+            assert_eq!(params[0].name, "search_path");
             assert_eq!(
-                value,
+                params[0].value,
                 ParameterValue::Tuple(vec!["$user".into(), "public".into(), "APPLES".into()])
             )
         }
@@ -462,7 +462,7 @@ fn test_set() {
 
     let command = command!("SET LOCAL work_mem TO 1");
     match command.0 {
-        Command::Set { local, .. } => assert!(local),
+        Command::Set { params, .. } => assert!(params[0].local),
         _ => panic!("not a set"),
     }
 }
@@ -500,13 +500,11 @@ fn test_transaction() {
         cluster.clone()
     );
     match route {
-        Command::Set {
-            name, value, local, ..
-        } => {
-            assert_eq!(name, "application_name");
-            assert_eq!(value.as_str().unwrap(), "test");
+        Command::Set { params, .. } => {
+            assert_eq!(params[0].name, "application_name");
+            assert_eq!(params[0].value.as_str().unwrap(), "test");
             assert!(!cluster.read_only());
-            assert!(!local);
+            assert!(!params[0].local);
         }
 
         _ => panic!("not a query"),

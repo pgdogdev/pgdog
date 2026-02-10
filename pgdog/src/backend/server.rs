@@ -59,6 +59,7 @@ pub struct Server {
     in_transaction: bool,
     re_synced: bool,
     replication_mode: bool,
+    statement_executed: bool,
     pooler_mode: PoolerMode,
     stream_buffer: MessageBuffer,
     disconnect_reason: Option<DisconnectReason>,
@@ -268,6 +269,7 @@ impl Server {
             schema_changed: false,
             sync_prepared: false,
             in_transaction: false,
+            statement_executed: false,
             re_synced: false,
             pooler_mode: PoolerMode::Transaction,
             stream_buffer: MessageBuffer::new(cfg.config.memory.message_buffer),
@@ -422,6 +424,7 @@ impl Server {
                 }
                 self.stream_buffer.shrink_to_fit();
                 self.streaming = false;
+                self.statement_executed = false;
             }
             'E' => {
                 let error = ErrorResponse::from_bytes(message.to_bytes()?)?;
@@ -448,6 +451,7 @@ impl Server {
                     "RESET" => self.client_params.clear(), // Someone reset params, we're gonna need to re-sync.
                     _ => (),
                 }
+                self.statement_executed = true;
             }
             'G' => self.stats.copy_mode(),
             '1' => self.stats.parse_complete(),
@@ -556,7 +560,7 @@ impl Server {
     /// There are no more expected messages from the server connection
     /// and we haven't started an explicit transaction.
     pub fn done(&self) -> bool {
-        self.prepared_statements.done() && !self.in_transaction()
+        self.prepared_statements.done() && !self.in_transaction() && !self.statement_executed
     }
 
     /// Server hasn't finished sending or receiving a complete message.
@@ -1032,6 +1036,7 @@ pub mod test {
                 pooler_mode: PoolerMode::Transaction,
                 stream_buffer: MessageBuffer::new(4096),
                 disconnect_reason: None,
+                statement_executed: false,
             }
         }
     }
@@ -2651,5 +2656,101 @@ pub mod test {
         assert_eq!(msg.code(), 'Z');
 
         server.execute("ROLLBACK").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_extended_execute_flush_not_done_without_sync() {
+        let mut server = test_server().await;
+
+        server
+            .send(
+                &vec![
+                    Parse::named("test_no_sync", "SELECT 1").into(),
+                    Describe::new_statement("test_no_sync").into(),
+                    Flush.into(),
+                ]
+                .into(),
+            )
+            .await
+            .unwrap();
+
+        for c in ['1', 't', 'T'] {
+            let msg = server.read().await.unwrap();
+            assert_eq!(msg.code(), c);
+        }
+        assert!(server.done());
+
+        server
+            .send(
+                &vec![
+                    Bind::new_statement("test_no_sync").into(),
+                    Execute::new().into(),
+                    Flush.into(),
+                ]
+                .into(),
+            )
+            .await
+            .unwrap();
+
+        for c in ['2', 'D', 'C'] {
+            let msg = server.read().await.unwrap();
+            assert_eq!(msg.code(), c);
+            assert!(!server.done());
+        }
+
+        server
+            .send(&vec![ProtocolMessage::from(Sync)].into())
+            .await
+            .unwrap();
+        let msg = server.read().await.unwrap();
+        assert_eq!(msg.code(), 'Z');
+        assert!(server.done());
+    }
+
+    #[tokio::test]
+    async fn test_parse_describe_flush_done_without_execute() {
+        let mut server = test_server().await;
+
+        server
+            .send(
+                &vec![
+                    Parse::named("test_no_exec", "SELECT 1").into(),
+                    Describe::new_statement("test_no_exec").into(),
+                    Flush.into(),
+                ]
+                .into(),
+            )
+            .await
+            .unwrap();
+
+        for c in ['1', 't'] {
+            let msg = server.read().await.unwrap();
+            assert_eq!(msg.code(), c);
+            assert!(!server.done());
+        }
+
+        let msg = server.read().await.unwrap();
+        assert_eq!(msg.code(), 'T');
+        assert!(server.done());
+    }
+
+    #[tokio::test]
+    async fn test_simple_query_not_done_until_ready_for_query() {
+        let mut server = test_server().await;
+
+        server
+            .send(&vec![Query::new("SELECT 1").into()].into())
+            .await
+            .unwrap();
+
+        for c in ['T', 'D', 'C'] {
+            let msg = server.read().await.unwrap();
+            assert_eq!(msg.code(), c);
+            assert!(!server.done());
+        }
+
+        let msg = server.read().await.unwrap();
+        assert_eq!(msg.code(), 'Z');
+        assert!(server.done());
     }
 }
