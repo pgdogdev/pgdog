@@ -60,6 +60,7 @@ pub struct Server {
     re_synced: bool,
     replication_mode: bool,
     statement_executed: bool,
+    sending_request: bool,
     pooler_mode: PoolerMode,
     stream_buffer: MessageBuffer,
     disconnect_reason: Option<DisconnectReason>,
@@ -271,6 +272,7 @@ impl Server {
             in_transaction: false,
             statement_executed: false,
             re_synced: false,
+            sending_request: false,
             pooler_mode: PoolerMode::Transaction,
             stream_buffer: MessageBuffer::new(cfg.config.memory.message_buffer),
             disconnect_reason: None,
@@ -300,12 +302,20 @@ impl Server {
 
     /// Send messages to the server and flush the buffer.
     pub async fn send(&mut self, client_request: &ClientRequest) -> Result<(), Error> {
+        // Request is being sent to the server, so the
+        // server connection is in a partial state.
+        self.sending_request = true;
+
         self.stats.state(State::Active);
 
         for message in client_request.messages.iter() {
             self.send_one(message).await?;
         }
         self.flush().await?;
+
+        // The whole request is now in server's hands.
+        // We can recover the connection from this point on.
+        self.sending_request = false;
 
         self.stats.state(State::ReceivingData);
 
@@ -620,6 +630,11 @@ impl Server {
     /// Connection was left with an unfinished query.
     pub fn needs_drain(&self) -> bool {
         !self.in_sync()
+    }
+
+    /// A request is being sent by a client.
+    pub fn sending_request(&self) -> bool {
+        self.sending_request
     }
 
     /// Close the connection, don't do any recovery.
@@ -1037,6 +1052,7 @@ pub mod test {
                 stream_buffer: MessageBuffer::new(4096),
                 disconnect_reason: None,
                 statement_executed: false,
+                sending_request: false,
             }
         }
     }
