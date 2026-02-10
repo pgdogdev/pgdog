@@ -5,6 +5,13 @@ use crate::{
 };
 use lazy_static::lazy_static;
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct SetParam {
+    pub name: String,
+    pub value: ParameterValue,
+    pub local: bool,
+}
+
 #[derive(Debug, Clone)]
 pub enum Command {
     Query(Route),
@@ -22,9 +29,7 @@ pub enum Command {
     },
     ReplicationMeta,
     Set {
-        name: String,
-        value: ParameterValue,
-        local: bool,
+        params: Vec<SetParam>,
         route: Route,
     },
     PreparedStatement(Prepare),
