@@ -1,0 +1,92 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Non-sharded models
+model PrismaUser {
+  id        Int      @id @default(autoincrement())
+  email     String   @unique
+  name      String?
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at")
+  posts     PrismaPost[]
+
+  @@map("prisma_users")
+}
+
+model PrismaPost {
+  id        Int      @id @default(autoincrement())
+  title     String
+  content   String?
+  published Boolean  @default(false)
+  authorId  Int      @map("author_id")
+  author    PrismaUser @relation(fields: [authorId], references: [id])
+
+  @@map("prisma_posts")
+}
+
+model PrismaProduct {
+  id       Int     @id @default(autoincrement())
+  name     String
+  price    Decimal @db.Decimal(10, 2)
+  stock    Int     @default(0)
+  category String?
+  metadata Json?
+
+  @@map("prisma_products")
+}
+
+model PrismaAccount {
+  id      Int     @id @default(autoincrement())
+  name    String
+  balance Decimal @db.Decimal(10, 2) @default(0)
+
+  @@map("prisma_accounts")
+}
+
+// Sharded models (customer_id as sharding key)
+model ShardedOrder {
+  id         BigInt  @id
+  customerId BigInt  @map("customer_id")
+  total      Decimal @db.Decimal(10, 2)
+  status     String
+  items      ShardedOrderItem[]
+
+  @@map("sharded_orders")
+}
+
+model ShardedOrderItem {
+  id          BigInt  @id
+  customerId  BigInt  @map("customer_id")
+  orderId     BigInt  @map("order_id")
+  productName String  @map("product_name")
+  quantity    Int
+  price       Decimal @db.Decimal(10, 2)
+  order       ShardedOrder @relation(fields: [orderId], references: [id])
+
+  @@map("sharded_order_items")
+}
+
+model ShardedCustomerEvent {
+  id         BigInt   @id
+  customerId BigInt   @map("customer_id")
+  eventType  String   @map("event_type")
+  payload    Json?
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  @@map("sharded_customer_events")
+}
+
+model ShardedMetric {
+  id         BigInt @id
+  customerId BigInt @map("customer_id")
+  name       String
+  value      Int
+
+  @@map("sharded_metrics")
+}

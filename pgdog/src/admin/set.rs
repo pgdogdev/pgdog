@@ -160,6 +160,10 @@ impl Command for Set {
                 config.config.general.client_idle_in_transaction_timeout = self.value.parse()?;
             }
 
+            "reload_schema_on_ddl" => {
+                config.config.general.reload_schema_on_ddl = Self::from_json(&self.value)?;
+            }
+
             _ => return Err(Error::Syntax),
         }
 
