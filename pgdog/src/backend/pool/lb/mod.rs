@@ -76,7 +76,7 @@ pub struct LoadBalancer {
     pub(super) round_robin: Arc<AtomicUsize>,
     /// Chosen load balancing strategy.
     pub(super) lb_strategy: LoadBalancingStrategy,
-    /// Maintenance. notification.
+    /// Maintenance notification.
     pub(super) maintenance: Arc<Notify>,
     /// Read/write split.
     pub(super) rw_split: ReadWriteSplit,

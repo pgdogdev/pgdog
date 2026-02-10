@@ -1,5 +1,6 @@
 //! Schema operations.
 pub mod columns;
+pub mod postgres_fdw;
 pub mod relation;
 pub mod sync;
 

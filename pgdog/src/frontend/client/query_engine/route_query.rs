@@ -88,6 +88,7 @@ impl QueryEngine {
             context.transaction,
             context.sticky,
         )?;
+
         match self.router.query(router_context) {
             Ok(command) => {
                 context.client_request.route = Some(command.route().clone());

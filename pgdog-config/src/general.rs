@@ -5,7 +5,9 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use crate::pooling::ConnectionRecovery;
-use crate::{CopyFormat, QueryParserEngine, QueryParserLevel, SystemCatalogsBehavior};
+use crate::{
+    CopyFormat, CrossShardBackend, QueryParserEngine, QueryParserLevel, SystemCatalogsBehavior,
+};
 
 use super::auth::{AuthType, PassthoughAuth};
 use super::database::{LoadBalancingStrategy, ReadWriteSplit, ReadWriteStrategy};
@@ -206,6 +208,9 @@ pub struct General {
     /// Trigger a schema reload on DDL like CREATE TABLE.
     #[serde(default = "General::reload_schema_on_ddl")]
     pub reload_schema_on_ddl: bool,
+    /// Cross-shard backend.
+    #[serde(default = "General::cross_shard_backend")]
+    pub cross_shard_backend: CrossShardBackend,
 }
 
 impl Default for General {
@@ -278,6 +283,7 @@ impl Default for General {
             omnisharded_sticky: bool::default(),
             resharding_copy_format: CopyFormat::default(),
             reload_schema_on_ddl: Self::reload_schema_on_ddl(),
+            cross_shard_backend: Self::cross_shard_backend(),
         }
     }
 }
@@ -404,6 +410,10 @@ impl General {
             "PGDOG_QUERY_TIMEOUT",
             crate::MAX_DURATION.as_millis() as u64,
         )
+    }
+
+    fn cross_shard_backend() -> CrossShardBackend {
+        Self::env_enum_or_default("PGDOG_CROSS_SHARD_BACKEND")
     }
 
     pub fn query_timeout(&self) -> Duration {

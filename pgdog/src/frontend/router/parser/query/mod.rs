@@ -24,6 +24,7 @@ use super::{
 mod ddl;
 mod delete;
 mod explain;
+mod fdw_fallback;
 mod plugins;
 mod schema_sharding;
 mod select;
@@ -347,7 +348,7 @@ impl QueryParser {
 
         // e.g. Parse, Describe, Flush-style flow.
         if !context.router_context.executable {
-            if let Command::Query(ref query) = command {
+            if let Command::Query(ref mut query) = command {
                 if query.is_cross_shard() && statement.rewrite_plan.insert_split.is_empty() {
                     context
                         .shards_calculator
@@ -355,13 +356,11 @@ impl QueryParser {
                             round_robin::next() % context.shards,
                         )));
 
+                    query.set_shard_mut(context.shards_calculator.shard().clone());
+
                     // Since this query isn't executable and we decided
                     // to route it to any shard, we can early return here.
-                    return Ok(Command::Query(
-                        query
-                            .clone()
-                            .with_shard(context.shards_calculator.shard().clone()),
-                    ));
+                    return Ok(command);
                 }
             }
         }
@@ -381,6 +380,14 @@ impl QueryParser {
             let shard = context.shards_calculator.shard();
             if shard.is_direct() {
                 route.set_shard_mut(shard);
+            }
+
+            // User requested fdw backend. Cool, but never for DDL.
+            if context.router_context.parameter_hints.use_fdw_fallback()
+                && !route.is_ddl()
+                && context.router_context.cluster.fdw_fallback_enabled()
+            {
+                route.set_fdw_fallback(true);
             }
         }
 

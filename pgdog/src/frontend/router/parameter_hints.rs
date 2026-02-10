@@ -16,6 +16,7 @@ pub struct ParameterHints<'a> {
     pub pgdog_shard: Option<&'a ParameterValue>,
     pub pgdog_sharding_key: Option<&'a ParameterValue>,
     pub pgdog_role: Option<&'a ParameterValue>,
+    pub pgdog_cross_shard_backend: Option<&'a ParameterValue>,
     hooks: ParserHooks,
 }
 
@@ -26,6 +27,7 @@ impl<'a> From<&'a Parameters> for ParameterHints<'a> {
             pgdog_shard: value.get("pgdog.shard"),
             pgdog_role: value.get("pgdog.role"),
             pgdog_sharding_key: value.get("pgdog.sharding_key"),
+            pgdog_cross_shard_backend: value.get("pgdog.cross_shard_backend"),
             hooks: ParserHooks::default(),
         }
     }
@@ -112,6 +114,13 @@ impl ParameterHints<'_> {
 
         role
     }
+
+    /// User said fdw
+    pub(crate) fn use_fdw_fallback(&self) -> bool {
+        self.pgdog_cross_shard_backend
+            .map(|s| s.as_str() == Some("fdw"))
+            .unwrap_or_default()
+    }
 }
 
 #[cfg(test)]
@@ -148,6 +157,7 @@ mod tests {
             pgdog_shard: None,
             pgdog_sharding_key: Some(&sharding_key),
             pgdog_role: None,
+            pgdog_cross_shard_backend: None,
             hooks: ParserHooks::default(),
         };
 
@@ -169,6 +179,7 @@ mod tests {
             pgdog_shard: None,
             pgdog_sharding_key: Some(&sharding_key),
             pgdog_role: None,
+            pgdog_cross_shard_backend: None,
             hooks: ParserHooks::default(),
         };
 

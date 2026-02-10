@@ -6,7 +6,7 @@ use tracing::{info, warn};
 
 use crate::sharding::ShardedSchema;
 use crate::{
-    system_catalogs, EnumeratedDatabase, Memory, OmnishardedTable, PassthoughAuth,
+    system_catalogs, EnumeratedDatabase, Fdw, Memory, OmnishardedTable, PassthoughAuth,
     PreparedStatements, QueryParserEngine, QueryParserLevel, ReadWriteSplit, RewriteMode, Role,
     SystemCatalogsBehavior,
 };
@@ -187,6 +187,9 @@ pub struct Config {
     /// Memory tweaks
     #[serde(default)]
     pub memory: Memory,
+
+    #[serde(default)]
+    pub fdw: Fdw,
 }
 
 impl Config {
