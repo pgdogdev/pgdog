@@ -38,7 +38,7 @@ async function setupSchema(prisma) {
   // Prisma ORM always uses schema-qualified names (public.tablename), so we must
   // create tables explicitly in the public schema
   await prisma.$executeRaw`
-    CREATE TABLE IF NOT EXISTS public.prisma_users (
+    CREATE TABLE IF NOT EXISTS public.prm_users_9k (
       id SERIAL PRIMARY KEY,
       email TEXT UNIQUE NOT NULL,
       name TEXT,
@@ -48,17 +48,17 @@ async function setupSchema(prisma) {
   `;
 
   await prisma.$executeRaw`
-    CREATE TABLE IF NOT EXISTS public.prisma_posts (
+    CREATE TABLE IF NOT EXISTS public.prm_posts_9k (
       id SERIAL PRIMARY KEY,
       title TEXT NOT NULL,
       content TEXT,
       published BOOLEAN DEFAULT false,
-      author_id INT REFERENCES public.prisma_users(id) ON DELETE CASCADE
+      author_id INT REFERENCES public.prm_users_9k(id) ON DELETE CASCADE
     )
   `;
 
   await prisma.$executeRaw`
-    CREATE TABLE IF NOT EXISTS public.prisma_products (
+    CREATE TABLE IF NOT EXISTS public.prm_products_9k (
       id SERIAL PRIMARY KEY,
       name TEXT NOT NULL,
       price DECIMAL(10, 2),
@@ -69,13 +69,25 @@ async function setupSchema(prisma) {
   `;
 
   await prisma.$executeRaw`
-    CREATE TABLE IF NOT EXISTS public.prisma_accounts (
+    CREATE TABLE IF NOT EXISTS public.prm_accounts_9k (
       id SERIAL PRIMARY KEY,
       name TEXT NOT NULL,
       balance DECIMAL(10, 2) DEFAULT 0
     )
   `;
 }
+
+// ---------------------------------------------------------------------------
+// Global setup/teardown for admin settings
+// ---------------------------------------------------------------------------
+
+before(async function () {
+  await setupAdmin();
+});
+
+after(async function () {
+  await teardownAdmin();
+});
 
 // ---------------------------------------------------------------------------
 // Basic CRUD using Prisma ORM
@@ -85,7 +97,6 @@ describe("Prisma ORM CRUD", function () {
   let prisma;
 
   before(async function () {
-    await setupAdmin();
     prisma = createPrisma();
     await prisma.$connect();
     await setupSchema(prisma);
@@ -569,7 +580,6 @@ describe("Prisma ORM update operations", function () {
 
   after(async function () {
     await prisma.$disconnect();
-    await teardownAdmin();
   });
 
   it("updateMany", async function () {

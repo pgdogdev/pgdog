@@ -1,8 +1,10 @@
 import { Sequelize, DataTypes } from "sequelize";
+import pg from "pg";
 import assert from "assert";
 
 const PGDOG_HOST = "127.0.0.1";
 const PGDOG_PORT = 6432;
+const ADMIN_URL = "postgresql://admin:pgdog@127.0.0.1:6432/admin";
 
 function createSequelize(database = "pgdog", opts = {}) {
   return new Sequelize(database, "pgdog", "pgdog", {
@@ -14,6 +16,34 @@ function createSequelize(database = "pgdog", opts = {}) {
     ...opts,
   });
 }
+
+async function setupAdmin() {
+  const client = new pg.Client({ connectionString: ADMIN_URL });
+  await client.connect();
+  await client.query("SET rewrite_enabled TO true");
+  await client.query("SET rewrite_split_inserts TO rewrite");
+  await client.query("SET reload_schema_on_ddl TO true");
+  await client.end();
+}
+
+async function teardownAdmin() {
+  const client = new pg.Client({ connectionString: ADMIN_URL });
+  await client.connect();
+  await client.query("RELOAD");
+  await client.end();
+}
+
+// ---------------------------------------------------------------------------
+// Global setup/teardown for admin settings
+// ---------------------------------------------------------------------------
+
+before(async function () {
+  await setupAdmin();
+});
+
+after(async function () {
+  await teardownAdmin();
+});
 
 // ---------------------------------------------------------------------------
 // Regular (non-sharded) ORM tests
@@ -32,14 +62,14 @@ describe("Sequelize regular ORM", function () {
         name: { type: DataTypes.STRING, allowNull: false },
         quantity: { type: DataTypes.INTEGER, defaultValue: 0 },
       },
-      { tableName: "sequelize_items", timestamps: true }
+      { tableName: "seq_items_7x", timestamps: true }
     );
 
     await Item.sync({ force: true });
   });
 
   after(async function () {
-    await seq.query('DROP TABLE IF EXISTS "sequelize_items"');
+    await seq.query('DROP TABLE IF EXISTS "seq_items_7x"');
     await seq.close();
   });
 
@@ -208,7 +238,7 @@ describe("Sequelize associations", function () {
       {
         name: { type: DataTypes.STRING, allowNull: false },
       },
-      { tableName: "sequelize_authors", timestamps: false }
+      { tableName: "seq_authors_7x", timestamps: false }
     );
 
     Book = seq.define(
@@ -220,7 +250,7 @@ describe("Sequelize associations", function () {
           references: { model: Author, key: "id" },
         },
       },
-      { tableName: "sequelize_books", timestamps: false }
+      { tableName: "seq_books_7x", timestamps: false }
     );
 
     Tag = seq.define(
@@ -228,13 +258,13 @@ describe("Sequelize associations", function () {
       {
         name: { type: DataTypes.STRING, allowNull: false },
       },
-      { tableName: "sequelize_tags", timestamps: false }
+      { tableName: "seq_tags_7x", timestamps: false }
     );
 
     BookTag = seq.define(
       "BookTag",
       {},
-      { tableName: "sequelize_book_tags", timestamps: false }
+      { tableName: "seq_book_tags_7x", timestamps: false }
     );
 
     Author.hasMany(Book, { foreignKey: "authorId", as: "books" });
@@ -246,10 +276,10 @@ describe("Sequelize associations", function () {
   });
 
   after(async function () {
-    await seq.query('DROP TABLE IF EXISTS "sequelize_book_tags"');
-    await seq.query('DROP TABLE IF EXISTS "sequelize_books"');
-    await seq.query('DROP TABLE IF EXISTS "sequelize_authors"');
-    await seq.query('DROP TABLE IF EXISTS "sequelize_tags"');
+    await seq.query('DROP TABLE IF EXISTS "seq_book_tags_7x"');
+    await seq.query('DROP TABLE IF EXISTS "seq_books_7x"');
+    await seq.query('DROP TABLE IF EXISTS "seq_authors_7x"');
+    await seq.query('DROP TABLE IF EXISTS "seq_tags_7x"');
     await seq.close();
   });
 
@@ -330,7 +360,7 @@ describe("Sequelize advanced queries", function () {
         price: { type: DataTypes.DECIMAL(10, 2) },
         stock: { type: DataTypes.INTEGER, defaultValue: 0 },
       },
-      { tableName: "sequelize_products", timestamps: false }
+      { tableName: "seq_products_7x", timestamps: false }
     );
 
     await Product.sync({ force: true });
@@ -345,7 +375,7 @@ describe("Sequelize advanced queries", function () {
   });
 
   after(async function () {
-    await seq.query('DROP TABLE IF EXISTS "sequelize_products"');
+    await seq.query('DROP TABLE IF EXISTS "seq_products_7x"');
     await seq.close();
   });
 
@@ -486,15 +516,15 @@ describe("Sequelize data types", function () {
         float_col: { type: DataTypes.FLOAT },
         enum_col: { type: DataTypes.ENUM("active", "inactive", "pending") },
       },
-      { tableName: "sequelize_type_test", timestamps: false }
+      { tableName: "seq_types_7x", timestamps: false }
     );
 
     await TypeTest.sync({ force: true });
   });
 
   after(async function () {
-    await seq.query('DROP TABLE IF EXISTS "sequelize_type_test"');
-    await seq.query('DROP TYPE IF EXISTS "enum_sequelize_type_test_enum_col"');
+    await seq.query('DROP TABLE IF EXISTS "seq_types_7x"');
+    await seq.query('DROP TYPE IF EXISTS "enum_seq_types_7x_enum_col"');
     await seq.close();
   });
 
@@ -520,7 +550,7 @@ describe("Sequelize data types", function () {
     await TypeTest.create({ jsonb_col: data });
 
     const [rows] = await seq.query(
-      `SELECT * FROM sequelize_type_test WHERE jsonb_col->>'status' = 'active'`
+      `SELECT * FROM seq_types_7x WHERE jsonb_col->>'status' = 'active'`
     );
     assert.ok(rows.length >= 1);
   });
@@ -619,7 +649,7 @@ describe("Sequelize edge cases", function () {
     const TempTable = seq.define(
       "Temp",
       { value: DataTypes.STRING },
-      { tableName: "sequelize_temp", timestamps: false }
+      { tableName: "seq_temp_7x", timestamps: false }
     );
     await TempTable.sync({ force: true });
 
@@ -645,7 +675,7 @@ describe("Sequelize edge cases", function () {
       throw err;
     }
 
-    await seq.query('DROP TABLE IF EXISTS "sequelize_temp"');
+    await seq.query('DROP TABLE IF EXISTS "seq_temp_7x"');
     await seq.close();
   });
 
@@ -654,7 +684,7 @@ describe("Sequelize edge cases", function () {
     const Counter = seq.define(
       "Counter",
       { value: DataTypes.INTEGER },
-      { tableName: "sequelize_counter", timestamps: false }
+      { tableName: "seq_counter_7x", timestamps: false }
     );
     await Counter.sync({ force: true });
 
@@ -667,7 +697,7 @@ describe("Sequelize edge cases", function () {
     const count = await Counter.count();
     assert.strictEqual(count, 10);
 
-    await seq.query('DROP TABLE IF EXISTS "sequelize_counter"');
+    await seq.query('DROP TABLE IF EXISTS "seq_counter_7x"');
     await seq.close();
   });
 
@@ -676,7 +706,7 @@ describe("Sequelize edge cases", function () {
     const Mixed = seq.define(
       "Mixed",
       { value: DataTypes.INTEGER },
-      { tableName: "sequelize_mixed", timestamps: false }
+      { tableName: "seq_mixed_7x", timestamps: false }
     );
     await Mixed.sync({ force: true });
 
@@ -690,7 +720,7 @@ describe("Sequelize edge cases", function () {
     const count = await Mixed.count();
     assert.strictEqual(count, 6);
 
-    await seq.query('DROP TABLE IF EXISTS "sequelize_mixed"');
+    await seq.query('DROP TABLE IF EXISTS "seq_mixed_7x"');
     await seq.close();
   });
 
@@ -699,7 +729,7 @@ describe("Sequelize edge cases", function () {
     const SeqTx = seq.define(
       "SeqTx",
       { value: DataTypes.INTEGER },
-      { tableName: "sequelize_seqtx", timestamps: false }
+      { tableName: "seq_seqtx_7x", timestamps: false }
     );
     await SeqTx.sync({ force: true });
 
@@ -712,7 +742,7 @@ describe("Sequelize edge cases", function () {
     const count = await SeqTx.count();
     assert.strictEqual(count, 5);
 
-    await seq.query('DROP TABLE IF EXISTS "sequelize_seqtx"');
+    await seq.query('DROP TABLE IF EXISTS "seq_seqtx_7x"');
     await seq.close();
   });
 
@@ -746,7 +776,7 @@ describe("Sequelize edge cases", function () {
     const Empty = seq.define(
       "Empty",
       { value: DataTypes.STRING },
-      { tableName: "sequelize_empty", timestamps: false }
+      { tableName: "seq_empty_7x", timestamps: false }
     );
     await Empty.sync({ force: true });
 
@@ -756,7 +786,7 @@ describe("Sequelize edge cases", function () {
     const one = await Empty.findOne();
     assert.strictEqual(one, null);
 
-    await seq.query('DROP TABLE IF EXISTS "sequelize_empty"');
+    await seq.query('DROP TABLE IF EXISTS "seq_empty_7x"');
     await seq.close();
   });
 
@@ -765,7 +795,7 @@ describe("Sequelize edge cases", function () {
     const Special = seq.define(
       "Special",
       { value: DataTypes.TEXT },
-      { tableName: "sequelize_special", timestamps: false }
+      { tableName: "seq_special_7x", timestamps: false }
     );
     await Special.sync({ force: true });
 
@@ -785,7 +815,7 @@ describe("Sequelize edge cases", function () {
       assert.strictEqual(found.value, str);
     }
 
-    await seq.query('DROP TABLE IF EXISTS "sequelize_special"');
+    await seq.query('DROP TABLE IF EXISTS "seq_special_7x"');
     await seq.close();
   });
 
@@ -794,7 +824,7 @@ describe("Sequelize edge cases", function () {
     const LongTx = seq.define(
       "LongTx",
       { value: DataTypes.INTEGER },
-      { tableName: "sequelize_longtx", timestamps: false }
+      { tableName: "seq_longtx_7x", timestamps: false }
     );
     await LongTx.sync({ force: true });
 
@@ -815,8 +845,388 @@ describe("Sequelize edge cases", function () {
     const countAfter = await LongTx.count();
     assert.strictEqual(countAfter, 50);
 
-    await seq.query('DROP TABLE IF EXISTS "sequelize_longtx"');
+    await seq.query('DROP TABLE IF EXISTS "seq_longtx_7x"');
     await seq.close();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Sharded CRUD tests
+// ---------------------------------------------------------------------------
+
+describe("Sequelize sharded CRUD", function () {
+  let seq;
+  let ShardedOrder;
+
+  before(async function () {
+    seq = createSequelize("pgdog_sharded");
+
+    ShardedOrder = seq.define(
+      "ShardedOrder",
+      {
+        id: { type: DataTypes.BIGINT, primaryKey: true },
+        customerId: { type: DataTypes.BIGINT, allowNull: false, field: "customer_id" },
+        total: { type: DataTypes.DECIMAL(10, 2) },
+        status: { type: DataTypes.STRING },
+      },
+      { tableName: "seq_sh_orders_7x", timestamps: false }
+    );
+
+    await seq.query(`
+      CREATE TABLE IF NOT EXISTS public.seq_sh_orders_7x (
+        id BIGINT PRIMARY KEY,
+        customer_id BIGINT NOT NULL,
+        total DECIMAL(10, 2),
+        status TEXT
+      )
+    `);
+
+    await ShardedOrder.destroy({ where: {} });
+  });
+
+  after(async function () {
+    await seq.query('DROP TABLE IF EXISTS public.seq_sh_orders_7x');
+    await seq.close();
+  });
+
+  it("create order with ORM", async function () {
+    const order = await ShardedOrder.create({
+      id: 1,
+      customerId: 1,
+      total: 100.0,
+      status: "pending",
+    });
+    assert.strictEqual(String(order.customerId), "1");
+    assert.strictEqual(order.status, "pending");
+  });
+
+  it("findAll by customer_id", async function () {
+    await ShardedOrder.bulkCreate([
+      { id: 2, customerId: 1, total: 200.0, status: "pending" },
+      { id: 3, customerId: 1, total: 300.0, status: "shipped" },
+    ]);
+
+    const orders = await ShardedOrder.findAll({
+      where: { customerId: 1 },
+    });
+    assert.strictEqual(orders.length, 3);
+  });
+
+  it("findOne by customer_id", async function () {
+    const order = await ShardedOrder.findOne({
+      where: { customerId: 1 },
+    });
+    assert.ok(order);
+    assert.strictEqual(String(order.customerId), "1");
+  });
+
+  it("findByPk", async function () {
+    const order = await ShardedOrder.findByPk(1);
+    assert.ok(order);
+    assert.strictEqual(String(order.id), "1");
+  });
+
+  it("update by id", async function () {
+    await ShardedOrder.update(
+      { status: "completed" },
+      { where: { id: 1 } }
+    );
+    const order = await ShardedOrder.findByPk(1);
+    assert.strictEqual(order.status, "completed");
+  });
+
+  it("update many by customer_id", async function () {
+    await ShardedOrder.update(
+      { status: "archived" },
+      { where: { customerId: 1 } }
+    );
+    const orders = await ShardedOrder.findAll({
+      where: { customerId: 1 },
+    });
+    assert.strictEqual(orders.length, 3);
+    orders.forEach((o) => assert.strictEqual(o.status, "archived"));
+  });
+
+  it("destroy by id", async function () {
+    await ShardedOrder.destroy({ where: { id: 3 } });
+    const order = await ShardedOrder.findByPk(3);
+    assert.strictEqual(order, null);
+  });
+
+  it("destroy many by customer_id", async function () {
+    await ShardedOrder.destroy({ where: { customerId: 1 } });
+    const orders = await ShardedOrder.findAll({
+      where: { customerId: 1 },
+    });
+    assert.strictEqual(orders.length, 0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Sharded aggregation tests
+// ---------------------------------------------------------------------------
+
+describe("Sequelize sharded aggregations", function () {
+  let seq;
+  let ShardedOrder;
+
+  before(async function () {
+    seq = createSequelize("pgdog_sharded");
+
+    ShardedOrder = seq.define(
+      "ShardedOrder",
+      {
+        id: { type: DataTypes.BIGINT, primaryKey: true },
+        customerId: { type: DataTypes.BIGINT, allowNull: false, field: "customer_id" },
+        total: { type: DataTypes.DECIMAL(10, 2) },
+        status: { type: DataTypes.STRING },
+      },
+      { tableName: "seq_sh_orders_7x", timestamps: false }
+    );
+
+    await seq.query(`
+      CREATE TABLE IF NOT EXISTS public.seq_sh_orders_7x (
+        id BIGINT PRIMARY KEY,
+        customer_id BIGINT NOT NULL,
+        total DECIMAL(10, 2),
+        status TEXT
+      )
+    `);
+
+    await ShardedOrder.destroy({ where: {} });
+    await ShardedOrder.bulkCreate([
+      { id: 100, customerId: 100, total: 100.0, status: "completed" },
+      { id: 101, customerId: 100, total: 200.0, status: "pending" },
+      { id: 102, customerId: 100, total: 300.0, status: "completed" },
+    ]);
+  });
+
+  after(async function () {
+    await ShardedOrder.destroy({ where: { customerId: 100 } });
+    await seq.close();
+  });
+
+  it("count by customer_id", async function () {
+    const count = await ShardedOrder.count({
+      where: { customerId: 100 },
+    });
+    assert.strictEqual(count, 3);
+  });
+
+  it("sum by customer_id", async function () {
+    const sum = await ShardedOrder.sum("total", {
+      where: { customerId: 100 },
+    });
+    assert.strictEqual(parseFloat(sum), 600.0);
+  });
+
+  it("max by customer_id", async function () {
+    const max = await ShardedOrder.max("total", {
+      where: { customerId: 100 },
+    });
+    assert.strictEqual(parseFloat(max), 300.0);
+  });
+
+  it("min by customer_id", async function () {
+    const min = await ShardedOrder.min("total", {
+      where: { customerId: 100 },
+    });
+    assert.strictEqual(parseFloat(min), 100.0);
+  });
+
+  it("group by status for customer", async function () {
+    const result = await ShardedOrder.findAll({
+      attributes: [
+        "status",
+        [seq.fn("COUNT", seq.col("id")), "count"],
+      ],
+      where: { customerId: 100 },
+      group: ["status"],
+    });
+    assert.strictEqual(result.length, 2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Sharded transaction tests
+// ---------------------------------------------------------------------------
+
+describe("Sequelize sharded transactions", function () {
+  let seq;
+  let ShardedOrder;
+
+  before(async function () {
+    seq = createSequelize("pgdog_sharded");
+
+    ShardedOrder = seq.define(
+      "ShardedOrder",
+      {
+        id: { type: DataTypes.BIGINT, primaryKey: true },
+        customerId: { type: DataTypes.BIGINT, allowNull: false, field: "customer_id" },
+        total: { type: DataTypes.DECIMAL(10, 2) },
+        status: { type: DataTypes.STRING },
+      },
+      { tableName: "seq_sh_orders_7x", timestamps: false }
+    );
+
+    await seq.query(`
+      CREATE TABLE IF NOT EXISTS public.seq_sh_orders_7x (
+        id BIGINT PRIMARY KEY,
+        customer_id BIGINT NOT NULL,
+        total DECIMAL(10, 2),
+        status TEXT
+      )
+    `);
+  });
+
+  after(async function () {
+    await seq.close();
+  });
+
+  it("transaction with multiple creates", async function () {
+    const customerId = 200;
+    const t = await seq.transaction();
+
+    await ShardedOrder.create(
+      { id: 200, customerId, total: 500.0, status: "pending" },
+      { transaction: t }
+    );
+    await ShardedOrder.create(
+      { id: 201, customerId, total: 600.0, status: "pending" },
+      { transaction: t }
+    );
+
+    await t.commit();
+
+    const orders = await ShardedOrder.findAll({
+      where: { customerId },
+    });
+    assert.strictEqual(orders.length, 2);
+
+    await ShardedOrder.destroy({ where: { customerId } });
+  });
+
+  it("transaction rollback", async function () {
+    const customerId = 201;
+    const t = await seq.transaction();
+
+    await ShardedOrder.create(
+      { id: 202, customerId, total: 700.0, status: "pending" },
+      { transaction: t }
+    );
+
+    await t.rollback();
+
+    const orders = await ShardedOrder.findAll({
+      where: { customerId },
+    });
+    assert.strictEqual(orders.length, 0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Cross-shard query tests
+// ---------------------------------------------------------------------------
+
+describe("Sequelize cross-shard queries", function () {
+  let seq;
+  let ShardedMetric;
+
+  before(async function () {
+    seq = createSequelize("pgdog_sharded");
+
+    ShardedMetric = seq.define(
+      "ShardedMetric",
+      {
+        id: { type: DataTypes.BIGINT, primaryKey: true },
+        customerId: { type: DataTypes.BIGINT, allowNull: false, field: "customer_id" },
+        name: { type: DataTypes.STRING },
+        value: { type: DataTypes.INTEGER },
+      },
+      { tableName: "seq_sh_metrics_7x", timestamps: false }
+    );
+
+    await seq.query(`
+      CREATE TABLE IF NOT EXISTS public.seq_sh_metrics_7x (
+        id BIGINT PRIMARY KEY,
+        customer_id BIGINT NOT NULL,
+        name TEXT,
+        value INT
+      )
+    `);
+
+    await ShardedMetric.destroy({ where: {} });
+
+    let id = 1;
+    for (const customerId of [900, 901, 902, 903, 904]) {
+      for (let i = 0; i < 4; i++) {
+        await ShardedMetric.create({
+          id: id,
+          customerId: customerId,
+          name: `metric_${i}`,
+          value: customerId + i,
+        });
+        id++;
+      }
+    }
+  });
+
+  after(async function () {
+    await seq.query('DROP TABLE IF EXISTS public.seq_sh_metrics_7x');
+    await seq.close();
+  });
+
+  it("count all rows across shards", async function () {
+    const count = await ShardedMetric.count();
+    assert.strictEqual(count, 20);
+  });
+
+  it("findAll without customer_id filter", async function () {
+    const metrics = await ShardedMetric.findAll({
+      order: [["id", "ASC"]],
+    });
+    assert.strictEqual(metrics.length, 20);
+  });
+
+  it("findAll with limit across shards", async function () {
+    const metrics = await ShardedMetric.findAll({
+      order: [["id", "ASC"]],
+      limit: 10,
+    });
+    assert.strictEqual(metrics.length, 10);
+  });
+
+  it("sum across all shards", async function () {
+    const sum = await ShardedMetric.sum("value");
+    const expected = [900, 901, 902, 903, 904].reduce(
+      (acc, cid) => acc + cid + (cid + 1) + (cid + 2) + (cid + 3),
+      0
+    );
+    assert.strictEqual(sum, expected);
+  });
+
+  it("group by name across shards", async function () {
+    const result = await ShardedMetric.findAll({
+      attributes: [
+        "name",
+        [seq.fn("COUNT", seq.col("id")), "count"],
+        [seq.fn("SUM", seq.col("value")), "total"],
+      ],
+      group: ["name"],
+      order: [["name", "ASC"]],
+    });
+    assert.strictEqual(result.length, 4);
+    result.forEach((r) => {
+      assert.strictEqual(parseInt(r.dataValues.count), 5);
+    });
+  });
+
+  it("findAll by single customer returns exact count", async function () {
+    const metrics = await ShardedMetric.findAll({
+      where: { customerId: 902 },
+    });
+    assert.strictEqual(metrics.length, 4);
+    metrics.forEach((m) => assert.strictEqual(String(m.customerId), "902"));
   });
 });
 

@@ -38,7 +38,7 @@ async function setupShardedSchema(prisma) {
   // Prisma ORM always uses schema-qualified names (public.tablename), so we must
   // create tables explicitly in the public schema
   await prisma.$executeRaw`
-    CREATE TABLE IF NOT EXISTS public.sharded_orders (
+    CREATE TABLE IF NOT EXISTS public.prm_sh_orders_9k (
       id BIGINT PRIMARY KEY,
       customer_id BIGINT NOT NULL,
       total DECIMAL(10, 2),
@@ -47,7 +47,7 @@ async function setupShardedSchema(prisma) {
   `;
 
   await prisma.$executeRaw`
-    CREATE TABLE IF NOT EXISTS public.sharded_order_items (
+    CREATE TABLE IF NOT EXISTS public.prm_sh_order_items_9k (
       id BIGINT PRIMARY KEY,
       customer_id BIGINT NOT NULL,
       order_id BIGINT NOT NULL,
@@ -58,7 +58,7 @@ async function setupShardedSchema(prisma) {
   `;
 
   await prisma.$executeRaw`
-    CREATE TABLE IF NOT EXISTS public.sharded_customer_events (
+    CREATE TABLE IF NOT EXISTS public.prm_sh_events_9k (
       id BIGINT PRIMARY KEY,
       customer_id BIGINT NOT NULL,
       event_type TEXT NOT NULL,
@@ -68,7 +68,7 @@ async function setupShardedSchema(prisma) {
   `;
 
   await prisma.$executeRaw`
-    CREATE TABLE IF NOT EXISTS public.sharded_metrics (
+    CREATE TABLE IF NOT EXISTS public.prm_sh_metrics_9k (
       id BIGINT PRIMARY KEY,
       customer_id BIGINT NOT NULL,
       name TEXT,
@@ -78,6 +78,18 @@ async function setupShardedSchema(prisma) {
 }
 
 // ---------------------------------------------------------------------------
+// Global setup/teardown for admin settings
+// ---------------------------------------------------------------------------
+
+before(async function () {
+  await setupAdmin();
+});
+
+after(async function () {
+  await teardownAdmin();
+});
+
+// ---------------------------------------------------------------------------
 // Sharded CRUD using Prisma ORM
 // ---------------------------------------------------------------------------
 
@@ -85,7 +97,6 @@ describe("Prisma ORM sharded CRUD", function () {
   let prisma;
 
   before(async function () {
-    await setupAdmin();
     prisma = createPrisma();
     await prisma.$connect();
     await setupShardedSchema(prisma);
@@ -461,7 +472,6 @@ describe("Prisma ORM cross-shard queries", function () {
 
   after(async function () {
     await prisma.$disconnect();
-    await teardownAdmin();
   });
 
   it("count all rows across shards", async function () {

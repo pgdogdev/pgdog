@@ -16,7 +16,7 @@ model PrismaUser {
   createdAt DateTime @default(now()) @map("created_at")
   posts     PrismaPost[]
 
-  @@map("prisma_users")
+  @@map("prm_users_9k")
 }
 
 model PrismaPost {
@@ -27,7 +27,7 @@ model PrismaPost {
   authorId  Int      @map("author_id")
   author    PrismaUser @relation(fields: [authorId], references: [id])
 
-  @@map("prisma_posts")
+  @@map("prm_posts_9k")
 }
 
 model PrismaProduct {
@@ -38,7 +38,7 @@ model PrismaProduct {
   category String?
   metadata Json?
 
-  @@map("prisma_products")
+  @@map("prm_products_9k")
 }
 
 model PrismaAccount {
@@ -46,7 +46,7 @@ model PrismaAccount {
   name    String
   balance Decimal @db.Decimal(10, 2) @default(0)
 
-  @@map("prisma_accounts")
+  @@map("prm_accounts_9k")
 }
 
 // Sharded models (customer_id as sharding key)
@@ -57,7 +57,7 @@ model ShardedOrder {
   status     String
   items      ShardedOrderItem[]
 
-  @@map("sharded_orders")
+  @@map("prm_sh_orders_9k")
 }
 
 model ShardedOrderItem {
@@ -69,7 +69,7 @@ model ShardedOrderItem {
   price       Decimal @db.Decimal(10, 2)
   order       ShardedOrder @relation(fields: [orderId], references: [id])
 
-  @@map("sharded_order_items")
+  @@map("prm_sh_order_items_9k")
 }
 
 model ShardedCustomerEvent {
@@ -79,7 +79,7 @@ model ShardedCustomerEvent {
   payload    Json?
   createdAt  DateTime @default(now()) @map("created_at")
 
-  @@map("sharded_customer_events")
+  @@map("prm_sh_events_9k")
 }
 
 model ShardedMetric {
@@ -88,5 +88,5 @@ model ShardedMetric {
   name       String
   value      Int
 
-  @@map("sharded_metrics")
+  @@map("prm_sh_metrics_9k")
 }
