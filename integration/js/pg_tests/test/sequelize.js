@@ -62,7 +62,7 @@ describe("Sequelize regular ORM", function () {
         name: { type: DataTypes.STRING, allowNull: false },
         quantity: { type: DataTypes.INTEGER, defaultValue: 0 },
       },
-      { tableName: "seq_items_7x", timestamps: true }
+      { tableName: "seq_items_7x", timestamps: true },
     );
 
     await Item.sync({ force: true });
@@ -125,7 +125,7 @@ describe("Sequelize regular ORM", function () {
     const t = await seq.transaction();
     const item = await Item.create(
       { name: "tx_item", quantity: 42 },
-      { transaction: t }
+      { transaction: t },
     );
     await t.commit();
 
@@ -137,7 +137,7 @@ describe("Sequelize regular ORM", function () {
     const t = await seq.transaction();
     const item = await Item.create(
       { name: "rollback_item", quantity: 99 },
-      { transaction: t }
+      { transaction: t },
     );
     const id = item.id;
     await t.rollback();
@@ -158,7 +158,7 @@ describe("Sequelize multi-statement SET", function () {
 
     await seq.query(
       "SET statement_timeout TO '30s'; SET lock_timeout TO '10s'",
-      { transaction: t }
+      { transaction: t },
     );
 
     const stResult = await seq.query("SHOW statement_timeout", {
@@ -181,7 +181,7 @@ describe("Sequelize multi-statement SET", function () {
 
     await seq.query(
       "SET client_min_messages TO warning;SET TIME ZONE INTERVAL '+00:00' HOUR TO MINUTE",
-      { transaction: t }
+      { transaction: t },
     );
 
     const cmResult = await seq.query("SHOW client_min_messages", {
@@ -193,7 +193,7 @@ describe("Sequelize multi-statement SET", function () {
     const tz = tzResult[0].TimeZone || tzResult[0].timezone;
     assert.ok(
       tz.includes("00:00") || tz === "UTC" || tz === "Etc/UTC",
-      `expected UTC-equivalent timezone, got ${tz}`
+      `expected UTC-equivalent timezone, got ${tz}`,
     );
 
     await t.commit();
@@ -209,9 +209,9 @@ describe("Sequelize multi-statement SET", function () {
     } catch (err) {
       assert.ok(
         err.message.includes(
-          "multi-statement queries cannot mix SET with other commands"
+          "multi-statement queries cannot mix SET with other commands",
         ),
-        `unexpected error: ${err.message}`
+        `unexpected error: ${err.message}`,
       );
     }
 
@@ -238,7 +238,7 @@ describe("Sequelize associations", function () {
       {
         name: { type: DataTypes.STRING, allowNull: false },
       },
-      { tableName: "seq_authors_7x", timestamps: false }
+      { tableName: "seq_authors_7x", timestamps: false },
     );
 
     Book = seq.define(
@@ -250,7 +250,7 @@ describe("Sequelize associations", function () {
           references: { model: Author, key: "id" },
         },
       },
-      { tableName: "seq_books_7x", timestamps: false }
+      { tableName: "seq_books_7x", timestamps: false },
     );
 
     Tag = seq.define(
@@ -258,13 +258,13 @@ describe("Sequelize associations", function () {
       {
         name: { type: DataTypes.STRING, allowNull: false },
       },
-      { tableName: "seq_tags_7x", timestamps: false }
+      { tableName: "seq_tags_7x", timestamps: false },
     );
 
     BookTag = seq.define(
       "BookTag",
       {},
-      { tableName: "seq_book_tags_7x", timestamps: false }
+      { tableName: "seq_book_tags_7x", timestamps: false },
     );
 
     Author.hasMany(Book, { foreignKey: "authorId", as: "books" });
@@ -324,7 +324,10 @@ describe("Sequelize associations", function () {
 
   it("nested include", async function () {
     const author = await Author.create({ name: "Nested Author" });
-    const book = await Book.create({ title: "Nested Book", authorId: author.id });
+    const book = await Book.create({
+      title: "Nested Book",
+      authorId: author.id,
+    });
     const tag = await Tag.create({ name: "nested-tag" });
     await book.addTag(tag);
 
@@ -360,7 +363,7 @@ describe("Sequelize advanced queries", function () {
         price: { type: DataTypes.DECIMAL(10, 2) },
         stock: { type: DataTypes.INTEGER, defaultValue: 0 },
       },
-      { tableName: "seq_products_7x", timestamps: false }
+      { tableName: "seq_products_7x", timestamps: false },
     );
 
     await Product.sync({ force: true });
@@ -477,10 +480,7 @@ describe("Sequelize advanced queries", function () {
 
   it("group by with count", async function () {
     const counts = await Product.findAll({
-      attributes: [
-        "category",
-        [seq.fn("COUNT", seq.col("id")), "count"],
-      ],
+      attributes: ["category", [seq.fn("COUNT", seq.col("id")), "count"]],
       group: ["category"],
     });
     assert.ok(counts.length >= 3);
@@ -516,7 +516,7 @@ describe("Sequelize data types", function () {
         float_col: { type: DataTypes.FLOAT },
         enum_col: { type: DataTypes.ENUM("active", "inactive", "pending") },
       },
-      { tableName: "seq_types_7x", timestamps: false }
+      { tableName: "seq_types_7x", timestamps: false },
     );
 
     await TypeTest.sync({ force: true });
@@ -533,7 +533,7 @@ describe("Sequelize data types", function () {
     assert.ok(row.uuid_col);
     assert.match(
       row.uuid_col,
-      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
     );
   });
 
@@ -550,7 +550,7 @@ describe("Sequelize data types", function () {
     await TypeTest.create({ jsonb_col: data });
 
     const [rows] = await seq.query(
-      `SELECT * FROM seq_types_7x WHERE jsonb_col->>'status' = 'active'`
+      `SELECT * FROM seq_types_7x WHERE jsonb_col->>'status' = 'active'`,
     );
     assert.ok(rows.length >= 1);
   });
@@ -649,7 +649,7 @@ describe("Sequelize edge cases", function () {
     const TempTable = seq.define(
       "Temp",
       { value: DataTypes.STRING },
-      { tableName: "seq_temp_7x", timestamps: false }
+      { tableName: "seq_temp_7x", timestamps: false },
     );
     await TempTable.sync({ force: true });
 
@@ -684,7 +684,7 @@ describe("Sequelize edge cases", function () {
     const Counter = seq.define(
       "Counter",
       { value: DataTypes.INTEGER },
-      { tableName: "seq_counter_7x", timestamps: false }
+      { tableName: "seq_counter_7x", timestamps: false },
     );
     await Counter.sync({ force: true });
 
@@ -706,7 +706,7 @@ describe("Sequelize edge cases", function () {
     const Mixed = seq.define(
       "Mixed",
       { value: DataTypes.INTEGER },
-      { tableName: "seq_mixed_7x", timestamps: false }
+      { tableName: "seq_mixed_7x", timestamps: false },
     );
     await Mixed.sync({ force: true });
 
@@ -729,7 +729,7 @@ describe("Sequelize edge cases", function () {
     const SeqTx = seq.define(
       "SeqTx",
       { value: DataTypes.INTEGER },
-      { tableName: "seq_seqtx_7x", timestamps: false }
+      { tableName: "seq_seqtx_7x", timestamps: false },
     );
     await SeqTx.sync({ force: true });
 
@@ -764,7 +764,7 @@ describe("Sequelize edge cases", function () {
       "SELECT :a::integer * :b::integer AS product",
       {
         replacements: { a: 6, b: 7 },
-      }
+      },
     );
     assert.strictEqual(rows[0].product, 42);
 
@@ -776,7 +776,7 @@ describe("Sequelize edge cases", function () {
     const Empty = seq.define(
       "Empty",
       { value: DataTypes.STRING },
-      { tableName: "seq_empty_7x", timestamps: false }
+      { tableName: "seq_empty_7x", timestamps: false },
     );
     await Empty.sync({ force: true });
 
@@ -795,7 +795,7 @@ describe("Sequelize edge cases", function () {
     const Special = seq.define(
       "Special",
       { value: DataTypes.TEXT },
-      { tableName: "seq_special_7x", timestamps: false }
+      { tableName: "seq_special_7x", timestamps: false },
     );
     await Special.sync({ force: true });
 
@@ -824,7 +824,7 @@ describe("Sequelize edge cases", function () {
     const LongTx = seq.define(
       "LongTx",
       { value: DataTypes.INTEGER },
-      { tableName: "seq_longtx_7x", timestamps: false }
+      { tableName: "seq_longtx_7x", timestamps: false },
     );
     await LongTx.sync({ force: true });
 
@@ -851,6 +851,86 @@ describe("Sequelize edge cases", function () {
 });
 
 // ---------------------------------------------------------------------------
+// Protocol tests (simple vs extended)
+// ---------------------------------------------------------------------------
+
+describe("Sequelize protocol tests", function () {
+  it("simple protocol query", async function () {
+    const seq = createSequelize();
+
+    const [rows] = await seq.query("SELECT 1 + 1 AS result");
+    assert.strictEqual(rows[0].result, 2);
+
+    await seq.close();
+  });
+
+  it("extended protocol query with bind parameters", async function () {
+    const seq = createSequelize();
+
+    const [rows] = await seq.query("SELECT $1::int + $2::int AS result", {
+      bind: [1, 1],
+    });
+    assert.strictEqual(rows[0].result, 2);
+
+    await seq.close();
+  });
+
+  it("same query via simple and extended protocol", async function () {
+    const seq = createSequelize();
+
+    const simpleResult = await seq.query("SELECT 42 AS value");
+    assert.strictEqual(simpleResult[0][0].value, 42);
+
+    const extendedResult = await seq.query("SELECT $1::int AS value", {
+      bind: [42],
+    });
+    assert.strictEqual(extendedResult[0][0].value, 42);
+
+    await seq.close();
+  });
+
+  it("model operations via simple and extended protocol", async function () {
+    const seq = createSequelize();
+
+    const ProtocolTest = seq.define(
+      "ProtocolTest",
+      {
+        name: { type: DataTypes.STRING, allowNull: false },
+        value: { type: DataTypes.INTEGER },
+      },
+      { tableName: "seq_protocol_test_7x", timestamps: false },
+    );
+
+    await ProtocolTest.sync({ force: true });
+
+    // Extended protocol: ORM create uses prepared statements
+    const item = await ProtocolTest.create({ name: "test", value: 42 });
+    assert.strictEqual(item.name, "test");
+    assert.strictEqual(item.value, 42);
+
+    // Extended protocol: ORM findOne with where clause
+    const found = await ProtocolTest.findOne({ where: { name: "test" } });
+    assert.strictEqual(found.value, 42);
+
+    // Simple protocol: raw query without parameters
+    const [simpleRows] = await seq.query(
+      "SELECT * FROM seq_protocol_test_7x WHERE name = 'test'",
+    );
+    assert.strictEqual(simpleRows[0].value, 42);
+
+    // Extended protocol: raw query with bind parameters
+    const [extendedRows] = await seq.query(
+      "SELECT * FROM seq_protocol_test_7x WHERE name = $1",
+      { bind: ["test"] },
+    );
+    assert.strictEqual(extendedRows[0].value, 42);
+
+    await seq.query('DROP TABLE IF EXISTS "seq_protocol_test_7x"');
+    await seq.close();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Sharded CRUD tests
 // ---------------------------------------------------------------------------
 
@@ -865,11 +945,15 @@ describe("Sequelize sharded CRUD", function () {
       "ShardedOrder",
       {
         id: { type: DataTypes.BIGINT, primaryKey: true },
-        customerId: { type: DataTypes.BIGINT, allowNull: false, field: "customer_id" },
+        customerId: {
+          type: DataTypes.BIGINT,
+          allowNull: false,
+          field: "customer_id",
+        },
         total: { type: DataTypes.DECIMAL(10, 2) },
         status: { type: DataTypes.STRING },
       },
-      { tableName: "seq_sh_orders_7x", timestamps: false }
+      { tableName: "seq_sh_orders_7x", timestamps: false },
     );
 
     await seq.query(`
@@ -885,7 +969,7 @@ describe("Sequelize sharded CRUD", function () {
   });
 
   after(async function () {
-    await seq.query('DROP TABLE IF EXISTS public.seq_sh_orders_7x');
+    await seq.query("DROP TABLE IF EXISTS public.seq_sh_orders_7x");
     await seq.close();
   });
 
@@ -927,10 +1011,7 @@ describe("Sequelize sharded CRUD", function () {
   });
 
   it("update by id", async function () {
-    await ShardedOrder.update(
-      { status: "completed" },
-      { where: { id: 1 } }
-    );
+    await ShardedOrder.update({ status: "completed" }, { where: { id: 1 } });
     const order = await ShardedOrder.findByPk(1);
     assert.strictEqual(order.status, "completed");
   });
@@ -938,7 +1019,7 @@ describe("Sequelize sharded CRUD", function () {
   it("update many by customer_id", async function () {
     await ShardedOrder.update(
       { status: "archived" },
-      { where: { customerId: 1 } }
+      { where: { customerId: 1 } },
     );
     const orders = await ShardedOrder.findAll({
       where: { customerId: 1 },
@@ -977,11 +1058,15 @@ describe("Sequelize sharded aggregations", function () {
       "ShardedOrder",
       {
         id: { type: DataTypes.BIGINT, primaryKey: true },
-        customerId: { type: DataTypes.BIGINT, allowNull: false, field: "customer_id" },
+        customerId: {
+          type: DataTypes.BIGINT,
+          allowNull: false,
+          field: "customer_id",
+        },
         total: { type: DataTypes.DECIMAL(10, 2) },
         status: { type: DataTypes.STRING },
       },
-      { tableName: "seq_sh_orders_7x", timestamps: false }
+      { tableName: "seq_sh_orders_7x", timestamps: false },
     );
 
     await seq.query(`
@@ -1036,10 +1121,7 @@ describe("Sequelize sharded aggregations", function () {
 
   it("group by status for customer", async function () {
     const result = await ShardedOrder.findAll({
-      attributes: [
-        "status",
-        [seq.fn("COUNT", seq.col("id")), "count"],
-      ],
+      attributes: ["status", [seq.fn("COUNT", seq.col("id")), "count"]],
       where: { customerId: 100 },
       group: ["status"],
     });
@@ -1062,11 +1144,15 @@ describe("Sequelize sharded transactions", function () {
       "ShardedOrder",
       {
         id: { type: DataTypes.BIGINT, primaryKey: true },
-        customerId: { type: DataTypes.BIGINT, allowNull: false, field: "customer_id" },
+        customerId: {
+          type: DataTypes.BIGINT,
+          allowNull: false,
+          field: "customer_id",
+        },
         total: { type: DataTypes.DECIMAL(10, 2) },
         status: { type: DataTypes.STRING },
       },
-      { tableName: "seq_sh_orders_7x", timestamps: false }
+      { tableName: "seq_sh_orders_7x", timestamps: false },
     );
 
     await seq.query(`
@@ -1089,11 +1175,11 @@ describe("Sequelize sharded transactions", function () {
 
     await ShardedOrder.create(
       { id: 200, customerId, total: 500.0, status: "pending" },
-      { transaction: t }
+      { transaction: t },
     );
     await ShardedOrder.create(
       { id: 201, customerId, total: 600.0, status: "pending" },
-      { transaction: t }
+      { transaction: t },
     );
 
     await t.commit();
@@ -1112,7 +1198,7 @@ describe("Sequelize sharded transactions", function () {
 
     await ShardedOrder.create(
       { id: 202, customerId, total: 700.0, status: "pending" },
-      { transaction: t }
+      { transaction: t },
     );
 
     await t.rollback();
@@ -1139,11 +1225,15 @@ describe("Sequelize cross-shard queries", function () {
       "ShardedMetric",
       {
         id: { type: DataTypes.BIGINT, primaryKey: true },
-        customerId: { type: DataTypes.BIGINT, allowNull: false, field: "customer_id" },
+        customerId: {
+          type: DataTypes.BIGINT,
+          allowNull: false,
+          field: "customer_id",
+        },
         name: { type: DataTypes.STRING },
         value: { type: DataTypes.INTEGER },
       },
-      { tableName: "seq_sh_metrics_7x", timestamps: false }
+      { tableName: "seq_sh_metrics_7x", timestamps: false },
     );
 
     await seq.query(`
@@ -1172,7 +1262,7 @@ describe("Sequelize cross-shard queries", function () {
   });
 
   after(async function () {
-    await seq.query('DROP TABLE IF EXISTS public.seq_sh_metrics_7x');
+    await seq.query("DROP TABLE IF EXISTS public.seq_sh_metrics_7x");
     await seq.close();
   });
 
@@ -1200,7 +1290,7 @@ describe("Sequelize cross-shard queries", function () {
     const sum = await ShardedMetric.sum("value");
     const expected = [900, 901, 902, 903, 904].reduce(
       (acc, cid) => acc + cid + (cid + 1) + (cid + 2) + (cid + 3),
-      0
+      0,
     );
     assert.strictEqual(sum, expected);
   });
@@ -1229,4 +1319,3 @@ describe("Sequelize cross-shard queries", function () {
     metrics.forEach((m) => assert.strictEqual(String(m.customerId), "902"));
   });
 });
-
