@@ -1,4 +1,7 @@
-use crate::{frontend::Command, net::parameter::ParameterValue};
+use crate::{
+    frontend::{router::parser::Shard, Command},
+    net::parameter::ParameterValue,
+};
 
 use super::setup::*;
 
@@ -112,12 +115,23 @@ fn test_set_transaction_level() {
         "set transaction isolation level repeatable read",
         "set transaction snapshot '00000003-0000001B-1'",
         "SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL SERIALIZABLE",
+        "SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY",
+        "SET SESSION CHARACTERISTICS AS TRANSACTION DEFERRABLE",
     ] {
         let command = test.execute(vec![Query::new(query).into()]);
-        assert!(
-            matches!(command.clone(), Command::Query(_)),
-            "{:#?}",
-            command
-        );
+        match &command {
+            Command::Query(route) => {
+                assert_eq!(
+                    route.shard(),
+                    &Shard::All,
+                    "SET TRANSACTION should route to all shards for '{query}'"
+                );
+                assert!(
+                    route.is_write(),
+                    "SET TRANSACTION should be a write for '{query}'"
+                );
+            }
+            _ => panic!("expected Command::Query for '{query}', got {command:#?}"),
+        }
     }
 }
