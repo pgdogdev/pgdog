@@ -4,6 +4,7 @@ pub mod auto_id;
 pub mod avg;
 pub mod ban;
 pub mod client_ids;
+pub mod connection_recovery;
 pub mod cross_shard_disabled;
 pub mod distinct;
 pub mod explain;
