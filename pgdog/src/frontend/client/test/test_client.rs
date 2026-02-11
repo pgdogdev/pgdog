@@ -194,6 +194,11 @@ impl TestClient {
         Ok(result)
     }
 
+    /// Check if the backend is connected.
+    pub(crate) fn backend_connected(&mut self) -> bool {
+        self.engine.backend().connected()
+    }
+
     /// Generate a random ID for a given shard.
     pub(crate) fn random_id_for_shard(&mut self, shard: usize) -> i64 {
         let cluster = self.engine.backend().cluster().unwrap().clone();

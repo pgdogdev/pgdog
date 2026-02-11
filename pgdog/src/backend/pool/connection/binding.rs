@@ -160,7 +160,14 @@ impl Binding {
                     result?;
                 }
 
-                state.update(shards_sent, client_request.route());
+                // For Sync-only requests, update shards count but don't reset counters.
+                // Sync needs correct shards for ReadyForQuery counting, but we must
+                // preserve buffered CommandComplete from previous queries.
+                if client_request.is_sync_only() {
+                    state.update_shards(shards_sent);
+                } else {
+                    state.update(shards_sent, client_request.route());
+                }
 
                 Ok(())
             }

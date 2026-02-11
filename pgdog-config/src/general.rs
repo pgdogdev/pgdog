@@ -182,6 +182,9 @@ pub struct General {
     /// Connection cleanup algorithm.
     #[serde(default = "General::connection_recovery")]
     pub connection_recovery: ConnectionRecovery,
+    /// Client connection recovery
+    #[serde(default = "General::client_connection_recovery")]
+    pub client_connection_recovery: ConnectionRecovery,
     /// LSN check interval.
     #[serde(default = "General::lsn_check_interval")]
     pub lsn_check_interval: u64,
@@ -270,6 +273,7 @@ impl Default for General {
             server_lifetime: Self::server_lifetime(),
             stats_period: Self::stats_period(),
             connection_recovery: Self::connection_recovery(),
+            client_connection_recovery: Self::client_connection_recovery(),
             lsn_check_interval: Self::lsn_check_interval(),
             lsn_check_timeout: Self::lsn_check_timeout(),
             lsn_check_delay: Self::lsn_check_delay(),
@@ -599,6 +603,10 @@ impl General {
 
     pub fn connection_recovery() -> ConnectionRecovery {
         Self::env_enum_or_default("PGDOG_CONNECTION_RECOVERY")
+    }
+
+    pub fn client_connection_recovery() -> ConnectionRecovery {
+        Self::env_enum_or_default("PGDOG_CLIENT_CONNECTION_RECOVERY")
     }
 
     fn stats_period() -> u64 {
