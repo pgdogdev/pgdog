@@ -81,6 +81,13 @@ impl MultiShard {
         self.route = route.clone();
     }
 
+    /// Update only the shards count without resetting counters.
+    /// Used for Sync-only requests where we need correct ReadyForQuery counting
+    /// but must preserve buffered CommandComplete from previous queries.
+    pub(super) fn update_shards(&mut self, shards: usize) {
+        self.shards = shards;
+    }
+
     pub(super) fn reset(&mut self) {
         self.counters = Counters::default();
         self.buffer.reset();

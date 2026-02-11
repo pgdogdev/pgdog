@@ -192,6 +192,17 @@ impl ClientRequest {
             .unwrap_or(false)
     }
 
+    /// The buffer contains only Sync (and possibly Flush) messages.
+    /// Used to avoid resetting multi-shard state when Sync is sent
+    /// as a separate request (via splice).
+    pub fn is_sync_only(&self) -> bool {
+        !self.messages.is_empty()
+            && self
+                .messages
+                .iter()
+                .all(|m| m.code() == 'S' || m.code() == 'H')
+    }
+
     /// The client is setting state on the connection
     /// which we can no longer ignore.
     pub(crate) fn is_executable(&self) -> bool {

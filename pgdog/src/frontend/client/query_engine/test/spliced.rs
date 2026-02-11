@@ -1,7 +1,9 @@
 use super::{test_client, test_sharded_client};
 use crate::{
     expect_message,
-    net::{BindComplete, CommandComplete, DataRow, Parameters, ParseComplete, ReadyForQuery},
+    net::{
+        BindComplete, CommandComplete, DataRow, Describe, Parameters, ParseComplete, ReadyForQuery,
+    },
 };
 
 use super::prelude::*;
@@ -11,15 +13,11 @@ async fn test_intercept_incomplete_sync_only_not_connected() {
     for mut client in [test_client(), test_sharded_client()] {
         let mut engine = QueryEngine::from_client(&client).unwrap();
 
-        // Backend should not be connected initially
         assert!(!engine.backend().connected());
 
-        // Set up a Sync-only request
         client.client_request = vec![Sync.into()].into();
         let mut context = QueryEngineContext::new(&mut client);
 
-        // When backend is NOT connected, intercept_incomplete should return true
-        // (it handles the Sync locally without connecting to backend)
         let intercepted = engine.intercept_incomplete(&mut context).await.unwrap();
         assert!(
             intercepted,
@@ -32,31 +30,23 @@ async fn test_intercept_incomplete_sync_only_not_connected() {
 async fn test_intercept_incomplete_sync_only_when_connected() {
     let mut test_client = TestClient::new_sharded(Parameters::default()).await;
 
-    // First, establish a backend connection with Execute+Flush
     test_client.send(Parse::named("stmt", "SELECT 1")).await;
     test_client.send(Bind::new_statement("stmt")).await;
     test_client.send(Execute::new()).await;
     test_client.send(Flush).await;
 
     test_client.try_process().await.unwrap();
-
-    // Backend should be connected
     assert!(test_client.backend_connected());
 
-    // Drain responses
     expect_message!(test_client.read().await, ParseComplete);
     expect_message!(test_client.read().await, BindComplete);
     expect_message!(test_client.read().await, DataRow);
     expect_message!(test_client.read().await, CommandComplete);
 
-    // Now manually test intercept_incomplete with Sync-only request
-    // Access client and engine separately to avoid borrow conflict
     test_client.client.client_request = vec![Sync.into()].into();
 
     let mut context = QueryEngineContext::new(&mut test_client.client);
 
-    // When backend IS connected, intercept_incomplete should return false
-    // (Sync should be forwarded to the backend, not intercepted)
     let intercepted = test_client
         .engine
         .intercept_incomplete(&mut context)
@@ -72,36 +62,26 @@ async fn test_intercept_incomplete_sync_only_when_connected() {
 async fn test_sync_forwarded_when_backend_connected() {
     let mut client = TestClient::new_sharded(Parameters::default()).await;
 
-    // First, establish a connection with Execute+Flush
     client.send(Parse::named("stmt", "SELECT 1")).await;
     client.send(Bind::new_statement("stmt")).await;
     client.send(Execute::new()).await;
     client.send(Flush).await;
 
     client.try_process().await.unwrap();
-
-    // Backend should be connected
     assert!(client.backend_connected());
 
-    // Read the responses from first request
     expect_message!(client.read().await, ParseComplete);
     expect_message!(client.read().await, BindComplete);
     let row = expect_message!(client.read().await, DataRow);
     assert_eq!(row.get_int(0, true), Some(1));
     expect_message!(client.read().await, CommandComplete);
 
-    // Now send only Sync - this should be forwarded to backend (not intercepted)
-    // because intercept_incomplete returns false when backend is connected
     client.send(Sync).await;
-
     client.try_process().await.unwrap();
 
-    // Backend should be released after Sync
     assert!(!client.backend_connected());
 
-    // We should receive ReadyForQuery from the actual backend
     let rfq = expect_message!(client.read().await, ReadyForQuery);
-    // Transaction status should be idle ('I') since we're not in a transaction
     assert_eq!(rfq.status, 'I');
 }
 
@@ -109,10 +89,8 @@ async fn test_sync_forwarded_when_backend_connected() {
 async fn test_spliced_pipelined_executes() {
     let mut client = TestClient::new_sharded(Parameters::default()).await;
 
-    // Before any query, backend should not be connected
     assert!(!client.backend_connected());
 
-    // Send two pipelined Parse/Bind/Execute sequences without Sync.
     client.send(Parse::named("stmt1", "SELECT 1")).await;
     client.send(Bind::new_statement("stmt1")).await;
     client.send(Execute::new()).await;
@@ -122,35 +100,26 @@ async fn test_spliced_pipelined_executes() {
     client.send(Flush).await;
 
     client.try_process().await.unwrap();
-
-    // Backend stays connected after Execute+Flush (no Sync yet)
     assert!(client.backend_connected());
 
-    // First statement responses
     expect_message!(client.read().await, ParseComplete);
     expect_message!(client.read().await, BindComplete);
     let row = expect_message!(client.read().await, DataRow);
     assert_eq!(row.get_int(0, true), Some(1));
     expect_message!(client.read().await, CommandComplete);
 
-    // Second statement responses
     expect_message!(client.read().await, ParseComplete);
     expect_message!(client.read().await, BindComplete);
     let row = expect_message!(client.read().await, DataRow);
     assert_eq!(row.get_int(0, true), Some(2));
     expect_message!(client.read().await, CommandComplete);
 
-    // Still connected before Sync
     assert!(client.backend_connected());
 
-    // Now send Sync
     client.send(Sync).await;
     client.try_process().await.unwrap();
 
-    // Released after Sync
     assert!(!client.backend_connected());
-
-    // Sync response
     expect_message!(client.read().await, ReadyForQuery);
 }
 
@@ -160,26 +129,19 @@ async fn test_spliced_with_flush_mid_pipeline() {
 
     assert!(!client.backend_connected());
 
-    // Parse with Flush, then Bind, Execute, Sync in separate request.
-    // In transaction mode, connection is released after each complete request.
     client.send(Parse::named("stmt", "SELECT 1")).await;
     client.send(Flush).await;
 
     client.try_process().await.unwrap();
-
-    // After Flush in transaction mode, backend is released (no pending splices)
     assert!(!client.backend_connected());
 
     expect_message!(client.read().await, ParseComplete);
 
-    // Now send the rest - this gets a new connection
     client.send(Bind::new_statement("stmt")).await;
     client.send(Execute::new()).await;
     client.send(Sync).await;
 
     client.try_process().await.unwrap();
-
-    // After Sync, backend is released
     assert!(!client.backend_connected());
 
     expect_message!(client.read().await, BindComplete);
@@ -195,16 +157,12 @@ async fn test_spliced_single_execute_no_splice() {
 
     assert!(!client.backend_connected());
 
-    // Single Execute should not be spliced (optimization)
-    // Send everything except Sync first
     client.send(Parse::named("stmt", "SELECT 42")).await;
     client.send(Bind::new_statement("stmt")).await;
     client.send(Execute::new()).await;
     client.send(Flush).await;
 
     client.try_process().await.unwrap();
-
-    // Backend connected after Execute+Flush (no Sync yet)
     assert!(client.backend_connected());
 
     expect_message!(client.read().await, ParseComplete);
@@ -213,16 +171,12 @@ async fn test_spliced_single_execute_no_splice() {
     assert_eq!(row.get_int(0, true), Some(42));
     expect_message!(client.read().await, CommandComplete);
 
-    // Still connected before Sync
     assert!(client.backend_connected());
 
-    // Now send Sync
     client.send(Sync).await;
     client.try_process().await.unwrap();
 
-    // Released after Sync
     assert!(!client.backend_connected());
-
     expect_message!(client.read().await, ReadyForQuery);
 }
 
@@ -232,8 +186,6 @@ async fn test_spliced_reuses_named_statement() {
 
     assert!(!client.backend_connected());
 
-    // Parse once, Bind and Execute multiple times without Sync.
-    // Second Bind references statement from first splice.
     client.send(Parse::named("reuse", "SELECT 100")).await;
     client.send(Bind::new_statement("reuse")).await;
     client.send(Execute::new()).await;
@@ -242,32 +194,222 @@ async fn test_spliced_reuses_named_statement() {
     client.send(Flush).await;
 
     client.try_process().await.unwrap();
-
-    // Backend stays connected (no Sync yet)
     assert!(client.backend_connected());
 
-    // First execution
     expect_message!(client.read().await, ParseComplete);
     expect_message!(client.read().await, BindComplete);
     let row = expect_message!(client.read().await, DataRow);
     assert_eq!(row.get_int(0, true), Some(100));
     expect_message!(client.read().await, CommandComplete);
 
-    // Second execution (reuses the named statement, same result)
     expect_message!(client.read().await, BindComplete);
     let row = expect_message!(client.read().await, DataRow);
     assert_eq!(row.get_int(0, true), Some(100));
     expect_message!(client.read().await, CommandComplete);
 
-    // Still connected before Sync
     assert!(client.backend_connected());
 
-    // Now send Sync
     client.send(Sync).await;
     client.try_process().await.unwrap();
 
-    // Released after Sync
+    assert!(!client.backend_connected());
+    expect_message!(client.read().await, ReadyForQuery);
+}
+
+/// Test JDBC transaction pattern: BEGIN + SELECT with Describe pipelined.
+/// The request is spliced into 3 parts: BEGIN, SELECT, Sync.
+#[tokio::test]
+async fn test_jdbc_transaction_pattern_sharded() {
+    let mut client = TestClient::new_sharded(Parameters::default()).await;
+
     assert!(!client.backend_connected());
 
-    expect_message!(client.read().await, ReadyForQuery);
+    client.send(Parse::named("", "BEGIN")).await;
+    client.send(Bind::new_statement("")).await;
+    client.send(Execute::new()).await;
+    client
+        .send(Parse::named("", "SELECT COUNT(*) as count FROM sharded"))
+        .await;
+    client.send(Bind::new_statement("")).await;
+    client.send(Describe::new_portal("")).await;
+    client.send(Execute::new()).await;
+    client.send(Sync).await;
+
+    client.try_process().await.unwrap();
+
+    let messages = client.read_until('Z').await.unwrap();
+
+    // Expected: ParseComplete, BindComplete, CommandComplete (BEGIN),
+    //           ParseComplete, BindComplete, RowDescription, DataRow, CommandComplete (SELECT),
+    //           ReadyForQuery
+    assert_eq!(messages.len(), 9, "Expected 9 messages");
+    assert_eq!(messages[0].code(), '1'); // ParseComplete
+    assert_eq!(messages[1].code(), '2'); // BindComplete
+    assert_eq!(messages[2].code(), 'C'); // CommandComplete (BEGIN)
+    assert_eq!(messages[3].code(), '1'); // ParseComplete
+    assert_eq!(messages[4].code(), '2'); // BindComplete
+    assert_eq!(messages[5].code(), 'T'); // RowDescription
+    assert_eq!(messages[6].code(), 'D'); // DataRow
+    assert_eq!(messages[7].code(), 'C'); // CommandComplete (SELECT)
+    assert_eq!(messages[8].code(), 'Z'); // ReadyForQuery
+}
+
+/// Test JDBC transaction with INSERT followed by SELECT on sharded database.
+/// This reproduces the bug where multi-shard state got confused after
+/// spliced BEGIN + INSERT going to different shard counts.
+#[tokio::test]
+async fn test_jdbc_transaction_insert_then_select_sharded() {
+    let mut client = TestClient::new_sharded(Parameters::default()).await;
+
+    client.send(Query::new("TRUNCATE TABLE sharded")).await;
+    client.try_process().await.unwrap();
+    client.read_until('Z').await.unwrap();
+
+    // BEGIN + SELECT pipelined (goes to all shards)
+    client.send(Parse::named("", "BEGIN")).await;
+    client.send(Bind::new_statement("")).await;
+    client.send(Execute::new()).await;
+    client
+        .send(Parse::named("", "SELECT COUNT(*) as count FROM sharded"))
+        .await;
+    client.send(Bind::new_statement("")).await;
+    client.send(Describe::new_portal("")).await;
+    client.send(Execute::new()).await;
+    client.send(Sync).await;
+    client.try_process().await.unwrap();
+
+    let messages = client.read_until('Z').await.unwrap();
+    assert_eq!(messages.len(), 9, "Expected 9 messages for BEGIN+SELECT");
+
+    // ROLLBACK
+    client.send(Query::new("ROLLBACK")).await;
+    client.try_process().await.unwrap();
+    client.read_until('Z').await.unwrap();
+
+    // BEGIN + INSERT pipelined (BEGIN goes to all shards, INSERT goes to one)
+    client.send(Parse::named("", "BEGIN")).await;
+    client.send(Bind::new_statement("")).await;
+    client.send(Execute::new()).await;
+    client
+        .send(Parse::named(
+            "",
+            "INSERT INTO sharded (id, value) VALUES (1, 'test1')",
+        ))
+        .await;
+    client.send(Bind::new_statement("")).await;
+    client.send(Describe::new_portal("")).await;
+    client.send(Execute::new()).await;
+    client.send(Sync).await;
+    client.try_process().await.unwrap();
+    client.read_until('Z').await.unwrap();
+
+    // Second INSERT (goes to potentially different shard)
+    client
+        .send(Parse::named(
+            "",
+            "INSERT INTO sharded (id, value) VALUES (2, 'test2')",
+        ))
+        .await;
+    client.send(Bind::new_statement("")).await;
+    client.send(Describe::new_portal("")).await;
+    client.send(Execute::new()).await;
+    client.send(Sync).await;
+    client.try_process().await.unwrap();
+    client.read_until('Z').await.unwrap();
+
+    // SELECT COUNT(*) (goes to all shards)
+    client
+        .send(Parse::named("", "SELECT COUNT(*) as count FROM sharded"))
+        .await;
+    client.send(Bind::new_statement("")).await;
+    client.send(Describe::new_portal("")).await;
+    client.send(Execute::new()).await;
+    client.send(Sync).await;
+    client.try_process().await.unwrap();
+
+    let messages = client.read_until('Z').await.unwrap();
+
+    // Expected: ParseComplete, BindComplete, RowDescription, DataRow, CommandComplete, ReadyForQuery
+    assert_eq!(messages.len(), 6, "Expected 6 messages for SELECT");
+    assert_eq!(messages[0].code(), '1'); // ParseComplete
+    assert_eq!(messages[1].code(), '2'); // BindComplete
+    assert_eq!(messages[2].code(), 'T'); // RowDescription
+    assert_eq!(messages[3].code(), 'D'); // DataRow
+    assert_eq!(messages[4].code(), 'C'); // CommandComplete
+    assert_eq!(messages[5].code(), 'Z'); // ReadyForQuery
+
+    client.send(Query::new("ROLLBACK")).await;
+    client.try_process().await.unwrap();
+    client.read_until('Z').await.unwrap();
+}
+
+/// Test simple Query protocol on sharded database in a transaction.
+#[tokio::test]
+async fn test_simple_query_protocol_sharded_transaction() {
+    let mut client = TestClient::new_sharded(Parameters::default()).await;
+
+    client.send(Query::new("TRUNCATE TABLE sharded")).await;
+    client.try_process().await.unwrap();
+    client.read_until('Z').await.unwrap();
+
+    client.send(Query::new("BEGIN")).await;
+    client.try_process().await.unwrap();
+    client.read_until('Z').await.unwrap();
+
+    client
+        .send(Query::new("SELECT COUNT(*) as count FROM sharded"))
+        .await;
+    client.try_process().await.unwrap();
+    client.read_until('Z').await.unwrap();
+
+    client.send(Query::new("ROLLBACK")).await;
+    client.try_process().await.unwrap();
+    client.read_until('Z').await.unwrap();
+
+    client
+        .send(Query::new(
+            "INSERT INTO sharded (id, value) VALUES (1, 'test1')",
+        ))
+        .await;
+    client.try_process().await.unwrap();
+    client.read_until('Z').await.unwrap();
+
+    client
+        .send(Query::new(
+            "INSERT INTO sharded (id, value) VALUES (2, 'test2')",
+        ))
+        .await;
+    client.try_process().await.unwrap();
+    client.read_until('Z').await.unwrap();
+
+    client
+        .send(Query::new("SELECT COUNT(*) as count FROM sharded"))
+        .await;
+    client.try_process().await.unwrap();
+
+    let messages = client.read_until('Z').await.unwrap();
+
+    // Simple query returns: RowDescription, DataRow, CommandComplete, ReadyForQuery
+    assert!(messages.len() >= 3, "Expected at least 3 messages");
+    assert!(
+        messages.iter().any(|m| m.code() == 'T'),
+        "Should have RowDescription"
+    );
+    assert!(
+        messages.iter().any(|m| m.code() == 'D'),
+        "Should have DataRow"
+    );
+    assert!(
+        messages.iter().any(|m| m.code() == 'C'),
+        "Should have CommandComplete"
+    );
+    assert_eq!(
+        messages.last().unwrap().code(),
+        'Z',
+        "Last message should be ReadyForQuery"
+    );
+
+    client.send(Query::new("ROLLBACK")).await;
+    client.try_process().await.unwrap();
+    client.read_until('Z').await.unwrap();
 }
