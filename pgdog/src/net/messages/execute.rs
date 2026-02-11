@@ -47,6 +47,18 @@ impl Execute {
         }
     }
 
+    /// Create an Execute message for a named portal with a row limit.
+    /// A limit of 0 means fetch all rows.
+    pub fn new_portal_limit(name: &str, max_rows: i32) -> Self {
+        let mut payload = Payload::named('E');
+        payload.put_string(name);
+        payload.put_i32(max_rows);
+        Self {
+            payload: payload.freeze(),
+            portal_len: name.len() + 1,
+        }
+    }
+
     pub fn portal(&self) -> &str {
         let start = 5;
         let end = start
