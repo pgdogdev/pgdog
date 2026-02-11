@@ -71,6 +71,7 @@ pub struct Cluster {
     pub_sub_channel_size: usize,
     query_parser: QueryParserLevel,
     connection_recovery: ConnectionRecovery,
+    client_connection_recovery: ConnectionRecovery,
     query_parser_engine: QueryParserEngine,
     reload_schema_on_ddl: bool,
 }
@@ -144,6 +145,7 @@ pub struct ClusterConfig<'a> {
     pub query_parser: QueryParserLevel,
     pub query_parser_engine: QueryParserEngine,
     pub connection_recovery: ConnectionRecovery,
+    pub client_connection_recovery: ConnectionRecovery,
     pub lsn_check_interval: Duration,
     pub reload_schema_on_ddl: bool,
 }
@@ -192,6 +194,7 @@ impl<'a> ClusterConfig<'a> {
             query_parser: general.query_parser,
             query_parser_engine: general.query_parser_engine,
             connection_recovery: general.connection_recovery,
+            client_connection_recovery: general.client_connection_recovery,
             lsn_check_interval: Duration::from_millis(general.lsn_check_interval),
             reload_schema_on_ddl: general.reload_schema_on_ddl,
         }
@@ -225,6 +228,7 @@ impl Cluster {
             pub_sub_channel_size,
             query_parser,
             connection_recovery,
+            client_connection_recovery,
             lsn_check_interval,
             query_parser_engine,
             reload_schema_on_ddl,
@@ -272,6 +276,7 @@ impl Cluster {
             pub_sub_channel_size,
             query_parser,
             connection_recovery,
+            client_connection_recovery,
             query_parser_engine,
             reload_schema_on_ddl,
         }
@@ -377,6 +382,10 @@ impl Cluster {
 
     pub fn connection_recovery(&self) -> &ConnectionRecovery {
         &self.connection_recovery
+    }
+
+    pub fn client_connection_recovery(&self) -> &ConnectionRecovery {
+        &self.client_connection_recovery
     }
 
     pub fn dry_run(&self) -> bool {

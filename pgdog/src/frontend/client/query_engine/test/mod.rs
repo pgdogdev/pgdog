@@ -16,6 +16,7 @@ mod schema_changed;
 mod set;
 mod set_schema_sharding;
 mod sharded;
+mod spliced;
 
 pub(super) fn test_client() -> Client {
     load_test();

@@ -70,8 +70,13 @@ impl QueryEngine {
 
             Err(err) => {
                 self.stats.error();
+                let can_recover = self
+                    .backend
+                    .cluster()
+                    .map(|cluster| cluster.client_connection_recovery().can_recover())
+                    .unwrap_or_default();
 
-                if err.no_server() {
+                if err.no_server() && can_recover {
                     error!("{} [{:?}]", err, context.stream.peer_addr());
 
                     let error = ErrorResponse::from_err(&err);

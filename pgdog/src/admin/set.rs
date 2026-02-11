@@ -164,6 +164,22 @@ impl Command for Set {
                 config.config.general.reload_schema_on_ddl = Self::from_json(&self.value)?;
             }
 
+            "connection_recovery" => {
+                config.config.general.connection_recovery = Self::from_json(&self.value)?;
+            }
+
+            "client_connection_recovery" => {
+                config.config.general.client_connection_recovery = Self::from_json(&self.value)?;
+            }
+
+            "default_pool_size" => {
+                config.config.general.default_pool_size = self.value.parse()?;
+            }
+
+            "connect_timeout" => {
+                config.config.general.connect_timeout = self.value.parse()?;
+            }
+
             _ => return Err(Error::Syntax),
         }
 
