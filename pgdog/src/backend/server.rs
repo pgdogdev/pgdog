@@ -2969,6 +2969,7 @@ pub mod test {
             .await
             .unwrap();
 
+        assert!(server.needs_drain());
         server.drain().await.unwrap();
 
         assert!(server.in_sync());
@@ -3005,6 +3006,7 @@ pub mod test {
         let msg = server.read().await.unwrap();
         assert_eq!(msg.code(), '1');
 
+        assert!(server.needs_drain());
         server.drain().await.unwrap();
 
         assert!(server.in_sync());
@@ -3043,6 +3045,7 @@ pub mod test {
             assert_eq!(msg.code(), c);
         }
 
+        assert!(server.needs_drain());
         server.drain().await.unwrap();
 
         assert!(server.in_sync());
@@ -3081,6 +3084,7 @@ pub mod test {
             assert_eq!(msg.code(), c);
         }
 
+        assert!(server.needs_drain());
         server.drain().await.unwrap();
 
         assert!(server.in_sync());
@@ -3119,6 +3123,7 @@ pub mod test {
             assert_eq!(msg.code(), c);
         }
 
+        assert!(server.needs_drain());
         server.drain().await.unwrap();
 
         assert!(server.in_sync());
@@ -3147,6 +3152,7 @@ pub mod test {
         let msg = server.read().await.unwrap();
         assert_eq!(msg.code(), 'E');
 
+        assert!(server.needs_drain());
         server.drain().await.unwrap();
 
         assert!(server.in_sync());
@@ -3187,6 +3193,7 @@ pub mod test {
             assert_eq!(msg.code(), 'D');
         }
 
+        assert!(server.needs_drain());
         server.drain().await.unwrap();
 
         assert!(server.in_sync());
@@ -3207,6 +3214,7 @@ pub mod test {
         let msg = server.read().await.unwrap();
         assert_eq!(msg.code(), 'T');
 
+        assert!(server.needs_drain());
         server.drain().await.unwrap();
 
         assert!(server.in_sync());
@@ -3229,6 +3237,7 @@ pub mod test {
             assert_eq!(msg.code(), c);
         }
 
+        assert!(server.needs_drain());
         server.drain().await.unwrap();
 
         assert!(server.in_sync());
@@ -3264,6 +3273,7 @@ pub mod test {
             assert_eq!(msg.code(), c);
         }
 
+        assert!(server.needs_drain());
         server.drain().await.unwrap();
 
         assert!(server.in_sync());
