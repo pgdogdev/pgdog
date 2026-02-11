@@ -108,6 +108,7 @@ pub fn remove_comments(
 ) -> Result<String, Error> {
     let mut cursor = 0;
     let mut out = String::with_capacity(query.len());
+    let mut metadata = Vec::with_capacity(3);
 
     for st in tokenized_query {
         let start = st.start as usize;
@@ -120,9 +121,9 @@ pub fn remove_comments(
                 let comment = &query[start..end];
 
                 if let Some(except) = except {
-                    let rewritten = keep_only_matching(comment, except);
+                    let m = keep_only_matching(comment, except);
 
-                    out.push_str(&rewritten);
+                    metadata.push(m.to_string());
                 }
             }
             _ => {
@@ -136,6 +137,9 @@ pub fn remove_comments(
     if cursor < query.len() {
         out.push_str(&query[cursor..]);
     }
+
+    metadata.sort_unstable();
+    out.insert_str(0, &metadata.join(""));
 
     Ok(out)
 }
@@ -250,6 +254,26 @@ mod tests {
         let result = parse_comment(query, &schema).unwrap();
         assert_eq!(result.0, Some(Shard::Direct(2)));
         assert_eq!(result.1, Some(Role::Replica));
+    }
+
+    #[test]
+    fn test_remove_comments_no_exceptions() {
+        let query = "SELECT * FROM table /* comment */ WHERE id = 1";
+        let tokens = scan(query).unwrap().tokens;
+
+        let result = remove_comments(query, &tokens, None).unwrap();
+
+        assert_eq!(result, "SELECT * FROM table  WHERE id = 1");
+    }
+
+    #[test]
+    fn test_remove_comments_with_exceptions() {
+        let query = "SELECT /* comment */ * FROM table /* pgdog_shard: 4 comment */ WHERE id = 1";
+        let tokens = scan(query).unwrap().tokens;
+
+        let result = remove_comments(query, &tokens, Some(&[&SHARD])).unwrap();
+
+        assert_eq!(result, "pgdog_shard: 4SELECT  * FROM table  WHERE id = 1");
     }
 
     #[test]
