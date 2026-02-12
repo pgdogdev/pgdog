@@ -2374,7 +2374,7 @@ mod test {
     }
 
     // INSERT without column list tests
-    use crate::backend::schema::columns::Column as SchemaColumn;
+    use crate::backend::schema::columns::StatsColumn as SchemaColumn;
     use crate::backend::schema::Relation;
     use indexmap::IndexMap;
 
@@ -2392,7 +2392,8 @@ mod test {
                 data_type: "bigint".into(),
                 ordinal_position: 1,
                 is_primary_key: true,
-            },
+            }
+            .into(),
         );
         columns.insert(
             "name".to_string(),
@@ -2406,7 +2407,8 @@ mod test {
                 data_type: "text".into(),
                 ordinal_position: 2,
                 is_primary_key: false,
-            },
+            }
+            .into(),
         );
         let relation = Relation::test_table("public", "sharded", columns);
         let relations = HashMap::from([(("public".into(), "sharded".into()), relation)]);
@@ -2531,7 +2533,8 @@ mod test {
                     ordinal_position: 1,
                     is_primary_key: true,
                     ..Default::default()
-                },
+                }
+                .into(),
             );
             columns.insert(
                 "tenant_id".to_string(),
@@ -2540,7 +2543,8 @@ mod test {
                     column_name: "tenant_id".into(),
                     ordinal_position: 2,
                     ..Default::default()
-                },
+                }
+                .into(),
             );
             Relation::test_table("public", table_name, columns)
         };

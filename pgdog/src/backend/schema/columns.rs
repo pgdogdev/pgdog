@@ -1,21 +1,45 @@
 //! Get all table definitions.
+pub use pgdog_stats::Column as StatsColumn;
+use serde::{Deserialize, Serialize};
+
 use super::Error;
 use crate::{backend::Server, net::messages::DataRow};
-use std::collections::HashMap;
+use std::{
+    collections::HashMap,
+    ops::{Deref, DerefMut},
+};
 
 static COLUMNS: &str = include_str!("columns.sql");
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Column {
-    pub table_catalog: String,
-    pub table_schema: String,
-    pub table_name: String,
-    pub column_name: String,
-    pub column_default: String,
-    pub is_nullable: bool,
-    pub data_type: String,
-    pub ordinal_position: i32,
-    pub is_primary_key: bool,
+    inner: StatsColumn,
+}
+
+impl From<StatsColumn> for Column {
+    fn from(value: StatsColumn) -> Self {
+        Self { inner: value }
+    }
+}
+
+impl From<Column> for StatsColumn {
+    fn from(value: Column) -> Self {
+        value.inner
+    }
+}
+
+impl Deref for Column {
+    type Target = StatsColumn;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl DerefMut for Column {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.inner
+    }
 }
 
 impl Column {
@@ -41,15 +65,17 @@ impl From<DataRow> for Column {
     fn from(value: DataRow) -> Self {
         use crate::net::messages::Format;
         Self {
-            table_catalog: value.get_text(0).unwrap_or_default(),
-            table_schema: value.get_text(1).unwrap_or_default(),
-            table_name: value.get_text(2).unwrap_or_default(),
-            column_name: value.get_text(3).unwrap_or_default(),
-            column_default: value.get_text(4).unwrap_or_default(),
-            is_nullable: value.get_text(5).unwrap_or_default() == "true",
-            data_type: value.get_text(6).unwrap_or_default(),
-            ordinal_position: value.get::<i32>(7, Format::Text).unwrap_or(0),
-            is_primary_key: value.get_text(8).unwrap_or_default() == "true",
+            inner: StatsColumn {
+                table_catalog: value.get_text(0).unwrap_or_default(),
+                table_schema: value.get_text(1).unwrap_or_default(),
+                table_name: value.get_text(2).unwrap_or_default(),
+                column_name: value.get_text(3).unwrap_or_default(),
+                column_default: value.get_text(4).unwrap_or_default(),
+                is_nullable: value.get_text(5).unwrap_or_default() == "true",
+                data_type: value.get_text(6).unwrap_or_default(),
+                ordinal_position: value.get::<i32>(7, Format::Text).unwrap_or(0),
+                is_primary_key: value.get_text(8).unwrap_or_default() == "true",
+            },
         }
     }
 }

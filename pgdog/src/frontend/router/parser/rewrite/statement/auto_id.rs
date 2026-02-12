@@ -247,7 +247,7 @@ mod tests {
     use std::collections::HashMap;
 
     use super::*;
-    use crate::backend::schema::columns::Column as SchemaColumn;
+    use crate::backend::schema::columns::StatsColumn as SchemaColumn;
     use crate::backend::schema::{Relation, Schema};
     use crate::backend::ShardingSchema;
     use crate::frontend::router::parser::StatementRewriteContext;
@@ -267,7 +267,8 @@ mod tests {
                 data_type: "bigint".into(),
                 ordinal_position: 1,
                 is_primary_key: true,
-            },
+            }
+            .into(),
         );
         columns.insert(
             "name".to_string(),
@@ -281,7 +282,8 @@ mod tests {
                 data_type: "text".into(),
                 ordinal_position: 2,
                 is_primary_key: false,
-            },
+            }
+            .into(),
         );
         let relation = Relation::test_table("public", "users", columns);
         let relations = HashMap::from([(("public".into(), "users".into()), relation)]);
@@ -302,7 +304,8 @@ mod tests {
                 data_type: "uuid".into(),
                 ordinal_position: 1,
                 is_primary_key: true,
-            },
+            }
+            .into(),
         );
         columns.insert(
             "name".to_string(),
@@ -316,7 +319,8 @@ mod tests {
                 data_type: "text".into(),
                 ordinal_position: 2,
                 is_primary_key: false,
-            },
+            }
+            .into(),
         );
         let relation = Relation::test_table("public", "users", columns);
         let relations = HashMap::from([(("public".into(), "users".into()), relation)]);

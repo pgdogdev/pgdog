@@ -3,7 +3,11 @@ pub mod columns;
 pub mod relation;
 pub mod sync;
 
-use std::sync::Arc;
+pub use pgdog_stats::{
+    Relation as StatsRelation, Relations as StatsRelations, Schema as StatsSchema, SchemaInner,
+};
+use serde::{Deserialize, Serialize};
+use std::ops::DerefMut;
 use std::{collections::HashMap, ops::Deref};
 use tracing::debug;
 
@@ -15,30 +19,35 @@ use crate::net::parameter::ParameterValue;
 
 static SETUP: &str = include_str!("setup.sql");
 
-/// Schema name -> Table name -> Relation
-type Relations = HashMap<String, HashMap<String, Relation>>;
-
-#[derive(Debug, Default)]
-struct Inner {
-    search_path: Vec<String>,
-    relations: Relations,
+/// Load schema from database.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Schema {
+    inner: StatsSchema,
 }
 
-/// Load schema from database.
-#[derive(Debug, Clone, Default)]
-pub struct Schema {
-    inner: Arc<Inner>,
+impl Deref for Schema {
+    type Target = StatsSchema;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl DerefMut for Schema {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.inner
+    }
 }
 
 impl Schema {
     /// Load schema from a server connection.
     pub async fn load(server: &mut Server) -> Result<Self, Error> {
-        let mut relations: Relations = HashMap::new();
+        let mut relations: StatsRelations = HashMap::new();
         for relation in Relation::load(server).await? {
             relations
                 .entry(relation.schema().to_owned())
                 .or_default()
-                .insert(relation.name.clone(), relation);
+                .insert(relation.name.clone(), relation.into());
         }
 
         let search_path = server
@@ -50,13 +59,13 @@ impl Schema {
             .map(|p| p.trim().replace("\"", ""))
             .collect();
 
-        let inner = Inner {
+        let inner = SchemaInner {
             search_path,
             relations,
         };
 
         Ok(Self {
-            inner: Arc::new(inner),
+            inner: StatsSchema::new(inner),
         })
     }
 
@@ -70,12 +79,15 @@ impl Schema {
         search_path: Vec<String>,
         relations: HashMap<(String, String), Relation>,
     ) -> Self {
-        let mut nested: Relations = HashMap::new();
+        let mut nested: StatsRelations = HashMap::new();
         for ((schema, name), relation) in relations {
-            nested.entry(schema).or_default().insert(name, relation);
+            nested
+                .entry(schema)
+                .or_default()
+                .insert(name, relation.into());
         }
         Self {
-            inner: Arc::new(Inner {
+            inner: StatsSchema::new(SchemaInner {
                 search_path,
                 relations: nested,
             }),
@@ -158,26 +170,18 @@ impl Schema {
         table: Table<'_>,
         user: &str,
         search_path: Option<&ParameterValue>,
-    ) -> Option<&Relation> {
+    ) -> Option<&StatsRelation> {
         if let Some(schema) = table.schema {
-            return self.get(schema, table.name);
+            return self.inner.get(schema, table.name);
         }
 
         for schema in self.resolve_search_path(user, search_path) {
-            if let Some(relation) = self.get(schema, table.name) {
-                return Some(relation);
+            if let Some(relation) = self.inner.get(schema, table.name) {
+                return Some(relation.into());
             }
         }
 
         None
-    }
-
-    /// Get a relation by schema and table name.
-    pub fn get(&self, schema: &str, name: &str) -> Option<&Relation> {
-        self.inner
-            .relations
-            .get(schema)
-            .and_then(|tables| tables.get(name))
     }
 
     fn resolve_search_path<'a>(
@@ -196,7 +200,7 @@ impl Schema {
     }
 
     /// Get all tables.
-    pub fn tables(&self) -> Vec<&Relation> {
+    pub fn tables(&self) -> Vec<&StatsRelation> {
         self.inner
             .relations
             .values()
@@ -206,7 +210,7 @@ impl Schema {
     }
 
     /// Get all sequences.
-    pub fn sequences(&self) -> Vec<&Relation> {
+    pub fn sequences(&self) -> Vec<&StatsRelation> {
         self.inner
             .relations
             .values()
@@ -218,14 +222,6 @@ impl Schema {
     /// Get search path components.
     pub fn search_path(&self) -> &[String] {
         &self.inner.search_path
-    }
-}
-
-impl Deref for Schema {
-    type Target = Relations;
-
-    fn deref(&self) -> &Self::Target {
-        &self.inner.relations
     }
 }
 
