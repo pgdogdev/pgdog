@@ -1,6 +1,11 @@
-use std::collections::HashMap;
+use pgdog_stats::Relation as StatsRelation;
+use std::{
+    collections::HashMap,
+    ops::{Deref, DerefMut},
+};
 
 use indexmap::IndexMap;
+use serde::{Deserialize, Serialize};
 
 use super::{columns::Column, Error};
 use crate::{
@@ -11,32 +16,51 @@ use crate::{
 /// Get all relations in the database.
 pub static TABLES: &str = include_str!("relations.sql");
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Relation {
-    schema: String,
-    pub name: String,
-    pub type_: String,
-    pub owner: String,
-    pub persistence: String,
-    pub access_method: String,
-    pub description: String,
-    pub oid: i32,
-    /// Columns indexed by name, ordered by ordinal position.
-    columns: IndexMap<String, Column>,
+    inner: StatsRelation,
+}
+
+impl Deref for Relation {
+    type Target = StatsRelation;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl DerefMut for Relation {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.inner
+    }
+}
+
+impl From<StatsRelation> for Relation {
+    fn from(value: StatsRelation) -> Self {
+        Self { inner: value }
+    }
+}
+
+impl From<Relation> for StatsRelation {
+    fn from(value: Relation) -> Self {
+        value.inner
+    }
 }
 
 impl From<DataRow> for Relation {
     fn from(value: DataRow) -> Self {
         Self {
-            schema: value.get_text(0).unwrap_or_default(),
-            name: value.get_text(1).unwrap_or_default(),
-            type_: value.get_text(2).unwrap_or_default(),
-            owner: value.get_text(3).unwrap_or_default(),
-            persistence: value.get_text(4).unwrap_or_default(),
-            access_method: value.get_text(5).unwrap_or_default(),
-            description: value.get_text(6).unwrap_or_default(),
-            oid: value.get::<i32>(7, Format::Text).unwrap_or_default(),
-            columns: IndexMap::new(),
+            inner: StatsRelation {
+                schema: value.get_text(0).unwrap_or_default(),
+                name: value.get_text(1).unwrap_or_default(),
+                type_: value.get_text(2).unwrap_or_default(),
+                owner: value.get_text(3).unwrap_or_default(),
+                persistence: value.get_text(4).unwrap_or_default(),
+                access_method: value.get_text(5).unwrap_or_default(),
+                description: value.get_text(6).unwrap_or_default(),
+                oid: value.get::<i32>(7, Format::Text).unwrap_or_default(),
+                columns: IndexMap::new(),
+            },
         }
     }
 }
@@ -61,57 +85,19 @@ impl Relation {
                 relation.columns = column
                     .1
                     .into_iter()
-                    .map(|c| (c.column_name.clone(), c))
+                    .map(|c| (c.column_name.clone(), c.into()))
                     .collect();
             }
         }
 
         Ok(relations.into_values().collect())
     }
-
-    /// Get schema where the table is located.
-    pub fn schema(&self) -> &str {
-        if self.schema.is_empty() {
-            "public"
-        } else {
-            &self.schema
-        }
-    }
-
-    /// This is an index.
-    pub fn is_index(&self) -> bool {
-        matches!(self.type_.as_str(), "index" | "partitioned index")
-    }
-
-    /// This is a table.
-    pub fn is_table(&self) -> bool {
-        matches!(self.type_.as_str(), "table" | "partitioned table")
-    }
-
-    /// This is a sequence.
-    pub fn is_sequence(&self) -> bool {
-        self.type_ == "sequence"
-    }
-
-    /// Columns by name, in ordinal position order.
-    pub fn columns(&self) -> &IndexMap<String, Column> {
-        &self.columns
-    }
-
-    /// Get ordered column names (in ordinal position order).
-    pub fn column_names(&self) -> impl Iterator<Item = &str> {
-        self.columns.keys().map(|s| s.as_str())
-    }
-
-    pub fn has_column(&self, name: &str) -> bool {
-        self.columns.contains_key(name)
-    }
 }
 
 #[cfg(test)]
 impl Relation {
     pub(crate) fn test_table(schema: &str, name: &str, columns: IndexMap<String, Column>) -> Self {
-        Self {
+        StatsRelation {
             schema: schema.into(),
             name: name.into(),
             type_: "table".into(),
@@ -120,8 +106,9 @@ impl Relation {
             access_method: String::new(),
             description: String::new(),
             oid: 0,
-            columns,
+            columns: columns.into_iter().map(|(k, v)| (k, v.into())).collect(),
         }
+        .into()
     }
 }
 
