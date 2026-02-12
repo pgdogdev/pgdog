@@ -1,11 +1,11 @@
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, ops::Deref, sync::Arc};
+use std::{collections::HashMap, hash::Hash, ops::Deref, sync::Arc};
 
 /// Schema name -> Table name -> Relation
 pub type Relations = HashMap<String, HashMap<String, Relation>>;
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Hash)]
 pub struct Column {
     pub table_catalog: String,
     pub table_schema: String,
@@ -18,7 +18,7 @@ pub struct Column {
     pub is_primary_key: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Relation {
     pub schema: String,
     pub name: String,
@@ -30,6 +30,23 @@ pub struct Relation {
     pub oid: i32,
     /// Columns indexed by name, ordered by ordinal position.
     pub columns: IndexMap<String, Column>,
+}
+
+impl Hash for Relation {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.schema.hash(state);
+        self.name.hash(state);
+        self.type_.hash(state);
+        self.owner.hash(state);
+        self.persistence.hash(state);
+        self.access_method.hash(state);
+        self.description.hash(state);
+        self.oid.hash(state);
+        for (key, value) in &self.columns {
+            key.hash(state);
+            value.hash(state);
+        }
+    }
 }
 
 impl Relation {
@@ -72,16 +89,39 @@ impl Relation {
     }
 }
 
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct SchemaInner {
     pub search_path: Vec<String>,
     pub relations: Relations,
 }
 
+impl Hash for SchemaInner {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.search_path.hash(state);
+        let mut entries: Vec<_> = self.relations.iter().collect();
+        entries.sort_by_key(|(k, _)| *k);
+        for (schema, tables) in entries {
+            schema.hash(state);
+            let mut table_entries: Vec<_> = tables.iter().collect();
+            table_entries.sort_by_key(|(k, _)| *k);
+            for (name, relation) in table_entries {
+                name.hash(state);
+                relation.hash(state);
+            }
+        }
+    }
+}
+
 /// Load schema from database.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct Schema {
     inner: Arc<SchemaInner>,
+}
+
+impl Hash for Schema {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.inner.hash(state);
+    }
 }
 
 impl Schema {
