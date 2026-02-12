@@ -20,7 +20,7 @@ use crate::net::parameter::ParameterValue;
 static SETUP: &str = include_str!("setup.sql");
 
 /// Load schema from database.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Hash)]
 pub struct Schema {
     inner: StatsSchema,
 }
