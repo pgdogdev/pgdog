@@ -15,6 +15,7 @@ use tracing::{error, info};
 use crate::{
     backend::{
         databases::{databases, User as DatabaseUser},
+        pool::ee::schema_changed_hook,
         replication::{ReplicationConfig, ShardedSchemas},
         Schema, ShardedTables,
     },
@@ -534,6 +535,7 @@ impl Cluster {
 
         if self.load_schema() && !already_started {
             for shard in self.shards() {
+                let identifier = self.identifier();
                 let readiness = self.readiness.clone();
                 let shard = shard.clone();
                 let shards = self.shards.len();
@@ -550,6 +552,9 @@ impl Cluster {
                     // Loaded schema on all shards.
                     if done >= shards - 1 {
                         readiness.schemas_ready.notify_waiters();
+                        // We assume the schema is the same on all shards.
+                        // TODO: check that this is the case and raise a stink if its not.
+                        schema_changed_hook(&shard.schema(), &identifier);
                     }
                 });
             }

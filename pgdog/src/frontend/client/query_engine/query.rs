@@ -2,7 +2,6 @@ use tokio::time::timeout;
 use tracing::{info, trace};
 
 use crate::{
-    backend::databases::reload_from_existing,
     frontend::{
         client::TransactionType,
         router::parser::{explain_trace::ExplainTrace, rewrite::statement::plan::RewriteResult},
@@ -16,6 +15,7 @@ use crate::{
 
 use tracing::{debug, error};
 
+use super::hooks::schema::schema_changed;
 use super::*;
 
 impl QueryEngine {
@@ -301,7 +301,7 @@ impl QueryEngine {
                     "schema change detected, reloading config [{}]",
                     self.backend.cluster()?.identifier(),
                 );
-                reload_from_existing()?;
+                schema_changed()?;
             }
 
             self.router.reset();
