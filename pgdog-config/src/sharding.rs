@@ -370,6 +370,27 @@ impl Display for CopyFormat {
     }
 }
 
+#[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Eq, Hash, Default)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub enum LoadSchema {
+    On,
+    Off,
+    #[default]
+    Auto,
+}
+
+impl FromStr for LoadSchema {
+    type Err = ();
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s.to_lowercase().as_str() {
+            "on" => Self::On,
+            "auto" => Self::Auto,
+            "off" => Self::Off,
+            _ => return Err(()),
+        })
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;

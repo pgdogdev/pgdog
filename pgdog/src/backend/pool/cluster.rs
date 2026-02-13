@@ -1,7 +1,9 @@
 //! A collection of replicas and a primary.
 
 use parking_lot::Mutex;
-use pgdog_config::{PreparedStatements, QueryParserEngine, QueryParserLevel, Rewrite, RewriteMode};
+use pgdog_config::{
+    LoadSchema, PreparedStatements, QueryParserEngine, QueryParserLevel, Rewrite, RewriteMode,
+};
 use std::{
     sync::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -75,6 +77,7 @@ pub struct Cluster {
     client_connection_recovery: ConnectionRecovery,
     query_parser_engine: QueryParserEngine,
     reload_schema_on_ddl: bool,
+    load_schema: LoadSchema,
 }
 
 /// Sharding configuration from the cluster.
@@ -149,6 +152,7 @@ pub struct ClusterConfig<'a> {
     pub client_connection_recovery: ConnectionRecovery,
     pub lsn_check_interval: Duration,
     pub reload_schema_on_ddl: bool,
+    pub load_schema: LoadSchema,
 }
 
 impl<'a> ClusterConfig<'a> {
@@ -198,6 +202,7 @@ impl<'a> ClusterConfig<'a> {
             client_connection_recovery: general.client_connection_recovery,
             lsn_check_interval: Duration::from_millis(general.lsn_check_interval),
             reload_schema_on_ddl: general.reload_schema_on_ddl,
+            load_schema: general.load_schema,
         }
     }
 }
@@ -233,6 +238,7 @@ impl Cluster {
             lsn_check_interval,
             query_parser_engine,
             reload_schema_on_ddl,
+            load_schema,
         } = config;
 
         let identifier = Arc::new(DatabaseUser {
@@ -280,6 +286,7 @@ impl Cluster {
             client_connection_recovery,
             query_parser_engine,
             reload_schema_on_ddl,
+            load_schema,
         }
     }
 
@@ -486,10 +493,11 @@ impl Cluster {
     }
 
     fn load_schema(&self) -> bool {
-        self.shards.len() > 1
-            && self.sharded_schemas.is_empty()
-            && !self.sharded_tables.tables().is_empty()
-            || self.multi_tenant().is_some()
+        match self.load_schema {
+            LoadSchema::On => true,
+            LoadSchema::Off => false,
+            LoadSchema::Auto => self.shards.len() > 1 || self.multi_tenant().is_some(),
+        }
     }
 
     /// Get currently loaded schema from shard 0.
