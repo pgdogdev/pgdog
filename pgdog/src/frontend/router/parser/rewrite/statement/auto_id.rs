@@ -267,6 +267,7 @@ mod tests {
                 data_type: "bigint".into(),
                 ordinal_position: 1,
                 is_primary_key: true,
+                foreign_keys: Vec::new(),
             }
             .into(),
         );
@@ -282,6 +283,7 @@ mod tests {
                 data_type: "text".into(),
                 ordinal_position: 2,
                 is_primary_key: false,
+                foreign_keys: Vec::new(),
             }
             .into(),
         );
@@ -304,6 +306,7 @@ mod tests {
                 data_type: "uuid".into(),
                 ordinal_position: 1,
                 is_primary_key: true,
+                foreign_keys: Vec::new(),
             }
             .into(),
         );
@@ -319,6 +322,7 @@ mod tests {
                 data_type: "text".into(),
                 ordinal_position: 2,
                 is_primary_key: false,
+                foreign_keys: Vec::new(),
             }
             .into(),
         );

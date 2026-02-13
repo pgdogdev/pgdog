@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use crate::pooling::ConnectionRecovery;
-use crate::{CopyFormat, QueryParserEngine, QueryParserLevel, SystemCatalogsBehavior};
+use crate::{CopyFormat, LoadSchema, QueryParserEngine, QueryParserLevel, SystemCatalogsBehavior};
 
 use super::auth::{AuthType, PassthoughAuth};
 use super::database::{LoadBalancingStrategy, ReadWriteSplit, ReadWriteStrategy};
@@ -209,6 +209,9 @@ pub struct General {
     /// Trigger a schema reload on DDL like CREATE TABLE.
     #[serde(default = "General::reload_schema_on_ddl")]
     pub reload_schema_on_ddl: bool,
+    /// Load database schema.
+    #[serde(default = "General::load_schema")]
+    pub load_schema: LoadSchema,
 }
 
 impl Default for General {
@@ -282,6 +285,7 @@ impl Default for General {
             omnisharded_sticky: bool::default(),
             resharding_copy_format: CopyFormat::default(),
             reload_schema_on_ddl: Self::reload_schema_on_ddl(),
+            load_schema: Self::load_schema(),
         }
     }
 }
@@ -564,6 +568,10 @@ impl General {
             "PGDOG_CHECKOUT_TIMEOUT",
             Duration::from_secs(5).as_millis() as u64,
         )
+    }
+
+    fn load_schema() -> LoadSchema {
+        Self::env_enum_or_default("PGDOG_LOAD_SCHEMA")
     }
 
     pub fn mirror_queue() -> usize {

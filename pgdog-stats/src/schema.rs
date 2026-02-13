@@ -5,6 +5,40 @@ use std::{collections::HashMap, hash::Hash, ops::Deref, sync::Arc};
 /// Schema name -> Table name -> Relation
 pub type Relations = HashMap<String, HashMap<String, Relation>>;
 
+/// The action to take when a referenced row is deleted or updated.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub enum ForeignKeyAction {
+    #[default]
+    NoAction,
+    Restrict,
+    Cascade,
+    SetNull,
+    SetDefault,
+}
+
+impl ForeignKeyAction {
+    /// Parse from PostgreSQL's information_schema representation.
+    pub fn from_pg_string(s: &str) -> Self {
+        match s {
+            "CASCADE" => Self::Cascade,
+            "SET NULL" => Self::SetNull,
+            "SET DEFAULT" => Self::SetDefault,
+            "RESTRICT" => Self::Restrict,
+            "NO ACTION" | _ => Self::NoAction,
+        }
+    }
+}
+
+/// A foreign key reference to another table's column.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Hash)]
+pub struct ForeignKey {
+    pub schema: String,
+    pub table: String,
+    pub column: String,
+    pub on_delete: ForeignKeyAction,
+    pub on_update: ForeignKeyAction,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Hash)]
 pub struct Column {
     pub table_catalog: String,
@@ -16,6 +50,7 @@ pub struct Column {
     pub data_type: String,
     pub ordinal_position: i32,
     pub is_primary_key: bool,
+    pub foreign_keys: Vec<ForeignKey>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
