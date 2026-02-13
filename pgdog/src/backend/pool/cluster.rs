@@ -752,7 +752,8 @@ mod test {
         let config = ConfigAndUsers::default();
         let cluster = Cluster::new_test(&config);
 
-        assert!(!cluster.load_schema());
+        // In Auto mode with multiple shards, load_schema returns true
+        assert!(cluster.load_schema());
     }
 
     #[test]
@@ -762,7 +763,9 @@ mod test {
         cluster.sharded_schemas = ShardedSchemas::default();
         cluster.sharded_tables = ShardedTables::default();
 
-        assert!(!cluster.load_schema());
+        // In Auto mode with multiple shards, load_schema returns true
+        // (sharded_schemas and sharded_tables no longer affect this decision)
+        assert!(cluster.load_schema());
     }
 
     #[test]
@@ -846,9 +849,9 @@ mod test {
     #[tokio::test]
     async fn test_wait_schema_loaded_returns_immediately_when_not_needed() {
         let config = ConfigAndUsers::default();
-        let cluster = Cluster::new_test(&config);
+        let cluster = Cluster::new_test_single_shard(&config);
 
-        // load_schema() returns false because sharded_schemas is not empty
+        // load_schema() returns false for single shard without multi_tenant
         assert!(!cluster.load_schema());
 
         // Should return immediately without waiting
