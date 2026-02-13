@@ -1,7 +1,9 @@
 //! A collection of replicas and a primary.
 
 use parking_lot::Mutex;
-use pgdog_config::{PreparedStatements, QueryParserEngine, QueryParserLevel, Rewrite, RewriteMode};
+use pgdog_config::{
+    LoadSchema, PreparedStatements, QueryParserEngine, QueryParserLevel, Rewrite, RewriteMode,
+};
 use std::{
     sync::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -75,6 +77,7 @@ pub struct Cluster {
     client_connection_recovery: ConnectionRecovery,
     query_parser_engine: QueryParserEngine,
     reload_schema_on_ddl: bool,
+    load_schema: LoadSchema,
 }
 
 /// Sharding configuration from the cluster.
@@ -149,6 +152,7 @@ pub struct ClusterConfig<'a> {
     pub client_connection_recovery: ConnectionRecovery,
     pub lsn_check_interval: Duration,
     pub reload_schema_on_ddl: bool,
+    pub load_schema: LoadSchema,
 }
 
 impl<'a> ClusterConfig<'a> {
@@ -198,6 +202,7 @@ impl<'a> ClusterConfig<'a> {
             client_connection_recovery: general.client_connection_recovery,
             lsn_check_interval: Duration::from_millis(general.lsn_check_interval),
             reload_schema_on_ddl: general.reload_schema_on_ddl,
+            load_schema: general.load_schema,
         }
     }
 }
@@ -233,6 +238,7 @@ impl Cluster {
             lsn_check_interval,
             query_parser_engine,
             reload_schema_on_ddl,
+            load_schema,
         } = config;
 
         let identifier = Arc::new(DatabaseUser {
@@ -280,6 +286,7 @@ impl Cluster {
             client_connection_recovery,
             query_parser_engine,
             reload_schema_on_ddl,
+            load_schema,
         }
     }
 
@@ -486,10 +493,11 @@ impl Cluster {
     }
 
     fn load_schema(&self) -> bool {
-        self.shards.len() > 1
-            && self.sharded_schemas.is_empty()
-            && !self.sharded_tables.tables().is_empty()
-            || self.multi_tenant().is_some()
+        match self.load_schema {
+            LoadSchema::On => true,
+            LoadSchema::Off => false,
+            LoadSchema::Auto => self.shards.len() > 1 || self.multi_tenant().is_some(),
+        }
     }
 
     /// Get currently loaded schema from shard 0.
@@ -549,12 +557,11 @@ impl Cluster {
 
                     info!("loaded schema from {}/{} shards", done + 1, shards);
 
+                    schema_changed_hook(&shard.schema(), &identifier, &shard);
+
                     // Loaded schema on all shards.
                     if done >= shards - 1 {
                         readiness.schemas_ready.notify_waiters();
-                        // We assume the schema is the same on all shards.
-                        // TODO: check that this is the case and raise a stink if its not.
-                        schema_changed_hook(&shard.schema(), &identifier);
                     }
                 });
             }
@@ -745,7 +752,8 @@ mod test {
         let config = ConfigAndUsers::default();
         let cluster = Cluster::new_test(&config);
 
-        assert!(!cluster.load_schema());
+        // In Auto mode with multiple shards, load_schema returns true
+        assert!(cluster.load_schema());
     }
 
     #[test]
@@ -755,7 +763,9 @@ mod test {
         cluster.sharded_schemas = ShardedSchemas::default();
         cluster.sharded_tables = ShardedTables::default();
 
-        assert!(!cluster.load_schema());
+        // In Auto mode with multiple shards, load_schema returns true
+        // (sharded_schemas and sharded_tables no longer affect this decision)
+        assert!(cluster.load_schema());
     }
 
     #[test]
@@ -839,9 +849,9 @@ mod test {
     #[tokio::test]
     async fn test_wait_schema_loaded_returns_immediately_when_not_needed() {
         let config = ConfigAndUsers::default();
-        let cluster = Cluster::new_test(&config);
+        let cluster = Cluster::new_test_single_shard(&config);
 
-        // load_schema() returns false because sharded_schemas is not empty
+        // load_schema() returns false for single shard without multi_tenant
         assert!(!cluster.load_schema());
 
         // Should return immediately without waiting
