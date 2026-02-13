@@ -1,0 +1,6 @@
+[[databases]]
+name = "pgdog"
+host = "127.0.0.1"
+
+[admin]
+password = "pgdog"
