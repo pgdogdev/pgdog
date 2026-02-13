@@ -221,4 +221,72 @@ mod test {
             .await
             .unwrap();
     }
+
+    #[tokio::test]
+    async fn test_load_composite_foreign_keys() {
+        let pool = pool();
+        let mut conn = pool.get(&Request::default()).await.unwrap();
+
+        // Create test tables with composite FK
+        conn.execute("DROP TABLE IF EXISTS fk_comp_child CASCADE")
+            .await
+            .unwrap();
+        conn.execute("DROP TABLE IF EXISTS fk_comp_parent CASCADE")
+            .await
+            .unwrap();
+
+        conn.execute(
+            "CREATE TABLE fk_comp_parent (
+                tenant_id INTEGER NOT NULL,
+                id INTEGER NOT NULL,
+                name TEXT,
+                PRIMARY KEY (tenant_id, id)
+            )",
+        )
+        .await
+        .unwrap();
+
+        conn.execute(
+            "CREATE TABLE fk_comp_child (
+                id SERIAL PRIMARY KEY,
+                parent_tenant INTEGER NOT NULL,
+                parent_id INTEGER NOT NULL,
+                FOREIGN KEY (parent_tenant, parent_id) REFERENCES fk_comp_parent(tenant_id, id)
+            )",
+        )
+        .await
+        .unwrap();
+
+        let columns = Column::load(&mut conn).await.unwrap();
+
+        let child_columns = columns
+            .get(&("pgdog".to_string(), "fk_comp_child".to_string()))
+            .expect("fk_comp_child table should exist");
+
+        // Check parent_tenant column FK
+        let parent_tenant_col = child_columns
+            .iter()
+            .find(|c| c.column_name == "parent_tenant")
+            .expect("parent_tenant column should exist");
+        assert_eq!(parent_tenant_col.foreign_keys.len(), 1);
+        assert_eq!(parent_tenant_col.foreign_keys[0].table, "fk_comp_parent");
+        assert_eq!(parent_tenant_col.foreign_keys[0].column, "tenant_id");
+
+        // Check parent_id column FK
+        let parent_id_col = child_columns
+            .iter()
+            .find(|c| c.column_name == "parent_id")
+            .expect("parent_id column should exist");
+        assert_eq!(parent_id_col.foreign_keys.len(), 1);
+        assert_eq!(parent_id_col.foreign_keys[0].table, "fk_comp_parent");
+        assert_eq!(parent_id_col.foreign_keys[0].column, "id");
+
+        // Clean up
+        conn.execute("DROP TABLE IF EXISTS fk_comp_child CASCADE")
+            .await
+            .unwrap();
+        conn.execute("DROP TABLE IF EXISTS fk_comp_parent CASCADE")
+            .await
+            .unwrap();
+    }
 }
