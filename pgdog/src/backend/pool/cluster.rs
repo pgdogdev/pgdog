@@ -557,12 +557,11 @@ impl Cluster {
 
                     info!("loaded schema from {}/{} shards", done + 1, shards);
 
+                    schema_changed_hook(&shard.schema(), &identifier, &shard);
+
                     // Loaded schema on all shards.
                     if done >= shards - 1 {
                         readiness.schemas_ready.notify_waiters();
-                        // We assume the schema is the same on all shards.
-                        // TODO: check that this is the case and raise a stink if its not.
-                        schema_changed_hook(&shard.schema(), &identifier);
                     }
                 });
             }
