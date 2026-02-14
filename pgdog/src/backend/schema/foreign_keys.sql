@@ -1,4 +1,4 @@
-SELECT
+SELECT DISTINCT
     kcu.table_schema::text AS source_schema,
     kcu.table_name::text AS source_table,
     kcu.column_name::text AS source_column,
@@ -29,4 +29,4 @@ WHERE
     tc.constraint_type = 'FOREIGN KEY'
     AND tc.table_schema NOT IN ('pg_catalog', 'information_schema')
 ORDER BY
-    kcu.table_schema, kcu.table_name, kcu.column_name;
+    source_schema, source_table, source_column;
