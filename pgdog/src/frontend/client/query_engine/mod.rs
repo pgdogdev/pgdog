@@ -243,11 +243,9 @@ impl QueryEngine {
                     .await?
             }
             Command::Unlisten(channel) => self.unlisten(context, &channel.clone()).await?,
-            Command::Set {
-                name, value, local, ..
-            } => {
-                self.set(context, name.clone(), value.clone(), *local)
-                    .await?;
+            Command::Set { params, .. } => {
+                let params = params.clone();
+                self.set(context, &params).await?;
             }
             Command::Copy(_) => self.execute(context).await?,
             Command::Deallocate => self.deallocate(context).await?,

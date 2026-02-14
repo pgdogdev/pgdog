@@ -2,7 +2,6 @@ use tokio::time::timeout;
 use tracing::{info, trace};
 
 use crate::{
-    backend::databases::reload_from_existing,
     frontend::{
         client::TransactionType,
         router::parser::{explain_trace::ExplainTrace, rewrite::statement::plan::RewriteResult},
@@ -16,6 +15,7 @@ use crate::{
 
 use tracing::{debug, error};
 
+use super::hooks::schema::schema_changed;
 use super::*;
 
 impl QueryEngine {
@@ -58,6 +58,28 @@ impl QueryEngine {
             }
         }
 
+        match timeout(
+            context.timeouts.query_timeout(&State::Active),
+            self.client_server_exchange(context),
+        )
+        .await
+        {
+            Ok(response) => response?,
+            Err(err) => {
+                // Close the conn, it could be stuck executing a query
+                // or dead.
+                self.backend.force_close();
+                return Err(err.into());
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn client_server_exchange(
+        &mut self,
+        context: &mut QueryEngineContext<'_>,
+    ) -> Result<(), Error> {
         match context.rewrite_result.take() {
             Some(RewriteResult::InsertSplit(requests)) => {
                 multi_step::InsertMulti::from_engine(self, requests)
@@ -75,7 +97,7 @@ impl QueryEngine {
                     && !self.streaming
                     && !self.test_mode.enabled
                 {
-                    let message = self.read_server_message(context).await?;
+                    let message = self.read_server_message().await?;
                     self.process_server_message(context, message).await?;
                 }
             }
@@ -90,32 +112,14 @@ impl QueryEngine {
         Ok(())
     }
 
-    pub async fn read_server_message(
-        &mut self,
-        context: &mut QueryEngineContext<'_>,
-    ) -> Result<Message, Error> {
-        let message = match timeout(
-            context.timeouts.query_timeout(&State::Active),
-            self.backend.read(),
-        )
-        .await
-        {
-            Ok(response) => response?,
-            Err(err) => {
-                // Close the conn, it could be stuck executing a query
-                // or dead.
-                self.backend.force_close();
-                return Err(err.into());
-            }
-        };
-
-        Ok(message)
+    pub async fn read_server_message(&mut self) -> Result<Message, Error> {
+        Ok(self.backend.read().await?)
     }
 
     pub async fn process_server_message(
         &mut self,
         context: &mut QueryEngineContext<'_>,
-        message: Message,
+        mut message: Message,
     ) -> Result<(), Error> {
         self.streaming = message.streaming();
 
@@ -125,7 +129,6 @@ impl QueryEngine {
         } else {
             None
         };
-        let mut message = message.backend();
         let has_more_messages = self.backend.has_more_messages();
 
         if let Some(bytes) = payload {
@@ -298,7 +301,7 @@ impl QueryEngine {
                     "schema change detected, reloading config [{}]",
                     self.backend.cluster()?.identifier(),
                 );
-                reload_from_existing()?;
+                schema_changed()?;
             }
 
             self.router.reset();

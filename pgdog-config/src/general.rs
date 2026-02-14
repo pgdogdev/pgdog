@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use crate::pooling::ConnectionRecovery;
-use crate::{CopyFormat, QueryParserEngine, QueryParserLevel, SystemCatalogsBehavior};
+use crate::{CopyFormat, LoadSchema, QueryParserEngine, QueryParserLevel, SystemCatalogsBehavior};
 
 use super::auth::{AuthType, PassthoughAuth};
 use super::database::{LoadBalancingStrategy, ReadWriteSplit, ReadWriteStrategy};
@@ -182,6 +182,9 @@ pub struct General {
     /// Connection cleanup algorithm.
     #[serde(default = "General::connection_recovery")]
     pub connection_recovery: ConnectionRecovery,
+    /// Client connection recovery
+    #[serde(default = "General::client_connection_recovery")]
+    pub client_connection_recovery: ConnectionRecovery,
     /// LSN check interval.
     #[serde(default = "General::lsn_check_interval")]
     pub lsn_check_interval: u64,
@@ -206,6 +209,9 @@ pub struct General {
     /// Trigger a schema reload on DDL like CREATE TABLE.
     #[serde(default = "General::reload_schema_on_ddl")]
     pub reload_schema_on_ddl: bool,
+    /// Load database schema.
+    #[serde(default = "General::load_schema")]
+    pub load_schema: LoadSchema,
 }
 
 impl Default for General {
@@ -270,6 +276,7 @@ impl Default for General {
             server_lifetime: Self::server_lifetime(),
             stats_period: Self::stats_period(),
             connection_recovery: Self::connection_recovery(),
+            client_connection_recovery: Self::client_connection_recovery(),
             lsn_check_interval: Self::lsn_check_interval(),
             lsn_check_timeout: Self::lsn_check_timeout(),
             lsn_check_delay: Self::lsn_check_delay(),
@@ -278,6 +285,7 @@ impl Default for General {
             omnisharded_sticky: bool::default(),
             resharding_copy_format: CopyFormat::default(),
             reload_schema_on_ddl: Self::reload_schema_on_ddl(),
+            load_schema: Self::load_schema(),
         }
     }
 }
@@ -562,6 +570,10 @@ impl General {
         )
     }
 
+    fn load_schema() -> LoadSchema {
+        Self::env_enum_or_default("PGDOG_LOAD_SCHEMA")
+    }
+
     pub fn mirror_queue() -> usize {
         Self::env_or_default("PGDOG_MIRROR_QUEUE", 128)
     }
@@ -599,6 +611,10 @@ impl General {
 
     pub fn connection_recovery() -> ConnectionRecovery {
         Self::env_enum_or_default("PGDOG_CONNECTION_RECOVERY")
+    }
+
+    pub fn client_connection_recovery() -> ConnectionRecovery {
+        Self::env_enum_or_default("PGDOG_CLIENT_CONNECTION_RECOVERY")
     }
 
     fn stats_period() -> u64 {

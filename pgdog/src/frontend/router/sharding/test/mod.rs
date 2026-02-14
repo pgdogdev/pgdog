@@ -359,3 +359,108 @@ async fn test_shard_by_uuid_list() {
 
     server.execute("ROLLBACK").await.unwrap();
 }
+
+#[tokio::test]
+async fn test_shard_by_list_with_default() {
+    let mut server = test_server().await;
+
+    // Create a table with list partitions for specific values and a default partition
+    let queries = vec![
+        Query::new("BEGIN"),
+        Query::new("CREATE TABLE test_shard_list_default (c BIGINT) PARTITION BY LIST(c)"),
+        Query::new("CREATE TABLE test_shard_list_default_0 PARTITION OF test_shard_list_default FOR VALUES IN (0, 1, 2)"),
+        Query::new("CREATE TABLE test_shard_list_default_1 PARTITION OF test_shard_list_default FOR VALUES IN (10, 11, 12)"),
+        Query::new("CREATE TABLE test_shard_list_default_2 PARTITION OF test_shard_list_default DEFAULT"),
+    ];
+    server.execute_batch(&queries).await.unwrap();
+
+    // Insert values: some mapped explicitly, some going to default
+    let inserts: Vec<Query> = [0, 1, 2, 10, 11, 12, 99, 100, 999]
+        .iter()
+        .map(|v| {
+            Query::new(format!(
+                "INSERT INTO test_shard_list_default (c) VALUES ({})",
+                v
+            ))
+        })
+        .collect();
+    server.execute_batch(&inserts).await.unwrap();
+
+    // Create mapping with explicit lists and a default shard
+    let mut table = ShardedTable::default();
+    table.data_type = DataType::Bigint;
+    table.mapping = Mapping::new(&vec![
+        ShardedMapping {
+            kind: ShardedMappingKind::List,
+            values: [0, 1, 2].into_iter().map(FlexibleType::Integer).collect(),
+            shard: 0,
+            ..Default::default()
+        },
+        ShardedMapping {
+            kind: ShardedMappingKind::List,
+            values: [10, 11, 12]
+                .into_iter()
+                .map(FlexibleType::Integer)
+                .collect(),
+            shard: 1,
+            ..Default::default()
+        },
+        ShardedMapping {
+            kind: ShardedMappingKind::Default,
+            shard: 2,
+            ..Default::default()
+        },
+    ]);
+
+    // Verify explicitly mapped values route correctly
+    for (shard, values) in [(0, vec![0, 1, 2]), (1, vec![10, 11, 12])] {
+        for value in values {
+            let context = ContextBuilder::new(&table)
+                .data(value)
+                .shards(3)
+                .build()
+                .unwrap();
+            assert_eq!(context.apply().unwrap(), Shard::Direct(shard));
+        }
+    }
+
+    // Verify unmapped values route to default shard
+    for value in [99, 100, 999, -1, i64::MAX] {
+        let context = ContextBuilder::new(&table)
+            .data(value)
+            .shards(3)
+            .build()
+            .unwrap();
+        assert_eq!(context.apply().unwrap(), Shard::Direct(2));
+    }
+
+    // Verify data actually ended up in the right partitions
+    let shard_0_values = server
+        .fetch_all::<i64>("SELECT * FROM test_shard_list_default_0")
+        .await
+        .unwrap();
+    assert_eq!(
+        shard_0_values.iter().collect::<HashSet<_>>(),
+        [0, 1, 2].iter().collect()
+    );
+
+    let shard_1_values = server
+        .fetch_all::<i64>("SELECT * FROM test_shard_list_default_1")
+        .await
+        .unwrap();
+    assert_eq!(
+        shard_1_values.iter().collect::<HashSet<_>>(),
+        [10, 11, 12].iter().collect()
+    );
+
+    let shard_2_values = server
+        .fetch_all::<i64>("SELECT * FROM test_shard_list_default_2")
+        .await
+        .unwrap();
+    assert_eq!(
+        shard_2_values.iter().collect::<HashSet<_>>(),
+        [99, 100, 999].iter().collect()
+    );
+
+    server.execute("ROLLBACK").await.unwrap();
+}

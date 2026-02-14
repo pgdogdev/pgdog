@@ -247,13 +247,22 @@ impl QueryParser {
             .run()?;
         }
 
+        let stmts = &statement.parse_result().protobuf.stmts;
+
+        // Handle multi-statement SET commands (e.g. "SET x TO 1; SET y TO 2").
+        if stmts.len() > 1 {
+            if let Some(command) = self.try_multi_set(stmts, context)? {
+                return Ok(command);
+            }
+        }
+
         //
         // Get the root AST node.
         //
         // We don't expect clients to send multiple queries. If they do
         // only the first one is used for routing.
         //
-        let root = statement.parse_result().protobuf.stmts.first();
+        let root = stmts.first();
 
         let root = if let Some(root) = root {
             root.stmt.as_ref().ok_or(Error::EmptyQuery)?
@@ -519,11 +528,21 @@ impl QueryParser {
             self.recorder_mut(),
         )
         .with_schema_lookup(schema_lookup);
+
+        let is_sharded = parser.is_sharded(
+            &context.router_context.schema,
+            context.router_context.cluster.user(),
+            context.router_context.parameter_hints.search_path,
+        );
+
         let shard = parser.shard()?.unwrap_or(Shard::All);
 
-        context
-            .shards_calculator
-            .push(ShardWithPriority::new_table(shard.clone()));
+        context.shards_calculator.push(if is_sharded {
+            ShardWithPriority::new_table(shard.clone())
+        } else {
+            ShardWithPriority::new_table_omni(shard)
+        });
+
         let shard = context.shards_calculator.shard();
 
         if let Some(recorder) = self.recorder_mut() {

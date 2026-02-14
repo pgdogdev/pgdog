@@ -7,6 +7,7 @@ pub mod comms;
 pub mod config;
 pub mod connection;
 pub mod dns_cache;
+pub mod ee;
 pub mod error;
 pub mod guard;
 pub mod healthcheck;
