@@ -277,6 +277,16 @@ mod tests {
     }
 
     #[test]
+    fn test_remove_comments_multiple_metadata() {
+        let query = "SELECT 1 /* pgdog_shard: 4 */ + 2 /* pgdog_role: primary */;";
+        let tokens = scan(query).unwrap().tokens;
+
+        let result = remove_comments(query, &tokens, Some(&[&ROLE, &SHARD])).unwrap();
+
+        assert_eq!(result, "pgdog_role: primarypgdog_shard: 4SELECT 1  + 2 ;");
+    }
+
+    #[test]
     fn test_replica_role_detection() {
         use crate::backend::ShardedTables;
 
