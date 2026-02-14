@@ -14,7 +14,7 @@ pub use copy::CopyRow;
 pub use error::Error;
 use lazy_static::lazy_static;
 use parser::Shard;
-pub use parser::{Ast, Command, QueryParser, Route};
+pub use parser::{Ast, Command, QueryParser, Route, SetParam};
 
 use crate::frontend::router::parser::ShardWithPriority;
 

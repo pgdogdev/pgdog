@@ -11,6 +11,11 @@ impl QueryEngine {
         &mut self,
         context: &mut QueryEngineContext<'_>,
     ) -> Result<bool, Error> {
+        // Don't intercept requests when we are connected.
+        if self.backend.connected() {
+            return Ok(false);
+        }
+
         // Client sent Sync only
         let only_sync = context
             .client_request

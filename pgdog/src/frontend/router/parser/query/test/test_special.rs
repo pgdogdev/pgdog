@@ -312,6 +312,53 @@ fn test_cast_sharding_key() {
     assert!(matches!(command.route().shard(), Shard::Direct(_)));
 }
 
+// --- No-query message combinations ---
+
+#[test]
+fn test_sync_only() {
+    let mut test = QueryParserTest::new();
+
+    let command = test.execute(vec![Sync.into()]);
+
+    match &command {
+        Command::Query(route) => {
+            assert_eq!(route.shard(), &Shard::All);
+            assert!(route.is_write());
+        }
+        _ => panic!("expected Command::Query, got {command:#?}"),
+    }
+}
+
+#[test]
+fn test_close_and_flush() {
+    let mut test = QueryParserTest::new();
+
+    let command = test.execute(vec![Close::named("test").into(), Flush.into()]);
+
+    match &command {
+        Command::Query(route) => {
+            assert_eq!(route.shard(), &Shard::All);
+            assert!(route.is_write());
+        }
+        _ => panic!("expected Command::Query, got {command:#?}"),
+    }
+}
+
+#[test]
+fn test_close_only() {
+    let mut test = QueryParserTest::new();
+
+    let command = test.execute(vec![Close::named("test").into()]);
+
+    match &command {
+        Command::Query(route) => {
+            assert_eq!(route.shard(), &Shard::All);
+            assert!(route.is_write());
+        }
+        _ => panic!("expected Command::Query, got {command:#?}"),
+    }
+}
+
 // --- Empty/edge parameter values ---
 
 #[test]

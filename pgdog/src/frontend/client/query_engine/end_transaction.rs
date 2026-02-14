@@ -1,4 +1,4 @@
-use crate::net::{CommandComplete, NoticeResponse, Protocol, ReadyForQuery};
+use crate::net::{BackendKeyData, CommandComplete, NoticeResponse, Protocol, ReadyForQuery};
 
 use super::*;
 
@@ -23,7 +23,7 @@ impl QueryEngine {
             } else {
                 vec![]
             };
-            messages.push(cmd.message()?.backend());
+            messages.push(cmd.message()?.backend(BackendKeyData::default()));
             messages.push(ReadyForQuery::idle().message()?);
 
             context.stream.send_many(&messages).await?

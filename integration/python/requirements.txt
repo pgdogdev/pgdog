@@ -4,7 +4,7 @@ asyncpg==0.30.0
 black==25.1.0
 click==8.2.0
 Django==5.1.7
-greenlet==3.1.1
+greenlet
 iniconfig==2.1.0
 mypy_extensions==1.1.0
 packaging==24.2
