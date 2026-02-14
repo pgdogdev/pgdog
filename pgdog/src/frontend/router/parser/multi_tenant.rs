@@ -108,7 +108,7 @@ impl<'a> MultiTenantCheck<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::backend::schema::{columns::Column, Relation, Schema};
+    use crate::backend::schema::{columns::StatsColumn as Column, Relation, Schema};
     use indexmap::IndexMap;
     use std::collections::HashMap;
 
@@ -126,7 +126,9 @@ mod tests {
                 data_type: "bigint".into(),
                 ordinal_position: 1,
                 is_primary_key: false,
-            },
+                foreign_keys: Vec::new(),
+            }
+            .into(),
         );
 
         let relation = Relation::test_table("public", "accounts", columns);

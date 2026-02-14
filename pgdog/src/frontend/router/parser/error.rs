@@ -93,4 +93,7 @@ pub enum Error {
 
     #[error("sharded databases require the query parser to be enabled")]
     QueryParserRequired,
+
+    #[error("multi-statement queries cannot mix SET with other commands")]
+    MultiStatementMixedSet,
 }

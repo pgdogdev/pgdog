@@ -192,6 +192,17 @@ impl ClientRequest {
             .unwrap_or(false)
     }
 
+    /// The buffer contains only Sync (and possibly Flush) messages.
+    /// Used to avoid resetting multi-shard state when Sync is sent
+    /// as a separate request (via splice).
+    pub fn is_sync_only(&self) -> bool {
+        !self.messages.is_empty()
+            && self
+                .messages
+                .iter()
+                .all(|m| m.code() == 'S' || m.code() == 'H')
+    }
+
     /// The client is setting state on the connection
     /// which we can no longer ignore.
     pub(crate) fn is_executable(&self) -> bool {
@@ -261,15 +272,16 @@ impl ClientRequest {
                     requests.push(std::mem::take(&mut current_request));
                 }
 
-                // Sync typically is last. We place it with the last request
-                // to save on round trips.
+                // Sync is always in its own request. This ensures
+                // we can handle ReadyForQuery separately from query results.
                 'S' => {
-                    current_request.messages.push(message.clone());
-                    if current_request.len() == 1 {
-                        if let Some(last_request) = requests.last_mut() {
-                            last_request.extend(current_request.drain(..));
-                        }
+                    // Push any accumulated messages first
+                    if !current_request.is_empty() {
+                        requests.push(std::mem::take(&mut current_request));
                     }
+                    // Sync goes in its own request
+                    current_request.messages.push(message.clone());
+                    requests.push(std::mem::take(&mut current_request));
                 }
 
                 c => return Err(Error::UnexpectedMessage('S', c)),
@@ -336,7 +348,7 @@ mod test {
         ];
         let req = ClientRequest::from(messages);
         let splice = req.spliced().unwrap();
-        assert_eq!(splice.len(), 3);
+        assert_eq!(splice.len(), 4);
 
         // First slice should contain: Parse("start"), Bind("start"), Execute, Flush
         let first_slice = &splice[0];
@@ -376,11 +388,15 @@ mod test {
             panic!("Expected Bind message");
         }
 
-        // Third slice should contain: Describe("test"), Sync
+        // Third slice should contain: Describe("test")
         let third_slice = &splice[2];
-        assert_eq!(third_slice.len(), 2);
+        assert_eq!(third_slice.len(), 1);
         assert_eq!(third_slice[0].code(), 'D'); // Describe
-        assert_eq!(third_slice[1].code(), 'S'); // Sync
+
+        // Fourth slice should contain: Sync (always separate)
+        let fourth_slice = &splice[3];
+        assert_eq!(fourth_slice.len(), 1);
+        assert_eq!(fourth_slice[0].code(), 'S'); // Sync
 
         let messages = vec![
             ProtocolMessage::from(Parse::named("test", "SELECT $1")),
@@ -465,7 +481,7 @@ mod test {
         ];
         let req = ClientRequest::from(messages);
         let splice = req.spliced().unwrap();
-        assert_eq!(splice.len(), 2);
+        assert_eq!(splice.len(), 3);
 
         // First slice should contain: Parse("stmt"), Describe("stmt"), Flush, Bind("stmt"), Execute, Flush
         let first_slice = &splice[0];
@@ -477,13 +493,17 @@ mod test {
         assert_eq!(first_slice[4].code(), 'E'); // Execute
         assert_eq!(first_slice[5].code(), 'H'); // Flush (added by splice logic)
 
-        // Second slice should contain: Bind("stmt"), Execute, Flush, Sync
+        // Second slice should contain: Bind("stmt"), Execute, Flush
         let second_slice = &splice[1];
-        assert_eq!(second_slice.len(), 4);
+        assert_eq!(second_slice.len(), 3);
         assert_eq!(second_slice[0].code(), 'B'); // Bind
         assert_eq!(second_slice[1].code(), 'E'); // Execute
         assert_eq!(second_slice[2].code(), 'H'); // Flush
-        assert_eq!(second_slice[3].code(), 'S'); // Sync
+
+        // Third slice should contain: Sync (always separate)
+        let third_slice = &splice[2];
+        assert_eq!(third_slice.len(), 1);
+        assert_eq!(third_slice[0].code(), 'S'); // Sync
     }
 
     #[test]
@@ -496,5 +516,49 @@ mod test {
             let req = ClientRequest::from(vec![query]);
             assert!(req.is_begin());
         }
+    }
+
+    #[test]
+    fn test_is_complete() {
+        // Sync marks request complete
+        let req = ClientRequest::from(vec![
+            Parse::named("test", "SELECT 1").into(),
+            Bind::new_statement("test").into(),
+            Execute::new().into(),
+            Sync::new().into(),
+        ]);
+        assert!(req.is_complete());
+
+        // Flush marks request complete
+        let req = ClientRequest::from(vec![
+            Parse::named("test", "SELECT 1").into(),
+            Bind::new_statement("test").into(),
+            Execute::new().into(),
+            Flush.into(),
+        ]);
+        assert!(req.is_complete());
+
+        // Simple Query marks request complete
+        let req = ClientRequest::from(vec![Query::new("SELECT 1").into()]);
+        assert!(req.is_complete());
+
+        // Parse only - NOT complete
+        let req = ClientRequest::from(vec![Parse::named("test", "SELECT 1").into()]);
+        assert!(!req.is_complete());
+
+        // Parse, Bind, Execute without Sync/Flush - NOT complete
+        let req = ClientRequest::from(vec![
+            Parse::named("test", "SELECT 1").into(),
+            Bind::new_statement("test").into(),
+            Execute::new().into(),
+        ]);
+        assert!(!req.is_complete());
+
+        // Parse, Describe without Flush/Sync - NOT complete
+        let req = ClientRequest::from(vec![
+            Parse::named("test", "SELECT 1").into(),
+            Describe::new_statement("test").into(),
+        ]);
+        assert!(!req.is_complete());
     }
 }

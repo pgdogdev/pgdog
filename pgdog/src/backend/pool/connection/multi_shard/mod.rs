@@ -9,7 +9,7 @@ use crate::{
             command_complete::CommandComplete, DataRow, FromBytes, Message, Protocol,
             RowDescription, ToBytes,
         },
-        Decoder, ReadyForQuery,
+        BackendKeyData, Decoder, ReadyForQuery,
     },
 };
 
@@ -42,6 +42,7 @@ struct Counters {
     copy_done: usize,
     copy_out: usize,
     copy_data: usize,
+    first_backend_data: Option<BackendKeyData>,
 }
 
 /// Multi-shard state.
@@ -78,6 +79,13 @@ impl MultiShard {
         self.reset();
         self.shards = shards;
         self.route = route.clone();
+    }
+
+    /// Update only the shards count without resetting counters.
+    /// Used for Sync-only requests where we need correct ReadyForQuery counting
+    /// but must preserve buffered CommandComplete from previous queries.
+    pub(super) fn update_shards(&mut self, shards: usize) {
+        self.shards = shards;
     }
 
     pub(super) fn reset(&mut self) {
@@ -120,7 +128,14 @@ impl MultiShard {
             'C' => {
                 let cc = CommandComplete::from_bytes(message.to_bytes()?)?;
                 let has_rows = if let Some(rows) = cc.rows()? {
-                    self.counters.rows += rows;
+                    if self.route.is_omni() {
+                        // Only use the first shard's row count for consistency with DataRow.
+                        if self.counters.command_complete_count == 0 {
+                            self.counters.rows = rows;
+                        }
+                    } else {
+                        self.counters.rows += rows;
+                    }
                     true
                 } else {
                     false
@@ -145,6 +160,7 @@ impl MultiShard {
 
                         self.buffer.sort(self.route.order_by(), &self.decoder);
                         self.buffer.distinct(self.route.distinct(), &self.decoder);
+                        self.buffer.limit(&self.route.limit());
                     }
 
                     if has_rows {
@@ -204,10 +220,20 @@ impl MultiShard {
                     self.validator.validate_data_row(&data_row)?;
                 }
 
+                if self.counters.first_backend_data.is_none() {
+                    self.counters.first_backend_data = message.source().backend_id();
+                }
+
                 if !self.should_buffer()
                     && self.counters.row_description.is_multiple_of(self.shards)
                 {
-                    forward = Some(message);
+                    if self.route.is_omni() {
+                        if self.counters.first_backend_data == message.source().backend_id() {
+                            forward = Some(message);
+                        }
+                    } else {
+                        forward = Some(message);
+                    }
                 } else {
                     self.buffer.add(message).map_err(Error::from)?;
                 }
@@ -286,7 +312,7 @@ impl MultiShard {
     }
 
     fn should_buffer(&self) -> bool {
-        self.shards > 1 && self.route.should_buffer()
+        self.shards > 1 && self.route.should_buffer() && !self.route.is_omni()
     }
 
     /// Multi-shard state is ready to send messages.

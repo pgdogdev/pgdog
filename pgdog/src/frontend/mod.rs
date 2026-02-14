@@ -24,6 +24,6 @@ pub(crate) use error::Error;
 pub use prepared_statements::{PreparedStatements, Rewrite};
 #[cfg(debug_assertions)]
 pub use query_logger::QueryLogger;
-pub use router::{Command, Router};
+pub use router::{Command, Router, SetParam};
 pub use router::{RouterContext, SearchPath};
 pub use stats::Stats;

@@ -103,7 +103,7 @@ async def test_error_transaction(conns):
 
 
 @pytest.mark.asyncio
-async def test_insert_allshard(conns):
+async def test_insert_omnishard(conns):
     conn = conns[1]
     try:
         async with conn.transaction():
@@ -130,7 +130,7 @@ async def test_insert_allshard(conns):
                 i * 25.0,
                 i * 50.0,
             )
-            for shard in range(2):
+            for shard in range(1):
                 assert result[shard][0] == i
                 assert result[shard][1] == f"one_{i}"
                 assert result[shard][3] == i * 25.0

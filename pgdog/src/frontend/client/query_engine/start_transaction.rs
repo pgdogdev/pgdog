@@ -1,6 +1,9 @@
 use crate::{
     frontend::client::TransactionType,
-    net::{BindComplete, CommandComplete, NoticeResponse, ParseComplete, Protocol, ReadyForQuery},
+    net::{
+        BackendKeyData, BindComplete, CommandComplete, NoticeResponse, ParseComplete, Protocol,
+        ReadyForQuery,
+    },
 };
 
 use super::*;
@@ -23,7 +26,9 @@ impl QueryEngine {
             context
                 .stream
                 .send_many(&[
-                    CommandComplete::new_begin().message()?.backend(),
+                    CommandComplete::new_begin()
+                        .message()?
+                        .backend(BackendKeyData::default()),
                     ReadyForQuery::in_transaction(context.in_transaction()).message()?,
                 ])
                 .await?
@@ -48,11 +53,17 @@ impl QueryEngine {
                 'B' => reply.push(BindComplete.message()?),
                 'D' | 'H' => (),
                 'E' => reply.push(if in_transaction {
-                    CommandComplete::new_begin().message()?.backend()
+                    CommandComplete::new_begin()
+                        .message()?
+                        .backend(BackendKeyData::default())
                 } else if !rollback {
-                    CommandComplete::new_commit().message()?.backend()
+                    CommandComplete::new_commit()
+                        .message()?
+                        .backend(BackendKeyData::default())
                 } else {
-                    CommandComplete::new_rollback().message()?.backend()
+                    CommandComplete::new_rollback()
+                        .message()?
+                        .backend(BackendKeyData::default())
                 }),
                 'S' => {
                     if rollback && !context.in_transaction() {

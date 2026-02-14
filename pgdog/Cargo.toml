@@ -1,6 +1,6 @@
 [package]
 name = "pgdog"
-version = "0.1.27"
+version = "0.1.29"
 edition = "2021"
 description = "Modern PostgreSQL proxy, pooler and load balancer."
 authors = ["PgDog <hi@pgdog.dev>"]
@@ -56,7 +56,7 @@ http-body-util = "0.1"
 hyper-util = { version = "0.1", features = ["full"] }
 socket2 = "0.5.9"
 sha1 = "0.10"
-indexmap = "2.9"
+indexmap = { version = "2.9", features = ["serde"] }
 lru = "0.16"
 hickory-resolver = "0.25.2"
 lazy_static = "1"

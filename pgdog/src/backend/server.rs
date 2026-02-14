@@ -59,6 +59,8 @@ pub struct Server {
     in_transaction: bool,
     re_synced: bool,
     replication_mode: bool,
+    statement_executed: bool,
+    sending_request: bool,
     pooler_mode: PoolerMode,
     stream_buffer: MessageBuffer,
     disconnect_reason: Option<DisconnectReason>,
@@ -268,7 +270,9 @@ impl Server {
             schema_changed: false,
             sync_prepared: false,
             in_transaction: false,
+            statement_executed: false,
             re_synced: false,
+            sending_request: false,
             pooler_mode: PoolerMode::Transaction,
             stream_buffer: MessageBuffer::new(cfg.config.memory.message_buffer),
             disconnect_reason: None,
@@ -298,12 +302,20 @@ impl Server {
 
     /// Send messages to the server and flush the buffer.
     pub async fn send(&mut self, client_request: &ClientRequest) -> Result<(), Error> {
+        // Request is being sent to the server, so the
+        // server connection is in a partial state.
+        self.sending_request = true;
+
         self.stats.state(State::Active);
 
         for message in client_request.messages.iter() {
             self.send_one(message).await?;
         }
         self.flush().await?;
+
+        // The whole request is now in server's hands.
+        // We can recover the connection from this point on.
+        self.sending_request = false;
 
         self.stats.state(State::ReceivingData);
 
@@ -360,11 +372,11 @@ impl Server {
     pub async fn read(&mut self) -> Result<Message, Error> {
         let message = loop {
             if let Some(message) = self.prepared_statements.state_mut().get_simulated() {
-                return Ok(message.backend());
+                return Ok(message.backend(self.id));
             }
             match self.stream_buffer.read(self.stream.as_mut().unwrap()).await {
                 Ok(message) => {
-                    let message = message.stream(self.streaming).backend();
+                    let message = message.stream(self.streaming).backend(self.id);
                     match self.prepared_statements.forward(&message) {
                         Ok(forward) => {
                             if forward {
@@ -422,6 +434,7 @@ impl Server {
                 }
                 self.stream_buffer.shrink_to_fit();
                 self.streaming = false;
+                self.statement_executed = false;
             }
             'E' => {
                 let error = ErrorResponse::from_bytes(message.to_bytes()?)?;
@@ -448,7 +461,9 @@ impl Server {
                     "RESET" => self.client_params.clear(), // Someone reset params, we're gonna need to re-sync.
                     _ => (),
                 }
+                self.statement_executed = true;
             }
+            's' => self.statement_executed = true,
             'G' => self.stats.copy_mode(),
             '1' => self.stats.parse_complete(),
             '2' => self.stats.bind_complete(),
@@ -556,7 +571,7 @@ impl Server {
     /// There are no more expected messages from the server connection
     /// and we haven't started an explicit transaction.
     pub fn done(&self) -> bool {
-        self.prepared_statements.done() && !self.in_transaction()
+        self.prepared_statements.done() && !self.in_transaction() && !self.statement_executed
     }
 
     /// Server hasn't finished sending or receiving a complete message.
@@ -616,6 +631,11 @@ impl Server {
     /// Connection was left with an unfinished query.
     pub fn needs_drain(&self) -> bool {
         !self.in_sync()
+    }
+
+    /// A request is being sent by a client.
+    pub fn sending_request(&self) -> bool {
+        self.sending_request
     }
 
     /// Close the connection, don't do any recovery.
@@ -1005,7 +1025,7 @@ pub mod test {
 
     impl Default for Server {
         fn default() -> Self {
-            let id = BackendKeyData::default();
+            let id = BackendKeyData::new();
             let addr = Address::default();
             Self {
                 stream: None,
@@ -1032,6 +1052,8 @@ pub mod test {
                 pooler_mode: PoolerMode::Transaction,
                 stream_buffer: MessageBuffer::new(4096),
                 disconnect_reason: None,
+                statement_executed: false,
+                sending_request: false,
             }
         }
     }
@@ -2651,5 +2673,612 @@ pub mod test {
         assert_eq!(msg.code(), 'Z');
 
         server.execute("ROLLBACK").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_extended_execute_flush_not_done_without_sync() {
+        let mut server = test_server().await;
+
+        server
+            .send(
+                &vec![
+                    Parse::named("test_no_sync", "SELECT 1").into(),
+                    Describe::new_statement("test_no_sync").into(),
+                    Flush.into(),
+                ]
+                .into(),
+            )
+            .await
+            .unwrap();
+
+        for c in ['1', 't', 'T'] {
+            let msg = server.read().await.unwrap();
+            assert_eq!(msg.code(), c);
+        }
+        assert!(server.done());
+
+        server
+            .send(
+                &vec![
+                    Bind::new_statement("test_no_sync").into(),
+                    Execute::new().into(),
+                    Flush.into(),
+                ]
+                .into(),
+            )
+            .await
+            .unwrap();
+
+        for c in ['2', 'D', 'C'] {
+            let msg = server.read().await.unwrap();
+            assert_eq!(msg.code(), c);
+            assert!(!server.done());
+        }
+
+        server
+            .send(&vec![ProtocolMessage::from(Sync)].into())
+            .await
+            .unwrap();
+        let msg = server.read().await.unwrap();
+        assert_eq!(msg.code(), 'Z');
+        assert!(server.done());
+    }
+
+    #[tokio::test]
+    async fn test_parse_describe_flush_done_without_execute() {
+        let mut server = test_server().await;
+
+        server
+            .send(
+                &vec![
+                    Parse::named("test_no_exec", "SELECT 1").into(),
+                    Describe::new_statement("test_no_exec").into(),
+                    Flush.into(),
+                ]
+                .into(),
+            )
+            .await
+            .unwrap();
+
+        for c in ['1', 't'] {
+            let msg = server.read().await.unwrap();
+            assert_eq!(msg.code(), c);
+            assert!(!server.done());
+        }
+
+        let msg = server.read().await.unwrap();
+        assert_eq!(msg.code(), 'T');
+        assert!(server.done());
+    }
+
+    #[tokio::test]
+    async fn test_simple_query_not_done_until_ready_for_query() {
+        let mut server = test_server().await;
+
+        server
+            .send(&vec![Query::new("SELECT 1").into()].into())
+            .await
+            .unwrap();
+
+        for c in ['T', 'D', 'C'] {
+            let msg = server.read().await.unwrap();
+            assert_eq!(msg.code(), c);
+            assert!(!server.done());
+        }
+
+        let msg = server.read().await.unwrap();
+        assert_eq!(msg.code(), 'Z');
+        assert!(server.done());
+    }
+
+    #[tokio::test]
+    async fn test_portal_suspended() {
+        let mut server = test_server().await;
+
+        server
+            .execute("CREATE TEMP TABLE test_portal_suspended AS SELECT generate_series(1, 5) AS n")
+            .await
+            .unwrap();
+
+        server
+            .send(
+                &vec![
+                    Parse::named("portal_test", "SELECT n FROM test_portal_suspended").into(),
+                    Bind::new_name_portal("portal_test", "portal1").into(),
+                    Execute::new_portal_limit("portal1", 1).into(),
+                    Flush.into(),
+                ]
+                .into(),
+            )
+            .await
+            .unwrap();
+
+        let msg = server.read().await.unwrap();
+        assert_eq!(msg.code(), '1');
+        assert!(!server.done());
+        assert!(server.has_more_messages());
+
+        let msg = server.read().await.unwrap();
+        assert_eq!(msg.code(), '2');
+        assert!(!server.done());
+        assert!(server.has_more_messages());
+
+        let msg = server.read().await.unwrap();
+        assert_eq!(msg.code(), 'D');
+        assert!(!server.done());
+        assert!(server.has_more_messages());
+
+        let msg = server.read().await.unwrap();
+        assert_eq!(msg.code(), 's');
+        assert!(!server.done());
+        assert!(!server.has_more_messages());
+        assert!(server.needs_drain());
+
+        server
+            .send(&vec![Execute::new_portal_limit("portal1", 0).into(), Sync.into()].into())
+            .await
+            .unwrap();
+
+        for _ in 0..4 {
+            let msg = server.read().await.unwrap();
+            assert_eq!(msg.code(), 'D');
+            assert!(!server.done());
+        }
+
+        let msg = server.read().await.unwrap();
+        assert_eq!(msg.code(), 'C');
+        assert!(!server.done());
+        assert!(server.has_more_messages());
+
+        let msg = server.read().await.unwrap();
+        assert_eq!(msg.code(), 'Z');
+        assert!(server.done());
+        assert!(!server.has_more_messages());
+        assert!(!server.needs_drain());
+    }
+
+    #[tokio::test]
+    async fn test_pipelined_independent_syncs() {
+        use crate::net::bind::Parameter;
+        let mut server = test_server().await;
+
+        server
+            .send(
+                &vec![
+                    Parse::named("pipe1", "SELECT $1::int AS first").into(),
+                    Bind::new_params(
+                        "pipe1",
+                        &[Parameter {
+                            len: 1,
+                            data: "1".as_bytes().into(),
+                        }],
+                    )
+                    .into(),
+                    Execute::new().into(),
+                    Sync.into(),
+                    Parse::named("pipe2", "SELECT $1::int AS second").into(),
+                    Bind::new_params(
+                        "pipe2",
+                        &[Parameter {
+                            len: 1,
+                            data: "2".as_bytes().into(),
+                        }],
+                    )
+                    .into(),
+                    Execute::new().into(),
+                    Sync.into(),
+                ]
+                .into(),
+            )
+            .await
+            .unwrap();
+
+        for c in ['1', '2', 'D', 'C'] {
+            let msg = server.read().await.unwrap();
+            assert_eq!(msg.code(), c);
+            assert!(!server.done());
+            assert!(server.has_more_messages());
+        }
+
+        let msg = server.read().await.unwrap();
+        assert_eq!(msg.code(), 'Z');
+        assert!(!server.done() || server.has_more_messages());
+
+        for c in ['1', '2', 'D', 'C'] {
+            let msg = server.read().await.unwrap();
+            assert_eq!(msg.code(), c);
+            assert!(!server.done());
+        }
+
+        let msg = server.read().await.unwrap();
+        assert_eq!(msg.code(), 'Z');
+        assert!(server.done());
+        assert!(!server.has_more_messages());
+        assert!(!server.needs_drain());
+    }
+
+    #[tokio::test]
+    async fn test_empty_query_extended() {
+        let mut server = test_server().await;
+
+        server
+            .send(
+                &vec![
+                    Parse::new_anonymous("").into(),
+                    Bind::new_statement("").into(),
+                    Execute::new().into(),
+                    Sync.into(),
+                ]
+                .into(),
+            )
+            .await
+            .unwrap();
+
+        for c in ['1', '2', 'I'] {
+            let msg = server.read().await.unwrap();
+            assert_eq!(msg.code(), c);
+            assert!(!server.done());
+        }
+
+        let msg = server.read().await.unwrap();
+        assert_eq!(msg.code(), 'Z');
+        assert!(server.done());
+        assert!(!server.needs_drain());
+    }
+
+    async fn verify_server_usable(server: &mut Server) {
+        use rand::Rng;
+        let expected: i32 = rand::rng().random_range(1..1_000_000);
+        let result = server
+            .execute(&format!("SELECT {}", expected))
+            .await
+            .unwrap();
+        let data_row = result
+            .iter()
+            .find(|m| m.code() == 'D')
+            .expect("expected DataRow");
+        let data_row = DataRow::from_bytes(data_row.to_bytes().unwrap()).unwrap();
+        let value: i32 = data_row.get(0, Format::Text).unwrap();
+        assert_eq!(value, expected);
+        assert!(server.done());
+        assert!(server.in_sync());
+    }
+
+    #[tokio::test]
+    async fn test_drain_after_zero_reads() {
+        use crate::net::bind::Parameter;
+        let mut server = test_server().await;
+
+        server
+            .send(
+                &vec![
+                    Parse::named("drain0", "SELECT $1::int").into(),
+                    Bind::new_params(
+                        "drain0",
+                        &[Parameter {
+                            len: 1,
+                            data: "1".as_bytes().into(),
+                        }],
+                    )
+                    .into(),
+                    Execute::new().into(),
+                    Sync.into(),
+                ]
+                .into(),
+            )
+            .await
+            .unwrap();
+
+        assert!(server.needs_drain());
+        server.drain().await.unwrap();
+
+        assert!(server.in_sync());
+        assert!(server.done());
+        assert!(!server.needs_drain());
+        verify_server_usable(&mut server).await;
+    }
+
+    #[tokio::test]
+    async fn test_drain_after_parse_complete() {
+        use crate::net::bind::Parameter;
+        let mut server = test_server().await;
+
+        server
+            .send(
+                &vec![
+                    Parse::named("drain1", "SELECT $1::int").into(),
+                    Bind::new_params(
+                        "drain1",
+                        &[Parameter {
+                            len: 1,
+                            data: "1".as_bytes().into(),
+                        }],
+                    )
+                    .into(),
+                    Execute::new().into(),
+                    Sync.into(),
+                ]
+                .into(),
+            )
+            .await
+            .unwrap();
+
+        let msg = server.read().await.unwrap();
+        assert_eq!(msg.code(), '1');
+
+        assert!(server.needs_drain());
+        server.drain().await.unwrap();
+
+        assert!(server.in_sync());
+        assert!(server.done());
+        assert!(!server.needs_drain());
+        verify_server_usable(&mut server).await;
+    }
+
+    #[tokio::test]
+    async fn test_drain_after_bind_complete() {
+        use crate::net::bind::Parameter;
+        let mut server = test_server().await;
+
+        server
+            .send(
+                &vec![
+                    Parse::named("drain2", "SELECT $1::int").into(),
+                    Bind::new_params(
+                        "drain2",
+                        &[Parameter {
+                            len: 1,
+                            data: "1".as_bytes().into(),
+                        }],
+                    )
+                    .into(),
+                    Execute::new().into(),
+                    Sync.into(),
+                ]
+                .into(),
+            )
+            .await
+            .unwrap();
+
+        for c in ['1', '2'] {
+            let msg = server.read().await.unwrap();
+            assert_eq!(msg.code(), c);
+        }
+
+        assert!(server.needs_drain());
+        server.drain().await.unwrap();
+
+        assert!(server.in_sync());
+        assert!(server.done());
+        assert!(!server.needs_drain());
+        verify_server_usable(&mut server).await;
+    }
+
+    #[tokio::test]
+    async fn test_drain_after_data_row() {
+        use crate::net::bind::Parameter;
+        let mut server = test_server().await;
+
+        server
+            .send(
+                &vec![
+                    Parse::named("drain3", "SELECT $1::int").into(),
+                    Bind::new_params(
+                        "drain3",
+                        &[Parameter {
+                            len: 1,
+                            data: "1".as_bytes().into(),
+                        }],
+                    )
+                    .into(),
+                    Execute::new().into(),
+                    Sync.into(),
+                ]
+                .into(),
+            )
+            .await
+            .unwrap();
+
+        for c in ['1', '2', 'D'] {
+            let msg = server.read().await.unwrap();
+            assert_eq!(msg.code(), c);
+        }
+
+        assert!(server.needs_drain());
+        server.drain().await.unwrap();
+
+        assert!(server.in_sync());
+        assert!(server.done());
+        assert!(!server.needs_drain());
+        verify_server_usable(&mut server).await;
+    }
+
+    #[tokio::test]
+    async fn test_drain_after_command_complete() {
+        use crate::net::bind::Parameter;
+        let mut server = test_server().await;
+
+        server
+            .send(
+                &vec![
+                    Parse::named("drain4", "SELECT $1::int").into(),
+                    Bind::new_params(
+                        "drain4",
+                        &[Parameter {
+                            len: 1,
+                            data: "1".as_bytes().into(),
+                        }],
+                    )
+                    .into(),
+                    Execute::new().into(),
+                    Sync.into(),
+                ]
+                .into(),
+            )
+            .await
+            .unwrap();
+
+        for c in ['1', '2', 'D', 'C'] {
+            let msg = server.read().await.unwrap();
+            assert_eq!(msg.code(), c);
+        }
+
+        assert!(server.needs_drain());
+        server.drain().await.unwrap();
+
+        assert!(server.in_sync());
+        assert!(server.done());
+        assert!(!server.needs_drain());
+        verify_server_usable(&mut server).await;
+    }
+
+    #[tokio::test]
+    async fn test_drain_after_error() {
+        let mut server = test_server().await;
+
+        server
+            .send(
+                &vec![
+                    Parse::named("drain_err", "SELECT * FROM nonexistent_table_xyz").into(),
+                    Bind::new_statement("drain_err").into(),
+                    Execute::new().into(),
+                    Sync.into(),
+                ]
+                .into(),
+            )
+            .await
+            .unwrap();
+
+        let msg = server.read().await.unwrap();
+        assert_eq!(msg.code(), 'E');
+
+        assert!(server.needs_drain());
+        server.drain().await.unwrap();
+
+        assert!(server.in_sync());
+        assert!(server.done());
+        assert!(!server.needs_drain());
+        verify_server_usable(&mut server).await;
+    }
+
+    #[tokio::test]
+    async fn test_drain_with_multiple_data_rows() {
+        let mut server = test_server().await;
+
+        server
+            .execute("CREATE TEMP TABLE drain_rows AS SELECT generate_series(1, 10) AS n")
+            .await
+            .unwrap();
+
+        server
+            .send(
+                &vec![
+                    Parse::named("drain_multi", "SELECT n FROM drain_rows").into(),
+                    Bind::new_statement("drain_multi").into(),
+                    Execute::new().into(),
+                    Sync.into(),
+                ]
+                .into(),
+            )
+            .await
+            .unwrap();
+
+        for c in ['1', '2'] {
+            let msg = server.read().await.unwrap();
+            assert_eq!(msg.code(), c);
+        }
+
+        for _ in 0..3 {
+            let msg = server.read().await.unwrap();
+            assert_eq!(msg.code(), 'D');
+        }
+
+        assert!(server.needs_drain());
+        server.drain().await.unwrap();
+
+        assert!(server.in_sync());
+        assert!(server.done());
+        assert!(!server.needs_drain());
+        verify_server_usable(&mut server).await;
+    }
+
+    #[tokio::test]
+    async fn test_drain_simple_query_after_row_description() {
+        let mut server = test_server().await;
+
+        server
+            .send(&vec![Query::new("SELECT 1, 2, 3").into()].into())
+            .await
+            .unwrap();
+
+        let msg = server.read().await.unwrap();
+        assert_eq!(msg.code(), 'T');
+
+        assert!(server.needs_drain());
+        server.drain().await.unwrap();
+
+        assert!(server.in_sync());
+        assert!(server.done());
+        assert!(!server.needs_drain());
+        verify_server_usable(&mut server).await;
+    }
+
+    #[tokio::test]
+    async fn test_drain_simple_query_after_data_row() {
+        let mut server = test_server().await;
+
+        server
+            .send(&vec![Query::new("SELECT 1").into()].into())
+            .await
+            .unwrap();
+
+        for c in ['T', 'D'] {
+            let msg = server.read().await.unwrap();
+            assert_eq!(msg.code(), c);
+        }
+
+        assert!(server.needs_drain());
+        server.drain().await.unwrap();
+
+        assert!(server.in_sync());
+        assert!(server.done());
+        assert!(!server.needs_drain());
+        verify_server_usable(&mut server).await;
+    }
+
+    #[tokio::test]
+    async fn test_drain_after_portal_suspended() {
+        let mut server = test_server().await;
+
+        server
+            .execute("CREATE TEMP TABLE drain_portal AS SELECT generate_series(1, 5) AS n")
+            .await
+            .unwrap();
+
+        server
+            .send(
+                &vec![
+                    Parse::named("drain_susp", "SELECT n FROM drain_portal").into(),
+                    Bind::new_name_portal("drain_susp", "p1").into(),
+                    Execute::new_portal_limit("p1", 1).into(),
+                    Sync.into(),
+                ]
+                .into(),
+            )
+            .await
+            .unwrap();
+
+        for c in ['1', '2', 'D', 's'] {
+            let msg = server.read().await.unwrap();
+            assert_eq!(msg.code(), c);
+        }
+
+        assert!(server.needs_drain());
+        server.drain().await.unwrap();
+
+        assert!(server.in_sync());
+        assert!(server.done());
+        assert!(!server.needs_drain());
+        verify_server_usable(&mut server).await;
     }
 }

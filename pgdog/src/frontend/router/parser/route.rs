@@ -299,6 +299,14 @@ impl Route {
     pub fn with_aggregate_rewrite_plan_mut(&mut self, plan: AggregateRewritePlan) {
         self.rewrite_plan = plan;
     }
+
+    /// This route is for an omnisharded table.
+    pub fn is_omni(&self) -> bool {
+        matches!(
+            self.shard.source(),
+            ShardSource::Table(TableReason::Omni) | ShardSource::RoundRobin(RoundRobinReason::Omni)
+        )
+    }
 }
 
 /// Shard source.
@@ -312,7 +320,7 @@ impl Route {
 pub enum ShardSource {
     #[default]
     DefaultUnset,
-    Table,
+    Table(TableReason),
     RoundRobin(RoundRobinReason),
     SearchPath(String),
     Set,
@@ -337,6 +345,12 @@ pub enum OverrideReason {
     Transaction,
     OnlyOneShard,
     RewriteUpdate,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Ord, PartialOrd)]
+pub enum TableReason {
+    Omni,
+    Sharded,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Ord, PartialOrd, Default)]
@@ -365,7 +379,14 @@ impl ShardWithPriority {
     pub fn new_table(shard: Shard) -> Self {
         Self {
             shard,
-            source: ShardSource::Table,
+            source: ShardSource::Table(TableReason::Sharded),
+        }
+    }
+
+    pub fn new_table_omni(shard: Shard) -> Self {
+        Self {
+            shard,
+            source: ShardSource::Table(TableReason::Omni),
         }
     }
 
@@ -463,7 +484,6 @@ impl ShardWithPriority {
         }
     }
 
-    #[cfg(test)]
     pub(crate) fn source(&self) -> &ShardSource {
         &self.source
     }
@@ -530,8 +550,11 @@ mod test {
 
     #[test]
     fn test_source_ord() {
-        assert!(ShardSource::Table < ShardSource::RoundRobin(RoundRobinReason::NotExecutable));
-        assert!(ShardSource::Table < ShardSource::SearchPath(String::new()));
+        assert!(
+            ShardSource::Table(TableReason::Sharded)
+                < ShardSource::RoundRobin(RoundRobinReason::NotExecutable)
+        );
+        assert!(ShardSource::Table(TableReason::Omni) < ShardSource::SearchPath(String::new()));
         assert!(ShardSource::SearchPath(String::new()) < ShardSource::Set);
         assert!(ShardSource::Set < ShardSource::Comment);
         assert!(ShardSource::Comment < ShardSource::Override(OverrideReason::OnlyOneShard));

@@ -1,6 +1,7 @@
 //! Query hooks.
 #![allow(unused_variables, dead_code)]
 use super::*;
+pub mod schema;
 
 #[derive(Debug)]
 pub struct QueryEngineHooks;
