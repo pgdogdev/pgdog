@@ -28,5 +28,33 @@ LEFT JOIN (
     AND c.column_name = pk.column_name
 WHERE
     c.table_schema NOT IN ('pg_catalog', 'information_schema')
+
+UNION ALL
+
+-- Materialized views are not in information_schema.columns
+SELECT
+    current_database()::text AS table_catalog,
+    n.nspname::text AS table_schema,
+    cls.relname::text AS table_name,
+    a.attname::text AS column_name,
+    pg_get_expr(d.adbin, d.adrelid)::text AS column_default,
+    (NOT a.attnotnull)::text AS is_nullable,
+    pg_catalog.format_type(a.atttypid, a.atttypmod)::text AS data_type,
+    a.attnum::int AS ordinal_position,
+    'false'::text AS is_primary_key
+FROM
+    pg_catalog.pg_class cls
+JOIN
+    pg_catalog.pg_namespace n ON n.oid = cls.relnamespace
+JOIN
+    pg_catalog.pg_attribute a ON a.attrelid = cls.oid
+LEFT JOIN
+    pg_catalog.pg_attrdef d ON d.adrelid = cls.oid AND d.adnum = a.attnum
+WHERE
+    cls.relkind = 'm'
+    AND a.attnum > 0
+    AND NOT a.attisdropped
+    AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+
 ORDER BY
-    c.table_schema, c.table_name, c.ordinal_position;
+    table_schema, table_name, ordinal_position;
