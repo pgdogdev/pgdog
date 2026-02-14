@@ -2,9 +2,9 @@
 # ----- General ----------------------------------------------------------------
 
 [general]
-query_timeout = 1_000
-checkout_timeout = 1_000
-connect_timeout = 1_000
+query_timeout = 2_000
+checkout_timeout = 2_000
+connect_timeout = 2_000
 load_balancing_strategy = "round_robin"
 rollback_timeout = 1_000
 read_write_strategy = "aggressive"

@@ -207,7 +207,7 @@ pub fn load_test_replicas() {
 
 #[cfg(test)]
 pub fn load_test_sharded() {
-    use pgdog_config::ShardedSchema;
+    use pgdog_config::{OmnishardedTables, ShardedSchema};
 
     use crate::backend::databases::init;
 
@@ -295,6 +295,11 @@ pub fn load_test_sharded() {
             ..Default::default()
         },
     ];
+    config.config.omnisharded_tables = vec![OmnishardedTables {
+        database: "pgdog".into(),
+        tables: vec!["sharded_omni".into()],
+        sticky: false,
+    }];
     config.config.rewrite.enabled = true;
     config.config.rewrite.split_inserts = RewriteMode::Rewrite;
     config.config.rewrite.shard_key = RewriteMode::Rewrite;
