@@ -2438,6 +2438,7 @@ dependencies = [
  "rustls-native-certs",
  "rustls-pki-types",
  "scram",
+ "semver",
  "serde",
  "serde_json",
  "sha1",

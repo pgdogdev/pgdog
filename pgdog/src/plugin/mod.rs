@@ -6,11 +6,23 @@ use once_cell::sync::OnceCell;
 use pgdog_plugin::libloading::Library;
 use pgdog_plugin::Plugin;
 use pgdog_plugin::{comp, libloading};
+use semver::Version;
 use tokio::time::Instant;
 use tracing::{debug, error, info, warn};
 
 static LIBS: OnceCell<Vec<Library>> = OnceCell::new();
 pub static PLUGINS: OnceCell<Vec<Plugin>> = OnceCell::new();
+
+// Compare semantic versions by major and minor only (ignore patch/bugfix).
+fn same_major_minor(a: &str, b: &str) -> bool {
+    match (Version::parse(a), Version::parse(b)) {
+        (Ok(va), Ok(vb)) => va.major == vb.major && va.minor == vb.minor,
+        _ => {
+            warn!("failed to parse plugin API version(s) ('{a}' or '{b}'), skipping plugin",);
+            false
+        }
+    }
+}
 
 /// Load plugins.
 ///
@@ -61,9 +73,9 @@ pub fn load(names: &[&str]) -> Result<(), libloading::Error> {
                 continue;
             }
 
-            // Check plugin api version
+            // Check plugin api version (compare major.minor only)
             if let Some(plugin_api_version) = plugin.pgdog_plugin_api_version() {
-                if plugin_api_version != pgdog_plugin_api_version {
+                if !same_major_minor(plugin_api_version.deref(), pgdog_plugin_api_version.deref()) {
                     warn!(
                         "skipping plugin \"{}\" because it was compiled with different plugin API version ({})",
                         plugin.name(),
