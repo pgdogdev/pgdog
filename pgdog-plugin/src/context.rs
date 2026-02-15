@@ -80,6 +80,7 @@ impl Deref for Statement {
 /// }
 /// ```
 ///
+#[derive(Debug)]
 pub struct Context {
     ffi: PdRouterContext,
 }

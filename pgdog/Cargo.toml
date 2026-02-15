@@ -35,7 +35,7 @@ rustls-native-certs = "0.8"
 rustls-pki-types = "1"
 arc-swap = "1"
 toml = "0.8"
-pgdog-plugin = { path = "../pgdog-plugin", version = "0.1.8" }
+pgdog-plugin.workspace = true
 tokio-util = { version = "0.7", features = ["rt"] }
 fnv = "1"
 scram = { git = "https://github.com/pgdogdev/scram.git", rev = "848003d" }

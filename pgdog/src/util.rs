@@ -115,9 +115,10 @@ pub fn escape_identifier(s: &str) -> String {
 /// Get PgDog's version string.
 pub fn pgdog_version() -> String {
     format!(
-        "v{} [main@{}, {}]",
+        "v{} [main@{}, pgdog-plugin {}, {}]",
         env!("CARGO_PKG_VERSION"),
         env!("GIT_HASH"),
+        comp::pgdog_plugin_api_version().deref(),
         comp::rustc_version().deref()
     )
 }

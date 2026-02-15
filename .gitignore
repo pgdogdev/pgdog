@@ -62,3 +62,4 @@ integration/log.txt
 integration/pgdog.config
 integration/**/.bundle
 integration/**/vendor
+integration/**/*.test

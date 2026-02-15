@@ -1,0 +1,13 @@
+[package]
+name = "test-plugin-main"
+version = "0.1.0"
+edition = "2024"
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+pgdog-plugin = { git = "https://github.com/pgdogdev/pgdog", branch = "main" }
+assertions = { path = "../assertions" }

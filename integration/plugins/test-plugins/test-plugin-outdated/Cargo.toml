@@ -1,0 +1,12 @@
+[package]
+name = "test-plugin-outdated"
+version = "0.1.0"
+edition = "2024"
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+pgdog-plugin = { version = "0.1.8" }

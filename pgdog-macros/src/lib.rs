@@ -42,6 +42,14 @@ pub fn plugin(_input: TokenStream) -> TokenStream {
                 *output = version;
             }
         }
+
+        #[unsafe(no_mangle)]
+        pub unsafe extern "C" fn pgdog_plugin_api_version(output: *mut pgdog_plugin::PdStr) {
+            let version = pgdog_plugin::comp::pgdog_plugin_api_version();
+            unsafe {
+                *output = version;
+            }
+        }
     };
     TokenStream::from(expanded)
 }

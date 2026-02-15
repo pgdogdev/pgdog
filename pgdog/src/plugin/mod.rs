@@ -36,6 +36,7 @@ pub fn load(names: &[&str]) -> Result<(), libloading::Error> {
     let _ = LIBS.set(libs);
 
     let rustc_version = comp::rustc_version();
+    let pgdog_plugin_api_version = comp::pgdog_plugin_api_version();
 
     let mut plugins = vec![];
     for (i, name) in names.iter().enumerate() {
@@ -58,6 +59,30 @@ pub fn load(names: &[&str]) -> Result<(), libloading::Error> {
                     plugin.name()
                 );
                 continue;
+            }
+
+            // Check plugin api version
+            if let Some(plugin_api_version) = plugin.pgdog_plugin_api_version() {
+                if plugin_api_version != pgdog_plugin_api_version {
+                    warn!(
+                        "skipping plugin \"{}\" because it was compiled with different plugin API version ({})",
+                        plugin.name(),
+                        plugin_api_version.deref()
+                    );
+                    continue;
+                }
+            } else {
+                warn!(
+                    "plugin {} doesn't expose its plugin API version, please update version of pgdog-plugin crate in your plugin", plugin.name()
+                );
+
+                // TODO: use this after after some time when we want to force version
+                // compatibility based on pgdog-plugin version
+                // warn!(
+                //     "skipping plugin \"{}\" because it doesn't expose its plugin API version",
+                //     plugin.name()
+                // );
+                // continue;
             }
 
             if plugin.init() {
