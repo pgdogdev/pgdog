@@ -27,7 +27,7 @@ helm install pgdog pgdogdev/pgdog
 
 ### AWS ECS
 
-PgDog can be deployed with on AWS ECS with our [Terraform module](https://github.com/pgdogdev/pgdog-ecs-terraform):
+PgDog can be deployed with on AWS Elastic Container Service (ECS) using our [Terraform module](https://github.com/pgdogdev/pgdog-ecs-terraform):
 
 ```hcl
 module "pgdog" {
