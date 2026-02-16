@@ -26,18 +26,16 @@ pub fn plugin(_input: TokenStream) -> TokenStream {
         }
 
         #[unsafe(no_mangle)]
-        pub unsafe extern "C" fn pgdog_pg_query_version(output: *mut pgdog_plugin::PdStr) {
-            let version: pgdog_plugin::PdStr = option_env!("PGDOG_PGQUERY_VERSION")
-                .unwrap_or_default()
-                .into();
+        pub unsafe extern "C" fn pgdog_plugin_version(output: *mut pgdog_plugin::PdStr) {
+            let version: pgdog_plugin::PdStr = env!("CARGO_PKG_VERSION").into();
             unsafe {
                 *output = version;
             }
         }
 
         #[unsafe(no_mangle)]
-        pub unsafe extern "C" fn pgdog_plugin_version(output: *mut pgdog_plugin::PdStr) {
-            let version: pgdog_plugin::PdStr = env!("CARGO_PKG_VERSION").into();
+        pub unsafe extern "C" fn pgdog_plugin_api_version(output: *mut pgdog_plugin::PdStr) {
+            let version = pgdog_plugin::comp::pgdog_plugin_api_version();
             unsafe {
                 *output = version;
             }

@@ -3,8 +3,14 @@
 members = [
     "examples/demo",
     "integration/rust",
-    "pgdog", "pgdog-config", "pgdog-macros",
-    "pgdog-plugin", "pgdog-plugin-build", "pgdog-postgres-types", "pgdog-stats", "pgdog-vector", "plugins/pgdog-example-plugin",
+    "pgdog",
+    "pgdog-config",
+    "pgdog-macros",
+    "pgdog-plugin",
+    "pgdog-postgres-types",
+    "pgdog-stats",
+    "pgdog-vector",
+    "plugins/pgdog-example-plugin",
 ]
 resolver = "2"
 
@@ -23,3 +29,6 @@ inherits = "release"
 lto = false
 codegen-units = 16
 debug = true
+
+[workspace.dependencies]
+pgdog-plugin = { path = "./pgdog-plugin", version = "0.2.0" }
