@@ -25,6 +25,14 @@ helm repo add pgdogdev https://helm.pgdog.dev
 helm install pgdog pgdogdev/pgdog
 ```
 
+### Terraform
+
+PgDog can be deployed with Terraform. Choose any one of the modules below, depending on where you want PgDog to be deployed:
+
+| Module | Environment |
+|-|-|
+| [pgdog-ecs-terraform](https://github.com/pgdogdev/pgdog-ecs-terraform) | AWS Elastic Container Service (ECS) |
+
 ### Try in Docker
 
 You can try PgDog quickly using Docker. Install [Docker Compose](https://docs.docker.com/compose/) and run:
