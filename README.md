@@ -25,17 +25,12 @@ helm repo add pgdogdev https://helm.pgdog.dev
 helm install pgdog pgdogdev/pgdog
 ```
 
-### AWS ECS
+### AWS
 
-PgDog can be deployed with on AWS Elastic Container Service (ECS) using our [Terraform module](https://github.com/pgdogdev/pgdog-ecs-terraform):
+If you're using AWS RDS, you can deploy PgDog using one of two supported methods:
 
-```hcl
-module "pgdog" {
-  source = "github.com/pgdogdev/pgdog-ecs-terraform?ref=v0.1.0"
-
-  # See module documentation for module variables.
-}
-```
+1. [Helm chart](https://github.com/pgdogdev/helm) with [EKS](https://aws.amazon.com/eks/), or a self-hosted Kubernetes cluster
+2. [Terraform module](https://github.com/pgdogdev/pgdog-ecs-terraform) to deploy PgDog on [ECS](https://aws.amazon.com/ecs/)
 
 ### Try in Docker
 
