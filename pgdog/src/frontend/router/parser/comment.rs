@@ -109,6 +109,7 @@ pub fn remove_comments(
     let mut cursor = 0;
     let mut out = String::with_capacity(query.len());
     let mut metadata = Vec::with_capacity(3);
+    let mut has_comment = false;
 
     for st in tokenized_query {
         let start = st.start as usize;
@@ -118,12 +119,16 @@ pub fn remove_comments(
 
         match st.token {
             t if t == Token::CComment as i32 => {
+                has_comment = true;
+
                 let comment = &query[start..end];
 
                 if let Some(except) = except {
                     let m = keep_only_matching(comment, except);
 
-                    metadata.push(m.to_string());
+                    if !m.is_empty() {
+                        metadata.push(m.to_string());
+                    }
                 }
             }
             _ => {
@@ -138,10 +143,44 @@ pub fn remove_comments(
         out.push_str(&query[cursor..]);
     }
 
-    metadata.sort_unstable();
-    out.insert_str(0, &metadata.join(""));
+    if has_comment {
+        return Ok(normalize_query(&out, &mut metadata));
+    }
 
     Ok(out)
+}
+
+/// Prepends metadata comments and removes duplicate whitespace
+/// that likely appear during comment removal
+fn normalize_query(query: &str, metadata: &mut Vec<String>) -> String {
+    let mut result = String::with_capacity(query.len());
+
+    query.split_whitespace().for_each(|s| {
+        if !result.is_empty() {
+            result.push(' ');
+        }
+
+        result.push_str(s);
+    });
+
+    // Special case for when a comment is at the end of a query,
+    if result.ends_with(" ;") {
+        result.truncate(result.len() - 2);
+        result.push(';');
+    }
+
+    if !metadata.is_empty() {
+        metadata.sort_unstable();
+
+        let metadata_str = &mut metadata.join(" ");
+
+        metadata_str.insert_str(0, "/* ");
+        metadata_str.push_str(" */ ");
+
+        result.insert_str(0, metadata_str);
+    }
+
+    result
 }
 
 fn keep_only_matching(comment: &str, regs: &[&Regex]) -> String {
@@ -263,7 +302,7 @@ mod tests {
 
         let result = remove_comments(query, &tokens, None).unwrap();
 
-        assert_eq!(result, "SELECT * FROM table  WHERE id = 1");
+        assert_eq!(result, "SELECT * FROM table WHERE id = 1");
     }
 
     #[test]
@@ -273,7 +312,10 @@ mod tests {
 
         let result = remove_comments(query, &tokens, Some(&[&SHARD])).unwrap();
 
-        assert_eq!(result, "pgdog_shard: 4SELECT  * FROM table  WHERE id = 1");
+        assert_eq!(
+            result,
+            "/* pgdog_shard: 4 */ SELECT * FROM table WHERE id = 1"
+        );
     }
 
     #[test]
@@ -283,7 +325,10 @@ mod tests {
 
         let result = remove_comments(query, &tokens, Some(&[&ROLE, &SHARD])).unwrap();
 
-        assert_eq!(result, "pgdog_role: primarypgdog_shard: 4SELECT 1  + 2 ;");
+        assert_eq!(
+            result,
+            "/* pgdog_role: primary pgdog_shard: 4 */ SELECT 1 + 2;"
+        );
     }
 
     #[test]
