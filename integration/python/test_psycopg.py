@@ -117,3 +117,192 @@ def test_postgres_variants_parameter_limits(count, expect_error_keywords):
             assert any(keyword in message for keyword in expect_error_keywords)
     else:
         assert successes == [count, count]
+
+
+def test_pipeline():
+    conn = normal_sync()
+    conn.autocommit = True
+
+    with conn.pipeline():
+        cur = conn.cursor()
+        cur.execute("SELECT 1::bigint")
+        cur2 = conn.cursor()
+        cur2.execute("SELECT 2::bigint")
+        cur3 = conn.cursor()
+        cur3.execute("SELECT 3::bigint")
+
+        assert cur.fetchone()[0] == 1
+        assert cur2.fetchone()[0] == 2
+        assert cur3.fetchone()[0] == 3
+
+    conn.close()
+    no_out_of_sync()
+
+
+def test_pipeline_many_queries():
+    """Stress the splicing logic with many queries in a single pipeline.
+
+    pgdog splits multi-Execute pipelines into separate sub-requests.
+    If any response is dropped during splicing, libpq can't exit pipeline mode.
+    """
+    conn = normal_sync()
+    conn.autocommit = True
+
+    with conn.pipeline():
+        cursors = []
+        for i in range(50):
+            cur = conn.cursor()
+            cur.execute("SELECT %s::bigint", (i,))
+            cursors.append((cur, i))
+
+        for cur, expected in cursors:
+            assert cur.fetchone()[0] == expected
+
+    conn.close()
+    no_out_of_sync()
+
+
+def test_pipeline_executemany():
+    """executemany in pipeline mode sends Parse once, then multiple Bind/Execute.
+
+    This is a different splicing pattern than multiple separate execute() calls.
+    """
+    conn = normal_sync()
+
+    conn.execute("DROP TABLE IF EXISTS pipeline_test")
+    conn.execute("CREATE TABLE pipeline_test (id BIGINT PRIMARY KEY, value TEXT)")
+    conn.commit()
+
+    with conn.pipeline():
+        cur = conn.cursor()
+        cur.executemany(
+            "INSERT INTO pipeline_test (id, value) VALUES (%s, %s)",
+            [(i, f"val_{i}") for i in range(100)],
+        )
+        conn.commit()
+
+    cur = conn.cursor()
+    cur.execute("SELECT count(*) FROM pipeline_test")
+    assert cur.fetchone()[0] == 100
+    conn.commit()
+
+    conn.execute("DROP TABLE pipeline_test")
+    conn.commit()
+    conn.close()
+    no_out_of_sync()
+
+
+def test_pipeline_transaction():
+    conn = normal_sync()
+
+    conn.execute("DROP TABLE IF EXISTS pipeline_test")
+    conn.execute("CREATE TABLE pipeline_test (id BIGINT PRIMARY KEY, value TEXT)")
+    conn.commit()
+
+    with conn.pipeline():
+        conn.execute("INSERT INTO pipeline_test (id, value) VALUES (%s, %s)", (1, "a"))
+        conn.execute("INSERT INTO pipeline_test (id, value) VALUES (%s, %s)", (2, "b"))
+        conn.execute("INSERT INTO pipeline_test (id, value) VALUES (%s, %s)", (3, "c"))
+        conn.commit()
+
+        cur = conn.cursor()
+        cur.execute("SELECT count(*) FROM pipeline_test")
+        assert cur.fetchone()[0] == 3
+        conn.commit()
+
+    conn.execute("DROP TABLE pipeline_test")
+    conn.commit()
+    conn.close()
+    no_out_of_sync()
+
+
+def test_pipeline_fetch_after_exit():
+    """Results fetched after exiting pipeline context.
+
+    psycopg must drain all pending results when exiting the pipeline block.
+    If pgdog didn't send all responses, this triggers 'cannot exit pipeline
+    mode while busy'.
+    """
+    conn = normal_sync()
+    conn.autocommit = True
+
+    with conn.pipeline():
+        cur1 = conn.cursor()
+        cur1.execute("SELECT 1::bigint")
+        cur2 = conn.cursor()
+        cur2.execute("SELECT 2::bigint")
+
+    assert cur1.fetchone()[0] == 1
+    assert cur2.fetchone()[0] == 2
+
+    conn.close()
+    no_out_of_sync()
+
+
+def test_pipeline_repeated():
+    """Multiple pipeline blocks on the same connection.
+
+    Tests that pgdog properly resets state between pipelines.
+    """
+    conn = normal_sync()
+    conn.autocommit = True
+
+    for batch in range(10):
+        with conn.pipeline():
+            cursors = []
+            for i in range(10):
+                cur = conn.cursor()
+                cur.execute("SELECT %s::bigint", (batch * 10 + i,))
+                cursors.append((cur, batch * 10 + i))
+
+            for cur, expected in cursors:
+                assert cur.fetchone()[0] == expected
+
+    conn.close()
+    no_out_of_sync()
+
+
+def test_pipeline_query_then_nonpipeline():
+    """Pipeline followed immediately by non-pipeline query.
+
+    If pipeline exit fails, the subsequent simple query triggers
+    'PQsendQuery not allowed in pipeline mode'.
+    """
+    conn = normal_sync()
+    conn.autocommit = True
+
+    with conn.pipeline():
+        cur = conn.cursor()
+        cur.execute("SELECT 1::bigint")
+        cur.fetchone()
+
+    cur = conn.cursor()
+    cur.execute("SELECT 2::bigint")
+    assert cur.fetchone()[0] == 2
+
+    conn.close()
+    no_out_of_sync()
+
+
+def test_pipeline_error_recovery():
+    conn = normal_sync()
+    conn.autocommit = True
+
+    with conn.pipeline():
+        cur = conn.cursor()
+        cur.execute("SELECT 1::bigint")
+        assert cur.fetchone()[0] == 1
+
+    with pytest.raises(psycopg.errors.UndefinedTable):
+        with conn.pipeline():
+            cur = conn.cursor()
+            cur.execute("SELECT * FROM nonexistent_table_pipeline_test")
+            cur.fetchall()
+
+    with conn.pipeline():
+        cur = conn.cursor()
+        cur.execute("SELECT 42::bigint")
+        assert cur.fetchone()[0] == 42
+
+    conn.close()
+    no_out_of_sync()

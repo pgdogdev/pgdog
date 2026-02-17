@@ -9,8 +9,8 @@ use tracing::debug;
 use crate::frontend::ClientRequest;
 use crate::net::messages::command_complete::CommandComplete;
 use crate::net::messages::{ErrorResponse, FromBytes, Protocol, Query, ReadyForQuery};
-use crate::net::ProtocolMessage;
 use crate::net::ToBytes;
+use crate::net::{BackendKeyData, ProtocolMessage};
 
 use super::parser::Parser;
 use super::prelude::Message;
@@ -60,6 +60,11 @@ impl AdminServer {
 
         self.messages.extend(messages);
         self.messages.push_back(ReadyForQuery::idle().message()?);
+
+        self.messages = std::mem::take(&mut self.messages)
+            .into_iter()
+            .map(|m| m.backend(BackendKeyData::default()))
+            .collect();
 
         Ok(())
     }
