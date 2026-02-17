@@ -14,7 +14,7 @@
 //!
 //! ```toml
 //! [lib]
-//! crate-type = ["rlib", "cdylib"]
+//! crate-type = ["cdylib"]
 //! ```
 //!
 //! ## Dependencies
@@ -26,7 +26,7 @@
 //! following 2 requirements:
 //!
 //! 1. Plugins must be compiled with the **same version of the Rust compiler** as PgDog. This is automatically checked at runtime and plugins that don't do this are not loaded.
-//! 2. Plugins must use the **same version of [`pg_query`] crate** as PgDog. This happens automatically when using `pg_query` structs re-exported by this crate.
+//! 2. Plugins must use the **same version of `pgdog-plugin` crate** as PgDog. This is automatically checked at runtime and plugins that use incompatible versions are not loaded.
 //!
 //!
 //! #### Configure dependencies
@@ -35,7 +35,7 @@
 //!
 //! ```toml
 //! [dependencies]
-//! pgdog-plugin = "0.1.6"
+//! pgdog-plugin = "0.2.0"
 //! ```
 //!
 //! # Required methods
