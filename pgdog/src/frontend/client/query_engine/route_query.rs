@@ -2,8 +2,6 @@ use pgdog_config::PoolerMode;
 use tokio::time::timeout;
 use tracing::trace;
 
-use crate::frontend::router::parser::rewrite::statement::plan::RewriteResult;
-
 use super::*;
 
 #[derive(Debug, Clone)]
@@ -100,10 +98,8 @@ impl QueryEngine {
                 );
 
                 // Apply post-parser rewrites, e.g. offset/limit.
-                if let Some(RewriteResult::InPlace { offset }) = &context.rewrite_result {
-                    if let Some(offset) = offset {
-                        offset.apply_after_parser(context.client_request)?;
-                    }
+                if let Some(ref rewrite_result) = &context.rewrite_result {
+                    rewrite_result.apply_after_parser(context.client_request)?;
                 }
             }
             Err(err) => {

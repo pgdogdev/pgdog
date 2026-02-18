@@ -55,6 +55,17 @@ pub(crate) enum RewriteResult {
     ShardingKeyUpdate(ShardingKeyUpdate),
 }
 
+impl RewriteResult {
+    pub(crate) fn apply_after_parser(&self, request: &mut ClientRequest) -> Result<(), Error> {
+        match self {
+            Self::InPlace {
+                offset: Some(ref offset),
+            } => offset.apply_after_parser(request),
+            _ => Ok(()),
+        }
+    }
+}
+
 impl RewritePlan {
     /// Apply the rewrite plan to a Bind message by appending generated unique IDs.
     pub(crate) fn apply_bind(&self, bind: &mut Bind) -> Result<(), Error> {

@@ -16,7 +16,7 @@ pub(crate) struct OffsetPlan {
 }
 
 impl OffsetPlan {
-    pub(crate) fn apply_after_parser(&self, request: &mut ClientRequest) -> Result<(), Error> {
+    pub(super) fn apply_after_parser(&self, request: &mut ClientRequest) -> Result<(), Error> {
         let route = match request.route.as_mut() {
             Some(route) => route,
             None => return Ok(()),
