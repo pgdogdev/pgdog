@@ -87,7 +87,7 @@ impl QueryEngine {
                     .await?;
             }
 
-            Some(RewriteResult::InPlace) | None => {
+            Some(RewriteResult::InPlace { .. }) | None => {
                 self.backend
                     .handle_client_request(context.client_request, &mut self.router, self.streaming)
                     .await?;

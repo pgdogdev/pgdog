@@ -236,6 +236,10 @@ impl Route {
         &self.limit
     }
 
+    pub fn set_limit(&mut self, limit: Limit) {
+        self.limit = limit;
+    }
+
     pub fn with_read(mut self, read: bool) -> Self {
         self.set_read(read);
         self

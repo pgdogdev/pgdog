@@ -14,6 +14,7 @@ pub mod aggregate;
 pub mod auto_id;
 pub mod error;
 pub mod insert;
+pub mod offset;
 pub mod plan;
 pub mod simple_prepared;
 pub mod unique_id;
@@ -140,6 +141,7 @@ impl<'a> StatementRewrite<'a> {
         })?;
 
         self.rewrite_aggregates(&mut plan)?;
+        self.limit_offset(&mut plan)?;
 
         if self.rewritten {
             plan.stmt = Some(match self.schema.query_parser_engine {
