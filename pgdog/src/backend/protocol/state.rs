@@ -225,6 +225,11 @@ impl ProtocolState {
     pub(crate) fn in_sync(&self) -> bool {
         !self.out_of_sync
     }
+
+    /// Check if the protocol is out of sync due to an error in extended protocol.
+    pub(crate) fn out_of_sync(&self) -> bool {
+        self.out_of_sync
+    }
 }
 
 #[cfg(test)]

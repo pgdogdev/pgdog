@@ -240,6 +240,15 @@ impl Binding {
         }
     }
 
+    /// Protocol is out of sync due to an error in extended protocol.
+    pub fn out_of_sync(&self) -> bool {
+        match self {
+            Binding::Direct(Some(server)) => server.out_of_sync(),
+            Binding::MultiShard(servers, _state) => servers.iter().any(|s| s.out_of_sync()),
+            _ => false,
+        }
+    }
+
     pub(super) fn state_check(&self, state: State) -> bool {
         match self {
             Binding::Direct(Some(server)) => {

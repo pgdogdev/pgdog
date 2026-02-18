@@ -306,3 +306,25 @@ def test_pipeline_error_recovery():
 
     conn.close()
     no_out_of_sync()
+
+
+def test_pipeline_multiple_errors():
+    """Pipeline with multiple queries to a non-existent table.
+
+    Tests that pipeline mode properly handles errors when multiple
+    queries are sent without waiting for server responses.
+    """
+    conn = normal_sync()
+    conn.autocommit = True
+
+    # Pipeline with multiple errors should return the first error
+    # and not timeout or get stuck in "cannot exit pipeline mode"
+    with pytest.raises(psycopg.errors.UndefinedTable):
+        with conn.pipeline():
+            cur = conn.cursor()
+            for i in range(5):
+                cur.execute("SELECT * FROM no_existing_table")
+            cur.fetchone()
+
+    conn.close()
+    no_out_of_sync()

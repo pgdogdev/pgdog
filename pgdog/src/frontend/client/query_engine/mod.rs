@@ -295,4 +295,9 @@ impl QueryEngine {
     pub fn get_state(&self) -> State {
         self.stats.state
     }
+
+    /// Check if the backend protocol is out of sync due to an error in extended protocol.
+    pub fn out_of_sync(&self) -> bool {
+        self.backend.out_of_sync()
+    }
 }

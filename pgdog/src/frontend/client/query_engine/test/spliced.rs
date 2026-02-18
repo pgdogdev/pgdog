@@ -2,7 +2,8 @@ use super::{test_client, test_sharded_client};
 use crate::{
     expect_message,
     net::{
-        BindComplete, CommandComplete, DataRow, Describe, Parameters, ParseComplete, ReadyForQuery,
+        BindComplete, CommandComplete, DataRow, Describe, ErrorResponse, Parameters, ParseComplete,
+        ReadyForQuery,
     },
 };
 
@@ -412,4 +413,61 @@ async fn test_simple_query_protocol_sharded_transaction() {
     client.send(Query::new("ROLLBACK")).await;
     client.try_process().await.unwrap();
     client.read_until('Z').await.unwrap();
+}
+
+/// Test that pipeline errors skip remaining queries and jump to Sync.
+/// When Postgres receives an error in pipeline mode, it enters "aborted" state
+/// and ignores all commands until Sync. pgdog must detect this and skip
+/// remaining spliced requests to avoid timeout.
+#[tokio::test]
+async fn test_spliced_pipeline_error_skips_to_sync() {
+    let mut client = TestClient::new_sharded(Parameters::default()).await;
+
+    assert!(!client.backend_connected());
+
+    // Send 3 queries in pipeline mode, first one will error (non-existent table)
+    client
+        .send(Parse::named("", "SELECT * FROM nonexistent_table_12345"))
+        .await;
+    client.send(Bind::new_statement("")).await;
+    client.send(Execute::new()).await;
+
+    client.send(Parse::named("", "SELECT 2")).await;
+    client.send(Bind::new_statement("")).await;
+    client.send(Execute::new()).await;
+
+    client.send(Parse::named("", "SELECT 3")).await;
+    client.send(Bind::new_statement("")).await;
+    client.send(Execute::new()).await;
+
+    client.send(Sync).await;
+
+    // Process should complete without timeout
+    client.try_process().await.unwrap();
+
+    // Read messages manually since read_until returns Err on ErrorResponse
+    let mut messages = vec![];
+    loop {
+        let message = client.read().await;
+        let code = message.code();
+        messages.push(message);
+        if code == 'Z' {
+            break;
+        }
+    }
+
+    // Must have at least ErrorResponse and ReadyForQuery
+    assert!(messages.len() >= 2, "Expected at least 2 messages");
+
+    // First message should be ErrorResponse (42P01 = undefined table)
+    let error =
+        ErrorResponse::try_from(messages[0].clone()).expect("first message should be error");
+    assert_eq!(error.code, "42P01", "Expected undefined table error");
+
+    // Last message should be ReadyForQuery
+    let rfq = expect_message!(messages.last().unwrap().clone(), ReadyForQuery);
+    assert_eq!(rfq.status, 'I', "Should be idle after pipeline error");
+
+    // Connection should be released back to pool
+    assert!(!client.backend_connected());
 }
