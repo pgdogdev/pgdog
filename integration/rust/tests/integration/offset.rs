@@ -46,6 +46,26 @@ async fn cleanup(pool: &PgPool) {
     }
 }
 
+async fn seed_with_customer_id(pool: &PgPool) -> Result<(), sqlx::Error> {
+    // Shard 0: values 1..=5 with customer_id=1
+    pool.execute(
+        format!(
+            "/* pgdog_shard: 0 */ INSERT INTO {TABLE}(value, customer_id) VALUES (1,1), (2,1), (3,1), (4,1), (5,1)"
+        )
+        .as_str(),
+    )
+    .await?;
+    // Shard 1: values 6..=10 with customer_id=1
+    pool.execute(
+        format!(
+            "/* pgdog_shard: 1 */ INSERT INTO {TABLE}(value, customer_id) VALUES (6,1), (7,1), (8,1), (9,1), (10,1)"
+        )
+        .as_str(),
+    )
+    .await?;
+    Ok(())
+}
+
 fn values(rows: &[sqlx::postgres::PgRow]) -> Vec<i32> {
     rows.iter().map(|r| r.get::<i32, _>("value")).collect()
 }
@@ -193,6 +213,107 @@ async fn offset_descending_order() -> Result<(), Box<dyn std::error::Error>> {
         )
         .await?;
     assert_eq!(values(&rows), vec![5, 4, 3]);
+
+    cleanup(&sharded).await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn offset_single_shard_not_rewritten() -> Result<(), Box<dyn std::error::Error>> {
+    let sharded = connections_sqlx().await.get(1).cloned().unwrap();
+    reset(&sharded).await?;
+    seed_with_customer_id(&sharded).await?;
+
+    // Query with shard comment forces single-shard routing.
+    // LIMIT/OFFSET should be passed through unchanged to Postgres.
+    let rows = sharded
+        .fetch_all(
+            format!(
+                "/* pgdog_shard: 0 */ SELECT value FROM {TABLE} ORDER BY value LIMIT 3 OFFSET 2"
+            )
+            .as_str(),
+        )
+        .await?;
+    // Shard 0 has values 1..=5, so OFFSET 2 LIMIT 3 → [3, 4, 5]
+    assert_eq!(values(&rows), vec![3, 4, 5]);
+
+    let rows = sharded
+        .fetch_all(
+            format!(
+                "/* pgdog_shard: 0 */ SELECT value FROM {TABLE} ORDER BY value LIMIT 2 OFFSET 4"
+            )
+            .as_str(),
+        )
+        .await?;
+    // Only 1 row left at offset 4 on shard 0
+    assert_eq!(values(&rows), vec![5]);
+
+    let rows = sharded
+        .fetch_all(
+            format!(
+                "/* pgdog_shard: 1 */ SELECT value FROM {TABLE} ORDER BY value LIMIT 3 OFFSET 0"
+            )
+            .as_str(),
+        )
+        .await?;
+    // Shard 1 has values 6..=10
+    assert_eq!(values(&rows), vec![6, 7, 8]);
+
+    let rows = sharded
+        .fetch_all(
+            format!(
+                "/* pgdog_shard: 1 */ SELECT value FROM {TABLE} ORDER BY value LIMIT 10 OFFSET 3"
+            )
+            .as_str(),
+        )
+        .await?;
+    assert_eq!(values(&rows), vec![9, 10]);
+
+    cleanup(&sharded).await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn offset_single_shard_prepared() -> Result<(), Box<dyn std::error::Error>> {
+    let sharded = connections_sqlx().await.get(1).cloned().unwrap();
+    reset(&sharded).await?;
+    seed_with_customer_id(&sharded).await?;
+
+    // Parameterized query targeting a single shard via WHERE customer_id.
+    let sql = format!(
+        "SELECT value FROM {TABLE} WHERE customer_id = $1 ORDER BY value LIMIT $2 OFFSET $3"
+    );
+
+    // customer_id=1 hashes to some shard; both shards have data with customer_id=1,
+    // but the router sends the query to only one shard. Regardless of which shard
+    // it picks, LIMIT/OFFSET should work correctly on the shard's local data.
+    let rows = sqlx::query(&sql)
+        .bind(1i64)
+        .bind(3i64)
+        .bind(0i64)
+        .fetch_all(&sharded)
+        .await?;
+    assert_eq!(rows.len(), 3);
+    // Values should be consecutive and ordered.
+    let vals = values(&rows);
+    assert_eq!(vals[1] - vals[0], 1);
+    assert_eq!(vals[2] - vals[1], 1);
+
+    let first_page = vals.clone();
+
+    // Next page should continue where we left off.
+    let rows = sqlx::query(&sql)
+        .bind(1i64)
+        .bind(3i64)
+        .bind(3i64)
+        .fetch_all(&sharded)
+        .await?;
+    let second_page = values(&rows);
+
+    // No overlap between pages.
+    for v in &second_page {
+        assert!(!first_page.contains(v));
+    }
 
     cleanup(&sharded).await;
     Ok(())
