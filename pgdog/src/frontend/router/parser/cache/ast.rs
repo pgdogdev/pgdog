@@ -7,9 +7,7 @@ use std::{collections::HashSet, ops::Deref};
 use parking_lot::Mutex;
 use std::sync::Arc;
 
-use super::super::{
-    comment::comment, Error, Route, Shard, StatementRewrite, StatementRewriteContext, Table,
-};
+use super::super::{Error, Route, Shard, StatementRewrite, StatementRewriteContext, Table};
 use super::{Fingerprint, Stats};
 use crate::backend::schema::Schema;
 use crate::frontend::router::parser::rewrite::statement::RewritePlan;
@@ -72,6 +70,8 @@ impl Ast {
         schema: &ShardingSchema,
         db_schema: &Schema,
         prepared_statements: &mut PreparedStatements,
+        comment_shard: Option<Shard>,
+        comment_role: Option<Role>,
         user: &str,
         search_path: Option<&ParameterValue>,
     ) -> Result<Self, Error> {
@@ -81,7 +81,6 @@ impl Ast {
             QueryParserEngine::PgQueryRaw => parse_raw(query),
         }
         .map_err(Error::PgQuery)?;
-        let (comment_shard, comment_role) = comment(query, schema)?;
         let fingerprint =
             Fingerprint::new(query, schema.query_parser_engine).map_err(Error::PgQuery)?;
 
@@ -125,12 +124,16 @@ impl Ast {
         query: &BufferedQuery,
         ctx: &super::AstContext<'_>,
         prepared_statements: &mut PreparedStatements,
+        shard: Option<Shard>,
+        role: Option<Role>,
     ) -> Result<Self, Error> {
         Self::new(
             query,
             &ctx.sharding_schema,
             &ctx.db_schema,
             prepared_statements,
+            shard,
+            role,
             ctx.user,
             ctx.search_path,
         )

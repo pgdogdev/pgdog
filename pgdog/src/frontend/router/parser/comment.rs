@@ -1,4 +1,5 @@
 use once_cell::sync::Lazy;
+use pg_query::protobuf::ScanToken;
 use pg_query::scan_raw;
 use pg_query::{protobuf::Token, scan};
 use pgdog_config::QueryParserEngine;
@@ -24,23 +25,26 @@ fn get_matched_value<'a>(caps: &'a regex::Captures<'a>) -> Option<&'a str> {
         .map(|m| m.as_str())
 }
 
-/// Extract shard number from a comment.
+/// Extract shard number from a comment. Additionally returns the entire
+/// comment string if it exists.
 ///
-/// Comment style uses the C-style comments (not SQL comments!)
+/// Comment style for the shard metadata uses the C-style comments (not SQL comments!)
 /// as to allow the comment to appear anywhere in the query.
 ///
 /// See [`SHARD`] and [`SHARDING_KEY`] for the style of comment we expect.
 ///
-pub fn comment(
+pub fn parse_comment(
     query: &str,
     schema: &ShardingSchema,
-) -> Result<(Option<Shard>, Option<Role>), Error> {
+) -> Result<(Option<Shard>, Option<Role>, Option<String>), Error> {
     let tokens = match schema.query_parser_engine {
         QueryParserEngine::PgQueryProtobuf => scan(query),
         QueryParserEngine::PgQueryRaw => scan_raw(query),
     }
     .map_err(Error::PgQuery)?;
+    let mut shard = None;
     let mut role = None;
+    let mut filtered_query = None;
 
     for token in tokens.tokens.iter() {
         if token.token == Token::CComment as i32 {
@@ -57,33 +61,138 @@ pub fn comment(
             if let Some(cap) = SHARDING_KEY.captures(comment) {
                 if let Some(sharding_key) = get_matched_value(&cap) {
                     if let Some(schema) = schema.schemas.get(Some(sharding_key.into())) {
-                        return Ok((Some(schema.shard().into()), role));
+                        shard = Some(schema.shard().into());
+                    } else {
+                        let ctx = ContextBuilder::infer_from_from_and_config(sharding_key, schema)?
+                            .shards(schema.shards)
+                            .build()?;
+                        shard = Some(ctx.apply()?);
                     }
-                    let ctx = ContextBuilder::infer_from_from_and_config(sharding_key, schema)?
-                        .shards(schema.shards)
-                        .build()?;
-                    return Ok((Some(ctx.apply()?), role));
                 }
             }
             if let Some(cap) = SHARD.captures(comment) {
-                if let Some(shard) = cap.get(1) {
-                    return Ok((
-                        Some(
-                            shard
-                                .as_str()
-                                .parse::<usize>()
-                                .ok()
-                                .map(Shard::Direct)
-                                .unwrap_or(Shard::All),
-                        ),
-                        role,
-                    ));
+                if let Some(s) = cap.get(1) {
+                    shard = Some(
+                        s.as_str()
+                            .parse::<usize>()
+                            .ok()
+                            .map(Shard::Direct)
+                            .unwrap_or(Shard::All),
+                    );
                 }
             }
         }
     }
 
-    Ok((None, role))
+    if has_comments(&tokens.tokens) {
+        filtered_query = Some(remove_comments(
+            query,
+            &tokens.tokens,
+            Some(&[&SHARD, &*SHARDING_KEY, &ROLE]),
+        )?);
+    }
+
+    Ok((shard, role, filtered_query))
+}
+
+pub fn has_comments(tokenized_query: &Vec<ScanToken>) -> bool {
+    tokenized_query
+        .iter()
+        .any(|st| st.token == Token::CComment as i32 || st.token == Token::SqlComment as i32)
+}
+
+pub fn remove_comments(
+    query: &str,
+    tokenized_query: &Vec<ScanToken>,
+    except: Option<&[&Regex]>,
+) -> Result<String, Error> {
+    let mut cursor = 0;
+    let mut out = String::with_capacity(query.len());
+    let mut metadata = Vec::with_capacity(3);
+    let mut has_comment = false;
+
+    for st in tokenized_query {
+        let start = st.start as usize;
+        let end = st.end as usize;
+
+        out.push_str(&query[cursor..start]);
+
+        match st.token {
+            t if t == Token::CComment as i32 => {
+                has_comment = true;
+
+                let comment = &query[start..end];
+
+                if let Some(except) = except {
+                    let m = keep_only_matching(comment, except);
+
+                    if !m.is_empty() {
+                        metadata.push(m.to_string());
+                    }
+                }
+            }
+            _ => {
+                out.push_str(&query[start..end]);
+            }
+        }
+
+        cursor = end;
+    }
+
+    if cursor < query.len() {
+        out.push_str(&query[cursor..]);
+    }
+
+    if has_comment {
+        return Ok(normalize_query(&out, &mut metadata));
+    }
+
+    Ok(out)
+}
+
+/// Prepends metadata comments and removes duplicate whitespace
+/// that likely appear during comment removal
+fn normalize_query(query: &str, metadata: &mut Vec<String>) -> String {
+    let mut result = String::with_capacity(query.len());
+
+    query.split_whitespace().for_each(|s| {
+        if !result.is_empty() {
+            result.push(' ');
+        }
+
+        result.push_str(s);
+    });
+
+    // Special case for when a comment is at the end of a query,
+    if result.ends_with(" ;") {
+        result.truncate(result.len() - 2);
+        result.push(';');
+    }
+
+    if !metadata.is_empty() {
+        metadata.sort_unstable();
+
+        let metadata_str = &mut metadata.join(" ");
+
+        metadata_str.insert_str(0, "/* ");
+        metadata_str.push_str(" */ ");
+
+        result.insert_str(0, metadata_str);
+    }
+
+    result
+}
+
+fn keep_only_matching(comment: &str, regs: &[&Regex]) -> String {
+    let mut out = String::new();
+
+    for reg in regs {
+        for m in reg.find_iter(comment) {
+            out.push_str(m.as_str());
+        }
+    }
+
+    out
 }
 
 #[cfg(test)]
@@ -166,7 +275,7 @@ mod tests {
         };
 
         let query = "SELECT * FROM users /* pgdog_role: primary */";
-        let result = comment(query, &schema).unwrap();
+        let result = parse_comment(query, &schema).unwrap();
         assert_eq!(result.1, Some(Role::Primary));
     }
 
@@ -181,9 +290,45 @@ mod tests {
         };
 
         let query = "SELECT * FROM users /* pgdog_role: replica pgdog_shard: 2 */";
-        let result = comment(query, &schema).unwrap();
+        let result = parse_comment(query, &schema).unwrap();
         assert_eq!(result.0, Some(Shard::Direct(2)));
         assert_eq!(result.1, Some(Role::Replica));
+    }
+
+    #[test]
+    fn test_remove_comments_no_exceptions() {
+        let query = "SELECT * FROM table /* comment */ WHERE id = 1";
+        let tokens = scan(query).unwrap().tokens;
+
+        let result = remove_comments(query, &tokens, None).unwrap();
+
+        assert_eq!(result, "SELECT * FROM table WHERE id = 1");
+    }
+
+    #[test]
+    fn test_remove_comments_with_exceptions() {
+        let query = "SELECT /* comment */ * FROM table /* pgdog_shard: 4 comment */ WHERE id = 1";
+        let tokens = scan(query).unwrap().tokens;
+
+        let result = remove_comments(query, &tokens, Some(&[&SHARD])).unwrap();
+
+        assert_eq!(
+            result,
+            "/* pgdog_shard: 4 */ SELECT * FROM table WHERE id = 1"
+        );
+    }
+
+    #[test]
+    fn test_remove_comments_multiple_metadata() {
+        let query = "SELECT 1 /* pgdog_shard: 4 */ + 2 /* pgdog_role: primary */;";
+        let tokens = scan(query).unwrap().tokens;
+
+        let result = remove_comments(query, &tokens, Some(&[&ROLE, &SHARD])).unwrap();
+
+        assert_eq!(
+            result,
+            "/* pgdog_role: primary pgdog_shard: 4 */ SELECT 1 + 2;"
+        );
     }
 
     #[test]
@@ -197,7 +342,7 @@ mod tests {
         };
 
         let query = "SELECT * FROM users /* pgdog_role: replica */";
-        let result = comment(query, &schema).unwrap();
+        let result = parse_comment(query, &schema).unwrap();
         assert_eq!(result.1, Some(Role::Replica));
     }
 
@@ -212,7 +357,7 @@ mod tests {
         };
 
         let query = "SELECT * FROM users /* pgdog_role: invalid */";
-        let result = comment(query, &schema).unwrap();
+        let result = parse_comment(query, &schema).unwrap();
         assert_eq!(result.1, None);
     }
 
@@ -227,7 +372,7 @@ mod tests {
         };
 
         let query = "SELECT * FROM users";
-        let result = comment(query, &schema).unwrap();
+        let result = parse_comment(query, &schema).unwrap();
         assert_eq!(result.1, None);
     }
 
@@ -252,7 +397,7 @@ mod tests {
         };
 
         let query = "SELECT * FROM users /* pgdog_sharding_key: sales */";
-        let result = comment(query, &schema).unwrap();
+        let result = parse_comment(query, &schema).unwrap();
         assert_eq!(result.0, Some(Shard::Direct(1)));
     }
 }
