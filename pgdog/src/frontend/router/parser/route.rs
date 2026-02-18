@@ -1,4 +1,4 @@
-use std::{fmt::Display, ops::Deref};
+use std::{collections::HashMap, fmt::Display, ops::Deref};
 
 use lazy_static::lazy_static;
 
@@ -90,6 +90,8 @@ pub struct Route {
     rollback_savepoint: bool,
     search_path_driven: bool,
     schema_changed: bool,
+    display_table: bool,
+    table_shard_map: Option<HashMap<String, Vec<usize>>>,
 }
 
 impl Display for Route {
@@ -325,6 +327,25 @@ impl Route {
             self.shard.source(),
             ShardSource::Table(TableReason::Omni) | ShardSource::RoundRobin(RoundRobinReason::Omni)
         )
+    }
+    pub fn set_display_table(&mut self, v: bool) {
+        self.display_table = v;
+    }
+
+    pub fn display_table(&self) -> bool {
+        self.display_table
+    }
+
+    pub fn table_shard_map(&self) -> Option<HashMap<String, Vec<usize>>> {
+        if self.table_shard_map == None {
+            Some(HashMap::new())
+        } else {
+            self.table_shard_map.clone()
+        }
+    }
+
+    pub fn set_table_shard_map(&mut self, map: Option<HashMap<String, Vec<usize>>>) {
+        self.table_shard_map = map;
     }
 }
 
