@@ -487,6 +487,22 @@ impl Client {
                 let mut context = QueryEngineContext::new(self).spliced(&mut req, reqs.len());
                 query_engine.handle(&mut context).await?;
                 self.transaction = context.transaction();
+
+                // If pipeline is aborted due to error, skip to Sync to complete the pipeline.
+                // Postgres ignores all commands after an error until it receives Sync.
+                if query_engine.out_of_sync() && !req.is_sync_only() {
+                    debug!("pipeline aborted, skipping to Sync");
+                    while let Some((_, mut next_req)) = reqs.next() {
+                        if next_req.is_sync_only() {
+                            debug!("processing Sync to complete aborted pipeline");
+                            let mut ctx = QueryEngineContext::new(self).spliced(&mut next_req, 0);
+                            query_engine.handle(&mut ctx).await?;
+                            self.transaction = ctx.transaction();
+                            break;
+                        }
+                    }
+                    break;
+                }
             }
         }
 

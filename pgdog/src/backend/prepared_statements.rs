@@ -260,6 +260,11 @@ impl PreparedStatements {
         self.state.in_copy_mode()
     }
 
+    /// The protocol is out of sync due to an error in extended protocol.
+    pub(crate) fn out_of_sync(&self) -> bool {
+        self.state.out_of_sync()
+    }
+
     fn check_prepared(&mut self, name: &str) -> Result<Option<ProtocolMessage>, Error> {
         if !self.contains(name) && !self.parses.iter().any(|s| s == name) {
             let parse = self.parse(name);

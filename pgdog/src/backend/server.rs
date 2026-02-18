@@ -605,6 +605,11 @@ impl Server {
         self.prepared_statements.in_copy_mode()
     }
 
+    /// Protocol is out of sync due to an error in extended protocol.
+    pub fn out_of_sync(&self) -> bool {
+        self.prepared_statements.out_of_sync()
+    }
+
     /// Server is still inside a transaction.
     #[inline]
     pub fn in_transaction(&self) -> bool {
