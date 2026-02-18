@@ -220,13 +220,6 @@ impl Buffer {
     }
 
     /// Execute LIMIT ... OFFSET ...
-    ///
-    /// N.B.: offset is incorrectly calculated at the moment
-    /// because we send it to Postgres as-is.
-    ///
-    /// What we need to do is rewrite LIMIT to be LIMIT + OFFSET,
-    /// overfetch those rows, and then apply the OFFSET to the entire
-    /// result set from all shards.
     pub(super) fn limit(&mut self, limit: &Limit) {
         let offset = limit.offset.unwrap_or(0);
         self.buffer.drain(..offset.min(self.buffer.len()));
