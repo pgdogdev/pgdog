@@ -4,6 +4,7 @@ use crate::net::{Bind, Parse, ProtocolMessage, Query};
 use crate::unique_id::UniqueId;
 
 use super::insert::build_split_requests;
+use super::offset::OffsetPlan;
 use super::{aggregate::AggregateRewritePlan, Error, InsertSplit, ShardingKeyUpdate};
 
 /// Statement rewrite plan.
@@ -42,13 +43,27 @@ pub struct RewritePlan {
     /// Sharding key is being updated, we need to execute
     /// a multi-step plan.
     pub(crate) sharding_key_update: Option<ShardingKeyUpdate>,
+
+    /// Limit/offset pagination.
+    pub(crate) offset: Option<OffsetPlan>,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) enum RewriteResult {
-    InPlace,
+    InPlace { offset: Option<OffsetPlan> },
     InsertSplit(Vec<ClientRequest>),
     ShardingKeyUpdate(ShardingKeyUpdate),
+}
+
+impl RewriteResult {
+    pub(crate) fn apply_after_parser(&self, request: &mut ClientRequest) -> Result<(), Error> {
+        match self {
+            Self::InPlace {
+                offset: Some(ref offset),
+            } => offset.apply_after_parser(request),
+            _ => Ok(()),
+        }
+    }
 }
 
 impl RewritePlan {
@@ -65,6 +80,7 @@ impl RewritePlan {
             };
             bind.push_param(param, format);
         }
+
         Ok(())
     }
 
@@ -122,7 +138,9 @@ impl RewritePlan {
             }
         }
 
-        Ok(RewriteResult::InPlace)
+        Ok(RewriteResult::InPlace {
+            offset: self.offset.clone(),
+        })
     }
 }
 

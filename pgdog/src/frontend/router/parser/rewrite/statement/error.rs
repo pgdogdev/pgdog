@@ -34,4 +34,7 @@ pub enum Error {
 
     #[error("primary key is missing")]
     MissingPrimaryKey,
+
+    #[error("missing AST on request")]
+    MissingAst,
 }

@@ -96,6 +96,11 @@ impl QueryEngine {
                     context.client_request.messages,
                     command,
                 );
+
+                // Apply post-parser rewrites, e.g. offset/limit.
+                if let Some(ref rewrite_result) = &context.rewrite_result {
+                    rewrite_result.apply_after_parser(context.client_request)?;
+                }
             }
             Err(err) => {
                 self.error_response(context, ErrorResponse::syntax(err.to_string().as_str()))

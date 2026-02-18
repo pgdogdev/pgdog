@@ -229,11 +229,18 @@ impl Route {
     }
 
     pub fn should_buffer(&self) -> bool {
-        !self.order_by().is_empty() || !self.aggregate().is_empty() || self.distinct().is_some()
+        !self.order_by().is_empty()
+            || !self.aggregate().is_empty()
+            || self.distinct().is_some()
+            || self.limit().offset.is_some()
     }
 
     pub fn limit(&self) -> &Limit {
         &self.limit
+    }
+
+    pub fn set_limit(&mut self, limit: Limit) {
+        self.limit = limit;
     }
 
     pub fn with_read(mut self, read: bool) -> Self {
@@ -584,6 +591,81 @@ mod test {
             ShardWithPriority::new_comment(shard.clone())
                 < ShardWithPriority::new_override_dry_run(shard.clone())
         );
+    }
+
+    #[test]
+    fn test_should_buffer_empty_route() {
+        let route = Route::default();
+        assert!(!route.should_buffer());
+    }
+
+    #[test]
+    fn test_should_buffer_order_by() {
+        let route = Route::select(
+            ShardWithPriority::new_table(Shard::All),
+            vec![OrderBy::Asc(0)],
+            Default::default(),
+            Limit::default(),
+            None,
+        );
+        assert!(route.should_buffer());
+    }
+
+    #[test]
+    fn test_should_buffer_limit_only() {
+        let route = Route::select(
+            ShardWithPriority::new_table(Shard::All),
+            vec![],
+            Default::default(),
+            Limit {
+                limit: Some(10),
+                offset: None,
+            },
+            None,
+        );
+        assert!(!route.should_buffer());
+    }
+
+    #[test]
+    fn test_should_buffer_offset_only() {
+        let route = Route::select(
+            ShardWithPriority::new_table(Shard::All),
+            vec![],
+            Default::default(),
+            Limit {
+                limit: None,
+                offset: Some(5),
+            },
+            None,
+        );
+        assert!(route.should_buffer());
+    }
+
+    #[test]
+    fn test_should_buffer_limit_and_offset() {
+        let route = Route::select(
+            ShardWithPriority::new_table(Shard::All),
+            vec![],
+            Default::default(),
+            Limit {
+                limit: Some(10),
+                offset: Some(5),
+            },
+            None,
+        );
+        assert!(route.should_buffer());
+    }
+
+    #[test]
+    fn test_should_buffer_no_limit_no_offset() {
+        let route = Route::select(
+            ShardWithPriority::new_table(Shard::All),
+            vec![],
+            Default::default(),
+            Limit::default(),
+            None,
+        );
+        assert!(!route.should_buffer());
     }
 
     #[test]

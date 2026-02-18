@@ -278,6 +278,18 @@ impl Bind {
         self.original = None;
     }
 
+    /// Overwrite an existing parameter at the given index.
+    /// Returns `false` if the index is out of bounds.
+    pub fn set_param(&mut self, index: usize, param: Parameter) -> bool {
+        if let Some(slot) = self.params.get_mut(index) {
+            *slot = param;
+            self.original = None;
+            true
+        } else {
+            false
+        }
+    }
+
     /// Get the effective format for new parameters.
     pub fn default_param_format(&self) -> Format {
         if self.codes.len() == 1 {
@@ -477,6 +489,20 @@ mod test {
             }
             assert_eq!(msg.code(), c);
         }
+    }
+
+    #[test]
+    fn test_set_param() {
+        let mut bind = Bind::new_params("test", &[Parameter::new(b"10"), Parameter::new(b"5")]);
+        assert_eq!(bind.params_raw()[0].data.as_ref(), b"10");
+        assert_eq!(bind.params_raw()[1].data.as_ref(), b"5");
+
+        bind.set_param(0, Parameter::new(b"15"));
+        bind.set_param(1, Parameter::new(b"0"));
+
+        assert_eq!(bind.params_raw()[0].data.as_ref(), b"15");
+        assert_eq!(bind.params_raw()[1].data.as_ref(), b"0");
+        assert_eq!(bind.params_raw().len(), 2);
     }
 
     #[test]
