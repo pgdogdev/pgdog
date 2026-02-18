@@ -1,6 +1,7 @@
 use crate::frontend::router::parser::rewrite::statement::{
     offset::OffsetPlan, plan::RewriteResult,
 };
+use crate::frontend::router::parser::route::{Route, Shard, ShardWithPriority};
 use crate::frontend::router::parser::Limit;
 
 use super::prelude::*;
@@ -19,6 +20,16 @@ async fn run_test(messages: Vec<ProtocolMessage>) -> Option<OffsetPlan> {
         Some(RewriteResult::InPlace { offset }) => offset,
         other => panic!("expected InPlace, got {:?}", other),
     }
+}
+
+fn cross_shard_route() -> Route {
+    Route::select(
+        ShardWithPriority::new_table(Shard::All),
+        vec![],
+        Default::default(),
+        Limit::default(),
+        None,
+    )
 }
 
 #[tokio::test]
@@ -103,4 +114,131 @@ async fn test_offset_limit_no_select() {
     .await;
 
     assert!(offset.is_none());
+}
+
+#[tokio::test]
+async fn test_offset_with_unique_id_simple() {
+    unsafe {
+        std::env::set_var("NODE_ID", "pgdog-1");
+    }
+    let sql = "SELECT pgdog.unique_id() FROM test LIMIT 10 OFFSET 5";
+    let mut client = test_sharded_client();
+    client.client_request = ClientRequest::from(vec![ProtocolMessage::Query(Query::new(sql))]);
+
+    let mut engine = QueryEngine::from_client(&client).unwrap();
+    let mut context = QueryEngineContext::new(&mut client);
+
+    engine.parse_and_rewrite(&mut context).await.unwrap();
+
+    // After parse_and_rewrite, the Query message should have unique_id replaced.
+    let rewritten_sql = match &context.client_request.messages[0] {
+        ProtocolMessage::Query(q) => q.query().to_owned(),
+        _ => panic!("expected Query"),
+    };
+    assert!(
+        !rewritten_sql.contains("pgdog.unique_id"),
+        "unique_id should be replaced: {rewritten_sql}"
+    );
+    assert!(
+        rewritten_sql.contains("::bigint"),
+        "should have bigint cast: {rewritten_sql}"
+    );
+
+    // apply_after_parser with a cross-shard route.
+    context.client_request.route = Some(cross_shard_route());
+    context
+        .rewrite_result
+        .as_ref()
+        .unwrap()
+        .apply_after_parser(context.client_request)
+        .unwrap();
+
+    let final_sql = match &context.client_request.messages[0] {
+        ProtocolMessage::Query(q) => q.query().to_owned(),
+        _ => panic!("expected Query"),
+    };
+
+    // unique_id rewrite must survive.
+    assert!(
+        !final_sql.contains("pgdog.unique_id"),
+        "unique_id rewrite must survive apply_after_parser: {final_sql}"
+    );
+    assert!(
+        final_sql.contains("::bigint"),
+        "bigint cast must survive: {final_sql}"
+    );
+    // LIMIT/OFFSET must be rewritten for cross-shard.
+    assert!(
+        final_sql.contains("LIMIT 15"),
+        "LIMIT should be 10+5=15: {final_sql}"
+    );
+    assert!(
+        final_sql.contains("OFFSET 0"),
+        "OFFSET should be 0: {final_sql}"
+    );
+}
+
+#[tokio::test]
+async fn test_offset_with_unique_id_extended() {
+    unsafe {
+        std::env::set_var("NODE_ID", "pgdog-1");
+    }
+    let sql = "SELECT pgdog.unique_id(), $1 FROM test LIMIT $2 OFFSET $3";
+    let mut client = test_sharded_client();
+    client.client_request = ClientRequest::from(vec![
+        ProtocolMessage::Parse(Parse::new_anonymous(sql)),
+        ProtocolMessage::Bind(Bind::new_params(
+            "",
+            &[
+                Parameter::new(b"hello"),
+                Parameter::new(b"10"),
+                Parameter::new(b"5"),
+            ],
+        )),
+        ProtocolMessage::Execute(Execute::new()),
+        ProtocolMessage::Sync(Sync),
+    ]);
+
+    let mut engine = QueryEngine::from_client(&client).unwrap();
+    let mut context = QueryEngineContext::new(&mut client);
+
+    engine.parse_and_rewrite(&mut context).await.unwrap();
+
+    // After parse_and_rewrite, Parse should have unique_id rewritten to $4::bigint.
+    let rewritten_sql = match &context.client_request.messages[0] {
+        ProtocolMessage::Parse(p) => p.query().to_owned(),
+        _ => panic!("expected Parse"),
+    };
+    assert_eq!(
+        rewritten_sql,
+        "SELECT $4::bigint, $1 FROM test LIMIT $2 OFFSET $3"
+    );
+
+    // apply_after_parser with cross-shard route should only rewrite Bind params.
+    context.client_request.route = Some(cross_shard_route());
+    context
+        .rewrite_result
+        .as_ref()
+        .unwrap()
+        .apply_after_parser(context.client_request)
+        .unwrap();
+
+    // SQL unchanged (all limit/offset are params).
+    let final_sql = match &context.client_request.messages[0] {
+        ProtocolMessage::Parse(p) => p.query().to_owned(),
+        _ => panic!("expected Parse"),
+    };
+    assert_eq!(
+        final_sql, "SELECT $4::bigint, $1 FROM test LIMIT $2 OFFSET $3",
+        "SQL must be unchanged for all-param case"
+    );
+
+    // Bind params: $1=hello unchanged, $2=limit rewritten to 15, $3=offset rewritten to 0.
+    if let ProtocolMessage::Bind(bind) = &context.client_request.messages[1] {
+        assert_eq!(bind.params_raw()[0].data.as_ref(), b"hello");
+        assert_eq!(bind.params_raw()[1].data.as_ref(), b"15");
+        assert_eq!(bind.params_raw()[2].data.as_ref(), b"0");
+    } else {
+        panic!("expected Bind");
+    }
 }
