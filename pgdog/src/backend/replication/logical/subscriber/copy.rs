@@ -170,7 +170,7 @@ impl CopySubscriber {
     }
 
     async fn flush(&mut self) -> Result<(), Error> {
-        let result = self.copy.shard(&self.buffer)?;
+        let result = self.copy.shard(&self.buffer).await?;
         self.buffer.clear();
 
         for row in &result {

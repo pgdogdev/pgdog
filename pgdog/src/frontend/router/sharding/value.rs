@@ -5,7 +5,7 @@ use uuid::Uuid;
 use super::{Error, Hasher};
 use crate::{
     config::DataType,
-    net::{Format, FromDataType, ParameterWithFormat, Vector},
+    net::{bind::Parameter, Format, FromDataType, ParameterWithFormat, Vector},
 };
 use bytes::Bytes;
 
@@ -14,6 +14,18 @@ pub enum Data<'a> {
     Text(&'a str),
     Binary(&'a [u8]),
     Integer(i64),
+}
+
+impl Data<'_> {
+    /// Get parameter with format encoding.
+    pub(crate) fn parameter_with_format(&self) -> (Parameter, Format) {
+        let format = match self {
+            Self::Text(_) => Format::Text,
+            _ => Format::Binary,
+        };
+
+        (self.clone().into(), format)
+    }
 }
 
 impl<'a> From<&'a str> for Data<'a> {
@@ -37,6 +49,25 @@ impl From<i64> for Data<'_> {
 impl<'a> From<&'a Bytes> for Data<'a> {
     fn from(value: &'a Bytes) -> Self {
         Self::Binary(&value[..])
+    }
+}
+
+impl From<Data<'_>> for Parameter {
+    fn from(value: Data<'_>) -> Self {
+        match value {
+            Data::Text(text) => Parameter {
+                len: text.len() as i32,
+                data: text.as_bytes().to_vec().into(),
+            },
+            Data::Binary(binary) => Parameter {
+                len: binary.len() as i32,
+                data: binary.to_vec().into(),
+            },
+            Data::Integer(integer) => Parameter {
+                len: 8,
+                data: integer.to_be_bytes().to_vec().into(),
+            },
+        }
     }
 }
 

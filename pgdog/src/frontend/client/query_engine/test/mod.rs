@@ -7,6 +7,7 @@ use crate::{
     net::{Parameters, Stream},
 };
 
+mod copy;
 mod omni;
 pub mod prelude;
 mod rewrite_extended;

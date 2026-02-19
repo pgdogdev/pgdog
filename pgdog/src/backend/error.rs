@@ -137,6 +137,9 @@ pub enum Error {
 
     #[error("no foreign key path found from table \"{table}\" to any sharded table")]
     NoForeignKeyPath { table: String },
+
+    #[error("sharding error: {0}")]
+    Sharding(String),
 }
 
 impl From<crate::frontend::Error> for Error {

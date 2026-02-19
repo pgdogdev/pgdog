@@ -1,5 +1,6 @@
 //! Schema operations.
 pub mod columns;
+pub mod fk_lookup;
 pub mod join;
 pub mod relation;
 pub mod sync;
@@ -7,6 +8,7 @@ pub mod sync;
 #[cfg(test)]
 pub mod test_helpers;
 
+pub use fk_lookup::FkLookup;
 use fnv::FnvHashMap;
 pub use join::Join;
 pub use pgdog_stats::{

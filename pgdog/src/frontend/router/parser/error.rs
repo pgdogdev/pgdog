@@ -16,6 +16,9 @@ pub enum Error {
     #[error("no sharding column in CSV")]
     NoShardingColumn,
 
+    #[error("no primary key column in row")]
+    NoPrimaryKeyColumn,
+
     #[error("{0}")]
     Net(#[from] crate::net::Error),
 

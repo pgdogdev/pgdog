@@ -765,6 +765,63 @@ mod test {
         pub fn set_read_write_strategy(&mut self, rw_strategy: ReadWriteStrategy) {
             self.rw_strategy = rw_strategy;
         }
+
+        /// Create a test cluster with custom schema and sharding tables.
+        /// Unlike new_test(), this doesn't preset the schema on shards,
+        /// allowing the caller to set their own schema.
+        pub fn new_test_with_sharding(
+            sharded_tables: ShardedTables,
+            db_schema: crate::backend::schema::Schema,
+        ) -> Self {
+            let config = ConfigAndUsers::default();
+            let identifier = Arc::new(DatabaseUser {
+                user: "pgdog".into(),
+                database: "pgdog".into(),
+            });
+            let primary = &Some(PoolConfig {
+                address: Address::new_test(),
+                config: Config::default(),
+            });
+            let replicas = &[PoolConfig {
+                address: Address::new_test(),
+                config: Config::default(),
+            }];
+
+            let sharded_schemas = ShardedSchemas::new(vec![]);
+
+            let shards = (0..2)
+                .into_iter()
+                .map(|number| {
+                    let shard = Shard::new(ShardConfig {
+                        number,
+                        primary,
+                        replicas,
+                        lb_strategy: LoadBalancingStrategy::Random,
+                        rw_split: ReadWriteSplit::IncludePrimary,
+                        identifier: identifier.clone(),
+                        lsn_check_interval: Duration::MAX,
+                    });
+                    // Set the custom schema on each shard
+                    shard.set_test_schema(db_schema.clone());
+                    shard
+                })
+                .collect::<Vec<_>>();
+
+            Cluster {
+                sharded_tables,
+                sharded_schemas,
+                shards,
+                identifier,
+                prepared_statements: config.config.general.prepared_statements,
+                dry_run: config.config.general.dry_run,
+                expanded_explain: config.config.general.expanded_explain,
+                query_parser: config.config.general.query_parser,
+                rewrite: config.config.rewrite.clone(),
+                two_phase_commit: config.config.general.two_phase_commit,
+                two_phase_commit_auto: config.config.general.two_phase_commit_auto.unwrap_or(false),
+                ..Default::default()
+            }
+        }
     }
 
     #[test]

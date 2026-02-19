@@ -2,6 +2,7 @@ use std::collections::{HashSet, VecDeque};
 
 use serde::{Deserialize, Serialize};
 
+use crate::config::ShardedTable;
 use crate::{backend::ShardingSchema, frontend::router::parser::OwnedColumn};
 
 use super::Error;
@@ -24,8 +25,18 @@ pub struct Join {
     pub path: Vec<JoinStep>,
     /// The sharding key column in the final table.
     pub sharding_column: OwnedColumn,
-    /// The SQL query to fetch the sharding key value.
+    /// The SQL query to fetch the sharding key value using the FK value.
     pub query: String,
+    /// The sharded table configuration.
+    pub sharded_table: ShardedTable,
+}
+
+impl Join {
+    /// Get the FK column name for FK lookup.
+    /// Returns the first FK column in the path that should be used for lookup.
+    pub fn fk_column(&self) -> Option<&str> {
+        self.path.first().map(|step| step.from.name.as_str())
+    }
 }
 
 impl Schema {
@@ -47,7 +58,9 @@ impl Schema {
         let start_pk = Self::find_primary_key_in_relation(start);
 
         // Check if start table itself has the sharding key
-        if let Some(sharding_col) = Self::find_sharding_column_in_relation(start, sharding) {
+        if let Some((sharding_col, sharded_table)) =
+            Self::find_sharding_column_in_relation(start, sharding)
+        {
             let query = self.build_direct_query(
                 start_schema,
                 start_table,
@@ -62,6 +75,7 @@ impl Schema {
                     schema: Some(start_schema.to_string()),
                 },
                 query,
+                sharded_table,
             });
         }
 
@@ -113,16 +127,11 @@ impl Schema {
                     });
 
                     // Check if target table has the sharding key
-                    if let Some(sharding_col) =
+                    if let Some((sharding_col, sharded_table)) =
                         Self::find_sharding_column_in_relation(target_relation, sharding)
                     {
-                        let query = self.build_join_query(
-                            start_schema,
-                            start_table,
-                            &new_path,
-                            &sharding_col,
-                            start_pk.as_deref(),
-                        );
+                        // Build query that directly looks up sharding key via FK value
+                        let query = Self::build_fk_lookup_query(&new_path, &sharding_col);
                         return Ok(Join {
                             path: new_path,
                             sharding_column: OwnedColumn {
@@ -131,6 +140,7 @@ impl Schema {
                                 schema: Some(target_schema.clone()),
                             },
                             query,
+                            sharded_table,
                         });
                     }
 
@@ -156,10 +166,11 @@ impl Schema {
     }
 
     /// Check if a relation has a sharding key column.
+    /// Returns the column name and the matching ShardedTable config.
     fn find_sharding_column_in_relation(
         relation: &StatsRelation,
         sharding: &ShardingSchema,
-    ) -> Option<String> {
+    ) -> Option<(String, ShardedTable)> {
         for sharded_table in sharding.tables.tables() {
             // Match by schema if specified
             if let Some(ref schema) = sharded_table.schema {
@@ -177,7 +188,7 @@ impl Schema {
 
             // Check if the table has the sharding column
             if relation.has_column(&sharded_table.column) {
-                return Some(sharded_table.column.clone());
+                return Some((sharded_table.column.clone(), sharded_table.clone()));
             }
         }
 
@@ -207,18 +218,35 @@ impl Schema {
         query
     }
 
-    /// Build a JOIN query from the path.
-    fn build_join_query(
-        &self,
-        start_schema: &str,
-        start_table: &str,
-        path: &[JoinStep],
-        sharding_col: &str,
-        primary_key: Option<&str>,
-    ) -> String {
+    /// Build a query for FK lookup.
+    /// Takes FK value as $1 and queries parent table(s) to get sharding key.
+    fn build_fk_lookup_query(path: &[JoinStep], sharding_col: &str) -> String {
         if path.is_empty() {
-            return self.build_direct_query(start_schema, start_table, sharding_col, primary_key);
+            return String::new();
         }
+
+        // For single-hop: SELECT sharding_col FROM parent WHERE pk = $1
+        if path.len() == 1 {
+            let step = &path[0];
+            let to_schema = step.to.schema.as_deref().unwrap_or("public");
+            let to_table = step.to.table.as_deref().unwrap_or("");
+            return format!(
+                "SELECT \"{}\".\"{}\".\"{}\" FROM \"{}\".\"{}\" WHERE \"{}\".\"{}\".\"{}\" = $1",
+                to_schema,
+                to_table,
+                sharding_col,
+                to_schema,
+                to_table,
+                to_schema,
+                to_table,
+                step.to.name
+            );
+        }
+
+        // For multi-hop: start from first target and join to final table
+        let first_step = &path[0];
+        let first_schema = first_step.to.schema.as_deref().unwrap_or("public");
+        let first_table = first_step.to.table.as_deref().unwrap_or("");
 
         let last_step = path.last().unwrap();
         let target_schema = last_step.to.schema.as_deref().unwrap_or("public");
@@ -226,10 +254,11 @@ impl Schema {
 
         let mut query = format!(
             "SELECT \"{}\".\"{}\".\"{}\" FROM \"{}\".\"{}\"",
-            target_schema, target_table, sharding_col, start_schema, start_table
+            target_schema, target_table, sharding_col, first_schema, first_table
         );
 
-        for step in path {
+        // Build joins from path[1..] (skip first step, we're starting from its target)
+        for step in &path[1..] {
             let from_schema = step.from.schema.as_deref().unwrap_or("public");
             let from_table = step.from.table.as_deref().unwrap_or("");
             let to_schema = step.to.schema.as_deref().unwrap_or("public");
@@ -248,12 +277,11 @@ impl Schema {
             ));
         }
 
-        if let Some(pk) = primary_key {
-            query.push_str(&format!(
-                " WHERE \"{}\".\"{}\".\"{}\" = $1",
-                start_schema, start_table, pk
-            ));
-        }
+        // WHERE uses the first target's referenced column
+        query.push_str(&format!(
+            " WHERE \"{}\".\"{}\".\"{}\" = $1",
+            first_schema, first_table, first_step.to.name
+        ));
 
         query
     }
@@ -329,9 +357,10 @@ mod test {
         assert_eq!(join.path[0].to.table, Some("users".into()));
         assert_eq!(join.path[0].to.name, "id");
         assert_eq!(join.sharding_column.name, "user_id");
+        // Query directly looks up sharding key from parent table using FK value
         assert_eq!(
             join.query,
-            r#"SELECT "public"."users"."user_id" FROM "public"."orders" JOIN "public"."users" ON "public"."orders"."user_id" = "public"."users"."id" WHERE "public"."orders"."id" = $1"#
+            r#"SELECT "public"."users"."user_id" FROM "public"."users" WHERE "public"."users"."id" = $1"#
         );
     }
 
@@ -351,9 +380,10 @@ mod test {
         assert_eq!(join.path[1].from.table, Some("orders".into()));
         assert_eq!(join.path[1].to.table, Some("users".into()));
         assert_eq!(join.sharding_column.name, "user_id");
+        // Query starts from first target (orders) and joins to find sharding key
         assert_eq!(
             join.query,
-            r#"SELECT "public"."users"."user_id" FROM "public"."order_items" JOIN "public"."orders" ON "public"."order_items"."order_id" = "public"."orders"."id" JOIN "public"."users" ON "public"."orders"."user_id" = "public"."users"."id" WHERE "public"."order_items"."id" = $1"#
+            r#"SELECT "public"."users"."user_id" FROM "public"."orders" JOIN "public"."users" ON "public"."orders"."user_id" = "public"."users"."id" WHERE "public"."orders"."id" = $1"#
         );
     }
 

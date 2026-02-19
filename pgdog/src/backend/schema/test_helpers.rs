@@ -229,6 +229,13 @@ impl ShardingBuilder {
         self
     }
 
+    pub fn database(mut self, database: &str) -> Self {
+        if let Some(table) = self.tables.last_mut() {
+            table.database = database.into();
+        }
+        self
+    }
+
     pub fn build(self) -> ShardingSchema {
         ShardingSchema {
             shards: self.shards,
