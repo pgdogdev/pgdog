@@ -99,16 +99,15 @@ impl Config {
     pub fn new(general: &General, database: &Database, user: &User, is_only_replica: bool) -> Self {
         Self {
             inner: pgdog_stats::Config {
-                min: database
+                min: user
                     .min_pool_size
-                    .unwrap_or(user.min_pool_size.unwrap_or(general.min_pool_size)),
-                max: database
+                    .unwrap_or(database.min_pool_size.unwrap_or(general.min_pool_size)),
+                max: user
                     .pool_size
-                    .unwrap_or(user.pool_size.unwrap_or(general.default_pool_size)),
+                    .unwrap_or(database.pool_size.unwrap_or(general.default_pool_size)),
                 max_age: Duration::from_millis(
-                    database
-                        .server_lifetime
-                        .unwrap_or(user.server_lifetime.unwrap_or(general.server_lifetime)),
+                    user.server_lifetime
+                        .unwrap_or(database.server_lifetime.unwrap_or(general.server_lifetime)),
                 ),
                 healthcheck_interval: Duration::from_millis(general.healthcheck_interval),
                 idle_healthcheck_interval: Duration::from_millis(general.idle_healthcheck_interval),
@@ -116,29 +115,26 @@ impl Config {
                 healthcheck_timeout: Duration::from_millis(general.healthcheck_timeout),
                 ban_timeout: Duration::from_millis(general.ban_timeout),
                 rollback_timeout: Duration::from_millis(general.rollback_timeout),
-                statement_timeout: if let Some(statement_timeout) = database.statement_timeout {
-                    Some(statement_timeout)
-                } else {
-                    user.statement_timeout
-                }
-                .map(Duration::from_millis),
+                statement_timeout: user
+                    .statement_timeout
+                    .or(database.statement_timeout)
+                    .map(Duration::from_millis),
                 replication_mode: user.replication_mode,
-                pooler_mode: database
+                pooler_mode: user
                     .pooler_mode
-                    .unwrap_or(user.pooler_mode.unwrap_or(general.pooler_mode)),
+                    .unwrap_or(database.pooler_mode.unwrap_or(general.pooler_mode)),
                 connect_timeout: Duration::from_millis(general.connect_timeout),
                 connect_attempts: general.connect_attempts,
                 connect_attempt_delay: general.connect_attempt_delay(),
                 query_timeout: Duration::from_millis(general.query_timeout),
                 checkout_timeout: Duration::from_millis(general.checkout_timeout),
                 idle_timeout: Duration::from_millis(
-                    database
-                        .idle_timeout
-                        .unwrap_or(user.idle_timeout.unwrap_or(general.idle_timeout)),
+                    user.idle_timeout
+                        .unwrap_or(database.idle_timeout.unwrap_or(general.idle_timeout)),
                 ),
-                read_only: database
+                read_only: user
                     .read_only
-                    .unwrap_or(user.read_only.unwrap_or_default()),
+                    .unwrap_or(database.read_only.unwrap_or_default()),
                 prepared_statements_limit: general.prepared_statements_limit,
                 stats_period: Duration::from_millis(general.stats_period),
                 bannable: !is_only_replica,
@@ -164,6 +160,7 @@ impl Default for Config {
 #[cfg(test)]
 mod test {
     use super::*;
+    use pgdog_config::PoolerMode;
 
     fn create_database(role: Role) -> Database {
         Database {
@@ -184,6 +181,42 @@ mod test {
         let config = Config::new(&general, &database, &user, false);
 
         assert!(config.role_detection);
+    }
+
+    #[test]
+    fn test_user_takes_precedence_over_database() {
+        let general = General::default();
+        let user = User {
+            pool_size: Some(5),
+            min_pool_size: Some(5),
+            server_lifetime: Some(5),
+            statement_timeout: Some(5),
+            pooler_mode: Some(PoolerMode::Session),
+            idle_timeout: Some(5),
+            read_only: Some(true),
+            ..Default::default()
+        };
+
+        let database = Database {
+            pool_size: Some(10),
+            min_pool_size: Some(10),
+            server_lifetime: Some(10),
+            statement_timeout: Some(10),
+            pooler_mode: Some(PoolerMode::Transaction),
+            idle_timeout: Some(10),
+            read_only: Some(false),
+            ..Default::default()
+        };
+
+        let config = Config::new(&general, &database, &user, false);
+
+        assert_eq!(5, config.max);
+        assert_eq!(5, config.min);
+        assert_eq!(Duration::from_millis(5), config.max_age);
+        assert_eq!(Some(Duration::from_millis(5)), config.statement_timeout);
+        assert_eq!(PoolerMode::Session, config.pooler_mode);
+        assert_eq!(Duration::from_millis(5), config.idle_timeout);
+        assert_eq!(true, config.read_only);
     }
 
     #[test]
