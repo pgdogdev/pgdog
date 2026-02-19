@@ -160,6 +160,7 @@ impl Default for Config {
 #[cfg(test)]
 mod test {
     use super::*;
+    use pgdog_config::PoolerMode;
 
     fn create_database(role: Role) -> Database {
         Database {
@@ -187,16 +188,35 @@ mod test {
         let general = General::default();
         let user = User {
             pool_size: Some(5),
+            min_pool_size: Some(5),
+            server_lifetime: Some(5),
+            statement_timeout: Some(5),
+            pooler_mode: Some(PoolerMode::Session),
+            idle_timeout: Some(5),
+            read_only: Some(true),
             ..Default::default()
         };
+
         let database = Database {
             pool_size: Some(10),
+            min_pool_size: Some(10),
+            server_lifetime: Some(10),
+            statement_timeout: Some(10),
+            pooler_mode: Some(PoolerMode::Transaction),
+            idle_timeout: Some(10),
+            read_only: Some(false),
             ..Default::default()
         };
 
         let config = Config::new(&general, &database, &user, false);
 
         assert_eq!(5, config.max);
+        assert_eq!(5, config.min);
+        assert_eq!(Duration::from_millis(5), config.max_age);
+        assert_eq!(Some(Duration::from_millis(5)), config.statement_timeout);
+        assert_eq!(PoolerMode::Session, config.pooler_mode);
+        assert_eq!(Duration::from_millis(5), config.idle_timeout);
+        assert_eq!(true, config.read_only);
     }
 
     #[test]
