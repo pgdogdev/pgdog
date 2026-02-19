@@ -115,29 +115,26 @@ impl Config {
                 healthcheck_timeout: Duration::from_millis(general.healthcheck_timeout),
                 ban_timeout: Duration::from_millis(general.ban_timeout),
                 rollback_timeout: Duration::from_millis(general.rollback_timeout),
-                statement_timeout: if let Some(statement_timeout) = database.statement_timeout {
-                    Some(statement_timeout)
-                } else {
-                    user.statement_timeout
-                }
-                .map(Duration::from_millis),
+                statement_timeout: user
+                    .statement_timeout
+                    .or(database.statement_timeout)
+                    .map(Duration::from_millis),
                 replication_mode: user.replication_mode,
-                pooler_mode: database
+                pooler_mode: user
                     .pooler_mode
-                    .unwrap_or(user.pooler_mode.unwrap_or(general.pooler_mode)),
+                    .unwrap_or(database.pooler_mode.unwrap_or(general.pooler_mode)),
                 connect_timeout: Duration::from_millis(general.connect_timeout),
                 connect_attempts: general.connect_attempts,
                 connect_attempt_delay: general.connect_attempt_delay(),
                 query_timeout: Duration::from_millis(general.query_timeout),
                 checkout_timeout: Duration::from_millis(general.checkout_timeout),
                 idle_timeout: Duration::from_millis(
-                    database
-                        .idle_timeout
-                        .unwrap_or(user.idle_timeout.unwrap_or(general.idle_timeout)),
+                    user.idle_timeout
+                        .unwrap_or(database.idle_timeout.unwrap_or(general.idle_timeout)),
                 ),
-                read_only: database
+                read_only: user
                     .read_only
-                    .unwrap_or(user.read_only.unwrap_or_default()),
+                    .unwrap_or(database.read_only.unwrap_or_default()),
                 prepared_statements_limit: general.prepared_statements_limit,
                 stats_period: Duration::from_millis(general.stats_period),
                 bannable: !is_only_replica,
