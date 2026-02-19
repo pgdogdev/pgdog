@@ -134,6 +134,9 @@ pub enum Error {
 
     #[error("unsupported aggregation {function}: {reason}")]
     UnsupportedAggregation { function: String, reason: String },
+
+    #[error("no foreign key path found from table \"{table}\" to any sharded table")]
+    NoForeignKeyPath { table: String },
 }
 
 impl From<crate::frontend::Error> for Error {

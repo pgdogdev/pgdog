@@ -360,9 +360,9 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
         Ok(None)
     }
 
-    /// Check that the query references a table that contains a sharded
-    /// column. This check is needed in case sharded tables config
-    /// doesn't specify a table name and should short-circuit if it does.
+    /// Check that the query references a table that can participate in sharded routing.
+    /// Uses the precomputed `is_sharded` flag on relations which accounts for both
+    /// direct sharding keys and FK join paths to sharded tables.
     pub fn is_sharded(
         &mut self,
         db_schema: &Schema,
@@ -374,37 +374,10 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
             return false;
         }
 
-        let sharded_tables = self.schema.tables.tables();
-
-        // Separate configs with explicit table names from those without
-        let (named, nameless): (Vec<_>, Vec<_>) =
-            sharded_tables.iter().partition(|t| t.name.is_some());
-
         for table in self.tables() {
-            // Check named sharded table configs (fast path, no schema lookup needed)
-            for config in &named {
-                if let Some(ref name) = config.name {
-                    if table.name == name {
-                        // Also check schema match if specified in config
-                        if let Some(ref config_schema) = config.schema {
-                            if table.schema != Some(config_schema.as_str()) {
-                                continue;
-                            }
-                        }
-                        return true;
-                    }
-                }
-            }
-
-            // Check nameless configs by looking up the table in the db schema
-            // to see if it has the sharding column
-            if !nameless.is_empty() {
-                if let Some(relation) = db_schema.table(*table, user, search_path) {
-                    for config in &nameless {
-                        if relation.has_column(&config.column) {
-                            return true;
-                        }
-                    }
+            if let Some(relation) = db_schema.table(*table, user, search_path) {
+                if relation.is_sharded {
+                    return true;
                 }
             }
         }
@@ -2565,7 +2538,9 @@ mod test {
 
     fn run_is_sharded_test(stmt: &str) -> bool {
         let schema = make_omnisharded_sharding_schema();
-        let db_schema = make_omnisharded_db_schema();
+        let mut db_schema = make_omnisharded_db_schema();
+        // Compute joins to set is_sharded flags on relations
+        db_schema.computed_sharded_joins(&schema);
         let raw = pg_query::parse(stmt)
             .unwrap()
             .protobuf
@@ -2643,5 +2618,88 @@ mod test {
             !result,
             "DELETE from omnisharded table should not be sharded"
         );
+    }
+
+    /// Test helper for FK join sharding detection.
+    /// Creates a schema with users (sharding key) and orders (FK to users).
+    fn run_fk_join_sharding_test(stmt: &str) -> bool {
+        use crate::backend::schema::test_helpers::prelude::*;
+
+        let mut db_schema = schema()
+            .relation(
+                table("users")
+                    .oid(1001)
+                    .column(pk("id"))
+                    .column(col("user_id")),
+            )
+            .relation(
+                table("orders")
+                    .oid(1002)
+                    .column(pk("id"))
+                    .column(fk("user_id", "users", "id")),
+            )
+            .relation(table("isolated").oid(1003).column(pk("id")))
+            .build();
+
+        let sharding_schema = sharding().sharded_table("users", "user_id").build();
+        db_schema.computed_sharded_joins(&sharding_schema);
+
+        let raw = pg_query::parse(stmt)
+            .unwrap()
+            .protobuf
+            .stmts
+            .first()
+            .cloned()
+            .unwrap();
+
+        let mut parser = StatementParser::from_raw(&raw, None, &sharding_schema, None).unwrap();
+        parser.is_sharded(&db_schema, "test_user", None)
+    }
+
+    #[test]
+    fn test_is_sharded_detects_fk_join_to_sharded_table() {
+        // orders doesn't have sharding key, but FK joins to users which does
+        let result = run_fk_join_sharding_test("SELECT * FROM orders WHERE id = 1");
+        assert!(result, "orders should be sharded via FK join to users");
+    }
+
+    #[test]
+    fn test_is_sharded_direct_table_with_sharding_key() {
+        // users has the sharding key directly
+        let result = run_fk_join_sharding_test("SELECT * FROM users WHERE id = 1");
+        assert!(result, "users has sharding key directly");
+    }
+
+    #[test]
+    fn test_is_sharded_table_without_fk_path() {
+        // isolated has no FK path to any sharded table
+        let result = run_fk_join_sharding_test("SELECT * FROM isolated WHERE id = 1");
+        assert!(!result, "isolated has no FK path to sharded table");
+    }
+
+    #[test]
+    fn test_is_sharded_join_query_with_fk_table() {
+        // Query joining orders (FK) with users (sharded)
+        let result =
+            run_fk_join_sharding_test("SELECT * FROM orders o JOIN users u ON o.user_id = u.id");
+        assert!(result, "join query with sharded table should be sharded");
+    }
+
+    #[test]
+    fn test_is_sharded_insert_on_fk_table() {
+        let result = run_fk_join_sharding_test("INSERT INTO orders (id, user_id) VALUES (1, 100)");
+        assert!(result, "insert on FK table should be sharded");
+    }
+
+    #[test]
+    fn test_is_sharded_update_on_fk_table() {
+        let result = run_fk_join_sharding_test("UPDATE orders SET user_id = 100 WHERE id = 1");
+        assert!(result, "update on FK table should be sharded");
+    }
+
+    #[test]
+    fn test_is_sharded_delete_on_fk_table() {
+        let result = run_fk_join_sharding_test("DELETE FROM orders WHERE id = 1");
+        assert!(result, "delete on FK table should be sharded");
     }
 }

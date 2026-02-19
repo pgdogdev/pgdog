@@ -126,12 +126,20 @@ impl Shard {
     }
 
     /// Load schema from the shard's primary.
-    pub async fn update_schema(&self) -> Result<(), crate::backend::Error> {
+    pub async fn update_schema(
+        &self,
+        sharding: &crate::backend::ShardingSchema,
+    ) -> Result<(), crate::backend::Error> {
         let mut server = self.primary_or_replica(&Request::default()).await?;
-        let schema = Schema::load(&mut server).await?;
+        let mut schema = Schema::load(&mut server).await?;
+
+        // Compute joins for tables that don't have the sharding key directly
+        schema.computed_sharded_joins(sharding);
+
         info!(
-            "loaded schema for {} tables on shard {} [{}]",
+            "loaded schema for {} tables ({} joins) on shard {} [{}]",
             schema.tables().len(),
+            schema.joins_count(),
             self.number(),
             server.addr()
         );
@@ -284,6 +292,14 @@ impl ShardInner {
             identifier,
             schema: Arc::new(OnceCell::new()),
         }
+    }
+}
+
+#[cfg(test)]
+impl Shard {
+    /// Set the schema for testing purposes.
+    pub fn set_test_schema(&self, schema: Schema) {
+        let _ = self.inner.schema.set(schema);
     }
 }
 

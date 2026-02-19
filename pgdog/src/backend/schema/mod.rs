@@ -1,28 +1,45 @@
 //! Schema operations.
 pub mod columns;
+pub mod join;
 pub mod relation;
 pub mod sync;
 
+#[cfg(test)]
+pub mod test_helpers;
+
+use fnv::FnvHashMap;
+pub use join::Join;
 pub use pgdog_stats::{
     Relation as StatsRelation, Relations as StatsRelations, Schema as StatsSchema, SchemaInner,
 };
 use serde::{Deserialize, Serialize};
+use std::hash::Hash;
 use std::ops::DerefMut;
 use std::{collections::HashMap, ops::Deref};
 use tracing::debug;
 
 pub use relation::Relation;
 
-use super::{pool::Request, Cluster, Error, Server};
+use super::{pool::Request, Cluster, Error, Server, ShardingSchema};
 use crate::frontend::router::parser::Table;
 use crate::net::parameter::ParameterValue;
 
 static SETUP: &str = include_str!("setup.sql");
 
 /// Load schema from database.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Hash)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct Schema {
     inner: StatsSchema,
+    /// Precomputed joins for tables that don't have the sharding key directly.
+    /// Key is the relation OID.
+    #[serde(skip)]
+    joins: FnvHashMap<i32, Join>,
+}
+
+impl Hash for Schema {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.inner.hash(state);
+    }
 }
 
 impl Deref for Schema {
@@ -66,6 +83,7 @@ impl Schema {
 
         Ok(Self {
             inner: StatsSchema::new(inner),
+            joins: FnvHashMap::default(),
         })
     }
 
@@ -91,6 +109,7 @@ impl Schema {
                 search_path,
                 relations: nested,
             }),
+            joins: FnvHashMap::default(),
         }
     }
 
@@ -184,6 +203,21 @@ impl Schema {
         None
     }
 
+    /// Get this table join to a sharded table.
+    pub fn table_sharded_join(
+        &self,
+        table: Table<'_>,
+        user: &str,
+        search_path: Option<&'_ ParameterValue>,
+    ) -> Option<&Join> {
+        let relation = self.table(table, user, search_path);
+        if let Some(relation) = relation {
+            self.get_sharded_join(relation)
+        } else {
+            None
+        }
+    }
+
     fn resolve_search_path<'a>(
         &'a self,
         user: &'a str,
@@ -222,6 +256,71 @@ impl Schema {
     /// Get search path components.
     pub fn search_path(&self) -> &[String] {
         &self.inner.search_path
+    }
+
+    /// Compute and store joins for all tables that don't have the sharding key directly.
+    /// Also sets the `is_sharded` flag on each relation based on whether it can
+    /// participate in sharded routing (either has sharding key directly or via FK path).
+    pub fn computed_sharded_joins(&mut self, sharding: &ShardingSchema) {
+        use std::collections::HashSet;
+
+        self.joins.clear();
+
+        // Collect OIDs first to avoid borrow issues
+        let oids: Vec<i32> = self.tables().iter().map(|r| r.oid).collect();
+
+        // Track which tables can participate in sharding
+        let mut sharded_oids: HashSet<i32> = HashSet::new();
+
+        for oid in oids {
+            // Look up the relation by finding it in any schema
+            let relation = self
+                .inner
+                .relations
+                .values()
+                .flat_map(|tables| tables.values())
+                .find(|r| r.oid == oid);
+
+            let relation = match relation {
+                Some(r) => r,
+                None => continue,
+            };
+
+            // Try to construct a join - if successful, table can participate in sharding
+            if let Ok(join) = self.construct_join(relation, sharding) {
+                sharded_oids.insert(oid);
+
+                // Only store join path if table doesn't have sharding key directly
+                if !join.path.is_empty() {
+                    self.joins.insert(oid, join);
+                }
+            }
+        }
+
+        // Clone relations and set is_sharded flag
+        let mut new_relations = self.inner.relations.clone();
+        for tables in new_relations.values_mut() {
+            for relation in tables.values_mut() {
+                relation.is_sharded = sharded_oids.contains(&relation.oid);
+            }
+        }
+
+        // Rebuild inner with updated relations
+        self.inner = StatsSchema::new(SchemaInner {
+            search_path: self.inner.search_path.clone(),
+            relations: new_relations,
+        });
+    }
+
+    /// Lookup a precomputed join for a relation by OID.
+    /// Returns None if the table has the sharding key directly or no path exists.
+    pub fn get_sharded_join(&self, relation: &StatsRelation) -> Option<&Join> {
+        self.joins.get(&relation.oid)
+    }
+
+    /// Get the number of precomputed joins.
+    pub fn joins_count(&self) -> usize {
+        self.joins.len()
     }
 }
 

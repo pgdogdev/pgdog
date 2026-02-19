@@ -60,6 +60,7 @@ impl From<DataRow> for Relation {
                 description: value.get_text(6).unwrap_or_default(),
                 oid: value.get::<i32>(7, Format::Text).unwrap_or_default(),
                 columns: IndexMap::new(),
+                is_sharded: false,
             },
         }
     }
@@ -107,6 +108,7 @@ impl Relation {
             description: String::new(),
             oid: 0,
             columns: columns.into_iter().map(|(k, v)| (k, v.into())).collect(),
+            is_sharded: false,
         }
         .into()
     }

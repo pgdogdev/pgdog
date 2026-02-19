@@ -542,14 +542,17 @@ impl Cluster {
             .swap(true, Ordering::SeqCst);
 
         if self.load_schema() && !already_started {
+            let sharding_schema = self.sharding_schema();
+
             for shard in self.shards() {
                 let identifier = self.identifier();
                 let readiness = self.readiness.clone();
                 let shard = shard.clone();
                 let shards = self.shards.len();
+                let sharding = sharding_schema.clone();
 
                 spawn(async move {
-                    if let Err(err) = shard.update_schema().await {
+                    if let Err(err) = shard.update_schema(&sharding).await {
                         error!("error loading schema for shard {}: {}", shard.number(), err);
                     }
 
@@ -632,6 +635,7 @@ mod test {
         backend::{
             pool::{Address, Config, PoolConfig, ShardConfig},
             replication::ShardedSchemas,
+            schema::test_helpers::prelude::*,
             Shard, ShardedTables,
         },
         config::{
@@ -644,6 +648,8 @@ mod test {
 
     impl Cluster {
         pub fn new_test(config: &ConfigAndUsers) -> Self {
+            use crate::backend::replication::ShardedSchemas as SS;
+
             let identifier = Arc::new(DatabaseUser {
                 user: "pgdog".into(),
                 database: "pgdog".into(),
@@ -657,10 +663,68 @@ mod test {
                 config: Config::default(),
             }];
 
+            let sharded_tables = ShardedTables::new(
+                vec![ShardedTable {
+                    database: "pgdog".into(),
+                    name: Some("sharded".into()),
+                    column: "id".into(),
+                    primary: true,
+                    centroids: vec![],
+                    data_type: DataType::Bigint,
+                    centroids_path: None,
+                    centroid_probes: 1,
+                    hasher: Hasher::Postgres,
+                    ..Default::default()
+                }],
+                vec![
+                    OmnishardedTable {
+                        name: "sharded_omni".into(),
+                        sticky_routing: false,
+                    },
+                    OmnishardedTable {
+                        name: "sharded_omni_sticky".into(),
+                        sticky_routing: true,
+                    },
+                ],
+                config.config.general.omnisharded_sticky,
+                config.config.general.system_catalogs,
+            );
+
+            let sharded_schemas = ShardedSchemas::new(vec![
+                ShardedSchema {
+                    database: "pgdog".into(),
+                    name: Some("shard_0".into()),
+                    shard: 0,
+                    ..Default::default()
+                },
+                ShardedSchema {
+                    database: "pgdog".into(),
+                    name: Some("shard_1".into()),
+                    shard: 1,
+                    ..Default::default()
+                },
+            ]);
+
+            // Create test schema with sharded tables
+            let mut db_schema = schema()
+                .relation(table("sharded").oid(1).column(pk("id")))
+                .relation(table("sharded_omni").oid(2).column(pk("id")))
+                .relation(table("sharded_omni_sticky").oid(3).column(pk("id")))
+                .build();
+
+            // Compute sharded joins to set is_sharded flags
+            let sharding_schema = super::ShardingSchema {
+                shards: 2,
+                tables: sharded_tables.clone(),
+                schemas: SS::new(vec![]),
+                ..Default::default()
+            };
+            db_schema.computed_sharded_joins(&sharding_schema);
+
             let shards = (0..2)
                 .into_iter()
                 .map(|number| {
-                    Shard::new(ShardConfig {
+                    let shard = Shard::new(ShardConfig {
                         number,
                         primary,
                         replicas,
@@ -668,51 +732,16 @@ mod test {
                         rw_split: ReadWriteSplit::IncludePrimary,
                         identifier: identifier.clone(),
                         lsn_check_interval: Duration::MAX,
-                    })
+                    });
+                    // Set the test schema on each shard
+                    shard.set_test_schema(db_schema.clone());
+                    shard
                 })
                 .collect::<Vec<_>>();
 
             Cluster {
-                sharded_tables: ShardedTables::new(
-                    vec![ShardedTable {
-                        database: "pgdog".into(),
-                        name: Some("sharded".into()),
-                        column: "id".into(),
-                        primary: true,
-                        centroids: vec![],
-                        data_type: DataType::Bigint,
-                        centroids_path: None,
-                        centroid_probes: 1,
-                        hasher: Hasher::Postgres,
-                        ..Default::default()
-                    }],
-                    vec![
-                        OmnishardedTable {
-                            name: "sharded_omni".into(),
-                            sticky_routing: false,
-                        },
-                        OmnishardedTable {
-                            name: "sharded_omni_sticky".into(),
-                            sticky_routing: true,
-                        },
-                    ],
-                    config.config.general.omnisharded_sticky,
-                    config.config.general.system_catalogs,
-                ),
-                sharded_schemas: ShardedSchemas::new(vec![
-                    ShardedSchema {
-                        database: "pgdog".into(),
-                        name: Some("shard_0".into()),
-                        shard: 0,
-                        ..Default::default()
-                    },
-                    ShardedSchema {
-                        database: "pgdog".into(),
-                        name: Some("shard_1".into()),
-                        shard: 1,
-                        ..Default::default()
-                    },
-                ]),
+                sharded_tables,
+                sharded_schemas,
                 shards,
                 identifier,
                 prepared_statements: config.config.general.prepared_statements,
