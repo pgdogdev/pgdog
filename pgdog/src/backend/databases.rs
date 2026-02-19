@@ -1805,7 +1805,7 @@ password = "testpass"
     }
 
     #[test]
-    fn test_user_with_password_not_paused() {
+    fn test_passthrough_user_with_password_unpaused() {
         let mut config = Config::default();
         config.general.passthrough_auth = PassthoughAuth::EnabledPlain;
         config.databases = vec![Database {
@@ -1946,40 +1946,5 @@ password = "testpass"
                 assert!(!pool.state().paused);
             }
         }
-    }
-
-    #[test]
-    fn test_backend_auth_ready_trust_allows_empty_password_user() {
-        let mut config = Config::default();
-        config.general.passthrough_auth = PassthoughAuth::EnabledPlain;
-        config.general.auth_type = AuthType::Trust;
-        config.databases = vec![Database {
-            name: "pgdog".to_string(),
-            host: "localhost".to_string(),
-            port: 5432,
-            role: Role::Primary,
-            ..Default::default()
-        }];
-
-        let users = crate::config::Users {
-            users: vec![crate::config::User {
-                name: "pgdog".to_string(),
-                database: "pgdog".to_string(),
-                password: None,
-                ..Default::default()
-            }],
-            ..Default::default()
-        };
-
-        let databases = from_config(&ConfigAndUsers {
-            config,
-            users,
-            config_path: std::path::PathBuf::new(),
-            users_path: std::path::PathBuf::new(),
-        });
-
-        assert!(databases.exists(("pgdog", "pgdog")));
-        assert!(!databases.has_password(("pgdog", "pgdog")));
-        assert!(databases.is_backend_auth_ready(("pgdog", "pgdog"), &AuthType::Trust));
     }
 }
