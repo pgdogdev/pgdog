@@ -193,6 +193,16 @@ impl LoadBalancer {
         Monitor::spawn(self);
     }
 
+    /// Pause all target pools.
+    pub fn pause(&self) {
+        self.targets.iter().for_each(|target| target.pool.pause());
+    }
+
+    /// Resume all target pools.
+    pub fn resume(&self) {
+        self.targets.iter().for_each(|target| target.pool.resume());
+    }
+
     /// Get a live connection from the pool.
     pub async fn get(&self, request: &Request) -> Result<Guard, Error> {
         match timeout(self.checkout_timeout, self.get_internal(request)).await {

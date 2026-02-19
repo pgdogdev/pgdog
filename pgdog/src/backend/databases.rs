@@ -533,12 +533,19 @@ fn new_pool(user: &crate::config::User, config: &crate::config::Config) -> Optio
         &config.rewrite,
     );
 
+    let cluster = Cluster::new(cluster_config);
+
+    // Passthrough users without configured passwords should not probe backend.
+    if config.general.passthrough_auth() && user.password().is_empty() {
+        cluster.pause();
+    }
+
     Some((
         User {
             user: user.name.clone(),
             database: user.database.clone(),
         },
-        Cluster::new(cluster_config),
+        cluster,
     ))
 }
 
@@ -690,7 +697,7 @@ pub fn from_config(config: &ConfigAndUsers) -> Databases {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{Config, ConfigAndUsers, Database, Role};
+    use crate::config::{Config, ConfigAndUsers, Database, PassthoughAuth, Role};
 
     #[test]
     fn test_mirror_user_isolation() {
@@ -1737,5 +1744,149 @@ password = "testpass"
         assert_eq!(new_users.users.len(), 1);
         assert_eq!(new_users.users[0].name, "testuser");
         assert_eq!(new_users.users[0].database, "destination_db");
+    }
+
+    #[test]
+    fn test_passthrough_empty_password_starts_paused() {
+        let mut config = Config::default();
+        config.general.passthrough_auth = PassthoughAuth::EnabledPlain;
+        config.databases = vec![Database {
+            name: "pgdog".to_string(),
+            host: "localhost".to_string(),
+            port: 5432,
+            role: Role::Primary,
+            ..Default::default()
+        }];
+
+        let users = crate::config::Users {
+            users: vec![crate::config::User {
+                name: "pgdog".to_string(),
+                database: "pgdog".to_string(),
+                password: None,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let databases = from_config(&ConfigAndUsers {
+            config,
+            users,
+            config_path: std::path::PathBuf::new(),
+            users_path: std::path::PathBuf::new(),
+        });
+
+        let key = User {
+            user: "pgdog".to_string(),
+            database: "pgdog".to_string(),
+        };
+
+        let cluster = databases.all().get(&key).expect("cluster should exist");
+
+        for shard in cluster.shards() {
+            for pool in shard.pools() {
+                assert!(pool.state().paused);
+            }
+        }
+    }
+
+    #[test]
+    fn test_user_with_password_not_paused() {
+        let mut config = Config::default();
+        config.general.passthrough_auth = PassthoughAuth::EnabledPlain;
+        config.databases = vec![Database {
+            name: "pgdog".to_string(),
+            host: "localhost".to_string(),
+            port: 5432,
+            role: Role::Primary,
+            ..Default::default()
+        }];
+
+        let users = crate::config::Users {
+            users: vec![crate::config::User {
+                name: "pgdog".to_string(),
+                database: "pgdog".to_string(),
+                password: Some("pgdog".to_string()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let databases = from_config(&ConfigAndUsers {
+            config,
+            users,
+            config_path: std::path::PathBuf::new(),
+            users_path: std::path::PathBuf::new(),
+        });
+
+        let key = User {
+            user: "pgdog".to_string(),
+            database: "pgdog".to_string(),
+        };
+
+        let cluster = databases.all().get(&key).expect("cluster should exist");
+
+        for shard in cluster.shards() {
+            for pool in shard.pools() {
+                assert!(!pool.state().paused);
+            }
+        }
+    }
+
+    #[test]
+    fn test_replace_empty_password_cluster_with_passthrough_password() {
+        let mut config = Config::default();
+        config.general.passthrough_auth = PassthoughAuth::EnabledPlain;
+        config.databases = vec![Database {
+            name: "pgdog".to_string(),
+            host: "localhost".to_string(),
+            port: 5432,
+            role: Role::Primary,
+            ..Default::default()
+        }];
+
+        let users = crate::config::Users {
+            users: vec![crate::config::User {
+                name: "pgdog".to_string(),
+                database: "pgdog".to_string(),
+                password: None,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let databases = from_config(&ConfigAndUsers {
+            config: config.clone(),
+            users,
+            config_path: std::path::PathBuf::new(),
+            users_path: std::path::PathBuf::new(),
+        });
+
+        let passthrough_user = crate::config::User {
+            name: "pgdog".to_string(),
+            database: "pgdog".to_string(),
+            password: Some("secret".to_string()),
+            ..Default::default()
+        };
+
+        let (user, cluster) = new_pool(&passthrough_user, &config).expect("cluster should exist");
+        let (added, databases) = databases.add(user, cluster);
+
+        assert!(added);
+        assert!(databases.exists(("pgdog", "pgdog")));
+
+        let key = User {
+            user: "pgdog".to_string(),
+            database: "pgdog".to_string(),
+        };
+
+        let cluster = databases.all().get(&key).expect("cluster should exist");
+
+        assert_eq!(cluster.password(), "secret");
+
+        for shard in cluster.shards() {
+            for pool in shard.pools() {
+                assert!(!pool.state().paused);
+            }
+        }
     }
 }

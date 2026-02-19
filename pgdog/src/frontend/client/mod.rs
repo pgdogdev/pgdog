@@ -251,6 +251,11 @@ impl Client {
             stream.send(&Authentication::Ok).await?;
         }
 
+        // Allow pools to connect if passthrough password exists
+        if passthrough_password.is_some() {
+            conn.resume_cluster_pools();
+        }
+
         // Check if the pooler is shutting down.
         if comms.offline() && !admin {
             stream.fatal(ErrorResponse::shutting_down()).await?;

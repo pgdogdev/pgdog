@@ -359,6 +359,13 @@ impl Connection {
         Ok(())
     }
 
+    /// Resume pools for the currently bound cluster.
+    pub(crate) fn resume_cluster_pools(&self) {
+        if let Some(cluster) = &self.cluster {
+            cluster.resume();
+        }
+    }
+
     pub(crate) fn bind(&mut self, bind: &Bind) -> Result<(), Error> {
         match self.binding {
             Binding::MultiShard(_, ref mut state) => {
