@@ -99,16 +99,15 @@ impl Config {
     pub fn new(general: &General, database: &Database, user: &User, is_only_replica: bool) -> Self {
         Self {
             inner: pgdog_stats::Config {
-                min: database
+                min: user
                     .min_pool_size
-                    .unwrap_or(user.min_pool_size.unwrap_or(general.min_pool_size)),
-                max: database
+                    .unwrap_or(database.min_pool_size.unwrap_or(general.min_pool_size)),
+                max: user
                     .pool_size
-                    .unwrap_or(user.pool_size.unwrap_or(general.default_pool_size)),
+                    .unwrap_or(database.pool_size.unwrap_or(general.default_pool_size)),
                 max_age: Duration::from_millis(
-                    database
-                        .server_lifetime
-                        .unwrap_or(user.server_lifetime.unwrap_or(general.server_lifetime)),
+                    user.server_lifetime
+                        .unwrap_or(database.server_lifetime.unwrap_or(general.server_lifetime)),
                 ),
                 healthcheck_interval: Duration::from_millis(general.healthcheck_interval),
                 idle_healthcheck_interval: Duration::from_millis(general.idle_healthcheck_interval),
@@ -184,6 +183,23 @@ mod test {
         let config = Config::new(&general, &database, &user, false);
 
         assert!(config.role_detection);
+    }
+
+    #[test]
+    fn test_user_takes_precedence_over_database() {
+        let general = General::default();
+        let user = User {
+            pool_size: Some(5),
+            ..Default::default()
+        };
+        let database = Database {
+            pool_size: Some(10),
+            ..Default::default()
+        };
+
+        let config = Config::new(&general, &database, &user, false);
+
+        assert_eq!(5, config.max);
     }
 
     #[test]
