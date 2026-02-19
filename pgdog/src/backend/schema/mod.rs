@@ -266,22 +266,19 @@ impl Schema {
 
         self.joins.clear();
 
-        // Collect OIDs first to avoid borrow issues
-        let oids: Vec<i32> = self.tables().iter().map(|r| r.oid).collect();
+        // Collect (oid, schema, name) to avoid borrow issues and enable O(1) lookup
+        let tables_info: Vec<(i32, String, String)> = self
+            .tables()
+            .iter()
+            .map(|r| (r.oid, r.schema().to_string(), r.name.clone()))
+            .collect();
 
         // Track which tables can participate in sharding
         let mut sharded_oids: HashSet<i32> = HashSet::new();
 
-        for oid in oids {
-            // Look up the relation by finding it in any schema
-            let relation = self
-                .inner
-                .relations
-                .values()
-                .flat_map(|tables| tables.values())
-                .find(|r| r.oid == oid);
-
-            let relation = match relation {
+        for (oid, schema_name, table_name) in tables_info {
+            // O(1) HashMap lookup instead of O(N) linear search
+            let relation = match self.inner.get(&schema_name, &table_name) {
                 Some(r) => r,
                 None => continue,
             };
