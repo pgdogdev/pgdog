@@ -614,7 +614,7 @@ impl General {
     }
 
     pub fn client_connection_recovery() -> ConnectionRecovery {
-        Self::env_enum_or_default("PGDOG_CLIENT_CONNECTION_RECOVERY")
+        Self::env_option("PGDOG_CLIENT_CONNECTION_RECOVERY").unwrap_or(ConnectionRecovery::Drop)
     }
 
     fn stats_period() -> u64 {
