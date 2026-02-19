@@ -20,7 +20,7 @@ use crate::frontend::router::sharding::Mapping;
 use crate::frontend::PreparedStatements;
 use crate::{
     backend::pool::PoolConfig,
-    config::{config, load, ConfigAndUsers, ManualQuery, Role},
+    config::{config, load, AuthType, ConfigAndUsers, ManualQuery, Role},
     net::{messages::BackendKeyData, tls},
 };
 
@@ -307,11 +307,24 @@ impl Databases {
     }
 
     /// Check if a cluster exists, quickly.
-    pub fn exists(&self, user: impl ToUser) -> bool {
-        if let Some(cluster) = self.databases.get(&user.to_user()) {
-            !cluster.password().is_empty()
+    pub(crate) fn exists(&self, user: impl ToUser) -> bool {
+        self.databases.contains_key(&user.to_user())
+    }
+
+    /// Check if a cluster exists, and has a non-empty password.
+    pub(crate) fn has_password(&self, user: impl ToUser) -> bool {
+        self.databases
+            .get(&user.to_user())
+            .is_some_and(|cluster| !cluster.password().is_empty())
+    }
+
+    /// Check if backend authentication can work for this user.
+    pub fn is_backend_auth_ready(&self, user: impl ToUser, authtype: &AuthType) -> bool {
+        // Trust auth doesn't need a password, so the cluster merely has to exist.
+        if authtype.trust() {
+            self.exists(user)
         } else {
-            false
+            self.has_password(user)
         }
     }
 
@@ -535,8 +548,10 @@ fn new_pool(user: &crate::config::User, config: &crate::config::Config) -> Optio
 
     let cluster = Cluster::new(cluster_config);
 
-    // Passthrough users without configured passwords should not probe backend.
-    if config.general.passthrough_auth() && user.password().is_empty() {
+    if config.general.passthrough_auth()
+        && user.password().is_empty()
+        && !config.general.auth_type.trust()
+    {
         cluster.pause();
     }
 
@@ -697,7 +712,7 @@ pub fn from_config(config: &ConfigAndUsers) -> Databases {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{Config, ConfigAndUsers, Database, PassthoughAuth, Role};
+    use crate::config::{AuthType, Config, ConfigAndUsers, Database, PassthoughAuth, Role};
 
     #[test]
     fn test_mirror_user_isolation() {
@@ -1833,6 +1848,49 @@ password = "testpass"
     }
 
     #[test]
+    fn test_passthrough_empty_password_trust_starts_unpaused() {
+        let mut config = Config::default();
+        config.general.passthrough_auth = PassthoughAuth::EnabledPlain;
+        config.general.auth_type = AuthType::Trust;
+        config.databases = vec![Database {
+            name: "pgdog".to_string(),
+            host: "localhost".to_string(),
+            port: 5432,
+            role: Role::Primary,
+            ..Default::default()
+        }];
+
+        let users = crate::config::Users {
+            users: vec![crate::config::User {
+                name: "pgdog".to_string(),
+                database: "pgdog".to_string(),
+                password: None,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let databases = from_config(&ConfigAndUsers {
+            config,
+            users,
+            config_path: std::path::PathBuf::new(),
+            users_path: std::path::PathBuf::new(),
+        });
+
+        let key = User {
+            user: "pgdog".to_string(),
+            database: "pgdog".to_string(),
+        };
+        let cluster = databases.all().get(&key).expect("cluster should exist");
+
+        for shard in cluster.shards() {
+            for pool in shard.pools() {
+                assert!(!pool.state().paused);
+            }
+        }
+    }
+
+    #[test]
     fn test_replace_empty_password_cluster_with_passthrough_password() {
         let mut config = Config::default();
         config.general.passthrough_auth = PassthoughAuth::EnabledPlain;
@@ -1872,7 +1930,7 @@ password = "testpass"
         let (added, databases) = databases.add(user, cluster);
 
         assert!(added);
-        assert!(databases.exists(("pgdog", "pgdog")));
+        assert!(databases.has_password(("pgdog", "pgdog")));
 
         let key = User {
             user: "pgdog".to_string(),
@@ -1888,5 +1946,40 @@ password = "testpass"
                 assert!(!pool.state().paused);
             }
         }
+    }
+
+    #[test]
+    fn test_backend_auth_ready_trust_allows_empty_password_user() {
+        let mut config = Config::default();
+        config.general.passthrough_auth = PassthoughAuth::EnabledPlain;
+        config.general.auth_type = AuthType::Trust;
+        config.databases = vec![Database {
+            name: "pgdog".to_string(),
+            host: "localhost".to_string(),
+            port: 5432,
+            role: Role::Primary,
+            ..Default::default()
+        }];
+
+        let users = crate::config::Users {
+            users: vec![crate::config::User {
+                name: "pgdog".to_string(),
+                database: "pgdog".to_string(),
+                password: None,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let databases = from_config(&ConfigAndUsers {
+            config,
+            users,
+            config_path: std::path::PathBuf::new(),
+            users_path: std::path::PathBuf::new(),
+        });
+
+        assert!(databases.exists(("pgdog", "pgdog")));
+        assert!(!databases.has_password(("pgdog", "pgdog")));
+        assert!(databases.is_backend_auth_ready(("pgdog", "pgdog"), &AuthType::Trust));
     }
 }

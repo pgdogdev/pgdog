@@ -156,7 +156,6 @@ impl Client {
         let comms = ClientComms::new(&id);
 
         // Auto database.
-        let exists = databases::databases().exists((user, database));
         let passthrough_password = if config.config.general.passthrough_auth() && !admin {
             let password = if auth_type.trust() {
                 // Use empty password.
@@ -172,7 +171,7 @@ impl Client {
                 Password::from_bytes(password.to_bytes()?)?
             };
 
-            if !exists {
+            if !databases::databases().is_backend_auth_ready((user, database), auth_type) {
                 let user = user_from_params(&params, &password).ok();
                 if let Some(user) = user {
                     databases::add(user);
