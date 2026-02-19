@@ -148,6 +148,16 @@ impl Shard {
         }
     }
 
+    /// Pause every pool in this shard.
+    pub fn pause(&self) {
+        self.lb.pause();
+    }
+
+    /// Resume every pool in this shard.
+    pub fn resume(&self) {
+        self.lb.resume();
+    }
+
     /// Returns true if the shard has a primary database.
     pub fn has_primary(&self) -> bool {
         self.lb.primary().is_some()
