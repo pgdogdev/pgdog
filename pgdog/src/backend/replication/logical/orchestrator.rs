@@ -1,10 +1,11 @@
 use crate::{
     backend::{
+        databases::cutover,
         maintenance_mode,
         schema::sync::{pg_dump::PgDumpOutput, PgDump},
         Cluster,
     },
-    net::tls::reload,
+    util::format_bytes,
 };
 use std::{sync::Arc, time::Duration};
 use tokio::{sync::Mutex, task::JoinHandle, time::interval};
@@ -140,6 +141,8 @@ impl Orchestrator {
         // Ready for cutover.
         let mut paused = false;
 
+        let config = config();
+
         loop {
             check.tick().await;
             let lag = self.publisher.lock().await.replication_lag();
@@ -148,14 +151,14 @@ impl Orchestrator {
                 info!("[cutover] replication lag={}, shard={}", lag, shard);
             }
 
-            let max_lag = lag.iter().map(|(_, lag)| *lag).max().unwrap_or_default();
+            let max_lag = lag.iter().map(|(_, lag)| *lag).max().unwrap_or_default() as u64;
 
-            // 1 MB
-            // TODO: make configurable.
-            if max_lag < 1_000_000 && !paused {
+            // Time to go.
+            if max_lag <= config.config.general.cutover_traffic_stop_threshold && !paused {
                 info!(
-                    "[cutover] replication lag has reached maintenance mode threshold: {} bytes",
-                    max_lag
+                    "[cutover] stopping traffic, lag={}, threshold={}",
+                    format_bytes(max_lag),
+                    format_bytes(config.config.general.cutover_traffic_stop_threshold),
                 );
                 // Pause traffic.
                 maintenance_mode::start();
@@ -168,8 +171,12 @@ impl Orchestrator {
             // that no data changes have been sent in over a second or something
             // like that.
             // TODO: add timeout.
-            if max_lag <= 1 && paused {
-                info!("[cutover] starting cutover, lag={}", max_lag);
+            if max_lag <= config.config.general.cutover_replication_lag_threshold && paused {
+                info!(
+                    "[cutover] starting cutover, lag={}, threshold={}",
+                    format_bytes(max_lag),
+                    format_bytes(config.config.general.cutover_replication_lag_threshold)
+                );
 
                 self.publisher.lock().await.request_stop();
                 let result = waiter.wait().await;
@@ -202,9 +209,6 @@ impl Orchestrator {
                 result?;
                 break;
             }
-
-            // Drop replication slots.
-            self.cleanup().await?;
         }
 
         Ok(())
@@ -237,15 +241,12 @@ impl Orchestrator {
     pub(crate) async fn cutover(&self, ignore_errors: bool) -> Result<(), Error> {
         self.schema_sync_cutover(ignore_errors).await?;
 
-        let destination = databases().schema_owner(&self.source.identifier().database)?;
-
-        // Make sure the config was actually mutated.
-        if destination.shards().len() != self.destination.shards().len() {
-            return Err(Error::NoNewCluster);
-        }
-
-        // Reload the config.
-        reload()?;
+        // Immediate traffic cutover in-memory.
+        // N.B. Make sure to write new config to disk.
+        cutover(
+            &self.source.identifier().database,
+            &self.destination.identifier().database,
+        )?;
 
         Ok(())
     }

@@ -170,6 +170,11 @@ async fn pgdog(command: Option<Commands>) -> Result<(), Box<dyn std::error::Erro
                 cli::setup(database).await?;
             }
 
+            if let Commands::ReplicateAndCutover { .. } = command {
+                info!("🔄 entering test mode");
+                cli::replicate_and_cutover(command.clone()).await?;
+            }
+
             if let Commands::Route { .. } = command {
                 if let Err(err) = cli::route(command.clone()).await {
                     error!("{}", err);

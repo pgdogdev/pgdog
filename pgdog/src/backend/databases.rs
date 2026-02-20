@@ -1,6 +1,7 @@
 //! Databases behind pgDog.
 
 use std::collections::{hash_map::Entry, HashMap};
+use std::ops::Deref;
 use std::sync::Arc;
 
 use arc_swap::ArcSwap;
@@ -157,6 +158,26 @@ pub(crate) fn add(mut user: crate::config::User) {
     }
 }
 
+/// Remove source. Rename destination to source.
+pub fn cutover(source: &str, destination: &str) -> Result<(), Error> {
+    let _lock = lock();
+
+    let mut config = config().deref().clone();
+
+    config.config.cutover(destination, source);
+    config.users.cutover(destination, source);
+
+    let databases = from_config(&config);
+
+    replace_databases(databases, true)?;
+
+    info!(
+        r#"database "{}" renamed to "{}", "{}" is removed"#,
+        destination, source, destination
+    );
+    Ok(())
+}
+
 /// Database/user pair that identifies a database cluster pool.
 #[derive(Debug, PartialEq, Hash, Eq, Clone, Default)]
 pub struct User {
@@ -195,15 +216,6 @@ impl ToUser for (&str, Option<&str>) {
         }
     }
 }
-
-// impl ToUser for &pgdog_config::User {
-//     fn to_user(&self) -> User {
-//         User {
-//             user: self.name.clone(),
-//             database: self.database.clone(),
-//         }
-//     }
-// }
 
 /// Databases.
 #[derive(Default, Clone)]

@@ -67,6 +67,15 @@ impl Users {
             }
         }
     }
+
+    /// Remove anything in to and rename from to to.
+    pub fn cutover(&mut self, from: &str, to: &str) {
+        self.users.retain(|user| user.database != to);
+        self.users
+            .iter_mut()
+            .filter(|user| user.database == from)
+            .for_each(|user| user.database = to.to_owned());
+    }
 }
 
 /// User allowed to connect to pgDog.
@@ -191,5 +200,35 @@ fn admin_password() -> String {
     } else {
         let pw = random_string(12);
         format!("_pgdog_{}", pw)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_cutover_removes_source_renames_destination() {
+        let mut users = Users {
+            users: vec![
+                User::new("alice", "pass1", "source_db"),
+                User::new("bob", "pass2", "source_db"),
+                User::new("alice", "pass3", "destination_db"),
+                User::new("bob", "pass4", "destination_db"),
+            ],
+            ..Default::default()
+        };
+
+        // cutover(from, to) removes `to` and renames `from` -> `to`.
+        // To "remove source, rename destination to source" we call:
+        users.cutover("destination_db", "source_db");
+
+        assert_eq!(users.users.len(), 2);
+        assert!(users.users.iter().all(|u| u.database == "source_db"));
+        // The surviving users should have destination_db's passwords
+        let alice = users.users.iter().find(|u| u.name == "alice").unwrap();
+        assert_eq!(alice.password(), "pass3");
+        let bob = users.users.iter().find(|u| u.name == "bob").unwrap();
+        assert_eq!(bob.password(), "pass4");
     }
 }

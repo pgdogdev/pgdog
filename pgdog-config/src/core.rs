@@ -499,6 +499,51 @@ impl Config {
 
         result
     }
+
+    /// Rename database and remove old to database from config.
+    pub fn cutover(&mut self, from: &str, to: &str) {
+        self.databases.retain(|database| database.name != to);
+        self.sharded_mappings
+            .retain(|mapping| mapping.database != to);
+        self.sharded_tables.retain(|mapping| mapping.database != to);
+        self.omnisharded_tables
+            .retain(|mapping| mapping.database != to);
+        self.mirroring
+            .retain(|mirror| mirror.source_db != to && mirror.destination_db != to);
+
+        self.databases.iter_mut().for_each(|database| {
+            if database.name == from {
+                database.name = to.to_owned();
+            }
+        });
+
+        self.sharded_mappings.iter_mut().for_each(|mapping| {
+            if mapping.database == from {
+                mapping.database = to.to_owned();
+            }
+        });
+
+        self.sharded_tables.iter_mut().for_each(|mapping| {
+            if mapping.database == from {
+                mapping.database = to.to_owned();
+            }
+        });
+
+        self.omnisharded_tables.iter_mut().for_each(|mapping| {
+            if mapping.database == from {
+                mapping.database = to.to_owned();
+            }
+        });
+        self.mirroring.iter_mut().for_each(|mapping| {
+            if mapping.destination_db == from {
+                mapping.destination_db = to.to_owned();
+            }
+
+            if mapping.source_db == from {
+                mapping.source_db = to.to_owned();
+            }
+        });
+    }
 }
 
 #[cfg(test)]
@@ -862,5 +907,39 @@ tables = ["my_table"]
         assert_eq!(db1_tables[0].name, "my_table");
         assert!(!db1_tables.iter().any(|t| t.name == "pg_class"));
         assert!(!db1_tables.iter().any(|t| t.name == "pg_attribute"));
+    }
+
+    #[test]
+    fn test_cutover_removes_source_renames_destination() {
+        let mut config = Config::default();
+        config.databases = vec![
+            Database {
+                name: "source_db".to_string(),
+                host: "old-host".to_string(),
+                port: 5432,
+                role: Role::Primary,
+                ..Default::default()
+            },
+            Database {
+                name: "destination_db".to_string(),
+                host: "new-host".to_string(),
+                port: 5433,
+                role: Role::Primary,
+                ..Default::default()
+            },
+        ];
+
+        // After cutover: source_db should be gone, destination_db renamed to source_db.
+        // Config::cutover(from, to) removes `to` and renames `from` -> `to`.
+        // So to "remove source, rename destination to source" we need:
+        //   cutover(from=destination_db, to=source_db)
+        config.cutover("destination_db", "source_db");
+
+        assert_eq!(config.databases.len(), 1);
+        assert_eq!(config.databases[0].name, "source_db");
+        assert_eq!(
+            config.databases[0].host, "new-host",
+            "should keep the destination's host after cutover"
+        );
     }
 }

@@ -139,6 +139,32 @@ pub enum Commands {
         cutover: bool,
     },
 
+    /// For testing purposes only.
+    ///
+    /// Performs the entire schema sync, data sync and replication flow
+    /// with cutover trigger.
+    ///
+    /// Use for internal testing only. To do this in production,
+    /// use the admin database RESHARD command.
+    ///
+    ReplicateAndCutover {
+        /// Source database name.
+        #[arg(long)]
+        from_database: String,
+
+        /// Destination database name.
+        #[arg(long)]
+        to_database: String,
+
+        /// Publication name.
+        #[arg(long)]
+        publication: String,
+
+        /// Replication slot name.
+        #[arg(long)]
+        replication_slot: Option<String>,
+    },
+
     /// Perform cluster configuration steps
     /// required for sharded operations.
     Setup {
@@ -231,6 +257,28 @@ pub fn config_check(
         1 => Err(errors.into_iter().next().unwrap()),
         _ => Err(ConfigCheckError::Multiple(errors)),
     }
+}
+
+/// FOR TESTING PURPOSES ONLY.
+pub async fn replicate_and_cutover(commands: Commands) -> Result<(), Box<dyn std::error::Error>> {
+    if let Commands::ReplicateAndCutover {
+        from_database,
+        to_database,
+        publication,
+        replication_slot,
+    } = commands
+    {
+        let mut orchestrator = Orchestrator::new(
+            &from_database,
+            &to_database,
+            &publication,
+            replication_slot.as_ref().map(|s| s.as_str()),
+        )?;
+
+        orchestrator.replicate_and_cutover().await?;
+    }
+
+    Ok(())
 }
 
 pub async fn data_sync(commands: Commands) -> Result<(), Box<dyn std::error::Error>> {
