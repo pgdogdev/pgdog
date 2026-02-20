@@ -325,6 +325,8 @@ pub struct Config {
     pub lsn_check_delay: Duration,
     /// Automatic role detection enabled.
     pub role_detection: bool,
+    /// Used for resharding only.
+    pub resharding_only: bool,
 }
 
 impl Default for Config {
@@ -360,6 +362,7 @@ impl Default for Config {
             lsn_check_timeout: Duration::from_millis(5_000),
             lsn_check_delay: Duration::from_millis(5_000),
             role_detection: false,
+            resharding_only: false,
         }
     }
 }

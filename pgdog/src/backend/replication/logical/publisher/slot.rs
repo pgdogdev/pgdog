@@ -2,8 +2,8 @@ use super::super::Error;
 use crate::{
     backend::{self, pool::Address, ConnectReason, Server, ServerOptions},
     net::{
-        replication::StatusUpdate, CopyData, CopyDone, DataRow, ErrorResponse, Format, FromBytes,
-        Protocol, Query, ToBytes,
+        replication::{StatusUpdate, XLogData},
+        CopyData, CopyDone, DataRow, ErrorResponse, Format, FromBytes, Protocol, Query, ToBytes,
     },
     util::random_string,
 };
@@ -46,6 +46,7 @@ pub struct ReplicationSlot {
     dropped: bool,
     server: Option<Server>,
     kind: SlotKind,
+    server_meta: Option<Server>,
 }
 
 impl ReplicationSlot {
@@ -62,6 +63,7 @@ impl ReplicationSlot {
             dropped: false,
             server: None,
             kind: SlotKind::Replication,
+            server_meta: None,
         }
     }
 
@@ -78,6 +80,7 @@ impl ReplicationSlot {
             dropped: true, // Temporary.
             server: None,
             kind: SlotKind::DataSync,
+            server_meta: None,
         }
     }
 
@@ -93,6 +96,37 @@ impl ReplicationSlot {
         );
 
         Ok(())
+    }
+
+    /// Get or create a separate server connection for meta commands.
+    pub async fn server_meta(&mut self) -> Result<&mut Server, Error> {
+        if let Some(ref mut server) = self.server_meta {
+            Ok(server)
+        } else {
+            self.server_meta = Some(
+                Server::connect(
+                    &self.address,
+                    ServerOptions::default(),
+                    ConnectReason::Replication,
+                )
+                .await?,
+            );
+            Ok(self.server_meta.as_mut().unwrap())
+        }
+    }
+
+    /// Replication lag in bytes for this slot.
+    pub async fn replication_lag(&mut self) -> Result<i64, Error> {
+        let query = format!(
+            "SELECT pg_current_wal_lsn() - confirmed_flush_lsn \
+             FROM pg_replication_slots \
+             WHERE slot_name = '{}'",
+            self.name
+        );
+        let mut lag: Vec<i64> = self.server_meta().await?.fetch_all(&query).await?;
+
+        lag.pop()
+            .ok_or(Error::MissingReplicationSlot(self.name.clone()))
     }
 
     pub fn server(&mut self) -> Result<&mut Server, Error> {
@@ -294,14 +328,28 @@ impl ReplicationSlot {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum ReplicationData {
     CopyData(CopyData),
     CopyDone,
 }
 
+impl ReplicationData {
+    pub fn xlog_data(&self) -> Option<XLogData> {
+        if let Self::CopyData(copy_data) = self {
+            copy_data.xlog_data()
+        } else {
+            None
+        }
+    }
+}
+
 #[cfg(test)]
 mod test {
+    use tokio::spawn;
+
+    use crate::{backend::server::test::test_server, net::replication::xlog_data::XLogPayload};
+
     use super::*;
 
     #[test]
@@ -311,5 +359,114 @@ mod test {
         assert_eq!(lsn.high, 1);
         let lsn = lsn.to_string();
         assert_eq!(lsn, original);
+    }
+
+    #[tokio::test]
+    async fn test_real_lsn() {
+        let result: Vec<String> = test_server()
+            .await
+            .fetch_all("SELECT pg_current_wal_lsn()")
+            .await
+            .unwrap();
+        let lsn = Lsn::from_str(&result[0]).unwrap();
+        let lsn_2 = Lsn::from_i64(lsn.lsn);
+        assert_eq!(lsn.to_string(), result[0]);
+        assert_eq!(lsn, lsn_2);
+    }
+
+    #[tokio::test]
+    async fn test_slot_replication() {
+        use tokio::sync::mpsc::*;
+        crate::logger();
+
+        let mut server = test_server().await;
+
+        server
+            .execute("CREATE TABLE IF NOT EXISTS public.test_slot_replication(id BIGINT)")
+            .await
+            .unwrap();
+        let _ = server
+            .execute("DROP PUBLICATION test_slot_replication")
+            .await;
+        let _ = server
+            .execute(format!(
+                "SELECT pg_drop_replication_slot(test_slot_replication)"
+            ))
+            .await;
+        server
+            .execute(
+                "CREATE PUBLICATION test_slot_replication FOR TABLE public.test_slot_replication",
+            )
+            .await
+            .unwrap();
+
+        let addr = server.addr();
+
+        let mut slot = ReplicationSlot::replication(
+            "test_slot_replication",
+            addr,
+            Some("test_slot_replication".into()),
+        );
+        let _ = slot.create_slot().await.unwrap();
+        slot.connect().await.unwrap();
+
+        let (tx, mut rx) = channel(16);
+
+        let handle = spawn(async move {
+            slot.start_replication().await?;
+            server
+                .execute("INSERT INTO test_slot_replication (id) VALUES (1)")
+                .await?;
+
+            loop {
+                let message = slot.replicate(Duration::MAX).await?;
+                tx.send(message.clone()).await.unwrap();
+
+                if let Some(message) = message {
+                    match message.clone() {
+                        ReplicationData::CopyData(copy_data) => match copy_data.xlog_data() {
+                            Some(xlog_data) => {
+                                if let Some(XLogPayload::Commit(_)) = xlog_data.payload() {
+                                    slot.stop_replication().await?;
+                                }
+                            }
+                            _ => (),
+                        },
+                        ReplicationData::CopyDone => (),
+                    }
+                } else {
+                    break;
+                }
+            }
+
+            slot.drop_slot().await?;
+
+            Ok::<(), Error>(())
+        });
+
+        let mut got_row = false;
+
+        while let Some(message) = rx.recv().await {
+            let payload = message
+                .and_then(|message| message.xlog_data())
+                .and_then(|payload| payload.payload());
+            if let Some(payload) = payload {
+                match payload {
+                    XLogPayload::Relation(relation) => {
+                        assert_eq!(relation.name, "test_slot_replication")
+                    }
+                    XLogPayload::Insert(insert) => {
+                        assert_eq!(insert.column(0).unwrap().as_str().unwrap(), "1")
+                    }
+                    XLogPayload::Begin(_) => (),
+                    XLogPayload::Commit(_) => got_row = true,
+                    _ => panic!("{:#?}", payload),
+                }
+            }
+        }
+
+        assert!(got_row);
+
+        handle.await.unwrap().unwrap();
     }
 }

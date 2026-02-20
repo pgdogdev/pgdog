@@ -256,7 +256,11 @@ impl LoadBalancer {
         use LoadBalancingStrategy::*;
         use ReadWriteSplit::*;
 
-        let mut candidates: Vec<&Target> = self.targets.iter().collect();
+        let mut candidates: Vec<&Target> = self
+            .targets
+            .iter()
+            .filter(|target| !target.pool.config().resharding_only) // Don't let reads on resharding-only replicas.
+            .collect();
 
         let primary_reads = match self.rw_split {
             IncludePrimary => true,

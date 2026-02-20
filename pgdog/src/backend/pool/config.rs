@@ -143,6 +143,7 @@ impl Config {
                 lsn_check_timeout: Duration::from_millis(general.lsn_check_timeout),
                 lsn_check_delay: Duration::from_millis(general.lsn_check_delay),
                 role_detection: database.role == Role::Auto,
+                resharding_only: database.resharding_only,
                 ..Default::default()
             },
         }
