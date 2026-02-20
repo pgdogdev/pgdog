@@ -17,7 +17,7 @@ use super::{Copy, PublicationTable, PublicationTableColumn, ReplicaIdentity, Rep
 
 use tracing::info;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Table {
     /// Name of the table publication.
     pub publication: String,

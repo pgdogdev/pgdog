@@ -1,4 +1,3 @@
-use std::ops::Deref;
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
@@ -8,7 +7,7 @@ use tokio::{select, signal::ctrl_c};
 use tracing::{error, info};
 
 use crate::backend::schema::sync::config::ShardConfig;
-use crate::backend::schema::sync::pg_dump::{PgDump, SyncState};
+use crate::backend::schema::sync::pg_dump::SyncState;
 use crate::backend::{databases::databases, replication::logical::Publisher};
 use crate::config::{config, Config, Users};
 use crate::frontend::router::cli::RouterCli;
@@ -306,8 +305,6 @@ pub async fn schema_sync(commands: Commands) -> Result<(), Box<dyn std::error::E
             return Ok(());
         };
 
-    let dump = PgDump::new(&source, &publication);
-    let output = dump.dump().await?;
     let state = if data_sync_complete {
         SyncState::PostData
     } else if cutover {
@@ -316,18 +313,15 @@ pub async fn schema_sync(commands: Commands) -> Result<(), Box<dyn std::error::E
         SyncState::PreData
     };
 
-    if state == SyncState::PreData {
-        ShardConfig::sync_all(&destination).await?;
-    }
-
-    if dry_run {
-        let queries = output.statements(state)?;
-        for query in queries {
-            println!("{}", query.deref());
-        }
-    } else {
-        output.restore(&destination, ignore_errors, state).await?;
-    }
+    crate::backend::schema::sync::schema_sync(
+        &source,
+        &destination,
+        &publication,
+        state,
+        dry_run,
+        ignore_errors,
+    )
+    .await?;
 
     Ok(())
 }

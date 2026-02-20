@@ -14,7 +14,11 @@ use tokio::{
 };
 
 use super::super::Error;
-use crate::backend::{pool::Address, replication::publisher::Table, Cluster, Pool};
+use crate::backend::{
+    pool::Address,
+    replication::{publisher::Table, status::ReplicationTracker},
+    Cluster, Pool,
+};
 
 struct ParallelSync {
     table: Table,
@@ -22,6 +26,7 @@ struct ParallelSync {
     dest: Cluster,
     tx: UnboundedSender<Result<Table, Error>>,
     permit: Arc<Semaphore>,
+    shard: usize,
 }
 
 impl ParallelSync {
@@ -36,10 +41,18 @@ impl ParallelSync {
                 .await
                 .map_err(|_| Error::ParallelConnection)?;
 
+            let tracker = ReplicationTracker::new(self.shard);
+
+            tracker.copy_data(&self.table);
+
             let result = match self.table.data_sync(&self.addr, &self.dest).await {
                 Ok(_) => Ok(self.table),
                 Err(err) => Err(err),
             };
+
+            if let Ok(ref result) = result {
+                tracker.copy_data_done(result);
+            }
 
             self.tx
                 .send(result)
@@ -56,11 +69,17 @@ pub struct ParallelSyncManager {
     tables: Vec<Table>,
     replicas: Vec<Pool>,
     dest: Cluster,
+    shard: usize,
 }
 
 impl ParallelSyncManager {
     /// Create parallel sync manager.
-    pub fn new(tables: Vec<Table>, replicas: Vec<Pool>, dest: &Cluster) -> Result<Self, Error> {
+    pub fn new(
+        tables: Vec<Table>,
+        replicas: Vec<Pool>,
+        dest: &Cluster,
+        shard: usize,
+    ) -> Result<Self, Error> {
         if replicas.is_empty() {
             return Err(Error::NoReplicas);
         }
@@ -70,6 +89,7 @@ impl ParallelSyncManager {
             tables,
             replicas,
             dest: dest.clone(),
+            shard,
         })
     }
 
@@ -96,6 +116,7 @@ impl ParallelSyncManager {
                 dest: self.dest.clone(),
                 tx: tx.clone(),
                 permit: self.permit.clone(),
+                shard: self.shard,
             }
             .run();
         }

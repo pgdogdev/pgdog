@@ -17,7 +17,12 @@ use tracing::{info, trace, warn};
 
 use super::{progress::Progress, Error};
 use crate::{
-    backend::{self, pool::Request, replication::publisher::PublicationTable, Cluster},
+    backend::{
+        self,
+        pool::Request,
+        replication::{publisher::PublicationTable, status::ReplicationTracker},
+        Cluster,
+    },
     config::config,
     frontend::router::parser::{sequence::Sequence, Column, Table},
 };
@@ -152,6 +157,8 @@ impl PgDump {
         );
 
         for (num, shard) in self.source.shards().iter().enumerate() {
+            ReplicationTracker::new(num).schema_dump();
+
             let mut server = shard.primary_or_replica(&Request::default()).await?;
             let tables = PublicationTable::load(&self.publication, &mut server).await?;
             if comparison.is_empty() {
@@ -938,6 +945,19 @@ impl PgDumpOutput {
                                 let table =
                                     stmt.relation.as_ref().map(Table::from).unwrap_or_default();
 
+                                let index_schema = stmt
+                                    .relation
+                                    .as_ref()
+                                    .map(|r| schema_name(r))
+                                    .unwrap_or("public");
+                                result.push(Statement::Other {
+                                    sql: format!(
+                                        "DROP INDEX IF EXISTS \"{}\".\"{}\"",
+                                        index_schema, stmt.idxname
+                                    ),
+                                    idempotent: true,
+                                });
+
                                 result.push(Statement::Index {
                                     table,
                                     name: stmt.idxname.as_str(),
@@ -1040,7 +1060,9 @@ impl PgDumpOutput {
 
             let mut progress = Progress::new(stmts.len());
 
-            for stmt in &stmts {
+            for (idx, stmt) in stmts.iter().enumerate() {
+                ReplicationTracker::new(num).schema_restore(idx, stmts.len());
+
                 progress.next(stmt);
                 if let Err(err) = primary.execute(stmt.deref()).await {
                     if let backend::Error::ExecutionError(ref err) = err {

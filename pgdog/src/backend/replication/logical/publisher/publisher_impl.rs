@@ -12,7 +12,8 @@ use crate::backend::replication::logical::subscriber::stream::StreamSubscriber;
 use crate::backend::replication::publisher::progress::Progress;
 use crate::backend::replication::publisher::Lsn;
 use crate::backend::replication::{
-    logical::publisher::ReplicationData, publisher::ParallelSyncManager,
+    logical::publisher::ReplicationData, logical::status::ReplicationTracker,
+    publisher::ParallelSyncManager,
 };
 use crate::backend::{pool::Request, Cluster};
 use crate::config::Role;
@@ -70,6 +71,7 @@ impl Publisher {
     /// TODO: Add support for 2-phase commit.
     async fn create_slots(&mut self, slot_name: Option<String>) -> Result<(), Error> {
         for (number, shard) in self.cluster.shards().iter().enumerate() {
+            ReplicationTracker::new(number).create_slot();
             let addr = shard.primary(&Request::default()).await?.addr().clone();
 
             let mut slot =
@@ -127,6 +129,7 @@ impl Publisher {
             let handle = spawn(async move {
                 slot.start_replication().await?;
                 let progress = Progress::new_stream();
+                let tracker = ReplicationTracker::new(number);
 
                 loop {
                     select! {
@@ -166,6 +169,7 @@ impl Publisher {
 
                         _ = check_lag.tick() => {
                             let lag = slot.replication_lag().await?;
+                            tracker.replication_lag(lag);
 
                             info!(
                                 "replication lag at {} bytes [{}]",
@@ -231,7 +235,7 @@ impl Publisher {
                 resharding_only
             };
 
-            let manager = ParallelSyncManager::new(tables, replicas, dest)?;
+            let manager = ParallelSyncManager::new(tables, replicas, dest, number)?;
             let tables = manager.run().await?;
 
             info!(
