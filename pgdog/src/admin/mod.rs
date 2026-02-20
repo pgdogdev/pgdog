@@ -16,6 +16,7 @@ pub mod probe;
 pub mod reconnect;
 pub mod reload;
 pub mod reset_query_cache;
+pub mod reshard;
 pub mod server;
 pub mod set;
 pub mod setup_schema;

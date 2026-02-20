@@ -3,7 +3,7 @@
 use super::{
     ban::Ban, healthcheck::Healthcheck, maintenance_mode::MaintenanceMode, pause::Pause,
     prelude::Message, probe::Probe, reconnect::Reconnect, reload::Reload,
-    reset_query_cache::ResetQueryCache, set::Set, setup_schema::SetupSchema,
+    reset_query_cache::ResetQueryCache, reshard::Reshard, set::Set, setup_schema::SetupSchema,
     show_client_memory::ShowClientMemory, show_clients::ShowClients, show_config::ShowConfig,
     show_instance_id::ShowInstanceId, show_lists::ShowLists, show_mirrors::ShowMirrors,
     show_peers::ShowPeers, show_pools::ShowPools, show_prepared_statements::ShowPreparedStatements,
@@ -45,6 +45,7 @@ pub enum ParseResult {
     Probe(Probe),
     MaintenanceMode(MaintenanceMode),
     Healthcheck(Healthcheck),
+    Reshard(Reshard),
 }
 
 impl ParseResult {
@@ -81,6 +82,7 @@ impl ParseResult {
             Probe(probe) => probe.execute().await,
             MaintenanceMode(maintenance_mode) => maintenance_mode.execute().await,
             Healthcheck(healthcheck) => healthcheck.execute().await,
+            Reshard(reshard) => reshard.execute().await,
         }
     }
 
@@ -117,6 +119,7 @@ impl ParseResult {
             Probe(probe) => probe.name(),
             MaintenanceMode(maintenance_mode) => maintenance_mode.name(),
             Healthcheck(healthcheck) => healthcheck.name(),
+            Reshard(reshard) => reshard.name(),
         }
     }
 }
@@ -188,6 +191,7 @@ impl Parser {
                     return Err(Error::Syntax);
                 }
             },
+            "reshard" => ParseResult::Reshard(Reshard::parse(&sql)?),
             "probe" => ParseResult::Probe(Probe::parse(&sql)?),
             "maintenance" => ParseResult::MaintenanceMode(MaintenanceMode::parse(&sql)?),
             // TODO: This is not ready yet. We have a race and
