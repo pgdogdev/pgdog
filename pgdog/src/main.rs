@@ -153,6 +153,7 @@ async fn pgdog(command: Option<Commands>) -> Result<(), Box<dyn std::error::Erro
                 info!("🔄 entering data sync mode");
                 if let Err(err) = cli::data_sync(command.clone()).await {
                     error!("{}", err);
+                    return Err(err.into());
                 }
             }
 
@@ -160,6 +161,7 @@ async fn pgdog(command: Option<Commands>) -> Result<(), Box<dyn std::error::Erro
                 info!("🔄 entering schema sync mode");
                 if let Err(err) = cli::schema_sync(command.clone()).await {
                     error!("{}", err);
+                    return Err(err.into());
                 }
             }
 
@@ -171,6 +173,7 @@ async fn pgdog(command: Option<Commands>) -> Result<(), Box<dyn std::error::Erro
             if let Commands::Route { .. } = command {
                 if let Err(err) = cli::route(command.clone()).await {
                     error!("{}", err);
+                    return Err(err.into());
                 }
             }
         }

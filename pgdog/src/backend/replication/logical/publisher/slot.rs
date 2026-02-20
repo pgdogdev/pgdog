@@ -9,7 +9,7 @@ use crate::{
 };
 use std::{fmt::Display, str::FromStr, time::Duration};
 use tokio::time::timeout;
-use tracing::{debug, trace};
+use tracing::{debug, trace, warn};
 
 pub use pgdog_stats::Lsn;
 
@@ -226,7 +226,7 @@ impl ReplicationSlot {
         let drop_slot = self.drop_slot_query(true);
         self.server()?.execute(&drop_slot).await?;
 
-        debug!(
+        warn!(
             "replication slot \"{}\" dropped [{}]",
             self.name, self.address
         );

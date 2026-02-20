@@ -3,6 +3,8 @@
 use std::time::Duration;
 
 use pgdog_config::QueryParserEngine;
+use tokio::select;
+use tracing::error;
 
 use crate::backend::pool::Address;
 use crate::backend::replication::publisher::progress::Progress;
@@ -13,7 +15,9 @@ use crate::config::config;
 use crate::net::replication::StatusUpdate;
 
 use super::super::{subscriber::CopySubscriber, Error};
-use super::{Copy, PublicationTable, PublicationTableColumn, ReplicaIdentity, ReplicationSlot};
+use super::{
+    AbortSignal, Copy, PublicationTable, PublicationTableColumn, ReplicaIdentity, ReplicationSlot,
+};
 
 use tracing::info;
 
@@ -178,7 +182,12 @@ impl Table {
         Ok(())
     }
 
-    pub async fn data_sync(&mut self, source: &Address, dest: &Cluster) -> Result<Lsn, Error> {
+    pub async fn data_sync(
+        &mut self,
+        source: &Address,
+        dest: &Cluster,
+        abort: AbortSignal,
+    ) -> Result<Lsn, Error> {
         info!(
             "data sync for \"{}\".\"{}\" started [{}]",
             self.table.schema, self.table.name, source
@@ -208,8 +217,18 @@ impl Table {
         let progress = Progress::new_data_sync(&self.table);
 
         while let Some(data_row) = copy.data(slot.server()?).await? {
-            copy_sub.copy_data(data_row).await?;
-            progress.update(copy_sub.bytes_sharded(), slot.lsn().lsn);
+            select! {
+                _ = abort.aborted() =>  {
+                    error!("aborting data sync for table {}", self.table);
+
+                    return Err(Error::CopyAborted(self.table.clone()))
+                },
+
+                result = copy_sub.copy_data(data_row) => {
+                    result?;
+                    progress.update(copy_sub.bytes_sharded(), slot.lsn().lsn);
+                }
+            }
         }
 
         copy_sub.copy_done().await?;

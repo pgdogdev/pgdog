@@ -14,6 +14,7 @@ use tokio::{
 };
 
 use super::super::Error;
+use super::AbortSignal;
 use crate::backend::{
     pool::Address,
     replication::{publisher::Table, status::ReplicationTracker},
@@ -41,11 +42,16 @@ impl ParallelSync {
                 .await
                 .map_err(|_| Error::ParallelConnection)?;
 
+            if self.tx.is_closed() {
+                return Err(Error::DataSyncAborted);
+            }
+
             let tracker = ReplicationTracker::new(self.shard);
 
             tracker.copy_data(&self.table);
+            let abort = AbortSignal::new(self.tx.clone());
 
-            let result = match self.table.data_sync(&self.addr, &self.dest).await {
+            let result = match self.table.data_sync(&self.addr, &self.dest, abort).await {
                 Ok(_) => Ok(self.table),
                 Err(err) => Err(err),
             };
@@ -124,8 +130,7 @@ impl ParallelSyncManager {
         drop(tx);
 
         while let Some(table) = rx.recv().await {
-            let table = table?;
-            tables.push(table);
+            tables.push(table?);
         }
 
         Ok(tables)

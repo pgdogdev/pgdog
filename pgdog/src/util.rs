@@ -123,6 +123,26 @@ pub fn pgdog_version() -> String {
     )
 }
 
+/// Format a byte count into a human-readable string.
+pub fn format_bytes(bytes: u64) -> String {
+    const KB: u64 = 1024;
+    const MB: u64 = KB * 1024;
+    const GB: u64 = MB * 1024;
+    const TB: u64 = GB * 1024;
+
+    if bytes < KB {
+        format!("{} B", bytes)
+    } else if bytes < MB {
+        format!("{:.2} KB", bytes as f64 / KB as f64)
+    } else if bytes < GB {
+        format!("{:.2} MB", bytes as f64 / MB as f64)
+    } else if bytes < TB {
+        format!("{:.2} GB", bytes as f64 / GB as f64)
+    } else {
+        format!("{:.2} TB", bytes as f64 / TB as f64)
+    }
+}
+
 /// Get user and database parameters.
 pub fn user_database_from_params(params: &Parameters) -> (&str, &str) {
     let user = params.get_default("user", "postgres");
@@ -199,6 +219,20 @@ mod test {
             remove_var("NODE_ID");
         }
         assert!(node_id().is_err());
+    }
+
+    #[test]
+    fn test_format_bytes() {
+        assert_eq!(format_bytes(0), "0 B");
+        assert_eq!(format_bytes(1), "1 B");
+        assert_eq!(format_bytes(512), "512 B");
+        assert_eq!(format_bytes(1024), "1.00 KB");
+        assert_eq!(format_bytes(1536), "1.50 KB");
+        assert_eq!(format_bytes(1048576), "1.00 MB");
+        assert_eq!(format_bytes(1572864), "1.50 MB");
+        assert_eq!(format_bytes(1073741824), "1.00 GB");
+        assert_eq!(format_bytes(1610612736), "1.50 GB");
+        assert_eq!(format_bytes(1099511627776), "1.00 TB");
     }
 
     // These should run in separate processes (if using nextest).

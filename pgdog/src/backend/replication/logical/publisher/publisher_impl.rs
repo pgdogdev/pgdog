@@ -1,7 +1,11 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 
+use parking_lot::Mutex;
 use pgdog_config::QueryParserEngine;
+use tokio::sync::Notify;
+use tokio::task::JoinHandle;
 use tokio::{select, spawn, time::interval};
 use tracing::{debug, error, info};
 
@@ -18,8 +22,9 @@ use crate::backend::replication::{
 use crate::backend::{pool::Request, Cluster};
 use crate::config::Role;
 use crate::net::replication::ReplicationMeta;
+use crate::util::format_bytes;
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct Publisher {
     /// Destination cluster.
     cluster: Cluster,
@@ -31,6 +36,10 @@ pub struct Publisher {
     slots: HashMap<usize, ReplicationSlot>,
     /// Query parser engine.
     query_parser_engine: QueryParserEngine,
+    /// Replication lag.
+    replication_lag: Arc<Mutex<HashMap<usize, i64>>>,
+    /// Stop signal.
+    stop: Arc<Notify>,
 }
 
 impl Publisher {
@@ -45,6 +54,8 @@ impl Publisher {
             tables: HashMap::new(),
             slots: HashMap::new(),
             query_parser_engine,
+            replication_lag: Arc::new(Mutex::new(HashMap::new())),
+            stop: Arc::new(Notify::new()),
         }
     }
 
@@ -92,7 +103,8 @@ impl Publisher {
         &mut self,
         dest: &Cluster,
         slot_name: Option<String>,
-    ) -> Result<(), Error> {
+        is_async: bool,
+    ) -> Result<Vec<JoinHandle<Result<(), Error>>>, Error> {
         // Replicate shards in parallel.
         let mut streams = vec![];
 
@@ -124,6 +136,8 @@ impl Publisher {
             stream.set_current_lsn(slot.lsn().lsn);
 
             let mut check_lag = interval(Duration::from_secs(1));
+            let replication_lag = self.replication_lag.clone();
+            let stop = self.stop.clone();
 
             // Replicate in parallel.
             let handle = spawn(async move {
@@ -133,6 +147,10 @@ impl Publisher {
 
                 loop {
                     select! {
+                        _ = stop.notified() => {
+                            slot.stop_replication().await?;
+                        }
+
                         // This is cancellation-safe.
                         replication_data = slot.replicate(Duration::MAX) => {
                             let replication_data = replication_data?;
@@ -171,9 +189,14 @@ impl Publisher {
                             let lag = slot.replication_lag().await?;
                             tracker.replication_lag(lag);
 
+                            {
+                                let mut guard = replication_lag.lock();
+                                guard.insert(number, lag);
+                            }
+
                             info!(
                                 "replication lag at {} bytes [{}]",
-                                lag,
+                                format_bytes(lag as u64),
                                 slot.server()?.addr()
                             );
                         }
@@ -186,6 +209,10 @@ impl Publisher {
             streams.push(handle);
         }
 
+        if is_async {
+            return Ok(streams);
+        }
+
         for (shard, stream) in streams.into_iter().enumerate() {
             if let Err(err) = stream.await.unwrap() {
                 error!("error replicating from shard {}: {}", shard, err);
@@ -193,7 +220,17 @@ impl Publisher {
             }
         }
 
-        Ok(())
+        Ok(vec![])
+    }
+
+    /// Request the publisher to stop replication.
+    pub fn request_stop(&self) {
+        self.stop.notify_one();
+    }
+
+    /// Get current replication lag.
+    pub fn replication_lag(&self) -> HashMap<usize, i64> {
+        self.replication_lag.lock().clone()
     }
 
     /// Sync data from all tables in a publication from one shard to N shards,
@@ -203,7 +240,6 @@ impl Publisher {
     pub async fn data_sync(
         &mut self,
         dest: &Cluster,
-        replicate: bool,
         slot_name: Option<String>,
     ) -> Result<(), Error> {
         // Create replication slots.
@@ -249,9 +285,13 @@ impl Publisher {
             self.tables.insert(number, tables);
         }
 
-        if replicate {
-            // Replicate changes.
-            self.replicate(dest, slot_name).await?;
+        Ok(())
+    }
+
+    /// Cleanup after replication.
+    pub async fn cleanup(&mut self) -> Result<(), Error> {
+        for slot in self.slots.values_mut() {
+            slot.drop_slot().await?;
         }
 
         Ok(())

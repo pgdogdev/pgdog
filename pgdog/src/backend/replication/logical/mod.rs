@@ -1,5 +1,6 @@
 pub mod copy_statement;
 pub mod error;
+pub mod orchestrator;
 pub mod publisher;
 pub mod status;
 pub mod subscriber;
@@ -39,7 +40,7 @@ pub async fn reshard(source: &str, destination: &str, publication: &str) -> Resu
         config().config.general.query_parser_engine,
     );
 
-    publisher.data_sync(&dest, false, None).await?;
+    publisher.data_sync(&dest, None).await?;
 
     let src = src.clone();
     let dest = dest.clone();

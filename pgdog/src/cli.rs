@@ -1,15 +1,19 @@
+use std::ops::Deref;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use clap::{Parser, Subcommand};
 use std::fs::read_to_string;
 use thiserror::Error;
+use tokio::time::sleep;
 use tokio::{select, signal::ctrl_c};
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
+use crate::backend::databases::databases;
+use crate::backend::replication::orchestrator::Orchestrator;
 use crate::backend::schema::sync::config::ShardConfig;
 use crate::backend::schema::sync::pg_dump::SyncState;
-use crate::backend::{databases::databases, replication::logical::Publisher};
-use crate::config::{config, Config, Users};
+use crate::config::{Config, Users};
 use crate::frontend::router::cli::RouterCli;
 
 /// PgDog is a PostgreSQL pooler, proxy, load balancer and query router.
@@ -99,6 +103,10 @@ pub enum Commands {
         /// Name of the replication slot to create/use.
         #[arg(long)]
         replication_slot: Option<String>,
+
+        /// Don't perform pre-data schema sync.
+        #[arg(long)]
+        skip_schema_sync: bool,
     },
 
     /// Copy schema from source to destination cluster.
@@ -226,51 +234,71 @@ pub fn config_check(
 }
 
 pub async fn data_sync(commands: Commands) -> Result<(), Box<dyn std::error::Error>> {
-    let (source, destination, publication, replicate_only, sync_only, replication_slot) =
-        if let Commands::DataSync {
-            from_database,
-            to_database,
-            publication,
-            replicate_only,
-            sync_only,
-            replication_slot,
-        } = commands
-        {
-            let source = databases().schema_owner(&from_database)?;
-            let dest = databases().schema_owner(&to_database)?;
+    use crate::backend::replication::logical::Error;
 
-            (
-                source,
-                dest,
-                publication,
-                replicate_only,
-                sync_only,
-                replication_slot,
-            )
-        } else {
-            return Ok(());
-        };
+    if let Commands::DataSync {
+        from_database,
+        to_database,
+        publication,
+        replicate_only,
+        sync_only,
+        replication_slot,
+        skip_schema_sync,
+    } = commands
+    {
+        let mut orchestrator = Orchestrator::new(
+            &from_database,
+            &to_database,
+            &publication,
+            replication_slot.as_ref().map(|s| s.as_str()),
+        )?;
+        orchestrator.load_schema().await?;
 
-    let mut publication = Publisher::new(
-        &source,
-        &publication,
-        config().config.general.query_parser_engine,
-    );
-    if replicate_only {
-        if let Err(err) = publication.replicate(&destination, replication_slot).await {
-            error!("{}", err);
+        if !skip_schema_sync {
+            orchestrator.schema_sync_pre(true).await?;
         }
-    } else {
-        select! {
-            result = publication.data_sync(&destination, !sync_only, replication_slot) => {
-                if let Err(err) = result {
-                    error!("{}", err);
+
+        if !replicate_only {
+            select! {
+                result = orchestrator.data_sync() => {
+                    result?;
+                }
+
+                _ = ctrl_c() => {
+                    warn!("abort signal received, waiting 5 seconds and performing cleanup");
+                    sleep(Duration::from_secs(5)).await;
+
+                    orchestrator.cleanup().await?;
+
+                    return Err(Error::DataSyncAborted.into());
                 }
             }
-
-            _ = ctrl_c() => (),
-
         }
+
+        if !sync_only {
+            let mut waiter = orchestrator.replicate().await?;
+
+            select! {
+                result = waiter.wait() => {
+                    result?;
+                }
+
+                _ = ctrl_c() => {
+                    warn!("abort signal received");
+
+                    orchestrator.request_stop().await;
+
+                    info!("waiting for replication to stop");
+
+                    waiter.wait().await?;
+                    orchestrator.cleanup().await?;
+
+                    return Err(Error::DataSyncAborted.into());
+                }
+            }
+        }
+    } else {
+        return Ok(());
     }
 
     Ok(())
@@ -278,50 +306,45 @@ pub async fn data_sync(commands: Commands) -> Result<(), Box<dyn std::error::Err
 
 #[allow(clippy::print_stdout)]
 pub async fn schema_sync(commands: Commands) -> Result<(), Box<dyn std::error::Error>> {
-    let (source, destination, publication, dry_run, ignore_errors, data_sync_complete, cutover) =
-        if let Commands::SchemaSync {
-            from_database,
-            to_database,
-            publication,
-            dry_run,
-            ignore_errors,
-            data_sync_complete,
-            cutover,
-        } = commands
-        {
-            let source = databases().schema_owner(&from_database)?;
-            let dest = databases().schema_owner(&to_database)?;
-
-            (
-                source,
-                dest,
-                publication,
-                dry_run,
-                ignore_errors,
-                data_sync_complete,
-                cutover,
-            )
-        } else {
-            return Ok(());
-        };
-
-    let state = if data_sync_complete {
-        SyncState::PostData
-    } else if cutover {
-        SyncState::Cutover
-    } else {
-        SyncState::PreData
-    };
-
-    crate::backend::schema::sync::schema_sync(
-        &source,
-        &destination,
-        &publication,
-        state,
+    if let Commands::SchemaSync {
+        from_database,
+        to_database,
+        publication,
         dry_run,
         ignore_errors,
-    )
-    .await?;
+        data_sync_complete,
+        cutover,
+    } = commands
+    {
+        let mut orchestrator = Orchestrator::new(&from_database, &to_database, &publication, None)?;
+        orchestrator.load_schema().await?;
+
+        if dry_run {
+            let state = if data_sync_complete {
+                SyncState::PostData
+            } else if cutover {
+                SyncState::Cutover
+            } else {
+                SyncState::PreData
+            };
+
+            let schema = orchestrator.schema()?;
+            for statement in schema.statements(state)? {
+                println!("{}", statement.deref());
+            }
+            return Ok(());
+        }
+
+        if data_sync_complete {
+            orchestrator.schema_sync_post(ignore_errors).await?;
+        } else if cutover {
+            orchestrator.schema_sync_cutover(ignore_errors).await?;
+        } else {
+            orchestrator.schema_sync_pre(ignore_errors).await?;
+        }
+    } else {
+        return Ok(());
+    }
 
     Ok(())
 }
