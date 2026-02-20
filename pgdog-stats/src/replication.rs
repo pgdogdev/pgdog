@@ -21,6 +21,11 @@ impl Lsn {
         let low = ((lsn & 0xFFFF_FFFF) as u32) as i64;
         Self { high, low, lsn }
     }
+
+    /// Replication lag in bytes.
+    pub fn distance_bytes(&self, other: &Lsn) -> i64 {
+        self.lsn - other.lsn
+    }
 }
 
 impl FromDataType for Lsn {

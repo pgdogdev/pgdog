@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use pgdog_config::QueryParserEngine;
-use tokio::{select, spawn};
+use tokio::{select, spawn, time::interval};
 use tracing::{debug, error, info};
 
 use super::super::{publisher::Table, Error};
@@ -121,6 +121,8 @@ impl Publisher {
                 .ok_or(Error::NoReplicationSlot(number))?;
             stream.set_current_lsn(slot.lsn().lsn);
 
+            let mut check_lag = interval(Duration::from_secs(1));
+
             // Replicate in parallel.
             let handle = spawn(async move {
                 slot.start_replication().await?;
@@ -128,16 +130,23 @@ impl Publisher {
 
                 loop {
                     select! {
+                        // This is cancellation-safe.
                         replication_data = slot.replicate(Duration::MAX) => {
+                            let replication_data = replication_data?;
+
                             match replication_data {
-                                Ok(Some(ReplicationData::CopyData(data))) => {
-                                    let lsn = if let Some(ReplicationMeta::KeepAlive(ka)) = data.replication_meta() {
-                                        // If the LSN hasn't moved, we reached the end of the stream.
-                                        // If Postgres is getting requesting reply, provide our LSN now.
-                                        if !stream.set_current_lsn(ka.wal_end) || ka.reply() {
+                                Some(ReplicationData::CopyData(data)) => {
+                                    let lsn = if let Some(ReplicationMeta::KeepAlive(ka)) =
+                                        data.replication_meta()
+                                    {
+                                        if ka.reply() {
                                             slot.status_update(stream.status_update()).await?;
                                         }
-                                        debug!("origin at lsn {} [{}]", Lsn::from_i64(ka.wal_end), slot.server()?.addr());
+                                        debug!(
+                                            "origin at lsn {} [{}]",
+                                            Lsn::from_i64(ka.wal_end),
+                                            slot.server()?.addr()
+                                        );
                                         ka.wal_end
                                     } else {
                                         if let Some(status_update) = stream.handle(data).await? {
@@ -147,15 +156,22 @@ impl Publisher {
                                     };
                                     progress.update(stream.bytes_sharded(), lsn);
                                 }
-                                Ok(Some(ReplicationData::CopyDone)) => (),
-                                Ok(None) => {
+                                Some(ReplicationData::CopyDone) => (),
+                                None => {
                                     slot.drop_slot().await?;
                                     break;
                                 }
-                                Err(err) => {
-                                    return Err(err);
-                                }
                             }
+                        }
+
+                        _ = check_lag.tick() => {
+                            let lag = slot.replication_lag().await?;
+
+                            info!(
+                                "replication lag at {} bytes [{}]",
+                                lag,
+                                slot.server()?.addr()
+                            );
                         }
                     }
                 }
@@ -195,16 +211,25 @@ impl Publisher {
                 Table::load(&self.publication, &mut primary, self.query_parser_engine).await?;
 
             let include_primary = !shard.has_replicas();
-            let replicas = shard
-                .pools_with_roles()
+            let resharding_only = shard
+                .pools()
                 .into_iter()
-                .filter(|(r, _)| match *r {
-                    Role::Replica => true,
-                    Role::Primary => include_primary,
-                    Role::Auto => false,
-                })
-                .map(|(_, p)| p)
+                .filter(|pool| pool.config().resharding_only)
                 .collect::<Vec<_>>();
+            let replicas = if resharding_only.is_empty() {
+                shard
+                    .pools_with_roles()
+                    .into_iter()
+                    .filter(|(r, _)| match *r {
+                        Role::Replica => true,
+                        Role::Primary => include_primary,
+                        Role::Auto => false,
+                    })
+                    .map(|(_, p)| p)
+                    .collect::<Vec<_>>()
+            } else {
+                resharding_only
+            };
 
             let manager = ParallelSyncManager::new(tables, replicas, dest)?;
             let tables = manager.run().await?;

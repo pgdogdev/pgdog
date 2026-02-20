@@ -7,7 +7,7 @@ use super::super::super::bind::Format;
 use super::super::super::prelude::*;
 use super::string::unescape;
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct TupleData {
     pub columns: Vec<Column>,
 }

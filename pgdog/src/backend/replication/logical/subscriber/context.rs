@@ -4,7 +4,9 @@ use super::super::Error;
 use crate::{
     backend::Cluster,
     frontend::{
-        client::Sticky, router::parser::Shard, ClientRequest, Command, Router, RouterContext,
+        client::Sticky,
+        router::parser::{AstContext, Cache, Shard},
+        BufferedQuery, ClientRequest, Command, PreparedStatements, Router, RouterContext,
     },
     net::{replication::TupleData, Bind, Parameters, Parse},
 };
@@ -14,6 +16,7 @@ pub struct StreamContext<'a> {
     request: ClientRequest,
     cluster: &'a Cluster,
     bind: Bind,
+    parse: Parse,
 }
 
 impl<'a> StreamContext<'a> {
@@ -26,6 +29,7 @@ impl<'a> StreamContext<'a> {
             request,
             cluster,
             bind,
+            parse: stmt.clone(),
         }
     }
 
@@ -51,6 +55,16 @@ impl<'a> StreamContext<'a> {
         lazy_static! {
             static ref PARAMS: Parameters = Parameters::default();
         }
+
+        let ast_context = AstContext::from_cluster(&self.cluster, &PARAMS);
+
+        let ast = Cache::get().query(
+            &BufferedQuery::Prepared(self.parse.clone()),
+            &ast_context,
+            &mut PreparedStatements::default(),
+        )?;
+        self.request.ast = Some(ast);
+
         Ok(RouterContext::new(
             &self.request,
             self.cluster,
@@ -58,5 +72,35 @@ impl<'a> StreamContext<'a> {
             None,
             Sticky::new(),
         )?)
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use bytes::Bytes;
+
+    use crate::{
+        config::config,
+        net::replication::logical::tuple_data::{Column, Identifier},
+    };
+
+    use super::*;
+
+    #[test]
+    fn test_stream_context() {
+        let cluster = Cluster::new_test(&config());
+        let tuple = TupleData {
+            columns: vec![Column {
+                identifier: Identifier::Format(pgdog_postgres_types::Format::Text),
+                len: 1,
+                data: Bytes::from("1"),
+            }],
+        };
+        let parse = Parse::new_anonymous("INSERT INTO sharded (customer_id) VALUES ($1)");
+
+        let shard = StreamContext::new(&cluster, &tuple, &parse)
+            .shard()
+            .unwrap();
+        assert!(matches!(shard, Shard::Direct(_)));
     }
 }

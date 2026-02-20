@@ -123,6 +123,9 @@ pub struct Database {
     pub read_only: Option<bool>,
     /// Server lifetime.
     pub server_lifetime: Option<u64>,
+    /// Used for resharding only.
+    #[serde(default)]
+    pub resharding_only: bool,
 }
 
 impl Database {
