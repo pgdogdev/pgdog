@@ -1,12 +1,101 @@
 use std::{
     collections::{HashMap, HashSet},
+    ops::Deref,
     sync::Arc,
+    time::SystemTime,
 };
 
+use dashmap::DashMap;
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 
 use crate::backend::{databases::User, replication::publisher::Table, Cluster};
+
+static COPIES: Lazy<TableCopies> = Lazy::new(|| TableCopies::default());
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct TableCopy {
+    schema: String,
+    table: String,
+}
+
+impl TableCopy {
+    pub(crate) fn new(schema: &str, table: &str, sql: &str) -> Self {
+        let copy = Self {
+            schema: schema.to_owned(),
+            table: table.to_owned(),
+        };
+        TableCopies::get().insert(
+            copy.clone(),
+            TableCopyState {
+                sql: sql.to_owned(),
+                last_update: SystemTime::now(),
+                ..Default::default()
+            },
+        );
+        copy
+    }
+
+    pub(crate) fn update_progress(&self, bytes: usize, rows: usize) {
+        if let Some(mut state) = TableCopies::get().get_mut(self) {
+            state.bytes += bytes;
+            state.rows += rows;
+            let elapsed = SystemTime::now()
+                .duration_since(state.last_update)
+                .unwrap_or_default()
+                .as_secs_f64();
+            if elapsed > 0.0 {
+                state.bytes_per_sec = state.bytes / elapsed as usize;
+            }
+        }
+    }
+}
+
+impl Drop for TableCopy {
+    fn drop(&mut self) {
+        COPIES.copies.remove(self);
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct TableCopyState {
+    pub(crate) sql: String,
+    pub(crate) rows: usize,
+    pub(crate) bytes: usize,
+    pub(crate) bytes_per_sec: usize,
+    pub(crate) last_update: SystemTime,
+}
+
+impl Default for TableCopyState {
+    fn default() -> Self {
+        Self {
+            sql: String::default(),
+            rows: 0,
+            bytes: 0,
+            bytes_per_sec: 0,
+            last_update: SystemTime::now(),
+        }
+    }
+}
+
+#[derive(Default, Clone)]
+pub struct TableCopies {
+    copies: Arc<DashMap<TableCopy, TableCopyState>>,
+}
+
+impl Deref for TableCopies {
+    type Target = DashMap<TableCopy, TableCopyState>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.copies
+    }
+}
+
+impl TableCopies {
+    pub(crate) fn get() -> Self {
+        COPIES.clone()
+    }
+}
 
 static STATE: Lazy<Mutex<HashMap<usize, ReplicationState>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));

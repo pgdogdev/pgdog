@@ -10,6 +10,7 @@ use crate::backend::pool::Address;
 use crate::backend::replication::publisher::progress::Progress;
 use crate::backend::replication::publisher::Lsn;
 
+use crate::backend::replication::status::TableCopy;
 use crate::backend::{Cluster, Server};
 use crate::config::config;
 use crate::net::replication::StatusUpdate;
@@ -198,6 +199,12 @@ impl Table {
         // Subscriber uses COPY [...] FROM STDIN.
         let copy = Copy::new(self, config().config.general.resharding_copy_format);
 
+        let tracker = TableCopy::new(
+            &self.table.schema,
+            &self.table.name,
+            &copy.statement().copy_out(),
+        );
+
         // Create new standalone connection for the copy.
         // let mut server = Server::connect(source, ServerOptions::new_replication()).await?;
         let mut copy_sub = CopySubscriber::new(copy.statement(), dest, self.query_parser_engine)?;
@@ -225,8 +232,9 @@ impl Table {
                 },
 
                 result = copy_sub.copy_data(data_row) => {
-                    result?;
+                    let (rows, bytes) = result?;
                     progress.update(copy_sub.bytes_sharded(), slot.lsn().lsn);
+                    tracker.update_progress(bytes, rows);
                 }
             }
         }
