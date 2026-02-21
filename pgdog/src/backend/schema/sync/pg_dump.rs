@@ -20,7 +20,7 @@ use crate::{
     backend::{
         self,
         pool::Request,
-        replication::{publisher::PublicationTable, status::ReplicationTracker},
+        replication::{publisher::PublicationTable, status::SchemaStatement},
         Cluster,
     },
     config::config,
@@ -157,8 +157,6 @@ impl PgDump {
         );
 
         for (num, shard) in self.source.shards().iter().enumerate() {
-            ReplicationTracker::new(num).schema_dump();
-
             let mut server = shard.primary_or_replica(&Request::default()).await?;
             let tables = PublicationTable::load(&self.publication, &mut server).await?;
             if comparison.is_empty() {
@@ -227,11 +225,21 @@ pub struct PgDumpOutput {
     original: String,
 }
 
-#[derive(Debug, Copy, Clone, PartialEq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub enum SyncState {
     PreData,
     PostData,
     Cutover,
+}
+
+impl std::fmt::Display for SyncState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::PreData => write!(f, "pre_data"),
+            Self::PostData => write!(f, "post_data"),
+            Self::Cutover => write!(f, "cutover"),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -1060,10 +1068,10 @@ impl PgDumpOutput {
 
             let mut progress = Progress::new(stmts.len());
 
-            for (idx, stmt) in stmts.iter().enumerate() {
-                ReplicationTracker::new(num).schema_restore(idx, stmts.len());
-
+            for stmt in &stmts {
                 progress.next(stmt);
+                let _tracker = SchemaStatement::new(dest, stmt, num, state);
+
                 if let Err(err) = primary.execute(stmt.deref()).await {
                     if let backend::Error::ExecutionError(ref err) = err {
                         let code = &err.code;

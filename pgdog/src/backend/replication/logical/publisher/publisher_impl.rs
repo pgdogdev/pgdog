@@ -16,8 +16,7 @@ use crate::backend::replication::logical::subscriber::stream::StreamSubscriber;
 use crate::backend::replication::publisher::progress::Progress;
 use crate::backend::replication::publisher::Lsn;
 use crate::backend::replication::{
-    logical::publisher::ReplicationData, logical::status::ReplicationTracker,
-    publisher::ParallelSyncManager,
+    logical::publisher::ReplicationData, publisher::ParallelSyncManager,
 };
 use crate::backend::{pool::Request, Cluster};
 use crate::config::Role;
@@ -82,7 +81,6 @@ impl Publisher {
     /// TODO: Add support for 2-phase commit.
     async fn create_slots(&mut self, slot_name: Option<String>) -> Result<(), Error> {
         for (number, shard) in self.cluster.shards().iter().enumerate() {
-            ReplicationTracker::new(number).create_slot();
             let addr = shard.primary(&Request::default()).await?.addr().clone();
 
             let mut slot =
@@ -104,7 +102,7 @@ impl Publisher {
         dest: &Cluster,
         slot_name: Option<String>,
         is_async: bool,
-    ) -> Result<Vec<JoinHandle<Result<(), Error>>>, Error> {
+    ) -> Result<Waiter, Error> {
         // Replicate shards in parallel.
         let mut streams = vec![];
 
@@ -143,7 +141,6 @@ impl Publisher {
             let handle = spawn(async move {
                 slot.start_replication().await?;
                 let progress = Progress::new_stream();
-                let tracker = ReplicationTracker::new(number);
 
                 loop {
                     select! {
@@ -187,7 +184,6 @@ impl Publisher {
 
                         _ = check_lag.tick() => {
                             let lag = slot.replication_lag().await?;
-                            tracker.replication_lag(lag);
 
                             {
                                 let mut guard = replication_lag.lock();
@@ -210,7 +206,10 @@ impl Publisher {
         }
 
         if is_async {
-            return Ok(streams);
+            return Ok(Waiter {
+                streams,
+                stop: self.stop.clone(),
+            });
         }
 
         for (shard, stream) in streams.into_iter().enumerate() {
@@ -220,7 +219,10 @@ impl Publisher {
             }
         }
 
-        Ok(vec![])
+        Ok(Waiter {
+            streams: vec![],
+            stop: self.stop.clone(),
+        })
     }
 
     /// Request the publisher to stop replication.
@@ -271,7 +273,7 @@ impl Publisher {
                 resharding_only
             };
 
-            let manager = ParallelSyncManager::new(tables, replicas, dest, number)?;
+            let manager = ParallelSyncManager::new(tables, replicas, dest)?;
             let tables = manager.run().await?;
 
             info!(
@@ -292,6 +294,24 @@ impl Publisher {
     pub async fn cleanup(&mut self) -> Result<(), Error> {
         for slot in self.slots.values_mut() {
             slot.drop_slot().await?;
+        }
+
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+pub struct Waiter {
+    streams: Vec<JoinHandle<Result<(), Error>>>,
+    stop: Arc<Notify>,
+}
+
+impl Waiter {
+    pub async fn wait(&mut self) -> Result<(), Error> {
+        self.stop.notify_one();
+
+        for stream in &mut self.streams {
+            stream.await??;
         }
 
         Ok(())

@@ -15,7 +15,11 @@ use tokio::{
 
 use super::super::Error;
 use super::AbortSignal;
-use crate::backend::{pool::Address, replication::publisher::Table, Cluster, Pool};
+use crate::backend::{
+    pool::Address,
+    replication::{publisher::Table, status::TableCopy},
+    Cluster, Pool,
+};
 
 struct ParallelSync {
     table: Table,
@@ -23,13 +27,15 @@ struct ParallelSync {
     dest: Cluster,
     tx: UnboundedSender<Result<Table, Error>>,
     permit: Arc<Semaphore>,
-    shard: usize,
 }
 
 impl ParallelSync {
     // Run parallel sync.
     pub fn run(mut self) {
         spawn(async move {
+            // Record copy in queue before waiting for permit.
+            let tracker = TableCopy::new(&self.table.table.schema, &self.table.table.name);
+
             // This won't acquire until we have at least 1 available permit.
             // Permit will be given back when this task completes.
             let _permit = self
@@ -44,7 +50,11 @@ impl ParallelSync {
 
             let abort = AbortSignal::new(self.tx.clone());
 
-            let result = match self.table.data_sync(&self.addr, &self.dest, abort).await {
+            let result = match self
+                .table
+                .data_sync(&self.addr, &self.dest, abort, &tracker)
+                .await
+            {
                 Ok(_) => Ok(self.table),
                 Err(err) => Err(err),
             };
@@ -64,17 +74,11 @@ pub struct ParallelSyncManager {
     tables: Vec<Table>,
     replicas: Vec<Pool>,
     dest: Cluster,
-    shard: usize,
 }
 
 impl ParallelSyncManager {
     /// Create parallel sync manager.
-    pub fn new(
-        tables: Vec<Table>,
-        replicas: Vec<Pool>,
-        dest: &Cluster,
-        shard: usize,
-    ) -> Result<Self, Error> {
+    pub fn new(tables: Vec<Table>, replicas: Vec<Pool>, dest: &Cluster) -> Result<Self, Error> {
         if replicas.is_empty() {
             return Err(Error::NoReplicas);
         }
@@ -84,7 +88,6 @@ impl ParallelSyncManager {
             tables,
             replicas,
             dest: dest.clone(),
-            shard,
         })
     }
 
@@ -111,7 +114,6 @@ impl ParallelSyncManager {
                 dest: self.dest.clone(),
                 tx: tx.clone(),
                 permit: self.permit.clone(),
-                shard: self.shard,
             }
             .run();
         }

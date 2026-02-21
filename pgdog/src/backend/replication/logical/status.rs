@@ -1,16 +1,16 @@
-use std::{
-    collections::{HashMap, HashSet},
-    ops::Deref,
-    sync::Arc,
-    time::SystemTime,
+use std::{ops::Deref, sync::Arc, time::SystemTime};
+
+use dashmap::{DashMap, DashSet};
+use once_cell::sync::Lazy;
+use pgdog_stats::Lsn;
+
+use crate::backend::{
+    databases::User,
+    schema::sync::{Statement, SyncState},
+    Cluster,
 };
 
-use dashmap::DashMap;
-use once_cell::sync::Lazy;
-use parking_lot::Mutex;
-
-use crate::backend::{databases::User, replication::publisher::Table, Cluster};
-
+/// Status of table copies.
 static COPIES: Lazy<TableCopies> = Lazy::new(|| TableCopies::default());
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -20,7 +20,7 @@ pub struct TableCopy {
 }
 
 impl TableCopy {
-    pub(crate) fn new(schema: &str, table: &str, sql: &str) -> Self {
+    pub(crate) fn new(schema: &str, table: &str) -> Self {
         let copy = Self {
             schema: schema.to_owned(),
             table: table.to_owned(),
@@ -28,7 +28,6 @@ impl TableCopy {
         TableCopies::get().insert(
             copy.clone(),
             TableCopyState {
-                sql: sql.to_owned(),
                 last_update: SystemTime::now(),
                 ..Default::default()
             },
@@ -47,6 +46,12 @@ impl TableCopy {
             if elapsed > 0.0 {
                 state.bytes_per_sec = state.bytes / elapsed as usize;
             }
+        }
+    }
+
+    pub(crate) fn update_sql(&self, sql: &str) {
+        if let Some(mut state) = TableCopies::get().get_mut(self) {
+            state.sql = sql.to_owned();
         }
     }
 }
@@ -97,123 +102,195 @@ impl TableCopies {
     }
 }
 
-static STATE: Lazy<Mutex<HashMap<usize, ReplicationState>>> =
-    Lazy::new(|| Mutex::new(HashMap::new()));
-static REPLICATION: Lazy<Mutex<Option<ReplicationClusters>>> = Lazy::new(|| Mutex::new(None));
+static REPLICATION_SLOTS: Lazy<ReplicationSlots> = Lazy::new(ReplicationSlots::default);
 
-fn update_or_insert(tracker: &ReplicationTracker, state: State) {
-    let mut guard = STATE.lock();
-    if let Some(entry) = guard.get_mut(&tracker.shard) {
-        entry.state = state;
-    } else {
-        guard.insert(
-            tracker.shard,
-            ReplicationState {
-                state,
-                tables: HashSet::new(),
-            },
-        );
+/// Replication slot.
+#[derive(Debug, Clone)]
+pub struct ReplicationSlot {
+    pub(crate) name: String,
+    pub(crate) lsn: Lsn,
+    pub(crate) lag: i64,
+    pub(crate) copy_data: bool,
+}
+
+impl ReplicationSlot {
+    pub(crate) fn new(name: &str, lsn: &Lsn, copy_data: bool) -> Self {
+        let slot = Self {
+            name: name.to_owned(),
+            lsn: lsn.clone(),
+            copy_data,
+            lag: 0,
+        };
+
+        ReplicationSlots::get().insert(name.to_owned(), slot.clone());
+
+        slot
+    }
+
+    pub(crate) fn update_lsn(&self, lsn: &Lsn) {
+        if let Some(mut slot) = ReplicationSlots::get().get_mut(&self.name) {
+            slot.lsn = lsn.clone();
+        }
+    }
+
+    pub(crate) fn update_lag(&self, lag: i64) {
+        if let Some(mut slot) = ReplicationSlots::get().get_mut(&self.name) {
+            slot.lag = lag;
+        }
+    }
+
+    pub(crate) fn dropped(&self) {
+        ReplicationSlots::get().remove(&self.name);
     }
 }
 
-#[derive(Default, Clone)]
-pub struct ReplicationClusters {
-    pub src: Arc<User>,
-    pub dest: Arc<User>,
+impl Drop for ReplicationSlot {
+    fn drop(&mut self) {
+        if self.copy_data {
+            self.dropped();
+        }
+    }
 }
 
-impl ReplicationClusters {
-    pub fn start(src: &Cluster, dest: &Cluster) {
-        *REPLICATION.lock() = Some(ReplicationClusters {
-            src: src.identifier(),
-            dest: dest.identifier(),
-        });
-    }
+#[derive(Default, Clone, Debug)]
+pub struct ReplicationSlots {
+    slots: Arc<DashMap<String, ReplicationSlot>>,
+}
 
-    pub fn end() {
-        *REPLICATION.lock() = None;
-        STATE.lock().clear();
+impl ReplicationSlots {
+    pub(crate) fn get() -> Self {
+        REPLICATION_SLOTS.clone()
+    }
+}
+
+impl Deref for ReplicationSlots {
+    type Target = Arc<DashMap<String, ReplicationSlot>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.slots
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub(crate) struct ReplicationTracker {
-    shard: usize,
+pub enum StatementKind {
+    Table,
+    Index,
+    Statement,
 }
 
-#[derive(Debug, Clone, PartialEq, Default)]
-pub enum State {
-    #[default]
-    SchemaDump,
-    SchemaRestore {
-        stmt: usize,
-        total: usize,
-    },
-    CopyData {
-        table: usize,
-        total: usize,
-    },
-    CreateSlot,
-    Replication {
-        lag: i64,
-    },
-}
-
-#[derive(Default, Clone)]
-pub struct ReplicationState {
-    pub state: State,
-    pub tables: HashSet<Table>,
-}
-
-pub fn resharding_status() -> (
-    Option<ReplicationClusters>,
-    HashMap<usize, ReplicationState>,
-) {
-    let replication = REPLICATION.lock().clone();
-    let state = STATE.lock().clone();
-    (replication, state)
-}
-
-impl ReplicationTracker {
-    pub(crate) fn start(src: &Cluster, dest: &Cluster) {
-        ReplicationClusters::start(src, dest);
-    }
-
-    pub(crate) fn new(shard: usize) -> Self {
-        Self { shard }
-    }
-
-    pub(crate) fn schema_dump(&self) {
-        update_or_insert(self, State::SchemaDump);
-    }
-
-    pub(crate) fn schema_restore(&self, stmt: usize, total: usize) {
-        update_or_insert(self, State::SchemaRestore { stmt, total });
-    }
-
-    pub(crate) fn replication_lag(&self, lag: i64) {
-        update_or_insert(self, State::Replication { lag });
-    }
-
-    pub(crate) fn create_slot(&self) {
-        update_or_insert(self, State::CreateSlot);
-    }
-
-    pub(crate) fn copy_data(&self, table: &Table) {
-        STATE
-            .lock()
-            .entry(self.shard)
-            .or_insert_with(ReplicationState::default)
-            .tables
-            .insert(table.clone());
-    }
-
-    pub(crate) fn copy_data_done(&self, table: &Table) {
-        STATE
-            .lock()
-            .entry(self.shard)
-            .or_insert_with(ReplicationState::default)
-            .tables
-            .remove(table);
+impl std::fmt::Display for StatementKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Table => write!(f, "table"),
+            Self::Index => write!(f, "index"),
+            Self::Statement => write!(f, "statement"),
+        }
     }
 }
+
+#[derive(Debug, Clone, PartialEq, Hash, Eq)]
+pub struct SchemaStatement {
+    pub(crate) user: User,
+    pub(crate) shard: usize,
+    pub(crate) sql: String,
+    pub(crate) kind: StatementKind,
+    pub(crate) sync_state: SyncState,
+    pub(crate) started_at: SystemTime,
+    pub(crate) table_schema: Option<String>,
+    pub(crate) table_name: Option<String>,
+}
+
+impl SchemaStatement {
+    pub(crate) fn new(
+        cluster: &Cluster,
+        stmt: &Statement<'_>,
+        shard: usize,
+        sync_state: SyncState,
+    ) -> Self {
+        let user = cluster.identifier().deref().clone();
+
+        let stmt = match stmt {
+            Statement::Index { table, sql, .. } => Self {
+                user,
+                shard,
+                sql: sql.clone(),
+                kind: StatementKind::Index,
+                sync_state,
+                started_at: SystemTime::now(),
+                table_schema: table.schema.map(|s| s.to_string()),
+                table_name: Some(table.name.to_owned()),
+            },
+            Statement::Table { table, sql } => Self {
+                user,
+                shard,
+                sql: sql.clone(),
+                kind: StatementKind::Table,
+                sync_state,
+                started_at: SystemTime::now(),
+                table_schema: table.schema.map(|s| s.to_string()),
+                table_name: Some(table.name.to_owned()),
+            },
+            Statement::Other { sql, .. } => Self {
+                user,
+                shard,
+                sql: sql.clone(),
+                kind: StatementKind::Statement,
+                sync_state,
+                started_at: SystemTime::now(),
+                table_schema: None,
+                table_name: None,
+            },
+            Statement::SequenceOwner { sql, .. } => Self {
+                user,
+                shard,
+                sql: sql.to_string(),
+                kind: StatementKind::Statement,
+                sync_state,
+                started_at: SystemTime::now(),
+                table_schema: None,
+                table_name: None,
+            },
+            Statement::SequenceSetMax { sql, .. } => Self {
+                user,
+                shard,
+                sql: sql.clone(),
+                kind: StatementKind::Statement,
+                sync_state,
+                started_at: SystemTime::now(),
+                table_schema: None,
+                table_name: None,
+            },
+        };
+
+        SchemaStatements::get().insert(stmt.clone());
+
+        stmt
+    }
+}
+
+impl Drop for SchemaStatement {
+    fn drop(&mut self) {
+        SchemaStatements::get().remove(self);
+    }
+}
+
+#[derive(Default, Debug, Clone)]
+pub struct SchemaStatements {
+    stmts: Arc<DashSet<SchemaStatement>>,
+}
+
+impl SchemaStatements {
+    pub(crate) fn get() -> Self {
+        SCHEMA_STATEMENTS.clone()
+    }
+}
+
+impl Deref for SchemaStatements {
+    type Target = Arc<DashSet<SchemaStatement>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.stmts
+    }
+}
+
+static SCHEMA_STATEMENTS: Lazy<SchemaStatements> = Lazy::new(SchemaStatements::default);

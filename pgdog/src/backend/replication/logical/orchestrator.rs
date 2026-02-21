@@ -8,7 +8,7 @@ use crate::{
     util::format_bytes,
 };
 use std::{sync::Arc, time::Duration};
-use tokio::{sync::Mutex, task::JoinHandle, time::interval};
+use tokio::{sync::Mutex, time::interval};
 use tracing::{error, info};
 
 use super::*;
@@ -107,11 +107,9 @@ impl Orchestrator {
     ///
     pub(crate) async fn replicate(&self) -> Result<Waiter, Error> {
         let mut publisher = self.publisher.lock().await;
-        let streams = publisher
+        publisher
             .replicate(&self.destination, self.replication_slot.clone(), true)
-            .await?;
-
-        Ok(Waiter { streams })
+            .await
     }
 
     /// Request replication stop.
@@ -254,20 +252,6 @@ impl Orchestrator {
     pub(crate) async fn cleanup(&mut self) -> Result<(), Error> {
         let mut guard = self.publisher.lock().await;
         guard.cleanup().await?;
-
-        Ok(())
-    }
-}
-
-pub(crate) struct Waiter {
-    streams: Vec<JoinHandle<Result<(), Error>>>,
-}
-
-impl Waiter {
-    pub(crate) async fn wait(&mut self) -> Result<(), Error> {
-        for stream in &mut self.streams {
-            stream.await??;
-        }
 
         Ok(())
     }

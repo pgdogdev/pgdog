@@ -1,16 +1,19 @@
 //! Admin command parser.
 
 use super::{
-    ban::Ban, healthcheck::Healthcheck, maintenance_mode::MaintenanceMode, pause::Pause,
-    prelude::Message, probe::Probe, reconnect::Reconnect, reload::Reload,
-    reset_query_cache::ResetQueryCache, reshard::Reshard, set::Set, setup_schema::SetupSchema,
+    ban::Ban, copy_data::CopyData, healthcheck::Healthcheck, maintenance_mode::MaintenanceMode,
+    pause::Pause, prelude::Message, probe::Probe, reconnect::Reconnect, reload::Reload,
+    replicate::Replicate, reset_query_cache::ResetQueryCache, reshard::Reshard,
+    schema_sync::SchemaSync, set::Set, setup_schema::SetupSchema,
     show_client_memory::ShowClientMemory, show_clients::ShowClients, show_config::ShowConfig,
     show_instance_id::ShowInstanceId, show_lists::ShowLists, show_mirrors::ShowMirrors,
     show_peers::ShowPeers, show_pools::ShowPools, show_prepared_statements::ShowPreparedStatements,
     show_query_cache::ShowQueryCache, show_replication::ShowReplication,
-    show_resharding::ShowResharding, show_server_memory::ShowServerMemory,
-    show_servers::ShowServers, show_stats::ShowStats, show_transactions::ShowTransactions,
-    show_version::ShowVersion, shutdown::Shutdown, Command, Error,
+    show_replication_slots::ShowReplicationSlots, show_resharding::ShowResharding,
+    show_schema_sync::ShowSchemaSync, show_server_memory::ShowServerMemory,
+    show_servers::ShowServers, show_stats::ShowStats, show_table_copies::ShowTableCopies,
+    show_transactions::ShowTransactions, show_version::ShowVersion, shutdown::Shutdown, Command,
+    Error,
 };
 
 use tracing::debug;
@@ -40,12 +43,18 @@ pub enum ParseResult {
     ShowResharding(ShowResharding),
     ShowServerMemory(ShowServerMemory),
     ShowClientMemory(ShowClientMemory),
+    ShowTableCopies(ShowTableCopies),
+    ShowReplicationSlots(ShowReplicationSlots),
+    ShowSchemaSync(ShowSchemaSync),
     Set(Set),
     Ban(Ban),
     Probe(Probe),
     MaintenanceMode(MaintenanceMode),
     Healthcheck(Healthcheck),
     Reshard(Reshard),
+    SchemaSync(SchemaSync),
+    CopyData(CopyData),
+    Replicate(Replicate),
 }
 
 impl ParseResult {
@@ -77,12 +86,18 @@ impl ParseResult {
             ShowResharding(cmd) => cmd.execute().await,
             ShowServerMemory(show_server_memory) => show_server_memory.execute().await,
             ShowClientMemory(show_client_memory) => show_client_memory.execute().await,
+            ShowTableCopies(show_table_copies) => show_table_copies.execute().await,
+            ShowReplicationSlots(cmd) => cmd.execute().await,
+            ShowSchemaSync(cmd) => cmd.execute().await,
             Set(set) => set.execute().await,
             Ban(ban) => ban.execute().await,
             Probe(probe) => probe.execute().await,
             MaintenanceMode(maintenance_mode) => maintenance_mode.execute().await,
             Healthcheck(healthcheck) => healthcheck.execute().await,
             Reshard(reshard) => reshard.execute().await,
+            SchemaSync(cmd) => cmd.execute().await,
+            CopyData(cmd) => cmd.execute().await,
+            Replicate(cmd) => cmd.execute().await,
         }
     }
 
@@ -114,12 +129,18 @@ impl ParseResult {
             ShowResharding(cmd) => cmd.name(),
             ShowServerMemory(show_server_memory) => show_server_memory.name(),
             ShowClientMemory(show_client_memory) => show_client_memory.name(),
+            ShowTableCopies(show_table_copies) => show_table_copies.name(),
+            ShowReplicationSlots(cmd) => cmd.name(),
+            ShowSchemaSync(cmd) => cmd.name(),
             Set(set) => set.name(),
             Ban(ban) => ban.name(),
             Probe(probe) => probe.name(),
             MaintenanceMode(maintenance_mode) => maintenance_mode.name(),
             Healthcheck(healthcheck) => healthcheck.name(),
             Reshard(reshard) => reshard.name(),
+            SchemaSync(cmd) => cmd.name(),
+            CopyData(cmd) => cmd.name(),
+            Replicate(cmd) => cmd.name(),
         }
     }
 }
@@ -169,7 +190,12 @@ impl Parser {
                 "lists" => ParseResult::ShowLists(ShowLists::parse(&sql)?),
                 "prepared" => ParseResult::ShowPrepared(ShowPreparedStatements::parse(&sql)?),
                 "replication" => ParseResult::ShowReplication(ShowReplication::parse(&sql)?),
+                "replication_slots" => {
+                    ParseResult::ShowReplicationSlots(ShowReplicationSlots::parse(&sql)?)
+                }
                 "resharding" => ParseResult::ShowResharding(ShowResharding::parse(&sql)?),
+                "schema_sync" => ParseResult::ShowSchemaSync(ShowSchemaSync::parse(&sql)?),
+                "table_copies" => ParseResult::ShowTableCopies(ShowTableCopies::parse(&sql)?),
                 command => {
                     debug!("unknown admin show command: '{}'", command);
                     return Err(Error::Syntax);
@@ -190,6 +216,9 @@ impl Parser {
                 }
             },
             "reshard" => ParseResult::Reshard(Reshard::parse(&sql)?),
+            "schema_sync" => ParseResult::SchemaSync(SchemaSync::parse(&sql)?),
+            "copy_data" => ParseResult::CopyData(CopyData::parse(&sql)?),
+            "replicate" => ParseResult::Replicate(Replicate::parse(&sql)?),
             "probe" => ParseResult::Probe(Probe::parse(&sql)?),
             "maintenance" => ParseResult::MaintenanceMode(MaintenanceMode::parse(&sql)?),
             // TODO: This is not ready yet. We have a race and

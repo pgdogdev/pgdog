@@ -1,3 +1,4 @@
+pub mod admin;
 pub mod copy_statement;
 pub mod error;
 pub mod orchestrator;
@@ -5,10 +6,11 @@ pub mod publisher;
 pub mod status;
 pub mod subscriber;
 
+pub use admin::*;
 pub use copy_statement::CopyStatement;
 pub use error::Error;
 
-pub use publisher::publisher_impl::Publisher;
+pub use publisher::publisher_impl::{Publisher, Waiter};
 pub use subscriber::{CopySubscriber, StreamSubscriber};
 
 use crate::{

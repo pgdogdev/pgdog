@@ -1,3 +1,4 @@
+use super::super::status::ReplicationSlot as ReplicationSlotTracker;
 use super::super::Error;
 use crate::{
     backend::{self, pool::Address, ConnectReason, Server, ServerOptions},
@@ -47,6 +48,7 @@ pub struct ReplicationSlot {
     server: Option<Server>,
     kind: SlotKind,
     server_meta: Option<Server>,
+    tracker: Option<ReplicationSlotTracker>,
 }
 
 impl ReplicationSlot {
@@ -64,6 +66,7 @@ impl ReplicationSlot {
             server: None,
             kind: SlotKind::Replication,
             server_meta: None,
+            tracker: None,
         }
     }
 
@@ -81,6 +84,7 @@ impl ReplicationSlot {
             server: None,
             kind: SlotKind::DataSync,
             server_meta: None,
+            tracker: None,
         }
     }
 
@@ -125,8 +129,15 @@ impl ReplicationSlot {
         );
         let mut lag: Vec<i64> = self.server_meta().await?.fetch_all(&query).await?;
 
-        lag.pop()
-            .ok_or(Error::MissingReplicationSlot(self.name.clone()))
+        let lag = lag
+            .pop()
+            .ok_or(Error::MissingReplicationSlot(self.name.clone()))?;
+
+        if let Some(ref tracker) = self.tracker {
+            tracker.update_lag(lag);
+        }
+
+        Ok(lag)
     }
 
     pub fn server(&mut self) -> Result<&mut Server, Error> {
@@ -180,6 +191,11 @@ impl ReplicationSlot {
                     .ok_or(Error::MissingData)?;
                 let lsn = Lsn::from_str(&lsn)?;
                 self.lsn = lsn;
+                self.tracker = Some(ReplicationSlotTracker::new(
+                    &self.name,
+                    &self.lsn,
+                    self.dropped,
+                ));
 
                 debug!(
                     "replication slot \"{}\" at lsn {} created [{}]",
@@ -201,6 +217,11 @@ impl ReplicationSlot {
                         {
                             let lsn = Lsn::from_str(&lsn)?;
                             self.lsn = lsn;
+                            self.tracker = Some(ReplicationSlotTracker::new(
+                                &self.name,
+                                &self.lsn,
+                                self.dropped,
+                            ));
 
                             debug!(
                                 "using existing replication slot \"{}\" at lsn {} [{}]",
@@ -231,6 +252,7 @@ impl ReplicationSlot {
             self.name, self.address
         );
         self.dropped = true;
+        self.tracker.take().map(|slot| slot.dropped());
 
         Ok(())
     }
@@ -305,6 +327,10 @@ impl ReplicationSlot {
             status_update.last_flushed,
             self.server()?.addr()
         );
+
+        self.tracker
+            .as_ref()
+            .map(|tracker| tracker.update_lsn(&Lsn::from_i64(status_update.last_flushed)));
 
         self.server()?
             .send_one(&status_update.wrapped()?.into())

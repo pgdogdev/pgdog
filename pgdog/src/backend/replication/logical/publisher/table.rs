@@ -188,6 +188,7 @@ impl Table {
         source: &Address,
         dest: &Cluster,
         abort: AbortSignal,
+        tracker: &TableCopy,
     ) -> Result<Lsn, Error> {
         info!(
             "data sync for \"{}\".\"{}\" started [{}]",
@@ -199,11 +200,7 @@ impl Table {
         // Subscriber uses COPY [...] FROM STDIN.
         let copy = Copy::new(self, config().config.general.resharding_copy_format);
 
-        let tracker = TableCopy::new(
-            &self.table.schema,
-            &self.table.name,
-            &copy.statement().copy_out(),
-        );
+        tracker.update_sql(&copy.statement().copy_out());
 
         // Create new standalone connection for the copy.
         // let mut server = Server::connect(source, ServerOptions::new_replication()).await?;

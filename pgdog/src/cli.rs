@@ -7,7 +7,7 @@ use std::fs::read_to_string;
 use thiserror::Error;
 use tokio::time::sleep;
 use tokio::{select, signal::ctrl_c};
-use tracing::{error, info, warn};
+use tracing::{info, warn};
 
 use crate::backend::databases::databases;
 use crate::backend::replication::orchestrator::Orchestrator;
