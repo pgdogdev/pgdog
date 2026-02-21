@@ -1,7 +1,7 @@
 use once_cell::sync::Lazy;
 use pg_query::scan_raw;
 use pg_query::{protobuf::Token, scan};
-use pgdog_config::QueryParserEngine;
+use pgdog_config::{CrossShardBackend, QueryParserEngine};
 use regex::Regex;
 
 use crate::backend::ShardingSchema;
@@ -16,12 +16,21 @@ static SHARDING_KEY: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r#"pgdog_sharding_key: *(?:"([^"]*)"|'([^']*)'|([0-9a-zA-Z-]+))"#).unwrap()
 });
 static ROLE: Lazy<Regex> = Lazy::new(|| Regex::new(r#"pgdog_role: *(primary|replica)"#).unwrap());
+static BACKEND: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r#"pgdog_cross_shard_backend: fdw"#).unwrap());
 
 fn get_matched_value<'a>(caps: &'a regex::Captures<'a>) -> Option<&'a str> {
     caps.get(1)
         .or_else(|| caps.get(2))
         .or_else(|| caps.get(3))
         .map(|m| m.as_str())
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct CommentRoute {
+    pub shard: Option<Shard>,
+    pub role: Option<Role>,
+    pub cross_shard_backend: Option<CrossShardBackend>,
 }
 
 /// Extract shard number from a comment.
@@ -31,16 +40,13 @@ fn get_matched_value<'a>(caps: &'a regex::Captures<'a>) -> Option<&'a str> {
 ///
 /// See [`SHARD`] and [`SHARDING_KEY`] for the style of comment we expect.
 ///
-pub fn comment(
-    query: &str,
-    schema: &ShardingSchema,
-) -> Result<(Option<Shard>, Option<Role>), Error> {
+pub fn comment(query: &str, schema: &ShardingSchema) -> Result<CommentRoute, Error> {
     let tokens = match schema.query_parser_engine {
         QueryParserEngine::PgQueryProtobuf => scan(query),
         QueryParserEngine::PgQueryRaw => scan_raw(query),
     }
     .map_err(Error::PgQuery)?;
-    let mut role = None;
+    let mut comment_route = CommentRoute::default();
 
     for token in tokens.tokens.iter() {
         if token.token == Token::CComment as i32 {
@@ -48,8 +54,8 @@ pub fn comment(
             if let Some(cap) = ROLE.captures(comment) {
                 if let Some(r) = cap.get(1) {
                     match r.as_str() {
-                        "primary" => role = Some(Role::Primary),
-                        "replica" => role = Some(Role::Replica),
+                        "primary" => comment_route.role = Some(Role::Primary),
+                        "replica" => comment_route.role = Some(Role::Replica),
                         _ => return Err(Error::RegexError),
                     }
                 }
@@ -57,33 +63,33 @@ pub fn comment(
             if let Some(cap) = SHARDING_KEY.captures(comment) {
                 if let Some(sharding_key) = get_matched_value(&cap) {
                     if let Some(schema) = schema.schemas.get(Some(sharding_key.into())) {
-                        return Ok((Some(schema.shard().into()), role));
+                        comment_route.shard = Some(schema.shard().into());
+                    } else {
+                        let ctx = ContextBuilder::infer_from_from_and_config(sharding_key, schema)?
+                            .shards(schema.shards)
+                            .build()?;
+                        comment_route.shard = Some(ctx.apply()?);
                     }
-                    let ctx = ContextBuilder::infer_from_from_and_config(sharding_key, schema)?
-                        .shards(schema.shards)
-                        .build()?;
-                    return Ok((Some(ctx.apply()?), role));
+                }
+            } else if let Some(cap) = SHARD.captures(comment) {
+                if let Some(shard) = cap.get(1) {
+                    comment_route.shard = Some(
+                        shard
+                            .as_str()
+                            .parse::<usize>()
+                            .ok()
+                            .map(Shard::Direct)
+                            .unwrap_or(Shard::All),
+                    );
                 }
             }
-            if let Some(cap) = SHARD.captures(comment) {
-                if let Some(shard) = cap.get(1) {
-                    return Ok((
-                        Some(
-                            shard
-                                .as_str()
-                                .parse::<usize>()
-                                .ok()
-                                .map(Shard::Direct)
-                                .unwrap_or(Shard::All),
-                        ),
-                        role,
-                    ));
-                }
+            if let Some(_) = BACKEND.captures(comment) {
+                comment_route.cross_shard_backend = Some(CrossShardBackend::Fdw);
             }
         }
     }
 
-    Ok((None, role))
+    Ok(comment_route)
 }
 
 #[cfg(test)]
@@ -167,7 +173,7 @@ mod tests {
 
         let query = "SELECT * FROM users /* pgdog_role: primary */";
         let result = comment(query, &schema).unwrap();
-        assert_eq!(result.1, Some(Role::Primary));
+        assert_eq!(result.role, Some(Role::Primary));
     }
 
     #[test]
@@ -182,8 +188,8 @@ mod tests {
 
         let query = "SELECT * FROM users /* pgdog_role: replica pgdog_shard: 2 */";
         let result = comment(query, &schema).unwrap();
-        assert_eq!(result.0, Some(Shard::Direct(2)));
-        assert_eq!(result.1, Some(Role::Replica));
+        assert_eq!(result.shard, Some(Shard::Direct(2)));
+        assert_eq!(result.role, Some(Role::Replica));
     }
 
     #[test]
@@ -198,7 +204,7 @@ mod tests {
 
         let query = "SELECT * FROM users /* pgdog_role: replica */";
         let result = comment(query, &schema).unwrap();
-        assert_eq!(result.1, Some(Role::Replica));
+        assert_eq!(result.role, Some(Role::Replica));
     }
 
     #[test]
@@ -213,7 +219,7 @@ mod tests {
 
         let query = "SELECT * FROM users /* pgdog_role: invalid */";
         let result = comment(query, &schema).unwrap();
-        assert_eq!(result.1, None);
+        assert_eq!(result.role, None);
     }
 
     #[test]
@@ -228,7 +234,14 @@ mod tests {
 
         let query = "SELECT * FROM users";
         let result = comment(query, &schema).unwrap();
-        assert_eq!(result.1, None);
+        assert_eq!(result.role, None);
+    }
+
+    #[test]
+    fn test_fdw_fallback() {
+        let query = "/* pgdog_cross_shard_backend: fdw */ SELECT * FROM users";
+        let result = comment(query, &ShardingSchema::default()).unwrap();
+        assert_eq!(result.cross_shard_backend, Some(CrossShardBackend::Fdw));
     }
 
     #[test]
@@ -253,6 +266,6 @@ mod tests {
 
         let query = "SELECT * FROM users /* pgdog_sharding_key: sales */";
         let result = comment(query, &schema).unwrap();
-        assert_eq!(result.0, Some(Shard::Direct(1)));
+        assert_eq!(result.shard, Some(Shard::Direct(1)));
     }
 }

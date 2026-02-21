@@ -313,6 +313,15 @@ impl ListShards {
             Ok(None)
         }
     }
+
+    /// Get all values that map to a specific shard.
+    pub fn values_for_shard(&self, shard: usize) -> Vec<&FlexibleType> {
+        self.mapping
+            .iter()
+            .filter(|(_, &s)| s == shard)
+            .map(|(v, _)| v)
+            .collect()
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Eq, Hash, Default)]
@@ -388,6 +397,44 @@ impl FromStr for LoadSchema {
             "off" => Self::Off,
             _ => return Err(()),
         })
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Eq, Hash, Default)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub enum CrossShardBackend {
+    #[default]
+    Pgdog,
+    Fdw,
+    Hybrid,
+}
+
+impl CrossShardBackend {
+    pub fn need_fdw(&self) -> bool {
+        matches!(self, Self::Fdw | Self::Hybrid)
+    }
+}
+
+impl Display for CrossShardBackend {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Pgdog => write!(f, "pgdog"),
+            Self::Fdw => write!(f, "fdw"),
+            Self::Hybrid => write!(f, "hybrid"),
+        }
+    }
+}
+
+impl FromStr for CrossShardBackend {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "pgdog" => Ok(Self::Pgdog),
+            "fdw" => Ok(Self::Fdw),
+            "hybrid" => Ok(Self::Hybrid),
+            _ => Err(()),
+        }
     }
 }
 

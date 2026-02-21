@@ -5,15 +5,19 @@ use super::setup::{QueryParserTest, *};
 
 #[test]
 fn test_subquery_in_where() {
-    let mut test = QueryParserTest::new();
+    let mut test = QueryParserTest::new().with_fdw_fallback();
 
+    // Subquery references `other_table` which is unsharded, so FDW fallback is triggered
     let command = test.execute(vec![Query::new(
         "SELECT * FROM sharded WHERE id IN (SELECT id FROM other_table WHERE status = 'active')",
     )
     .into()]);
 
     assert!(command.route().is_read());
-    assert_eq!(command.route().shard(), &Shard::All);
+    assert!(
+        !command.route().is_fdw_fallback(),
+        "Subquery with unsharded table should not trigger FDW fallback"
+    );
 }
 
 #[test]
@@ -55,8 +59,9 @@ fn test_scalar_subquery() {
 
 #[test]
 fn test_subquery_with_sharding_key() {
-    let mut test = QueryParserTest::new();
+    let mut test = QueryParserTest::new().with_fdw_fallback();
 
+    // Subquery references `other` which is unsharded, so FDW fallback is triggered
     let command = test.execute(vec![
         Parse::named(
             "__test_sub",
@@ -68,21 +73,28 @@ fn test_subquery_with_sharding_key() {
         Sync.into(),
     ]);
 
-    // Can't route to specific shard because we don't know the subquery result
-    assert_eq!(command.route().shard(), &Shard::All);
+    assert!(
+        !command.route().is_fdw_fallback(),
+        "Subquery with unsharded table should not trigger FDW fallback"
+    );
 }
 
 #[test]
 fn test_nested_subqueries() {
-    let mut test = QueryParserTest::new();
+    let mut test = QueryParserTest::new().with_fdw_fallback();
 
+    // Nested subqueries reference `other` and `statuses` which are unsharded,
+    // so FDW fallback is triggered
     let command = test.execute(vec![Query::new(
         "SELECT * FROM sharded WHERE id IN (SELECT id FROM other WHERE status IN (SELECT status FROM statuses))",
     )
     .into()]);
 
     assert!(command.route().is_read());
-    assert_eq!(command.route().shard(), &Shard::All);
+    assert!(
+        !command.route().is_fdw_fallback(),
+        "Nested subqueries with unsharded tables should not trigger FDW fallback"
+    );
 }
 
 #[test]

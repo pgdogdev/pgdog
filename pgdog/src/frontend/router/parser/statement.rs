@@ -245,6 +245,11 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
         self
     }
 
+    /// Get the sharding schema reference.
+    pub fn sharding_schema(&self) -> &ShardingSchema {
+        self.schema
+    }
+
     pub fn from_select(
         stmt: &'a SelectStmt,
         bind: Option<&'b Bind>,

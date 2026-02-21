@@ -1,0 +1,9 @@
+[[users]]
+name = "pgdog"
+password = "pgdog"
+database = "pgdog"
+
+[[users]]
+name = "lev"
+password = "lev"
+database = "pgdog"

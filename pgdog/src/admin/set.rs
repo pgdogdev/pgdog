@@ -180,6 +180,10 @@ impl Command for Set {
                 config.config.general.connect_timeout = self.value.parse()?;
             }
 
+            "cross_shard_backend" => {
+                config.config.general.cross_shard_backend = Self::from_json(&self.value)?;
+            }
+
             _ => return Err(Error::Syntax),
         }
 

@@ -14,6 +14,10 @@ fn test_create_table() {
 
     assert!(command.route().is_write());
     assert_eq!(command.route().shard(), &Shard::All);
+    assert!(
+        !command.route().is_fdw_fallback(),
+        "DDL should not trigger FDW fallback"
+    );
 }
 
 #[test]
@@ -24,6 +28,10 @@ fn test_drop_table() {
 
     assert!(command.route().is_write());
     assert_eq!(command.route().shard(), &Shard::All);
+    assert!(
+        !command.route().is_fdw_fallback(),
+        "DDL should not trigger FDW fallback"
+    );
 }
 
 #[test]
@@ -37,6 +45,10 @@ fn test_alter_table() {
 
     assert!(command.route().is_write());
     assert_eq!(command.route().shard(), &Shard::All);
+    assert!(
+        !command.route().is_fdw_fallback(),
+        "DDL should not trigger FDW fallback"
+    );
 }
 
 #[test]
@@ -49,6 +61,10 @@ fn test_create_index() {
 
     assert!(command.route().is_write());
     assert_eq!(command.route().shard(), &Shard::All);
+    assert!(
+        !command.route().is_fdw_fallback(),
+        "DDL should not trigger FDW fallback"
+    );
 }
 
 #[test]
@@ -59,6 +75,10 @@ fn test_drop_index() {
 
     assert!(command.route().is_write());
     assert_eq!(command.route().shard(), &Shard::All);
+    assert!(
+        !command.route().is_fdw_fallback(),
+        "DDL should not trigger FDW fallback"
+    );
 }
 
 #[test]
@@ -69,6 +89,10 @@ fn test_truncate() {
 
     assert!(command.route().is_write());
     assert_eq!(command.route().shard(), &Shard::All);
+    assert!(
+        !command.route().is_fdw_fallback(),
+        "DDL should not trigger FDW fallback"
+    );
 }
 
 #[test]
@@ -79,6 +103,10 @@ fn test_create_sequence() {
 
     assert!(command.route().is_write());
     assert_eq!(command.route().shard(), &Shard::All);
+    assert!(
+        !command.route().is_fdw_fallback(),
+        "DDL should not trigger FDW fallback"
+    );
 }
 
 #[test]
@@ -88,6 +116,10 @@ fn test_vacuum() {
     let command = test.execute(vec![Query::new("VACUUM sharded").into()]);
 
     assert!(command.route().is_write());
+    assert!(
+        !command.route().is_fdw_fallback(),
+        "DDL should not trigger FDW fallback"
+    );
 }
 
 #[test]
@@ -97,6 +129,10 @@ fn test_analyze() {
     let command = test.execute(vec![Query::new("ANALYZE sharded").into()]);
 
     assert!(command.route().is_write());
+    assert!(
+        !command.route().is_fdw_fallback(),
+        "DDL should not trigger FDW fallback"
+    );
 }
 
 #[test]

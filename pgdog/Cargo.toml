@@ -63,6 +63,8 @@ hickory-resolver = "0.25.2"
 lazy_static = "1"
 dashmap = "6"
 derive_builder = "0.20.2"
+tempfile = "3.23.0"
+nix = { version = "0.31", features = ["signal"] }
 pgdog-config = { path = "../pgdog-config" }
 pgdog-vector = { path = "../pgdog-vector" }
 pgdog-stats = { path = "../pgdog-stats" }
@@ -76,5 +78,4 @@ tikv-jemallocator = "0.6"
 cc = "1"
 
 [dev-dependencies]
-tempfile = "3.23.0"
 stats_alloc = "0.1.10"

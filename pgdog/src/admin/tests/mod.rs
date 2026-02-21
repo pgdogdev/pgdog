@@ -6,6 +6,7 @@ use crate::net::messages::{DataRow, DataType, FromBytes, Protocol, RowDescriptio
 
 use super::show_client_memory::ShowClientMemory;
 use super::show_config::ShowConfig;
+use super::show_fdw::ShowFdw;
 use super::show_lists::ShowLists;
 use super::show_mirrors::ShowMirrors;
 use super::show_pools::ShowPools;
@@ -464,4 +465,60 @@ async fn show_client_memory_reports_memory_stats() {
         let field = row_description.field(idx).expect("field should exist");
         assert_eq!(field.data_type(), *expected_type);
     }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn show_fdw_returns_correct_columns_with_no_fdw_configured() {
+    let context = TestAdminContext::new();
+
+    let mut config = ConfigAndUsers::default();
+    config.config.databases.push(Database {
+        name: "app".into(),
+        host: "127.0.0.1".into(),
+        role: Role::Primary,
+        shard: 0,
+        ..Default::default()
+    });
+    config.users.users.push(ConfigUser {
+        name: "alice".into(),
+        database: "app".into(),
+        password: Some("secret".into()),
+        ..Default::default()
+    });
+
+    context.set_config(config);
+
+    let command = ShowFdw;
+    let messages = command.execute().await.expect("show fdw execution failed");
+
+    assert_eq!(
+        messages.len(),
+        1,
+        "expected only row description when no FDW configured"
+    );
+
+    let row_description = RowDescription::from_bytes(messages[0].payload())
+        .expect("row description message should parse");
+    let actual_names: Vec<&str> = row_description
+        .fields
+        .iter()
+        .map(|field| field.name.as_str())
+        .collect();
+    let expected_names = vec![
+        "id",
+        "database",
+        "user",
+        "database_name",
+        "addr",
+        "port",
+        "role",
+        "sv_idle",
+        "sv_active",
+        "sv_total",
+        "total_xact_count",
+        "total_query_count",
+        "avg_xact_count",
+        "avg_query_count",
+    ];
+    assert_eq!(actual_names, expected_names);
 }

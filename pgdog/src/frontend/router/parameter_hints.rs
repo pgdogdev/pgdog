@@ -1,4 +1,6 @@
-use pgdog_config::Role;
+use std::str::FromStr;
+
+use pgdog_config::{CrossShardBackend, Role};
 
 use super::parser::Error;
 use crate::{
@@ -16,6 +18,7 @@ pub struct ParameterHints<'a> {
     pub pgdog_shard: Option<&'a ParameterValue>,
     pub pgdog_sharding_key: Option<&'a ParameterValue>,
     pub pgdog_role: Option<&'a ParameterValue>,
+    pub pgdog_cross_shard_backend: Option<&'a ParameterValue>,
     hooks: ParserHooks,
 }
 
@@ -26,6 +29,7 @@ impl<'a> From<&'a Parameters> for ParameterHints<'a> {
             pgdog_shard: value.get("pgdog.shard"),
             pgdog_role: value.get("pgdog.role"),
             pgdog_sharding_key: value.get("pgdog.sharding_key"),
+            pgdog_cross_shard_backend: value.get("pgdog.cross_shard_backend"),
             hooks: ParserHooks::default(),
         }
     }
@@ -112,6 +116,19 @@ impl ParameterHints<'_> {
 
         role
     }
+
+    /// User said use fdw.
+    pub(crate) fn use_fdw_fallback(&self) -> bool {
+        if let Some(ref val) = self.pgdog_cross_shard_backend {
+            if let Some(s) = val.as_str() {
+                if let Ok(fdw) = CrossShardBackend::from_str(s) {
+                    return fdw.need_fdw();
+                }
+            }
+        }
+
+        false
+    }
 }
 
 #[cfg(test)]
@@ -148,6 +165,7 @@ mod tests {
             pgdog_shard: None,
             pgdog_sharding_key: Some(&sharding_key),
             pgdog_role: None,
+            pgdog_cross_shard_backend: None,
             hooks: ParserHooks::default(),
         };
 
@@ -169,6 +187,7 @@ mod tests {
             pgdog_shard: None,
             pgdog_sharding_key: Some(&sharding_key),
             pgdog_role: None,
+            pgdog_cross_shard_backend: None,
             hooks: ParserHooks::default(),
         };
 

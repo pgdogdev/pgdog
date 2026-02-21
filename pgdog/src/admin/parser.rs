@@ -5,12 +5,12 @@ use super::{
     prelude::Message, probe::Probe, reconnect::Reconnect, reload::Reload,
     reset_query_cache::ResetQueryCache, set::Set, setup_schema::SetupSchema,
     show_client_memory::ShowClientMemory, show_clients::ShowClients, show_config::ShowConfig,
-    show_instance_id::ShowInstanceId, show_lists::ShowLists, show_mirrors::ShowMirrors,
-    show_peers::ShowPeers, show_pools::ShowPools, show_prepared_statements::ShowPreparedStatements,
-    show_query_cache::ShowQueryCache, show_replication::ShowReplication,
-    show_server_memory::ShowServerMemory, show_servers::ShowServers, show_stats::ShowStats,
-    show_transactions::ShowTransactions, show_version::ShowVersion, shutdown::Shutdown, Command,
-    Error,
+    show_fdw::ShowFdw, show_instance_id::ShowInstanceId, show_lists::ShowLists,
+    show_mirrors::ShowMirrors, show_peers::ShowPeers, show_pools::ShowPools,
+    show_prepared_statements::ShowPreparedStatements, show_query_cache::ShowQueryCache,
+    show_replication::ShowReplication, show_server_memory::ShowServerMemory,
+    show_servers::ShowServers, show_stats::ShowStats, show_transactions::ShowTransactions,
+    show_version::ShowVersion, shutdown::Shutdown, Command, Error,
 };
 
 use tracing::debug;
@@ -44,6 +44,7 @@ pub enum ParseResult {
     Probe(Probe),
     MaintenanceMode(MaintenanceMode),
     Healthcheck(Healthcheck),
+    ShowFdw(ShowFdw),
 }
 
 impl ParseResult {
@@ -79,6 +80,7 @@ impl ParseResult {
             Probe(probe) => probe.execute().await,
             MaintenanceMode(maintenance_mode) => maintenance_mode.execute().await,
             Healthcheck(healthcheck) => healthcheck.execute().await,
+            ShowFdw(show_fdw) => show_fdw.execute().await,
         }
     }
 
@@ -114,6 +116,7 @@ impl ParseResult {
             Probe(probe) => probe.name(),
             MaintenanceMode(maintenance_mode) => maintenance_mode.name(),
             Healthcheck(healthcheck) => healthcheck.name(),
+            ShowFdw(show_fdw) => show_fdw.name(),
         }
     }
 }
@@ -163,6 +166,7 @@ impl Parser {
                 "lists" => ParseResult::ShowLists(ShowLists::parse(&sql)?),
                 "prepared" => ParseResult::ShowPrepared(ShowPreparedStatements::parse(&sql)?),
                 "replication" => ParseResult::ShowReplication(ShowReplication::parse(&sql)?),
+                "fdw" => ParseResult::ShowFdw(ShowFdw::parse(&sql)?),
                 command => {
                     debug!("unknown admin show command: '{}'", command);
                     return Err(Error::Syntax);
@@ -228,5 +232,11 @@ mod tests {
     fn parses_show_client_memory_command() {
         let result = Parser::parse("SHOW CLIENT MEMORY;");
         assert!(matches!(result, Ok(ParseResult::ShowClientMemory(_))));
+    }
+
+    #[test]
+    fn parses_show_fdw_command() {
+        let result = Parser::parse("SHOW FDW;");
+        assert!(matches!(result, Ok(ParseResult::ShowFdw(_))));
     }
 }
