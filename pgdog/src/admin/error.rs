@@ -36,6 +36,9 @@ pub enum Error {
 
     #[error("address is not valid")]
     InvalidAddress,
+
+    #[error("{0}")]
+    Toml(#[from] toml::ser::Error),
 }
 
 impl From<crate::backend::Error> for Error {

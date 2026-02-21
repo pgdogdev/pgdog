@@ -6,6 +6,7 @@ use crate::net::messages::{DataRow, DataType, FromBytes, Protocol, RowDescriptio
 
 use super::show_client_memory::ShowClientMemory;
 use super::show_config::ShowConfig;
+use super::show_config_file::ShowConfigFile;
 use super::show_lists::ShowLists;
 use super::show_mirrors::ShowMirrors;
 use super::show_pools::ShowPools;
@@ -195,6 +196,91 @@ async fn show_config_pretty_prints_general_settings() {
         .map(|(_, value)| value)
         .expect("connect_timeout row should be present");
     assert_eq!(connect_timeout, "2s");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn show_config_file_dumps_live_state_as_toml() {
+    let context = TestAdminContext::new();
+
+    let mut config = ConfigAndUsers::default();
+    config.config.general.default_pool_size = 11;
+    config.config.general.connect_timeout = 7_000;
+    config.config.general.log_connections = true;
+    config.config.general.tls_client_required = true;
+    config.config.databases.push(Database {
+        name: "app".into(),
+        host: "127.0.0.1".into(),
+        database_name: Some("postgres".into()),
+        user: Some("postgres".into()),
+        password: Some("hunter2".into()),
+        shard: 0,
+        ..Default::default()
+    });
+
+    context.set_config(config);
+
+    let command = ShowConfigFile;
+    let messages = command
+        .execute()
+        .await
+        .expect("show config file execution failed");
+
+    assert_eq!(messages.len(), 2, "expected row description plus data row");
+
+    let row_description = RowDescription::from_bytes(messages[0].payload())
+        .expect("row description message should parse");
+    let columns: Vec<&str> = row_description
+        .fields
+        .iter()
+        .map(|field| field.name.as_str())
+        .collect();
+    assert_eq!(columns, vec!["pgdog.toml"]);
+    assert_eq!(row_description.fields[0].data_type(), DataType::Text);
+
+    let row = DataRow::from_bytes(messages[1].payload()).expect("data row should parse");
+    let payload = row.get_text(0).expect("toml payload should be text");
+
+    let actual_value: toml::Value = payload
+        .parse()
+        .expect("payload should parse back into toml value");
+
+    let general = actual_value
+        .get("general")
+        .and_then(|value| value.as_table())
+        .expect("general section should exist and be a table");
+    assert_eq!(
+        general
+            .get("default_pool_size")
+            .and_then(|v| v.as_integer()),
+        Some(11)
+    );
+    assert_eq!(
+        general.get("connect_timeout").and_then(|v| v.as_integer()),
+        Some(7_000)
+    );
+    assert_eq!(
+        general.get("log_connections").and_then(|v| v.as_bool()),
+        Some(true)
+    );
+    assert_eq!(
+        general.get("tls_client_required").and_then(|v| v.as_bool()),
+        Some(true)
+    );
+
+    let databases = actual_value
+        .get("databases")
+        .and_then(|value| value.as_array())
+        .expect("databases array should be present");
+    assert_eq!(databases.len(), 1);
+
+    let database = databases[0]
+        .as_table()
+        .expect("database entry should be a table");
+    assert_eq!(database.get("name").and_then(|v| v.as_str()), Some("app"));
+    assert_eq!(
+        database.get("password").and_then(|v| v.as_str()),
+        Some("hunter2")
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]
