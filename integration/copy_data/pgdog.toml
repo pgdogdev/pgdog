@@ -1,5 +1,5 @@
 [general]
-resharding_copy_format = "binary"
+resharding_copy_format = "text"
 
 [[databases]]
 name = "source"
