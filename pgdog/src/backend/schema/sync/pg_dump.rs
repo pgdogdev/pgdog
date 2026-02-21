@@ -17,7 +17,12 @@ use tracing::{info, trace, warn};
 
 use super::{progress::Progress, Error};
 use crate::{
-    backend::{self, pool::Request, replication::publisher::PublicationTable, Cluster},
+    backend::{
+        self,
+        pool::Request,
+        replication::{publisher::PublicationTable, status::SchemaStatement},
+        Cluster,
+    },
     config::config,
     frontend::router::parser::{sequence::Sequence, Column, Table},
 };
@@ -220,11 +225,21 @@ pub struct PgDumpOutput {
     original: String,
 }
 
-#[derive(Debug, Copy, Clone, PartialEq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub enum SyncState {
     PreData,
     PostData,
     Cutover,
+}
+
+impl std::fmt::Display for SyncState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::PreData => write!(f, "pre_data"),
+            Self::PostData => write!(f, "post_data"),
+            Self::Cutover => write!(f, "cutover"),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -938,6 +953,19 @@ impl PgDumpOutput {
                                 let table =
                                     stmt.relation.as_ref().map(Table::from).unwrap_or_default();
 
+                                let index_schema = stmt
+                                    .relation
+                                    .as_ref()
+                                    .map(|r| schema_name(r))
+                                    .unwrap_or("public");
+                                result.push(Statement::Other {
+                                    sql: format!(
+                                        "DROP INDEX IF EXISTS \"{}\".\"{}\"",
+                                        index_schema, stmt.idxname
+                                    ),
+                                    idempotent: true,
+                                });
+
                                 result.push(Statement::Index {
                                     table,
                                     name: stmt.idxname.as_str(),
@@ -1042,6 +1070,8 @@ impl PgDumpOutput {
 
             for stmt in &stmts {
                 progress.next(stmt);
+                let _tracker = SchemaStatement::new(dest, stmt, num, state);
+
                 if let Err(err) = primary.execute(stmt.deref()).await {
                     if let backend::Error::ExecutionError(ref err) = err {
                         let code = &err.code;

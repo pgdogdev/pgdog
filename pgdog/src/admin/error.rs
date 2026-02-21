@@ -36,6 +36,15 @@ pub enum Error {
 
     #[error("address is not valid")]
     InvalidAddress,
+
+    #[error("{0}")]
+    Replication(Box<crate::backend::replication::logical::Error>),
+}
+
+impl From<crate::backend::replication::logical::Error> for Error {
+    fn from(err: crate::backend::replication::logical::Error) -> Self {
+        Error::Replication(Box::new(err))
+    }
 }
 
 impl From<crate::backend::Error> for Error {

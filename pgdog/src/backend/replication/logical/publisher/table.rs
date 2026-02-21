@@ -3,21 +3,26 @@
 use std::time::Duration;
 
 use pgdog_config::QueryParserEngine;
+use tokio::select;
+use tracing::error;
 
 use crate::backend::pool::Address;
 use crate::backend::replication::publisher::progress::Progress;
 use crate::backend::replication::publisher::Lsn;
 
+use crate::backend::replication::status::TableCopy;
 use crate::backend::{Cluster, Server};
 use crate::config::config;
 use crate::net::replication::StatusUpdate;
 
 use super::super::{subscriber::CopySubscriber, Error};
-use super::{Copy, PublicationTable, PublicationTableColumn, ReplicaIdentity, ReplicationSlot};
+use super::{
+    AbortSignal, Copy, PublicationTable, PublicationTableColumn, ReplicaIdentity, ReplicationSlot,
+};
 
 use tracing::info;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Table {
     /// Name of the table publication.
     pub publication: String,
@@ -178,7 +183,13 @@ impl Table {
         Ok(())
     }
 
-    pub async fn data_sync(&mut self, source: &Address, dest: &Cluster) -> Result<Lsn, Error> {
+    pub async fn data_sync(
+        &mut self,
+        source: &Address,
+        dest: &Cluster,
+        abort: AbortSignal,
+        tracker: &TableCopy,
+    ) -> Result<Lsn, Error> {
         info!(
             "data sync for \"{}\".\"{}\" started [{}]",
             self.table.schema, self.table.name, source
@@ -188,6 +199,8 @@ impl Table {
         // Publisher uses COPY [...] TO STDOUT.
         // Subscriber uses COPY [...] FROM STDIN.
         let copy = Copy::new(self, config().config.general.resharding_copy_format);
+
+        tracker.update_sql(&copy.statement().copy_out());
 
         // Create new standalone connection for the copy.
         // let mut server = Server::connect(source, ServerOptions::new_replication()).await?;
@@ -208,8 +221,19 @@ impl Table {
         let progress = Progress::new_data_sync(&self.table);
 
         while let Some(data_row) = copy.data(slot.server()?).await? {
-            copy_sub.copy_data(data_row).await?;
-            progress.update(copy_sub.bytes_sharded(), slot.lsn().lsn);
+            select! {
+                _ = abort.aborted() =>  {
+                    error!("aborting data sync for table {}", self.table);
+
+                    return Err(Error::CopyAborted(self.table.clone()))
+                },
+
+                result = copy_sub.copy_data(data_row) => {
+                    let (rows, bytes) = result?;
+                    progress.update(copy_sub.bytes_sharded(), slot.lsn().lsn);
+                    tracker.update_progress(bytes, rows);
+                }
+            }
         }
 
         copy_sub.copy_done().await?;

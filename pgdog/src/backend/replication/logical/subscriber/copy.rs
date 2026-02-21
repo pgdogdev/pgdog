@@ -160,18 +160,21 @@ impl CopySubscriber {
     }
 
     /// Send data to subscriber, buffered.
-    pub async fn copy_data(&mut self, data: CopyData) -> Result<(), Error> {
+    pub async fn copy_data(&mut self, data: CopyData) -> Result<(usize, usize), Error> {
         self.buffer.push(data);
         if self.buffer.len() == BUFFER_SIZE {
-            self.flush().await?
+            return self.flush().await;
         }
 
-        Ok(())
+        Ok((0, 0))
     }
 
-    async fn flush(&mut self) -> Result<(), Error> {
+    async fn flush(&mut self) -> Result<(usize, usize), Error> {
         let result = self.copy.shard(&self.buffer)?;
         self.buffer.clear();
+
+        let rows = result.len();
+        let bytes = result.iter().map(|row| row.len()).sum::<usize>();
 
         for row in &result {
             for (shard, server) in self.connections.iter_mut().enumerate() {
@@ -193,7 +196,7 @@ impl CopySubscriber {
 
         self.bytes_sharded += result.iter().map(|c| c.len()).sum::<usize>();
 
-        Ok(())
+        Ok((rows, bytes))
     }
 
     /// Total amount of bytes shaded.

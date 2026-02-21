@@ -212,6 +212,12 @@ pub struct General {
     /// Load database schema.
     #[serde(default = "General::load_schema")]
     pub load_schema: LoadSchema,
+    /// Cutover maintenance threshold.
+    #[serde(default = "General::cutover_traffic_stop_threshold")]
+    pub cutover_traffic_stop_threshold: u64,
+    /// Cutover lag threshold.
+    #[serde(default = "General::cutover_replication_lag_threshold")]
+    pub cutover_replication_lag_threshold: u64,
 }
 
 impl Default for General {
@@ -286,6 +292,8 @@ impl Default for General {
             resharding_copy_format: CopyFormat::default(),
             reload_schema_on_ddl: Self::reload_schema_on_ddl(),
             load_schema: Self::load_schema(),
+            cutover_replication_lag_threshold: Self::cutover_replication_lag_threshold(),
+            cutover_traffic_stop_threshold: Self::cutover_traffic_stop_threshold(),
         }
     }
 }
@@ -373,6 +381,16 @@ impl General {
             "PGDOG_BAN_TIMEOUT",
             Duration::from_secs(300).as_millis() as u64,
         )
+    }
+
+    fn cutover_replication_lag_threshold() -> u64 {
+        Self::env_or_default("PGDOG_CUTOVER_REPLICATION_LAG_THRESHOLD", 1_000)
+        // 1KB
+    }
+
+    fn cutover_traffic_stop_threshold() -> u64 {
+        Self::env_or_default("PGDOG_CUTOVER_REPLICATION_LAG_THRESHOLD", 1_000_000)
+        // 1MB
     }
 
     fn rollback_timeout() -> u64 {

@@ -33,7 +33,7 @@ LEFT JOIN pg_namespace pn   ON pn.oid = p.relnamespace
 ORDER BY n.nspname, c.relname;";
 
 /// Table included in a publication.
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq, Default, Eq, Hash)]
 pub struct PublicationTable {
     pub schema: String,
     pub name: String,
@@ -99,7 +99,7 @@ INNER JOIN pg_catalog.pg_namespace n
 ON (c.relnamespace = n.oid) WHERE n.nspname = $1 AND c.relname = $2";
 
 /// Identifies the columns part of the replica identity for a table.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct ReplicaIdentity {
     pub oid: i32,
     pub identity: String,
@@ -146,7 +146,7 @@ FROM
     ON (i.indexrelid = pg_get_replica_identity_index($1))
     WHERE a.attnum > 0::pg_catalog.int2 AND NOT a.attisdropped AND a.attgenerated = '' AND a.attrelid = $2 ORDER BY a.attnum";
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PublicationTableColumn {
     pub oid: i32,
     pub name: String,

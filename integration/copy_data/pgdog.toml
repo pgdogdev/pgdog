@@ -22,3 +22,6 @@ shard = 1
 database = "destination"
 column = "tenant_id"
 data_type = "bigint"
+
+[admin]
+password = "pgdog"

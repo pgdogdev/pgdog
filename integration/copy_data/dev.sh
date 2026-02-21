@@ -1,7 +1,8 @@
 #!/bin/bash
 set -e
+trap 'kill 0' SIGINT SIGTERM
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
-DEFAULT_BIN="${SCRIPT_DIR}/../../target/release/pgdog"
+DEFAULT_BIN="${SCRIPT_DIR}/../../target/debug/pgdog"
 PGDOG_BIN=${PGDOG_BIN:-$DEFAULT_BIN}
 
 export PGUSER=pgdog

@@ -59,6 +59,26 @@ pub fn human_duration(duration: Duration) -> String {
     }
 }
 
+/// Get a human-readable duration split into days and hh:mm:ss:ms.
+/// Example: "2d 03:15:42:100" or "00:05:30:250"
+pub fn human_duration_display(duration: Duration) -> String {
+    let total_secs = duration.as_secs();
+    let days = total_secs / 86400;
+    let hours = (total_secs % 86400) / 3600;
+    let minutes = (total_secs % 3600) / 60;
+    let seconds = total_secs % 60;
+    let millis = duration.subsec_millis();
+
+    if days > 0 {
+        format!(
+            "{}d {:02}:{:02}:{:02}:{:03}",
+            days, hours, minutes, seconds, millis
+        )
+    } else {
+        format!("{:02}:{:02}:{:02}:{:03}", hours, minutes, seconds, millis)
+    }
+}
+
 // 2000-01-01T00:00:00Z
 static POSTGRES_EPOCH: i64 = 946684800000000000;
 
@@ -121,6 +141,40 @@ pub fn pgdog_version() -> String {
         comp::pgdog_plugin_api_version().deref(),
         comp::rustc_version().deref()
     )
+}
+
+/// Format a number with commas for readability.
+/// Example: 1234567 -> "1,234,567"
+pub fn number_human(n: u64) -> String {
+    let s = n.to_string();
+    let mut result = String::new();
+    for (i, c) in s.chars().rev().enumerate() {
+        if i > 0 && i % 3 == 0 {
+            result.push(',');
+        }
+        result.push(c);
+    }
+    result.chars().rev().collect()
+}
+
+/// Format a byte count into a human-readable string.
+pub fn format_bytes(bytes: u64) -> String {
+    const KB: u64 = 1024;
+    const MB: u64 = KB * 1024;
+    const GB: u64 = MB * 1024;
+    const TB: u64 = GB * 1024;
+
+    if bytes < KB {
+        format!("{} B", bytes)
+    } else if bytes < MB {
+        format!("{:.2} KB", bytes as f64 / KB as f64)
+    } else if bytes < GB {
+        format!("{:.2} MB", bytes as f64 / MB as f64)
+    } else if bytes < TB {
+        format!("{:.2} GB", bytes as f64 / GB as f64)
+    } else {
+        format!("{:.2} TB", bytes as f64 / TB as f64)
+    }
 }
 
 /// Get user and database parameters.
@@ -199,6 +253,20 @@ mod test {
             remove_var("NODE_ID");
         }
         assert!(node_id().is_err());
+    }
+
+    #[test]
+    fn test_format_bytes() {
+        assert_eq!(format_bytes(0), "0 B");
+        assert_eq!(format_bytes(1), "1 B");
+        assert_eq!(format_bytes(512), "512 B");
+        assert_eq!(format_bytes(1024), "1.00 KB");
+        assert_eq!(format_bytes(1536), "1.50 KB");
+        assert_eq!(format_bytes(1048576), "1.00 MB");
+        assert_eq!(format_bytes(1572864), "1.50 MB");
+        assert_eq!(format_bytes(1073741824), "1.00 GB");
+        assert_eq!(format_bytes(1610612736), "1.50 GB");
+        assert_eq!(format_bytes(1099511627776), "1.00 TB");
     }
 
     // These should run in separate processes (if using nextest).
