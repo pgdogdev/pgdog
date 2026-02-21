@@ -8,7 +8,7 @@ use super::{
     show_instance_id::ShowInstanceId, show_lists::ShowLists, show_mirrors::ShowMirrors,
     show_peers::ShowPeers, show_pools::ShowPools, show_prepared_statements::ShowPreparedStatements,
     show_query_cache::ShowQueryCache, show_replication::ShowReplication,
-    show_resharding_status::ShowReshardingStatus, show_server_memory::ShowServerMemory,
+    show_resharding::ShowResharding, show_server_memory::ShowServerMemory,
     show_servers::ShowServers, show_stats::ShowStats, show_transactions::ShowTransactions,
     show_version::ShowVersion, shutdown::Shutdown, Command, Error,
 };
@@ -37,7 +37,7 @@ pub enum ParseResult {
     ShowLists(ShowLists),
     ShowPrepared(ShowPreparedStatements),
     ShowReplication(ShowReplication),
-    ShowReshardingStatus(ShowReshardingStatus),
+    ShowResharding(ShowResharding),
     ShowServerMemory(ShowServerMemory),
     ShowClientMemory(ShowClientMemory),
     Set(Set),
@@ -74,7 +74,7 @@ impl ParseResult {
             ShowLists(show_lists) => show_lists.execute().await,
             ShowPrepared(cmd) => cmd.execute().await,
             ShowReplication(show_replication) => show_replication.execute().await,
-            ShowReshardingStatus(cmd) => cmd.execute().await,
+            ShowResharding(cmd) => cmd.execute().await,
             ShowServerMemory(show_server_memory) => show_server_memory.execute().await,
             ShowClientMemory(show_client_memory) => show_client_memory.execute().await,
             Set(set) => set.execute().await,
@@ -111,7 +111,7 @@ impl ParseResult {
             ShowLists(show_lists) => show_lists.name(),
             ShowPrepared(show) => show.name(),
             ShowReplication(show_replication) => show_replication.name(),
-            ShowReshardingStatus(cmd) => cmd.name(),
+            ShowResharding(cmd) => cmd.name(),
             ShowServerMemory(show_server_memory) => show_server_memory.name(),
             ShowClientMemory(show_client_memory) => show_client_memory.name(),
             Set(set) => set.name(),
@@ -169,9 +169,7 @@ impl Parser {
                 "lists" => ParseResult::ShowLists(ShowLists::parse(&sql)?),
                 "prepared" => ParseResult::ShowPrepared(ShowPreparedStatements::parse(&sql)?),
                 "replication" => ParseResult::ShowReplication(ShowReplication::parse(&sql)?),
-                "resharding_status" => {
-                    ParseResult::ShowReshardingStatus(ShowReshardingStatus::parse(&sql)?)
-                }
+                "resharding" => ParseResult::ShowResharding(ShowResharding::parse(&sql)?),
                 command => {
                     debug!("unknown admin show command: '{}'", command);
                     return Err(Error::Syntax);

@@ -15,8 +15,8 @@ static COPIES: Lazy<TableCopies> = Lazy::new(|| TableCopies::default());
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TableCopy {
-    schema: String,
-    table: String,
+    pub(crate) schema: String,
+    pub(crate) table: String,
 }
 
 impl TableCopy {
