@@ -296,6 +296,7 @@ impl Connection {
         if client_request.is_copy() && !streaming {
             let rows = router
                 .copy_data(client_request)
+                .await
                 .map_err(|e| Error::Router(e.to_string()))?;
             if !rows.is_empty() {
                 self.send_copy(rows).await?;

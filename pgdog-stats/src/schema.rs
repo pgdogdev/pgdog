@@ -65,6 +65,9 @@ pub struct Relation {
     pub oid: i32,
     /// Columns indexed by name, ordered by ordinal position.
     pub columns: IndexMap<String, Column>,
+    /// Whether this relation is sharded.
+    #[serde(default)]
+    pub is_sharded: bool,
 }
 
 impl Hash for Relation {
@@ -81,6 +84,7 @@ impl Hash for Relation {
             key.hash(state);
             value.hash(state);
         }
+        self.is_sharded.hash(state);
     }
 }
 

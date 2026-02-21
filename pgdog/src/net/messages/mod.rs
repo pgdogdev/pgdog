@@ -135,41 +135,53 @@ impl MemoryUsage for Message {
 
 impl std::fmt::Debug for Message {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        macro_rules! try_fmt {
+            ($expr:expr) => {
+                match $expr {
+                    Ok(m) => m.fmt(f),
+                    Err(_) => f
+                        .debug_struct("Message")
+                        .field("code", &self.code())
+                        .field("len", &self.payload().len())
+                        .finish(),
+                }
+            };
+        }
+
         match self.code() {
-            'Q' => Query::from_bytes(self.payload()).unwrap().fmt(f),
+            'Q' => try_fmt!(Query::from_bytes(self.payload())),
             'D' => match self.source {
-                Source::Backend(_) => DataRow::from_bytes(self.payload()).unwrap().fmt(f),
-                Source::Frontend => Describe::from_bytes(self.payload()).unwrap().fmt(f),
+                Source::Backend(_) => try_fmt!(DataRow::from_bytes(self.payload())),
+                Source::Frontend => try_fmt!(Describe::from_bytes(self.payload())),
             },
-            'P' => Parse::from_bytes(self.payload()).unwrap().fmt(f),
-            'B' => Bind::from_bytes(self.payload()).unwrap().fmt(f),
+            'P' => try_fmt!(Parse::from_bytes(self.payload())),
+            'B' => try_fmt!(Bind::from_bytes(self.payload())),
             'S' => match self.source {
                 Source::Frontend => f.debug_struct("Sync").finish(),
-                Source::Backend(_) => ParameterStatus::from_bytes(self.payload()).unwrap().fmt(f),
+                Source::Backend(_) => try_fmt!(ParameterStatus::from_bytes(self.payload())),
             },
-            '1' => ParseComplete::from_bytes(self.payload()).unwrap().fmt(f),
-            '2' => BindComplete::from_bytes(self.payload()).unwrap().fmt(f),
+            '1' => try_fmt!(ParseComplete::from_bytes(self.payload())),
+            '2' => try_fmt!(BindComplete::from_bytes(self.payload())),
             '3' => f.debug_struct("CloseComplete").finish(),
             'E' => match self.source {
                 Source::Frontend => f.debug_struct("Execute").finish(),
-                Source::Backend(_) => ErrorResponse::from_bytes(self.payload()).unwrap().fmt(f),
+                Source::Backend(_) => try_fmt!(ErrorResponse::from_bytes(self.payload())),
             },
-            'T' => RowDescription::from_bytes(self.payload()).unwrap().fmt(f),
-            'Z' => ReadyForQuery::from_bytes(self.payload()).unwrap().fmt(f),
+            'T' => try_fmt!(RowDescription::from_bytes(self.payload())),
+            'Z' => try_fmt!(ReadyForQuery::from_bytes(self.payload())),
             'C' => match self.source {
-                Source::Backend(_) => CommandComplete::from_bytes(self.payload()).unwrap().fmt(f),
-                Source::Frontend => Close::from_bytes(self.payload()).unwrap().fmt(f),
+                Source::Backend(_) => try_fmt!(CommandComplete::from_bytes(self.payload())),
+                Source::Frontend => try_fmt!(Close::from_bytes(self.payload())),
             },
-            'd' => CopyData::from_bytes(self.payload()).unwrap().fmt(f),
+            'd' => try_fmt!(CopyData::from_bytes(self.payload())),
             'W' => f.debug_struct("CopyBothResponse").finish(),
             'I' => f.debug_struct("EmptyQueryResponse").finish(),
-            't' => ParameterDescription::from_bytes(self.payload())
-                .unwrap()
-                .fmt(f),
+            't' => try_fmt!(ParameterDescription::from_bytes(self.payload())),
             'H' => f.debug_struct("Flush").finish(),
             _ => f
                 .debug_struct("Message")
-                .field("payload", &self.payload())
+                .field("code", &self.code())
+                .field("len", &self.payload().len())
                 .finish(),
         }
     }

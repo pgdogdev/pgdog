@@ -21,7 +21,7 @@ pub struct Column<'a> {
 }
 
 /// Owned version of Column that owns its string data.
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]
 pub struct OwnedColumn {
     /// Column name.
     pub name: String,

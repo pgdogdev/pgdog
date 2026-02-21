@@ -57,7 +57,7 @@ pub use rewrite::{
 pub use route::{Route, Shard, ShardWithPriority, ShardsWithPriority};
 pub use schema::Schema;
 pub use sequence::{OwnedSequence, Sequence};
-pub use statement::{SchemaLookupContext, StatementParser};
+pub use statement::{CopySharding, SchemaLookupContext, StatementParser};
 pub use table::{OwnedTable, Table};
 pub use tuple::Tuple;
 pub use value::Value;

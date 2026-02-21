@@ -2,7 +2,8 @@ use std::collections::{HashMap, HashSet};
 
 use pg_query::{
     protobuf::{
-        AExprKind, BoolExprType, DeleteStmt, InsertStmt, RangeVar, RawStmt, SelectStmt, UpdateStmt,
+        AExprKind, BoolExprType, CopyStmt, DeleteStmt, InsertStmt, RangeVar, RawStmt, SelectStmt,
+        UpdateStmt,
     },
     Node, NodeEnum,
 };
@@ -165,6 +166,14 @@ enum Statement<'a> {
     Update(&'a UpdateStmt),
     Delete(&'a DeleteStmt),
     Insert(&'a InsertStmt),
+    Copy(&'a CopyStmt),
+}
+
+#[derive(Debug, Clone)]
+pub struct CopySharding<'a> {
+    pub key_position: Option<usize>,
+    pub key_table: Option<&'a ShardedTable>,
+    pub primary_key_position: Option<usize>,
 }
 
 /// Context for looking up table columns from the database schema.
@@ -281,6 +290,11 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
         Self::new(Statement::Insert(stmt), bind, schema, recorder)
     }
 
+    /// COPY only uses simple protocol (no bind) and doesn't support EXPLAIN.
+    pub fn from_copy(stmt: &'a CopyStmt, schema: &'b ShardingSchema) -> Self {
+        Self::new(Statement::Copy(stmt), None, schema, None)
+    }
+
     /// Record a sharding key match.
     fn record_sharding_key(&mut self, shard: &Shard, column: Column<'_>, value: &Value<'_>) {
         self.hooks
@@ -313,6 +327,7 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
             Some(NodeEnum::UpdateStmt(stmt)) => Ok(Self::from_update(stmt, bind, schema, recorder)),
             Some(NodeEnum::DeleteStmt(stmt)) => Ok(Self::from_delete(stmt, bind, schema, recorder)),
             Some(NodeEnum::InsertStmt(stmt)) => Ok(Self::from_insert(stmt, bind, schema, recorder)),
+            Some(NodeEnum::CopyStmt(stmt)) => Ok(Self::from_copy(stmt, schema)),
             _ => Err(Error::NotASelect),
         }
     }
@@ -329,6 +344,8 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
             Statement::Update(stmt) => self.shard_update(stmt),
             Statement::Delete(stmt) => self.shard_delete(stmt),
             Statement::Insert(stmt) => self.shard_insert(stmt),
+            // COPY doesn't have values in the SQL statement - routing happens per-row
+            Statement::Copy(_) => Ok(None),
         }?;
 
         // Key-based sharding succeeded
@@ -360,9 +377,9 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
         Ok(None)
     }
 
-    /// Check that the query references a table that contains a sharded
-    /// column. This check is needed in case sharded tables config
-    /// doesn't specify a table name and should short-circuit if it does.
+    /// Check that the query references a table that can participate in sharded routing.
+    /// Uses the precomputed `is_sharded` flag on relations which accounts for both
+    /// direct sharding keys and FK join paths to sharded tables.
     pub fn is_sharded(
         &mut self,
         db_schema: &Schema,
@@ -374,42 +391,114 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
             return false;
         }
 
-        let sharded_tables = self.schema.tables.tables();
-
-        // Separate configs with explicit table names from those without
-        let (named, nameless): (Vec<_>, Vec<_>) =
-            sharded_tables.iter().partition(|t| t.name.is_some());
-
         for table in self.tables() {
-            // Check named sharded table configs (fast path, no schema lookup needed)
-            for config in &named {
-                if let Some(ref name) = config.name {
-                    if table.name == name {
-                        // Also check schema match if specified in config
-                        if let Some(ref config_schema) = config.schema {
-                            if table.schema != Some(config_schema.as_str()) {
-                                continue;
-                            }
-                        }
-                        return true;
-                    }
-                }
-            }
-
-            // Check nameless configs by looking up the table in the db schema
-            // to see if it has the sharding column
-            if !nameless.is_empty() {
-                if let Some(relation) = db_schema.table(*table, user, search_path) {
-                    for config in &nameless {
-                        if relation.has_column(&config.column) {
-                            return true;
-                        }
-                    }
+            if let Some(relation) = db_schema.table(*table, user, search_path) {
+                if relation.is_sharded {
+                    return true;
                 }
             }
         }
 
         false
+    }
+
+    /// Get column names for a COPY statement with primary key info.
+    /// Returns Vec<(is_primary_key, column_name)>.
+    fn get_copy_columns(&self, stmt: &CopyStmt, table: &Table<'_>) -> Vec<(bool, String)> {
+        // First try to get columns from the COPY statement itself
+        let col_names: Vec<String> = stmt
+            .attlist
+            .iter()
+            .filter_map(|s| Column::from_string(s).ok())
+            .map(|c| c.name.to_string())
+            .collect();
+
+        if !col_names.is_empty() {
+            // Look up primary key info from schema if available
+            if let Some(ref schema_lookup) = self.schema_lookup {
+                if let Some(relation) = schema_lookup.db_schema.table(
+                    *table,
+                    schema_lookup.user,
+                    schema_lookup.search_path,
+                ) {
+                    return col_names
+                        .into_iter()
+                        .map(|name| {
+                            let is_pk = relation
+                                .columns()
+                                .get(&name)
+                                .map(|c| c.is_primary_key)
+                                .unwrap_or(false);
+                            (is_pk, name)
+                        })
+                        .collect();
+                }
+            }
+            // No schema lookup, return columns without PK info
+            return col_names.into_iter().map(|name| (false, name)).collect();
+        }
+
+        // No columns specified in COPY, try to look them up from schema
+        if let Some(ref schema_lookup) = self.schema_lookup {
+            if let Some(relation) =
+                schema_lookup
+                    .db_schema
+                    .table(*table, schema_lookup.user, schema_lookup.search_path)
+            {
+                return relation
+                    .columns()
+                    .iter()
+                    .map(|(name, col)| (col.is_primary_key, name.clone()))
+                    .collect();
+            }
+        }
+
+        vec![]
+    }
+
+    pub fn copy_sharding_key(&self) -> Option<CopySharding<'_>> {
+        let stmt = match self.stmt {
+            Statement::Copy(stmt) => stmt,
+            _ => return None,
+        };
+
+        let relation = stmt.relation.as_ref()?;
+        let table = Table::from(relation);
+
+        // Get column names with PK info from COPY statement or schema lookup
+        let columns = self.get_copy_columns(stmt, &table);
+
+        // Find the primary key position
+        let primary_key_position = columns.iter().position(|(is_pk, _)| *is_pk);
+
+        let sharded_tables = self.schema.tables.tables();
+
+        // Check tables with explicit name first
+        for sharded in sharded_tables.iter().filter(|t| t.name.is_some()) {
+            if sharded.name.as_deref() == Some(table.name) {
+                if let Some(position) = columns.iter().position(|(_, name)| name == &sharded.column)
+                {
+                    return Some(CopySharding {
+                        key_position: Some(position),
+                        key_table: Some(sharded),
+                        primary_key_position,
+                    });
+                }
+            }
+        }
+
+        // Check tables without name (column-only config)
+        for sharded in sharded_tables.iter().filter(|t| t.name.is_none()) {
+            if let Some(position) = columns.iter().position(|(_, name)| name == &sharded.column) {
+                return Some(CopySharding {
+                    key_position: Some(position),
+                    key_table: Some(sharded),
+                    primary_key_position,
+                });
+            }
+        }
+
+        None
     }
 
     /// Extract all tables referenced in the statement.
@@ -420,6 +509,7 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
             Statement::Update(stmt) => self.extract_tables_from_update(stmt, &mut tables),
             Statement::Delete(stmt) => self.extract_tables_from_delete(stmt, &mut tables),
             Statement::Insert(stmt) => self.extract_tables_from_insert(stmt, &mut tables),
+            Statement::Copy(stmt) => self.extract_tables_from_copy(stmt, &mut tables),
         }
         tables
     }
@@ -541,6 +631,12 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
             if let Some(NodeEnum::SelectStmt(ref inner_select)) = select_stmt.node {
                 self.extract_tables_from_select(inner_select, tables);
             }
+        }
+    }
+
+    fn extract_tables_from_copy(&self, stmt: &'a CopyStmt, tables: &mut Vec<Table<'a>>) {
+        if let Some(ref relation) = stmt.relation {
+            tables.push(Table::from(relation));
         }
     }
 
@@ -2565,7 +2661,9 @@ mod test {
 
     fn run_is_sharded_test(stmt: &str) -> bool {
         let schema = make_omnisharded_sharding_schema();
-        let db_schema = make_omnisharded_db_schema();
+        let mut db_schema = make_omnisharded_db_schema();
+        // Compute joins to set is_sharded flags on relations
+        db_schema.computed_sharded_joins(&schema);
         let raw = pg_query::parse(stmt)
             .unwrap()
             .protobuf
@@ -2643,5 +2741,312 @@ mod test {
             !result,
             "DELETE from omnisharded table should not be sharded"
         );
+    }
+
+    /// Test helper for FK join sharding detection.
+    /// Creates a schema with users (sharding key) and orders (FK to users).
+    fn run_fk_join_sharding_test(stmt: &str) -> bool {
+        use crate::backend::schema::test_helpers::prelude::*;
+
+        let mut db_schema = schema()
+            .relation(
+                table("users")
+                    .oid(1001)
+                    .column(pk("id"))
+                    .column(col("user_id")),
+            )
+            .relation(
+                table("orders")
+                    .oid(1002)
+                    .column(pk("id"))
+                    .column(fk("user_id", "users", "id")),
+            )
+            .relation(table("isolated").oid(1003).column(pk("id")))
+            .build();
+
+        let sharding_schema = sharding().sharded_table("users", "user_id").build();
+        db_schema.computed_sharded_joins(&sharding_schema);
+
+        let raw = pg_query::parse(stmt)
+            .unwrap()
+            .protobuf
+            .stmts
+            .first()
+            .cloned()
+            .unwrap();
+
+        let mut parser = StatementParser::from_raw(&raw, None, &sharding_schema, None).unwrap();
+        parser.is_sharded(&db_schema, "test_user", None)
+    }
+
+    #[test]
+    fn test_is_sharded_detects_fk_join_to_sharded_table() {
+        // orders doesn't have sharding key, but FK joins to users which does
+        let result = run_fk_join_sharding_test("SELECT * FROM orders WHERE id = 1");
+        assert!(result, "orders should be sharded via FK join to users");
+    }
+
+    #[test]
+    fn test_is_sharded_direct_table_with_sharding_key() {
+        // users has the sharding key directly
+        let result = run_fk_join_sharding_test("SELECT * FROM users WHERE id = 1");
+        assert!(result, "users has sharding key directly");
+    }
+
+    #[test]
+    fn test_is_sharded_table_without_fk_path() {
+        // isolated has no FK path to any sharded table
+        let result = run_fk_join_sharding_test("SELECT * FROM isolated WHERE id = 1");
+        assert!(!result, "isolated has no FK path to sharded table");
+    }
+
+    #[test]
+    fn test_is_sharded_join_query_with_fk_table() {
+        // Query joining orders (FK) with users (sharded)
+        let result =
+            run_fk_join_sharding_test("SELECT * FROM orders o JOIN users u ON o.user_id = u.id");
+        assert!(result, "join query with sharded table should be sharded");
+    }
+
+    #[test]
+    fn test_is_sharded_insert_on_fk_table() {
+        let result = run_fk_join_sharding_test("INSERT INTO orders (id, user_id) VALUES (1, 100)");
+        assert!(result, "insert on FK table should be sharded");
+    }
+
+    #[test]
+    fn test_is_sharded_update_on_fk_table() {
+        let result = run_fk_join_sharding_test("UPDATE orders SET user_id = 100 WHERE id = 1");
+        assert!(result, "update on FK table should be sharded");
+    }
+
+    #[test]
+    fn test_is_sharded_delete_on_fk_table() {
+        let result = run_fk_join_sharding_test("DELETE FROM orders WHERE id = 1");
+        assert!(result, "delete on FK table should be sharded");
+    }
+
+    // COPY sharding key tests
+
+    #[test]
+    fn test_copy_sharding_key_found() {
+        let sharding_schema = ShardingSchema {
+            shards: 3,
+            tables: ShardedTables::new(
+                vec![ShardedTable {
+                    column: "id".into(),
+                    name: Some("users".into()),
+                    ..Default::default()
+                }],
+                vec![],
+                false,
+                SystemCatalogsBehavior::default(),
+            ),
+            ..Default::default()
+        };
+
+        let raw = pg_query::parse("COPY users (name, id, email) FROM STDIN")
+            .unwrap()
+            .protobuf
+            .stmts
+            .first()
+            .cloned()
+            .unwrap();
+
+        let parser = StatementParser::from_raw(&raw, None, &sharding_schema, None).unwrap();
+        let result = parser.copy_sharding_key();
+
+        assert!(result.is_some(), "should find sharding key");
+        let sharding = result.unwrap();
+        assert_eq!(
+            sharding.key_position,
+            Some(1),
+            "id is at position 1 (0-indexed)"
+        );
+        assert_eq!(sharding.key_table.unwrap().column, "id");
+    }
+
+    #[test]
+    fn test_copy_sharding_key_first_position() {
+        let sharding_schema = ShardingSchema {
+            shards: 3,
+            tables: ShardedTables::new(
+                vec![ShardedTable {
+                    column: "tenant_id".into(),
+                    name: Some("orders".into()),
+                    ..Default::default()
+                }],
+                vec![],
+                false,
+                SystemCatalogsBehavior::default(),
+            ),
+            ..Default::default()
+        };
+
+        let raw = pg_query::parse("COPY orders (tenant_id, amount, status) FROM STDIN CSV")
+            .unwrap()
+            .protobuf
+            .stmts
+            .first()
+            .cloned()
+            .unwrap();
+
+        let parser = StatementParser::from_raw(&raw, None, &sharding_schema, None).unwrap();
+        let result = parser.copy_sharding_key();
+
+        assert!(result.is_some());
+        let sharding = result.unwrap();
+        assert_eq!(sharding.key_position, Some(0), "tenant_id is at position 0");
+    }
+
+    #[test]
+    fn test_copy_sharding_key_not_found() {
+        let sharding_schema = ShardingSchema {
+            shards: 3,
+            tables: ShardedTables::new(
+                vec![ShardedTable {
+                    column: "user_id".into(),
+                    name: Some("users".into()),
+                    ..Default::default()
+                }],
+                vec![],
+                false,
+                SystemCatalogsBehavior::default(),
+            ),
+            ..Default::default()
+        };
+
+        // COPY on a different table
+        let raw = pg_query::parse("COPY orders (id, amount) FROM STDIN")
+            .unwrap()
+            .protobuf
+            .stmts
+            .first()
+            .cloned()
+            .unwrap();
+
+        let parser = StatementParser::from_raw(&raw, None, &sharding_schema, None).unwrap();
+        let result = parser.copy_sharding_key();
+
+        assert!(
+            result.is_none(),
+            "should not find sharding key for different table"
+        );
+    }
+
+    #[test]
+    fn test_copy_sharding_key_column_only_config() {
+        // Column-only sharding config (no table name specified)
+        let sharding_schema = ShardingSchema {
+            shards: 3,
+            tables: ShardedTables::new(
+                vec![ShardedTable {
+                    column: "tenant_id".into(),
+                    // No table name - matches any table with this column
+                    ..Default::default()
+                }],
+                vec![],
+                false,
+                SystemCatalogsBehavior::default(),
+            ),
+            ..Default::default()
+        };
+
+        let raw = pg_query::parse("COPY any_table (id, tenant_id, data) FROM STDIN")
+            .unwrap()
+            .protobuf
+            .stmts
+            .first()
+            .cloned()
+            .unwrap();
+
+        let parser = StatementParser::from_raw(&raw, None, &sharding_schema, None).unwrap();
+        let result = parser.copy_sharding_key();
+
+        assert!(result.is_some(), "column-only config should match");
+        let sharding = result.unwrap();
+        assert_eq!(sharding.key_position, Some(1), "tenant_id is at position 1");
+    }
+
+    #[test]
+    fn test_copy_sharding_key_non_copy_returns_none() {
+        let sharding_schema = ShardingSchema {
+            shards: 3,
+            tables: ShardedTables::new(
+                vec![ShardedTable {
+                    column: "id".into(),
+                    name: Some("users".into()),
+                    ..Default::default()
+                }],
+                vec![],
+                false,
+                SystemCatalogsBehavior::default(),
+            ),
+            ..Default::default()
+        };
+
+        let raw = pg_query::parse("SELECT * FROM users WHERE id = 1")
+            .unwrap()
+            .protobuf
+            .stmts
+            .first()
+            .cloned()
+            .unwrap();
+
+        let parser = StatementParser::from_raw(&raw, None, &sharding_schema, None).unwrap();
+        let result = parser.copy_sharding_key();
+
+        assert!(result.is_none(), "non-COPY statement should return None");
+    }
+
+    #[test]
+    fn test_copy_sharding_key_without_column_list() {
+        // COPY without explicit column list should find sharding key from schema
+        let sharding_schema = ShardingSchema {
+            shards: 3,
+            tables: ShardedTables::new(
+                vec![ShardedTable {
+                    column: "id".into(),
+                    name: Some("sharded".into()),
+                    ..Default::default()
+                }],
+                vec![],
+                false,
+                SystemCatalogsBehavior::default(),
+            ),
+            ..Default::default()
+        };
+
+        let db_schema = make_test_schema_with_relation();
+        let schema_lookup = SchemaLookupContext {
+            db_schema: &db_schema,
+            user: "test",
+            search_path: None,
+        };
+
+        let raw = pg_query::parse("COPY sharded FROM STDIN")
+            .unwrap()
+            .protobuf
+            .stmts
+            .first()
+            .cloned()
+            .unwrap();
+
+        let parser = StatementParser::from_raw(&raw, None, &sharding_schema, None)
+            .unwrap()
+            .with_schema_lookup(schema_lookup);
+        let result = parser.copy_sharding_key();
+
+        assert!(
+            result.is_some(),
+            "should find sharding key from schema when COPY has no column list"
+        );
+        let sharding = result.unwrap();
+        assert_eq!(
+            sharding.key_position,
+            Some(0),
+            "id is at position 0 (first column in schema)"
+        );
+        assert_eq!(sharding.key_table.unwrap().column, "id");
     }
 }
