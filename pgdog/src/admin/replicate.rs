@@ -50,7 +50,7 @@ impl Command for Replicate {
             &self.from_database,
             &self.to_database,
             &self.publication,
-            self.replication_slot.as_deref(),
+            self.replication_slot.clone(),
         )?;
 
         let waiter = orchestrator.replicate().await?;

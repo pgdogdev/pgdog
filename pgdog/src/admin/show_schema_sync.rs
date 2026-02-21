@@ -2,7 +2,10 @@ use std::time::SystemTime;
 
 use chrono::{DateTime, Local};
 
-use crate::{backend::replication::logical::status::SchemaStatements, util::format_time};
+use crate::{
+    backend::replication::logical::status::SchemaStatements,
+    util::{format_time, human_duration_display},
+};
 
 use super::prelude::*;
 
@@ -26,6 +29,7 @@ impl Command for ShowSchemaSync {
             Field::text("kind"),
             Field::text("sync_state"),
             Field::text("started_at"),
+            Field::text("elapsed"),
             Field::bigint("elapsed_ms"),
             Field::text("table_schema"),
             Field::text("table_name"),
@@ -37,10 +41,9 @@ impl Command for ShowSchemaSync {
         for entry in SchemaStatements::get().iter() {
             let stmt = entry.key();
 
-            let elapsed_ms = now
-                .duration_since(stmt.started_at)
-                .unwrap_or_default()
-                .as_millis() as i64;
+            let elapsed = now.duration_since(stmt.started_at).unwrap_or_default();
+            let elapsed_ms = elapsed.as_millis() as i64;
+            let elapsed_human = human_duration_display(elapsed);
 
             let kind = stmt.kind.to_string();
             let sync_state = stmt.sync_state.to_string();
@@ -54,6 +57,7 @@ impl Command for ShowSchemaSync {
                 .add(kind.as_str())
                 .add(sync_state.as_str())
                 .add(started_at.as_str())
+                .add(elapsed_human.as_str())
                 .add(elapsed_ms)
                 .add(stmt.table_schema.as_deref().unwrap_or(""))
                 .add(stmt.table_name.as_deref().unwrap_or(""))

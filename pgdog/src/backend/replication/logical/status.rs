@@ -42,8 +42,8 @@ impl TableCopy {
             let elapsed = SystemTime::now()
                 .duration_since(state.last_update)
                 .unwrap_or_default()
-                .as_secs_f64();
-            if elapsed > 0.0 {
+                .as_secs();
+            if elapsed > 0 {
                 state.bytes_per_sec = state.bytes / elapsed as usize;
             }
         }

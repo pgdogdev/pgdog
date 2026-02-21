@@ -5,7 +5,7 @@ use crate::{
         schema::sync::{pg_dump::PgDumpOutput, PgDump},
         Cluster,
     },
-    util::format_bytes,
+    util::{format_bytes, random_string},
 };
 use std::{sync::Arc, time::Duration};
 use tokio::{sync::Mutex, time::interval};
@@ -20,7 +20,7 @@ pub(crate) struct Orchestrator {
     publication: String,
     schema: Option<PgDumpOutput>,
     publisher: Arc<Mutex<Publisher>>,
-    replication_slot: Option<String>,
+    replication_slot: String,
 }
 
 impl Orchestrator {
@@ -29,10 +29,13 @@ impl Orchestrator {
         source: &str,
         destination: &str,
         publication: &str,
-        replication_slot: Option<&str>,
+        replication_slot: Option<String>,
     ) -> Result<Self, Error> {
         let source = databases().schema_owner(source)?;
         let destination = databases().schema_owner(destination)?;
+
+        let replication_slot = replication_slot
+            .unwrap_or(format!("__pgdog_repl_{}", random_string(19).to_lowercase()));
 
         let mut orchestrator = Self {
             source,
@@ -40,7 +43,7 @@ impl Orchestrator {
             publication: publication.to_owned(),
             schema: None,
             publisher: Arc::new(Mutex::new(Publisher::default())),
-            replication_slot: replication_slot.map(|s| s.to_string()),
+            replication_slot,
         };
 
         orchestrator.refresh_publisher();
@@ -53,8 +56,13 @@ impl Orchestrator {
             &self.source,
             &self.publication,
             config().config.general.query_parser_engine,
+            self.replication_slot.clone(),
         );
         self.publisher = Arc::new(Mutex::new(publisher));
+    }
+
+    pub(crate) fn replication_slot(&self) -> &str {
+        &self.replication_slot
     }
 
     pub(crate) async fn load_schema(&mut self) -> Result<(), Error> {
@@ -94,9 +102,7 @@ impl Orchestrator {
 
         // Run data sync for all tables in parallel using multiple replicas,
         // if available.
-        publisher
-            .data_sync(&self.destination, self.replication_slot.clone())
-            .await?;
+        publisher.data_sync(&self.destination).await?;
 
         Ok(())
     }
@@ -107,9 +113,7 @@ impl Orchestrator {
     ///
     pub(crate) async fn replicate(&self) -> Result<Waiter, Error> {
         let mut publisher = self.publisher.lock().await;
-        publisher
-            .replicate(&self.destination, self.replication_slot.clone(), true)
-            .await
+        publisher.replicate(&self.destination).await
     }
 
     /// Request replication stop.

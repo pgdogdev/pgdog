@@ -70,7 +70,7 @@ impl Command for SchemaSync {
             &self.from_database,
             &self.to_database,
             &self.publication,
-            self.replication_slot.as_deref(),
+            self.replication_slot.clone(),
         )?;
 
         let phase = self.phase;
@@ -78,9 +78,9 @@ impl Command for SchemaSync {
             orchestrator.load_schema().await?;
 
             match phase {
-                SchemaSyncPhase::Pre => orchestrator.schema_sync_pre(true).await?,
-                SchemaSyncPhase::Post => orchestrator.schema_sync_post(true).await?,
-            }
+                SchemaSyncPhase::Pre => orchestrator.schema_sync_pre(true).await,
+                SchemaSyncPhase::Post => orchestrator.schema_sync_post(true).await,
+            }?;
 
             Ok(())
         });

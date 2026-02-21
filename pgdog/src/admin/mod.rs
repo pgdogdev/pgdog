@@ -41,9 +41,11 @@ pub mod show_server_memory;
 pub mod show_servers;
 pub mod show_stats;
 pub mod show_table_copies;
+pub mod show_tasks;
 pub mod show_transactions;
 pub mod show_version;
 pub mod shutdown;
+pub mod stop_task;
 
 pub use error::Error;
 

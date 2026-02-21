@@ -59,6 +59,26 @@ pub fn human_duration(duration: Duration) -> String {
     }
 }
 
+/// Get a human-readable duration split into days and hh:mm:ss:ms.
+/// Example: "2d 03:15:42:100" or "00:05:30:250"
+pub fn human_duration_display(duration: Duration) -> String {
+    let total_secs = duration.as_secs();
+    let days = total_secs / 86400;
+    let hours = (total_secs % 86400) / 3600;
+    let minutes = (total_secs % 3600) / 60;
+    let seconds = total_secs % 60;
+    let millis = duration.subsec_millis();
+
+    if days > 0 {
+        format!(
+            "{}d {:02}:{:02}:{:02}:{:03}",
+            days, hours, minutes, seconds, millis
+        )
+    } else {
+        format!("{:02}:{:02}:{:02}:{:03}", hours, minutes, seconds, millis)
+    }
+}
+
 // 2000-01-01T00:00:00Z
 static POSTGRES_EPOCH: i64 = 946684800000000000;
 
@@ -121,6 +141,20 @@ pub fn pgdog_version() -> String {
         comp::pgdog_plugin_api_version().deref(),
         comp::rustc_version().deref()
     )
+}
+
+/// Format a number with commas for readability.
+/// Example: 1234567 -> "1,234,567"
+pub fn number_human(n: u64) -> String {
+    let s = n.to_string();
+    let mut result = String::new();
+    for (i, c) in s.chars().rev().enumerate() {
+        if i > 0 && i % 3 == 0 {
+            result.push(',');
+        }
+        result.push(c);
+    }
+    result.chars().rev().collect()
 }
 
 /// Format a byte count into a human-readable string.

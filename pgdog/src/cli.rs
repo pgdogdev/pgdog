@@ -272,7 +272,7 @@ pub async fn replicate_and_cutover(commands: Commands) -> Result<(), Box<dyn std
             &from_database,
             &to_database,
             &publication,
-            replication_slot.as_ref().map(|s| s.as_str()),
+            replication_slot.clone(),
         )?;
 
         orchestrator.replicate_and_cutover().await?;
@@ -298,7 +298,7 @@ pub async fn data_sync(commands: Commands) -> Result<(), Box<dyn std::error::Err
             &from_database,
             &to_database,
             &publication,
-            replication_slot.as_ref().map(|s| s.as_str()),
+            replication_slot.clone(),
         )?;
         orchestrator.load_schema().await?;
 

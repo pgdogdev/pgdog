@@ -12,8 +12,8 @@ use super::{
     show_replication_slots::ShowReplicationSlots, show_resharding::ShowResharding,
     show_schema_sync::ShowSchemaSync, show_server_memory::ShowServerMemory,
     show_servers::ShowServers, show_stats::ShowStats, show_table_copies::ShowTableCopies,
-    show_transactions::ShowTransactions, show_version::ShowVersion, shutdown::Shutdown, Command,
-    Error,
+    show_tasks::ShowTasks, show_transactions::ShowTransactions, show_version::ShowVersion,
+    shutdown::Shutdown, stop_task::StopTask, Command, Error,
 };
 
 use tracing::debug;
@@ -55,6 +55,8 @@ pub enum ParseResult {
     SchemaSync(SchemaSync),
     CopyData(CopyData),
     Replicate(Replicate),
+    ShowTasks(ShowTasks),
+    StopTask(StopTask),
 }
 
 impl ParseResult {
@@ -98,6 +100,8 @@ impl ParseResult {
             SchemaSync(cmd) => cmd.execute().await,
             CopyData(cmd) => cmd.execute().await,
             Replicate(cmd) => cmd.execute().await,
+            ShowTasks(cmd) => cmd.execute().await,
+            StopTask(cmd) => cmd.execute().await,
         }
     }
 
@@ -141,6 +145,8 @@ impl ParseResult {
             SchemaSync(cmd) => cmd.name(),
             CopyData(cmd) => cmd.name(),
             Replicate(cmd) => cmd.name(),
+            ShowTasks(cmd) => cmd.name(),
+            StopTask(cmd) => cmd.name(),
         }
     }
 }
@@ -196,6 +202,7 @@ impl Parser {
                 "resharding" => ParseResult::ShowResharding(ShowResharding::parse(&sql)?),
                 "schema_sync" => ParseResult::ShowSchemaSync(ShowSchemaSync::parse(&sql)?),
                 "table_copies" => ParseResult::ShowTableCopies(ShowTableCopies::parse(&sql)?),
+                "tasks" => ParseResult::ShowTasks(ShowTasks::parse(&sql)?),
                 command => {
                     debug!("unknown admin show command: '{}'", command);
                     return Err(Error::Syntax);
@@ -219,6 +226,7 @@ impl Parser {
             "schema_sync" => ParseResult::SchemaSync(SchemaSync::parse(&sql)?),
             "copy_data" => ParseResult::CopyData(CopyData::parse(&sql)?),
             "replicate" => ParseResult::Replicate(Replicate::parse(&sql)?),
+            "stop_task" => ParseResult::StopTask(StopTask::parse(&sql)?),
             "probe" => ParseResult::Probe(Probe::parse(&sql)?),
             "maintenance" => ParseResult::MaintenanceMode(MaintenanceMode::parse(&sql)?),
             // TODO: This is not ready yet. We have a race and

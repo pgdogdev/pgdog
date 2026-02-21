@@ -51,18 +51,21 @@ impl Command for CopyData {
             &self.from_database,
             &self.to_database,
             &self.publication,
-            self.replication_slot.as_deref(),
+            self.replication_slot.clone(),
         )?;
 
-        let handle = spawn(async move { orchestrator.data_sync().await });
+        let slot_name = orchestrator.replication_slot().to_owned();
 
-        let task_id = Task::register(TaskType::CopyData(handle));
+        let task_id = Task::register(TaskType::CopyData(spawn(async move {
+            orchestrator.data_sync().await
+        })));
 
         let mut dr = DataRow::new();
-        dr.add(task_id.to_string());
+        dr.add(task_id.to_string()).add(slot_name);
 
         Ok(vec![
-            RowDescription::new(&[Field::text("task_id")]).message()?,
+            RowDescription::new(&[Field::text("task_id"), Field::text("replication_slot")])
+                .message()?,
             dr.message()?,
         ])
     }

@@ -12,6 +12,7 @@ use tokio::{
         Semaphore,
     },
 };
+use tracing::info;
 
 use super::super::Error;
 use super::AbortSignal;
@@ -93,6 +94,11 @@ impl ParallelSyncManager {
 
     /// Run parallel table sync and return table LSNs when everything is done.
     pub async fn run(self) -> Result<Vec<Table>, Error> {
+        info!(
+            "starting parallel table copy using {} replicas",
+            self.replicas.len()
+        );
+
         let mut replicas_iter = self.replicas.iter();
         // Loop through replicas, one at a time.
         // This works around Rust iterators not having a "rewind" function.

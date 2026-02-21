@@ -48,7 +48,7 @@ impl Command for Reshard {
             &self.from_database,
             &self.to_database,
             &self.publication,
-            self.replication_slot.as_deref(),
+            self.replication_slot.clone(),
         )?;
 
         orchestrator.replicate_and_cutover().await?;

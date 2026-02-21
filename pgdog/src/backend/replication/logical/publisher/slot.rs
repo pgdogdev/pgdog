@@ -352,6 +352,11 @@ impl ReplicationSlot {
     pub fn lsn(&self) -> Lsn {
         self.lsn
     }
+
+    /// Slot name.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
 }
 
 #[derive(Debug, Clone)]
