@@ -115,6 +115,11 @@ impl Inner {
         self.taken.len()
     }
 
+    /// Get backend IDs for all currently checked out servers.
+    pub(super) fn checked_out_server_ids(&self) -> Vec<BackendKeyData> {
+        self.taken.servers()
+    }
+
     /// Find the server currently linked to this client, if any.
     #[inline]
     pub(super) fn peer(&self, client_id: &BackendKeyData) -> Option<BackendKeyData> {

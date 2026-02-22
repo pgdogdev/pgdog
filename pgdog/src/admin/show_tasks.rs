@@ -30,7 +30,7 @@ impl Command for ShowTasks {
         let mut messages = vec![rd.message()?];
         let now = SystemTime::now();
 
-        for (id, task_type, started_at) in AsyncTasks::get().iter() {
+        for (id, task_kind, started_at) in AsyncTasks::get().iter() {
             let elapsed = now.duration_since(started_at).unwrap_or_default();
             let elapsed_ms = elapsed.as_millis() as i64;
             let elapsed_str = human_duration_display(elapsed);
@@ -39,7 +39,7 @@ impl Command for ShowTasks {
 
             let mut row = DataRow::new();
             row.add(id as i64)
-                .add(task_type)
+                .add(task_kind.to_string().as_str())
                 .add(started_at_str.as_str())
                 .add(elapsed_str.as_str())
                 .add(elapsed_ms);

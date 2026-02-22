@@ -1,4 +1,4 @@
-use crate::backend::replication::logical::admin::AsyncTasks;
+use crate::backend::replication::logical::admin::{AsyncTasks, TaskKind};
 use crate::net::messages::{ErrorResponse, NoticeResponse};
 
 use super::prelude::*;
@@ -26,11 +26,11 @@ impl Command for StopTask {
     }
 
     async fn execute(&self) -> Result<Vec<Message>, Error> {
-        let task_type = AsyncTasks::remove(self.task_id);
+        let task_kind = AsyncTasks::remove(self.task_id);
 
         let mut messages = vec![];
 
-        if let Some("copy_data") = task_type {
+        if task_kind == Some(TaskKind::CopyData) {
             let notice = NoticeResponse::from(ErrorResponse {
                 severity: "WARNING".into(),
                 code: "01000".into(),
@@ -40,7 +40,7 @@ impl Command for StopTask {
             messages.push(notice.message()?);
         }
 
-        let result = match task_type {
+        let result = match task_kind {
             Some(_) => "OK",
             None => "task not found",
         };

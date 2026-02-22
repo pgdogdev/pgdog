@@ -1,15 +1,19 @@
 use crate::{
     backend::{
-        databases::cutover,
+        databases::{cancel_all, cutover},
         maintenance_mode,
         schema::sync::{pg_dump::PgDumpOutput, PgDump},
         Cluster,
     },
-    util::{format_bytes, random_string},
+    util::{format_bytes, human_duration, random_string},
 };
+use pgdog_config::CutoverTimeoutAction;
 use std::{sync::Arc, time::Duration};
-use tokio::{sync::Mutex, time::interval};
-use tracing::{error, info};
+use tokio::{
+    sync::Mutex,
+    time::{interval, Instant},
+};
+use tracing::{info, warn};
 
 use super::*;
 
@@ -111,9 +115,13 @@ impl Orchestrator {
     ///
     /// Useful for CLI interface only, since this will never stop.
     ///
-    pub(crate) async fn replicate(&self) -> Result<Waiter, Error> {
+    pub(crate) async fn replicate(&self) -> Result<ReplicationWaiter, Error> {
         let mut publisher = self.publisher.lock().await;
-        publisher.replicate(&self.destination).await
+        let waiter = publisher.replicate(&self.destination).await?;
+        Ok(ReplicationWaiter {
+            orchestrator: self.clone(),
+            waiter,
+        })
     }
 
     /// Request replication stop.
@@ -135,83 +143,8 @@ impl Orchestrator {
         // Create secondary indexes on destination.
         self.schema_sync_post(true).await?;
 
-        // Start replication to catch up.
-        let mut waiter = self.replicate().await?;
-
-        // Check once a second how far we got.
-        let mut check = interval(Duration::from_secs(1));
-        // Ready for cutover.
-        let mut paused = false;
-
-        let config = config();
-
-        loop {
-            check.tick().await;
-            let lag = self.publisher.lock().await.replication_lag();
-
-            for (shard, lag) in lag.iter() {
-                info!("[cutover] replication lag={}, shard={}", lag, shard);
-            }
-
-            let max_lag = lag.iter().map(|(_, lag)| *lag).max().unwrap_or_default() as u64;
-
-            // Time to go.
-            if max_lag <= config.config.general.cutover_traffic_stop_threshold && !paused {
-                info!(
-                    "[cutover] stopping traffic, lag={}, threshold={}",
-                    format_bytes(max_lag),
-                    format_bytes(config.config.general.cutover_traffic_stop_threshold),
-                );
-                // Pause traffic.
-                maintenance_mode::start();
-                paused = true;
-                // TODO: wait for clients to all stop.
-            }
-
-            // Okay lets go.
-            // TODO: will lag ever be zero? We want to check
-            // that no data changes have been sent in over a second or something
-            // like that.
-            // TODO: add timeout.
-            if max_lag <= config.config.general.cutover_replication_lag_threshold && paused {
-                info!(
-                    "[cutover] starting cutover, lag={}, threshold={}",
-                    format_bytes(max_lag),
-                    format_bytes(config.config.general.cutover_replication_lag_threshold)
-                );
-
-                self.publisher.lock().await.request_stop();
-                let result = waiter.wait().await;
-
-                match result {
-                    Ok(_) => (),
-                    Err(err) => {
-                        maintenance_mode::stop();
-                        return Err(err);
-                    }
-                }
-
-                info!("[cutover] replication terminated, performing configuration reload");
-
-                // No matter what happens, resume traffic.
-                let result = self.cutover(true).await;
-
-                match &result {
-                    Ok(()) => {
-                        info!("[cutover] cutover complete, resuming traffic");
-                    }
-
-                    Err(err) => {
-                        error!("[cutover] cutover failed, resuming traffic, error: {}", err);
-                    }
-                }
-
-                maintenance_mode::stop();
-
-                result?;
-                break;
-            }
-        }
+        // Start replication to catch up and cutover once done.
+        self.replicate().await?.cutover().await?;
 
         Ok(())
     }
@@ -239,18 +172,10 @@ impl Orchestrator {
         Ok(())
     }
 
-    /// Perform cutover.
-    pub(crate) async fn cutover(&self, ignore_errors: bool) -> Result<(), Error> {
-        self.schema_sync_cutover(ignore_errors).await?;
-
-        // Immediate traffic cutover in-memory.
-        // N.B. Make sure to write new config to disk.
-        cutover(
-            &self.source.identifier().database,
-            &self.destination.identifier().database,
-        )?;
-
-        Ok(())
+    /// Get the largest replication lag out of all the shards.
+    async fn replication_lag(&self) -> u64 {
+        let lag = self.publisher.lock().await.replication_lag();
+        lag.iter().map(|(_, lag)| *lag).max().unwrap_or_default() as u64
     }
 
     pub(crate) async fn cleanup(&mut self) -> Result<(), Error> {
@@ -260,3 +185,140 @@ impl Orchestrator {
         Ok(())
     }
 }
+
+#[derive(Debug)]
+pub struct ReplicationWaiter {
+    orchestrator: Orchestrator,
+    waiter: Waiter,
+}
+
+impl ReplicationWaiter {
+    pub(crate) async fn wait(&mut self) -> Result<(), Error> {
+        self.waiter.wait().await
+    }
+
+    pub(crate) fn stop(&self) {
+        self.waiter.stop();
+    }
+
+    /// Perform traffic cutover between source and destination.
+    pub(crate) async fn cutover(&mut self) -> Result<(), Error> {
+        let config = config();
+        let traffic_stop = config.config.general.cutover_traffic_stop_threshold;
+        let cutover_threshold = config.config.general.cutover_replication_lag_threshold;
+        let last_transaction_delay =
+            Duration::from_millis(config.config.general.cutover_last_transaction_delay);
+        let cutover_timeout = Duration::from_millis(config.config.general.cutover_timeout);
+        let cutover_timeout_action = config.config.general.cutover_timeout_action;
+
+        // Check once a second how far we got.
+        let mut check = interval(Duration::from_secs(1));
+
+        loop {
+            check.tick().await;
+            let lag = self.orchestrator.replication_lag().await;
+
+            // Time to go.
+            if lag <= traffic_stop {
+                info!(
+                    "[cutover] stopping traffic, lag={}, threshold={}",
+                    format_bytes(lag),
+                    format_bytes(config.config.general.cutover_traffic_stop_threshold),
+                );
+
+                // Pause traffic.
+                maintenance_mode::start();
+
+                // Cancel any running queries.
+                cancel_all(&self.orchestrator.source.identifier().database).await?;
+
+                break;
+                // TODO: wait for clients to all stop.
+            }
+        }
+
+        // Check more frequently.
+        let mut check = interval(Duration::from_millis(50));
+        // Abort clock starts now.
+        let start = Instant::now();
+
+        loop {
+            check.tick().await;
+            let cutover_timeout_exceeded = start.elapsed() >= cutover_timeout;
+
+            if cutover_timeout_action == CutoverTimeoutAction::Abort {
+                maintenance_mode::stop();
+                warn!("[cutover] abort timeout reached, resuming traffic");
+                return Err(Error::AbortTimeout);
+            }
+
+            let lag = self.orchestrator.replication_lag().await;
+            let last_transaction = self
+                .orchestrator
+                .publisher
+                .lock()
+                .await
+                .last_transaction()
+                .unwrap_or_default();
+
+            // Perform cutover if any of the following is true:
+            //
+            // 1. Cutover timeout exceeded and action is cutover.
+            // 2. Replication lag is below threshold.
+            // 3. Last transaction was a while ago.
+            //
+            let should_cutover = cutover_timeout_exceeded
+                || lag <= cutover_threshold
+                || last_transaction > last_transaction_delay;
+
+            if should_cutover {
+                info!(
+                    "[cutover] starting cutover, lag={}, threshold={}, last_transaction={}, timeout={}",
+                    format_bytes(lag),
+                    format_bytes(cutover_threshold),
+                    human_duration(last_transaction),
+                    cutover_timeout_exceeded,
+                );
+
+                // We're going, point of no return.
+                self.orchestrator.publisher.lock().await.request_stop();
+                ok_or_abort!(self.waiter.wait().await);
+                ok_or_abort!(self.orchestrator.schema_sync_cutover(true).await);
+                // Traffic is about to go to the new cluster.
+                // If this fails, we'll resume traffic to the old cluster instead
+                // and the whole thing needs to be done from scratch.
+                ok_or_abort!(cutover(
+                    &self.orchestrator.source.identifier().database,
+                    &self.orchestrator.destination.identifier().database,
+                ));
+
+                info!("[cutover] complete, resuming traffic");
+
+                // Point traffic to the other database and resume.
+                maintenance_mode::stop();
+
+                info!("[cutover] stopping replication");
+
+                info!("[cutover] replication stopped");
+
+                break;
+            }
+        }
+
+        Ok(())
+    }
+}
+
+macro_rules! ok_or_abort {
+    ($expr:expr) => {
+        match $expr {
+            Ok(_) => (),
+            Err(err) => {
+                maintenance_mode::stop();
+                return Err(err.into());
+            }
+        }
+    };
+}
+
+use ok_or_abort;

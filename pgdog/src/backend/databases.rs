@@ -5,6 +5,7 @@ use std::ops::Deref;
 use std::sync::Arc;
 
 use arc_swap::ArcSwap;
+use futures::future::try_join_all;
 use once_cell::sync::Lazy;
 use parking_lot::lock_api::MutexGuard;
 use parking_lot::{Mutex, RawMutex};
@@ -103,6 +104,20 @@ pub fn init() -> Result<(), Error> {
 /// Shutdown all databases.
 pub fn shutdown() {
     databases().shutdown();
+}
+
+/// Cancel all queries running on a database.
+pub async fn cancel_all(database: &str) -> Result<(), Error> {
+    let clusters: Vec<_> = databases()
+        .all()
+        .iter()
+        .filter(|(user, _)| user.database == database)
+        .map(|(_, cluster)| cluster.clone())
+        .collect();
+
+    try_join_all(clusters.iter().map(|cluster| cluster.cancel_all())).await?;
+
+    Ok(())
 }
 
 /// Re-create pools from config.

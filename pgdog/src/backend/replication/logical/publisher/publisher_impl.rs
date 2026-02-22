@@ -6,6 +6,7 @@ use parking_lot::Mutex;
 use pgdog_config::QueryParserEngine;
 use tokio::sync::Notify;
 use tokio::task::JoinHandle;
+use tokio::time::Instant;
 use tokio::{select, spawn, time::interval};
 use tracing::{debug, info};
 
@@ -37,6 +38,8 @@ pub struct Publisher {
     query_parser_engine: QueryParserEngine,
     /// Replication lag.
     replication_lag: Arc<Mutex<HashMap<usize, i64>>>,
+    /// Last transaction.
+    last_transaction: Arc<Mutex<Option<Instant>>>,
     /// Stop signal.
     stop: Arc<Notify>,
     /// Slot name.
@@ -58,6 +61,7 @@ impl Publisher {
             query_parser_engine,
             replication_lag: Arc::new(Mutex::new(HashMap::new())),
             stop: Arc::new(Notify::new()),
+            last_transaction: Arc::new(Mutex::new(None)),
             slot_name,
         }
     }
@@ -142,6 +146,7 @@ impl Publisher {
             let mut check_lag = interval(Duration::from_secs(1));
             let replication_lag = self.replication_lag.clone();
             let stop = self.stop.clone();
+            let last_transaction = self.last_transaction.clone();
 
             // Replicate in parallel.
             let handle = spawn(async move {
@@ -175,6 +180,7 @@ impl Publisher {
                                     } else {
                                         if let Some(status_update) = stream.handle(data).await? {
                                             slot.status_update(status_update).await?;
+                                            *last_transaction.lock() = Some(Instant::now());
                                         }
                                         stream.lsn()
                                     };
@@ -225,6 +231,14 @@ impl Publisher {
     /// Get current replication lag.
     pub fn replication_lag(&self) -> HashMap<usize, i64> {
         self.replication_lag.lock().clone()
+    }
+
+    /// Get how long ago last transaction was committed.
+    pub fn last_transaction(&self) -> Option<Duration> {
+        self.last_transaction
+            .lock()
+            .clone()
+            .map(|last| last.elapsed())
     }
 
     /// Sync data from all tables in a publication from one shard to N shards,

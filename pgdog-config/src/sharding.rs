@@ -391,6 +391,25 @@ impl FromStr for LoadSchema {
     }
 }
 
+#[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Eq, Hash, Default)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub enum CutoverTimeoutAction {
+    #[default]
+    Abort,
+    Cutover,
+}
+
+impl FromStr for CutoverTimeoutAction {
+    type Err = ();
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s.to_lowercase().as_str() {
+            "abort" => Self::Abort,
+            "cutover" => Self::Cutover,
+            _ => return Err(()),
+        })
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;

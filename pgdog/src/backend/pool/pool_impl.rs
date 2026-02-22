@@ -4,6 +4,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use futures::future::try_join_all;
 use once_cell::sync::{Lazy, OnceCell};
 use parking_lot::RwLock;
 use parking_lot::{lock_api::MutexGuard, Mutex, RawMutex};
@@ -324,6 +325,18 @@ impl Pool {
 
         guard.paused = true;
         guard.dump_idle();
+    }
+
+    /// Send a cancellation request for all running queries.
+    pub async fn cancel_all(&self) -> Result<(), Error> {
+        let taken = self.lock().checked_out_server_ids();
+        let addr = self.addr().clone();
+
+        try_join_all(taken.iter().map(|id| Server::cancel(&addr, id)))
+            .await
+            .map_err(|_| Error::FastShutdown)?;
+
+        Ok(())
     }
 
     /// Resume the pool.

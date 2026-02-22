@@ -1,4 +1,5 @@
 use std::{
+    fmt,
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc,
@@ -6,12 +7,16 @@ use std::{
     time::SystemTime,
 };
 
-use crate::backend::replication::Waiter;
+use crate::backend::replication::orchestrator::ReplicationWaiter;
 
 use super::Error;
 use dashmap::DashMap;
 use once_cell::sync::Lazy;
-use tokio::{select, spawn, sync::oneshot, task::JoinHandle};
+use tokio::{
+    select, spawn,
+    sync::{oneshot, Notify},
+    task::JoinHandle,
+};
 use tracing::error;
 
 static TASKS: Lazy<AsyncTasks> = Lazy::new(AsyncTasks::default);
@@ -27,13 +32,31 @@ impl Task {
 pub enum TaskType {
     SchemaSync(JoinHandle<Result<(), Error>>),
     CopyData(JoinHandle<Result<(), Error>>),
-    Replication(Waiter),
+    Replication(ReplicationWaiter),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TaskKind {
+    SchemaSync,
+    CopyData,
+    Replication,
+}
+
+impl fmt::Display for TaskKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            TaskKind::SchemaSync => write!(f, "schema_sync"),
+            TaskKind::CopyData => write!(f, "copy_data"),
+            TaskKind::Replication => write!(f, "replication"),
+        }
+    }
 }
 
 pub struct TaskInfo {
     #[allow(dead_code)]
     abort_tx: oneshot::Sender<()>,
-    pub task_type: &'static str,
+    cutover: Arc<Notify>,
+    pub task_kind: TaskKind,
     pub started_at: SystemTime,
 }
 
@@ -48,6 +71,20 @@ impl AsyncTasks {
         TASKS.clone()
     }
 
+    /// Perform cutover.
+    pub fn cutover() -> Result<(), Error> {
+        let this = Self::get();
+        let task = this.tasks.iter().next().ok_or(Error::TaskNotFound)?;
+
+        if task.task_kind != TaskKind::Replication {
+            return Err(Error::NotReplication);
+        }
+
+        task.cutover.notify_one();
+
+        Ok(())
+    }
+
     pub fn insert(task: TaskType) -> u64 {
         let this = Self::get();
         let id = this.counter.fetch_add(1, Ordering::SeqCst);
@@ -59,7 +96,8 @@ impl AsyncTasks {
                     id,
                     TaskInfo {
                         abort_tx,
-                        task_type: "schema_sync",
+                        cutover: Arc::new(Notify::new()),
+                        task_kind: TaskKind::SchemaSync,
                         started_at: SystemTime::now(),
                     },
                 );
@@ -86,7 +124,8 @@ impl AsyncTasks {
                     id,
                     TaskInfo {
                         abort_tx,
-                        task_type: "copy_data",
+                        cutover: Arc::new(Notify::new()),
+                        task_kind: TaskKind::CopyData,
                         started_at: SystemTime::now(),
                     },
                 );
@@ -109,18 +148,28 @@ impl AsyncTasks {
             }
 
             TaskType::Replication(mut waiter) => {
+                let cutover = Arc::new(Notify::new());
+
                 this.tasks.insert(
                     id,
                     TaskInfo {
                         abort_tx,
-                        task_type: "replication",
+                        cutover: cutover.clone(),
+                        task_kind: TaskKind::Replication,
                         started_at: SystemTime::now(),
                     },
                 );
+
                 spawn(async move {
                     select! {
                         _ = abort_rx => {
                             waiter.stop();
+                        }
+
+                        _ = cutover.notified() => {
+                            if let Err(err) = waiter.cutover().await {
+                                error!("[task: {}] {}", id, err);
+                            }
                         }
 
                         result = waiter.wait() => {
@@ -138,17 +187,17 @@ impl AsyncTasks {
         id
     }
 
-    pub fn remove(id: u64) -> Option<&'static str> {
+    pub fn remove(id: u64) -> Option<TaskKind> {
         // Dropping the sender signals abort to the waiting task
         Self::get()
             .tasks
             .remove(&id)
-            .map(|(_, info)| info.task_type)
+            .map(|(_, info)| info.task_kind)
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = (u64, &'static str, SystemTime)> + '_ {
+    pub fn iter(&self) -> impl Iterator<Item = (u64, TaskKind, SystemTime)> + '_ {
         self.tasks
             .iter()
-            .map(|e| (*e.key(), e.value().task_type, e.value().started_at))
+            .map(|e| (*e.key(), e.value().task_kind, e.value().started_at))
     }
 }

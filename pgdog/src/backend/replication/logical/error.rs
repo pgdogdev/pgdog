@@ -107,6 +107,18 @@ pub enum Error {
 
     #[error("replication has been aborted")]
     ReplicationAborted,
+
+    #[error("waiter has no publisher")]
+    NoPublisher,
+
+    #[error("cutover abort timeout")]
+    AbortTimeout,
+
+    #[error("task not found")]
+    TaskNotFound,
+
+    #[error("task is not a replication task")]
+    NotReplication,
 }
 
 impl From<ErrorResponse> for Error {
