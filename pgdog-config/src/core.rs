@@ -1122,4 +1122,61 @@ destination_db = "source_db"
         assert_eq!(config.sharded_tables, expected.sharded_tables);
         assert_eq!(config.mirroring, expected.mirroring);
     }
+
+    #[test]
+    fn test_cutover_backup_roundtrip() {
+        let original_toml = r#"
+[[databases]]
+name = "source_db"
+host = "source-host"
+port = 5432
+role = "primary"
+shard = 0
+
+[[databases]]
+name = "destination_db"
+host = "destination-host"
+port = 5433
+role = "primary"
+shard = 0
+"#;
+
+        // Parse original config
+        let original: Config = toml::from_str(original_toml).unwrap();
+
+        // Simulate backup: serialize original to TOML
+        let backup_toml = toml::to_string_pretty(&original).unwrap();
+
+        // Perform cutover
+        let mut config = original.clone();
+        config.cutover("source_db", "destination_db");
+
+        // Serialize cutover result (what would be written to disk)
+        let new_toml = toml::to_string_pretty(&config).unwrap();
+
+        // Verify backup can be parsed back and matches original
+        let restored_backup: Config = toml::from_str(&backup_toml).unwrap();
+        assert_eq!(restored_backup.databases, original.databases);
+
+        // Verify new config can be parsed back and has swapped values
+        let restored_new: Config = toml::from_str(&new_toml).unwrap();
+
+        // After cutover: source_db should have destination's host
+        let source = restored_new
+            .databases
+            .iter()
+            .find(|d| d.name == "source_db")
+            .unwrap();
+        assert_eq!(source.host, "destination-host");
+        assert_eq!(source.port, 5433);
+
+        // After cutover: destination_db should have source's host
+        let dest = restored_new
+            .databases
+            .iter()
+            .find(|d| d.name == "destination_db")
+            .unwrap();
+        assert_eq!(dest.host, "source-host");
+        assert_eq!(dest.port, 5432);
+    }
 }

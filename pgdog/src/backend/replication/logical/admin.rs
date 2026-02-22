@@ -319,7 +319,7 @@ mod tests {
 
         // Cutover should fail because there's no replication task
         let result = AsyncTasks::cutover();
-        assert!(matches!(result, Err(Error::TaskNotFound)));
+        assert!(matches!(result, Err(Error::NotReplication)), "{:?}", result);
 
         // Cleanup
         AsyncTasks::remove(id);
