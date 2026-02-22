@@ -269,6 +269,69 @@ mod test {
         assert_eq!(format_bytes(1099511627776), "1.00 TB");
     }
 
+    #[test]
+    fn test_number_human() {
+        assert_eq!(number_human(0), "0");
+        assert_eq!(number_human(1), "1");
+        assert_eq!(number_human(12), "12");
+        assert_eq!(number_human(123), "123");
+        assert_eq!(number_human(1234), "1,234");
+        assert_eq!(number_human(12345), "12,345");
+        assert_eq!(number_human(123456), "123,456");
+        assert_eq!(number_human(1234567), "1,234,567");
+        assert_eq!(number_human(1234567890), "1,234,567,890");
+    }
+
+    #[test]
+    fn test_human_duration_display() {
+        // Zero duration
+        assert_eq!(
+            human_duration_display(Duration::from_millis(0)),
+            "00:00:00:000"
+        );
+
+        // Just milliseconds
+        assert_eq!(
+            human_duration_display(Duration::from_millis(500)),
+            "00:00:00:500"
+        );
+
+        // Seconds and milliseconds
+        assert_eq!(
+            human_duration_display(Duration::from_millis(5500)),
+            "00:00:05:500"
+        );
+
+        // Minutes, seconds, milliseconds
+        assert_eq!(
+            human_duration_display(Duration::from_millis(65500)),
+            "00:01:05:500"
+        );
+
+        // Hours, minutes, seconds, milliseconds
+        assert_eq!(
+            human_duration_display(Duration::from_millis(3665500)),
+            "01:01:05:500"
+        );
+
+        // Days
+        assert_eq!(
+            human_duration_display(
+                Duration::from_secs(86400 + 3600 + 60 + 1) + Duration::from_millis(123)
+            ),
+            "1d 01:01:01:123"
+        );
+
+        // Multiple days
+        assert_eq!(
+            human_duration_display(
+                Duration::from_secs(2 * 86400 + 12 * 3600 + 30 * 60 + 45)
+                    + Duration::from_millis(999)
+            ),
+            "2d 12:30:45:999"
+        );
+    }
+
     // These should run in separate processes (if using nextest).
     #[test]
     fn test_node_id_set() {

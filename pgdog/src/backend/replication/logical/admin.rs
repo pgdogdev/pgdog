@@ -74,11 +74,11 @@ impl AsyncTasks {
     /// Perform cutover.
     pub fn cutover() -> Result<(), Error> {
         let this = Self::get();
-        let task = this.tasks.iter().next().ok_or(Error::TaskNotFound)?;
-
-        if task.task_kind != TaskKind::Replication {
-            return Err(Error::NotReplication);
-        }
+        let task = this
+            .tasks
+            .iter()
+            .find(|t| t.task_kind == TaskKind::Replication)
+            .ok_or(Error::NotReplication)?;
 
         task.cutover.notify_one();
 
@@ -199,5 +199,153 @@ impl AsyncTasks {
         self.tasks
             .iter()
             .map(|e| (*e.key(), e.value().task_kind, e.value().started_at))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+    use tokio::time::sleep;
+
+    #[test]
+    fn test_task_kind_display() {
+        assert_eq!(TaskKind::SchemaSync.to_string(), "schema_sync");
+        assert_eq!(TaskKind::CopyData.to_string(), "copy_data");
+        assert_eq!(TaskKind::Replication.to_string(), "replication");
+    }
+
+    #[tokio::test]
+    async fn test_task_registration_and_removal() {
+        // Create a task that completes immediately
+        let handle = spawn(async { Ok::<(), Error>(()) });
+        let id = Task::register(TaskType::SchemaSync(handle));
+
+        // Task should be visible briefly
+        // Give it a moment to register
+        sleep(Duration::from_millis(10)).await;
+
+        // Try to remove it - it may already be gone if it completed
+        let result = AsyncTasks::remove(id);
+        // Either we removed it, or it already completed and removed itself
+        assert!(result.is_none() || result == Some(TaskKind::SchemaSync));
+    }
+
+    #[tokio::test]
+    async fn test_task_abort_via_remove() {
+        // Create a long-running task
+        let handle = spawn(async {
+            sleep(Duration::from_secs(60)).await;
+            Ok::<(), Error>(())
+        });
+        let id = Task::register(TaskType::CopyData(handle));
+
+        // Give it time to register
+        sleep(Duration::from_millis(10)).await;
+
+        // Remove should abort the task
+        let result = AsyncTasks::remove(id);
+        assert_eq!(result, Some(TaskKind::CopyData));
+
+        // Task should be gone now
+        sleep(Duration::from_millis(50)).await;
+        let result = AsyncTasks::remove(id);
+        assert_eq!(result, None);
+    }
+
+    #[tokio::test]
+    async fn test_task_iter() {
+        // Create multiple tasks
+        let handle1 = spawn(async {
+            sleep(Duration::from_secs(60)).await;
+            Ok::<(), Error>(())
+        });
+        let handle2 = spawn(async {
+            sleep(Duration::from_secs(60)).await;
+            Ok::<(), Error>(())
+        });
+
+        let id1 = Task::register(TaskType::SchemaSync(handle1));
+        let id2 = Task::register(TaskType::CopyData(handle2));
+
+        sleep(Duration::from_millis(10)).await;
+
+        // Should see both tasks
+        let tasks: Vec<_> = AsyncTasks::get().iter().collect();
+        let task_ids: Vec<_> = tasks.iter().map(|(id, _, _)| *id).collect();
+        assert!(task_ids.contains(&id1));
+        assert!(task_ids.contains(&id2));
+
+        // Verify task kinds
+        for (id, kind, _) in &tasks {
+            if *id == id1 {
+                assert_eq!(*kind, TaskKind::SchemaSync);
+            } else if *id == id2 {
+                assert_eq!(*kind, TaskKind::CopyData);
+            }
+        }
+
+        // Cleanup
+        AsyncTasks::remove(id1);
+        AsyncTasks::remove(id2);
+    }
+
+    #[tokio::test]
+    async fn test_task_auto_cleanup_on_completion() {
+        // Create a task that completes quickly
+        let handle = spawn(async {
+            sleep(Duration::from_millis(10)).await;
+            Ok::<(), Error>(())
+        });
+        let id = Task::register(TaskType::SchemaSync(handle));
+
+        // Wait for task to complete and cleanup
+        sleep(Duration::from_millis(100)).await;
+
+        // Task should have removed itself
+        let result = AsyncTasks::remove(id);
+        assert_eq!(result, None);
+    }
+
+    #[tokio::test]
+    async fn test_cutover_fails_without_replication_task() {
+        // Create a non-replication task
+        let handle = spawn(async {
+            sleep(Duration::from_secs(60)).await;
+            Ok::<(), Error>(())
+        });
+        let id = Task::register(TaskType::SchemaSync(handle));
+        sleep(Duration::from_millis(10)).await;
+
+        // Cutover should fail because there's no replication task
+        let result = AsyncTasks::cutover();
+        assert!(matches!(result, Err(Error::TaskNotFound)));
+
+        // Cleanup
+        AsyncTasks::remove(id);
+    }
+
+    #[tokio::test]
+    async fn test_cutover_returns_not_found_when_no_replication_task() {
+        // Register several non-replication tasks
+        let mut task_ids = vec![];
+        for _ in 0..5 {
+            let handle = spawn(async {
+                sleep(Duration::from_secs(60)).await;
+                Ok::<(), Error>(())
+            });
+            task_ids.push(Task::register(TaskType::SchemaSync(handle)));
+        }
+
+        sleep(Duration::from_millis(10)).await;
+
+        // With only non-replication tasks, cutover should return TaskNotFound
+        let result = AsyncTasks::cutover();
+        assert!(matches!(result, Err(Error::NotReplication)));
+
+        // Cleanup
+        for id in task_ids {
+            AsyncTasks::remove(id);
+        }
     }
 }

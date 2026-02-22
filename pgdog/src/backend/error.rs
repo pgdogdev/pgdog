@@ -134,6 +134,9 @@ pub enum Error {
 
     #[error("unsupported aggregation {function}: {reason}")]
     UnsupportedAggregation { function: String, reason: String },
+
+    #[error("toml: {0}")]
+    TomlSer(#[from] toml::ser::Error),
 }
 
 impl From<crate::frontend::Error> for Error {

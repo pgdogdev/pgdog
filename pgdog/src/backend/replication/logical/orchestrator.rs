@@ -7,7 +7,7 @@ use crate::{
     },
     util::{format_bytes, human_duration, random_string},
 };
-use pgdog_config::CutoverTimeoutAction;
+use pgdog_config::{ConfigAndUsers, CutoverTimeoutAction};
 use std::{sync::Arc, time::Duration};
 use tokio::{
     sync::Mutex,
@@ -53,6 +53,14 @@ impl Orchestrator {
         orchestrator.refresh_publisher();
 
         Ok(orchestrator)
+    }
+
+    fn refresh(&mut self) -> Result<(), Error> {
+        self.source = databases().schema_owner(&self.source.identifier().database)?;
+        self.destination = databases().schema_owner(&self.destination.identifier().database)?;
+        self.refresh_publisher();
+
+        Ok(())
     }
 
     fn refresh_publisher(&mut self) {
@@ -121,6 +129,7 @@ impl Orchestrator {
         Ok(ReplicationWaiter {
             orchestrator: self.clone(),
             waiter,
+            config: config(),
         })
     }
 
@@ -161,7 +170,7 @@ impl Orchestrator {
 
     pub(crate) async fn schema_sync_cutover(&self, ignore_errors: bool) -> Result<(), Error> {
         // Sequences won't be used in a sharded database.
-        if self.destination.shards().len() > 1 {
+        if self.destination.shards().len() == 1 {
             let schema = self.schema.as_ref().ok_or(Error::NoSchema)?;
 
             schema
@@ -190,6 +199,7 @@ impl Orchestrator {
 pub struct ReplicationWaiter {
     orchestrator: Orchestrator,
     waiter: Waiter,
+    config: Arc<ConfigAndUsers>,
 }
 
 impl ReplicationWaiter {
@@ -201,15 +211,9 @@ impl ReplicationWaiter {
         self.waiter.stop();
     }
 
-    /// Perform traffic cutover between source and destination.
-    pub(crate) async fn cutover(&mut self) -> Result<(), Error> {
-        let config = config();
-        let traffic_stop = config.config.general.cutover_traffic_stop_threshold;
-        let cutover_threshold = config.config.general.cutover_replication_lag_threshold;
-        let last_transaction_delay =
-            Duration::from_millis(config.config.general.cutover_last_transaction_delay);
-        let cutover_timeout = Duration::from_millis(config.config.general.cutover_timeout);
-        let cutover_timeout_action = config.config.general.cutover_timeout_action;
+    /// Wait for replication to catch up.
+    async fn wait_for_replication(&mut self) -> Result<(), Error> {
+        let traffic_stop = self.config.config.general.cutover_traffic_stop_threshold;
 
         // Check once a second how far we got.
         let mut check = interval(Duration::from_secs(1));
@@ -223,7 +227,7 @@ impl ReplicationWaiter {
                 info!(
                     "[cutover] stopping traffic, lag={}, threshold={}",
                     format_bytes(lag),
-                    format_bytes(config.config.general.cutover_traffic_stop_threshold),
+                    format_bytes(traffic_stop),
                 );
 
                 // Pause traffic.
@@ -237,6 +241,17 @@ impl ReplicationWaiter {
             }
         }
 
+        Ok(())
+    }
+
+    /// Wait for cutover.
+    async fn wait_for_cutover(&mut self) -> Result<(), Error> {
+        let cutover_threshold = self.config.config.general.cutover_replication_lag_threshold;
+        let last_transaction_delay =
+            Duration::from_millis(self.config.config.general.cutover_last_transaction_delay);
+        let cutover_timeout = Duration::from_millis(self.config.config.general.cutover_timeout);
+        let cutover_timeout_action = self.config.config.general.cutover_timeout_action;
+
         // Check more frequently.
         let mut check = interval(Duration::from_millis(50));
         // Abort clock starts now.
@@ -246,7 +261,7 @@ impl ReplicationWaiter {
             check.tick().await;
             let cutover_timeout_exceeded = start.elapsed() >= cutover_timeout;
 
-            if cutover_timeout_action == CutoverTimeoutAction::Abort {
+            if cutover_timeout_exceeded && cutover_timeout_action == CutoverTimeoutAction::Abort {
                 maintenance_mode::stop();
                 warn!("[cutover] abort timeout reached, resuming traffic");
                 return Err(Error::AbortTimeout);
@@ -279,31 +294,51 @@ impl ReplicationWaiter {
                     human_duration(last_transaction),
                     cutover_timeout_exceeded,
                 );
-
-                // We're going, point of no return.
-                self.orchestrator.publisher.lock().await.request_stop();
-                ok_or_abort!(self.waiter.wait().await);
-                ok_or_abort!(self.orchestrator.schema_sync_cutover(true).await);
-                // Traffic is about to go to the new cluster.
-                // If this fails, we'll resume traffic to the old cluster instead
-                // and the whole thing needs to be done from scratch.
-                ok_or_abort!(cutover(
-                    &self.orchestrator.source.identifier().database,
-                    &self.orchestrator.destination.identifier().database,
-                ));
-
-                info!("[cutover] complete, resuming traffic");
-
-                // Point traffic to the other database and resume.
-                maintenance_mode::stop();
-
-                info!("[cutover] stopping replication");
-
-                info!("[cutover] replication stopped");
-
                 break;
             }
         }
+
+        Ok(())
+    }
+
+    /// Perform traffic cutover between source and destination.
+    pub(crate) async fn cutover(&mut self) -> Result<(), Error> {
+        self.wait_for_replication().await?;
+        self.wait_for_cutover().await?;
+
+        // We're going, point of no return.
+        self.orchestrator.publisher.lock().await.request_stop();
+        ok_or_abort!(self.waiter.wait().await);
+        ok_or_abort!(self.orchestrator.schema_sync_cutover(true).await);
+        // Traffic is about to go to the new cluster.
+        // If this fails, we'll resume traffic to the old cluster instead
+        // and the whole thing needs to be done from scratch.
+        ok_or_abort!(
+            cutover(
+                &self.orchestrator.source.identifier().database,
+                &self.orchestrator.destination.identifier().database,
+            )
+            .await
+        );
+
+        // Source is now destination and vice versa.
+        ok_or_abort!(self.orchestrator.refresh());
+
+        // Create reverse replication in case we need to rollback.
+        let waiter = ok_or_abort!(self.orchestrator.replicate().await);
+
+        // Let it run in the background.
+        AsyncTasks::insert(TaskType::Replication(waiter));
+
+        // It's not safe to resume traffic.
+        info!("[cutover] complete, resuming traffic");
+
+        // Point traffic to the other database and resume.
+        maintenance_mode::stop();
+
+        info!("[cutover] stopping replication");
+
+        info!("[cutover] replication stopped");
 
         Ok(())
     }
@@ -312,7 +347,7 @@ impl ReplicationWaiter {
 macro_rules! ok_or_abort {
     ($expr:expr) => {
         match $expr {
-            Ok(_) => (),
+            Ok(res) => res,
             Err(err) => {
                 maintenance_mode::stop();
                 return Err(err.into());
@@ -322,3 +357,117 @@ macro_rules! ok_or_abort {
 }
 
 use ok_or_abort;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::backend::pool::Cluster;
+    use pgdog_config::ConfigAndUsers;
+    use std::sync::Arc;
+    use tokio::time::Instant;
+
+    impl Orchestrator {
+        fn new_test(config: &ConfigAndUsers) -> Self {
+            let cluster = Cluster::new_test(config);
+            Self {
+                source: cluster.clone(),
+                destination: cluster,
+                publication: "test_pub".to_owned(),
+                schema: None,
+                publisher: Arc::new(Mutex::new(Publisher::default())),
+                replication_slot: "test_slot".to_owned(),
+            }
+        }
+    }
+
+    impl ReplicationWaiter {
+        fn new_test(orchestrator: Orchestrator, config: Arc<ConfigAndUsers>) -> Self {
+            Self {
+                orchestrator,
+                waiter: Waiter::new_test(),
+                config,
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_wait_for_replication_exits_when_lag_below_threshold() {
+        // Ensure maintenance mode is off at start
+        maintenance_mode::stop();
+        assert!(!maintenance_mode::is_on());
+
+        let mut config = ConfigAndUsers::default();
+        config.config.general.cutover_traffic_stop_threshold = 1000;
+
+        let orchestrator = Orchestrator::new_test(&config);
+
+        // Set replication lag below threshold
+        orchestrator
+            .publisher
+            .lock()
+            .await
+            .set_replication_lag(0, 500);
+
+        let config = Arc::new(config);
+        let mut waiter = ReplicationWaiter::new_test(orchestrator, config);
+
+        // Should exit immediately since lag (500) <= threshold (1000)
+        let result = waiter.wait_for_replication().await;
+        assert!(result.is_ok());
+
+        // Maintenance mode should be on after wait_for_replication
+        assert!(maintenance_mode::is_on());
+
+        // Clean up maintenance mode
+        maintenance_mode::stop();
+        assert!(!maintenance_mode::is_on());
+    }
+
+    #[tokio::test]
+    async fn test_wait_for_cutover_exits_when_lag_below_threshold() {
+        let mut config = ConfigAndUsers::default();
+        config.config.general.cutover_replication_lag_threshold = 100;
+        config.config.general.cutover_timeout = 10000;
+
+        let orchestrator = Orchestrator::new_test(&config);
+
+        // Set replication lag below cutover threshold
+        orchestrator
+            .publisher
+            .lock()
+            .await
+            .set_replication_lag(0, 50);
+
+        let config = Arc::new(config);
+        let mut waiter = ReplicationWaiter::new_test(orchestrator, config);
+
+        // Should exit immediately since lag (50) <= threshold (100)
+        let result = waiter.wait_for_cutover().await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_wait_for_cutover_exits_when_last_transaction_old() {
+        let mut config = ConfigAndUsers::default();
+        config.config.general.cutover_replication_lag_threshold = 10;
+        config.config.general.cutover_last_transaction_delay = 100;
+        config.config.general.cutover_timeout = 10000;
+
+        let orchestrator = Orchestrator::new_test(&config);
+
+        {
+            let publisher = orchestrator.publisher.lock().await;
+            // Set lag above threshold so we don't exit on that condition
+            publisher.set_replication_lag(0, 1000);
+            // Set last_transaction to a time in the past (> 100ms ago)
+            publisher.set_last_transaction(Some(Instant::now() - Duration::from_millis(200)));
+        }
+
+        let config = Arc::new(config);
+        let mut waiter = ReplicationWaiter::new_test(orchestrator, config);
+
+        // Should exit because last_transaction (200ms) > threshold (100ms)
+        let result = waiter.wait_for_cutover().await;
+        assert!(result.is_ok());
+    }
+}

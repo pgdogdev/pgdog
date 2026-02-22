@@ -52,3 +52,25 @@ pub fn random_string(n: usize) -> String {
         .map(char::from)
         .collect()
 }
+
+/// Swap field values using tmp pattern: source -> tmp, dest -> source, tmp -> dest.
+#[macro_export]
+macro_rules! swap_field {
+    ($iter:expr, $field:ident, $source:expr, $destination:expr, $tmp:expr) => {
+        $iter.for_each(|item| {
+            if item.$field == $source {
+                item.$field = $tmp.clone();
+            }
+        });
+        $iter.for_each(|item| {
+            if item.$field == $destination {
+                item.$field = $source.to_owned();
+            }
+        });
+        $iter.for_each(|item| {
+            if item.$field == $tmp {
+                item.$field = $destination.to_owned();
+            }
+        });
+    };
+}

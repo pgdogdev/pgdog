@@ -33,6 +33,11 @@ pub fn stop() {
     warn!("maintenance mode is off");
 }
 
+#[cfg(test)]
+pub fn is_on() -> bool {
+    MAINTENANCE_MODE.on.load(Ordering::Relaxed)
+}
+
 #[derive(Debug)]
 struct MaintenanceMode {
     notify: Notify,

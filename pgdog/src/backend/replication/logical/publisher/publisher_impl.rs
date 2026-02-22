@@ -308,6 +308,17 @@ impl Publisher {
     }
 }
 
+#[cfg(test)]
+impl Publisher {
+    pub fn set_replication_lag(&self, shard: usize, lag: i64) {
+        self.replication_lag.lock().insert(shard, lag);
+    }
+
+    pub fn set_last_transaction(&self, instant: Option<Instant>) {
+        *self.last_transaction.lock() = instant;
+    }
+}
+
 #[derive(Debug)]
 pub struct Waiter {
     streams: Vec<JoinHandle<Result<(), Error>>>,
@@ -325,5 +336,15 @@ impl Waiter {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+impl Waiter {
+    pub fn new_test() -> Self {
+        Self {
+            streams: vec![],
+            stop: Arc::new(Notify::new()),
+        }
     }
 }

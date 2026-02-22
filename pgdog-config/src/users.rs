@@ -68,13 +68,12 @@ impl Users {
         }
     }
 
-    /// Remove anything in to and rename from to to.
-    pub fn cutover(&mut self, from: &str, to: &str) {
-        self.users.retain(|user| user.database != to);
-        self.users
-            .iter_mut()
-            .filter(|user| user.database == from)
-            .for_each(|user| user.database = to.to_owned());
+    /// Swap user database references between source and destination.
+    /// Users on source become users on destination, and vice versa.
+    pub fn cutover(&mut self, source: &str, destination: &str) {
+        let tmp = format!("__tmp_{}__", random_string(12));
+
+        crate::swap_field!(self.users.iter_mut(), database, source, destination, tmp);
     }
 }
 
@@ -208,7 +207,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_cutover_removes_source_renames_destination() {
+    fn test_cutover_swaps_user_database_references() {
         let mut users = Users {
             users: vec![
                 User::new("alice", "pass1", "source_db"),
@@ -219,16 +218,39 @@ mod tests {
             ..Default::default()
         };
 
-        // cutover(from, to) removes `to` and renames `from` -> `to`.
-        // To "remove source, rename destination to source" we call:
-        users.cutover("destination_db", "source_db");
+        // cutover swaps user database references
+        users.cutover("source_db", "destination_db");
 
-        assert_eq!(users.users.len(), 2);
-        assert!(users.users.iter().all(|u| u.database == "source_db"));
-        // The surviving users should have destination_db's passwords
-        let alice = users.users.iter().find(|u| u.name == "alice").unwrap();
-        assert_eq!(alice.password(), "pass3");
-        let bob = users.users.iter().find(|u| u.name == "bob").unwrap();
-        assert_eq!(bob.password(), "pass4");
+        assert_eq!(users.users.len(), 4);
+
+        // Users that were on source_db should now be on destination_db
+        let alice_dest = users
+            .users
+            .iter()
+            .find(|u| u.name == "alice" && u.database == "destination_db")
+            .unwrap();
+        assert_eq!(alice_dest.password(), "pass1");
+
+        let bob_dest = users
+            .users
+            .iter()
+            .find(|u| u.name == "bob" && u.database == "destination_db")
+            .unwrap();
+        assert_eq!(bob_dest.password(), "pass2");
+
+        // Users that were on destination_db should now be on source_db
+        let alice_source = users
+            .users
+            .iter()
+            .find(|u| u.name == "alice" && u.database == "source_db")
+            .unwrap();
+        assert_eq!(alice_source.password(), "pass3");
+
+        let bob_source = users
+            .users
+            .iter()
+            .find(|u| u.name == "bob" && u.database == "source_db")
+            .unwrap();
+        assert_eq!(bob_source.password(), "pass4");
     }
 }

@@ -2,6 +2,7 @@
 
 use std::collections::{hash_map::Entry, HashMap};
 use std::ops::Deref;
+use std::path::Path;
 use std::sync::Arc;
 
 use arc_swap::ArcSwap;
@@ -173,23 +174,67 @@ pub(crate) fn add(mut user: crate::config::User) {
     }
 }
 
-/// Remove source. Rename destination to source.
-pub fn cutover(source: &str, destination: &str) -> Result<(), Error> {
-    let _lock = lock();
+/// Swap database configs between source and destination.
+/// Both databases keep their names, but their configs (host, port, etc.) are exchanged.
+/// User database references are also swapped.
+/// Persists changes to disk (best effort).
+pub async fn cutover(source: &str, destination: &str) -> Result<(), Error> {
+    use tokio::fs::{copy, write};
 
-    let mut config = config().deref().clone();
+    let config = {
+        let _lock = lock();
 
-    config.config.cutover(destination, source);
-    config.users.cutover(destination, source);
+        let mut config = config().deref().clone();
 
-    let databases = from_config(&config);
+        config.config.cutover(source, destination);
+        config.users.cutover(source, destination);
 
-    replace_databases(databases, true)?;
+        let databases = from_config(&config);
 
-    info!(
-        r#"database "{}" renamed to "{}", "{}" is removed"#,
-        destination, source, destination
-    );
+        replace_databases(databases, true)?;
+
+        config
+    };
+
+    info!(r#"databases swapped: "{}" <-> "{}""#, source, destination);
+
+    if let Err(err) = copy(
+        &config.config_path,
+        config.config_path.clone().with_extension("bak.toml"),
+    )
+    .await
+    {
+        warn!(
+            "{} is read-only, skipping config persistence (err: {})",
+            config
+                .config_path
+                .parent()
+                .map(|path| path.to_owned())
+                .unwrap_or_default()
+                .display(),
+            err
+        );
+        return Ok(());
+    }
+
+    copy(
+        &config.users_path,
+        &config.users_path.clone().with_extension("bak.toml"),
+    )
+    .await?;
+
+    write(
+        &config.config_path,
+        toml::to_string_pretty(&config.config)?.as_bytes(),
+    )
+    .await?;
+
+    write(
+        &config.users_path,
+        toml::to_string_pretty(&config.users)?.as_bytes(),
+    )
+    .await?;
+
     Ok(())
 }
 

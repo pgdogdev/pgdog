@@ -1,10 +1,10 @@
 //! Admin command parser.
 
 use super::{
-    ban::Ban, copy_data::CopyData, healthcheck::Healthcheck, maintenance_mode::MaintenanceMode,
-    pause::Pause, prelude::Message, probe::Probe, reconnect::Reconnect, reload::Reload,
-    replicate::Replicate, reset_query_cache::ResetQueryCache, reshard::Reshard,
-    schema_sync::SchemaSync, set::Set, setup_schema::SetupSchema,
+    ban::Ban, copy_data::CopyData, cutover::Cutover, healthcheck::Healthcheck,
+    maintenance_mode::MaintenanceMode, pause::Pause, prelude::Message, probe::Probe,
+    reconnect::Reconnect, reload::Reload, replicate::Replicate, reset_query_cache::ResetQueryCache,
+    reshard::Reshard, schema_sync::SchemaSync, set::Set, setup_schema::SetupSchema,
     show_client_memory::ShowClientMemory, show_clients::ShowClients, show_config::ShowConfig,
     show_instance_id::ShowInstanceId, show_lists::ShowLists, show_mirrors::ShowMirrors,
     show_peers::ShowPeers, show_pools::ShowPools, show_prepared_statements::ShowPreparedStatements,
@@ -57,6 +57,7 @@ pub enum ParseResult {
     Replicate(Replicate),
     ShowTasks(ShowTasks),
     StopTask(StopTask),
+    Cutover(Cutover),
 }
 
 impl ParseResult {
@@ -102,6 +103,7 @@ impl ParseResult {
             Replicate(cmd) => cmd.execute().await,
             ShowTasks(cmd) => cmd.execute().await,
             StopTask(cmd) => cmd.execute().await,
+            Cutover(cmd) => cmd.execute().await,
         }
     }
 
@@ -147,6 +149,7 @@ impl ParseResult {
             Replicate(cmd) => cmd.name(),
             ShowTasks(cmd) => cmd.name(),
             StopTask(cmd) => cmd.name(),
+            Cutover(cmd) => cmd.name(),
         }
     }
 }
@@ -227,6 +230,7 @@ impl Parser {
             "copy_data" => ParseResult::CopyData(CopyData::parse(&sql)?),
             "replicate" => ParseResult::Replicate(Replicate::parse(&sql)?),
             "stop_task" => ParseResult::StopTask(StopTask::parse(&sql)?),
+            "cutover" => ParseResult::Cutover(Cutover::parse(&sql)?),
             "probe" => ParseResult::Probe(Probe::parse(&sql)?),
             "maintenance" => ParseResult::MaintenanceMode(MaintenanceMode::parse(&sql)?),
             // TODO: This is not ready yet. We have a race and
@@ -273,5 +277,11 @@ mod tests {
     fn parses_show_client_memory_command() {
         let result = Parser::parse("SHOW CLIENT MEMORY;");
         assert!(matches!(result, Ok(ParseResult::ShowClientMemory(_))));
+    }
+
+    #[test]
+    fn parses_cutover_command() {
+        let result = Parser::parse("CUTOVER");
+        assert!(matches!(result, Ok(ParseResult::Cutover(_))));
     }
 }

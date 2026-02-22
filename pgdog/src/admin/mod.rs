@@ -6,6 +6,7 @@ use crate::net::messages::Message;
 
 pub mod ban;
 pub mod copy_data;
+pub mod cutover;
 pub mod error;
 pub mod healthcheck;
 pub mod maintenance_mode;

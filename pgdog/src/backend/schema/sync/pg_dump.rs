@@ -904,9 +904,25 @@ impl PgDumpOutput {
                             }
                         }
 
+                        NodeEnum::CreatePublicationStmt(stmt) => {
+                            if state == SyncState::PreData {
+                                // DROP first for idempotency
+                                result.push(Statement::Other {
+                                    sql: format!(
+                                        "DROP PUBLICATION IF EXISTS \"{}\"",
+                                        crate::util::escape_identifier(&stmt.pubname)
+                                    ),
+                                    idempotent: true,
+                                });
+                                result.push(Statement::Other {
+                                    sql: original.to_string(),
+                                    idempotent: false,
+                                });
+                            }
+                        }
+
                         // Skip these.
-                        NodeEnum::CreatePublicationStmt(_)
-                        | NodeEnum::CreateSubscriptionStmt(_)
+                        NodeEnum::CreateSubscriptionStmt(_)
                         | NodeEnum::AlterPublicationStmt(_)
                         | NodeEnum::AlterSubscriptionStmt(_) => (),
 
@@ -1410,6 +1426,28 @@ ALTER TABLE ONLY parent ATTACH PARTITION parent_2024 FOR VALUES FROM ('2024-01-0
 
         // No statements in post-data for table partitions
         assert!(post_data.is_empty());
+    }
+
+    #[test]
+    fn test_create_publication_restored() {
+        let q = "CREATE PUBLICATION my_pub FOR TABLE users, orders;";
+        let output = PgDumpOutput {
+            stmts: parse(q).unwrap().protobuf,
+            original: q.to_owned(),
+        };
+
+        let statements = output.statements(SyncState::PreData).unwrap();
+
+        // Should have DROP and CREATE statements
+        assert_eq!(statements.len(), 2);
+        assert_eq!(
+            statements[0].deref(),
+            "DROP PUBLICATION IF EXISTS \"my_pub\""
+        );
+        assert_eq!(
+            statements[1].deref(),
+            "CREATE PUBLICATION my_pub FOR TABLE users, orders"
+        );
     }
 
     #[test]
