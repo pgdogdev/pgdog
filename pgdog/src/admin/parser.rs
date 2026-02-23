@@ -9,11 +9,10 @@ use super::{
     show_instance_id::ShowInstanceId, show_lists::ShowLists, show_mirrors::ShowMirrors,
     show_peers::ShowPeers, show_pools::ShowPools, show_prepared_statements::ShowPreparedStatements,
     show_query_cache::ShowQueryCache, show_replication::ShowReplication,
-    show_replication_slots::ShowReplicationSlots, show_resharding::ShowResharding,
-    show_schema_sync::ShowSchemaSync, show_server_memory::ShowServerMemory,
-    show_servers::ShowServers, show_stats::ShowStats, show_table_copies::ShowTableCopies,
-    show_tasks::ShowTasks, show_transactions::ShowTransactions, show_version::ShowVersion,
-    shutdown::Shutdown, stop_task::StopTask, Command, Error,
+    show_replication_slots::ShowReplicationSlots, show_schema_sync::ShowSchemaSync,
+    show_server_memory::ShowServerMemory, show_servers::ShowServers, show_stats::ShowStats,
+    show_table_copies::ShowTableCopies, show_tasks::ShowTasks, show_transactions::ShowTransactions,
+    show_version::ShowVersion, shutdown::Shutdown, stop_task::StopTask, Command, Error,
 };
 
 use tracing::debug;
@@ -40,7 +39,6 @@ pub enum ParseResult {
     ShowLists(ShowLists),
     ShowPrepared(ShowPreparedStatements),
     ShowReplication(ShowReplication),
-    ShowResharding(ShowResharding),
     ShowServerMemory(ShowServerMemory),
     ShowClientMemory(ShowClientMemory),
     ShowTableCopies(ShowTableCopies),
@@ -86,7 +84,6 @@ impl ParseResult {
             ShowLists(show_lists) => show_lists.execute().await,
             ShowPrepared(cmd) => cmd.execute().await,
             ShowReplication(show_replication) => show_replication.execute().await,
-            ShowResharding(cmd) => cmd.execute().await,
             ShowServerMemory(show_server_memory) => show_server_memory.execute().await,
             ShowClientMemory(show_client_memory) => show_client_memory.execute().await,
             ShowTableCopies(show_table_copies) => show_table_copies.execute().await,
@@ -132,7 +129,6 @@ impl ParseResult {
             ShowLists(show_lists) => show_lists.name(),
             ShowPrepared(show) => show.name(),
             ShowReplication(show_replication) => show_replication.name(),
-            ShowResharding(cmd) => cmd.name(),
             ShowServerMemory(show_server_memory) => show_server_memory.name(),
             ShowClientMemory(show_client_memory) => show_client_memory.name(),
             ShowTableCopies(show_table_copies) => show_table_copies.name(),
@@ -202,7 +198,6 @@ impl Parser {
                 "replication_slots" => {
                     ParseResult::ShowReplicationSlots(ShowReplicationSlots::parse(&sql)?)
                 }
-                "resharding" => ParseResult::ShowResharding(ShowResharding::parse(&sql)?),
                 "schema_sync" => ParseResult::ShowSchemaSync(ShowSchemaSync::parse(&sql)?),
                 "table_copies" => ParseResult::ShowTableCopies(ShowTableCopies::parse(&sql)?),
                 "tasks" => ParseResult::ShowTasks(ShowTasks::parse(&sql)?),
