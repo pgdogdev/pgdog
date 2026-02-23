@@ -1,0 +1,41 @@
+services:
+  source:
+    image: postgres:18
+    command: postgres -c wal_level=logical
+    environment:
+      POSTGRES_USER: pgdog
+      POSTGRES_PASSWORD: pgdog
+      POSTGRES_DB: pgdog
+    volumes:
+      - ./setup.sql:/docker-entrypoint-initdb.d/setup.sql
+    ports:
+      - 15432:5432
+    networks:
+      - postgres
+
+  shard_0:
+    image: postgres:18
+    command: postgres -c wal_level=logical
+    environment:
+      POSTGRES_USER: pgdog
+      POSTGRES_PASSWORD: pgdog
+      POSTGRES_DB: pgdog1
+    ports:
+      - 15433:5432
+    networks:
+      - postgres
+
+  shard_1:
+    image: postgres:18
+    command: postgres -c wal_level=logical
+    environment:
+      POSTGRES_USER: pgdog
+      POSTGRES_PASSWORD: pgdog
+      POSTGRES_DB: pgdog2
+    ports:
+      - 15434:5432
+    networks:
+      - postgres
+
+networks:
+  postgres:
