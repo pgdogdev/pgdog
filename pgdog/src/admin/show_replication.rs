@@ -60,6 +60,7 @@ impl Command for ShowReplication {
                         .add(if valid {
                             state
                                 .replica_lag
+                                .duration
                                 .as_millis()
                                 .to_string()
                                 .to_data_row_column()

@@ -203,17 +203,16 @@ impl Connection {
                 // Get params from the first database that answers.
                 // Parameters are cached on the pool.
                 for shard in self.cluster()?.shards() {
-                    for pool in shard.pools() {
-                        if let Ok(params) = pool.params(request).await {
-                            let mut result = vec![];
-                            for param in params.iter() {
-                                if let Some(value) = param.1.as_str() {
-                                    result.push(ParameterStatus::from((param.0.as_str(), value)));
-                                }
-                            }
+                    if let Ok(params) = shard.params(request).await {
+                        let mut result = vec![];
 
-                            return Ok(result);
+                        for param in params.iter() {
+                            if let Some(value) = param.1.as_str() {
+                                result.push(ParameterStatus::from((param.0.as_str(), value)));
+                            }
                         }
+
+                        return Ok(result);
                     }
                 }
                 Err(Error::Pool(pool::Error::AllReplicasDown))

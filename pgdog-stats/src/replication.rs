@@ -1,6 +1,6 @@
 use std::fmt::Display;
 use std::str::FromStr;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use bytes::Bytes;
 use pgdog_postgres_types::Error;
@@ -104,6 +104,29 @@ impl Default for LsnStats {
             timestamp: TimestampTz::default(),
             fetched: SystemTime::now(),
             aurora: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+pub struct ReplicaLag {
+    pub duration: Duration,
+    pub bytes: i64,
+}
+
+impl ReplicaLag {
+    /// A way to compare replica lag calculated by us.
+    ///
+    /// First, take bytes, they are the most accurate. Then, compare estimated
+    /// duration.
+    ///
+    pub fn greater_or_eq(&self, other: &Self) -> bool {
+        if self.bytes >= other.bytes {
+            true
+        } else if self.duration >= other.duration {
+            true
+        } else {
+            false
         }
     }
 }

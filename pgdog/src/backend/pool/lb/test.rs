@@ -4,6 +4,7 @@ use tokio::time::sleep;
 
 use crate::backend::pool::{Address, Config, Error, PoolConfig, Request};
 use crate::config::LoadBalancingStrategy;
+use pgdog_stats::ReplicaLag;
 
 use super::*;
 use monitor::Monitor;
@@ -1077,4 +1078,433 @@ async fn test_least_active_connections_prefers_pool_with_fewer_checked_out() {
     );
 
     replicas.shutdown();
+}
+
+// ==========================================
+// ban_check unit tests
+// ==========================================
+
+fn setup_test_replicas_no_launch() -> LoadBalancer {
+    let pool_config1 = create_test_pool_config("127.0.0.1", 5432);
+    let pool_config2 = create_test_pool_config("localhost", 5432);
+
+    LoadBalancer::new(
+        &None,
+        &[pool_config1, pool_config2],
+        LoadBalancingStrategy::Random,
+        ReadWriteSplit::IncludePrimary,
+    )
+}
+
+#[test]
+fn test_ban_check_clears_expired_ban_when_healthy_no_lag() {
+    let replicas = setup_test_replicas_no_launch();
+
+    // Ban with short timeout
+    replicas.targets[0]
+        .ban
+        .ban(Error::ServerError, Duration::from_millis(1));
+
+    // Wait for ban to expire
+    std::thread::sleep(Duration::from_millis(10));
+
+    assert!(replicas.targets[0].ban.banned());
+
+    let monitor = Monitor::new_test(&replicas);
+    let threshold = ReplicaLag {
+        duration: Duration::MAX,
+        bytes: i64::MAX,
+    };
+
+    monitor.ban_check(&threshold);
+
+    assert!(
+        !replicas.targets[0].ban.banned(),
+        "Expired ban should be cleared when healthy and no replica lag"
+    );
+}
+
+#[test]
+fn test_ban_check_does_not_clear_expired_ban_when_replica_lag_bad() {
+    let replicas = setup_test_replicas_no_launch();
+
+    // Ban with short timeout
+    replicas.targets[0]
+        .ban
+        .ban(Error::ServerError, Duration::from_millis(1));
+
+    // Set replica lag on the pool
+    replicas.targets[0].pool.lock().replica_lag = ReplicaLag {
+        duration: Duration::from_secs(10),
+        bytes: 1000,
+    };
+
+    // Wait for ban to expire
+    std::thread::sleep(Duration::from_millis(10));
+
+    assert!(replicas.targets[0].ban.banned());
+
+    let monitor = Monitor::new_test(&replicas);
+    // Threshold that the pool's replica_lag exceeds
+    let threshold = ReplicaLag {
+        duration: Duration::from_secs(1),
+        bytes: 100,
+    };
+
+    monitor.ban_check(&threshold);
+
+    assert!(
+        replicas.targets[0].ban.banned(),
+        "Expired ban should NOT be cleared when replica lag exceeds threshold"
+    );
+}
+
+#[test]
+fn test_ban_check_bans_with_replica_lag_reason() {
+    let replicas = setup_test_replicas_no_launch();
+
+    // Set target as unhealthy
+    replicas.targets[0].health.toggle(false);
+
+    // Set replica lag on the pool
+    replicas.targets[0].pool.lock().replica_lag = ReplicaLag {
+        duration: Duration::from_secs(10),
+        bytes: 1000,
+    };
+
+    let monitor = Monitor::new_test(&replicas);
+    let threshold = ReplicaLag {
+        duration: Duration::from_secs(1),
+        bytes: 100,
+    };
+
+    monitor.ban_check(&threshold);
+
+    assert!(replicas.targets[0].ban.banned());
+    assert_eq!(
+        replicas.targets[0].ban.error(),
+        Some(Error::ReplicaLag),
+        "Ban reason should be ReplicaLag when replica lag exceeds threshold"
+    );
+}
+
+#[test]
+fn test_ban_check_bans_with_pool_unhealthy_reason() {
+    let replicas = setup_test_replicas_no_launch();
+
+    // Set target as unhealthy
+    replicas.targets[0].health.toggle(false);
+
+    // No replica lag set (defaults to zero)
+
+    let monitor = Monitor::new_test(&replicas);
+    let threshold = ReplicaLag {
+        duration: Duration::MAX,
+        bytes: i64::MAX,
+    };
+
+    monitor.ban_check(&threshold);
+
+    assert!(replicas.targets[0].ban.banned());
+    assert_eq!(
+        replicas.targets[0].ban.error(),
+        Some(Error::PoolUnhealthy),
+        "Ban reason should be PoolUnhealthy when replica lag is within threshold"
+    );
+}
+
+#[test]
+fn test_ban_check_does_not_ban_single_target() {
+    let pool_config = create_test_pool_config("127.0.0.1", 5432);
+
+    let replicas = LoadBalancer::new(
+        &None,
+        &[pool_config],
+        LoadBalancingStrategy::Random,
+        ReadWriteSplit::IncludePrimary,
+    );
+    // Don't launch - we're unit testing ban_check
+
+    // Set target as unhealthy
+    replicas.targets[0].health.toggle(false);
+
+    let monitor = Monitor::new_test(&replicas);
+    let threshold = ReplicaLag {
+        duration: Duration::MAX,
+        bytes: i64::MAX,
+    };
+
+    monitor.ban_check(&threshold);
+
+    assert!(
+        !replicas.targets[0].ban.banned(),
+        "Single target should not be banned even when unhealthy"
+    );
+}
+
+#[test]
+fn test_ban_check_does_not_ban_with_zero_ban_timeout() {
+    let pool_config1 = PoolConfig {
+        address: Address {
+            host: "127.0.0.1".into(),
+            port: 5432,
+            user: "pgdog".into(),
+            password: "pgdog".into(),
+            database_name: "pgdog".into(),
+            ..Default::default()
+        },
+        config: Config {
+            inner: pgdog_stats::Config {
+                max: 1,
+                checkout_timeout: Duration::from_millis(1000),
+                ban_timeout: Duration::ZERO,
+                ..Config::default().inner
+            },
+        },
+        ..Default::default()
+    };
+
+    let pool_config2 = PoolConfig {
+        address: Address {
+            host: "localhost".into(),
+            port: 5432,
+            user: "pgdog".into(),
+            password: "pgdog".into(),
+            database_name: "pgdog".into(),
+            ..Default::default()
+        },
+        config: Config {
+            inner: pgdog_stats::Config {
+                max: 1,
+                checkout_timeout: Duration::from_millis(1000),
+                ban_timeout: Duration::ZERO,
+                ..Config::default().inner
+            },
+        },
+        ..Default::default()
+    };
+
+    let replicas = LoadBalancer::new(
+        &None,
+        &[pool_config1, pool_config2],
+        LoadBalancingStrategy::Random,
+        ReadWriteSplit::IncludePrimary,
+    );
+
+    // Set target as unhealthy
+    replicas.targets[0].health.toggle(false);
+
+    let monitor = Monitor::new_test(&replicas);
+    let threshold = ReplicaLag {
+        duration: Duration::MAX,
+        bytes: i64::MAX,
+    };
+
+    monitor.ban_check(&threshold);
+
+    assert!(
+        !replicas.targets[0].ban.banned(),
+        "Target with zero ban_timeout should not be banned"
+    );
+}
+
+#[test]
+fn test_ban_check_unbans_all_when_all_unhealthy() {
+    let replicas = setup_test_replicas_no_launch();
+
+    // Ban both targets manually first
+    replicas.targets[0]
+        .ban
+        .ban(Error::ServerError, Duration::from_secs(60));
+    replicas.targets[1]
+        .ban
+        .ban(Error::ServerError, Duration::from_secs(60));
+
+    // Set both as unhealthy
+    replicas.targets[0].health.toggle(false);
+    replicas.targets[1].health.toggle(false);
+
+    assert!(replicas.targets[0].ban.banned());
+    assert!(replicas.targets[1].ban.banned());
+
+    let monitor = Monitor::new_test(&replicas);
+    let threshold = ReplicaLag {
+        duration: Duration::MAX,
+        bytes: i64::MAX,
+    };
+
+    monitor.ban_check(&threshold);
+
+    assert!(
+        !replicas.targets[0].ban.banned(),
+        "All bans should be cleared when all targets are unhealthy"
+    );
+    assert!(
+        !replicas.targets[1].ban.banned(),
+        "All bans should be cleared when all targets are unhealthy"
+    );
+}
+
+#[test]
+fn test_ban_check_does_not_clear_unexpired_ban() {
+    let replicas = setup_test_replicas_no_launch();
+
+    // Ban with long timeout
+    replicas.targets[0]
+        .ban
+        .ban(Error::ServerError, Duration::from_secs(60));
+
+    assert!(replicas.targets[0].ban.banned());
+
+    let monitor = Monitor::new_test(&replicas);
+    let threshold = ReplicaLag {
+        duration: Duration::MAX,
+        bytes: i64::MAX,
+    };
+
+    monitor.ban_check(&threshold);
+
+    assert!(
+        replicas.targets[0].ban.banned(),
+        "Unexpired ban should not be cleared"
+    );
+}
+
+#[test]
+fn test_ban_check_default_threshold_ignores_replica_lag() {
+    let replicas = setup_test_replicas_no_launch();
+
+    // Set very high replica lag on the pool
+    replicas.targets[0].pool.lock().replica_lag = ReplicaLag {
+        duration: Duration::from_secs(3600), // 1 hour lag
+        bytes: 1_000_000_000,                // 1GB lag
+    };
+
+    // Set target as unhealthy
+    replicas.targets[0].health.toggle(false);
+
+    let monitor = Monitor::new_test(&replicas);
+    // Use default config thresholds (MAX values)
+    let threshold = ReplicaLag {
+        duration: Duration::MAX,
+        bytes: i64::MAX,
+    };
+
+    monitor.ban_check(&threshold);
+
+    assert!(replicas.targets[0].ban.banned());
+    assert_eq!(
+        replicas.targets[0].ban.error(),
+        Some(Error::PoolUnhealthy),
+        "With default MAX threshold, ban reason should be PoolUnhealthy, not ReplicaLag"
+    );
+}
+
+#[test]
+fn test_ban_check_default_threshold_clears_expired_ban_despite_high_lag() {
+    let replicas = setup_test_replicas_no_launch();
+
+    // Ban with short timeout
+    replicas.targets[0]
+        .ban
+        .ban(Error::ServerError, Duration::from_millis(1));
+
+    // Set very high replica lag on the pool
+    replicas.targets[0].pool.lock().replica_lag = ReplicaLag {
+        duration: Duration::from_secs(3600), // 1 hour lag
+        bytes: 1_000_000_000,                // 1GB lag
+    };
+
+    // Wait for ban to expire
+    std::thread::sleep(Duration::from_millis(10));
+
+    assert!(replicas.targets[0].ban.banned());
+
+    let monitor = Monitor::new_test(&replicas);
+    // Use default config thresholds (MAX values) - replica lag should be ignored
+    let threshold = ReplicaLag {
+        duration: Duration::MAX,
+        bytes: i64::MAX,
+    };
+
+    monitor.ban_check(&threshold);
+
+    assert!(
+        !replicas.targets[0].ban.banned(),
+        "With default MAX threshold, expired ban should be cleared despite high replica lag"
+    );
+}
+
+// ==========================================
+// params() tests
+// ==========================================
+
+#[tokio::test]
+async fn test_params_returns_params_from_non_banned_target() {
+    let replicas = setup_test_replicas();
+
+    let request = Request::default();
+    let result = replicas.params(&request).await;
+
+    assert!(result.is_ok(), "params() should succeed when targets exist");
+
+    replicas.shutdown();
+}
+
+#[tokio::test]
+async fn test_params_returns_all_replicas_down_when_all_banned() {
+    let replicas = setup_test_replicas();
+
+    // Ban all targets
+    for target in &replicas.targets {
+        target.ban.ban(Error::ServerError, Duration::from_secs(60));
+    }
+
+    let request = Request::default();
+    let result = replicas.params(&request).await;
+
+    assert!(
+        matches!(result, Err(Error::AllReplicasDown)),
+        "params() should return AllReplicasDown when all targets are banned"
+    );
+
+    replicas.shutdown();
+}
+
+#[tokio::test]
+async fn test_params_skips_banned_targets() {
+    let replicas = setup_test_replicas();
+
+    // Ban first target
+    replicas.targets[0]
+        .ban
+        .ban(Error::ServerError, Duration::from_secs(60));
+
+    let request = Request::default();
+    let result = replicas.params(&request).await;
+
+    assert!(
+        result.is_ok(),
+        "params() should succeed by using non-banned target"
+    );
+
+    replicas.shutdown();
+}
+
+#[tokio::test]
+async fn test_params_returns_all_replicas_down_when_empty() {
+    let replicas = LoadBalancer::new(
+        &None,
+        &[],
+        LoadBalancingStrategy::Random,
+        ReadWriteSplit::IncludePrimary,
+    );
+
+    let request = Request::default();
+    let result = replicas.params(&request).await;
+
+    assert!(
+        matches!(result, Err(Error::AllReplicasDown)),
+        "params() should return AllReplicasDown when no targets exist"
+    );
 }

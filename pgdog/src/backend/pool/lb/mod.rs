@@ -12,8 +12,11 @@ use rand::seq::SliceRandom;
 use tokio::{sync::Notify, time::timeout};
 use tracing::warn;
 
-use crate::config::{LoadBalancingStrategy, ReadWriteSplit, Role};
 use crate::net::messages::BackendKeyData;
+use crate::{
+    config::{LoadBalancingStrategy, ReadWriteSplit, Role},
+    net::Parameters,
+};
 
 use super::{Error, Guard, Pool, PoolConfig, Request};
 
@@ -197,6 +200,15 @@ impl LoadBalancer {
             Ok(Err(err)) => Err(err),
             Err(_) => Err(Error::ReplicaCheckoutTimeout),
         }
+    }
+
+    /// Get parameters from first non-banned connection pool.
+    pub async fn params(&self, request: &Request) -> Result<&Parameters, Error> {
+        for target in self.targets.iter().filter(|target| !target.ban.banned()) {
+            return Ok(target.pool.params(request).await?);
+        }
+
+        Err(Error::AllReplicasDown)
     }
 
     /// Move connections from this replica set to another.

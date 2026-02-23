@@ -76,4 +76,7 @@ pub enum Error {
 
     #[error("fast shutdown failed")]
     FastShutdown,
+
+    #[error("replica lag")]
+    ReplicaLag,
 }

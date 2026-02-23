@@ -3,7 +3,6 @@
 use std::cmp::max;
 use std::collections::VecDeque;
 use std::fmt::Display;
-use std::time::Duration;
 
 use crate::backend::{stats::Counts as BackendCounts, Server};
 use crate::backend::{ConnectReason, DisconnectReason};
@@ -11,7 +10,9 @@ use crate::net::messages::BackendKeyData;
 
 use tokio::time::Instant;
 
-use super::{Config, Error, Mapping, Oids, Pool, Request, Stats, Taken, Waiter};
+use super::{
+    lsn_monitor::ReplicaLag, Config, Error, Mapping, Oids, Pool, Request, Stats, Taken, Waiter,
+};
 
 /// Pool internals protected by a mutex.
 #[derive(Default)]
@@ -48,7 +49,7 @@ pub(super) struct Inner {
     /// Unique pool identifier.
     id: u64,
     /// Replica lag.
-    pub(super) replica_lag: Duration,
+    pub(super) replica_lag: ReplicaLag,
 }
 
 impl std::fmt::Debug for Inner {
@@ -81,7 +82,7 @@ impl Inner {
             oids: None,
             moved: None,
             id,
-            replica_lag: Duration::ZERO,
+            replica_lag: ReplicaLag::default(),
         }
     }
     /// Total number of connections managed by the pool.

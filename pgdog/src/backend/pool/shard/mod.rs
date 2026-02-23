@@ -13,7 +13,7 @@ use crate::backend::PubSubListener;
 use crate::backend::Schema;
 use crate::config::{config, LoadBalancingStrategy, ReadWriteSplit, Role};
 use crate::net::messages::BackendKeyData;
-use crate::net::NotificationResponse;
+use crate::net::{NotificationResponse, Parameters};
 
 use super::{Error, Guard, LoadBalancer, Pool, PoolConfig, Request};
 
@@ -230,6 +230,11 @@ impl Shard {
     /// the shard routing logic.
     pub fn redetect_roles(&self) -> bool {
         self.lb.redetect_roles()
+    }
+
+    /// Get parameters from first available connection pool.
+    pub async fn params(&self, request: &Request) -> Result<&Parameters, Error> {
+        self.lb.params(request).await
     }
 }
 

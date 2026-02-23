@@ -19,8 +19,10 @@ use crate::net::{Parameter, Parameters};
 
 use super::inner::CheckInResult;
 use super::{
-    lb::TargetHealth, lsn_monitor::LsnMonitor, Address, Comms, Config, Error, Guard, Healtcheck,
-    Inner, Monitor, Oids, PoolConfig, Request, State, Waiting,
+    lb::TargetHealth,
+    lsn_monitor::{LsnMonitor, ReplicaLag},
+    Address, Comms, Config, Error, Guard, Healtcheck, Inner, Monitor, Oids, PoolConfig, Request,
+    State, Waiting,
 };
 
 static ID_COUNTER: Lazy<Arc<AtomicU64>> = Lazy::new(|| Arc::new(AtomicU64::new(0)));
@@ -434,6 +436,11 @@ impl Pool {
     /// Pool state.
     pub fn state(&self) -> State {
         State::get(self)
+    }
+
+    /// Get replica lag real quick.
+    pub fn replica_lag(&self) -> ReplicaLag {
+        self.lock().replica_lag
     }
 
     /// LSN stats

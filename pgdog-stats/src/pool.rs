@@ -6,7 +6,7 @@ use std::{
 use pgdog_config::{PoolerMode, pooling::ConnectionRecovery};
 use serde::{Deserialize, Serialize};
 
-use crate::LsnStats;
+use crate::{LsnStats, ReplicaLag};
 
 /// Pool statistics.
 ///
@@ -255,7 +255,7 @@ pub struct State {
     /// Pool mode
     pub pooler_mode: PoolerMode,
     /// Lag
-    pub replica_lag: Duration,
+    pub replica_lag: ReplicaLag,
     /// Force closed.
     pub force_close: usize,
     // LSN stats.
