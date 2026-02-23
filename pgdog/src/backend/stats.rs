@@ -59,9 +59,11 @@ pub struct ServerStats {
 impl ServerStats {
     fn new(id: BackendKeyData, options: &ServerOptions, config: &Memory) -> Self {
         let now = Instant::now();
-        let mut inner = pgdog_stats::server::Stats::default();
-        inner.memory = *MemoryStats::new(config);
-        inner.pool_id = options.pool_id;
+        let inner = pgdog_stats::server::Stats {
+            memory: *MemoryStats::new(config),
+            pool_id: options.pool_id,
+            ..Default::default()
+        };
 
         Self {
             inner,
@@ -123,7 +125,7 @@ impl Stats {
         let local = ServerStats::new(id, options, config);
 
         let server = ConnectedServer {
-            stats: local.clone(),
+            stats: local,
             addr: addr.clone(),
             application_name: params.get_default("application_name", "PgDog").to_owned(),
             client: None,
@@ -138,7 +140,7 @@ impl Stats {
     /// Sync local stats to shared (called on I/O operations).
     #[inline]
     fn sync_to_shared(&self) {
-        self.shared.lock().stats = self.local.clone();
+        self.shared.lock().stats = self.local;
     }
 
     fn transaction_state(&mut self, now: Instant, state: State) {

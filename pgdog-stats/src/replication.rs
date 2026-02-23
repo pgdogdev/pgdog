@@ -123,10 +123,8 @@ impl ReplicaLag {
     pub fn greater_or_eq(&self, other: &Self) -> bool {
         if self.bytes >= other.bytes {
             true
-        } else if self.duration >= other.duration {
-            true
         } else {
-            false
+            self.duration >= other.duration
         }
     }
 }

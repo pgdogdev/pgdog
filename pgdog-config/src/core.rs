@@ -260,7 +260,7 @@ impl Config {
                 let entry = tables.entry(database).or_insert_with(Vec::new);
 
                 for table in system_catalogs() {
-                    if entry.iter().find(|t| t.name == *table).is_none() {
+                    if !entry.iter().any(|t| t.name == *table) {
                         entry.push(OmnishardedTable {
                             name: table.to_string(),
                             sticky_routing,
@@ -452,13 +452,13 @@ impl Config {
             self.general.query_parser = QueryParserLevel::On;
         }
 
-        if self.general.query_parser_engine == QueryParserEngine::PgQueryRaw {
-            if self.memory.stack_size < 32 * 1024 * 1024 {
-                self.memory.stack_size = 32 * 1024 * 1024;
-                warn!(
-                    r#""pg_query_raw" parser engine requires a large thread stack, setting it to 32MiB for each Tokio worker"#
-                );
-            }
+        if self.general.query_parser_engine == QueryParserEngine::PgQueryRaw
+            && self.memory.stack_size < 32 * 1024 * 1024
+        {
+            self.memory.stack_size = 32 * 1024 * 1024;
+            warn!(
+                r#""pg_query_raw" parser engine requires a large thread stack, setting it to 32MiB for each Tokio worker"#
+            );
         }
     }
 

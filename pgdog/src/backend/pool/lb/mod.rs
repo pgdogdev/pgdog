@@ -204,8 +204,8 @@ impl LoadBalancer {
 
     /// Get parameters from first non-banned connection pool.
     pub async fn params(&self, request: &Request) -> Result<&Parameters, Error> {
-        for target in self.targets.iter().filter(|target| !target.ban.banned()) {
-            return Ok(target.pool.params(request).await?);
+        if let Some(target) = self.targets.iter().find(|target| !target.ban.banned()) {
+            return target.pool.params(request).await;
         }
 
         Err(Error::AllReplicasDown)

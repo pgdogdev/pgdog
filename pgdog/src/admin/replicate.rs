@@ -54,7 +54,7 @@ impl Command for Replicate {
         )?;
 
         let waiter = orchestrator.replicate().await?;
-        let task_id = Task::register(TaskType::Replication(waiter));
+        let task_id = Task::register(TaskType::Replication(Box::new(waiter)));
 
         let mut dr = DataRow::new();
         dr.add(task_id.to_string());

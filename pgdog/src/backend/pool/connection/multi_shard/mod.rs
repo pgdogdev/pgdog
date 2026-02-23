@@ -160,7 +160,7 @@ impl MultiShard {
 
                         self.buffer.sort(self.route.order_by(), &self.decoder);
                         self.buffer.distinct(self.route.distinct(), &self.decoder);
-                        self.buffer.limit(&self.route.limit());
+                        self.buffer.limit(self.route.limit());
                     }
 
                     if has_rows {

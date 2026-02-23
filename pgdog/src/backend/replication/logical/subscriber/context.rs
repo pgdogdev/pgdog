@@ -56,7 +56,7 @@ impl<'a> StreamContext<'a> {
             static ref PARAMS: Parameters = Parameters::default();
         }
 
-        let ast_context = AstContext::from_cluster(&self.cluster, &PARAMS);
+        let ast_context = AstContext::from_cluster(self.cluster, &PARAMS);
 
         let ast = Cache::get().query(
             &BufferedQuery::Prepared(self.parse.clone()),

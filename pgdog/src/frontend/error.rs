@@ -72,7 +72,13 @@ pub enum Error {
     // FIXME: layer errors better so we don't have
     // to reach so deep into a module.
     #[error("{0}")]
-    Multi(#[from] crate::frontend::client::query_engine::multi_step::error::Error),
+    Multi(#[from] Box<crate::frontend::client::query_engine::multi_step::error::Error>),
+}
+
+impl From<crate::frontend::client::query_engine::multi_step::error::Error> for Error {
+    fn from(value: crate::frontend::client::query_engine::multi_step::error::Error) -> Self {
+        Self::Multi(Box::new(value))
+    }
 }
 
 impl Error {

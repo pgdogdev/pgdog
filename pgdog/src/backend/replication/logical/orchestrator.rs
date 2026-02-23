@@ -197,7 +197,7 @@ impl Orchestrator {
     /// Get the largest replication lag out of all the shards.
     async fn replication_lag(&self) -> u64 {
         let lag = self.publisher.lock().await.replication_lag();
-        lag.iter().map(|(_, lag)| *lag).max().unwrap_or_default() as u64
+        lag.values().copied().max().unwrap_or_default() as u64
     }
 
     pub(crate) async fn cleanup(&mut self) -> Result<(), Error> {
@@ -303,7 +303,7 @@ impl ReplicationWaiter {
             Some(CutoverReason::Timeout)
         } else if lag <= cutover_threshold {
             Some(CutoverReason::Lag)
-        } else if last_transaction.map_or(true, |t| t > last_transaction_delay) {
+        } else if last_transaction.is_none_or(|t| t > last_transaction_delay) {
             Some(CutoverReason::LastTransaction)
         } else {
             None
@@ -403,7 +403,7 @@ impl ReplicationWaiter {
         let waiter = ok_or_abort!(self.orchestrator.replicate().await);
 
         // Let it run in the background.
-        AsyncTasks::insert(TaskType::Replication(waiter));
+        AsyncTasks::insert(TaskType::Replication(Box::new(waiter)));
 
         // It's not safe to resume traffic.
         info!("[cutover] complete, resuming traffic");

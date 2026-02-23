@@ -492,7 +492,7 @@ impl Client {
                 // Postgres ignores all commands after an error until it receives Sync.
                 if query_engine.out_of_sync() && !req.is_sync_only() {
                     debug!("pipeline aborted, skipping to Sync");
-                    while let Some((_, mut next_req)) = reqs.next() {
+                    for (_, mut next_req) in reqs.by_ref() {
                         if next_req.is_sync_only() {
                             debug!("processing Sync to complete aborted pipeline");
                             let mut ctx = QueryEngineContext::new(self).spliced(&mut next_req, 0);

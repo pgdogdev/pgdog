@@ -88,7 +88,7 @@ impl Monitor {
                 .pool
                 .state()
                 .replica_lag
-                .greater_or_eq(&replica_ban_threshold);
+                .greater_or_eq(replica_ban_threshold);
 
             // Clear expired bans.
             if healthy && !replica_lag_bad {

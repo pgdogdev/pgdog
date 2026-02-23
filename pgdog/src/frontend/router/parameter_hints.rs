@@ -59,7 +59,7 @@ impl ParameterHints<'_> {
                         .shards(sharding_schema.shards)
                         .build()?;
                 let shard = ctx.apply()?;
-                self.hooks.record_set_sharding_key(&shard, &val);
+                self.hooks.record_set_sharding_key(&shard, val);
                 shards.push(ShardWithPriority::new_set(shard));
             } else {
                 schema_sharder.resolve(Some(Schema::from(val.as_str())), &sharding_schema.schemas);
