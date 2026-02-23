@@ -197,42 +197,44 @@ pub async fn cutover(source: &str, destination: &str) -> Result<(), Error> {
 
     info!(r#"databases swapped: "{}" <-> "{}""#, source, destination);
 
-    if let Err(err) = copy(
-        &config.config_path,
-        config.config_path.clone().with_extension("bak.toml"),
-    )
-    .await
-    {
-        warn!(
-            "{} is read-only, skipping config persistence (err: {})",
-            config
-                .config_path
-                .parent()
-                .map(|path| path.to_owned())
-                .unwrap_or_default()
-                .display(),
-            err
-        );
-        return Ok(());
+    if config.config.general.cutover_save_config {
+        if let Err(err) = copy(
+            &config.config_path,
+            config.config_path.clone().with_extension("bak.toml"),
+        )
+        .await
+        {
+            warn!(
+                "{} is read-only, skipping config persistence (err: {})",
+                config
+                    .config_path
+                    .parent()
+                    .map(|path| path.to_owned())
+                    .unwrap_or_default()
+                    .display(),
+                err
+            );
+            return Ok(());
+        }
+
+        copy(
+            &config.users_path,
+            &config.users_path.clone().with_extension("bak.toml"),
+        )
+        .await?;
+
+        write(
+            &config.config_path,
+            toml::to_string_pretty(&config.config)?.as_bytes(),
+        )
+        .await?;
+
+        write(
+            &config.users_path,
+            toml::to_string_pretty(&config.users)?.as_bytes(),
+        )
+        .await?;
     }
-
-    copy(
-        &config.users_path,
-        &config.users_path.clone().with_extension("bak.toml"),
-    )
-    .await?;
-
-    write(
-        &config.config_path,
-        toml::to_string_pretty(&config.config)?.as_bytes(),
-    )
-    .await?;
-
-    write(
-        &config.users_path,
-        toml::to_string_pretty(&config.users)?.as_bytes(),
-    )
-    .await?;
 
     Ok(())
 }

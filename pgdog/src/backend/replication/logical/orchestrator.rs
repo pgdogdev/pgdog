@@ -8,7 +8,7 @@ use crate::{
     util::{format_bytes, human_duration, random_string},
 };
 use pgdog_config::{ConfigAndUsers, CutoverTimeoutAction};
-use std::{sync::Arc, time::Duration};
+use std::{fmt::Display, sync::Arc, time::Duration};
 use tokio::{
     select,
     sync::Mutex,
@@ -110,6 +110,20 @@ impl Orchestrator {
         Ok(())
     }
 
+    /// Remove any blockers for reverse replication.
+    pub(crate) async fn schema_sync_post_cutover(
+        &mut self,
+        ignore_errors: bool,
+    ) -> Result<(), Error> {
+        let schema = self.schema.as_ref().ok_or(Error::NoSchema)?;
+
+        schema
+            .restore(&self.destination, ignore_errors, SyncState::PostCutover)
+            .await?;
+
+        Ok(())
+    }
+
     pub(crate) async fn data_sync(&self) -> Result<(), Error> {
         let mut publisher = self.publisher.lock().await;
 
@@ -201,6 +215,23 @@ pub struct ReplicationWaiter {
     config: Arc<ConfigAndUsers>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum CutoverReason {
+    Lag,
+    Timeout,
+    LastTransaction,
+}
+
+impl Display for CutoverReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Lag => write!(f, "lag"),
+            Self::Timeout => write!(f, "timeout"),
+            Self::LastTransaction => write!(f, "last_transaction"),
+        }
+    }
+}
+
 impl ReplicationWaiter {
     pub(crate) async fn wait(&mut self) -> Result<(), Error> {
         self.waiter.wait().await
@@ -258,6 +289,27 @@ impl ReplicationWaiter {
         Ok(())
     }
 
+    async fn should_cutover(&self, elapsed: Duration) -> Option<CutoverReason> {
+        let cutover_timeout = Duration::from_millis(self.config.config.general.cutover_timeout);
+        let cutover_threshold = self.config.config.general.cutover_replication_lag_threshold;
+        let last_transaction_delay =
+            Duration::from_millis(self.config.config.general.cutover_last_transaction_delay);
+
+        let lag = self.orchestrator.replication_lag().await;
+        let last_transaction = self.orchestrator.publisher.lock().await.last_transaction();
+        let cutover_timeout_exceeded = elapsed >= cutover_timeout;
+
+        if cutover_timeout_exceeded {
+            Some(CutoverReason::Timeout)
+        } else if lag <= cutover_threshold {
+            Some(CutoverReason::Lag)
+        } else if last_transaction.map_or(true, |t| t > last_transaction_delay) {
+            Some(CutoverReason::LastTransaction)
+        } else {
+            None
+        }
+    }
+
     /// Wait for cutover.
     async fn wait_for_cutover(&mut self) -> Result<(), Error> {
         let cutover_threshold = self.config.config.general.cutover_replication_lag_threshold;
@@ -275,12 +327,21 @@ impl ReplicationWaiter {
 
         // Check more frequently.
         let mut check = interval(Duration::from_millis(50));
+        let mut log = interval(Duration::from_secs(1));
         // Abort clock starts now.
         let start = Instant::now();
 
         loop {
             select! {
                 _ = check.tick() => {}
+
+                _ = log.tick() => {
+                    info!("[cutover] lag={}, last_transaction={}, timeout={}",
+                        human_duration(cutover_timeout),
+                        human_duration(last_transaction_delay),
+                        format_bytes(cutover_threshold)
+                    );
+                }
 
                 // In case replication breaks now.
                 res = self.waiter.wait() => {
@@ -289,41 +350,21 @@ impl ReplicationWaiter {
             }
 
             let elapsed = start.elapsed();
-            let cutover_timeout_exceeded = elapsed >= cutover_timeout;
+            let cutover_reason = self.should_cutover(elapsed).await;
+            match cutover_reason {
+                Some(CutoverReason::Timeout) => {
+                    if cutover_timeout_action == CutoverTimeoutAction::Abort {
+                        maintenance_mode::stop();
+                        warn!("[cutover] abort timeout reached, resuming traffic");
+                        return Err(Error::AbortTimeout);
+                    }
+                }
 
-            if cutover_timeout_exceeded && cutover_timeout_action == CutoverTimeoutAction::Abort {
-                maintenance_mode::stop();
-                warn!("[cutover] abort timeout reached, resuming traffic");
-                return Err(Error::AbortTimeout);
-            }
-
-            let lag = self.orchestrator.replication_lag().await;
-            let last_transaction = self
-                .orchestrator
-                .publisher
-                .lock()
-                .await
-                .last_transaction()
-                .unwrap_or_default();
-
-            // Perform cutover if any of the following is true:
-            //
-            // 1. Cutover timeout exceeded and action is cutover.
-            // 2. Replication lag is below threshold.
-            // 3. Last transaction was a while ago.
-            //
-            let should_cutover = cutover_timeout_exceeded
-                || lag <= cutover_threshold
-                || last_transaction > last_transaction_delay;
-
-            if should_cutover {
-                info!(
-                    "[cutover] starting cutover: lag={}, last_transaction={}, timeout={}",
-                    lag <= cutover_threshold,
-                    last_transaction > last_transaction_delay,
-                    cutover_timeout_exceeded,
-                );
-                break;
+                None => continue,
+                Some(reason) => {
+                    info!("[cutover] performing cutover now, reason: {}", reason);
+                    break;
+                }
             }
         }
 
@@ -353,6 +394,11 @@ impl ReplicationWaiter {
         // Source is now destination and vice versa.
         ok_or_abort!(self.orchestrator.refresh());
 
+        info!("[cutover] setting up reverse replication");
+
+        // Fix any reverse replication blockers.
+        ok_or_abort!(self.orchestrator.schema_sync_post_cutover(true).await);
+
         // Create reverse replication in case we need to rollback.
         let waiter = ok_or_abort!(self.orchestrator.replicate().await);
 
@@ -364,10 +410,6 @@ impl ReplicationWaiter {
 
         // Point traffic to the other database and resume.
         maintenance_mode::stop();
-
-        info!("[cutover] stopping replication");
-
-        info!("[cutover] replication stopped");
 
         Ok(())
     }
@@ -470,6 +512,10 @@ mod tests {
         let config = Arc::new(config);
         let mut waiter = ReplicationWaiter::new_test(orchestrator, config);
 
+        // should_cutover returns Lag when lag is below threshold
+        let result = waiter.should_cutover(Duration::from_millis(100)).await;
+        assert_eq!(result, Some(CutoverReason::Lag));
+
         // Should exit immediately since lag (50) <= threshold (100)
         let result = waiter.wait_for_cutover().await;
         assert!(result.is_ok());
@@ -495,8 +541,111 @@ mod tests {
         let config = Arc::new(config);
         let mut waiter = ReplicationWaiter::new_test(orchestrator, config);
 
+        // should_cutover returns LastTransaction when last transaction is old
+        let result = waiter.should_cutover(Duration::from_millis(100)).await;
+        assert_eq!(result, Some(CutoverReason::LastTransaction));
+
         // Should exit because last_transaction (200ms) > threshold (100ms)
         let result = waiter.wait_for_cutover().await;
         assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_should_cutover_when_no_transaction() {
+        let mut config = ConfigAndUsers::default();
+        config.config.general.cutover_replication_lag_threshold = 10;
+        config.config.general.cutover_last_transaction_delay = 100;
+        config.config.general.cutover_timeout = 10000;
+
+        let orchestrator = Orchestrator::new_test(&config);
+
+        {
+            let publisher = orchestrator.publisher.lock().await;
+            // Set lag above threshold so we don't exit on that condition
+            publisher.set_replication_lag(0, 1000);
+            // No transaction set (None)
+            publisher.set_last_transaction(None);
+        }
+
+        let config = Arc::new(config);
+        let waiter = ReplicationWaiter::new_test(orchestrator, config);
+
+        // should_cutover returns LastTransaction when there's no transaction
+        let result = waiter.should_cutover(Duration::from_millis(100)).await;
+        assert_eq!(result, Some(CutoverReason::LastTransaction));
+    }
+
+    #[tokio::test]
+    async fn test_should_not_cutover_when_lag_above_threshold_and_recent_transaction() {
+        let mut config = ConfigAndUsers::default();
+        config.config.general.cutover_timeout = 10000;
+        config.config.general.cutover_replication_lag_threshold = 100;
+        config.config.general.cutover_last_transaction_delay = 500;
+
+        let orchestrator = Orchestrator::new_test(&config);
+
+        {
+            let publisher = orchestrator.publisher.lock().await;
+            // Lag above threshold
+            publisher.set_replication_lag(0, 1000);
+            // Recent transaction (50ms ago, threshold is 500ms)
+            publisher.set_last_transaction(Some(Instant::now() - Duration::from_millis(50)));
+        }
+
+        let config = Arc::new(config);
+        let waiter = ReplicationWaiter::new_test(orchestrator, config);
+
+        // Not timed out (100ms elapsed, timeout is 10000ms)
+        let result = waiter.should_cutover(Duration::from_millis(100)).await;
+        assert_eq!(result, None);
+    }
+
+    #[tokio::test]
+    async fn test_should_not_cutover_when_timeout_not_reached() {
+        let mut config = ConfigAndUsers::default();
+        config.config.general.cutover_timeout = 1000;
+        config.config.general.cutover_replication_lag_threshold = 10;
+        config.config.general.cutover_last_transaction_delay = 500;
+
+        let orchestrator = Orchestrator::new_test(&config);
+
+        {
+            let publisher = orchestrator.publisher.lock().await;
+            // Lag above threshold
+            publisher.set_replication_lag(0, 1000);
+            // Recent transaction
+            publisher.set_last_transaction(Some(Instant::now() - Duration::from_millis(100)));
+        }
+
+        let config = Arc::new(config);
+        let waiter = ReplicationWaiter::new_test(orchestrator, config);
+
+        // Elapsed is 999ms, timeout is 1000ms - should not trigger timeout
+        let result = waiter.should_cutover(Duration::from_millis(999)).await;
+        assert_eq!(result, None);
+    }
+
+    #[tokio::test]
+    async fn test_should_not_cutover_when_lag_just_above_threshold() {
+        let mut config = ConfigAndUsers::default();
+        config.config.general.cutover_timeout = 10000;
+        config.config.general.cutover_replication_lag_threshold = 100;
+        config.config.general.cutover_last_transaction_delay = 500;
+
+        let orchestrator = Orchestrator::new_test(&config);
+
+        {
+            let publisher = orchestrator.publisher.lock().await;
+            // Lag just above threshold (101 > 100)
+            publisher.set_replication_lag(0, 101);
+            // Recent transaction
+            publisher.set_last_transaction(Some(Instant::now() - Duration::from_millis(50)));
+        }
+
+        let config = Arc::new(config);
+        let waiter = ReplicationWaiter::new_test(orchestrator, config);
+
+        let result = waiter.should_cutover(Duration::from_millis(100)).await;
+        assert_eq!(result, None);
     }
 }

@@ -230,6 +230,7 @@ pub enum SyncState {
     PreData,
     PostData,
     Cutover,
+    PostCutover,
 }
 
 impl std::fmt::Display for SyncState {
@@ -238,6 +239,7 @@ impl std::fmt::Display for SyncState {
             Self::PreData => write!(f, "pre_data"),
             Self::PostData => write!(f, "post_data"),
             Self::Cutover => write!(f, "cutover"),
+            Self::PostCutover => write!(f, "post_cutover"),
         }
     }
 }
@@ -882,6 +884,17 @@ impl PgDumpOutput {
                                                         }
                                                     }
                                                 }
+                                            } else if state == SyncState::PostCutover {
+                                                // Drop identity constraint after cutover
+                                                if let Some(ref relation) = stmt.relation {
+                                                    let sql = format!(
+                                                        "ALTER TABLE \"{}\".\"{}\" ALTER COLUMN \"{}\" DROP IDENTITY IF EXISTS",
+                                                        crate::util::escape_identifier(schema_name(relation)),
+                                                        crate::util::escape_identifier(&relation.relname),
+                                                        crate::util::escape_identifier(&cmd.name)
+                                                    );
+                                                    result.push(sql.into());
+                                                }
                                             }
                                             // Skip identity constraint in PreData - it will be added in Cutover
                                         }
@@ -1247,6 +1260,31 @@ ALTER TABLE ONLY public.users
 
         let statements = output.statements(SyncState::PostData).unwrap();
         assert!(statements.is_empty());
+    }
+
+    #[test]
+    fn test_generated_identity_post_cutover() {
+        let q = "ALTER TABLE public.users ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY (
+            SEQUENCE NAME public.users_id_seq
+            START WITH 1
+            INCREMENT BY 1
+            NO MINVALUE
+            NO MAXVALUE
+            CACHE 1
+        );";
+        let parse = pg_query::parse(q).unwrap();
+        let output = PgDumpOutput {
+            stmts: parse.protobuf,
+            original: q.to_string(),
+        };
+
+        // PostCutover should drop identity constraints
+        let statements = output.statements(SyncState::PostCutover).unwrap();
+        assert_eq!(statements.len(), 1);
+        assert!(statements[0].deref().contains("DROP IDENTITY IF EXISTS"));
+        assert!(statements[0].deref().contains("public"));
+        assert!(statements[0].deref().contains("users"));
+        assert!(statements[0].deref().contains("id"));
     }
 
     #[test]

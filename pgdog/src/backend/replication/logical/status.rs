@@ -113,6 +113,7 @@ pub struct ReplicationSlot {
     pub(crate) lag: i64,
     pub(crate) copy_data: bool,
     pub(crate) address: Address,
+    pub(crate) last_transaction: Option<SystemTime>,
 }
 
 impl ReplicationSlot {
@@ -123,6 +124,7 @@ impl ReplicationSlot {
             copy_data,
             lag: 0,
             address: address.clone(),
+            last_transaction: None,
         };
 
         ReplicationSlots::get().insert(name.to_owned(), slot.clone());
@@ -133,6 +135,7 @@ impl ReplicationSlot {
     pub(crate) fn update_lsn(&self, lsn: &Lsn) {
         if let Some(mut slot) = ReplicationSlots::get().get_mut(&self.name) {
             slot.lsn = lsn.clone();
+            slot.last_transaction = Some(SystemTime::now());
         }
     }
 

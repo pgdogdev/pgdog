@@ -230,6 +230,9 @@ pub struct General {
     /// Cutover abort timeout: if cutover takes longer than this, abort.
     #[serde(default = "General::cutover_timeout_action")]
     pub cutover_timeout_action: CutoverTimeoutAction,
+    /// Cutover save config to disk.
+    #[serde(default)]
+    pub cutover_save_config: bool,
 }
 
 impl Default for General {
@@ -309,6 +312,7 @@ impl Default for General {
             cutover_last_transaction_delay: Self::cutover_last_transaction_delay(),
             cutover_timeout: Self::cutover_timeout(),
             cutover_timeout_action: Self::cutover_timeout_action(),
+            cutover_save_config: bool::default(),
         }
     }
 }
