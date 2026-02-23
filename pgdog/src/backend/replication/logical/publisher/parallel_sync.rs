@@ -12,9 +12,15 @@ use tokio::{
         Semaphore,
     },
 };
+use tracing::info;
 
 use super::super::Error;
-use crate::backend::{pool::Address, replication::publisher::Table, Cluster, Pool};
+use super::AbortSignal;
+use crate::backend::{
+    pool::Address,
+    replication::{publisher::Table, status::TableCopy},
+    Cluster, Pool,
+};
 
 struct ParallelSync {
     table: Table,
@@ -28,6 +34,9 @@ impl ParallelSync {
     // Run parallel sync.
     pub fn run(mut self) {
         spawn(async move {
+            // Record copy in queue before waiting for permit.
+            let tracker = TableCopy::new(&self.table.table.schema, &self.table.table.name);
+
             // This won't acquire until we have at least 1 available permit.
             // Permit will be given back when this task completes.
             let _permit = self
@@ -36,7 +45,17 @@ impl ParallelSync {
                 .await
                 .map_err(|_| Error::ParallelConnection)?;
 
-            let result = match self.table.data_sync(&self.addr, &self.dest).await {
+            if self.tx.is_closed() {
+                return Err(Error::DataSyncAborted);
+            }
+
+            let abort = AbortSignal::new(self.tx.clone());
+
+            let result = match self
+                .table
+                .data_sync(&self.addr, &self.dest, abort, &tracker)
+                .await
+            {
                 Ok(_) => Ok(self.table),
                 Err(err) => Err(err),
             };
@@ -75,6 +94,11 @@ impl ParallelSyncManager {
 
     /// Run parallel table sync and return table LSNs when everything is done.
     pub async fn run(self) -> Result<Vec<Table>, Error> {
+        info!(
+            "starting parallel table copy using {} replicas",
+            self.replicas.len()
+        );
+
         let mut replicas_iter = self.replicas.iter();
         // Loop through replicas, one at a time.
         // This works around Rust iterators not having a "rewind" function.
@@ -103,8 +127,7 @@ impl ParallelSyncManager {
         drop(tx);
 
         while let Some(table) = rx.recv().await {
-            let table = table?;
-            tables.push(table);
+            tables.push(table?);
         }
 
         Ok(tables)

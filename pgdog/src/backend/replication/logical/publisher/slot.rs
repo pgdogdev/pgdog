@@ -1,3 +1,4 @@
+use super::super::status::ReplicationSlot as ReplicationSlotTracker;
 use super::super::Error;
 use crate::{
     backend::{self, pool::Address, ConnectReason, Server, ServerOptions},
@@ -9,7 +10,7 @@ use crate::{
 };
 use std::{fmt::Display, str::FromStr, time::Duration};
 use tokio::time::timeout;
-use tracing::{debug, trace};
+use tracing::{debug, info, trace, warn};
 
 pub use pgdog_stats::Lsn;
 
@@ -47,12 +48,19 @@ pub struct ReplicationSlot {
     server: Option<Server>,
     kind: SlotKind,
     server_meta: Option<Server>,
+    tracker: Option<ReplicationSlotTracker>,
 }
 
 impl ReplicationSlot {
     /// Create replication slot used for streaming the WAL.
-    pub fn replication(publication: &str, address: &Address, name: Option<String>) -> Self {
-        let name = name.unwrap_or(format!("__pgdog_repl_{}", random_string(19).to_lowercase()));
+    pub fn replication(
+        publication: &str,
+        address: &Address,
+        name: Option<String>,
+        shard: usize,
+    ) -> Self {
+        let name = name.unwrap_or(format!("__pgdog_repl_{}", random_string(18).to_lowercase()));
+        let name = format!("{}_{}", name, shard);
 
         Self {
             address: address.clone(),
@@ -64,6 +72,7 @@ impl ReplicationSlot {
             server: None,
             kind: SlotKind::Replication,
             server_meta: None,
+            tracker: None,
         }
     }
 
@@ -81,6 +90,7 @@ impl ReplicationSlot {
             server: None,
             kind: SlotKind::DataSync,
             server_meta: None,
+            tracker: None,
         }
     }
 
@@ -125,8 +135,15 @@ impl ReplicationSlot {
         );
         let mut lag: Vec<i64> = self.server_meta().await?.fetch_all(&query).await?;
 
-        lag.pop()
-            .ok_or(Error::MissingReplicationSlot(self.name.clone()))
+        let lag = lag
+            .pop()
+            .ok_or(Error::MissingReplicationSlot(self.name.clone()))?;
+
+        if let Some(ref tracker) = self.tracker {
+            tracker.update_lag(lag);
+        }
+
+        Ok(lag)
     }
 
     pub fn server(&mut self) -> Result<&mut Server, Error> {
@@ -138,6 +155,11 @@ impl ReplicationSlot {
         if self.server.is_none() {
             self.connect().await?;
         }
+
+        info!(
+            "creating replication slot \"{}\" [{}]",
+            self.name, self.address
+        );
 
         if self.kind == SlotKind::DataSync {
             self.server()?
@@ -180,8 +202,14 @@ impl ReplicationSlot {
                     .ok_or(Error::MissingData)?;
                 let lsn = Lsn::from_str(&lsn)?;
                 self.lsn = lsn;
+                self.tracker = Some(ReplicationSlotTracker::new(
+                    &self.name,
+                    &self.lsn,
+                    self.dropped,
+                    &self.address,
+                ));
 
-                debug!(
+                info!(
                     "replication slot \"{}\" at lsn {} created [{}]",
                     self.name, self.lsn, self.address,
                 );
@@ -201,8 +229,14 @@ impl ReplicationSlot {
                         {
                             let lsn = Lsn::from_str(&lsn)?;
                             self.lsn = lsn;
+                            self.tracker = Some(ReplicationSlotTracker::new(
+                                &self.name,
+                                &self.lsn,
+                                self.dropped,
+                                &self.address,
+                            ));
 
-                            debug!(
+                            info!(
                                 "using existing replication slot \"{}\" at lsn {} [{}]",
                                 self.name, self.lsn, self.address,
                             );
@@ -226,11 +260,12 @@ impl ReplicationSlot {
         let drop_slot = self.drop_slot_query(true);
         self.server()?.execute(&drop_slot).await?;
 
-        debug!(
+        warn!(
             "replication slot \"{}\" dropped [{}]",
             self.name, self.address
         );
         self.dropped = true;
+        self.tracker.take().map(|slot| slot.dropped());
 
         Ok(())
     }
@@ -306,6 +341,10 @@ impl ReplicationSlot {
             self.server()?.addr()
         );
 
+        self.tracker
+            .as_ref()
+            .map(|tracker| tracker.update_lsn(&Lsn::from_i64(status_update.last_flushed)));
+
         self.server()?
             .send_one(&status_update.wrapped()?.into())
             .await?;
@@ -325,6 +364,11 @@ impl ReplicationSlot {
     /// Current slot LSN.
     pub fn lsn(&self) -> Lsn {
         self.lsn
+    }
+
+    /// Slot name.
+    pub fn name(&self) -> &str {
+        &self.name
     }
 }
 
@@ -406,6 +450,7 @@ mod test {
             "test_slot_replication",
             addr,
             Some("test_slot_replication".into()),
+            0,
         );
         let _ = slot.create_slot().await.unwrap();
         slot.connect().await.unwrap();

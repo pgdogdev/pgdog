@@ -58,6 +58,13 @@ impl Taken {
         self.client_server.get(client).copied()
     }
 
+    pub(super) fn servers(&self) -> Vec<BackendKeyData> {
+        self.client_server
+            .iter()
+            .map(|(_, server)| server.clone())
+            .collect()
+    }
+
     #[cfg(test)]
     pub(super) fn clear(&mut self) {
         self.taken.clear();

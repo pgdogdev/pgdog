@@ -1,5 +1,6 @@
 //! A collection of replicas and a primary.
 
+use futures::future::try_join_all;
 use parking_lot::Mutex;
 use pgdog_config::{
     LoadSchema, PreparedStatements, QueryParserEngine, QueryParserLevel, Rewrite, RewriteMode,
@@ -577,6 +578,21 @@ impl Cluster {
         }
 
         self.readiness.online.store(false, Ordering::Relaxed);
+    }
+
+    /// Send a cancellation request for all running queries.
+    pub(crate) async fn cancel_all(&self) -> Result<(), Error> {
+        let pools: Vec<_> = self
+            .shards()
+            .iter()
+            .flat_map(|shard| shard.pools())
+            .collect();
+
+        try_join_all(pools.iter().map(|pool| pool.cancel_all()))
+            .await
+            .map_err(|_| Error::FastShutdown)?;
+
+        Ok(())
     }
 
     /// Is the cluster online?

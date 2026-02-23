@@ -7,7 +7,9 @@ use pgdog_postgres_types::Error;
 use pgdog_postgres_types::{Format, FromDataType, TimestampTz};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Default, Copy, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Default, Copy, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash,
+)]
 pub struct Lsn {
     pub high: i64,
     pub low: i64,

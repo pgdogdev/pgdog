@@ -67,6 +67,14 @@ impl Users {
             }
         }
     }
+
+    /// Swap user database references between source and destination.
+    /// Users on source become users on destination, and vice versa.
+    pub fn cutover(&mut self, source: &str, destination: &str) {
+        let tmp = format!("__tmp_{}__", random_string(12));
+
+        crate::swap_field!(self.users.iter_mut(), database, source, destination, tmp);
+    }
 }
 
 /// User allowed to connect to pgDog.
@@ -191,5 +199,58 @@ fn admin_password() -> String {
     } else {
         let pw = random_string(12);
         format!("_pgdog_{}", pw)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_cutover_swaps_user_database_references() {
+        let mut users = Users {
+            users: vec![
+                User::new("alice", "pass1", "source_db"),
+                User::new("bob", "pass2", "source_db"),
+                User::new("alice", "pass3", "destination_db"),
+                User::new("bob", "pass4", "destination_db"),
+            ],
+            ..Default::default()
+        };
+
+        // cutover swaps user database references
+        users.cutover("source_db", "destination_db");
+
+        assert_eq!(users.users.len(), 4);
+
+        // Users that were on source_db should now be on destination_db
+        let alice_dest = users
+            .users
+            .iter()
+            .find(|u| u.name == "alice" && u.database == "destination_db")
+            .unwrap();
+        assert_eq!(alice_dest.password(), "pass1");
+
+        let bob_dest = users
+            .users
+            .iter()
+            .find(|u| u.name == "bob" && u.database == "destination_db")
+            .unwrap();
+        assert_eq!(bob_dest.password(), "pass2");
+
+        // Users that were on destination_db should now be on source_db
+        let alice_source = users
+            .users
+            .iter()
+            .find(|u| u.name == "alice" && u.database == "source_db")
+            .unwrap();
+        assert_eq!(alice_source.password(), "pass3");
+
+        let bob_source = users
+            .users
+            .iter()
+            .find(|u| u.name == "bob" && u.database == "source_db")
+            .unwrap();
+        assert_eq!(bob_source.password(), "pass4");
     }
 }

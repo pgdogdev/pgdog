@@ -1,11 +1,13 @@
 pub mod slot;
 pub use slot::*;
+pub mod abort;
 pub mod copy;
 pub mod parallel_sync;
 pub mod progress;
 pub mod publisher_impl;
 pub mod queries;
 pub mod table;
+pub use abort::*;
 pub use copy::*;
 pub use parallel_sync::ParallelSyncManager;
 pub use queries::*;

@@ -5,7 +5,10 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use crate::pooling::ConnectionRecovery;
-use crate::{CopyFormat, LoadSchema, QueryParserEngine, QueryParserLevel, SystemCatalogsBehavior};
+use crate::{
+    CopyFormat, CutoverTimeoutAction, LoadSchema, QueryParserEngine, QueryParserLevel,
+    SystemCatalogsBehavior,
+};
 
 use super::auth::{AuthType, PassthoughAuth};
 use super::database::{LoadBalancingStrategy, ReadWriteSplit, ReadWriteStrategy};
@@ -212,6 +215,24 @@ pub struct General {
     /// Load database schema.
     #[serde(default = "General::load_schema")]
     pub load_schema: LoadSchema,
+    /// Cutover maintenance threshold.
+    #[serde(default = "General::cutover_traffic_stop_threshold")]
+    pub cutover_traffic_stop_threshold: u64,
+    /// Cutover lag threshold.
+    #[serde(default = "General::cutover_replication_lag_threshold")]
+    pub cutover_replication_lag_threshold: u64,
+    /// Cutover last transaction delay.
+    #[serde(default = "General::cutover_last_transaction_delay")]
+    pub cutover_last_transaction_delay: u64,
+    /// Cutover timeout: how long to wait before doing a cutover anyway.
+    #[serde(default = "General::cutover_timeout")]
+    pub cutover_timeout: u64,
+    /// Cutover abort timeout: if cutover takes longer than this, abort.
+    #[serde(default = "General::cutover_timeout_action")]
+    pub cutover_timeout_action: CutoverTimeoutAction,
+    /// Cutover save config to disk.
+    #[serde(default)]
+    pub cutover_save_config: bool,
 }
 
 impl Default for General {
@@ -286,6 +307,12 @@ impl Default for General {
             resharding_copy_format: CopyFormat::default(),
             reload_schema_on_ddl: Self::reload_schema_on_ddl(),
             load_schema: Self::load_schema(),
+            cutover_replication_lag_threshold: Self::cutover_replication_lag_threshold(),
+            cutover_traffic_stop_threshold: Self::cutover_traffic_stop_threshold(),
+            cutover_last_transaction_delay: Self::cutover_last_transaction_delay(),
+            cutover_timeout: Self::cutover_timeout(),
+            cutover_timeout_action: Self::cutover_timeout_action(),
+            cutover_save_config: bool::default(),
         }
     }
 }
@@ -373,6 +400,29 @@ impl General {
             "PGDOG_BAN_TIMEOUT",
             Duration::from_secs(300).as_millis() as u64,
         )
+    }
+
+    fn cutover_replication_lag_threshold() -> u64 {
+        Self::env_or_default("PGDOG_CUTOVER_REPLICATION_LAG_THRESHOLD", 1_000)
+        // 1KB
+    }
+
+    fn cutover_traffic_stop_threshold() -> u64 {
+        Self::env_or_default("PGDOG_CUTOVER_TRAFFIC_STOP_THRESHOLD", 1_000_000)
+        // 1MB
+    }
+
+    fn cutover_last_transaction_delay() -> u64 {
+        Self::env_or_default("PGDOG_CUTOVER_LAST_TRANSACTION_DELAY", 1_000) // 1 second
+    }
+
+    fn cutover_timeout() -> u64 {
+        Self::env_or_default("PGDOG_CUTOVER_TIMEOUT", 30_000)
+        // 30 seconds
+    }
+
+    fn cutover_timeout_action() -> CutoverTimeoutAction {
+        Self::env_enum_or_default("PGDOG_CUTOVER_TIMEOUT_ACTION")
     }
 
     fn rollback_timeout() -> u64 {

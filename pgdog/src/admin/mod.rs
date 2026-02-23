@@ -5,6 +5,8 @@ use async_trait::async_trait;
 use crate::net::messages::Message;
 
 pub mod ban;
+pub mod copy_data;
+pub mod cutover;
 pub mod error;
 pub mod healthcheck;
 pub mod maintenance_mode;
@@ -15,7 +17,10 @@ pub mod prelude;
 pub mod probe;
 pub mod reconnect;
 pub mod reload;
+pub mod replicate;
 pub mod reset_query_cache;
+pub mod reshard;
+pub mod schema_sync;
 pub mod server;
 pub mod set;
 pub mod setup_schema;
@@ -30,12 +35,17 @@ pub mod show_pools;
 pub mod show_prepared_statements;
 pub mod show_query_cache;
 pub mod show_replication;
+pub mod show_replication_slots;
+pub mod show_schema_sync;
 pub mod show_server_memory;
 pub mod show_servers;
 pub mod show_stats;
+pub mod show_table_copies;
+pub mod show_tasks;
 pub mod show_transactions;
 pub mod show_version;
 pub mod shutdown;
+pub mod stop_task;
 
 pub use error::Error;
 

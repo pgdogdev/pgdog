@@ -86,10 +86,49 @@ pub enum Error {
 
     #[error("router returned incorrect command")]
     IncorrectCommand,
+
+    #[error("schema: {0}")]
+    SchemaSync(Box<crate::backend::schema::sync::error::Error>),
+
+    #[error("schema isn't loaded")]
+    NoSchema,
+
+    #[error("config wasn't updated with new cluster")]
+    NoNewCluster,
+
+    #[error("tokio: {0}")]
+    JoinError(#[from] tokio::task::JoinError),
+
+    #[error("copy for table {0} been aborted")]
+    CopyAborted(PublicationTable),
+
+    #[error("data sync has been aborted")]
+    DataSyncAborted,
+
+    #[error("replication has been aborted")]
+    ReplicationAborted,
+
+    #[error("waiter has no publisher")]
+    NoPublisher,
+
+    #[error("cutover abort timeout")]
+    AbortTimeout,
+
+    #[error("task not found")]
+    TaskNotFound,
+
+    #[error("task is not a replication task")]
+    NotReplication,
 }
 
 impl From<ErrorResponse> for Error {
     fn from(value: ErrorResponse) -> Self {
         Self::PgError(Box::new(value))
+    }
+}
+
+impl From<crate::backend::schema::sync::error::Error> for Error {
+    fn from(value: crate::backend::schema::sync::error::Error) -> Self {
+        Self::SchemaSync(Box::new(value))
     }
 }

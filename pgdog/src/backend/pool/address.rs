@@ -8,7 +8,7 @@ use crate::backend::{pool::dns_cache::DnsCache, Error};
 use crate::config::{config, Database, User};
 
 /// Server address.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default, Eq, Hash)]
 pub struct Address {
     /// Server host.
     pub host: String,

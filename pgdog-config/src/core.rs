@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use tracing::{info, warn};
 
 use crate::sharding::ShardedSchema;
+use crate::util::random_string;
 use crate::{
     system_catalogs, EnumeratedDatabase, Memory, OmnishardedTable, PassthoughAuth,
     PreparedStatements, QueryParserEngine, QueryParserLevel, ReadWriteSplit, RewriteMode, Role,
@@ -499,6 +500,49 @@ impl Config {
 
         result
     }
+
+    /// Swap database configs between `source` and `destination`.
+    /// Uses tmp pattern: source -> tmp, destination -> source, tmp -> destination.
+    pub fn cutover(&mut self, source: &str, destination: &str) {
+        let tmp = format!("__tmp_{}__", random_string(12));
+
+        crate::swap_field!(self.databases.iter_mut(), name, source, destination, tmp);
+        crate::swap_field!(
+            self.sharded_mappings.iter_mut(),
+            database,
+            source,
+            destination,
+            tmp
+        );
+        crate::swap_field!(
+            self.sharded_tables.iter_mut(),
+            database,
+            source,
+            destination,
+            tmp
+        );
+        crate::swap_field!(
+            self.omnisharded_tables.iter_mut(),
+            database,
+            source,
+            destination,
+            tmp
+        );
+        crate::swap_field!(
+            self.mirroring.iter_mut(),
+            source_db,
+            source,
+            destination,
+            tmp
+        );
+        crate::swap_field!(
+            self.mirroring.iter_mut(),
+            destination_db,
+            source,
+            destination,
+            tmp
+        );
+    }
 }
 
 #[cfg(test)]
@@ -862,5 +906,277 @@ tables = ["my_table"]
         assert_eq!(db1_tables[0].name, "my_table");
         assert!(!db1_tables.iter().any(|t| t.name == "pg_class"));
         assert!(!db1_tables.iter().any(|t| t.name == "pg_attribute"));
+    }
+
+    #[test]
+    fn test_cutover_swaps_database_configs() {
+        let mut config = Config::default();
+        config.databases = vec![
+            Database {
+                name: "source_db".to_string(),
+                host: "source-host".to_string(),
+                port: 5432,
+                role: Role::Primary,
+                ..Default::default()
+            },
+            Database {
+                name: "destination_db".to_string(),
+                host: "destination-host".to_string(),
+                port: 5433,
+                role: Role::Primary,
+                ..Default::default()
+            },
+        ];
+
+        // After cutover: looking up source_db returns destination's config
+        config.cutover("source_db", "destination_db");
+
+        assert_eq!(config.databases.len(), 2);
+
+        // source_db should now have destination's config (host, port)
+        let source = config
+            .databases
+            .iter()
+            .find(|d| d.name == "source_db")
+            .unwrap();
+        assert_eq!(
+            source.host, "destination-host",
+            "source_db should now have destination's host after cutover"
+        );
+        assert_eq!(
+            source.port, 5433,
+            "source_db should now have destination's port after cutover"
+        );
+
+        // destination_db should now have source's config (host, port)
+        let destination = config
+            .databases
+            .iter()
+            .find(|d| d.name == "destination_db")
+            .unwrap();
+        assert_eq!(
+            destination.host, "source-host",
+            "destination_db should now have source's host after cutover"
+        );
+        assert_eq!(
+            destination.port, 5432,
+            "destination_db should now have source's port after cutover"
+        );
+    }
+
+    #[test]
+    fn test_cutover_visual() {
+        let before = r#"
+[[databases]]
+name = "source_db"
+host = "source-host-0"
+port = 5432
+role = "primary"
+shard = 0
+
+[[databases]]
+name = "source_db"
+host = "source-host-0-replica"
+port = 5432
+role = "replica"
+shard = 0
+
+[[databases]]
+name = "source_db"
+host = "source-host-1"
+port = 5432
+role = "primary"
+shard = 1
+
+[[databases]]
+name = "source_db"
+host = "source-host-1-replica"
+port = 5432
+role = "replica"
+shard = 1
+
+[[databases]]
+name = "destination_db"
+host = "destination-host-0"
+port = 5433
+role = "primary"
+shard = 0
+
+[[databases]]
+name = "destination_db"
+host = "destination-host-0-replica"
+port = 5433
+role = "replica"
+shard = 0
+
+[[databases]]
+name = "destination_db"
+host = "destination-host-1"
+port = 5433
+role = "primary"
+shard = 1
+
+[[databases]]
+name = "destination_db"
+host = "destination-host-1-replica"
+port = 5433
+role = "replica"
+shard = 1
+
+[[sharded_tables]]
+database = "source_db"
+name = "users"
+column = "id"
+
+[[sharded_tables]]
+database = "destination_db"
+name = "users"
+column = "id"
+
+[[mirroring]]
+source_db = "source_db"
+destination_db = "destination_db"
+"#;
+
+        // After name swap: elements stay in place, only names change
+        // Original source_db entries become destination_db (keeping source's host)
+        // Original destination_db entries become source_db (keeping destination's host)
+        let expected_after = r#"
+[[databases]]
+name = "destination_db"
+host = "source-host-0"
+port = 5432
+role = "primary"
+shard = 0
+
+[[databases]]
+name = "destination_db"
+host = "source-host-0-replica"
+port = 5432
+role = "replica"
+shard = 0
+
+[[databases]]
+name = "destination_db"
+host = "source-host-1"
+port = 5432
+role = "primary"
+shard = 1
+
+[[databases]]
+name = "destination_db"
+host = "source-host-1-replica"
+port = 5432
+role = "replica"
+shard = 1
+
+[[databases]]
+name = "source_db"
+host = "destination-host-0"
+port = 5433
+role = "primary"
+shard = 0
+
+[[databases]]
+name = "source_db"
+host = "destination-host-0-replica"
+port = 5433
+role = "replica"
+shard = 0
+
+[[databases]]
+name = "source_db"
+host = "destination-host-1"
+port = 5433
+role = "primary"
+shard = 1
+
+[[databases]]
+name = "source_db"
+host = "destination-host-1-replica"
+port = 5433
+role = "replica"
+shard = 1
+
+[[sharded_tables]]
+database = "destination_db"
+name = "users"
+column = "id"
+
+[[sharded_tables]]
+database = "source_db"
+name = "users"
+column = "id"
+
+[[mirroring]]
+source_db = "destination_db"
+destination_db = "source_db"
+"#;
+
+        let mut config: Config = toml::from_str(before).unwrap();
+        config.cutover("source_db", "destination_db");
+
+        let expected: Config = toml::from_str(expected_after).unwrap();
+
+        assert_eq!(config.databases, expected.databases);
+        assert_eq!(config.sharded_tables, expected.sharded_tables);
+        assert_eq!(config.mirroring, expected.mirroring);
+    }
+
+    #[test]
+    fn test_cutover_backup_roundtrip() {
+        let original_toml = r#"
+[[databases]]
+name = "source_db"
+host = "source-host"
+port = 5432
+role = "primary"
+shard = 0
+
+[[databases]]
+name = "destination_db"
+host = "destination-host"
+port = 5433
+role = "primary"
+shard = 0
+"#;
+
+        // Parse original config
+        let original: Config = toml::from_str(original_toml).unwrap();
+
+        // Simulate backup: serialize original to TOML
+        let backup_toml = toml::to_string_pretty(&original).unwrap();
+
+        // Perform cutover
+        let mut config = original.clone();
+        config.cutover("source_db", "destination_db");
+
+        // Serialize cutover result (what would be written to disk)
+        let new_toml = toml::to_string_pretty(&config).unwrap();
+
+        // Verify backup can be parsed back and matches original
+        let restored_backup: Config = toml::from_str(&backup_toml).unwrap();
+        assert_eq!(restored_backup.databases, original.databases);
+
+        // Verify new config can be parsed back and has swapped values
+        let restored_new: Config = toml::from_str(&new_toml).unwrap();
+
+        // After cutover: source_db should have destination's host
+        let source = restored_new
+            .databases
+            .iter()
+            .find(|d| d.name == "source_db")
+            .unwrap();
+        assert_eq!(source.host, "destination-host");
+        assert_eq!(source.port, 5433);
+
+        // After cutover: destination_db should have source's host
+        let dest = restored_new
+            .databases
+            .iter()
+            .find(|d| d.name == "destination_db")
+            .unwrap();
+        assert_eq!(dest.host, "source-host");
+        assert_eq!(dest.port, 5432);
     }
 }
