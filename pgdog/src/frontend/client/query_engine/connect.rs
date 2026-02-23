@@ -121,22 +121,18 @@ impl QueryEngine {
     pub(super) fn transaction_route(&mut self, route: &Route) -> Result<Route, Error> {
         let cluster = self.backend.cluster()?;
 
+        let mut route = route.clone();
+
         if cluster.shards().len() == 1 {
-            Ok(
-                Route::write(ShardWithPriority::new_override_transaction(Shard::Direct(
-                    0,
-                )))
-                .with_read(route.is_read()),
-            )
-        } else if route.is_search_path_driven() {
+            route.set_shard_mut(ShardWithPriority::new_override_transaction(Shard::Direct(
+                0,
+            )));
+        } else if !route.is_search_path_driven() {
             // Schema-based routing will only go to one shard.
-            Ok(route.clone())
-        } else {
-            Ok(
-                Route::write(ShardWithPriority::new_override_transaction(Shard::All))
-                    .with_read(route.is_read()),
-            )
+            route.set_shard_mut(ShardWithPriority::new_override_transaction(Shard::All));
         }
+
+        Ok(route)
     }
 
     fn debug_connected(&self, context: &QueryEngineContext<'_>, connected: bool) {

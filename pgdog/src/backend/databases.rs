@@ -1,6 +1,6 @@
 //! Databases behind pgDog.
 
-use std::collections::{hash_map::Entry, HashMap};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use arc_swap::ArcSwap;
@@ -9,8 +9,9 @@ use parking_lot::lock_api::MutexGuard;
 use parking_lot::{Mutex, RawMutex};
 use tracing::{debug, error, info, warn};
 
+use crate::backend::fdw::PostgresLauncher;
 use crate::backend::replication::ShardedSchemas;
-use crate::config::PoolerMode;
+use crate::config::{set, PoolerMode};
 use crate::frontend::client::query_engine::two_pc::Manager;
 use crate::frontend::router::parser::Cache;
 use crate::frontend::router::sharding::mapping::mapping_valid;
@@ -82,12 +83,24 @@ pub fn reload_from_existing() -> Result<(), Error> {
     let databases = from_config(&config);
 
     replace_databases(databases, true)?;
+
+    // Reconfigure FDW with new schema.
+    if config.config.general.cross_shard_backend.need_fdw() {
+        PostgresLauncher::get().reconfigure()?;
+    }
+
     Ok(())
 }
 
 /// Initialize the databases for the first time.
 pub fn init() -> Result<(), Error> {
     let config = config();
+
+    // Start postgres_fdw compatibility engine.
+    if config.config.general.cross_shard_backend.need_fdw() {
+        PostgresLauncher::get().launch()?;
+    }
+
     replace_databases(from_config(&config), false)?;
 
     // Resize query cache
@@ -114,6 +127,26 @@ pub fn reload() -> Result<(), Error> {
 
     tls::reload()?;
 
+    // Reconfigure FDW with new schema.
+    match (
+        old_config.config.general.cross_shard_backend.need_fdw(),
+        new_config.config.general.cross_shard_backend.need_fdw(),
+    ) {
+        (true, true) => {
+            PostgresLauncher::get().reconfigure()?;
+        }
+
+        (false, true) => {
+            PostgresLauncher::get().launch()?;
+        }
+
+        (true, false) => {
+            PostgresLauncher::get().shutdown()?;
+        }
+
+        (false, false) => {}
+    }
+
     // Remove any unused prepared statements.
     PreparedStatements::global()
         .write()
@@ -126,35 +159,38 @@ pub fn reload() -> Result<(), Error> {
 }
 
 /// Add new user to pool.
-pub(crate) fn add(mut user: crate::config::User) {
+pub(crate) fn add(user: crate::config::User) -> Result<(), Error> {
+    use std::ops::Deref;
+
     // One user at a time.
-    let _lock = lock();
+    let lock = lock();
 
     debug!(
         "adding user \"{}\" for database \"{}\" via auth passthrough",
         user.name, user.database
     );
 
-    let config = config();
-    for existing in &config.users.users {
+    let mut config = config().deref().clone();
+    let mut found = false;
+    for existing in &mut config.users.users {
         if existing.name == user.name && existing.database == user.database {
-            let mut existing = existing.clone();
-            existing.password = user.password.clone();
-            user = existing;
+            found = true;
+            if existing.password().is_empty() {
+                existing.password = user.password.clone();
+            }
         }
     }
-    let pool = new_pool(&user, &config.config);
-    if let Some((user, cluster)) = pool {
-        let databases = (*databases()).clone();
-        let (added, databases) = databases.add(user, cluster);
-        if added {
-            // Launch the new pool (idempotent).
-            databases.launch();
-            // Don't use replace_databases because Arc refers to the same DBs,
-            // and we'll shut them down.
-            DATABASES.store(Arc::new(databases));
-        }
+
+    if !found {
+        config.users.users.push(user);
     }
+
+    set(config)?;
+    drop(lock);
+
+    reload_from_existing()?;
+
+    Ok(())
 }
 
 /// Database/user pair that identifies a database cluster pool.
@@ -196,15 +232,6 @@ impl ToUser for (&str, Option<&str>) {
     }
 }
 
-// impl ToUser for &pgdog_config::User {
-//     fn to_user(&self) -> User {
-//         User {
-//             user: self.name.clone(),
-//             database: self.database.clone(),
-//         }
-//     }
-// }
-
 /// Databases.
 #[derive(Default, Clone)]
 pub struct Databases {
@@ -215,24 +242,6 @@ pub struct Databases {
 }
 
 impl Databases {
-    /// Add new connection pools to the databases.
-    fn add(mut self, user: User, cluster: Cluster) -> (bool, Databases) {
-        match self.databases.entry(user) {
-            Entry::Vacant(e) => {
-                e.insert(cluster);
-                (true, self)
-            }
-            Entry::Occupied(mut e) => {
-                if e.get().password().is_empty() {
-                    e.insert(cluster);
-                    (true, self)
-                } else {
-                    (false, self)
-                }
-            }
-        }
-    }
-
     /// Check if a cluster exists, quickly.
     pub fn exists(&self, user: impl ToUser) -> bool {
         if let Some(cluster) = self.databases.get(&user.to_user()) {
@@ -619,8 +628,8 @@ mod tests {
     use super::*;
     use crate::config::{Config, ConfigAndUsers, Database, Role};
 
-    #[test]
-    fn test_mirror_user_isolation() {
+    #[tokio::test]
+    async fn test_mirror_user_isolation() {
         // Test that each user gets their own mirror cluster
         let mut config = Config::default();
 
@@ -700,8 +709,8 @@ mod tests {
         assert_eq!(bob_mirrors[0].name(), "db1_mirror");
     }
 
-    #[test]
-    fn test_mirror_user_mismatch_handling() {
+    #[tokio::test]
+    async fn test_mirror_user_mismatch_handling() {
         // Test that mirroring is disabled gracefully when users don't match
         let mut config = Config::default();
 
@@ -776,8 +785,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_precomputed_mirror_configs() {
+    #[tokio::test]
+    async fn test_precomputed_mirror_configs() {
         // Test that mirror configs are precomputed correctly during initialization
         let mut config = Config::default();
         config.general.mirror_queue = 100;
@@ -853,8 +862,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_mirror_config_with_global_defaults() {
+    #[tokio::test]
+    async fn test_mirror_config_with_global_defaults() {
         // Test that global defaults are used when mirror-specific values aren't provided
         let mut config = Config::default();
         config.general.mirror_queue = 150;
@@ -926,8 +935,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_mirror_config_partial_overrides() {
+    #[tokio::test]
+    async fn test_mirror_config_partial_overrides() {
         // Test that we can override just queue or just exposure
         let mut config = Config::default();
         config.general.mirror_queue = 100;
@@ -1026,8 +1035,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_invalid_mirror_not_precomputed() {
+    #[tokio::test]
+    async fn test_invalid_mirror_not_precomputed() {
         // Test that invalid mirror configs (user mismatch) are not precomputed
         let mut config = Config::default();
 
@@ -1089,8 +1098,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_mirror_config_no_users() {
+    #[tokio::test]
+    async fn test_mirror_config_no_users() {
         // Test that mirror configs without any users are not precomputed
         let mut config = Config::default();
         config.general.mirror_queue = 100;
@@ -1198,8 +1207,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_user_all_databases_creates_pools_for_all_dbs() {
+    #[tokio::test]
+    async fn test_user_all_databases_creates_pools_for_all_dbs() {
         let mut config = Config::default();
 
         config.databases = vec![
@@ -1261,8 +1270,8 @@ mod tests {
         assert_eq!(databases.all().len(), 3);
     }
 
-    #[test]
-    fn test_user_multiple_databases_creates_pools_for_specified_dbs() {
+    #[tokio::test]
+    async fn test_user_multiple_databases_creates_pools_for_specified_dbs() {
         let mut config = Config::default();
 
         config.databases = vec![
@@ -1324,8 +1333,8 @@ mod tests {
         assert_eq!(databases.all().len(), 2);
     }
 
-    #[test]
-    fn test_all_databases_takes_priority_over_databases_list() {
+    #[tokio::test]
+    async fn test_all_databases_takes_priority_over_databases_list() {
         let mut config = Config::default();
 
         config.databases = vec![
@@ -1406,8 +1415,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_user_with_single_database_creates_one_pool() {
+    #[tokio::test]
+    async fn test_user_with_single_database_creates_one_pool() {
         let mut config = Config::default();
 
         config.databases = vec![
@@ -1456,8 +1465,8 @@ mod tests {
         assert_eq!(databases.all().len(), 1);
     }
 
-    #[test]
-    fn test_multiple_users_with_different_database_access() {
+    #[tokio::test]
+    async fn test_multiple_users_with_different_database_access() {
         let mut config = Config::default();
 
         config.databases = vec![
@@ -1534,8 +1543,8 @@ mod tests {
         assert_eq!(databases.all().len(), 6);
     }
 
-    #[test]
-    fn test_databases_list_with_nonexistent_database_skipped() {
+    #[tokio::test]
+    async fn test_databases_list_with_nonexistent_database_skipped() {
         let mut config = Config::default();
 
         config.databases = vec![Database {

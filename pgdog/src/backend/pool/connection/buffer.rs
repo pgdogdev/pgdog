@@ -12,7 +12,7 @@ use crate::{
     },
     net::{
         messages::{DataRow, FromBytes, Message, Protocol, ToBytes, Vector},
-        Decoder,
+        BackendKeyData, Decoder,
     },
 };
 
@@ -213,7 +213,11 @@ impl Buffer {
     /// Take messages from buffer.
     pub(super) fn take(&mut self) -> Option<Message> {
         if self.full {
-            self.buffer.pop_front().and_then(|s| s.message().ok())
+            self.buffer.pop_front().and_then(|s| {
+                s.message()
+                    .ok()
+                    .map(|m| m.backend(BackendKeyData::default()))
+            })
         } else {
             None
         }

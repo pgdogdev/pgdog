@@ -50,6 +50,9 @@ pub enum Error {
     #[error("no databases")]
     NoDatabases,
 
+    #[error("fdw backend not configured")]
+    NoFdw,
+
     #[error("config values contain null bytes")]
     NullBytes,
 

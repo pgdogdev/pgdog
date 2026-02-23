@@ -1,0 +1,36 @@
+
+[general]
+cross_shard_backend = "fdw"
+
+[[databases]]
+name = "pgdog"
+shard = 0
+host = "127.0.0.1"
+database_name = "shard_0_fdw"
+
+[[databases]]
+name = "pgdog"
+shard = 1
+host = "127.0.0.1"
+database_name = "shard_1_fdw"
+
+[[databases]]
+name = "pgdog"
+shard = 0
+host = "127.0.0.1"
+database_name = "shard_0_fdw"
+role = "replica"
+
+[[databases]]
+name = "pgdog"
+shard = 1
+host = "127.0.0.1"
+database_name = "shard_1_fdw"
+role = "replica"
+
+[[sharded_tables]]
+column = "user_id"
+database = "pgdog"
+
+[admin]
+password = "pgdog"
