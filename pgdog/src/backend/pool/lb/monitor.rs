@@ -43,7 +43,12 @@ impl Monitor {
 
         let replica_ban_threshold = ReplicaLag {
             duration: Duration::from_millis(config.config.general.ban_replica_lag),
-            bytes: config.config.general.ban_replica_lag_bytes as i64,
+            bytes: config
+                .config
+                .general
+                .ban_replica_lag_bytes
+                .try_into()
+                .unwrap_or(i64::MAX),
         };
 
         loop {
