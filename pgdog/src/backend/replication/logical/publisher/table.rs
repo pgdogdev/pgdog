@@ -14,6 +14,7 @@ use crate::backend::replication::status::TableCopy;
 use crate::backend::{Cluster, Server};
 use crate::config::config;
 use crate::net::replication::StatusUpdate;
+use crate::util::escape_identifier;
 
 use super::super::{subscriber::CopySubscriber, Error};
 use super::{
@@ -79,7 +80,7 @@ impl Table {
             "({})",
             self.columns
                 .iter()
-                .map(|c| format!("\"{}\"", c.name.as_str()))
+                .map(|c| format!("\"{}\"", escape_identifier(&c.name)))
                 .collect::<Vec<_>>()
                 .join(", ")
         );
@@ -98,14 +99,14 @@ impl Table {
                 self.columns
                     .iter()
                     .filter(|c| c.identity)
-                    .map(|c| format!("\"{}\"", c.name.as_str()))
+                    .map(|c| format!("\"{}\"", escape_identifier(&c.name)))
                     .collect::<Vec<_>>()
                     .join(", "),
                 self.columns
                     .iter()
                     .enumerate()
                     .filter(|(_, c)| !c.identity)
-                    .map(|(i, c)| format!("\"{}\" = ${}", c.name, i + 1))
+                    .map(|(i, c)| format!("\"{}\" = ${}", escape_identifier(&c.name), i + 1))
                     .collect::<Vec<_>>()
                     .join(", ")
             )
@@ -115,8 +116,8 @@ impl Table {
 
         format!(
             "INSERT INTO \"{}\".\"{}\" {} {} {}",
-            self.table.destination_schema(),
-            self.table.destination_name(),
+            escape_identifier(self.table.destination_schema()),
+            escape_identifier(self.table.destination_name()),
             names,
             values,
             on_conflict
@@ -130,7 +131,7 @@ impl Table {
             .iter()
             .enumerate()
             .filter(|(_, c)| !c.identity)
-            .map(|(i, c)| format!("\"{}\" = ${}", c.name, i + 1))
+            .map(|(i, c)| format!("\"{}\" = ${}", escape_identifier(&c.name), i + 1))
             .collect::<Vec<_>>()
             .join(", ");
 
@@ -139,14 +140,14 @@ impl Table {
             .iter()
             .enumerate()
             .filter(|(_, c)| c.identity)
-            .map(|(i, c)| format!("\"{}\" = ${}", c.name, i + 1))
+            .map(|(i, c)| format!("\"{}\" = ${}", escape_identifier(&c.name), i + 1))
             .collect::<Vec<_>>()
             .join(" AND ");
 
         format!(
             "UPDATE \"{}\".\"{}\" SET {} WHERE {}",
-            self.table.destination_schema(),
-            self.table.destination_name(),
+            escape_identifier(self.table.destination_schema()),
+            escape_identifier(self.table.destination_name()),
             set_clause,
             where_clause
         )
@@ -159,14 +160,14 @@ impl Table {
             .iter()
             .enumerate()
             .filter(|(_, c)| c.identity)
-            .map(|(i, c)| format!("\"{}\" = ${}", c.name, i + 1))
+            .map(|(i, c)| format!("\"{}\" = ${}", escape_identifier(&c.name), i + 1))
             .collect::<Vec<_>>()
             .join(" AND ");
 
         format!(
             "DELETE FROM \"{}\".\"{}\" WHERE {}",
-            self.table.destination_schema(),
-            self.table.destination_name(),
+            escape_identifier(self.table.destination_schema()),
+            escape_identifier(self.table.destination_name()),
             where_clause
         )
     }
@@ -269,6 +270,109 @@ mod test {
     use crate::config::config;
 
     use super::*;
+
+    fn make_table(columns: Vec<(&str, bool)>) -> Table {
+        Table {
+            publication: "test".to_string(),
+            table: PublicationTable {
+                schema: "public".to_string(),
+                name: "test_table".to_string(),
+                attributes: "".to_string(),
+                parent_schema: "".to_string(),
+                parent_name: "".to_string(),
+            },
+            identity: ReplicaIdentity {
+                oid: 1,
+                identity: "".to_string(),
+                kind: "".to_string(),
+            },
+            columns: columns
+                .into_iter()
+                .map(|(name, identity)| PublicationTableColumn {
+                    oid: 1,
+                    name: name.to_string(),
+                    type_oid: 23,
+                    identity,
+                })
+                .collect(),
+            lsn: Lsn::default(),
+            query_parser_engine: QueryParserEngine::default(),
+        }
+    }
+
+    #[test]
+    fn test_sql_generation_simple() {
+        let table = make_table(vec![("id", true), ("name", false), ("value", false)]);
+
+        let insert = table.insert(false);
+        assert!(pg_query::parse(&insert).is_ok(), "insert: {}", insert);
+
+        let upsert = table.insert(true);
+        assert!(pg_query::parse(&upsert).is_ok(), "upsert: {}", upsert);
+
+        let update = table.update();
+        assert!(pg_query::parse(&update).is_ok(), "update: {}", update);
+
+        let delete = table.delete();
+        assert!(pg_query::parse(&delete).is_ok(), "delete: {}", delete);
+    }
+
+    #[test]
+    fn test_sql_generation_quoted_column() {
+        let table = make_table(vec![("id", true), ("has\"quote", false), ("normal", false)]);
+
+        let insert = table.insert(false);
+        assert!(pg_query::parse(&insert).is_ok(), "insert: {}", insert);
+
+        let upsert = table.insert(true);
+        assert!(pg_query::parse(&upsert).is_ok(), "upsert: {}", upsert);
+
+        let update = table.update();
+        assert!(pg_query::parse(&update).is_ok(), "update: {}", update);
+
+        let delete = table.delete();
+        assert!(pg_query::parse(&delete).is_ok(), "delete: {}", delete);
+    }
+
+    #[test]
+    fn test_sql_generation_special_chars() {
+        let table = make_table(vec![
+            ("id", true),
+            ("col with spaces", false),
+            ("UPPER", false),
+        ]);
+
+        let insert = table.insert(false);
+        assert!(pg_query::parse(&insert).is_ok(), "insert: {}", insert);
+
+        let upsert = table.insert(true);
+        assert!(pg_query::parse(&upsert).is_ok(), "upsert: {}", upsert);
+
+        let update = table.update();
+        assert!(pg_query::parse(&update).is_ok(), "update: {}", update);
+
+        let delete = table.delete();
+        assert!(pg_query::parse(&delete).is_ok(), "delete: {}", delete);
+    }
+
+    #[test]
+    fn test_sql_generation_quoted_table_name() {
+        let mut table = make_table(vec![("id", true), ("value", false)]);
+        table.table.name = "table\"with\"quotes".to_string();
+        table.table.schema = "schema\"quote".to_string();
+
+        let insert = table.insert(false);
+        assert!(pg_query::parse(&insert).is_ok(), "insert: {}", insert);
+
+        let upsert = table.insert(true);
+        assert!(pg_query::parse(&upsert).is_ok(), "upsert: {}", upsert);
+
+        let update = table.update();
+        assert!(pg_query::parse(&update).is_ok(), "update: {}", update);
+
+        let delete = table.delete();
+        assert!(pg_query::parse(&delete).is_ok(), "delete: {}", delete);
+    }
 
     #[tokio::test]
     async fn test_publication() {
