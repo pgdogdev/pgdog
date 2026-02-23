@@ -1678,7 +1678,8 @@ password = "testpass"
         fs::write(&users_path, original_users).await.unwrap();
 
         // Load config from temp files and set in global state
-        let config = crate::config::ConfigAndUsers::load(&config_path, &users_path).unwrap();
+        let mut config = crate::config::ConfigAndUsers::load(&config_path, &users_path).unwrap();
+        config.config.general.cutover_save_config = true;
         crate::config::set(config).unwrap();
 
         // Call the actual cutover function
