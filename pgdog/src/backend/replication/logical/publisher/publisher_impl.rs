@@ -22,7 +22,6 @@ use crate::backend::replication::{
 use crate::backend::{pool::Request, Cluster};
 use crate::config::Role;
 use crate::net::replication::ReplicationMeta;
-use crate::util::format_bytes;
 
 #[derive(Debug, Default)]
 pub struct Publisher {
@@ -99,6 +98,7 @@ impl Publisher {
                 &self.publication,
                 &addr,
                 Some(self.slot_name.clone()),
+                number,
             );
             slot.create_slot().await?;
 
@@ -197,16 +197,10 @@ impl Publisher {
                         _ = check_lag.tick() => {
                             let lag = slot.replication_lag().await?;
 
-                            {
-                                let mut guard = replication_lag.lock();
-                                guard.insert(number, lag);
-                            }
+                            let mut guard = replication_lag.lock();
+                            guard.insert(number, lag);
 
-                            info!(
-                                "replication lag at {} bytes [{}]",
-                                format_bytes(lag as u64),
-                                slot.server()?.addr()
-                            );
+
                         }
                     }
                 }

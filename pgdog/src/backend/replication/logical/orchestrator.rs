@@ -10,6 +10,7 @@ use crate::{
 use pgdog_config::{ConfigAndUsers, CutoverTimeoutAction};
 use std::{sync::Arc, time::Duration};
 use tokio::{
+    select,
     sync::Mutex,
     time::{interval, Instant},
 };
@@ -170,13 +171,11 @@ impl Orchestrator {
 
     pub(crate) async fn schema_sync_cutover(&self, ignore_errors: bool) -> Result<(), Error> {
         // Sequences won't be used in a sharded database.
-        if self.destination.shards().len() == 1 {
-            let schema = self.schema.as_ref().ok_or(Error::NoSchema)?;
+        let schema = self.schema.as_ref().ok_or(Error::NoSchema)?;
 
-            schema
-                .restore(&self.destination, ignore_errors, SyncState::Cutover)
-                .await?;
-        }
+        schema
+            .restore(&self.destination, ignore_errors, SyncState::Cutover)
+            .await?;
 
         Ok(())
     }
@@ -215,12 +214,27 @@ impl ReplicationWaiter {
     async fn wait_for_replication(&mut self) -> Result<(), Error> {
         let traffic_stop = self.config.config.general.cutover_traffic_stop_threshold;
 
+        info!(
+            "[cutover] started, waiting for traffic stop threshold={}",
+            format_bytes(traffic_stop)
+        );
+
         // Check once a second how far we got.
         let mut check = interval(Duration::from_secs(1));
 
         loop {
-            check.tick().await;
+            select! {
+                _ = check.tick() => {}
+
+                // In case replication breaks now.
+                res = self.waiter.wait() => {
+                    res?;
+                }
+            }
+
             let lag = self.orchestrator.replication_lag().await;
+
+            info!("[cutover] replication lag: {}", format_bytes(lag as u64));
 
             // Time to go.
             if lag <= traffic_stop {
@@ -252,14 +266,30 @@ impl ReplicationWaiter {
         let cutover_timeout = Duration::from_millis(self.config.config.general.cutover_timeout);
         let cutover_timeout_action = self.config.config.general.cutover_timeout_action;
 
+        info!(
+            "[cutover] waiting for first cutover threshold: timeout={}, transaction={}, lag={}",
+            human_duration(cutover_timeout),
+            human_duration(last_transaction_delay),
+            format_bytes(cutover_threshold)
+        );
+
         // Check more frequently.
         let mut check = interval(Duration::from_millis(50));
         // Abort clock starts now.
         let start = Instant::now();
 
         loop {
-            check.tick().await;
-            let cutover_timeout_exceeded = start.elapsed() >= cutover_timeout;
+            select! {
+                _ = check.tick() => {}
+
+                // In case replication breaks now.
+                res = self.waiter.wait() => {
+                    res?;
+                }
+            }
+
+            let elapsed = start.elapsed();
+            let cutover_timeout_exceeded = elapsed >= cutover_timeout;
 
             if cutover_timeout_exceeded && cutover_timeout_action == CutoverTimeoutAction::Abort {
                 maintenance_mode::stop();
@@ -288,10 +318,9 @@ impl ReplicationWaiter {
 
             if should_cutover {
                 info!(
-                    "[cutover] starting cutover, lag={}, threshold={}, last_transaction={}, timeout={}",
-                    format_bytes(lag),
-                    format_bytes(cutover_threshold),
-                    human_duration(last_transaction),
+                    "[cutover] starting cutover: lag={}, last_transaction={}, timeout={}",
+                    lag <= cutover_threshold,
+                    last_transaction > last_transaction_delay,
                     cutover_timeout_exceeded,
                 );
                 break;

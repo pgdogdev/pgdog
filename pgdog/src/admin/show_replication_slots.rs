@@ -16,6 +16,9 @@ impl Command for ShowReplicationSlots {
 
     async fn execute(&self) -> Result<Vec<Message>, Error> {
         let rd = RowDescription::new(&[
+            Field::text("host"),
+            Field::bigint("port"),
+            Field::text("database_name"),
             Field::text("name"),
             Field::text("lsn"),
             Field::text("lag"),
@@ -28,7 +31,10 @@ impl Command for ShowReplicationSlots {
             let slot = entry.value();
 
             let mut row = DataRow::new();
-            row.add(slot.name.as_str())
+            row.add(&slot.address.host)
+                .add(slot.address.port as i64)
+                .add(&slot.address.database_name)
+                .add(slot.name.as_str())
                 .add(slot.lsn.to_string().as_str())
                 .add(format_bytes(slot.lag as u64).as_str())
                 .add(slot.lag)

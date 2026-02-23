@@ -6,6 +6,7 @@ use pgdog_stats::Lsn;
 
 use crate::backend::{
     databases::User,
+    pool::Address,
     schema::sync::{Statement, SyncState},
     Cluster,
 };
@@ -111,15 +112,17 @@ pub struct ReplicationSlot {
     pub(crate) lsn: Lsn,
     pub(crate) lag: i64,
     pub(crate) copy_data: bool,
+    pub(crate) address: Address,
 }
 
 impl ReplicationSlot {
-    pub(crate) fn new(name: &str, lsn: &Lsn, copy_data: bool) -> Self {
+    pub(crate) fn new(name: &str, lsn: &Lsn, copy_data: bool, address: &Address) -> Self {
         let slot = Self {
             name: name.to_owned(),
             lsn: lsn.clone(),
             copy_data,
             lag: 0,
+            address: address.clone(),
         };
 
         ReplicationSlots::get().insert(name.to_owned(), slot.clone());

@@ -41,7 +41,7 @@ CREATE TABLE IF NOT EXISTS copy_data.log_actions(
 );
 
 CREATE TABLE copy_data.with_identity(
-    id BIGINT GENERATED ALWAYS AS identity,
+    id BIGINT PRIMARY KEY GENERATED ALWAYS AS identity,
     tenant_id BIGINT NOT NULL
 );
 

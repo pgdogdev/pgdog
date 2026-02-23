@@ -10,7 +10,7 @@ use crate::{
 };
 use std::{fmt::Display, str::FromStr, time::Duration};
 use tokio::time::timeout;
-use tracing::{debug, trace, warn};
+use tracing::{debug, info, trace, warn};
 
 pub use pgdog_stats::Lsn;
 
@@ -53,8 +53,14 @@ pub struct ReplicationSlot {
 
 impl ReplicationSlot {
     /// Create replication slot used for streaming the WAL.
-    pub fn replication(publication: &str, address: &Address, name: Option<String>) -> Self {
-        let name = name.unwrap_or(format!("__pgdog_repl_{}", random_string(19).to_lowercase()));
+    pub fn replication(
+        publication: &str,
+        address: &Address,
+        name: Option<String>,
+        shard: usize,
+    ) -> Self {
+        let name = name.unwrap_or(format!("__pgdog_repl_{}", random_string(18).to_lowercase()));
+        let name = format!("{}_{}", name, shard);
 
         Self {
             address: address.clone(),
@@ -150,6 +156,11 @@ impl ReplicationSlot {
             self.connect().await?;
         }
 
+        info!(
+            "creating replication slot \"{}\" [{}]",
+            self.name, self.address
+        );
+
         if self.kind == SlotKind::DataSync {
             self.server()?
                 .execute("BEGIN READ ONLY ISOLATION LEVEL REPEATABLE READ")
@@ -195,9 +206,10 @@ impl ReplicationSlot {
                     &self.name,
                     &self.lsn,
                     self.dropped,
+                    &self.address,
                 ));
 
-                debug!(
+                info!(
                     "replication slot \"{}\" at lsn {} created [{}]",
                     self.name, self.lsn, self.address,
                 );
@@ -221,9 +233,10 @@ impl ReplicationSlot {
                                 &self.name,
                                 &self.lsn,
                                 self.dropped,
+                                &self.address,
                             ));
 
-                            debug!(
+                            info!(
                                 "using existing replication slot \"{}\" at lsn {} [{}]",
                                 self.name, self.lsn, self.address,
                             );
@@ -437,6 +450,7 @@ mod test {
             "test_slot_replication",
             addr,
             Some("test_slot_replication".into()),
+            0,
         );
         let _ = slot.create_slot().await.unwrap();
         slot.connect().await.unwrap();

@@ -5,6 +5,7 @@ use tracing::info;
 
 use crate::backend::replication::logical::admin::{Task, TaskType};
 use crate::backend::replication::orchestrator::Orchestrator;
+use crate::backend::replication::AsyncTasks;
 
 use super::prelude::*;
 
@@ -47,7 +48,7 @@ impl Command for CopyData {
             self.from_database, self.to_database, self.publication
         );
 
-        let orchestrator = Orchestrator::new(
+        let mut orchestrator = Orchestrator::new(
             &self.from_database,
             &self.to_database,
             &self.publication,
@@ -57,7 +58,11 @@ impl Command for CopyData {
         let slot_name = orchestrator.replication_slot().to_owned();
 
         let task_id = Task::register(TaskType::CopyData(spawn(async move {
-            orchestrator.data_sync().await
+            orchestrator.load_schema().await?;
+            orchestrator.data_sync().await?;
+            AsyncTasks::insert(TaskType::Replication(orchestrator.replicate().await?));
+
+            Ok(())
         })));
 
         let mut dr = DataRow::new();

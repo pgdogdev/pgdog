@@ -824,6 +824,10 @@ impl PgDumpOutput {
 
                                         AlterTableType::AtAddIdentity => {
                                             if state == SyncState::Cutover {
+                                                // Add identity constraint during cutover
+                                                result.push(original.into());
+
+                                                // Set sequence to max(column) value
                                                 if let Some(ref node) = cmd.def {
                                                     if let Some(NodeEnum::Constraint(
                                                         ref constraint,
@@ -878,9 +882,8 @@ impl PgDumpOutput {
                                                         }
                                                     }
                                                 }
-                                            } else if state == SyncState::PreData {
-                                                result.push(original.into());
                                             }
+                                            // Skip identity constraint in PreData - it will be added in Cutover
                                         }
                                         // AlterTableType::AtChangeOwner => {
                                         //     continue; // Don't change owners, for now.
@@ -921,9 +924,17 @@ impl PgDumpOutput {
                             }
                         }
 
+                        NodeEnum::AlterPublicationStmt(_) => {
+                            if state == SyncState::PreData {
+                                result.push(Statement::Other {
+                                    sql: original.to_string(),
+                                    idempotent: false,
+                                });
+                            }
+                        }
+
                         // Skip these.
                         NodeEnum::CreateSubscriptionStmt(_)
-                        | NodeEnum::AlterPublicationStmt(_)
                         | NodeEnum::AlterSubscriptionStmt(_) => (),
 
                         NodeEnum::AlterSeqStmt(stmt) => {
@@ -1204,9 +1215,23 @@ ALTER TABLE ONLY public.users
             stmts: parse.protobuf,
             original: q.to_string(),
         };
+
+        // Identity constraints should be skipped in PreData
+        let statements = output.statements(SyncState::PreData).unwrap();
+        assert!(statements.is_empty());
+
+        // Identity constraints should be added in Cutover
         let statements = output.statements(SyncState::Cutover).unwrap();
-        match statements.first() {
-            Some(Statement::SequenceSetMax { sequence, sql }) => {
+        assert_eq!(statements.len(), 2);
+
+        // First statement is the original identity constraint
+        assert!(statements[0]
+            .deref()
+            .contains("ADD GENERATED ALWAYS AS IDENTITY"));
+
+        // Second statement is the sequence setval
+        match &statements[1] {
+            Statement::SequenceSetMax { sequence, sql } => {
                 assert_eq!(sequence.table.name, "users_id_seq");
                 assert_eq!(
                     sequence.table.schema().map(|schema| schema.name),
@@ -1217,11 +1242,9 @@ ALTER TABLE ONLY public.users
                     r#"SELECT setval('"public"."users_id_seq"', COALESCE((SELECT MAX("id") FROM "public"."users"), 1), true);"#
                 );
             }
-
             _ => panic!("not a set sequence max"),
         }
-        let statements = output.statements(SyncState::PreData).unwrap();
-        assert!(!statements.is_empty());
+
         let statements = output.statements(SyncState::PostData).unwrap();
         assert!(statements.is_empty());
     }
@@ -1448,6 +1471,23 @@ ALTER TABLE ONLY parent ATTACH PARTITION parent_2024 FOR VALUES FROM ('2024-01-0
             statements[1].deref(),
             "CREATE PUBLICATION my_pub FOR TABLE users, orders"
         );
+    }
+
+    #[test]
+    fn test_alter_publication_add_table_restored() {
+        // pg_dump outputs publication tables as ALTER PUBLICATION ... ADD TABLE
+        let q = "ALTER PUBLICATION my_pub ADD TABLE ONLY public.users;";
+        let output = PgDumpOutput {
+            stmts: parse(q).unwrap().protobuf,
+            original: q.to_owned(),
+        };
+
+        let statements = output.statements(SyncState::PreData).unwrap();
+
+        assert_eq!(statements.len(), 1);
+        assert!(statements[0]
+            .deref()
+            .contains("ALTER PUBLICATION my_pub ADD TABLE"));
     }
 
     #[test]
