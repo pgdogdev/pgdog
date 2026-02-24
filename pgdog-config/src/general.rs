@@ -410,11 +410,13 @@ impl General {
     }
 
     fn ban_replica_lag() -> u64 {
-        Self::env_or_default("PGDOG_BAN_REPLICA_LAG", Duration::MAX.as_millis() as u64)
+        // Use i64::MAX to ensure TOML serialization compatibility (TOML only supports i64)
+        Self::env_or_default("PGDOG_BAN_REPLICA_LAG", i64::MAX as u64)
     }
 
     fn ban_replica_lag_bytes() -> u64 {
-        Self::env_or_default("PGDOG_BAN_REPLICA_LAG_BYTES", u64::MAX)
+        // Use i64::MAX to ensure TOML serialization compatibility (TOML only supports i64)
+        Self::env_or_default("PGDOG_BAN_REPLICA_LAG_BYTES", i64::MAX as u64)
     }
 
     fn cutover_replication_lag_threshold() -> u64 {
