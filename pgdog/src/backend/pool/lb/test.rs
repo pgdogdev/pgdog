@@ -1125,8 +1125,11 @@ fn test_ban_check_clears_expired_ban_when_healthy_no_lag() {
 }
 
 #[test]
-fn test_ban_check_does_not_clear_expired_ban_when_replica_lag_bad() {
+fn test_ban_check_does_not_clear_expired_ban_when_healthy_with_bad_lag() {
     let replicas = setup_test_replicas_no_launch();
+
+    // Target is healthy (default)
+    assert!(replicas.targets[0].health.healthy());
 
     // Ban with short timeout
     replicas.targets[0]
@@ -1145,7 +1148,6 @@ fn test_ban_check_does_not_clear_expired_ban_when_replica_lag_bad() {
     assert!(replicas.targets[0].ban.banned());
 
     let monitor = Monitor::new_test(&replicas);
-    // Threshold that the pool's replica_lag exceeds
     let threshold = ReplicaLag {
         duration: Duration::from_secs(1),
         bytes: 100,
@@ -1155,12 +1157,49 @@ fn test_ban_check_does_not_clear_expired_ban_when_replica_lag_bad() {
 
     assert!(
         replicas.targets[0].ban.banned(),
-        "Expired ban should NOT be cleared when replica lag exceeds threshold"
+        "Expired ban should NOT be cleared when healthy replica has bad lag"
     );
 }
 
 #[test]
-fn test_ban_check_bans_with_replica_lag_reason() {
+fn test_ban_check_does_not_clear_expired_ban_when_unhealthy_with_bad_lag() {
+    let replicas = setup_test_replicas_no_launch();
+
+    // Set target as unhealthy
+    replicas.targets[0].health.toggle(false);
+
+    // Ban with short timeout
+    replicas.targets[0]
+        .ban
+        .ban(Error::ServerError, Duration::from_millis(1));
+
+    // Set replica lag on the pool
+    replicas.targets[0].pool.lock().replica_lag = ReplicaLag {
+        duration: Duration::from_secs(10),
+        bytes: 1000,
+    };
+
+    // Wait for ban to expire
+    std::thread::sleep(Duration::from_millis(10));
+
+    assert!(replicas.targets[0].ban.banned());
+
+    let monitor = Monitor::new_test(&replicas);
+    let threshold = ReplicaLag {
+        duration: Duration::from_secs(1),
+        bytes: 100,
+    };
+
+    monitor.ban_check(&threshold);
+
+    assert!(
+        replicas.targets[0].ban.banned(),
+        "Expired ban should NOT be cleared when unhealthy replica has bad lag"
+    );
+}
+
+#[test]
+fn test_ban_check_bans_unhealthy_replica_with_bad_lag() {
     let replicas = setup_test_replicas_no_launch();
 
     // Set target as unhealthy
@@ -1184,7 +1223,39 @@ fn test_ban_check_bans_with_replica_lag_reason() {
     assert_eq!(
         replicas.targets[0].ban.error(),
         Some(Error::ReplicaLag),
-        "Ban reason should be ReplicaLag when replica lag exceeds threshold"
+        "Ban reason should be ReplicaLag when unhealthy replica has bad lag"
+    );
+}
+
+#[test]
+fn test_ban_check_bans_healthy_replica_with_bad_lag() {
+    let replicas = setup_test_replicas_no_launch();
+
+    // Target stays healthy (default)
+    assert!(replicas.targets[0].health.healthy());
+
+    // Set replica lag on the pool
+    replicas.targets[0].pool.lock().replica_lag = ReplicaLag {
+        duration: Duration::from_secs(10),
+        bytes: 1000,
+    };
+
+    let monitor = Monitor::new_test(&replicas);
+    let threshold = ReplicaLag {
+        duration: Duration::from_secs(1),
+        bytes: 100,
+    };
+
+    monitor.ban_check(&threshold);
+
+    assert!(
+        replicas.targets[0].ban.banned(),
+        "Healthy replica with bad lag should be banned"
+    );
+    assert_eq!(
+        replicas.targets[0].ban.error(),
+        Some(Error::ReplicaLag),
+        "Ban reason should be ReplicaLag"
     );
 }
 
@@ -1371,7 +1442,35 @@ fn test_ban_check_does_not_clear_unexpired_ban() {
 }
 
 #[test]
-fn test_ban_check_default_threshold_ignores_replica_lag() {
+fn test_ban_check_default_threshold_does_not_ban_healthy_replica_with_high_lag() {
+    let replicas = setup_test_replicas_no_launch();
+
+    // Target is healthy (default)
+    assert!(replicas.targets[0].health.healthy());
+
+    // Set very high replica lag on the pool
+    replicas.targets[0].pool.lock().replica_lag = ReplicaLag {
+        duration: Duration::from_secs(3600), // 1 hour lag
+        bytes: 1_000_000_000,                // 1GB lag
+    };
+
+    let monitor = Monitor::new_test(&replicas);
+    // Use default config thresholds (MAX values)
+    let threshold = ReplicaLag {
+        duration: Duration::MAX,
+        bytes: i64::MAX,
+    };
+
+    monitor.ban_check(&threshold);
+
+    assert!(
+        !replicas.targets[0].ban.banned(),
+        "With default MAX threshold, healthy replica should NOT be banned despite high lag"
+    );
+}
+
+#[test]
+fn test_ban_check_default_threshold_bans_unhealthy_with_pool_unhealthy_reason() {
     let replicas = setup_test_replicas_no_launch();
 
     // Set very high replica lag on the pool
@@ -1396,7 +1495,7 @@ fn test_ban_check_default_threshold_ignores_replica_lag() {
     assert_eq!(
         replicas.targets[0].ban.error(),
         Some(Error::PoolUnhealthy),
-        "With default MAX threshold, ban reason should be PoolUnhealthy, not ReplicaLag"
+        "With default MAX threshold, unhealthy replica should be banned with PoolUnhealthy reason"
     );
 }
 

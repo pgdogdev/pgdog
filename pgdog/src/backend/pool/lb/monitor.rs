@@ -91,8 +91,7 @@ impl Monitor {
             let healthy = target.health.healthy();
             let replica_lag_bad = target
                 .pool
-                .state()
-                .replica_lag
+                .replica_lag()
                 .greater_or_eq(replica_ban_threshold);
 
             // Clear expired bans.
@@ -101,22 +100,20 @@ impl Monitor {
             }
 
             let bannable = targets.len() > 1 && target.pool.config().ban_timeout > Duration::ZERO;
+            let should_ban = !healthy || replica_lag_bad;
 
-            // Check health and ban if unhealthy.
-            if !healthy && bannable {
-                let already_banned = target.ban.banned();
-                if already_banned || !healthy {
+            if should_ban && bannable {
+                if target.ban.banned() || should_ban {
                     banned += 1;
                 }
-                if !healthy {
-                    let reason = if replica_lag_bad {
-                        Error::ReplicaLag
-                    } else {
-                        Error::PoolUnhealthy
-                    };
 
-                    ban_targets.push((i, reason));
-                }
+                let reason = if replica_lag_bad {
+                    Error::ReplicaLag
+                } else {
+                    Error::PoolUnhealthy
+                };
+
+                ban_targets.push((i, reason));
             }
         }
 

@@ -128,3 +128,155 @@ impl ReplicaLag {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pgdog_config::General;
+
+    #[test]
+    fn test_default_replica_lag_never_exceeds_default_config_threshold() {
+        let lag = ReplicaLag::default();
+
+        let config = General::default();
+        let default_threshold = ReplicaLag {
+            bytes: config.ban_replica_lag_bytes.try_into().unwrap_or(i64::MAX),
+            duration: Duration::from_millis(config.ban_replica_lag),
+        };
+
+        assert!(
+            !lag.greater_or_eq(&default_threshold),
+            "Default replica lag (no measurements) should never exceed default config threshold"
+        );
+    }
+
+    #[test]
+    fn test_greater_or_eq_only_bytes_configured() {
+        // Duration threshold is MAX (not configured), only bytes matters
+        let threshold = ReplicaLag {
+            bytes: 1000,
+            duration: Duration::MAX,
+        };
+
+        // Bytes exceeds threshold
+        let lag_bad = ReplicaLag {
+            bytes: 2000,
+            duration: Duration::ZERO,
+        };
+        assert!(
+            lag_bad.greater_or_eq(&threshold),
+            "Should trigger when bytes exceeds threshold"
+        );
+
+        // Bytes below threshold
+        let lag_ok = ReplicaLag {
+            bytes: 500,
+            duration: Duration::from_secs(3600), // High duration ignored since threshold is MAX
+        };
+        assert!(
+            !lag_ok.greater_or_eq(&threshold),
+            "Should not trigger when bytes below threshold"
+        );
+    }
+
+    #[test]
+    fn test_greater_or_eq_only_duration_configured() {
+        // Bytes threshold is MAX (not configured), only duration matters
+        let threshold = ReplicaLag {
+            bytes: i64::MAX,
+            duration: Duration::from_secs(5),
+        };
+
+        // Duration exceeds threshold
+        let lag_bad = ReplicaLag {
+            bytes: 1000,
+            duration: Duration::from_secs(10),
+        };
+        assert!(
+            lag_bad.greater_or_eq(&threshold),
+            "Should trigger when duration exceeds threshold"
+        );
+
+        // Duration below threshold
+        let lag_ok = ReplicaLag {
+            bytes: 1000,
+            duration: Duration::from_secs(1),
+        };
+        assert!(
+            !lag_ok.greater_or_eq(&threshold),
+            "Should not trigger when duration below threshold"
+        );
+    }
+
+    #[test]
+    fn test_greater_or_eq_both_configured_bytes_exceeds() {
+        let threshold = ReplicaLag {
+            bytes: 1000,
+            duration: Duration::from_secs(5),
+        };
+
+        // Bytes exceeds, duration doesn't - should trigger (bytes takes priority)
+        let lag = ReplicaLag {
+            bytes: 2000,
+            duration: Duration::from_secs(1),
+        };
+        assert!(
+            lag.greater_or_eq(&threshold),
+            "Should trigger when bytes exceeds (bytes takes priority)"
+        );
+    }
+
+    #[test]
+    fn test_greater_or_eq_both_configured_only_duration_exceeds() {
+        let threshold = ReplicaLag {
+            bytes: 1000,
+            duration: Duration::from_secs(5),
+        };
+
+        // Bytes below, duration exceeds - should trigger
+        let lag = ReplicaLag {
+            bytes: 500,
+            duration: Duration::from_secs(10),
+        };
+        assert!(
+            lag.greater_or_eq(&threshold),
+            "Should trigger when duration exceeds and bytes below"
+        );
+    }
+
+    #[test]
+    fn test_greater_or_eq_both_configured_neither_exceeds() {
+        let threshold = ReplicaLag {
+            bytes: 1000,
+            duration: Duration::from_secs(5),
+        };
+
+        // Neither exceeds
+        let lag = ReplicaLag {
+            bytes: 500,
+            duration: Duration::from_secs(1),
+        };
+        assert!(
+            !lag.greater_or_eq(&threshold),
+            "Should not trigger when neither exceeds"
+        );
+    }
+
+    #[test]
+    fn test_greater_or_eq_bytes_takes_priority() {
+        let threshold = ReplicaLag {
+            bytes: 1000,
+            duration: Duration::from_secs(5),
+        };
+
+        // Bytes exactly at threshold - should trigger immediately without checking duration
+        let lag = ReplicaLag {
+            bytes: 1000,
+            duration: Duration::ZERO,
+        };
+        assert!(
+            lag.greater_or_eq(&threshold),
+            "Should trigger when bytes equals threshold (>=)"
+        );
+    }
+}
