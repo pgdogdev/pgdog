@@ -1,4 +1,4 @@
-use std::{io::Read, ops::Deref};
+use std::ops::Deref;
 
 use bytes::{Buf, BufMut, BytesMut};
 use once_cell::sync::Lazy;
@@ -22,6 +22,9 @@ pub fn binary_signature() -> &'static Vec<u8> {
     SIGNATURE.deref()
 }
 
+/// Total bytes required for a complete header.
+const HEADER_SIZE: usize = 11 + 4 + 4; // signature + flags + extension
+
 #[derive(Debug, Clone, Default)]
 #[allow(dead_code)]
 pub struct Header {
@@ -31,9 +34,12 @@ pub struct Header {
 }
 
 impl Header {
-    pub(super) fn read(buf: &mut impl Buf) -> Result<Self, Error> {
-        let mut signature = vec![0u8; SIGNATURE.len()];
-        buf.reader().read_exact(&mut signature)?;
+    pub(super) fn read(buf: &mut impl Buf) -> Result<Option<Self>, Error> {
+        if buf.remaining() < HEADER_SIZE {
+            return Ok(None);
+        }
+
+        let signature: Vec<u8> = buf.copy_to_bytes(SIGNATURE.len()).to_vec();
 
         if signature != *SIGNATURE {
             return Err(Error::BinaryMissingHeader);
@@ -47,11 +53,11 @@ impl Header {
             return Err(Error::BinaryHeaderExtension);
         }
 
-        Ok(Self {
+        Ok(Some(Self {
             flags,
             has_oid: has_oids,
             header_extension,
-        })
+        }))
     }
 
     pub(super) fn bytes_read(&self) -> usize {

@@ -260,12 +260,13 @@ impl CopyParser {
 
                 CopyStream::Binary(stream) => {
                     if self.headers {
-                        let header = stream.header()?;
-                        rows.push(CopyRow::new(
-                            &header.to_bytes()?,
-                            self.schema_shard.clone().unwrap_or(Shard::All),
-                        ));
-                        self.headers = false;
+                        if let Some(header) = stream.header()? {
+                            rows.push(CopyRow::new(
+                                &header.to_bytes()?,
+                                self.schema_shard.clone().unwrap_or(Shard::All),
+                            ));
+                            self.headers = false;
+                        }
                     }
 
                     for tuple in stream.tuples() {

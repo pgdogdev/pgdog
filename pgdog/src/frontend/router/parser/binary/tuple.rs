@@ -1,11 +1,9 @@
-use std::io::Read;
 use std::ops::Deref;
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 
 use crate::net::messages::ToBytes;
 
-use super::super::Error;
 use super::header::Header;
 
 #[derive(Debug, Clone)]
@@ -58,41 +56,101 @@ impl Tuple {
         }
     }
 
-    pub(super) fn read(header: &Header, buf: &mut impl Buf) -> Result<Option<Self>, Error> {
-        if !buf.has_remaining() {
-            return Ok(None);
+    /// Calculate the total bytes needed to read a complete tuple.
+    /// Returns None if there isn't enough data to determine the size.
+    fn calculate_needed_bytes(header: &Header, data: &[u8]) -> Option<usize> {
+        let mut offset = 0;
+
+        // Need at least 2 bytes for num_cols
+        if data.len() < 2 {
+            return None;
         }
+        let num_cols = i16::from_be_bytes([data[0], data[1]]);
+        offset += 2;
+
+        // Terminator (-1) only needs the 2 bytes we already checked
+        if num_cols == -1 {
+            return Some(2);
+        }
+
+        // OID if header has it
+        if header.has_oid {
+            offset += 4;
+            if data.len() < offset {
+                return None;
+            }
+        }
+
+        // Each column has a 4-byte length, plus the data
+        for _ in 0..num_cols {
+            if data.len() < offset + 4 {
+                return None;
+            }
+            let len = i32::from_be_bytes([
+                data[offset],
+                data[offset + 1],
+                data[offset + 2],
+                data[offset + 3],
+            ]);
+            offset += 4;
+
+            if len >= 0 {
+                offset += len as usize;
+                if data.len() < offset {
+                    return None;
+                }
+            }
+        }
+
+        Some(offset)
+    }
+
+    pub(super) fn read(header: &Header, buf: &mut impl Buf) -> Option<Self> {
+        // Get a view of the buffer data to calculate needed bytes
+        let data = buf.chunk();
+
+        // Check if we have enough data for a complete tuple
+        let needed = Self::calculate_needed_bytes(header, data)?;
+
+        // We have enough data - now actually parse it
         let num_cols = buf.get_i16();
         if num_cols == -1 {
-            return Ok(Some(Tuple {
+            return Some(Tuple {
                 row: vec![],
                 oid: None,
                 end: true,
-            }));
+            });
         }
+
         let oid = if header.has_oid {
             Some(buf.get_i32())
         } else {
             None
         };
 
-        let mut row = vec![];
+        let mut row = Vec::with_capacity(num_cols as usize);
         for _ in 0..num_cols {
             let len = buf.get_i32();
             if len == -1 {
                 row.push(Data::Null);
             } else {
-                let mut bytes = BytesMut::zeroed(len as usize);
-                buf.reader().read_exact(&mut bytes[..])?;
-                row.push(Data::Column(bytes.freeze()));
+                let bytes = buf.copy_to_bytes(len as usize);
+                row.push(Data::Column(bytes));
             }
         }
 
-        Ok(Some(Self {
+        debug_assert_eq!(
+            needed,
+            2 + row.len() * 4
+                + row.iter().map(|r| r.len()).sum::<usize>()
+                + if header.has_oid { 4 } else { 0 }
+        );
+
+        Some(Self {
             row,
             oid,
             end: false,
-        }))
+        })
     }
 
     pub(super) fn bytes_read(&self, header: &Header) -> usize {
