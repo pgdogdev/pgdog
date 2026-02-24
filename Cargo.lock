@@ -2382,7 +2382,7 @@ dependencies = [
 [[package]]
 name = "pg_query"
 version = "6.1.1"
-source = "git+https://github.com/pgdogdev/pg_query.rs.git?rev=4f79b92fe4d630b1f253f27f13c9096c77530fd6#4f79b92fe4d630b1f253f27f13c9096c77530fd6"
+source = "git+https://github.com/pgdogdev/pg_query.rs.git?rev=b4c864cc02e902b8946dad5524b814ec074cc6bc#b4c864cc02e902b8946dad5524b814ec074cc6bc"
 dependencies = [
  "bindgen 0.66.1",
  "cc",
