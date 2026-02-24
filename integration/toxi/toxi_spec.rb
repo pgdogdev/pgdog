@@ -180,7 +180,7 @@ describe 'tcp' do
     end
 
     after do
-      admin.exec 'RECONNECT'
+      admin.exec 'RELOAD'
     end
 
     describe 'broken primary' do
