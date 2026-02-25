@@ -1,3 +1,4 @@
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -11,7 +12,7 @@ struct RawReplicaLag {
     max_age: Option<u64>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, JsonSchema)]
 pub struct ReplicaLag {
     pub check_interval: Duration,
     pub max_age: Duration,
@@ -96,7 +97,7 @@ impl Default for ReplicaLag {
 }
 
 /// Replication configuration.
-#[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
+#[derive(Serialize, Deserialize, PartialEq, Debug, Clone, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub struct Replication {
     /// Path to the pg_dump executable.
@@ -119,7 +120,7 @@ impl Default for Replication {
 }
 
 /// Mirroring configuration.
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Mirroring {
     /// Source database name to mirror from.

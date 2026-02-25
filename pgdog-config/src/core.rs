@@ -1,3 +1,4 @@
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs::read_to_string;
@@ -126,7 +127,7 @@ impl Default for ConfigAndUsers {
 }
 
 /// Configuration.
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
     /// General configuration.
@@ -194,8 +195,7 @@ impl Config {
     /// Organize all databases by name for quicker retrieval.
     pub fn databases(&self) -> HashMap<String, Vec<Vec<EnumeratedDatabase>>> {
         let mut databases = HashMap::new();
-        let mut number = 0;
-        for database in &self.databases {
+        for (number, database) in self.databases.iter().enumerate() {
             let entry = databases
                 .entry(database.name.clone())
                 .or_insert_with(Vec::new);
@@ -209,7 +209,6 @@ impl Config {
                     number,
                     database: database.clone(),
                 });
-            number += 1;
         }
         databases
     }

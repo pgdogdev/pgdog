@@ -1,3 +1,4 @@
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::{
     fmt::Display,
@@ -7,7 +8,7 @@ use std::{
 
 use super::pooling::PoolerMode;
 
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Copy)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Copy, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ReadWriteStrategy {
     #[default]
@@ -27,7 +28,7 @@ impl FromStr for ReadWriteStrategy {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Copy)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Copy, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum LoadBalancingStrategy {
     #[default]
@@ -49,7 +50,7 @@ impl FromStr for LoadBalancingStrategy {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Copy)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Copy, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ReadWriteSplit {
     #[default]
@@ -84,7 +85,9 @@ impl Display for ReadWriteSplit {
 }
 
 /// Database server proxied by pgDog.
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Ord, PartialOrd, Eq)]
+#[derive(
+    Serialize, Deserialize, Debug, Clone, Default, PartialEq, Ord, PartialOrd, Eq, JsonSchema,
+)]
 #[serde(deny_unknown_fields)]
 pub struct Database {
     /// Database name visible to the clients.
@@ -140,7 +143,18 @@ impl Database {
 }
 
 #[derive(
-    Serialize, Deserialize, Debug, Clone, Default, PartialEq, Ord, PartialOrd, Eq, Hash, Copy,
+    Serialize,
+    Deserialize,
+    Debug,
+    Clone,
+    Default,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Eq,
+    Hash,
+    Copy,
+    JsonSchema,
 )]
 #[serde(rename_all = "snake_case")]
 pub enum Role {

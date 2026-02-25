@@ -1,3 +1,4 @@
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::collections::{hash_map::DefaultHasher, HashSet};
@@ -11,7 +12,7 @@ use super::error::Error;
 use pgdog_vector::Vector;
 
 /// Sharded table.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct ShardedTable {
     /// Database this table belongs to.
@@ -78,7 +79,7 @@ impl ShardedTable {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Hasher {
     #[default]
@@ -86,7 +87,7 @@ pub enum Hasher {
     Sha1,
 }
 
-#[derive(Serialize, Deserialize, PartialEq, Debug, Clone, Default, Copy, Eq, Hash)]
+#[derive(Serialize, Deserialize, PartialEq, Debug, Clone, Default, Copy, Eq, Hash, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum DataType {
     #[default]
@@ -96,7 +97,7 @@ pub enum DataType {
     Varchar,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, Eq, JsonSchema)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct ShardedMapping {
     pub database: String,
@@ -133,14 +134,14 @@ impl Hash for ShardedMapping {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, Eq, Hash)]
+#[derive(Serialize, Deserialize, PartialEq, Debug, Clone, Default, Eq, Hash, JsonSchema)]
 pub struct ShardedMappingKey {
     database: String,
     column: String,
     table: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, PartialEq, Debug, Clone, Default, Hash, Eq)]
+#[derive(Serialize, Deserialize, PartialEq, Debug, Clone, Default, Hash, Eq, JsonSchema)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum ShardedMappingKind {
     #[default]
@@ -149,10 +150,11 @@ pub enum ShardedMappingKind {
     Default,
 }
 
-#[derive(Serialize, Deserialize, PartialEq, Debug, Clone, Eq, Hash)]
+#[derive(Serialize, Deserialize, PartialEq, Debug, Clone, Eq, Hash, JsonSchema)]
 #[serde(untagged)]
 pub enum FlexibleType {
     Integer(i64),
+    #[schemars(with = "String")]
     Uuid(uuid::Uuid),
     String(String),
 }
@@ -175,8 +177,7 @@ impl From<String> for FlexibleType {
     }
 }
 
-#[derive(Serialize, Deserialize, PartialEq, Debug, Clone, Default)]
-#[serde(rename_all = "snake_case", deny_unknown_fields)]
+#[derive(Serialize, Deserialize, PartialEq, Debug, Clone, Default, Eq, Hash, JsonSchema)]
 pub struct OmnishardedTables {
     pub database: String,
     pub tables: Vec<String>,
@@ -191,12 +192,12 @@ pub struct OmnishardedTable {
 }
 
 /// Queries with manual routing rules.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, JsonSchema)]
 pub struct ManualQuery {
     pub fingerprint: String,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, Default, JsonSchema)]
 pub struct ShardedSchema {
     /// Database name.
     pub database: String,
@@ -315,7 +316,7 @@ impl ListShards {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Eq, Hash, Default)]
+#[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Eq, Hash, Default, JsonSchema)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum QueryParserLevel {
     On,
@@ -324,7 +325,7 @@ pub enum QueryParserLevel {
     Off,
 }
 
-#[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Eq, Hash, Default)]
+#[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Eq, Hash, Default, JsonSchema)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum QueryParserEngine {
     #[default]
@@ -332,7 +333,7 @@ pub enum QueryParserEngine {
     PgQueryRaw,
 }
 
-#[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Eq, Hash, Default)]
+#[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Eq, Hash, Default, JsonSchema)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum SystemCatalogsBehavior {
     Omnisharded,
@@ -353,7 +354,7 @@ impl FromStr for SystemCatalogsBehavior {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Eq, Hash, Default)]
+#[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Eq, Hash, Default, JsonSchema)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum CopyFormat {
     Text,
@@ -370,7 +371,7 @@ impl Display for CopyFormat {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Eq, Hash, Default)]
+#[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Eq, Hash, Default, JsonSchema)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum LoadSchema {
     On,
@@ -391,7 +392,7 @@ impl FromStr for LoadSchema {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Eq, Hash, Default)]
+#[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Eq, Hash, Default, JsonSchema)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum CutoverTimeoutAction {
     #[default]

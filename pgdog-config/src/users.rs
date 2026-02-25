@@ -5,9 +5,10 @@ use tracing::warn;
 use super::core::Config;
 use super::pooling::PoolerMode;
 use crate::util::random_string;
+use schemars::JsonSchema;
 
 /// pgDog plugin.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Plugin {
     /// Plugin name.
@@ -15,7 +16,7 @@ pub struct Plugin {
 }
 
 /// Users and passwords.
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Users {
     pub admin: Option<Admin>,
@@ -78,7 +79,9 @@ impl Users {
 }
 
 /// User allowed to connect to pgDog.
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, Ord, PartialOrd)]
+#[derive(
+    Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, Ord, PartialOrd, JsonSchema,
+)]
 #[serde(deny_unknown_fields)]
 pub struct User {
     /// User name.
@@ -149,7 +152,7 @@ impl User {
 }
 
 /// Admin database settings.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Admin {
     /// Admin database name.

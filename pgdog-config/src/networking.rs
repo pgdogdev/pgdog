@@ -3,9 +3,11 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use crate::util::human_duration_optional;
+use schemars::JsonSchema;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Copy)]
 #[serde(rename_all = "snake_case")]
+#[derive(JsonSchema)]
 pub enum TlsVerifyMode {
     #[default]
     Disabled,
@@ -30,6 +32,7 @@ impl FromStr for TlsVerifyMode {
 
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
 #[serde(deny_unknown_fields)]
+#[derive(JsonSchema)]
 pub struct Tcp {
     #[serde(default = "Tcp::default_keepalive")]
     keepalive: bool,
@@ -108,6 +111,7 @@ impl Tcp {
 
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
 #[serde(rename_all = "snake_case")]
+#[derive(JsonSchema)]
 pub struct MultiTenant {
     pub column: String,
 }
