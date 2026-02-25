@@ -20,7 +20,7 @@ pub enum Error {
     Router(#[from] crate::frontend::router::Error),
 
     #[error("{0}")]
-    Execution(ErrorResponse),
+    Execution(Box<ErrorResponse>),
 
     #[error("net: {0}")]
     Net(#[from] crate::net::Error),
@@ -44,5 +44,11 @@ pub enum UpdateError {
 impl From<crate::frontend::Error> for Error {
     fn from(value: crate::frontend::Error) -> Self {
         Self::Frontend(Box::new(value))
+    }
+}
+
+impl From<ErrorResponse> for Error {
+    fn from(value: ErrorResponse) -> Self {
+        Self::Execution(Box::new(value))
     }
 }

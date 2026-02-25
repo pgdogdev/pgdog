@@ -10,6 +10,9 @@ pgbench -h 127.0.0.1 -U pgdog -p 6432 pgdog -t 1000 -c 10 --protocol simple -P 1
 pgbench -h 127.0.0.1 -U pgdog -p 6432 pgdog -t 1000 -c 10 --protocol extended -P 1
 pgbench -h 127.0.0.1 -U pgdog -p 6432 pgdog -t 1000 -c 10 --protocol prepared -P 1
 
+# Test copy
+bash ${SCRIPT_DIR}/copy_test.sh
+
 pushd ${SCRIPT_DIR}
 
 set +e

@@ -59,10 +59,7 @@ impl Taken {
     }
 
     pub(super) fn servers(&self) -> Vec<BackendKeyData> {
-        self.client_server
-            .iter()
-            .map(|(_, server)| server.clone())
-            .collect()
+        self.client_server.values().copied().collect()
     }
 
     #[cfg(test)]

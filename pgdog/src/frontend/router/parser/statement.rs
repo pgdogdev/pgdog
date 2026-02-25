@@ -1129,7 +1129,7 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
     }
 
     /// Get column names from the INSERT statement, or look them up from schema if not specified.
-    fn get_insert_columns<'d>(&self, stmt: &'d InsertStmt, ctx: &SearchContext<'_>) -> Vec<String> {
+    fn get_insert_columns(&self, stmt: &InsertStmt, ctx: &SearchContext<'_>) -> Vec<String> {
         // First try to get columns from the INSERT statement itself
         let cols: Vec<String> = stmt
             .cols

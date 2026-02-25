@@ -176,7 +176,7 @@ impl<'a> UpdateMulti<'a> {
             let code = message.code();
 
             if code == 'E' {
-                return Err(Error::Execution(ErrorResponse::try_from(message)?));
+                return Err(ErrorResponse::try_from(message)?.into());
             }
 
             if forward_reply && checker.forward(code) {
@@ -229,7 +229,7 @@ impl<'a> UpdateMulti<'a> {
 
         self.engine
             .backend
-            .handle_client_request(&mut request, &mut Router::default(), false)
+            .handle_client_request(&request, &mut Router::default(), false)
             .await?;
 
         let mut row = Row::default();
@@ -243,7 +243,7 @@ impl<'a> UpdateMulti<'a> {
                     rows += 1;
                 }
                 'T' => row.row_description = RowDescription::try_from(message)?,
-                'E' => return Err(Error::Execution(ErrorResponse::try_from(message)?)),
+                'E' => return Err(ErrorResponse::try_from(message)?.into()),
                 _ => (),
             }
         }

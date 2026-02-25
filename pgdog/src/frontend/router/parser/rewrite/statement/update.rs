@@ -147,7 +147,7 @@ impl Insert {
                 let value = match value {
                     UpdateValue::Value(value) => {
                         values_str.push(format!("${}", bind_idx + 1));
-                        Value::try_from(value).unwrap() // SAFETY: We check that the value is valid.
+                        Value::try_from(value.as_ref()).unwrap() // SAFETY: We check that the value is valid.
                     }
                     UpdateValue::Expr(expr) => {
                         values_str.push(expr.clone());
@@ -324,7 +324,7 @@ impl<'a> StatementRewrite<'a> {
     fn sharding_key_update_check(
         &'a self,
         stmt: &'a UpdateStmt,
-    ) -> Result<Option<&'a Box<ResTarget>>, Error> {
+    ) -> Result<Option<&'a ResTarget>, Error> {
         let table = if let Some(table) = stmt.relation.as_ref().map(Table::from) {
             table
         } else {
@@ -354,7 +354,7 @@ impl<'a> StatementRewrite<'a> {
                         .is_ok();
 
                     if supported {
-                        Ok(Some(res))
+                        Ok(Some(res.as_ref()))
                     } else {
                         // FIXME:
                         //
@@ -413,7 +413,7 @@ fn rewrite_params(parse_result: &mut ParseResult) -> Result<Vec<u16>, Error> {
 
 #[derive(Debug, Clone)]
 pub(super) enum UpdateValue {
-    Value(Node),
+    Value(Box<Node>),
     Expr(String), // We deparse the expression because we can't handle it yet.
 }
 
@@ -438,23 +438,21 @@ fn res_targets_to_insert_res_targets(
 ) -> Result<HashMap<String, UpdateValue>, Error> {
     let mut result = HashMap::new();
     for target in &stmt.target_list {
-        if let Some(ref node) = target.node {
-            if let NodeEnum::ResTarget(ref target) = node {
-                let valid = target
-                    .val
-                    .as_ref()
-                    .map(|value| Value::try_from(&value.node).is_ok())
-                    .unwrap_or_default();
-                let value = if valid {
-                    UpdateValue::Value(*target.val.clone().unwrap())
-                } else {
-                    UpdateValue::Expr(deparse_expr(
-                        target.val.as_ref().unwrap(),
-                        query_parser_engine,
-                    )?)
-                };
-                result.insert(target.name.clone(), value);
-            }
+        if let Some(NodeEnum::ResTarget(ref target)) = target.node.as_ref() {
+            let valid = target
+                .val
+                .as_ref()
+                .map(|value| Value::try_from(&value.node).is_ok())
+                .unwrap_or_default();
+            let value = if valid {
+                UpdateValue::Value(target.val.clone().unwrap())
+            } else {
+                UpdateValue::Expr(deparse_expr(
+                    target.val.as_ref().unwrap(),
+                    query_parser_engine,
+                )?)
+            };
+            result.insert(target.name.clone(), value);
         }
     }
 
@@ -509,13 +507,10 @@ fn parse_result(node: NodeEnum) -> ParseResult {
     ParseResult {
         version: pg_query::PG_VERSION_NUM as i32,
         stmts: vec![RawStmt {
-            stmt: Some(Box::new(Node {
-                node: Some(node),
-                ..Default::default()
-            })),
-            ..Default::default()
+            stmt: Some(Box::new(Node { node: Some(node) })),
+            stmt_location: 0,
+            stmt_len: 0,
         }],
-        ..Default::default()
     }
 }
 

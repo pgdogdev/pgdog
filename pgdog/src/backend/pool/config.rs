@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use crate::config::{Database, General, User};
 
 /// Pool configuration.
-#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Default)]
 pub struct Config {
     pub(crate) inner: pgdog_stats::Config,
 }
@@ -146,14 +146,6 @@ impl Config {
                 resharding_only: database.resharding_only,
                 ..Default::default()
             },
-        }
-    }
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            inner: pgdog_stats::Config::default(),
         }
     }
 }

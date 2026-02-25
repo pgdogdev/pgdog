@@ -454,8 +454,8 @@ impl Cluster {
     /// Use the query parser.
     pub fn use_query_parser(&self) -> bool {
         match self.query_parser() {
-            QueryParserLevel::Off => return false,
-            QueryParserLevel::On => return true,
+            QueryParserLevel::Off => false,
+            QueryParserLevel::On => true,
             QueryParserLevel::Auto => {
                 self.multi_tenant().is_some()
                     || self.router_needed()

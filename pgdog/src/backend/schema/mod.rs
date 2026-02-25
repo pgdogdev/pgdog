@@ -177,7 +177,7 @@ impl Schema {
 
         for schema in self.resolve_search_path(user, search_path) {
             if let Some(relation) = self.inner.get(schema, table.name) {
-                return Some(relation.into());
+                return Some(relation);
             }
         }
 

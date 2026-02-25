@@ -4,16 +4,12 @@ use std::str::FromStr;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum RewriteMode {
     Ignore,
+    #[default]
     Error,
     Rewrite,
-}
-
-impl Default for RewriteMode {
-    fn default() -> Self {
-        Self::Error
-    }
 }
 
 impl fmt::Display for RewriteMode {

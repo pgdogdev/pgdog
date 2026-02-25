@@ -180,7 +180,7 @@ describe 'tcp' do
     end
 
     after do
-      admin.exec 'RECONNECT'
+      admin.exec 'RELOAD'
     end
 
     describe 'broken primary' do
@@ -290,6 +290,46 @@ describe 'tcp' do
       end
       expect(errors).to be <= 1
       expect(25 - ok).to eq(errors)
+    end
+
+    describe 'client connection respects ban list' do
+      databases = %i[primary replica replica2 replica3]
+
+      databases.each_with_index do |db, idx|
+        3.times do |iteration|
+          it "handles #{db} being down (iteration #{iteration + 1})" do
+            admin.exec 'RELOAD'
+            sleep 0.1
+
+            pools_before = admin.exec('SHOW POOLS').select do |pool|
+              pool['database'] == 'failover'
+            end
+            expect(pools_before.all? { |p| p['banned'] == 'f' }).to be true
+
+            Toxiproxy[db].toxic(:reset_peer).apply do
+              errors = 0
+              5.times do
+                c = conn
+                c.exec 'SELECT 1'
+                c.close
+              rescue StandardError
+                errors += 1
+              end
+              expect(errors).to be <= 2
+
+              sleep 0.05
+              banned_pools = admin.exec('SHOW POOLS').select do |pool|
+                pool['database'] == 'failover' && pool['banned'] == 't'
+              end
+              expect(banned_pools.size).to be >= 1
+            end
+
+            c = conn
+            c.exec 'SELECT 1'
+            c.close
+          end
+        end
+      end
     end
 
     it 'clients can connect when all servers are down after caching connection params' do

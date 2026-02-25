@@ -229,10 +229,7 @@ impl Publisher {
 
     /// Get how long ago last transaction was committed.
     pub fn last_transaction(&self) -> Option<Duration> {
-        self.last_transaction
-            .lock()
-            .clone()
-            .map(|last| last.elapsed())
+        (*self.last_transaction.lock()).map(|last| last.elapsed())
     }
 
     /// Sync data from all tables in a publication from one shard to N shards,

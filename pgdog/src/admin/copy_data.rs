@@ -60,7 +60,9 @@ impl Command for CopyData {
         let task_id = Task::register(TaskType::CopyData(spawn(async move {
             orchestrator.load_schema().await?;
             orchestrator.data_sync().await?;
-            AsyncTasks::insert(TaskType::Replication(orchestrator.replicate().await?));
+            AsyncTasks::insert(TaskType::Replication(Box::new(
+                orchestrator.replicate().await?,
+            )));
 
             Ok(())
         })));

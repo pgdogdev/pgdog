@@ -1,3 +1,5 @@
+use crate::backend::pool::lsn_monitor::ReplicaLag;
+
 use super::*;
 
 use tokio::time::interval;
@@ -92,20 +94,13 @@ impl ShardMonitor {
                 for replica in replicas {
                     // Primary is ahead, there is replica lag.
                     let lag = if primary.1.lsn.lsn > replica.1.lsn.lsn {
-                        // Assuming databases use the same timezone,
-                        // since they are primary & replicas and database
-                        // clocks are correctly synchronized.
-                        let lag_ms = (primary.1.timestamp.to_naive_datetime()
-                            - replica.1.timestamp.to_naive_datetime())
-                        .num_milliseconds()
-                        .clamp(0, i64::MAX);
-                        Duration::from_millis(lag_ms as u64)
+                        primary.1.replica_lag(&replica.1)
                     } else {
-                        Duration::ZERO
+                        ReplicaLag::default()
                     };
                     replica.0.lock().replica_lag = lag;
                 }
-                primary.0.lock().replica_lag = Duration::ZERO;
+                primary.0.lock().replica_lag = ReplicaLag::default();
             }
         }
 

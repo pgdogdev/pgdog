@@ -993,11 +993,8 @@ impl PgDumpOutput {
                                 let table =
                                     stmt.relation.as_ref().map(Table::from).unwrap_or_default();
 
-                                let index_schema = stmt
-                                    .relation
-                                    .as_ref()
-                                    .map(|r| schema_name(r))
-                                    .unwrap_or("public");
+                                let index_schema =
+                                    stmt.relation.as_ref().map(schema_name).unwrap_or("public");
                                 result.push(Statement::Other {
                                     sql: format!(
                                         "DROP INDEX IF EXISTS \"{}\".\"{}\"",

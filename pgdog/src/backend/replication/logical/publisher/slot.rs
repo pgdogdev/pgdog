@@ -265,7 +265,9 @@ impl ReplicationSlot {
             self.name, self.address
         );
         self.dropped = true;
-        self.tracker.take().map(|slot| slot.dropped());
+        if let Some(slot) = self.tracker.take() {
+            slot.dropped()
+        }
 
         Ok(())
     }
@@ -341,9 +343,9 @@ impl ReplicationSlot {
             self.server()?.addr()
         );
 
-        self.tracker
-            .as_ref()
-            .map(|tracker| tracker.update_lsn(&Lsn::from_i64(status_update.last_flushed)));
+        if let Some(tracker) = self.tracker.as_ref() {
+            tracker.update_lsn(&Lsn::from_i64(status_update.last_flushed))
+        }
 
         self.server()?
             .send_one(&status_update.wrapped()?.into())

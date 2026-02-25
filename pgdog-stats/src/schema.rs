@@ -24,7 +24,7 @@ impl ForeignKeyAction {
             "SET NULL" => Self::SetNull,
             "SET DEFAULT" => Self::SetDefault,
             "RESTRICT" => Self::Restrict,
-            "NO ACTION" | _ => Self::NoAction,
+            _ => Self::NoAction,
         }
     }
 }

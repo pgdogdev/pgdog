@@ -15,7 +15,7 @@ impl StatementRewrite<'_> {
     /// - `ignore`: Do nothing
     /// - `error`: Return an error if a BIGINT primary key is missing
     /// - `rewrite`: Auto-inject pgdog.unique_id() for missing columns,
-    ///              or replace DEFAULT values with pgdog.unique_id()
+    ///   or replace DEFAULT values with pgdog.unique_id()
     ///
     /// This runs before unique_id replacement so injected function calls
     /// will be processed by the unique_id rewriter.

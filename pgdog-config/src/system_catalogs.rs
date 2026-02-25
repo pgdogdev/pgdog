@@ -21,7 +21,7 @@ const CATALOGS: &[&str] = &[
 ];
 
 static SYSTEM_CATALOGS: Lazy<HashSet<&'static str>> =
-    Lazy::new(|| CATALOGS.into_iter().map(|s| *s).collect());
+    Lazy::new(|| CATALOGS.iter().copied().collect());
 
 /// Get a list of system catalogs that we care about.
 pub fn system_catalogs() -> &'static HashSet<&'static str> {

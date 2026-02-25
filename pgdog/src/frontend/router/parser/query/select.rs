@@ -75,7 +75,7 @@ impl QueryParser {
             let shard = Shard::Direct(round_robin::next() % context.shards);
 
             if let Some(recorder) = self.recorder_mut() {
-                recorder.record_entry(Some(shard.clone()), format!("SELECT omnishard no table"));
+                recorder.record_entry(Some(shard.clone()), "SELECT omnishard no table".to_string());
             }
 
             context
@@ -132,16 +132,16 @@ impl QueryParser {
                 .shards_calculator
                 .push(ShardWithPriority::new_table(Shard::All));
         } else {
-            let system_catalog_sharded = context
-                .sharding_schema
-                .tables()
-                .is_system_catalog_sharded()
-                .then(|| {
-                    tables
-                        .iter()
-                        .any(|table| system_catalogs().contains(&table.name))
-                })
-                .unwrap_or_default();
+            let system_catalog_sharded =
+                if context.sharding_schema.tables().is_system_catalog_sharded() {
+                    {
+                        tables
+                            .iter()
+                            .any(|table| system_catalogs().contains(&table.name))
+                    }
+                } else {
+                    Default::default()
+                };
 
             if system_catalog_sharded {
                 debug!("system catalog sharded");

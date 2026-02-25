@@ -53,6 +53,11 @@ pub struct General {
     /// Maximum duration of a ban.
     #[serde(default = "General::ban_timeout")]
     pub ban_timeout: u64,
+    /// Ban replica lag.
+    #[serde(default = "General::ban_replica_lag")]
+    pub ban_replica_lag: u64,
+    #[serde(default = "General::ban_replica_lag_bytes")]
+    pub ban_replica_lag_bytes: u64,
     /// Rollback timeout.
     #[serde(default = "General::rollback_timeout")]
     pub rollback_timeout: u64,
@@ -250,6 +255,8 @@ impl Default for General {
             healthcheck_timeout: Self::healthcheck_timeout(),
             healthcheck_port: Self::healthcheck_port(),
             ban_timeout: Self::ban_timeout(),
+            ban_replica_lag: Self::ban_replica_lag(),
+            ban_replica_lag_bytes: Self::ban_replica_lag_bytes(),
             rollback_timeout: Self::rollback_timeout(),
             load_balancing_strategy: Self::load_balancing_strategy(),
             read_write_strategy: Self::read_write_strategy(),
@@ -400,6 +407,16 @@ impl General {
             "PGDOG_BAN_TIMEOUT",
             Duration::from_secs(300).as_millis() as u64,
         )
+    }
+
+    fn ban_replica_lag() -> u64 {
+        // Use i64::MAX to ensure TOML serialization compatibility (TOML only supports i64)
+        Self::env_or_default("PGDOG_BAN_REPLICA_LAG", i64::MAX as u64)
+    }
+
+    fn ban_replica_lag_bytes() -> u64 {
+        // Use i64::MAX to ensure TOML serialization compatibility (TOML only supports i64)
+        Self::env_or_default("PGDOG_BAN_REPLICA_LAG_BYTES", i64::MAX as u64)
     }
 
     fn cutover_replication_lag_threshold() -> u64 {

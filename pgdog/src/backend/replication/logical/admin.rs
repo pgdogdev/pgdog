@@ -32,7 +32,7 @@ impl Task {
 pub enum TaskType {
     SchemaSync(JoinHandle<Result<(), Error>>),
     CopyData(JoinHandle<Result<(), Error>>),
-    Replication(ReplicationWaiter),
+    Replication(Box<ReplicationWaiter>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

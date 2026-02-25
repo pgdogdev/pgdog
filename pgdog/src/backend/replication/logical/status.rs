@@ -12,7 +12,7 @@ use crate::backend::{
 };
 
 /// Status of table copies.
-static COPIES: Lazy<TableCopies> = Lazy::new(|| TableCopies::default());
+static COPIES: Lazy<TableCopies> = Lazy::new(TableCopies::default);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TableCopy {
@@ -120,7 +120,7 @@ impl ReplicationSlot {
     pub(crate) fn new(name: &str, lsn: &Lsn, copy_data: bool, address: &Address) -> Self {
         let slot = Self {
             name: name.to_owned(),
-            lsn: lsn.clone(),
+            lsn: *lsn,
             copy_data,
             lag: 0,
             address: address.clone(),
@@ -134,7 +134,7 @@ impl ReplicationSlot {
 
     pub(crate) fn update_lsn(&self, lsn: &Lsn) {
         if let Some(mut slot) = ReplicationSlots::get().get_mut(&self.name) {
-            slot.lsn = lsn.clone();
+            slot.lsn = *lsn;
             slot.last_transaction = Some(SystemTime::now());
         }
     }

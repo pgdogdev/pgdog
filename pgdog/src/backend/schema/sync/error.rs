@@ -12,7 +12,7 @@ pub enum Error {
     Pool(#[from] crate::backend::pool::Error),
 
     #[error("{0}")]
-    LogicalReplication(#[from] crate::backend::replication::logical::Error),
+    LogicalReplication(#[from] Box<crate::backend::replication::logical::Error>),
 
     #[error("pg_dump command failed: {0}")]
     Io(#[from] std::io::Error),
@@ -37,4 +37,10 @@ pub enum Error {
 
     #[error("publication \"{0}\" has no tables")]
     PublicationNoTables(String),
+}
+
+impl From<crate::backend::replication::logical::Error> for Error {
+    fn from(value: crate::backend::replication::logical::Error) -> Self {
+        Self::LogicalReplication(Box::new(value))
+    }
 }
