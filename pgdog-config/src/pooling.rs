@@ -2,13 +2,20 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 
+/// prepared statement support mode.
+///
+/// https://docs.pgdog.dev/configuration/pgdog.toml/general/#prepared_statements
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Copy, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum PreparedStatements {
+    /// Prepared statements are disabled.
     Disabled,
+    /// Handles prepared statements sent normally using the extended protocol (default).
     #[default]
     Extended,
+    /// Caches and rewrites unnamed prepared statements, useful for some legacy client drivers.
     ExtendedAnonymous,
+    /// Enables support for rewriting prepared statements sent over the simple protocol.
     Full,
 }
 
@@ -40,14 +47,24 @@ impl FromStr for PreparedStatements {
     }
 }
 
+/// connection pooling mode for database pools.
+///
+/// https://docs.pgdog.dev/configuration/pgdog.toml/general/#pooler_mode
 #[derive(
     Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq, Ord, PartialOrd, JsonSchema,
 )]
 #[serde(rename_all = "snake_case")]
 pub enum PoolerMode {
+    /// Server connections are checked out only for the duration of a transaction (default).
+    ///
+    /// See [transaction mode](https://docs.pgdog.dev/features/transaction-mode/).
     #[default]
     Transaction,
+    /// Each client connection maps to a dedicated server connection for the session duration.
+    ///
+    /// See [session mode](https://docs.pgdog.dev/features/session-mode/).
     Session,
+    /// Server connections are checked out only for a single statement.
     Statement,
 }
 
@@ -73,14 +90,20 @@ impl FromStr for PoolerMode {
     }
 }
 
+/// controls if server connections are recovered or dropped if a client abruptly disconnects.
+///
+/// https://docs.pgdog.dev/configuration/pgdog.toml/general/#connection_recovery
 #[derive(
     Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq, Ord, PartialOrd, JsonSchema,
 )]
 #[serde(rename_all = "snake_case")]
 pub enum ConnectionRecovery {
+    /// Attempt to recover the connection by rolling back any open transaction and resynchronizing (default).
     #[default]
     Recover,
+    /// Attempt to `ROLLBACK` any unfinished transactions but do not attempt to resynchronize connections.
     RollbackOnly,
+    /// Close connections without attempting recovery.
     Drop,
 }
 

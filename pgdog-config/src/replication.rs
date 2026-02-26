@@ -12,9 +12,17 @@ struct RawReplicaLag {
     max_age: Option<u64>,
 }
 
+/// Replica lag banning configuration. When a replica's replication lag exceeds the threshold, it is banned from serving read queries.
 #[derive(Debug, Clone, PartialEq, JsonSchema)]
 pub struct ReplicaLag {
+    /// How often to check replica lag, in milliseconds.
+    ///
+    /// _Default:_ `1000`
     pub check_interval: Duration,
+
+    /// Maximum allowed replication lag before a replica is banned, in milliseconds.
+    ///
+    /// _Default:_ `25`
     pub max_age: Duration,
 }
 
@@ -96,11 +104,15 @@ impl Default for ReplicaLag {
     }
 }
 
-/// Replication configuration.
+/// Replication configuration used for online resharding.
+///
+/// https://docs.pgdog.dev/configuration/pgdog.toml/replication/
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub struct Replication {
-    /// Path to the pg_dump executable.
+    /// Path to the `pg_dump` executable used during online resharding to copy data between shards.
+    ///
+    /// _Default:_ `pg_dump`
     #[serde(default = "Replication::pg_dump_path")]
     pub pg_dump_path: PathBuf,
 }
@@ -119,17 +131,30 @@ impl Default for Replication {
     }
 }
 
-/// Mirroring configuration.
+/// [Mirroring](https://docs.pgdog.dev/features/mirroring/) configuration. Database mirroring replicates traffic, byte for byte, from one database to another for testing purposes.
+///
+/// https://docs.pgdog.dev/configuration/pgdog.toml/mirroring/
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Mirroring {
-    /// Source database name to mirror from.
+    /// Name of the source database to mirror traffic from. This should be a `name` configured in the [`databases`](https://docs.pgdog.dev/configuration/pgdog.toml/databases/) section of `pgdog.toml`.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/mirroring/#source_db
     pub source_db: String,
-    /// Destination database name to mirror to.
+
+    /// Name of the destination database to mirror traffic to. This should be a `name` configured in the [`databases`](https://docs.pgdog.dev/configuration/pgdog.toml/databases/) section of `pgdog.toml`.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/mirroring/#destination_db
     pub destination_db: String,
-    /// Queue length for this mirror (overrides global mirror_queue).
+
+    /// The length of the queue to provision for mirrored transactions. See [mirroring](https://docs.pgdog.dev/features/mirroring/) for more details. This overrides the [`mirror_queue`](https://docs.pgdog.dev/configuration/pgdog.toml/general/#mirror_queue) setting.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/mirroring/#queue_depth
     pub queue_length: Option<usize>,
-    /// Exposure for this mirror (overrides global mirror_exposure).
+
+    /// The percentage of transactions to mirror, specified as a floating point number between 0.0 and 1.0. See [mirroring](https://docs.pgdog.dev/features/mirroring/) for more details. This overrides the [`mirror_exposure`](https://docs.pgdog.dev/configuration/pgdog.toml/general/#mirror_exposure) setting.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/mirroring/#exposure
     pub exposure: Option<f32>,
 }
 
@@ -181,11 +206,11 @@ impl FromStr for Mirroring {
     }
 }
 
-/// Runtime mirror configuration with resolved values.
+/// Runtime mirror configuration with defaults resolved from global settings.
 #[derive(Debug, Clone)]
 pub struct MirrorConfig {
-    /// Queue length for this mirror.
+    /// Effective queue length for this mirror.
     pub queue_length: usize,
-    /// Exposure for this mirror.
+    /// Effective exposure fraction for this mirror.
     pub exposure: f32,
 }

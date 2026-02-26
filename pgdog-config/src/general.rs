@@ -16,227 +16,548 @@ use super::database::{LoadBalancingStrategy, ReadWriteSplit, ReadWriteStrategy};
 use super::networking::TlsVerifyMode;
 use super::pooling::{PoolerMode, PreparedStatements};
 
+/// General settings are relevant to the operations of the pooler itself, or apply to all database pools.
+///
+/// https://docs.pgdog.dev/configuration/pgdog.toml/general/
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct General {
-    /// Run on this address.
+    /// The IP address of the local network interface PgDog will bind to listen for connections.
+    ///
+    /// **Note:** This setting cannot be changed at runtime.
+    ///
+    /// _Default:_ `0.0.0.0`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#host
     #[serde(default = "General::host")]
     pub host: String,
-    /// Run on this port.
+
+    /// The TCP port PgDog will bind to listen for connections.
+    ///
+    /// **Note:** This setting cannot be changed at runtime.
+    ///
+    /// _Default:_ `6432`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#port
     #[serde(default = "General::port")]
     pub port: u16,
-    /// Spawn this many Tokio threads.
+
+    /// Number of Tokio threads to spawn at pooler startup. In multi-core systems, the recommended setting is two (2) per virtual CPU. The value `0` means to spawn no threads and use the current thread runtime.
+    ///
+    /// **Note:** This setting cannot be changed at runtime.
+    ///
+    /// _Default:_ `2`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#workers
     #[serde(default = "General::workers")]
     pub workers: usize,
-    /// Default pool size, e.g. 10.
+
+    /// Default maximum number of server connections per database pool.
+    ///
+    /// **Note:** We strongly recommend keeping this value well below the supported connections of the backend database(s) to allow connections for maintenance in high load scenarios.
+    ///
+    /// _Default:_ `10`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#default_pool_size
     #[serde(default = "General::default_pool_size")]
     pub default_pool_size: usize,
-    /// Minimum number of connections to maintain in the pool.
+
+    /// Default minimum number of connections per database pool to keep open at all times.
+    ///
+    /// _Default:_ `1`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#min_pool_size
     #[serde(default = "General::min_pool_size")]
     pub min_pool_size: usize,
-    /// Pooler mode, e.g. transaction.
+
+    /// Default pooler mode to use for database pools.
+    ///
+    /// _Default:_ `transaction`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#pooler_mode
     #[serde(default)]
     pub pooler_mode: PoolerMode,
-    /// How often to check a connection.
+
+    /// Frequency of healthchecks performed by PgDog to ensure connections provided to clients from the pool are working.
+    ///
+    /// _Default:_ `30000`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#healthcheck_interval
     #[serde(default = "General::healthcheck_interval")]
     pub healthcheck_interval: u64,
-    /// How often to issue a healthcheck via an idle connection.
+
+    /// Frequency of healthchecks performed by PgDog on idle connections.
+    ///
+    /// _Default:_ `30000`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#idle_healthcheck_interval
     #[serde(default = "General::idle_healthcheck_interval")]
     pub idle_healthcheck_interval: u64,
-    /// Delay idle healthchecks by this time at startup.
+
+    /// Delay running idle healthchecks at PgDog startup to give databases (and pools) time to spin up.
+    ///
+    /// _Default:_ `5000`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#idle_healthcheck_delay
     #[serde(default = "General::idle_healthcheck_delay")]
     pub idle_healthcheck_delay: u64,
-    /// Healthcheck timeout.
+
+    /// Maximum amount of time to wait for a healthcheck query to complete.
+    ///
+    /// _Default:_ `5000`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#healthcheck_timeout
     #[serde(default = "General::healthcheck_timeout")]
     pub healthcheck_timeout: u64,
-    /// HTTP health check port.
+
+    /// Enable load balancer HTTP health checks with the HTTP server running on this port.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#healthcheck_port
     pub healthcheck_port: Option<u16>,
-    /// Maximum duration of a ban.
+
+    /// Connection pools blocked from serving traffic due to an error will be placed back into active rotation after this long.
+    ///
+    /// _Default:_ `300000`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#ban_timeout
     #[serde(default = "General::ban_timeout")]
     pub ban_timeout: u64,
-    /// Ban replica lag.
+
+    /// Ban a replica from serving read queries if its replication lag (in milliseconds) exceeds this threshold.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#ban_replica_lag
     #[serde(default = "General::ban_replica_lag")]
     pub ban_replica_lag: u64,
+
+    /// Ban a replica from serving read queries if its replication lag (in bytes) exceeds this threshold.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#ban_replica_lag_bytes
     #[serde(default = "General::ban_replica_lag_bytes")]
     pub ban_replica_lag_bytes: u64,
-    /// Rollback timeout.
+
+    /// How long to allow for `ROLLBACK` queries to run on server connections with unfinished transactions.
+    ///
+    /// _Default:_ `5000`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#rollback_timeout
     #[serde(default = "General::rollback_timeout")]
     pub rollback_timeout: u64,
-    /// Load balancing strategy.
+
+    /// Which strategy to use for load balancing read queries.
+    ///
+    /// _Default:_ `random`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#load_balancing_strategy
     #[serde(default = "General::load_balancing_strategy")]
     pub load_balancing_strategy: LoadBalancingStrategy,
-    /// How aggressive should the query parser be in determining reads.
+
+    /// How aggressive the query parser should be in determining read vs. write queries.
+    ///
+    /// _Default:_ `conservative`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#read_write_strategy
     #[serde(default)]
     pub read_write_strategy: ReadWriteStrategy,
-    /// Read write split.
+
+    /// How to handle the separation of read and write queries.
+    ///
+    /// _Default:_ `include_primary`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#read_write_split
     #[serde(default)]
     pub read_write_split: ReadWriteSplit,
-    /// TLS certificate.
+
+    /// Path to the TLS certificate PgDog will use to setup TLS connections with clients.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#tls_certificate
     pub tls_certificate: Option<PathBuf>,
-    /// TLS private key.
+
+    /// Path to the TLS private key PgDog will use to setup TLS connections with clients.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#tls_private_key
     pub tls_private_key: Option<PathBuf>,
+
+    /// Reject clients that connect without TLS.
+    ///
+    /// _Default:_ `false`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#tls_client_required
     #[serde(default)]
     pub tls_client_required: bool,
-    /// TLS verification mode (for connecting to servers)
+
+    /// How to handle TLS connections to Postgres servers.
+    ///
+    /// _Default:_ `prefer`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#tls_verify
     #[serde(default = "General::default_tls_verify")]
     pub tls_verify: TlsVerifyMode,
-    /// TLS CA certificate (for connecting to servers).
+
+    /// Path to a certificate bundle used to validate the server certificate on TLS connection creation.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#tls_server_ca_certificate
     pub tls_server_ca_certificate: Option<PathBuf>,
-    /// Shutdown timeout.
+
+    /// How long to wait for active clients to finish transactions when shutting down.
+    ///
+    /// _Default:_ `60000`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#shutdown_timeout
     #[serde(default = "General::default_shutdown_timeout")]
     pub shutdown_timeout: u64,
-    /// Shutdown termination timeout (after shutdown_timeout expires, forcibly terminate).
+
+    /// How long to wait for active connections to be forcibly terminated after `shutdown_timeout` expires.
+    ///
+    /// **Note:** If set, PgDog will send `CANCEL` requests to PostgreSQL for any remaining active queries before tearing down connection pools.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#shutdown_termination_timeout
     #[serde(default = "General::default_shutdown_termination_timeout")]
     pub shutdown_termination_timeout: Option<u64>,
-    /// Broadcast IP.
+
+    /// Broadcast IP address used for multi-instance coordination (e.g., schema cache invalidation across nodes).
     pub broadcast_address: Option<Ipv4Addr>,
-    /// Broadcast port.
+
+    /// UDP port used for multi-instance broadcast coordination.
     #[serde(default = "General::broadcast_port")]
     pub broadcast_port: u16,
-    /// Load queries to file (warning: slow, don't use in production).
+
+    /// Path to a file where all queries are logged. Logging every query is slow; do not use in production.
     #[serde(default)]
     pub query_log: Option<PathBuf>,
-    /// Enable OpenMetrics server on this port.
+
+    /// The port used for the OpenMetrics HTTP endpoint.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#openmetrics_port
     pub openmetrics_port: Option<u16>,
-    /// OpenMetrics prefix.
+
+    /// Prefix added to all metric names exposed via the OpenMetrics endpoint.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#openmetrics_namespace
     pub openmetrics_namespace: Option<String>,
-    /// Prepared statatements support.
+
+    /// Enables support for prepared statements.
+    ///
+    /// _Default:_ `extended`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#prepared_statements
     #[serde(default)]
     pub prepared_statements: PreparedStatements,
-    /// Parse Queries override.
+
+    /// Deprecated: use [`query_parser`](General::query_parser) set to `"on"` instead.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#query_parser_enabled
     #[serde(default = "General::query_parser_enabled")]
     pub query_parser_enabled: bool,
-    /// Query parser.
+
+    /// Toggle the query parser to enable/disable query parsing and all of its benefits. By default, the query parser is turned on automatically, so only disable it if you know what you're doing.
+    ///
+    /// _Default:_ `auto`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#query_parser
     #[serde(default)]
     pub query_parser: QueryParserLevel,
-    /// Query parser engine.
+
+    /// Underlying parser implementation used to analyze SQL queries.
     #[serde(default)]
     pub query_parser_engine: QueryParserEngine,
-    /// Limit on the number of prepared statements in the server cache.
+
+    /// Number of prepared statements that will be allowed for each server connection.
+    ///
+    /// **Note:** If this limit is reached, the least used statement is closed and replaced with the newest one. Additionally, any unused statements in the global cache above this limit will be removed.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#prepared_statements_limit
     #[serde(default = "General::prepared_statements_limit")]
     pub prepared_statements_limit: usize,
+
+    /// Limit on the number of statements saved in the statement cache used to accelerate query parsing.
+    ///
+    /// _Default:_ `50000`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#query_cache_limit
     #[serde(default = "General::query_cache_limit")]
     pub query_cache_limit: usize,
-    /// Automatically add connection pools for user/database pairs we don't have.
+
+    /// Toggle automatic creation of connection pools given the user name, database and password.
+    ///
+    /// _Default:_ `disabled`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#passthrough_auth
     #[serde(default = "General::default_passthrough_auth")]
     pub passthrough_auth: PassthoughAuth,
-    /// Server connect timeout.
+
+    /// Maximum amount of time to allow for PgDog to create a connection to Postgres.
+    ///
+    /// _Default:_ `5000`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#connect_timeout
     #[serde(default = "General::default_connect_timeout")]
     pub connect_timeout: u64,
-    /// Attempt connections multiple times on bad networks.
+
+    /// Maximum number of retries for Postgres server connection attempts.
+    ///
+    /// _Default:_ `1`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#connect_attempts
     #[serde(default = "General::connect_attempts")]
     pub connect_attempts: u64,
-    /// How long to wait between connection attempts.
+
+    /// Amount of time to wait between connection attempt retries.
+    ///
+    /// _Default:_ `0`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#connect_attempt_delay
     #[serde(default = "General::default_connect_attempt_delay")]
     pub connect_attempt_delay: u64,
-    /// How long to wait for a query to return the result before aborting. Dangerous: don't use unless your network is bad.
+
+    /// Maximum amount of time to wait for a Postgres query to finish executing.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#query_timeout
     #[serde(default = "General::default_query_timeout")]
     pub query_timeout: u64,
-    /// Checkout timeout.
+
+    /// Maximum amount of time a client is allowed to wait for a connection from the pool.
+    ///
+    /// _Default:_ `5000`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#checkout_timeout
     #[serde(default = "General::checkout_timeout")]
     pub checkout_timeout: u64,
-    /// Login timeout.
+
+    /// Maximum amount of time new clients have to complete authentication.
+    ///
+    /// _Default:_ `60000`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#client_login_timeout
     #[serde(default = "General::client_login_timeout")]
     pub client_login_timeout: u64,
-    /// Dry run for sharding. Parse the query, route to shard 0.
+
+    /// Enable the query parser in single-shard deployments and record its decisions.
+    ///
+    /// _Default:_ `false`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#dry_run
     #[serde(default)]
     pub dry_run: bool,
-    /// Idle timeout.
+
+    /// Close server connections that have been idle, i.e., haven't served a single client transaction, for this amount of time.
+    ///
+    /// _Default:_ `60000`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#idle_timeout
     #[serde(default = "General::idle_timeout")]
     pub idle_timeout: u64,
-    /// Client idle timeout.
+
+    /// Close client connections that have been idle, i.e., haven't sent any queries, for this amount of time.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#client_idle_timeout
     #[serde(default = "General::default_client_idle_timeout")]
     pub client_idle_timeout: u64,
-    /// Client idle in transaction timeout.
+
+    /// Close client connections that have been idle inside a transaction for this amount of time.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#client_idle_in_transaction_timeout
     #[serde(default = "General::default_client_idle_in_transaction_timeout")]
     pub client_idle_in_transaction_timeout: u64,
-    /// Server lifetime.
+
+    /// Maximum amount of time a server connection is allowed to exist.
+    ///
+    /// _Default:_ `86400000`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#server_lifetime
     #[serde(default = "General::server_lifetime")]
     pub server_lifetime: u64,
-    /// Mirror queue size.
+
+    /// How many transactions can wait while the mirror database processes previous requests.
+    ///
+    /// _Default:_ `128`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#mirror_queue
     #[serde(default = "General::mirror_queue")]
     pub mirror_queue: usize,
-    /// Mirror exposure
+
+    /// How many transactions to send to the mirror as a fraction of regular traffic.
+    ///
+    /// _Default:_ `1.0`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#mirror_exposure
     #[serde(default = "General::mirror_exposure")]
     pub mirror_exposure: f32,
+
+    /// What kind of authentication mechanism to use for client connections.
+    ///
+    /// _Default:_ `scram`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#auth_type
     #[serde(default)]
     pub auth_type: AuthType,
-    /// Disable cross-shard queries.
+
+    /// Disable cross-shard queries globally. When enabled, queries touching more than one shard are rejected.
     #[serde(default)]
     pub cross_shard_disabled: bool,
-    /// How often to refresh DNS entries, in ms.
+
+    /// Overrides the TTL set on DNS records received from DNS servers.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#dns_ttl
     #[serde(default)]
     pub dns_ttl: Option<u64>,
-    /// LISTEN/NOTIFY channel size.
+
+    /// Enables support for pub/sub and configures the size of the background task queue.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#pub_sub_channel_size
     #[serde(default)]
     pub pub_sub_channel_size: usize,
-    /// Log client connections.
+
+    /// If enabled, log every time a user creates a new connection to PgDog.
+    ///
+    /// _Default:_ `true`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#log_connections
     #[serde(default = "General::log_connections")]
     pub log_connections: bool,
-    /// Log client disconnections.
+
+    /// If enabled, log every time a user disconnects from PgDog.
+    ///
+    /// _Default:_ `true`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#log_disconnections
     #[serde(default = "General::log_disconnections")]
     pub log_disconnections: bool,
-    /// Two-phase commit.
+
+    /// Enable two-phase commit for write, cross-shard transactions.
+    ///
+    /// _Default:_ `false`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#two_phase_commit
     #[serde(default)]
     pub two_phase_commit: bool,
-    /// Two-phase commit automatic transactions.
+
+    /// Enable automatic conversion of single-statement write transactions to use two-phase commit.
+    ///
+    /// _Default:_ `true`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#two_phase_commit_auto
     #[serde(default)]
     pub two_phase_commit_auto: Option<bool>,
-    /// Enable expanded EXPLAIN output.
+
+    /// Enable expanded (`\x`) output for `EXPLAIN` results returned by PgDog's built-in query plan aggregation.
     #[serde(default = "General::expanded_explain")]
     pub expanded_explain: bool,
-    /// Stats averaging period (in milliseconds).
+
+    /// How often to calculate averages shown in `SHOW STATS` admin command and the Prometheus metrics.
+    ///
+    /// _Default:_ `15000`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#stats_period
     #[serde(default = "General::stats_period")]
     pub stats_period: u64,
-    /// Connection cleanup algorithm.
+
+    /// Controls if server connections are recovered or dropped if a client abruptly disconnects.
+    ///
+    /// _Default:_ `recover`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#connection_recovery
     #[serde(default = "General::connection_recovery")]
     pub connection_recovery: ConnectionRecovery,
-    /// Client connection recovery
+
+    /// Controls whether to disconnect clients upon encountering connection pool errors.
+    ///
+    /// **Note:** Set this to `drop` if your clients are async / use pipelining mode.
+    ///
+    /// _Default:_ `recover`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#client_connection_recovery
     #[serde(default = "General::client_connection_recovery")]
     pub client_connection_recovery: ConnectionRecovery,
-    /// LSN check interval.
+
+    /// How frequently to run the replication delay check.
+    ///
+    /// _Default:_ `5000`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#lsn_check_interval
     #[serde(default = "General::lsn_check_interval")]
     pub lsn_check_interval: u64,
-    /// LSN check timeout.
+
+    /// Maximum amount of time allowed for the replication delay query to return a result.
+    ///
+    /// _Default:_ `5000`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#lsn_check_timeout
     #[serde(default = "General::lsn_check_timeout")]
     pub lsn_check_timeout: u64,
-    /// LSN check delay.
+
+    /// For how long to delay checking for replication delay.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#lsn_check_delay
     #[serde(default = "General::lsn_check_delay")]
     pub lsn_check_delay: u64,
+
     /// Minimum ID for unique ID generator.
     #[serde(default)]
     pub unique_id_min: u64,
-    /// System catalogs are omnisharded?
+
+    /// Changes how system catalog tables (like `pg_database`, `pg_class`, etc.) are treated by the query router.
+    ///
+    /// _Default:_ `omnisharded_sticky`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#system_catalogs
     #[serde(default = "General::default_system_catalogs")]
     pub system_catalogs: SystemCatalogsBehavior,
-    /// Omnisharded queries are sticky by default.
+
+    /// If turned on, queries touching omnisharded tables are always sent to the same shard for any given client connection. The shard is determined at random on connection creation.
+    ///
+    /// _Default:_ `false`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#omnisharded_sticky
     #[serde(default)]
     pub omnisharded_sticky: bool,
-    /// Copy format used for resharding.
+
+    /// Which format to use for `COPY` statements during resharding.
+    ///
+    /// **Note:** Text format is required when migrating from `INTEGER` to `BIGINT` primary keys during resharding.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#resharding_copy_format
     #[serde(default)]
     pub resharding_copy_format: CopyFormat,
-    /// Trigger a schema reload on DDL like CREATE TABLE.
+
+    /// Automatically reload the schema cache used by PgDog to route queries upon detecting DDL statements.
+    ///
+    /// **Note:** This setting requires PgDog Enterprise Edition to work as expected. If using the open source edition, it will only work with single-node PgDog deployments, e.g., in local development or CI.
+    ///
+    /// _Default:_ `true`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#reload_schema_on_ddl
     #[serde(default = "General::reload_schema_on_ddl")]
     pub reload_schema_on_ddl: bool,
-    /// Load database schema.
+
+    /// Controls whether PgDog loads the database schema at startup for query routing.
+    ///
+    /// _Default:_ `auto`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#load_schema
     #[serde(default = "General::load_schema")]
     pub load_schema: LoadSchema,
-    /// Cutover maintenance threshold.
+
+    /// Maximum number of active transactions allowed before cutover pauses traffic, in milliseconds.
     #[serde(default = "General::cutover_traffic_stop_threshold")]
     pub cutover_traffic_stop_threshold: u64,
-    /// Cutover lag threshold.
+
+    /// Maximum replication lag (in bytes) allowed before proceeding with cutover.
     #[serde(default = "General::cutover_replication_lag_threshold")]
     pub cutover_replication_lag_threshold: u64,
-    /// Cutover last transaction delay.
+
+    /// How long to wait after the last transaction drains before completing cutover, in milliseconds.
     #[serde(default = "General::cutover_last_transaction_delay")]
     pub cutover_last_transaction_delay: u64,
-    /// Cutover timeout: how long to wait before doing a cutover anyway.
+
+    /// How long to wait for cutover conditions to be met before taking the timeout action, in milliseconds.
     #[serde(default = "General::cutover_timeout")]
     pub cutover_timeout: u64,
-    /// Cutover abort timeout: if cutover takes longer than this, abort.
+
+    /// What to do when the cutover timeout is reached.
     #[serde(default = "General::cutover_timeout_action")]
     pub cutover_timeout_action: CutoverTimeoutAction,
-    /// Cutover save config to disk.
+
+    /// Persist the post-cutover configuration to `pgdog.toml` and `users.toml` on disk.
     #[serde(default)]
     pub cutover_save_config: bool,
 }

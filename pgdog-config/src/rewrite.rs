@@ -3,15 +3,21 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::str::FromStr;
 
+/// Controls what PgDog does when encountering a query that would require a rewrite.
+///
+/// https://docs.pgdog.dev/configuration/pgdog.toml/rewrite/
 #[derive(
     Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, JsonSchema,
 )]
 #[serde(rename_all = "lowercase")]
 #[derive(Default)]
 pub enum RewriteMode {
+    /// Forward the query unchanged.
     Ignore,
+    /// Return an error to the client (default).
     #[default]
     Error,
+    /// Automatically rewrite the query and execute it.
     Rewrite,
 }
 
@@ -39,23 +45,43 @@ impl FromStr for RewriteMode {
     }
 }
 
+/// Controls PgDog's automatic SQL rewrites for sharded databases. It affects sharding key updates and multi-tuple inserts.
+///
+/// **Note:** Consider enabling [two-phase commit](https://docs.pgdog.dev/features/sharding/2pc/) when either feature is set to `rewrite`. Without it, rewrites are committed shard-by-shard and can leave partial changes if a transaction fails.
+///
+/// https://docs.pgdog.dev/configuration/pgdog.toml/rewrite/
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Rewrite {
-    /// Global rewrite toggle. When disabled, rewrite-specific features remain
-    /// inactive, even if individual policies request rewriting.
+    /// Enables/disables the query rewrite engine.
+    ///
+    /// _Default:_ `false`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/rewrite/#enabled
     #[serde(default)]
     pub enabled: bool,
-    /// Policy for handling shard-key updates.
+
+    /// Behavior for `UPDATE` statements changing sharding keys: `error` rejects, `rewrite` migrates rows between shards, `ignore` forwards unchanged.
+    ///
+    /// _Default:_ `error`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/rewrite/#shard_key
     #[serde(default = "Rewrite::default_shard_key")]
     pub shard_key: RewriteMode,
-    /// Policy for handling multi-row INSERT statements that target sharded tables.
+
+    /// Behavior for multi-row `INSERT` on sharded tables: `error` rejects, `rewrite` distributes rows to their shards, `ignore` forwards unchanged.
+    ///
+    /// _Default:_ `error`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/rewrite/#split_inserts
     #[serde(default = "Rewrite::default_split_inserts")]
     pub split_inserts: RewriteMode,
-    /// Policy for handling INSERT statements missing a BIGINT primary key.
-    /// - ignore: Allow the INSERT without modification
-    /// - error: Return an error if a BIGINT primary key is missing
-    /// - rewrite: Auto-inject pgdog.unique_id() for missing BIGINT primary keys
+
+    /// Behavior for `INSERT` missing a `BIGINT` primary key: `error` rejects, `rewrite` auto-injects `pgdog.unique_id()`, `ignore` allows without modification.
+    ///
+    /// _Default:_ `ignore`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/rewrite/#primary_key
     #[serde(default = "Rewrite::default_primary_key")]
     pub primary_key: RewriteMode,
 }

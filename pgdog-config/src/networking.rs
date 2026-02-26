@@ -5,14 +5,23 @@ use std::time::Duration;
 use crate::util::human_duration_optional;
 use schemars::JsonSchema;
 
+/// how to handle TLS connections to Postgres servers.
+///
+/// By default, PgDog will attempt to establish TLS and will accept any server certificate.
+///
+/// https://docs.pgdog.dev/configuration/pgdog.toml/general/#tls_verify
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Copy)]
 #[serde(rename_all = "snake_case")]
 #[derive(JsonSchema)]
 pub enum TlsVerifyMode {
+    /// TLS is disabled.
     #[default]
     Disabled,
+    /// Use TLS if available; do not verify the server certificate (default).
     Prefer,
+    /// Validate the server certificate against a CA bundle.
     VerifyCa,
+    /// Validate the server certificate and that the hostname matches.
     VerifyFull,
 }
 
@@ -30,6 +39,13 @@ impl FromStr for TlsVerifyMode {
     }
 }
 
+/// TCP settings for client and server connections.
+///
+/// Optimal TCP settings are necessary to quickly recover from database incidents.
+///
+/// **Note:** Not all networks support or play well with TCP keep-alives. If you see an increased number of dropped connections after enabling these settings, you may have to disable them.
+///
+/// https://docs.pgdog.dev/configuration/pgdog.toml/network/
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
 #[serde(deny_unknown_fields)]
 #[derive(JsonSchema)]
@@ -109,9 +125,11 @@ impl Tcp {
     }
 }
 
+/// multi-tenant routing configuration, mapping queries to shards via a tenant identifier column.
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
 #[serde(rename_all = "snake_case")]
 #[derive(JsonSchema)]
 pub struct MultiTenant {
+    /// Name of the column carrying the tenant identifier used to route queries.
     pub column: String,
 }

@@ -1,10 +1,11 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Users",
-  "description": "Users and passwords.",
+  "description": "This configuration controls which users are allowed to connect to PgDog. This is a TOML list so for each user, add a `[[users]]` section to `users.toml`.\n\nhttps://docs.pgdog.dev/configuration/users.toml/users/",
   "type": "object",
   "properties": {
     "admin": {
+      "description": "Admin database configuration.",
       "anyOf": [
         {
           "$ref": "#/$defs/Admin"
@@ -15,7 +16,7 @@
       ]
     },
     "users": {
-      "description": "Users and passwords.",
+      "description": "Users and passwords.\n\nhttps://docs.pgdog.dev/configuration/users.toml/users/",
       "type": "array",
       "default": [],
       "items": {
@@ -26,21 +27,21 @@
   "additionalProperties": false,
   "$defs": {
     "Admin": {
-      "description": "Admin database settings.",
+      "description": "Admin database settings control access to the [admin](https://docs.pgdog.dev/administration/) database which contains real time statistics about internal operations of PgDog.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/admin/",
       "type": "object",
       "properties": {
         "name": {
-          "description": "Admin database name.",
+          "description": "Admin database name.\n\n_Default:_ `admin`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/admin/#name",
           "type": "string",
           "default": "admin"
         },
         "password": {
-          "description": "Admin user's password.",
+          "description": "Password the user needs to provide when connecting to the admin database. By default, this is randomly generated so the admin database is locked out unless this value is set.\n\n**Note:** If this value is not set, admin database access will be restricted.\n\n_Default:_ random\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/admin/#password",
           "type": "string",
-          "default": "_pgdog_gc1o11HaljHZ"
+          "default": "_pgdog_J0VcJ834VBBU"
         },
         "user": {
-          "description": "Admin user name.",
+          "description": "User allowed to connect to the admin database. This user doesn't have to be configured in `users.toml`.\n\n_Default:_ `admin`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/admin/#user",
           "type": "string",
           "default": "admin"
         }
@@ -48,19 +49,31 @@
       "additionalProperties": false
     },
     "PoolerMode": {
-      "type": "string",
-      "enum": [
-        "transaction",
-        "session",
-        "statement"
+      "description": "connection pooling mode for database pools.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#pooler_mode",
+      "oneOf": [
+        {
+          "description": "Server connections are checked out only for the duration of a transaction (default).\n\nSee [transaction mode](https://docs.pgdog.dev/features/transaction-mode/).",
+          "type": "string",
+          "const": "transaction"
+        },
+        {
+          "description": "Each client connection maps to a dedicated server connection for the session duration.\n\nSee [session mode](https://docs.pgdog.dev/features/session-mode/).",
+          "type": "string",
+          "const": "session"
+        },
+        {
+          "description": "Server connections are checked out only for a single statement.",
+          "type": "string",
+          "const": "statement"
+        }
       ]
     },
     "User": {
-      "description": "User allowed to connect to pgDog.",
+      "description": "A user entry in `users.toml`, controlling which users are allowed to connect to PgDog.\n\nhttps://docs.pgdog.dev/configuration/users.toml/users/",
       "type": "object",
       "properties": {
         "all_databases": {
-          "description": "User belongs to all databases",
+          "description": "User belongs to all databases.",
           "type": "boolean",
           "default": false
         },
@@ -72,12 +85,12 @@
           ]
         },
         "database": {
-          "description": "Database name, from pgdog.toml.",
+          "description": "Name of the database cluster this user belongs to. This refers to `name` setting in [`pgdog.toml`](https://docs.pgdog.dev/configuration/pgdog.toml/databases/), databases section.\n\nhttps://docs.pgdog.dev/configuration/users.toml/users/#database",
           "type": "string",
           "default": ""
         },
         "databases": {
-          "description": "List of databases the user has access to.",
+          "description": "List of database clusters this user has access to.",
           "type": "array",
           "default": [],
           "items": {
@@ -85,7 +98,7 @@
           }
         },
         "idle_timeout": {
-          "description": "Idle timeout.",
+          "description": "Overrides [`idle_timeout`](https://docs.pgdog.dev/configuration/pgdog.toml/general/#idle_timeout) for this user. Server connections that have been idle for this long, without affecting [`min_pool_size`](https://docs.pgdog.dev/configuration/pgdog.toml/general/#min_pool_size), will be closed.\n\nhttps://docs.pgdog.dev/configuration/users.toml/users/#idle_timeout",
           "type": [
             "integer",
             "null"
@@ -94,7 +107,7 @@
           "minimum": 0
         },
         "min_pool_size": {
-          "description": "Minimum pool size for this user pool, overriding `min_pool_size`.",
+          "description": "Overrides [`min_pool_size`](https://docs.pgdog.dev/configuration/pgdog.toml/general/#min_pool_size) for this user. Opens at least this many connections on pooler startup and keeps them open despite [`idle_timeout`](https://docs.pgdog.dev/configuration/pgdog.toml/general/#idle_timeout).\n\nhttps://docs.pgdog.dev/configuration/users.toml/users/#min_pool_size",
           "type": [
             "integer",
             "null"
@@ -103,18 +116,18 @@
           "minimum": 0
         },
         "name": {
-          "description": "User name.",
+          "description": "Name of the user. Clients that connect to PgDog will need to use this username.\n\nhttps://docs.pgdog.dev/configuration/users.toml/users/#name",
           "type": "string"
         },
         "password": {
-          "description": "User's password.",
+          "description": "The password for the user. Clients will need to provide this when connecting to PgDog.\n\nhttps://docs.pgdog.dev/configuration/users.toml/users/#password",
           "type": [
             "string",
             "null"
           ]
         },
         "pool_size": {
-          "description": "Pool size for this user pool, overriding `default_pool_size`.",
+          "description": "Overrides [`default_pool_size`](https://docs.pgdog.dev/configuration/pgdog.toml/general/) for this user. No more than this many server connections will be open at any given time to serve requests for this connection pool.\n\nhttps://docs.pgdog.dev/configuration/users.toml/users/#pool_size",
           "type": [
             "integer",
             "null"
@@ -123,7 +136,7 @@
           "minimum": 0
         },
         "pooler_mode": {
-          "description": "Pooler mode.",
+          "description": "Overrides [`pooler_mode`](https://docs.pgdog.dev/configuration/pgdog.toml/general/) for this user. This allows users in [session mode](https://docs.pgdog.dev/features/session-mode/) to connect to the same PgDog instance as users in [transaction mode](https://docs.pgdog.dev/features/transaction-mode/).\n\nhttps://docs.pgdog.dev/configuration/users.toml/users/#pooler_mode",
           "anyOf": [
             {
               "$ref": "#/$defs/PoolerMode"
@@ -134,31 +147,31 @@
           ]
         },
         "read_only": {
-          "description": "Read-only mode.",
+          "description": "Sets `default_transaction_read_only` to `on` for all connections.",
           "type": [
             "boolean",
             "null"
           ]
         },
         "replication_mode": {
-          "description": "Relication mode.",
+          "description": "Sets the `replication=database` parameter on user connections to Postgres. Allows this user to use replication commands.\n\n_Default:_ `false`\n\nhttps://docs.pgdog.dev/configuration/users.toml/users/#replication_mode",
           "type": "boolean",
           "default": false
         },
         "replication_sharding": {
-          "description": "Sharding into this database.",
+          "description": "Sharding target database for replication.",
           "type": [
             "string",
             "null"
           ]
         },
         "schema_admin": {
-          "description": "Schema owner.",
+          "description": "Schema owner with elevated DDL privileges.",
           "type": "boolean",
           "default": false
         },
         "server_lifetime": {
-          "description": "Server lifetime.",
+          "description": "Server connections older than this (in milliseconds) will be closed when returned to the pool.",
           "type": [
             "integer",
             "null"
@@ -167,21 +180,21 @@
           "minimum": 0
         },
         "server_password": {
-          "description": "Server password.",
+          "description": "Which password to connect with when creating backend connections from PgDog to PostgreSQL. By default, the password configured in `password` is used. This setting allows you to override this configuration and use a different password, decoupling server passwords from user passwords given to clients.\n\n**Note:** Values specified in `pgdog.toml` take priority over this configuration.\n\nhttps://docs.pgdog.dev/configuration/users.toml/users/#server_password",
           "type": [
             "string",
             "null"
           ]
         },
         "server_user": {
-          "description": "Server username.",
+          "description": "Which user to connect with when creating backend connections from PgDog to PostgreSQL. By default, the user configured in `name` is used. This setting allows you to override this configuration and use a different user.\n\n**Note:** Values specified in `pgdog.toml` take priority over this configuration.\n\nhttps://docs.pgdog.dev/configuration/users.toml/users/#server_user",
           "type": [
             "string",
             "null"
           ]
         },
         "statement_timeout": {
-          "description": "Statement timeout.",
+          "description": "Sets the `statement_timeout` on all server connections at connection creation. This allows you to set a reasonable default for each user without modifying `postgresql.conf` or using `ALTER USER`.\n\n**Note:** Nothing is preventing the user from manually changing this setting at runtime, e.g., by running `SET statement_timeout TO 0`;\n\nhttps://docs.pgdog.dev/configuration/users.toml/users/#statement_timeout",
           "type": [
             "integer",
             "null"
@@ -190,14 +203,14 @@
           "minimum": 0
         },
         "two_phase_commit": {
-          "description": "Two-pc.",
+          "description": "Overrides [`two_phase_commit`](https://docs.pgdog.dev/configuration/pgdog.toml/general/#two_phase_commit) for this user.\n\nhttps://docs.pgdog.dev/configuration/users.toml/users/#two_phase_commit",
           "type": [
             "boolean",
             "null"
           ]
         },
         "two_phase_commit_auto": {
-          "description": "Automatic transactions.",
+          "description": "Overrides [`two_phase_commit_auto`](https://docs.pgdog.dev/configuration/pgdog.toml/general/#two_phase_commit_auto) for this user.\n\nhttps://docs.pgdog.dev/configuration/users.toml/users/#two_phase_commit_auto",
           "type": [
             "boolean",
             "null"
