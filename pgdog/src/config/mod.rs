@@ -26,7 +26,7 @@ pub use pgdog_config::auth::{AuthType, PassthoughAuth};
 pub use pgdog_config::{LoadBalancingStrategy, ReadWriteSplit, ReadWriteStrategy};
 pub use pooling::{ConnectionRecovery, PoolerMode, PreparedStatements};
 pub use rewrite::{Rewrite, RewriteMode};
-pub use users::{Admin, Plugin, User, Users};
+pub use users::{Admin, Plugin, ServerAuth, User, Users};
 
 // Re-export from sharding module
 pub use sharding::{
@@ -61,7 +61,7 @@ pub fn load(config: &PathBuf, users: &PathBuf) -> Result<ConfigAndUsers, Error> 
 }
 
 pub fn set(mut config: ConfigAndUsers) -> Result<ConfigAndUsers, Error> {
-    config.config.check();
+    config.check()?;
     for table in config.config.sharded_tables.iter_mut() {
         table.load_centroids()?;
     }

@@ -15,12 +15,12 @@ use crate::{
 use super::database::Database;
 use super::error::Error;
 use super::general::General;
-use super::networking::{MultiTenant, Tcp};
+use super::networking::{MultiTenant, Tcp, TlsVerifyMode};
 use super::pooling::PoolerMode;
 use super::replication::{MirrorConfig, Mirroring, ReplicaLag, Replication};
 use super::rewrite::Rewrite;
 use super::sharding::{ManualQuery, OmnishardedTables, ShardedMapping, ShardedTable};
-use super::users::{Admin, Plugin, Users};
+use super::users::{Admin, Plugin, ServerAuth, Users};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ConfigAndUsers {
@@ -57,8 +57,7 @@ impl ConfigAndUsers {
         }
 
         let mut users: Users = if let Ok(users) = read_to_string(users_path) {
-            let mut users: Users = toml::from_str(&users)?;
-            users.check(&config);
+            let users: Users = toml::from_str(&users)?;
             info!("loaded \"{}\"", users_path.display());
             users
         } else {
@@ -82,12 +81,49 @@ impl ConfigAndUsers {
             warn!("admin password has been randomly generated");
         }
 
-        Ok(ConfigAndUsers {
+        let mut config_and_users = ConfigAndUsers {
             config,
             users,
             config_path: config_path.to_owned(),
             users_path: users_path.to_owned(),
-        })
+        };
+
+        config_and_users.check()?;
+
+        Ok(config_and_users)
+    }
+
+    pub fn check(&mut self) -> Result<(), Error> {
+        self.config.check();
+        self.users.check(&self.config);
+        self.validate_server_auth()?;
+        Ok(())
+    }
+
+    fn validate_server_auth(&self) -> Result<(), Error> {
+        let has_rds_iam_user = self
+            .users
+            .users
+            .iter()
+            .any(|user| user.server_auth == ServerAuth::RdsIam);
+
+        if !has_rds_iam_user {
+            return Ok(());
+        }
+
+        if self.config.general.passthrough_auth != PassthoughAuth::Disabled {
+            return Err(Error::ParseError(
+                "\"passthrough_auth\" must be \"disabled\" when any user has \"server_auth = \\\"rds_iam\\\"\"".into(),
+            ));
+        }
+
+        if self.config.general.tls_verify == TlsVerifyMode::Disabled {
+            return Err(Error::ParseError(
+                "\"tls_verify\" cannot be \"disabled\" when any user has \"server_auth = \\\"rds_iam\\\"\"".into(),
+            ));
+        }
+
+        Ok(())
     }
 
     /// Prepared statements are enabled.
@@ -1178,5 +1214,41 @@ shard = 0
             .unwrap();
         assert_eq!(dest.host, "source-host");
         assert_eq!(dest.port, 5432);
+    }
+
+    #[test]
+    fn test_rds_iam_rejects_passthrough_auth() {
+        let mut config = ConfigAndUsers::default();
+        config.config.general.passthrough_auth = PassthoughAuth::EnabledPlain;
+        config.config.general.tls_verify = TlsVerifyMode::VerifyFull;
+        config.users.users.push(crate::User {
+            name: "alice".into(),
+            database: "db".into(),
+            password: Some("secret".into()),
+            server_auth: ServerAuth::RdsIam,
+            ..Default::default()
+        });
+
+        let err = config.check().unwrap_err().to_string();
+        assert!(err.contains("passthrough_auth"));
+        assert!(err.contains("rds_iam"));
+    }
+
+    #[test]
+    fn test_rds_iam_rejects_tls_verify_disabled() {
+        let mut config = ConfigAndUsers::default();
+        config.config.general.tls_verify = TlsVerifyMode::Disabled;
+        config.config.general.passthrough_auth = PassthoughAuth::Disabled;
+        config.users.users.push(crate::User {
+            name: "alice".into(),
+            database: "db".into(),
+            password: Some("secret".into()),
+            server_auth: ServerAuth::RdsIam,
+            ..Default::default()
+        });
+
+        let err = config.check().unwrap_err().to_string();
+        assert!(err.contains("tls_verify"));
+        assert!(err.contains("rds_iam"));
     }
 }

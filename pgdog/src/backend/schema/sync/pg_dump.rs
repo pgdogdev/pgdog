@@ -23,7 +23,7 @@ use crate::{
         replication::{publisher::PublicationTable, status::SchemaStatement},
         Cluster,
     },
-    config::config,
+    config::{config, ServerAuth},
     frontend::router::parser::{sequence::Sequence, Column, Table},
 };
 
@@ -118,6 +118,31 @@ pub struct PgDump {
     publication: String,
 }
 
+fn build_pg_dump_command(
+    pg_dump_path: &str,
+    addr: &backend::pool::Address,
+    auth_secret: &str,
+) -> Command {
+    let mut command = Command::new(pg_dump_path);
+    command
+        .arg("--schema-only")
+        .arg("-h")
+        .arg(&addr.host)
+        .arg("-p")
+        .arg(addr.port.to_string())
+        .arg("-U")
+        .arg(&addr.user)
+        .env("PGPASSWORD", auth_secret)
+        .arg("-d")
+        .arg(&addr.database_name);
+
+    if addr.server_auth == ServerAuth::RdsIam {
+        command.env("PGSSLMODE", "require");
+    }
+
+    command
+}
+
 impl PgDump {
     pub fn new(source: &Cluster, publication: &str) -> Self {
         Self {
@@ -185,19 +210,9 @@ impl PgDump {
             .to_str()
             .unwrap_or("pg_dump");
 
-        let output = Command::new(pg_dump_path)
-            .arg("--schema-only")
-            .arg("-h")
-            .arg(&addr.host)
-            .arg("-p")
-            .arg(addr.port.to_string())
-            .arg("-U")
-            .arg(&addr.user)
-            .env("PGPASSWORD", &addr.password)
-            .arg("-d")
-            .arg(&addr.database_name)
-            .output()
-            .await?;
+        let auth_secret = addr.auth_secret().await?;
+        let mut command = build_pg_dump_command(pg_dump_path, &addr, &auth_secret);
+        let output = command.output().await?;
 
         if !output.status.success() {
             let err = from_utf8(&output.stderr)?;
@@ -1146,12 +1161,53 @@ impl PgDumpOutput {
 
 #[cfg(test)]
 mod test {
+    use std::ffi::OsStr;
+
+    use crate::config::ServerAuth;
+
     use super::*;
 
     #[tokio::test]
     async fn test_pg_dump_execute() {
         let cluster = Cluster::new_test_single_shard(&config());
         let _pg_dump = PgDump::new(&cluster, "test_pg_dump_execute");
+    }
+
+    #[test]
+    fn test_build_pg_dump_command_sets_password_env() {
+        let addr = backend::pool::Address::new_test();
+        let command = build_pg_dump_command("pg_dump", &addr, "secret");
+
+        let env = command
+            .as_std()
+            .get_envs()
+            .find(|(key, _)| *key == OsStr::new("PGPASSWORD"))
+            .and_then(|(_, value)| value);
+
+        assert_eq!(env, Some(OsStr::new("secret")));
+
+        let sslmode = command
+            .as_std()
+            .get_envs()
+            .find(|(key, _)| *key == OsStr::new("PGSSLMODE"))
+            .and_then(|(_, value)| value);
+
+        assert_eq!(sslmode, None);
+    }
+
+    #[test]
+    fn test_build_pg_dump_command_sets_tls_for_rds_iam() {
+        let mut addr = backend::pool::Address::new_test();
+        addr.server_auth = ServerAuth::RdsIam;
+        let command = build_pg_dump_command("pg_dump", &addr, "token");
+
+        let sslmode = command
+            .as_std()
+            .get_envs()
+            .find(|(key, _)| *key == OsStr::new("PGSSLMODE"))
+            .and_then(|(_, value)| value);
+
+        assert_eq!(sslmode, Some(OsStr::new("require")));
     }
 
     #[test]

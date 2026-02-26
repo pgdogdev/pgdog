@@ -77,6 +77,25 @@ impl Users {
     }
 }
 
+/// Backend authentication mode used by PgDog for server connections.
+#[derive(
+    Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq, Ord, PartialOrd, Hash,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum ServerAuth {
+    /// Use configured static password.
+    #[default]
+    Password,
+    /// Generate an AWS RDS IAM auth token per connection attempt.
+    RdsIam,
+}
+
+impl ServerAuth {
+    pub fn rds_iam(&self) -> bool {
+        matches!(self, Self::RdsIam)
+    }
+}
+
 /// User allowed to connect to pgDog.
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, Ord, PartialOrd)]
 #[serde(deny_unknown_fields)]
@@ -104,6 +123,11 @@ pub struct User {
     pub server_user: Option<String>,
     /// Server password.
     pub server_password: Option<String>,
+    /// Backend auth mode for server connections.
+    #[serde(default)]
+    pub server_auth: ServerAuth,
+    /// Optional region override for RDS IAM token generation.
+    pub server_iam_region: Option<String>,
     /// Statement timeout.
     pub statement_timeout: Option<u64>,
     /// Relication mode.
@@ -252,5 +276,37 @@ mod tests {
             .find(|u| u.name == "bob" && u.database == "source_db")
             .unwrap();
         assert_eq!(bob_source.password(), "pass4");
+    }
+
+    #[test]
+    fn test_user_server_auth_defaults_to_password() {
+        let source = r#"
+[[users]]
+name = "alice"
+database = "db"
+password = "secret"
+"#;
+
+        let users: Users = toml::from_str(source).unwrap();
+        let user = users.users.first().unwrap();
+        assert_eq!(user.server_auth, ServerAuth::Password);
+        assert!(user.server_iam_region.is_none());
+    }
+
+    #[test]
+    fn test_user_server_auth_rds_iam_with_region() {
+        let source = r#"
+[[users]]
+name = "alice"
+database = "db"
+password = "secret"
+server_auth = "rds_iam"
+server_iam_region = "us-east-1"
+"#;
+
+        let users: Users = toml::from_str(source).unwrap();
+        let user = users.users.first().unwrap();
+        assert_eq!(user.server_auth, ServerAuth::RdsIam);
+        assert_eq!(user.server_iam_region.as_deref(), Some("us-east-1"));
     }
 }

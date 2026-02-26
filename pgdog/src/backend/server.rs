@@ -164,7 +164,8 @@ impl Server {
         stream.flush().await?;
 
         // Perform authentication.
-        let mut scram = Client::new(&addr.user, &addr.password);
+        let auth_secret = addr.auth_secret().await?;
+        let mut scram = Client::new(&addr.user, &auth_secret);
         let mut auth_type = AuthType::Trust;
         loop {
             let message = stream.read().await?;
@@ -180,7 +181,7 @@ impl Server {
                     match auth {
                         Authentication::Ok => break,
                         Authentication::ClearTextPassword => {
-                            let password = Password::new_password(&addr.password);
+                            let password = Password::new_password(&auth_secret);
                             stream.send_flush(&password).await?;
                         }
                         Authentication::Sasl(_) => {
@@ -200,7 +201,7 @@ impl Server {
                         }
                         Authentication::Md5(salt) => {
                             auth_type = AuthType::Md5;
-                            let client = md5::Client::new_salt(&addr.user, &addr.password, &salt)?;
+                            let client = md5::Client::new_salt(&addr.user, &auth_secret, &salt)?;
                             stream.send_flush(&client.response()).await?;
                         }
                     }
@@ -1024,9 +1025,29 @@ impl Drop for Server {
 // Used for testing.
 #[cfg(test)]
 pub mod test {
+    use bytes::{BufMut, BytesMut};
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpListener,
+    };
+
     use crate::{config::Memory, frontend::PreparedStatements, net::*};
 
     use super::{Error, *};
+
+    async fn read_password_message(stream: &mut tokio::net::TcpStream) -> Password {
+        let code = stream.read_u8().await.unwrap();
+        let len = stream.read_i32().await.unwrap();
+        let mut payload = vec![0; (len - 4) as usize];
+        stream.read_exact(&mut payload).await.unwrap();
+
+        let mut bytes = BytesMut::with_capacity(len as usize + 1);
+        bytes.put_u8(code);
+        bytes.put_i32(len);
+        bytes.extend_from_slice(&payload);
+
+        Password::from_bytes(bytes.freeze()).unwrap()
+    }
 
     impl Default for Server {
         fn default() -> Self {
@@ -1090,6 +1111,63 @@ pub mod test {
         )
         .await
         .unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_connect_rds_iam_uses_dynamic_token_not_static_password() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let expected_secret = "iam-token-for-test".to_string();
+        let server_task = tokio::spawn({
+            let expected_secret = expected_secret.clone();
+            async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+
+                let startup = Startup::from_stream(&mut socket).await.unwrap();
+                let startup = if matches!(startup, Startup::Ssl) {
+                    socket.write_all(b"N").await.unwrap();
+                    Startup::from_stream(&mut socket).await.unwrap()
+                } else {
+                    startup
+                };
+                assert!(matches!(startup, Startup::Startup { .. }));
+
+                socket
+                    .write_all(&Authentication::ClearTextPassword.to_bytes().unwrap())
+                    .await
+                    .unwrap();
+
+                let password = read_password_message(&mut socket).await;
+                assert_eq!(password.password(), Some(expected_secret.as_str()));
+
+                socket
+                    .write_all(&Authentication::Ok.to_bytes().unwrap())
+                    .await
+                    .unwrap();
+                socket
+                    .write_all(&BackendKeyData::new().to_bytes().unwrap())
+                    .await
+                    .unwrap();
+                socket
+                    .write_all(&ReadyForQuery::idle().to_bytes().unwrap())
+                    .await
+                    .unwrap();
+            }
+        });
+
+        let mut addr = Address::new_test();
+        addr.port = port;
+        addr.server_auth = crate::config::ServerAuth::RdsIam;
+        addr.server_iam_region = Some("us-east-1".into());
+        addr.password = "wrong-password".into();
+
+        crate::backend::auth::rds_iam::set_test_token_override(Some(expected_secret));
+        let result = Server::connect(&addr, ServerOptions::default(), ConnectReason::Other).await;
+        crate::backend::auth::rds_iam::set_test_token_override(None);
+
+        let server = result.unwrap();
+        drop(server);
+        server_task.await.unwrap();
     }
 
     #[tokio::test]
