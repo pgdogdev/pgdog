@@ -15,6 +15,7 @@ use tokio::runtime::Builder;
 use tracing::{error, info};
 
 use std::process::exit;
+use std::process::Command;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = cli::Cli::parse();
@@ -29,13 +30,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             exit(0);
         }
 
-        Some(Commands::Configcheck) => {
-            if let Err(e) = config::load(&args.config, &args.users) {
-                error!("{}", e);
+        Some(Commands::Psql {
+            ref database,
+            ref user,
+        }) => {
+            #[cfg(unix)]
+            {
+                let _output = Command::new("psql")
+                    .args([
+                        "--dbname",
+                        &database.clone().expect("Database argument expected"),
+                        "--user",
+                        &user.clone().expect("User argument expected"),
+                    ])
+                    .spawn()?
+                    .wait();
+            }
+        }
+
+        Some(Commands::Configcheck { config, users }) => {
+            if let Err(e) = pgdog::cli::config_check(config, users) {
+                error!("Configuration error: {}", e);
                 exit(1);
             }
 
-            info!("✅ config valid");
+            info!("✅ Configuration valid");
             exit(0);
         }
 
