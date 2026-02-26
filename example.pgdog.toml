@@ -120,6 +120,8 @@ tls_client_required = false
 # - prefer
 # - verify-ca
 # - verify-full
+# NOTE: if any user sets `server_auth = "rds_iam"` in users.toml,
+# this cannot be "disabled".
 tls_verify = "disabled"
 
 # Path to PEM-encoded certificate bundle to use for Postgres server
@@ -197,6 +199,8 @@ query_cache_limit = 1_000
 # - enabled (requires TLS)
 # - enabled_plain
 #
+# NOTE: `passthrough_auth` cannot be enabled when using
+# per-user backend `server_auth = "rds_iam"`.
 passthrough_auth = "disabled"
 
 # How long to wait for Postgres server connections to be created by the pool before
