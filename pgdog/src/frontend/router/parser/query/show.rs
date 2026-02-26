@@ -51,6 +51,8 @@ mod test_show {
             &c.sharding_schema(),
             &c.schema(),
             &mut PreparedStatements::default(),
+            None,
+            None,
             "",
             None,
         )
@@ -72,6 +74,8 @@ mod test_show {
             &c.sharding_schema(),
             &c.schema(),
             &mut PreparedStatements::default(),
+            None,
+            None,
             "",
             None,
         )
