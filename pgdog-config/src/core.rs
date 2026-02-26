@@ -173,6 +173,7 @@ pub struct Config {
     ///
     /// https://docs.pgdog.dev/configuration/pgdog.toml/admin/
     #[serde(default)]
+    #[schemars(default = "crate::users::Admin::schemars_default_stub")]
     pub admin: Admin,
 
     /// To detect and route queries with sharding keys, PgDog expects the sharded column to be specified in the configuration.
