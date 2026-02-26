@@ -1,0 +1,1474 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Config",
+  "description": "Configuration.",
+  "type": "object",
+  "properties": {
+    "admin": {
+      "$ref": "#/$defs/Admin",
+      "default": {
+        "name": "admin",
+        "password": "_pgdog_tcHdzzgEzsV0",
+        "user": "admin"
+      }
+    },
+    "databases": {
+      "description": "Servers.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/Database"
+      }
+    },
+    "general": {
+      "description": "General configuration.",
+      "$ref": "#/$defs/General",
+      "default": {
+        "auth_type": "scram",
+        "ban_replica_lag": 9223372036854775807,
+        "ban_replica_lag_bytes": 9223372036854775807,
+        "ban_timeout": 300000,
+        "broadcast_address": null,
+        "broadcast_port": 6433,
+        "checkout_timeout": 5000,
+        "client_connection_recovery": "drop",
+        "client_idle_in_transaction_timeout": 9223372036854775807,
+        "client_idle_timeout": 9223372036854775807,
+        "client_login_timeout": 60000,
+        "connect_attempt_delay": 0,
+        "connect_attempts": 1,
+        "connect_timeout": 5000,
+        "connection_recovery": "recover",
+        "cross_shard_disabled": false,
+        "cutover_last_transaction_delay": 1000,
+        "cutover_replication_lag_threshold": 1000,
+        "cutover_save_config": false,
+        "cutover_timeout": 30000,
+        "cutover_timeout_action": "abort",
+        "cutover_traffic_stop_threshold": 1000000,
+        "default_pool_size": 10,
+        "dns_ttl": null,
+        "dry_run": false,
+        "expanded_explain": false,
+        "healthcheck_interval": 30000,
+        "healthcheck_port": null,
+        "healthcheck_timeout": 5000,
+        "host": "0.0.0.0",
+        "idle_healthcheck_delay": 5000,
+        "idle_healthcheck_interval": 30000,
+        "idle_timeout": 60000,
+        "load_balancing_strategy": "random",
+        "load_schema": "auto",
+        "log_connections": true,
+        "log_disconnections": true,
+        "lsn_check_delay": 9223372036854775807,
+        "lsn_check_interval": 5000,
+        "lsn_check_timeout": 5000,
+        "min_pool_size": 1,
+        "mirror_exposure": 1.0,
+        "mirror_queue": 128,
+        "omnisharded_sticky": false,
+        "openmetrics_namespace": null,
+        "openmetrics_port": null,
+        "passthrough_auth": "disabled",
+        "pooler_mode": "transaction",
+        "port": 6432,
+        "prepared_statements": "extended",
+        "prepared_statements_limit": 9223372036854775807,
+        "pub_sub_channel_size": 0,
+        "query_cache_limit": 50000,
+        "query_log": null,
+        "query_parser": "auto",
+        "query_parser_enabled": false,
+        "query_parser_engine": "pg_query_protobuf",
+        "query_timeout": 9223372036854775807,
+        "read_write_split": "include_primary",
+        "read_write_strategy": "conservative",
+        "reload_schema_on_ddl": true,
+        "resharding_copy_format": "binary",
+        "rollback_timeout": 5000,
+        "server_lifetime": 86400000,
+        "shutdown_termination_timeout": null,
+        "shutdown_timeout": 60000,
+        "stats_period": 15000,
+        "system_catalogs": "omnisharded_sticky",
+        "tls_certificate": null,
+        "tls_client_required": false,
+        "tls_private_key": null,
+        "tls_server_ca_certificate": null,
+        "tls_verify": "prefer",
+        "two_phase_commit": false,
+        "two_phase_commit_auto": null,
+        "unique_id_min": 0,
+        "workers": 2
+      }
+    },
+    "manual_queries": {
+      "description": "Queries routed manually to a single shard.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/ManualQuery"
+      }
+    },
+    "memory": {
+      "description": "Memory tweaks",
+      "$ref": "#/$defs/Memory",
+      "default": {
+        "message_buffer": 4096,
+        "net_buffer": 4096,
+        "stack_size": 2097152
+      }
+    },
+    "mirroring": {
+      "description": "Mirroring configurations.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/Mirroring"
+      }
+    },
+    "multi_tenant": {
+      "description": "Multi-tenant",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/MultiTenant"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "omnisharded_tables": {
+      "description": "List of omnisharded tables.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/OmnishardedTables"
+      }
+    },
+    "plugins": {
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/Plugin"
+      }
+    },
+    "replica_lag": {
+      "description": "Replica lag configuration.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ReplicaLag"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "replication": {
+      "description": "Replication config.",
+      "$ref": "#/$defs/Replication",
+      "default": {
+        "pg_dump_path": "pg_dump"
+      }
+    },
+    "rewrite": {
+      "description": "Rewrite configuration.",
+      "$ref": "#/$defs/Rewrite",
+      "default": {
+        "enabled": false,
+        "primary_key": "ignore",
+        "shard_key": "error",
+        "split_inserts": "error"
+      }
+    },
+    "sharded_mappings": {
+      "description": "Explicit sharding key mappings.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/ShardedMapping"
+      }
+    },
+    "sharded_schemas": {
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/ShardedSchema"
+      }
+    },
+    "sharded_tables": {
+      "description": "List of sharded tables.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/ShardedTable"
+      }
+    },
+    "tcp": {
+      "description": "TCP settings",
+      "$ref": "#/$defs/Tcp",
+      "default": {
+        "congestion_control": null,
+        "interval": null,
+        "keepalive": true,
+        "retries": null,
+        "time": null,
+        "user_timeout": null
+      }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "Admin": {
+      "description": "Admin database settings.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "description": "Admin database name.",
+          "type": "string",
+          "default": "admin"
+        },
+        "password": {
+          "description": "Admin user's password.",
+          "type": "string",
+          "default": "_pgdog_JclUvyPTRqjz"
+        },
+        "user": {
+          "description": "Admin user name.",
+          "type": "string",
+          "default": "admin"
+        }
+      },
+      "additionalProperties": false
+    },
+    "AuthType": {
+      "type": "string",
+      "enum": [
+        "md5",
+        "scram",
+        "trust",
+        "plain"
+      ]
+    },
+    "ConnectionRecovery": {
+      "type": "string",
+      "enum": [
+        "recover",
+        "rollback_only",
+        "drop"
+      ]
+    },
+    "CopyFormat": {
+      "type": "string",
+      "enum": [
+        "text",
+        "binary"
+      ]
+    },
+    "CutoverTimeoutAction": {
+      "type": "string",
+      "enum": [
+        "abort",
+        "cutover"
+      ]
+    },
+    "DataType": {
+      "type": "string",
+      "enum": [
+        "bigint",
+        "uuid",
+        "vector",
+        "varchar"
+      ]
+    },
+    "Database": {
+      "description": "Database server proxied by pgDog.",
+      "type": "object",
+      "properties": {
+        "database_name": {
+          "description": "PostgreSQL database name, e.g. \"postgres\".",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "host": {
+          "description": "Database host or IP address, e.g. 127.0.0.1.",
+          "type": "string"
+        },
+        "idle_timeout": {
+          "description": "Idle timeout.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "min_pool_size": {
+          "description": "Minimum pool size for this database pools, overriding `min_pool_size`.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 0
+        },
+        "name": {
+          "description": "Database name visible to the clients.",
+          "type": "string"
+        },
+        "password": {
+          "description": "Use this password to login, overriding the userlist.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "pool_size": {
+          "description": "Pool size for this database pools, overriding `default_pool_size`.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 0
+        },
+        "pooler_mode": {
+          "description": "Pooler mode.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PoolerMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "port": {
+          "description": "Database port, e.g. 5432.",
+          "type": "integer",
+          "format": "uint16",
+          "default": 5432,
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "read_only": {
+          "description": "Read-only mode.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "resharding_only": {
+          "description": "Used for resharding only.",
+          "type": "boolean",
+          "default": false
+        },
+        "role": {
+          "description": "Database role, e.g. primary.",
+          "$ref": "#/$defs/Role",
+          "default": "primary"
+        },
+        "server_lifetime": {
+          "description": "Server lifetime.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "shard": {
+          "description": "Shard.",
+          "type": "integer",
+          "format": "uint",
+          "default": 0,
+          "minimum": 0
+        },
+        "statement_timeout": {
+          "description": "Statement timeout.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "user": {
+          "description": "Use this user to connect to the database, overriding the userlist.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "host"
+      ]
+    },
+    "Duration": {
+      "type": "object",
+      "properties": {
+        "nanos": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "secs": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "secs",
+        "nanos"
+      ]
+    },
+    "FlexibleType": {
+      "anyOf": [
+        {
+          "type": "integer",
+          "format": "int64"
+        },
+        {
+          "type": "string"
+        },
+        {
+          "type": "string"
+        }
+      ]
+    },
+    "Float": {
+      "description": "Wrapper type for f32 that implements Ord for PostgreSQL compatibility",
+      "type": "number",
+      "format": "float"
+    },
+    "General": {
+      "type": "object",
+      "properties": {
+        "auth_type": {
+          "$ref": "#/$defs/AuthType",
+          "default": "scram"
+        },
+        "ban_replica_lag": {
+          "description": "Ban replica lag.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 9223372036854775807,
+          "minimum": 0
+        },
+        "ban_replica_lag_bytes": {
+          "type": "integer",
+          "format": "uint64",
+          "default": 9223372036854775807,
+          "minimum": 0
+        },
+        "ban_timeout": {
+          "description": "Maximum duration of a ban.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 300000,
+          "minimum": 0
+        },
+        "broadcast_address": {
+          "description": "Broadcast IP.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "ipv4"
+        },
+        "broadcast_port": {
+          "description": "Broadcast port.",
+          "type": "integer",
+          "format": "uint16",
+          "default": 6433,
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "checkout_timeout": {
+          "description": "Checkout timeout.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 5000,
+          "minimum": 0
+        },
+        "client_connection_recovery": {
+          "description": "Client connection recovery",
+          "$ref": "#/$defs/ConnectionRecovery",
+          "default": "drop"
+        },
+        "client_idle_in_transaction_timeout": {
+          "description": "Client idle in transaction timeout.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 9223372036854775807,
+          "minimum": 0
+        },
+        "client_idle_timeout": {
+          "description": "Client idle timeout.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 9223372036854775807,
+          "minimum": 0
+        },
+        "client_login_timeout": {
+          "description": "Login timeout.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 60000,
+          "minimum": 0
+        },
+        "connect_attempt_delay": {
+          "description": "How long to wait between connection attempts.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 0,
+          "minimum": 0
+        },
+        "connect_attempts": {
+          "description": "Attempt connections multiple times on bad networks.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 1,
+          "minimum": 0
+        },
+        "connect_timeout": {
+          "description": "Server connect timeout.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 5000,
+          "minimum": 0
+        },
+        "connection_recovery": {
+          "description": "Connection cleanup algorithm.",
+          "$ref": "#/$defs/ConnectionRecovery",
+          "default": "recover"
+        },
+        "cross_shard_disabled": {
+          "description": "Disable cross-shard queries.",
+          "type": "boolean",
+          "default": false
+        },
+        "cutover_last_transaction_delay": {
+          "description": "Cutover last transaction delay.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 1000,
+          "minimum": 0
+        },
+        "cutover_replication_lag_threshold": {
+          "description": "Cutover lag threshold.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 1000,
+          "minimum": 0
+        },
+        "cutover_save_config": {
+          "description": "Cutover save config to disk.",
+          "type": "boolean",
+          "default": false
+        },
+        "cutover_timeout": {
+          "description": "Cutover timeout: how long to wait before doing a cutover anyway.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 30000,
+          "minimum": 0
+        },
+        "cutover_timeout_action": {
+          "description": "Cutover abort timeout: if cutover takes longer than this, abort.",
+          "$ref": "#/$defs/CutoverTimeoutAction",
+          "default": "abort"
+        },
+        "cutover_traffic_stop_threshold": {
+          "description": "Cutover maintenance threshold.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 1000000,
+          "minimum": 0
+        },
+        "default_pool_size": {
+          "description": "Default pool size, e.g. 10.",
+          "type": "integer",
+          "format": "uint",
+          "default": 10,
+          "minimum": 0
+        },
+        "dns_ttl": {
+          "description": "How often to refresh DNS entries, in ms.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "default": null,
+          "minimum": 0
+        },
+        "dry_run": {
+          "description": "Dry run for sharding. Parse the query, route to shard 0.",
+          "type": "boolean",
+          "default": false
+        },
+        "expanded_explain": {
+          "description": "Enable expanded EXPLAIN output.",
+          "type": "boolean",
+          "default": false
+        },
+        "healthcheck_interval": {
+          "description": "How often to check a connection.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 30000,
+          "minimum": 0
+        },
+        "healthcheck_port": {
+          "description": "HTTP health check port.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "healthcheck_timeout": {
+          "description": "Healthcheck timeout.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 5000,
+          "minimum": 0
+        },
+        "host": {
+          "description": "Run on this address.",
+          "type": "string",
+          "default": "0.0.0.0"
+        },
+        "idle_healthcheck_delay": {
+          "description": "Delay idle healthchecks by this time at startup.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 5000,
+          "minimum": 0
+        },
+        "idle_healthcheck_interval": {
+          "description": "How often to issue a healthcheck via an idle connection.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 30000,
+          "minimum": 0
+        },
+        "idle_timeout": {
+          "description": "Idle timeout.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 60000,
+          "minimum": 0
+        },
+        "load_balancing_strategy": {
+          "description": "Load balancing strategy.",
+          "$ref": "#/$defs/LoadBalancingStrategy",
+          "default": "random"
+        },
+        "load_schema": {
+          "description": "Load database schema.",
+          "$ref": "#/$defs/LoadSchema",
+          "default": "auto"
+        },
+        "log_connections": {
+          "description": "Log client connections.",
+          "type": "boolean",
+          "default": true
+        },
+        "log_disconnections": {
+          "description": "Log client disconnections.",
+          "type": "boolean",
+          "default": true
+        },
+        "lsn_check_delay": {
+          "description": "LSN check delay.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 9223372036854775807,
+          "minimum": 0
+        },
+        "lsn_check_interval": {
+          "description": "LSN check interval.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 5000,
+          "minimum": 0
+        },
+        "lsn_check_timeout": {
+          "description": "LSN check timeout.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 5000,
+          "minimum": 0
+        },
+        "min_pool_size": {
+          "description": "Minimum number of connections to maintain in the pool.",
+          "type": "integer",
+          "format": "uint",
+          "default": 1,
+          "minimum": 0
+        },
+        "mirror_exposure": {
+          "description": "Mirror exposure",
+          "type": "number",
+          "format": "float",
+          "default": 1.0
+        },
+        "mirror_queue": {
+          "description": "Mirror queue size.",
+          "type": "integer",
+          "format": "uint",
+          "default": 128,
+          "minimum": 0
+        },
+        "omnisharded_sticky": {
+          "description": "Omnisharded queries are sticky by default.",
+          "type": "boolean",
+          "default": false
+        },
+        "openmetrics_namespace": {
+          "description": "OpenMetrics prefix.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "openmetrics_port": {
+          "description": "Enable OpenMetrics server on this port.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "passthrough_auth": {
+          "description": "Automatically add connection pools for user/database pairs we don't have.",
+          "$ref": "#/$defs/PassthoughAuth",
+          "default": "disabled"
+        },
+        "pooler_mode": {
+          "description": "Pooler mode, e.g. transaction.",
+          "$ref": "#/$defs/PoolerMode",
+          "default": "transaction"
+        },
+        "port": {
+          "description": "Run on this port.",
+          "type": "integer",
+          "format": "uint16",
+          "default": 6432,
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "prepared_statements": {
+          "description": "Prepared statatements support.",
+          "$ref": "#/$defs/PreparedStatements",
+          "default": "extended"
+        },
+        "prepared_statements_limit": {
+          "description": "Limit on the number of prepared statements in the server cache.",
+          "type": "integer",
+          "format": "uint",
+          "default": 9223372036854775807,
+          "minimum": 0
+        },
+        "pub_sub_channel_size": {
+          "description": "LISTEN/NOTIFY channel size.",
+          "type": "integer",
+          "format": "uint",
+          "default": 0,
+          "minimum": 0
+        },
+        "query_cache_limit": {
+          "type": "integer",
+          "format": "uint",
+          "default": 50000,
+          "minimum": 0
+        },
+        "query_log": {
+          "description": "Load queries to file (warning: slow, don't use in production).",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "query_parser": {
+          "description": "Query parser.",
+          "$ref": "#/$defs/QueryParserLevel",
+          "default": "auto"
+        },
+        "query_parser_enabled": {
+          "description": "Parse Queries override.",
+          "type": "boolean",
+          "default": false
+        },
+        "query_parser_engine": {
+          "description": "Query parser engine.",
+          "$ref": "#/$defs/QueryParserEngine",
+          "default": "pg_query_protobuf"
+        },
+        "query_timeout": {
+          "description": "How long to wait for a query to return the result before aborting. Dangerous: don't use unless your network is bad.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 9223372036854775807,
+          "minimum": 0
+        },
+        "read_write_split": {
+          "description": "Read write split.",
+          "$ref": "#/$defs/ReadWriteSplit",
+          "default": "include_primary"
+        },
+        "read_write_strategy": {
+          "description": "How aggressive should the query parser be in determining reads.",
+          "$ref": "#/$defs/ReadWriteStrategy",
+          "default": "conservative"
+        },
+        "reload_schema_on_ddl": {
+          "description": "Trigger a schema reload on DDL like CREATE TABLE.",
+          "type": "boolean",
+          "default": true
+        },
+        "resharding_copy_format": {
+          "description": "Copy format used for resharding.",
+          "$ref": "#/$defs/CopyFormat",
+          "default": "binary"
+        },
+        "rollback_timeout": {
+          "description": "Rollback timeout.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 5000,
+          "minimum": 0
+        },
+        "server_lifetime": {
+          "description": "Server lifetime.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 86400000,
+          "minimum": 0
+        },
+        "shutdown_termination_timeout": {
+          "description": "Shutdown termination timeout (after shutdown_timeout expires, forcibly terminate).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "default": null,
+          "minimum": 0
+        },
+        "shutdown_timeout": {
+          "description": "Shutdown timeout.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 60000,
+          "minimum": 0
+        },
+        "stats_period": {
+          "description": "Stats averaging period (in milliseconds).",
+          "type": "integer",
+          "format": "uint64",
+          "default": 15000,
+          "minimum": 0
+        },
+        "system_catalogs": {
+          "description": "System catalogs are omnisharded?",
+          "$ref": "#/$defs/SystemCatalogsBehavior",
+          "default": "omnisharded_sticky"
+        },
+        "tls_certificate": {
+          "description": "TLS certificate.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tls_client_required": {
+          "type": "boolean",
+          "default": false
+        },
+        "tls_private_key": {
+          "description": "TLS private key.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tls_server_ca_certificate": {
+          "description": "TLS CA certificate (for connecting to servers).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tls_verify": {
+          "description": "TLS verification mode (for connecting to servers)",
+          "$ref": "#/$defs/TlsVerifyMode",
+          "default": "prefer"
+        },
+        "two_phase_commit": {
+          "description": "Two-phase commit.",
+          "type": "boolean",
+          "default": false
+        },
+        "two_phase_commit_auto": {
+          "description": "Two-phase commit automatic transactions.",
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "default": null
+        },
+        "unique_id_min": {
+          "description": "Minimum ID for unique ID generator.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 0,
+          "minimum": 0
+        },
+        "workers": {
+          "description": "Spawn this many Tokio threads.",
+          "type": "integer",
+          "format": "uint",
+          "default": 2,
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "Hasher": {
+      "type": "string",
+      "enum": [
+        "postgres",
+        "sha1"
+      ]
+    },
+    "LoadBalancingStrategy": {
+      "type": "string",
+      "enum": [
+        "random",
+        "round_robin",
+        "least_active_connections"
+      ]
+    },
+    "LoadSchema": {
+      "type": "string",
+      "enum": [
+        "on",
+        "off",
+        "auto"
+      ]
+    },
+    "ManualQuery": {
+      "description": "Queries with manual routing rules.",
+      "type": "object",
+      "properties": {
+        "fingerprint": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "fingerprint"
+      ]
+    },
+    "Memory": {
+      "type": "object",
+      "properties": {
+        "message_buffer": {
+          "type": "integer",
+          "format": "uint",
+          "default": 4096,
+          "minimum": 0
+        },
+        "net_buffer": {
+          "type": "integer",
+          "format": "uint",
+          "default": 4096,
+          "minimum": 0
+        },
+        "stack_size": {
+          "type": "integer",
+          "format": "uint",
+          "default": 2097152,
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "Mirroring": {
+      "description": "Mirroring configuration.",
+      "type": "object",
+      "properties": {
+        "destination_db": {
+          "description": "Destination database name to mirror to.",
+          "type": "string"
+        },
+        "exposure": {
+          "description": "Exposure for this mirror (overrides global mirror_exposure).",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "float"
+        },
+        "queue_length": {
+          "description": "Queue length for this mirror (overrides global mirror_queue).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 0
+        },
+        "source_db": {
+          "description": "Source database name to mirror from.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "source_db",
+        "destination_db"
+      ]
+    },
+    "MultiTenant": {
+      "type": "object",
+      "properties": {
+        "column": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "column"
+      ]
+    },
+    "OmnishardedTables": {
+      "type": "object",
+      "properties": {
+        "database": {
+          "type": "string"
+        },
+        "sticky": {
+          "type": "boolean",
+          "default": false
+        },
+        "tables": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "database",
+        "tables"
+      ]
+    },
+    "PassthoughAuth": {
+      "type": "string",
+      "enum": [
+        "disabled",
+        "enabled",
+        "enabled_plain"
+      ]
+    },
+    "Plugin": {
+      "description": "pgDog plugin.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "description": "Plugin name.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name"
+      ]
+    },
+    "PoolerMode": {
+      "type": "string",
+      "enum": [
+        "transaction",
+        "session",
+        "statement"
+      ]
+    },
+    "PreparedStatements": {
+      "type": "string",
+      "enum": [
+        "disabled",
+        "extended",
+        "extended_anonymous",
+        "full"
+      ]
+    },
+    "QueryParserEngine": {
+      "type": "string",
+      "enum": [
+        "pg_query_protobuf",
+        "pg_query_raw"
+      ]
+    },
+    "QueryParserLevel": {
+      "type": "string",
+      "enum": [
+        "on",
+        "auto",
+        "off"
+      ]
+    },
+    "ReadWriteSplit": {
+      "type": "string",
+      "enum": [
+        "include_primary",
+        "exclude_primary",
+        "include_primary_if_replica_banned"
+      ]
+    },
+    "ReadWriteStrategy": {
+      "type": "string",
+      "enum": [
+        "conservative",
+        "aggressive"
+      ]
+    },
+    "ReplicaLag": {
+      "type": "object",
+      "properties": {
+        "check_interval": {
+          "$ref": "#/$defs/Duration"
+        },
+        "max_age": {
+          "$ref": "#/$defs/Duration"
+        }
+      },
+      "required": [
+        "check_interval",
+        "max_age"
+      ]
+    },
+    "Replication": {
+      "description": "Replication configuration.",
+      "type": "object",
+      "properties": {
+        "pg_dump_path": {
+          "description": "Path to the pg_dump executable.",
+          "type": "string",
+          "default": "pg_dump"
+        }
+      }
+    },
+    "Rewrite": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "description": "Global rewrite toggle. When disabled, rewrite-specific features remain\ninactive, even if individual policies request rewriting.",
+          "type": "boolean",
+          "default": false
+        },
+        "primary_key": {
+          "description": "Policy for handling INSERT statements missing a BIGINT primary key.\n- ignore: Allow the INSERT without modification\n- error: Return an error if a BIGINT primary key is missing\n- rewrite: Auto-inject pgdog.unique_id() for missing BIGINT primary keys",
+          "$ref": "#/$defs/RewriteMode",
+          "default": "ignore"
+        },
+        "shard_key": {
+          "description": "Policy for handling shard-key updates.",
+          "$ref": "#/$defs/RewriteMode",
+          "default": "error"
+        },
+        "split_inserts": {
+          "description": "Policy for handling multi-row INSERT statements that target sharded tables.",
+          "$ref": "#/$defs/RewriteMode",
+          "default": "error"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RewriteMode": {
+      "type": "string",
+      "enum": [
+        "ignore",
+        "error",
+        "rewrite"
+      ]
+    },
+    "Role": {
+      "type": "string",
+      "enum": [
+        "primary",
+        "replica",
+        "auto"
+      ]
+    },
+    "ShardedMapping": {
+      "type": "object",
+      "properties": {
+        "column": {
+          "type": "string"
+        },
+        "database": {
+          "type": "string"
+        },
+        "end": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FlexibleType"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "kind": {
+          "$ref": "#/$defs/ShardedMappingKind"
+        },
+        "schema": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "shard": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "start": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FlexibleType"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "table": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "values": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/FlexibleType"
+          },
+          "uniqueItems": true
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "database",
+        "column",
+        "kind",
+        "shard"
+      ]
+    },
+    "ShardedMappingKind": {
+      "type": "string",
+      "enum": [
+        "list",
+        "range",
+        "default"
+      ]
+    },
+    "ShardedSchema": {
+      "type": "object",
+      "properties": {
+        "all": {
+          "description": "All shards.",
+          "type": "boolean",
+          "default": false
+        },
+        "database": {
+          "description": "Database name.",
+          "type": "string"
+        },
+        "name": {
+          "description": "Schema name.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "shard": {
+          "type": "integer",
+          "format": "uint",
+          "default": 0,
+          "minimum": 0
+        }
+      },
+      "required": [
+        "database"
+      ]
+    },
+    "ShardedTable": {
+      "description": "Sharded table.",
+      "type": "object",
+      "properties": {
+        "centroid_probes": {
+          "description": "How many centroids to probe.",
+          "type": "integer",
+          "format": "uint",
+          "default": 0,
+          "minimum": 0
+        },
+        "centroids": {
+          "description": "Centroids for vector sharding.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Vector"
+          }
+        },
+        "centroids_path": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "column": {
+          "description": "Table sharded on this column.",
+          "type": "string",
+          "default": ""
+        },
+        "data_type": {
+          "description": "Data type of the column.",
+          "$ref": "#/$defs/DataType",
+          "default": "bigint"
+        },
+        "database": {
+          "description": "Database this table belongs to.",
+          "type": "string"
+        },
+        "hasher": {
+          "description": "Hasher function.",
+          "$ref": "#/$defs/Hasher",
+          "default": "postgres"
+        },
+        "name": {
+          "description": "Table name. If none specified, all tables with the specified\ncolumn are considered sharded.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "primary": {
+          "description": "This table is the primary sharding anchor (e.g. \"users\").",
+          "type": "boolean",
+          "default": false
+        },
+        "schema": {
+          "description": "Schema name. If not specified, will match all schemas.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "database"
+      ]
+    },
+    "SystemCatalogsBehavior": {
+      "type": "string",
+      "enum": [
+        "omnisharded",
+        "omnisharded_sticky",
+        "sharded"
+      ]
+    },
+    "Tcp": {
+      "type": "object",
+      "properties": {
+        "congestion_control": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "interval": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "keepalive": {
+          "type": "boolean",
+          "default": true
+        },
+        "retries": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "time": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "user_timeout": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "TlsVerifyMode": {
+      "type": "string",
+      "enum": [
+        "disabled",
+        "prefer",
+        "verify_ca",
+        "verify_full"
+      ]
+    },
+    "Vector": {
+      "type": "object",
+      "properties": {
+        "values": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Float"
+          }
+        }
+      },
+      "required": [
+        "values"
+      ]
+    }
+  }
+}

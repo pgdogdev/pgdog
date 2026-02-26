@@ -1,0 +1,213 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Users",
+  "description": "Users and passwords.",
+  "type": "object",
+  "properties": {
+    "admin": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Admin"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "users": {
+      "description": "Users and passwords.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/User"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "Admin": {
+      "description": "Admin database settings.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "description": "Admin database name.",
+          "type": "string",
+          "default": "admin"
+        },
+        "password": {
+          "description": "Admin user's password.",
+          "type": "string",
+          "default": "_pgdog_gc1o11HaljHZ"
+        },
+        "user": {
+          "description": "Admin user name.",
+          "type": "string",
+          "default": "admin"
+        }
+      },
+      "additionalProperties": false
+    },
+    "PoolerMode": {
+      "type": "string",
+      "enum": [
+        "transaction",
+        "session",
+        "statement"
+      ]
+    },
+    "User": {
+      "description": "User allowed to connect to pgDog.",
+      "type": "object",
+      "properties": {
+        "all_databases": {
+          "description": "User belongs to all databases",
+          "type": "boolean",
+          "default": false
+        },
+        "cross_shard_disabled": {
+          "description": "Disable cross-shard queries for this user.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "database": {
+          "description": "Database name, from pgdog.toml.",
+          "type": "string",
+          "default": ""
+        },
+        "databases": {
+          "description": "List of databases the user has access to.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "idle_timeout": {
+          "description": "Idle timeout.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "min_pool_size": {
+          "description": "Minimum pool size for this user pool, overriding `min_pool_size`.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 0
+        },
+        "name": {
+          "description": "User name.",
+          "type": "string"
+        },
+        "password": {
+          "description": "User's password.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "pool_size": {
+          "description": "Pool size for this user pool, overriding `default_pool_size`.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 0
+        },
+        "pooler_mode": {
+          "description": "Pooler mode.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PoolerMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "read_only": {
+          "description": "Read-only mode.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "replication_mode": {
+          "description": "Relication mode.",
+          "type": "boolean",
+          "default": false
+        },
+        "replication_sharding": {
+          "description": "Sharding into this database.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "schema_admin": {
+          "description": "Schema owner.",
+          "type": "boolean",
+          "default": false
+        },
+        "server_lifetime": {
+          "description": "Server lifetime.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "server_password": {
+          "description": "Server password.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "server_user": {
+          "description": "Server username.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "statement_timeout": {
+          "description": "Statement timeout.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "two_phase_commit": {
+          "description": "Two-pc.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "two_phase_commit_auto": {
+          "description": "Automatic transactions.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name"
+      ]
+    }
+  }
+}

@@ -1252,6 +1252,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "get_dir"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a7be53a543a609b266f8ed4237af223fa96bdaa54d69fd6845c71a421a4a4748"
+
+[[package]]
 name = "getrandom"
 version = "0.2.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2470,6 +2476,17 @@ dependencies = [
  "parking_lot",
  "pgdog-plugin",
  "thiserror 2.0.12",
+]
+
+[[package]]
+name = "pgdog-jsonschema"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "pgdog-config",
+ "schemars",
+ "serde_json",
+ "workspace_root",
 ]
 
 [[package]]
@@ -5222,6 +5239,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6f42320e61fe2cfd34354ecb597f86f413484a798ba44a8ca1165c58d42da6c1"
 dependencies = [
  "bitflags 2.9.1",
+]
+
+[[package]]
+name = "workspace_root"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "70d804157714956faa87af2ccf3ea2917a7e588c84c6e0a473311c1fca161818"
+dependencies = [
+ "get_dir",
 ]
 
 [[package]]
