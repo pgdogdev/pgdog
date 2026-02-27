@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs::read_to_string;
 use std::path::PathBuf;
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
 use crate::sharding::ShardedSchema;
 use crate::util::random_string;
@@ -41,7 +41,11 @@ impl ConfigAndUsers {
         let mut config: Config = if let Ok(config) = read_to_string(config_path) {
             let config = match toml::from_str(&config) {
                 Ok(config) => config,
-                Err(err) => return Err(Error::config(&config, err)),
+                Err(err) => {
+                    let error = Error::config(&config, err);
+                    error!("failed to load {}: {}", config_path.display(), error);
+                    return Err(error);
+                }
             };
             info!("loaded \"{}\"", config_path.display());
             config
@@ -58,7 +62,14 @@ impl ConfigAndUsers {
         }
 
         let mut users: Users = if let Ok(users) = read_to_string(users_path) {
-            let mut users: Users = toml::from_str(&users)?;
+            let mut users: Users = match toml::from_str(&users) {
+                Ok(config) => config,
+                Err(err) => {
+                    let error = Error::config(&users, err);
+                    error!("failed to load {}: {}", users_path.display(), error);
+                    return Err(error);
+                }
+            };
             users.check(&config);
             info!("loaded \"{}\"", users_path.display());
             users
