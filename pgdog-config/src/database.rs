@@ -137,6 +137,28 @@ impl Database {
     fn port() -> u16 {
         5432
     }
+
+    /// Whether this database entry is a wildcard template (`name = "*"`).
+    pub fn is_wildcard(&self) -> bool {
+        self.name == "*"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_database_is_wildcard() {
+        let mut db = Database::default();
+        assert!(!db.is_wildcard());
+
+        db.name = "mydb".to_string();
+        assert!(!db.is_wildcard());
+
+        db.name = "*".to_string();
+        assert!(db.is_wildcard());
+    }
 }
 
 #[derive(

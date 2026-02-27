@@ -346,6 +346,16 @@ impl Cluster {
         &self.shards
     }
 
+    /// Total number of connections (idle + checked-out) across all shards.
+    /// Used by the wildcard-pool eviction task to decide whether a pool is idle.
+    pub fn total_connections(&self) -> usize {
+        self.shards
+            .iter()
+            .flat_map(|shard| shard.pools())
+            .map(|pool| pool.state().total)
+            .sum()
+    }
+
     /// Get the password the user should use to connect to the database.
     pub fn password(&self) -> &str {
         &self.password
