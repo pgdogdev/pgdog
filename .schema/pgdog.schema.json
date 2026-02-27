@@ -1661,12 +1661,14 @@
       "type": "object",
       "properties": {
         "congestion_control": {
+          "description": "TCP congestion control algorithm (e.g. `\"reno\"`, `\"cubic\"`).\n\n**Note:** Linux only.",
           "type": [
             "string",
             "null"
           ]
         },
         "interval": {
+          "description": "Time between successive keep-alive probes. Milliseconds.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/network/#interval",
           "type": [
             "integer",
             "null"
@@ -1675,10 +1677,12 @@
           "minimum": 0
         },
         "keepalive": {
+          "description": "Enable TCP keep-alive probing on idle client and server connections.\n\n**Note:** Not all networks support TCP keep-alive. Disable if you observe increased connection drops.\n\n_Default:_ `true`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/network/#keepalive",
           "type": "boolean",
           "default": true
         },
         "retries": {
+          "description": "How many consecutive failed keep-alive probes before the connection is terminated.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/network/#retries",
           "type": [
             "integer",
             "null"
@@ -1687,6 +1691,7 @@
           "minimum": 0
         },
         "time": {
+          "description": "How long a connection must be idle before keep-alive probes begin. Milliseconds.\n\n_Default:_ system default (2 hours)\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/network/#time",
           "type": [
             "integer",
             "null"
@@ -1695,6 +1700,7 @@
           "minimum": 0
         },
         "user_timeout": {
+          "description": "Close connections with unacknowledged data after this duration (`TCP_USER_TIMEOUT`). Milliseconds.\n\n**Note:** Linux only.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/network/#user_timeout",
           "type": [
             "integer",
             "null"
@@ -1706,7 +1712,7 @@
       "additionalProperties": false
     },
     "TlsVerifyMode": {
-      "description": "how to handle TLS connections to Postgres servers.\n\nBy default, PgDog will attempt to establish TLS and will accept any server certificate.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#tls_verify",
+      "description": "TLS verification mode for connections to Postgres servers.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#tls_verify",
       "oneOf": [
         {
           "description": "TLS is disabled.",

@@ -5,9 +5,7 @@ use std::time::Duration;
 use crate::util::human_duration_optional;
 use schemars::JsonSchema;
 
-/// how to handle TLS connections to Postgres servers.
-///
-/// By default, PgDog will attempt to establish TLS and will accept any server certificate.
+/// TLS verification mode for connections to Postgres servers.
 ///
 /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#tls_verify
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Copy)]
@@ -50,12 +48,38 @@ impl FromStr for TlsVerifyMode {
 #[serde(deny_unknown_fields)]
 #[derive(JsonSchema)]
 pub struct Tcp {
+    /// Enable TCP keep-alive probing on idle client and server connections.
+    ///
+    /// **Note:** Not all networks support TCP keep-alive. Disable if you observe increased connection drops.
+    ///
+    /// _Default:_ `true`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/network/#keepalive
     #[serde(default = "Tcp::default_keepalive")]
     keepalive: bool,
-    user_timeout: Option<u64>,
+    /// How long a connection must be idle before keep-alive probes begin. Milliseconds.
+    ///
+    /// _Default:_ system default (2 hours)
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/network/#time
     time: Option<u64>,
+    /// Time between successive keep-alive probes. Milliseconds.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/network/#interval
     interval: Option<u64>,
+    /// How many consecutive failed keep-alive probes before the connection is terminated.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/network/#retries
     retries: Option<u32>,
+    /// Close connections with unacknowledged data after this duration (`TCP_USER_TIMEOUT`). Milliseconds.
+    ///
+    /// **Note:** Linux only.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/network/#user_timeout
+    user_timeout: Option<u64>,
+    /// TCP congestion control algorithm (e.g. `"reno"`, `"cubic"`).
+    ///
+    /// **Note:** Linux only.
     congestion_control: Option<String>,
 }
 

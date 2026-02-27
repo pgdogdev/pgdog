@@ -329,7 +329,9 @@ split_inserts = "error"
 # TCP tweaks.
 #
 [tcp]
-# Enable keep-alives.
+# Enable TCP keep-alive probing on idle client and server connections.
+keepalive = true
+# How many consecutive failed keep-alive probes before the connection is terminated.
 retries = 3
 # How long to wait for keep-alive messages to start sending on idle connections.
 time = 1000
@@ -337,9 +339,7 @@ time = 1000
 interval = 1000
 # Read timeout on the socket. How long to wait for data sent to be acked.
 user_timeout = 1000
-# How many times to retry a keep-alive probe before closing the connection.
-connect_retries = 3
-# TCP congestion control algorith.
+# TCP congestion control algorithm.
 congestion_control = "reno"
 
 #
