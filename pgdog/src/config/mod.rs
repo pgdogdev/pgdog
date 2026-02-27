@@ -16,7 +16,7 @@ pub mod sharding;
 pub mod users;
 
 pub use core::{Config, ConfigAndUsers};
-pub use database::{Database, Role};
+pub use database::{Database, EnumeratedDatabase, Role};
 pub use error::Error;
 pub use general::General;
 pub use memory::*;
@@ -310,6 +310,60 @@ pub fn load_test_sharded() {
         password: Some("pgdog".into()),
         ..Default::default()
     }];
+
+    set(config).unwrap();
+    init().unwrap();
+}
+
+/// Load a wildcard test configuration.
+///
+/// Sets up a wildcard database template (`name = "*"`) pointing at a real
+/// PostgreSQL server and a wildcard user (`name = "*", database = "*"`).
+/// An explicit pool for user=pgdog / database=pgdog is also created so
+/// that tests can compare explicit vs. wildcard resolution.
+#[cfg(test)]
+pub fn load_test_wildcard() {
+    use crate::backend::databases::init;
+
+    let mut config = ConfigAndUsers::default();
+    config.config.general.min_pool_size = 0;
+
+    config.config.databases = vec![
+        // Explicit database — should always take priority.
+        Database {
+            name: "pgdog".into(),
+            host: "127.0.0.1".into(),
+            port: 5432,
+            role: Role::Primary,
+            database_name: Some("pgdog".into()),
+            ..Default::default()
+        },
+        // Wildcard template — any other database name resolves here.
+        Database {
+            name: "*".into(),
+            host: "127.0.0.1".into(),
+            port: 5432,
+            role: Role::Primary,
+            ..Default::default()
+        },
+    ];
+
+    config.users.users = vec![
+        // Explicit user for the explicit database.
+        User {
+            name: "pgdog".into(),
+            database: "pgdog".into(),
+            password: Some("pgdog".into()),
+            ..Default::default()
+        },
+        // Wildcard user — any user / any database.
+        User {
+            name: "*".into(),
+            database: "*".into(),
+            password: Some("pgdog".into()),
+            ..Default::default()
+        },
+    ];
 
     set(config).unwrap();
     init().unwrap();

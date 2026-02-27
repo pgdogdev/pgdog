@@ -333,15 +333,41 @@ impl Connection {
                 }
 
                 let databases = databases();
-                let cluster = databases.cluster(user)?;
+                let cluster = match databases.cluster(user) {
+                    Ok(c) => c,
+                    Err(_) => {
+                        // Drop the Arc before mutating global state.
+                        drop(databases);
+                        // Attempt wildcard pool creation.
+                        match databases::add_wildcard_pool(
+                            &self.user,
+                            &self.database,
+                            self.passthrough_password.as_deref(),
+                        ) {
+                            Ok(Some(c)) => c,
+                            Ok(None) => {
+                                return Err(Error::NoDatabase(databases::User {
+                                    user: self.user.clone(),
+                                    database: self.database.clone(),
+                                }));
+                            }
+                            Err(e) => return Err(e),
+                        }
+                    }
+                };
 
                 self.cluster = Some(cluster.clone());
                 let source_db = cluster.name();
+
+                // Re-read databases after potential wildcard pool creation.
+                let databases = databases::databases();
                 self.mirrors = databases
-                    .mirrors(user)?
+                    .mirrors(user)
+                    .ok()
+                    .flatten()
                     .unwrap_or(&[])
                     .iter()
-                    .map(|dest_cluster| {
+                    .map(|dest_cluster: &Cluster| {
                         let mirror_config = databases.mirror_config(source_db, dest_cluster.name());
                         Mirror::spawn(source_db, dest_cluster, mirror_config)
                     })
