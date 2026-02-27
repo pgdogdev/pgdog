@@ -1,3 +1,5 @@
+use crate::backend::databases::{add_wildcard_pool, databases};
+use crate::config::load_test_wildcard_with_limit;
 use crate::frontend::client::test::test_client::TestClient;
 use crate::net::{Parameters, Query};
 
@@ -101,4 +103,84 @@ async fn test_wildcard_nonexistent_pg_database() {
 
     let dbs = databases();
     assert!(dbs.exists(("pgdog", fake_db)));
+}
+
+/// When `max_wildcard_pools` is set, pools beyond the limit are rejected
+/// (returning `Ok(None)`) without panicking or erroring.
+#[tokio::test]
+async fn test_max_wildcard_pools_limit_enforced() {
+    load_test_wildcard_with_limit(2);
+
+    // First two pools succeed.
+    let r1 = add_wildcard_pool("user_a", "db_one", None);
+    assert!(r1.is_ok());
+    assert!(
+        r1.unwrap().is_some(),
+        "first pool within limit should be created"
+    );
+
+    let r2 = add_wildcard_pool("user_b", "db_two", None);
+    assert!(r2.is_ok());
+    assert!(
+        r2.unwrap().is_some(),
+        "second pool within limit should be created"
+    );
+
+    // Third pool must be rejected.
+    let r3 = add_wildcard_pool("user_c", "db_three", None);
+    assert!(r3.is_ok(), "should not error, just reject gracefully");
+    assert!(
+        r3.unwrap().is_none(),
+        "pool creation beyond max_wildcard_pools must return None"
+    );
+
+    let dbs = databases();
+    assert!(
+        !dbs.exists(("user_c", "db_three")),
+        "rejected pool must not be registered"
+    );
+}
+
+/// `max_wildcard_pools = 0` means unlimited: any number of pools may be
+/// created without triggering the limit.
+#[tokio::test]
+async fn test_max_wildcard_pools_zero_means_unlimited() {
+    load_test_wildcard_with_limit(0);
+
+    for i in 0..5usize {
+        let db = format!("unlimited_db_{i}");
+        let user = format!("unlimited_user_{i}");
+        let result = add_wildcard_pool(&user, &db, None);
+        assert!(result.is_ok());
+        assert!(
+            result.unwrap().is_some(),
+            "pool {i} should be created when limit is 0"
+        );
+    }
+}
+
+/// After a config reload (simulated by calling `load_test_wildcard_with_limit`
+/// again) the wildcard pool counter is reset to zero, so pools that were
+/// previously rejected can now be created.
+#[tokio::test]
+async fn test_max_wildcard_pools_counter_resets_on_reload() {
+    load_test_wildcard_with_limit(1);
+
+    // Fill the single slot.
+    let r1 = add_wildcard_pool("reload_user", "first_db", None);
+    assert!(r1.unwrap().is_some(), "slot 1 should be filled");
+
+    // Next pool is rejected.
+    let r2 = add_wildcard_pool("reload_user", "second_db", None);
+    assert!(r2.unwrap().is_none(), "should be rejected at limit");
+
+    // Simulate SIGHUP / config reload — resets the counter and the pool map.
+    load_test_wildcard_with_limit(1);
+
+    // The previously rejected database can now be created again.
+    let r3 = add_wildcard_pool("reload_user", "second_db", None);
+    assert!(
+        r3.unwrap().is_some(),
+        "should succeed after reload resets the counter"
+    );
 }

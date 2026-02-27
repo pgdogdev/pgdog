@@ -75,8 +75,16 @@ pub fn reconnect() -> Result<(), Error> {
     Ok(())
 }
 
-/// Re-create databases from existing config,
-/// preserving connections.
+/// Re-create databases from existing config, preserving connections.
+///
+/// **SIGHUP / config-reload behaviour for wildcard pools:**
+/// Wildcard pools created on demand by [`add_wildcard_pool`] are *not* included
+/// in the freshly built [`Databases`] produced by [`from_config`].  Because
+/// [`replace_databases`] only moves connections whose key exists in the new
+/// config, those connections are dropped and the pools are evicted.  On the
+/// next client login [`add_wildcard_pool`] will recreate the pool from the
+/// (potentially updated) wildcard template, and the
+/// [`General::max_wildcard_pools`] counter resets to zero.
 pub fn reload_from_existing() -> Result<(), Error> {
     let _lock = lock();
 
@@ -202,6 +210,17 @@ pub(crate) fn add_wildcard_pool(
         None => return Ok(None),
     };
 
+    // Enforce the operator-configured pool limit before allocating a new pool.
+    let max = config_snapshot.config.general.max_wildcard_pools;
+    if max > 0 && dbs.wildcard_pool_count >= max {
+        warn!(
+            "max_wildcard_pools limit ({}) reached, rejecting wildcard pool \
+             for user=\"{}\" database=\"{}\"",
+            max, user, database
+        );
+        return Ok(None);
+    }
+
     // Build a synthetic user config from the wildcard template.
     let template_user_key = User {
         user: if wildcard_match.wildcard_user {
@@ -234,8 +253,10 @@ pub(crate) fn add_wildcard_pool(
         // Use an existing user config's settings from a template pool.
         let template_cluster = dbs.databases.get(&template_user_key);
         template_cluster.map(|_| {
-            // Build from config users list.
-            config()
+            // Use the snapshot so user lookups are consistent with the database
+            // config captured at the same instant (avoids a race if a SIGHUP
+            // reload changes the global config mid-call).
+            config_snapshot
                 .users
                 .users
                 .iter()
@@ -262,9 +283,9 @@ pub(crate) fn add_wildcard_pool(
         user_config.password = Some(pw.to_string());
     }
 
-    // If the wildcard template is for the database, we need to create synthetic
-    // database entries from the wildcard database templates.
-    let mut synthetic_config = config_snapshot.clone();
+    // Build a synthetic Config so we can substitute the real database name
+    // into the wildcard template before handing it to new_pool.
+    let mut synthetic_config = config_snapshot.config.clone();
     if wildcard_match.wildcard_database {
         if let Some(templates) = dbs.wildcard_db_templates() {
             let mut new_dbs: Vec<crate::config::Database> = synthetic_config
@@ -298,8 +319,9 @@ pub(crate) fn add_wildcard_pool(
         );
 
         let databases = (*databases()).clone();
-        let (added, databases) = databases.add(pool_user, cluster.clone());
+        let (added, mut databases) = databases.add(pool_user, cluster.clone());
         if added {
+            databases.wildcard_pool_count += 1;
             databases.launch();
             DATABASES.store(Arc::new(databases));
         }
@@ -437,8 +459,13 @@ pub struct Databases {
     wildcard_db_templates: Option<Vec<Vec<crate::config::EnumeratedDatabase>>>,
     /// Wildcard user templates (users with name = "*").
     wildcard_users: Vec<crate::config::User>,
-    /// Snapshot of the config, needed to create pools lazily from wildcard templates.
-    config_snapshot: Option<Arc<crate::config::Config>>,
+    /// Full config snapshot (both databases and users) captured at construction
+    /// time, needed to create pools lazily from wildcard templates without
+    /// racing against a concurrent config reload that might change `config()`.
+    config_snapshot: Option<Arc<crate::config::ConfigAndUsers>>,
+    /// Number of pools created dynamically via wildcard matching.
+    /// Reset to zero on every config reload so the limit applies per-epoch.
+    wildcard_pool_count: usize,
 }
 
 impl Databases {
@@ -540,8 +567,8 @@ impl Databases {
         &self.wildcard_users
     }
 
-    /// Get config snapshot for creating wildcard pools.
-    pub fn config_snapshot(&self) -> Option<&crate::config::Config> {
+    /// Get the full config snapshot used for creating wildcard pools.
+    pub fn config_snapshot(&self) -> Option<&crate::config::ConfigAndUsers> {
         self.config_snapshot.as_deref()
     }
 
@@ -919,7 +946,7 @@ pub fn from_config(config: &ConfigAndUsers) -> Databases {
         .collect();
 
     let config_snapshot = if wildcard_db_templates.is_some() || !wildcard_users.is_empty() {
-        Some(Arc::new(config.config.clone()))
+        Some(Arc::new(config.clone()))
     } else {
         None
     };
@@ -932,6 +959,7 @@ pub fn from_config(config: &ConfigAndUsers) -> Databases {
         wildcard_db_templates,
         wildcard_users,
         config_snapshot,
+        wildcard_pool_count: 0,
     }
 }
 

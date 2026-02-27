@@ -368,3 +368,48 @@ pub fn load_test_wildcard() {
     set(config).unwrap();
     init().unwrap();
 }
+/// Like [`load_test_wildcard`] but also sets `max_wildcard_pools` so tests
+/// can exercise the pool-count limit without modifying the global default.
+pub fn load_test_wildcard_with_limit(max_wildcard_pools: usize) {
+    use crate::backend::databases::init;
+
+    let mut config = ConfigAndUsers::default();
+    config.config.general.min_pool_size = 0;
+    config.config.general.max_wildcard_pools = max_wildcard_pools;
+
+    config.config.databases = vec![
+        Database {
+            name: "pgdog".into(),
+            host: "127.0.0.1".into(),
+            port: 5432,
+            role: Role::Primary,
+            database_name: Some("pgdog".into()),
+            ..Default::default()
+        },
+        Database {
+            name: "*".into(),
+            host: "127.0.0.1".into(),
+            port: 5432,
+            role: Role::Primary,
+            ..Default::default()
+        },
+    ];
+
+    config.users.users = vec![
+        User {
+            name: "pgdog".into(),
+            database: "pgdog".into(),
+            password: Some("pgdog".into()),
+            ..Default::default()
+        },
+        User {
+            name: "*".into(),
+            database: "*".into(),
+            password: Some("pgdog".into()),
+            ..Default::default()
+        },
+    ];
+
+    set(config).unwrap();
+    init().unwrap();
+}
