@@ -1,8 +1,9 @@
 //! Databases behind pgDog.
 
-use std::collections::{hash_map::Entry, HashMap};
+use std::collections::{hash_map::Entry, HashMap, HashSet};
 use std::ops::Deref;
 use std::sync::Arc;
+use std::time::Duration;
 
 use arc_swap::ArcSwap;
 use futures::future::try_join_all;
@@ -34,6 +35,20 @@ use super::{
 static DATABASES: Lazy<ArcSwap<Databases>> =
     Lazy::new(|| ArcSwap::from_pointee(Databases::default()));
 static LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+/// Spawns the wildcard-pool background eviction loop exactly once.
+static WILDCARD_EVICTION: Lazy<()> = Lazy::new(|| {
+    tokio::spawn(async {
+        loop {
+            let timeout_secs = config().config.general.wildcard_pool_idle_timeout;
+            if timeout_secs == 0 {
+                tokio::time::sleep(Duration::from_secs(60)).await;
+                continue;
+            }
+            tokio::time::sleep(Duration::from_secs(timeout_secs)).await;
+            evict_idle_wildcard_pools();
+        }
+    });
+});
 
 /// Sync databases during modification.
 pub fn lock() -> MutexGuard<'static, RawMutex, ()> {
@@ -106,7 +121,46 @@ pub fn init() -> Result<(), Error> {
     // Start two-pc manager.
     let _monitor = Manager::get();
 
+    // Start the wildcard pool eviction background task.
+    let _ = &*WILDCARD_EVICTION;
+
     Ok(())
+}
+
+/// Remove dynamically-created wildcard pools that currently have zero connections.
+///
+/// This is called periodically by the background eviction task started in
+/// [`init`], and is also exposed as `pub(crate)` so unit tests can invoke it
+/// directly without running a Tokio runtime loop.
+pub(crate) fn evict_idle_wildcard_pools() {
+    let _lock = lock();
+    let dbs = databases();
+
+    let to_evict: Vec<User> = dbs
+        .dynamic_pools
+        .iter()
+        .filter(|user| {
+            dbs.databases
+                .get(*user)
+                .map_or(false, |c| c.total_connections() == 0)
+        })
+        .cloned()
+        .collect();
+
+    if to_evict.is_empty() {
+        return;
+    }
+
+    let mut new_dbs = (*dbs).clone();
+    for user in &to_evict {
+        if let Some(cluster) = new_dbs.databases.remove(user) {
+            cluster.shutdown();
+            new_dbs.dynamic_pools.remove(user);
+            new_dbs.wildcard_pool_count = new_dbs.wildcard_pool_count.saturating_sub(1);
+        }
+    }
+    DATABASES.store(Arc::new(new_dbs));
+    info!("evicted {} idle wildcard pool(s)", to_evict.len());
 }
 
 /// Shutdown all databases.
@@ -319,9 +373,10 @@ pub(crate) fn add_wildcard_pool(
         );
 
         let databases = (*databases()).clone();
-        let (added, mut databases) = databases.add(pool_user, cluster.clone());
+        let (added, mut databases) = databases.add(pool_user.clone(), cluster.clone());
         if added {
             databases.wildcard_pool_count += 1;
+            databases.dynamic_pools.insert(pool_user);
             databases.launch();
             DATABASES.store(Arc::new(databases));
         }
@@ -466,6 +521,9 @@ pub struct Databases {
     /// Number of pools created dynamically via wildcard matching.
     /// Reset to zero on every config reload so the limit applies per-epoch.
     wildcard_pool_count: usize,
+    /// Keys of pools that were created dynamically via wildcard matching.
+    /// Used by the background eviction task to identify eligible candidates.
+    dynamic_pools: HashSet<User>,
 }
 
 impl Databases {
@@ -570,6 +628,18 @@ impl Databases {
     /// Get the full config snapshot used for creating wildcard pools.
     pub fn config_snapshot(&self) -> Option<&crate::config::ConfigAndUsers> {
         self.config_snapshot.as_deref()
+    }
+
+    /// Number of pools currently created via wildcard matching.
+    #[cfg(test)]
+    pub(crate) fn wildcard_pool_count(&self) -> usize {
+        self.wildcard_pool_count
+    }
+
+    /// Keys of dynamically-created wildcard pools.
+    #[cfg(test)]
+    pub(crate) fn dynamic_pools(&self) -> &HashSet<User> {
+        &self.dynamic_pools
     }
 
     /// Get a cluster for the user/database pair if it's configured.
@@ -960,6 +1030,7 @@ pub fn from_config(config: &ConfigAndUsers) -> Databases {
         wildcard_users,
         config_snapshot,
         wildcard_pool_count: 0,
+        dynamic_pools: HashSet::new(),
     }
 }
 

@@ -244,6 +244,11 @@ pub struct General {
     /// (e.g. via a SIGHUP config reload).
     #[serde(default)]
     pub max_wildcard_pools: usize,
+    /// Seconds a dynamically-created wildcard pool must have zero connections
+    /// before it is automatically removed. 0 disables automatic eviction;
+    /// pools are only cleaned up on SIGHUP or restart.
+    #[serde(default)]
+    pub wildcard_pool_idle_timeout: u64,
 }
 
 impl Default for General {
@@ -327,6 +332,7 @@ impl Default for General {
             cutover_timeout_action: Self::cutover_timeout_action(),
             cutover_save_config: bool::default(),
             max_wildcard_pools: 0,
+            wildcard_pool_idle_timeout: 0,
         }
     }
 }

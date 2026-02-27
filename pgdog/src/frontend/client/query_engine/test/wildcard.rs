@@ -1,4 +1,4 @@
-use crate::backend::databases::{add_wildcard_pool, databases};
+use crate::backend::databases::{add_wildcard_pool, databases, evict_idle_wildcard_pools};
 use crate::config::load_test_wildcard_with_limit;
 use crate::frontend::client::test::test_client::TestClient;
 use crate::net::{Parameters, Query};
@@ -182,5 +182,94 @@ async fn test_max_wildcard_pools_counter_resets_on_reload() {
     assert!(
         r3.unwrap().is_some(),
         "should succeed after reload resets the counter"
+    );
+}
+
+/// Eviction removes an idle wildcard pool and clears it from the dynamic-pool
+/// registry and the pool count.
+#[tokio::test]
+async fn test_evict_idle_wildcard_pools_removes_idle_pool() {
+    load_test_wildcard_with_limit(0);
+
+    let result = add_wildcard_pool("evict_user", "evict_db", None);
+    assert!(result.unwrap().is_some(), "pool should be created");
+
+    let dbs = databases();
+    assert!(
+        dbs.exists(("evict_user", "evict_db")),
+        "pool must exist before eviction"
+    );
+    assert!(
+        dbs.dynamic_pools()
+            .iter()
+            .any(|u| u.user == "evict_user" && u.database == "evict_db"),
+        "pool must be tracked in dynamic_pools"
+    );
+    assert!(dbs.wildcard_pool_count() >= 1, "counter must be positive");
+    drop(dbs);
+
+    // All freshly-created test pools have zero connections — eviction proceeds.
+    evict_idle_wildcard_pools();
+
+    let dbs = databases();
+    assert!(
+        !dbs.exists(("evict_user", "evict_db")),
+        "evicted pool must no longer be registered"
+    );
+    assert!(
+        !dbs.dynamic_pools()
+            .iter()
+            .any(|u| u.user == "evict_user" && u.database == "evict_db"),
+        "evicted pool must be removed from dynamic_pools"
+    );
+}
+
+/// Evicting a pool decrements `wildcard_pool_count` so that a new pool can be
+/// created even when the limit was full before eviction.
+#[tokio::test]
+async fn test_evict_idle_wildcard_pools_decrements_count() {
+    load_test_wildcard_with_limit(1);
+
+    // Fill the single slot.
+    let r = add_wildcard_pool("count_user", "count_db", None);
+    assert!(r.unwrap().is_some(), "slot should be filled");
+    assert_eq!(databases().wildcard_pool_count(), 1, "counter should be 1");
+
+    // Slot is full — a new pool is rejected.
+    let rejected = add_wildcard_pool("count_user", "other_db", None);
+    assert!(
+        rejected.unwrap().is_none(),
+        "must be rejected when at limit"
+    );
+
+    evict_idle_wildcard_pools();
+
+    assert_eq!(
+        databases().wildcard_pool_count(),
+        0,
+        "counter must drop to 0 after eviction"
+    );
+
+    // Now a new pool can be created again without reloading config.
+    let r2 = add_wildcard_pool("count_user", "new_db_after_eviction", None);
+    assert!(
+        r2.unwrap().is_some(),
+        "pool creation must succeed once eviction freed a slot"
+    );
+}
+
+/// When there are no dynamic pools, calling `evict_idle_wildcard_pools` is a
+/// safe no-op that doesn't disturb statically-configured pools.
+#[tokio::test]
+async fn test_evict_idle_wildcard_pools_noop_on_empty() {
+    load_test_wildcard_with_limit(0);
+
+    let before = databases().all().len();
+    evict_idle_wildcard_pools();
+    let after = databases().all().len();
+
+    assert_eq!(
+        before, after,
+        "static pools must be unaffected by eviction when no dynamic pools exist"
     );
 }
