@@ -1,18 +1,27 @@
 [workspace]
-
-members = [
-    "examples/demo",
-    "integration/rust",
-    "pgdog",
-    "pgdog-config",
-    "pgdog-macros",
-    "pgdog-plugin",
-    "pgdog-postgres-types",
-    "pgdog-stats",
-    "pgdog-vector",
-    "plugins/pgdog-example-plugin",
-]
 resolver = "2"
+members = [
+  "examples/demo",
+  "integration/rust",
+  "pgdog",
+  "pgdog-config",
+  "pgdog-macros",
+  "pgdog-plugin",
+  "pgdog-postgres-types",
+  "pgdog-stats",
+  "pgdog-vector",
+  "plugins/pgdog-example-plugin",
+  "scripts/*",
+]
+
+[workspace.package]
+edition = "2024"
+
+[workspace.dependencies]
+pgdog-plugin = { path = "./pgdog-plugin", version = "0.2.0" }
+pgdog-config = { path = "./pgdog-config", version = "0.1.0" }
+schemars = { version = "1.2.1", features = ["uuid1"] }
+serde_json = "1.0"
 
 # [patch.crates-io]
 # tokio = { path = "../tokio/tokio" }
@@ -21,14 +30,11 @@ resolver = "2"
 # pg_query = { path = "../pg_query.rs" }
 
 [profile.release]
-codegen-units = 1
 lto = true
+codegen-units = 1
 
 [profile.flamegraph]
 inherits = "release"
+debug = true
 lto = false
 codegen-units = 16
-debug = true
-
-[workspace.dependencies]
-pgdog-plugin = { path = "./pgdog-plugin", version = "0.2.0" }

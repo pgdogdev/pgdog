@@ -1,8 +1,9 @@
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs::read_to_string;
 use std::path::PathBuf;
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
 use crate::sharding::ShardedSchema;
 use crate::util::random_string;
@@ -40,7 +41,11 @@ impl ConfigAndUsers {
         let mut config: Config = if let Ok(config) = read_to_string(config_path) {
             let config = match toml::from_str(&config) {
                 Ok(config) => config,
-                Err(err) => return Err(Error::config(&config, err)),
+                Err(err) => {
+                    let error = Error::config(&config, err);
+                    error!("failed to load {}: {}", config_path.display(), error);
+                    return Err(error);
+                }
             };
             info!("loaded \"{}\"", config_path.display());
             config
@@ -57,7 +62,14 @@ impl ConfigAndUsers {
         }
 
         let mut users: Users = if let Ok(users) = read_to_string(users_path) {
-            let mut users: Users = toml::from_str(&users)?;
+            let mut users: Users = match toml::from_str(&users) {
+                Ok(config) => config,
+                Err(err) => {
+                    let error = Error::config(&users, err);
+                    error!("failed to load {}: {}", users_path.display(), error);
+                    return Err(error);
+                }
+            };
             users.check(&config);
             info!("loaded \"{}\"", users_path.display());
             users
@@ -126,35 +138,58 @@ impl Default for ConfigAndUsers {
 }
 
 /// Configuration.
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
-    /// General configuration.
+    /// General settings are relevant to the operations of the pooler itself, or apply to all database pools.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/
     #[serde(default)]
     pub general: General,
 
-    /// Rewrite configuration.
+    /// Controls PgDog's automatic SQL rewrites for sharded databases. It affects sharding key updates and multi-tuple inserts.
+    ///
+    /// **Note:** Consider enabling two-phase commit when either feature is set to `rewrite`. Without it, rewrites are committed shard-by-shard and can leave partial changes if a transaction fails.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/rewrite/
     #[serde(default)]
     pub rewrite: Rewrite,
 
-    /// TCP settings
+    /// PgDog speaks the Postgres protocol which, underneath, uses TCP. Optimal TCP settings are necessary to quickly recover from database incidents.
+    ///
+    /// **Note:** Not all networks support or play well with TCP keep-alives. If you see an increased number of dropped connections after enabling these settings, you may have to disable them.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/network/
     #[serde(default)]
     pub tcp: Tcp,
 
-    /// Multi-tenant
+    /// Multi-tenant isolation settings.
     pub multi_tenant: Option<MultiTenant>,
 
-    /// Servers.
+    /// Database settings configure which databases PgDog is managing. This is a TOML list of hosts, ports, and other settings like database roles (primary or replica).
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/databases/
     #[serde(default)]
     pub databases: Vec<Database>,
 
+    /// [Plugins](https://docs.pgdog.dev/features/plugins/) are dynamically loaded at PgDog startup. These settings control which plugins are loaded.
+    ///
+    /// **Note:** Plugins can only be configured at PgDog startup. They cannot be changed after the process is running.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/plugins/
     #[serde(default)]
     pub plugins: Vec<Plugin>,
 
+    /// Admin database settings control access to the [admin](https://docs.pgdog.dev/administration/) database which contains real time statistics about internal operations of PgDog.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/admin/
     #[serde(default)]
+    #[schemars(default = "crate::users::Admin::schemars_default_stub")]
     pub admin: Admin,
 
-    /// List of sharded tables.
+    /// To detect and route queries with sharding keys, PgDog expects the sharded column to be specified in the configuration.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/
     #[serde(default)]
     pub sharded_tables: Vec<ShardedTable>,
 
@@ -162,7 +197,11 @@ pub struct Config {
     #[serde(default)]
     pub manual_queries: Vec<ManualQuery>,
 
-    /// List of omnisharded tables.
+    /// Omnisharded tables are tables that contain the same data on all shards. This is useful for storing relatively static metadata used in joins or data that doesn't fit the sharding schema of the database, e.g., list of countries, global settings, list of blocked IPs, etc.
+    ///
+    /// **Note:** Unless explicitly configured as sharded tables, all tables default to omnisharded status, which makes configuration simpler, and doesn't require explicitly enumerating all tables in `pgdog.toml`.
+    ///
+    /// https://docs.pgdog.dev/features/sharding/omnishards/
     #[serde(default)]
     pub omnisharded_tables: Vec<OmnishardedTables>,
 
@@ -170,6 +209,9 @@ pub struct Config {
     #[serde(default)]
     pub sharded_mappings: Vec<ShardedMapping>,
 
+    /// [Schema-based sharding](https://docs.pgdog.dev/features/sharding/sharding-functions/#schema-based-sharding) places data from tables in different Postgres schemas on their own shards.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/sharded_schemas/
     #[serde(default)]
     pub sharded_schemas: Vec<ShardedSchema>,
 
@@ -181,11 +223,15 @@ pub struct Config {
     #[serde(default)]
     pub replication: Replication,
 
-    /// Mirroring configurations.
+    /// [Mirroring](https://docs.pgdog.dev/features/mirroring/) settings configure traffic mirroring between two databases. When enabled, query traffic is copied from the source database to the destination database, in real time.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/mirroring/
     #[serde(default)]
     pub mirroring: Vec<Mirroring>,
 
-    /// Memory tweaks
+    /// Memory settings control buffer sizes used by PgDog for network I/O and task execution.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/memory/
     #[serde(default)]
     pub memory: Memory,
 }
@@ -194,8 +240,7 @@ impl Config {
     /// Organize all databases by name for quicker retrieval.
     pub fn databases(&self) -> HashMap<String, Vec<Vec<EnumeratedDatabase>>> {
         let mut databases = HashMap::new();
-        let mut number = 0;
-        for database in &self.databases {
+        for (number, database) in self.databases.iter().enumerate() {
             let entry = databases
                 .entry(database.name.clone())
                 .or_insert_with(Vec::new);
@@ -209,7 +254,6 @@ impl Config {
                     number,
                     database: database.clone(),
                 });
-            number += 1;
         }
         databases
     }

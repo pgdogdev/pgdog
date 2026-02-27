@@ -1,0 +1,52 @@
+name: jsonschema
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - 'pgdog-config/src/**/*.rs'
+      - 'pgdog-config/Cargo.toml'
+      - 'scripts/jsonschema/src/**/*.rs'
+      - 'scripts/jsonschema/Cargo.toml'
+
+jobs:
+  check-schema:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+      - uses: tombi-toml/setup-tombi@v1
+      - name: Generate JSON schema
+        run: |
+          echo "Remove .cargo/config.toml temporarily to avoid installing additional tools"
+          rm .cargo/config.toml
+
+          cargo run -p pgdog-jsonschema --manifest-path ./pgdog/Cargo.toml
+
+          echo "Restore the .cargo/config.toml after script ran successfully"
+          git restore .cargo/config.toml
+      - name: Check for uncommitted schema changes
+        run: |
+          pwd
+          if ! git diff --exit-code .schema/; then
+            echo ""
+            echo "ERROR: JSON schema files are out of date."
+            echo ""
+            echo "The .schema/ files do not match the current pgdog-config types."
+            echo "Please run the following command locally and commit the result:"
+            echo ""
+            echo "  cargo run -p pgdog-jsonschema"
+            echo ""
+            exit 1
+          fi
+      - name: Run example.config toml validation
+        run: |
+          if ! tombi lint example.*.toml; then
+            echo ""
+            echo "ERROR: Example TOML config files failed schema validation."
+            echo "Update example.pgdog.toml / example.users.toml to match the latest schema."
+            echo ""
+            exit 1
+          fi
