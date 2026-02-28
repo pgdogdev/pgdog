@@ -4,6 +4,10 @@ database = "pgdog"
 password = "pgdog"
 
 [[users]]
+name = "pgdog2"
+database = "pgdog"
+
+[[users]]
 name = "pgdog_session"
 database = "pgdog"
 password = "pgdog"

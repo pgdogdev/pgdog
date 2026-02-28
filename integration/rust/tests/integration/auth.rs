@@ -91,3 +91,34 @@ async fn test_passthrough_auth() {
     user.execute("SELECT 1").await.unwrap();
     original.execute("SELECT 1").await.unwrap();
 }
+
+#[tokio::test]
+#[serial]
+async fn test_user_without_password_passthrough_auth() {
+    let admin = admin_sqlx().await;
+
+    admin.execute("RELOAD").await.unwrap();
+    admin.execute("SET auth_type TO 'scram'").await.unwrap();
+    assert_setting_str("auth_type", "scram").await;
+
+    let user = "postgres://pgdog2:pgdog@127.0.0.1:6432/pgdog";
+
+    let no_password_err = PgConnection::connect(user).await.err().unwrap();
+
+    assert!(
+        no_password_err
+            .to_string()
+            .contains("password for user \"pgdog2\" and database \"pgdog\" is wrong")
+    );
+
+    admin
+        .execute("SET passthrough_auth TO 'enabled_plain'")
+        .await
+        .unwrap();
+    assert_setting_str("passthrough_auth", "enabled_plain").await;
+
+    let mut user = PgConnection::connect(user).await.unwrap();
+
+    user.execute("SELECT 1").await.unwrap();
+    user.close().await.unwrap();
+}
