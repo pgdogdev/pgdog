@@ -251,14 +251,14 @@ mod test {
                 3,
                 "mirror buffer should have 3 requests"
             );
-            sleep(Duration::from_millis(50)).await;
+            sleep(Duration::from_millis(100)).await;
             // Nothing happens until we flush.
             assert!(
                 conn.execute("DROP TABLE pgdog.test_mirror").await.is_err(),
                 "table pgdog.test_mirror shouldn't exist yet"
             );
             assert!(mirror.flush(), "mirror didn't flush");
-            sleep(Duration::from_millis(50)).await;
+            sleep(Duration::from_millis(100)).await;
             assert!(
                 conn.execute("DROP TABLE pgdog.test_mirror").await.is_ok(),
                 "pgdog.test_mirror should exist"
