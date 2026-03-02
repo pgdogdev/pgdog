@@ -1,3 +1,4 @@
+#:schema ./.schema/users.schema.json
 #
 # Basic users configuration.
 #

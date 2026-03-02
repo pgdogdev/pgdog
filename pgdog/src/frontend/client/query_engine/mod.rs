@@ -247,6 +247,9 @@ impl QueryEngine {
                 let params = params.clone();
                 self.set(context, &params).await?;
             }
+            Command::ResetAll => {
+                self.reset_all(context).await?;
+            }
             Command::Copy(_) => self.execute(context).await?,
             Command::Deallocate => self.deallocate(context).await?,
             Command::Discard { extended } => self.discard(context, *extended).await?,
