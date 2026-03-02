@@ -10,6 +10,7 @@ pub struct SetParam {
     pub name: String,
     pub value: ParameterValue,
     pub local: bool,
+    pub reset: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -32,6 +33,7 @@ pub enum Command {
         params: Vec<SetParam>,
         route: Route,
     },
+    ResetAll,
     PreparedStatement(Prepare),
     InternalField {
         name: String,
