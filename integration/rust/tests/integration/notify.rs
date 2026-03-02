@@ -378,3 +378,36 @@ async fn test_notify_not_delivered_after_constraint_violation() {
     let _ = conn.execute("DROP TABLE test_notify_constraint").await;
     listener_task.abort();
 }
+
+#[tokio::test]
+async fn test_notify_session_mode() {
+    let mut listener =
+        PgListener::connect("postgres://pgdog_session:pgdog@127.0.0.1:6432/pgdog")
+            .await
+            .unwrap();
+
+    listener.listen("test_session_notify").await.unwrap();
+
+    let listener_task = spawn(async move {
+        let msg = timeout(Duration::from_secs(5), listener.recv())
+            .await
+            .expect("timed out waiting for notification")
+            .unwrap();
+
+        assert_eq!(msg.channel(), "test_session_notify");
+        assert_eq!(msg.payload(), "hello_from_session");
+    });
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let mut conn =
+        PgConnection::connect("postgres://pgdog_session:pgdog@127.0.0.1:6432/pgdog")
+            .await
+            .unwrap();
+
+    conn.execute("NOTIFY test_session_notify, 'hello_from_session'")
+        .await
+        .unwrap();
+
+    listener_task.await.unwrap();
+}
