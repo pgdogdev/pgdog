@@ -19,6 +19,7 @@ pub mod offset;
 pub mod per_stmt_routing;
 pub mod prepared;
 pub mod reload;
+pub mod reset;
 pub mod rewrite;
 pub mod savepoint;
 pub mod set_in_transaction;
