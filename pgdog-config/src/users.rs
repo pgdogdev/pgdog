@@ -93,7 +93,18 @@ impl Users {
 
 /// Backend authentication mode used by PgDog for server connections.
 #[derive(
-    Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq, Ord, PartialOrd, Hash, JsonSchema,
+    Serialize,
+    Deserialize,
+    Debug,
+    Clone,
+    Copy,
+    Default,
+    PartialEq,
+    Eq,
+    Ord,
+    PartialOrd,
+    Hash,
+    JsonSchema,
 )]
 #[serde(rename_all = "snake_case")]
 pub enum ServerAuth {
@@ -111,7 +122,6 @@ impl ServerAuth {
 }
 
 /// User allowed to connect to pgDog.
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, Ord, PartialOrd)]
 /// A user entry in `users.toml`, controlling which users are allowed to connect to PgDog.
 ///
 /// https://docs.pgdog.dev/configuration/users.toml/users/
