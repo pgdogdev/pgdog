@@ -378,3 +378,13 @@ async fn test_notify_not_delivered_after_constraint_violation() {
     let _ = conn.execute("DROP TABLE test_notify_constraint").await;
     listener_task.abort();
 }
+
+#[tokio::test]
+async fn test_listen_session_mode() {
+    let mut conn = PgConnection::connect("postgres://pgdog_session:pgdog@127.0.0.1:6432/pgdog")
+        .await
+        .unwrap();
+
+    conn.execute("LISTEN test_session_channel").await.unwrap();
+    conn.execute("UNLISTEN test_session_channel").await.unwrap();
+}
