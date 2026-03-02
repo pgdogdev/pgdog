@@ -14,6 +14,7 @@ static WRITE_ONLY: Lazy<HashMap<&'static str, LockingBehavior>> = Lazy::new(|| {
         ("pg_try_advisory_lock_shared", LockingBehavior::Lock),
         ("pg_try_advisory_xact_lock_shared", LockingBehavior::None),
         ("pg_advisory_unlock_all", LockingBehavior::Unlock),
+        ("pg_advisory_unlock", LockingBehavior::Unlock), // TODO: we don't track multiple advisory locks.
         ("nextval", LockingBehavior::None),
         ("setval", LockingBehavior::None),
     ])
@@ -89,6 +90,12 @@ impl<'a> TryFrom<&'a Node> for Function<'a> {
             Some(NodeEnum::ResTarget(res)) => {
                 if let Some(val) = &res.val {
                     return Self::try_from(val.as_ref());
+                }
+            }
+
+            Some(NodeEnum::NullTest(test)) => {
+                if let Some(node) = test.arg.as_ref() {
+                    return Self::try_from(node.as_ref());
                 }
             }
 

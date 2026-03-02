@@ -127,3 +127,65 @@ func TestPqCrud(t *testing.T) {
 		}
 	}
 }
+
+func TestAdvisoryLockWithTransaction(t *testing.T) {
+	adminConn, err := sql.Open("postgres", "postgres://admin:pgdog@127.0.0.1:6432/admin?sslmode=disable")
+	assert.Nil(t, err)
+	defer adminConn.Close()
+
+	_, err = adminConn.Exec("SET prepared_statements TO 'extended_anonymous'")
+	assert.Nil(t, err)
+
+	_, err = adminConn.Exec("SET query_parser TO 'on'")
+	assert.Nil(t, err)
+
+	conn, err := sql.Open("postgres", "postgres://pgdog:pgdog@127.0.0.1:6432/pgdog?sslmode=disable")
+	assert.Nil(t, err)
+	defer conn.Close()
+
+	conn.SetMaxOpenConns(1)
+
+	lockKey := rand.Int63()
+
+	// 1. Take an advisory lock
+	var lockResult bool
+	err = conn.QueryRow("SELECT pg_advisory_lock($1) IS NOT NULL", lockKey).Scan(&lockResult)
+	assert.Nil(t, err)
+	assert.True(t, lockResult)
+
+	// 2. Start a transaction
+	tx, err := conn.Begin()
+	assert.Nil(t, err)
+
+	// 3. Run a couple queries inside the transaction
+	var one int
+	err = tx.QueryRow("SELECT 1").Scan(&one)
+	assert.Nil(t, err)
+	assert.Equal(t, 1, one)
+
+	var two int
+	err = tx.QueryRow("SELECT 2").Scan(&two)
+	assert.Nil(t, err)
+	assert.Equal(t, 2, two)
+
+	// 4. Commit the transaction
+	err = tx.Commit()
+	assert.Nil(t, err)
+
+	// 5. Run some queries outside of the transaction
+	var three int
+	err = conn.QueryRow("SELECT 3").Scan(&three)
+	assert.Nil(t, err)
+	assert.Equal(t, 3, three)
+
+	var four int
+	err = conn.QueryRow("SELECT 4").Scan(&four)
+	assert.Nil(t, err)
+	assert.Equal(t, 4, four)
+
+	// 6. Release the advisory lock
+	var unlockResult bool
+	err = conn.QueryRow("SELECT pg_advisory_unlock($1)", lockKey).Scan(&unlockResult)
+	assert.Nil(t, err)
+	assert.True(t, unlockResult)
+}

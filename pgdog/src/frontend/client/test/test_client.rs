@@ -199,6 +199,11 @@ impl TestClient {
         self.engine.backend().connected()
     }
 
+    /// Check if the backend is locked to this client.
+    pub(crate) fn backend_locked(&mut self) -> bool {
+        self.engine.backend().locked()
+    }
+
     /// Generate a random ID for a given shard.
     pub(crate) fn random_id_for_shard(&mut self, shard: usize) -> i64 {
         let cluster = self.engine.backend().cluster().unwrap().clone();

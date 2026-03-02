@@ -81,7 +81,7 @@ pub struct Route {
     order_by: Vec<OrderBy>,
     aggregate: Aggregate,
     limit: Limit,
-    lock_session: bool,
+    lock_session: Option<bool>,
     distinct: Option<DistinctBy>,
     maintenance: bool,
     rewrite_plan: AggregateRewritePlan,
@@ -284,11 +284,23 @@ impl Route {
             locking_behavior,
         } = write;
         self.read = !writes;
-        self.lock_session = matches!(locking_behavior, LockingBehavior::Lock);
+        self.lock_session = match locking_behavior {
+            LockingBehavior::Lock => Some(true),
+            LockingBehavior::Unlock => Some(false),
+            LockingBehavior::None => None,
+        };
     }
 
     pub fn is_lock_session(&self) -> bool {
+        self.lock_session == Some(true)
+    }
+
+    pub fn lock_session(&self) -> Option<bool> {
         self.lock_session
+    }
+
+    pub fn is_unlock_session(&self) -> bool {
+        self.lock_session == Some(false)
     }
 
     pub fn distinct(&self) -> &Option<DistinctBy> {

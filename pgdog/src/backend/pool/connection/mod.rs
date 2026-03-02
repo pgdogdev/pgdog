@@ -384,6 +384,12 @@ impl Connection {
         }
     }
 
+    /// Check if this connection is locked to a client.
+    #[cfg(test)]
+    pub(crate) fn locked(&self) -> bool {
+        self.locked
+    }
+
     /// Get connected servers addresses.
     pub(crate) fn addr(&self) -> Result<Vec<&Address>, Error> {
         Ok(match self.binding {
