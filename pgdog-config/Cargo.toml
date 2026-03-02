@@ -14,6 +14,7 @@ uuid = { version = "1", features = ["v4", "serde"] }
 rand = "*"
 pgdog-vector = { path = "../pgdog-vector" }
 once_cell = "*"
+schemars.workspace = true
 
 [dev-dependencies]
 tempfile = "3.23.0"

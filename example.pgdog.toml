@@ -1,3 +1,4 @@
+#:schema ./.schema/pgdog.schema.json
 #
 # PgDog configuration.
 #
@@ -9,7 +10,6 @@
 # Most non-specific configuration is found here.
 #
 [general]
-
 # PgDog host.
 #
 # Example:
@@ -19,27 +19,22 @@
 #
 # Default: 0.0.0.0
 host = "0.0.0.0"
-
 # PgDog port. Default: 6432
 port = 6432
-
 # Number of Tokio threads to serve requests.
 #
 # Default: 2
 # Recommended: 2 per CPU
 workers = 2
-
 # Maximum number of Postgres connections per user/database connection pool.
 #
 # Default: 10
 default_pool_size = 10
-
 # Minimum number of Postgres connections to maintain per user/database connection pool.
 # This many connections will be created at PgDog startup and maintained.
 #
 # Default: 1
 min_pool_size = 1
-
 # Multiplexer mode. Allows to re-use Postgres connections between multiple clients.
 #
 # Transaction mode allows re-use. Session mode locks Postgres connections to a
@@ -48,39 +43,32 @@ min_pool_size = 1
 # Default: transaction
 #
 pooler_mode = "transaction"
-
 # How often to check pool connections before giving them to a client.
 #
 # Default: 30 seconds
 healthcheck_interval = 30_000
-
 # How often to check databases with a health check. This happens independently from clients
 # and runs on a separate loop. This is helpful if databases aren't frequently used.
 #
 # Default: 30 seconds
 idle_healthcheck_interval = 30_000
-
 # How long to wait after PgDog startup to start idle health checks. This gives PgDog time to
 # warm up connection pools before health checks start running.
 #
 # Default: 5 seconds
 idle_healthcheck_delay = 5_000
-
 # How long to wait for a health check to complete before banning a database.
 #
 # Default: 5 seconds
 healthcheck_timeout = 5_000
-
 # Databases are automatically unbanned after this amount of time.
 #
 # Default: 5 minutes
 ban_timeout = 300_000
-
 # How long to wait for an automatic rollback to complete on abandoned transactions.
 #
 # Default: 5 seconds
 rollback_timeout = 5_000
-
 # Which strategy to use for the load balancing of transactions. Only available if PgDog is
 # in transaction mode.
 #
@@ -91,7 +79,6 @@ rollback_timeout = 5_000
 # - least_active_connections
 # - round_robin
 load_balancing_strategy = "random"
-
 # How to split read queries from write queries.
 #
 # Conservative strategy routes all explicit transactions to the primary.
@@ -99,18 +86,14 @@ load_balancing_strategy = "random"
 #
 # Default: conservative
 read_write_strategy = "conservative"
-
 # Path to PEM-encoded TLS certificate to use for client connections.
 tls_certificate = "relative/or/absolute/path/to/certificate.pem"
-
 # Path to PEM-encoded TLS certificate private key
 tls_private_key = "relative/or/absolute/path/to/private_key.pem"
-
 # Require clients to use TLS when connecting
 #
 # Default: false
 tls_client_required = false
-
 # TLS mode for Postgres server connections.
 #
 # Default: disabled
@@ -121,37 +104,31 @@ tls_client_required = false
 # - verify-ca
 # - verify-full
 tls_verify = "disabled"
-
 # Path to PEM-encoded certificate bundle to use for Postgres server
 # certificate validation.
 tls_server_ca_certificate = "relative/or/absolute/path/to/certificate.pem"
-
 # How long to wait for active connections to finish transactions
 # when shutting down PgDog.
 #
 # Default: 60 seconds
 shutdown_timeout = 60_000
-
 # How long to wait for active connections to be forcibly terminated
 # after shutdown_timeout expires.
 #
 # Default: disabled
 shutdown_termination_timeout = 60_000
-
 # OpenMetrics server port.
 #
 # If set, enables Prometheus-style metrics exporter.
 #
 # Default: not set
 openmetrics_port = 9090
-
 # Namespace to use for Prometheus metrics.
 #
 # Disambiguates metric names from metrics scraped from other apps.
 #
 # Default: none
 openmetrics_namespace = "pgdog_"
-
 # Configure levels of support for prepared statements.
 #
 # Default: enabled
@@ -163,28 +140,24 @@ openmetrics_namespace = "pgdog_"
 #
 # Default: extended
 prepared_statements = "extended"
-
 # Will override the default and enable query parsing. This can be useful if
 # you don't have a primary/replica, have one shard, and don't want
 # prepared_statements = 'full' but still want to enable query parsing
 # in order to synchronise your clients `set` commands for instance.
 # NOTE: true enables, and false will just fallback to default behaviour.
 query_parser_enabled = true
-
 # Limit on the number of prepared statements active on
 # any Postgres server connection.
 #
 # Default: unlimited
 #
 prepared_statements_limit = 1_000
-
 # Limit on the number of queries cached in the Abstract Syntax Tree
 # cache used for query routing and sharding.
 #
 # Default: unlimited
 #
 query_cache_limit = 1_000
-
 # Authentication passthrough.
 #
 # If enabled, passwords in users.toml are optional and PgDog will ask
@@ -198,13 +171,11 @@ query_cache_limit = 1_000
 # - enabled_plain
 #
 passthrough_auth = "disabled"
-
 # How long to wait for Postgres server connections to be created by the pool before
 # returning an error and banning the database.
 #
 # Default: 5 seconds
 connect_timeout = 5_000
-
 # How many times to retry connection creation before banning the database from serving
 # more queries.
 #
@@ -212,12 +183,10 @@ connect_timeout = 5_000
 #
 # Default: 1
 connect_attempts = 1
-
 # How long to wait between connection attempts.
 #
 # Default: 0
 connect_attempt_delay = 1_000
-
 # How long to give a Postgres server to execute a query. Transaction will be aborted
 # automatically if this delay expires.
 #
@@ -225,34 +194,28 @@ connect_attempt_delay = 1_000
 #
 # Default: unlimited
 query_timeout = 60_000
-
 # How long to wait for a connection from a pool. Pool is banned if this expires.
 #
 # Default: 5 seconds
 checkout_timeout = 5_000
-
 # Enable the query parser to detect query compatibility with sharding.
 #
 # Default: disabled
 #
 dry_run = false
-
 # Close unused pool connections above min_pool_size after this long.
 #
 # Default: 60 seconds
 idle_timeout = 60_000
-
 # Client idle timeout. How long to wait for clients to send another transaction
 # before disconnecting them.
 #
 # Default: unlimited
 client_idle_timeout = 60_000
-
 # Size of the mirror queue. Queries that don't fit are dropped.
 #
 # Default: 128
 mirror_queue = 128
-
 # Authentication type to use for client connections.
 #
 # Default: scram
@@ -262,12 +225,10 @@ mirror_queue = 128
 # - md5
 # - trust
 auth_type = "scram"
-
 # Disable cross-shard queries.
 #
 # Default: false
 cross_shard_disabled = false
-
 # Override default TTL on DNS records used for server connections.
 #
 # Default: disabled
@@ -282,18 +243,15 @@ dns_ttl = 5_000
 #
 # Default: admin
 name = "admin"
-
 # Password for the admin database.
 #
 # Default: random (disables access)
 #
 password = "pgdog"
-
 # Name of the user that can connect to the admin database.
 #
 # Default: admin
 user = "admin"
-
 
 #
 # Simple (unsharded) database.
@@ -302,13 +260,10 @@ user = "admin"
 # Name of the database. This is what your clients will need to specify in
 # their config.
 name = "pgdog"
-
 # Postgres server adddress.
 host = "127.0.0.1"
-
 # Postgres server port.
 port = 5432
-
 # Database role.
 #
 # Default: primary
@@ -325,42 +280,12 @@ role = "primary"
 [[databases]]
 # Same name as the primary database above.
 name = "pgdog"
-
 # Postgres server address.
 host = "127.0.0.1"
-
 # Postgres server port.
 port = 5432
-
 # Role set to replica.
 role = "replica"
-
-[rewrite]
-enabled = false
-shard_key = "ignore"
-split_inserts = "error"
-
-#
-# TCP tweaks.
-#
-[tcp]
-# Enable keep-alives.
-retries = 3
-
-# How long to wait for keep-alive messages to start sending on idle connections.
-time = 1000
-
-# Time between keep-alive messages.
-interval = 1000
-
-# Read timeout on the socket. How long to wait for data sent to be acked.
-user_timeout = 1000
-
-# How many times to retry a keep-alive probe before closing the connection.
-connect_retries = 3
-
-# TCP congestion control algorith.
-congestion_control = "reno"
 
 #
 # Sharded cluster with two primaries.
@@ -395,6 +320,28 @@ shard = 1
 role = "replica"
 read_only = true
 
+[rewrite]
+enabled = false
+shard_key = "ignore"
+split_inserts = "error"
+
+#
+# TCP tweaks.
+#
+[tcp]
+# Enable TCP keep-alive probing on idle client and server connections.
+keepalive = true
+# How many consecutive failed keep-alive probes before the connection is terminated.
+retries = 3
+# How long to wait for keep-alive messages to start sending on idle connections.
+time = 1000
+# Time between keep-alive messages.
+interval = 1000
+# Read timeout on the socket. How long to wait for data sent to be acked.
+user_timeout = 1000
+# TCP congestion control algorithm.
+congestion_control = "reno"
+
 #
 # Read/write access to theses tables will be automatically
 # sharded.
@@ -423,6 +370,17 @@ primary = true
 # start = 100
 # shard = 1
 
+[[sharded_tables]]
+column = "customer_id"
+database = "pgdog_sharded"
+data_type = "bigint"
+
+[[sharded_tables]]
+database = "pgdog_sharded"
+name = "sharded_varchar"
+column = "id_varchar"
+data_type = "varchar"
+
 [[sharded_mappings]]
 database = "pgdog_sharded"
 table = "sharded"
@@ -439,18 +397,6 @@ kind = "list"
 values = [5, 6, 7]
 shard = 1
 
-
-[[sharded_tables]]
-column = "customer_id"
-database = "pgdog_sharded"
-data_type = "bigint"
-
-[[sharded_tables]]
-database = "pgdog_sharded"
-name = "sharded_varchar"
-column = "id_varchar"
-data_type = "varchar"
-
 #
 # ActiveRecord sends these queries
 # at startup to figure out the schema.
@@ -459,28 +405,28 @@ data_type = "varchar"
 # cross-shard queries and getting incorrect results.
 #
 [[manual_queries]]
-fingerprint = "e78fe2c08de5f079" #[16685804461073231993]
+fingerprint = "e78fe2c08de5f079"  # [16685804461073231993]
 
 [[manual_queries]]
-fingerprint = "43258d068030bb3e" #[4838428433739463486]
+fingerprint = "43258d068030bb3e"  # [4838428433739463486]
 
 [[manual_queries]]
-fingerprint = "08aab2cee482a97d" #[624508100011010429]
+fingerprint = "08aab2cee482a97d"  # [624508100011010429]
 
 [[manual_queries]]
-fingerprint = "23cd60d5972d1712" #[2579824632033777426]
+fingerprint = "23cd60d5972d1712"  # [2579824632033777426]
 
 [[manual_queries]]
-fingerprint = "bb38525ebeb46656" #[13490623250668217942]
+fingerprint = "bb38525ebeb46656"  # [13490623250668217942]
 
 [[manual_queries]]
-fingerprint = "f4814b6fadabc4c1" #[17618446160277259457]
+fingerprint = "f4814b6fadabc4c1"  # [17618446160277259457]
 
 [[manual_queries]]
 fingerprint = "04dc05f480b702d3"
 
 [[manual_queries]]
-fingerprint = "2d9944fc9caeaadd" # [3285733254894627549]
+fingerprint = "2d9944fc9caeaadd"  # [3285733254894627549]
 
 # [multi_tenant]
 # column = "tenant_id"

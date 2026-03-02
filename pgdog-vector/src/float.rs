@@ -4,10 +4,11 @@ use std::{
     hash::{Hash, Hasher},
 };
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Wrapper type for f32 that implements Ord for PostgreSQL compatibility
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema)]
 pub struct Float(pub f32);
 
 impl PartialOrd for Float {

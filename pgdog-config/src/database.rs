@@ -1,3 +1,4 @@
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::{
     fmt::Display,
@@ -7,11 +8,16 @@ use std::{
 
 use super::pooling::PoolerMode;
 
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Copy)]
+/// How aggressive the query parser should be in determining read vs. write queries.
+///
+/// https://docs.pgdog.dev/configuration/pgdog.toml/general/#read_write_strategy
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Copy, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ReadWriteStrategy {
+    /// Transactions are writes, standalone `SELECT` are reads (default).
     #[default]
     Conservative,
+    /// Use first statement inside a transaction for determining query route.
     Aggressive,
 }
 
@@ -27,12 +33,20 @@ impl FromStr for ReadWriteStrategy {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Copy)]
+/// Which strategy to use for load balancing read queries.
+///
+/// Note: See [load balancer](https://docs.pgdog.dev/features/load-balancer/) for more details.
+///
+/// https://docs.pgdog.dev/configuration/pgdog.toml/general/#load_balancing_strategy
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Copy, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum LoadBalancingStrategy {
+    /// Select a replica at random (default).
     #[default]
     Random,
+    /// Distribute queries in a round-robin sequence.
     RoundRobin,
+    /// Route to the replica with the fewest active connections.
     LeastActiveConnections,
 }
 
@@ -49,12 +63,18 @@ impl FromStr for LoadBalancingStrategy {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Copy)]
+/// How to handle the separation of read and write queries.
+///
+/// https://docs.pgdog.dev/configuration/pgdog.toml/general/#read_write_split
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Copy, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ReadWriteSplit {
+    /// Uses the primary database as well as the replicas to serve read queries (default).
     #[default]
     IncludePrimary,
+    /// Sends all read queries to replicas, leaving the primary to serve only writes.
     ExcludePrimary,
+    /// Sends reads to the primary only if one or more replicas have been banned.
     IncludePrimaryIfReplicaBanned,
 }
 
@@ -83,47 +103,85 @@ impl Display for ReadWriteSplit {
     }
 }
 
-/// Database server proxied by pgDog.
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Ord, PartialOrd, Eq)]
+/// Database settings configure which databases PgDog is managing. This is a TOML list of hosts, ports, and other settings like database roles (primary or replica).
+///
+/// https://docs.pgdog.dev/configuration/pgdog.toml/databases/
+#[derive(
+    Serialize, Deserialize, Debug, Clone, Default, PartialEq, Ord, PartialOrd, Eq, JsonSchema,
+)]
 #[serde(deny_unknown_fields)]
 pub struct Database {
-    /// Database name visible to the clients.
+    /// Name of your database. Clients that connect to PgDog will need to use this name to refer to the database. For multiple entries that are part of the same cluster, use the same value.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/databases/#name
     pub name: String,
-    /// Database role, e.g. primary.
+    /// Type of role this host performs in your database cluster. This can be `primary` for primary databases that serve writes (and reads), `replica` for PostgreSQL replicas that can only serve reads, or `auto` to let PgDog decide.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/databases/#role
     #[serde(default)]
     pub role: Role,
-    /// Database host or IP address, e.g. 127.0.0.1.
+    /// IP address or DNS name of the machine where the PostgreSQL server is running.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/databases/#host
     pub host: String,
-    /// Database port, e.g. 5432.
+    /// The port PostgreSQL is running on. More often than not, this is going to be `5432`.
+    ///
+    /// _Default:_ `5432`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/databases/#port
     #[serde(default = "Database::port")]
     pub port: u16,
-    /// Shard.
+    /// The shard number for this database. Only required if your database contains more than one shard. Shard numbers start at 0.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/databases/#shard
     #[serde(default)]
     pub shard: usize,
-    /// PostgreSQL database name, e.g. "postgres".
+    /// Name of the PostgreSQL database on the server PgDog will connect to. If not set, this defaults to `name`.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/databases/#database_name
     pub database_name: Option<String>,
-    /// Use this user to connect to the database, overriding the userlist.
+    /// Name of the PostgreSQL user to connect with when creating backend connections from PgDog to Postgres. If not set, this defaults to `name` in users.toml.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/databases/#user
     pub user: Option<String>,
-    /// Use this password to login, overriding the userlist.
+    /// Password to use when creating backend connections to PostgreSQL. If not set, this defaults to `password` in users.toml.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/databases/#password
     pub password: Option<String>,
     // Maximum number of connections to this database from this pooler.
     // #[serde(default = "Database::max_connections")]
     // pub max_connections: usize,
-    /// Pool size for this database pools, overriding `default_pool_size`.
+    /// Overrides the [`default_pool_size`](https://docs.pgdog.dev/configuration/pgdog.toml/general/#default_pool_size) setting. All connection pools for this database will open at most this many connections to Postgres.
+    ///
+    /// **Note:** We strongly recommend keeping this value well below the supported connections of the backend database(s) to allow connections for maintenance in high load scenarios.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/databases/#pool_size
     pub pool_size: Option<usize>,
-    /// Minimum pool size for this database pools, overriding `min_pool_size`.
+    /// Overrides the `min_pool_size` setting. The connection pool will maintain at minimum this many connections.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/databases/#min_pool_size
     pub min_pool_size: Option<usize>,
-    /// Pooler mode.
+    /// Overrides the `pooler_mode` setting. Connections to this database will use this connection pool mode.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/databases/#pooler_mode
     pub pooler_mode: Option<PoolerMode>,
-    /// Statement timeout.
+    /// This setting configures the `statement_timeout` connection parameter on all connections to Postgres for this database.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/databases/#statement_timeout
     pub statement_timeout: Option<u64>,
-    /// Idle timeout.
+    /// Overrides the `idle_timeout` setting. Idle server connections exceeding this timeout will be closed automatically.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/databases/#idle_timeout
     pub idle_timeout: Option<u64>,
-    /// Read-only mode.
+    /// Sets the `default_transaction_read_only` connection parameter to `on` on all server connections to this database. Clients can still override it with `SET`.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/databases/#read_only
     pub read_only: Option<bool>,
-    /// Server lifetime.
+    /// Overrides the `server_lifetime` setting. Server connections older than this will be closed when returned to the pool.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/databases/#server_lifetime
     pub server_lifetime: Option<u64>,
-    /// Used for resharding only.
+    /// Used for resharding only; this database will not serve regular traffic.
     #[serde(default)]
     pub resharding_only: bool,
 }
@@ -139,14 +197,31 @@ impl Database {
     }
 }
 
+/// Role a PostgreSQL server performs in a cluster.
+///
+/// https://docs.pgdog.dev/configuration/pgdog.toml/databases/#role
 #[derive(
-    Serialize, Deserialize, Debug, Clone, Default, PartialEq, Ord, PartialOrd, Eq, Hash, Copy,
+    Serialize,
+    Deserialize,
+    Debug,
+    Clone,
+    Default,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Eq,
+    Hash,
+    Copy,
+    JsonSchema,
 )]
 #[serde(rename_all = "snake_case")]
 pub enum Role {
+    /// Primary database that serves writes (and reads) (default).
     #[default]
     Primary,
+    /// PostgreSQL replica that can only serve reads.
     Replica,
+    /// Role is detected automatically by PgDog at runtime.
     Auto,
 }
 
