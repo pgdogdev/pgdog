@@ -230,6 +230,11 @@ impl QueryEngine {
                 context.params.rollback();
             }
             Command::Query(_) => self.execute(context).await?,
+            Command::Listen { .. } | Command::Notify { .. } | Command::Unlisten(_)
+                if self.backend.session_mode() =>
+            {
+                self.execute(context).await?
+            }
             Command::Listen { channel, shard } => {
                 self.listen(context, &channel.clone(), shard.clone())
                     .await?
