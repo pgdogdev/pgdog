@@ -381,10 +381,9 @@ async fn test_notify_not_delivered_after_constraint_violation() {
 
 #[tokio::test]
 async fn test_notify_session_mode() {
-    let mut listener =
-        PgListener::connect("postgres://pgdog_session:pgdog@127.0.0.1:6432/pgdog")
-            .await
-            .unwrap();
+    let mut listener = PgListener::connect("postgres://pgdog_session:pgdog@127.0.0.1:6432/pgdog")
+        .await
+        .unwrap();
 
     listener.listen("test_session_notify").await.unwrap();
 
@@ -400,10 +399,9 @@ async fn test_notify_session_mode() {
 
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    let mut conn =
-        PgConnection::connect("postgres://pgdog_session:pgdog@127.0.0.1:6432/pgdog")
-            .await
-            .unwrap();
+    let mut conn = PgConnection::connect("postgres://pgdog_session:pgdog@127.0.0.1:6432/pgdog")
+        .await
+        .unwrap();
 
     conn.execute("NOTIFY test_session_notify, 'hello_from_session'")
         .await
