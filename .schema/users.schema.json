@@ -68,8 +68,23 @@
         }
       ]
     },
+    "ServerAuth": {
+      "description": "Backend authentication mode used by PgDog for server connections.",
+      "oneOf": [
+        {
+          "description": "Use configured static password.",
+          "type": "string",
+          "const": "password"
+        },
+        {
+          "description": "Generate an AWS RDS IAM auth token per connection attempt.",
+          "type": "string",
+          "const": "rds_iam"
+        }
+      ]
+    },
     "User": {
-      "description": "A user entry in `users.toml`, controlling which users are allowed to connect to PgDog.\n\nhttps://docs.pgdog.dev/configuration/users.toml/users/",
+      "description": "User allowed to connect to pgDog.\nA user entry in `users.toml`, controlling which users are allowed to connect to PgDog.\n\nhttps://docs.pgdog.dev/configuration/users.toml/users/",
       "type": "object",
       "properties": {
         "all_databases": {
@@ -170,6 +185,18 @@
           "type": "boolean",
           "default": false
         },
+        "server_auth": {
+          "description": "Backend auth mode for server connections.",
+          "$ref": "#/$defs/ServerAuth",
+          "default": "password"
+        },
+        "server_iam_region": {
+          "description": "Optional region override for RDS IAM token generation.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "server_lifetime": {
           "description": "Server connections older than this (in milliseconds) will be closed when returned to the pool.",
           "type": [
@@ -194,7 +221,7 @@
           ]
         },
         "statement_timeout": {
-          "description": "Sets the `statement_timeout` on all server connections at connection creation. This allows you to set a reasonable default for each user without modifying `postgresql.conf` or using `ALTER USER`.\n\n**Note:** Nothing is preventing the user from manually changing this setting at runtime, e.g., by running `SET statement_timeout TO 0`;\n\nhttps://docs.pgdog.dev/configuration/users.toml/users/#statement_timeout",
+          "description": "Statement timeout.\n\nSets the `statement_timeout` on all server connections at connection creation. This allows you to set a reasonable default for each user without modifying `postgresql.conf` or using `ALTER USER`.\n\n**Note:** Nothing is preventing the user from manually changing this setting at runtime, e.g., by running `SET statement_timeout TO 0`;\n\nhttps://docs.pgdog.dev/configuration/users.toml/users/#statement_timeout",
           "type": [
             "integer",
             "null"
