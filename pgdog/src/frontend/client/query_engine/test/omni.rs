@@ -9,13 +9,7 @@ use super::prelude::*;
 async fn test_omni_update_returns_single_shard_count() {
     let mut client = TestClient::new_sharded(Parameters::default()).await;
 
-    // Setup: create table and insert data on both shards
-    client
-        .send_simple(Query::new(
-            "CREATE TABLE IF NOT EXISTS sharded_omni (id BIGINT PRIMARY KEY, value TEXT)",
-        ))
-        .await;
-    client.read_until('Z').await.unwrap();
+    // Setup: table is provisioned by integration/setup.sh
 
     client
         .send_simple(Query::new("DELETE FROM sharded_omni"))
@@ -47,7 +41,7 @@ async fn test_omni_update_returns_single_shard_count() {
 
     // Cleanup
     client
-        .send_simple(Query::new("DROP TABLE IF EXISTS sharded_omni"))
+        .send_simple(Query::new("DELETE FROM sharded_omni"))
         .await;
     client.read_until('Z').await.unwrap();
 }
@@ -56,13 +50,7 @@ async fn test_omni_update_returns_single_shard_count() {
 async fn test_omni_delete_returns_single_shard_count() {
     let mut client = TestClient::new_sharded(Parameters::default()).await;
 
-    // Setup
-    client
-        .send_simple(Query::new(
-            "CREATE TABLE IF NOT EXISTS sharded_omni (id BIGINT PRIMARY KEY, value TEXT)",
-        ))
-        .await;
-    client.read_until('Z').await.unwrap();
+    // Setup: table is provisioned by integration/setup.sh
 
     client
         .send_simple(Query::new("DELETE FROM sharded_omni"))
@@ -92,7 +80,7 @@ async fn test_omni_delete_returns_single_shard_count() {
 
     // Cleanup
     client
-        .send_simple(Query::new("DROP TABLE IF EXISTS sharded_omni"))
+        .send_simple(Query::new("DELETE FROM sharded_omni"))
         .await;
     client.read_until('Z').await.unwrap();
 }
@@ -101,13 +89,7 @@ async fn test_omni_delete_returns_single_shard_count() {
 async fn test_omni_insert_returns_single_shard_count() {
     let mut client = TestClient::new_sharded(Parameters::default()).await;
 
-    // Setup
-    client
-        .send_simple(Query::new(
-            "CREATE TABLE IF NOT EXISTS sharded_omni (id BIGINT PRIMARY KEY, value TEXT)",
-        ))
-        .await;
-    client.read_until('Z').await.unwrap();
+    // Setup: table is provisioned by integration/setup.sh
 
     client
         .send_simple(Query::new("DELETE FROM sharded_omni"))
@@ -132,7 +114,7 @@ async fn test_omni_insert_returns_single_shard_count() {
 
     // Cleanup
     client
-        .send_simple(Query::new("DROP TABLE IF EXISTS sharded_omni"))
+        .send_simple(Query::new("DELETE FROM sharded_omni"))
         .await;
     client.read_until('Z').await.unwrap();
 }
@@ -141,13 +123,7 @@ async fn test_omni_insert_returns_single_shard_count() {
 async fn test_omni_update_returning_only_from_one_shard() {
     let mut client = TestClient::new_sharded(Parameters::default()).await;
 
-    // Setup
-    client
-        .send_simple(Query::new(
-            "CREATE TABLE IF NOT EXISTS sharded_omni (id BIGINT PRIMARY KEY, value TEXT)",
-        ))
-        .await;
-    client.read_until('Z').await.unwrap();
+    // Setup: table is provisioned by integration/setup.sh
 
     client
         .send_simple(Query::new("DELETE FROM sharded_omni"))
@@ -194,7 +170,7 @@ async fn test_omni_update_returning_only_from_one_shard() {
 
     // Cleanup
     client
-        .send_simple(Query::new("DROP TABLE IF EXISTS sharded_omni"))
+        .send_simple(Query::new("DELETE FROM sharded_omni"))
         .await;
     client.read_until('Z').await.unwrap();
 }
@@ -203,13 +179,7 @@ async fn test_omni_update_returning_only_from_one_shard() {
 async fn test_omni_delete_returning_only_from_one_shard() {
     let mut client = TestClient::new_sharded(Parameters::default()).await;
 
-    // Setup
-    client
-        .send_simple(Query::new(
-            "CREATE TABLE IF NOT EXISTS sharded_omni (id BIGINT PRIMARY KEY, value TEXT)",
-        ))
-        .await;
-    client.read_until('Z').await.unwrap();
+    // Setup: table is provisioned by integration/setup.sh
 
     client
         .send_simple(Query::new("DELETE FROM sharded_omni"))
@@ -246,7 +216,7 @@ async fn test_omni_delete_returning_only_from_one_shard() {
 
     // Cleanup
     client
-        .send_simple(Query::new("DROP TABLE IF EXISTS sharded_omni"))
+        .send_simple(Query::new("DELETE FROM sharded_omni"))
         .await;
     client.read_until('Z').await.unwrap();
 }
@@ -255,13 +225,7 @@ async fn test_omni_delete_returning_only_from_one_shard() {
 async fn test_omni_insert_returning_only_from_one_shard() {
     let mut client = TestClient::new_sharded(Parameters::default()).await;
 
-    // Setup
-    client
-        .send_simple(Query::new(
-            "CREATE TABLE IF NOT EXISTS sharded_omni (id BIGINT PRIMARY KEY, value TEXT)",
-        ))
-        .await;
-    client.read_until('Z').await.unwrap();
+    // Setup: table is provisioned by integration/setup.sh
 
     client
         .send_simple(Query::new("DELETE FROM sharded_omni"))
@@ -293,7 +257,7 @@ async fn test_omni_insert_returning_only_from_one_shard() {
 
     // Cleanup
     client
-        .send_simple(Query::new("DROP TABLE IF EXISTS sharded_omni"))
+        .send_simple(Query::new("DELETE FROM sharded_omni"))
         .await;
     client.read_until('Z').await.unwrap();
 }

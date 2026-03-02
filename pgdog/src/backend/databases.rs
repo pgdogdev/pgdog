@@ -1,8 +1,9 @@
 //! Databases behind pgDog.
 
-use std::collections::{hash_map::Entry, HashMap};
+use std::collections::{hash_map::Entry, HashMap, HashSet};
 use std::ops::Deref;
 use std::sync::Arc;
+use std::time::Duration;
 
 use arc_swap::ArcSwap;
 use futures::future::try_join_all;
@@ -34,6 +35,20 @@ use super::{
 static DATABASES: Lazy<ArcSwap<Databases>> =
     Lazy::new(|| ArcSwap::from_pointee(Databases::default()));
 static LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+/// Spawns the wildcard-pool background eviction loop exactly once.
+static WILDCARD_EVICTION: Lazy<()> = Lazy::new(|| {
+    tokio::spawn(async {
+        loop {
+            let timeout_secs = config().config.general.wildcard_pool_idle_timeout;
+            if timeout_secs == 0 {
+                tokio::time::sleep(Duration::from_secs(60)).await;
+                continue;
+            }
+            tokio::time::sleep(Duration::from_secs(timeout_secs)).await;
+            evict_idle_wildcard_pools();
+        }
+    });
+});
 
 /// Sync databases during modification.
 pub fn lock() -> MutexGuard<'static, RawMutex, ()> {
@@ -75,8 +90,16 @@ pub fn reconnect() -> Result<(), Error> {
     Ok(())
 }
 
-/// Re-create databases from existing config,
-/// preserving connections.
+/// Re-create databases from existing config, preserving connections.
+///
+/// **SIGHUP / config-reload behaviour for wildcard pools:**
+/// Wildcard pools created on demand by [`add_wildcard_pool`] are *not* included
+/// in the freshly built [`Databases`] produced by [`from_config`].  Because
+/// [`replace_databases`] only moves connections whose key exists in the new
+/// config, those connections are dropped and the pools are evicted.  On the
+/// next client login [`add_wildcard_pool`] will recreate the pool from the
+/// (potentially updated) wildcard template, and the
+/// [`General::max_wildcard_pools`] counter resets to zero.
 pub fn reload_from_existing() -> Result<(), Error> {
     let _lock = lock();
 
@@ -98,7 +121,46 @@ pub fn init() -> Result<(), Error> {
     // Start two-pc manager.
     let _monitor = Manager::get();
 
+    // Start the wildcard pool eviction background task.
+    let _ = &*WILDCARD_EVICTION;
+
     Ok(())
+}
+
+/// Remove dynamically-created wildcard pools that currently have zero connections.
+///
+/// This is called periodically by the background eviction task started in
+/// [`init`], and is also exposed as `pub(crate)` so unit tests can invoke it
+/// directly without running a Tokio runtime loop.
+pub(crate) fn evict_idle_wildcard_pools() {
+    let _lock = lock();
+    let dbs = databases();
+
+    let to_evict: Vec<User> = dbs
+        .dynamic_pools
+        .iter()
+        .filter(|user| {
+            dbs.databases
+                .get(*user)
+                .map_or(false, |c| c.total_connections() == 0)
+        })
+        .cloned()
+        .collect();
+
+    if to_evict.is_empty() {
+        return;
+    }
+
+    let mut new_dbs = (*dbs).clone();
+    for user in &to_evict {
+        if let Some(cluster) = new_dbs.databases.remove(user) {
+            cluster.shutdown();
+            new_dbs.dynamic_pools.remove(user);
+            new_dbs.wildcard_pool_count = new_dbs.wildcard_pool_count.saturating_sub(1);
+        }
+    }
+    DATABASES.store(Arc::new(new_dbs));
+    info!("evicted {} idle wildcard pool(s)", to_evict.len());
 }
 
 /// Shutdown all databases.
@@ -170,6 +232,162 @@ pub(crate) fn add(mut user: crate::config::User) {
             // and we'll shut them down.
             DATABASES.store(Arc::new(databases));
         }
+    }
+}
+
+/// Attempt to create a pool from wildcard templates for the given user/database.
+/// Returns the Cluster if a wildcard match was found and the pool was created.
+///
+/// When `passthrough_password` is provided (from passthrough auth), it overrides
+/// the wildcard template's password so the pool can authenticate to PostgreSQL
+/// and the login check can verify the client's credential.
+pub(crate) fn add_wildcard_pool(
+    user: &str,
+    database: &str,
+    passthrough_password: Option<&str>,
+) -> Result<Option<Cluster>, Error> {
+    let _lock = lock();
+
+    // Double-check: another thread may have created it.
+    let dbs = databases();
+    if dbs.exists((user, database)) {
+        return Ok(Some(dbs.cluster((user, database))?));
+    }
+
+    let wildcard_match = match dbs.find_wildcard_match(user, database) {
+        Some(m) => m,
+        None => return Ok(None),
+    };
+
+    let config_snapshot = match dbs.config_snapshot() {
+        Some(c) => c.clone(),
+        None => return Ok(None),
+    };
+
+    // Enforce the operator-configured pool limit before allocating a new pool.
+    let max = config_snapshot.config.general.max_wildcard_pools;
+    if max > 0 && dbs.wildcard_pool_count >= max {
+        warn!(
+            "max_wildcard_pools limit ({}) reached, rejecting wildcard pool \
+             for user=\"{}\" database=\"{}\"",
+            max, user, database
+        );
+        return Ok(None);
+    }
+
+    // Build a synthetic user config from the wildcard template.
+    let template_user_key = User {
+        user: if wildcard_match.wildcard_user {
+            "*".to_string()
+        } else {
+            user.to_string()
+        },
+        database: if wildcard_match.wildcard_database {
+            "*".to_string()
+        } else {
+            database.to_string()
+        },
+    };
+
+    // Find the user template from wildcard_users or from the existing pool configs.
+    let user_config = if wildcard_match.wildcard_user {
+        // Look for a wildcard user template that matches.
+        let db_pattern = if wildcard_match.wildcard_database {
+            "*"
+        } else {
+            database
+        };
+        dbs.wildcard_users()
+            .iter()
+            .find(|u| {
+                u.is_wildcard_name() && (u.database == db_pattern || u.is_wildcard_database())
+            })
+            .cloned()
+    } else {
+        // Use an existing user config's settings from a template pool.
+        let template_cluster = dbs.databases.get(&template_user_key);
+        template_cluster.map(|_| {
+            // Use the snapshot so user lookups are consistent with the database
+            // config captured at the same instant (avoids a race if a SIGHUP
+            // reload changes the global config mid-call).
+            config_snapshot
+                .users
+                .users
+                .iter()
+                .find(|u| u.name == user && (u.database == "*" || u.is_wildcard_database()))
+                .cloned()
+                .unwrap_or_else(|| crate::config::User::new(user, "", database))
+        })
+    };
+
+    let mut user_config = match user_config {
+        Some(u) => u,
+        None => return Ok(None),
+    };
+
+    // Override the wildcard name/database with the actual values.
+    if user_config.is_wildcard_name() {
+        user_config.name = user.to_string();
+    }
+    user_config.database = database.to_string();
+
+    // For passthrough auth, set the client's password so the backend pool can
+    // authenticate to PostgreSQL and the proxy-level credential check succeeds.
+    if let Some(pw) = passthrough_password {
+        user_config.password = Some(pw.to_string());
+    }
+
+    // Build a synthetic Config so we can substitute the real database name
+    // into the wildcard template before handing it to new_pool.
+    let mut synthetic_config = config_snapshot.config.clone();
+    if wildcard_match.wildcard_database {
+        if let Some(templates) = dbs.wildcard_db_templates() {
+            let mut new_dbs: Vec<crate::config::Database> = synthetic_config
+                .databases
+                .iter()
+                .filter(|d| !d.is_wildcard())
+                .cloned()
+                .collect();
+
+            for shard_templates in templates {
+                for template in shard_templates {
+                    let mut db = template.database.clone();
+                    db.name = database.to_string();
+                    // Respect explicit database_name; otherwise use the client-requested name.
+                    if db.database_name.is_none() {
+                        db.database_name = Some(database.to_string());
+                    }
+                    new_dbs.push(db);
+                }
+            }
+
+            synthetic_config.databases = new_dbs;
+        }
+    }
+
+    let pool = new_pool(&user_config, &synthetic_config);
+    if let Some((pool_user, cluster)) = pool {
+        debug!(
+            "created wildcard pool for user=\"{}\" database=\"{}\"",
+            user, database
+        );
+
+        let databases = (*databases()).clone();
+        let (added, mut databases) = databases.add(pool_user.clone(), cluster.clone());
+        if added {
+            databases.wildcard_pool_count += 1;
+            databases.dynamic_pools.insert(pool_user);
+            databases.launch();
+            DATABASES.store(Arc::new(databases));
+        }
+
+        Ok(Some(cluster))
+    } else {
+        warn!(
+            "wildcard match found but pool creation failed for user=\"{}\" database=\"{}\"",
+            user, database
+        );
+        Ok(None)
     }
 }
 
@@ -278,6 +496,13 @@ impl ToUser for (&str, Option<&str>) {
     }
 }
 
+/// Describes which parts of a wildcard match were used.
+#[derive(Debug, Clone, PartialEq)]
+struct WildcardMatch {
+    wildcard_user: bool,
+    wildcard_database: bool,
+}
+
 /// Databases.
 #[derive(Default, Clone)]
 pub struct Databases {
@@ -285,6 +510,20 @@ pub struct Databases {
     manual_queries: HashMap<String, ManualQuery>,
     mirrors: HashMap<User, Vec<Cluster>>,
     mirror_configs: HashMap<(String, String), crate::config::MirrorConfig>,
+    /// Wildcard database templates (databases with name = "*"), organized by shard.
+    wildcard_db_templates: Option<Vec<Vec<crate::config::EnumeratedDatabase>>>,
+    /// Wildcard user templates (users with name = "*").
+    wildcard_users: Vec<crate::config::User>,
+    /// Full config snapshot (both databases and users) captured at construction
+    /// time, needed to create pools lazily from wildcard templates without
+    /// racing against a concurrent config reload that might change `config()`.
+    config_snapshot: Option<Arc<crate::config::ConfigAndUsers>>,
+    /// Number of pools created dynamically via wildcard matching.
+    /// Reset to zero on every config reload so the limit applies per-epoch.
+    wildcard_pool_count: usize,
+    /// Keys of pools that were created dynamically via wildcard matching.
+    /// Used by the background eviction task to identify eligible candidates.
+    dynamic_pools: HashSet<User>,
 }
 
 impl Databases {
@@ -313,6 +552,94 @@ impl Databases {
         } else {
             false
         }
+    }
+
+    /// Check if any wildcard templates are configured.
+    pub fn has_wildcard(&self) -> bool {
+        self.wildcard_db_templates.is_some() || !self.wildcard_users.is_empty()
+    }
+
+    /// Check if a cluster exists or could be created via wildcard matching.
+    pub fn exists_or_wildcard(&self, user: impl ToUser) -> bool {
+        let user = user.to_user();
+        if self.exists((&*user.user, &*user.database)) {
+            return true;
+        }
+        self.has_wildcard()
+            && self
+                .find_wildcard_match(&user.user, &user.database)
+                .is_some()
+    }
+
+    /// Find a wildcard match for a user/database pair.
+    /// Returns a tuple of (user_template, is_wildcard_user, is_wildcard_db).
+    fn find_wildcard_match(&self, user: &str, database: &str) -> Option<WildcardMatch> {
+        // Priority 1: exact user, wildcard database
+        let user_key = User {
+            user: user.to_string(),
+            database: "*".to_string(),
+        };
+        if self.databases.contains_key(&user_key) && self.wildcard_db_templates.is_some() {
+            return Some(WildcardMatch {
+                wildcard_user: false,
+                wildcard_database: true,
+            });
+        }
+
+        // Priority 2: wildcard user, exact database
+        let wildcard_user_key = User {
+            user: "*".to_string(),
+            database: database.to_string(),
+        };
+        if self.databases.contains_key(&wildcard_user_key) {
+            return Some(WildcardMatch {
+                wildcard_user: true,
+                wildcard_database: false,
+            });
+        }
+
+        // Priority 3: both wildcard
+        let full_wildcard_key = User {
+            user: "*".to_string(),
+            database: "*".to_string(),
+        };
+        if self.databases.contains_key(&full_wildcard_key)
+            || (!self.wildcard_users.is_empty() && self.wildcard_db_templates.is_some())
+        {
+            return Some(WildcardMatch {
+                wildcard_user: true,
+                wildcard_database: true,
+            });
+        }
+
+        None
+    }
+
+    /// Get wildcard database templates.
+    pub fn wildcard_db_templates(&self) -> Option<&Vec<Vec<crate::config::EnumeratedDatabase>>> {
+        self.wildcard_db_templates.as_ref()
+    }
+
+    /// Get wildcard user templates.
+    pub fn wildcard_users(&self) -> &[crate::config::User] {
+        &self.wildcard_users
+    }
+
+    /// Get the full config snapshot used for creating wildcard pools.
+    pub fn config_snapshot(&self) -> Option<&crate::config::ConfigAndUsers> {
+        self.config_snapshot.as_deref()
+    }
+
+    /// Number of pools currently created via wildcard matching.
+    #[cfg(test)]
+    pub(crate) fn wildcard_pool_count(&self) -> usize {
+        self.wildcard_pool_count
+    }
+
+    /// Keys of dynamically-created wildcard pools.
+    #[cfg(test)]
+    pub(crate) fn dynamic_pools(&self) -> &HashSet<User> {
+        &self.dynamic_pools
     }
 
     /// Get a cluster for the user/database pair if it's configured.
@@ -679,11 +1006,31 @@ pub fn from_config(config: &ConfigAndUsers) -> Databases {
         }
     }
 
+    let wildcard_db_templates = config.config.wildcard_databases();
+    let wildcard_users: Vec<crate::config::User> = config
+        .users
+        .users
+        .iter()
+        .filter(|u| u.is_wildcard_name() || u.is_wildcard_database())
+        .cloned()
+        .collect();
+
+    let config_snapshot = if wildcard_db_templates.is_some() || !wildcard_users.is_empty() {
+        Some(Arc::new(config.clone()))
+    } else {
+        None
+    };
+
     Databases {
         databases,
         manual_queries: config.config.manual_queries(),
         mirrors,
         mirror_configs,
+        wildcard_db_templates,
+        wildcard_users,
+        config_snapshot,
+        wildcard_pool_count: 0,
+        dynamic_pools: HashSet::new(),
     }
 }
 
@@ -1737,5 +2084,169 @@ password = "testpass"
         assert_eq!(new_users.users.len(), 1);
         assert_eq!(new_users.users[0].name, "testuser");
         assert_eq!(new_users.users[0].database, "destination_db");
+    }
+
+    #[test]
+    fn test_wildcard_db_templates_populated() {
+        let mut config = Config::default();
+        config.databases = vec![
+            Database {
+                name: "explicit_db".to_string(),
+                host: "host1".to_string(),
+                role: Role::Primary,
+                ..Default::default()
+            },
+            Database {
+                name: "*".to_string(),
+                host: "wildcard-host".to_string(),
+                role: Role::Primary,
+                ..Default::default()
+            },
+        ];
+
+        let config_and_users = ConfigAndUsers {
+            config,
+            users: crate::config::Users {
+                users: vec![crate::config::User::new("alice", "pass", "explicit_db")],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let databases = from_config(&config_and_users);
+
+        assert!(databases.has_wildcard());
+        assert!(databases.wildcard_db_templates().is_some());
+        let templates = databases.wildcard_db_templates().unwrap();
+        assert_eq!(templates.len(), 1); // shard 0 only
+        assert_eq!(templates[0].len(), 1);
+        assert_eq!(templates[0][0].host, "wildcard-host");
+    }
+
+    #[test]
+    fn test_no_wildcard_when_absent() {
+        let mut config = Config::default();
+        config.databases = vec![Database {
+            name: "mydb".to_string(),
+            host: "host1".to_string(),
+            role: Role::Primary,
+            ..Default::default()
+        }];
+
+        let config_and_users = ConfigAndUsers {
+            config,
+            users: crate::config::Users {
+                users: vec![crate::config::User::new("alice", "pass", "mydb")],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let databases = from_config(&config_and_users);
+
+        assert!(!databases.has_wildcard());
+        assert!(databases.wildcard_db_templates().is_none());
+        assert!(databases.wildcard_users().is_empty());
+        assert!(databases.config_snapshot().is_none());
+    }
+
+    #[test]
+    fn test_wildcard_users_populated() {
+        let mut config = Config::default();
+        config.databases = vec![Database {
+            name: "*".to_string(),
+            host: "wildcard-host".to_string(),
+            role: Role::Primary,
+            ..Default::default()
+        }];
+
+        let config_and_users = ConfigAndUsers {
+            config,
+            users: crate::config::Users {
+                users: vec![crate::config::User {
+                    name: "*".to_string(),
+                    database: "*".to_string(),
+                    password: Some("secret".to_string()),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let databases = from_config(&config_and_users);
+
+        assert!(databases.has_wildcard());
+        assert_eq!(databases.wildcard_users().len(), 1);
+        assert!(databases.wildcard_users()[0].is_wildcard_name());
+        assert!(databases.wildcard_users()[0].is_wildcard_database());
+        assert!(databases.config_snapshot().is_some());
+    }
+
+    #[test]
+    fn test_find_wildcard_match_priority() {
+        let mut config = Config::default();
+        config.databases = vec![
+            Database {
+                name: "explicit_db".to_string(),
+                host: "host1".to_string(),
+                role: Role::Primary,
+                ..Default::default()
+            },
+            Database {
+                name: "*".to_string(),
+                host: "wildcard-host".to_string(),
+                role: Role::Primary,
+                ..Default::default()
+            },
+        ];
+
+        let config_and_users = ConfigAndUsers {
+            config,
+            users: crate::config::Users {
+                users: vec![
+                    crate::config::User::new("alice", "pass", "explicit_db"),
+                    crate::config::User {
+                        name: "alice".to_string(),
+                        database: "*".to_string(),
+                        password: Some("pass".to_string()),
+                        ..Default::default()
+                    },
+                    crate::config::User {
+                        name: "*".to_string(),
+                        database: "*".to_string(),
+                        password: Some("wild".to_string()),
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let databases = from_config(&config_and_users);
+
+        // Exact match exists — no wildcard needed.
+        assert!(databases.cluster(("alice", "explicit_db")).is_ok());
+
+        // Wildcard database for known user (alice/*) — priority 1.
+        let m = databases.find_wildcard_match("alice", "unknown_db");
+        assert_eq!(
+            m,
+            Some(WildcardMatch {
+                wildcard_user: false,
+                wildcard_database: true,
+            })
+        );
+
+        // Wildcard user for unknown user — priority 3 (full wildcard).
+        let m = databases.find_wildcard_match("unknown_user", "unknown_db");
+        assert_eq!(
+            m,
+            Some(WildcardMatch {
+                wildcard_user: true,
+                wildcard_database: true,
+            })
+        );
     }
 }

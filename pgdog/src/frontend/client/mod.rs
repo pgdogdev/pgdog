@@ -156,7 +156,11 @@ impl Client {
         let comms = ClientComms::new(&id);
 
         // Auto database.
-        let exists = databases::databases().exists((user, database));
+        let dbs = databases::databases();
+        let exists = dbs.exists((user, database));
+        let wildcard_available = !exists && dbs.exists_or_wildcard((user, database));
+        drop(dbs);
+
         let passthrough_password = if config.config.general.passthrough_auth() && !admin {
             let password = if auth_type.trust() {
                 // Use empty password.
@@ -172,7 +176,7 @@ impl Client {
                 Password::from_bytes(password.to_bytes()?)?
             };
 
-            if !exists {
+            if !exists && !wildcard_available {
                 let user = user_from_params(&params, &password).ok();
                 if let Some(user) = user {
                     databases::add(user);

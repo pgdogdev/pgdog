@@ -1,0 +1,13 @@
+# Explicit user for the explicit database.
+[[users]]
+name = "pgdog"
+database = "pgdog"
+password = "pgdog"
+
+# Wildcard user — any (user, database) pair not matched above.
+# No server_user/server_password: pgdog passes through the
+# client-provided credentials to Postgres directly.
+[[users]]
+name = "*"
+database = "*"
+min_pool_size = 0
