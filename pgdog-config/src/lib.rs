@@ -33,7 +33,7 @@ pub use replication::*;
 pub use rewrite::{Rewrite, RewriteMode};
 pub use sharding::*;
 pub use system_catalogs::system_catalogs;
-pub use users::{Admin, Plugin, User, Users};
+pub use users::{Admin, Plugin, ServerAuth, User, Users};
 
 use std::time::Duration;
 

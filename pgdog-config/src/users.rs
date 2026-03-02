@@ -91,6 +91,37 @@ impl Users {
     }
 }
 
+/// Backend authentication mode used by PgDog for server connections.
+#[derive(
+    Serialize,
+    Deserialize,
+    Debug,
+    Clone,
+    Copy,
+    Default,
+    PartialEq,
+    Eq,
+    Ord,
+    PartialOrd,
+    Hash,
+    JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum ServerAuth {
+    /// Use configured static password.
+    #[default]
+    Password,
+    /// Generate an AWS RDS IAM auth token per connection attempt.
+    RdsIam,
+}
+
+impl ServerAuth {
+    pub fn rds_iam(&self) -> bool {
+        matches!(self, Self::RdsIam)
+    }
+}
+
+/// User allowed to connect to pgDog.
 /// A user entry in `users.toml`, controlling which users are allowed to connect to PgDog.
 ///
 /// https://docs.pgdog.dev/configuration/users.toml/users/
@@ -142,6 +173,13 @@ pub struct User {
     ///
     /// https://docs.pgdog.dev/configuration/users.toml/users/#server_password
     pub server_password: Option<String>,
+    /// Backend auth mode for server connections.
+    #[serde(default)]
+    pub server_auth: ServerAuth,
+    /// Optional region override for RDS IAM token generation.
+    pub server_iam_region: Option<String>,
+    /// Statement timeout.
+    ///
     /// Sets the `statement_timeout` on all server connections at connection creation. This allows you to set a reasonable default for each user without modifying `postgresql.conf` or using `ALTER USER`.
     ///
     /// **Note:** Nothing is preventing the user from manually changing this setting at runtime, e.g., by running `SET statement_timeout TO 0`;
@@ -336,5 +374,37 @@ mod tests {
             .find(|u| u.name == "bob" && u.database == "source_db")
             .unwrap();
         assert_eq!(bob_source.password(), "pass4");
+    }
+
+    #[test]
+    fn test_user_server_auth_defaults_to_password() {
+        let source = r#"
+[[users]]
+name = "alice"
+database = "db"
+password = "secret"
+"#;
+
+        let users: Users = toml::from_str(source).unwrap();
+        let user = users.users.first().unwrap();
+        assert_eq!(user.server_auth, ServerAuth::Password);
+        assert!(user.server_iam_region.is_none());
+    }
+
+    #[test]
+    fn test_user_server_auth_rds_iam_with_region() {
+        let source = r#"
+[[users]]
+name = "alice"
+database = "db"
+password = "secret"
+server_auth = "rds_iam"
+server_iam_region = "us-east-1"
+"#;
+
+        let users: Users = toml::from_str(source).unwrap();
+        let user = users.users.first().unwrap();
+        assert_eq!(user.server_auth, ServerAuth::RdsIam);
+        assert_eq!(user.server_iam_region.as_deref(), Some("us-east-1"));
     }
 }

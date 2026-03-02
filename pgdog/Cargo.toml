@@ -63,6 +63,8 @@ hickory-resolver = "0.25.2"
 lazy_static = "1"
 dashmap = "6"
 derive_builder = "0.20.2"
+aws-config = { version = "1", features = ["behavior-version-latest"] }
+aws-sdk-rds = "1"
 pgdog-config = { path = "../pgdog-config" }
 pgdog-vector = { path = "../pgdog-vector" }
 pgdog-stats = { path = "../pgdog-stats" }

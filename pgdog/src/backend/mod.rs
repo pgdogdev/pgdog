@@ -1,5 +1,6 @@
 //! pgDog backend managers connections to PostgreSQL.
 
+pub mod auth;
 pub mod connect_reason;
 pub mod databases;
 pub mod disconnect_reason;
