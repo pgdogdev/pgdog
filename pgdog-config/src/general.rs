@@ -742,8 +742,8 @@ impl General {
     }
 
     fn cutover_replication_lag_threshold() -> u64 {
-        Self::env_or_default("PGDOG_CUTOVER_REPLICATION_LAG_THRESHOLD", 1_000)
-        // 1KB
+        Self::env_or_default("PGDOG_CUTOVER_REPLICATION_LAG_THRESHOLD", 0)
+        // 0 bytes
     }
 
     fn cutover_traffic_stop_threshold() -> u64 {
