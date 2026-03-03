@@ -418,8 +418,12 @@ impl Client {
 
                 buffer = self.buffer(client_state) => {
                     let event = buffer?;
-                    if !self.client_request.messages.is_empty() {
-                        self.client_messages(&mut query_engine).await?;
+
+                    // Only send requests to the backend if they are complete.
+                    if self.client_request.is_complete() {
+                        if !self.client_request.messages.is_empty() {
+                            self.client_messages(&mut query_engine).await?;
+                        }
                     }
 
                     match event {
