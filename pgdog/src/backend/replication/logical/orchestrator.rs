@@ -222,6 +222,19 @@ enum CutoverReason {
     LastTransaction,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum CutoverAction {
+    Go(CutoverReason),
+    NoGo(CutoverData),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CutoverData {
+    lag: u64,
+    last_transaction: Option<Duration>,
+    elapsed: Duration,
+}
+
 impl Display for CutoverReason {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -289,7 +302,7 @@ impl ReplicationWaiter {
         Ok(())
     }
 
-    async fn should_cutover(&self, elapsed: Duration) -> Option<CutoverReason> {
+    async fn should_cutover(&self, elapsed: Duration) -> CutoverAction {
         let cutover_timeout = Duration::from_millis(self.config.config.general.cutover_timeout);
         let cutover_threshold = self.config.config.general.cutover_replication_lag_threshold;
         let last_transaction_delay =
@@ -300,13 +313,17 @@ impl ReplicationWaiter {
         let cutover_timeout_exceeded = elapsed >= cutover_timeout;
 
         if cutover_timeout_exceeded {
-            Some(CutoverReason::Timeout)
+            CutoverAction::Go(CutoverReason::Timeout)
         } else if lag <= cutover_threshold {
-            Some(CutoverReason::Lag)
+            CutoverAction::Go(CutoverReason::Lag)
         } else if last_transaction.is_none_or(|t| t > last_transaction_delay) {
-            Some(CutoverReason::LastTransaction)
+            CutoverAction::Go(CutoverReason::LastTransaction)
         } else {
-            None
+            CutoverAction::NoGo(CutoverData {
+                lag,
+                last_transaction,
+                elapsed,
+            })
         }
     }
 
@@ -331,16 +348,25 @@ impl ReplicationWaiter {
         // Abort clock starts now.
         let start = Instant::now();
 
+        let mut cutover_data = None;
+
         loop {
             select! {
                 _ = check.tick() => {}
 
                 _ = log.tick() => {
-                    info!("[cutover] lag={}, last_transaction={}, timeout={}",
-                        human_duration(cutover_timeout),
-                        human_duration(last_transaction_delay),
-                        format_bytes(cutover_threshold)
-                    );
+                    if let Some(CutoverData { lag, last_transaction, elapsed }) = cutover_data {
+                        info!("[cutover] lag={}, last_transaction={}, timeout={}",
+                            format_bytes(lag),
+                            if let Some(last_transaction) = last_transaction {
+                                human_duration(last_transaction)
+                            } else {
+                                "none".into()
+                            },
+                            human_duration(elapsed),
+                        );
+                    }
+
                 }
 
                 // In case replication breaks now.
@@ -352,16 +378,25 @@ impl ReplicationWaiter {
             let elapsed = start.elapsed();
             let cutover_reason = self.should_cutover(elapsed).await;
             match cutover_reason {
-                Some(CutoverReason::Timeout) => {
+                CutoverAction::Go(CutoverReason::Timeout) => {
                     if cutover_timeout_action == CutoverTimeoutAction::Abort {
                         maintenance_mode::stop();
                         warn!("[cutover] abort timeout reached, resuming traffic");
                         return Err(Error::AbortTimeout);
+                    } else {
+                        info!(
+                            "[cutover] performing cutover now, reason: {}",
+                            CutoverReason::Timeout
+                        );
+                        break;
                     }
                 }
 
-                None => continue,
-                Some(reason) => {
+                CutoverAction::NoGo(data) => {
+                    cutover_data = Some(data);
+                    continue;
+                }
+                CutoverAction::Go(reason) => {
                     info!("[cutover] performing cutover now, reason: {}", reason);
                     break;
                 }
@@ -514,7 +549,7 @@ mod tests {
 
         // should_cutover returns Lag when lag is below threshold
         let result = waiter.should_cutover(Duration::from_millis(100)).await;
-        assert_eq!(result, Some(CutoverReason::Lag));
+        assert_eq!(result, CutoverAction::Go(CutoverReason::Lag));
 
         // Should exit immediately since lag (50) <= threshold (100)
         let result = waiter.wait_for_cutover().await;
@@ -543,7 +578,7 @@ mod tests {
 
         // should_cutover returns LastTransaction when last transaction is old
         let result = waiter.should_cutover(Duration::from_millis(100)).await;
-        assert_eq!(result, Some(CutoverReason::LastTransaction));
+        assert_eq!(result, CutoverAction::Go(CutoverReason::LastTransaction));
 
         // Should exit because last_transaction (200ms) > threshold (100ms)
         let result = waiter.wait_for_cutover().await;
@@ -572,7 +607,7 @@ mod tests {
 
         // should_cutover returns LastTransaction when there's no transaction
         let result = waiter.should_cutover(Duration::from_millis(100)).await;
-        assert_eq!(result, Some(CutoverReason::LastTransaction));
+        assert_eq!(result, CutoverAction::Go(CutoverReason::LastTransaction));
     }
 
     #[tokio::test]
@@ -597,7 +632,7 @@ mod tests {
 
         // Not timed out (100ms elapsed, timeout is 10000ms)
         let result = waiter.should_cutover(Duration::from_millis(100)).await;
-        assert_eq!(result, None);
+        assert!(matches!(result, CutoverAction::NoGo { .. }));
     }
 
     #[tokio::test]
@@ -622,7 +657,7 @@ mod tests {
 
         // Elapsed is 999ms, timeout is 1000ms - should not trigger timeout
         let result = waiter.should_cutover(Duration::from_millis(999)).await;
-        assert_eq!(result, None);
+        assert!(matches!(result, CutoverAction::NoGo { .. }));
     }
 
     #[tokio::test]
@@ -646,6 +681,6 @@ mod tests {
         let waiter = ReplicationWaiter::new_test(orchestrator, config);
 
         let result = waiter.should_cutover(Duration::from_millis(100)).await;
-        assert_eq!(result, None);
+        assert!(matches!(result, CutoverAction::NoGo { .. }));
     }
 }

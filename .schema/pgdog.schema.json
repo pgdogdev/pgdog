@@ -42,7 +42,7 @@
         "connection_recovery": "recover",
         "cross_shard_disabled": false,
         "cutover_last_transaction_delay": 1000,
-        "cutover_replication_lag_threshold": 1000,
+        "cutover_replication_lag_threshold": 0,
         "cutover_save_config": false,
         "cutover_timeout": 30000,
         "cutover_timeout_action": "abort",
@@ -627,38 +627,38 @@
           "default": false
         },
         "cutover_last_transaction_delay": {
-          "description": "How long to wait after the last transaction drains before completing cutover, in milliseconds.",
+          "description": "Time (in milliseconds) since the last transaction on any table in the publication before PgDog will swap the configuration during a cutover.\n\n_Default:_ `1000`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#cutover_last_transaction_delay",
           "type": "integer",
           "format": "uint64",
           "default": 1000,
           "minimum": 0
         },
         "cutover_replication_lag_threshold": {
-          "description": "Maximum replication lag (in bytes) allowed before proceeding with cutover.",
+          "description": "Replication lag (in bytes) that must be reached before PgDog will swap the configuration during a cutover.\n\n_Default:_ `0`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#cutover_replication_lag_threshold",
           "type": "integer",
           "format": "uint64",
-          "default": 1000,
+          "default": 0,
           "minimum": 0
         },
         "cutover_save_config": {
-          "description": "Persist the post-cutover configuration to `pgdog.toml` and `users.toml` on disk.",
+          "description": "Save the swapped configuration to disk after a traffic cutover. When enabled, PgDog will backup both configuration files as `pgdog.bak.toml` and `users.bak.toml`, and write the new configuration to `pgdog.toml` and `users.toml`.\n\n_Default:_ `false`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#cutover_save_config",
           "type": "boolean",
           "default": false
         },
         "cutover_timeout": {
-          "description": "How long to wait for cutover conditions to be met before taking the timeout action, in milliseconds.",
+          "description": "Maximum amount of time (in milliseconds) to wait for the cutover thresholds to be met. If exceeded, PgDog will take the action specified by `cutover_timeout_action`.\n\n_Default:_ `30000`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#cutover_timeout",
           "type": "integer",
           "format": "uint64",
           "default": 30000,
           "minimum": 0
         },
         "cutover_timeout_action": {
-          "description": "What to do when the cutover timeout is reached.",
+          "description": "Action to take when `cutover_timeout` is exceeded.\n\n_Default:_ `abort`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#cutover_timeout_action",
           "$ref": "#/$defs/CutoverTimeoutAction",
           "default": "abort"
         },
         "cutover_traffic_stop_threshold": {
-          "description": "Maximum number of active transactions allowed before cutover pauses traffic, in milliseconds.",
+          "description": "Replication lag threshold (in bytes) at which PgDog will pause traffic automatically during a traffic cutover.\n\n_Default:_ `1000000`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#cutover_traffic_stop_threshold",
           "type": "integer",
           "format": "uint64",
           "default": 1000000,
