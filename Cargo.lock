@@ -3693,6 +3693,7 @@ dependencies = [
 name = "rust"
 version = "0.1.0"
 dependencies = [
+ "bytes",
  "chrono",
  "futures-util",
  "libc",

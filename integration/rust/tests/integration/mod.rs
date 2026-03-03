@@ -16,6 +16,7 @@ pub mod max;
 pub mod multi_set;
 pub mod notify;
 pub mod offset;
+pub mod partial_req;
 pub mod per_stmt_routing;
 pub mod prepared;
 pub mod reload;
