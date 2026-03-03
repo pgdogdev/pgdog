@@ -203,7 +203,7 @@ PgDog supports two authentication methods:
 1. Password-based
 2. AWS RDS IAM
 
-### Password-based authentication
+#### Password-based authentication
 
 Password-based authentication allows for clients to authenticate to PgDog and for PgDog to authenticate to PostgreSQL. It currently supports the following password hashing algorithms:
 
