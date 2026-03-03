@@ -196,6 +196,8 @@ role = "auto"
 
 ### Authentication
 
+&#128216; **[Authentication](https://docs.pgdog.dev/features/authentication/)**
+
 PgDog supports two authentication methods:
 
 1. Password-based
