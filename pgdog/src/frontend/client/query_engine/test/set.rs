@@ -26,6 +26,8 @@ async fn test_set() {
         test_client.client().params.get("application_name").unwrap(),
         &ParameterValue::String("test_set".into()),
     );
+
+    assert!(!test_client.backend_locked());
 }
 
 #[tokio::test]
@@ -68,6 +70,8 @@ async fn test_set_inside_transaction() {
         'T'
     );
 
+    assert!(!test_client.backend_locked());
+
     test_client
         .send_simple(Query::new("SET search_path TO acustomer, public"))
         .await;
@@ -96,6 +100,8 @@ async fn test_set_inside_transaction() {
         test_client.client().params.get("search_path").unwrap(),
         &ParameterValue::Tuple(vec!["acustomer".into(), "public".into()]),
     );
+
+    assert!(!test_client.backend_locked());
 }
 
 #[tokio::test]

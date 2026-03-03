@@ -7,6 +7,7 @@ use crate::{
     net::{Parameters, Stream},
 };
 
+mod lock_session;
 mod omni;
 pub mod prelude;
 mod rewrite_extended;

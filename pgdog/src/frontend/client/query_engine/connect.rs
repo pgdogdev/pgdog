@@ -45,8 +45,9 @@ impl QueryEngine {
                 //
                 // Used in case the client runs an advisory lock
                 // or another leaky transaction mode abstraction.
-                self.backend
-                    .lock(context.client_request.route().is_lock_session());
+                if let Some(true) = context.client_request.route().lock_session() {
+                    self.backend.lock(true);
+                }
 
                 self.debug_connected(context, false);
 
