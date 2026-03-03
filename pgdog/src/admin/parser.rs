@@ -1,19 +1,6 @@
 //! Admin command parser.
 
-use super::{
-    ban::Ban, copy_data::CopyData, cutover::Cutover, healthcheck::Healthcheck,
-    maintenance_mode::MaintenanceMode, pause::Pause, prelude::Message, probe::Probe,
-    reconnect::Reconnect, reload::Reload, replicate::Replicate, reset_query_cache::ResetQueryCache,
-    reshard::Reshard, schema_sync::SchemaSync, set::Set, setup_schema::SetupSchema,
-    show_client_memory::ShowClientMemory, show_clients::ShowClients, show_config::ShowConfig,
-    show_instance_id::ShowInstanceId, show_lists::ShowLists, show_mirrors::ShowMirrors,
-    show_peers::ShowPeers, show_pools::ShowPools, show_prepared_statements::ShowPreparedStatements,
-    show_query_cache::ShowQueryCache, show_replication::ShowReplication,
-    show_replication_slots::ShowReplicationSlots, show_schema_sync::ShowSchemaSync,
-    show_server_memory::ShowServerMemory, show_servers::ShowServers, show_stats::ShowStats,
-    show_table_copies::ShowTableCopies, show_tasks::ShowTasks, show_transactions::ShowTransactions,
-    show_version::ShowVersion, shutdown::Shutdown, stop_task::StopTask, Command, Error,
-};
+use super::*;
 
 use tracing::debug;
 
