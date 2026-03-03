@@ -537,27 +537,51 @@ pub struct General {
     #[serde(default = "General::load_schema")]
     pub load_schema: LoadSchema,
 
-    /// Maximum number of active transactions allowed before cutover pauses traffic, in milliseconds.
+    /// Replication lag threshold (in bytes) at which PgDog will pause traffic automatically during a traffic cutover.
+    ///
+    /// _Default:_ `1000000`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#cutover_traffic_stop_threshold
     #[serde(default = "General::cutover_traffic_stop_threshold")]
     pub cutover_traffic_stop_threshold: u64,
 
-    /// Maximum replication lag (in bytes) allowed before proceeding with cutover.
+    /// Replication lag (in bytes) that must be reached before PgDog will swap the configuration during a cutover.
+    ///
+    /// _Default:_ `0`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#cutover_replication_lag_threshold
     #[serde(default = "General::cutover_replication_lag_threshold")]
     pub cutover_replication_lag_threshold: u64,
 
-    /// How long to wait after the last transaction drains before completing cutover, in milliseconds.
+    /// Time (in milliseconds) since the last transaction on any table in the publication before PgDog will swap the configuration during a cutover.
+    ///
+    /// _Default:_ `1000`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#cutover_last_transaction_delay
     #[serde(default = "General::cutover_last_transaction_delay")]
     pub cutover_last_transaction_delay: u64,
 
-    /// How long to wait for cutover conditions to be met before taking the timeout action, in milliseconds.
+    /// Maximum amount of time (in milliseconds) to wait for the cutover thresholds to be met. If exceeded, PgDog will take the action specified by `cutover_timeout_action`.
+    ///
+    /// _Default:_ `30000`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#cutover_timeout
     #[serde(default = "General::cutover_timeout")]
     pub cutover_timeout: u64,
 
-    /// What to do when the cutover timeout is reached.
+    /// Action to take when `cutover_timeout` is exceeded.
+    ///
+    /// _Default:_ `abort`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#cutover_timeout_action
     #[serde(default = "General::cutover_timeout_action")]
     pub cutover_timeout_action: CutoverTimeoutAction,
 
-    /// Persist the post-cutover configuration to `pgdog.toml` and `users.toml` on disk.
+    /// Save the swapped configuration to disk after a traffic cutover. When enabled, PgDog will backup both configuration files as `pgdog.bak.toml` and `users.bak.toml`, and write the new configuration to `pgdog.toml` and `users.toml`.
+    ///
+    /// _Default:_ `false`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#cutover_save_config
     #[serde(default)]
     pub cutover_save_config: bool,
 }
