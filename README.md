@@ -93,25 +93,6 @@ password = "hunter2"
 
 If a database in `pgdog.toml` doesn't have a user in `users.toml`, the connection pool for that database will not be created and users won't be able to connect.
 
-### RDS IAM backend authentication
-
-PgDog can keep client-to-proxy authentication unchanged while using AWS RDS IAM tokens for proxy-to-PostgreSQL authentication on a per-user basis.
-
-```toml
-[[users]]
-name = "alice"
-database = "pgdog"
-password = "client-password"
-server_auth = "rds_iam"
-# Optional; PgDog infers region from *.region.rds.amazonaws.com(.cn) hostnames when omitted.
-# server_iam_region = "us-east-1"
-```
-
-When any user has `server_auth = "rds_iam"`:
-
-- `general.tls_verify` must not be `"disabled"`.
-- `general.passthrough_auth` must be `"disabled"`.
-
 If you'd like to try it out locally, create the database and user like so:
 
 ```sql
@@ -212,6 +193,42 @@ name = "prod"
 host = "10.0.0.2"
 role = "auto"
 ```
+
+### Authentication
+
+PgDog supports two authentication methods:
+
+1. Password-based
+2. AWS RDS IAM
+
+### Password-based authentication
+
+Password-based authentication allows for clients to authenticate to PgDog and for PgDog to authenticate to PostgreSQL. It currently supports the following password hashing algorithms:
+
+- SCRAM-SHA-256
+- MD5
+- Plain
+
+#### RDS IAM backend authentication
+
+PgDog can keep client-to-PgDog authentication unchanged while using AWS RDS IAM tokens for PgDog-to-PostgreSQL authentication on a per-user basis.
+
+**Example**
+
+```toml
+[[users]]
+name = "alice"
+database = "pgdog"
+password = "client-password"
+server_auth = "rds_iam"
+# Optional; PgDog infers region from *.region.rds.amazonaws.com(.cn) hostnames when omitted.
+# server_iam_region = "us-east-1"
+```
+
+When any user has `server_auth = "rds_iam"`, the following settings must be configured as well:
+
+- `tls_verify` must **not** be `"disabled"`.
+- `passthrough_auth` must be `"disabled"`.
 
 ### Sharding
 
