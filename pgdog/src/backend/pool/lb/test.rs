@@ -394,6 +394,42 @@ async fn test_read_write_split_include_primary() {
 }
 
 #[tokio::test]
+async fn test_read_write_split_exclude_primary_no_replicas() {
+    let primary_config = create_test_pool_config("127.0.0.1", 5432);
+    let primary_pool = Pool::new(&primary_config);
+    primary_pool.launch();
+
+    let replica_configs = [];
+
+    let replicas = LoadBalancer::new(
+        &Some(primary_pool),
+        &replica_configs,
+        LoadBalancingStrategy::RoundRobin,
+        ReadWriteSplit::ExcludePrimary,
+    );
+    replicas.launch();
+
+    let request = Request::default();
+
+    // Try getting connections multiple times and we have primary in the set
+    let mut used_pool_ids = HashSet::new();
+    for _ in 0..2 {
+        let conn = replicas.get(&request).await.unwrap();
+        used_pool_ids.insert(conn.pool.id());
+    }
+
+    // Should use only primary
+    assert_eq!(used_pool_ids.len(), 1);
+
+    // Verify primary pool ID is in the set of used pools
+    let primary_id = replicas.primary().unwrap().id();
+    assert!(used_pool_ids.contains(&primary_id));
+
+    // Shutdown 
+    replicas.shutdown();
+}
+
+#[tokio::test]
 async fn test_read_write_split_exclude_primary_no_primary() {
     // Test exclude primary setting when no primary exists
     let replica_configs = [

@@ -277,7 +277,8 @@ impl LoadBalancer {
         let primary_reads = match self.rw_split {
             IncludePrimary => true,
             IncludePrimaryIfReplicaBanned => candidates.iter().any(|target| target.ban.banned()),
-            ExcludePrimary => false,
+            // we read from the primary if we have no replicas
+            ExcludePrimary => !candidates.iter().any(|target| target.role() == Role::Replica),
         };
 
         if !primary_reads {
