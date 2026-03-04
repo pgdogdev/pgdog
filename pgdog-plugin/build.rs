@@ -15,7 +15,7 @@ fn main() {
         // Unwrap the Result and panic on failure.
         .expect("Unable to generate bindings");
 
-    let out_path = PathBuf::from("src");
+    let out_path = PathBuf::from(std::env::var("OUT_DIR").unwrap());
     let _ = bindings.write_to_file(out_path.join("bindings.rs"));
 
     let rustc = std::env::var("RUSTC").unwrap();
