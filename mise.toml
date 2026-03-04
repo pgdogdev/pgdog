@@ -1,3 +1,4 @@
 [tools]
+"rust" = { version = "1.91.0" }
 "cargo:cargo-nextest" = "latest"
 "cargo:cargo-watch" = "latest"
