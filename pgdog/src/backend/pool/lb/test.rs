@@ -425,7 +425,7 @@ async fn test_read_write_split_exclude_primary_no_replicas() {
     let primary_id = replicas.primary().unwrap().id();
     assert!(used_pool_ids.contains(&primary_id));
 
-    // Shutdown 
+    // Shutdown
     replicas.shutdown();
 }
 
