@@ -76,11 +76,16 @@ mod tests {
         let cluster = Cluster::new_test(&config());
         let mut stmts = PreparedStatements::default();
 
+        let (maybe_shard, maybe_role, _) =
+            comment::parse_comment(sql, &cluster.sharding_schema()).unwrap();
+
         let ast = Ast::new(
             &BufferedQuery::Query(Query::new(sql)),
             &cluster.sharding_schema(),
             &cluster.schema(),
             &mut stmts,
+            maybe_shard,
+            maybe_role,
             "",
             None,
         )
@@ -119,6 +124,8 @@ mod tests {
             &cluster.sharding_schema(),
             &cluster.schema(),
             &mut stmts,
+            None,
+            None,
             "",
             None,
         )
