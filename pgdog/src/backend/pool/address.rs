@@ -29,6 +29,21 @@ pub struct Address {
     pub database_number: usize,
 }
 
+impl From<Address> for pgdog_stats::Address {
+    fn from(value: Address) -> Self {
+        pgdog_stats::Address {
+            host: value.host,
+            port: value.port,
+            database_name: value.database_name,
+            user: value.user,
+            password: value.password,
+            server_auth: value.server_auth,
+            server_iam_region: value.server_iam_region,
+            database_number: value.database_number,
+        }
+    }
+}
+
 impl Address {
     /// Create new address from config values.
     pub fn new(database: &Database, user: &User, database_number: usize) -> Self {

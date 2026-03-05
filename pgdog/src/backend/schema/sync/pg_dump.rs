@@ -240,24 +240,7 @@ pub struct PgDumpOutput {
     original: String,
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
-pub enum SyncState {
-    PreData,
-    PostData,
-    Cutover,
-    PostCutover,
-}
-
-impl std::fmt::Display for SyncState {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::PreData => write!(f, "pre_data"),
-            Self::PostData => write!(f, "post_data"),
-            Self::Cutover => write!(f, "cutover"),
-            Self::PostCutover => write!(f, "post_cutover"),
-        }
-    }
-}
+pub use pgdog_stats::SyncState;
 
 #[derive(Debug)]
 pub enum Statement<'a> {

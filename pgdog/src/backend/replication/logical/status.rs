@@ -1,11 +1,11 @@
+use std::ops::DerefMut;
 use std::{ops::Deref, sync::Arc, time::SystemTime};
 
 use dashmap::{DashMap, DashSet};
 use once_cell::sync::Lazy;
-use pgdog_stats::Lsn;
+use pgdog_stats::{Lsn, StatementKind, TableCopyState};
 
 use crate::backend::{
-    databases::User,
     pool::Address,
     schema::sync::{Statement, SyncState},
     Cluster,
@@ -18,6 +18,15 @@ static COPIES: Lazy<TableCopies> = Lazy::new(TableCopies::default);
 pub struct TableCopy {
     pub(crate) schema: String,
     pub(crate) table: String,
+}
+
+impl From<&TableCopy> for pgdog_stats::TableCopy {
+    fn from(value: &TableCopy) -> Self {
+        pgdog_stats::TableCopy {
+            schema: value.schema.clone(),
+            table: value.table.clone(),
+        }
+    }
 }
 
 impl TableCopy {
@@ -63,27 +72,6 @@ impl Drop for TableCopy {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct TableCopyState {
-    pub(crate) sql: String,
-    pub(crate) rows: usize,
-    pub(crate) bytes: usize,
-    pub(crate) bytes_per_sec: usize,
-    pub(crate) last_update: SystemTime,
-}
-
-impl Default for TableCopyState {
-    fn default() -> Self {
-        Self {
-            sql: String::default(),
-            rows: 0,
-            bytes: 0,
-            bytes_per_sec: 0,
-            last_update: SystemTime::now(),
-        }
-    }
-}
-
 #[derive(Default, Clone)]
 pub struct TableCopies {
     copies: Arc<DashMap<TableCopy, TableCopyState>>,
@@ -108,23 +96,34 @@ static REPLICATION_SLOTS: Lazy<ReplicationSlots> = Lazy::new(ReplicationSlots::d
 /// Replication slot.
 #[derive(Debug, Clone)]
 pub struct ReplicationSlot {
-    pub(crate) name: String,
-    pub(crate) lsn: Lsn,
-    pub(crate) lag: i64,
-    pub(crate) copy_data: bool,
-    pub(crate) address: Address,
-    pub(crate) last_transaction: Option<SystemTime>,
+    inner: pgdog_stats::ReplicationSlot,
+}
+
+impl Deref for ReplicationSlot {
+    type Target = pgdog_stats::ReplicationSlot;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl DerefMut for ReplicationSlot {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.inner
+    }
 }
 
 impl ReplicationSlot {
     pub(crate) fn new(name: &str, lsn: &Lsn, copy_data: bool, address: &Address) -> Self {
         let slot = Self {
-            name: name.to_owned(),
-            lsn: *lsn,
-            copy_data,
-            lag: 0,
-            address: address.clone(),
-            last_transaction: None,
+            inner: pgdog_stats::ReplicationSlot {
+                name: name.to_owned(),
+                lsn: *lsn,
+                copy_data,
+                lag: 0,
+                address: address.clone().into(),
+                last_transaction: None,
+            },
         };
 
         ReplicationSlots::get().insert(name.to_owned(), slot.clone());
@@ -177,33 +176,23 @@ impl Deref for ReplicationSlots {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum StatementKind {
-    Table,
-    Index,
-    Statement,
+#[derive(Debug, Clone, PartialEq, Hash, Eq)]
+pub struct SchemaStatement {
+    inner: pgdog_stats::SchemaStatement,
 }
 
-impl std::fmt::Display for StatementKind {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Table => write!(f, "table"),
-            Self::Index => write!(f, "index"),
-            Self::Statement => write!(f, "statement"),
-        }
+impl From<pgdog_stats::SchemaStatement> for SchemaStatement {
+    fn from(value: pgdog_stats::SchemaStatement) -> Self {
+        Self { inner: value }
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Hash, Eq)]
-pub struct SchemaStatement {
-    pub(crate) user: User,
-    pub(crate) shard: usize,
-    pub(crate) sql: String,
-    pub(crate) kind: StatementKind,
-    pub(crate) sync_state: SyncState,
-    pub(crate) started_at: SystemTime,
-    pub(crate) table_schema: Option<String>,
-    pub(crate) table_name: Option<String>,
+impl Deref for SchemaStatement {
+    type Target = pgdog_stats::SchemaStatement;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
 }
 
 impl SchemaStatement {
@@ -215,9 +204,9 @@ impl SchemaStatement {
     ) -> Self {
         let user = cluster.identifier().deref().clone();
 
-        let stmt = match stmt {
-            Statement::Index { table, sql, .. } => Self {
-                user,
+        let stmt: Self = match stmt {
+            Statement::Index { table, sql, .. } => pgdog_stats::SchemaStatement {
+                user: user.into(),
                 shard,
                 sql: sql.clone(),
                 kind: StatementKind::Index,
@@ -226,8 +215,8 @@ impl SchemaStatement {
                 table_schema: table.schema.map(|s| s.to_string()),
                 table_name: Some(table.name.to_owned()),
             },
-            Statement::Table { table, sql } => Self {
-                user,
+            Statement::Table { table, sql } => pgdog_stats::SchemaStatement {
+                user: user.into(),
                 shard,
                 sql: sql.clone(),
                 kind: StatementKind::Table,
@@ -236,8 +225,8 @@ impl SchemaStatement {
                 table_schema: table.schema.map(|s| s.to_string()),
                 table_name: Some(table.name.to_owned()),
             },
-            Statement::Other { sql, .. } => Self {
-                user,
+            Statement::Other { sql, .. } => pgdog_stats::SchemaStatement {
+                user: user.into(),
                 shard,
                 sql: sql.clone(),
                 kind: StatementKind::Statement,
@@ -246,8 +235,8 @@ impl SchemaStatement {
                 table_schema: None,
                 table_name: None,
             },
-            Statement::SequenceOwner { sql, .. } => Self {
-                user,
+            Statement::SequenceOwner { sql, .. } => pgdog_stats::SchemaStatement {
+                user: user.into(),
                 shard,
                 sql: sql.to_string(),
                 kind: StatementKind::Statement,
@@ -256,8 +245,8 @@ impl SchemaStatement {
                 table_schema: None,
                 table_name: None,
             },
-            Statement::SequenceSetMax { sql, .. } => Self {
-                user,
+            Statement::SequenceSetMax { sql, .. } => pgdog_stats::SchemaStatement {
+                user: user.into(),
                 shard,
                 sql: sql.clone(),
                 kind: StatementKind::Statement,
@@ -266,7 +255,8 @@ impl SchemaStatement {
                 table_schema: None,
                 table_name: None,
             },
-        };
+        }
+        .into();
 
         SchemaStatements::get().insert(stmt.clone());
 

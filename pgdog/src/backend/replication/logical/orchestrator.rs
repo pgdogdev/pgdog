@@ -94,6 +94,8 @@ impl Orchestrator {
     pub(crate) async fn schema_sync_pre(&mut self, ignore_errors: bool) -> Result<(), Error> {
         let schema = self.schema.as_ref().ok_or(Error::NoSchema)?;
 
+        orchestrator_state(OrchestratorState::SchemSyncPre);
+
         schema
             .restore(&self.destination, ignore_errors, SyncState::PreData)
             .await?;
@@ -117,6 +119,8 @@ impl Orchestrator {
     ) -> Result<(), Error> {
         let schema = self.schema.as_ref().ok_or(Error::NoSchema)?;
 
+        orchestrator_state(OrchestratorState::SchemaSyncPostCutover);
+
         schema
             .restore(&self.destination, ignore_errors, SyncState::PostCutover)
             .await?;
@@ -126,6 +130,8 @@ impl Orchestrator {
 
     pub(crate) async fn data_sync(&self) -> Result<(), Error> {
         let mut publisher = self.publisher.lock().await;
+
+        orchestrator_state(OrchestratorState::DataSync);
 
         // Run data sync for all tables in parallel using multiple replicas,
         // if available.
@@ -141,6 +147,9 @@ impl Orchestrator {
     pub(crate) async fn replicate(&self) -> Result<ReplicationWaiter, Error> {
         let mut publisher = self.publisher.lock().await;
         let waiter = publisher.replicate(&self.destination).await?;
+
+        orchestrator_state(OrchestratorState::Replication);
+
         Ok(ReplicationWaiter {
             orchestrator: self.clone(),
             waiter,
@@ -176,6 +185,8 @@ impl Orchestrator {
     pub(crate) async fn schema_sync_post(&mut self, ignore_errors: bool) -> Result<(), Error> {
         let schema = self.schema.as_ref().ok_or(Error::NoSchema)?;
 
+        orchestrator_state(OrchestratorState::SchemaSyncPost);
+
         schema
             .restore(&self.destination, ignore_errors, SyncState::PostData)
             .await?;
@@ -186,6 +197,8 @@ impl Orchestrator {
     pub(crate) async fn schema_sync_cutover(&self, ignore_errors: bool) -> Result<(), Error> {
         // Sequences won't be used in a sharded database.
         let schema = self.schema.as_ref().ok_or(Error::NoSchema)?;
+
+        orchestrator_state(OrchestratorState::SchemaSyncCutover);
 
         schema
             .restore(&self.destination, ignore_errors, SyncState::Cutover)
@@ -215,24 +228,24 @@ pub struct ReplicationWaiter {
     config: Arc<ConfigAndUsers>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum CutoverReason {
+#[derive(Debug, Clone, PartialEq, Eq, Copy)]
+pub(crate) enum CutoverReason {
     Lag,
     Timeout,
     LastTransaction,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum CutoverAction {
+#[derive(Debug, Clone, PartialEq, Eq, Copy)]
+pub(crate) enum CutoverAction {
     Go(CutoverReason),
     NoGo(CutoverData),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct CutoverData {
-    lag: u64,
-    last_transaction: Option<Duration>,
-    elapsed: Duration,
+#[derive(Debug, Clone, PartialEq, Eq, Copy)]
+pub(crate) struct CutoverData {
+    pub(crate) lag: u64,
+    pub(crate) last_transaction: Option<Duration>,
+    pub(crate) elapsed: Duration,
 }
 
 impl Display for CutoverReason {
@@ -277,6 +290,7 @@ impl ReplicationWaiter {
             }
 
             let lag = self.orchestrator.replication_lag().await;
+            cutover_state(CutoverState::WaitingForReplication { lag });
 
             info!("[cutover] replication lag: {}", format_bytes(lag as u64));
 
@@ -377,6 +391,11 @@ impl ReplicationWaiter {
 
             let elapsed = start.elapsed();
             let cutover_reason = self.should_cutover(elapsed).await;
+
+            cutover_state(CutoverState::WaitForCutover {
+                action: cutover_reason,
+            });
+
             match cutover_reason {
                 CutoverAction::Go(CutoverReason::Timeout) => {
                     if cutover_timeout_action == CutoverTimeoutAction::Abort {
@@ -446,6 +465,8 @@ impl ReplicationWaiter {
         // Point traffic to the other database and resume.
         maintenance_mode::stop();
 
+        cutover_state(CutoverState::Complete);
+
         Ok(())
     }
 }
@@ -456,6 +477,9 @@ macro_rules! ok_or_abort {
             Ok(res) => res,
             Err(err) => {
                 maintenance_mode::stop();
+                cutover_state(CutoverState::Abort {
+                    error: err.to_string(),
+                });
                 return Err(err.into());
             }
         }
