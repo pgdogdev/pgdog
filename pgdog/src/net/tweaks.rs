@@ -21,6 +21,7 @@ pub fn tweak(socket: &TcpStream) -> Result<()> {
     if let Some(interval) = config.interval() {
         params = params.with_interval(interval);
     }
+    #[cfg(not(windows))]
     if let Some(retries) = config.retries() {
         params = params.with_retries(retries);
     }
