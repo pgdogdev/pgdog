@@ -65,7 +65,7 @@ pub struct Address {
     pub database_number: usize,
 }
 
-#[derive(Debug, Clone, PartialEq, Hash, Eq)]
+#[derive(Debug, Clone, PartialEq, Hash, Eq, Serialize, Deserialize)]
 pub struct SchemaStatement {
     pub user: User,
     pub shard: usize,
@@ -77,7 +77,7 @@ pub struct SchemaStatement {
     pub table_name: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum StatementKind {
     Table,
     Index,
@@ -94,7 +94,7 @@ impl std::fmt::Display for StatementKind {
     }
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum SyncState {
     PreData,
     PostData,
