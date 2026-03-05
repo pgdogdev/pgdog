@@ -1,5 +1,6 @@
 pub mod admin;
 pub mod copy_statement;
+pub mod ee;
 pub mod error;
 pub mod orchestrator;
 pub mod publisher;
@@ -10,6 +11,8 @@ pub use admin::*;
 pub use copy_statement::CopyStatement;
 pub use error::Error;
 
+use ee::*;
+use orchestrator::*;
 pub use publisher::publisher_impl::{Publisher, Waiter};
 pub use subscriber::{CopySubscriber, StreamSubscriber};
 

@@ -248,6 +248,15 @@ pub struct User {
     pub database: String,
 }
 
+impl From<User> for pgdog_stats::User {
+    fn from(value: User) -> Self {
+        Self {
+            user: value.user,
+            database: value.database,
+        }
+    }
+}
+
 impl std::fmt::Display for User {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}/{}", self.user, self.database)
