@@ -24,6 +24,12 @@ static UNTRACKED_PARAMS: Lazy<Vec<String>> = Lazy::new(|| {
         String::from("user"),
         String::from("client_encoding"),
         String::from("replication"),
+        String::from("is_superuser"),
+        String::from("server_version"),
+        String::from("server_encoding"),
+        String::from("integer_datetimes"),
+        String::from("session_authorization"),
+        String::from("in_hot_standby"),
         String::from("pgdog.role"),
         String::from("pgdog.shard"),
         String::from("pgdog.sharding_key"),
@@ -392,22 +398,6 @@ impl Parameters {
             .keys()
             .map(|name| Query::new(format!(r#"RESET "{}""#, name)))
             .collect()
-    }
-
-    /// Get self-declared shard number.
-    pub fn shard(&self) -> Option<usize> {
-        if let Some(ParameterValue::String(application_name)) = self.get("application_name") {
-            if application_name.starts_with("pgdog_shard_") {
-                application_name
-                    .replace("pgdog_shard_", "")
-                    .parse::<usize>()
-                    .ok()
-            } else {
-                None
-            }
-        } else {
-            None
-        }
     }
 
     /// Get parameter value or returned an error.

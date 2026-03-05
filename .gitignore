@@ -63,3 +63,5 @@ integration/pgdog.config
 integration/**/.bundle
 integration/**/vendor
 integration/**/*.test
+
+.rustup

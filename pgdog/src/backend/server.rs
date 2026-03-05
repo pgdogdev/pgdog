@@ -1861,8 +1861,22 @@ pub mod test {
     #[tokio::test]
     async fn test_sync_params() {
         let mut server = test_server().await;
+
+        let is_superuser_before = server
+            .fetch_all::<String>("SHOW is_superuser")
+            .await
+            .unwrap()[0]
+            .clone();
+
+        let opposite = if is_superuser_before == "on" {
+            "off"
+        } else {
+            "on"
+        };
+
         let mut params = Parameters::default();
         params.insert("application_name", "test_sync_params");
+        params.insert("is_superuser", opposite);
         let changed = server
             .link_client(&BackendKeyData::new(), &params, None)
             .await
@@ -1874,6 +1888,16 @@ pub mod test {
             .await
             .unwrap();
         assert_eq!(app_name[0], "test_sync_params");
+
+        let is_superuser_after = server
+            .fetch_all::<String>("SHOW is_superuser")
+            .await
+            .unwrap()[0]
+            .clone();
+        assert_eq!(
+            is_superuser_before, is_superuser_after,
+            "is_superuser must not be changed by link_client"
+        );
 
         let changed = server
             .link_client(&BackendKeyData::new(), &params, None)
