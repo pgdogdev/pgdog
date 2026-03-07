@@ -7,7 +7,7 @@ use crate::{
         router::parser::{explain_trace::ExplainTrace, rewrite::statement::plan::RewriteResult},
     },
     net::{
-        DataRow, FromBytes, Message, Protocol, ProtocolMessage, Query, ReadyForQuery,
+        DataRow, Field, FromBytes, Message, Protocol, ProtocolMessage, Query, ReadyForQuery,
         RowDescription, ToBytes, TransactionState,
     },
     state::State,
@@ -36,7 +36,7 @@ impl QueryEngine {
         // We need to run a query now.
         if context.in_transaction() {
             // Connect to one shard if not sharded or to all shards
-            // for a cross-shard tranasction.
+            // for a cross-shard transaction.
             if !self.connect_transaction(context).await? {
                 return Ok(());
             }
@@ -123,8 +123,23 @@ impl QueryEngine {
     ) -> Result<(), Error> {
         self.streaming = message.streaming();
 
+        let should_rewrite_for_display_table =
+            if let Some(route) = context.client_request.route.as_ref() {
+                route.display_table()
+            } else {
+                false
+            };
+
         let code = message.code();
         let payload = if code == 'T' {
+            if should_rewrite_for_display_table {
+                let mut fields = RowDescription::from_bytes(message.payload())
+                    .unwrap()
+                    .fields
+                    .to_vec();
+                fields.push(Field::text("Shard"));
+                message = RowDescription::new(&fields).message()?;
+            }
             Some(message.payload())
         } else {
             None
@@ -150,6 +165,38 @@ impl QueryEngine {
                 state.annotated = true;
             }
             self.pending_explain = None;
+        }
+
+        if code == 'D' {
+            if should_rewrite_for_display_table {
+                let mut dr = DataRow::from_bytes(message.payload()).unwrap();
+                let col = dr.column(1).unwrap();
+
+                let shard_map = self.backend.forward_with_shard();
+                let table_lookup = std::str::from_utf8(&col).unwrap();
+
+                if let Some(map) = shard_map {
+                    if self.seen_tables.contains(table_lookup) {
+                        return Ok(());
+                    }
+
+                    self.seen_tables.insert(table_lookup.to_string());
+
+                    let mut new_col = String::new();
+                    for (i, val) in map[table_lookup].iter().enumerate() {
+                        if i > 0 {
+                            new_col.push_str(", ")
+                        }
+                        new_col.push_str(&val.to_string());
+                    }
+                    dr.add(new_col);
+                } else {
+                    dr.add(None);
+                }
+
+                message = dr.message()?;
+                Some(message.payload());
+            }
         }
 
         // Messages that we need to send to the client immediately.

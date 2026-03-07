@@ -108,6 +108,18 @@ impl QueryParser {
             Command::default()
         };
 
+        // Check if we are executing \dt command
+        if let Command::Query(route) = &mut command {
+            let q = context.query().unwrap();
+            if q.contains("pg_catalog.pg_class")
+                && q.contains("pg_catalog.pg_namespace")
+                && q.contains("relkind")
+                && q.contains("pg_toast")
+            {
+                route.set_display_table(true);
+            }
+        }
+
         if let Command::Query(route) = &mut command {
             if route.is_cross_shard() && context.shards == 1 {
                 context
