@@ -324,8 +324,11 @@ impl Connection {
         match self.binding {
             Binding::Direct(_) | Binding::MultiShard(_, _) => {
                 let user = (self.user.as_str(), self.database.as_str());
+                let config = config();
                 // Check passthrough auth.
-                if config().config.general.passthrough_auth() && !databases().exists(user) {
+                if config.config.general.passthrough_auth()
+                    && !databases().is_backend_auth_ready(user, &config.config.general.auth_type)
+                {
                     if let Some(ref passthrough_password) = self.passthrough_password {
                         let new_user = User::new(&self.user, passthrough_password, &self.database);
                         databases::add(new_user);
@@ -357,6 +360,13 @@ impl Connection {
         }
 
         Ok(())
+    }
+
+    /// Resume pools for the currently bound cluster.
+    pub(crate) fn resume_cluster_pools(&self) {
+        if let Some(cluster) = &self.cluster {
+            cluster.resume();
+        }
     }
 
     pub(crate) fn bind(&mut self, bind: &Bind) -> Result<(), Error> {
