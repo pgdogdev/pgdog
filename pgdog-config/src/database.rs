@@ -48,6 +48,8 @@ pub enum LoadBalancingStrategy {
     RoundRobin,
     /// Route to the replica with the fewest active connections.
     LeastActiveConnections,
+    /// Weighted round-robin, distributing requests proportionally to configured weights.
+    WeightedRoundRobin,
 }
 
 impl FromStr for LoadBalancingStrategy {
@@ -58,6 +60,7 @@ impl FromStr for LoadBalancingStrategy {
             "random" => Ok(Self::Random),
             "roundrobin" => Ok(Self::RoundRobin),
             "leastactiveconnections" => Ok(Self::LeastActiveConnections),
+            "weightedroundrobin" => Ok(Self::WeightedRoundRobin),
             _ => Err(format!("Invalid load balancing strategy: {}", s)),
         }
     }
@@ -184,6 +187,9 @@ pub struct Database {
     /// Used for resharding only; this database will not serve regular traffic.
     #[serde(default)]
     pub resharding_only: bool,
+    /// Used for weighted load balancing.
+    #[serde(default = "Database::lb_weight")]
+    pub lb_weight: u8,
 }
 
 impl Database {
@@ -194,6 +200,10 @@ impl Database {
 
     fn port() -> u16 {
         5432
+    }
+
+    fn lb_weight() -> u8 {
+        255
     }
 }
 
