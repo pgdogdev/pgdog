@@ -144,6 +144,7 @@ impl Config {
                 lsn_check_delay: Duration::from_millis(general.lsn_check_delay),
                 role_detection: database.role == Role::Auto,
                 resharding_only: database.resharding_only,
+                lb_weight: database.lb_weight,
                 ..Default::default()
             },
         }

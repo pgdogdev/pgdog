@@ -370,6 +370,14 @@
           "format": "uint64",
           "minimum": 0
         },
+        "lb_weight": {
+          "description": "Used for weighted load balancing.",
+          "type": "integer",
+          "format": "uint8",
+          "default": 255,
+          "maximum": 255,
+          "minimum": 0
+        },
         "min_pool_size": {
           "description": "Overrides the `min_pool_size` setting. The connection pool will maintain at minimum this many connections.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/databases/#min_pool_size",
           "type": [
@@ -1054,6 +1062,11 @@
           "description": "Route to the replica with the fewest active connections.",
           "type": "string",
           "const": "least_active_connections"
+        },
+        {
+          "description": "Weighted round-robin, distributing requests proportionally to configured weights.",
+          "type": "string",
+          "const": "weighted_round_robin"
         }
       ]
     },

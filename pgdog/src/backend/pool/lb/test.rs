@@ -1083,6 +1083,153 @@ async fn test_monitor_unbans_all_when_second_target_becomes_unhealthy_after_firs
     replicas.shutdown();
 }
 
+fn create_test_pool_config_weighted(host: &str, port: u16, lb_weight: u8) -> PoolConfig {
+    PoolConfig {
+        address: Address {
+            host: host.into(),
+            port,
+            user: "pgdog".into(),
+            password: "pgdog".into(),
+            database_name: "pgdog".into(),
+            ..Default::default()
+        },
+        config: Config {
+            inner: pgdog_stats::Config {
+                max: 1,
+                checkout_timeout: Duration::from_millis(1000),
+                ban_timeout: Duration::from_millis(100),
+                lb_weight,
+                ..Config::default().inner
+            },
+        },
+        ..Default::default()
+    }
+}
+
+#[tokio::test]
+async fn test_weighted_round_robin_smooth_distribution() {
+    let pool_config1 = create_test_pool_config_weighted("127.0.0.1", 5432, 5);
+    let pool_config2 = create_test_pool_config_weighted("localhost", 5432, 1);
+
+    let lb = LoadBalancer::new(
+        &None,
+        &[pool_config1, pool_config2],
+        LoadBalancingStrategy::WeightedRoundRobin,
+        ReadWriteSplit::IncludePrimary,
+    );
+    lb.launch();
+
+    let request = Request::default();
+
+    let pool_a = lb.targets[0].pool.id();
+    let pool_b = lb.targets[1].pool.id();
+
+    // With weights [5, 1], over 6 rounds the sequence should be: A, A, B, A, A, A
+    // (B appears at position 3 due to max_by_key last-wins tie-breaking)
+    let mut sequence = Vec::new();
+    for _ in 0..6 {
+        let conn = lb.get(&request).await.unwrap();
+        sequence.push(conn.pool.id());
+    }
+
+    assert_eq!(
+        sequence,
+        vec![pool_a, pool_a, pool_b, pool_a, pool_a, pool_a],
+    );
+
+    lb.shutdown();
+}
+
+#[tokio::test]
+async fn test_weighted_round_robin_equal_weights() {
+    let pool_config1 = create_test_pool_config_weighted("127.0.0.1", 5432, 1);
+    let pool_config2 = create_test_pool_config_weighted("localhost", 5432, 1);
+
+    let lb = LoadBalancer::new(
+        &None,
+        &[pool_config1, pool_config2],
+        LoadBalancingStrategy::WeightedRoundRobin,
+        ReadWriteSplit::IncludePrimary,
+    );
+    lb.launch();
+
+    let request = Request::default();
+
+    let pool_a = lb.targets[0].pool.id();
+    let pool_b = lb.targets[1].pool.id();
+
+    // With equal weights, should alternate: B, A, B, A
+    // (max_by_key picks the last element on tie, so B goes first)
+    let mut sequence = Vec::new();
+    for _ in 0..4 {
+        let conn = lb.get(&request).await.unwrap();
+        sequence.push(conn.pool.id());
+    }
+
+    assert_eq!(sequence, vec![pool_b, pool_a, pool_b, pool_a]);
+
+    lb.shutdown();
+}
+
+#[tokio::test]
+async fn test_weighted_round_robin_zero_weight_never_selected() {
+    let pool_config1 = create_test_pool_config_weighted("127.0.0.1", 5432, 0);
+    let pool_config2 = create_test_pool_config_weighted("localhost", 5432, 10);
+
+    let lb = LoadBalancer::new(
+        &None,
+        &[pool_config1, pool_config2],
+        LoadBalancingStrategy::WeightedRoundRobin,
+        ReadWriteSplit::IncludePrimary,
+    );
+    lb.launch();
+
+    let request = Request::default();
+
+    let expected_id = lb.targets[1].pool.id();
+    for _ in 0..20 {
+        let conn = lb.get(&request).await.unwrap();
+        assert_eq!(
+            conn.pool.id(),
+            expected_id,
+            "Pool with weight 0 should never be selected first"
+        );
+    }
+
+    lb.shutdown();
+}
+
+#[tokio::test]
+async fn test_weighted_round_robin_proportional_distribution() {
+    let pool_config1 = create_test_pool_config_weighted("127.0.0.1", 5432, 3);
+    let pool_config2 = create_test_pool_config_weighted("localhost", 5432, 1);
+
+    let lb = LoadBalancer::new(
+        &None,
+        &[pool_config1, pool_config2],
+        LoadBalancingStrategy::WeightedRoundRobin,
+        ReadWriteSplit::IncludePrimary,
+    );
+    lb.launch();
+
+    let request = Request::default();
+
+    let pool_a = lb.targets[0].pool.id();
+
+    // Over 40 rounds (10 full cycles of total_weight=4), A should get exactly 30
+    let mut a_count = 0;
+    for _ in 0..40 {
+        let conn = lb.get(&request).await.unwrap();
+        if conn.pool.id() == pool_a {
+            a_count += 1;
+        }
+    }
+
+    assert_eq!(a_count, 30, "Pool A (weight 3) should get 3/4 of requests");
+
+    lb.shutdown();
+}
+
 #[tokio::test]
 async fn test_least_active_connections_prefers_pool_with_fewer_checked_out() {
     let pool_config1 = create_test_pool_config("127.0.0.1", 5432);

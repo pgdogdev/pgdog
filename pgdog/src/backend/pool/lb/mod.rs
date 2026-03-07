@@ -2,7 +2,7 @@
 
 use std::{
     sync::{
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicI64, AtomicUsize, Ordering},
         Arc,
     },
     time::{Duration, SystemTime},
@@ -38,6 +38,8 @@ pub struct Target {
     pub ban: Ban,
     replica: Arc<AtomicBool>,
     pub health: TargetHealth,
+    /// Smooth weighted round-robin current weight tracker.
+    current_weight: Arc<AtomicI64>,
 }
 
 impl Target {
@@ -48,6 +50,7 @@ impl Target {
             replica: Arc::new(AtomicBool::new(role == Role::Replica)),
             health: pool.inner().health.clone(),
             pool,
+            current_weight: Arc::new(AtomicI64::new(0)),
         }
     }
 
@@ -302,6 +305,33 @@ impl LoadBalancer {
             }
             LeastActiveConnections => {
                 candidates.sort_by_cached_key(|target| target.pool.lock().checked_out());
+            }
+            WeightedRoundRobin => {
+                let total_weight: i64 = candidates
+                    .iter()
+                    .map(|target| target.pool.config().lb_weight as i64)
+                    .sum();
+
+                if total_weight > 0 {
+                    for target in &candidates {
+                        target
+                            .current_weight
+                            .fetch_add(target.pool.config().lb_weight as i64, Ordering::Relaxed);
+                    }
+
+                    let max_idx = candidates
+                        .iter()
+                        .enumerate()
+                        .max_by_key(|(_, t)| t.current_weight.load(Ordering::Relaxed))
+                        .map(|(idx, _)| idx)
+                        .unwrap_or_default();
+
+                    candidates[max_idx]
+                        .current_weight
+                        .fetch_sub(total_weight, Ordering::Relaxed);
+
+                    candidates.swap(0, max_idx);
+                }
             }
         }
 

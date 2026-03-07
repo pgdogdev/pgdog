@@ -327,6 +327,8 @@ pub struct Config {
     pub role_detection: bool,
     /// Used for resharding only.
     pub resharding_only: bool,
+    /// LB weight.
+    pub lb_weight: u8,
 }
 
 impl Default for Config {
@@ -363,6 +365,7 @@ impl Default for Config {
             lsn_check_delay: Duration::from_millis(5_000),
             role_detection: false,
             resharding_only: false,
+            lb_weight: 255,
         }
     }
 }
