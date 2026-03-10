@@ -1,4 +1,4 @@
-use std::time::SystemTime;
+use std::{sync::Arc, time::SystemTime};
 
 use pgdog_config::ServerAuth;
 use serde::{Deserialize, Serialize};
@@ -13,7 +13,7 @@ pub struct TableCopy {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TableCopyState {
-    pub sql: String,
+    pub sql: Arc<String>,
     pub rows: usize,
     pub bytes: usize,
     pub bytes_per_sec: usize,
@@ -23,7 +23,7 @@ pub struct TableCopyState {
 impl Default for TableCopyState {
     fn default() -> Self {
         Self {
-            sql: String::default(),
+            sql: Arc::new(String::default()),
             rows: 0,
             bytes: 0,
             bytes_per_sec: 0,
@@ -67,14 +67,23 @@ pub struct Address {
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq, Serialize, Deserialize)]
 pub struct SchemaStatement {
+    pub id: i64,
     pub user: User,
     pub shard: usize,
     pub sql: String,
     pub kind: StatementKind,
     pub sync_state: SyncState,
-    pub started_at: SystemTime,
+    pub started_at: Option<SystemTime>,
     pub table_schema: Option<String>,
     pub table_name: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Hash, Eq, Serialize, Deserialize)]
+pub struct SchemaStatementTask {
+    pub statement: SchemaStatement,
+    pub running: bool,
+    pub done: bool,
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]

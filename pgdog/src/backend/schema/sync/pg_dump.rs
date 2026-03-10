@@ -272,6 +272,18 @@ pub enum Statement<'a> {
     },
 }
 
+impl Statement<'_> {
+    pub(crate) fn sql(&self) -> &str {
+        match self {
+            Self::Index { sql, .. } => sql.as_str(),
+            Self::Other { sql, .. } => sql.as_str(),
+            Self::SequenceOwner { sql, .. } => *sql,
+            Self::SequenceSetMax { sql, .. } => sql.as_str(),
+            Self::Table { sql, .. } => sql.as_str(),
+        }
+    }
+}
+
 impl<'a> Deref for Statement<'a> {
     type Target = str;
     fn deref(&self) -> &Self::Target {
@@ -1090,6 +1102,14 @@ impl PgDumpOutput {
         state: SyncState,
     ) -> Result<(), Error> {
         let stmts = self.statements(state)?;
+        let mut trackers = (0..dest.shards().len())
+            .map(|shard| {
+                stmts
+                    .iter()
+                    .map(|stmt| (stmt.sql(), SchemaStatement::new(dest, stmt, shard, state)))
+                    .collect::<HashMap<_, _>>()
+            })
+            .collect::<Vec<_>>();
 
         for (num, shard) in dest.shards().iter().enumerate() {
             let mut primary = shard.primary(&Request::default()).await?;
@@ -1105,7 +1125,14 @@ impl PgDumpOutput {
 
             for stmt in &stmts {
                 progress.next(stmt);
-                let _tracker = SchemaStatement::new(dest, stmt, num, state);
+
+                let mut tracker = trackers
+                    .get_mut(num)
+                    .and_then(|trackers| trackers.remove(stmt.sql()));
+
+                if let Some(ref mut tracker) = tracker {
+                    tracker.running();
+                }
 
                 if let Err(err) = primary.execute(stmt.deref()).await {
                     if let backend::Error::ExecutionError(ref err) = err {
@@ -1117,6 +1144,9 @@ impl PgDumpOutput {
                                     warn!("entity already exists, skipping");
                                     continue;
                                 } else if !ignore_errors {
+                                    if let Some(ref mut tracker) = tracker {
+                                        tracker.error(&err);
+                                    }
                                     return Err(Error::Backend(backend::Error::ExecutionError(
                                         err.clone(),
                                     )));
