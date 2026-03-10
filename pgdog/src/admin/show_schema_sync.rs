@@ -38,17 +38,26 @@ impl Command for ShowSchemaSync {
         let mut messages = vec![rd.message()?];
         let now = SystemTime::now();
 
-        for entry in SchemaStatements::get().iter() {
-            let stmt = entry.key();
+        let mut entries: Vec<_> = SchemaStatements::get()
+            .iter()
+            .map(|task| task.clone())
+            .collect();
+        entries.sort_by_key(|k| if k.running { 0 } else { 1 });
 
-            let elapsed = now.duration_since(stmt.started_at).unwrap_or_default();
-            let elapsed_ms = elapsed.as_millis() as i64;
-            let elapsed_human = human_duration_display(elapsed);
+        for entry in entries {
+            let stmt = entry.statement;
+
+            let elapsed = stmt
+                .started_at
+                .map(|t| now.duration_since(t).unwrap_or_default());
+            let elapsed_ms: Option<i64> = elapsed.map(|e| e.as_millis() as i64);
+            let elapsed_human: Option<String> = elapsed.map(human_duration_display);
 
             let kind = stmt.kind.to_string();
             let sync_state = stmt.sync_state.to_string();
-            let started_at: DateTime<Local> = stmt.started_at.into();
-            let started_at = format_time(started_at);
+            let started_at: Option<String> = stmt
+                .started_at
+                .map(|started_at| format_time(DateTime::<Local>::from(started_at)));
 
             let mut row = DataRow::new();
             row.add(stmt.user.database.as_str())
@@ -56,8 +65,8 @@ impl Command for ShowSchemaSync {
                 .add(stmt.shard as i64)
                 .add(kind.as_str())
                 .add(sync_state.as_str())
-                .add(started_at.as_str())
-                .add(elapsed_human.as_str())
+                .add(started_at)
+                .add(elapsed_human)
                 .add(elapsed_ms)
                 .add(stmt.table_schema.as_deref().unwrap_or(""))
                 .add(stmt.table_name.as_deref().unwrap_or(""))

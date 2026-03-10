@@ -1,30 +1,36 @@
 use std::ops::DerefMut;
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::{ops::Deref, sync::Arc, time::SystemTime};
 
 use dashmap::{DashMap, DashSet};
 use once_cell::sync::Lazy;
-use pgdog_stats::{Lsn, StatementKind, TableCopyState};
+use pgdog_stats::{Lsn, SchemaStatementTask, StatementKind, TableCopyState};
 
+use crate::backend::replication::ee::{
+    data_sync_done, data_sync_error, data_sync_progress, schema_sync_task,
+};
 use crate::backend::{
     pool::Address,
+    replication::logical::Error as LogicalError,
     schema::sync::{Statement, SyncState},
     Cluster,
 };
+use crate::net::ErrorResponse;
 
 /// Status of table copies.
 static COPIES: Lazy<TableCopies> = Lazy::new(TableCopies::default);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TableCopy {
-    pub(crate) schema: String,
-    pub(crate) table: String,
+    pub(crate) schema: Arc<String>,
+    pub(crate) table: Arc<String>,
 }
 
 impl From<&TableCopy> for pgdog_stats::TableCopy {
     fn from(value: &TableCopy) -> Self {
         pgdog_stats::TableCopy {
-            schema: value.schema.clone(),
-            table: value.table.clone(),
+            schema: value.schema.to_string(),
+            table: value.table.to_string(),
         }
     }
 }
@@ -32,16 +38,18 @@ impl From<&TableCopy> for pgdog_stats::TableCopy {
 impl TableCopy {
     pub(crate) fn new(schema: &str, table: &str) -> Self {
         let copy = Self {
-            schema: schema.to_owned(),
-            table: table.to_owned(),
+            schema: Arc::new(schema.to_owned()),
+            table: Arc::new(table.to_owned()),
         };
-        TableCopies::get().insert(
-            copy.clone(),
-            TableCopyState {
-                last_update: SystemTime::now(),
-                ..Default::default()
-            },
-        );
+        let state = TableCopyState {
+            last_update: SystemTime::now(),
+            ..Default::default()
+        };
+
+        TableCopies::get().insert(copy.clone(), state.clone());
+
+        data_sync_progress(&copy, &state);
+
         copy
     }
 
@@ -56,18 +64,25 @@ impl TableCopy {
             if elapsed > 0 {
                 state.bytes_per_sec = state.bytes / elapsed as usize;
             }
+
+            data_sync_progress(&self, &state);
         }
+    }
+
+    pub(crate) fn error(&self, error: &LogicalError) {
+        data_sync_error(&self, error);
     }
 
     pub(crate) fn update_sql(&self, sql: &str) {
         if let Some(mut state) = TableCopies::get().get_mut(self) {
-            state.sql = sql.to_owned();
+            state.sql = Arc::new(sql.to_owned());
         }
     }
 }
 
 impl Drop for TableCopy {
     fn drop(&mut self) {
+        data_sync_done(&self);
         COPIES.copies.remove(self);
     }
 }
@@ -178,20 +193,14 @@ impl Deref for ReplicationSlots {
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
 pub struct SchemaStatement {
-    inner: pgdog_stats::SchemaStatement,
-}
-
-impl From<pgdog_stats::SchemaStatement> for SchemaStatement {
-    fn from(value: pgdog_stats::SchemaStatement) -> Self {
-        Self { inner: value }
-    }
+    task: SchemaStatementTask,
 }
 
 impl Deref for SchemaStatement {
     type Target = pgdog_stats::SchemaStatement;
 
     fn deref(&self) -> &Self::Target {
-        &self.inner
+        &self.task.statement
     }
 }
 
@@ -203,86 +212,136 @@ impl SchemaStatement {
         sync_state: SyncState,
     ) -> Self {
         let user = cluster.identifier().deref().clone();
+        let id = SchemaStatements::next_id();
 
-        let stmt: Self = match stmt {
+        let stmt = match stmt {
             Statement::Index { table, sql, .. } => pgdog_stats::SchemaStatement {
+                id,
                 user: user.into(),
                 shard,
                 sql: sql.clone(),
                 kind: StatementKind::Index,
                 sync_state,
-                started_at: SystemTime::now(),
+                started_at: None,
                 table_schema: table.schema.map(|s| s.to_string()),
                 table_name: Some(table.name.to_owned()),
             },
             Statement::Table { table, sql } => pgdog_stats::SchemaStatement {
+                id,
                 user: user.into(),
                 shard,
                 sql: sql.clone(),
                 kind: StatementKind::Table,
                 sync_state,
-                started_at: SystemTime::now(),
+                started_at: None,
                 table_schema: table.schema.map(|s| s.to_string()),
                 table_name: Some(table.name.to_owned()),
             },
             Statement::Other { sql, .. } => pgdog_stats::SchemaStatement {
+                id,
                 user: user.into(),
                 shard,
                 sql: sql.clone(),
                 kind: StatementKind::Statement,
                 sync_state,
-                started_at: SystemTime::now(),
+                started_at: None,
                 table_schema: None,
                 table_name: None,
             },
             Statement::SequenceOwner { sql, .. } => pgdog_stats::SchemaStatement {
+                id,
                 user: user.into(),
                 shard,
                 sql: sql.to_string(),
                 kind: StatementKind::Statement,
                 sync_state,
-                started_at: SystemTime::now(),
+                started_at: None,
                 table_schema: None,
                 table_name: None,
             },
             Statement::SequenceSetMax { sql, .. } => pgdog_stats::SchemaStatement {
+                id,
                 user: user.into(),
                 shard,
                 sql: sql.clone(),
                 kind: StatementKind::Statement,
                 sync_state,
-                started_at: SystemTime::now(),
+                started_at: None,
                 table_schema: None,
                 table_name: None,
             },
+        };
+
+        let task = SchemaStatementTask {
+            statement: stmt,
+            running: false,
+            done: false,
+            error: None,
+        };
+
+        SchemaStatements::get().insert(task.clone());
+
+        schema_sync_task(&task);
+
+        Self { task }
+    }
+
+    pub(crate) fn running(&mut self) {
+        if let Some(entry) =
+            SchemaStatements::get()
+                .stmts
+                .remove(&self.task)
+                .and_then(|mut entry| {
+                    entry.running = true;
+                    entry.statement.started_at = Some(SystemTime::now());
+
+                    Some(entry)
+                })
+        {
+            self.task = entry.clone();
+            schema_sync_task(&self.task);
+            SchemaStatements::get().insert(self.task.clone());
         }
-        .into();
+    }
 
-        SchemaStatements::get().insert(stmt.clone());
-
-        stmt
+    pub(crate) fn error(&mut self, err: &ErrorResponse) {
+        if let Some(mut entry) = SchemaStatements::get().stmts.remove(&self.task) {
+            entry.error = Some(err.to_string());
+            entry.done = true;
+            self.task = entry.clone();
+            schema_sync_task(&self.task);
+            SchemaStatements::get().insert(self.task.clone());
+        }
     }
 }
 
 impl Drop for SchemaStatement {
     fn drop(&mut self) {
-        SchemaStatements::get().remove(self);
+        SchemaStatements::get().remove(&self.task);
+
+        self.task.done = true;
+        schema_sync_task(&self.task);
     }
 }
 
 #[derive(Default, Debug, Clone)]
 pub struct SchemaStatements {
-    stmts: Arc<DashSet<SchemaStatement>>,
+    stmts: Arc<DashSet<SchemaStatementTask>>,
+    id: Arc<AtomicI64>,
 }
 
 impl SchemaStatements {
     pub(crate) fn get() -> Self {
         SCHEMA_STATEMENTS.clone()
     }
+
+    pub(crate) fn next_id() -> i64 {
+        Self::get().id.fetch_add(1, Ordering::SeqCst)
+    }
 }
 
 impl Deref for SchemaStatements {
-    type Target = Arc<DashSet<SchemaStatement>>;
+    type Target = Arc<DashSet<SchemaStatementTask>>;
 
     fn deref(&self) -> &Self::Target {
         &self.stmts
