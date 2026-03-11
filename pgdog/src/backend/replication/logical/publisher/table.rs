@@ -230,13 +230,7 @@ impl Table {
                 },
 
                 result = copy_sub.copy_data(data_row) => {
-                    let (rows, bytes) = match result {
-                        Ok(result) => result,
-                        Err(err) => {
-                            tracker.error(&err);
-                            return Err(err);
-                        }
-                    };
+                    let (rows, bytes) = result?;
                     progress.update(copy_sub.bytes_sharded(), slot.lsn().lsn);
                     tracker.update_progress(bytes, rows);
                 }

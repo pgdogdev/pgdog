@@ -7,7 +7,8 @@ use once_cell::sync::Lazy;
 use pgdog_stats::{Lsn, SchemaStatementTask, StatementKind, TableCopyState};
 
 use crate::backend::replication::ee::{
-    data_sync_done, data_sync_error, data_sync_progress, schema_sync_task,
+    data_sync_done, data_sync_error, data_sync_progress, replication_slot_create,
+    replication_slot_drop, replication_slot_error, replication_slot_update, schema_sync_task,
 };
 use crate::backend::{
     pool::Address,
@@ -143,6 +144,8 @@ impl ReplicationSlot {
 
         ReplicationSlots::get().insert(name.to_owned(), slot.clone());
 
+        replication_slot_create(&slot.inner);
+
         slot
     }
 
@@ -150,22 +153,32 @@ impl ReplicationSlot {
         if let Some(mut slot) = ReplicationSlots::get().get_mut(&self.name) {
             slot.lsn = *lsn;
             slot.last_transaction = Some(SystemTime::now());
+            replication_slot_update(&slot.inner);
         }
     }
 
     pub(crate) fn update_lag(&self, lag: i64) {
         if let Some(mut slot) = ReplicationSlots::get().get_mut(&self.name) {
             slot.lag = lag;
+            replication_slot_update(&slot.inner);
         }
     }
 
     pub(crate) fn dropped(&self) {
         ReplicationSlots::get().remove(&self.name);
+        replication_slot_drop(&self.inner);
+    }
+
+    pub(crate) fn error(&self, error: &ErrorResponse) {
+        replication_slot_error(&self.inner, error);
     }
 }
 
 impl Drop for ReplicationSlot {
     fn drop(&mut self) {
+        // The slot is dropped automatically by the connection,
+        // and we don't call fn dropped manually, so we need to do that here
+        // to track the slot is gone.
         if self.copy_data {
             self.dropped();
         }

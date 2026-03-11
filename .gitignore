@@ -65,3 +65,6 @@ integration/**/vendor
 integration/**/*.test
 
 .rustup
+enterprise/control-web/dist
+enterprise/control-web/node_modules
+enterprise/control-web/.vite/*
