@@ -122,9 +122,9 @@ impl QueryEngine {
         Ok(self.backend.read().await?)
     }
 
-    /// Query engine finished executing.
-    pub fn done(&self) -> bool {
-        !self.backend.connected() && self.begin_stmt.is_none()
+    /// Client can safely disconnect (no active backend connection or pending transaction).
+    pub fn can_disconnect(&self) -> bool {
+        self.begin_stmt.is_none() && self.backend.done()
     }
 
     /// Current state.
@@ -195,6 +195,7 @@ impl QueryEngine {
                 query,
                 transaction_type,
                 extended,
+                ..
             } => {
                 self.start_transaction(context, query.clone(), *transaction_type, *extended)
                     .await?

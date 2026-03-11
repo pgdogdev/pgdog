@@ -394,10 +394,16 @@ impl Client {
         let shutdown = self.comms.shutting_down();
         let mut offline;
         let mut query_engine = QueryEngine::from_client(self)?;
+        let mut terminating = false;
 
         loop {
-            offline = (self.comms.offline() && !self.admin || self.shutdown) && query_engine.done();
+            offline = (self.comms.offline() && !self.admin || self.shutdown)
+                && query_engine.can_disconnect();
             if offline {
+                break;
+            }
+
+            if terminating && query_engine.can_disconnect() {
                 break;
             }
 
@@ -405,7 +411,7 @@ impl Client {
 
             select! {
                 _ = shutdown.notified() => {
-                    if query_engine.done() {
+                    if query_engine.can_disconnect() {
                         continue; // Wake up task.
                     }
                 }
@@ -416,7 +422,7 @@ impl Client {
                     self.server_message(&mut query_engine, message).await?;
                 }
 
-                buffer = self.buffer(client_state) => {
+                buffer = self.buffer(client_state), if !terminating => {
                     let event = buffer?;
 
                     // Only send requests to the backend if they are complete.
@@ -429,13 +435,11 @@ impl Client {
                     match event {
                         BufferEvent::DisconnectAbrupt => break,
                         BufferEvent::DisconnectGraceful => {
-                            let done = query_engine.done();
-
-                            if done {
+                            if query_engine.can_disconnect() {
                                 break;
                             }
+                            terminating = true;
                         }
-
                         BufferEvent::HaveRequest => (),
                     }
                 }
