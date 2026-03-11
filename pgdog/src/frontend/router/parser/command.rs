@@ -21,6 +21,7 @@ pub enum Command {
         query: BufferedQuery,
         transaction_type: TransactionType,
         extended: bool,
+        route: Route,
     },
     CommitTransaction {
         extended: bool,
@@ -66,6 +67,7 @@ impl Command {
         match self {
             Self::Query(route) => route,
             Self::Set { route, .. } => route,
+            Self::StartTransaction { route, .. } => route,
             _ => &DEFAULT_ROUTE,
         }
     }

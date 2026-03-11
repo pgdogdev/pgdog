@@ -35,6 +35,8 @@ impl QueryParser {
                     query: context.query()?.clone(),
                     transaction_type,
                     extended,
+                    route: Route::write(context.shards_calculator.shard())
+                        .with_read(transaction_type == TransactionType::ReadOnly),
                 });
             }
             TransactionStmtKind::TransStmtRollbackTo => rollback_savepoint = true,

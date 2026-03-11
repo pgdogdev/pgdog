@@ -11,6 +11,14 @@ server_user = "pgdog"
 pooler_mode = "session"
 
 [[users]]
+name = "pgdog_session"
+database = "pgdog_sharded"
+password = "pgdog"
+server_user = "pgdog"
+pooler_mode = "session"
+cross_shard_disabled = true
+
+[[users]]
 name = "pgdog"
 database = "pgdog_sharded"
 password = "pgdog"
@@ -67,3 +75,11 @@ min_pool_size = 0
 name = "pgdog"
 password = "pgdog"
 database = "pgdog_schema"
+
+[[users]]
+name = "pgdog_session_no_cross_shard"
+password = "pgdog"
+database = "pgdog_schema_no_cross"
+server_user = "pgdog"
+cross_shard_disabled = true
+pooler_mode = "session"

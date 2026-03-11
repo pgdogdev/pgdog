@@ -23,6 +23,8 @@ tls_private_key = "integration/tls/key.pem"
 query_parser_engine = "pg_query_raw"
 system_catalogs = "omnisharded_sticky"
 reload_schema_on_ddl = false
+idle_healthcheck_delay = 50000000
+
 
 [memory]
 net_buffer = 8096
@@ -403,6 +405,28 @@ shard = 1
 database = "pgdog_schema"
 shard = 0
 
+[[databases]]
+name = "pgdog_schema_no_cross"
+host = "127.0.0.1"
+database_name = "shard_0"
+shard = 0
+
+[[databases]]
+name = "pgdog_schema_no_cross"
+host = "127.0.0.1"
+database_name = "shard_1"
+shard = 1
+
+
+[[sharded_schemas]]
+database = "pgdog_schema_no_cross"
+name = "shard_0"
+shard = 0
+
+[[sharded_schemas]]
+database = "pgdog_schema_no_cross"
+name = "shard_1"
+shard = 1
 
 # ------------------------------------------------------------------------------
 # ----- Admin ------------------------------------------------------------------
