@@ -1,9 +1,12 @@
 //! EE hooks.
 #![allow(dead_code, unused)]
 
-use pgdog_stats::{Lsn, SchemaStatementTask, TableCopyState};
+use pgdog_stats::{Lsn, ReplicationSlot, SchemaStatementTask, TableCopyState};
 
-use crate::backend::replication::{logical::Error as LogicalError, status::TableCopy};
+use crate::{
+    backend::replication::{logical::Error as LogicalError, status::TableCopy},
+    net::ErrorResponse,
+};
 
 use super::*;
 use std::time::Duration;
@@ -40,3 +43,11 @@ pub(crate) fn data_sync_progress(table: &TableCopy, state: &TableCopyState) {}
 pub(crate) fn data_sync_done(table: &TableCopy) {}
 
 pub(crate) fn data_sync_error(table: &TableCopy, err: &LogicalError) {}
+
+pub(crate) fn replication_slot_create(slot: &ReplicationSlot) {}
+
+pub(crate) fn replication_slot_drop(slot: &ReplicationSlot) {}
+
+pub(crate) fn replication_slot_update(slot: &ReplicationSlot) {}
+
+pub(crate) fn replication_slot_error(slot: &ReplicationSlot, err: &ErrorResponse) {}

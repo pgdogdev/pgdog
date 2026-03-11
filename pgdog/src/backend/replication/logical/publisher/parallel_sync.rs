@@ -57,7 +57,10 @@ impl ParallelSync {
                 .await
             {
                 Ok(_) => Ok(self.table),
-                Err(err) => Err(err),
+                Err(err) => {
+                    tracker.error(&err);
+                    return Err(err);
+                }
             };
 
             self.tx

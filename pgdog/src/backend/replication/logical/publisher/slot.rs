@@ -329,7 +329,14 @@ impl ReplicationSlot {
                     debug!("slot \"{}\" drained [{}]", self.name, self.address);
                     return Ok(None);
                 }
-                'E' => return Err(ErrorResponse::from_bytes(message.to_bytes()?)?.into()),
+                'E' => {
+                    let error = ErrorResponse::from_bytes(message.to_bytes()?)?;
+                    if let Some(ref tracker) = self.tracker {
+                        tracker.error(&error);
+                    }
+
+                    return Err(error.into());
+                }
                 c => return Err(Error::OutOfSync(c)),
             }
         }
