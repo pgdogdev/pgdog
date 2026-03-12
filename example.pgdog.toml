@@ -131,6 +131,18 @@ openmetrics_port = 9090
 #
 # Default: none
 openmetrics_namespace = "pgdog_"
+# Log output format.
+#
+# Default: text
+#
+# Available options:
+# - text
+# - json
+log_format = "text"
+# Log filter directives using the same syntax as RUST_LOG.
+#
+# Default: info
+log_level = "info"
 # Configure levels of support for prepared statements.
 #
 # Default: enabled

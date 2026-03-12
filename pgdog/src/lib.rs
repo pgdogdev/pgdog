@@ -19,6 +19,7 @@ pub mod tui;
 pub mod unique_id;
 pub mod util;
 
+use pgdog_config::{General, LogFormat};
 use tracing::level_filters::LevelFilter;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
@@ -41,19 +42,56 @@ static GLOBAL: &stats_alloc::StatsAlloc<System> = &stats_alloc::INSTRUMENTED_SYS
 /// Using try_init and ignoring errors to allow
 /// for use in tests (setting up multiple times).
 pub fn logger() {
-    let format = fmt::layer()
-        .with_ansi(std::io::stderr().is_terminal())
-        .with_writer(std::io::stderr)
-        .with_file(false);
-    #[cfg(not(debug_assertions))]
-    let format = format.with_target(false);
+    init_logger(None);
+}
 
-    let filter = EnvFilter::builder()
-        .with_default_directive(LevelFilter::INFO.into())
-        .from_env_lossy();
+/// Setup the logger using PgDog configuration.
+pub fn logger_with_config(general: &General) {
+    init_logger(Some(general));
+}
 
-    let _ = tracing_subscriber::registry()
-        .with(format)
-        .with(filter)
-        .try_init();
+fn init_logger(general: Option<&General>) {
+    let filter = match general {
+        Some(general) => EnvFilter::builder()
+            .with_default_directive(LevelFilter::INFO.into())
+            .parse_lossy(general.log_level.as_str()),
+        None => EnvFilter::builder()
+            .with_default_directive(LevelFilter::INFO.into())
+            .from_env_lossy(),
+    };
+
+    match general
+        .map(|general| general.log_format)
+        .unwrap_or_default()
+    {
+        LogFormat::Text => {
+            let format = fmt::layer()
+                .with_ansi(std::io::stderr().is_terminal())
+                .with_writer(std::io::stderr)
+                .with_file(false);
+            #[cfg(not(debug_assertions))]
+            let format = format.with_target(false);
+
+            let _ = tracing_subscriber::registry()
+                .with(format)
+                .with(filter)
+                .try_init();
+        }
+        LogFormat::Json => {
+            let format = fmt::layer()
+                .json()
+                .with_ansi(false)
+                .with_writer(std::io::stderr)
+                .with_file(false)
+                .with_current_span(false)
+                .with_span_list(false);
+            #[cfg(not(debug_assertions))]
+            let format = format.with_target(false);
+
+            let _ = tracing_subscriber::registry()
+                .with(format)
+                .with(filter)
+                .try_init();
+        }
+    }
 }

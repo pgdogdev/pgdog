@@ -1,8 +1,10 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::env;
+use std::fmt;
 use std::net::Ipv4Addr;
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::time::Duration;
 
 use crate::pooling::ConnectionRecovery;
@@ -15,6 +17,38 @@ use super::auth::{AuthType, PassthoughAuth};
 use super::database::{LoadBalancingStrategy, ReadWriteSplit, ReadWriteStrategy};
 use super::networking::TlsVerifyMode;
 use super::pooling::{PoolerMode, PreparedStatements};
+
+/// Format to use for PgDog application logs.
+#[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Eq, Hash, Default, JsonSchema)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub enum LogFormat {
+    /// Human-readable text logs (default).
+    #[default]
+    Text,
+    /// Structured JSON logs suitable for ECS/Datadog ingestion.
+    Json,
+}
+
+impl fmt::Display for LogFormat {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Text => f.write_str("text"),
+            Self::Json => f.write_str("json"),
+        }
+    }
+}
+
+impl FromStr for LogFormat {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_ascii_lowercase().as_str() {
+            "text" => Ok(Self::Text),
+            "json" => Ok(Self::Json),
+            _ => Err(()),
+        }
+    }
+}
 
 /// General settings are relevant to the operations of the pooler itself, or apply to all database pools.
 ///
@@ -407,6 +441,22 @@ pub struct General {
     #[serde(default)]
     pub pub_sub_channel_size: usize,
 
+    /// Format to use for PgDog application logs.
+    ///
+    /// _Default:_ `text`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#log_format
+    #[serde(default = "General::log_format")]
+    pub log_format: LogFormat,
+
+    /// Log filter directives using the same syntax as the `RUST_LOG` environment variable.
+    ///
+    /// _Default:_ `info`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#log_level
+    #[serde(default = "General::log_level")]
+    pub log_level: String,
+
     /// If enabled, log every time a user creates a new connection to PgDog.
     ///
     /// _Default:_ `true`
@@ -642,6 +692,8 @@ impl Default for General {
             cross_shard_disabled: Self::cross_shard_disabled(),
             dns_ttl: Self::default_dns_ttl(),
             pub_sub_channel_size: Self::pub_sub_channel_size(),
+            log_format: Self::log_format(),
+            log_level: Self::log_level(),
             log_connections: Self::log_connections(),
             log_disconnections: Self::log_disconnections(),
             two_phase_commit: bool::default(),
@@ -1003,6 +1055,14 @@ impl General {
         Self::env_or_default("PGDOG_QUERY_CACHE_LIMIT", 50_000)
     }
 
+    pub fn log_format() -> LogFormat {
+        Self::env_enum_or_default("PGDOG_LOG_FORMAT")
+    }
+
+    pub fn log_level() -> String {
+        env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string())
+    }
+
     pub fn log_connections() -> bool {
         Self::env_bool_or_default("PGDOG_LOG_CONNECTIONS", true)
     }
@@ -1362,6 +1422,21 @@ mod tests {
         assert_eq!(General::cross_shard_disabled(), false);
         assert_eq!(General::log_connections(), true);
         assert_eq!(General::log_disconnections(), true);
+    }
+
+    #[test]
+    fn test_env_log_settings() {
+        env::set_var("PGDOG_LOG_FORMAT", "json");
+        env::set_var("RUST_LOG", "pgdog=debug,info");
+
+        assert_eq!(General::log_format(), LogFormat::Json);
+        assert_eq!(General::log_level(), "pgdog=debug,info");
+
+        env::remove_var("PGDOG_LOG_FORMAT");
+        env::remove_var("RUST_LOG");
+
+        assert_eq!(General::log_format(), LogFormat::Text);
+        assert_eq!(General::log_level(), "info");
     }
 
     #[test]
