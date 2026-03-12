@@ -110,6 +110,7 @@ pub fn load(plugins: &[pgdog_config::Plugin]) -> Result<(), libloading::Error> {
                         "plugin {} failed to load its configuration file, skipping",
                         plugin_lib.name()
                     );
+                    continue;
                 }
             }
 
