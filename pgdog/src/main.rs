@@ -1,5 +1,9 @@
 //! pgDog, modern PostgreSQL proxy, pooler and query router.
 
+use std::fs::read_to_string;
+use std::path::Path;
+use std::process::exit;
+
 use clap::Parser;
 use pgdog::backend::databases;
 use pgdog::backend::pool::dns_cache::DnsCache;
@@ -11,31 +15,18 @@ use pgdog::plugin;
 use pgdog::stats;
 use pgdog::util::pgdog_version;
 use pgdog::{healthcheck, net};
+use serde::Deserialize;
 use tokio::runtime::Builder;
 use tracing::{error, info};
 
-use std::process::exit;
-
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = cli::Cli::parse();
-
-    pgdog::logger();
-
+    let command = args.command.clone();
     let mut overrides = pgdog::config::Overrides::default();
 
-    match args.command {
+    match command.as_ref() {
         Some(Commands::Fingerprint { query, path }) => {
-            pgdog::cli::fingerprint(query, path)?;
-            exit(0);
-        }
-
-        Some(Commands::Configcheck) => {
-            if let Err(e) = config::load(&args.config, &args.users) {
-                error!("{}", e);
-                exit(1);
-            }
-
-            info!("✅ config valid");
+            pgdog::cli::fingerprint(query.clone(), path.clone())?;
             exit(0);
         }
 
@@ -45,17 +36,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             session_mode,
         }) => {
             overrides = pgdog::config::Overrides {
-                min_pool_size,
-                session_mode,
-                default_pool_size: pool_size,
+                min_pool_size: *min_pool_size,
+                session_mode: *session_mode,
+                default_pool_size: *pool_size,
             };
         }
 
         _ => (),
     }
 
+    bootstrap_logger(&args.config);
+
+    let config = match config::load(&args.config, &args.users) {
+        Ok(config) => config,
+        Err(err) => {
+            if matches!(command.as_ref(), Some(Commands::Configcheck)) {
+                error!("{}", err);
+                exit(1);
+            }
+            return Err(Box::new(err));
+        }
+    };
+
+    if matches!(command.as_ref(), Some(Commands::Configcheck)) {
+        info!("✅ config valid");
+        exit(0);
+    }
+
     info!("🐕 PgDog {}", pgdog_version());
-    let config = config::load(&args.config, &args.users)?;
 
     // Get databases from environment or from --database-url args.
     let config = if let Some(database_urls) = args.database_url {
@@ -191,4 +199,34 @@ async fn pgdog(command: Option<Commands>) -> Result<(), Box<dyn std::error::Erro
     plugin::shutdown();
 
     Ok(())
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct BootstrapLoggingConfig {
+    #[serde(default)]
+    general: BootstrapLoggingGeneral,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct BootstrapLoggingGeneral {
+    log_format: Option<pgdog::config::LogFormat>,
+    log_level: Option<String>,
+}
+
+fn bootstrap_logger(config_path: &Path) {
+    let mut general = pgdog::config::General::default();
+
+    if let Ok(config) = read_to_string(config_path) {
+        if let Ok(bootstrap) = toml::from_str::<BootstrapLoggingConfig>(&config) {
+            if let Some(log_format) = bootstrap.general.log_format {
+                general.log_format = log_format;
+            }
+
+            if let Some(log_level) = bootstrap.general.log_level {
+                general.log_level = log_level;
+            }
+        }
+    }
+
+    pgdog::logger_with_config(&general);
 }

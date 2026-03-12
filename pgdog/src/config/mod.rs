@@ -18,7 +18,7 @@ pub mod users;
 pub use core::{Config, ConfigAndUsers};
 pub use database::{Database, Role};
 pub use error::Error;
-pub use general::General;
+pub use general::{General, LogFormat};
 pub use memory::*;
 pub use networking::{MultiTenant, Tcp, TlsVerifyMode};
 pub use overrides::Overrides;

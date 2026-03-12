@@ -62,6 +62,8 @@
         "load_schema": "auto",
         "log_connections": true,
         "log_disconnections": true,
+        "log_format": "text",
+        "log_level": "info",
         "lsn_check_delay": 9223372036854775807,
         "lsn_check_interval": 5000,
         "lsn_check_timeout": 5000,
@@ -769,6 +771,16 @@
           "type": "boolean",
           "default": true
         },
+        "log_format": {
+          "description": "Format to use for PgDog application logs.\n\n_Default:_ `text`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#log_format",
+          "$ref": "#/$defs/LogFormat",
+          "default": "text"
+        },
+        "log_level": {
+          "description": "Log filter directives using the same syntax as the `RUST_LOG` environment variable.\n\n_Default:_ `info`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#log_level",
+          "type": "string",
+          "default": "info"
+        },
         "lsn_check_delay": {
           "description": "For how long to delay checking for replication delay.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#lsn_check_delay",
           "type": "integer",
@@ -1087,6 +1099,21 @@
           "description": "Load only when sharding is configured (default).",
           "type": "string",
           "const": "auto"
+        }
+      ]
+    },
+    "LogFormat": {
+      "description": "Format to use for PgDog application logs.",
+      "oneOf": [
+        {
+          "description": "Human-readable text logs (default).",
+          "type": "string",
+          "const": "text"
+        },
+        {
+          "description": "Structured JSON logs suitable for ECS/Datadog ingestion.",
+          "type": "string",
+          "const": "json"
         }
       ]
     },
