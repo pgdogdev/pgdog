@@ -4,7 +4,7 @@
 //! a safe interface to the plugin's methods.
 //!
 
-use std::path::Path;
+use std::{path::Path, u8};
 
 use libloading::{library_filename, Library, Symbol};
 
@@ -26,6 +26,8 @@ pub struct Plugin<'a> {
     init: Option<Symbol<'a, unsafe extern "C" fn()>>,
     /// Shutdown routine.
     fini: Option<Symbol<'a, unsafe extern "C" fn()>>,
+    /// Configure plugin.
+    config: Option<Symbol<'a, unsafe extern "C" fn(PdStr, *mut u8)>>,
     /// Route query.
     route: Option<Symbol<'a, unsafe extern "C" fn(PdRouterContext, *mut PdRoute)>>,
     /// Compiler version.
@@ -76,6 +78,7 @@ impl<'a> Plugin<'a> {
         let rustc_version = unsafe { library.get(b"pgdog_rustc_version\0") }.ok();
         let pgdog_plugin_api_version = unsafe { library.get(b"pgdog_plugin_api_version\0") }.ok();
         let plugin_version = unsafe { library.get(b"pgdog_plugin_version\0") }.ok();
+        let config = unsafe { library.get(b"pgdog_config\0") }.ok();
 
         Self {
             name: name.to_owned(),
@@ -85,6 +88,7 @@ impl<'a> Plugin<'a> {
             rustc_version,
             pgdog_plugin_api_version,
             plugin_version,
+            config,
         }
     }
 
@@ -106,6 +110,18 @@ impl<'a> Plugin<'a> {
         if let Some(ref fini) = &self.fini {
             unsafe { fini() }
         }
+    }
+
+    /// Pass the config path to the plugin.
+    pub fn config(&self, path: PdStr) -> bool {
+        let mut code = 1;
+        if let Some(ref config) = self.config {
+            unsafe {
+                config(path, &mut code);
+            }
+        }
+
+        code == 0
     }
 
     /// Execute plugin's route routine. Determines where a statement should be sent.

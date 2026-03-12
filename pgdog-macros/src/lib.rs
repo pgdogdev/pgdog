@@ -63,6 +63,25 @@ pub fn init(_attr: TokenStream, item: TokenStream) -> TokenStream {
     TokenStream::from(expanded)
 }
 
+/// Generate the `pgdog_config` method that's executed at plugin load time.
+#[proc_macro_attribute]
+pub fn config(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    let input_fn = parse_macro_input!(item as ItemFn);
+    let fn_name = &input_fn.sig.ident;
+
+    let expanded = quote! {
+
+        #[unsafe(no_mangle)]
+        pub extern "C" fn pgdog_config(path: pgdog_plugin::PdStr, result: *mut u8) {
+            #input_fn
+
+            #fn_name(path, result);
+        }
+    };
+
+    TokenStream::from(expanded)
+}
+
 /// Generate the `pgdog_fini` method that runs at PgDog shutdown.
 #[proc_macro_attribute]
 pub fn fini(_attr: TokenStream, item: TokenStream) -> TokenStream {

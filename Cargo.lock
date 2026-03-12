@@ -2997,6 +2997,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "pgdog-primary-only-tables"
+version = "0.1.0"
+dependencies = [
+ "arc-swap",
+ "once_cell",
+ "parking_lot",
+ "pgdog-plugin",
+ "serde",
+ "thiserror 2.0.12",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "pgdog-stats"
 version = "0.1.0"
 dependencies = [

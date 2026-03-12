@@ -10,7 +10,7 @@ members = [
   "pgdog-postgres-types",
   "pgdog-stats",
   "pgdog-vector",
-  "plugins/pgdog-example-plugin",
+  "plugins/pgdog-example-plugin", "plugins/pgdog-primary-only-tables",
   "scripts/*",
 ]
 
