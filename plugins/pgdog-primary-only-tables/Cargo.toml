@@ -15,4 +15,3 @@ toml = "0.8"
 serde = { version = "1", features = ["derive"]}
 arc-swap = "1"
 tracing = "0.1"
-tracing-subscriber = "0.3"

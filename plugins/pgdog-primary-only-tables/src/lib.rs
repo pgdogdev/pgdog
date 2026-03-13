@@ -1,39 +1,21 @@
 use std::{
     fs::File,
-    io::{IsTerminal, Read},
+    io::Read,
     path::{Path, PathBuf},
     sync::Arc,
 };
 
 use arc_swap::ArcSwap;
 use once_cell::sync::Lazy;
-use pgdog_plugin::{Context, PdStr, ReadWrite, Route, Shard, macros, pg_query::NodeRef};
+use pgdog_plugin::{
+    Context, PdConfig, ReadWrite, Route, Shard, macros, pg_query::NodeEnum, pg_query::NodeRef,
+};
 use serde::{Deserialize, Serialize};
-use tracing::{error, info, level_filters::LevelFilter};
-use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
+use tracing::{error, info};
 
 static CONFIG: Lazy<ArcSwap<Config>> = Lazy::new(|| ArcSwap::from_pointee(Config::default()));
 
 macros::plugin!();
-
-#[macros::init]
-fn init() {
-    let filter = EnvFilter::builder()
-        .with_default_directive(LevelFilter::INFO.into())
-        .from_env_lossy();
-
-    let format = fmt::layer()
-        .with_ansi(std::io::stderr().is_terminal())
-        .with_writer(std::io::stderr)
-        .with_file(false);
-    #[cfg(not(debug_assertions))]
-    let format = format.with_target(false);
-
-    let _ = tracing_subscriber::registry()
-        .with(format)
-        .with(filter)
-        .try_init();
-}
 
 #[macros::route]
 fn route(context: Context) -> Route {
@@ -41,8 +23,16 @@ fn route(context: Context) -> Route {
 }
 
 #[macros::config]
-fn config(config: PdStr, result: *mut u8) {
-    let path = PathBuf::from(config.to_string());
+fn config(config: PdConfig, result: *mut u8) {
+    let plugin_config = config.plugin_config.to_string();
+    if plugin_config.is_empty() {
+        unsafe {
+            *result = 0;
+        }
+        return;
+    }
+
+    let path = PathBuf::from(plugin_config);
     if let Err(err) = read_config(&path) {
         error!("[pgdog_primary_only_tables] failed to load config: {}", err);
 
@@ -86,8 +76,29 @@ fn read_config(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn route_query(context: Context) -> Result<Route, Box<dyn std::error::Error>> {
-    let config = CONFIG.load().clone();
     let ast = context.statement().protobuf();
+
+    let root_node = ast
+        .stmts
+        .first()
+        .and_then(|s| s.stmt.as_ref())
+        .and_then(|s| s.node.as_ref());
+
+    let is_select = root_node.is_some_and(|node| match node {
+        NodeEnum::SelectStmt(_) => true,
+        NodeEnum::ExplainStmt(stmt) => stmt
+            .query
+            .as_ref()
+            .and_then(|q| q.node.as_ref())
+            .is_some_and(|n| matches!(n, NodeEnum::SelectStmt(_))),
+        _ => false,
+    });
+
+    if !is_select {
+        return Ok(Route::default());
+    }
+
+    let config = CONFIG.load().clone();
 
     for node in ast.nodes() {
         if let NodeRef::RangeVar(range_var) = node.0 {

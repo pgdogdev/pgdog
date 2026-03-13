@@ -64,6 +64,18 @@ typedef struct PdRouterContext {
 /**
  * Routing decision returned by the plugin.
  */
+/**
+ * Configuration passed from PgDog to plugins.
+ */
+typedef struct PdConfig {
+    /** Log level, e.g. "info", "debug", "error". */
+    struct PdStr log_level;
+    /** Whether to use JSON log format. `1` = `true`, `0` = `false`. */
+    uint8_t log_json;
+    /** Path to the plugin's configuration file. Empty string if not set. */
+    struct PdStr plugin_config;
+} PdConfig;
+
  typedef struct PdRoute {
      /** Which shard the query should go to.
       *

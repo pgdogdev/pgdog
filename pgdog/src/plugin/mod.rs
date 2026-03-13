@@ -3,9 +3,10 @@
 use std::ops::Deref;
 
 use once_cell::sync::OnceCell;
+use pgdog_config::{Config, LogFormat};
 use pgdog_plugin::libloading::Library;
 use pgdog_plugin::{comp, libloading};
-use pgdog_plugin::{PdStr, Plugin};
+use pgdog_plugin::{PdConfig, PdStr, Plugin};
 use semver::Version;
 use tokio::time::Instant;
 use tracing::{debug, error, info, warn};
@@ -30,10 +31,12 @@ fn same_major_minor(a: &str, b: &str) -> bool {
 ///
 /// This should be run before Tokio is loaded since this is not thread-safe.
 ///
-pub fn load(plugins: &[pgdog_config::Plugin]) -> Result<(), libloading::Error> {
+pub fn load(config: &Config) -> Result<(), libloading::Error> {
     if LIBS.get().is_some() {
         return Ok(());
     };
+
+    let plugins = &config.plugins;
 
     let mut libs = vec![];
     for plugin in plugins {
@@ -101,17 +104,28 @@ pub fn load(plugins: &[pgdog_config::Plugin]) -> Result<(), libloading::Error> {
                 debug!("plugin \"{}\" initialized", plugin_lib.name());
             }
 
-            if let Some(ref config) = plugin.config {
-                let config_path = config.display().to_string();
-                let config_str = PdStr::from(config_path.as_str());
+            let plugin_config_path = plugin
+                .config
+                .as_ref()
+                .map(|p| p.display().to_string())
+                .unwrap_or_default();
 
-                if !plugin_lib.config(config_str) {
-                    warn!(
-                        "plugin {} failed to load its configuration file, skipping",
-                        plugin_lib.name()
-                    );
-                    continue;
-                }
+            let pd_config = PdConfig {
+                log_level: PdStr::from(config.general.log_level.as_str()),
+                log_json: if config.general.log_format == LogFormat::Json {
+                    1
+                } else {
+                    0
+                },
+                plugin_config: PdStr::from(plugin_config_path.as_str()),
+            };
+
+            if !plugin_lib.config(pd_config) {
+                warn!(
+                    "plugin {} failed to load its configuration, skipping",
+                    plugin_lib.name()
+                );
+                continue;
             }
 
             info!(
@@ -157,5 +171,5 @@ pub fn plugins() -> Option<&'static Vec<Plugin<'static>>> {
 pub fn load_from_config() -> Result<(), libloading::Error> {
     let config = crate::config::config();
 
-    load(&config.config.plugins)
+    load(&config.config)
 }

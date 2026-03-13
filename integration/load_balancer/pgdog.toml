@@ -16,6 +16,7 @@ pooler_mode = "transaction"
 load_balancing_strategy = "round_robin"
 auth_type = "trust"
 read_write_split = "exclude_primary"
+expanded_explain = true
 lsn_check_delay = 0
 
 [rewrite]
@@ -49,6 +50,10 @@ host = "localhost"
 role = "replica"
 port = 45002
 
+
+[[plugins]]
+name = "pgdog_primary_only_tables"
+config = "integration/load_balancer/plugin_config.toml"
 
 [tcp]
 retries = 3

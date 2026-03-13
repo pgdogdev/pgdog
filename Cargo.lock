@@ -2975,12 +2975,14 @@ dependencies = [
 
 [[package]]
 name = "pgdog-plugin"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "bindgen 0.71.1",
  "libloading",
  "pg_query",
  "pgdog-macros",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -3008,7 +3010,6 @@ dependencies = [
  "thiserror 2.0.12",
  "toml",
  "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]

@@ -72,10 +72,15 @@ pub fn config(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let expanded = quote! {
 
         #[unsafe(no_mangle)]
-        pub extern "C" fn pgdog_config(path: pgdog_plugin::PdStr, result: *mut u8) {
+        pub extern "C" fn pgdog_config(
+            pd_config: pgdog_plugin::PdConfig,
+            result: *mut u8)
+        {
+            pgdog_plugin::logging::init(&pd_config);
+
             #input_fn
 
-            #fn_name(path, result);
+            #fn_name(pd_config, result);
         }
     };
 

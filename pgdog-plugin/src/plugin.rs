@@ -4,11 +4,11 @@
 //! a safe interface to the plugin's methods.
 //!
 
-use std::{path::Path, u8};
+use std::path::Path;
 
 use libloading::{library_filename, Library, Symbol};
 
-use crate::{PdRoute, PdRouterContext, PdStr};
+use crate::{PdConfig, PdRoute, PdRouterContext, PdStr};
 
 /// Plugin interface.
 ///
@@ -27,7 +27,7 @@ pub struct Plugin<'a> {
     /// Shutdown routine.
     fini: Option<Symbol<'a, unsafe extern "C" fn()>>,
     /// Configure plugin.
-    config: Option<Symbol<'a, unsafe extern "C" fn(PdStr, *mut u8)>>,
+    config: Option<Symbol<'a, unsafe extern "C" fn(PdConfig, *mut u8)>>,
     /// Route query.
     route: Option<Symbol<'a, unsafe extern "C" fn(PdRouterContext, *mut PdRoute)>>,
     /// Compiler version.
@@ -112,16 +112,17 @@ impl<'a> Plugin<'a> {
         }
     }
 
-    /// Pass the config path to the plugin.
-    pub fn config(&self, path: PdStr) -> bool {
-        let mut code = 1;
-        if let Some(ref config) = self.config {
+    /// Pass configuration to the plugin.
+    pub fn config(&self, config: PdConfig) -> bool {
+        if let Some(ref config_fn) = self.config {
+            let mut code = 1;
             unsafe {
-                config(path, &mut code);
+                config_fn(config, &mut code);
             }
+            code == 0
+        } else {
+            true
         }
-
-        code == 0
     }
 
     /// Execute plugin's route routine. Determines where a statement should be sent.
