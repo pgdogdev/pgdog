@@ -22,7 +22,7 @@ pub use general::{General, LogFormat};
 pub use memory::*;
 pub use networking::{MultiTenant, Tcp, TlsVerifyMode};
 pub use overrides::Overrides;
-pub use pgdog_config::auth::{AuthType, PassthoughAuth};
+pub use pgdog_config::auth::{AuthType, PassthroughAuth};
 pub use pgdog_config::{LoadBalancingStrategy, ReadWriteSplit, ReadWriteStrategy};
 pub use pooling::{ConnectionRecovery, PoolerMode, PreparedStatements};
 pub use rewrite::{Rewrite, RewriteMode};

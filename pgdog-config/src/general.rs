@@ -13,7 +13,7 @@ use crate::{
     SystemCatalogsBehavior,
 };
 
-use super::auth::{AuthType, PassthoughAuth};
+use super::auth::{AuthType, PassthroughAuth};
 use super::database::{LoadBalancingStrategy, ReadWriteSplit, ReadWriteStrategy};
 use super::networking::TlsVerifyMode;
 use super::pooling::{PoolerMode, PreparedStatements};
@@ -317,7 +317,7 @@ pub struct General {
     ///
     /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#passthrough_auth
     #[serde(default = "General::default_passthrough_auth")]
-    pub passthrough_auth: PassthoughAuth,
+    pub passthrough_auth: PassthroughAuth,
 
     /// Maximum amount of time to allow for PgDog to create a connection to Postgres.
     ///
@@ -1094,17 +1094,17 @@ impl General {
         Self::env_or_default("PGDOG_STATS_PERIOD", 15_000)
     }
 
-    fn default_passthrough_auth() -> PassthoughAuth {
+    fn default_passthrough_auth() -> PassthroughAuth {
         if let Ok(auth) = env::var("PGDOG_PASSTHROUGH_AUTH") {
             // TODO: figure out why toml::from_str doesn't work.
             match auth.as_str() {
-                "enabled" => PassthoughAuth::Enabled,
-                "disabled" => PassthoughAuth::Disabled,
-                "enabled_plain" => PassthoughAuth::EnabledPlain,
-                _ => PassthoughAuth::default(),
+                "enabled" => PassthroughAuth::Enabled,
+                "disabled" => PassthroughAuth::Disabled,
+                "enabled_plain" => PassthroughAuth::EnabledPlain,
+                _ => PassthroughAuth::default(),
             }
         } else {
-            PassthoughAuth::default()
+            PassthroughAuth::default()
         }
     }
 
@@ -1129,8 +1129,8 @@ impl General {
     }
 
     pub fn passthrough_auth(&self) -> bool {
-        self.tls().is_some() && self.passthrough_auth == PassthoughAuth::Enabled
-            || self.passthrough_auth == PassthoughAuth::EnabledPlain
+        self.tls().is_some() && self.passthrough_auth == PassthroughAuth::Enabled
+            || self.passthrough_auth == PassthroughAuth::EnabledPlain
     }
 
     /// Support for LISTEN/NOTIFY.

@@ -846,7 +846,7 @@
         },
         "passthrough_auth": {
           "description": "Toggle automatic creation of connection pools given the user name, database and password.\n\n_Default:_ `disabled`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#passthrough_auth",
-          "$ref": "#/$defs/PassthoughAuth",
+          "$ref": "#/$defs/PassthroughAuth",
           "default": "disabled"
         },
         "pooler_mode": {
@@ -1232,7 +1232,7 @@
         "tables"
       ]
     },
-    "PassthoughAuth": {
+    "PassthroughAuth": {
       "description": "toggle automatic creation of connection pools given the user name, database and password.\n\nSee [passthrough authentication](https://docs.pgdog.dev/features/authentication/#passthrough-authentication).\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#passthrough_auth",
       "oneOf": [
         {
