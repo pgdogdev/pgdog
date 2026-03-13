@@ -9,7 +9,7 @@ use std::{fmt::Display, str::FromStr};
 /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#passthrough_auth
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
-pub enum PassthoughAuth {
+pub enum PassthroughAuth {
     /// Passthrough auth is disabled (default).
     #[default]
     Disabled,

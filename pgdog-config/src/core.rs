@@ -8,7 +8,7 @@ use tracing::{error, info, warn};
 use crate::sharding::ShardedSchema;
 use crate::util::random_string;
 use crate::{
-    system_catalogs, EnumeratedDatabase, Memory, OmnishardedTable, PassthoughAuth,
+    system_catalogs, EnumeratedDatabase, Memory, OmnishardedTable, PassthroughAuth,
     PreparedStatements, QueryParserEngine, QueryParserLevel, ReadWriteSplit, RewriteMode, Role,
     SystemCatalogsBehavior,
 };
@@ -124,7 +124,7 @@ impl ConfigAndUsers {
             return Ok(());
         }
 
-        if self.config.general.passthrough_auth != PassthoughAuth::Disabled {
+        if self.config.general.passthrough_auth != PassthroughAuth::Disabled {
             return Err(Error::ParseError(
                 "\"passthrough_auth\" must be \"disabled\" when any user has \"server_auth = \\\"rds_iam\\\"\"".into(),
             ));
@@ -490,12 +490,12 @@ impl Config {
 
         // Warn about plain auth and TLS
         match self.general.passthrough_auth {
-            PassthoughAuth::Enabled if !self.general.tls_client_required => {
+            PassthroughAuth::Enabled if !self.general.tls_client_required => {
                 warn!(
                     "consider setting \"tls_client_required\" while \"passthrough_auth\" is enabled to prevent clients from exposing plaintext passwords"
                 );
             }
-            PassthoughAuth::EnabledPlain => {
+            PassthroughAuth::EnabledPlain => {
                 warn!(
                     "\"passthrough_auth\" is set to \"plain\", network traffic may expose plaintext passwords"
                 )
@@ -1264,7 +1264,7 @@ shard = 0
     #[test]
     fn test_rds_iam_rejects_passthrough_auth() {
         let mut config = ConfigAndUsers::default();
-        config.config.general.passthrough_auth = PassthoughAuth::EnabledPlain;
+        config.config.general.passthrough_auth = PassthroughAuth::EnabledPlain;
         config.config.general.tls_verify = TlsVerifyMode::VerifyFull;
         config.users.users.push(crate::User {
             name: "alice".into(),
@@ -1283,7 +1283,7 @@ shard = 0
     fn test_rds_iam_rejects_tls_verify_disabled() {
         let mut config = ConfigAndUsers::default();
         config.config.general.tls_verify = TlsVerifyMode::Disabled;
-        config.config.general.passthrough_auth = PassthoughAuth::Disabled;
+        config.config.general.passthrough_auth = PassthroughAuth::Disabled;
         config.users.users.push(crate::User {
             name: "alice".into(),
             database: "db".into(),

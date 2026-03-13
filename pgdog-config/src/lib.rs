@@ -17,7 +17,7 @@ pub mod url;
 pub mod users;
 pub mod util;
 
-pub use auth::{AuthType, PassthoughAuth};
+pub use auth::{AuthType, PassthroughAuth};
 pub use core::{Config, ConfigAndUsers};
 pub use data_types::*;
 pub use database::{
