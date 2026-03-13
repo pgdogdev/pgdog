@@ -36,6 +36,8 @@ pub struct Plugin<'a> {
     pgdog_plugin_api_version: Option<Symbol<'a, unsafe extern "C" fn(*mut PdStr)>>,
     /// Plugin version.
     plugin_version: Option<Symbol<'a, unsafe extern "C" fn(*mut PdStr)>>,
+    /// Logging initialization.
+    logging_init: Option<Symbol<'a, extern "C" fn(PdConfig)>>,
 }
 
 impl<'a> Plugin<'a> {
@@ -79,6 +81,7 @@ impl<'a> Plugin<'a> {
         let pgdog_plugin_api_version = unsafe { library.get(b"pgdog_plugin_api_version\0") }.ok();
         let plugin_version = unsafe { library.get(b"pgdog_plugin_version\0") }.ok();
         let config = unsafe { library.get(b"pgdog_config\0") }.ok();
+        let logging_init = unsafe { library.get(b"pgdog_logging_init\0") }.ok();
 
         Self {
             name: name.to_owned(),
@@ -89,6 +92,14 @@ impl<'a> Plugin<'a> {
             pgdog_plugin_api_version,
             plugin_version,
             config,
+            logging_init,
+        }
+    }
+
+    /// Initialize plugin logging with PgDog's log configuration.
+    pub fn logging_init(&self, config: PdConfig) {
+        if let Some(ref logging_init) = self.logging_init {
+            logging_init(config);
         }
     }
 

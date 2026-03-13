@@ -40,6 +40,11 @@ pub fn plugin(_input: TokenStream) -> TokenStream {
                 *output = version;
             }
         }
+
+        #[unsafe(no_mangle)]
+        pub extern "C" fn pgdog_logging_init(config: pgdog_plugin::PdConfig) {
+            pgdog_plugin::logging::init(&config);
+        }
     };
     TokenStream::from(expanded)
 }
@@ -76,8 +81,6 @@ pub fn config(_attr: TokenStream, item: TokenStream) -> TokenStream {
             pd_config: pgdog_plugin::PdConfig,
             result: *mut u8)
         {
-            pgdog_plugin::logging::init(&pd_config);
-
             #input_fn
 
             #fn_name(pd_config, result);

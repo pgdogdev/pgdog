@@ -100,10 +100,6 @@ pub fn load(config: &Config) -> Result<(), libloading::Error> {
                 // continue;
             }
 
-            if plugin_lib.init() {
-                debug!("plugin \"{}\" initialized", plugin_lib.name());
-            }
-
             let plugin_config_path = plugin
                 .config
                 .as_ref()
@@ -119,6 +115,12 @@ pub fn load(config: &Config) -> Result<(), libloading::Error> {
                 },
                 plugin_config: PdStr::from(plugin_config_path.as_str()),
             };
+
+            plugin_lib.logging_init(pd_config.clone());
+
+            if plugin_lib.init() {
+                debug!("plugin \"{}\" initialized", plugin_lib.name());
+            }
 
             if !plugin_lib.config(pd_config) {
                 warn!(
