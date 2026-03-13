@@ -1256,6 +1256,13 @@
       "description": "Plugins are dynamically loaded at PgDog startup. These settings control which plugins are loaded.\n\nNote: Plugins can only be configured at PgDog startup. They cannot be changed after the process is running.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/plugins/",
       "type": "object",
       "properties": {
+        "config": {
+          "description": "Path to the configuration file for the plugin, if any. Plugin-specific settings can be\nplaced there. It's completely plugin-specific and any fomrat is acceptable.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "name": {
           "description": "Name of the plugin to load. This is used by PgDog to look up the shared library object in `LD_LIBRARY_PATH`. For example, if your plugin name is `router`, PgDog will look for `librouter.so` on Linux, `librouter.dll` on Windows, and `librouter.dylib` on Mac OS.\n\n**Note:** Make sure the user running PgDog has read & execute permissions on the library.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/plugins/#name",
           "type": "string"

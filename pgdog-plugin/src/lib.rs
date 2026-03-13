@@ -169,6 +169,7 @@ pub mod bindings {
 pub mod ast;
 pub mod comp;
 pub mod context;
+pub mod logging;
 pub mod parameters;
 pub mod plugin;
 pub mod prelude;

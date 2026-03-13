@@ -2975,12 +2975,14 @@ dependencies = [
 
 [[package]]
 name = "pgdog-plugin"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "bindgen 0.71.1",
  "libloading",
  "pg_query",
  "pgdog-macros",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -2994,6 +2996,20 @@ dependencies = [
  "serde",
  "thiserror 2.0.12",
  "uuid",
+]
+
+[[package]]
+name = "pgdog-primary-only-tables"
+version = "0.1.0"
+dependencies = [
+ "arc-swap",
+ "once_cell",
+ "parking_lot",
+ "pgdog-plugin",
+ "serde",
+ "thiserror 2.0.12",
+ "toml",
+ "tracing",
 ]
 
 [[package]]

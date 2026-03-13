@@ -27,6 +27,13 @@ for p in 45000 45001 45002; do
     fi
 done
 
+pushd ${SCRIPT_DIR}/../../plugins/pgdog-primary-only-tables
+cargo build --release
+popd
+
+export LD_LIBRARY_PATH=${SCRIPT_DIR}/../../target/release:${LD_LIBRARY_PATH:-}
+export DYLD_LIBRARY_PATH=${LD_LIBRARY_PATH}
+
 docker-compose up -d
 
 echo "Waiting for Postgres to be ready"

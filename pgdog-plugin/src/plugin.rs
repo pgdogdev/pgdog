@@ -8,7 +8,7 @@ use std::path::Path;
 
 use libloading::{library_filename, Library, Symbol};
 
-use crate::{PdRoute, PdRouterContext, PdStr};
+use crate::{PdConfig, PdRoute, PdRouterContext, PdStr};
 
 /// Plugin interface.
 ///
@@ -26,6 +26,8 @@ pub struct Plugin<'a> {
     init: Option<Symbol<'a, unsafe extern "C" fn()>>,
     /// Shutdown routine.
     fini: Option<Symbol<'a, unsafe extern "C" fn()>>,
+    /// Configure plugin.
+    config: Option<Symbol<'a, unsafe extern "C" fn(PdConfig, *mut u8)>>,
     /// Route query.
     route: Option<Symbol<'a, unsafe extern "C" fn(PdRouterContext, *mut PdRoute)>>,
     /// Compiler version.
@@ -34,6 +36,8 @@ pub struct Plugin<'a> {
     pgdog_plugin_api_version: Option<Symbol<'a, unsafe extern "C" fn(*mut PdStr)>>,
     /// Plugin version.
     plugin_version: Option<Symbol<'a, unsafe extern "C" fn(*mut PdStr)>>,
+    /// Logging initialization.
+    logging_init: Option<Symbol<'a, extern "C" fn(PdConfig)>>,
 }
 
 impl<'a> Plugin<'a> {
@@ -76,6 +80,8 @@ impl<'a> Plugin<'a> {
         let rustc_version = unsafe { library.get(b"pgdog_rustc_version\0") }.ok();
         let pgdog_plugin_api_version = unsafe { library.get(b"pgdog_plugin_api_version\0") }.ok();
         let plugin_version = unsafe { library.get(b"pgdog_plugin_version\0") }.ok();
+        let config = unsafe { library.get(b"pgdog_config\0") }.ok();
+        let logging_init = unsafe { library.get(b"pgdog_logging_init\0") }.ok();
 
         Self {
             name: name.to_owned(),
@@ -85,6 +91,15 @@ impl<'a> Plugin<'a> {
             rustc_version,
             pgdog_plugin_api_version,
             plugin_version,
+            config,
+            logging_init,
+        }
+    }
+
+    /// Initialize plugin logging with PgDog's log configuration.
+    pub fn logging_init(&self, config: PdConfig) {
+        if let Some(ref logging_init) = self.logging_init {
+            logging_init(config);
         }
     }
 
@@ -105,6 +120,19 @@ impl<'a> Plugin<'a> {
     pub fn fini(&self) {
         if let Some(ref fini) = &self.fini {
             unsafe { fini() }
+        }
+    }
+
+    /// Pass configuration to the plugin.
+    pub fn config(&self, config: PdConfig) -> bool {
+        if let Some(ref config_fn) = self.config {
+            let mut code = 1;
+            unsafe {
+                config_fn(config, &mut code);
+            }
+            code == 0
+        } else {
+            true
         }
     }
 

@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::env;
+use std::path::PathBuf;
 use tracing::warn;
 
 use super::core::Config;
@@ -21,6 +22,10 @@ pub struct Plugin {
     ///
     /// https://docs.pgdog.dev/configuration/pgdog.toml/plugins/#name
     pub name: String,
+
+    /// Path to the configuration file for the plugin, if any. Plugin-specific settings can be
+    /// placed there. It's completely plugin-specific and any fomrat is acceptable.
+    pub config: Option<PathBuf>,
 }
 
 /// This configuration controls which users are allowed to connect to PgDog. This is a TOML list so for each user, add a `[[users]]` section to `users.toml`.
