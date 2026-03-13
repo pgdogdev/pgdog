@@ -338,7 +338,10 @@ mod test {
             config.config.general.prepared_statements,
             PreparedStatementsLevel::Extended
         );
-        assert_eq!(config.prepared_statements(), PreparedStatementsLevel::Disabled);
+        assert_eq!(
+            config.prepared_statements(),
+            PreparedStatementsLevel::Disabled
+        );
 
         let params = Parameters::from(vec![
             Parameter {
@@ -352,6 +355,9 @@ mod test {
         ]);
 
         let mirror = Mirror::new(&params, &config);
-        assert_eq!(mirror.prepared_statements.level(), PreparedStatementsLevel::Disabled);
+        assert_eq!(
+            mirror.prepared_statements.level(),
+            PreparedStatementsLevel::Disabled
+        );
     }
 }
