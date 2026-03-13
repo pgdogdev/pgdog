@@ -122,6 +122,12 @@ impl PreparedStatements {
         self.local.len()
     }
 
+    /// Current prepared statements compatibility level.
+    #[cfg(test)]
+    pub fn level(&self) -> PreparedStatementsLevel {
+        self.level
+    }
+
     /// Is the local cache empty?
     pub fn is_empty(&self) -> bool {
         self.len_local() == 0
@@ -157,7 +163,6 @@ impl PreparedStatements {
     }
 
     /// Set the prepared statements level.
-    #[cfg(test)]
     pub fn set_level(&mut self, level: PreparedStatementsLevel) {
         self.level = level;
     }

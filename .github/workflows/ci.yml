@@ -117,7 +117,7 @@ jobs:
           sudo -u postgres psql -c 'ALTER SYSTEM SET wal_level TO logical;'
           sudo service postgresql restart
           bash integration/setup.sh
-          sudo apt update && sudo apt install -y python3-virtualenv mold
+          sudo apt update && sudo apt install -y python3-virtualenv mold php-cli php-pgsql
           sudo gem install bundler
           sudo apt remove -y cmake
           sudo pip3 install cmake==3.31.6
@@ -157,6 +157,8 @@ jobs:
         run: bash integration/ruby/run.sh
       - name: Java
         run: bash integration/java/run.sh
+      - name: Mirror
+        run: bash integration/mirror/run.sh
       - name: SQL
         run: bash integration/sql/run.sh
       - name: Toxi
