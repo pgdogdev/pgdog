@@ -5,6 +5,7 @@
 
 use super::*;
 use crate::backend::pool::MirrorStats;
+use crate::frontend::ClientRequest;
 use parking_lot::Mutex;
 use std::sync::Arc;
 

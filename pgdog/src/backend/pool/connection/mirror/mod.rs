@@ -16,8 +16,6 @@ use crate::frontend::client::TransactionType;
 use crate::frontend::{ClientComms, PreparedStatements};
 use crate::net::{BackendKeyData, Parameter, Parameters, Stream};
 
-use crate::frontend::ClientRequest;
-
 use super::Error;
 
 pub mod buffer_with_delay;
@@ -51,9 +49,12 @@ pub struct Mirror {
 
 impl Mirror {
     fn new(params: &Parameters, config: &ConfigAndUsers) -> Self {
+        let mut prepared_statements = PreparedStatements::new();
+        prepared_statements.set_level(config.prepared_statements());
+
         Self {
             id: BackendKeyData::new(),
-            prepared_statements: PreparedStatements::new(),
+            prepared_statements,
             params: params.clone(),
             timeouts: Timeouts::from_config(&config.config.general),
             stream: Stream::dev_null(),
@@ -173,7 +174,11 @@ impl Mirror {
 
 #[cfg(test)]
 mod test {
-    use crate::{backend::pool::Request, config, net::Query};
+    use crate::{
+        backend::pool::Request,
+        config::{self, PoolerMode, PreparedStatements as PreparedStatementsLevel},
+        net::{Parameter, Parameters, Query},
+    };
 
     use super::*;
 
@@ -318,5 +323,35 @@ mod test {
         );
 
         cluster.shutdown();
+    }
+
+    #[tokio::test]
+    async fn test_mirror_uses_effective_prepared_statements_level() {
+        config::load_test();
+        let mut test_config = (*config::config()).clone();
+        test_config.config.general.pooler_mode = PoolerMode::Session;
+        test_config.config.general.prepared_statements = PreparedStatementsLevel::Extended;
+        let test_config = config::set(test_config).unwrap();
+        let config = std::sync::Arc::new(test_config);
+
+        assert_eq!(
+            config.config.general.prepared_statements,
+            PreparedStatementsLevel::Extended
+        );
+        assert_eq!(config.prepared_statements(), PreparedStatementsLevel::Disabled);
+
+        let params = Parameters::from(vec![
+            Parameter {
+                name: "user".into(),
+                value: "pgdog".into(),
+            },
+            Parameter {
+                name: "database".into(),
+                value: "pgdog".into(),
+            },
+        ]);
+
+        let mirror = Mirror::new(&params, &config);
+        assert_eq!(mirror.prepared_statements.level(), PreparedStatementsLevel::Disabled);
     }
 }
