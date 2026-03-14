@@ -256,6 +256,17 @@ impl Message {
     pub fn transaction_error(&self) -> bool {
         self.code() == 'Z' && self.payload[5] as char == 'E'
     }
+
+    pub fn table_name_from_dt(&self) -> Result<Option<String>, Error> {
+        if self.code() != 'D' {
+            return Ok(None);
+        }
+        let byte_name = DataRow::from_bytes(self.payload()).unwrap().column(1);
+
+        let table_name = std::str::from_utf8(&byte_name.unwrap())?.to_string();
+
+        return Ok(Some(table_name));
+    }
 }
 
 /// Check that the message we received is what we expected.

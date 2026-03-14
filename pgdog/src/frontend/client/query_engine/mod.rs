@@ -10,6 +10,7 @@ use crate::{
     state::State,
 };
 
+use std::collections::HashSet;
 use tracing::debug;
 
 pub mod connect;
@@ -78,6 +79,7 @@ pub struct QueryEngine {
     notify_buffer: NotifyBuffer,
     pending_explain: Option<ExplainResponseState>,
     hooks: QueryEngineHooks,
+    seen_tables: HashSet<String>,
 }
 
 impl QueryEngine {
@@ -105,6 +107,7 @@ impl QueryEngine {
             pending_explain: None,
             begin_stmt: None,
             router: Router::default(),
+            seen_tables: HashSet::new(),
         })
     }
 
