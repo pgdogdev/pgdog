@@ -277,7 +277,7 @@ impl Statement<'_> {
         match self {
             Self::Index { sql, .. } => sql.as_str(),
             Self::Other { sql, .. } => sql.as_str(),
-            Self::SequenceOwner { sql, .. } => *sql,
+            Self::SequenceOwner { sql, .. } => sql,
             Self::SequenceSetMax { sql, .. } => sql.as_str(),
             Self::Table { sql, .. } => sql.as_str(),
         }
@@ -1145,7 +1145,7 @@ impl PgDumpOutput {
                                     continue;
                                 } else if !ignore_errors {
                                     if let Some(ref mut tracker) = tracker {
-                                        tracker.error(&err);
+                                        tracker.error(err);
                                     }
                                     return Err(Error::Backend(backend::Error::ExecutionError(
                                         err.clone(),

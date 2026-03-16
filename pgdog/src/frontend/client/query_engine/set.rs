@@ -13,16 +13,12 @@ impl QueryEngine {
             if param.reset {
                 context.params.reset(&param.name);
                 fake_command = "RESET";
+            } else if context.in_transaction() {
+                context
+                    .params
+                    .insert_transaction(&param.name, param.value.clone(), param.local);
             } else {
-                if context.in_transaction() {
-                    context.params.insert_transaction(
-                        &param.name,
-                        param.value.clone(),
-                        param.local,
-                    );
-                } else {
-                    context.params.insert(&param.name, param.value.clone());
-                }
+                context.params.insert(&param.name, param.value.clone());
             }
         }
 

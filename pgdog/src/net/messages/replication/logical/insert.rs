@@ -1,3 +1,5 @@
+use bytes::BytesMut;
+
 use super::super::super::code;
 use super::super::super::prelude::*;
 use super::tuple_data::Column;
@@ -14,6 +16,17 @@ impl Insert {
     /// Get column at index.
     pub fn column(&self, index: usize) -> Option<&Column> {
         self.tuple_data.columns.get(index)
+    }
+}
+
+impl ToBytes for Insert {
+    fn to_bytes(&self) -> Result<Bytes, Error> {
+        let mut buf = BytesMut::new();
+        buf.put_u8(b'I');
+        buf.put_i32(self.oid);
+        buf.put_u8(b'N');
+        buf.put(self.tuple_data.to_bytes()?);
+        Ok(buf.freeze())
     }
 }
 

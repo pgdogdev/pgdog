@@ -66,14 +66,12 @@ impl Address {
             },
             password: if server_auth.rds_iam() {
                 String::new()
+            } else if let Some(password) = database.password.clone() {
+                password
+            } else if let Some(password) = user.server_password.clone() {
+                password
             } else {
-                if let Some(password) = database.password.clone() {
-                    password
-                } else if let Some(password) = user.server_password.clone() {
-                    password
-                } else {
-                    user.password().to_string()
-                }
+                user.password().to_string()
             },
             server_auth,
             server_iam_region: user.server_iam_region.clone(),
