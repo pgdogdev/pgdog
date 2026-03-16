@@ -51,11 +51,13 @@ sleep 3
 
 # Stop replication and capture its exit code.
 kill ${REPL_PID} 2>/dev/null || true
+set +e
 wait ${REPL_PID}
 REPL_EXIT=$?
+set -e
 REPL_PID=""
 
-# data-sync exits with 130 (SIGTERM) on normal shutdown.
+# 0, 130 (SIGINT), 143 (SIGTERM) are all normal shutdown codes.
 if [ ${REPL_EXIT} -ne 0 ] && [ ${REPL_EXIT} -ne 130 ] && [ ${REPL_EXIT} -ne 143 ]; then
     echo "ERROR: replication process exited with code ${REPL_EXIT}"
     exit ${REPL_EXIT}
