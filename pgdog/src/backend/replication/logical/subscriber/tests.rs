@@ -377,6 +377,16 @@ async fn relation_outside_transaction() {
 async fn relation_after_insert_inside_transaction() {
     let mut sub = make_subscriber_single_shard();
     let mut verify = test_server().await;
+
+    // Ensure the second table exists (CI only creates sharded/sharded_omni).
+    verify
+        .execute(
+            "CREATE TABLE IF NOT EXISTS public.sharded_test_b (\
+             id BIGINT PRIMARY KEY, value TEXT)",
+        )
+        .await
+        .unwrap();
+
     sub.connect().await.unwrap();
 
     let oid_a = 16384;
