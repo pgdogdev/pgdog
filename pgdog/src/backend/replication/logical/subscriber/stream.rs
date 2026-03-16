@@ -238,7 +238,7 @@ impl StreamSubscriber {
             .enumerate()
             .filter(|(shard, _)| match val {
                 Shard::Direct(direct) => *shard == *direct,
-                Shard::Multi(multi) => multi.contains(&shard),
+                Shard::Multi(multi) => multi.contains(shard),
                 _ => true,
             })
             .map(|(_, server)| server)
@@ -382,19 +382,17 @@ impl StreamSubscriber {
         }
         for server in &mut self.connections {
             // Drain responses from server.
-            loop {
-                let msg = server.read().await?;
-                trace!("[{}] --> {:?}", server.addr(), msg);
+            let msg = server.read().await?;
+            trace!("[{}] --> {:?}", server.addr(), msg);
 
-                match msg.code() {
-                    'E' => {
-                        return Err(Error::PgError(Box::new(ErrorResponse::from_bytes(
-                            msg.to_bytes()?,
-                        )?)))
-                    }
-                    'Z' => break,
-                    c => return Err(Error::CommitOutOfSync(c)),
+            match msg.code() {
+                'E' => {
+                    return Err(Error::PgError(Box::new(ErrorResponse::from_bytes(
+                        msg.to_bytes()?,
+                    )?)))
                 }
+                'Z' => (),
+                c => return Err(Error::CommitOutOfSync(c)),
             }
         }
 

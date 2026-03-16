@@ -66,12 +66,12 @@ impl TableCopy {
                 state.bytes_per_sec = state.bytes / elapsed as usize;
             }
 
-            data_sync_progress(&self, &state);
+            data_sync_progress(self, &state);
         }
     }
 
     pub(crate) fn error(&self, error: &LogicalError) {
-        data_sync_error(&self, error);
+        data_sync_error(self, error);
     }
 
     pub(crate) fn update_sql(&self, sql: &str) {
@@ -83,7 +83,7 @@ impl TableCopy {
 
 impl Drop for TableCopy {
     fn drop(&mut self) {
-        data_sync_done(&self);
+        data_sync_done(self);
         COPIES.copies.remove(self);
     }
 }
@@ -304,11 +304,11 @@ impl SchemaStatement {
             SchemaStatements::get()
                 .stmts
                 .remove(&self.task)
-                .and_then(|mut entry| {
+                .map(|mut entry| {
                     entry.running = true;
                     entry.statement.started_at = Some(SystemTime::now());
 
-                    Some(entry)
+                    entry
                 })
         {
             self.task = entry.clone();

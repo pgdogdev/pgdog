@@ -116,7 +116,7 @@ pub fn load(config: &Config) -> Result<(), libloading::Error> {
                 plugin_config: PdStr::from(plugin_config_path.as_str()),
             };
 
-            plugin_lib.logging_init(pd_config.clone());
+            plugin_lib.logging_init(pd_config);
 
             if plugin_lib.init() {
                 debug!("plugin \"{}\" initialized", plugin_lib.name());
