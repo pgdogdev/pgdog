@@ -361,7 +361,7 @@ impl StreamSubscriber {
         Ok(())
     }
 
-    fn lsn_applied(&self, oid: &i32) -> bool {
+    pub(crate) fn lsn_applied(&self, oid: &i32) -> bool {
         if let Some(table_lsn) = self.table_lsns.get(oid) {
             // Don't apply change if table is ahead.
             if self.lsn < *table_lsn {
@@ -565,5 +565,11 @@ impl StreamSubscriber {
     /// Lsn changed since the last time we updated it.
     pub fn lsn_changed(&self) -> bool {
         self.lsn_changed
+    }
+
+    /// Whether we are inside a transaction.
+    #[cfg(test)]
+    pub(crate) fn in_transaction(&self) -> bool {
+        self.in_transaction
     }
 }

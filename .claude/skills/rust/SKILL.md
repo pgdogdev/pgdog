@@ -290,6 +290,17 @@ for i in 0..1000 {
 }
 ```
 
+### Import instead of using absolute paths
+
+```rust
+/// BAD
+let v = tokio::net::TcpStream::connect("localhost:8080");
+
+/// GOOD
+use tokio::net::TcpStream;
+let v = TcpStream::connect("localhost:8080");
+```
+
 ### Profile Before Optimizing
 
 ```bash

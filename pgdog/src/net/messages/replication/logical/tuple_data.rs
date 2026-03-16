@@ -1,5 +1,7 @@
 use std::str::from_utf8;
 
+use bytes::BytesMut;
+
 use crate::net::bind::Parameter;
 use crate::net::Bind;
 
@@ -126,6 +128,30 @@ impl Column {
 impl FromBytes for TupleData {
     fn from_bytes(mut bytes: Bytes) -> Result<Self, Error> {
         Self::from_buffer(&mut bytes)
+    }
+}
+
+impl ToBytes for TupleData {
+    fn to_bytes(&self) -> Result<Bytes, Error> {
+        let mut buf = BytesMut::new();
+        buf.put_i16(self.columns.len() as i16);
+        for col in &self.columns {
+            match col.identifier {
+                Identifier::Null => buf.put_u8(b'n'),
+                Identifier::Toasted => buf.put_u8(b'u'),
+                Identifier::Format(Format::Text) => {
+                    buf.put_u8(b't');
+                    buf.put_i32(col.len);
+                    buf.put(col.data.clone());
+                }
+                Identifier::Format(Format::Binary) => {
+                    buf.put_u8(b'b');
+                    buf.put_i32(col.len);
+                    buf.put(col.data.clone());
+                }
+            }
+        }
+        Ok(buf.freeze())
     }
 }
 
