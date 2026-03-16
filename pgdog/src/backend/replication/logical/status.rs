@@ -300,16 +300,15 @@ impl SchemaStatement {
     }
 
     pub(crate) fn running(&mut self) {
-        if let Some(entry) =
-            SchemaStatements::get()
-                .stmts
-                .remove(&self.task)
-                .map(|mut entry| {
-                    entry.running = true;
-                    entry.statement.started_at = Some(SystemTime::now());
+        if let Some(entry) = SchemaStatements::get()
+            .stmts
+            .remove(&self.task)
+            .map(|mut entry| {
+                entry.running = true;
+                entry.statement.started_at = Some(SystemTime::now());
 
-                    entry
-                })
+                entry
+            })
         {
             self.task = entry.clone();
             schema_sync_task(&self.task);
