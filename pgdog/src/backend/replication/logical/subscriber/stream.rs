@@ -114,7 +114,7 @@ impl Statement {
         self.parse.query()
     }
 }
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct StreamSubscriber {
     /// Destination cluster.
     cluster: Cluster,
@@ -141,6 +141,7 @@ pub struct StreamSubscriber {
     // Position in the WAL we have flushed successfully.
     lsn: i64,
     lsn_changed: bool,
+    in_transaction: bool,
 
     // Bytes sharded
     bytes_sharded: usize,
@@ -178,6 +179,7 @@ impl StreamSubscriber {
             lsn: 0, // Unknown,
             bytes_sharded: 0,
             lsn_changed: true,
+            in_transaction: false,
             query_parser_engine,
         }
     }
@@ -228,25 +230,43 @@ impl StreamSubscriber {
         Ok(())
     }
 
-    // Send a statement to one or more shards.
+    // Send a statement to one or more matching shards.
     async fn send(&mut self, val: &Shard, bind: &Bind) -> Result<(), Error> {
-        for (shard, conn) in self.connections.iter_mut().enumerate() {
-            match val {
-                Shard::Direct(direct) => {
-                    if shard != *direct {
-                        continue;
-                    }
-                }
-                Shard::Multi(multi) => {
-                    if multi.contains(&shard) {
-                        continue;
-                    }
-                }
-                _ => (),
-            }
+        let mut conns: Vec<_> = self
+            .connections
+            .iter_mut()
+            .enumerate()
+            .filter(|(shard, _)| match val {
+                Shard::Direct(direct) => *shard == *direct,
+                Shard::Multi(multi) => multi.contains(&shard),
+                _ => true,
+            })
+            .map(|(_, server)| server)
+            .collect();
 
+        for conn in &mut conns {
             conn.send(&vec![bind.clone().into(), Execute::new().into(), Flush.into()].into())
                 .await?;
+        }
+
+        for conn in &mut conns {
+            conn.flush().await?;
+        }
+
+        for conn in &mut conns {
+            // Keep server connections always synchronized.
+            for _ in 0..2 {
+                let msg = conn.read().await?;
+                match msg.code() {
+                    '2' | 'C' => (),
+                    'E' => {
+                        return Err(Error::PgError(Box::new(ErrorResponse::from_bytes(
+                            msg.to_bytes()?,
+                        )?)))
+                    }
+                    c => return Err(Error::SendOutOfSync(c)),
+                }
+            }
         }
 
         Ok(())
@@ -373,7 +393,6 @@ impl StreamSubscriber {
                         )?)))
                     }
                     'Z' => break,
-                    '2' | 'C' => continue,
                     c => return Err(Error::CommitOutOfSync(c)),
                 }
             }
@@ -427,7 +446,11 @@ impl StreamSubscriber {
                             upsert.parse().clone().into(),
                             update.parse().clone().into(),
                             delete.parse().clone().into(),
-                            Sync.into(),
+                            if self.in_transaction {
+                                Flush.into()
+                            } else {
+                                Sync.into()
+                            },
                         ]
                         .into(),
                     )
@@ -435,7 +458,8 @@ impl StreamSubscriber {
             }
 
             for server in &mut self.connections {
-                loop {
+                let num_messages = if self.in_transaction { 4 } else { 5 };
+                for _ in 0..num_messages {
                     let msg = server.read().await?;
                     trace!("[{}] --> {:?}", server.addr(), msg);
 
@@ -491,10 +515,12 @@ impl StreamSubscriber {
                     XLogPayload::Commit(commit) => {
                         self.commit(commit).await?;
                         status_update = Some(self.status_update());
+                        self.in_transaction = false;
                     }
                     XLogPayload::Relation(relation) => self.relation(relation).await?,
                     XLogPayload::Begin(begin) => {
                         self.set_current_lsn(begin.final_transaction_lsn);
+                        self.in_transaction = true;
                     }
                     _ => (),
                 }

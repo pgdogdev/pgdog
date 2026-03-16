@@ -33,6 +33,9 @@ pub enum Error {
     #[error("out of sync during relation prepare, got {0}")]
     RelationOutOfSync(char),
 
+    #[error("out of sync during row write, got {0}")]
+    SendOutOfSync(char),
+
     #[error("missing data")]
     MissingData,
 
