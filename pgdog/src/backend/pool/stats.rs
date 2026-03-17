@@ -17,6 +17,7 @@ use pgdog_stats::memory::MemoryStats as StatsMemoryStats;
 use pgdog_stats::pool::Counts as StatsCounts;
 use pgdog_stats::pool::Stats as StatsStats;
 use pgdog_stats::MessageBufferStats;
+use tokio::time::Instant;
 
 /// Pool statistics.
 ///
@@ -105,6 +106,19 @@ impl Stats {
     /// Calculate averages.
     pub fn calc_averages(&mut self, time: Duration) {
         self.inner.calc_averages(time);
+    }
+
+    /// Record a successful connection checkout.
+    /// Centralises the four counts that must always move together:
+    /// wait time, assignment counter, and the read/write routing counter.
+    pub fn record_checkout(&mut self, started_at: Instant, read: bool) {
+        self.counts.wait_time += started_at.elapsed();
+        self.counts.server_assignment_count += 1;
+        if read {
+            self.counts.reads += 1;
+        } else {
+            self.counts.writes += 1;
+        }
     }
 }
 

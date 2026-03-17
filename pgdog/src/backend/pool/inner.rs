@@ -252,7 +252,7 @@ impl Inner {
     /// Place connection back into the pool
     /// or give it to a waiting client.
     #[inline]
-    pub(super) fn put(&mut self, mut conn: Box<Server>, now: Instant) -> Result<(), Error> {
+    pub(super) fn put(&mut self, mut conn: Box<Server>) -> Result<(), Error> {
         // Try to give it to a client that's been waiting, if any.
         let id = *conn.id();
         while let Some(waiter) = self.waiting.pop_front() {
@@ -263,8 +263,8 @@ impl Inner {
                     server: id,
                     client: waiter.request.id,
                 })?;
-                self.stats.counts.server_assignment_count += 1;
-                self.stats.counts.wait_time += now.duration_since(waiter.request.created_at);
+                self.stats
+                    .record_checkout(waiter.request.created_at, waiter.request.read);
                 return Ok(());
             }
         }
@@ -380,7 +380,7 @@ impl Inner {
         // Finally, if the server is ok,
         // place the connection back into the idle list.
         if server.can_check_in() {
-            self.put(server, now)?;
+            self.put(server)?;
             result.replenish = false;
         } else {
             self.out_of_sync += 1;
@@ -854,7 +854,7 @@ mod test {
         });
 
         let server = Box::new(Server::default());
-        inner.put(server, Instant::now()).unwrap();
+        inner.put(server).unwrap();
 
         assert_eq!(inner.idle(), 0); // Connection given to waiter, not idle
         assert_eq!(inner.checked_out(), 1); // Connection now checked out to waiter
@@ -869,7 +869,7 @@ mod test {
         let mut inner = Inner::default();
         let server = Box::new(Server::default());
 
-        inner.put(server, Instant::now()).unwrap();
+        inner.put(server).unwrap();
 
         assert_eq!(inner.idle(), 1); // Connection added to idle pool
         assert_eq!(inner.checked_out(), 0);
@@ -1046,7 +1046,7 @@ mod test {
         assert_eq!(inner.waiting.len(), 3);
 
         let server = Box::new(Server::default());
-        inner.put(server, Instant::now()).unwrap();
+        inner.put(server).unwrap();
 
         // All waiters should be removed from queue since we tried each one
         assert_eq!(inner.waiting.len(), 0);
@@ -1083,7 +1083,7 @@ mod test {
         assert_eq!(inner.waiting.len(), 2);
 
         let server = Box::new(Server::default());
-        inner.put(server, Instant::now()).unwrap();
+        inner.put(server).unwrap();
 
         // All waiters should be removed since they were all dropped
         assert_eq!(inner.waiting.len(), 0);
