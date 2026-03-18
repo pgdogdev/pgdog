@@ -1,0 +1,38 @@
+version: 2
+updates:
+  # ignore integration tests security alerts
+  - package-ecosystem: composer
+    directory: /
+    schedule:
+      interval: weekly
+    exclude-paths:
+      - "/integration/**"
+      - "**/tests/**"
+  - package-ecosystem: bundler
+    directory: /
+    schedule:
+      interval: weekly
+    exclude-paths:
+      - "/integration/**"
+      - "**/tests/**"
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    exclude-paths:
+      - "/integration/**"
+      - "**/tests/**"
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    exclude-paths:
+      - "/integration/**"
+      - "**/tests/**"
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    exclude-paths:
+      - "/integration/**"
+      - "**/tests/**"
