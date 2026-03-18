@@ -138,12 +138,33 @@ pub fn reload() -> Result<(), Error> {
 }
 
 fn build_acceptor(cert: &Path, key: &Path) -> Result<TlsAcceptor, Error> {
-    let pem = CertificateDer::from_pem_file(cert)?;
+    let certs = CertificateDer::pem_file_iter(cert)
+        .map_err(|e| {
+            Error::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("Failed to read TLS certificate file: {}", e),
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| {
+            Error::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("Failed to parse TLS certificates: {}", e),
+            ))
+        })?;
+
+    if certs.is_empty() {
+        return Err(Error::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "No valid certificates found in TLS certificate file",
+        )));
+    }
+
     let key = PrivateKeyDer::from_pem_file(key)?;
 
     let config = rustls::ServerConfig::builder()
         .with_no_client_auth()
-        .with_single_cert(vec![pem], key)?;
+        .with_single_cert(certs, key)?;
 
     ACCEPTOR_BUILD_COUNT.fetch_add(1, Ordering::SeqCst);
 
