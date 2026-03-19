@@ -441,6 +441,16 @@ impl Server {
                 let error = ErrorResponse::from_bytes(message.to_bytes()?)?;
                 self.schema_changed = error.code == "0A000";
                 self.stats.error();
+
+                // Non-recoverable, Postgres is about to close the connection,
+                // by no fault of ours or theirs.
+                //
+                // This shouldn't trigger ban behavior either, so that's why
+                // we are setting ForceClose and not Error state.
+                if matches!(error.severity.as_str(), "FATAL" | "PANIC") {
+                    self.stats.state(State::ForceClose);
+                    return Err(Error::ExecutionError(Box::new(error)));
+                }
             }
             'W' => {
                 debug!("streaming replication on [{}]", self.addr());
@@ -3387,5 +3397,32 @@ pub mod test {
         assert!(server.done());
         assert!(!server.needs_drain());
         verify_server_usable(&mut server).await;
+    }
+
+    #[tokio::test]
+    async fn test_fatal_error_sets_force_close() {
+        let mut server = test_server().await;
+
+        // Terminate our own backend — PostgreSQL sends a FATAL error.
+        server
+            .send(
+                &vec![ProtocolMessage::from(Query::new(
+                    "SELECT pg_terminate_backend(pg_backend_pid())",
+                ))]
+                .into(),
+            )
+            .await
+            .unwrap();
+
+        // Read until the FATAL error arrives.
+        let err = loop {
+            match server.read().await {
+                Ok(_) => continue,
+                Err(err) => break err,
+            }
+        };
+        assert!(matches!(err, Error::ExecutionError(_)));
+        assert!(server.force_close());
+        assert_eq!(server.stats().get_state(), State::ForceClose);
     }
 }
