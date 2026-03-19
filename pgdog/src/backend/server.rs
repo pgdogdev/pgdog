@@ -3391,4 +3391,52 @@ pub mod test {
         assert!(!server.needs_drain());
         verify_server_usable(&mut server).await;
     }
+
+    #[tokio::test]
+    async fn test_transaction_timeout_fatal_clears_queue() {
+        let mut server = test_server().await;
+
+        server
+            .send(&vec![ProtocolMessage::from(Query::new(
+                "SET transaction_timeout = '100ms'",
+            ))]
+            .into())
+            .await
+            .unwrap();
+        for c in ['C', 'Z'] {
+            assert_eq!(server.read().await.unwrap().code(), c);
+        }
+
+        server
+            .send(&vec![ProtocolMessage::from(Query::new("BEGIN"))].into())
+            .await
+            .unwrap();
+        for c in ['C', 'Z'] {
+            assert_eq!(server.read().await.unwrap().code(), c);
+        }
+
+        server
+            .send(&vec![ProtocolMessage::from(Query::new("SELECT pg_sleep(1)"))].into())
+            .await
+            .unwrap();
+
+        let msg = server.read().await.unwrap();
+        assert_eq!(msg.code(), 'T');
+
+        let msg = server.read().await.unwrap();
+        assert_eq!(msg.code(), 'E');
+
+        let error = ErrorResponse::from_bytes(msg.to_bytes().unwrap()).unwrap();
+        assert_eq!(error.severity, "FATAL");
+        assert!(
+            error.message.contains("transaction timeout"),
+            "unexpected error message: {}",
+            error.message
+        );
+
+        assert!(
+            !server.has_more_messages(),
+            "FATAL should clear the message queue"
+        );
+    }
 }

@@ -9,6 +9,7 @@ use crate::{
 
 mod lock_session;
 mod omni;
+mod transaction_timeout;
 pub mod prelude;
 mod rewrite_extended;
 mod rewrite_insert_split;
