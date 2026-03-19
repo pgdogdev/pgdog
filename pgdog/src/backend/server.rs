@@ -441,6 +441,9 @@ impl Server {
                 let error = ErrorResponse::from_bytes(message.to_bytes()?)?;
                 self.schema_changed = error.code == "0A000";
                 self.stats.error();
+                if matches!(error.severity.as_str(), "FATAL" | "PANIC") {
+                    self.prepared_statements.state_mut().clear_queue();
+                }
             }
             'W' => {
                 debug!("streaming replication on [{}]", self.addr());

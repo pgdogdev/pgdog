@@ -240,6 +240,10 @@ impl QueryEngine {
             context.stream.send(&message).await?;
         }
 
+        if code == 'E' && !has_more_messages {
+            self.backend.force_close();
+        }
+
         if code == 'Z' {
             self.pending_explain = None;
         }

@@ -199,6 +199,10 @@ impl ProtocolState {
         self.len() == 0
     }
 
+    pub(crate) fn clear_queue(&mut self) {
+        self.queue.clear();
+    }
+
     pub(crate) fn len(&self) -> usize {
         self.queue.len()
     }

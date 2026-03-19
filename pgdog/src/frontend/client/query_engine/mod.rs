@@ -127,6 +127,11 @@ impl QueryEngine {
         self.begin_stmt.is_none() && self.backend.done()
     }
 
+    /// Backend connection is active.
+    pub fn backend_connected(&self) -> bool {
+        self.backend.connected()
+    }
+
     /// Current state.
     pub fn client_state(&self) -> State {
         self.stats.state

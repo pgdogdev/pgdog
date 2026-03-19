@@ -420,6 +420,9 @@ impl Client {
                 message = query_engine.read_backend() => {
                     let message = message?;
                     self.server_message(&mut query_engine, message).await?;
+                    if !query_engine.backend_connected() {
+                        break;
+                    }
                 }
 
                 buffer = self.buffer(client_state), if !terminating => {
