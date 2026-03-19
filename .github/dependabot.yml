@@ -6,33 +6,33 @@ updates:
     schedule:
       interval: weekly
     exclude-paths:
-      - "/integration/**"
+      - "integration/**"
       - "**/tests/**"
   - package-ecosystem: bundler
     directory: /
     schedule:
       interval: weekly
     exclude-paths:
-      - "/integration/**"
+      - "integration/**"
       - "**/tests/**"
   - package-ecosystem: gomod
     directory: /
     schedule:
       interval: weekly
     exclude-paths:
-      - "/integration/**"
+      - "integration/**"
       - "**/tests/**"
   - package-ecosystem: npm
     directory: /
     schedule:
       interval: weekly
     exclude-paths:
-      - "/integration/**"
+      - "integration/**"
       - "**/tests/**"
   - package-ecosystem: cargo
     directory: /
     schedule:
       interval: weekly
     exclude-paths:
-      - "/integration/**"
+      - "integration/**"
       - "**/tests/**"
