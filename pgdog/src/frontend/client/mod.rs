@@ -53,7 +53,6 @@ pub struct Client {
     timeouts: Timeouts,
     client_request: ClientRequest,
     stream_buffer: MessageBuffer,
-    passthrough_password: Option<String>,
     sticky: Sticky,
 }
 
@@ -94,11 +93,6 @@ impl MemoryUsage for Client {
             + std::mem::size_of::<Timeouts>()
             + self.stream_buffer.capacity()
             + self.client_request.memory_usage()
-            + self
-                .passthrough_password
-                .as_ref()
-                .map(|s| s.capacity())
-                .unwrap_or(0)
     }
 }
 
@@ -151,96 +145,77 @@ impl Client {
         let admin = database == config.config.admin.name && config.config.admin.user == user;
         let admin_password = &config.config.admin.password;
         let auth_type = &config.config.general.auth_type;
-
+        let passthrough = config.config.general.passthrough_auth();
         let id = BackendKeyData::new_client();
         let comms = ClientComms::new(&id);
 
-        // Auto database.
-        let exists = databases::databases().exists((user, database));
-        let passthrough_password = if config.config.general.passthrough_auth() && !admin {
-            let password = if auth_type.trust() {
-                // Use empty password.
-                // TODO: Postgres must be using "trust" auth
-                // or some other kind of authentication that doesn't require a password.
-                Password::new_password("")
+        // Check if we need to ask the client for its password in plaintext
+        // because we don't actually have it configured.
+        //
+        // This is likely because passthrough authentication is enabled.
+        //
+        let auth_ok = if passthrough {
+            // Get the password. We always need it because we need to check if
+            // it's current and hasn't been changed.
+            stream
+                .send_flush(&Authentication::ClearTextPassword)
+                .await?;
+            let password = stream.read().await?;
+            let password = Password::from_bytes(password.to_bytes()?)?;
+            // Passthrough authentication assumes the client password is good
+            // and lets Postgres perform the authentication instead. If Postgres
+            // returns an error, the connection pool will be banned and the client
+            // won't be able to run queries.
+            let user = user_from_params(&params, &password).ok();
+            if let Some(user) = user {
+                databases::add(user)?;
+                true
             } else {
-                // Get the password.
-                stream
-                    .send_flush(&Authentication::ClearTextPassword)
-                    .await?;
-                let password = stream.read().await?;
-                Password::from_bytes(password.to_bytes()?)?
+                false
+            }
+        } else {
+            let password = if admin {
+                Some(admin_password.clone())
+            } else {
+                databases::databases()
+                    .password((user, database))
+                    .map(|p| p.to_string())
             };
 
-            if !exists {
-                let user = user_from_params(&params, &password).ok();
-                if let Some(user) = user {
-                    databases::add(user);
-                }
-            }
-            password.password().map(|p| p.to_owned())
-        } else {
-            None
-        };
-
-        // Get server parameters and send them to the client.
-        let mut conn = match Connection::new(user, database, admin, &passthrough_password) {
-            Ok(conn) => conn,
-            Err(_) => {
-                stream.fatal(ErrorResponse::auth(user, database)).await?;
-                return Ok(None);
-            }
-        };
-
-        let password = if admin {
-            admin_password
-        } else {
-            conn.cluster()?.password()
-        };
-
-        let mut auth_ok = false;
-
-        if let Some(ref passthrough_password) = passthrough_password {
-            if passthrough_password != password && auth_type != &AuthType::Trust {
-                stream.fatal(ErrorResponse::auth(user, database)).await?;
-                return Ok(None);
-            } else {
-                auth_ok = true;
-            }
-        }
-
-        let auth_type = &config.config.general.auth_type;
-        if !auth_ok {
-            auth_ok = match auth_type {
-                AuthType::Md5 => {
-                    let md5 = md5::Client::new(user, password);
-                    stream.send_flush(&md5.challenge()).await?;
-                    let password = Password::from_bytes(stream.read().await?.to_bytes()?)?;
-                    if let Password::PasswordMessage { response } = password {
-                        md5.check(&response)
-                    } else {
-                        false
+            if let Some(password) = password {
+                match auth_type {
+                    AuthType::Md5 => {
+                        let md5 = md5::Client::new(user, &password);
+                        stream.send_flush(&md5.challenge()).await?;
+                        let password = Password::from_bytes(stream.read().await?.to_bytes()?)?;
+                        if let Password::PasswordMessage { response } = password {
+                            md5.check(&response)
+                        } else {
+                            false
+                        }
                     }
+
+                    AuthType::Scram => {
+                        stream.send_flush(&Authentication::scram()).await?;
+
+                        let scram = Server::new(&password);
+                        let res = scram.handle(&mut stream).await;
+                        matches!(res, Ok(true))
+                    }
+
+                    AuthType::Plain => {
+                        stream
+                            .send_flush(&Authentication::ClearTextPassword)
+                            .await?;
+                        let response = stream.read().await?;
+                        let response = Password::from_bytes(response.to_bytes()?)?;
+                        response.password() == Some(&password)
+                    }
+
+                    AuthType::Trust => true,
                 }
-
-                AuthType::Scram => {
-                    stream.send_flush(&Authentication::scram()).await?;
-
-                    let scram = Server::new(password);
-                    let res = scram.handle(&mut stream).await;
-                    matches!(res, Ok(true))
-                }
-
-                AuthType::Plain => {
-                    stream
-                        .send_flush(&Authentication::ClearTextPassword)
-                        .await?;
-                    let response = stream.read().await?;
-                    let response = Password::from_bytes(response.to_bytes()?)?;
-                    response.password() == Some(password)
-                }
-
-                AuthType::Trust => true,
+            } else {
+                false
             }
         };
 
@@ -252,11 +227,27 @@ impl Client {
         }
 
         // Check if the pooler is shutting down.
+        //
+        // We do this late because we don't want to give away anything about the
+        // database state to clients that haven't authenticated themselves.
+        //
+        // Admin connections are allowed to connect anyway.
         if comms.offline() && !admin {
             stream.fatal(ErrorResponse::shutting_down()).await?;
             return Ok(None);
         }
 
+        let mut conn = match Connection::new(user, database, admin) {
+            Ok(conn) => conn,
+            Err(err) => {
+                debug!("connection error: {}", err);
+                stream.fatal(ErrorResponse::auth(user, database)).await?;
+                return Ok(None);
+            }
+        };
+
+        // Get connection parameters. These will be most likely cached,
+        // unless the pool was just created.
         let server_params = match conn.parameters(&Request::unrouted(id)).await {
             Ok(params) => params,
             Err(err) => {
@@ -289,7 +280,7 @@ impl Client {
                 user,
                 database,
                 addr,
-                if passthrough_password.is_some() {
+                if passthrough {
                     "passthrough".into()
                 } else {
                     auth_type.to_string()
@@ -317,7 +308,6 @@ impl Client {
             client_request: ClientRequest::new(),
             stream_buffer: MessageBuffer::new(config.config.memory.message_buffer),
             shutdown: false,
-            passthrough_password,
             sticky: Sticky::from_params(&params),
             connect_params: params,
         }))
@@ -350,7 +340,6 @@ impl Client {
             client_request: ClientRequest::new(),
             stream_buffer: MessageBuffer::new(4096),
             shutdown: false,
-            passthrough_password: None,
             sticky: Sticky::from_params(&connect_params),
             params: connect_params,
         }

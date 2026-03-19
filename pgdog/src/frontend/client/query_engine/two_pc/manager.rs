@@ -180,22 +180,18 @@ impl Manager {
             phase => phase,
         };
 
-        let mut connection = match Connection::new(
-            &state.identifier.user,
-            &state.identifier.database,
-            false,
-            &None,
-        ) {
-            Ok(conn) => conn,
-            Err(err) => {
-                // Database got removed from config.
-                if matches!(err, crate::backend::Error::NoDatabase(_)) {
-                    return Ok(());
-                } else {
-                    return Err(err.into());
+        let mut connection =
+            match Connection::new(&state.identifier.user, &state.identifier.database, false) {
+                Ok(conn) => conn,
+                Err(err) => {
+                    // Database got removed from config.
+                    if matches!(err, crate::backend::Error::NoDatabase(_)) {
+                        return Ok(());
+                    } else {
+                        return Err(err.into());
+                    }
                 }
-            }
-        };
+            };
 
         connection
             .connect(

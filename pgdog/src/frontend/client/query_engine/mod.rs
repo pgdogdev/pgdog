@@ -82,16 +82,11 @@ pub struct QueryEngine {
 
 impl QueryEngine {
     /// Create new query engine.
-    pub fn new(
-        params: &Parameters,
-        comms: &ClientComms,
-        admin: bool,
-        passthrough_password: &Option<String>,
-    ) -> Result<Self, Error> {
+    pub fn new(params: &Parameters, comms: &ClientComms, admin: bool) -> Result<Self, Error> {
         let user = params.get_required("user")?;
         let database = params.get_default("database", user);
 
-        let backend = Connection::new(user, database, admin, passthrough_password)?;
+        let backend = Connection::new(user, database, admin)?;
 
         Ok(Self {
             backend,
@@ -109,12 +104,7 @@ impl QueryEngine {
     }
 
     pub fn from_client(client: &Client) -> Result<Self, Error> {
-        Self::new(
-            &client.params,
-            &client.comms,
-            client.admin,
-            &client.passthrough_password,
-        )
+        Self::new(&client.params, &client.comms, client.admin)
     }
 
     /// Wait for an async message from the backend.

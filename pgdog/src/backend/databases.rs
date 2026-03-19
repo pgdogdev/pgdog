@@ -1,6 +1,6 @@
 //! Databases behind pgDog.
 
-use std::collections::{hash_map::Entry, HashMap};
+use std::collections::HashMap;
 use std::ops::Deref;
 use std::sync::Arc;
 
@@ -20,7 +20,7 @@ use crate::frontend::router::sharding::Mapping;
 use crate::frontend::PreparedStatements;
 use crate::{
     backend::pool::PoolConfig,
-    config::{config, load, ConfigAndUsers, ManualQuery, Role},
+    config::{config, load, set, ConfigAndUsers, ManualQuery, Role},
     net::{messages::BackendKeyData, tls},
 };
 
@@ -141,36 +141,70 @@ pub fn reload() -> Result<(), Error> {
     Ok(())
 }
 
-/// Add new user to pool.
-pub(crate) fn add(mut user: crate::config::User) {
-    // One user at a time.
-    let _lock = lock();
+/// Add new user to pool via passthrough authentication.
+pub(crate) fn add(user: crate::config::User) -> Result<(), Error> {
+    fn get_should_replace(user: crate::config::User) -> (crate::config::User, bool) {
+        let config = config();
 
-    debug!(
-        "adding user \"{}\" for database \"{}\" via auth passthrough",
-        user.name, user.database
-    );
+        // If the user is defined in the config (users.toml),
+        // take all of its configuration settings and just update the password.
+        config
+            .users
+            .users
+            .iter()
+            .find(|existing| existing.name == user.name && existing.database == user.database)
+            .and_then(|existing| {
+                // User exists, but the passwords don't match,
+                // so we need to create a new connection pool with the new password.
+                if existing.password != user.password {
+                    let mut existing = existing.clone();
+                    existing.password = user.password.clone();
+                    Some((existing, true))
+                } else {
+                    // User exists and passwords match, we don't need to do anything.
+                    Some((existing.clone(), false))
+                }
+            })
+            // User doesn't exist, we should create it.
+            .unwrap_or((user, true))
+    }
 
-    let config = config();
-    for existing in &config.users.users {
-        if existing.name == user.name && existing.database == user.database {
-            let mut existing = existing.clone();
-            existing.password = user.password.clone();
-            user = existing;
-        }
+    // If the user is defined in the config (users.toml),
+    // take all of its configuration settings and just update the password.
+    let (_, should_replace) = get_should_replace(user.clone());
+
+    if !should_replace {
+        return Ok(());
     }
-    let pool = new_pool(&user, &config.config);
-    if let Some((user, cluster)) = pool {
-        let databases = (*databases()).clone();
-        let (added, databases) = databases.add(user, cluster);
-        if added {
-            // Launch the new pool (idempotent).
-            databases.launch();
-            // Don't use replace_databases because Arc refers to the same DBs,
-            // and we'll shut them down.
-            DATABASES.store(Arc::new(databases));
+
+    // Lock the config and do the check again to
+    // avoid any races.
+    {
+        let _lock = lock();
+
+        let (user, should_replace) = get_should_replace(user);
+
+        if !should_replace {
+            return Ok(());
         }
+
+        debug!(
+            r#"adding user "{}" to database "{}" via passthrough auth"#,
+            user.name, user.database
+        );
+
+        let mut new_config = (*config()).clone();
+        // Remove existing entries for this user/database so we don't
+        // leave stale passwords that would match on next login.
+        new_config
+            .users
+            .users
+            .retain(|u| !(u.name == user.name && u.database == user.database));
+        new_config.users.users.push(user);
+        set(new_config)?;
     }
+
+    reload_from_existing()
 }
 
 /// Swap database configs between source and destination.
@@ -297,30 +331,16 @@ pub struct Databases {
 }
 
 impl Databases {
-    /// Add new connection pools to the databases.
-    fn add(mut self, user: User, cluster: Cluster) -> (bool, Databases) {
-        match self.databases.entry(user) {
-            Entry::Vacant(e) => {
-                e.insert(cluster);
-                (true, self)
-            }
-            Entry::Occupied(mut e) => {
-                if e.get().password().is_empty() {
-                    e.insert(cluster);
-                    (true, self)
-                } else {
-                    (false, self)
-                }
-            }
-        }
-    }
-
-    /// Check if a cluster exists, quickly.
-    pub fn exists(&self, user: impl ToUser) -> bool {
+    /// Get the database user password, if one is configured.
+    pub fn password(&self, user: impl ToUser) -> Option<&str> {
         if let Some(cluster) = self.databases.get(&user.to_user()) {
-            !cluster.password().is_empty()
+            if cluster.password().is_empty() {
+                None
+            } else {
+                Some(cluster.password())
+            }
         } else {
-            false
+            None
         }
     }
 
