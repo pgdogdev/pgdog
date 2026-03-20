@@ -42,6 +42,10 @@ describe 'authentication' do
       expect(res[0]['one']).to eq('1')
       res = conn.exec 'SELECT 2 AS two'
       expect(res[0]['two']).to eq('2')
+
+      # Verify statement_timeout is carried over from user config.
+      res = conn.exec 'SHOW statement_timeout'
+      expect(res[0]['statement_timeout']).to eq('45999ms')
       conn.close
 
       # Verify pool is now online.

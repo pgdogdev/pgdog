@@ -90,3 +90,4 @@ server_user = "pgdog"
 pool_size = 5
 database = "pgdog"
 min_pool_size = 1
+statement_timeout = 45_999
