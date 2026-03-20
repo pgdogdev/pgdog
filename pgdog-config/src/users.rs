@@ -44,6 +44,7 @@ pub struct Users {
 }
 
 impl Users {
+    /// Run configuration checks.
     pub fn check(&mut self, config: &Config) {
         for user in &mut self.users {
             if user.password().is_empty() {
@@ -93,6 +94,22 @@ impl Users {
         let tmp = format!("__tmp_{}__", random_string(12));
 
         crate::swap_field!(self.users.iter_mut(), database, source, destination, tmp);
+    }
+
+    /// Remove user with the same name and database.
+    ///
+    /// Add new user in its place.
+    pub fn add_or_replace(&mut self, user: User) {
+        self.users
+            .retain(|existing| !(existing.name == user.name && existing.database == user.database));
+        self.users.push(user);
+    }
+
+    pub fn find(&self, user: &User) -> Option<User> {
+        self.users
+            .iter()
+            .find(|existing| existing.name == user.name && existing.database == user.database)
+            .cloned()
     }
 }
 

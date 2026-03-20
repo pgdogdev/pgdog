@@ -31,7 +31,7 @@ use super::Stream;
 
 pub mod target_session_attrs;
 pub mod test_client;
-pub use test_client::TestClient;
+pub use test_client::{SpawnedClient, TestClient};
 
 //
 // cargo nextest runs these in separate processes.

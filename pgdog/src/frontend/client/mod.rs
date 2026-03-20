@@ -168,8 +168,7 @@ impl Client {
             // won't be able to run queries.
             let user = user_from_params(&params, &password).ok();
             if let Some(user) = user {
-                databases::add(user)?;
-                true
+                databases::add(user)?
             } else {
                 false
             }
@@ -365,7 +364,7 @@ impl Client {
             Err(err) => {
                 let _ = self
                     .stream
-                    .error(ErrorResponse::from_err(&err), false)
+                    .fatal(ErrorResponse::from_client_err(&err))
                     .await;
                 if config().config.general.log_disconnections {
                     let (user, database) = user_database_from_params(&self.params);
@@ -597,6 +596,13 @@ impl Drop for Client {
     fn drop(&mut self) {
         self.comms.disconnect();
         self.prepared_statements.close_all();
+    }
+}
+
+#[cfg(test)]
+impl Client {
+    pub async fn spawn_test(mut self) {
+        self.spawn_internal().await;
     }
 }
 

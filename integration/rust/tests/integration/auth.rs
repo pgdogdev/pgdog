@@ -103,10 +103,10 @@ async fn test_passthrough_password_change() {
     // Ensure clean state.
     admin.execute("RELOAD").await.unwrap();
     admin
-        .execute("SET passthrough_auth TO 'enabled_plain'")
+        .execute("SET passthrough_auth TO 'enabled_plain_allow_change'")
         .await
         .unwrap();
-    assert_setting_str("passthrough_auth", "enabled_plain").await;
+    assert_setting_str("passthrough_auth", "enabled_plain_allow_change").await;
 
     // Make sure pgdog1 has the original password.
     direct

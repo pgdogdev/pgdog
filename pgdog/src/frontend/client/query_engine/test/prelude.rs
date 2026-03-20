@@ -2,7 +2,7 @@ pub use crate::{
     frontend::{
         client::{
             query_engine::{QueryEngine, QueryEngineContext},
-            test::TestClient,
+            test::{SpawnedClient, TestClient},
             Client,
         },
         ClientRequest,

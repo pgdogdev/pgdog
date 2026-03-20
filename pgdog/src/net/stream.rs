@@ -12,7 +12,7 @@ use std::ops::Deref;
 use std::pin::Pin;
 use std::task::Context;
 
-use super::messages::{ErrorResponse, Message, Protocol, ReadyForQuery, Terminate};
+use super::messages::{ErrorResponse, Message, Protocol, ReadyForQuery};
 
 /// Inner stream types.
 #[pin_project(project = StreamInnerProjection)]
@@ -269,8 +269,7 @@ impl Stream {
 
     /// Send an error to the client and disconnect gracefully.
     pub async fn fatal(&mut self, error: ErrorResponse) -> Result<(), crate::net::Error> {
-        self.send(&error).await?;
-        self.send_flush(&Terminate).await?;
+        self.send_flush(&error).await?;
 
         Ok(())
     }

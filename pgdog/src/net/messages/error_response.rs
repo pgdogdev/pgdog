@@ -6,6 +6,8 @@ use std::time::Duration;
 use super::prelude::*;
 use crate::{net::c_string_buf, state::State};
 
+use crate::frontend::Error as FrontendError;
+
 /// ErrorResponse (B) message.
 #[derive(Debug, Clone)]
 pub struct ErrorResponse {
@@ -179,6 +181,20 @@ impl ErrorResponse {
             context: None,
             file: None,
             routine: None,
+        }
+    }
+
+    pub fn from_client_err(err: &FrontendError) -> Self {
+        use crate::backend::Error as BackendError;
+        if let (FrontendError::Backend(BackendError::ExecutionError(err))) = err {
+            *(err.clone())
+        } else {
+            Self {
+                severity: "FATAL".into(),
+                code: "58000".into(),
+                message: err.to_string(),
+                ..Default::default()
+            }
         }
     }
 
