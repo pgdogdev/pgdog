@@ -315,6 +315,7 @@ impl Inner {
         mut server: Box<Server>,
         now: Instant,
         stats: BackendCounts,
+        moving: bool,
     ) -> Result<CheckInResult, Error> {
         let mut result = CheckInResult {
             server_error: false,
@@ -327,7 +328,7 @@ impl Inner {
             if moved.id() != self.id {
                 server.stats_mut().set_pool_id(moved.id());
                 server.stats().update();
-                moved.lock().maybe_check_in(server, now, stats)?;
+                moved.lock().maybe_check_in(server, now, stats, true)?;
                 return Ok(result);
             }
         }
@@ -347,7 +348,7 @@ impl Inner {
         }
 
         // Pool is offline or paused, connection should be closed.
-        if !self.online || self.paused {
+        if !self.online && !moving || self.paused {
             result.replenish = false;
             return Ok(result);
         }
@@ -505,7 +506,7 @@ mod test {
             .unwrap();
 
         let result = inner
-            .maybe_check_in(server, Instant::now(), BackendCounts::default())
+            .maybe_check_in(server, Instant::now(), BackendCounts::default(), false)
             .unwrap();
 
         assert!(!result.server_error);
@@ -530,7 +531,7 @@ mod test {
             .unwrap();
 
         inner
-            .maybe_check_in(server, Instant::now(), BackendCounts::default())
+            .maybe_check_in(server, Instant::now(), BackendCounts::default(), false)
             .unwrap();
 
         assert_eq!(inner.total(), 0); // pool paused, connection not added
@@ -553,7 +554,7 @@ mod test {
             .unwrap();
 
         let result = inner
-            .maybe_check_in(server, Instant::now(), BackendCounts::default())
+            .maybe_check_in(server, Instant::now(), BackendCounts::default(), false)
             .unwrap();
 
         assert!(!result.server_error);
@@ -580,7 +581,7 @@ mod test {
         assert_eq!(inner.checked_out(), 1);
 
         let result = inner
-            .maybe_check_in(server, Instant::now(), BackendCounts::default())
+            .maybe_check_in(server, Instant::now(), BackendCounts::default(), false)
             .unwrap();
         assert!(result.server_error);
 
@@ -709,7 +710,7 @@ mod test {
             .unwrap();
 
         inner
-            .maybe_check_in(server, Instant::now(), BackendCounts::default())
+            .maybe_check_in(server, Instant::now(), BackendCounts::default(), false)
             .unwrap();
         assert_eq!(inner.idle(), 1);
 
@@ -760,6 +761,7 @@ mod test {
                 server,
                 Instant::now() + Duration::from_secs(61), // Exceeds max age
                 BackendCounts::default(),
+                false,
             )
             .unwrap();
 
@@ -1139,14 +1141,14 @@ mod test {
         // Check in both connections
         let now = Instant::now();
         inner
-            .maybe_check_in(conn1, now, BackendCounts::default())
+            .maybe_check_in(conn1, now, BackendCounts::default(), false)
             .unwrap();
         assert_eq!(inner.idle(), 1);
         assert_eq!(inner.checked_out(), 1);
         assert_eq!(inner.total(), 2);
 
         inner
-            .maybe_check_in(conn2, now, BackendCounts::default())
+            .maybe_check_in(conn2, now, BackendCounts::default(), false)
             .unwrap();
         assert_eq!(inner.idle(), 2);
         assert_eq!(inner.checked_out(), 0);

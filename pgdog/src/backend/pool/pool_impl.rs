@@ -244,7 +244,7 @@ impl Pool {
         let CheckInResult {
             server_error,
             replenish,
-        } = { self.lock().maybe_check_in(server, now, counts)? };
+        } = { self.lock().maybe_check_in(server, now, counts, false)? };
 
         if server_error {
             error!(

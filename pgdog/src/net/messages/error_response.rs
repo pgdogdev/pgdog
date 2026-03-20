@@ -186,7 +186,7 @@ impl ErrorResponse {
 
     pub fn from_client_err(err: &FrontendError) -> Self {
         use crate::backend::Error as BackendError;
-        if let (FrontendError::Backend(BackendError::ExecutionError(err))) = err {
+        if let FrontendError::Backend(BackendError::ExecutionError(err)) = err {
             *(err.clone())
         } else {
             Self {
