@@ -163,8 +163,6 @@ pub(crate) fn add(user: ConfigUser) -> Result<bool, Error> {
     let config = config();
     let existing = config.users.find(&user);
 
-    if existing.is_none() {}
-
     // User already exists in users.toml.
     if let Some(mut existing) = existing {
         // Password hasn't been set yet.
