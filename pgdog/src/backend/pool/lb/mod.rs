@@ -196,6 +196,11 @@ impl LoadBalancer {
         Monitor::spawn(self);
     }
 
+    /// Check that the load balancer targets are all launched.
+    pub fn online(&self) -> bool {
+        self.targets.iter().all(|target| target.pool.lock().online)
+    }
+
     /// Get a live connection from the pool.
     pub async fn get(&self, request: &Request) -> Result<Guard, Error> {
         match timeout(self.checkout_timeout, self.get_internal(request)).await {

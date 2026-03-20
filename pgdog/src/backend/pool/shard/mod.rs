@@ -139,6 +139,11 @@ impl Shard {
         Ok(())
     }
 
+    /// Check that the shard LB targets are all launched.
+    pub fn online(&self) -> bool {
+        self.lb.online()
+    }
+
     /// Bring every pool online.
     pub fn launch(&self) {
         self.lb.launch();

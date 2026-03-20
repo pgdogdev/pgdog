@@ -310,7 +310,6 @@ impl Pool {
             to_guard.set_taken(taken);
         }
 
-        destination.launch();
         self.shutdown();
 
         Ok(())

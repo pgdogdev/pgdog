@@ -447,7 +447,15 @@ impl Databases {
 
         // Launch all clusters
         for cluster in self.all().values() {
-            cluster.launch();
+            if cluster.password().is_empty() {
+                warn!(
+                    r#"disabling pool for user "{}" and database "{}", password not set"#,
+                    cluster.user(),
+                    cluster.name()
+                );
+            } else {
+                cluster.launch();
+            }
 
             if cluster.pooler_mode() == PoolerMode::Session && cluster.router_needed() {
                 warn!(
