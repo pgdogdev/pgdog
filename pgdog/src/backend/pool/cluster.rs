@@ -571,6 +571,16 @@ impl Cluster {
         self.readiness.online.store(true, Ordering::Relaxed);
     }
 
+    /// Pause all pools in this cluster.
+    pub fn pause(&self) {
+        self.shards().iter().for_each(|shard| shard.pause())
+    }
+
+    /// Resume all pools in this cluster.
+    pub fn resume(&self) {
+        self.shards().iter().for_each(|shard| shard.resume())
+    }
+
     /// Shutdown the connection pools.
     pub(crate) fn shutdown(&self) {
         for shard in self.shards() {
@@ -835,6 +845,26 @@ mod test {
         assert!(cluster.online());
         cluster.shutdown();
         assert!(!cluster.online());
+    }
+
+    #[test]
+    fn test_pause_resume_toggles_all_pools() {
+        let config = ConfigAndUsers::default();
+        let cluster = Cluster::new_test(&config);
+
+        cluster.pause();
+        for shard in cluster.shards() {
+            for pool in shard.pools() {
+                assert!(pool.state().paused);
+            }
+        }
+
+        cluster.resume();
+        for shard in cluster.shards() {
+            for pool in shard.pools() {
+                assert!(!pool.state().paused);
+            }
+        }
     }
 
     #[tokio::test]
