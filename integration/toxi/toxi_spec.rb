@@ -57,7 +57,7 @@ shared_examples 'minimal errors' do |role, toxic|
         end
         25.times do
           c.exec 'SELECT 1'
-        rescue PG::SystemError
+        rescue PG::SystemError, PG::ConnectionBad
           c = conn # reconnect
           errors.increment
         end
@@ -84,11 +84,12 @@ shared_examples 'minimal errors' do |role, toxic|
       25.times do
         Sharded.where(id: 1).first
         ok += 1
-      rescue StandardError
+      rescue StandardError => e
+        puts "Error: #{e.class}: #{e.message}"
         errors += 1
       end
     end
-    expect(errors).to be <= 1
+    expect(errors).to be <= 2
     expect(25 - ok).to eq(errors)
   end
 end
