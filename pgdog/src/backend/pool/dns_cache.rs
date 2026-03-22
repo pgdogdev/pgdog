@@ -155,14 +155,13 @@ impl DnsCache {
 // -------------------------------------------------------------------------------------------------
 // ------ DnsCache :: Test-specific methods --------------------------------------------------------
 
+#[cfg(test)]
 impl DnsCache {
-    #[cfg(test)]
     pub fn clear_cache_for_testing(&self) {
         let mut cache = self.cache.write();
         cache.clear();
     }
 
-    #[cfg(test)]
     pub fn get_cached_hostnames_for_testing(&self) -> Vec<String> {
         let hostnames = self.hostnames.read();
         hostnames.iter().cloned().collect()

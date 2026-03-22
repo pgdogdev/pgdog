@@ -544,13 +544,11 @@ fn new_pool(user: &crate::config::User, config: &crate::config::Config) -> Optio
     let sharded_schemas = ShardedSchemas::new(sharded_schemas);
 
     let cluster_config = ClusterConfig::new(
-        general,
+        config,
         user,
         &shard_configs,
         sharded_tables,
-        config.multi_tenant(),
         sharded_schemas,
-        &config.rewrite,
     );
 
     Some((
@@ -709,20 +707,27 @@ pub fn from_config(config: &ConfigAndUsers) -> Databases {
 
 #[cfg(test)]
 mod tests {
+    use pgdog_config::General;
+
     use super::*;
     use crate::config::{Config, ConfigAndUsers, Database, Role};
 
     fn setup_config(passthrough_auth: crate::config::PassthroughAuth, users: Vec<ConfigUser>) {
         let _lock = lock();
-        let mut config = Config::default();
-        config.databases = vec![Database {
-            name: "db1".to_string(),
-            host: "localhost".to_string(),
-            port: 5432,
-            role: Role::Primary,
+        let config = Config {
+            databases: vec![Database {
+                name: "db1".to_string(),
+                host: "localhost".to_string(),
+                port: 5432,
+                role: Role::Primary,
+                ..Default::default()
+            }],
+            general: General {
+                passthrough_auth,
+                ..Default::default()
+            },
             ..Default::default()
-        }];
-        config.general.passthrough_auth = passthrough_auth;
+        };
 
         let users = crate::config::Users {
             users,
