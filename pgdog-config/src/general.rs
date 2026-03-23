@@ -1129,8 +1129,15 @@ impl General {
     }
 
     pub fn passthrough_auth(&self) -> bool {
-        self.tls().is_some() && self.passthrough_auth == PassthroughAuth::Enabled
-            || self.passthrough_auth == PassthroughAuth::EnabledPlain
+        self.tls().is_some()
+            && matches!(
+                self.passthrough_auth,
+                PassthroughAuth::Enabled | PassthroughAuth::EnabledAllowChange
+            )
+            || matches!(
+                self.passthrough_auth,
+                PassthroughAuth::EnabledPlain | PassthroughAuth::EnabledPlainAllowChange
+            )
     }
 
     /// Support for LISTEN/NOTIFY.

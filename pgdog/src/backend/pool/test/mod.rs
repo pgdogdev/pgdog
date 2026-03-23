@@ -607,7 +607,7 @@ async fn test_move_conns_to() {
     source.move_conns_to(&destination).unwrap();
 
     assert!(!source.lock().online);
-    assert!(destination.lock().online);
+    assert!(!destination.lock().online);
     assert_eq!(destination.lock().total(), 2);
     assert_eq!(source.lock().total(), 0);
     let new_pool_id = destination.id();
@@ -621,6 +621,152 @@ async fn test_move_conns_to() {
 
     assert_eq!(destination.lock().idle(), 2);
     assert_eq!(destination.lock().checked_out(), 0);
+}
+
+#[tokio::test]
+async fn test_move_conns_all_idle() {
+    crate::logger();
+
+    let config = Config {
+        inner: pgdog_stats::Config {
+            max: 3,
+            min: 0,
+            ..Config::default().inner
+        },
+    };
+
+    let source = Pool::new(&PoolConfig {
+        address: Address::new_test(),
+        config,
+    });
+    source.launch();
+
+    let destination = Pool::new(&PoolConfig {
+        address: Address::new_test(),
+        config,
+    });
+
+    // Check out and return 3 connections so they become idle.
+    let c1 = source.get(&Request::default()).await.unwrap();
+    let c2 = source.get(&Request::default()).await.unwrap();
+    let c3 = source.get(&Request::default()).await.unwrap();
+    drop(c1);
+    drop(c2);
+    drop(c3);
+    sleep(Duration::from_millis(50)).await;
+
+    assert_eq!(source.lock().idle(), 3);
+
+    source.move_conns_to(&destination).unwrap();
+
+    // All idle connections moved to destination.
+    assert_eq!(source.lock().total(), 0);
+    assert_eq!(destination.lock().idle(), 3);
+    assert_eq!(destination.lock().checked_out(), 0);
+
+    let new_pool_id = destination.id();
+    for conn in destination.lock().idle_conns() {
+        assert_eq!(conn.stats().pool_id(), new_pool_id);
+    }
+}
+
+#[tokio::test]
+async fn test_move_conns_all_checked_out() {
+    crate::logger();
+
+    let config = Config {
+        inner: pgdog_stats::Config {
+            max: 3,
+            min: 0,
+            ..Config::default().inner
+        },
+    };
+
+    let source = Pool::new(&PoolConfig {
+        address: Address::new_test(),
+        config,
+    });
+    source.launch();
+
+    let destination = Pool::new(&PoolConfig {
+        address: Address::new_test(),
+        config,
+    });
+
+    let c1 = source.get(&Request::default()).await.unwrap();
+    let c2 = source.get(&Request::default()).await.unwrap();
+    let c3 = source.get(&Request::default()).await.unwrap();
+
+    assert_eq!(source.lock().checked_out(), 3);
+    assert_eq!(source.lock().idle(), 0);
+
+    source.move_conns_to(&destination).unwrap();
+
+    // All connections are in-flight, tracked as taken in destination.
+    assert_eq!(source.lock().total(), 0);
+    assert_eq!(destination.lock().total(), 3);
+    assert_eq!(destination.lock().checked_out(), 3);
+    assert_eq!(destination.lock().idle(), 0);
+
+    // Return them one by one.
+    drop(c1);
+    sleep(Duration::from_millis(50)).await;
+    assert_eq!(destination.lock().idle(), 1);
+    assert_eq!(destination.lock().checked_out(), 2);
+
+    drop(c2);
+    sleep(Duration::from_millis(50)).await;
+    assert_eq!(destination.lock().idle(), 2);
+    assert_eq!(destination.lock().checked_out(), 1);
+
+    drop(c3);
+    sleep(Duration::from_millis(50)).await;
+    assert_eq!(destination.lock().idle(), 3);
+    assert_eq!(destination.lock().checked_out(), 0);
+}
+
+#[tokio::test]
+async fn test_move_conns_destination_serves_after_launch() {
+    crate::logger();
+
+    let config = Config {
+        inner: pgdog_stats::Config {
+            max: 3,
+            min: 0,
+            ..Config::default().inner
+        },
+    };
+
+    let source = Pool::new(&PoolConfig {
+        address: Address::new_test(),
+        config,
+    });
+    source.launch();
+
+    let destination = Pool::new(&PoolConfig {
+        address: Address::new_test(),
+        config,
+    });
+
+    // Create one idle connection.
+    let c1 = source.get(&Request::default()).await.unwrap();
+    drop(c1);
+    sleep(Duration::from_millis(50)).await;
+
+    source.move_conns_to(&destination).unwrap();
+    assert_eq!(destination.lock().idle(), 1);
+    assert!(!destination.lock().online);
+
+    // Launch destination, connections should be servable.
+    destination.launch();
+    assert!(destination.lock().online);
+
+    let c = destination.get(&Request::default()).await.unwrap();
+    assert_eq!(destination.lock().checked_out(), 1);
+    assert_eq!(destination.lock().idle(), 0);
+    drop(c);
+    sleep(Duration::from_millis(50)).await;
+    assert_eq!(destination.lock().idle(), 1);
 }
 
 #[tokio::test]

@@ -44,6 +44,7 @@ pub struct Users {
 }
 
 impl Users {
+    /// Run configuration checks.
     pub fn check(&mut self, config: &Config) {
         for user in &mut self.users {
             if user.password().is_empty() {
@@ -93,6 +94,22 @@ impl Users {
         let tmp = format!("__tmp_{}__", random_string(12));
 
         crate::swap_field!(self.users.iter_mut(), database, source, destination, tmp);
+    }
+
+    /// Remove user with the same name and database.
+    ///
+    /// Add new user in its place.
+    pub fn add_or_replace(&mut self, user: User) {
+        self.users
+            .retain(|existing| !(existing.name == user.name && existing.database == user.database));
+        self.users.push(user);
+    }
+
+    pub fn find(&self, user: &User) -> Option<User> {
+        self.users
+            .iter()
+            .find(|existing| existing.name == user.name && existing.database == user.database)
+            .cloned()
     }
 }
 
@@ -394,6 +411,104 @@ password = "secret"
         let user = users.users.first().unwrap();
         assert_eq!(user.server_auth, ServerAuth::Password);
         assert!(user.server_iam_region.is_none());
+    }
+
+    #[test]
+    fn test_add_or_replace_adds_new_user() {
+        let mut users = Users::default();
+        let user = User::new("alice", "pass", "db1");
+        users.add_or_replace(user.clone());
+
+        assert_eq!(users.users.len(), 1);
+        assert_eq!(users.users[0], user);
+    }
+
+    #[test]
+    fn test_add_or_replace_replaces_same_name_and_database() {
+        let mut users = Users::default();
+        users.add_or_replace(User::new("alice", "old_pass", "db1"));
+        users.add_or_replace(User::new("alice", "new_pass", "db1"));
+
+        assert_eq!(users.users.len(), 1);
+        assert_eq!(users.users[0].password(), "new_pass");
+    }
+
+    #[test]
+    fn test_add_or_replace_keeps_different_database() {
+        let mut users = Users::default();
+        users.add_or_replace(User::new("alice", "pass1", "db1"));
+        users.add_or_replace(User::new("alice", "pass2", "db2"));
+
+        assert_eq!(users.users.len(), 2);
+    }
+
+    #[test]
+    fn test_add_or_replace_keeps_different_name() {
+        let mut users = Users::default();
+        users.add_or_replace(User::new("alice", "pass1", "db1"));
+        users.add_or_replace(User::new("bob", "pass2", "db1"));
+
+        assert_eq!(users.users.len(), 2);
+    }
+
+    #[test]
+    fn test_add_or_replace_multiple_replaces() {
+        let mut users = Users::default();
+        users.add_or_replace(User::new("alice", "pass1", "db1"));
+        users.add_or_replace(User::new("alice", "pass2", "db1"));
+        users.add_or_replace(User::new("alice", "pass3", "db1"));
+
+        assert_eq!(users.users.len(), 1);
+        assert_eq!(users.users[0].password(), "pass3");
+    }
+
+    #[test]
+    fn test_add_or_replace_preserves_ordering_of_other_users() {
+        let mut users = Users::default();
+        users.add_or_replace(User::new("alice", "pass1", "db1"));
+        users.add_or_replace(User::new("bob", "pass2", "db1"));
+        users.add_or_replace(User::new("charlie", "pass3", "db1"));
+
+        // Replace bob — alice stays, charlie stays, new bob appended at end
+        users.add_or_replace(User::new("bob", "new_pass", "db1"));
+
+        assert_eq!(users.users.len(), 3);
+        assert_eq!(users.users[0].name, "alice");
+        assert_eq!(users.users[1].name, "charlie");
+        assert_eq!(users.users[2].name, "bob");
+        assert_eq!(users.users[2].password(), "new_pass");
+    }
+
+    #[test]
+    fn test_find_returns_matching_user() {
+        let mut users = Users::default();
+        let alice = User::new("alice", "pass1", "db1");
+        users.add_or_replace(alice.clone());
+
+        let needle = User::new("alice", "", "db1");
+        let found = users.find(&needle).unwrap();
+        assert_eq!(found, alice);
+    }
+
+    #[test]
+    fn test_find_returns_none_when_no_match() {
+        let users = Users::default();
+        let needle = User::new("alice", "", "db1");
+        assert!(users.find(&needle).is_none());
+    }
+
+    #[test]
+    fn test_find_matches_on_name_and_database() {
+        let mut users = Users::default();
+        users.add_or_replace(User::new("alice", "pass1", "db1"));
+        users.add_or_replace(User::new("alice", "pass2", "db2"));
+
+        let needle = User::new("alice", "", "db2");
+        let found = users.find(&needle).unwrap();
+        assert_eq!(found.password(), "pass2");
+
+        let needle = User::new("bob", "", "db1");
+        assert!(users.find(&needle).is_none());
     }
 
     #[test]

@@ -550,8 +550,16 @@ impl Cluster {
                 let shards = self.shards.len();
 
                 spawn(async move {
-                    if let Err(err) = shard.update_schema().await {
-                        error!("error loading schema for shard {}: {}", shard.number(), err);
+                    use tokio::time::sleep;
+
+                    while let Err(err) = shard.update_schema().await {
+                        // Retry.
+                        if shard.online() {
+                            error!("error loading schema for shard {}: {}", shard.number(), err);
+                            sleep(Duration::from_millis(100)).await;
+                        } else {
+                            return;
+                        }
                     }
 
                     let done = readiness.schemas_loaded.fetch_add(1, Ordering::SeqCst);

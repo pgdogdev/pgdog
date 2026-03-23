@@ -22,7 +22,7 @@ async fn test_cleanup_transaction_phase_one() {
     let mut two_pc = TwoPc::default();
     let transaction = two_pc.transaction();
 
-    let mut conn = Connection::new(cluster.user(), cluster.name(), false, &None).unwrap();
+    let mut conn = Connection::new(cluster.user(), cluster.name(), false).unwrap();
     conn.connect(
         &Request::default(),
         &Route::write(ShardWithPriority::new_default_unset(Shard::All)),
@@ -92,7 +92,7 @@ async fn test_cleanup_transaction_phase_two() {
     let mut two_pc = TwoPc::default();
     let transaction = two_pc.transaction();
 
-    let mut conn = Connection::new(cluster.user(), cluster.name(), false, &None).unwrap();
+    let mut conn = Connection::new(cluster.user(), cluster.name(), false).unwrap();
     conn.connect(
         &Request::default(),
         &Route::write(ShardWithPriority::new_default_unset(Shard::All)),

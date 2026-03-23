@@ -46,7 +46,6 @@ use multi_shard::MultiShard;
 #[derive(Default, Debug)]
 pub struct Connection {
     user: String,
-    passthrough_password: Option<String>,
     database: String,
     binding: Binding,
     cluster: Option<Cluster>,
@@ -57,12 +56,7 @@ pub struct Connection {
 
 impl Connection {
     /// Create new server connection handler.
-    pub(crate) fn new(
-        user: &str,
-        database: &str,
-        admin: bool,
-        passthrough_password: &Option<String>,
-    ) -> Result<Self, Error> {
+    pub(crate) fn new(user: &str, database: &str, admin: bool) -> Result<Self, Error> {
         let mut conn = Self {
             binding: if admin {
                 Binding::Admin(AdminServer::new())
@@ -74,7 +68,6 @@ impl Connection {
             database: database.to_owned(),
             mirrors: vec![],
             locked: false,
-            passthrough_password: passthrough_password.clone(),
             pub_sub: PubSubClient::new(),
         };
 
@@ -321,40 +314,44 @@ impl Connection {
 
     /// Fetch the cluster from the global database store.
     fn reload(&mut self) -> Result<(), Error> {
-        match self.binding {
-            Binding::Direct(_) | Binding::MultiShard(_, _) => {
-                let user = (self.user.as_str(), self.database.as_str());
-                // Check passthrough auth.
-                if config().config.general.passthrough_auth() && !databases().exists(user) {
-                    if let Some(ref passthrough_password) = self.passthrough_password {
-                        let new_user = User::new(&self.user, passthrough_password, &self.database);
-                        databases::add(new_user);
-                    }
-                }
-
-                let databases = databases();
-                let cluster = databases.cluster(user)?;
-
-                self.cluster = Some(cluster.clone());
-                let source_db = cluster.name();
-                self.mirrors = databases
-                    .mirrors(user)?
-                    .unwrap_or(&[])
-                    .iter()
-                    .map(|dest_cluster| {
-                        let mirror_config = databases.mirror_config(source_db, dest_cluster.name());
-                        Mirror::spawn(source_db, dest_cluster, mirror_config)
-                    })
-                    .collect::<Result<Vec<_>, Error>>()?;
-                debug!(
-                    r#"database "{}" has {} mirrors"#,
-                    self.cluster()?.name(),
-                    self.mirrors.len()
-                );
-            }
-
-            _ => (),
+        if matches!(self.binding, Binding::Admin(_)) {
+            return Ok(());
         }
+
+        let user = (self.user.as_str(), self.database.as_str());
+        let config = config();
+
+        // Check if we need re-configure passthrough auth using our existing password.
+        //
+        // This happens on configuration reload (RELOAD/sighup), because we
+        // only load databases from the config. RELOAD effectively removes all passthrough
+        // connection pools until a client needs to query it and we re-create it.
+        //
+        if config.config.general.passthrough_auth() && databases().password(user).is_none() {
+            if let Some(ref cluster) = self.cluster {
+                databases::add(User::new(&self.user, cluster.password(), &self.database))?;
+            }
+        }
+
+        let databases = databases();
+        let cluster = databases.cluster(user)?;
+
+        self.cluster = Some(cluster.clone());
+        let source_db = cluster.name();
+        self.mirrors = databases
+            .mirrors(user)?
+            .unwrap_or(&[])
+            .iter()
+            .map(|dest_cluster| {
+                let mirror_config = databases.mirror_config(source_db, dest_cluster.name());
+                Mirror::spawn(source_db, dest_cluster, mirror_config)
+            })
+            .collect::<Result<Vec<_>, Error>>()?;
+        debug!(
+            r#"database "{}" has {} mirrors"#,
+            self.cluster()?.name(),
+            self.mirrors.len()
+        );
 
         Ok(())
     }

@@ -45,6 +45,66 @@ macro_rules! expect_message {
     }};
 }
 
+/// Read one protocol message from a TCP stream.
+pub async fn read_message(conn: &mut TcpStream) -> Message {
+    let code = conn.read_u8().await.expect("code");
+    let len = conn.read_i32().await.expect("len");
+    let mut rest = vec![0u8; len as usize - 4];
+    conn.read_exact(&mut rest).await.expect("read_exact");
+
+    let mut payload = BytesMut::new();
+    payload.put_u8(code);
+    payload.put_i32(len);
+    payload.put(Bytes::from(rest));
+
+    Message::new(payload.freeze()).backend(BackendKeyData::default())
+}
+
+/// Send a protocol message to a TCP stream.
+pub async fn send_message(conn: &mut TcpStream, message: impl Protocol) {
+    let message = message.to_bytes().expect("message to convert to bytes");
+    conn.write_all(&message).await.expect("write_all");
+    conn.flush().await.expect("flush");
+}
+
+/// Read messages until the given code appears.
+pub async fn read_until(conn: &mut TcpStream, code: char) -> Result<Vec<Message>, ErrorResponse> {
+    let mut result = vec![];
+    loop {
+        let message = read_message(conn).await;
+        result.push(message.clone());
+
+        if message.code() == code {
+            break;
+        }
+
+        if message.code() == 'E' && code != 'E' {
+            let error = ErrorResponse::try_from(message).unwrap();
+            return Err(error);
+        }
+    }
+
+    Ok(result)
+}
+
+/// Create a loopback TCP pair and a `Client` connected to one end.
+async fn new_client_pair(params: Parameters) -> (TcpStream, Client) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let connect_handle = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let stream = Stream::plain(stream, 4096);
+        Client::new_test(stream, params)
+    });
+
+    let conn = TcpStream::connect(format!("127.0.0.1:{}", port))
+        .await
+        .unwrap();
+    let client = connect_handle.await.unwrap();
+
+    (conn, client)
+}
+
 /// Test client.
 #[derive(Debug)]
 pub struct TestClient {
@@ -60,21 +120,7 @@ impl TestClient {
     /// Config needs to be loaded.
     ///
     async fn new(params: Parameters) -> Self {
-        let addr = "127.0.0.1:0".to_string();
-        let conn_addr = addr.clone();
-        let stream = TcpListener::bind(&conn_addr).await.unwrap();
-        let port = stream.local_addr().unwrap().port();
-        let connect_handle = tokio::spawn(async move {
-            let (stream, _) = stream.accept().await.unwrap();
-            let stream = Stream::plain(stream, 4096);
-
-            Client::new_test(stream, params)
-        });
-
-        let conn = TcpStream::connect(&format!("127.0.0.1:{}", port))
-            .await
-            .unwrap();
-        let client = connect_handle.await.unwrap();
+        let (conn, client) = new_client_pair(params).await;
 
         Self {
             conn,
@@ -125,9 +171,7 @@ impl TestClient {
 
     /// Send message to client.
     pub(crate) async fn send(&mut self, message: impl Protocol) {
-        let message = message.to_bytes().expect("message to convert to bytes");
-        self.conn.write_all(&message).await.expect("write_all");
-        self.conn.flush().await.expect("flush");
+        send_message(&mut self.conn, message).await;
     }
 
     /// Send a simple query and panic on any errors.
@@ -146,17 +190,7 @@ impl TestClient {
 
     /// Read a message received from the servers.
     pub(crate) async fn read(&mut self) -> Message {
-        let code = self.conn.read_u8().await.expect("code");
-        let len = self.conn.read_i32().await.expect("len");
-        let mut rest = vec![0u8; len as usize - 4];
-        self.conn.read_exact(&mut rest).await.expect("read_exact");
-
-        let mut payload = BytesMut::new();
-        payload.put_u8(code);
-        payload.put_i32(len);
-        payload.put(Bytes::from(rest));
-
-        Message::new(payload.freeze()).backend(BackendKeyData::default())
+        read_message(&mut self.conn).await
     }
 
     /// Inspect client state.
@@ -176,22 +210,7 @@ impl TestClient {
 
     /// Read all messages until an expected last message.
     pub(crate) async fn read_until(&mut self, code: char) -> Result<Vec<Message>, ErrorResponse> {
-        let mut result = vec![];
-        loop {
-            let message = self.read().await;
-            result.push(message.clone());
-
-            if message.code() == code {
-                break;
-            }
-
-            if message.code() == 'E' && code != 'E' {
-                let error = ErrorResponse::try_from(message).unwrap();
-                return Err(error);
-            }
-        }
-
-        Ok(result)
+        read_until(&mut self.conn, code).await
     }
 
     /// Check if the backend is connected.
@@ -226,6 +245,52 @@ impl TestClient {
 }
 
 impl Drop for TestClient {
+    fn drop(&mut self) {
+        shutdown();
+    }
+}
+
+/// Test client that spawns the client into an async task,
+/// running the full `spawn_internal` code path (including error handling).
+/// Interaction happens purely over the wire.
+pub struct SpawnedClient {
+    pub conn: TcpStream,
+    _handle: tokio::task::JoinHandle<()>,
+}
+
+impl SpawnedClient {
+    async fn new(params: Parameters) -> Self {
+        let (conn, client) = new_client_pair(params).await;
+
+        let handle = tokio::spawn(async move {
+            client.spawn_test().await;
+        });
+
+        Self {
+            conn,
+            _handle: handle,
+        }
+    }
+
+    pub async fn new_sharded(params: Parameters) -> Self {
+        load_test_sharded();
+        Self::new(params).await
+    }
+
+    pub async fn send(&mut self, message: impl Protocol) {
+        send_message(&mut self.conn, message).await;
+    }
+
+    pub async fn read(&mut self) -> Message {
+        read_message(&mut self.conn).await
+    }
+
+    pub async fn read_until(&mut self, code: char) -> Vec<Message> {
+        read_until(&mut self.conn, code).await.unwrap()
+    }
+}
+
+impl Drop for SpawnedClient {
     fn drop(&mut self) {
         shutdown();
     }

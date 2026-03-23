@@ -1249,6 +1249,16 @@
           "description": "Enabled without TLS requirement; network traffic may expose plaintext passwords.",
           "type": "string",
           "const": "enabled_plain"
+        },
+        {
+          "description": "Enabled and allows password changes.",
+          "type": "string",
+          "const": "enabled_allow_change"
+        },
+        {
+          "description": "Enabled without TLS requirement and allows password changes.",
+          "type": "string",
+          "const": "enabled_plain_allow_change"
         }
       ]
     },

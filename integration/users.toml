@@ -83,3 +83,11 @@ database = "pgdog_schema_no_cross"
 server_user = "pgdog"
 cross_shard_disabled = true
 pooler_mode = "session"
+
+[[users]]
+name = "pgdog_pass"
+server_user = "pgdog"
+pool_size = 5
+database = "pgdog"
+min_pool_size = 1
+statement_timeout = 45_999

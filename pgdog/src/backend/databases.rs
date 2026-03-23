@@ -1,6 +1,6 @@
 //! Databases behind pgDog.
 
-use std::collections::{hash_map::Entry, HashMap};
+use std::collections::HashMap;
 use std::ops::Deref;
 use std::sync::Arc;
 
@@ -20,7 +20,7 @@ use crate::frontend::router::sharding::Mapping;
 use crate::frontend::PreparedStatements;
 use crate::{
     backend::pool::PoolConfig,
-    config::{config, load, ConfigAndUsers, ManualQuery, Role},
+    config::{config, load, set, ConfigAndUsers, ManualQuery, Role, User as ConfigUser},
     net::{messages::BackendKeyData, tls},
 };
 
@@ -141,35 +141,52 @@ pub fn reload() -> Result<(), Error> {
     Ok(())
 }
 
-/// Add new user to pool.
-pub(crate) fn add(mut user: crate::config::User) {
-    // One user at a time.
-    let _lock = lock();
+/// Add new user to pool via passthrough authentication.
+///
+/// Return true if user can login, false otherwise.
+///
+pub(crate) fn add(user: ConfigUser) -> Result<bool, Error> {
+    fn add_user(user: ConfigUser) -> Result<(), Error> {
+        debug!(
+            r#"adding user "{}" to database "{}" via passthrough auth"#,
+            user.name, user.database
+        );
 
-    debug!(
-        "adding user \"{}\" for database \"{}\" via auth passthrough",
-        user.name, user.database
-    );
+        let _lock = lock();
+        let mut config = (*config()).clone();
+        config.users.add_or_replace(user);
+        set(config)?;
+
+        Ok(())
+    }
 
     let config = config();
-    for existing in &config.users.users {
-        if existing.name == user.name && existing.database == user.database {
-            let mut existing = existing.clone();
+    let existing = config.users.find(&user);
+
+    // User already exists in users.toml.
+    if let Some(mut existing) = existing {
+        // Password hasn't been set yet.
+        if existing.password.is_none() {
             existing.password = user.password.clone();
-            user = existing;
+            add_user(existing)?;
+            reload_from_existing()?;
+            Ok(true)
+        } else if existing.password == user.password {
+            // Passwords match.
+            Ok(true)
+        } else if config.config.general.passthrough_auth.allows_change() {
+            // Passwords don't match but we can change it.
+            existing.password = user.password.clone();
+            add_user(user)?;
+            reload_from_existing()?;
+            Ok(true)
+        } else {
+            Ok(false)
         }
-    }
-    let pool = new_pool(&user, &config.config);
-    if let Some((user, cluster)) = pool {
-        let databases = (*databases()).clone();
-        let (added, databases) = databases.add(user, cluster);
-        if added {
-            // Launch the new pool (idempotent).
-            databases.launch();
-            // Don't use replace_databases because Arc refers to the same DBs,
-            // and we'll shut them down.
-            DATABASES.store(Arc::new(databases));
-        }
+    } else {
+        add_user(user)?;
+        reload_from_existing()?;
+        Ok(true)
     }
 }
 
@@ -297,30 +314,16 @@ pub struct Databases {
 }
 
 impl Databases {
-    /// Add new connection pools to the databases.
-    fn add(mut self, user: User, cluster: Cluster) -> (bool, Databases) {
-        match self.databases.entry(user) {
-            Entry::Vacant(e) => {
-                e.insert(cluster);
-                (true, self)
-            }
-            Entry::Occupied(mut e) => {
-                if e.get().password().is_empty() {
-                    e.insert(cluster);
-                    (true, self)
-                } else {
-                    (false, self)
-                }
-            }
-        }
-    }
-
-    /// Check if a cluster exists, quickly.
-    pub fn exists(&self, user: impl ToUser) -> bool {
+    /// Get the database user password, if one is configured.
+    pub fn password(&self, user: impl ToUser) -> Option<&str> {
         if let Some(cluster) = self.databases.get(&user.to_user()) {
-            !cluster.password().is_empty()
+            if cluster.password().is_empty() {
+                None
+            } else {
+                Some(cluster.password())
+            }
         } else {
-            false
+            None
         }
     }
 
@@ -444,7 +447,15 @@ impl Databases {
 
         // Launch all clusters
         for cluster in self.all().values() {
-            cluster.launch();
+            if cluster.password().is_empty() {
+                warn!(
+                    r#"disabling pool for user "{}" and database "{}", password not set"#,
+                    cluster.user(),
+                    cluster.name()
+                );
+            } else {
+                cluster.launch();
+            }
 
             if cluster.pooler_mode() == PoolerMode::Session && cluster.router_needed() {
                 warn!(
@@ -700,6 +711,114 @@ pub fn from_config(config: &ConfigAndUsers) -> Databases {
 mod tests {
     use super::*;
     use crate::config::{Config, ConfigAndUsers, Database, Role};
+
+    fn setup_config(passthrough_auth: crate::config::PassthroughAuth, users: Vec<ConfigUser>) {
+        let _lock = lock();
+        let mut config = Config::default();
+        config.databases = vec![Database {
+            name: "db1".to_string(),
+            host: "localhost".to_string(),
+            port: 5432,
+            role: Role::Primary,
+            ..Default::default()
+        }];
+        config.general.passthrough_auth = passthrough_auth;
+
+        let users = crate::config::Users {
+            users,
+            ..Default::default()
+        };
+
+        let cu = ConfigAndUsers {
+            config,
+            users,
+            config_path: std::path::PathBuf::new(),
+            users_path: std::path::PathBuf::new(),
+        };
+
+        crate::config::set(cu).expect("set config");
+        let databases = from_config(&crate::config::config());
+        replace_databases(databases, false).expect("replace databases");
+    }
+
+    fn make_user(name: &str, password: Option<&str>) -> ConfigUser {
+        ConfigUser {
+            name: name.to_string(),
+            database: "db1".to_string(),
+            password: password.map(|p| p.to_string()),
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn test_add_new_user() {
+        setup_config(crate::config::PassthroughAuth::EnabledPlain, vec![]);
+
+        let result = add(make_user("new_user", Some("secret")));
+        assert!(result.is_ok());
+        assert!(result.unwrap());
+
+        let config = crate::config::config();
+        let found = config.users.find(&make_user("new_user", None));
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().password, Some("secret".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_add_existing_user_matching_password() {
+        setup_config(
+            crate::config::PassthroughAuth::EnabledPlain,
+            vec![make_user("alice", Some("pass123"))],
+        );
+
+        let result = add(make_user("alice", Some("pass123")));
+        assert!(result.is_ok());
+        assert!(result.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_add_existing_user_no_password_set() {
+        setup_config(
+            crate::config::PassthroughAuth::EnabledPlain,
+            vec![make_user("bob", None)],
+        );
+
+        let result = add(make_user("bob", Some("new_pass")));
+        assert!(result.is_ok());
+        assert!(result.unwrap());
+
+        let config = crate::config::config();
+        let found = config.users.find(&make_user("bob", None));
+        assert_eq!(found.unwrap().password, Some("new_pass".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_add_existing_user_wrong_password_no_change_allowed() {
+        setup_config(
+            crate::config::PassthroughAuth::EnabledPlain,
+            vec![make_user("charlie", Some("old_pass"))],
+        );
+
+        let result = add(make_user("charlie", Some("wrong_pass")));
+        assert!(result.is_ok());
+        assert!(!result.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_add_existing_user_wrong_password_change_allowed() {
+        setup_config(
+            crate::config::PassthroughAuth::EnabledPlainAllowChange,
+            vec![make_user("dave", Some("old_pass"))],
+        );
+
+        let result = add(make_user("dave", Some("new_pass")));
+        assert!(result.is_ok());
+        assert!(result.unwrap());
+
+        let config = crate::config::config();
+        let found = config.users.find(&make_user("dave", None));
+        assert_eq!(found.unwrap().password, Some("new_pass".to_string()));
+    }
 
     #[test]
     fn test_mirror_user_isolation() {

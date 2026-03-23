@@ -17,6 +17,19 @@ pub enum PassthroughAuth {
     Enabled,
     /// Enabled without TLS requirement; network traffic may expose plaintext passwords.
     EnabledPlain,
+    /// Enabled and allows password changes.
+    EnabledAllowChange,
+    /// Enabled without TLS requirement and allows password changes.
+    EnabledPlainAllowChange,
+}
+
+impl PassthroughAuth {
+    pub fn allows_change(&self) -> bool {
+        matches!(
+            self,
+            Self::EnabledPlainAllowChange | Self::EnabledAllowChange
+        )
+    }
 }
 
 /// authentication mechanism for client connections.
