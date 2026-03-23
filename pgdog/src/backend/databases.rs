@@ -574,24 +574,28 @@ impl Databases {
     /// Find a wildcard match for a user/database pair.
     /// Returns a tuple of (user_template, is_wildcard_user, is_wildcard_db).
     fn find_wildcard_match(&self, user: &str, database: &str) -> Option<WildcardMatch> {
-        // Priority 1: exact user, wildcard database
-        let user_key = User {
-            user: user.to_string(),
-            database: "*".to_string(),
-        };
-        if self.databases.contains_key(&user_key) && self.wildcard_db_templates.is_some() {
-            return Some(WildcardMatch {
-                wildcard_user: false,
-                wildcard_database: true,
-            });
+        // Priority 1: exact user name, wildcard database
+        // A user config with name="alice" and database="*" means alice can
+        // connect to any database backed by the wildcard db templates.
+        if self.wildcard_db_templates.is_some() {
+            let has_exact_user_wildcard_db = self
+                .wildcard_users
+                .iter()
+                .any(|u| u.name == user && u.is_wildcard_database());
+            if has_exact_user_wildcard_db {
+                return Some(WildcardMatch {
+                    wildcard_user: false,
+                    wildcard_database: true,
+                });
+            }
         }
 
         // Priority 2: wildcard user, exact database
-        let wildcard_user_key = User {
-            user: "*".to_string(),
-            database: database.to_string(),
-        };
-        if self.databases.contains_key(&wildcard_user_key) {
+        let has_wildcard_user_exact_db = self
+            .wildcard_users
+            .iter()
+            .any(|u| u.is_wildcard_name() && u.database == database);
+        if has_wildcard_user_exact_db {
             return Some(WildcardMatch {
                 wildcard_user: true,
                 wildcard_database: false,
@@ -599,13 +603,11 @@ impl Databases {
         }
 
         // Priority 3: both wildcard
-        let full_wildcard_key = User {
-            user: "*".to_string(),
-            database: "*".to_string(),
-        };
-        if self.databases.contains_key(&full_wildcard_key)
-            || (!self.wildcard_users.is_empty() && self.wildcard_db_templates.is_some())
-        {
+        let has_full_wildcard = self
+            .wildcard_users
+            .iter()
+            .any(|u| u.is_wildcard_name() && u.is_wildcard_database());
+        if has_full_wildcard && self.wildcard_db_templates.is_some() {
             return Some(WildcardMatch {
                 wildcard_user: true,
                 wildcard_database: true,
@@ -907,6 +909,12 @@ pub fn from_config(config: &ConfigAndUsers) -> Databases {
         };
 
         for user in users {
+            // Wildcard templates are stored separately and pools are created
+            // lazily via add_wildcard_pool(). Creating a static pool here
+            // would attempt to connect to Postgres with literal "*".
+            if user.is_wildcard_name() || user.is_wildcard_database() {
+                continue;
+            }
             if let Some((user, cluster)) = new_pool(&user, &config.config) {
                 databases.insert(user, cluster);
             }
@@ -2248,5 +2256,97 @@ password = "testpass"
                 wildcard_database: true,
             })
         );
+    }
+
+    #[test]
+    fn test_wildcard_templates_no_static_pools() {
+        // Wildcard-only config must NOT create static pools (which would
+        // attempt to connect to Postgres with literal "*" as db/user name).
+        let mut config = Config::default();
+        config.databases = vec![Database {
+            name: "*".to_string(),
+            host: "wildcard-host".to_string(),
+            role: Role::Primary,
+            ..Default::default()
+        }];
+
+        let config_and_users = ConfigAndUsers {
+            config,
+            users: crate::config::Users {
+                users: vec![crate::config::User {
+                    name: "*".to_string(),
+                    database: "*".to_string(),
+                    password: Some("secret".to_string()),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let databases = from_config(&config_and_users);
+
+        // Templates should be stored for lazy pool creation.
+        assert!(databases.has_wildcard());
+        assert!(databases.wildcard_db_templates().is_some());
+        assert_eq!(databases.wildcard_users().len(), 1);
+
+        // No static pools — literal "*" must never be launched.
+        assert!(
+            databases.all().is_empty(),
+            "wildcard-only config must not create static pools; got {} pool(s)",
+            databases.all().len()
+        );
+    }
+
+    #[test]
+    fn test_mixed_wildcard_and_concrete_pools() {
+        // Concrete user/db should create a static pool; wildcard should not.
+        let mut config = Config::default();
+        config.databases = vec![
+            Database {
+                name: "real_db".to_string(),
+                host: "host1".to_string(),
+                role: Role::Primary,
+                ..Default::default()
+            },
+            Database {
+                name: "*".to_string(),
+                host: "wildcard-host".to_string(),
+                role: Role::Primary,
+                ..Default::default()
+            },
+        ];
+
+        let config_and_users = ConfigAndUsers {
+            config,
+            users: crate::config::Users {
+                users: vec![
+                    crate::config::User::new("alice", "pass", "real_db"),
+                    crate::config::User {
+                        name: "*".to_string(),
+                        database: "*".to_string(),
+                        password: Some("secret".to_string()),
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let databases = from_config(&config_and_users);
+
+        assert!(databases.has_wildcard());
+        // Only the concrete pool should exist.
+        assert_eq!(
+            databases.all().len(),
+            1,
+            "expected 1 concrete pool, got {}",
+            databases.all().len()
+        );
+        assert!(databases.exists(("alice", "real_db")));
+        // The wildcard entry must NOT produce a static pool.
+        assert!(!databases.exists(("*", "*")));
     }
 }
