@@ -180,6 +180,14 @@ impl Command for Set {
                 config.config.general.connect_timeout = self.value.parse()?;
             }
 
+            "max_wildcard_pools" => {
+                config.config.general.max_wildcard_pools = self.value.parse()?;
+            }
+
+            "wildcard_pool_idle_timeout" => {
+                config.config.general.wildcard_pool_idle_timeout = self.value.parse()?;
+            }
+
             _ => return Err(Error::Syntax),
         }
 
