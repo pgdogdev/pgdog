@@ -33,7 +33,6 @@ def generate_pgdog_toml(args: argparse.Namespace) -> str:
         name = "*"
         host = "{args.host}"
         port = {args.port}
-        database_name = "*"
     """)
 
 

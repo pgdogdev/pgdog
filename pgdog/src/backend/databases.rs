@@ -353,8 +353,8 @@ pub(crate) fn add_wildcard_pool(
                 for template in shard_templates {
                     let mut db = template.database.clone();
                     db.name = database.to_string();
-                    // Respect explicit database_name; otherwise use the client-requested name.
-                    if db.database_name.is_none() {
+                    // Substitute wildcard database_name with the actual name.
+                    if db.database_name.is_none() || db.database_name.as_deref() == Some("*") {
                         db.database_name = Some(database.to_string());
                     }
                     new_dbs.push(db);
