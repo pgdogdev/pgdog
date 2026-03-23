@@ -263,7 +263,7 @@ async fn test_benchmark_pool() {
         handle.await.unwrap();
     }
     let duration = start.elapsed();
-    println!("bench: {}ms", duration.as_millis());
+    eprintln!("bench: {}ms", duration.as_millis());
 }
 
 #[tokio::test]

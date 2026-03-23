@@ -27,7 +27,6 @@ fn create_test_pool_config(host: &str, port: u16) -> PoolConfig {
                 ..Config::default().inner
             },
         },
-        ..Default::default()
     }
 }
 
@@ -739,7 +738,6 @@ async fn test_monitor_does_not_ban_with_zero_ban_timeout() {
                 ..Config::default().inner
             },
         },
-        ..Default::default()
     };
 
     let pool_config2 = PoolConfig {
@@ -759,7 +757,6 @@ async fn test_monitor_does_not_ban_with_zero_ban_timeout() {
                 ..Config::default().inner
             },
         },
-        ..Default::default()
     };
 
     let replicas = LoadBalancer::new(
@@ -1102,7 +1099,6 @@ fn create_test_pool_config_weighted(host: &str, port: u16, lb_weight: u8) -> Poo
                 ..Config::default().inner
             },
         },
-        ..Default::default()
     }
 }
 
@@ -1515,7 +1511,6 @@ fn test_ban_check_does_not_ban_with_zero_ban_timeout() {
                 ..Config::default().inner
             },
         },
-        ..Default::default()
     };
 
     let pool_config2 = PoolConfig {
@@ -1535,7 +1530,6 @@ fn test_ban_check_does_not_ban_with_zero_ban_timeout() {
                 ..Config::default().inner
             },
         },
-        ..Default::default()
     };
 
     let replicas = LoadBalancer::new(

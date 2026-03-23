@@ -30,7 +30,7 @@ macro_rules! expect_message {
         match <$ty as TryFrom<$crate::net::Message>>::try_from(message.clone()) {
             Ok(val) => val,
             Err(_) => {
-                match <crate::net::ErrorResponse as TryFrom<crate::net::Message>>::try_from(
+                match <$crate::net::ErrorResponse as TryFrom<$crate::net::Message>>::try_from(
                     message.clone(),
                 ) {
                     Ok(err) => panic!("expected {}, got ErrorResponse: {:?}", stringify!($ty), err),

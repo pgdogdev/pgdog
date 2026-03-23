@@ -21,8 +21,8 @@ async fn test_shard_varchar() {
             let word = words.first().unwrap();
 
             Query::new(format!(
-                "INSERT INTO test_shard_varchar (c) VALUES ('{}')",
-                format!("{}_{}_{}", i, word, i)
+                "INSERT INTO test_shard_varchar (c) VALUES ('{}_{}_{}')",
+                i, word, i
             ))
         })
         .collect::<Vec<_>>();
@@ -36,12 +36,6 @@ async fn test_shard_varchar() {
     queries.extend(inserts);
 
     server.execute_batch(&queries).await.unwrap();
-
-    let mut schema = ShardingSchema::default();
-    schema.shards = 3;
-
-    let mut table = ShardedTable::default();
-    table.data_type = DataType::Varchar;
 
     let shard_0 = server
         .execute("SELECT * FROM test_shard_varchar_0")
@@ -84,11 +78,15 @@ async fn test_shard_varchar() {
 }
 
 fn assert_shard(val: &[u8], expected_shard: usize) {
-    let mut schema = ShardingSchema::default();
-    schema.shards = 3;
+    let schema = ShardingSchema {
+        shards: 3,
+        ..Default::default()
+    };
 
-    let mut table = ShardedTable::default();
-    table.data_type = DataType::Varchar;
+    let table = ShardedTable {
+        data_type: DataType::Varchar,
+        ..Default::default()
+    };
 
     assert_eq!(varchar(val) as usize % 3, expected_shard);
 
@@ -172,19 +170,21 @@ async fn test_shard_by_range() {
 
     server.execute_batch(&queries).await.unwrap();
 
-    let mut table = ShardedTable::default();
-    table.data_type = DataType::Bigint;
-    table.mapping = Mapping::new(
-        &(0..3)
-            .map(|s| ShardedMapping {
-                kind: ShardedMappingKind::Range,
-                start: Some(FlexibleType::Integer(s * 33)),
-                end: Some(FlexibleType::Integer((s + 1) * 33)),
-                shard: s as usize,
-                ..Default::default()
-            })
-            .collect::<Vec<_>>(),
-    );
+    let table = ShardedTable {
+        data_type: DataType::Bigint,
+        mapping: Mapping::new(
+            &(0..3)
+                .map(|s| ShardedMapping {
+                    kind: ShardedMappingKind::Range,
+                    start: Some(FlexibleType::Integer(s * 33)),
+                    end: Some(FlexibleType::Integer((s + 1) * 33)),
+                    shard: s as usize,
+                    ..Default::default()
+                })
+                .collect::<Vec<_>>(),
+        ),
+        ..Default::default()
+    };
 
     for shard in 0..3 {
         let table_name = format!("SELECT * FROM test_shard_bigint_range_{}", shard);
@@ -228,20 +228,22 @@ async fn test_shard_by_list() {
 
     server.execute_batch(&queries).await.unwrap();
 
-    let mut table = ShardedTable::default();
-    table.data_type = DataType::Bigint;
-    table.mapping = Mapping::new(
-        &(0..3)
-            .map(|s| ShardedMapping {
-                kind: ShardedMappingKind::List,
-                values: (s * 10..((s + 1) * 10))
-                    .map(FlexibleType::Integer)
-                    .collect::<HashSet<_>>(),
-                shard: s as usize,
-                ..Default::default()
-            })
-            .collect::<Vec<_>>(),
-    );
+    let table = ShardedTable {
+        data_type: DataType::Bigint,
+        mapping: Mapping::new(
+            &(0..3)
+                .map(|s| ShardedMapping {
+                    kind: ShardedMappingKind::List,
+                    values: (s * 10..((s + 1) * 10))
+                        .map(FlexibleType::Integer)
+                        .collect::<HashSet<_>>(),
+                    shard: s as usize,
+                    ..Default::default()
+                })
+                .collect::<Vec<_>>(),
+        ),
+        ..Default::default()
+    };
 
     for shard in 0..3 {
         let table_name = format!("SELECT * FROM test_shard_bigint_list_{}", shard);
@@ -317,23 +319,25 @@ async fn test_shard_by_uuid_list() {
     server.execute_batch(&ddl_queries).await.unwrap();
     server.execute_batch(&insert_queries).await.unwrap();
 
-    let mut table = ShardedTable::default();
-    table.data_type = DataType::Uuid;
-    table.mapping = Mapping::new(
-        &uuid_sets
-            .into_iter()
-            .enumerate()
-            .map(|(shard, uuids)| ShardedMapping {
-                kind: ShardedMappingKind::List,
-                values: uuids
-                    .into_iter()
-                    .map(FlexibleType::Uuid)
-                    .collect::<HashSet<_>>(),
-                shard,
-                ..Default::default()
-            })
-            .collect::<Vec<_>>(),
-    );
+    let table = ShardedTable {
+        data_type: DataType::Uuid,
+        mapping: Mapping::new(
+            &uuid_sets
+                .into_iter()
+                .enumerate()
+                .map(|(shard, uuids)| ShardedMapping {
+                    kind: ShardedMappingKind::List,
+                    values: uuids
+                        .into_iter()
+                        .map(FlexibleType::Uuid)
+                        .collect::<HashSet<_>>(),
+                    shard,
+                    ..Default::default()
+                })
+                .collect::<Vec<_>>(),
+        ),
+        ..Default::default()
+    };
 
     for shard in 0..3 {
         let query = format!("SELECT * FROM test_shard_uuid_list_{}", shard);
@@ -384,30 +388,32 @@ async fn test_shard_by_list_with_default() {
     server.execute_batch(&inserts).await.unwrap();
 
     // Create mapping with explicit lists and a default shard
-    let mut table = ShardedTable::default();
-    table.data_type = DataType::Bigint;
-    table.mapping = Mapping::new(&[
-        ShardedMapping {
-            kind: ShardedMappingKind::List,
-            values: [0, 1, 2].into_iter().map(FlexibleType::Integer).collect(),
-            shard: 0,
-            ..Default::default()
-        },
-        ShardedMapping {
-            kind: ShardedMappingKind::List,
-            values: [10, 11, 12]
-                .into_iter()
-                .map(FlexibleType::Integer)
-                .collect(),
-            shard: 1,
-            ..Default::default()
-        },
-        ShardedMapping {
-            kind: ShardedMappingKind::Default,
-            shard: 2,
-            ..Default::default()
-        },
-    ]);
+    let table = ShardedTable {
+        data_type: DataType::Bigint,
+        mapping: Mapping::new(&[
+            ShardedMapping {
+                kind: ShardedMappingKind::List,
+                values: [0, 1, 2].into_iter().map(FlexibleType::Integer).collect(),
+                shard: 0,
+                ..Default::default()
+            },
+            ShardedMapping {
+                kind: ShardedMappingKind::List,
+                values: [10, 11, 12]
+                    .into_iter()
+                    .map(FlexibleType::Integer)
+                    .collect(),
+                shard: 1,
+                ..Default::default()
+            },
+            ShardedMapping {
+                kind: ShardedMappingKind::Default,
+                shard: 2,
+                ..Default::default()
+            },
+        ]),
+        ..Default::default()
+    };
 
     // Verify explicitly mapped values route correctly
     for (shard, values) in [(0, vec![0, 1, 2]), (1, vec![10, 11, 12])] {

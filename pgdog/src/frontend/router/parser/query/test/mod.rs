@@ -1,3 +1,5 @@
+#![allow(clippy::print_stdout)]
+
 use std::ops::Deref;
 
 use crate::{

@@ -14,6 +14,7 @@ mod test {
         assert_eq!(distance, 0.5);
     }
 
+    #[allow(clippy::print_stdout)]
     #[test]
     fn test_simd_features() {
         println!("SIMD features available:");

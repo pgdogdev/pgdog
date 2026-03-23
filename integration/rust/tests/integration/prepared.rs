@@ -33,11 +33,10 @@ async fn test_prepared_cache() {
         .await
         .unwrap()
         .into_iter()
-        .filter(|row| {
+        .find(|row| {
             row.get::<String, &str>("statement")
                 .contains("/* test_prepared_cache_rust */")
         })
-        .next()
         .unwrap();
 
     let clients = conns

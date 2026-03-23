@@ -1401,31 +1401,32 @@ mod tests {
 
     #[test]
     fn test_user_all_databases_creates_pools_for_all_dbs() {
-        let mut config = Config::default();
-
-        config.databases = vec![
-            Database {
-                name: "db1".to_string(),
-                host: "localhost".to_string(),
-                port: 5432,
-                role: Role::Primary,
-                ..Default::default()
-            },
-            Database {
-                name: "db2".to_string(),
-                host: "localhost".to_string(),
-                port: 5433,
-                role: Role::Primary,
-                ..Default::default()
-            },
-            Database {
-                name: "db3".to_string(),
-                host: "localhost".to_string(),
-                port: 5434,
-                role: Role::Primary,
-                ..Default::default()
-            },
-        ];
+        let config = Config {
+            databases: vec![
+                Database {
+                    name: "db1".to_string(),
+                    host: "localhost".to_string(),
+                    port: 5432,
+                    role: Role::Primary,
+                    ..Default::default()
+                },
+                Database {
+                    name: "db2".to_string(),
+                    host: "localhost".to_string(),
+                    port: 5433,
+                    role: Role::Primary,
+                    ..Default::default()
+                },
+                Database {
+                    name: "db3".to_string(),
+                    host: "localhost".to_string(),
+                    port: 5434,
+                    role: Role::Primary,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
 
         let users = crate::config::Users {
             users: vec![crate::config::User {
@@ -1464,31 +1465,32 @@ mod tests {
 
     #[test]
     fn test_user_multiple_databases_creates_pools_for_specified_dbs() {
-        let mut config = Config::default();
-
-        config.databases = vec![
-            Database {
-                name: "db1".to_string(),
-                host: "localhost".to_string(),
-                port: 5432,
-                role: Role::Primary,
-                ..Default::default()
-            },
-            Database {
-                name: "db2".to_string(),
-                host: "localhost".to_string(),
-                port: 5433,
-                role: Role::Primary,
-                ..Default::default()
-            },
-            Database {
-                name: "db3".to_string(),
-                host: "localhost".to_string(),
-                port: 5434,
-                role: Role::Primary,
-                ..Default::default()
-            },
-        ];
+        let config = Config {
+            databases: vec![
+                Database {
+                    name: "db1".to_string(),
+                    host: "localhost".to_string(),
+                    port: 5432,
+                    role: Role::Primary,
+                    ..Default::default()
+                },
+                Database {
+                    name: "db2".to_string(),
+                    host: "localhost".to_string(),
+                    port: 5433,
+                    role: Role::Primary,
+                    ..Default::default()
+                },
+                Database {
+                    name: "db3".to_string(),
+                    host: "localhost".to_string(),
+                    port: 5434,
+                    role: Role::Primary,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
 
         let users = crate::config::Users {
             users: vec![crate::config::User {
@@ -1527,31 +1529,32 @@ mod tests {
 
     #[test]
     fn test_all_databases_takes_priority_over_databases_list() {
-        let mut config = Config::default();
-
-        config.databases = vec![
-            Database {
-                name: "db1".to_string(),
-                host: "localhost".to_string(),
-                port: 5432,
-                role: Role::Primary,
-                ..Default::default()
-            },
-            Database {
-                name: "db2".to_string(),
-                host: "localhost".to_string(),
-                port: 5433,
-                role: Role::Primary,
-                ..Default::default()
-            },
-            Database {
-                name: "db3".to_string(),
-                host: "localhost".to_string(),
-                port: 5434,
-                role: Role::Primary,
-                ..Default::default()
-            },
-        ];
+        let config = Config {
+            databases: vec![
+                Database {
+                    name: "db1".to_string(),
+                    host: "localhost".to_string(),
+                    port: 5432,
+                    role: Role::Primary,
+                    ..Default::default()
+                },
+                Database {
+                    name: "db2".to_string(),
+                    host: "localhost".to_string(),
+                    port: 5433,
+                    role: Role::Primary,
+                    ..Default::default()
+                },
+                Database {
+                    name: "db3".to_string(),
+                    host: "localhost".to_string(),
+                    port: 5434,
+                    role: Role::Primary,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
 
         // User has both all_databases=true AND specific databases set
         let users = crate::config::Users {
@@ -1609,24 +1612,25 @@ mod tests {
 
     #[test]
     fn test_user_with_single_database_creates_one_pool() {
-        let mut config = Config::default();
-
-        config.databases = vec![
-            Database {
-                name: "db1".to_string(),
-                host: "localhost".to_string(),
-                port: 5432,
-                role: Role::Primary,
-                ..Default::default()
-            },
-            Database {
-                name: "db2".to_string(),
-                host: "localhost".to_string(),
-                port: 5433,
-                role: Role::Primary,
-                ..Default::default()
-            },
-        ];
+        let config = Config {
+            databases: vec![
+                Database {
+                    name: "db1".to_string(),
+                    host: "localhost".to_string(),
+                    port: 5432,
+                    role: Role::Primary,
+                    ..Default::default()
+                },
+                Database {
+                    name: "db2".to_string(),
+                    host: "localhost".to_string(),
+                    port: 5433,
+                    role: Role::Primary,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
 
         let users = crate::config::Users {
             users: vec![crate::config::User {
@@ -1659,31 +1663,32 @@ mod tests {
 
     #[test]
     fn test_multiple_users_with_different_database_access() {
-        let mut config = Config::default();
-
-        config.databases = vec![
-            Database {
-                name: "db1".to_string(),
-                host: "localhost".to_string(),
-                port: 5432,
-                role: Role::Primary,
-                ..Default::default()
-            },
-            Database {
-                name: "db2".to_string(),
-                host: "localhost".to_string(),
-                port: 5433,
-                role: Role::Primary,
-                ..Default::default()
-            },
-            Database {
-                name: "db3".to_string(),
-                host: "localhost".to_string(),
-                port: 5434,
-                role: Role::Primary,
-                ..Default::default()
-            },
-        ];
+        let config = Config {
+            databases: vec![
+                Database {
+                    name: "db1".to_string(),
+                    host: "localhost".to_string(),
+                    port: 5432,
+                    role: Role::Primary,
+                    ..Default::default()
+                },
+                Database {
+                    name: "db2".to_string(),
+                    host: "localhost".to_string(),
+                    port: 5433,
+                    role: Role::Primary,
+                    ..Default::default()
+                },
+                Database {
+                    name: "db3".to_string(),
+                    host: "localhost".to_string(),
+                    port: 5434,
+                    role: Role::Primary,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
 
         let users = crate::config::Users {
             users: vec![
@@ -1737,15 +1742,16 @@ mod tests {
 
     #[test]
     fn test_databases_list_with_nonexistent_database_skipped() {
-        let mut config = Config::default();
-
-        config.databases = vec![Database {
-            name: "db1".to_string(),
-            host: "localhost".to_string(),
-            port: 5432,
-            role: Role::Primary,
+        let config = Config {
+            databases: vec![Database {
+                name: "db1".to_string(),
+                host: "localhost".to_string(),
+                port: 5432,
+                role: Role::Primary,
+                ..Default::default()
+            }],
             ..Default::default()
-        }];
+        };
 
         // User requests access to both existing and non-existing databases
         let users = crate::config::Users {

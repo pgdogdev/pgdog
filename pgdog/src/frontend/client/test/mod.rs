@@ -726,14 +726,16 @@ async fn test_close_parse_same_name_global_cache() {
     // Verify the statement is registered correctly in the global cache
     let global_cache = client.prepared_statements.global.clone();
     assert_eq!(global_cache.read().len(), 1);
-    let binding = global_cache.write();
-    let (_, cached_stmt) = binding.statements().iter().next().unwrap();
-    assert_eq!(cached_stmt.used, 1);
+    {
+        let binding = global_cache.write();
+        let (_, cached_stmt) = binding.statements().iter().next().unwrap();
+        assert_eq!(cached_stmt.used, 1);
 
-    // Verify the SQL content in the global cache
-    let global_stmt_name = cached_stmt.name();
-    let cached_query = binding.query(&global_stmt_name).unwrap();
-    assert_eq!(cached_query, "SELECT $1");
+        // Verify the SQL content in the global cache
+        let global_stmt_name = cached_stmt.name();
+        let cached_query = binding.query(&global_stmt_name).unwrap();
+        assert_eq!(cached_query, "SELECT $1");
+    }
 
     // Verify the client's local cache
     assert_eq!(client.prepared_statements.len_local(), 1);
@@ -822,7 +824,7 @@ async fn test_statement_mode() {
     load_test_with_pooler_mode(PoolerMode::Statement);
     let (mut conn, mut client) = parallel_test_client().await;
 
-    let _ = tokio::spawn(async move {
+    tokio::spawn(async move {
         client.run().await.unwrap();
     });
 

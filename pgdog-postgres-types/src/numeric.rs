@@ -979,10 +979,10 @@ mod tests {
         assert!(nan_f64.is_nan());
 
         // Regular floats still work
-        let num_f32 = Numeric::from(3.14f32);
+        let num_f32 = Numeric::from(std::f32::consts::PI);
         assert!(!num_f32.is_nan());
 
-        let num_f64 = Numeric::from(2.718281828f64);
+        let num_f64 = Numeric::from(std::f64::consts::E);
         assert!(!num_f64.is_nan());
     }
 
