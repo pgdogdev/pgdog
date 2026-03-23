@@ -5,25 +5,48 @@ use sqlx::{Connection, Executor, PgConnection};
 
 #[tokio::test]
 #[serial]
-async fn test_auth() {
+async fn test_auth_types() {
     let admin = admin_sqlx().await;
-    let bad_password = "postgres://pgdog:skjfhjk23h4234@127.0.0.1:6432/pgdog";
+    let good = "postgres://pgdog:pgdog@127.0.0.1:6432/pgdog";
+    let bad = "postgres://pgdog:wrong@127.0.0.1:6432/pgdog";
+    let none = "postgres://pgdog@127.0.0.1:6432/pgdog";
 
-    admin.execute("SET auth_type TO 'trust'").await.unwrap();
-    assert_setting_str("auth_type", "trust").await;
+    for auth_type in ["md5", "scram", "plain", "trust"] {
+        admin
+            .execute(format!("SET auth_type TO '{auth_type}'").as_str())
+            .await
+            .unwrap();
+        assert_setting_str("auth_type", auth_type).await;
 
-    let mut any_password = PgConnection::connect(bad_password).await.unwrap();
-    any_password.execute("SELECT 1").await.unwrap();
+        let mut conn = PgConnection::connect(good).await.unwrap();
+        conn.execute("SELECT 1").await.unwrap();
 
-    let mut empty_password = PgConnection::connect("postgres://pgdog@127.0.0.1:6432/pgdog")
-        .await
-        .unwrap();
-    empty_password.execute("SELECT 1").await.unwrap();
+        if auth_type == "trust" {
+            let mut conn = PgConnection::connect(bad).await.unwrap();
+            conn.execute("SELECT 1").await.unwrap();
 
-    admin.execute("SET auth_type TO 'scram'").await.unwrap();
-    assert_setting_str("auth_type", "scram").await;
+            let mut conn = PgConnection::connect(none).await.unwrap();
+            conn.execute("SELECT 1").await.unwrap();
+        } else {
+            let bad_err = PgConnection::connect(bad).await.err().unwrap();
+            assert!(
+                bad_err
+                    .to_string()
+                    .contains("password for user \"pgdog\" and database \"pgdog\" is wrong"),
+                "{auth_type}: bad password error: {bad_err}"
+            );
+            let none_err = PgConnection::connect(none).await.err().unwrap();
+            assert!(
+                none_err
+                    .to_string()
+                    .contains("password for user \"pgdog\" and database \"pgdog\" is wrong"),
+                "{auth_type}: no password error: {none_err}"
+            );
+        }
+    }
 
-    assert!(PgConnection::connect(bad_password).await.is_err());
+    // Reset config.
+    admin.execute("RELOAD").await.unwrap();
 }
 
 #[tokio::test]
