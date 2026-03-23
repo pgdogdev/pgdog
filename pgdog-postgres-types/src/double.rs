@@ -284,7 +284,7 @@ mod tests {
 
     #[test]
     fn test_double_sorting() {
-        let mut values = vec![
+        let mut values = [
             Double(10.0),
             Double(f64::NAN),
             Double(5.0),

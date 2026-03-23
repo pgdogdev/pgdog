@@ -682,7 +682,6 @@ mod test {
             }];
 
             let shards = (0..2)
-                .into_iter()
                 .map(|number| {
                     Shard::new(ShardConfig {
                         number,

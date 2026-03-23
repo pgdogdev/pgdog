@@ -459,7 +459,7 @@ mod test {
             panic!("Expected Bind message");
         }
 
-        assert_eq!(splice.get(0).unwrap().messages.last().unwrap().code(), 'H');
+        assert_eq!(splice.first().unwrap().messages.last().unwrap().code(), 'H');
         assert_eq!(
             splice
                 .iter()

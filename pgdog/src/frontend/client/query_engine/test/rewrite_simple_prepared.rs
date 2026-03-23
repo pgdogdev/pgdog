@@ -7,7 +7,7 @@ use super::prelude::*;
 
 async fn run_test(client: &mut Client, messages: &[ProtocolMessage]) -> Vec<ProtocolMessage> {
     client.client_request = ClientRequest::from(messages.to_vec());
-    let mut engine = QueryEngine::from_client(&client).unwrap();
+    let mut engine = QueryEngine::from_client(client).unwrap();
     let mut context = QueryEngineContext::new(client);
 
     assert!(engine.parse_and_rewrite(&mut context).await.unwrap());

@@ -229,7 +229,7 @@ mod test {
         assert_eq!(original.len(), 0);
 
         for _ in 0..(5 * 25 * 1000) {
-            original.put_u8('S' as u8);
+            original.put_u8(b'S');
             original.put_i32(4);
 
             let sync = original.split_to(5);

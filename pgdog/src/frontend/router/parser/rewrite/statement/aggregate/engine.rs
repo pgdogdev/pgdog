@@ -327,7 +327,7 @@ mod tests {
             let stmt = select(&parsed);
             Aggregate::parse(stmt)
         };
-        let output = AggregatesRewrite::default().rewrite_select(&mut parsed, &aggregate);
+        let output = AggregatesRewrite.rewrite_select(&mut parsed, &aggregate);
         (parsed, output)
     }
 

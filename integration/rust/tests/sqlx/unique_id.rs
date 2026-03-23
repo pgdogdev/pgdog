@@ -121,11 +121,7 @@ async fn test_unique_id_bit_layout_matches_rust() {
         "timestamp should be positive (after epoch)"
     );
     // Timestamp should be close to current time (within 5 seconds)
-    let diff = if extracted_timestamp > expected_elapsed {
-        extracted_timestamp - expected_elapsed
-    } else {
-        expected_elapsed - extracted_timestamp
-    };
+    let diff = extracted_timestamp.abs_diff(expected_elapsed);
     assert!(
         diff < 5000,
         "timestamp {} should be close to expected {} (diff: {}ms)",
@@ -188,11 +184,7 @@ async fn test_unique_id_bit_layout_matches_rust() {
         .unwrap()
         .as_millis() as u64;
     let expected_elapsed = now_ms - PGDOG_EPOCH;
-    let pgdog_diff = if pgdog_timestamp > expected_elapsed {
-        pgdog_timestamp - expected_elapsed
-    } else {
-        expected_elapsed - pgdog_timestamp
-    };
+    let pgdog_diff = pgdog_timestamp.abs_diff(expected_elapsed);
     assert!(
         pgdog_diff < 5000,
         "pgdog timestamp {} should be close to expected {} (diff: {}ms)",

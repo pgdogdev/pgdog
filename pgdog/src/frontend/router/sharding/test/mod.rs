@@ -176,7 +176,6 @@ async fn test_shard_by_range() {
     table.data_type = DataType::Bigint;
     table.mapping = Mapping::new(
         &(0..3)
-            .into_iter()
             .map(|s| ShardedMapping {
                 kind: ShardedMappingKind::Range,
                 start: Some(FlexibleType::Integer(s * 33)),
@@ -233,12 +232,10 @@ async fn test_shard_by_list() {
     table.data_type = DataType::Bigint;
     table.mapping = Mapping::new(
         &(0..3)
-            .into_iter()
             .map(|s| ShardedMapping {
                 kind: ShardedMappingKind::List,
                 values: (s * 10..((s + 1) * 10))
-                    .into_iter()
-                    .map(|v| FlexibleType::Integer(v))
+                    .map(FlexibleType::Integer)
                     .collect::<HashSet<_>>(),
                 shard: s as usize,
                 ..Default::default()
@@ -301,15 +298,15 @@ async fn test_shard_by_uuid_list() {
 
     let ddl_queries = vec![
         Query::new("CREATE TABLE test_shard_uuid_list (id UUID) PARTITION BY LIST(id)"),
-        Query::new(&format!(
+        Query::new(format!(
             "CREATE TABLE test_shard_uuid_list_0 PARTITION OF test_shard_uuid_list FOR VALUES IN ({})",
             shard_0_uuids.iter().map(|u| format!("'{}'", u)).collect::<Vec<_>>().join(", ")
         )),
-        Query::new(&format!(
+        Query::new(format!(
             "CREATE TABLE test_shard_uuid_list_1 PARTITION OF test_shard_uuid_list FOR VALUES IN ({})",
             shard_1_uuids.iter().map(|u| format!("'{}'", u)).collect::<Vec<_>>().join(", ")
         )),
-        Query::new(&format!(
+        Query::new(format!(
             "CREATE TABLE test_shard_uuid_list_2 PARTITION OF test_shard_uuid_list FOR VALUES IN ({})",
             shard_2_uuids.iter().map(|u| format!("'{}'", u)).collect::<Vec<_>>().join(", ")
         )),
@@ -389,7 +386,7 @@ async fn test_shard_by_list_with_default() {
     // Create mapping with explicit lists and a default shard
     let mut table = ShardedTable::default();
     table.data_type = DataType::Bigint;
-    table.mapping = Mapping::new(&vec![
+    table.mapping = Mapping::new(&[
         ShardedMapping {
             kind: ShardedMappingKind::List,
             values: [0, 1, 2].into_iter().map(FlexibleType::Integer).collect(),

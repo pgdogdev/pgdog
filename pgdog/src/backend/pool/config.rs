@@ -210,7 +210,7 @@ mod test {
         assert_eq!(Some(Duration::from_millis(5)), config.statement_timeout);
         assert_eq!(PoolerMode::Session, config.pooler_mode);
         assert_eq!(Duration::from_millis(5), config.idle_timeout);
-        assert_eq!(true, config.read_only);
+        assert!(config.read_only);
     }
 
     #[test]

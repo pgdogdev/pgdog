@@ -362,7 +362,7 @@ async fn show_server_memory_reports_memory_stats() {
         .await
         .expect("show server memory execution failed");
 
-    assert!(messages.len() >= 1, "expected at least row description");
+    assert!(!messages.is_empty(), "expected at least row description");
 
     let row_description = RowDescription::from_bytes(messages[0].payload())
         .expect("row description message should parse");
@@ -419,7 +419,7 @@ async fn show_client_memory_reports_memory_stats() {
         .await
         .expect("show client memory execution failed");
 
-    assert!(messages.len() >= 1, "expected at least row description");
+    assert!(!messages.is_empty(), "expected at least row description");
 
     let row_description = RowDescription::from_bytes(messages[0].payload())
         .expect("row description message should parse");

@@ -55,12 +55,9 @@ fn test_omni_round_robin() {
         let mut test = QueryParserTest::new();
         let command = test.execute(vec![Query::new(q).into()]);
 
-        match command {
-            Command::Query(query) => {
-                assert!(matches!(query.shard(), Shard::Direct(_)));
-                omni_round_robin.insert(query.shard().clone());
-            }
-            _ => {}
+        if let Command::Query(query) = command {
+            assert!(matches!(query.shard(), Shard::Direct(_)));
+            omni_round_robin.insert(query.shard().clone());
         }
     }
 
@@ -78,12 +75,9 @@ fn test_omni_sticky() {
     for _ in 0..10 {
         let command = test.execute(vec![Query::new(q).into()]);
 
-        match command {
-            Command::Query(query) => {
-                assert!(matches!(query.shard(), Shard::Direct(_)));
-                omni_sticky.insert(query.shard().clone());
-            }
-            _ => {}
+        if let Command::Query(query) = command {
+            assert!(matches!(query.shard(), Shard::Direct(_)));
+            omni_sticky.insert(query.shard().clone());
         }
     }
 

@@ -950,7 +950,7 @@ mod tests {
 
     #[test]
     fn test_nan_sorting() {
-        let mut values = vec![
+        let mut values = [
             Numeric::from(10),
             Numeric::nan(),
             Numeric::from(5),
@@ -1032,11 +1032,11 @@ mod tests {
             // Encode to binary
             let encoded = original_numeric
                 .encode(Format::Binary)
-                .expect(&format!("Failed to encode {}", test_value));
+                .unwrap_or_else(|_| panic!("Failed to encode {}", test_value));
 
             // Decode back
             let decoded_numeric = Numeric::decode(&encoded, Format::Binary)
-                .expect(&format!("Failed to decode {}", test_value));
+                .unwrap_or_else(|_| panic!("Failed to decode {}", test_value));
 
             // Verify roundtrip
             assert_eq!(

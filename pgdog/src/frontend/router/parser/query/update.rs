@@ -126,12 +126,9 @@ mod tests {
             if let Some(NodeEnum::ResTarget(res)) = &target.node {
                 if let Some(val) = &res.val {
                     let value = Value::try_from(&val.node).unwrap();
-                    match value {
-                        Value::String(s) => {
-                            assert_eq!(s, "50.00");
-                            found_string = true;
-                        }
-                        _ => {}
+                    if let Value::String(s) = value {
+                        assert_eq!(s, "50.00");
+                        found_string = true;
                     }
                 }
             }

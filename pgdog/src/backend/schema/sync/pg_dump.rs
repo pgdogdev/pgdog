@@ -1276,7 +1276,7 @@ ALTER TABLE ONLY public.users
 
 \unrestrict nu6jB5ogH2xGMn2dB3dMyMbSZ2PsVDqB2IaWK6zZVjngeba0UrnmxMy6s63SwzR
 "#;
-        let _parse = pg_query::parse(&PgDump::clean(&dump)).unwrap();
+        let _parse = pg_query::parse(&PgDump::clean(dump)).unwrap();
     }
 
     #[test]
@@ -1618,7 +1618,7 @@ ALTER TABLE ONLY orders ATTACH PARTITION orders_2024 FOR VALUES FROM ('2024-01-0
         // Find the parent table statement
         let parent_stmt = statements
             .iter()
-            .find(|s| (&**s).contains("orders") && !(&**s).contains("orders_2024"))
+            .find(|s| s.contains("orders") && !s.contains("orders_2024"))
             .expect("should find parent table");
 
         // Parent should have id and user_id converted to bigint
@@ -1637,7 +1637,7 @@ ALTER TABLE ONLY orders ATTACH PARTITION orders_2024 FOR VALUES FROM ('2024-01-0
         // Find the child table statement
         let child_stmt = statements
             .iter()
-            .find(|s| (&**s).contains("orders_2024"))
+            .find(|s| s.contains("orders_2024"))
             .expect("should find child table");
 
         // Child should also have id and user_id converted to bigint

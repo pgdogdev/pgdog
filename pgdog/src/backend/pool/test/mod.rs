@@ -408,7 +408,7 @@ async fn test_prepared_statements_limit() {
         guard
             .send(
                 &vec![
-                    Parse::named(&format!("__pgdog_{}", id), "SELECT $1::bigint").into(),
+                    Parse::named(format!("__pgdog_{}", id), "SELECT $1::bigint").into(),
                     Sync.into(),
                 ]
                 .into(),
@@ -450,7 +450,7 @@ async fn test_prepared_statements_limit() {
         guard
             .send(
                 &vec![
-                    Parse::named(&format!("__pgdog_{}", id), "SELECT $1::bigint").into(),
+                    Parse::named(format!("__pgdog_{}", id), "SELECT $1::bigint").into(),
                     Sync.into(),
                 ]
                 .into(),

@@ -21,7 +21,6 @@ mod insert {
         });
 
         let values = (0..5)
-            .into_iter()
             .map(|_| {
                 let val = rng().random::<i64>();
                 (format!("'val_{}'", val), val)

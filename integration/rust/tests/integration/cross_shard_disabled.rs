@@ -31,7 +31,7 @@ async fn test_cross_shard_disabled() {
 
     // Not sharded DB.
     sqlx::query("SELECT * FROM sharded")
-        .fetch_optional(conns.get(0).unwrap())
+        .fetch_optional(conns.first().unwrap())
         .await
         .unwrap();
 

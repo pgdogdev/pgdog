@@ -442,9 +442,7 @@ mod test {
             .execute("DROP PUBLICATION test_slot_replication")
             .await;
         let _ = server
-            .execute(format!(
-                "SELECT pg_drop_replication_slot(test_slot_replication)"
-            ))
+            .execute("SELECT pg_drop_replication_slot(test_slot_replication)".to_string())
             .await;
         server
             .execute(
@@ -478,14 +476,13 @@ mod test {
 
                 if let Some(message) = message {
                     match message.clone() {
-                        ReplicationData::CopyData(copy_data) => match copy_data.xlog_data() {
-                            Some(xlog_data) => {
+                        ReplicationData::CopyData(copy_data) => {
+                            if let Some(xlog_data) = copy_data.xlog_data() {
                                 if let Some(XLogPayload::Commit(_)) = xlog_data.payload() {
                                     slot.stop_replication().await?;
                                 }
                             }
-                            _ => (),
-                        },
+                        }
                         ReplicationData::CopyDone => (),
                     }
                 } else {
