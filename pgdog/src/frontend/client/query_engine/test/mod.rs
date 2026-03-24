@@ -12,6 +12,7 @@ mod close_parse_global_cache;
 mod extended;
 mod fatal_error;
 mod graceful_disconnect;
+mod graceful_shutdown;
 mod lock_session;
 mod omni;
 pub mod prelude;

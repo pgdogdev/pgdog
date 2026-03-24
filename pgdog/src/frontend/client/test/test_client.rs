@@ -252,7 +252,7 @@ impl Drop for TestClient {
 /// Interaction happens purely over the wire.
 pub struct SpawnedClient {
     pub conn: TcpStream,
-    _handle: tokio::task::JoinHandle<()>,
+    handle: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl SpawnedClient {
@@ -265,7 +265,7 @@ impl SpawnedClient {
 
         Self {
             conn,
-            _handle: handle,
+            handle: Some(handle),
         }
     }
 
@@ -289,6 +289,13 @@ impl SpawnedClient {
 
     pub async fn read_until(&mut self, code: char) -> Vec<Message> {
         read_until(&mut self.conn, code).await.unwrap()
+    }
+
+    /// Wait for the client task to finish.
+    pub async fn join(&mut self) {
+        if let Some(handle) = self.handle.take() {
+            handle.await.unwrap();
+        }
     }
 }
 
