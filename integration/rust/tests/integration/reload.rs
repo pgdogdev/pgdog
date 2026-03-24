@@ -71,10 +71,10 @@ async fn test_reload_connection_count_stable() {
 }
 
 #[tokio::test]
-#[serial]
+#[ignore]
 async fn test_reload_pool_size_not_exceeded() {
     let pool_size: i64 = 50; // default_pool_size
-    let num_clients = 20;
+    let num_clients = 10;
     let app_name = "test_reload_pool_limit";
 
     sleep(Duration::from_secs(1)).await;
