@@ -8,7 +8,7 @@ pub use crate::{
         ClientRequest,
     },
     net::{
-        bind::Parameter, Bind, Execute, Flush, Parameters, Parse, Protocol, ProtocolMessage, Query,
-        Stream, Sync,
+        bind::Parameter, Bind, Close, Describe, Execute, Flush, Parameters, Parse, Protocol,
+        ProtocolMessage, Query, Stream, Sync, Terminate,
     },
 };

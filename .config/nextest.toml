@@ -2,3 +2,6 @@
 fail-fast = true
 test-threads = 1
 default-filter = "not package(rust)"
+
+[profile.default]
+slow-timeout = "15s"

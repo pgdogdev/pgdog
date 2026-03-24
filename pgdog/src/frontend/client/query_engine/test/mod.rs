@@ -7,10 +7,16 @@ use crate::{
     net::{Parameters, Stream},
 };
 
+mod close_parse;
+mod close_parse_global_cache;
+mod extended;
 mod fatal_error;
+mod graceful_disconnect;
 mod lock_session;
 mod omni;
 pub mod prelude;
+mod prepared_syntax_error;
+mod replicas;
 mod rewrite_extended;
 mod rewrite_insert_split;
 mod rewrite_offset;
@@ -20,6 +26,7 @@ mod set;
 mod set_schema_sharding;
 mod sharded;
 mod spliced;
+mod transaction_state;
 
 pub(super) fn test_client() -> Client {
     load_test();

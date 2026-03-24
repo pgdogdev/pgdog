@@ -136,7 +136,6 @@ impl TestClient {
     }
 
     /// New client with replicas but not sharded.
-    #[allow(dead_code)]
     pub(crate) async fn new_replicas(params: Parameters) -> Self {
         load_test_replicas();
         Self::new(params).await
@@ -200,10 +199,8 @@ impl TestClient {
 
     /// Process a request.
     pub(crate) async fn try_process(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        self.engine.set_test_mode(false);
         self.client.buffer(self.engine.stats().state).await?;
         self.client.client_messages(&mut self.engine).await?;
-        self.engine.set_test_mode(true);
 
         Ok(())
     }
@@ -270,6 +267,11 @@ impl SpawnedClient {
             conn,
             _handle: handle,
         }
+    }
+
+    pub async fn new_default(params: Parameters) -> Self {
+        crate::config::load_test();
+        Self::new(params).await
     }
 
     pub async fn new_sharded(params: Parameters) -> Self {
