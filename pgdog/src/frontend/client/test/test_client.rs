@@ -136,7 +136,6 @@ impl TestClient {
     }
 
     /// New client with replicas but not sharded.
-    #[allow(dead_code)]
     pub(crate) async fn new_replicas(params: Parameters) -> Self {
         load_test_replicas();
         Self::new(params).await
@@ -200,10 +199,8 @@ impl TestClient {
 
     /// Process a request.
     pub(crate) async fn try_process(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        self.engine.set_test_mode(false);
         self.client.buffer(self.engine.stats().state).await?;
         self.client.client_messages(&mut self.engine).await?;
-        self.engine.set_test_mode(true);
 
         Ok(())
     }
@@ -255,7 +252,7 @@ impl Drop for TestClient {
 /// Interaction happens purely over the wire.
 pub struct SpawnedClient {
     pub conn: TcpStream,
-    _handle: tokio::task::JoinHandle<()>,
+    handle: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl SpawnedClient {
@@ -268,8 +265,13 @@ impl SpawnedClient {
 
         Self {
             conn,
-            _handle: handle,
+            handle: Some(handle),
         }
+    }
+
+    pub async fn new_default(params: Parameters) -> Self {
+        crate::config::load_test();
+        Self::new(params).await
     }
 
     pub async fn new_sharded(params: Parameters) -> Self {
@@ -287,6 +289,13 @@ impl SpawnedClient {
 
     pub async fn read_until(&mut self, code: char) -> Vec<Message> {
         read_until(&mut self.conn, code).await.unwrap()
+    }
+
+    /// Wait for the client task to finish.
+    pub async fn join(&mut self) {
+        if let Some(handle) = self.handle.take() {
+            handle.await.unwrap();
+        }
     }
 }
 

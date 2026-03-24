@@ -47,7 +47,6 @@ pub struct Client {
     comms: ClientComms,
     admin: bool,
     streaming: bool,
-    shutdown: bool,
     prepared_statements: PreparedStatements,
     transaction: Option<TransactionType>,
     timeouts: Timeouts,
@@ -306,7 +305,6 @@ impl Client {
             timeouts: Timeouts::from_config(&config.config.general),
             client_request: ClientRequest::new(),
             stream_buffer: MessageBuffer::new(config.config.memory.message_buffer),
-            shutdown: false,
             sticky: Sticky::from_params(&params),
             connect_params: params,
         }))
@@ -338,7 +336,6 @@ impl Client {
             timeouts: Timeouts::from_config(&config().config.general),
             client_request: ClientRequest::new(),
             stream_buffer: MessageBuffer::new(4096),
-            shutdown: false,
             sticky: Sticky::from_params(&connect_params),
             params: connect_params,
         }
@@ -380,18 +377,20 @@ impl Client {
     /// Run the client.
     async fn run(&mut self) -> Result<(), Error> {
         let shutdown = self.comms.shutting_down();
-        let mut offline;
         let mut query_engine = QueryEngine::from_client(self)?;
-        let mut terminating = false;
 
         loop {
-            offline = (self.comms.offline() && !self.admin || self.shutdown)
-                && query_engine.can_disconnect();
-            if offline {
-                break;
-            }
+            // Check if we should be shutting down.
+            let offline = self.comms.offline();
+            // Check that there are no active transactions.
+            let query_engine_done = query_engine.can_disconnect();
 
-            if terminating && query_engine.can_disconnect() {
+            // If query engine is idle and we requested shutdown, we're done.
+            if query_engine_done && offline {
+                // Send shutdown notification to client.
+                self.stream
+                    .send_flush(&ErrorResponse::shutting_down())
+                    .await?;
                 break;
             }
 
@@ -399,9 +398,7 @@ impl Client {
 
             select! {
                 _ = shutdown.notified() => {
-                    if query_engine.can_disconnect() {
-                        continue; // Wake up task.
-                    }
+                    continue; // Wake up task.
                 }
 
                 // Async messages.
@@ -410,7 +407,7 @@ impl Client {
                     self.server_message(&mut query_engine, message).await?;
                 }
 
-                buffer = self.buffer(client_state), if !terminating => {
+                buffer = self.buffer(client_state) => {
                     let event = buffer?;
 
                     // Only send requests to the backend if they are complete.
@@ -420,23 +417,12 @@ impl Client {
                         }
 
                     match event {
-                        BufferEvent::DisconnectAbrupt => break,
-                        BufferEvent::DisconnectGraceful => {
-                            if query_engine.can_disconnect() {
-                                break;
-                            }
-                            terminating = true;
-                        }
+                        // Client disconnected, we're done.
+                        BufferEvent::DisconnectAbrupt | BufferEvent::DisconnectGraceful => break,
                         BufferEvent::HaveRequest => (),
                     }
                 }
             }
-        }
-
-        if offline && !self.shutdown {
-            self.stream
-                .send_flush(&ErrorResponse::shutting_down())
-                .await?;
         }
 
         Ok(())
@@ -547,7 +533,6 @@ impl Client {
 
             // Terminate (B & F).
             if message.code() == 'X' {
-                self.shutdown = true;
                 return Ok(BufferEvent::DisconnectGraceful);
             } else {
                 let message = ProtocolMessage::from_bytes(message.to_bytes()?)?;

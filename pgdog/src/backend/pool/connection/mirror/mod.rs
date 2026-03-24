@@ -96,11 +96,6 @@ impl Mirror {
         let mut query_engine =
             QueryEngine::new(&params, &ClientComms::new(&BackendKeyData::new()), false)?;
 
-        // Mirror must read server responses to keep the connection synchronized,
-        // so disable test_mode which skips reading responses.
-        #[cfg(test)]
-        query_engine.set_test_mode(false);
-
         // Mirror traffic handler.
         let mut mirror = Self::new(&params, &config);
 

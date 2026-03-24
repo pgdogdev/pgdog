@@ -1,4 +1,5 @@
 import asyncio
+import asyncpg
 import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
@@ -100,4 +101,47 @@ async def test_idle_in_transaction_timeout():
     """Verify that pgdog forwards PostgreSQL's idle_in_transaction_session_timeout error
     under concurrent load."""
     tasks = [_run_idle_in_transaction() for _ in range(WORKERS)]
+    await asyncio.gather(*tasks)
+
+
+async def _disconnect_mid_transaction():
+    """Single worker: begin a transaction, disconnect, verify rollback."""
+    conn = await asyncpg.connect(
+        user="pgdog",
+        password="pgdog",
+        database="pgdog",
+        host="127.0.0.1",
+        port=6432,
+    )
+
+    # Start a transaction and grab the backend pid
+    await conn.execute("BEGIN")
+    pid = await conn.fetchval("SELECT pg_backend_pid()")
+    await conn.execute("SELECT 1")
+
+    # Disconnect abruptly (without COMMIT/ROLLBACK)
+    await conn.close()
+
+    # Give pgdog a moment to clean up
+    await asyncio.sleep(0.5)
+
+    # Check via direct connection that the backend is idle (transaction was rolled back)
+    direct = direct_sync()
+    direct.autocommit = True
+    cur = direct.cursor()
+    cur.execute(
+        "SELECT state FROM pg_stat_activity WHERE pid = %s",
+        (pid,),
+    )
+    row = cur.fetchone()
+    direct.close()
+
+    assert row is not None, f"expected backend {pid} to still exist in the pool"
+    assert row[0] == "idle", f"expected backend {pid} to be idle (rolled back), got: {row[0]}"
+
+
+@pytest.mark.asyncio
+async def test_disconnect_mid_transaction_rolls_back():
+    """Disconnect in the middle of a transaction and verify pgdog rolls it back."""
+    tasks = [_disconnect_mid_transaction() for _ in range(WORKERS)]
     await asyncio.gather(*tasks)
