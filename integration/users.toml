@@ -57,6 +57,7 @@ schema_admin = true
 name = "pgdog"
 database = "failover"
 password = "pgdog"
+pool_size = 250
 
 [[users]]
 name = "pgdog"
@@ -91,3 +92,9 @@ pool_size = 5
 database = "pgdog"
 min_pool_size = 1
 statement_timeout = 45_999
+
+[[users]]
+database = "failover_primary"
+name = "pgdog"
+pool_size = 100
+password = "pgdog"

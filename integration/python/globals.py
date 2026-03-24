@@ -55,15 +55,17 @@ async def sharded_async():
 
 
 async def normal_async():
+    return await normal_async_db("pgdog")
+
+async def normal_async_db(database):
     return await asyncpg.connect(
         user="pgdog",
         password="pgdog",
-        database="pgdog",
+        database=database,
         host="127.0.0.1",
         port=6432,
         statement_cache_size=250,
     )
-
 async def schema_sharded_async():
     return await asyncpg.connect(
         user="pgdog",

@@ -113,6 +113,13 @@ database_name = "pgdog"
 read_only = true
 
 [[databases]]
+name = "failover_primary"
+host = "127.0.0.1"
+port = 5435
+role = "primary"
+database_name = "pgdog"
+
+[[databases]]
 name = "single_sharded_list"
 host = "127.0.0.1"
 port = 5432
