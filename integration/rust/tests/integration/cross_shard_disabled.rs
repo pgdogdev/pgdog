@@ -14,6 +14,26 @@ async fn test_cross_shard_disabled() {
 
     let conns = connections_sqlx().await;
 
+    // Ensure the sharded table exists on both shards (may have been
+    // dropped by cleanup_split_table in a previous test run).
+    let sharded = conns.get(1).unwrap();
+    for shard in [0, 1] {
+        let ddl = format!(
+            "/* pgdog_shard: {shard} */ CREATE TABLE IF NOT EXISTS sharded \
+             (id BIGINT PRIMARY KEY, value TEXT)"
+        );
+        sharded.execute(ddl.as_str()).await.unwrap();
+    }
+    conns
+        .get(0)
+        .unwrap()
+        .execute(
+            "CREATE TABLE IF NOT EXISTS sharded \
+             (id BIGINT PRIMARY KEY, value TEXT)",
+        )
+        .await
+        .unwrap();
+
     for conn in &conns {
         sqlx::query("SELECT * FROM sharded")
             .fetch_optional(conn)

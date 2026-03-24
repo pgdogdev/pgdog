@@ -52,26 +52,26 @@ read_only = true
 
 [[databases]]
 name = "pgdog_sharded"
-host = "localhost"
+host = "127.0.0.1"
 database_name = "shard_0"
 shard = 0
 
 [[databases]]
 name = "pgdog_sharded"
-host = "localhost"
+host = "127.0.0.1"
 database_name = "shard_1"
 shard = 1
 
 [[databases]]
 name = "pgdog_sharded"
-host = "localhost"
+host = "127.0.0.1"
 database_name = "shard_0"
 shard = 0
 role = "replica"
 
 [[databases]]
 name = "pgdog_sharded"
-host = "localhost"
+host = "127.0.0.1"
 database_name = "shard_1"
 shard = 1
 role = "replica"

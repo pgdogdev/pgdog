@@ -1,0 +1,146 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tenant-setup-script
+  namespace: pgdog-test
+  labels:
+    app: tenant-setup
+data:
+  create-tenants.sh: |
+    #!/bin/bash
+    set -euo pipefail
+
+    TENANT_COUNT="${TENANT_COUNT:-2000}"
+
+    echo "Creating pgdog role..."
+    psql -h postgres -U postgres -d postgres --no-psqlrc -q <<'EOSQL'
+    DO $$
+    BEGIN
+      IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'pgdog') THEN
+        CREATE ROLE pgdog WITH LOGIN PASSWORD 'pgdog' SUPERUSER;
+      END IF;
+    END $$;
+    EOSQL
+
+    echo "Creating tenant_template with schema and seed data..."
+    psql -h postgres -U postgres -d postgres --no-psqlrc -q \
+      -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = 'tenant_template' AND pid <> pg_backend_pid();" 2>/dev/null || true
+    psql -h postgres -U postgres -d postgres --no-psqlrc -q \
+      -c "DROP DATABASE IF EXISTS tenant_template;"
+    psql -h postgres -U postgres -d postgres --no-psqlrc -q \
+      -c "CREATE DATABASE tenant_template OWNER pgdog;"
+
+    psql -h postgres -U postgres -d tenant_template --no-psqlrc -q <<'EOSQL'
+    CREATE TABLE IF NOT EXISTS users (
+        id BIGSERIAL PRIMARY KEY,
+        name TEXT NOT NULL,
+        email TEXT NOT NULL,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE TABLE IF NOT EXISTS orders (
+        id BIGSERIAL PRIMARY KEY,
+        user_id BIGINT REFERENCES users(id),
+        total NUMERIC(10,2) NOT NULL,
+        status TEXT DEFAULT 'pending',
+        created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX idx_orders_user_id ON orders(user_id);
+    CREATE INDEX idx_orders_status ON orders(status);
+    INSERT INTO users (name, email)
+    SELECT 'user_' || i, 'user_' || i || '@example.com'
+    FROM generate_series(1, 100) AS i;
+    INSERT INTO orders (user_id, total, status)
+    SELECT
+        (random() * 99 + 1)::int,
+        (random() * 1000)::numeric(10,2),
+        (ARRAY['pending', 'completed', 'cancelled'])[floor(random() * 3 + 1)::int]
+    FROM generate_series(1, 1000) AS i;
+    EOSQL
+
+    echo "Creating ${TENANT_COUNT} tenant databases from template..."
+    BATCH_SIZE=50
+    created=0
+    for (( i=1; i<=TENANT_COUNT; i++ )); do
+      DB="tenant_${i}"
+      if ! psql -h postgres -U postgres -d postgres --no-psqlrc -tAq \
+        -c "SELECT 1 FROM pg_database WHERE datname = '${DB}'" | grep -q 1; then
+        psql -h postgres -U postgres -d postgres --no-psqlrc -q \
+          -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = 'tenant_template' AND pid <> pg_backend_pid();" 2>/dev/null || true
+        psql -h postgres -U postgres -d postgres --no-psqlrc -q \
+          -c "CREATE DATABASE ${DB} TEMPLATE tenant_template OWNER pgdog;"
+        ((created++)) || true
+      fi
+      if (( i % BATCH_SIZE == 0 )); then
+        echo "  [${i}/${TENANT_COUNT}] created=${created}"
+      fi
+    done
+
+    ACTUAL=$(psql -h postgres -U postgres -d postgres --no-psqlrc -tAq \
+      -c "SELECT count(*) FROM pg_database WHERE datname LIKE 'tenant_%' AND datname != 'tenant_template';")
+    echo "Done. ${ACTUAL} tenant databases exist (${created} newly created)."
+
+    echo "Creating ${TENANT_COUNT} tenant users for passthrough auth tests..."
+    USER_SQL=""
+    GRANT_SQL=""
+    for (( i=1; i<=TENANT_COUNT; i++ )); do
+      USER_SQL+="DO \$\$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'tenant_user_${i}') THEN CREATE ROLE tenant_user_${i} WITH LOGIN PASSWORD 'pass_${i}'; END IF; END \$\$;"
+      GRANT_SQL+="GRANT CONNECT ON DATABASE tenant_1 TO tenant_user_${i};"
+    done
+    psql -h postgres -U postgres -d postgres --no-psqlrc -q -c "$USER_SQL"
+    psql -h postgres -U postgres -d postgres --no-psqlrc -q -c "$GRANT_SQL"
+
+    # Grant table access inside tenant_1 for test users
+    TABLE_GRANT=""
+    for (( i=1; i<=TENANT_COUNT; i++ )); do
+      TABLE_GRANT+="GRANT SELECT, INSERT, UPDATE ON ALL TABLES IN SCHEMA public TO tenant_user_${i}; GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO tenant_user_${i};"
+    done
+    psql -h postgres -U postgres -d tenant_1 --no-psqlrc -q -c "$TABLE_GRANT"
+    echo "Done. ${TENANT_COUNT} tenant users created."
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: tenant-setup
+  namespace: pgdog-test
+  labels:
+    app: tenant-setup
+spec:
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        app: tenant-setup
+    spec:
+      restartPolicy: OnFailure
+      initContainers:
+        - name: wait-for-postgres
+          image: postgres:16
+          command:
+            - sh
+            - -c
+            - |
+              until pg_isready -h postgres -U postgres; do
+                echo "Waiting for postgres..."
+                sleep 2
+              done
+      containers:
+        - name: create-tenants
+          image: postgres:16
+          env:
+            - name: PGPASSWORD
+              value: postgres
+            - name: TENANT_COUNT
+              value: "100"
+          command:
+            - bash
+            - /scripts/create-tenants.sh
+          volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+              readOnly: true
+      volumes:
+        - name: scripts
+          configMap:
+            name: tenant-setup-script
+            defaultMode: 0755

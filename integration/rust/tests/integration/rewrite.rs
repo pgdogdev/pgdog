@@ -295,7 +295,9 @@ async fn test_error_disconnects_and_update_works() -> Result<(), Box<dyn std::er
     admin.execute("SET two_phase_commit TO true").await?;
     admin.execute("SET two_phase_commit_auto TO true").await?;
 
-    conn.execute("TRUNCATE TABLE sharded").await?;
+    // Ensure the table exists (may have been dropped by cleanup_split_table
+    // in a previous test).
+    prepare_split_table(&conn).await;
 
     for _ in 0..250 {
         conn.execute("INSERT INTO sharded (id, value) VALUES (pgdog.unique_id(), 'test')")

@@ -64,6 +64,8 @@ async fn concurrent_same_db() {
         "at least 18/20 concurrent connections to same db should succeed, got {successes}"
     );
 
+    // Allow pool registration to settle before verifying.
+    sleep(Duration::from_millis(200)).await;
     let pools = pool_databases().await;
     assert!(pools.contains(db), "SHOW POOLS should list a pool for {db}");
 
@@ -100,6 +102,7 @@ async fn concurrent_different_dbs() {
         "all 20 different-db connections should succeed"
     );
 
+    sleep(Duration::from_millis(200)).await;
     let pools = pool_databases().await;
     for i in 0..20 {
         let db = format!("tenant_diff_{i}");
@@ -138,6 +141,7 @@ async fn concurrent_mixed() {
     let successes = results.iter().filter(|r| matches!(r, Ok(Ok(())))).count();
     assert_eq!(successes, 50, "all 50 mixed connections should succeed");
 
+    sleep(Duration::from_millis(200)).await;
     let pools = pool_databases().await;
     let mixed_pools: HashSet<_> = pools
         .iter()

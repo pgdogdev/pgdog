@@ -15,7 +15,7 @@ def generate_pgdog_toml(args: argparse.Namespace) -> str:
         default_pool_size = {args.pool_size}
         min_pool_size = 0
         pooler_mode = "transaction"
-        idle_timeout = 60000
+        idle_timeout = 10000
         checkout_timeout = 5000
         healthcheck_interval = 30000
         healthcheck_timeout = 5000
@@ -28,6 +28,11 @@ def generate_pgdog_toml(args: argparse.Namespace) -> str:
         openmetrics_namespace = "pgdog"
         max_wildcard_pools = {args.max_wildcard_pools}
         wildcard_pool_idle_timeout = {args.wildcard_idle_timeout}
+
+        [admin]
+        name = "admin"
+        user = "admin"
+        password = "admin"
 
         [[databases]]
         name = "*"

@@ -163,6 +163,38 @@ pub(crate) fn evict_idle_wildcard_pools() {
     info!("evicted {} idle wildcard pool(s)", to_evict.len());
 }
 
+/// Remove a single dynamically-created wildcard pool so it can be
+/// recreated with updated credentials (e.g. after a password rotation).
+///
+/// Returns `true` if the pool existed and was removed.
+pub(crate) fn remove_wildcard_pool(user: &str, database: &str) -> bool {
+    let _lock = lock();
+    let dbs = databases();
+    let key = User {
+        user: user.to_string(),
+        database: database.to_string(),
+    };
+
+    if !dbs.dynamic_pools.contains(&key) {
+        return false;
+    }
+
+    let mut new_dbs = (*dbs).clone();
+    if let Some(cluster) = new_dbs.databases.remove(&key) {
+        cluster.shutdown();
+        new_dbs.dynamic_pools.remove(&key);
+        new_dbs.wildcard_pool_count = new_dbs.wildcard_pool_count.saturating_sub(1);
+        DATABASES.store(Arc::new(new_dbs));
+        debug!(
+            "removed wildcard pool for credential rotation: user=\"{}\" database=\"{}\"",
+            user, database
+        );
+        true
+    } else {
+        false
+    }
+}
+
 /// Shutdown all databases.
 pub fn shutdown() {
     databases().shutdown();
@@ -2348,5 +2380,74 @@ password = "testpass"
         assert!(databases.exists(("alice", "real_db")));
         // The wildcard entry must NOT produce a static pool.
         assert!(!databases.exists(("*", "*")));
+    }
+
+    #[tokio::test]
+    async fn test_remove_wildcard_pool() {
+        // Verify that remove_wildcard_pool removes a dynamically-created pool
+        // so it can be recreated with updated credentials.
+        let mut config = Config::default();
+        config.databases = vec![Database {
+            name: "*".to_string(),
+            host: "wildcard-host".to_string(),
+            role: Role::Primary,
+            ..Default::default()
+        }];
+
+        let config_and_users = ConfigAndUsers {
+            config,
+            users: crate::config::Users {
+                users: vec![crate::config::User {
+                    name: "*".to_string(),
+                    database: "*".to_string(),
+                    password: Some("secret".to_string()),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let dbs = from_config(&config_and_users);
+        DATABASES.store(Arc::new(dbs));
+
+        // Create a wildcard pool with initial password.
+        let result = add_wildcard_pool("bob", "tenant_1", Some("old_pass"));
+        assert!(result.is_ok());
+        let cluster = result.unwrap();
+        assert!(cluster.is_some(), "wildcard pool should have been created");
+        let cluster = cluster.unwrap();
+        assert_eq!(cluster.password(), "old_pass");
+
+        assert!(super::databases().exists(("bob", "tenant_1")));
+        assert_eq!(super::databases().wildcard_pool_count(), 1);
+        assert!(super::databases().dynamic_pools().contains(&User {
+            user: "bob".to_string(),
+            database: "tenant_1".to_string(),
+        }));
+
+        // Remove the pool.
+        let removed = remove_wildcard_pool("bob", "tenant_1");
+        assert!(removed, "pool should have been removed");
+
+        // Pool should be gone.
+        assert!(!super::databases().exists(("bob", "tenant_1")));
+        assert_eq!(super::databases().wildcard_pool_count(), 0);
+        assert!(!super::databases().dynamic_pools().contains(&User {
+            user: "bob".to_string(),
+            database: "tenant_1".to_string(),
+        }));
+
+        // Recreate with new password — simulates credential rotation.
+        let result = add_wildcard_pool("bob", "tenant_1", Some("new_pass"));
+        assert!(result.is_ok());
+        let cluster = result.unwrap();
+        assert!(cluster.is_some(), "pool should be recreated");
+        let cluster = cluster.unwrap();
+        assert_eq!(
+            cluster.password(),
+            "new_pass",
+            "recreated pool must use the new password"
+        );
     }
 }

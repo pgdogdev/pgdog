@@ -1,0 +1,30 @@
+[general]
+host = "0.0.0.0"
+port = 6432
+workers = 4
+default_pool_size = 7
+min_pool_size = 0
+pooler_mode = "transaction"
+idle_timeout = 10000
+checkout_timeout = 5000
+healthcheck_interval = 30000
+healthcheck_timeout = 5000
+connect_timeout = 5000
+query_timeout = 30000
+load_balancing_strategy = "random"
+prepared_statements = "extended"
+passthrough_auth = "enabled_plain"
+openmetrics_port = 9090
+openmetrics_namespace = "pgdog"
+max_wildcard_pools = 400
+wildcard_pool_idle_timeout = 300
+
+[admin]
+name = "admin"
+user = "admin"
+password = "admin"
+
+[[databases]]
+name = "*"
+host = "127.0.0.1"
+port = 15432

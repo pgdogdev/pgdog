@@ -67,8 +67,11 @@ async fn pool_cap_basic() {
         Err(_) => { /* connection-level rejection is also acceptable */ }
     }
 
+    // Allow pool registration to settle before counting.
+    sleep(Duration::from_millis(200)).await;
     assert_eq!(count_wildcard_pools("tenant_cap_").await, 5);
 
+    drop(clients);
     admin.simple_query("RELOAD").await.unwrap();
     sleep(Duration::from_millis(200)).await;
 }
@@ -107,6 +110,7 @@ async fn pool_cap_no_corruption() {
             .expect("existing wildcard pool should still work after cap rejection");
     }
 
+    drop(clients);
     admin.simple_query("RELOAD").await.unwrap();
     sleep(Duration::from_millis(200)).await;
 }
@@ -126,15 +130,20 @@ async fn pool_cap_after_eviction() {
         .unwrap();
     sleep(Duration::from_millis(200)).await;
 
-    // Connect and immediately drop so pools become idle.
-    for i in 1..=3 {
-        let db = format!("tenant_evict_{i}");
-        let client = connect_tenant(&db).await.unwrap();
-        client.simple_query("SELECT 1").await.unwrap();
+    // Connect, verify, then explicitly drop so pools become idle.
+    {
+        let mut clients = Vec::new();
+        for i in 1..=3 {
+            let db = format!("tenant_evict_{i}");
+            let client = connect_tenant(&db).await.unwrap();
+            client.simple_query("SELECT 1").await.unwrap();
+            clients.push(client);
+        }
+        drop(clients);
     }
 
-    // Wait for the eviction loop (timeout=2s + margin).
-    sleep(Duration::from_secs(4)).await;
+    // Wait for connections to close + eviction loop (timeout=2s + margin).
+    sleep(Duration::from_secs(5)).await;
 
     // Old pools should be evicted; new ones should succeed.
     for i in 4..=6 {

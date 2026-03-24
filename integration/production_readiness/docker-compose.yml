@@ -1,0 +1,110 @@
+services:
+  postgres_primary:
+    image: postgres:16
+    ports:
+      - "${POSTGRES_PRIMARY_PORT:-15432}:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-postgres}"
+    volumes:
+      - ./setup/init.sql:/docker-entrypoint-initdb.d/01-init.sql
+    # Many tenant databases need adequate shared memory
+    shm_size: 2g
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 8g
+    command:
+      - postgres
+      - -c
+      - max_connections=500
+      - -c
+      - shared_buffers=2GB
+      - -c
+      - effective_cache_size=6GB
+      - -c
+      - work_mem=8MB
+      - -c
+      - maintenance_work_mem=256MB
+      - -c
+      - wal_buffers=16MB
+      - -c
+      - checkpoint_completion_target=0.9
+      - -c
+      - random_page_cost=1.1
+      - -c
+      - effective_io_concurrency=200
+      - -c
+      - max_worker_processes=2
+      - -c
+      - max_parallel_workers_per_gather=1
+      - -c
+      - max_parallel_workers=2
+      - -c
+      - log_min_duration_statement=1000
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - pgdog_test
+
+  # Standalone instance for read/write split testing (not actual replication)
+  postgres_replica:
+    image: postgres:16
+    ports:
+      - "${POSTGRES_REPLICA_PORT:-15433}:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-postgres}"
+    volumes:
+      - ./setup/init.sql:/docker-entrypoint-initdb.d/01-init.sql
+    shm_size: 2g
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 8g
+    command:
+      - postgres
+      - -c
+      - max_connections=500
+      - -c
+      - shared_buffers=2GB
+      - -c
+      - effective_cache_size=6GB
+      - -c
+      - work_mem=8MB
+      - -c
+      - maintenance_work_mem=256MB
+      - -c
+      - wal_buffers=16MB
+      - -c
+      - checkpoint_completion_target=0.9
+      - -c
+      - random_page_cost=1.1
+      - -c
+      - effective_io_concurrency=200
+      - -c
+      - max_worker_processes=2
+      - -c
+      - max_parallel_workers_per_gather=1
+      - -c
+      - max_parallel_workers=2
+      - -c
+      - default_transaction_read_only=on
+      - -c
+      - log_min_duration_statement=1000
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - pgdog_test
+
+networks:
+  pgdog_test:
+    driver: bridge

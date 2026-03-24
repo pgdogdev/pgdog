@@ -37,6 +37,15 @@ fn rotated_key_path() -> PathBuf {
 #[tokio::test]
 #[serial]
 async fn tls_acceptor_swaps_after_sighup() {
+    // Ensure PgDog has loaded the current on-disk config (a previous test's
+    // ConfigGuard may not have given the SIGHUP enough time to take effect).
+    let admin = admin_tokio().await;
+    admin
+        .simple_query("RELOAD")
+        .await
+        .expect("admin reload before sighup test");
+    sleep(Duration::from_millis(500)).await;
+
     let mut guard = ConfigGuard::new().expect("config guard");
 
     let initial_cert = fetch_server_cert_der().await.expect("initial cert");
@@ -183,7 +192,7 @@ impl Drop for ConfigGuard {
     fn drop(&mut self) {
         let _ = fs::write(&self.path, &self.original);
         let _ = unsafe { libc::kill(self.pid, libc::SIGHUP) };
-        std::thread::sleep(Duration::from_millis(500));
+        std::thread::sleep(Duration::from_millis(1000));
     }
 }
 

@@ -197,27 +197,40 @@ impl Client {
         };
 
         let password = if admin {
-            admin_password
+            admin_password.to_owned()
         } else {
-            conn.cluster()?.password()
+            conn.cluster()?.password().to_owned()
         };
 
         let mut auth_ok = false;
 
-        if let Some(ref passthrough_password) = passthrough_password {
-            if passthrough_password != password && auth_type != &AuthType::Trust {
-                stream.fatal(ErrorResponse::auth(user, database)).await?;
-                return Ok(None);
-            } else {
-                auth_ok = true;
+        if let Some(ref client_password) = passthrough_password {
+            if client_password.as_str() != password && auth_type != &AuthType::Trust {
+                // Password changed — remove the old pool and recreate with the
+                // new credentials so both the proxy cache and backend Addresses
+                // pick up the rotated password.
+                databases::remove_wildcard_pool(user, database);
+                conn = match Connection::new(user, database, admin, &passthrough_password) {
+                    Ok(c) => c,
+                    Err(_) => {
+                        stream.fatal(ErrorResponse::auth(user, database)).await?;
+                        return Ok(None);
+                    }
+                };
+                let new_password = conn.cluster()?.password();
+                if client_password.as_str() != new_password && auth_type != &AuthType::Trust {
+                    stream.fatal(ErrorResponse::auth(user, database)).await?;
+                    return Ok(None);
+                }
             }
+            auth_ok = true;
         }
 
         let auth_type = &config.config.general.auth_type;
         if !auth_ok {
             auth_ok = match auth_type {
                 AuthType::Md5 => {
-                    let md5 = md5::Client::new(user, password);
+                    let md5 = md5::Client::new(user, &password);
                     stream.send_flush(&md5.challenge()).await?;
                     let password = Password::from_bytes(stream.read().await?.to_bytes()?)?;
                     if let Password::PasswordMessage { response } = password {
@@ -230,7 +243,7 @@ impl Client {
                 AuthType::Scram => {
                     stream.send_flush(&Authentication::scram()).await?;
 
-                    let scram = Server::new(password);
+                    let scram = Server::new(&password);
                     let res = scram.handle(&mut stream).await;
                     matches!(res, Ok(true))
                 }
@@ -241,7 +254,7 @@ impl Client {
                         .await?;
                     let response = stream.read().await?;
                     let response = Password::from_bytes(response.to_bytes()?)?;
-                    response.password() == Some(password)
+                    response.password() == Some(&password)
                 }
 
                 AuthType::Trust => true,
