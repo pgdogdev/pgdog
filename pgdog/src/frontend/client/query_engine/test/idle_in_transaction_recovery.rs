@@ -37,7 +37,7 @@ async fn test_idle_in_transaction_partial_recovery() {
     // This won't fire because we'll be stuck inside the extended exchange.
     client
         .send_simple(Query::new(
-            "SET idle_in_transaction_session_timeout TO '1ms'",
+            "SET idle_in_transaction_session_timeout TO '10ms'",
         ))
         .await;
     client.read_until('Z').await.unwrap();
