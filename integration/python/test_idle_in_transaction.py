@@ -2,9 +2,37 @@ import asyncio
 import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
-from globals import direct_sync
+from globals import admin, direct_sync
 
 WORKERS = 10
+
+
+@pytest.fixture(autouse=True)
+def set_idle_timeout_on_user():
+    """ALTER USER to set idle_in_transaction_session_timeout, then RECONNECT."""
+    direct = direct_sync()
+    direct.autocommit = True
+    direct.execute(
+        "ALTER USER pgdog SET idle_in_transaction_session_timeout = '500ms'"
+    )
+    direct.close()
+
+    # Tell pgdog to reconnect so the new setting takes effect
+    adm = admin()
+    adm.cursor().execute("RECONNECT")
+    adm.close()
+
+    yield
+
+    # Reset the user setting
+    direct = direct_sync()
+    direct.autocommit = True
+    direct.execute("ALTER USER pgdog RESET idle_in_transaction_session_timeout")
+    direct.close()
+
+    adm = admin()
+    adm.cursor().execute("RECONNECT")
+    adm.close()
 
 
 async def _run_idle_in_transaction():
@@ -18,10 +46,17 @@ async def _run_idle_in_transaction():
 
     async with session_factory() as session:
         async with session.begin():
-            await session.execute(
-                text("SET idle_in_transaction_session_timeout = '500ms'")
-            )
-            pid = (await session.execute(text("SELECT pg_backend_pid()"))).scalar()
+            # Confirm the timeout is set on this connection
+            row = (
+                await session.execute(
+                    text("SHOW idle_in_transaction_session_timeout")
+                )
+            ).scalar()
+            assert row == "500ms", f"expected timeout to be 500ms, got: {row}"
+
+            pid = (
+                await session.execute(text("SELECT pg_backend_pid()"))
+            ).scalar()
 
             # Run a query so the connection is now idle *in* the transaction
             await session.execute(text("SELECT 1"))
