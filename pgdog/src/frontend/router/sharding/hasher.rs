@@ -61,7 +61,7 @@ mod test {
         for (id, expected) in ids.iter().zip(shards.iter()) {
             let hash = Hasher::Sha1.bigint(*id as i64);
             let shard = hash % 12;
-            assert_eq!(shard as u64, *expected as u64);
+            assert_eq!(shard, *expected as u64);
         }
     }
 }

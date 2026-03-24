@@ -17,10 +17,10 @@ pub async fn get_stat(name: &str) -> std::result::Result<i64, Box<dyn std::error
     let metrics = reqwest::get("http://127.0.0.1:9090/metrics").await.unwrap();
 
     for line in metrics.text().await.unwrap().split("\n") {
-        if line.starts_with(name) {
-            if let Some(val) = line.split(" ").last() {
-                return Ok(val.parse()?);
-            }
+        if line.starts_with(name)
+            && let Some(val) = line.split(" ").last()
+        {
+            return Ok(val.parse()?);
         }
     }
 

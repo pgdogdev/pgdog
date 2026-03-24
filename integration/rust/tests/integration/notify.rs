@@ -127,7 +127,7 @@ async fn test_notify_only_delivered_after_transaction_commit() {
     // Wait for the NOTIFY to be delivered after commit
     let result = timeout(Duration::from_secs(5), async {
         loop {
-            if messages.lock().len() > 0 {
+            if !messages.lock().is_empty() {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(10)).await;

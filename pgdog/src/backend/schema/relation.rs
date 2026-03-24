@@ -122,7 +122,6 @@ mod test {
     async fn test_load_relations() {
         let pool = pool();
         let mut conn = pool.get(&Request::default()).await.unwrap();
-        let relations = Relation::load(&mut conn).await.unwrap();
-        println!("{:#?}", relations);
+        let _relations = Relation::load(&mut conn).await.unwrap();
     }
 }

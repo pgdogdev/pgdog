@@ -950,7 +950,7 @@ mod tests {
 
     #[test]
     fn test_nan_sorting() {
-        let mut values = vec![
+        let mut values = [
             Numeric::from(10),
             Numeric::nan(),
             Numeric::from(5),
@@ -979,10 +979,10 @@ mod tests {
         assert!(nan_f64.is_nan());
 
         // Regular floats still work
-        let num_f32 = Numeric::from(3.14f32);
+        let num_f32 = Numeric::from(std::f32::consts::PI);
         assert!(!num_f32.is_nan());
 
-        let num_f64 = Numeric::from(2.718281828f64);
+        let num_f64 = Numeric::from(std::f64::consts::E);
         assert!(!num_f64.is_nan());
     }
 
@@ -1032,11 +1032,11 @@ mod tests {
             // Encode to binary
             let encoded = original_numeric
                 .encode(Format::Binary)
-                .expect(&format!("Failed to encode {}", test_value));
+                .unwrap_or_else(|_| panic!("Failed to encode {}", test_value));
 
             // Decode back
             let decoded_numeric = Numeric::decode(&encoded, Format::Binary)
-                .expect(&format!("Failed to decode {}", test_value));
+                .unwrap_or_else(|_| panic!("Failed to decode {}", test_value));
 
             // Verify roundtrip
             assert_eq!(

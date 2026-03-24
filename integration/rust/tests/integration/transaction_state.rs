@@ -52,11 +52,10 @@ async fn test_transaction_state_transitions() {
                     break;
                 }
                 _ = sleep(Duration::from_millis(10)) => {
-                    if let Some(state) = fetch_client_state(&admin, APP_NAME).await {
-                        if state == "active" {
+                    if let Some(state) = fetch_client_state(&admin, APP_NAME).await
+                        && state == "active" {
                             saw_active = true;
                         }
-                    }
 
                     if Instant::now() >= deadline {
                         panic!("timed out waiting for client to become active");
@@ -99,10 +98,10 @@ async fn fetch_client_state(admin: &Pool<Postgres>, application_name: &str) -> O
 async fn wait_for_client_state(admin: &Pool<Postgres>, application_name: &str, expected: &str) {
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
-        if let Some(state) = fetch_client_state(admin, application_name).await {
-            if state == expected {
-                return;
-            }
+        if let Some(state) = fetch_client_state(admin, application_name).await
+            && state == expected
+        {
+            return;
         }
 
         if Instant::now() >= deadline {

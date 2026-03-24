@@ -1928,7 +1928,6 @@ pub mod test {
             if msg.code() == 'Z' {
                 break;
             }
-            println!("{:?}", msg);
         }
     }
 
@@ -2447,9 +2446,9 @@ pub mod test {
                 };
                 let messages_to_read = rng.random_range(0..expected_messages.len());
 
-                for i in 0..messages_to_read {
+                for expected in expected_messages.iter().take(messages_to_read) {
                     let msg = server.read().await.unwrap();
-                    assert_eq!(msg.code(), expected_messages[i]);
+                    assert_eq!(msg.code(), *expected);
                 }
             }
 

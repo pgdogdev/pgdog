@@ -1,3 +1,5 @@
+#![allow(clippy::print_stdout)]
+
 use crate::frontend::router::sharding::distance_simd_rust;
 use crate::net::messages::{data_types::Float, Vector};
 use std::time::{Duration, Instant};

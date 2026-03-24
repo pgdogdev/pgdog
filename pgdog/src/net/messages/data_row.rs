@@ -237,6 +237,13 @@ impl Protocol for DataRow {
     }
 }
 
+impl From<DataRow> for Lsn {
+    fn from(value: DataRow) -> Self {
+        let value = value.get::<Lsn>(0, Format::Text);
+        value.unwrap_or_default()
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -290,12 +297,5 @@ mod test {
         assert_eq!(dr.len(), 2);
         assert_eq!(dr.get::<String>(0, Format::Text).unwrap(), "a");
         assert_eq!(dr.get::<String>(1, Format::Text).unwrap(), "c");
-    }
-}
-
-impl From<DataRow> for Lsn {
-    fn from(value: DataRow) -> Self {
-        let value = value.get::<Lsn>(0, Format::Text);
-        value.unwrap_or_default()
     }
 }

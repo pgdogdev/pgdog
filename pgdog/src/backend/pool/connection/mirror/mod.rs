@@ -202,7 +202,6 @@ mod test {
         let stats2 = Arc::new(Mutex::new(MirrorStats::default()));
         let mut handle = MirrorHandler::new(tx.clone(), 0.5, stats2);
         let dropped = (0..25)
-            .into_iter()
             .map(|_| handle.send(&vec![].into()) && handle.send(&vec![].into()) && handle.flush())
             .filter(|s| !s)
             .count();

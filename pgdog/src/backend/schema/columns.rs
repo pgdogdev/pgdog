@@ -141,8 +141,7 @@ mod test {
     async fn test_load_columns() {
         let pool = pool();
         let mut conn = pool.get(&Request::default()).await.unwrap();
-        let columns = Column::load(&mut conn).await.unwrap();
-        println!("{:#?}", columns);
+        let _columns = Column::load(&mut conn).await.unwrap();
     }
 
     #[tokio::test]

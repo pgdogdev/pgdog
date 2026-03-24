@@ -191,6 +191,6 @@ mod test {
         let neg_numeric_node = &tuple[1];
         let value = Value::try_from(&neg_numeric_node.node).unwrap();
 
-        assert_eq!(value, Value::Float(-987654321.123456789));
+        assert_eq!(value, Value::Float(-987_654_321.123_456_8));
     }
 }

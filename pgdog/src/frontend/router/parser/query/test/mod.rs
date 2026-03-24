@@ -1,3 +1,5 @@
+#![allow(clippy::print_stdout)]
+
 use std::ops::Deref;
 
 use crate::{
@@ -57,8 +59,8 @@ fn parse_query(query: &str) -> Command {
     let params = Parameters::default();
     let context =
         RouterContext::new(&client_request, &cluster, &params, None, Sticky::new_test()).unwrap();
-    let command = query_parser.parse(context).unwrap().clone();
-    command
+
+    query_parser.parse(context).unwrap().clone()
 }
 
 macro_rules! command {
@@ -297,13 +299,9 @@ fn test_omni() {
 
     for _ in 0..10 {
         let command = parse_query(q);
-        match command {
-            Command::Query(query) => {
-                assert!(matches!(query.shard(), Shard::Direct(_)));
-                omni_round_robin.insert(query.shard().clone());
-            }
-
-            _ => {}
+        if let Command::Query(query) = command {
+            assert!(matches!(query.shard(), Shard::Direct(_)));
+            omni_round_robin.insert(query.shard().clone());
         }
     }
 
@@ -316,13 +314,9 @@ fn test_omni() {
 
     for _ in 0..10 {
         let command = parse_query(q);
-        match command {
-            Command::Query(query) => {
-                assert!(matches!(query.shard(), Shard::Direct(_)));
-                omni_sticky.insert(query.shard().clone());
-            }
-
-            _ => {}
+        if let Command::Query(query) = command {
+            assert!(matches!(query.shard(), Shard::Direct(_)));
+            omni_sticky.insert(query.shard().clone());
         }
     }
 

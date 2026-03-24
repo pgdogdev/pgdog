@@ -516,9 +516,11 @@ mod test {
 
     #[test]
     fn test_paused_pool_behavior() {
-        let mut inner = Inner::default();
-        inner.online = true;
-        inner.paused = true;
+        let mut inner = Inner {
+            online: true,
+            paused: true,
+            ..Default::default()
+        };
 
         let server = Box::new(Server::default());
         let server_id = *server.id();
@@ -539,9 +541,11 @@ mod test {
 
     #[test]
     fn test_online_pool_accepts_connections() {
-        let mut inner = Inner::default();
-        inner.online = true;
-        inner.paused = false;
+        let mut inner = Inner {
+            online: true,
+            paused: false,
+            ..Default::default()
+        };
 
         let server = Box::new(Server::default());
         let server_id = *server.id();
@@ -564,8 +568,10 @@ mod test {
 
     #[test]
     fn test_server_error_handling() {
-        let mut inner = Inner::default();
-        inner.online = true;
+        let mut inner = Inner {
+            online: true,
+            ..Default::default()
+        };
 
         let server = Box::new(Server::new_error());
         let server_id = *server.id();
@@ -591,8 +597,10 @@ mod test {
 
     #[test]
     fn test_should_create_with_waiting_clients() {
-        let mut inner = Inner::default();
-        inner.online = true;
+        let mut inner = Inner {
+            online: true,
+            ..Default::default()
+        };
         inner.config.max = 5;
         inner.config.min = 1;
 
@@ -617,8 +625,10 @@ mod test {
 
     #[test]
     fn test_should_create_below_minimum() {
-        let mut inner = Inner::default();
-        inner.online = true;
+        let mut inner = Inner {
+            online: true,
+            ..Default::default()
+        };
         inner.config.min = 2;
         inner.config.max = 5;
 
@@ -639,8 +649,10 @@ mod test {
 
     #[test]
     fn test_should_not_create_at_max() {
-        let mut inner = Inner::default();
-        inner.online = true;
+        let mut inner = Inner {
+            online: true,
+            ..Default::default()
+        };
         inner.config.max = 3;
 
         assert!(!inner.full());
@@ -693,8 +705,10 @@ mod test {
 
     #[test]
     fn test_close_old_ignores_minimum() {
-        let mut inner = Inner::default();
-        inner.online = true;
+        let mut inner = Inner {
+            online: true,
+            ..Default::default()
+        };
         inner.config.min = 1;
         inner.config.max_age = Duration::from_millis(60_000);
 
@@ -742,8 +756,10 @@ mod test {
 
     #[test]
     fn test_max_age_enforcement_on_checkin() {
-        let mut inner = Inner::default();
-        inner.online = true;
+        let mut inner = Inner {
+            online: true,
+            ..Default::default()
+        };
         inner.config.max_age = Duration::from_millis(60_000);
 
         let server = Box::new(Server::default());
@@ -945,8 +961,10 @@ mod test {
 
     #[test]
     fn test_should_create_for_waiting_clients_even_above_minimum() {
-        let mut inner = Inner::default();
-        inner.online = true;
+        let mut inner = Inner {
+            online: true,
+            ..Default::default()
+        };
         inner.config.min = 1;
         inner.config.max = 5;
 
@@ -991,8 +1009,10 @@ mod test {
 
     #[test]
     fn test_should_not_create_offline() {
-        let mut inner = Inner::default();
-        inner.online = false;
+        let mut inner = Inner {
+            online: false,
+            ..Default::default()
+        };
         inner.config.min = 2;
 
         assert!(inner.total() < inner.min());
@@ -1096,8 +1116,10 @@ mod test {
 
     #[test]
     fn test_same_client_checks_out_two_connections() {
-        let mut inner = Inner::default();
-        inner.online = true;
+        let mut inner = Inner {
+            online: true,
+            ..Default::default()
+        };
         inner.config.max = 2;
         inner.config.min = 0;
 

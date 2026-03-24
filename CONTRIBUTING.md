@@ -13,10 +13,13 @@ Contributions are welcome. If you see a bug, feel free to submit a PR with a fix
 1. Run cargo build in the project directory.
 2. Install Postgres (all Pg versions supported).
 3. Add user `pgdog` with password `pgdog`.
-4. Some tests used prepared transactions. Enable them with `ALTER SYSTEM SET max_prepared_transactions TO 1000;` sql command and restart Postgres.
-5. Run the setup script `bash integration/setup.sh`.
-6. Run the tests `cargo nextest run --profile dev`. If a test fails, try running it directly.
-7. Run the integration tests `bash integration/run.sh` or exact integration test with `bash integration/go/run.sh`.
+4. Some tests use additional features of Postgres. To enable them run the following commands in psql:
+   - `ALTER SYSTEM SET max_prepared_transactions TO 1000;`
+   - `ALTER SYSTEM SET wal_level TO logical;`
+5. Restart Postgres to apply the changes.
+6. Run the setup script `bash integration/setup.sh`.
+7. Run the tests `cargo nextest run --profile dev`. If a test fails, try running it directly.
+8. Run the integration tests `bash integration/run.sh` or exact integration test with `bash integration/go/run.sh`.
 
 ## Coding
 

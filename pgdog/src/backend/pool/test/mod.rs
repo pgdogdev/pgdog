@@ -263,7 +263,7 @@ async fn test_benchmark_pool() {
         handle.await.unwrap();
     }
     let duration = start.elapsed();
-    println!("bench: {}ms", duration.as_millis());
+    eprintln!("bench: {}ms", duration.as_millis());
 }
 
 #[tokio::test]
@@ -408,7 +408,7 @@ async fn test_prepared_statements_limit() {
         guard
             .send(
                 &vec![
-                    Parse::named(&format!("__pgdog_{}", id), "SELECT $1::bigint").into(),
+                    Parse::named(format!("__pgdog_{}", id), "SELECT $1::bigint").into(),
                     Sync.into(),
                 ]
                 .into(),
@@ -450,7 +450,7 @@ async fn test_prepared_statements_limit() {
         guard
             .send(
                 &vec![
-                    Parse::named(&format!("__pgdog_{}", id), "SELECT $1::bigint").into(),
+                    Parse::named(format!("__pgdog_{}", id), "SELECT $1::bigint").into(),
                     Sync.into(),
                 ]
                 .into(),

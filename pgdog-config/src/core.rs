@@ -991,23 +991,25 @@ tables = ["my_table"]
 
     #[test]
     fn test_cutover_swaps_database_configs() {
-        let mut config = Config::default();
-        config.databases = vec![
-            Database {
-                name: "source_db".to_string(),
-                host: "source-host".to_string(),
-                port: 5432,
-                role: Role::Primary,
-                ..Default::default()
-            },
-            Database {
-                name: "destination_db".to_string(),
-                host: "destination-host".to_string(),
-                port: 5433,
-                role: Role::Primary,
-                ..Default::default()
-            },
-        ];
+        let mut config = Config {
+            databases: vec![
+                Database {
+                    name: "source_db".to_string(),
+                    host: "source-host".to_string(),
+                    port: 5432,
+                    role: Role::Primary,
+                    ..Default::default()
+                },
+                Database {
+                    name: "destination_db".to_string(),
+                    host: "destination-host".to_string(),
+                    port: 5433,
+                    role: Role::Primary,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
 
         // After cutover: looking up source_db returns destination's config
         config.cutover("source_db", "destination_db");

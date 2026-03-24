@@ -102,7 +102,7 @@ impl QueryParserTest {
     }
 
     /// Startup parameters.
-
+    ///
     /// Execute a request and return the command (panics on error).
     pub(crate) fn execute(&mut self, request: Vec<ProtocolMessage>) -> Command {
         self.try_execute(request).expect("execute failed")

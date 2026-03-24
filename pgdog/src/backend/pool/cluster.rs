@@ -23,7 +23,7 @@ use crate::{
         Schema, ShardedTables,
     },
     config::{
-        ConnectionRecovery, General, MultiTenant, PoolerMode, ReadWriteSplit, ReadWriteStrategy,
+        ConnectionRecovery, MultiTenant, PoolerMode, ReadWriteSplit, ReadWriteStrategy,
         ShardedTable, User,
     },
     net::{messages::BackendKeyData, Query},
@@ -158,14 +158,16 @@ pub struct ClusterConfig<'a> {
 
 impl<'a> ClusterConfig<'a> {
     pub(crate) fn new(
-        general: &'a General,
+        config: &'a crate::config::Config,
         user: &'a User,
         shards: &'a [ClusterShardConfig],
         sharded_tables: ShardedTables,
-        multi_tenant: &'a Option<MultiTenant>,
         sharded_schemas: ShardedSchemas,
-        rewrite: &'a Rewrite,
     ) -> Self {
+        let general = &config.general;
+        let multi_tenant = config.multi_tenant();
+        let rewrite = &config.rewrite;
+
         let pooler_mode = shards
             .first()
             .map(|shard| shard.pooler_mode())
@@ -682,7 +684,6 @@ mod test {
             }];
 
             let shards = (0..2)
-                .into_iter()
                 .map(|number| {
                     Shard::new(ShardConfig {
                         number,

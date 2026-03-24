@@ -762,7 +762,7 @@ mod test {
             special: None,
         };
 
-        let datum = Datum::Timestamp(ts.clone());
+        let datum = Datum::Timestamp(ts);
         let encoded = datum.encode(Format::Binary).unwrap();
 
         let decoded = Timestamp::decode(&encoded, Format::Binary).unwrap();

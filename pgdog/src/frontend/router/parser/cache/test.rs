@@ -1,3 +1,5 @@
+#![allow(clippy::print_stdout)]
+
 use pg_query::{normalize, parse};
 use tokio::spawn;
 
