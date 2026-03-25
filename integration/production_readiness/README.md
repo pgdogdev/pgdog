@@ -50,6 +50,17 @@ bash load/passthrough_auth.sh --user-count 100
 bash load/pool_pressure.sh --pool-size 5 --connections 50
 bash load/sustained_load.sh --duration 10 --clients 50
 
+# New realistic tests
+bash load/pool_lifecycle.sh --idle-timeout 10 --cycles 3 --batch-size 50
+bash load/connection_storm.sh --storm-size 200 --parallel 100
+bash load/idle_in_transaction.sh --target-db tenant_1
+bash load/graceful_shutdown.sh --pgdog-bin /path/to/pgdog --config-dir config
+
+# Fault injection tests (require toxiproxy running)
+bash setup/configure_toxiproxy.sh
+bash load/backend_failure.sh --target-db tenant_1
+bash load/network_latency.sh --latency 5 --jitter 2
+
 # 6. Validate observability
 bash validate/check_metrics.sh
 bash validate/check_pools.sh
@@ -88,6 +99,12 @@ kubectl delete namespace pgdog-test
 | **Passthrough auth** | Auth delegation to Postgres | Correct creds succeed, wrong creds fail |
 | **Pool pressure** | Behavior when pools are exhausted | Clear timeouts, recovery after pressure |
 | **Sustained load** | Memory stability over time | RSS growth <20% |
+| **Pool lifecycle** | Wildcard pool create→idle→evict→recreate | Pools evict, recreate works, stable memory |
+| **Connection storm** | Thundering herd on cold pools | ≥90% success, recovery after burst |
+| **Idle-in-transaction** | Pool blocking by held transactions | Queries queue/timeout, pool recovers |
+| **Backend failure** | Reconnect after reset/partition/slow | Recovery after each fault type |
+| **Network latency** | Behavior under injected latency | Timeouts work, throughput degrades gracefully |
+| **Graceful shutdown** | SIGTERM drain under active load | Process exits within grace period, no panic |
 | **Metrics check** | OpenMetrics endpoint accuracy | Valid Prometheus format, pool counts match |
 | **Admin pools** | Admin interface consistency | Pool states match expected |
 | **Pool cap** (Rust) | `max_wildcard_pools` enforcement | Clean rejection at limit, no corruption |
@@ -148,9 +165,14 @@ This test suite addresses the "Edge cases to test before production use" from `2
 
 - ✅ **Wildcard pool cap reached** → `pool_cap_saturation` test
 - ✅ **Concurrent first connections** → `concurrent_pool_creation` test
+- ✅ **Cold tenant reconnect after eviction** → `pool_lifecycle` churn test
+- ✅ **Backend failure / network partition** → `backend_failure` test (toxiproxy)
+- ✅ **Network latency impact** → `network_latency` test (toxiproxy)
+- ✅ **Graceful shutdown under load** → `graceful_shutdown` test
+- ✅ **Idle-in-transaction pool starvation** → `idle_in_transaction` test
+- ✅ **Thundering herd on cold pools** → `connection_storm` test
 - ⬜ Password rotation for materialized wildcard pools (future: extend passthrough_auth test)
 - ⬜ Reload after changing wildcard template (future: config reload test)
-- ⬜ Cold tenant reconnect after eviction (future: eviction churn test)
 
 ## Directory Structure
 
@@ -163,7 +185,8 @@ integration/production_readiness/
 ├── setup/
 │   ├── init.sql              # Tenant database schema template
 │   ├── generate_tenants.sh   # Create N tenant databases
-│   └── generate_config.py    # Generate PgDog wildcard config
+│   ├── generate_config.py    # Generate PgDog wildcard config
+│   └── configure_toxiproxy.sh # Create toxiproxy proxy for fault injection
 ├── config/                   # Generated PgDog config (gitignored)
 ├── load/
 │   ├── tenant_workload.sql   # pgbench workload per tenant
@@ -171,7 +194,13 @@ integration/production_readiness/
 │   ├── multi_tenant_bench.sh # pgbench multi-tenant load
 │   ├── passthrough_auth.sh   # Auth delegation test
 │   ├── pool_pressure.sh      # Pool exhaustion test
-│   └── sustained_load.sh     # Long-running soak test
+│   ├── sustained_load.sh     # Long-running soak test
+│   ├── pool_lifecycle.sh     # Wildcard pool churn (create/evict/recreate)
+│   ├── connection_storm.sh   # Thundering herd on cold pools
+│   ├── idle_in_transaction.sh # Transaction hold pool starvation
+│   ├── backend_failure.sh    # Backend reset/partition/slow (toxiproxy)
+│   ├── network_latency.sh    # Injected latency impact (toxiproxy)
+│   └── graceful_shutdown.sh  # SIGTERM drain under load
 ├── validate/
 │   ├── check_metrics.sh      # OpenMetrics validation
 │   ├── check_pools.sh        # Admin DB pool checks

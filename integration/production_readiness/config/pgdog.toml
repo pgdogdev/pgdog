@@ -16,8 +16,8 @@ prepared_statements = "extended"
 passthrough_auth = "enabled_plain"
 openmetrics_port = 9090
 openmetrics_namespace = "pgdog"
-max_wildcard_pools = 400
-wildcard_pool_idle_timeout = 300
+max_wildcard_pools = 0
+wildcard_pool_idle_timeout = 15
 
 [admin]
 name = "admin"

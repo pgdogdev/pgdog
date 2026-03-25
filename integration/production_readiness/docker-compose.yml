@@ -105,6 +105,20 @@ services:
     networks:
       - pgdog_test
 
+  # Toxiproxy for network fault injection (latency, partition, reset)
+  toxiproxy:
+    image: ghcr.io/shopify/toxiproxy:2.12.0
+    ports:
+      - "${TOXI_LISTEN_PORT:-15440}:5432"
+      - "${TOXI_API_PORT:-8474}:8474"
+    networks:
+      - pgdog_test
+    healthcheck:
+      test: ["CMD", "/toxiproxy-cli", "list"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
 networks:
   pgdog_test:
     driver: bridge

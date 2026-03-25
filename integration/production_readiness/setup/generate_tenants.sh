@@ -10,18 +10,23 @@ while [[ $# -gt 0 ]]; do
         --count) COUNT="$2"; shift 2 ;;
         --host)  HOST="$2";  shift 2 ;;
         --port)  PORT="$2";  shift 2 ;;
+        --quiet) QUIET=true; shift ;;
         *) echo "Unknown option: $1"; exit 1 ;;
     esac
 done
 
 PGCONN="postgresql://postgres:postgres@${HOST}:${PORT}/postgres"
 
+QUIET="${QUIET:-false}"
+
 created=0
 skipped=0
 start_time=$(date +%s)
 
-echo "Creating ${COUNT} tenant databases on ${HOST}:${PORT}..."
-echo "Using tenant_template as base (schema + seed data pre-applied)"
+log() { [ "$QUIET" != "true" ] && echo "$@" || true; }
+
+log "Creating ${COUNT} tenant databases on ${HOST}:${PORT}..."
+log "Using tenant_template as base (schema + seed data pre-applied)"
 
 # Verify template exists before bulk creation
 if ! psql "$PGCONN" -tAc "SELECT 1 FROM pg_database WHERE datname = 'tenant_template'" | grep -q 1; then
@@ -37,19 +42,19 @@ for i in $(seq 1 "$COUNT"); do
         ((skipped++)) || true
     else
         # Disconnect any sessions from template before cloning
-        psql "$PGCONN" -qc "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = 'tenant_template' AND pid <> pg_backend_pid();" 2>/dev/null || true
+        psql "$PGCONN" -qAtc "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = 'tenant_template' AND pid <> pg_backend_pid();" >/dev/null 2>&1 || true
         psql "$PGCONN" -qc "CREATE DATABASE ${dbname} TEMPLATE tenant_template OWNER pgdog;" 2>/dev/null
         ((created++)) || true
     fi
 
     if (( i % 100 == 0 )); then
         elapsed=$(( $(date +%s) - start_time ))
-        echo "  [${i}/${COUNT}] created=${created} skipped=${skipped} elapsed=${elapsed}s"
+        log "  [${i}/${COUNT}] created=${created} skipped=${skipped} elapsed=${elapsed}s"
     fi
 done
 
-echo ""
-echo "Creating test users for passthrough auth testing..."
+log ""
+log "Creating test users for passthrough auth testing..."
 
 user_sql=""
 for i in $(seq 1 100); do
@@ -63,7 +68,7 @@ done
 psql "$PGCONN" -qc "$user_sql"
 
 # Grant connect on all tenant databases to pgdog and test users
-echo "Granting access to tenant databases..."
+log "Granting access to tenant databases..."
 grant_sql=""
 for i in $(seq 1 "$COUNT"); do
     grant_sql+="GRANT CONNECT ON DATABASE tenant_${i} TO pgdog;"
@@ -82,10 +87,10 @@ for i in $(seq 1 100); do
 done
 
 elapsed=$(( $(date +%s) - start_time ))
-echo ""
-echo "=== Summary ==="
-echo "  Total requested: ${COUNT}"
-echo "  Created:         ${created}"
-echo "  Skipped:         ${skipped}"
-echo "  Test users:      100 (tenant_user_1..tenant_user_100)"
-echo "  Elapsed:         ${elapsed}s"
+log ""
+log "=== Summary ==="
+log "  Total requested: ${COUNT}"
+log "  Created:         ${created}"
+log "  Skipped:         ${skipped}"
+log "  Test users:      100 (tenant_user_1..tenant_user_100)"
+log "  Elapsed:         ${elapsed}s"

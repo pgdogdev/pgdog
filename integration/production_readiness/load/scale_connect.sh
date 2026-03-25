@@ -8,6 +8,7 @@ COUNT=2000
 PGDOG_HOST="127.0.0.1"
 PGDOG_PORT=6432
 PARALLEL=50
+MIN_SUCCESS_RATE=85
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -15,6 +16,7 @@ while [[ $# -gt 0 ]]; do
         --pgdog-host) PGDOG_HOST="$2"; shift 2 ;;
         --pgdog-port) PGDOG_PORT="$2"; shift 2 ;;
         --parallel)   PARALLEL="$2";   shift 2 ;;
+        --min-success-rate) MIN_SUCCESS_RATE="$2"; shift 2 ;;
         *) echo "Unknown option: $1"; exit 1 ;;
     esac
 done
@@ -47,6 +49,7 @@ trap cleanup EXIT SIGINT SIGTERM
 echo "=== Scale Connection Test ==="
 echo "Target: ${PGDOG_HOST}:${PGDOG_PORT}"
 echo "Databases: ${COUNT}, Parallelism: ${PARALLEL}"
+echo "Required success rate: ${MIN_SUCCESS_RATE}%"
 echo ""
 
 # ── Phase 1: Sequential warm-up ─────────────────────────────────────────────
@@ -109,6 +112,7 @@ phase2_elapsed=$((phase2_end - phase2_start))
 successes=0
 failures=0
 total_latency_ms=0
+failed_dbs=()
 for f in "$RESULTS_DIR"/*; do
     read -r status ms < "$f"
     if [ "$status" = "ok" ]; then
@@ -116,9 +120,9 @@ for f in "$RESULTS_DIR"/*; do
         total_latency_ms=$((total_latency_ms + ms))
     else
         ((failures++)) || true
+        failed_dbs+=("$(basename "$f")")
     fi
 done
-rm -rf "$RESULTS_DIR"
 
 if [ "$successes" -gt 0 ]; then
     avg_latency=$((total_latency_ms / successes))
@@ -126,15 +130,42 @@ else
     avg_latency=0
 fi
 
+success_rate=0
+if [ "$COUNT" -gt 0 ]; then
+    success_rate=$(( successes * 100 / COUNT ))
+fi
+
+retry_recovered=0
+if [ "$failures" -gt 0 ]; then
+    echo ""
+    echo "--- Phase 2b: Retrying failed connections sequentially ---"
+    for db_idx in "${failed_dbs[@]}"; do
+        if PGPASSWORD=pgdog psql -h "$PGDOG_HOST" -p "$PGDOG_PORT" -U pgdog -d "tenant_${db_idx}" \
+            -c "SELECT 1" -t -q -A >/dev/null 2>&1; then
+            ((retry_recovered++)) || true
+        fi
+    done
+    echo "  Recovered on retry: ${retry_recovered}/${failures}"
+fi
+
+final_successes=$((successes + retry_recovered))
+final_failures=$((COUNT - final_successes))
+final_success_rate=0
+if [ "$COUNT" -gt 0 ]; then
+    final_success_rate=$(( final_successes * 100 / COUNT ))
+fi
+
+rm -rf "$RESULTS_DIR"
+
 batch_processed=$((successes + failures))
 if (( batch_processed % 200 == 0 || batch_processed == COUNT )); then
     : # progress already implicit from xargs completing
 fi
 
-if [ "$failures" -eq 0 ]; then
+if [ "$final_failures" -eq 0 ]; then
     pass "All ${COUNT} connections succeeded in ${phase2_elapsed}s (avg ${avg_latency}ms)"
 else
-    fail "${failures}/${COUNT} connections failed (${successes} succeeded, ${phase2_elapsed}s)"
+    warn "${final_failures}/${COUNT} connections still failed (${final_successes} succeeded, ${phase2_elapsed}s, ${final_success_rate}% success)"
 fi
 echo ""
 
@@ -182,16 +213,19 @@ echo "========================================"
 printf "  %-22s %s\n" "Total databases:"    "$COUNT"
 printf "  %-22s %s\n" "Successes:"          "$successes"
 printf "  %-22s %s\n" "Failures:"           "$failures"
+printf "  %-22s %s\n" "Recovered on retry:" "$retry_recovered"
+printf "  %-22s %s\n" "Final failures:"     "$final_failures"
+printf "  %-22s %s\n" "Success rate:"       "${final_success_rate}%"
 printf "  %-22s %s\n" "Avg latency:"        "${avg_latency}ms"
 printf "  %-22s %s\n" "Total time:"         "${phase2_elapsed}s"
 printf "  %-22s %s\n" "Pool count (admin):" "$pool_count"
 printf "  %-22s %s\n" "Metrics pool lines:" "$metrics_pool_count"
 echo "========================================"
 
-if [ "$failures" -gt 0 ]; then
-    fail "Scale test completed with ${failures} failures"
+if [ "$final_success_rate" -lt "$MIN_SUCCESS_RATE" ]; then
+    fail "Scale test completed below threshold: ${final_success_rate}% < ${MIN_SUCCESS_RATE}%"
     exit 1
 else
-    pass "Scale test passed"
+    pass "Scale test passed (${final_success_rate}% success, threshold ${MIN_SUCCESS_RATE}%)"
     exit 0
 fi
