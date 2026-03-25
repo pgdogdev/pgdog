@@ -36,9 +36,7 @@ async fn test_idle_in_transaction_partial_recovery() {
 
     // This won't fire because we'll be stuck inside the extended exchange.
     client
-        .send_simple(Query::new(
-            "SET idle_in_transaction_session_timeout TO '10ms'",
-        ))
+        .send_simple(Query::new("SET idle_in_transaction_session_timeout TO 100"))
         .await;
     client.read_until('Z').await.unwrap();
 
@@ -48,7 +46,7 @@ async fn test_idle_in_transaction_partial_recovery() {
     client.read_until('1').await.unwrap();
 
     // Stuck inside extended exchange, idle in transaction timeout will not fire.
-    sleep(Duration::from_millis(50)).await;
+    sleep(Duration::from_millis(100)).await;
 
     client.send(Parse::named("__test_2", "SELECT $1")).await;
     client.send(Flush).await;
