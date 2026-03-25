@@ -13,6 +13,7 @@ mod extended;
 mod fatal_error;
 mod graceful_disconnect;
 mod graceful_shutdown;
+mod idle_in_transaction_recovery;
 mod lock_session;
 mod omni;
 pub mod prelude;

@@ -111,6 +111,7 @@ pub struct TestClient {
     pub(crate) client: Client,
     pub(crate) engine: QueryEngine,
     pub(crate) conn: TcpStream,
+    pub(crate) leak_pool: bool,
 }
 
 impl TestClient {
@@ -119,13 +120,14 @@ impl TestClient {
     ///
     /// Config needs to be loaded.
     ///
-    async fn new(params: Parameters) -> Self {
+    pub(crate) async fn new(params: Parameters) -> Self {
         let (conn, client) = new_client_pair(params).await;
 
         Self {
             conn,
             engine: QueryEngine::from_client(&client).expect("create query engine from client"),
             client,
+            leak_pool: false,
         }
     }
 
@@ -133,6 +135,11 @@ impl TestClient {
     pub(crate) async fn new_sharded(params: Parameters) -> Self {
         load_test_sharded();
         Self::new(params).await
+    }
+
+    pub(crate) fn leak_pool(mut self) -> Self {
+        self.leak_pool = true;
+        self
     }
 
     /// New client with replicas but not sharded.
@@ -243,7 +250,9 @@ impl TestClient {
 
 impl Drop for TestClient {
     fn drop(&mut self) {
-        shutdown();
+        if !self.leak_pool {
+            shutdown();
+        }
     }
 }
 

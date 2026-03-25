@@ -43,7 +43,7 @@ base64 = "0.22"
 md5 = "0.7"
 futures = "0.3"
 csv-core = "0.1"
-pg_query = { git = "https://github.com/pgdogdev/pg_query.rs.git", rev = "f8c216209f90525f065b47ffde9eb5da803d2dc6" }
+pg_query = { git = "https://github.com/pgdogdev/pg_query.rs.git", rev = "d30dcb47fdf3fa77d102b813a34392146642903a" }
 regex = "1"
 semver = "1"
 uuid = { version = "1", features = ["v4", "serde"] }
