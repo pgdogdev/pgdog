@@ -123,10 +123,6 @@ impl Pool {
 
             // Fast path, idle connection probably available.
             let (server, granted_at, paused) = {
-                // Ask for time before we acquire the lock
-                // and only if we actually waited for a connection.
-                let granted_at = request.created_at;
-                let elapsed = granted_at.saturating_duration_since(request.created_at);
                 let mut guard = self.lock();
 
                 if !guard.online {
@@ -134,15 +130,14 @@ impl Pool {
                 }
 
                 let conn = guard.take(request)?;
+                // Capture the grant time after the lock and after take() so that
+                // lock contention and any in-lock work are included in wait_time.
+                let granted_at = Instant::now();
 
                 if conn.is_some() {
-                    guard.stats.counts.wait_time += elapsed;
-                    guard.stats.counts.server_assignment_count += 1;
-                    if request.read {
-                        guard.stats.counts.reads += 1;
-                    } else {
-                        guard.stats.counts.writes += 1;
-                    }
+                    guard
+                        .stats
+                        .record_checkout(request.created_at, request.read);
                 }
 
                 (conn, granted_at, guard.paused)
@@ -296,7 +291,6 @@ impl Pool {
     pub(crate) fn move_conns_to(&self, destination: &Pool) -> Result<(), Error> {
         // Ensure no deadlock.
         assert!(self.inner.id != destination.id());
-        let now = Instant::now();
 
         {
             let mut from_guard = self.lock();
@@ -305,7 +299,7 @@ impl Pool {
             from_guard.online = false;
             let (idle, taken) = from_guard.move_conns_to(destination);
             for server in idle {
-                to_guard.put(server, now)?;
+                to_guard.put(server)?;
             }
             to_guard.set_taken(taken);
         }
