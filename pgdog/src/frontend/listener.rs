@@ -158,9 +158,9 @@ impl Listener {
 
         // Not the end of the world if the tweaks are
         // not applied.
-        if let Err(err) = tweak(&stream) {
+        if let Err(err) = tweak(&stream, &config.config.tcp) {
             warn!(
-                "keepalive settings ({}) are not supported on this system, ignoring, err: {} [{}]",
+                "keepalive settings ({}) are not supported on this system, ignoring, error: {} [{}]",
                 config.config.tcp, err, addr
             );
         }

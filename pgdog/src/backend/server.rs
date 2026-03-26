@@ -90,18 +90,18 @@ impl Server {
     ) -> Result<Self, Error> {
         debug!("=> {}", addr);
         let stream = TcpStream::connect(addr.addr().await?).await?;
-        let cfg = config();
+        let config = config();
 
-        if let Err(err) = tweak(&stream) {
+        if let Err(err) = tweak(&stream, &config.config.tcp) {
             warn!(
                 "keepalive settings ({}) are not supported on this system, ignoring, error: {} [{}]",
-                cfg.config.tcp, err, addr,
+                config.config.tcp, err, addr,
             );
         }
 
-        let mut stream = Stream::plain(stream, cfg.config.memory.net_buffer);
+        let mut stream = Stream::plain(stream, config.config.memory.net_buffer);
 
-        let tls_mode = cfg.config.general.tls_verify;
+        let tls_mode = config.config.general.tls_verify;
 
         // Only attempt TLS if not in Disabled mode
         if tls_mode != TlsVerifyMode::Disabled {
@@ -123,7 +123,7 @@ impl Server {
 
                 let connector = connector_with_verify_mode(
                     tls_mode,
-                    cfg.config.general.tls_server_ca_certificate.as_ref(),
+                    config.config.general.tls_server_ca_certificate.as_ref(),
                 )?;
                 let plain = stream.take()?;
 
@@ -134,7 +134,7 @@ impl Server {
                     Ok(tls_stream) => {
                         debug!("TLS handshake successful with {}", addr.host);
                         let cipher = tokio_rustls::TlsStream::Client(tls_stream);
-                        stream = Stream::tls(cipher, cfg.config.memory.net_buffer);
+                        stream = Stream::tls(cipher, config.config.memory.net_buffer);
                     }
                     Err(e) => {
                         error!("TLS handshake failed with {:?} [{}]", e, addr);
@@ -266,7 +266,7 @@ impl Server {
             addr: addr.clone(),
             stream: Some(stream),
             id,
-            stats: Stats::connect(id, addr, &params, &options, &cfg.config.memory),
+            stats: Stats::connect(id, addr, &params, &options, &config.config.memory),
             replication_mode: options.replication_mode(),
             params,
             changed_params: Parameters::default(),
@@ -281,7 +281,7 @@ impl Server {
             re_synced: false,
             sending_request: false,
             pooler_mode: PoolerMode::Transaction,
-            stream_buffer: MessageBuffer::new(cfg.config.memory.message_buffer),
+            stream_buffer: MessageBuffer::new(config.config.memory.message_buffer),
             disconnect_reason: None,
         };
 
