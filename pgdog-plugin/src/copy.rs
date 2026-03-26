@@ -114,12 +114,20 @@ impl PdCopyRow {
     ///
     /// The caller must ensure `copy` and `data` outlive the returned struct,
     /// since it holds raw pointers into both.
-    pub fn from_proto(shards: usize, record: &Record, column_names: &[PdStr]) -> Self {
+    pub fn from_proto(
+        shards: usize,
+        record: &Record,
+        column_names: &[PdStr],
+        table_name: &PdStr,
+        schema_name: &PdStr,
+    ) -> Self {
         Self {
             shards: shards as u64,
             record: record as *const Record as *const c_void,
             num_columns: column_names.len() as u64,
             columns: column_names.as_ptr() as *mut PdStr,
+            table_name: table_name as *const PdStr as *mut PdStr,
+            schema_name: schema_name as *const PdStr as *mut PdStr,
         }
     }
 
@@ -144,5 +152,21 @@ impl PdCopyRow {
                 .map(|s| &**s)
                 .collect()
         }
+    }
+
+    /// Get table name.
+    pub fn table_name(&self) -> &str {
+        if self.table_name.is_null() {
+            return "";
+        }
+        unsafe { &*self.table_name }
+    }
+
+    /// Get schema name.
+    pub fn schema_name(&self) -> &str {
+        if self.schema_name.is_null() {
+            return "";
+        }
+        unsafe { &*self.schema_name }
     }
 }

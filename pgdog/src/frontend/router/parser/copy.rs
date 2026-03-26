@@ -70,6 +70,10 @@ pub struct CopyParser {
     schema_shard: Option<Shard>,
     /// String representing NULL values in text/CSV format.
     null_string: String,
+    /// Table name from the COPY statement.
+    table_name: String,
+    /// Schema name from the COPY statement.
+    schema_name: String,
 }
 
 impl Default for CopyParser {
@@ -85,6 +89,8 @@ impl Default for CopyParser {
             sharded_column: 0,
             schema_shard: None,
             null_string: "\\N".to_owned(),
+            table_name: String::new(),
+            schema_name: String::new(),
         }
     }
 }
@@ -119,6 +125,10 @@ impl CopyParser {
                 .collect();
 
             let table = Table::from(rel);
+            parser.table_name = table.name.to_owned();
+            if let Some(schema) = table.schema {
+                parser.schema_name = schema.to_owned();
+            }
 
             // The CopyParser is used for replicating
             // data during data-sync. This will ensure all rows
@@ -236,6 +246,14 @@ impl CopyParser {
 
                         let shard = if is_end_marker {
                             Shard::All
+                        } else if let Some(shard) = Self::check_plugins(
+                            &self.column_names,
+                            &self.sharding_schema,
+                            &record,
+                            &self.table_name,
+                            &self.schema_name,
+                        ) {
+                            shard
                         } else if let Some(table) = &self.sharded_table {
                             let key = record
                                 .get(self.sharded_column)
@@ -243,12 +261,6 @@ impl CopyParser {
 
                             if key == self.null_string {
                                 Shard::All
-                            } else if let Some(shard) = Self::check_plugins(
-                                &self.column_names,
-                                &self.sharding_schema,
-                                &record,
-                            ) {
-                                shard
                             } else {
                                 let ctx = ContextBuilder::new(table)
                                     .data(key)
@@ -259,10 +271,6 @@ impl CopyParser {
                             }
                         } else if let Some(schema_shard) = self.schema_shard.clone() {
                             schema_shard
-                        } else if let Some(shard) =
-                            Self::check_plugins(&self.column_names, &self.sharding_schema, &record)
-                        {
-                            shard
                         } else {
                             Shard::All
                         };
@@ -325,13 +333,18 @@ impl CopyParser {
         column_names: &[String],
         schema: &ShardingSchema,
         record: &Record,
+        table_name: &str,
+        schema_name: &str,
     ) -> Option<Shard> {
         if let Some(plugins) = plugins() {
             let columns: Vec<PdStr> = column_names
                 .iter()
                 .map(|s| PdStr::from(s.as_str()))
                 .collect();
-            let context = PdCopyRow::from_proto(schema.shards, record, &columns);
+            let table_name = PdStr::from(table_name);
+            let schema_name = PdStr::from(schema_name);
+            let context =
+                PdCopyRow::from_proto(schema.shards, record, &columns, &table_name, &schema_name);
 
             for plugin in plugins {
                 if let Some(route) = plugin.route_copy_row(context) {

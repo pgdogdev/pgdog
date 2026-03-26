@@ -49,6 +49,11 @@ typedef struct PdCopyRow {
     uint64_t num_columns;
     /** Column names */
     PdStr *columns;
+    /** Table name. */
+    PdStr *table_name;
+    /** Schema name. Null if not provided. */
+    PdStr *schema_name;
+    /**  */
 } PdCopyRow;
 
 /**

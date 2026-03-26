@@ -139,7 +139,12 @@ pub(crate) fn route_copy(row: PdCopyRow) -> Result<Route, PluginError> {
         Err(_) => return Ok(Route::unknown()),
     };
 
-    println!("copy decoded row with id {}", id);
+    println!(
+        "copy decoded row with id {} (table={}.{})",
+        id,
+        row.schema_name(),
+        row.table_name()
+    );
 
     let shard = (id.unsigned_abs() as usize) % shards;
     Ok(Route::new(Shard::Direct(shard), ReadWrite::Write))
@@ -179,13 +184,25 @@ mod test {
 
         // "7" + "Alice" concatenated, ends at [1, 6]
         let record = Record::new(b"7Alice", &[1, 6], '\t', CopyFormat::Text, "\\N");
-        let row = PdCopyRow::from_proto(4, &record, &columns);
+        let row = PdCopyRow::from_proto(
+            4,
+            &record,
+            &columns,
+            &PdStr::from("users"),
+            &PdStr::from("public"),
+        );
         let route = route_copy(row).unwrap();
         assert_eq!(route.shard.try_into(), Ok(Shard::Direct(3))); // 7 % 4 = 3
 
         // "0" + "Bob" concatenated, ends at [1, 4]
         let record = Record::new(b"0Bob", &[1, 4], '\t', CopyFormat::Text, "\\N");
-        let row = PdCopyRow::from_proto(4, &record, &columns);
+        let row = PdCopyRow::from_proto(
+            4,
+            &record,
+            &columns,
+            &PdStr::from("users"),
+            &PdStr::from("public"),
+        );
         let route = route_copy(row).unwrap();
         assert_eq!(route.shard.try_into(), Ok(Shard::Direct(0))); // 0 % 4 = 0
     }
@@ -195,7 +212,13 @@ mod test {
         let columns = [PdStr::from("id"), PdStr::from("name")];
 
         let record = Record::new(b"\\NAlice", &[2, 7], '\t', CopyFormat::Text, "\\N");
-        let row = PdCopyRow::from_proto(4, &record, &columns);
+        let row = PdCopyRow::from_proto(
+            4,
+            &record,
+            &columns,
+            &PdStr::from("users"),
+            &PdStr::from("public"),
+        );
         let route = route_copy(row).unwrap();
         assert_eq!(route.shard.try_into(), Ok(Shard::All));
     }
@@ -205,7 +228,13 @@ mod test {
         let columns = [PdStr::from("id"), PdStr::from("name")];
 
         let record = Record::new(b"5Charlie", &[1, 8], ',', CopyFormat::Csv, "\\N");
-        let row = PdCopyRow::from_proto(3, &record, &columns);
+        let row = PdCopyRow::from_proto(
+            3,
+            &record,
+            &columns,
+            &PdStr::from("users"),
+            &PdStr::from("public"),
+        );
         let route = route_copy(row).unwrap();
         assert_eq!(route.shard.try_into(), Ok(Shard::Direct(2))); // 5 % 3 = 2
     }
@@ -221,7 +250,13 @@ mod test {
             CopyFormat::Text,
             "\\N",
         );
-        let row = PdCopyRow::from_proto(4, &record, &columns);
+        let row = PdCopyRow::from_proto(
+            4,
+            &record,
+            &columns,
+            &PdStr::from("users"),
+            &PdStr::from("public"),
+        );
         let route = route_copy(row).unwrap();
         assert_eq!(route.shard.try_into(), Ok(Shard::Unknown));
     }
