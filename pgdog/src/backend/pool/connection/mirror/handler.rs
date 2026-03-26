@@ -553,7 +553,11 @@ mod tests {
 
     #[test]
     fn test_session_statements_pass_through_all_levels() {
-        for level in [MirroringLevel::Ddl, MirroringLevel::Dml, MirroringLevel::All] {
+        for level in [
+            MirroringLevel::Ddl,
+            MirroringLevel::Dml,
+            MirroringLevel::All,
+        ] {
             let (mut handler, _, _rx) = create_test_handler_with_level(1.0, level);
             assert!(
                 handler.send(&request_with_ast("SET search_path TO public")),

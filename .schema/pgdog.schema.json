@@ -1173,6 +1173,11 @@
           ],
           "format": "float"
         },
+        "level": {
+          "description": "What kind of statements to replicate.",
+          "$ref": "#/$defs/MirroringLevel",
+          "default": "all"
+        },
         "queue_length": {
           "description": "The length of the queue to provision for mirrored transactions. See [mirroring](https://docs.pgdog.dev/features/mirroring/) for more details. This overrides the [`mirror_queue`](https://docs.pgdog.dev/configuration/pgdog.toml/general/#mirror_queue) setting.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/mirroring/#queue_depth",
           "type": [
@@ -1191,6 +1196,25 @@
       "required": [
         "source_db",
         "destination_db"
+      ]
+    },
+    "MirroringLevel": {
+      "oneOf": [
+        {
+          "description": "Replicate all statements.",
+          "type": "string",
+          "const": "all"
+        },
+        {
+          "description": "Only DML (e.g., insert, update, delete, etc),",
+          "type": "string",
+          "const": "dml"
+        },
+        {
+          "description": "Only DDL (CREATE, DROP, etc.)",
+          "type": "string",
+          "const": "ddl"
+        }
       ]
     },
     "MultiTenant": {
