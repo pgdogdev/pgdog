@@ -1,6 +1,7 @@
 [general]
 mirror_exposure = 1.0
 openmetrics_port = 9090
+query_parser = "on"
 
 [rewrite]
 enabled = false
