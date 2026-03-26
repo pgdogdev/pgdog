@@ -1,8 +1,104 @@
-use std::{ffi::c_void, slice::from_raw_parts};
+use std::{ffi::c_void, ops::Range, str::from_utf8};
 
-use pg_query::{protobuf::CopyStmt, NodeEnum};
+use crate::bindings::{PdCopyRow, PdStr};
 
-use crate::bindings::PdCopyRow;
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum CopyFormat {
+    Text,
+    Csv,
+    Binary,
+}
+
+/// A complete CSV record.
+#[derive(Clone)]
+pub struct Record {
+    /// Raw record data.
+    pub data: Vec<u8>,
+    /// Field ranges.
+    pub fields: Vec<Range<usize>>,
+    /// Delimiter.
+    pub delimiter: char,
+    /// Format used.
+    pub format: CopyFormat,
+    /// Null string.
+    pub null_string: String,
+}
+
+impl std::fmt::Debug for Record {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Record")
+            .field("data", &from_utf8(&self.data))
+            .field("fields", &self.fields)
+            .field("delimiter", &self.delimiter)
+            .field("format", &self.format)
+            .field("null_string", &self.null_string)
+            .finish()
+    }
+}
+
+impl std::fmt::Display for Record {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(
+            f,
+            "{}",
+            (0..self.len())
+                .map(|field| match self.format {
+                    CopyFormat::Csv => {
+                        let text = self.get(field).unwrap();
+                        if text == self.null_string {
+                            text.to_owned()
+                        } else {
+                            format!("\"{}\"", self.get(field).unwrap().replace("\"", "\"\""))
+                        }
+                    }
+                    _ => self.get(field).unwrap().to_string(),
+                })
+                .collect::<Vec<String>>()
+                .join(&format!("{}", self.delimiter))
+        )
+    }
+}
+
+impl Record {
+    pub fn new(
+        data: &[u8],
+        ends: &[usize],
+        delimiter: char,
+        format: CopyFormat,
+        null_string: &str,
+    ) -> Self {
+        let mut last = 0;
+        let mut fields = vec![];
+        for e in ends {
+            fields.push(last..*e);
+            last = *e;
+        }
+        Self {
+            data: data.to_vec(),
+            fields,
+            delimiter,
+            format,
+            null_string: null_string.to_owned(),
+        }
+    }
+
+    /// Number of fields in the record.
+    pub fn len(&self) -> usize {
+        self.fields.len()
+    }
+
+    /// Return true if there are no fields in the record.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    pub fn get(&self, index: usize) -> Option<&str> {
+        self.fields
+            .get(index)
+            .cloned()
+            .and_then(|range| from_utf8(&self.data[range]).ok())
+    }
+}
 
 /// Copy format.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -18,56 +114,13 @@ impl PdCopyRow {
     ///
     /// The caller must ensure `copy` and `data` outlive the returned struct,
     /// since it holds raw pointers into both.
-    pub fn from_proto(copy: &CopyStmt, shards: usize, data: &[u8]) -> Self {
+    pub fn from_proto(shards: usize, record: &Record, column_names: &[PdStr]) -> Self {
         Self {
             shards: shards as u64,
-            copy_stmt: copy as *const CopyStmt as *const c_void,
-            data_len: data.len() as u64,
-            data: data.as_ptr() as *const c_void,
+            record: record as *const Record as *const c_void,
+            num_columns: column_names.len() as u64,
+            columns: column_names.as_ptr() as *mut PdStr,
         }
-    }
-
-    /// Get the CopyStmt protobuf.
-    pub fn copy_stmt(&self) -> &CopyStmt {
-        unsafe { &*(self.copy_stmt as *const CopyStmt) }
-    }
-
-    /// Helper to look up a string-valued option from the COPY statement.
-    pub fn option(&self, name: &str) -> Option<&str> {
-        for option in &self.copy_stmt().options {
-            if let Some(NodeEnum::DefElem(ref elem)) = option.node {
-                if elem.defname.eq_ignore_ascii_case(name) {
-                    if let Some(ref arg) = elem.arg {
-                        if let Some(NodeEnum::String(ref s)) = arg.node {
-                            return Some(&s.sval);
-                        }
-                    }
-                    // Option present but no value (e.g. HEADER).
-                    return Some("");
-                }
-            }
-        }
-        None
-    }
-
-    /// Check if a boolean-style option is present (e.g. HEADER).
-    fn has_option(&self, name: &str) -> bool {
-        self.option(name).is_some()
-    }
-
-    /// Get column names from the COPY statement.
-    pub fn columns(&self) -> Vec<&str> {
-        self.copy_stmt()
-            .attlist
-            .iter()
-            .filter_map(|node| {
-                if let Some(NodeEnum::String(ref s)) = node.node {
-                    Some(s.sval.as_str())
-                } else {
-                    None
-                }
-            })
-            .collect()
     }
 
     /// Get number of shards.
@@ -75,136 +128,21 @@ impl PdCopyRow {
         self.shards
     }
 
-    /// Get raw data. Caller is responsible for decoding.
-    /// The data will contain exactly one row.
-    pub fn data(&self) -> &[u8] {
-        unsafe { from_raw_parts(self.data as *const u8, self.data_len as usize) }
+    /// Get the parsed record.
+    pub fn record(&self) -> &Record {
+        unsafe { &*(self.record as *const Record) }
     }
 
-    /// Get row format.
-    pub fn format(&self) -> Format {
-        match self.option("format") {
-            Some(f) if f.eq_ignore_ascii_case("binary") => Format::Binary,
-            _ => Format::Text,
+    /// Get column names.
+    pub fn columns(&self) -> Vec<&str> {
+        if self.num_columns == 0 {
+            return vec![];
         }
-    }
-
-    /// Get delimiter.
-    pub fn delimiter(&self) -> char {
-        if let Some(d) = self.option("delimiter") {
-            return d.chars().next().unwrap_or(',');
+        unsafe {
+            std::slice::from_raw_parts(self.columns, self.num_columns as usize)
+                .iter()
+                .map(|s| &**s)
+                .collect()
         }
-
-        // CSV defaults to comma, text/binary default to tab.
-        match self.option("format") {
-            Some(f) if f.eq_ignore_ascii_case("csv") => ',',
-            _ => '\t',
-        }
-    }
-
-    /// Get NULL string.
-    pub fn null_string(&self) -> &str {
-        self.option("null").unwrap_or("\\N")
-    }
-
-    /// Whether the COPY includes headers.
-    pub fn headers(&self) -> bool {
-        // Binary format always has a header.
-        self.has_option("header") || self.format() == Format::Binary
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use pg_query::{parse, NodeEnum};
-
-    use super::*;
-
-    fn parse_copy(sql: &str) -> CopyStmt {
-        let parsed = parse(sql).unwrap();
-        let stmt = parsed.protobuf.stmts.first().unwrap();
-        match stmt.stmt.clone().unwrap().node.unwrap() {
-            NodeEnum::CopyStmt(copy) => *copy,
-            _ => panic!("not a COPY statement"),
-        }
-    }
-
-    #[test]
-    fn test_text_defaults() {
-        let copy = parse_copy("COPY t (id, value) FROM STDIN");
-        let data = b"1\thello\n";
-        let row = PdCopyRow::from_proto(&copy, 3, data);
-
-        assert_eq!(row.shards(), 3);
-        assert_eq!(row.format(), Format::Text);
-        assert_eq!(row.delimiter(), '\t');
-        assert_eq!(row.null_string(), "\\N");
-        assert!(!row.headers());
-        assert_eq!(row.data(), data.as_slice());
-        assert_eq!(row.columns(), vec!["id", "value"]);
-    }
-
-    #[test]
-    fn test_csv_defaults() {
-        let copy = parse_copy("COPY t (a, b, c) FROM STDIN CSV");
-        let row = PdCopyRow::from_proto(&copy, 2, b"1,2,3\n");
-
-        assert_eq!(row.format(), Format::Text);
-        assert_eq!(row.delimiter(), ',');
-        assert!(!row.headers());
-        assert_eq!(row.columns(), vec!["a", "b", "c"]);
-    }
-
-    #[test]
-    fn test_csv_header() {
-        let copy = parse_copy("COPY t (x) FROM STDIN CSV HEADER");
-        let row = PdCopyRow::from_proto(&copy, 1, b"x\n1\n");
-
-        assert!(row.headers());
-        assert_eq!(row.delimiter(), ',');
-    }
-
-    #[test]
-    fn test_custom_delimiter() {
-        let copy = parse_copy("COPY t FROM STDIN CSV DELIMITER '|'");
-        let row = PdCopyRow::from_proto(&copy, 1, b"a|b\n");
-
-        assert_eq!(row.delimiter(), '|');
-    }
-
-    #[test]
-    fn test_custom_null() {
-        let copy = parse_copy("COPY t (id) FROM STDIN CSV NULL 'NULL'");
-        let row = PdCopyRow::from_proto(&copy, 1, b"NULL\n");
-
-        assert_eq!(row.null_string(), "NULL");
-    }
-
-    #[test]
-    fn test_binary_format() {
-        let copy = parse_copy("COPY t FROM STDIN (FORMAT 'binary')");
-        let row = PdCopyRow::from_proto(&copy, 4, b"\x00");
-
-        assert_eq!(row.format(), Format::Binary);
-        assert!(row.headers());
-        assert_eq!(row.shards(), 4);
-    }
-
-    #[test]
-    fn test_no_columns() {
-        let copy = parse_copy("COPY t FROM STDIN");
-        let row = PdCopyRow::from_proto(&copy, 1, b"1\t2\n");
-
-        assert!(row.columns().is_empty());
-    }
-
-    #[test]
-    fn test_explicit_text_format() {
-        let copy = parse_copy(r#"COPY "public"."t" ("id", "val") FROM STDIN WITH (FORMAT text)"#);
-        let row = PdCopyRow::from_proto(&copy, 2, b"1\thello\n");
-
-        assert_eq!(row.format(), Format::Text);
-        assert_eq!(row.delimiter(), '\t');
-        assert_eq!(row.columns(), vec!["id", "val"]);
     }
 }

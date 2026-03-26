@@ -43,12 +43,12 @@ typedef struct PdParameters {
 typedef struct PdCopyRow {
     /** Number of shards in the config. */
     uint64_t shards;
-    /** Pointer to CopyStmt protobuf. */
-    const void *copy_stmt;
-    /** Data length. */
-    uint64_t data_len;
-    /** Raw copy data. */
-    const void *data;
+    /** CSV record. */
+    const void *record;
+    /** Column names number. */
+    uint64_t num_columns;
+    /** Column names */
+    PdStr *columns;
 } PdCopyRow;
 
 /**
