@@ -1,19 +1,22 @@
 //! Parse COPY statement.
 
 use pg_query::{protobuf::CopyStmt, NodeEnum};
+use pgdog_plugin::{PdCopyRow, PdStr};
 
 use crate::{
     backend::{Cluster, ShardingSchema},
     config::ShardedTable,
     frontend::router::{
-        parser::Shard,
+        parser::{Record, Shard},
         sharding::{ContextBuilder, Tables},
         CopyRow,
     },
     net::messages::{CopyData, ToBytes},
+    plugin::plugins,
 };
 
 use super::{binary::Data, BinaryStream, Column, CsvStream, Error, Table};
+pub use pgdog_plugin::copy::CopyFormat;
 
 /// Copy information parsed from a COPY statement.
 #[derive(Debug, Clone)]
@@ -39,13 +42,6 @@ impl Default for CopyInfo {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum CopyFormat {
-    Text,
-    Csv,
-    Binary,
-}
-
 #[derive(Debug, Clone)]
 enum CopyStream {
     Text(Box<CsvStream>),
@@ -58,8 +54,8 @@ pub struct CopyParser {
     headers: bool,
     /// CSV delimiter.
     delimiter: Option<char>,
-    /// Number of columns
-    columns: usize,
+    /// Column names from the COPY statement.
+    column_names: Vec<String>,
     /// This is a COPY coming from the client.
     is_from: bool,
     /// Stream parser.
@@ -74,6 +70,10 @@ pub struct CopyParser {
     schema_shard: Option<Shard>,
     /// String representing NULL values in text/CSV format.
     null_string: String,
+    /// Table name from the COPY statement.
+    table_name: String,
+    /// Schema name from the COPY statement.
+    schema_name: String,
 }
 
 impl Default for CopyParser {
@@ -81,7 +81,7 @@ impl Default for CopyParser {
         Self {
             headers: false,
             delimiter: None,
-            columns: 0,
+            column_names: vec![],
             is_from: false,
             stream: CopyStream::Text(Box::new(CsvStream::new(',', false, CopyFormat::Csv, "\\N"))),
             sharding_schema: ShardingSchema::default(),
@@ -89,6 +89,8 @@ impl Default for CopyParser {
             sharded_column: 0,
             schema_shard: None,
             null_string: "\\N".to_owned(),
+            table_name: String::new(),
+            schema_name: String::new(),
         }
     }
 }
@@ -113,7 +115,20 @@ impl CopyParser {
                 }
             }
 
+            parser.column_names = stmt
+                .attlist
+                .iter()
+                .filter_map(|n| match &n.node {
+                    Some(NodeEnum::String(s)) => Some(s.sval.clone()),
+                    _ => None,
+                })
+                .collect();
+
             let table = Table::from(rel);
+            parser.table_name = table.name.to_owned();
+            if let Some(schema) = table.schema {
+                parser.schema_name = schema.to_owned();
+            }
 
             // The CopyParser is used for replicating
             // data during data-sync. This will ensure all rows
@@ -126,8 +141,6 @@ impl CopyParser {
                 parser.sharded_table = Some(key.table.clone());
                 parser.sharded_column = key.position;
             }
-
-            parser.columns = columns.len();
 
             for option in &stmt.options {
                 if let Some(NodeEnum::DefElem(ref elem)) = option.node {
@@ -233,6 +246,14 @@ impl CopyParser {
 
                         let shard = if is_end_marker {
                             Shard::All
+                        } else if let Some(shard) = Self::check_plugins(
+                            &self.column_names,
+                            &self.sharding_schema,
+                            &record,
+                            &self.table_name,
+                            &self.schema_name,
+                        ) {
+                            shard
                         } else if let Some(table) = &self.sharded_table {
                             let key = record
                                 .get(self.sharded_column)
@@ -306,6 +327,37 @@ impl CopyParser {
         }
 
         Ok(rows)
+    }
+
+    fn check_plugins(
+        column_names: &[String],
+        schema: &ShardingSchema,
+        record: &Record,
+        table_name: &str,
+        schema_name: &str,
+    ) -> Option<Shard> {
+        if let Some(plugins) = plugins() {
+            let columns: Vec<PdStr> = column_names
+                .iter()
+                .map(|s| PdStr::from(s.as_str()))
+                .collect();
+            let table_name = PdStr::from(table_name);
+            let schema_name = PdStr::from(schema_name);
+            let context =
+                PdCopyRow::from_proto(schema.shards, record, &columns, &table_name, &schema_name);
+
+            for plugin in plugins {
+                if let Some(route) = plugin.route_copy_row(context) {
+                    if route.shard == -1 {
+                        return Some(Shard::All);
+                    } else if route.shard >= 0 {
+                        return Some(Shard::Direct(route.shard as usize));
+                    }
+                }
+            }
+        }
+
+        None
     }
 }
 

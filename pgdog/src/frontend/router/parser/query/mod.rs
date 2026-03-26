@@ -491,6 +491,7 @@ impl QueryParser {
             }
         }
 
+        // let plugin_context = context.plugin_context(&ast.ast.protobuf, &None);
         let parser = CopyParser::new(stmt, context.router_context.cluster)?;
         if !stmt.is_from {
             context
