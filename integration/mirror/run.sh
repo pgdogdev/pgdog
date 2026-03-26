@@ -8,4 +8,10 @@ wait_for_pgdog
 
 bash ${SCRIPT_DIR}/dev.sh
 
+
+pushd ${SCRIPT_DIR}/php
+bash run.sh
+popd
+
+
 stop_pgdog

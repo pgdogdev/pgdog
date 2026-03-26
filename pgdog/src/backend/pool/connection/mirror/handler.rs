@@ -5,8 +5,10 @@
 
 use super::*;
 use crate::backend::pool::MirrorStats;
+use crate::frontend::router::parser::cache::StatementType;
 use crate::frontend::ClientRequest;
 use parking_lot::Mutex;
+use pgdog_config::MirrorConfig;
 use std::sync::Arc;
 
 /// Mirror handle state.
@@ -27,8 +29,7 @@ enum MirrorHandlerState {
 pub struct MirrorHandler {
     /// Sender.
     tx: Sender<MirrorRequest>,
-    /// Percentage of requests being mirrored. 0 = 0%, 1.0 = 100%.
-    exposure: f32,
+    config: MirrorConfig,
     /// Mirror handle state.
     state: MirrorHandlerState,
     /// Request buffer.
@@ -46,10 +47,14 @@ impl MirrorHandler {
     }
 
     /// Create new mirror handle with exposure.
-    pub fn new(tx: Sender<MirrorRequest>, exposure: f32, stats: Arc<Mutex<MirrorStats>>) -> Self {
+    pub fn new(
+        tx: Sender<MirrorRequest>,
+        config: &MirrorConfig,
+        stats: Arc<Mutex<MirrorStats>>,
+    ) -> Self {
         Self {
             tx,
-            exposure,
+            config: config.clone(),
             state: MirrorHandlerState::Idle,
             buffer: vec![],
             timer: Instant::now(),
@@ -62,19 +67,33 @@ impl MirrorHandler {
     /// Returns true if request will be sent, false otherwise.
     ///
     pub fn send(&mut self, buffer: &ClientRequest) -> bool {
+        let stmt_type = buffer.ast.as_ref().map(|ast| ast.statement_type());
+        if let Some(stmt_type) = stmt_type {
+            match (self.config.level, stmt_type) {
+                (MirroringLevel::Ddl, StatementType::Dml) => {
+                    debug!("mirror dropping dml (level=ddl)");
+                    return false;
+                }
+                (MirroringLevel::Dml, StatementType::Ddl) => {
+                    debug!("mirror dropping ddl (level=dml)");
+                    return false;
+                }
+                _ => (),
+            }
+        }
         match self.state {
             MirrorHandlerState::Dropping => {
                 debug!("mirror dropping request");
                 false
             }
             MirrorHandlerState::Idle => {
-                let roll = if self.exposure < 1.0 {
+                let roll = if self.config.exposure < 1.0 {
                     rng().random_range(0.0..1.0)
                 } else {
                     0.99
                 };
 
-                if roll < self.exposure {
+                if roll < self.config.exposure {
                     self.state = MirrorHandlerState::Sending;
                     self.buffer.push(BufferWithDelay {
                         buffer: buffer.clone(),
@@ -84,7 +103,10 @@ impl MirrorHandler {
                     true
                 } else {
                     self.state = MirrorHandlerState::Dropping;
-                    debug!("mirror dropping transaction [exposure: {}]", self.exposure);
+                    debug!(
+                        "mirror dropping transaction [exposure: {}]",
+                        self.config.exposure
+                    );
                     false
                 }
             }
@@ -191,7 +213,14 @@ mod tests {
     ) {
         let (tx, rx) = channel(1000); // Keep receiver to prevent channel closure
         let stats = Arc::new(Mutex::new(MirrorStats::default()));
-        let handler = MirrorHandler::new(tx, exposure, stats.clone());
+        let handler = MirrorHandler::new(
+            tx,
+            &MirrorConfig {
+                exposure,
+                ..Default::default()
+            },
+            stats.clone(),
+        );
         (handler, stats, rx)
     }
 
@@ -415,7 +444,14 @@ mod tests {
     fn test_queue_length_with_channel_overflow() {
         let (tx, _rx) = channel(1); // Channel with capacity of 1
         let stats = Arc::new(Mutex::new(MirrorStats::default()));
-        let mut handler = MirrorHandler::new(tx, 1.0, stats.clone());
+        let mut handler = MirrorHandler::new(
+            tx,
+            &MirrorConfig {
+                exposure: 1.0,
+                ..Default::default()
+            },
+            stats.clone(),
+        );
 
         // Fill the channel
         assert!(handler.send(&vec![].into()));
@@ -437,6 +473,105 @@ mod tests {
                 "error_count should be 1 due to overflow"
             );
         }
+    }
+
+    fn create_test_handler_with_level(
+        exposure: f32,
+        level: MirroringLevel,
+    ) -> (
+        MirrorHandler,
+        Arc<Mutex<MirrorStats>>,
+        Receiver<MirrorRequest>,
+    ) {
+        let (tx, rx) = channel(1000);
+        let stats = Arc::new(Mutex::new(MirrorStats::default()));
+        let handler = MirrorHandler::new(
+            tx,
+            &MirrorConfig {
+                exposure,
+                level,
+                ..Default::default()
+            },
+            stats.clone(),
+        );
+        (handler, stats, rx)
+    }
+
+    fn request_with_ast(query: &str) -> ClientRequest {
+        use crate::frontend::router::Ast;
+        let ast = Ast::from_parse_result(pg_query::parse(query).unwrap());
+        ClientRequest {
+            messages: vec![],
+            route: None,
+            ast: Some(ast),
+        }
+    }
+
+    #[test]
+    fn test_ddl_level_drops_dml() {
+        let (mut handler, _, _rx) = create_test_handler_with_level(1.0, MirroringLevel::Ddl);
+
+        // DML should be dropped
+        assert!(!handler.send(&request_with_ast("SELECT 1")));
+        assert!(!handler.send(&request_with_ast("INSERT INTO t VALUES (1)")));
+        assert!(!handler.send(&request_with_ast("UPDATE t SET x = 1")));
+        assert!(!handler.send(&request_with_ast("DELETE FROM t")));
+        assert!(!handler.send(&request_with_ast("BEGIN")));
+
+        // DDL should be sent
+        assert!(handler.send(&request_with_ast("CREATE TABLE t (id INT)")));
+        assert!(handler.send(&request_with_ast("DROP TABLE t")));
+        assert!(handler.send(&request_with_ast("ALTER TABLE t ADD COLUMN x INT")));
+    }
+
+    #[test]
+    fn test_dml_level_drops_ddl() {
+        let (mut handler, _, _rx) = create_test_handler_with_level(1.0, MirroringLevel::Dml);
+
+        // DDL should be dropped
+        assert!(!handler.send(&request_with_ast("CREATE TABLE t (id INT)")));
+        assert!(!handler.send(&request_with_ast("DROP TABLE t")));
+        assert!(!handler.send(&request_with_ast("ALTER TABLE t ADD COLUMN x INT")));
+
+        // DML should be sent
+        assert!(handler.send(&request_with_ast("SELECT 1")));
+        assert!(handler.send(&request_with_ast("INSERT INTO t VALUES (1)")));
+        assert!(handler.send(&request_with_ast("UPDATE t SET x = 1")));
+        assert!(handler.send(&request_with_ast("DELETE FROM t")));
+        assert!(handler.send(&request_with_ast("BEGIN")));
+    }
+
+    #[test]
+    fn test_all_level_sends_everything() {
+        let (mut handler, _, _rx) = create_test_handler_with_level(1.0, MirroringLevel::All);
+
+        assert!(handler.send(&request_with_ast("SELECT 1")));
+        assert!(handler.send(&request_with_ast("CREATE TABLE t (id INT)")));
+        assert!(handler.send(&request_with_ast("SET search_path TO public")));
+        assert!(handler.send(&request_with_ast("BEGIN")));
+    }
+
+    #[test]
+    fn test_session_statements_pass_through_all_levels() {
+        for level in [
+            MirroringLevel::Ddl,
+            MirroringLevel::Dml,
+            MirroringLevel::All,
+        ] {
+            let (mut handler, _, _rx) = create_test_handler_with_level(1.0, level);
+            assert!(
+                handler.send(&request_with_ast("SET search_path TO public")),
+                "SET should pass through at level {:?}",
+                level,
+            );
+        }
+    }
+
+    #[test]
+    fn test_no_ast_passes_through() {
+        // Requests without AST (e.g. Sync-only) should always be sent
+        let (mut handler, _, _rx) = create_test_handler_with_level(1.0, MirroringLevel::Ddl);
+        assert!(handler.send(&vec![].into()));
     }
 
     #[test]

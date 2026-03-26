@@ -2,6 +2,7 @@
 
 use std::time::Duration;
 
+use pgdog_config::MirroringLevel;
 use rand::{rng, Rng};
 use tokio::select;
 use tokio::time::{sleep, Instant};
@@ -105,11 +106,12 @@ impl Mirror {
             .unwrap_or_else(|| crate::config::MirrorConfig {
                 queue_length: config.config.general.mirror_queue,
                 exposure: config.config.general.mirror_exposure,
+                level: MirroringLevel::default(),
             });
 
         // Mirror queue.
         let (tx, mut rx) = channel(mirror_config.queue_length);
-        let handler = MirrorHandler::new(tx, mirror_config.exposure, cluster.stats());
+        let handler = MirrorHandler::new(tx, &mirror_config, cluster.stats());
 
         let stats_for_errors = cluster.stats();
         spawn(async move {
@@ -165,6 +167,8 @@ impl Mirror {
 
 #[cfg(test)]
 mod test {
+    use pgdog_config::MirrorConfig;
+
     use crate::{
         backend::pool::Request,
         config::{self, PoolerMode, PreparedStatements as PreparedStatementsLevel},
@@ -181,7 +185,14 @@ mod test {
 
         let (tx, rx) = channel(25);
         let stats = Arc::new(Mutex::new(MirrorStats::default()));
-        let mut handle = MirrorHandler::new(tx.clone(), 1.0, stats.clone());
+        let mut handle = MirrorHandler::new(
+            tx.clone(),
+            &MirrorConfig {
+                exposure: 1.0,
+                ..Default::default()
+            },
+            stats.clone(),
+        );
 
         for _ in 0..25 {
             assert!(
@@ -195,7 +206,14 @@ mod test {
 
         let (tx, rx) = channel(25);
         let stats2 = Arc::new(Mutex::new(MirrorStats::default()));
-        let mut handle = MirrorHandler::new(tx.clone(), 0.5, stats2);
+        let mut handle = MirrorHandler::new(
+            tx.clone(),
+            &MirrorConfig {
+                exposure: 0.5,
+                ..Default::default()
+            },
+            stats2,
+        );
         let dropped = (0..25)
             .map(|_| handle.send(&vec![].into()) && handle.send(&vec![].into()) && handle.flush())
             .filter(|s| !s)

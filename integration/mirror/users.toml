@@ -7,3 +7,8 @@ database = "pgdog"
 name = "pgdog"
 password = "pgdog"
 database = "pgdog_mirror"
+
+[[users]]
+name = "pgdog"
+password = "pgdog"
+database = "pgdog_mirror2"
