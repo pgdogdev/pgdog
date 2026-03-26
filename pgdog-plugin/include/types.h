@@ -9,7 +9,7 @@
 typedef struct PdStr {
     size_t len;
     void *data;
-} RustString;
+} PdStr;
 
 /**
  * Wrapper around output by pg_query.
@@ -36,6 +36,20 @@ typedef struct PdParameters {
     /** Pointer to a `Vec` of parameter format codes. */
     void *format_codes;
 } PdParameters;
+
+/**
+ * Wrapper for copy data row.
+ */
+typedef struct PdCopyRow {
+    /** Number of shards in the config. */
+    uint64_t shards;
+    /** Pointer to CopyStmt protobuf. */
+    const void *copy_stmt;
+    /** Data length. */
+    uint64_t data_len;
+    /** Raw copy data. */
+    const void *data;
+} PdCopyRow;
 
 /**
  * Context on the database cluster configuration and the currently processed

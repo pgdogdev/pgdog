@@ -3,6 +3,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use csv::ReaderBuilder;
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 use pg_query::{NodeEnum, protobuf::RangeVar};
@@ -13,6 +14,9 @@ use thiserror::Error;
 pub enum PluginError {
     #[error("{0}")]
     PgQuery(#[from] pg_query::Error),
+
+    #[error("{0}")]
+    Csv(#[from] csv::Error),
 
     #[error("empty query")]
     EmptyQuery,
@@ -105,6 +109,57 @@ pub(crate) fn route_query(context: Context) -> Result<Route, PluginError> {
     Ok(Route::unknown())
 }
 
+/// Route a COPY row to the correct shard.
+///
+/// Uses the `csv` crate to parse the row, finds the "id" column,
+/// and hashes its value to pick a shard.
+pub(crate) fn route_copy(row: PdCopyRow) -> Result<Route, PluginError> {
+    let columns = row.columns();
+    let shards = row.shards() as usize;
+
+    if columns.is_empty() {
+        return Ok(Route::unknown());
+    }
+
+    // Find the position of the "id" column.
+    let id_pos = match columns.iter().position(|&c| c == "id") {
+        Some(pos) => pos,
+        None => return Ok(Route::unknown()),
+    };
+
+    // Parse the row with the csv crate using the COPY delimiter.
+    let mut reader = ReaderBuilder::new()
+        .has_headers(false)
+        .delimiter(row.delimiter() as u8)
+        .from_reader(row.data());
+
+    let record = match reader.records().next() {
+        Some(r) => r?,
+        None => return Ok(Route::unknown()),
+    };
+
+    let field = match record.get(id_pos) {
+        Some(f) => f,
+        None => return Ok(Route::unknown()),
+    };
+
+    // NULL values go to all shards.
+    if field == row.null_string() {
+        return Ok(Route::new(Shard::All, ReadWrite::Write));
+    }
+
+    // Parse the id and hash to a shard.
+    let id: i64 = match field.parse() {
+        Ok(v) => v,
+        Err(_) => return Ok(Route::unknown()),
+    };
+
+    println!("copy decoded row with id {}", id);
+
+    let shard = (id.unsigned_abs() as usize) % shards;
+    Ok(Route::new(Shard::Direct(shard), ReadWrite::Write))
+}
+
 #[cfg(test)]
 mod test {
     use pgdog_plugin::{PdParameters, PdStatement};
@@ -131,5 +186,105 @@ mod test {
 
         assert_eq!(read_write, ReadWrite::Read);
         assert_eq!(shard, Shard::Unknown);
+    }
+
+    #[test]
+    fn test_copy_routes_by_id() {
+        let proto = pg_query::parse("COPY users (id, name) FROM STDIN")
+            .unwrap()
+            .protobuf;
+        let copy_stmt = match proto
+            .stmts
+            .first()
+            .unwrap()
+            .stmt
+            .clone()
+            .unwrap()
+            .node
+            .unwrap()
+        {
+            NodeEnum::CopyStmt(s) => s,
+            _ => panic!("not a COPY"),
+        };
+
+        let row = PdCopyRow::from_proto(&copy_stmt, 4, b"7\tAlice\n");
+        let route = route_copy(row).unwrap();
+        assert_eq!(route.shard.try_into(), Ok(Shard::Direct(3))); // 7 % 4 = 3
+
+        let row = PdCopyRow::from_proto(&copy_stmt, 4, b"0\tBob\n");
+        let route = route_copy(row).unwrap();
+        assert_eq!(route.shard.try_into(), Ok(Shard::Direct(0))); // 0 % 4 = 0
+    }
+
+    #[test]
+    fn test_copy_null_id_routes_to_all() {
+        let proto = pg_query::parse("COPY users (id, name) FROM STDIN")
+            .unwrap()
+            .protobuf;
+        let copy_stmt = match proto
+            .stmts
+            .first()
+            .unwrap()
+            .stmt
+            .clone()
+            .unwrap()
+            .node
+            .unwrap()
+        {
+            NodeEnum::CopyStmt(s) => s,
+            _ => panic!("not a COPY"),
+        };
+
+        let row = PdCopyRow::from_proto(&copy_stmt, 4, b"\\N\tAlice\n");
+        let route = route_copy(row).unwrap();
+        assert_eq!(route.shard.try_into(), Ok(Shard::All));
+    }
+
+    #[test]
+    fn test_copy_csv_delimiter() {
+        let proto = pg_query::parse("COPY users (id, name) FROM STDIN CSV")
+            .unwrap()
+            .protobuf;
+        let copy_stmt = match proto
+            .stmts
+            .first()
+            .unwrap()
+            .stmt
+            .clone()
+            .unwrap()
+            .node
+            .unwrap()
+        {
+            NodeEnum::CopyStmt(s) => s,
+            _ => panic!("not a COPY"),
+        };
+
+        let row = PdCopyRow::from_proto(&copy_stmt, 3, b"5,Charlie\n");
+        let route = route_copy(row).unwrap();
+        assert_eq!(route.shard.try_into(), Ok(Shard::Direct(2))); // 5 % 3 = 2
+    }
+
+    #[test]
+    fn test_copy_no_id_column() {
+        let proto = pg_query::parse("COPY users (name, email) FROM STDIN")
+            .unwrap()
+            .protobuf;
+        let copy_stmt = match proto
+            .stmts
+            .first()
+            .unwrap()
+            .stmt
+            .clone()
+            .unwrap()
+            .node
+            .unwrap()
+        {
+            NodeEnum::CopyStmt(s) => s,
+            _ => panic!("not a COPY"),
+        };
+
+        let row = PdCopyRow::from_proto(&copy_stmt, 4, b"Alice\talice@test.com\n");
+        let route = route_copy(row).unwrap();
+        assert_eq!(route.shard.try_into(), Ok(Shard::Unknown));
     }
 }
