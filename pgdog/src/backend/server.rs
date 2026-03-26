@@ -90,8 +90,14 @@ impl Server {
     ) -> Result<Self, Error> {
         debug!("=> {}", addr);
         let stream = TcpStream::connect(addr.addr().await?).await?;
-        tweak(&stream)?;
         let cfg = config();
+
+        if let Err(err) = tweak(&stream) {
+            warn!(
+                "keepalive settings ({}) are not supported on this system, ignoring, error: {} [{}]",
+                cfg.config.tcp, err, addr,
+            );
+        }
 
         let mut stream = Stream::plain(stream, cfg.config.memory.net_buffer);
 

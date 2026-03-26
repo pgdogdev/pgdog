@@ -100,7 +100,7 @@ impl std::fmt::Display for Tcp {
             if let Some(ref c) = self.congestion_control {
                 c.as_str()
             } else {
-                ""
+                "default"
             },
         )
     }
