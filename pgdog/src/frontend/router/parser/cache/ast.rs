@@ -214,4 +214,42 @@ impl Ast {
             guard.direct += 1;
         }
     }
+
+    /// Get statement type.
+    pub fn statement_type(&self) -> StatementType {
+        let root = self
+            .ast
+            .protobuf
+            .stmts
+            .first()
+            .and_then(|s| s.stmt.as_ref())
+            .and_then(|s| s.node.as_ref());
+
+        match root {
+            Some(NodeEnum::SelectStmt(_))
+            | Some(NodeEnum::InsertStmt(_))
+            | Some(NodeEnum::UpdateStmt(_))
+            | Some(NodeEnum::DeleteStmt(_))
+            | Some(NodeEnum::CopyStmt(_))
+            | Some(NodeEnum::ExplainStmt(_))
+            | Some(NodeEnum::TransactionStmt(_)) => StatementType::Dml,
+
+            Some(NodeEnum::VariableSetStmt(_))
+            | Some(NodeEnum::VariableShowStmt(_))
+            | Some(NodeEnum::DeallocateStmt(_))
+            | Some(NodeEnum::ListenStmt(_))
+            | Some(NodeEnum::NotifyStmt(_))
+            | Some(NodeEnum::UnlistenStmt(_))
+            | Some(NodeEnum::DiscardStmt(_)) => StatementType::Session,
+
+            _ => StatementType::Ddl,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum StatementType {
+    Ddl,
+    Dml,
+    Session,
 }

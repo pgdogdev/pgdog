@@ -689,6 +689,7 @@ pub fn from_config(config: &ConfigAndUsers) -> Databases {
                 exposure: mirror
                     .exposure
                     .unwrap_or(config.config.general.mirror_exposure),
+                level: mirror.level,
             };
             mirror_configs.insert(
                 (mirror.source_db.clone(), mirror.destination_db.clone()),
@@ -852,8 +853,7 @@ mod tests {
         config.mirroring = vec![crate::config::Mirroring {
             source_db: "db1".to_string(),
             destination_db: "db1_mirror".to_string(),
-            queue_length: None,
-            exposure: None,
+            ..Default::default()
         }];
 
         let users = crate::config::Users {
@@ -932,8 +932,7 @@ mod tests {
         config.mirroring = vec![crate::config::Mirroring {
             source_db: "source_db".to_string(),
             destination_db: "dest_db".to_string(),
-            queue_length: None,
-            exposure: None,
+            ..Default::default()
         }];
 
         let users = crate::config::Users {
@@ -1011,6 +1010,7 @@ mod tests {
             destination_db: "dest_db".to_string(),
             queue_length: Some(256),
             exposure: Some(0.5),
+            ..Default::default()
         }];
 
         let users = crate::config::Users {
@@ -1087,8 +1087,7 @@ mod tests {
         config.mirroring = vec![crate::config::Mirroring {
             source_db: "db1".to_string(),
             destination_db: "db2".to_string(),
-            queue_length: None,
-            exposure: None,
+            ..Default::default()
         }];
 
         let users = crate::config::Users {
@@ -1168,13 +1167,13 @@ mod tests {
                 source_db: "primary".to_string(),
                 destination_db: "mirror1".to_string(),
                 queue_length: Some(200), // Override queue only
-                exposure: None,
+                ..Default::default()
             },
             crate::config::Mirroring {
                 source_db: "primary".to_string(),
                 destination_db: "mirror2".to_string(),
-                queue_length: None,
                 exposure: Some(0.25), // Override exposure only
+                ..Default::default()
             },
         ];
 
@@ -1259,6 +1258,7 @@ mod tests {
             destination_db: "dest".to_string(),
             queue_length: Some(256),
             exposure: Some(0.5),
+            ..Default::default()
         }];
 
         // Create user mismatch - user1 for source, user2 for dest
@@ -1325,6 +1325,7 @@ mod tests {
             destination_db: "dest_db".to_string(),
             queue_length: Some(256),
             exposure: Some(0.5),
+            ..Default::default()
         }];
 
         // No users at all

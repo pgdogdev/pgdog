@@ -156,6 +156,45 @@ pub struct Mirroring {
     ///
     /// https://docs.pgdog.dev/configuration/pgdog.toml/mirroring/#exposure
     pub exposure: Option<f32>,
+
+    /// What kind of statements to replicate.
+    #[serde(default)]
+    pub level: MirroringLevel,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema, Copy)]
+#[serde(deny_unknown_fields, rename_all = "lowercase")]
+pub enum MirroringLevel {
+    /// Replicate all statements.
+    #[default]
+    All,
+    /// Only DML (e.g., insert, update, delete, etc),
+    Dml,
+    /// Only DDL (CREATE, DROP, etc.)
+    Ddl,
+}
+
+impl std::fmt::Display for MirroringLevel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::All => write!(f, "all"),
+            Self::Dml => write!(f, "dml"),
+            Self::Ddl => write!(f, "ddl"),
+        }
+    }
+}
+
+impl FromStr for MirroringLevel {
+    type Err = ();
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "all" => Ok(Self::All),
+            "dml" => Ok(Self::Dml),
+            "ddl" => Ok(Self::Ddl),
+            _ => Err(()),
+        }
+    }
 }
 
 impl FromStr for Mirroring {
@@ -166,6 +205,7 @@ impl FromStr for Mirroring {
         let mut destination_db = None;
         let mut queue_length = None;
         let mut exposure = None;
+        let mut level = MirroringLevel::default();
 
         for pair in s.split('&') {
             let parts: Vec<&str> = pair.split('=').collect();
@@ -190,6 +230,7 @@ impl FromStr for Mirroring {
                             .map_err(|_| format!("Invalid exposure: {}", parts[1]))?,
                     );
                 }
+                "level" => level = MirroringLevel::from_str(parts[1]).unwrap_or_default(),
                 _ => return Err(format!("Unknown parameter: {}", parts[0])),
             }
         }
@@ -202,15 +243,18 @@ impl FromStr for Mirroring {
             destination_db,
             queue_length,
             exposure,
+            level,
         })
     }
 }
 
 /// Runtime mirror configuration with defaults resolved from global settings.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct MirrorConfig {
     /// Effective queue length for this mirror.
     pub queue_length: usize,
     /// Effective exposure fraction for this mirror.
     pub exposure: f32,
+    /// What kind of statements to mirror.
+    pub level: MirroringLevel,
 }

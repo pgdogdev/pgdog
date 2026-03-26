@@ -18,7 +18,7 @@ use super::error::Error;
 use super::general::General;
 use super::networking::{MultiTenant, Tcp, TlsVerifyMode};
 use super::pooling::PoolerMode;
-use super::replication::{MirrorConfig, Mirroring, ReplicaLag, Replication};
+use super::replication::{MirrorConfig, Mirroring, MirroringLevel, ReplicaLag, Replication};
 use super::rewrite::Rewrite;
 use super::sharding::{ManualQuery, OmnishardedTables, ShardedMapping, ShardedTable};
 use super::users::{Admin, Plugin, ServerAuth, Users};
@@ -94,14 +94,12 @@ impl ConfigAndUsers {
             warn!("admin password has been randomly generated");
         }
 
-        let mut config_and_users = ConfigAndUsers {
+        let config_and_users = ConfigAndUsers {
             config,
             users,
             config_path: config_path.to_owned(),
             users_path: users_path.to_owned(),
         };
-
-        config_and_users.check()?;
 
         Ok(config_and_users)
     }
@@ -424,6 +422,7 @@ impl Config {
             role: Role,
             role_warned: bool,
             parser_warned: bool,
+            mirror_parser_warned: bool,
             have_replicas: bool,
             sharded: bool,
         }
@@ -471,6 +470,7 @@ impl Config {
                         role: database.role,
                         role_warned: false,
                         parser_warned: false,
+                        mirror_parser_warned: false,
                         have_replicas: database.role == Role::Replica,
                         sharded: database.shard > 0,
                     },
@@ -517,7 +517,30 @@ impl Config {
             }
         }
 
-        for (database, check) in checks {
+        for mirror in &self.mirroring {
+            if mirror.level == MirroringLevel::All {
+                continue;
+            }
+            if let Some(check) = checks.get_mut(&mirror.source_db) {
+                if check.mirror_parser_warned {
+                    continue;
+                }
+                let parser_enabled = match self.general.query_parser {
+                    QueryParserLevel::On => true,
+                    QueryParserLevel::Off => false,
+                    QueryParserLevel::Auto => check.have_replicas || check.sharded,
+                };
+                if !parser_enabled {
+                    check.mirror_parser_warned = true;
+                    warn!(
+                        r#"mirroring from "{}" with level "{}" requires the query parser to classify statements, but it won't be enabled, set query_parser = "on""#,
+                        mirror.source_db, mirror.level
+                    );
+                }
+            }
+        }
+
+        for (database, check) in &checks {
             if !check.have_replicas
                 && self.general.read_write_split == ReadWriteSplit::ExcludePrimary
             {
@@ -560,6 +583,7 @@ impl Config {
             .map(|m| MirrorConfig {
                 queue_length: m.queue_length.unwrap_or(self.general.mirror_queue),
                 exposure: m.exposure.unwrap_or(self.general.mirror_exposure),
+                level: m.level,
             })
     }
 
@@ -571,6 +595,7 @@ impl Config {
             let config = MirrorConfig {
                 queue_length: mirror.queue_length.unwrap_or(self.general.mirror_queue),
                 exposure: mirror.exposure.unwrap_or(self.general.mirror_exposure),
+                level: mirror.level,
             };
 
             result

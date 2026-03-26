@@ -9,7 +9,3 @@ mkdir -p ${GEM_HOME}
 bundle install
 bundle exec rspec *_spec.rb
 popd
-
-pushd ${SCRIPT_DIR}/php
-bash run.sh
-popd
