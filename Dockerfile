@@ -1,7 +1,7 @@
 FROM ubuntu:latest AS builder
 
 RUN apt update && \
-    apt install -y build-essential cmake clang curl pkg-config libssl-dev git mold
+    apt install -y build-essential cmake clang curl pkg-config libssl-dev git mold protobuf-compiler
 
 # Install Rust.
 RUN curl https://sh.rustup.rs -sSf | sh -s -- -y
