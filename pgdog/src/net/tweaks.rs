@@ -1,14 +1,10 @@
 use std::io::Result;
 
+use pgdog_config::Tcp;
 use socket2::{SockRef, TcpKeepalive};
 use tokio::net::TcpStream;
 
-use crate::config::config;
-
-pub fn tweak(socket: &TcpStream) -> Result<()> {
-    let config = config();
-    let config = &config.config.tcp;
-
+pub fn tweak(socket: &TcpStream, config: &Tcp) -> Result<()> {
     // Disable the Nagle algorithm.
     socket.set_nodelay(true)?;
 

@@ -154,8 +154,16 @@ impl Listener {
     }
 
     async fn handle_client(stream: TcpStream, addr: SocketAddr) -> Result<(), Error> {
-        tweak(&stream)?;
         let config = config();
+
+        // Not the end of the world if the tweaks are
+        // not applied.
+        if let Err(err) = tweak(&stream, &config.config.tcp) {
+            warn!(
+                "keepalive settings ({}) are not supported on this system, ignoring, error: {} [{}]",
+                config.config.tcp, err, addr
+            );
+        }
 
         let mut stream = Stream::plain(stream, config.config.memory.net_buffer);
 
