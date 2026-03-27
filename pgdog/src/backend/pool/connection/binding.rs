@@ -2,11 +2,12 @@
 
 use crate::{
     frontend::{client::query_engine::TwoPcPhase, ClientRequest},
-    net::{parameter::Parameters, BackendKeyData, ProtocolMessage, Query},
+    net::{parameter::Parameters, BackendKeyData, Message, ProtocolMessage, Query},
     state::State,
 };
 
 use futures::future::join_all;
+use std::collections::HashMap;
 
 use super::*;
 
@@ -53,6 +54,13 @@ impl Binding {
         self.disconnect();
     }
 
+    pub fn forward_with_shard(&self) -> Option<HashMap<String, Vec<usize>>> {
+        match self {
+            Binding::MultiShard(_shards, state) => state.table_shard_map(),
+            _ => None,
+        }
+    }
+
     /// Are we connected to a backend?
     pub fn connected(&self) -> bool {
         match self {
@@ -91,12 +99,24 @@ impl Binding {
                             return Ok(message);
                         }
                         let mut read = false;
-                        for server in shards.iter_mut() {
+
+                        for (shard, server) in shards.iter_mut().enumerate() {
                             if !server.has_more_messages() {
                                 continue;
                             }
 
                             let message = server.read().await?;
+
+                            if state.display_table() {
+                                if let Some(table_name) = message.table_name_from_dt().unwrap() {
+                                    let mut map: HashMap<String, Vec<usize>> =
+                                        state.table_shard_map().unwrap_or_default();
+                                    map.entry(table_name.clone())
+                                        .or_insert_with(Vec::new)
+                                        .push(shard);
+                                    state.set_table_shard_map(Some(map));
+                                }
+                            }
 
                             read = true;
                             if let Some(message) = state.forward(message)? {
