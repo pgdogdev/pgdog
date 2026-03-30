@@ -13,6 +13,7 @@ use std::time::{Duration, SystemTime};
 
 use once_cell::sync::OnceCell;
 use parking_lot::Mutex;
+use pgdog_config::UniqueIdFunction;
 use thiserror::Error;
 
 use crate::config::config;
@@ -31,10 +32,24 @@ const TIMESTAMP_SHIFT: u8 = (SEQUENCE_BITS + NODE_BITS) as u8; // 22
 const MAX_OFFSET: u64 = i64::MAX as u64
     - ((MAX_TIMESTAMP << TIMESTAMP_SHIFT) | (MAX_NODE_ID << NODE_SHIFT) | MAX_SEQUENCE);
 
+// Compact layout: 41 timestamp + 6 node + 6 sequence = 53 bits (JS-safe)
+const COMPACT_NODE_BITS: u64 = 6; // Max 63 nodes
+const COMPACT_SEQUENCE_BITS: u64 = 6;
+const COMPACT_MAX_NODE_ID: u64 = (1 << COMPACT_NODE_BITS) - 1; // 63
+const COMPACT_MAX_SEQUENCE: u64 = (1 << COMPACT_SEQUENCE_BITS) - 1; // 63
+const COMPACT_NODE_SHIFT: u8 = COMPACT_SEQUENCE_BITS as u8; // 6
+const COMPACT_TIMESTAMP_SHIFT: u8 = (COMPACT_SEQUENCE_BITS + COMPACT_NODE_BITS) as u8; // 12
+
 static UNIQUE_ID: OnceCell<UniqueId> = OnceCell::new();
 
 #[derive(Debug, Default)]
 struct State {
+    last_timestamp_ms: u64,
+    sequence: u64,
+}
+
+#[derive(Debug, Default)]
+struct CompactState {
     last_timestamp_ms: u64,
     sequence: u64,
 }
@@ -72,6 +87,35 @@ impl State {
     }
 }
 
+impl CompactState {
+    fn next_id(&mut self, node_id: u64, id_offset: u64) -> u64 {
+        let mut now = wait_until(self.last_timestamp_ms);
+
+        if now == self.last_timestamp_ms {
+            self.sequence = (self.sequence + 1) & COMPACT_MAX_SEQUENCE;
+            if self.sequence == 0 {
+                now = wait_until(now + 1);
+            }
+        } else {
+            self.sequence = 0;
+        }
+
+        self.last_timestamp_ms = now;
+
+        let elapsed = self.last_timestamp_ms - PGDOG_EPOCH;
+        assert!(
+            elapsed <= MAX_TIMESTAMP,
+            "unique_id_compact timestamp overflow: {elapsed} > {MAX_TIMESTAMP}"
+        );
+        let timestamp_part = (elapsed & MAX_TIMESTAMP) << COMPACT_TIMESTAMP_SHIFT;
+        let node_part = node_id << COMPACT_NODE_SHIFT;
+        let sequence_part = self.sequence;
+
+        let base_id = timestamp_part | node_part | sequence_part;
+        base_id + id_offset
+    }
+}
+
 // Get current time in ms.
 fn now_ms() -> u64 {
     SystemTime::now()
@@ -100,6 +144,9 @@ pub enum Error {
     #[error("node ID exceeding maximum (1023): {0}")]
     NodeIdTooLarge(u64),
 
+    #[error("node ID exceeding compact maximum (63): {0}")]
+    CompactNodeIdTooLarge(u64),
+
     #[error("id_offset too large, would overflow i64: {0}")]
     OffsetTooLarge(u64),
 }
@@ -108,18 +155,25 @@ pub enum Error {
 pub struct UniqueId {
     node_id: u64,
     id_offset: u64,
-    inner: Mutex<State>,
+    standard: Mutex<State>,
+    compact: Mutex<CompactState>,
+    function: UniqueIdFunction,
 }
 
 impl UniqueId {
     /// Initialize the UniqueId generator.
-    fn new() -> Result<Self, Error> {
+    fn new(function: UniqueIdFunction) -> Result<Self, Error> {
         let node_id = node_id().map_err(|_| Error::InvalidNodeId(instance_id().to_string()))?;
 
         let min_id = config().config.general.unique_id_min;
 
         if node_id > MAX_NODE_ID {
             return Err(Error::NodeIdTooLarge(node_id));
+        }
+
+        // Compact (JS-safe) IDs only have 6 node bits.
+        if node_id > COMPACT_MAX_NODE_ID {
+            return Err(Error::CompactNodeIdTooLarge(node_id));
         }
 
         if min_id > MAX_OFFSET {
@@ -129,18 +183,30 @@ impl UniqueId {
         Ok(Self {
             node_id,
             id_offset: min_id,
-            inner: Mutex::new(State::default()),
+            standard: Mutex::new(State::default()),
+            compact: Mutex::new(CompactState::default()),
+            function,
         })
     }
 
     /// Get (and initialize, if necessary) the unique ID generator.
     pub fn generator() -> Result<&'static UniqueId, Error> {
-        UNIQUE_ID.get_or_try_init(Self::new)
+        UNIQUE_ID.get_or_try_init(|| {
+            let config = config();
+            Self::new(config.config.general.unique_id_function)
+        })
     }
 
     /// Generate a globally unique, monotonically increasing identifier.
     pub fn next_id(&self) -> i64 {
-        self.inner.lock().next_id(self.node_id, self.id_offset) as i64
+        match self.function {
+            UniqueIdFunction::Compact => {
+                self.compact.lock().next_id(self.node_id, self.id_offset) as i64
+            }
+            UniqueIdFunction::Standard => {
+                self.standard.lock().next_id(self.node_id, self.id_offset) as i64
+            }
+        }
     }
 }
 
@@ -251,6 +317,105 @@ mod test {
                 "ID {id} should be greater than offset {offset}"
             );
         }
+    }
+
+    #[test]
+    fn test_compact_unique_ids() {
+        let num_ids = 10_000;
+        let mut ids = HashSet::new();
+        let mut state = CompactState::default();
+        let node_id = 1u64;
+
+        for _ in 0..num_ids {
+            ids.insert(state.next_id(node_id, 0));
+        }
+
+        assert_eq!(ids.len(), num_ids);
+    }
+
+    #[test]
+    fn test_compact_monotonically_increasing() {
+        let mut state = CompactState::default();
+        let node_id = 1u64;
+
+        let mut prev_id = 0u64;
+        for _ in 0..10_000 {
+            let id = state.next_id(node_id, 0);
+            assert!(id > prev_id, "ID {id} not greater than previous {prev_id}");
+            prev_id = id;
+        }
+    }
+
+    #[test]
+    fn test_compact_js_safe() {
+        let mut state = CompactState::default();
+        let node_id = COMPACT_MAX_NODE_ID;
+        const JS_MAX_SAFE_INTEGER: u64 = (1 << 53) - 1;
+
+        for _ in 0..10_000 {
+            let id = state.next_id(node_id, 0);
+            let signed = id as i64;
+            assert!(signed > 0, "ID should be positive, got {signed}");
+            assert!(
+                id <= JS_MAX_SAFE_INTEGER,
+                "ID {id} exceeds JS MAX_SAFE_INTEGER {JS_MAX_SAFE_INTEGER}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_compact_bit_layout() {
+        // 41 timestamp + 6 node + 6 sequence = 53 bits
+        assert_eq!(
+            TIMESTAMP_BITS + COMPACT_NODE_BITS + COMPACT_SEQUENCE_BITS,
+            53
+        );
+        assert_eq!(COMPACT_TIMESTAMP_SHIFT, 12);
+        assert_eq!(COMPACT_NODE_SHIFT, 6);
+    }
+
+    #[test]
+    fn test_compact_max_values_fit() {
+        let max_elapsed = MAX_TIMESTAMP;
+        let max_node = COMPACT_MAX_NODE_ID;
+        let max_seq = COMPACT_MAX_SEQUENCE;
+
+        let id =
+            (max_elapsed << COMPACT_TIMESTAMP_SHIFT) | (max_node << COMPACT_NODE_SHIFT) | max_seq;
+        let signed = id as i64;
+        const JS_MAX_SAFE_INTEGER: i64 = (1 << 53) - 1;
+
+        assert!(
+            signed > 0,
+            "Max compact ID should be positive, got {signed}"
+        );
+        assert!(
+            signed <= JS_MAX_SAFE_INTEGER,
+            "Max compact ID {signed} exceeds JS MAX_SAFE_INTEGER {JS_MAX_SAFE_INTEGER}"
+        );
+    }
+
+    #[test]
+    fn test_compact_extract_components() {
+        let node: u64 = 42;
+        let mut state = CompactState::default();
+
+        let id = state.next_id(node, 0);
+
+        let extracted_seq = id & COMPACT_MAX_SEQUENCE;
+        let extracted_node = (id >> COMPACT_NODE_SHIFT) & COMPACT_MAX_NODE_ID;
+        let extracted_elapsed = id >> COMPACT_TIMESTAMP_SHIFT;
+
+        assert_eq!(extracted_node, node);
+        assert_eq!(extracted_seq, 0);
+        assert!(extracted_elapsed > 0);
+
+        let id2 = state.next_id(node, 0);
+        let extracted_seq2 = id2 & COMPACT_MAX_SEQUENCE;
+        let extracted_node2 = (id2 >> COMPACT_NODE_SHIFT) & COMPACT_MAX_NODE_ID;
+
+        assert_eq!(extracted_node2, node);
+        assert!(matches!(extracted_seq2, 1 | 0));
     }
 
     #[test]
