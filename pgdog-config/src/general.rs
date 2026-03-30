@@ -8,6 +8,7 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use crate::pooling::ConnectionRecovery;
+use crate::UniqueIdFunction;
 use crate::{
     CopyFormat, CutoverTimeoutAction, LoadSchema, QueryParserEngine, QueryParserLevel,
     SystemCatalogsBehavior,
@@ -545,6 +546,10 @@ pub struct General {
     #[serde(default)]
     pub unique_id_min: u64,
 
+    /// Unique ID generation function.
+    #[serde(default)]
+    pub unique_id_function: UniqueIdFunction,
+
     /// Changes how system catalog tables (like `pg_database`, `pg_class`, etc.) are treated by the query router.
     ///
     /// _Default:_ `omnisharded_sticky`
@@ -718,6 +723,7 @@ impl Default for General {
             cutover_timeout: Self::cutover_timeout(),
             cutover_timeout_action: Self::cutover_timeout_action(),
             cutover_save_config: bool::default(),
+            unique_id_function: Self::unique_id_function(),
         }
     }
 }
@@ -815,6 +821,10 @@ impl General {
     fn ban_replica_lag_bytes() -> u64 {
         // Use i64::MAX to ensure TOML serialization compatibility (TOML only supports i64)
         Self::env_or_default("PGDOG_BAN_REPLICA_LAG_BYTES", i64::MAX as u64)
+    }
+
+    fn unique_id_function() -> UniqueIdFunction {
+        Self::env_enum_or_default("PGDOG_UNIQUE_ID_FUNCTION")
     }
 
     fn cutover_replication_lag_threshold() -> u64 {

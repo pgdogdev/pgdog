@@ -516,6 +516,41 @@ impl FromStr for CutoverTimeoutAction {
     }
 }
 
+#[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Eq, Hash, Default, JsonSchema)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub enum UniqueIdFunction {
+    /// Standard 64-bit function using the entire 64-bit range.
+    #[default]
+    Standard,
+    /// Compact function using the leftest 53-bit range, making it
+    /// JavaScript-safe, so you can pass it as an integer directly
+    /// to the frontend apps.
+    ///
+    /// The year is 2026 and JavaScript continues to be a pain in the ass.
+    ///
+    Compact,
+}
+
+impl FromStr for UniqueIdFunction {
+    type Err = ();
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "standard" => Ok(Self::Standard),
+            "compact" => Ok(Self::Compact),
+            _ => Err(()),
+        }
+    }
+}
+
+impl Display for UniqueIdFunction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Compact => write!(f, "compact"),
+            Self::Standard => write!(f, "standard"),
+        }
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
