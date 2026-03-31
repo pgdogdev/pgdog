@@ -235,6 +235,92 @@ BEGIN
 END;
 $body$ LANGUAGE plpgsql;
 
+-- Install the sharded sequence on a table and column,
+-- automatically determining the sequence from the column's default value.
+CREATE OR REPLACE FUNCTION pgdog.install_next_id_seq(
+    schema_name TEXT,
+    table_name TEXT,
+    column_name TEXT,
+    lock_timeout TEXT DEFAULT '1s'
+) RETURNS TEXT AS $body$
+DECLARE max_id BIGINT;
+DECLARE current_id BIGINT;
+DECLARE seq_name TEXT;
+DECLARE col_default TEXT;
+DECLARE shard INTEGER;
+DECLARE shards INTEGER;
+BEGIN
+    -- Check inputs
+    EXECUTE format('SELECT "%s" FROM "%s"."%s" LIMIT 1', column_name, schema_name, table_name);
+
+    -- Get shard configuration.
+    SELECT
+        pgdog.config.shard,
+        pgdog.config.shards
+    INTO shard, shards
+    FROM pgdog.config;
+
+    IF shards IS NULL OR shard IS NULL THEN
+        RAISE EXCEPTION 'pgdog.config not set';
+    END IF;
+
+    -- Extract the sequence name from the column's default value.
+    SELECT pg_get_expr(d.adbin, d.adrelid)
+    INTO col_default
+    FROM pg_attrdef d
+    JOIN pg_attribute a ON a.attrelid = d.adrelid AND a.attnum = d.adnum
+    WHERE a.attrelid = format('"%s"."%s"', schema_name, table_name)::regclass
+      AND a.attname = column_name;
+
+    IF col_default IS NULL THEN
+        RAISE EXCEPTION 'column "%" on table "%"."%" has no default value', column_name, schema_name, table_name;
+    END IF;
+
+    -- Extract sequence name from nextval('sequence_name'::regclass).
+    SELECT substring(col_default FROM 'nextval\(''([^'']+)''')
+    INTO seq_name;
+
+    IF seq_name IS NULL THEN
+        RAISE EXCEPTION 'could not extract sequence name from default: %', col_default;
+    END IF;
+
+    PERFORM pgdog.check_table(schema_name, table_name);
+
+    IF NOT pgdog.check_column(schema_name, table_name, column_name) THEN
+        RAISE WARNING 'column is not indexed, this can be very slow';
+    END IF;
+
+    -- Lock table to prevent more writes.
+    EXECUTE format('LOCK TABLE "%s"."%s" IN ACCESS EXCLUSIVE MODE', schema_name, table_name);
+
+    -- Get the max column value.
+    EXECUTE format('SELECT MAX("%s") FROM "%s"."%s"', column_name, schema_name, table_name) INTO max_id;
+
+    -- Get current sequence value.
+    EXECUTE format('SELECT last_value FROM %s', seq_name) INTO current_id;
+
+    -- Install the function as the source of IDs.
+    EXECUTE format(
+        'ALTER TABLE "%s"."%s" ALTER COLUMN "%s" SET DEFAULT pgdog.next_id_seq(''%s''::regclass)',
+            schema_name,
+            table_name,
+            column_name,
+            seq_name
+        );
+
+    -- Update the sequence value if it's too low.
+    IF current_id < max_id THEN
+        PERFORM setval(seq_name::regclass, max_id);
+    END IF;
+
+    RETURN format('pgdog.next_id_seq(''%s'') installed on table "%s"."%s"',
+        seq_name,
+        schema_name,
+        table_name
+    );
+END;
+$body$ LANGUAGE plpgsql;
+
 -- Install trigger protecting the sharded column from bad inserts/updates.
 CREATE OR REPLACE FUNCTION pgdog.install_trigger(
     schema_name text,
