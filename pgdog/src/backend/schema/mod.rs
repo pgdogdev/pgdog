@@ -6,6 +6,13 @@ pub mod sync;
 pub use pgdog_stats::{
     Relation as StatsRelation, Relations as StatsRelations, Schema as StatsSchema, SchemaInner,
 };
+use pg_query::{
+    protobuf::{
+        ColumnDef, ConstrType, Constraint, CreateStmt, OnCommitAction, RangeVar,
+        String as PgString, TypeName,
+    },
+    Node, NodeEnum,
+};
 use serde::{Deserialize, Serialize};
 use std::ops::DerefMut;
 use std::{collections::HashMap, ops::Deref};
@@ -223,6 +230,142 @@ impl Schema {
     pub fn search_path(&self) -> &[String] {
         &self.inner.search_path
     }
+
+    /// Generate a `CREATE TABLE` statement for a relation in the schema.
+    pub fn to_sql(&self, schema: &str, table: &str) -> Option<String> {
+        let relation = self.inner.get(schema, table)?;
+
+        let mut table_elts = Vec::with_capacity(relation.columns.len());
+        let mut pk_columns = Vec::new();
+
+        for column in relation.columns.values() {
+            let mut constraints = Vec::new();
+
+            if !column.is_nullable {
+                constraints.push(Node {
+                    node: Some(NodeEnum::Constraint(Box::new(Constraint {
+                        contype: ConstrType::ConstrNotnull.into(),
+                        ..Default::default()
+                    }))),
+                });
+            }
+
+            if !column.column_default.is_empty() {
+                if let Some(expr) = Self::parse_default_expr(&column.column_default) {
+                    constraints.push(Node {
+                        node: Some(NodeEnum::Constraint(Box::new(Constraint {
+                            contype: ConstrType::ConstrDefault.into(),
+                            raw_expr: Some(Box::new(expr)),
+                            ..Default::default()
+                        }))),
+                    });
+                }
+            }
+
+            if column.is_primary_key {
+                pk_columns.push(Node {
+                    node: Some(NodeEnum::String(PgString {
+                        sval: column.column_name.clone(),
+                    })),
+                });
+            }
+
+            table_elts.push(Node {
+                node: Some(NodeEnum::ColumnDef(Box::new(ColumnDef {
+                    colname: column.column_name.clone(),
+                    type_name: Some(Self::pg_type_name(&column.data_type)),
+                    is_local: true,
+                    constraints,
+                    ..Default::default()
+                }))),
+            });
+        }
+
+        if !pk_columns.is_empty() {
+            table_elts.push(Node {
+                node: Some(NodeEnum::Constraint(Box::new(Constraint {
+                    contype: ConstrType::ConstrPrimary.into(),
+                    keys: pk_columns,
+                    ..Default::default()
+                }))),
+            });
+        }
+
+        let create_stmt = CreateStmt {
+            relation: Some(RangeVar {
+                schemaname: schema.to_owned(),
+                relname: table.to_owned(),
+                inh: true,
+                relpersistence: "p".to_owned(),
+                ..Default::default()
+            }),
+            table_elts,
+            oncommit: OnCommitAction::OncommitNoop.into(),
+            ..Default::default()
+        };
+
+        NodeEnum::CreateStmt(create_stmt).deparse().ok()
+    }
+
+    /// Parse a column default expression into an AST node.
+    fn parse_default_expr(default: &str) -> Option<Node> {
+        let parsed = pg_query::parse(&format!("SELECT {default}")).ok()?;
+        let stmt = parsed.protobuf.stmts.first()?;
+        let node = stmt.stmt.as_ref()?;
+        let NodeEnum::SelectStmt(ref select) = node.node.as_ref()? else {
+            return None;
+        };
+        let target = select.target_list.first()?;
+        let NodeEnum::ResTarget(ref res) = target.node.as_ref()? else {
+            return None;
+        };
+        res.val.as_ref().map(|v| (**v).clone())
+    }
+
+    /// Map an information_schema data type name to a pg_catalog [`TypeName`].
+    fn pg_type_name(data_type: &str) -> TypeName {
+        // Types that deparse correctly with pg_catalog qualification.
+        let pg_catalog_name = match data_type {
+            "bigint" => Some("int8"),
+            "integer" => Some("int4"),
+            "smallint" => Some("int2"),
+            "boolean" => Some("bool"),
+            "character varying" => Some("varchar"),
+            "double precision" => Some("float8"),
+            "real" => Some("float4"),
+            "timestamp without time zone" => Some("timestamp"),
+            "timestamp with time zone" => Some("timestamptz"),
+            "character" => Some("bpchar"),
+            _ => None,
+        };
+
+        let names = if let Some(pg_name) = pg_catalog_name {
+            vec![
+                Node {
+                    node: Some(NodeEnum::String(PgString {
+                        sval: "pg_catalog".to_owned(),
+                    })),
+                },
+                Node {
+                    node: Some(NodeEnum::String(PgString {
+                        sval: pg_name.to_owned(),
+                    })),
+                },
+            ]
+        } else {
+            vec![Node {
+                node: Some(NodeEnum::String(PgString {
+                    sval: data_type.to_owned(),
+                })),
+            }]
+        };
+
+        TypeName {
+            names,
+            typemod: -1,
+            ..Default::default()
+        }
+    }
 }
 
 #[cfg(test)]
@@ -272,6 +415,87 @@ mod test {
             .await
             .unwrap();
         assert!(debug.first().unwrap().contains("PgDog Debug"));
+    }
+
+    #[tokio::test]
+    async fn test_install_next_id_seq() {
+        use crate::backend::server::test::test_server;
+
+        let mut conn = test_server().await;
+
+        // Use a dedicated schema to avoid conflicts with test_schema
+        // which drops the pgdog schema.
+        conn.execute_checked("CREATE SCHEMA IF NOT EXISTS pgdog_test")
+            .await
+            .unwrap();
+
+        // Install pgdog schema (CREATE OR REPLACE is idempotent).
+        Schema::setup(&mut conn).await.unwrap();
+
+        // Ensure shard config exists.
+        let count = conn
+            .fetch_all::<i64>("SELECT COUNT(*) FROM pgdog.config")
+            .await
+            .unwrap();
+        if count.first().copied() == Some(0) {
+            conn.execute_checked(
+                "INSERT INTO pgdog.config (shard, shards) VALUES (0, 1)",
+            )
+            .await
+            .unwrap();
+        }
+
+        // Clean up from previous runs and create a test table with BIGSERIAL primary key.
+        conn.execute_checked("DROP TABLE IF EXISTS pgdog_test.ids")
+            .await
+            .unwrap();
+        conn.execute_checked(
+            "CREATE TABLE pgdog_test.ids (id BIGSERIAL PRIMARY KEY, value TEXT)",
+        )
+        .await
+        .unwrap();
+
+        // Install the sharded sequence via install_next_id_seq.
+        let result = conn
+            .fetch_all::<String>(
+                "SELECT pgdog.install_next_id_seq('pgdog_test', 'ids', 'id')",
+            )
+            .await
+            .unwrap();
+        assert!(
+            result.first().unwrap().contains("installed"),
+            "{}",
+            result.first().unwrap()
+        );
+
+        // Insert rows and collect generated IDs.
+        conn.execute_checked("INSERT INTO pgdog_test.ids (value) VALUES ('a')")
+            .await
+            .unwrap();
+        conn.execute_checked("INSERT INTO pgdog_test.ids (value) VALUES ('b')")
+            .await
+            .unwrap();
+        conn.execute_checked("INSERT INTO pgdog_test.ids (value) VALUES ('c')")
+            .await
+            .unwrap();
+
+        let ids = conn
+            .fetch_all::<i64>("SELECT id FROM pgdog_test.ids ORDER BY id")
+            .await
+            .unwrap();
+
+        assert_eq!(ids.len(), 3);
+
+        // All IDs should be unique.
+        let mut unique = ids.clone();
+        unique.sort();
+        unique.dedup();
+        assert_eq!(unique.len(), 3, "IDs are not unique: {:?}", ids);
+
+        // Clean up.
+        conn.execute_checked("DROP SCHEMA pgdog_test CASCADE")
+            .await
+            .unwrap();
     }
 
     #[test]
@@ -414,5 +638,51 @@ mod test {
         let result = schema.table(table, "alice", Some(&override_path));
         assert!(result.is_some());
         assert_eq!(result.unwrap().schema(), "custom");
+    }
+
+    #[test]
+    fn test_to_sql() {
+        use crate::backend::schema::columns::Column;
+
+        fn col(name: &str, table: &str, data_type: &str, ordinal: i32, pk: bool, nullable: bool) -> Column {
+            pgdog_stats::Column {
+                table_catalog: String::new(),
+                table_schema: "public".into(),
+                table_name: table.into(),
+                column_name: name.into(),
+                column_default: String::new(),
+                is_nullable: nullable,
+                data_type: data_type.into(),
+                ordinal_position: ordinal,
+                is_primary_key: pk,
+                foreign_keys: vec![],
+            }
+            .into()
+        }
+
+        let columns = IndexMap::from([
+            ("id".to_owned(), col("id", "users", "bigint", 1, true, false)),
+            ("name".to_owned(), col("name", "users", "text", 2, false, false)),
+            ("email".to_owned(), col("email", "users", "character varying", 3, false, true)),
+        ]);
+
+        let relations: HashMap<(String, String), Relation> =
+            HashMap::from([(("public".into(), "users".into()), Relation::test_table("public", "users", columns))]);
+        let schema = Schema::from_parts(vec!["public".into()], relations);
+
+        let sql = schema.to_sql("public", "users").unwrap();
+        assert!(sql.contains("CREATE TABLE"), "{sql}");
+        assert!(sql.contains("public"), "{sql}");
+        assert!(sql.contains("users"), "{sql}");
+        assert!(sql.contains("id"), "{sql}");
+        assert!(sql.contains("name"), "{sql}");
+        assert!(sql.contains("email"), "{sql}");
+        assert!(sql.contains("PRIMARY KEY"), "{sql}");
+    }
+
+    #[test]
+    fn test_to_sql_not_found() {
+        let schema = Schema::from_parts(vec!["public".into()], HashMap::new());
+        assert!(schema.to_sql("public", "nonexistent").is_none());
     }
 }

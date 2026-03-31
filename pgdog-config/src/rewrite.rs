@@ -19,6 +19,8 @@ pub enum RewriteMode {
     Error,
     /// Automatically rewrite the query and execute it.
     Rewrite,
+    /// Rewrite only for omnisharded tables.
+    RewriteOmni,
 }
 
 impl fmt::Display for RewriteMode {
@@ -27,6 +29,7 @@ impl fmt::Display for RewriteMode {
             RewriteMode::Error => "error",
             RewriteMode::Rewrite => "rewrite",
             RewriteMode::Ignore => "ignore",
+            RewriteMode::RewriteOmni => "rewrite_omni",
         };
         f.write_str(value)
     }
@@ -40,6 +43,7 @@ impl FromStr for RewriteMode {
             "error" => Ok(RewriteMode::Error),
             "rewrite" => Ok(RewriteMode::Rewrite),
             "ignore" => Ok(RewriteMode::Ignore),
+            "rewrite_omni" => Ok(RewriteMode::RewriteOmni),
             _ => Err(()),
         }
     }
