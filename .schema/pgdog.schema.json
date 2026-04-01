@@ -63,7 +63,7 @@
         "log_connections": true,
         "log_disconnections": true,
         "log_format": "text",
-        "log_level": "info",
+        "log_level": "trace",
         "lsn_check_delay": 9223372036854775807,
         "lsn_check_interval": 5000,
         "lsn_check_timeout": 5000,
@@ -780,7 +780,7 @@
         "log_level": {
           "description": "Log filter directives using the same syntax as the `RUST_LOG` environment variable.\n\n_Default:_ `info`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#log_level",
           "type": "string",
-          "default": "info"
+          "default": "trace"
         },
         "lsn_check_delay": {
           "description": "For how long to delay checking for replication delay.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#lsn_check_delay",
@@ -1501,6 +1501,11 @@
           "description": "Automatically rewrite the query and execute it.",
           "type": "string",
           "const": "rewrite"
+        },
+        {
+          "description": "Rewrite only for omnisharded tables.",
+          "type": "string",
+          "const": "rewrite_omni"
         }
       ]
     },

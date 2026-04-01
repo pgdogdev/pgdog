@@ -444,11 +444,18 @@ mod test {
 
     #[test]
     fn test_max_offset() {
-        // Verify MAX_OFFSET calculation is correct
         let max_base_id =
             (MAX_TIMESTAMP << TIMESTAMP_SHIFT) | (MAX_NODE_ID << NODE_SHIFT) | MAX_SEQUENCE;
         let result = max_base_id + MAX_OFFSET;
-        assert!(result <= i64::MAX as u64, "MAX_OFFSET would overflow i64");
+        assert_eq!(
+            result,
+            i64::MAX as u64,
+            "MAX_OFFSET should exactly reach i64::MAX"
+        );
+        assert!(
+            max_base_id.checked_add(MAX_OFFSET + 1).unwrap() > i64::MAX as u64,
+            "MAX_OFFSET + 1 should overflow i64"
+        );
     }
 
     #[test]
@@ -458,9 +465,13 @@ mod test {
             | (COMPACT_MAX_NODE_ID << COMPACT_NODE_SHIFT)
             | COMPACT_MAX_SEQUENCE;
         let result = max_base_id + COMPACT_MAX_OFFSET;
+        assert_eq!(
+            result, JS_MAX_SAFE_INTEGER,
+            "COMPACT_MAX_OFFSET should exactly reach JS MAX_SAFE_INTEGER"
+        );
         assert!(
-            result <= JS_MAX_SAFE_INTEGER,
-            "COMPACT_MAX_OFFSET would overflow JS MAX_SAFE_INTEGER"
+            max_base_id.checked_add(COMPACT_MAX_OFFSET + 1).unwrap() > JS_MAX_SAFE_INTEGER,
+            "COMPACT_MAX_OFFSET + 1 should overflow JS MAX_SAFE_INTEGER"
         );
     }
 }
