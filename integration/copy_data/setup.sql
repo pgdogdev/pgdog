@@ -45,6 +45,12 @@ CREATE TABLE copy_data.with_identity(
     tenant_id BIGINT NOT NULL
 );
 
+CREATE TABLE copy_data.settings (
+    id BIGSERIAL PRIMARY KEY,
+    setting_name TEXT NOT NULL UNIQUE,
+    setting_value TEXT NOT NULL
+);
+
 DROP PUBLICATION IF EXISTS pgdog;
 CREATE PUBLICATION pgdog FOR TABLES IN SCHEMA copy_data;
 

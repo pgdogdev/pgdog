@@ -14,3 +14,7 @@ database_name = "pgdog1"
 name = "destination"
 host = "127.0.0.1"
 database_name = "pgdog2"
+
+[[sharded_tables]]
+database = "destination"
+column = "user_id"

@@ -730,6 +730,13 @@ impl Server {
         query: impl Into<Query>,
     ) -> Result<Vec<Message>, Error> {
         let messages = self.execute(query).await?;
+        let notices = messages.iter().filter(|m| m.code() == 'N');
+
+        for notice in notices {
+            let notice = NoticeResponse::from_bytes(notice.to_bytes()?)?;
+            warn!("{} [{}]", notice.message.message, self.addr());
+        }
+
         let error = messages.iter().find(|m| m.code() == 'E');
         if let Some(error) = error {
             let error = ErrorResponse::from_bytes(error.to_bytes()?)?;
