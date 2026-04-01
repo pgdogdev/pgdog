@@ -39,6 +39,10 @@ const COMPACT_MAX_NODE_ID: u64 = (1 << COMPACT_NODE_BITS) - 1; // 63
 const COMPACT_MAX_SEQUENCE: u64 = (1 << COMPACT_SEQUENCE_BITS) - 1; // 63
 const COMPACT_NODE_SHIFT: u8 = COMPACT_SEQUENCE_BITS as u8; // 6
 const COMPACT_TIMESTAMP_SHIFT: u8 = (COMPACT_SEQUENCE_BITS + COMPACT_NODE_BITS) as u8; // 12
+const COMPACT_MAX_OFFSET: u64 = ((1u64 << 53) - 1)
+    - ((MAX_TIMESTAMP << COMPACT_TIMESTAMP_SHIFT)
+        | (COMPACT_MAX_NODE_ID << COMPACT_NODE_SHIFT)
+        | COMPACT_MAX_SEQUENCE);
 
 static UNIQUE_ID: OnceCell<UniqueId> = OnceCell::new();
 
@@ -167,17 +171,23 @@ impl UniqueId {
 
         let min_id = config().config.general.unique_id_min;
 
-        if node_id > MAX_NODE_ID {
-            return Err(Error::NodeIdTooLarge(node_id));
-        }
-
-        // Compact (JS-safe) IDs only have 6 node bits.
-        if node_id > COMPACT_MAX_NODE_ID {
-            return Err(Error::CompactNodeIdTooLarge(node_id));
-        }
-
-        if min_id > MAX_OFFSET {
-            return Err(Error::OffsetTooLarge(min_id));
+        match function {
+            UniqueIdFunction::Standard => {
+                if node_id > MAX_NODE_ID {
+                    return Err(Error::NodeIdTooLarge(node_id));
+                }
+                if min_id > MAX_OFFSET {
+                    return Err(Error::OffsetTooLarge(min_id));
+                }
+            }
+            UniqueIdFunction::Compact => {
+                if node_id > COMPACT_MAX_NODE_ID {
+                    return Err(Error::CompactNodeIdTooLarge(node_id));
+                }
+                if min_id > COMPACT_MAX_OFFSET {
+                    return Err(Error::OffsetTooLarge(min_id));
+                }
+            }
         }
 
         Ok(Self {
@@ -439,5 +449,18 @@ mod test {
             (MAX_TIMESTAMP << TIMESTAMP_SHIFT) | (MAX_NODE_ID << NODE_SHIFT) | MAX_SEQUENCE;
         let result = max_base_id + MAX_OFFSET;
         assert!(result <= i64::MAX as u64, "MAX_OFFSET would overflow i64");
+    }
+
+    #[test]
+    fn test_compact_max_offset() {
+        const JS_MAX_SAFE_INTEGER: u64 = (1 << 53) - 1;
+        let max_base_id = (MAX_TIMESTAMP << COMPACT_TIMESTAMP_SHIFT)
+            | (COMPACT_MAX_NODE_ID << COMPACT_NODE_SHIFT)
+            | COMPACT_MAX_SEQUENCE;
+        let result = max_base_id + COMPACT_MAX_OFFSET;
+        assert!(
+            result <= JS_MAX_SAFE_INTEGER,
+            "COMPACT_MAX_OFFSET would overflow JS MAX_SAFE_INTEGER"
+        );
     }
 }
