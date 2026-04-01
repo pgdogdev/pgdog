@@ -78,7 +78,7 @@ impl PreparedStatements {
             // Key already existed, only value changed.
             self.memory_used = self.memory_used.saturating_sub(str_mem(&old_value));
             self.memory_used += str_mem(&name);
-            self.global.write().decrement(&name);
+            self.global.write().decrement(&old_value);
         } else {
             // New entry.
             self.memory_used += str_mem(key) + str_mem(&name);
