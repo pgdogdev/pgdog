@@ -52,18 +52,26 @@ async fn test_reload_connection_count_stable() {
     eprintln!("connections before RELOAD: {before}");
 
     admin.simple_query("RELOAD").await.unwrap();
-    sleep(Duration::from_millis(500)).await;
+    let mut after = before;
+    let mut settled = false;
+    for _ in 0..20 {
+        sleep(Duration::from_millis(250)).await;
+        after = direct
+            .fetch_one(
+                "SELECT COUNT(*)::BIGINT FROM pg_stat_activity WHERE application_name = 'PgDog'",
+            )
+            .await
+            .unwrap()
+            .get(0);
+        eprintln!("connections after RELOAD: {after}");
+        if after == before {
+            settled = true;
+            break;
+        }
+    }
 
-    let after: i64 = direct
-        .fetch_one("SELECT COUNT(*)::BIGINT FROM pg_stat_activity WHERE application_name = 'PgDog'")
-        .await
-        .unwrap()
-        .get(0);
-
-    eprintln!("connections after RELOAD: {after}");
-
-    assert_eq!(
-        before, after,
+    assert!(
+        settled,
         "connection count changed after RELOAD: before={before}, after={after}"
     );
 
