@@ -81,12 +81,25 @@ EOF
 
 diff source.sql destination.sql > diff.txt || true
 
-# Extract column name and type from diff lines, ignoring everything else
-# This normalizes across different PG versions and constraint syntaxes
-ACTUAL_CONVERSIONS=$(grep '^[<>]' diff.txt | \
-    grep -E '\b(integer|bigint)\b' | \
-    sed -E 's/.*[[:space:]]([a-z_]+)[[:space:]]+(integer|bigint).*/\1 \2/' | \
-    sort -u)
+# Extract integer -> bigint conversions from the diff
+# 1. Get removed (< integer) and added (> bigint) column lines
+# 2. Only keep columns that appear as integer in source AND bigint in destination
+REMOVED_INT=$(grep '^<' diff.txt | \
+    sed -E 's/.*[[:space:]]([a-z_]+)[[:space:]]+integer\b.*/\1/' | \
+    grep -E '^[a-z_]+$' | sort -u)
+
+ADDED_BIGINT=$(grep '^>' diff.txt | \
+    sed -E 's/.*[[:space:]]([a-z_]+)[[:space:]]+bigint\b.*/\1/' | \
+    grep -E '^[a-z_]+$' | sort -u)
+
+# Columns that changed from integer to bigint
+CONVERTED=$(comm -12 <(echo "$REMOVED_INT") <(echo "$ADDED_BIGINT"))
+
+# Build the expected format: column_name integer \n column_name bigint
+ACTUAL_CONVERSIONS=$(echo "$CONVERTED" | while read col; do
+    echo "$col integer"
+    echo "$col bigint"
+done | sort -u)
 
 EXPECTED_SORTED=$(echo "$EXPECTED_CONVERSIONS" | sort -u)
 

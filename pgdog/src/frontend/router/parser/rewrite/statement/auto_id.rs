@@ -62,15 +62,6 @@ impl StatementRewrite<'_> {
             .copied()
             .collect();
 
-        // Replace DEFAULT values with unique_id() for present columns (only in rewrite mode)
-        if mode == RewriteMode::Rewrite {
-            let replaced = self.replace_set_to_default_at_positions(&present_pk_positions);
-            if replaced > 0 {
-                plan.auto_id_injected += replaced as u16;
-                self.rewritten = true;
-            }
-        }
-
         if missing_columns.is_empty() {
             return Ok(());
         }
@@ -81,6 +72,15 @@ impl StatementRewrite<'_> {
 
         let rewrite =
             mode == RewriteMode::Rewrite || mode == RewriteMode::RewriteOmni && !is_sharded;
+
+        // Replace DEFAULT values with unique_id() for present columns (only in rewrite mode)
+        if rewrite {
+            let replaced = self.replace_set_to_default_at_positions(&present_pk_positions);
+            if replaced > 0 {
+                plan.auto_id_injected += replaced as u16;
+                self.rewritten = true;
+            }
+        }
 
         if rewrite {
             for column in missing_columns {
