@@ -62,14 +62,6 @@ impl StatementRewrite<'_> {
             .copied()
             .collect();
 
-        if missing_columns.is_empty() {
-            return Ok(());
-        }
-
-        if mode == RewriteMode::Error {
-            return Err(Error::MissingPrimaryKey);
-        }
-
         let rewrite =
             mode == RewriteMode::Rewrite || mode == RewriteMode::RewriteOmni && !is_sharded;
 
@@ -80,6 +72,14 @@ impl StatementRewrite<'_> {
                 plan.auto_id_injected += replaced as u16;
                 self.rewritten = true;
             }
+        }
+
+        if missing_columns.is_empty() {
+            return Ok(());
+        }
+
+        if mode == RewriteMode::Error {
+            return Err(Error::MissingPrimaryKey);
         }
 
         if rewrite {
