@@ -295,6 +295,7 @@ async fn test_error_disconnects_and_update_works() -> Result<(), Box<dyn std::er
     admin.execute("SET two_phase_commit TO true").await?;
     admin.execute("SET two_phase_commit_auto TO true").await?;
 
+    prepare_split_table(&conn).await;
     conn.execute("TRUNCATE TABLE sharded").await?;
 
     for _ in 0..250 {

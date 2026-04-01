@@ -22,6 +22,9 @@ async fn test_connect() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_concurrent() {
+    const TASKS: i64 = 25;
+    const IDS_PER_TASK: i64 = 100;
+
     let mut tasks = JoinSet::new();
 
     let cache_hits_before = get_stat("pgdog_query_cache_hits").await.unwrap();
@@ -44,10 +47,15 @@ async fn test_concurrent() {
             .unwrap();
     }
 
-    for i in 0..25 {
+    for worker in 0..TASKS {
         tasks.spawn(async move {
+            // Workers must use disjoint keyspaces or the pre-insert SELECT becomes
+            // nondeterministic under concurrency.
+            let start = worker * IDS_PER_TASK;
+            let end = start + IDS_PER_TASK;
+
             for conn in connections_sqlx().await {
-                for id in i * 25..i * 25 + 100 {
+                for id in start..end {
                     let row: Option<(i64,)> =
                         sqlx::query_as("SELECT * FROM rust_test_concurrent.sharded WHERE id = $1")
                             .bind(id)
