@@ -1,7 +1,9 @@
 -- Schema where we are placing all of our code.
 CREATE SCHEMA IF NOT EXISTS pgdog;
+CREATE SCHEMA IF NOT EXISTS pgdog_shadow;
 
 GRANT USAGE ON SCHEMA pgdog TO PUBLIC;
+GRANT USAGE ON SCHEMA pgdog_shadow TO PUBLIC;
 
 -- Settings table.
 CREATE TABLE IF NOT EXISTS pgdog.config (
@@ -50,7 +52,10 @@ GRANT USAGE ON SEQUENCE pgdog.validator_bigint_id_seq TO PUBLIC;
 
 -- Generate a primary key from a sequence that will
 -- match the shard number this is ran on.
-CREATE OR REPLACE FUNCTION pgdog.next_id_seq(sequence_name regclass) RETURNS BIGINT AS $body$
+CREATE OR REPLACE FUNCTION pgdog.next_id_seq(
+     sequence_name regclass,
+     table_name regclass default 'pgdog.validator_bigint'::regclass
+) RETURNS BIGINT AS $body$
 DECLARE next_value BIGINT;
 DECLARE seq_oid oid;
 DECLARE table_oid oid;
@@ -58,7 +63,7 @@ DECLARE shards INTEGER;
 DECLARE shard INTEGER;
 BEGIN
     SELECT sequence_name INTO seq_oid;
-    SELECT 'pgdog.validator_bigint'::regclass INTO table_oid;
+    SELECT table_name INTO table_oid;
     SELECT
         pgdog.config.shard,
         pgdog.config.shards
@@ -235,6 +240,52 @@ BEGIN
 END;
 $body$ LANGUAGE plpgsql;
 
+--
+-- Create "shadow" table used for primary key generation using the internal sequence.
+--
+-- This will create the table and the sequence.
+--
+CREATE OR REPLACE FUNCTION pgdog.install_shadow_table(
+    schema_name TEXT,
+    table_name TEXT,
+    column_name TEXT,
+    lock_timeout TEXT DEFAULT '1s'
+) RETURNS text AS $body$
+DECLARE shadow_table_name TEXT;
+DECLARE shadow_seq_name TEXT;
+BEGIN
+    SELECT schema_name || '_' || table_name INTO shadow_table_name;
+    SELECT schema_name || '_' || table_name || '_' || column_name || '_seq' INTO shadow_seq_name;
+
+    PERFORM format('SET LOCAL lock_timeout TO ''%s''', lock_timeout);
+
+    EXECUTE format(
+        'CREATE TABLE IF NOT EXISTS pgdog_shadow."%s" (LIKE "%s"."%s") PARTITION BY HASH("%s")',
+        shadow_table_name,
+        schema_name,
+        table_name,
+        column_name
+    );
+
+    -- Create sequence.
+    EXECUTE format('CREATE SEQUENCE IF NOT EXISTS pgdog_shadow."%s"', shadow_seq_name);
+
+    -- Make the sequence owned by the shadow table.
+    EXECUTE format('ALTER SEQUENCE pgdog_shadow."%s" OWNED BY pgdog_shadow.%s.%s', shadow_seq_name, shadow_table_name, column_name);
+
+    -- Set it as the default for the target table, allowing automatic ID generation.
+    EXECUTE format('ALTER TABLE "%s"."%s" ALTER COLUMN "%s" SET DEFAULT pgdog.next_id_seq(''pgdog_shadow.%s''::regclass, ''pgdog_shadow.%s'')',
+        schema_name,
+        table_name,
+        column_name,
+        shadow_seq_name,
+        shadow_table_name
+    );
+
+    RETURN format('"pgdog_shadow"."%s"', shadow_table_name);
+END;
+$body$ LANGUAGE plpgsql;
+
 -- Install the sharded sequence on a table and column,
 -- automatically determining the sequence from the column's default value.
 CREATE OR REPLACE FUNCTION pgdog.install_next_id_seq(
@@ -403,87 +454,3 @@ BEGIN
     RETURN format('installed on shard %s', shard);
 END;
 $body$ LANGUAGE plpgsql;
-
--- Globally unique 64-bit ID generator (Snowflake-like).
--- Bit allocation: 41 timestamp + 10 node + 12 sequence = 63 bits (keeps sign bit clear)
--- The sequence stores (elapsed_ms << 12) | sequence_within_ms, allowing
--- automatic reset of the sequence counter when the millisecond changes.
--- CREATE SEQUENCE IF NOT EXISTS pgdog.unique_id_seq;
-
--- CREATE OR REPLACE FUNCTION pgdog.unique_id(id_offset BIGINT DEFAULT 0) RETURNS BIGINT AS $body$
--- DECLARE
---     sequence_bits CONSTANT INTEGER := 12;
---     node_bits CONSTANT INTEGER := 10;
---     max_node_id CONSTANT INTEGER := (1 << node_bits) - 1;         -- 1023
---     max_sequence CONSTANT INTEGER := (1 << sequence_bits) - 1;    -- 4095
---     max_timestamp CONSTANT BIGINT := (1::bigint << 41) - 1;
---     pgdog_epoch CONSTANT BIGINT := 1764184395000;  -- Wednesday, November 26, 2025 11:13:15 AM GMT-08:00
---     node_shift CONSTANT INTEGER := sequence_bits;  -- 12
---     timestamp_shift CONSTANT INTEGER := sequence_bits + node_bits;  -- 22
-
---     node_id INTEGER;
---     now_ms BIGINT;
---     elapsed BIGINT;
---     min_combined BIGINT;
---     combined_seq BIGINT;
---     seq INTEGER;
---     timestamp_part BIGINT;
---     node_part BIGINT;
---     base_id BIGINT;
--- BEGIN
---     -- Get node_id from pgdog.config.shard
---     SELECT pgdog.config.shard INTO node_id FROM pgdog.config;
-
---     IF node_id IS NULL THEN
---         RAISE EXCEPTION 'pgdog.config.shard not set';
---     END IF;
-
---     IF node_id < 0 OR node_id > max_node_id THEN
---         RAISE EXCEPTION 'shard must be between 0 and %', max_node_id;
---     END IF;
-
---     LOOP
---         -- Get next combined sequence value
---         combined_seq := nextval('pgdog.unique_id_seq');
-
---         -- Get current time in milliseconds since Unix epoch
---         now_ms := (EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint;
---         elapsed := now_ms - pgdog_epoch;
-
---         IF elapsed < 0 THEN
---             RAISE EXCEPTION 'Clock is before PgDog epoch (November 26, 2025)';
---         END IF;
-
---         -- Minimum valid combined value for current millisecond
---         min_combined := elapsed << 12;
-
---         -- If sequence is at or ahead of current time, we're good
---         IF combined_seq >= min_combined THEN
---             EXIT;
---         END IF;
-
---         -- Sequence is behind current time, advance it
---         PERFORM setval('pgdog.unique_id_seq', min_combined, false);
---     END LOOP;
-
---     -- Decompose the combined sequence value
---     seq := (combined_seq & max_sequence)::integer;
---     elapsed := combined_seq >> 12;
-
---     IF elapsed > max_timestamp THEN
---         RAISE EXCEPTION 'Timestamp overflow: % > %', elapsed, max_timestamp;
---     END IF;
-
---     -- Compose the ID: timestamp | node | sequence
---     timestamp_part := elapsed << timestamp_shift;
---     node_part := node_id::bigint << node_shift;
---     base_id := timestamp_part | node_part | seq;
-
---     RETURN base_id + id_offset;
--- END;
--- $body$ LANGUAGE plpgsql;
-
--- GRANT USAGE ON SEQUENCE pgdog.unique_id_seq TO PUBLIC;
-
--- -- Allow functions to be executed by anyone.
--- GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA pgdog TO PUBLIC;

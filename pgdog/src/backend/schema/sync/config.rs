@@ -37,7 +37,7 @@ impl ShardConfig {
     pub async fn sync_all(cluster: &Cluster) -> Result<(), Error> {
         let shards = cluster.shards().len();
 
-        info!("setting up schema on {} shards", shards);
+        info!("setting up shard config on {} shards", shards);
 
         let shards: Vec<_> = cluster
             .shards()
@@ -56,7 +56,7 @@ impl ShardConfig {
             shard.sync().await?;
         }
 
-        info!("schema setup complete for {} shards", shards.len());
+        info!("shard config complete for {} shards", shards.len());
 
         Ok(())
     }

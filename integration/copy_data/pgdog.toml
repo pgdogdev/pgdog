@@ -9,6 +9,11 @@ name = "source"
 host = "127.0.0.1"
 database_name = "pgdog"
 
+[[sharded_tables]]
+database = "source"
+column = "tenant_id"
+data_type = "bigint"
+
 #
 # Reshard 0 -> 2
 #
@@ -51,3 +56,6 @@ data_type = "bigint"
 
 [admin]
 password = "pgdog"
+
+[rewrite]
+primary_key = "rewrite_omni"

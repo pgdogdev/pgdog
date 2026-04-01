@@ -3,9 +3,6 @@ pub mod columns;
 pub mod relation;
 pub mod sync;
 
-pub use pgdog_stats::{
-    Relation as StatsRelation, Relations as StatsRelations, Schema as StatsSchema, SchemaInner,
-};
 use pg_query::{
     protobuf::{
         ColumnDef, ConstrType, Constraint, CreateStmt, OnCommitAction, RangeVar,
@@ -13,16 +10,20 @@ use pg_query::{
     },
     Node, NodeEnum,
 };
+pub use pgdog_stats::{
+    Relation as StatsRelation, Relations as StatsRelations, Schema as StatsSchema, SchemaInner,
+};
 use serde::{Deserialize, Serialize};
 use std::ops::DerefMut;
 use std::{collections::HashMap, ops::Deref};
-use tracing::debug;
+use tracing::info;
 
 pub use relation::Relation;
 
 use super::{pool::Request, Cluster, Error, Server};
 use crate::frontend::router::parser::Table;
 use crate::net::parameter::ParameterValue;
+use sync::ShardConfig;
 
 static SETUP: &str = include_str!("setup.sql");
 
@@ -112,57 +113,52 @@ impl Schema {
         let shards = cluster.shards();
         let sharded_tables = cluster.sharded_tables();
 
-        if shards.len() < 2 || sharded_tables.is_empty() {
+        if sharded_tables.is_empty() {
             return Ok(());
         }
 
-        for (shard_number, shard) in shards.iter().enumerate() {
+        // Sync configuration.
+        ShardConfig::sync_all(cluster).await?;
+
+        for shard in shards {
             let mut server = shard.primary(&Request::default()).await?;
             Self::setup(&mut server).await?;
             let schema = Self::load(&mut server).await?;
 
-            debug!("[{}] {:#?}", server.addr(), schema);
+            let tables = schema
+                .tables()
+                .iter()
+                .cloned()
+                .filter(|table| !matches!(table.schema.as_str(), "pgdog" | "pgdog_shadow"))
+                .collect::<Vec<_>>();
 
-            for table in sharded_tables {
-                for schema_table in schema
-                    .tables()
-                    .iter()
-                    .filter(|table| table.schema() != "pgdog")
-                {
-                    let column_match = schema_table.columns().values().find(|column| {
-                        column.column_name == table.column && column.data_type == "bigint"
-                    });
-                    if let Some(column_match) = column_match {
-                        if table.name.is_none()
-                            || table.name == Some(column_match.table_name.clone())
-                        {
-                            if table.primary {
-                                let query = format!(
-                                    "SELECT pgdog.install_next_id('{}', '{}', '{}', {}, {})",
-                                    schema_table.schema(),
-                                    schema_table.name,
-                                    column_match.column_name,
-                                    shards.len(),
-                                    shard_number
-                                );
+            info!(
+                "[schema] checking {} tables for sharded sequences [{}]",
+                tables.len(),
+                server.addr(),
+            );
 
-                                server.execute(&query).await?;
-                            }
+            for table in tables {
+                for column in table.columns().iter().filter(|column| {
+                    column.1.is_primary_key // Only primary keys.
+                        && matches!(column.1.data_type.as_str(), "bigint" | "int8") // Only BIGINT.
+                        && column.1.column_default.contains("nextval") // Only the ones that rely on a sequence.
+                }) {
+                    info!(
+                        "[schema] creating sharded sequence for \"{}\".\"{}\".\"{}\"",
+                        column.1.table_schema, column.1.table_name, column.1.column_name,
+                    );
 
-                            let query = format!(
-                                "SELECT pgdog.install_trigger('{}', '{}', '{}', {}, {})",
-                                schema_table.schema(),
-                                schema_table.name,
-                                column_match.column_name,
-                                shards.len(),
-                                shard_number
-                            );
+                    let query = format!(
+                        "SELECT pgdog.install_shadow_table('{}', '{}', '{}')",
+                        column.1.table_schema, column.1.table_name, column.1.column_name,
+                    );
 
-                            server.execute(&query).await?;
-                        }
-                    }
+                    server.execute_checked(&query).await?;
                 }
             }
+
+            info!("[schema] sharded sequence check done [{}]", server.addr());
         }
 
         Ok(())
@@ -438,28 +434,22 @@ mod test {
             .await
             .unwrap();
         if count.first().copied() == Some(0) {
-            conn.execute_checked(
-                "INSERT INTO pgdog.config (shard, shards) VALUES (0, 1)",
-            )
-            .await
-            .unwrap();
+            conn.execute_checked("INSERT INTO pgdog.config (shard, shards) VALUES (0, 1)")
+                .await
+                .unwrap();
         }
 
         // Clean up from previous runs and create a test table with BIGSERIAL primary key.
         conn.execute_checked("DROP TABLE IF EXISTS pgdog_test.ids")
             .await
             .unwrap();
-        conn.execute_checked(
-            "CREATE TABLE pgdog_test.ids (id BIGSERIAL PRIMARY KEY, value TEXT)",
-        )
-        .await
-        .unwrap();
+        conn.execute_checked("CREATE TABLE pgdog_test.ids (id BIGSERIAL PRIMARY KEY, value TEXT)")
+            .await
+            .unwrap();
 
         // Install the sharded sequence via install_next_id_seq.
         let result = conn
-            .fetch_all::<String>(
-                "SELECT pgdog.install_next_id_seq('pgdog_test', 'ids', 'id')",
-            )
+            .fetch_all::<String>("SELECT pgdog.install_next_id_seq('pgdog_test', 'ids', 'id')")
             .await
             .unwrap();
         assert!(
@@ -644,7 +634,14 @@ mod test {
     fn test_to_sql() {
         use crate::backend::schema::columns::Column;
 
-        fn col(name: &str, table: &str, data_type: &str, ordinal: i32, pk: bool, nullable: bool) -> Column {
+        fn col(
+            name: &str,
+            table: &str,
+            data_type: &str,
+            ordinal: i32,
+            pk: bool,
+            nullable: bool,
+        ) -> Column {
             pgdog_stats::Column {
                 table_catalog: String::new(),
                 table_schema: "public".into(),
@@ -661,13 +658,24 @@ mod test {
         }
 
         let columns = IndexMap::from([
-            ("id".to_owned(), col("id", "users", "bigint", 1, true, false)),
-            ("name".to_owned(), col("name", "users", "text", 2, false, false)),
-            ("email".to_owned(), col("email", "users", "character varying", 3, false, true)),
+            (
+                "id".to_owned(),
+                col("id", "users", "bigint", 1, true, false),
+            ),
+            (
+                "name".to_owned(),
+                col("name", "users", "text", 2, false, false),
+            ),
+            (
+                "email".to_owned(),
+                col("email", "users", "character varying", 3, false, true),
+            ),
         ]);
 
-        let relations: HashMap<(String, String), Relation> =
-            HashMap::from([(("public".into(), "users".into()), Relation::test_table("public", "users", columns))]);
+        let relations: HashMap<(String, String), Relation> = HashMap::from([(
+            ("public".into(), "users".into()),
+            Relation::test_table("public", "users", columns),
+        )]);
         let schema = Schema::from_parts(vec!["public".into()], relations);
 
         let sql = schema.to_sql("public", "users").unwrap();

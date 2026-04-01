@@ -348,6 +348,23 @@ impl Databases {
         Err(Error::NoSchemaOwner(database.to_owned()))
     }
 
+    /// Get all schema owners for all databases,
+    /// one per database.
+    ///
+    /// N.B.: Subsequent entry will override previous entry.
+    ///
+    pub fn schema_owners(&self) -> Vec<Cluster> {
+        let mut schema_owners = HashMap::new();
+
+        for cluster in self.databases.values() {
+            if cluster.schema_admin() {
+                schema_owners.insert(cluster.name().to_string(), cluster.clone());
+            }
+        }
+
+        schema_owners.into_values().collect()
+    }
+
     pub fn mirrors(&self, user: impl ToUser) -> Result<Option<&[Cluster]>, Error> {
         let user = user.to_user();
         if self.databases.contains_key(&user) {
