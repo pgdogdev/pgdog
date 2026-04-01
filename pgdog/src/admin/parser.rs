@@ -15,6 +15,7 @@ pub enum ParseResult {
     ShowServers(ShowServers),
     ShowPeers(ShowPeers),
     ShowQueryCache(ShowQueryCache),
+    ResetPrepared(ResetPrepared),
     ResetQueryCache(ResetQueryCache),
     ShowStats(ShowStats),
     ShowTransactions(ShowTransactions),
@@ -60,6 +61,7 @@ impl ParseResult {
             ShowServers(show_servers) => show_servers.execute().await,
             ShowPeers(show_peers) => show_peers.execute().await,
             ShowQueryCache(show_query_cache) => show_query_cache.execute().await,
+            ResetPrepared(cmd) => cmd.execute().await,
             ResetQueryCache(reset_query_cache) => reset_query_cache.execute().await,
             ShowStats(show_stats) => show_stats.execute().await,
             ShowTransactions(show_transactions) => show_transactions.execute().await,
@@ -105,6 +107,7 @@ impl ParseResult {
             ShowServers(show_servers) => show_servers.name(),
             ShowPeers(show_peers) => show_peers.name(),
             ShowQueryCache(show_query_cache) => show_query_cache.name(),
+            ResetPrepared(cmd) => cmd.name(),
             ResetQueryCache(reset_query_cache) => reset_query_cache.name(),
             ShowStats(show_stats) => show_stats.name(),
             ShowTransactions(show_transactions) => show_transactions.name(),
@@ -194,6 +197,7 @@ impl Parser {
                 }
             },
             "reset" => match iter.next().ok_or(Error::Syntax)?.trim() {
+                "prepared" => ParseResult::ResetPrepared(ResetPrepared::parse(&sql)?),
                 "query_cache" => ParseResult::ResetQueryCache(ResetQueryCache::parse(&sql)?),
                 command => {
                     debug!("unknown admin show command: '{}'", command);
