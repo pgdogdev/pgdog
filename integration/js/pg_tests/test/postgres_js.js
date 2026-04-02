@@ -505,5 +505,25 @@ describe("postgres.js unsafe stress test (50k unique statements)", function () {
       `${errors.length} failures, first 5: ${JSON.stringify(errors.slice(0, 5))}`,
     );
     assert.strictEqual(completed, TOTAL_QUERIES);
+
+    // Verify backend prepared statement evictions are happening.
+    // With 50k unique statements, pool_size=10, and capacity=500,
+    // each connection handles ~5k queries → ~4500 evictions each.
+    const res = await fetch("http://localhost:9090");
+    const metrics = await res.text();
+    const evictions = metrics
+      .split("\n")
+      .filter(
+        (l) =>
+          l.startsWith("pgdog_total_prepared_evictions") &&
+          l.includes('database="pgdog"') &&
+          l.includes('user="pgdog"'),
+      )
+      .map((l) => parseInt(l.split(" ").pop(), 10))
+      .reduce((a, b) => a + b, 0);
+    assert.ok(
+      evictions > 0,
+      `expected prepared statement evictions, got ${evictions}`,
+    );
   });
 });
