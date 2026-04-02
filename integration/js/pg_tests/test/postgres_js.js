@@ -456,6 +456,9 @@ describe("postgres.js unsafe stress test (50k unique statements)", function () {
 
   before(async function () {
     await adminSet("prepared_statements", "extended_anonymous");
+    // Warmup: ensure pool connections are established after databases::init()
+    // recreates backend pools (same pattern as other test suites).
+    await sql.unsafe("SELECT 1");
   });
 
   after(async function () {
