@@ -10,7 +10,7 @@ use tokio::{
 
 use crate::{
     backend::databases::{reload_from_existing, shutdown},
-    config::{config, load_test_replicas, load_test_sharded, set},
+    config::{config, load_test_replicas, load_test_sharded, load_test_sharded_3, set},
     frontend::{
         client::query_engine::QueryEngine,
         router::{parser::Shard, sharding::ContextBuilder},
@@ -134,6 +134,12 @@ impl TestClient {
     /// New sharded client with parameters.
     pub(crate) async fn new_sharded(params: Parameters) -> Self {
         load_test_sharded();
+        Self::new(params).await
+    }
+
+    /// New 3-shard client with parameters.
+    pub(crate) async fn new_sharded_3(params: Parameters) -> Self {
+        load_test_sharded_3();
         Self::new(params).await
     }
 

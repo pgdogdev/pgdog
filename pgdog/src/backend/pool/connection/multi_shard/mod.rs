@@ -52,6 +52,10 @@ pub struct MultiShard {
     shards: usize,
     /// Route the query is taking.
     route: Route,
+    /// Maps positional index in the servers vec to actual shard number.
+    /// When all shards are connected, this is `[0, 1, 2, ...]`.
+    /// When only a subset is connected (e.g. shards 0 and 2), this is `[0, 2]`.
+    shard_indices: Vec<usize>,
 
     /// Counters
     counters: Counters,
@@ -64,14 +68,24 @@ pub struct MultiShard {
 }
 
 impl MultiShard {
-    /// New multi-shard state given the number of shards in the cluster.
-    pub(super) fn new(shards: usize, route: &Route) -> Self {
+    /// New multi-shard state given the actual shard indices connected.
+    pub(super) fn new(shard_indices: Vec<usize>, route: &Route) -> Self {
+        let shards = shard_indices.len();
         Self {
             shards,
+            shard_indices,
             route: route.clone(),
             counters: Counters::default(),
             ..Default::default()
         }
+    }
+
+    /// Map a positional index to the actual shard number.
+    pub(super) fn shard_index(&self, position: usize) -> usize {
+        self.shard_indices
+            .get(position)
+            .copied()
+            .unwrap_or(position)
     }
 
     /// Update multi-shard state.
