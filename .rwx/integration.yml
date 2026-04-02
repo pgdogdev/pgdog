@@ -40,6 +40,19 @@ aliases:
     - pgdog-vector/**
     - plugins/**
     - scripts/**
+  postgres-bg-processes: &postgres-bg–processes
+    - key: postgres
+      run: |
+        sudo service postgresql start
+        sudo -u postgres createuser --superuser --login "$USER" || true
+        sudo -u postgres createdb "$USER" || true
+        sudo -u postgres psql -c 'ALTER SYSTEM SET wal_level TO logical;'
+        sudo -u postgres psql -c 'ALTER SYSTEM SET max_prepared_transactions TO 1000;'
+        sudo -u postgres psql -c 'ALTER SYSTEM SET max_connections TO 1000;'
+        sudo service postgresql restart
+        touch .pg_isready
+      ready-check: |
+        [ -f .pg_isready ] && pg_isready -U "$USER" -h 127.0.0.1
 
 tasks:
   - key: code
@@ -141,16 +154,10 @@ tasks:
 
   - key: integration-pgbench
     use: integration-build-pgdog-cov
+    background-processes: *postgres-bg–processes
     timeout: 15m
     run: |
       export LLVM_PROFILE_FILE="$PWD/target/llvm-cov-target/profiles/pgbench-%p-%m.profraw"
-
-      sudo service postgresql start
-      sudo -u postgres createuser --superuser --login "$USER" || true
-      sudo -u postgres createdb "$USER" || true
-      sudo -u postgres psql -c 'ALTER SYSTEM SET max_prepared_transactions TO 1000;'
-      sudo -u postgres psql -c 'ALTER SYSTEM SET max_connections TO 1000;'
-      sudo service postgresql restart
 
       bash integration/setup.sh
 
@@ -171,16 +178,9 @@ tasks:
 
   - key: integration-schema-sync
     use: integration-build-pgdog-cov
+    background-processes: *postgres-bg–processes
     run: |
       export LLVM_PROFILE_FILE="$PWD/target/llvm-cov-target/profiles/schema-sync-%p-%m.profraw"
-
-      sudo service postgresql start
-      sudo -u postgres createuser --superuser --login "$USER" || true
-      sudo -u postgres createdb "$USER" || true
-      sudo -u postgres psql -c 'ALTER SYSTEM SET max_prepared_transactions TO 1000;'
-      sudo -u postgres psql -c 'ALTER SYSTEM SET wal_level TO logical;'
-      sudo -u postgres psql -c 'ALTER SYSTEM SET max_connections TO 1000;'
-      sudo service postgresql restart
 
       bash integration/setup.sh
       timeout --signal=TERM --kill-after=30s 8m bash integration/schema_sync/run.sh
@@ -194,16 +194,10 @@ tasks:
 
   - key: integration-go
     use: integration-build-pgdog-cov
+    background-processes: *postgres-bg–processes
     timeout: 15m
     run: |
       export LLVM_PROFILE_FILE="$PWD/target/llvm-cov-target/profiles/go-%p-%m.profraw"
-
-      sudo service postgresql start
-      sudo -u postgres createuser --superuser --login "$USER" || true
-      sudo -u postgres createdb "$USER" || true
-      sudo -u postgres psql -c 'ALTER SYSTEM SET max_prepared_transactions TO 1000;'
-      sudo -u postgres psql -c 'ALTER SYSTEM SET max_connections TO 1000;'
-      sudo service postgresql restart
 
       max_attempts=2
       attempt=1
@@ -229,15 +223,10 @@ tasks:
 
   - key: integration-js
     use: [integration-build-pgdog-cov, integration-node]
+    background-processes: *postgres-bg–processes
     timeout: 10m
     run: |
       export LLVM_PROFILE_FILE="$PWD/target/llvm-cov-target/profiles/js-%p-%m.profraw"
-
-      sudo service postgresql start
-      sudo -u postgres createuser --superuser --login "$USER" || true
-      sudo -u postgres createdb "$USER" || true
-      sudo -u postgres psql -c 'ALTER SYSTEM SET max_prepared_transactions TO 1000;'
-      sudo service postgresql restart
 
       bash integration/setup.sh
 
@@ -255,6 +244,7 @@ tasks:
 
   - key: integration-ruby
     use: integration-build-pgdog-cov
+    background-processes: *postgres-bg–processes
     timeout: 10m
     run: |
       export LLVM_PROFILE_FILE="$PWD/target/llvm-cov-target/profiles/ruby-%p-%m.profraw"
@@ -267,13 +257,6 @@ tasks:
         killall -KILL pgdog 2>/dev/null || true
       }
       trap cleanup EXIT
-
-      sudo service postgresql start
-      sudo -u postgres createuser --superuser --login "$USER" || true
-      sudo -u postgres createdb "$USER" || true
-      sudo -u postgres psql -c 'ALTER SYSTEM SET max_prepared_transactions TO 1000;'
-      sudo -u postgres psql -c 'ALTER SYSTEM SET max_connections TO 1000;'
-      sudo service postgresql restart
 
       bash integration/setup.sh
       bash integration/toxi/setup.sh
@@ -290,16 +273,10 @@ tasks:
 
   - key: integration-java
     use: integration-build-pgdog-cov
+    background-processes: *postgres-bg–processes
     timeout: 10m
     run: |
       export LLVM_PROFILE_FILE="$PWD/target/llvm-cov-target/profiles/java-%p-%m.profraw"
-
-      sudo service postgresql start
-      sudo -u postgres createuser --superuser --login "$USER" || true
-      sudo -u postgres createdb "$USER" || true
-      sudo -u postgres psql -c 'ALTER SYSTEM SET max_prepared_transactions TO 1000;'
-      sudo -u postgres psql -c 'ALTER SYSTEM SET max_connections TO 1000;'
-      sudo service postgresql restart
 
       bash integration/setup.sh
       timeout --signal=TERM --kill-after=30s 6m bash integration/java/run.sh
@@ -313,15 +290,10 @@ tasks:
 
   - key: integration-mirror
     use: integration-build-pgdog-cov
+    background-processes: *postgres-bg–processes
     timeout: 10m
     run: |
       export LLVM_PROFILE_FILE="$PWD/target/llvm-cov-target/profiles/mirror-%p-%m.profraw"
-
-      sudo service postgresql start
-      sudo -u postgres createuser --superuser --login "$USER" || true
-      sudo -u postgres createdb "$USER" || true
-      sudo -u postgres psql -c 'ALTER SYSTEM SET max_prepared_transactions TO 1000;'
-      sudo service postgresql restart
 
       bash integration/setup.sh
       timeout --signal=TERM --kill-after=30s 6m bash integration/mirror/run.sh
@@ -335,15 +307,10 @@ tasks:
 
   - key: integration-sql
     use: integration-build-pgdog-cov
+    background-processes: *postgres-bg–processes
     timeout: 10m
     run: |
       export LLVM_PROFILE_FILE="$PWD/target/llvm-cov-target/profiles/sql-%p-%m.profraw"
-
-      sudo service postgresql start
-      sudo -u postgres createuser --superuser --login "$USER" || true
-      sudo -u postgres createdb "$USER" || true
-      sudo -u postgres psql -c 'ALTER SYSTEM SET max_prepared_transactions TO 1000;'
-      sudo service postgresql restart
 
       bash integration/setup.sh
       timeout --signal=TERM --kill-after=30s 8m bash integration/sql/run.sh
@@ -357,6 +324,7 @@ tasks:
 
   - key: integration-toxi
     use: integration-build-pgdog-cov
+    background-processes: *postgres-bg–processes
     timeout: 12m
     run: |
       export LLVM_PROFILE_FILE="$PWD/target/llvm-cov-target/profiles/toxi-%p-%m.profraw"
@@ -369,12 +337,6 @@ tasks:
         killall -KILL pgdog 2>/dev/null || true
       }
       trap cleanup EXIT
-
-      sudo service postgresql start
-      sudo -u postgres createuser --superuser --login "$USER" || true
-      sudo -u postgres createdb "$USER" || true
-      sudo -u postgres psql -c 'ALTER SYSTEM SET max_prepared_transactions TO 1000;'
-      sudo service postgresql restart
 
       bash integration/setup.sh
       bash integration/toxi/setup.sh
@@ -420,6 +382,7 @@ tasks:
 
   - key: integration-rust
     use: integration-build-pgdog-cov
+    background-processes: *postgres-bg–processes
     timeout: 20m
     agent:
       cpus: 16
@@ -437,13 +400,6 @@ tasks:
       }
       trap cleanup EXIT
 
-      sudo service postgresql start
-      sudo -u postgres createuser --superuser --login "$USER" || true
-      sudo -u postgres createdb "$USER" || true
-      sudo -u postgres psql -c 'ALTER SYSTEM SET max_prepared_transactions TO 1000;'
-      sudo -u postgres psql -c 'ALTER SYSTEM SET max_connections TO 1000;'
-      sudo service postgresql restart
-
       bash integration/setup.sh
       bash integration/toxi/setup.sh
 
@@ -459,16 +415,10 @@ tasks:
 
   - key: integration-copy-data
     use: integration-build-pgdog-cov
+    background-processes: *postgres-bg–processes
     timeout: 15m
     run: |
       export LLVM_PROFILE_FILE="$PWD/target/llvm-cov-target/profiles/copy-data-%p-%m.profraw"
-
-      sudo service postgresql start
-      sudo -u postgres createuser --superuser --login "$USER" || true
-      sudo -u postgres createdb "$USER" || true
-      sudo -u postgres psql -c 'ALTER SYSTEM SET max_prepared_transactions TO 1000;'
-      sudo -u postgres psql -c 'ALTER SYSTEM SET wal_level TO logical;'
-      sudo service postgresql restart
 
       bash integration/setup.sh
       timeout --signal=TERM --kill-after=30s 10m bash integration/copy_data/dev.sh
@@ -482,15 +432,10 @@ tasks:
 
   - key: integration-python
     use: integration-build-pgdog-cov
+    background-processes: *postgres-bg–processes
     timeout: 12m
     run: |
       export LLVM_PROFILE_FILE="$PWD/target/llvm-cov-target/profiles/python-%p-%m.profraw"
-
-      sudo service postgresql start
-      sudo -u postgres createuser --superuser --login "$USER" || true
-      sudo -u postgres createdb "$USER" || true
-      sudo -u postgres psql -c 'ALTER SYSTEM SET max_prepared_transactions TO 1000;'
-      sudo service postgresql restart
 
       bash integration/setup.sh
       timeout --signal=TERM --kill-after=30s 10m bash integration/python/run.sh
@@ -530,15 +475,10 @@ tasks:
 
   - key: integration-complex
     use: integration-build-pgdog-cov
+    background-processes: *postgres-bg–processes
     timeout: 15m
     run: |
       export LLVM_PROFILE_FILE="$PWD/target/llvm-cov-target/profiles/complex-%p-%m.profraw"
-
-      sudo service postgresql start
-      sudo -u postgres createuser --superuser --login "$USER" || true
-      sudo -u postgres createdb "$USER" || true
-      sudo -u postgres psql -c 'ALTER SYSTEM SET max_prepared_transactions TO 1000;'
-      sudo service postgresql restart
 
       bash integration/setup.sh
 
@@ -560,15 +500,10 @@ tasks:
 
   - key: integration-dry-run
     use: [integration-build-pgdog-cov, integration-node]
+    background-processes: *postgres-bg–processes
     timeout: 10m
     run: |
       export LLVM_PROFILE_FILE="$PWD/target/llvm-cov-target/profiles/dry-run-%p-%m.profraw"
-
-      sudo service postgresql start
-      sudo -u postgres createuser --superuser --login "$USER" || true
-      sudo -u postgres createdb "$USER" || true
-      sudo -u postgres psql -c 'ALTER SYSTEM SET max_prepared_transactions TO 1000;'
-      sudo service postgresql restart
 
       bash integration/setup.sh
 
