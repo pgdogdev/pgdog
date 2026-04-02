@@ -450,3 +450,80 @@ describe("postgres.js sql.array()", function () {
     assert.strictEqual(rows.length, 2); // a and c
   });
 });
+
+describe("postgres.js unsafe stress test (50k unique statements)", function () {
+  this.timeout(300000);
+
+  before(async function () {
+    await adminSet("prepared_statements", "extended_anonymous");
+    // Warmup: ensure pool connections are established after databases::init()
+    // recreates backend pools (same pattern as other test suites).
+    await sql.unsafe("SELECT 1");
+  });
+
+  after(async function () {
+    await adminSet("prepared_statements", "extended");
+  });
+
+  it("50k unique query texts with 25 rotating parameters", async function () {
+    const TOTAL_QUERIES = 50000;
+    const NUM_PARAMS = 25;
+    const BATCH_SIZE = 100;
+
+    const params = Array.from({ length: NUM_PARAMS }, (_, i) => i * 7 + 1);
+
+    let completed = 0;
+    const errors = [];
+
+    for (let batchStart = 0; batchStart < TOTAL_QUERIES; batchStart += BATCH_SIZE) {
+      const batchEnd = Math.min(batchStart + BATCH_SIZE, TOTAL_QUERIES);
+      const promises = [];
+
+      for (let i = batchStart; i < batchEnd; i++) {
+        const paramVal = params[i % NUM_PARAMS];
+        const queryText = `SELECT $1::int AS r_${i}`;
+
+        const p = sql
+          .unsafe(queryText, [paramVal])
+          .then((rows) => {
+            assert.strictEqual(rows[0][`r_${i}`], paramVal);
+            completed++;
+          })
+          .catch((err) => {
+            errors.push({ i, err: err.message });
+          });
+
+        promises.push(p);
+      }
+
+      await Promise.all(promises);
+    }
+
+    assert.strictEqual(
+      errors.length,
+      0,
+      `${errors.length} failures, first 5: ${JSON.stringify(errors.slice(0, 5))}`,
+    );
+    assert.strictEqual(completed, TOTAL_QUERIES);
+
+    // Verify backend prepared statement evictions are happening.
+    // With 50k unique statements, pool_size=10, and capacity=500,
+    // each connection handles ~5k queries → ~4500 evictions each.
+    const res = await fetch("http://localhost:9090");
+    const metrics = await res.text();
+    const evictions = metrics
+      .split("\n")
+      .filter(
+        (l) =>
+          l.startsWith("pgdog_total_prepared_evictions") &&
+          l.includes('database="pgdog"') &&
+          l.includes('user="pgdog"'),
+      )
+      .map((l) => parseInt(l.split(" ").pop(), 10))
+      .reduce((a, b) => a + b, 0);
+    assert.ok(
+      evictions > 0,
+      `expected prepared statement evictions, got ${evictions}`,
+    );
+  });
+});

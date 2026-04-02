@@ -152,11 +152,7 @@ impl Pool {
                 self.comms().ready.notified().await;
             }
 
-            let (server, granted_at) = if let Some(mut server) = server {
-                server
-                    .prepared_statements_mut()
-                    .set_capacity(self.inner.config.prepared_statements_limit);
-                server.set_pooler_mode(self.inner.config.pooler_mode);
+            let (mut server, granted_at) = if let Some(server) = server {
                 (Guard::new(pool, server, granted_at), granted_at)
             } else {
                 // Slow path, pool is empty, will create new connection
@@ -164,6 +160,11 @@ impl Pool {
                 let mut waiting = Waiting::new(pool, request)?;
                 waiting.wait().await?
             };
+
+            server
+                .prepared_statements_mut()
+                .set_capacity(self.inner.config.prepared_statements_limit);
+            server.set_pooler_mode(self.inner.config.pooler_mode);
 
             match self
                 .maybe_healthcheck(
