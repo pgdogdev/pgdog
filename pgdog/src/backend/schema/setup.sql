@@ -268,10 +268,22 @@ BEGIN
     );
 
     -- Create sequence.
-    EXECUTE format('CREATE SEQUENCE IF NOT EXISTS pgdog_shadow."%s"', shadow_seq_name);
+    EXECUTE format('CREATE SEQUENCE IF NOT EXISTS pgdog_shadow."%s" CACHE 100', shadow_seq_name);
 
     -- Make the sequence owned by the shadow table.
     EXECUTE format('ALTER SEQUENCE pgdog_shadow."%s" OWNED BY pgdog_shadow.%s.%s', shadow_seq_name, shadow_table_name, column_name);
+
+    -- Drop identity constraint if one exists, since we're replacing it with a custom default.
+    IF EXISTS (
+        SELECT 1
+        FROM information_schema.columns c
+        WHERE c.table_schema = install_shadow_table.schema_name
+        AND c.table_name = install_shadow_table.table_name
+        AND c.column_name = install_shadow_table.column_name
+        AND c.is_identity = 'YES'
+    ) THEN
+        EXECUTE format('ALTER TABLE "%s"."%s" ALTER COLUMN "%s" DROP IDENTITY', schema_name, table_name, column_name);
+    END IF;
 
     -- Set it as the default for the target table, allowing automatic ID generation.
     EXECUTE format('ALTER TABLE "%s"."%s" ALTER COLUMN "%s" SET DEFAULT pgdog.next_id_seq(''pgdog_shadow.%s''::regclass, ''pgdog_shadow.%s'')',
