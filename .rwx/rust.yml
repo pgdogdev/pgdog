@@ -298,9 +298,6 @@ tasks:
       filesystem: false
     filter: *shared-filter
 
-  # RWX does not currently have a direct per-task continue-on-error equivalent.
-  # Preserve the non-blocking behavior from GitHub Actions by surfacing failures
-  # in logs while still allowing the overall run to succeed.
   - key: rust-plugin-unit
     use: cargo-build-workspace
     timeout: 30m
