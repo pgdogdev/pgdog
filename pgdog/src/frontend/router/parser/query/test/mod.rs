@@ -14,6 +14,7 @@ use bytes::Bytes;
 use super::{super::Shard, *};
 use crate::backend::Cluster;
 use crate::config::ReadWriteStrategy;
+use crate::frontend::router::parser::comment;
 use crate::frontend::{
     client::{Sticky, TransactionType},
     router::Ast,
@@ -44,11 +45,17 @@ pub mod test_transaction;
 fn parse_query(query: &str) -> Command {
     let mut query_parser = QueryParser::default();
     let cluster = Cluster::new_test(&config());
+
+    let (maybe_role, maybe_shard, _) =
+        comment::parse_comment(&query, &cluster.sharding_schema()).unwrap();
+
     let ast = Ast::new(
         &BufferedQuery::Query(Query::new(query)),
         &cluster.sharding_schema(),
         &cluster.schema(),
         &mut PreparedStatements::default(),
+        maybe_role,
+        maybe_shard,
         "",
         None,
     )
@@ -72,11 +79,19 @@ macro_rules! command {
         let query = $query;
         let mut query_parser = QueryParser::default();
         let cluster = Cluster::new_test(&crate::config::config());
+
+        let buffered_query = &BufferedQuery::Query(Query::new($query));
+
+        let (maybe_role, maybe_shard, _) =
+            comment::parse_comment(&buffered_query, &cluster.sharding_schema()).unwrap();
+
         let mut ast = Ast::new(
-            &BufferedQuery::Query(Query::new($query)),
+            buffered_query,
             &cluster.sharding_schema(),
             &cluster.schema(),
             &mut PreparedStatements::default(),
+            maybe_role,
+            maybe_shard,
             "",
             None,
         )
@@ -133,11 +148,16 @@ macro_rules! query_parser {
 
         let mut prep_stmts = PreparedStatements::default();
 
+        let (maybe_role, maybe_shard, _) =
+            comment::parse_comment(&buffered_query, &cluster.sharding_schema()).unwrap();
+
         let mut ast = Ast::new(
             &buffered_query,
             &cluster.sharding_schema(),
             &cluster.schema(),
             &mut prep_stmts,
+            maybe_role,
+            maybe_shard,
             "",
             None,
         )
@@ -190,11 +210,19 @@ macro_rules! parse {
             .collect::<Vec<_>>();
         let bind = Bind::new_params_codes($name, &params, $codes);
         let cluster = Cluster::new_test(&crate::config::config());
+
+        let buffered_query = &BufferedQuery::Prepared(Parse::new_anonymous($query));
+
+        let (maybe_role, maybe_shard, _) =
+            comment::parse_comment(&buffered_query, &cluster.sharding_schema()).unwrap();
+
         let ast = Ast::new(
-            &BufferedQuery::Prepared(Parse::new_anonymous($query)),
+            buffered_query,
             &cluster.sharding_schema(),
             &cluster.schema(),
             &mut PreparedStatements::default(),
+            maybe_role,
+            maybe_shard,
             "",
             None,
         )
@@ -424,11 +452,17 @@ fn test_set() {
     let cluster = Cluster::new_test(&config());
     let mut prep_stmts = PreparedStatements::default();
     let buffered_query = BufferedQuery::Query(Query::new(query_str));
+
+    let (maybe_role, maybe_shard, _) =
+        comment::parse_comment(&buffered_query, &cluster.sharding_schema()).unwrap();
+
     let mut ast = Ast::new(
         &buffered_query,
         &cluster.sharding_schema(),
         &cluster.schema(),
         &mut prep_stmts,
+        maybe_role,
+        maybe_shard,
         "",
         None,
     )
@@ -575,6 +609,8 @@ WHERE t2.account = (
         &cluster.sharding_schema(),
         &cluster.schema(),
         &mut prep_stmts,
+        None,
+        None,
         "",
         None,
     )
