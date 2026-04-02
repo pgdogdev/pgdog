@@ -158,6 +158,7 @@ impl Connection {
             };
         } else {
             let mut shards = vec![];
+            let mut shard_indices = vec![];
             for (i, shard) in self.cluster()?.shards().iter().enumerate() {
                 if let Shard::Multi(numbers) = route.shard() {
                     if !numbers.contains(&i) {
@@ -175,11 +176,11 @@ impl Connection {
                 }
 
                 shards.push(server);
+                shard_indices.push(i);
             }
-            let num_shards = shards.len();
 
             self.binding =
-                Binding::MultiShard(shards, Box::new(MultiShard::new(num_shards, route)));
+                Binding::MultiShard(shards, Box::new(MultiShard::new(shard_indices, route)));
         }
 
         Ok(())

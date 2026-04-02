@@ -136,7 +136,11 @@ impl Binding {
                 let mut shards_sent = servers.len();
                 let mut futures = Vec::new();
 
-                for (shard, server) in servers.iter_mut().enumerate() {
+                for (position, server) in servers.iter_mut().enumerate() {
+                    // Map positional index to actual shard number.
+                    // When only a subset of shards is connected (Shard::Multi binding),
+                    // positional indices don't match actual shard numbers.
+                    let shard = state.shard_index(position);
                     let send = match client_request.route().shard() {
                         Shard::Direct(s) => {
                             shards_sent = 1;
@@ -177,9 +181,10 @@ impl Binding {
     /// Send copy messages to shards they are destined to go.
     pub async fn send_copy(&mut self, rows: Vec<CopyRow>) -> Result<(), Error> {
         match self {
-            Binding::MultiShard(servers, _state) => {
+            Binding::MultiShard(servers, state) => {
                 for row in rows {
-                    for (shard, server) in servers.iter_mut().enumerate() {
+                    for (position, server) in servers.iter_mut().enumerate() {
+                        let shard = state.shard_index(position);
                         match row.shard() {
                             Shard::Direct(row_shard) => {
                                 if shard == *row_shard {

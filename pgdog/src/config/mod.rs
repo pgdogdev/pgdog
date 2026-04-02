@@ -207,52 +207,46 @@ pub fn load_test_replicas() {
 
 #[cfg(test)]
 pub fn load_test_sharded() {
+    load_test_sharded_n(2);
+}
+
+/// Load 3-shard test configuration.
+pub fn load_test_sharded_3() {
+    load_test_sharded_n(3);
+}
+
+fn load_test_sharded_n(num_shards: usize) {
     use pgdog_config::{OmnishardedTables, ShardedSchema};
 
     use crate::backend::databases::init;
 
     let mut config = ConfigAndUsers::default();
     config.config.general.min_pool_size = 0;
-    config.config.databases = vec![
-        Database {
-            name: "pgdog".into(),
-            host: "127.0.0.1".into(),
-            port: 5432,
-            role: Role::Primary,
-            database_name: Some("shard_0".into()),
-            shard: 0,
-            ..Default::default()
-        },
-        Database {
-            name: "pgdog".into(),
-            host: "127.0.0.1".into(),
-            port: 5432,
-            role: Role::Replica,
-            read_only: Some(true),
-            database_name: Some("shard_0".into()),
-            shard: 0,
-            ..Default::default()
-        },
-        Database {
-            name: "pgdog".into(),
-            host: "127.0.0.1".into(),
-            port: 5432,
-            role: Role::Primary,
-            database_name: Some("shard_1".into()),
-            shard: 1,
-            ..Default::default()
-        },
-        Database {
-            name: "pgdog".into(),
-            host: "127.0.0.1".into(),
-            port: 5432,
-            role: Role::Replica,
-            read_only: Some(true),
-            database_name: Some("shard_1".into()),
-            shard: 1,
-            ..Default::default()
-        },
-    ];
+    config.config.databases = (0..num_shards)
+        .flat_map(|shard| {
+            vec![
+                Database {
+                    name: "pgdog".into(),
+                    host: "127.0.0.1".into(),
+                    port: 5432,
+                    role: Role::Primary,
+                    database_name: Some(format!("shard_{}", shard)),
+                    shard,
+                    ..Default::default()
+                },
+                Database {
+                    name: "pgdog".into(),
+                    host: "127.0.0.1".into(),
+                    port: 5432,
+                    role: Role::Replica,
+                    read_only: Some(true),
+                    database_name: Some(format!("shard_{}", shard)),
+                    shard,
+                    ..Default::default()
+                },
+            ]
+        })
+        .collect();
     config.config.sharded_tables = vec![
         ShardedTable {
             database: "pgdog".into(),

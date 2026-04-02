@@ -78,6 +78,19 @@ database_name = "shard_1"
 shard = 1
 role = "replica"
 
+# [[databases]]
+# name = "pgdog_sharded"
+# host = "localhost"
+# database_name = "shard_2"
+# shard = 2
+
+# [[databases]]
+# name = "pgdog_sharded"
+# host = "localhost"
+# database_name = "shard_2"
+# shard = 2
+# role = "replica"
+
 # ------------------------------------------------------------------------------
 # ----- Database :: failover ---------------------------------------------------
 

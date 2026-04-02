@@ -49,7 +49,7 @@ mod tests {
         ];
 
         let route = Route::write(ShardWithPriority::new_default_unset(Shard::All));
-        let multishard = MultiShard::new(3, &route);
+        let multishard = MultiShard::new(vec![0, 1, 2], &route);
 
         let mut binding = Binding::MultiShard(guards, Box::new(multishard));
 
