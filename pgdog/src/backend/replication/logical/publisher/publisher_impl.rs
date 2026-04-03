@@ -239,6 +239,7 @@ impl Publisher {
     pub async fn data_sync(&mut self, dest: &Cluster) -> Result<(), Error> {
         // Create replication slots.
         self.create_slots().await?;
+        let mut handles = vec![];
 
         for (number, shard) in self.cluster.shards().iter().enumerate() {
             let mut primary = shard.primary(&Request::default()).await?;
@@ -272,8 +273,17 @@ impl Publisher {
                 resharding_only
             };
 
-            let manager = ParallelSyncManager::new(tables, replicas, dest)?;
-            let tables = manager.run().await?;
+            let dest = dest.clone();
+            handles.push(spawn(async move {
+                let manager = ParallelSyncManager::new(tables, replicas, &dest)?;
+                let tables = manager.run().await?;
+
+                Ok::<Vec<Table>, Error>(tables)
+            }));
+        }
+
+        for (number, handle) in handles.into_iter().enumerate() {
+            let tables = handle.await??;
 
             info!(
                 "table sync for {} tables complete [{}, shard: {}]",
