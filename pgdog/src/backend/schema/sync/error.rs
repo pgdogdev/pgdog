@@ -1,4 +1,5 @@
 use thiserror::Error;
+use tokio::task::JoinError;
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -37,6 +38,9 @@ pub enum Error {
 
     #[error("publication \"{0}\" has no tables")]
     PublicationNoTables(String),
+
+    #[error("tokio task join error")]
+    JoinError(#[from] JoinError),
 }
 
 impl From<crate::backend::replication::logical::Error> for Error {
