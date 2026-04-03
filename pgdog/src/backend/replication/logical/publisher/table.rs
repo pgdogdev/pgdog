@@ -158,8 +158,8 @@ impl Table {
         let where_clause = self
             .columns
             .iter()
+            .filter(|c| c.identity)
             .enumerate()
-            .filter(|(_, c)| c.identity)
             .map(|(i, c)| format!("\"{}\" = ${}", escape_identifier(&c.name), i + 1))
             .collect::<Vec<_>>()
             .join(" AND ");
@@ -331,6 +331,40 @@ mod test {
         assert!(pg_query::parse(&update).is_ok(), "update: {}", update);
 
         let delete = table.delete();
+        assert!(pg_query::parse(&delete).is_ok(), "delete: {}", delete);
+    }
+
+    #[test]
+    fn test_delete_sequential_params_identity_not_first() {
+        // Regression: when identity columns aren't at the start of the column list,
+        // delete() must still produce sequential $1, $2, ... parameters.
+        let table = make_table(vec![("name", false), ("value", false), ("id", true)]);
+        let delete = table.delete();
+        assert!(delete.contains("$1"), "expected $1 in delete: {}", delete);
+        assert!(
+            !delete.contains("$3"),
+            "delete should not skip to $3: {}",
+            delete
+        );
+        assert!(pg_query::parse(&delete).is_ok(), "delete: {}", delete);
+    }
+
+    #[test]
+    fn test_delete_sequential_params_composite_key() {
+        // Regression: composite key with non-contiguous identity columns
+        // must produce $1, $2 not $1, $3.
+        let table = make_table(vec![("id", true), ("name", false), ("version", true)]);
+        let delete = table.delete();
+        assert!(
+            delete.contains("$1") && delete.contains("$2"),
+            "expected $1 and $2 in delete: {}",
+            delete
+        );
+        assert!(
+            !delete.contains("$3"),
+            "delete should not reference $3: {}",
+            delete
+        );
         assert!(pg_query::parse(&delete).is_ok(), "delete: {}", delete);
     }
 
