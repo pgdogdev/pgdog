@@ -59,6 +59,8 @@ impl From<DataRow> for Relation {
                 access_method: value.get_text(5).unwrap_or_default(),
                 description: value.get_text(6).unwrap_or_default(),
                 oid: value.get::<i32>(7, Format::Text).unwrap_or_default(),
+                parent_table_schema: value.get_text(8),
+                parent_table_name: value.get_text(9),
                 columns: IndexMap::new(),
             },
         }
@@ -106,6 +108,8 @@ impl Relation {
             access_method: String::new(),
             description: String::new(),
             oid: 0,
+            parent_table_schema: None,
+            parent_table_name: None,
             columns: columns.into_iter().map(|(k, v)| (k, v.into())).collect(),
         }
         .into()
