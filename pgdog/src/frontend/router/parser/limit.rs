@@ -49,12 +49,16 @@ impl<'a> LimitClause<'a> {
                         .parameter(*number as usize - 1)?
                         .ok_or(Error::MissingParameter(*number as usize))?;
 
-                    Ok(Some(
-                        param
-                            .bigint()
-                            .ok_or(Error::MissingParameter(*number as usize))?
-                            as usize,
-                    ))
+                    if param.is_null() {
+                        Ok(None)
+                    } else {
+                        Ok(Some(
+                            param
+                                .bigint()
+                                .ok_or(Error::MissingParameter(*number as usize))?
+                                as usize,
+                        ))
+                    }
                 } else {
                     Ok(None)
                 }

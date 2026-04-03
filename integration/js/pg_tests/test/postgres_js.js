@@ -34,8 +34,7 @@ describe("postgres.js basic", function () {
   });
 
   it("multiple rows", async function () {
-    const rows =
-      await sql`SELECT generate_series(1, 5)::int AS n ORDER BY n`;
+    const rows = await sql`SELECT generate_series(1, 5)::int AS n ORDER BY n`;
     assert.strictEqual(rows.length, 5);
     assert.strictEqual(rows[0].n, 1);
     assert.strictEqual(rows[4].n, 5);
@@ -63,8 +62,7 @@ describe("postgres.js CRUD", function () {
     assert.strictEqual(item.name, "widget");
     assert.strictEqual(item.quantity, 5);
 
-    const [found] =
-      await sql`SELECT * FROM pjs_items_9k WHERE id = ${item.id}`;
+    const [found] = await sql`SELECT * FROM pjs_items_9k WHERE id = ${item.id}`;
     assert.strictEqual(found.name, "widget");
   });
 
@@ -73,8 +71,7 @@ describe("postgres.js CRUD", function () {
       await sql`INSERT INTO pjs_items_9k (name, quantity) VALUES ('gizmo', 1) RETURNING *`;
     await sql`UPDATE pjs_items_9k SET quantity = 10 WHERE id = ${item.id}`;
 
-    const [found] =
-      await sql`SELECT * FROM pjs_items_9k WHERE id = ${item.id}`;
+    const [found] = await sql`SELECT * FROM pjs_items_9k WHERE id = ${item.id}`;
     assert.strictEqual(found.quantity, 10);
   });
 
@@ -83,8 +80,7 @@ describe("postgres.js CRUD", function () {
       await sql`INSERT INTO pjs_items_9k (name, quantity) VALUES ('doomed', 0) RETURNING *`;
     await sql`DELETE FROM pjs_items_9k WHERE id = ${item.id}`;
 
-    const rows =
-      await sql`SELECT * FROM pjs_items_9k WHERE id = ${item.id}`;
+    const rows = await sql`SELECT * FROM pjs_items_9k WHERE id = ${item.id}`;
     assert.strictEqual(rows.length, 0);
   });
 
@@ -122,8 +118,7 @@ describe("postgres.js transactions", function () {
       return await tx`INSERT INTO pjs_tx_9k (value) VALUES ('committed') RETURNING *`;
     });
 
-    const [found] =
-      await sql`SELECT * FROM pjs_tx_9k WHERE id = ${item.id}`;
+    const [found] = await sql`SELECT * FROM pjs_tx_9k WHERE id = ${item.id}`;
     assert.strictEqual(found.value, "committed");
   });
 
@@ -140,8 +135,7 @@ describe("postgres.js transactions", function () {
       assert.strictEqual(e.message, "force rollback");
     }
 
-    const rows =
-      await sql`SELECT * FROM pjs_tx_9k WHERE id = ${insertedId}`;
+    const rows = await sql`SELECT * FROM pjs_tx_9k WHERE id = ${insertedId}`;
     assert.strictEqual(rows.length, 0);
   });
 });
@@ -239,9 +233,7 @@ describe("postgres.js unsafe (simple protocol)", function () {
   });
 
   it("unsafe insert and select", async function () {
-    await sql.unsafe(
-      "INSERT INTO pjs_unsafe_9k (name) VALUES ('unsafe_item')",
-    );
+    await sql.unsafe("INSERT INTO pjs_unsafe_9k (name) VALUES ('unsafe_item')");
     const rows = await sql.unsafe(
       "SELECT * FROM pjs_unsafe_9k WHERE name = 'unsafe_item'",
     );
@@ -255,9 +247,7 @@ describe("postgres.js unsafe (simple protocol)", function () {
   });
 
   it("unsafe multi-statement", async function () {
-    const rows = await sql.unsafe(
-      "SELECT 1 AS a; SELECT 2 AS b",
-    );
+    const rows = await sql.unsafe("SELECT 1 AS a; SELECT 2 AS b");
     // postgres.js returns the last result for multi-statement
     assert.ok(rows.length >= 1);
   });
@@ -335,7 +325,8 @@ describe("postgres.js dynamic fragments", function () {
 
   it("dynamic column names", async function () {
     const columns = ["name", "score"];
-    const rows = await sql`SELECT ${sql(columns)} FROM pjs_dyn_9k ORDER BY score`;
+    const rows =
+      await sql`SELECT ${sql(columns)} FROM pjs_dyn_9k ORDER BY score`;
     assert.strictEqual(rows.length, 3);
     assert.strictEqual(rows[0].name, "alice");
     assert.strictEqual(rows[0].score, 10);
@@ -350,7 +341,8 @@ describe("postgres.js dynamic fragments", function () {
 
   it("dynamic ORDER BY", async function () {
     const orderCol = "score";
-    const rows = await sql`SELECT * FROM pjs_dyn_9k ORDER BY ${sql(orderCol)} DESC`;
+    const rows =
+      await sql`SELECT * FROM pjs_dyn_9k ORDER BY ${sql(orderCol)} DESC`;
     assert.strictEqual(rows[0].name, "charlie");
   });
 });
@@ -414,7 +406,8 @@ describe("postgres.js reserve (dedicated connection)", function () {
       await reserved`CREATE TABLE IF NOT EXISTS pjs_reserve_9k (id SERIAL PRIMARY KEY, val TEXT)`;
       await reserved`TRUNCATE TABLE pjs_reserve_9k`;
       await reserved`INSERT INTO pjs_reserve_9k (val) VALUES ('reserved')`;
-      const [row] = await reserved`SELECT * FROM pjs_reserve_9k WHERE val = 'reserved'`;
+      const [row] =
+        await reserved`SELECT * FROM pjs_reserve_9k WHERE val = 'reserved'`;
       assert.strictEqual(row.val, "reserved");
       await reserved`DROP TABLE IF EXISTS pjs_reserve_9k`;
     } finally {
@@ -440,7 +433,8 @@ describe("postgres.js sql.array()", function () {
 
   it("WHERE id = ANY with sql.array()", async function () {
     const ids = [1, 2];
-    const rows = await sql`SELECT * FROM pjs_arr_9k WHERE id = ANY(${sql.array(ids, 23)})`;
+    const rows =
+      await sql`SELECT * FROM pjs_arr_9k WHERE id = ANY(${sql.array(ids, 23)})`;
     assert.strictEqual(rows.length, 2);
   });
 
@@ -451,47 +445,236 @@ describe("postgres.js sql.array()", function () {
   });
 });
 
-describe("postgres.js unsafe stress test (50k unique statements)", function () {
-  this.timeout(300000);
-
+describe("postgres.js LIMIT NULL", function () {
   before(async function () {
     await adminSet("prepared_statements", "extended_anonymous");
-    // Warmup: ensure pool connections are established after databases::init()
-    // recreates backend pools (same pattern as other test suites).
-    await sql.unsafe("SELECT 1");
+    await sqlNoPrepare`CREATE TABLE IF NOT EXISTS pjs_limit_9k (
+      id SERIAL PRIMARY KEY,
+      value TEXT
+    )`;
+    await sqlNoPrepare`TRUNCATE TABLE pjs_limit_9k`;
+    await sqlNoPrepare`INSERT INTO pjs_limit_9k (value) VALUES ('a'), ('b'), ('c'), ('d'), ('e')`;
   });
 
   after(async function () {
+    await sqlNoPrepare`DROP TABLE IF EXISTS pjs_limit_9k`;
     await adminSet("prepared_statements", "extended");
   });
 
-  it("50k unique query texts with 25 rotating parameters", async function () {
+  it("LIMIT with null parameter returns all rows", async function () {
+    const limit = null;
+    const rows =
+      await sqlNoPrepare`SELECT * FROM pjs_limit_9k ORDER BY id LIMIT ${limit}`;
+    assert.strictEqual(rows.length, 5);
+  });
+
+  it("LIMIT with non-null parameter limits rows", async function () {
+    const limit = 2;
+    const rows =
+      await sqlNoPrepare`SELECT * FROM pjs_limit_9k ORDER BY id LIMIT ${limit}`;
+    assert.strictEqual(rows.length, 2);
+  });
+
+  it("LIMIT null with WHERE clause and multiple params", async function () {
+    const value = "a";
+    const limit = null;
+    const rows =
+      await sqlNoPrepare`SELECT * FROM pjs_limit_9k WHERE value >= ${value} ORDER BY id LIMIT ${limit}`;
+    assert.strictEqual(rows.length, 5);
+  });
+
+  it("LIMIT and OFFSET both null", async function () {
+    const limit = null;
+    const offset = null;
+    const rows =
+      await sqlNoPrepare`SELECT * FROM pjs_limit_9k ORDER BY id LIMIT ${limit} OFFSET ${offset}`;
+    assert.strictEqual(rows.length, 5);
+  });
+
+  it("LIMIT null with OFFSET non-null", async function () {
+    const limit = null;
+    const offset = 3;
+    const rows =
+      await sqlNoPrepare`SELECT * FROM pjs_limit_9k ORDER BY id LIMIT ${limit} OFFSET ${offset}`;
+    assert.strictEqual(rows.length, 2);
+  });
+
+  it("LIMIT non-null with OFFSET null", async function () {
+    const limit = 2;
+    const offset = null;
+    const rows =
+      await sqlNoPrepare`SELECT * FROM pjs_limit_9k ORDER BY id LIMIT ${limit} OFFSET ${offset}`;
+    assert.strictEqual(rows.length, 2);
+  });
+});
+
+describe("postgres.js unsafe stress test (50k unique statements, 5 clients)", function () {
+  this.timeout(300000);
+
+  const TIMESTAMPTZ_OID = 1184;
+  const timestampType = {
+    to: TIMESTAMPTZ_OID,
+    from: [TIMESTAMPTZ_OID],
+    serialize: (value) =>
+      (value instanceof Date ? value : new Date(value)).toISOString(),
+    parse: (value) => new Date(value),
+  };
+
+  const NUM_CLIENTS = 5;
+  const clients = [];
+
+  before(async function () {
+    await adminSet("prepared_statements", "extended_anonymous");
+    for (let i = 0; i < NUM_CLIENTS; i++) {
+      const c = postgres("postgres://pgdog:pgdog@127.0.0.1:6432/pgdog", {
+        prepare: false,
+        connection: { application_name: `stress_client_${i}` },
+        types: { timestamp: timestampType },
+      });
+      await c.unsafe("SELECT 1"); // warmup
+      clients.push(c);
+    }
+  });
+
+  after(async function () {
+    await Promise.all(clients.map((c) => c.end()));
+    await adminSet("prepared_statements", "extended");
+  });
+
+  it("50k mixed queries (unsafe + tagged template) across 5 clients", async function () {
     const TOTAL_QUERIES = 50000;
-    const NUM_PARAMS = 25;
     const BATCH_SIZE = 100;
 
-    const params = Array.from({ length: NUM_PARAMS }, (_, i) => i * 7 + 1);
+    // Build a query with 1..numParams parameters mixing ints and timestamps.
+    function buildQuery(i) {
+      const numParams = (i % 8) + 1; // 1 to 8 parameters
+      const useTimestamp = i % 3 === 0; // every 3rd query includes a timestamp
+      const vals = [];
+      const selectParts = [];
+      const expected = {};
+
+      for (let k = 0; k < numParams; k++) {
+        const paramIdx = k + 1;
+        if (useTimestamp && k === numParams - 1) {
+          const ts = new Date(1700000000000 + i * 1000);
+          vals.push(ts);
+          selectParts.push(`$${paramIdx}::timestamptz AS ts_q${i}`);
+          expected[`ts_q${i}`] = (val) => {
+            const got = val instanceof Date ? val : new Date(val);
+            assert.ok(!isNaN(got.getTime()), `invalid timestamp at query ${i}: ${val}`);
+            assert.ok(Math.abs(got.getTime() - ts.getTime()) < 60000, `timestamp mismatch at query ${i}: expected ~${ts.toISOString()}, got ${got.toISOString()}`);
+          };
+        } else {
+          const intVal = (i + k) * 7 + 1;
+          vals.push(intVal);
+          selectParts.push(`$${paramIdx}::int * ${k + 1} AS c${k}_q${i}`);
+          expected[`c${k}_q${i}`] = intVal * (k + 1);
+        }
+      }
+
+      const queryText = `SELECT ${selectParts.join(", ")}`;
+      return { queryText, vals, expected };
+    }
+
+    // Tagged template queries that exercise unnamed prepared statements.
+    // These reuse the same SQL text with different parameter values,
+    // which is the normal postgres.js pattern with prepare: false.
+    function taggedQuery(client, i) {
+      const variant = i % 6;
+      switch (variant) {
+        case 0: {
+          // Simple parameterized select
+          const val = i * 3 + 1;
+          return client`SELECT ${val}::int AS v`.then((rows) => {
+            assert.strictEqual(rows[0].v, val);
+          });
+        }
+        case 1: {
+          // Multiple parameters
+          const a = i % 100;
+          const b = i % 50;
+          return client`SELECT ${a}::int + ${b}::int AS sum`.then((rows) => {
+            assert.strictEqual(rows[0].sum, a + b);
+          });
+        }
+        case 2: {
+          // String parameter
+          const name = `item_${i}`;
+          return client`SELECT ${name}::text AS name`.then((rows) => {
+            assert.strictEqual(rows[0].name, name);
+          });
+        }
+        case 3: {
+          // Boolean + int parameters
+          const flag = i % 2 === 0;
+          const num = i % 1000;
+          return client`SELECT ${flag}::bool AS flag, ${num}::int AS num`.then((rows) => {
+            assert.strictEqual(rows[0].flag, flag);
+            assert.strictEqual(rows[0].num, num);
+          });
+        }
+        case 4: {
+          // Timestamp parameter
+          const ts = new Date(1700000000000 + i * 1000);
+          return client`SELECT ${ts}::timestamptz AS ts`.then((rows) => {
+            const got = rows[0].ts instanceof Date ? rows[0].ts : new Date(rows[0].ts);
+            assert.ok(Math.abs(got.getTime() - ts.getTime()) < 60000);
+          });
+        }
+        case 5: {
+          // Many parameters (4)
+          const a = i % 100, b = i % 50, c = i % 25, d = i % 10;
+          return client`SELECT ${a}::int AS a, ${b}::int AS b, ${c}::int AS c, ${d}::int AS d`.then((rows) => {
+            assert.strictEqual(rows[0].a, a);
+            assert.strictEqual(rows[0].b, b);
+            assert.strictEqual(rows[0].c, c);
+            assert.strictEqual(rows[0].d, d);
+          });
+        }
+      }
+    }
 
     let completed = 0;
     const errors = [];
 
-    for (let batchStart = 0; batchStart < TOTAL_QUERIES; batchStart += BATCH_SIZE) {
+    for (
+      let batchStart = 0;
+      batchStart < TOTAL_QUERIES;
+      batchStart += BATCH_SIZE
+    ) {
       const batchEnd = Math.min(batchStart + BATCH_SIZE, TOTAL_QUERIES);
       const promises = [];
 
       for (let i = batchStart; i < batchEnd; i++) {
-        const paramVal = params[i % NUM_PARAMS];
-        const queryText = `SELECT $1::int AS r_${i}`;
+        const client = clients[i % NUM_CLIENTS];
+        let p;
 
-        const p = sql
-          .unsafe(queryText, [paramVal])
-          .then((rows) => {
-            assert.strictEqual(rows[0][`r_${i}`], paramVal);
-            completed++;
-          })
-          .catch((err) => {
-            errors.push({ i, err: err.message });
-          });
+        if (i % 2 === 0) {
+          // Even: unsafe query (unique query text each time)
+          const { queryText, vals, expected } = buildQuery(i);
+          p = client
+            .unsafe(queryText, vals)
+            .then((rows) => {
+              for (const [col, val] of Object.entries(expected)) {
+                if (typeof val === "function") {
+                  val(rows[0][col]);
+                } else {
+                  assert.strictEqual(
+                    rows[0][col],
+                    val,
+                    `mismatch at query ${i}, col ${col}`,
+                  );
+                }
+              }
+            });
+        } else {
+          // Odd: tagged template (reused SQL text, unnamed prepared statements)
+          p = taggedQuery(client, i);
+        }
+
+        p = p
+          .then(() => { completed++; })
+          .catch((err) => { errors.push({ i, err: err.message }); });
 
         promises.push(p);
       }
@@ -507,8 +690,6 @@ describe("postgres.js unsafe stress test (50k unique statements)", function () {
     assert.strictEqual(completed, TOTAL_QUERIES);
 
     // Verify backend prepared statement evictions are happening.
-    // With 50k unique statements, pool_size=10, and capacity=500,
-    // each connection handles ~5k queries → ~4500 evictions each.
     const res = await fetch("http://localhost:9090");
     const metrics = await res.text();
     const evictions = metrics
