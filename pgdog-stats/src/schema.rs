@@ -63,6 +63,10 @@ pub struct Relation {
     pub access_method: String,
     pub description: String,
     pub oid: i32,
+    /// Schema of the parent (partitioned) table, if this is a partition.
+    pub parent_table_schema: Option<String>,
+    /// Name of the parent (partitioned) table, if this is a partition.
+    pub parent_table_name: Option<String>,
     /// Columns indexed by name, ordered by ordinal position.
     pub columns: IndexMap<String, Column>,
 }
@@ -77,6 +81,8 @@ impl Hash for Relation {
         self.access_method.hash(state);
         self.description.hash(state);
         self.oid.hash(state);
+        self.parent_table_schema.hash(state);
+        self.parent_table_name.hash(state);
         for (key, value) in &self.columns {
             key.hash(state);
             value.hash(state);
