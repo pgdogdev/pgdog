@@ -4,9 +4,11 @@ use std::{
     collections::{HashMap, HashSet},
     ops::Deref,
     str::from_utf8,
+    sync::Arc,
 };
 
 use lazy_static::lazy_static;
+use parking_lot::Mutex;
 use pg_query::{
     protobuf::{AlterTableType, ConstrType, ObjectType, ParseResult, RangeVar, String as PgString},
     Node, NodeEnum,
@@ -110,7 +112,7 @@ fn should_convert_to_bigint<'a>(
     is_integer_type(sval.as_str())
 }
 
-use tokio::process::Command;
+use tokio::{process::Command, spawn};
 
 #[derive(Debug, Clone)]
 pub struct PgDump {
@@ -1102,14 +1104,22 @@ impl PgDumpOutput {
         state: SyncState,
     ) -> Result<(), Error> {
         let stmts = self.statements(state)?;
-        let mut trackers = (0..dest.shards().len())
-            .map(|shard| {
-                stmts
-                    .iter()
-                    .map(|stmt| (stmt.sql(), SchemaStatement::new(dest, stmt, shard, state)))
-                    .collect::<HashMap<_, _>>()
-            })
-            .collect::<Vec<_>>();
+        let trackers = Arc::new(Mutex::new(
+            (0..dest.shards().len())
+                .map(|shard| {
+                    stmts
+                        .iter()
+                        .map(|stmt| {
+                            (
+                                stmt.sql().to_string(),
+                                SchemaStatement::new(dest, stmt, shard, state),
+                            )
+                        })
+                        .collect::<HashMap<_, _>>()
+                })
+                .collect::<Vec<_>>(),
+        ));
+        let mut handles = vec![];
 
         for (num, shard) in dest.shards().iter().enumerate() {
             let mut primary = shard.primary(&Request::default()).await?;
@@ -1121,51 +1131,68 @@ impl PgDumpOutput {
                 dest.name()
             );
 
-            let mut progress = Progress::new(stmts.len());
+            let trackers = trackers.clone();
+            let output = self.clone();
 
-            for stmt in &stmts {
-                progress.next(stmt);
+            handles.push(spawn(async move {
+                let stmts = output.statements(state)?;
 
-                let mut tracker = trackers
-                    .get_mut(num)
-                    .and_then(|trackers| trackers.remove(stmt.sql()));
+                let mut progress = Progress::new(stmts.len());
 
-                if let Some(ref mut tracker) = tracker {
-                    tracker.running();
-                }
+                for stmt in &stmts {
+                    progress.next(stmt);
 
-                if let Err(err) = primary.execute(stmt.deref()).await {
-                    if let backend::Error::ExecutionError(ref err) = err {
-                        let code = &err.code;
+                    let mut tracker = trackers
+                        .lock()
+                        .get_mut(num)
+                        .and_then(|trackers| trackers.remove(stmt.sql()));
 
-                        if let Statement::Other { idempotent, .. } = stmt {
-                            if !idempotent {
-                                if matches!(code.as_str(), "42P16" | "42710" | "42809" | "42P07") {
-                                    warn!("entity already exists, skipping");
-                                    continue;
-                                } else if !ignore_errors {
-                                    if let Some(ref mut tracker) = tracker {
-                                        tracker.error(err);
+                    if let Some(ref mut tracker) = tracker {
+                        tracker.running();
+                    }
+
+                    if let Err(err) = primary.execute(stmt.deref()).await {
+                        if let backend::Error::ExecutionError(ref err) = err {
+                            let code = &err.code;
+
+                            if let Statement::Other { idempotent, .. } = stmt {
+                                if !idempotent {
+                                    if matches!(
+                                        code.as_str(),
+                                        "42P16" | "42710" | "42809" | "42P07"
+                                    ) {
+                                        warn!("entity already exists, skipping");
+                                        continue;
+                                    } else if !ignore_errors {
+                                        if let Some(ref mut tracker) = tracker {
+                                            tracker.error(err);
+                                        }
+                                        return Err(Error::Backend(
+                                            backend::Error::ExecutionError(err.clone()),
+                                        ));
+                                    } else {
+                                        warn!("skipping: {}", err);
                                     }
-                                    return Err(Error::Backend(backend::Error::ExecutionError(
-                                        err.clone(),
-                                    )));
-                                } else {
-                                    warn!("skipping: {}", err);
                                 }
                             }
+                        } else {
+                            return Err(err.into());
                         }
-                    } else {
-                        return Err(err.into());
+                        if ignore_errors {
+                            warn!("skipping: {}", err);
+                        } else {
+                            return Err(err.into());
+                        }
                     }
-                    if ignore_errors {
-                        warn!("skipping: {}", err);
-                    } else {
-                        return Err(err.into());
-                    }
+                    progress.done();
                 }
-                progress.done();
-            }
+
+                Ok::<(), Error>(())
+            }));
+        }
+
+        for handle in handles {
+            handle.await??;
         }
 
         Ok(())
