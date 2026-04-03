@@ -3,7 +3,7 @@ use crate::{
         databases::{cancel_all, cutover},
         maintenance_mode,
         schema::sync::{pg_dump::PgDumpOutput, PgDump},
-        Cluster,
+        Cluster, Schema,
     },
     util::{format_bytes, human_duration, random_string},
 };
@@ -108,6 +108,9 @@ impl Orchestrator {
         self.destination.wait_schema_loaded().await;
 
         self.refresh_publisher();
+
+        // Install our stuff.
+        Schema::install(&self.destination).await?;
 
         Ok(())
     }

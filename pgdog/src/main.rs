@@ -106,6 +106,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         config.config.general.workers,
         config.config.memory.stack_size / 1024 / 1024
     );
+    info!(
+        "using \"{}\" unique 64-bit ID generator",
+        config.config.general.unique_id_function
+    );
 
     runtime.block_on(async move { pgdog(args.command).await })?;
 
