@@ -88,6 +88,42 @@ impl Server {
         options: ServerOptions,
         connect_reason: ConnectReason,
     ) -> Result<Self, Error> {
+        let first_secret = addr.auth_secret().await?;
+        let second_secret = addr.password_alternate.clone();
+
+        // Postmaster doesn't fork until auth is successful,
+        // so this is actually not terribly slow.
+        let attempt =
+            Self::connect_with_with_secret(addr, options.clone(), connect_reason, &first_secret)
+                .await;
+        match attempt {
+            Ok(server) => Ok(server),
+            Err(Error::ConnectionError(err)) => {
+                // Only retry if the server told us we used the wrong password.
+                if err.code == "28P01" {
+                    if let Some(second_secret) = second_secret {
+                        return Self::connect_with_with_secret(
+                            addr,
+                            options,
+                            connect_reason,
+                            &second_secret,
+                        )
+                        .await;
+                    }
+                }
+
+                Err(Error::ConnectionError(err))
+            }
+            Err(err) => Err(err),
+        }
+    }
+
+    async fn connect_with_with_secret(
+        addr: &Address,
+        options: ServerOptions,
+        connect_reason: ConnectReason,
+        auth_secret: &str,
+    ) -> Result<Self, Error> {
         debug!("=> {}", addr);
         let stream = TcpStream::connect(addr.addr().await?).await?;
         let config = config();
@@ -170,8 +206,7 @@ impl Server {
         stream.flush().await?;
 
         // Perform authentication.
-        let auth_secret = addr.auth_secret().await?;
-        let mut scram = Client::new(&addr.user, &auth_secret);
+        let mut scram = Client::new(&addr.user, auth_secret);
         let mut auth_type = AuthType::Trust;
         loop {
             let message = stream.read().await?;

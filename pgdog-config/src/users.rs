@@ -171,6 +171,10 @@ pub struct User {
     ///
     /// https://docs.pgdog.dev/configuration/users.toml/users/#password
     pub password: Option<String>,
+    /// Alternative password used for rotating the password with zero downtime.
+    /// PgDog will accept both `password` and `passwordAlternate` from the client
+    /// and attempt both when connecting to Postgres.
+    pub password_alternate: Option<String>,
     /// Overrides [`default_pool_size`](https://docs.pgdog.dev/configuration/pgdog.toml/general/) for this user. No more than this many server connections will be open at any given time to serve requests for this connection pool.
     ///
     /// https://docs.pgdog.dev/configuration/users.toml/users/#pool_size

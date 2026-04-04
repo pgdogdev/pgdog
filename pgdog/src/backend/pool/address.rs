@@ -20,6 +20,8 @@ pub struct Address {
     pub user: String,
     /// Password.
     pub password: String,
+    /// Password alternate, used for credentials rotation.
+    pub password_alternate: Option<String>,
     /// Server auth mode for backend connections.
     #[serde(default)]
     pub server_auth: ServerAuth,
@@ -37,6 +39,7 @@ impl From<Address> for pgdog_stats::Address {
             database_name: value.database_name,
             user: value.user,
             password: value.password,
+            password_alternate: value.password_alternate,
             server_auth: value.server_auth,
             server_iam_region: value.server_iam_region,
             database_number: value.database_number,
@@ -73,6 +76,7 @@ impl Address {
             } else {
                 user.password().to_string()
             },
+            password_alternate: user.password_alternate.clone(),
             server_auth,
             server_iam_region: user.server_iam_region.clone(),
             database_number,
@@ -112,7 +116,7 @@ impl Address {
             database_name: "pgdog".into(),
             server_auth: ServerAuth::Password,
             server_iam_region: None,
-            database_number: 0,
+            ..Default::default()
         }
     }
 }
@@ -145,7 +149,7 @@ impl TryFrom<Url> for Address {
             database_name,
             server_auth: ServerAuth::Password,
             server_iam_region: None,
-            database_number: 0,
+            ..Default::default()
         })
     }
 }

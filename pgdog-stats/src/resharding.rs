@@ -56,6 +56,8 @@ pub struct Address {
     pub user: String,
     /// Password.
     pub password: String,
+    /// Alternate password.
+    pub password_alternate: Option<String>,
     /// Server auth mode for backend connections.
     #[serde(default)]
     pub server_auth: ServerAuth,

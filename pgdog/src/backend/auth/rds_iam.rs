@@ -157,6 +157,7 @@ mod tests {
             database_number: 0,
             server_auth: ServerAuth::RdsIam,
             server_iam_region: Some("us-east-1".into()),
+            ..Default::default()
         };
 
         let token = token(&addr).await.unwrap();

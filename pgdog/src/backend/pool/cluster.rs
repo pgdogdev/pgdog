@@ -56,6 +56,7 @@ pub struct Cluster {
     identifier: Arc<DatabaseUser>,
     shards: Vec<Shard>,
     password: String,
+    password_alternate: Option<String>,
     pooler_mode: PoolerMode,
     sharded_tables: ShardedTables,
     sharded_schemas: ShardedSchemas,
@@ -131,6 +132,7 @@ pub struct ClusterConfig<'a> {
     pub lb_strategy: LoadBalancingStrategy,
     pub user: &'a str,
     pub password: &'a str,
+    pub password_alternate: Option<&'a String>,
     pub pooler_mode: PoolerMode,
     pub sharded_tables: ShardedTables,
     pub replication_sharding: Option<String>,
@@ -176,6 +178,7 @@ impl<'a> ClusterConfig<'a> {
         Self {
             name: &user.database,
             password: user.password(),
+            password_alternate: user.password_alternate.as_ref(),
             user: &user.name,
             replication_sharding: user.replication_sharding.clone(),
             pooler_mode,
@@ -219,6 +222,7 @@ impl Cluster {
             lb_strategy,
             user,
             password,
+            password_alternate,
             pooler_mode,
             sharded_tables,
             replication_sharding,
@@ -267,6 +271,7 @@ impl Cluster {
                 })
                 .collect(),
             password: password.to_owned(),
+            password_alternate: password_alternate.cloned(),
             pooler_mode,
             sharded_tables,
             sharded_schemas,
@@ -351,6 +356,11 @@ impl Cluster {
     /// Get the password the user should use to connect to the database.
     pub fn password(&self) -> &str {
         &self.password
+    }
+
+    /// Get alternative acceptable password.
+    pub fn password_alternate(&self) -> Option<&str> {
+        self.password_alternate.as_ref().map(|s| s.as_str())
     }
 
     /// User name.
