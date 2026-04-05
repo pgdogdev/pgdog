@@ -11,8 +11,9 @@ use crate::backend::replication::publisher::progress::Progress;
 use crate::backend::replication::publisher::Lsn;
 
 use crate::backend::replication::status::TableCopy;
-use crate::backend::{Cluster, Server};
+use crate::backend::{Cluster, Server, ShardedTables};
 use crate::config::config;
+use crate::frontend::router::parser::Column;
 use crate::net::replication::StatusUpdate;
 use crate::util::escape_identifier;
 
@@ -182,6 +183,23 @@ impl Table {
         self.columns = PublicationTableColumn::load(&self.identity, server).await?;
 
         Ok(())
+    }
+
+    /// Check if this table is sharded.
+    pub fn is_sharded(&self, tables: &ShardedTables) -> bool {
+        for column in &self.columns {
+            let c = Column {
+                name: &column.name,
+                table: Some(&self.table.name),
+                schema: Some(&self.table.schema),
+            };
+
+            if tables.get_table(c).is_some() {
+                return true;
+            }
+        }
+
+        false
     }
 
     pub async fn data_sync(

@@ -45,6 +45,26 @@ CREATE TABLE copy_data.with_identity(
     tenant_id BIGINT NOT NULL
 );
 
+-- Omni (non-sharded) tables: no tenant_id column.
+CREATE TABLE IF NOT EXISTS copy_data.countries (
+    id SERIAL PRIMARY KEY,
+    code CHAR(2) NOT NULL UNIQUE,
+    name VARCHAR NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS copy_data.currencies (
+    id SERIAL PRIMARY KEY,
+    code CHAR(3) NOT NULL UNIQUE,
+    name VARCHAR NOT NULL,
+    symbol VARCHAR(5)
+);
+
+CREATE TABLE IF NOT EXISTS copy_data.categories (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR NOT NULL,
+    parent_id INT REFERENCES copy_data.categories(id)
+);
+
 DROP PUBLICATION IF EXISTS pgdog;
 CREATE PUBLICATION pgdog FOR TABLES IN SCHEMA copy_data;
 
@@ -154,3 +174,20 @@ FROM generate_series(1, 10000);
 
 INSERT INTO copy_data.with_identity (tenant_id)
 SELECT floor(random() * 10000)::bigint FROM generate_series(1, 10000);
+
+INSERT INTO copy_data.countries (code, name) VALUES
+    ('US', 'United States'), ('GB', 'United Kingdom'), ('DE', 'Germany'),
+    ('FR', 'France'), ('JP', 'Japan'), ('CA', 'Canada'),
+    ('AU', 'Australia'), ('BR', 'Brazil'), ('IN', 'India'), ('CN', 'China');
+
+INSERT INTO copy_data.currencies (code, name, symbol) VALUES
+    ('USD', 'US Dollar', '$'), ('EUR', 'Euro', '€'), ('GBP', 'British Pound', '£'),
+    ('JPY', 'Japanese Yen', '¥'), ('CAD', 'Canadian Dollar', 'C$'),
+    ('AUD', 'Australian Dollar', 'A$'), ('BRL', 'Brazilian Real', 'R$'),
+    ('INR', 'Indian Rupee', '₹'), ('CNY', 'Chinese Yuan', '¥'), ('CHF', 'Swiss Franc', 'Fr');
+
+INSERT INTO copy_data.categories (name, parent_id) VALUES
+    ('Electronics', NULL), ('Clothing', NULL), ('Books', NULL),
+    ('Home & Garden', NULL), ('Sports', NULL);
+INSERT INTO copy_data.categories (name, parent_id) VALUES
+    ('Phones', 1), ('Laptops', 1), ('Shirts', 2), ('Pants', 2), ('Fiction', 3);
