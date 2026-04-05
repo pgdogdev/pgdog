@@ -11,6 +11,7 @@ use tokio::{
         mpsc::{unbounded_channel, UnboundedSender},
         Semaphore,
     },
+    task::JoinHandle,
 };
 use tracing::info;
 
@@ -32,7 +33,7 @@ struct ParallelSync {
 
 impl ParallelSync {
     // Run parallel sync.
-    pub fn run(mut self) {
+    pub fn run(mut self) -> JoinHandle<Result<(), Error>> {
         spawn(async move {
             // Record copy in queue before waiting for permit.
             let tracker = TableCopy::new(&self.table.table.schema, &self.table.table.name);
@@ -68,7 +69,7 @@ impl ParallelSync {
                 .map_err(|_| Error::ParallelConnection)?;
 
             Ok::<(), Error>(())
-        });
+        })
     }
 }
 
@@ -115,22 +116,29 @@ impl ParallelSyncManager {
 
         let (tx, mut rx) = unbounded_channel();
         let mut tables = vec![];
+        let mut handles = vec![];
 
         for table in self.tables {
-            ParallelSync {
-                table,
-                addr: replica.addr().clone(),
-                dest: self.dest.clone(),
-                tx: tx.clone(),
-                permit: self.permit.clone(),
-            }
-            .run();
+            handles.push(
+                ParallelSync {
+                    table,
+                    addr: replica.addr().clone(),
+                    dest: self.dest.clone(),
+                    tx: tx.clone(),
+                    permit: self.permit.clone(),
+                }
+                .run(),
+            );
         }
 
         drop(tx);
 
         while let Some(table) = rx.recv().await {
             tables.push(table?);
+        }
+
+        for handle in handles {
+            handle.await??;
         }
 
         Ok(tables)

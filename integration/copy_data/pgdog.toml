@@ -1,11 +1,17 @@
 [general]
 resharding_copy_format = "binary"
 
+#
+# Source of data.
+#
 [[databases]]
 name = "source"
 host = "127.0.0.1"
 database_name = "pgdog"
 
+#
+# Reshard 0 -> 2
+#
 [[databases]]
 name = "destination"
 host = "127.0.0.1"
@@ -20,6 +26,26 @@ shard = 1
 
 [[sharded_tables]]
 database = "destination"
+column = "tenant_id"
+data_type = "bigint"
+
+#
+# Reshard 2 -> 2
+#
+[[databases]]
+name = "destination2"
+host = "127.0.0.1"
+database_name = "shard_0"
+shard = 0
+
+[[databases]]
+name = "destination2"
+host = "127.0.0.1"
+database_name = "shard_1"
+shard = 1
+
+[[sharded_tables]]
+database = "destination2"
 column = "tenant_id"
 data_type = "bigint"
 

@@ -22,9 +22,19 @@ pushd ${SCRIPT_DIR}
 
 psql -f init.sql
 
+#
+# 0 -> 2
+#
 ${PGDOG_BIN} schema-sync --from-database source --to-database destination --publication pgdog
 ${PGDOG_BIN} data-sync --sync-only --from-database source --to-database destination --publication pgdog --replication-slot copy_data
 ${PGDOG_BIN} schema-sync --from-database source --to-database destination --publication pgdog --cutover
+
+#
+# 2 -> 2
+#
+${PGDOG_BIN} schema-sync --from-database destination --to-database destination2 --publication pgdog
+${PGDOG_BIN} data-sync --sync-only --from-database destination --to-database destination2 --publication pgdog --replication-slot copy_data
+${PGDOG_BIN} schema-sync --from-database destination --to-database destination2 --publication pgdog --cutover
 
 # Start replication in the background.
 ${PGDOG_BIN} data-sync --replicate-only --from-database source --to-database destination --publication pgdog &
@@ -62,5 +72,7 @@ if [ ${REPL_EXIT} -ne 0 ] && [ ${REPL_EXIT} -ne 130 ] && [ ${REPL_EXIT} -ne 143 
     echo "ERROR: replication process exited with code ${REPL_EXIT}"
     exit ${REPL_EXIT}
 fi
+
+psql -f init.sql
 
 popd
