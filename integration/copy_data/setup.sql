@@ -47,22 +47,22 @@ CREATE TABLE copy_data.with_identity(
 
 -- Omni (non-sharded) tables: no tenant_id column.
 CREATE TABLE IF NOT EXISTS copy_data.countries (
-    id SERIAL PRIMARY KEY,
-    code CHAR(2) NOT NULL UNIQUE,
+    id BIGSERIAL PRIMARY KEY,
+    code VARCHAR NOT NULL UNIQUE,
     name VARCHAR NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS copy_data.currencies (
-    id SERIAL PRIMARY KEY,
-    code CHAR(3) NOT NULL UNIQUE,
+    id BIGSERIAL PRIMARY KEY,
+    code VARCHAR NOT NULL UNIQUE,
     name VARCHAR NOT NULL,
-    symbol VARCHAR(5)
+    symbol VARCHAR
 );
 
 CREATE TABLE IF NOT EXISTS copy_data.categories (
-    id SERIAL PRIMARY KEY,
+    id BIGSERIAL PRIMARY KEY,
     name VARCHAR NOT NULL,
-    parent_id INT REFERENCES copy_data.categories(id)
+    parent_id INT
 );
 
 DROP PUBLICATION IF EXISTS pgdog;
@@ -165,7 +165,7 @@ FROM items_raw ir;
 
 INSERT INTO copy_data.log_actions (tenant_id, action)
 SELECT
-    CASE WHEN random() < 0.2 THEN NULL ELSE (floor(random() * 10000) + 1)::bigint END AS tenant_id,
+    (floor(random() * 10000) + 1)::bigint AS tenant_id,
     (ARRAY['login', 'logout', 'click', 'purchase', 'view', 'error'])[
         floor(random() * 6 + 1)::int
     ] AS action

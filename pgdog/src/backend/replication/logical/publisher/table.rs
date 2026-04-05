@@ -66,6 +66,11 @@ impl Table {
         Ok(results)
     }
 
+    /// Key used for duplicate check.
+    pub(super) fn key(&self) -> (String, String) {
+        (self.table.schema.clone(), self.table.name.clone())
+    }
+
     /// Check that the table supports replication.
     pub fn valid(&self) -> Result<(), Error> {
         if !self.columns.iter().any(|c| c.identity) {
@@ -256,6 +261,7 @@ impl Table {
         }
 
         copy_sub.copy_done().await?;
+
         copy_sub.disconnect().await?;
         progress.done();
 

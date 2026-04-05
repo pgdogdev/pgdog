@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -70,9 +70,12 @@ impl Publisher {
     }
 
     /// Synchronize tables for all shards.
-    pub async fn sync_tables(&mut self, data_sync: bool) -> Result<(), Error> {
-        let sharding_tables = &self.cluster.sharding_schema().tables;
-        let mut omnisharded = HashSet::new();
+    pub async fn sync_tables(&mut self, data_sync: bool, dest: &Cluster) -> Result<(), Error> {
+        let sharding_tables = dest.sharding_schema().tables;
+
+        // Omnisharded tables are split evenly between shards
+        // during copy to avoid duplicate key errors.
+        let mut omnisharded = HashMap::new();
 
         for (number, shard) in self.cluster.shards().iter().enumerate() {
             // Load tables from publication.
@@ -82,21 +85,15 @@ impl Publisher {
 
             // For data sync, split omni tables evenly between shards.
             if data_sync {
-                omnisharded.extend(
-                    tables
-                        .iter()
-                        .filter(|table| !table.is_sharded(&sharding_tables))
-                        .cloned()
-                        .collect::<Vec<_>>(),
-                );
-
-                self.tables.insert(
-                    number,
-                    tables
-                        .into_iter()
-                        .filter(|table| table.is_sharded(&sharding_tables))
-                        .collect(),
-                );
+                for table in tables {
+                    let omni = !table.is_sharded(&sharding_tables);
+                    if omni {
+                        omnisharded.insert(table.key(), table);
+                    } else {
+                        let entry = self.tables.entry(number).or_insert(vec![]);
+                        entry.push(table);
+                    }
+                }
             } else {
                 // For replication, process changes from all shards.
                 self.tables.insert(number, tables);
@@ -105,10 +102,11 @@ impl Publisher {
 
         // Distribute omni tables rougly equally between all shards.
         let mut shard_index = 0;
-        for table in omnisharded {
+        for table in omnisharded.into_values() {
             let shard = shard_index % self.cluster.shards().len();
-            if let Some(shard) = self.tables.get_mut(&shard) {
-                shard.push(table);
+            if let Some(tables) = self.tables.get_mut(&shard) {
+                tables.push(table);
+            } else {
             }
             shard_index += 1;
         }
@@ -150,7 +148,7 @@ impl Publisher {
         let mut streams = vec![];
 
         // Synchronize tables from publication.
-        self.sync_tables(false).await?;
+        self.sync_tables(false, dest).await?;
 
         // Create replication slots if we haven't already.
         if self.slots.is_empty() {
@@ -271,7 +269,7 @@ impl Publisher {
         // Create replication slots.
         self.create_slots().await?;
         // Fetch schema.
-        self.sync_tables(true).await?;
+        self.sync_tables(true, dest).await?;
 
         let mut handles = vec![];
 
