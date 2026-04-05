@@ -358,6 +358,14 @@ impl Cluster {
         &self.password
     }
 
+    /// Get both password and alternate.
+    pub fn passwords(&self) -> (&str, Option<&str>) {
+        (
+            self.password(),
+            self.password_alternate.as_ref().map(|s| s.as_str()),
+        )
+    }
+
     /// Get alternative acceptable password.
     pub fn password_alternate(&self) -> Option<&str> {
         self.password_alternate.as_ref().map(|s| s.as_str())
