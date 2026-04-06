@@ -23,8 +23,8 @@ function run_pgdog() {
     local config_file="${COMMON_DIR}/pgdog.config"
     if [ -z "${binary}" ]; then
         # Testing in release is faster and mirrors production.
-        cargo build --release
-        binary="target/release/pgdog"
+        cargo build
+        binary="target/debug/pgdog"
     fi
     if [ -f "${pid_file}" ]; then
         local existing_pid=$(cat "${pid_file}")

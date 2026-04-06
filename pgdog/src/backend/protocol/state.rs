@@ -234,11 +234,6 @@ impl ProtocolState {
         &self.queue
     }
 
-    #[cfg(test)]
-    pub(crate) fn queue_mut(&mut self) -> &mut VecDeque<ExecutionItem> {
-        &mut self.queue
-    }
-
     pub(crate) fn done(&self) -> bool {
         self.is_empty() && !self.out_of_sync
     }
@@ -888,6 +883,96 @@ mod test {
         assert_eq!(state.action('2').unwrap(), Action::Ignore);
         assert_eq!(state.action('C').unwrap(), Action::Forward);
         assert_eq!(state.action('Z').unwrap(), Action::Forward);
+        assert!(state.is_empty());
+    }
+
+    // Double action('c') for server CopyDone
+
+    // Safe path: Code(ReadyForQuery) backstop makes the double action('c') call idempotent.
+    #[test]
+    fn test_copydone_double_action_safe_with_rfq_backstop() {
+        let mut state = ProtocolState::default();
+        // 1. Queue: CopyOut slot + RFQ backstop (from Sync).
+        state.add('G'); // CopyOut
+        state.add('Z'); // ReadyForQuery backstop
+
+        // 2. First action('c'): pops CopyOut; RFQ backstop untouched.
+        assert_eq!(state.action('c').unwrap(), Action::Forward);
+        assert_eq!(state.len(), 1);
+
+        // 3. Second action('c'): sees RFQ at front; pushes it back (idempotent).
+        assert_eq!(state.action('c').unwrap(), Action::Forward);
+        assert_eq!(state.len(), 1); // RFQ still present for the server's ReadyForQuery
+    }
+
+    // Failure path: no Code(ReadyForQuery) backstop — second action('c') hits empty queue.
+    #[test]
+    fn test_copydone_double_action_oos_without_rfq_backstop() {
+        let mut state = ProtocolState::default();
+        // 1. Queue: Execute + Flush (no Sync) — no RFQ backstop.
+        state.add('C'); // ExecutionCompleted
+
+        // 2. First action('c'): pops ExecutionCompleted; queue empty.
+        assert_eq!(state.action('c').unwrap(), Action::Forward);
+        assert!(state.is_empty());
+
+        // 3. Second action('c'): empty queue → ProtocolOutOfSync.
+        assert!(state.action('c').is_err());
+    }
+
+    // Stale RFQ arrives before injected ParseComplete — Ignore arm rejects the mismatch.
+    #[test]
+    fn test_stale_rfq_hits_ignore_parsecomplete() {
+        let mut state = ProtocolState::default();
+        // 1. pgdog injects Parse; queue: [Ignore(ParseComplete), BindComplete, CommandComplete, RFQ].
+        state.add_ignore('1'); // ParseComplete — injected
+        state.add('2'); // BindComplete
+        state.add('C'); // CommandComplete
+        state.add('Z'); // ReadyForQuery
+
+        // Stale RFQ from prior cycle arrives before ParseComplete.
+        // ReadyForQuery != ParseComplete → ProtocolOutOfSync.
+        assert!(
+            state.action('Z').is_err(),
+            "stale RFQ against Ignore(ParseComplete) must produce ProtocolOutOfSync"
+        );
+    }
+
+    // Variant: stale RFQ hits Ignore(BindComplete) — same mismatch for any Ignore slot.
+    #[test]
+    fn test_stale_rfq_hits_ignore_bindcomplete() {
+        let mut state = ProtocolState::default();
+        // Both Parse and Bind are injected (Describe path).
+        state.add_ignore('1'); // ParseComplete — injected
+        state.add_ignore('2'); // BindComplete  — injected
+        state.add('T'); // RowDescription
+        state.add('C'); // CommandComplete
+        state.add('Z'); // ReadyForQuery
+
+        // ParseComplete arrives normally and is swallowed.
+        assert_eq!(state.action('1').unwrap(), Action::Ignore);
+
+        // Queue front is now Ignore(BindComplete).
+        // A stale RFQ arrives before BindComplete → ProtocolOutOfSync.
+        assert!(
+            state.action('Z').is_err(),
+            "stale RFQ against Ignore(BindComplete) must produce ProtocolOutOfSync"
+        );
+    }
+
+    // Happy path: injected ParseComplete arrives in order — silently ignored, rest forwarded.
+    #[test]
+    fn test_injected_parse_happy_path() {
+        let mut state = ProtocolState::default();
+        state.add_ignore('1'); // ParseComplete — injected, swallowed
+        state.add('2'); // BindComplete
+        state.add('C'); // CommandComplete
+        state.add('Z'); // ReadyForQuery
+
+        assert_eq!(state.action('1').unwrap(), Action::Ignore); // swallowed
+        assert_eq!(state.action('2').unwrap(), Action::Forward); // forwarded
+        assert_eq!(state.action('C').unwrap(), Action::Forward); // forwarded
+        assert_eq!(state.action('Z').unwrap(), Action::Forward); // forwarded
         assert!(state.is_empty());
     }
 }

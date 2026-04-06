@@ -13,7 +13,7 @@ describe 'load balancer' do
     it 'distributes traffic evenly' do
       conn = failover
       # Reset stats and bans
-      admin.exec "RECONNECT"
+      admin_exec 'RECONNECT'
 
       before = admin_stats('failover')
       250.times do
