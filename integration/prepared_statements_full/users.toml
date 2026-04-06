@@ -2,3 +2,19 @@
 database = "pgdog"
 name = "pgdog"
 password = "pgdog"
+
+
+[[users]]
+name = "pgdog_session"
+database = "pgdog"
+password = "pgdog"
+server_user = "pgdog"
+pooler_mode = "session"
+
+[[users]]
+name = "pgdog_tx_single"
+database = "pgdog"
+password = "pgdog"
+server_user = "pgdog"
+pooler_mode = "transaction"
+pool_size = 1
