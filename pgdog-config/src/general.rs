@@ -1052,7 +1052,7 @@ impl General {
     }
 
     pub fn query_cache_limit() -> usize {
-        Self::env_or_default("PGDOG_QUERY_CACHE_LIMIT", 50_000)
+        Self::env_or_default("PGDOG_QUERY_CACHE_LIMIT", 1_000)
     }
 
     pub fn log_format() -> LogFormat {
