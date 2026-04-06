@@ -79,7 +79,7 @@
         "prepared_statements": "extended",
         "prepared_statements_limit": 9223372036854775807,
         "pub_sub_channel_size": 0,
-        "query_cache_limit": 50000,
+        "query_cache_limit": 1000,
         "query_log": null,
         "query_parser": "auto",
         "query_parser_enabled": false,
@@ -885,7 +885,7 @@
           "description": "Limit on the number of statements saved in the statement cache used to accelerate query parsing.\n\n_Default:_ `50000`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#query_cache_limit",
           "type": "integer",
           "format": "uint",
-          "default": 50000,
+          "default": 1000,
           "minimum": 0
         },
         "query_log": {
