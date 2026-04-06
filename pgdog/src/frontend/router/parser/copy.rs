@@ -313,12 +313,7 @@ impl CopyParser {
 mod test {
     use pg_query::parse;
 
-    use crate::{
-        backend::server::test::test_server,
-        config::config,
-        frontend::router::parser::binary::header::Header,
-        net::{CopyDone, Protocol, Query, ToBytes},
-    };
+    use crate::config::config;
 
     use super::*;
 
