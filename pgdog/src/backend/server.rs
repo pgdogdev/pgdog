@@ -3430,4 +3430,184 @@ pub mod test {
         assert!(server.force_close());
         assert_eq!(server.stats().get_state(), State::ForceClose);
     }
+
+    // Failed injected PREPARE leaves EXECUTE ReadyForQuery unmatched — Error handler empties the queue.
+    #[tokio::test]
+    async fn test_prepare_execute_inject_failure_orphans_execute_rfq() {
+        let mut server = test_server().await;
+
+        // 1. Send [Prepare, Query] as the rewriter injects for EXECUTE.
+        server
+            .send(
+                &vec![
+                    ProtocolMessage::Prepare {
+                        name: "__pgdog_prepare_inject_test".to_string(),
+                        statement: "SELECT 1 FROM __pgdog_nonexistent_table__".to_string(),
+                    },
+                    ProtocolMessage::Query(Query::new("EXECUTE __pgdog_prepare_inject_test()")),
+                ]
+                .into(),
+            )
+            .await
+            .unwrap();
+
+        // 2. PREPARE 'E' forwarded; 'Z' consumes re-added Code(RFQ) — queue empty.
+        let msg = server.read().await.unwrap();
+        assert_eq!(msg.code(), 'E'); // 'E' PREPARE error
+        let msg = server.read().await.unwrap();
+        assert_eq!(msg.code(), 'Z'); // 'Z' PREPARE RFQ — queue now empty
+
+        // 3. EXECUTE 'E' forwarded (no-op on empty queue).
+        let msg = server.read().await.unwrap();
+        assert_eq!(msg.code(), 'E'); // 'E' EXECUTE error
+
+        // 4. BUG: EXECUTE 'Z' hits empty queue → ProtocolOutOfSync (fix: assert 'Z' + done()).
+        let err = server.read().await.unwrap_err();
+        assert!(
+            matches!(err, Error::ProtocolOutOfSync),
+            "expected ProtocolOutOfSync; got {:?}",
+            err,
+        );
+    }
+
+    // Extended Execute + Flush (no Sync): no RFQ backstop — double action('c') raises ProtocolOutOfSync.
+    #[tokio::test]
+    async fn test_copydone_double_action_oos_without_sync() {
+        let mut server = test_server().await;
+
+        // 1. Parse + Bind + Execute + Flush (not Sync); no RFQ backstop in queue.
+        server
+            .send(
+                &vec![
+                    ProtocolMessage::Parse(Parse::new_anonymous("COPY (VALUES (1),(2)) TO STDOUT")),
+                    ProtocolMessage::Bind(Bind::new_params("", &[])),
+                    ProtocolMessage::Execute(Execute::new()),
+                    // Flush (not Sync): prompts PostgreSQL to send buffered responses.
+                    // handle() maps this to Other, adding nothing to the queue.
+                    Flush.into(),
+                ]
+                .into(),
+            )
+            .await
+            .unwrap();
+
+        // 2. ParseComplete, BindComplete, CopyOutResponse, CopyData x2 arrive normally.
+        assert_eq!(server.read().await.unwrap().code(), '1'); // ParseComplete
+        assert_eq!(server.read().await.unwrap().code(), '2'); // BindComplete
+        assert_eq!(server.read().await.unwrap().code(), 'H'); // CopyOutResponse
+        assert_eq!(server.read().await.unwrap().code(), 'd'); // CopyData row 1
+        assert_eq!(server.read().await.unwrap().code(), 'd'); // CopyData row 2
+                                                              // 3. BUG: CopyDone — first action() pops ExecutionCompleted; second hits empty queue.
+        assert!(
+            matches!(server.read().await.unwrap_err(), Error::ProtocolOutOfSync),
+            "expected ProtocolOutOfSync"
+        );
+    }
+
+    // Safe path: Sync adds Code(RFQ) backstop — double action('c') is idempotent.
+    #[tokio::test]
+    async fn test_copydone_double_action_safe_with_sync() {
+        let mut server = test_server().await;
+
+        // 1. Parse + Bind + Execute + Sync; RFQ backstop added to queue.
+        server
+            .send(
+                &vec![
+                    ProtocolMessage::Parse(Parse::new_anonymous("COPY (VALUES (1),(2)) TO STDOUT")),
+                    ProtocolMessage::Bind(Bind::new_params("", &[])),
+                    ProtocolMessage::Execute(Execute::new()),
+                    ProtocolMessage::Sync(Sync),
+                ]
+                .into(),
+            )
+            .await
+            .unwrap();
+
+        // 2. Full response sequence — CopyDone is safe with RFQ backstop.
+        assert_eq!(server.read().await.unwrap().code(), '1'); // ParseComplete
+        assert_eq!(server.read().await.unwrap().code(), '2'); // BindComplete
+        assert_eq!(server.read().await.unwrap().code(), 'H'); // CopyOutResponse
+        assert_eq!(server.read().await.unwrap().code(), 'd'); // CopyData row 1
+        assert_eq!(server.read().await.unwrap().code(), 'd'); // CopyData row 2
+        assert_eq!(server.read().await.unwrap().code(), 'c'); // CopyDone -- safe with RFQ backstop
+        assert_eq!(server.read().await.unwrap().code(), 'C'); // CommandComplete
+        assert_eq!(server.read().await.unwrap().code(), 'Z'); // ReadyForQuery
+        assert!(
+            server.done(),
+            "server must be done after full response sequence"
+        );
+    }
+
+    // extended=true sticks after any parameterised query; Error handler sets out_of_sync on every subsequent error.
+    #[tokio::test]
+    async fn test_extended_flag_never_resets_spurious_out_of_sync() {
+        use crate::net::bind::Parameter;
+
+        let mut server = test_server().await;
+
+        // 1. Baseline: extended=false; simple-query error must not set out_of_sync.
+        server
+            .send(&vec![Query::new("SELECT 1/0").into()].into())
+            .await
+            .unwrap();
+        let msg = server.read().await.unwrap();
+        assert_eq!(msg.code(), 'E');
+        assert!(!server.out_of_sync());
+        let msg = server.read().await.unwrap();
+        assert_eq!(msg.code(), 'Z');
+        assert!(server.done());
+
+        // 2. Parameterised query sets extended=true permanently.
+        let bind = Bind::new_params_codes(
+            "",
+            &[Parameter {
+                len: 1,
+                data: "1".as_bytes().into(),
+            }],
+            &[Format::Text],
+        );
+        server
+            .send(
+                &vec![
+                    ProtocolMessage::from(Parse::new_anonymous("SELECT $1::int")),
+                    ProtocolMessage::from(bind),
+                    ProtocolMessage::from(Execute::new()),
+                    ProtocolMessage::from(Sync),
+                ]
+                .into(),
+            )
+            .await
+            .unwrap();
+
+        for c in ['1', '2', 'D', 'C', 'Z'] {
+            let msg = server.read().await.unwrap();
+            assert_eq!(msg.code(), c);
+        }
+        assert!(server.done());
+
+        // 3. Same error on same connection: extended stuck → out_of_sync=true spuriously.
+        server
+            .send(&vec![Query::new("SELECT 1/0").into()].into())
+            .await
+            .unwrap();
+        let msg = server.read().await.unwrap();
+        assert_eq!(msg.code(), 'E');
+        assert!(server.out_of_sync()); // spurious: extended=true even for plain simple query
+        let msg = server.read().await.unwrap();
+        assert_eq!(msg.code(), 'Z'); // RFQ clears out_of_sync but leaves extended stuck
+        assert!(!server.out_of_sync());
+        assert!(server.done());
+
+        // 4. Confirm extended remains stuck across RFQ resets.
+        server
+            .send(&vec![Query::new("SELECT 1/0").into()].into())
+            .await
+            .unwrap();
+        let msg = server.read().await.unwrap();
+        assert_eq!(msg.code(), 'E');
+        assert!(server.out_of_sync());
+        let msg = server.read().await.unwrap();
+        assert_eq!(msg.code(), 'Z');
+        assert!(server.done());
+    }
 }
