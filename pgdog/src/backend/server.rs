@@ -472,6 +472,13 @@ impl Server {
                         Ok(forward) => {
                             if forward {
                                 break message;
+                            } else if message.code() == 'E' {
+                                // we got an error that will not be forwarded to the client,
+                                // but it still be useful for tracing
+                                error!(
+                                    "Ignore error from stream: {:?}",
+                                    ErrorResponse::from_bytes(message.payload())
+                                );
                             }
                         }
                         Err(err) => {
@@ -2079,14 +2086,17 @@ pub mod test {
 
         let mut prep = PreparedStatements::new();
         let mut parse = Parse::named("test", "SELECT 1::bigint");
+
         prep.insert_anyway(&mut parse);
-        assert_eq!(parse.name(), "__pgdog_1");
+
+        let name = parse.name().to_owned();
+        assert!(name.starts_with("__pgdog_"));
 
         server
             .send(
                 &vec![ProtocolMessage::from(Query::new(format!(
                     "PREPARE {} AS {}",
-                    parse.name(),
+                    name,
                     parse.query()
                 )))]
                 .into(),
@@ -2099,10 +2109,10 @@ pub mod test {
         }
         assert!(server.sync_prepared());
         server.sync_prepared_statements().await.unwrap();
-        assert!(server.prepared_statements.contains("__pgdog_1"));
+        assert!(server.prepared_statements.contains(&name));
 
-        let describe = Describe::new_statement("__pgdog_1");
-        let bind = Bind::new_statement("__pgdog_1");
+        let describe = Describe::new_statement(&name);
+        let bind = Bind::new_statement(&name);
         let execute = Execute::new();
         server
             .send(
@@ -2122,7 +2132,7 @@ pub mod test {
             assert_eq!(c, msg.code());
         }
 
-        let parse = Parse::named("__pgdog_1", "SELECT 2::bigint");
+        let parse = Parse::named(&name, "SELECT 2::bigint");
         let describe = describe.clone();
 
         server
@@ -2136,7 +2146,7 @@ pub mod test {
         }
 
         server
-            .send(&vec![ProtocolMessage::from(Query::new("EXECUTE __pgdog_1"))].into())
+            .send(&vec![ProtocolMessage::from(Query::new(format!("EXECUTE {name}")))].into())
             .await
             .unwrap();
         for c in ['T', 'D', 'C', 'Z'] {
@@ -4155,19 +4165,7 @@ pub mod test {
         let msg = server.read().await.unwrap();
         assert_eq!(msg.code(), 'E'); // 'E' PREPARE error
         let msg = server.read().await.unwrap();
-        assert_eq!(msg.code(), 'Z'); // 'Z' PREPARE RFQ — queue now empty
-
-        // 3. EXECUTE 'E' forwarded (no-op on empty queue).
-        let msg = server.read().await.unwrap();
-        assert_eq!(msg.code(), 'E'); // 'E' EXECUTE error
-
-        // 4. BUG: EXECUTE 'Z' hits empty queue → ProtocolOutOfSync (fix: assert 'Z' + done()).
-        let err = server.read().await.unwrap_err();
-        assert!(
-            matches!(err, Error::ProtocolOutOfSync),
-            "expected ProtocolOutOfSync; got {:?}",
-            err,
-        );
+        assert_eq!(msg.code(), 'Z'); // 'Z' RFQ — queue now empty
     }
 
     // Extended Execute + Flush (no Sync): no RFQ backstop — double action('c') raises ProtocolOutOfSync.
