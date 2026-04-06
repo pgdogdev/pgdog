@@ -1,0 +1,351 @@
+on:
+  github:
+    pull_request:
+      init:
+        commit-sha: ${{ event.git.sha }}
+        branch: ${{ event.git.branch }}
+    push:
+      if: ${{ event.git.branch == "main" }}
+      init:
+        commit-sha: ${{ event.git.sha }}
+        branch: ${{ event.git.branch }}
+  cli:
+    init:
+      commit-sha: ${{ event.git.sha }}
+      branch: local
+
+base:
+  image: ubuntu:24.04
+  config: rwx/base 1.0.0
+
+concurrency-pools:
+  - id: pgdogdev/pgdog:rust:${{ init.branch }}
+    if: ${{ init.branch != "main" && init.branch != "local" }}
+    capacity: 1
+    on-overflow: cancel-running
+
+aliases:
+  shared-filter: &shared-filter
+    - "!.claude"
+    - "!.git"
+    - "!.gitattributes"
+    - "!.github"
+    - "!.gitignore"
+    - "!.rwx"
+    - "!AGENTS.md"
+    - "!CLAUDE.md"
+    - "!CONTRIBUTING.md"
+    - "!LICENSE"
+    - "!README.md"
+    - "!SECURITY.md"
+    - "!docs"
+
+tasks:
+  - key: code
+    call: git/clone 2.0.7
+    with:
+      repository: https://github.com/pgdogdev/pgdog.git
+      ref: ${{ init.commit-sha }}
+      preserve-git-dir: true
+      submodules: false
+
+  - key: rust
+    call: rust-lang/install 1.0.6
+    with:
+      rust-version: 1.91.0
+
+  - key: system-packages
+    run: |
+      sudo apt-get update
+      if [ -e /usr/bin/pg_config.libpq-dev ] && ! sudo dpkg-divert --list /usr/bin/pg_config >/dev/null 2>&1; then
+        sudo rm -f /usr/bin/pg_config.libpq-dev
+      fi
+      sudo apt-get install -y \
+        build-essential \
+        clang \
+        curl \
+        lcov \
+        libpq-dev \
+        libssl-dev \
+        mold \
+        pkg-config \
+        postgresql \
+        postgresql-client \
+        psmisc \
+        python3-pip \
+        python3-venv \
+        python3-virtualenv \
+        ruby-full
+      sudo apt-get remove -y cmake || true
+      sudo pip3 install --break-system-packages cmake==3.31.6
+      cmake --version
+      sudo gem install bundler
+      sudo apt-get clean
+    cache:
+      ttl: 7 days
+
+  - key: cargo-nextest
+    use: [system-packages, rust]
+    run: cargo install cargo-nextest --version "0.9.78" --locked
+
+  - key: cargo-llvm-cov
+    use: [cargo-nextest]
+    run: cargo install cargo-llvm-cov --locked --version "0.6.10"
+
+  - key: codecov-cli
+    use: system-packages
+    run: |
+      curl -fsSL -o codecov https://cli.codecov.io/v11.2.8/linux/codecov
+      chmod +x codecov
+
+  - key: cargo-build-workspace
+    use: [system-packages, code, rust, cargo-nextest]
+    agent:
+      cpus: 16
+      memory: 32gb
+      tmpfs: true
+    run: cargo test --workspace --no-run
+    outputs:
+      filesystem:
+        deduplicate: true
+    filter: *shared-filter
+
+  - key: cargo-build-workspace-cov
+    use: [system-packages, code, rust, cargo-nextest, cargo-llvm-cov]
+    agent:
+      cpus: 16
+      memory: 32gb
+      tmpfs: true
+    run: cargo llvm-cov nextest --workspace --no-clean -E 'none()' --no-tests=pass
+    outputs:
+      filesystem:
+        deduplicate: true
+        filter: ["!**/*.profraw"]
+    filter: *shared-filter
+
+  - key: cargo-test-pgdog
+    use: cargo-build-workspace-cov
+    timeout: 20m
+    run: |
+      sudo service postgresql start
+      sudo -u postgres createuser --superuser --login "$USER" || true
+      sudo -u postgres createdb "$USER" || true
+      sudo -u postgres psql -c 'ALTER SYSTEM SET max_prepared_transactions TO 1000;' -c 'ALTER SYSTEM SET wal_level TO logical;'
+      sudo service postgresql restart
+
+      bash integration/setup.sh
+
+      cargo llvm-cov nextest \
+        --workspace \
+        --no-clean \
+        --lcov \
+        --output-path lcov-pgdog.info \
+        --no-fail-fast \
+        --test-threads=1 \
+        -E 'package(pgdog)'
+    outputs:
+      filesystem: false
+      artifacts:
+        - key: lcov-pgdog
+          path: lcov-pgdog.info
+    filter: *shared-filter
+
+  - key: cargo-test-pgdog-config
+    use: cargo-build-workspace-cov
+    run: |
+      cargo llvm-cov nextest \
+        --workspace \
+        --no-clean \
+        --lcov \
+        --output-path lcov-pgdog-config.info \
+        --no-fail-fast \
+        --test-threads=1 \
+        -E 'package(pgdog-config)'
+    outputs:
+      filesystem: false
+      artifacts:
+        - key: lcov-pgdog-config
+          path: lcov-pgdog-config.info
+    filter: *shared-filter
+
+  - key: cargo-test-pgdog-vector
+    use: cargo-build-workspace-cov
+    run: |
+      cargo llvm-cov nextest \
+        --workspace \
+        --no-clean \
+        --lcov \
+        --output-path lcov-pgdog-vector.info \
+        --no-fail-fast \
+        --test-threads=1 \
+        -E 'package(pgdog-vector)'
+    outputs:
+      filesystem: false
+      artifacts:
+        - key: lcov-pgdog-vector
+          path: lcov-pgdog-vector.info
+    filter: *shared-filter
+
+  - key: cargo-test-pgdog-stats
+    use: cargo-build-workspace-cov
+    run: |
+      cargo llvm-cov nextest \
+        --workspace \
+        --no-clean \
+        --lcov \
+        --output-path lcov-pgdog-stats.info \
+        --no-fail-fast \
+        --test-threads=1 \
+        -E 'package(pgdog-stats)'
+    outputs:
+      filesystem: false
+      artifacts:
+        - key: lcov-pgdog-stats
+          path: lcov-pgdog-stats.info
+    filter: *shared-filter
+
+  - key: cargo-test-pgdog-postgres-types
+    use: cargo-build-workspace-cov
+    run: |
+      cargo llvm-cov nextest \
+        --workspace \
+        --no-clean \
+        --lcov \
+        --output-path lcov-pgdog-postgres-types.info \
+        --no-fail-fast \
+        --test-threads=1 \
+        -E 'package(pgdog-postgres-types)'
+    outputs:
+      filesystem: false
+      artifacts:
+        - key: lcov-pgdog-postgres-types
+          path: lcov-pgdog-postgres-types.info
+    filter: *shared-filter
+
+  - key: rust-core-lcov
+    use: system-packages
+    run: |
+      lcov \
+        -a "$LCOV_PGDOG" \
+        -a "$LCOV_PGDOG_CONFIG" \
+        -a "$LCOV_PGDOG_VECTOR" \
+        -a "$LCOV_PGDOG_STATS" \
+        -a "$LCOV_PGDOG_POSTGRES_TYPES" \
+        -o lcov.info
+    env:
+      LCOV_PGDOG: ${{ tasks.cargo-test-pgdog.artifacts.lcov-pgdog }}
+      LCOV_PGDOG_CONFIG: ${{ tasks.cargo-test-pgdog-config.artifacts.lcov-pgdog-config }}
+      LCOV_PGDOG_VECTOR: ${{ tasks.cargo-test-pgdog-vector.artifacts.lcov-pgdog-vector }}
+      LCOV_PGDOG_STATS: ${{ tasks.cargo-test-pgdog-stats.artifacts.lcov-pgdog-stats }}
+      LCOV_PGDOG_POSTGRES_TYPES: ${{ tasks.cargo-test-pgdog-postgres-types.artifacts.lcov-pgdog-postgres-types }}
+    outputs:
+      artifacts:
+        - key: core-lcov
+          path: lcov.info
+
+  - key: rust-codecov-upload
+    use: [code, codecov-cli]
+    env:
+      CODECOV_TOKEN: ${{ vaults.pgdog-development.secrets.CODECOV_TOKEN }}
+      LCOV_FILE: ${{ tasks.rust-core-lcov.artifacts.core-lcov }}
+    run: |
+      ./codecov --verbose upload-process \
+        --disable-search \
+        --fail-on-error \
+        -F unit \
+        -f "$LCOV_FILE"
+    outputs:
+      filesystem: false
+
+  - key: rust-fmt-check
+    use: [code, rust]
+    run: cargo fmt --all -- --check
+    outputs:
+      filesystem: false
+    filter: *shared-filter
+
+  - key: rust-pgdog-clippy
+    use: [system-packages, code, rust]
+    agent:
+      cpus: 4
+    run: cd pgdog && cargo clippy
+    outputs:
+      filesystem: false
+    filter: *shared-filter
+
+  - key: rust-workspace-build
+    use: [system-packages, code, rust]
+    agent:
+      cpus: 8
+    run: cargo build
+    outputs:
+      filesystem: false
+    filter: *shared-filter
+
+  - key: rust-workspace-check-release
+    use: [system-packages, code, rust]
+    agent:
+      cpus: 4
+    run: cargo check --release
+    outputs:
+      filesystem: false
+    filter: *shared-filter
+
+  - key: rust-doc-tests
+    use: cargo-build-workspace
+    run: cargo test --doc
+    outputs:
+      filesystem: false
+    filter: *shared-filter
+
+  - key: rust-plugin-unit
+    use: cargo-build-workspace
+    timeout: 30m
+    run: |
+      set +e
+      cargo nextest run -E 'package(pgdog-example-plugin)' --no-fail-fast
+      status=$?
+      set -e
+
+      if [ "$status" -ne 0 ]; then
+        printf '%s\n' \
+          "pgdog-example-plugin unit tests failed with exit code $status" \
+          > "$RWX_WARNINGS/plugin-unit"
+      fi
+
+      exit 0
+    outputs:
+      filesystem: false
+    filter: *shared-filter
+
+  - key: rust-plugin-integration
+    use: [system-packages, code, rust]
+    agent:
+      cpus: 8
+      memory: 16gb
+    timeout: 30m
+    run: |
+      sudo service postgresql start
+      sudo -u postgres createuser --superuser --login "$USER" || true
+      sudo -u postgres createdb "$USER" || true
+
+      bash integration/setup.sh
+
+      cargo build --release -p pgdog --bin pgdog
+      export PGDOG_BIN="$PWD/target/release/pgdog"
+
+      set +e
+      timeout --signal=TERM --kill-after=30s 11m bash integration/plugins/run.sh
+      status=$?
+      set -e
+
+      if [ "$status" -ne 0 ]; then
+        printf '%s\n' \
+          "pgdog-example-plugin integration tests failed with exit code $status" \
+          > "$RWX_WARNINGS/plugin-integration"
+      fi
+
+      exit 0
+    outputs:
+      filesystem: false
+    filter: *shared-filter
