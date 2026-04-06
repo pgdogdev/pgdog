@@ -70,14 +70,44 @@ impl Publisher {
     }
 
     /// Synchronize tables for all shards.
-    pub async fn sync_tables(&mut self) -> Result<(), Error> {
+    pub async fn sync_tables(&mut self, data_sync: bool, dest: &Cluster) -> Result<(), Error> {
+        let sharding_tables = dest.sharding_schema().tables;
+
+        // Omnisharded tables are split evenly between shards
+        // during copy to avoid duplicate key errors.
+        let mut omnisharded = HashMap::new();
+
         for (number, shard) in self.cluster.shards().iter().enumerate() {
             // Load tables from publication.
             let mut primary = shard.primary(&Request::default()).await?;
             let tables =
                 Table::load(&self.publication, &mut primary, self.query_parser_engine).await?;
 
-            self.tables.insert(number, tables);
+            // For data sync, split omni tables evenly between shards.
+            if data_sync {
+                for table in tables {
+                    let omni = !table.is_sharded(&sharding_tables);
+                    if omni {
+                        omnisharded.insert(table.key(), table);
+                    } else {
+                        let entry = self.tables.entry(number).or_insert(vec![]);
+                        entry.push(table);
+                    }
+                }
+            } else {
+                // For replication, process changes from all shards.
+                self.tables.insert(number, tables);
+            }
+        }
+
+        // Distribute omni tables rougly equally between all shards.
+        let mut shard_index = 0;
+        for table in omnisharded.into_values() {
+            let shard = shard_index % self.cluster.shards().len();
+            if let Some(tables) = self.tables.get_mut(&shard) {
+                tables.push(table);
+            }
+            shard_index += 1;
         }
 
         Ok(())
@@ -117,9 +147,7 @@ impl Publisher {
         let mut streams = vec![];
 
         // Synchronize tables from publication.
-        if self.tables.is_empty() {
-            self.sync_tables().await?;
-        }
+        self.sync_tables(false, dest).await?;
 
         // Create replication slots if we haven't already.
         if self.slots.is_empty() {
@@ -239,12 +267,17 @@ impl Publisher {
     pub async fn data_sync(&mut self, dest: &Cluster) -> Result<(), Error> {
         // Create replication slots.
         self.create_slots().await?;
+        // Fetch schema.
+        self.sync_tables(true, dest).await?;
+
         let mut handles = vec![];
 
         for (number, shard) in self.cluster.shards().iter().enumerate() {
-            let mut primary = shard.primary(&Request::default()).await?;
-            let tables =
-                Table::load(&self.publication, &mut primary, self.query_parser_engine).await?;
+            let tables = self
+                .tables
+                .get(&number)
+                .ok_or(Error::NoReplicationTables(number))?
+                .clone();
 
             info!(
                 "table sync starting for {} tables, shard={}",

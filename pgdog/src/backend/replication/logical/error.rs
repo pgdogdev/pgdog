@@ -122,6 +122,9 @@ pub enum Error {
 
     #[error("task is not a replication task")]
     NotReplication,
+
+    #[error("binary format mismatch (likely int -> bigint), use text copy instead: {0}")]
+    BinaryFormatMistmatch(ErrorResponse),
 }
 
 impl From<ErrorResponse> for Error {

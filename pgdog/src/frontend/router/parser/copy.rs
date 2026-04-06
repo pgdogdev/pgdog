@@ -553,7 +553,7 @@ mod test {
             _ => panic!("not a copy"),
         };
 
-        let mut copy = CopyParser::new(&copy, &Cluster::default()).unwrap();
+        let mut copy = CopyParser::new(&copy, &Cluster::new_test(&config())).unwrap();
         assert!(copy.is_from);
         assert!(copy.headers);
         let mut data = b"PGCOPY".to_vec();
@@ -574,7 +574,10 @@ mod test {
         let sharded = copy.shard(&[header]).unwrap();
         assert_eq!(sharded.len(), 3);
         assert_eq!(sharded[0].message().data(), &data[..19]); // Header is 19 bytes long.
+        assert_eq!(sharded[0].shard(), &Shard::All);
         assert_eq!(sharded[1].message().data().len(), 2 + 4 + 8 + 4 + 3);
+        assert!(matches!(sharded[1].shard(), &Shard::Direct(_)));
         assert_eq!(sharded[2].message().data(), (-1_i16).to_be_bytes());
+        assert_eq!(sharded[2].shard(), &Shard::All)
     }
 }

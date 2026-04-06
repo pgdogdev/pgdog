@@ -63,6 +63,7 @@ struct Statements {
     upsert: Statement,
     update: Statement,
     delete: Statement,
+    omni: bool,
 }
 
 #[derive(Default, Debug, Clone)]
@@ -284,8 +285,15 @@ impl StreamSubscriber {
         if let Some(statements) = self.statements.get(&insert.oid) {
             // Convert TupleData into a Bind message. We can now insert that tuple
             // using a prepared statement.
-            let mut context =
-                StreamContext::new(&self.cluster, &insert.tuple_data, statements.insert.parse());
+            let mut context = StreamContext::new(
+                &self.cluster,
+                &insert.tuple_data,
+                if statements.omni {
+                    statements.upsert.parse()
+                } else {
+                    statements.insert.parse()
+                },
+            );
             let bind = context.bind().clone();
             let shard = context.shard()?;
 
@@ -481,6 +489,7 @@ impl StreamSubscriber {
                     upsert,
                     update,
                     delete,
+                    omni: !table.is_sharded(&self.cluster.sharding_schema().tables),
                 },
             );
 

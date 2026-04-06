@@ -22,9 +22,74 @@ pushd ${SCRIPT_DIR}
 
 psql -f init.sql
 
+#
+# 0 -> 2
+#
 ${PGDOG_BIN} schema-sync --from-database source --to-database destination --publication pgdog
 ${PGDOG_BIN} data-sync --sync-only --from-database source --to-database destination --publication pgdog --replication-slot copy_data
 ${PGDOG_BIN} schema-sync --from-database source --to-database destination --publication pgdog --cutover
+
+# Check row counts: source (pgdog) vs destination (pgdog1 + pgdog2)
+echo "Checking row counts: source -> destination..."
+SHARDED_TABLES="copy_data.users copy_data.orders copy_data.order_items copy_data.log_actions copy_data.with_identity"
+OMNI_TABLES="copy_data.countries copy_data.currencies copy_data.categories"
+
+for TABLE in ${SHARDED_TABLES}; do
+    SRC=$(psql -d pgdog -tAc "SELECT COUNT(*) FROM ${TABLE}")
+    DST1=$(psql -d pgdog1 -tAc "SELECT COUNT(*) FROM ${TABLE}")
+    DST2=$(psql -d pgdog2 -tAc "SELECT COUNT(*) FROM ${TABLE}")
+    DST=$((DST1 + DST2))
+    if [ "${SRC}" -ne "${DST}" ]; then
+        echo "MISMATCH ${TABLE}: source=${SRC} destination=${DST} (shard0=${DST1} shard1=${DST2})"
+        exit 1
+    fi
+    echo "OK ${TABLE}: ${SRC} rows"
+done
+
+for TABLE in ${OMNI_TABLES}; do
+    SRC=$(psql -d pgdog -tAc "SELECT COUNT(*) FROM ${TABLE}")
+    DST1=$(psql -d pgdog1 -tAc "SELECT COUNT(*) FROM ${TABLE}")
+    DST2=$(psql -d pgdog2 -tAc "SELECT COUNT(*) FROM ${TABLE}")
+    if [ "${SRC}" -ne "${DST1}" ] || [ "${SRC}" -ne "${DST2}" ]; then
+        echo "MISMATCH ${TABLE}: source=${SRC} shard0=${DST1} shard1=${DST2} (expected ${SRC} on each shard)"
+        exit 1
+    fi
+    echo "OK ${TABLE}: ${SRC} rows on each shard"
+done
+
+#
+# 2 -> 2
+#
+${PGDOG_BIN} schema-sync --from-database destination --to-database destination2 --publication pgdog
+${PGDOG_BIN} data-sync --sync-only --from-database destination --to-database destination2 --publication pgdog --replication-slot copy_data
+${PGDOG_BIN} schema-sync --from-database destination --to-database destination2 --publication pgdog --cutover
+
+# Check row counts: destination (pgdog1 + pgdog2) vs destination2 (shard_0 + shard_1)
+echo "Checking row counts: destination -> destination2..."
+for TABLE in ${SHARDED_TABLES}; do
+    SRC1=$(psql -d pgdog1 -tAc "SELECT COUNT(*) FROM ${TABLE}")
+    SRC2=$(psql -d pgdog2 -tAc "SELECT COUNT(*) FROM ${TABLE}")
+    SRC=$((SRC1 + SRC2))
+    DST1=$(psql -d shard_0 -tAc "SELECT COUNT(*) FROM ${TABLE}")
+    DST2=$(psql -d shard_1 -tAc "SELECT COUNT(*) FROM ${TABLE}")
+    DST=$((DST1 + DST2))
+    if [ "${SRC}" -ne "${DST}" ]; then
+        echo "MISMATCH ${TABLE}: source=${SRC} destination=${DST} (shard0=${DST1} shard1=${DST2})"
+        exit 1
+    fi
+    echo "OK ${TABLE}: ${SRC} rows"
+done
+
+for TABLE in ${OMNI_TABLES}; do
+    SRC=$(psql -d pgdog1 -tAc "SELECT COUNT(*) FROM ${TABLE}")
+    DST1=$(psql -d shard_0 -tAc "SELECT COUNT(*) FROM ${TABLE}")
+    DST2=$(psql -d shard_1 -tAc "SELECT COUNT(*) FROM ${TABLE}")
+    if [ "${SRC}" -ne "${DST1}" ] || [ "${SRC}" -ne "${DST2}" ]; then
+        echo "MISMATCH ${TABLE}: source=${SRC} shard0=${DST1} shard1=${DST2} (expected ${SRC} on each shard)"
+        exit 1
+    fi
+    echo "OK ${TABLE}: ${SRC} rows on each shard"
+done
 
 # Start replication in the background.
 ${PGDOG_BIN} data-sync --replicate-only --from-database source --to-database destination --publication pgdog &
@@ -62,5 +127,7 @@ if [ ${REPL_EXIT} -ne 0 ] && [ ${REPL_EXIT} -ne 130 ] && [ ${REPL_EXIT} -ne 143 
     echo "ERROR: replication process exited with code ${REPL_EXIT}"
     exit ${REPL_EXIT}
 fi
+
+psql -f init.sql
 
 popd

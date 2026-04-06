@@ -142,9 +142,13 @@ impl CopySubscriber {
             let command_complete = server.read().await?;
             match command_complete.code() {
                 'E' => {
-                    return Err(Error::PgError(Box::new(ErrorResponse::from_bytes(
-                        command_complete.to_bytes()?,
-                    )?)))
+                    let error = ErrorResponse::from_bytes(command_complete.to_bytes()?)?;
+                    if error.code == "08P01" && error.message == "insufficient data left in message"
+                    {
+                        return Err(Error::BinaryFormatMistmatch(error));
+                    } else {
+                        return Err(Error::PgError(Box::new(error)));
+                    }
                 }
                 'C' => (),
                 c => return Err(Error::OutOfSync(c)),
