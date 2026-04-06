@@ -1,3 +1,5 @@
+use tracing::error;
+
 use crate::{
     net::{Message, Protocol},
     stats::memory::MemoryUsage,
@@ -146,17 +148,61 @@ impl ProtocolState {
         match code {
             ExecutionCode::Untracked => return Ok(Action::Forward),
             ExecutionCode::Error => {
-                // Remove everything from the execution queue.
-                // The connection is out of sync until client re-syncs it.
+                if matches!(
+                    self.queue.front(),
+                    Some(ExecutionItem::Ignore(ExecutionCode::Error))
+                ) {
+                    // We ignore errors only for the pgdog-injected sub-request.
+                    // In that case the first error is already processed and
+                    // sent to the client, for the remaining expected errors
+                    // we've added ignores for errors and RFQ.
+                    // The error is ignored but still be logged by [backend::server] module
+                    self.queue.pop_front();
+                    return Ok(Action::Ignore);
+                }
+
+                // This is the first (and client-visible) error in the chain. It is forwarded
+                // so the client receives exactly one Error+RFQ for their request.
+                // For extended-protocol pipelines also mark out-of-sync so the connection
+                // is not reused until the client re-syncs.
                 if self.extended {
                     self.out_of_sync = true;
                 }
-                let last = self.queue.pop_back();
-                self.queue.clear();
-                if let Some(ExecutionItem::Code(ExecutionCode::ReadyForQuery)) = last {
+
+                // find the first position for RFQ code to effectively
+                // separate the pgdog-injected sub-request from the remaining queries
+                let Some(rfq_pos) = self
+                    .queue
+                    .iter()
+                    .position(|i| matches!(i, ExecutionItem::Code(ExecutionCode::ReadyForQuery)))
+                else {
+                    self.queue.clear();
+                    return Ok(Action::Forward);
+                };
+
+                // broken_queue - pgdog-injected sub-request part that contains multiple requests
+                // that are not be executed properly anyway, since we've got an error previously
+                let broken_queue = self.queue.drain(..rfq_pos);
+
+                // Count how many queries are expected to finish in the pgdog-injected sub-request
+                // The current use case is only the Prepare + Execute messages from the [backend::server]
+                // And in case the prepare fails the execute will fail as well.
+                // WARN: That is not most reliable solution in case the injected set of queries
+                // will extend, but it should work for now.
+                let count_ignores = broken_queue
+                    .filter(|i| matches!(i, ExecutionItem::Ignore(ExecutionCode::ReadyForQuery)))
+                    .count();
+
+                // For every message that we expect to run add ignore for one error and one RFQ
+                // For prepare it'll be a one iteration that will create the query
+                // [Ignore(RFQ), Ignore(Error), Code(RFQ)]
+                for _ in 0..count_ignores {
                     self.queue
-                        .push_back(ExecutionItem::Code(ExecutionCode::ReadyForQuery));
+                        .push_front(ExecutionItem::Ignore(ExecutionCode::Error));
+                    self.queue
+                        .push_front(ExecutionItem::Ignore(ExecutionCode::ReadyForQuery));
                 }
+
                 return Ok(Action::Forward);
             }
 
@@ -165,7 +211,10 @@ impl ProtocolState {
             }
             _ => (),
         };
-        let in_queue = self.queue.pop_front().ok_or(Error::ProtocolOutOfSync)?;
+        let in_queue = self.queue.pop_front().ok_or_else(|| {
+            error!("Unexpected action {code:?}: queue is empty");
+            Error::ProtocolOutOfSync
+        })?;
         match in_queue {
             // The queue is waiting for the server to send ReadyForQuery,
             // but it sent something else. That means the execution pipeline
@@ -185,6 +234,8 @@ impl ProtocolState {
                 if code == in_queue {
                     Ok(Action::Ignore)
                 } else {
+                    error!(?self, "Unexpected action {code:?}: expected: {in_queue:?}");
+
                     Err(Error::ProtocolOutOfSync)
                 }
             }
@@ -930,6 +981,57 @@ mod test {
         assert_eq!(state.action('2').unwrap(), Action::Forward); // forwarded
         assert_eq!(state.action('C').unwrap(), Action::Forward); // forwarded
         assert_eq!(state.action('Z').unwrap(), Action::Forward); // forwarded
+        assert!(state.is_empty());
+    }
+
+    // Replicates the full lifecycle of an injected PREPARE that errors:
+    //
+    // Client sends:  PREPARE foo AS ...  (simple-query style)
+    //                EXECUTE (via Query)
+    //
+    // pgdog injects ahead of the client's Query:
+    //   add_ignore('C')  — CommandComplete from PREPARE
+    //   add_ignore('Z')  — RFQ from PREPARE
+    // Then the client's Query adds:
+    //   add('Z')         — the client-visible RFQ
+    //
+    // Queue before first error: [Ignore(C), Ignore(Z), Code(Z)]
+    //
+    // Server responds to PREPARE with an error:
+    //   'E'  → error branch fires: drain [Ignore(C), Ignore(Z)], count 1 Ignore(RFQ),
+    //          push_front loop produces [Ignore(RFQ), Ignore(Error), Code(Z)].
+    //          Action::Forward — client receives this error.
+    //   'Z'  → matches Ignore(RFQ) → Action::Ignore (PREPARE's RFQ suppressed)
+    //
+    // Server responds to EXECUTE (which fails because PREPARE never succeeded):
+    //   'E'  → fast-path: front is Ignore(Error) → pop → Action::Ignore (suppressed)
+    //   'Z'  → Code(Z) → Action::Forward — client receives the closing RFQ
+    #[test]
+    fn test_injected_prepare_error_full_lifecycle() {
+        let mut state = ProtocolState::default();
+
+        // --- setup: replicate what prepared_statements.rs does ---
+        // ProtocolMessage::Prepare injects:
+        state.add_ignore('C'); // Ignore(CommandComplete) — PREPARE response
+        state.add_ignore('Z'); // Ignore(RFQ)            — PREPARE response
+                               // ProtocolMessage::Query (client EXECUTE) adds:
+        state.add('Z'); // Code(RFQ) — client-visible
+
+        // --- server sends Error for PREPARE ---
+        // Error branch: drains [Ignore(C), Ignore(Z)], finds 1 Ignore(Z),
+        // rebuilds queue as [Ignore(RFQ), Ignore(Error), Code(Z)].
+        assert_eq!(state.action('E').unwrap(), Action::Forward);
+
+        // --- server sends RFQ for PREPARE (now suppressed) ---
+        assert_eq!(state.action('Z').unwrap(), Action::Ignore);
+
+        // --- server sends Error for EXECUTE (prepare never succeeded) ---
+        // Fast-path: Ignore(Error) is at front → pop and ignore.
+        assert_eq!(state.action('E').unwrap(), Action::Ignore);
+
+        // --- server sends RFQ for EXECUTE ---
+        // Code(Z) is at front → forwarded to client.
+        assert_eq!(state.action('Z').unwrap(), Action::Forward);
         assert!(state.is_empty());
     }
 }

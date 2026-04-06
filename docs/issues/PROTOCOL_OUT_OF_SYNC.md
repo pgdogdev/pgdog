@@ -15,7 +15,7 @@ calls `action(code)` which pops the queue front and checks the match. Two condit
 
 ---
 
-## Issue 1 — Failed `Prepare` orphans the EXECUTE ReadyForQuery
+## ✅ Issue 1 — Failed `Prepare` orphans the EXECUTE ReadyForQuery
 
 **Severity:** High — triggered by normal server behaviour; no client misbehaviour required.
 
@@ -34,29 +34,33 @@ The simple-query rewriter turns `EXECUTE stmt_name(args)` into two prepended mes
 independently by `handle()`. After both calls the queue is:
 
 ```
-[Ignore(ExecutionCompleted), Ignore(ReadyForQuery), Code(ReadyForQuery)]
-  ↑────────── handle(Prepare) ──────────↑           ↑── handle(Query) ──↑
+[Ignore(CommandComplete), Ignore(ReadyForQuery), Code(ReadyForQuery)]
+  ↑──────────── handle(Prepare) ─────────────↑  ↑─── handle(Query) ───↑
 ```
 
 If the injected `PREPARE` fails on the server:
 
-| Step | Server sends | Error handler action | Queue after |
+The Error handler's old behaviour was to pop the last item, clear the queue, and optionally re-add
+a trailing `Code(ReadyForQuery)`. That assumed a flat, single-request queue. With the injected
+sub-request the queue is compound, so clearing it discarded the client's own `Code(ReadyForQuery)`:
+
+| Step | Server sends | Old handler action | Queue after |
 |---|---|---|---|
-| 1 | `Error` for PREPARE | `pop_back` → `Code(RFQ)` matches; re-added | `[Code(RFQ)]` |
+| 1 | `Error` for PREPARE | `pop_back` → `Code(RFQ)` re-added | `[Code(RFQ)]` |
 | 2 | `ReadyForQuery` for PREPARE | pops `Code(RFQ)` normally | **empty** |
 | 3 | `Error` for EXECUTE (statement absent) | `pop_back` → None; nothing re-added | **empty** |
 | 4 | `ReadyForQuery` for EXECUTE | `pop_front` on empty → **ProtocolOutOfSync** | — |
 
-The Error handler at `state.rs:154–159` only re-adds a trailing `ReadyForQuery` when it finds
-`Code(ReadyForQuery)` at the back. The two `Ignore` items representing the PREPARE sub-request are
-invisible to it; once they are cleared the queue no longer knows the EXECUTE is still in-flight.
+The handler only re-added a trailing `ReadyForQuery` when it found `Code(ReadyForQuery)` at the
+back. The two `Ignore` items representing the PREPARE sub-request were invisible to it; once they
+were cleared the queue no longer knew the EXECUTE was still in-flight.
 
-Under high concurrency this becomes near-deterministic: the pool fast-path (`Guard::drop` → `checkin`
+Under high concurrency this became near-deterministic: the pool fast-path (`Guard::drop` → `checkin`
 → `put`) hands a connection directly to a waiting client with no healthcheck, no idle time, and no
-opportunity to drain the kernel socket buffer. The next query on that client consumes the stale EXECUTE
-`Error + ReadyForQuery`, producing `ProtocolOutOfSync`.
+opportunity to drain the kernel socket buffer. The next query on that client consumed the stale
+EXECUTE `Error + ReadyForQuery`, producing `ProtocolOutOfSync`.
 
-### Reproduction
+### Reproduction (historical)
 
 1. Connect to pgdog with session or transaction pooling.
 2. Issue a simple-query `EXECUTE` for a statement that will fail to prepare (schema mismatch, syntax
@@ -70,17 +74,27 @@ cd integration/prepared_statements_full && bash run.sh
 
 ### Tests
 
-All three tests live in `integration/prepared_statements_full/protocol_out_of_sync_spec.rb`.
+**State-machine unit test (`state.rs`, no backend needed)**
+
+- **`test_injected_prepare_error_full_lifecycle`** — builds the exact queue that
+  `prepared_statements.rs` produces (`add_ignore('C')`, `add_ignore('Z')`, `add('Z')`), fires
+  `action('E')` and asserts the intermediate queue shape `[Ignore(RFQ), Ignore(Error), Code(Z)]`,
+  then walks the remaining Z→Ignore, E→Ignore, Z→Forward sequence to completion.
+
+**Server-level integration test (`server.rs`, requires PostgreSQL)**
+
+The test that previously asserted `ProtocolOutOfSync` on the fourth message now asserts `E` then `Z`
+(two messages, both forwarded). Tests 2 and 3 below remain unresolved and are tracked separately.
 
 | Test | Pool mode | `got:` | `extended` | What it proves |
 |---|---|---|---|---|
-| 1 | session | Z | false | Orphaned RFQ hits empty queue on the very next query |
+| 1 | session | Z | false | Failed PREPARE no longer orphans the EXECUTE RFQ — **fixed** |
 | 2 | transaction | C | false | Stale-chain: DML CommandComplete hits empty queue |
 | 3 | session | Z | true | `extended = true` changes Error handler behavior (`out_of_sync`) |
 
 - **Test 1 — Session mode, `got: Z`, `extended: false`.**
-  Session-pooled user pinned to one backend. After triggering the failed prepare, `SELECT 1` consumes
-  the stale EXECUTE error; the orphaned RFQ then hits an empty queue. Client sees `PG::ConnectionBad`.
+  Session-pooled user pinned to one backend. The failed PREPARE now produces `E` (forwarded) then `Z`
+  (forwarded, closing RFQ). No orphaned RFQ remains. Client no longer sees `PG::ConnectionBad`.
 
 - **Test 2 — Transaction mode stale-chain, `got: C`, `extended: false`.**
   `pgdog_tx_single` (transaction mode, pool_size=1). Each query consumes the previous query's stale
@@ -89,24 +103,24 @@ All three tests live in `integration/prepared_statements_full/protocol_out_of_sy
   (`got: C`). Client sees `PG::ConnectionBad`.
 
 - **Test 3 — Session mode, `got: Z`, `extended: true`.**
-  Same as Test 1, but a prior `exec_params` call (`SELECT $1::int`) permanently sets `extended = true`
-  on the connection. The Error handler then sets `out_of_sync = true` before clearing the queue,
-  changing connection-lifecycle behaviour. Client sees `PG::ConnectionBad`.
+  Same as Test 1 (pre-fix), but a prior `exec_params` call (`SELECT $1::int`) permanently sets
+  `extended = true` on the connection. The Error handler then sets `out_of_sync = true` before
+  clearing the queue, changing connection-lifecycle behaviour. Client sees `PG::ConnectionBad`.
 
 ### Fix
 
-Fix the Error handler in `state.rs:154–159`. When the failed message is part of a pgdog-injected
-compound request, the handler must preserve the `Code(ReadyForQuery)` for the outer client-visible
-request — not just the PREPARE's trailing slot. Concretely: the handler needs to recognise that
-`Ignore` items at the back of the queue belong to a sub-request that is still in-flight, and must
-keep the outer `Code(ReadyForQuery)` accordingly.
+Error handler in `state.rs`, `ExecutionCode::Error` arm. See inline comments for full detail.
 
-The TCP-peek approach (`FIONREAD` / `MSG_PEEK` at checkin) is a valid defensive catch-all but adds a
-syscall on every checkin and does not fix the root cause.
+On error, find the first `Code(ReadyForQuery)` in the queue (the client's RFQ boundary), drain
+everything before it, count the `Ignore(RFQ)` slots in the drained portion, and prepend one
+`[Ignore(RFQ), Ignore(Error)]` pair per slot. A separate fast-path at the top of the arm handles
+the case where the queue front is already `Ignore(Error)` — subsequent errors from the same
+injected sub-request — by popping and returning `Action::Ignore` directly.
 
+See also: `test_injected_prepare_error_full_lifecycle` in `state.rs`.
 ---
 
-## Issue 2 — Double `action()` call in `forward()` for server CopyDone
+## 🔴 Issue 2 — Double `action()` call in `forward()` for server CopyDone
 
 **Severity:** Medium — requires the client to omit a trailing `Sync`.
 
@@ -174,7 +188,7 @@ way, the invariant must be made explicit in code comments.
 
 ---
 
-## Issue 3 — Stale ReadyForQuery hits an `Ignore(ParseComplete)` slot
+## 🔴 Issue 3 — Stale ReadyForQuery hits an `Ignore(ParseComplete)` slot
 
 **Severity:** Low — practically unreachable in normal operation.
 
@@ -231,7 +245,7 @@ before reuse, bounding the blast radius to a single request.
 
 ---
 
-## Issue 4 — `extended` flag is permanently set and never resets
+## 🔴 Issue 4 — `extended` flag is permanently set and never resets
 
 **Severity:** Low-medium — affects connection-lifecycle semantics and silently changes Error handler
 behaviour for all subsequent requests on a connection.
@@ -324,16 +338,3 @@ until the entire pipeline finishes.
 
 A post-fix test should verify: (a) phase 3 above now produces `out_of_sync == false`, and (b) an
 intermediate `ReadyForQuery` inside a pipelined extended request does not prematurely reset `extended`.
-
----
-
-## Common thread
-
-All four issues share the same underlying fragility: the `ProtocolState` queue and the actual server
-response stream diverge whenever an error or unexpected message interrupts a multi-message sub-request
-injected transparently by pgdog. The Error handler was written for a single client-visible request and
-does not account for the compound structures the prepared-statement rewriter produces.
-
-Issue 4 is a secondary consequence: `extended` was added as a guard for the Error handler but was
-attached to the connection rather than the current pipeline, so it outlives the requests it was meant
-to describe.

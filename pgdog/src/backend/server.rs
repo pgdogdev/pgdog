@@ -388,6 +388,13 @@ impl Server {
                         Ok(forward) => {
                             if forward {
                                 break message;
+                            } else if message.code() == 'E' {
+                                // we got an error that will not be forwarded to the client,
+                                // but it still be useful for tracing
+                                error!(
+                                    "Ignore error from stream: {:?}",
+                                    ErrorResponse::from_bytes(message.payload())
+                                );
                             }
                         }
                         Err(err) => {
@@ -3422,19 +3429,7 @@ pub mod test {
         let msg = server.read().await.unwrap();
         assert_eq!(msg.code(), 'E'); // 'E' PREPARE error
         let msg = server.read().await.unwrap();
-        assert_eq!(msg.code(), 'Z'); // 'Z' PREPARE RFQ — queue now empty
-
-        // 3. EXECUTE 'E' forwarded (no-op on empty queue).
-        let msg = server.read().await.unwrap();
-        assert_eq!(msg.code(), 'E'); // 'E' EXECUTE error
-
-        // 4. BUG: EXECUTE 'Z' hits empty queue → ProtocolOutOfSync (fix: assert 'Z' + done()).
-        let err = server.read().await.unwrap_err();
-        assert!(
-            matches!(err, Error::ProtocolOutOfSync),
-            "expected ProtocolOutOfSync; got {:?}",
-            err,
-        );
+        assert_eq!(msg.code(), 'Z'); // 'Z' RFQ — queue now empty
     }
 
     // Extended Execute + Flush (no Sync): no RFQ backstop — double action('c') raises ProtocolOutOfSync.
