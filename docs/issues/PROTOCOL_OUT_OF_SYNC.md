@@ -113,7 +113,7 @@ to `false`, breaking the one-way latch. The `ExecutionItem::extended()` helper i
 enables this scan.
 ---
 
-## Issue 1 — Failed `Prepare` orphans the EXECUTE ReadyForQuery
+## ✅ Issue 1 — Failed `Prepare` orphans the EXECUTE ReadyForQuery
 
 **Severity:** High — triggered by normal server behaviour; no client misbehaviour required.
 
@@ -157,7 +157,7 @@ Under high concurrency this becomes near-deterministic: the pool fast-path (`Gua
 time, and no opportunity to drain the kernel socket buffer. The next query on that client consumes
 the stale EXECUTE `Error + ReadyForQuery`, producing `ProtocolOutOfSync`.
 
-### Reproduction
+### Reproduction (historical)
 
 1. Connect to pgdog with session or transaction pooling.
 2. Issue a simple-query `EXECUTE` for a statement that will fail to prepare (schema mismatch, syntax
@@ -191,18 +191,18 @@ Both tests live in `integration/prepared_statements_full/protocol_out_of_sync_sp
 
 ### Fix
 
-Fix the Error handler in `state.rs:154–159`. When the failed message is part of a pgdog-injected
-compound request, the handler must preserve the `Code(ReadyForQuery)` for the outer client-visible
-request — not just the PREPARE's trailing slot. Concretely: the handler needs to recognise that
-`Ignore` items at the back of the queue belong to a sub-request that is still in-flight, and must
-keep the outer `Code(ReadyForQuery)` accordingly.
+Error handler in `state.rs`, `ExecutionCode::Error` arm. See inline comments for full detail.
 
-The TCP-peek approach (`FIONREAD` / `MSG_PEEK` at checkin) is a valid defensive catch-all but adds a
-syscall on every checkin and does not fix the root cause.
+On error, find the first `Code(ReadyForQuery)` in the queue (the client's RFQ boundary), drain
+everything before it, count the `Ignore(RFQ)` slots in the drained portion, and prepend one
+`[Ignore(RFQ), Ignore(Error)]` pair per slot. A separate fast-path at the top of the arm handles
+the case where the queue front is already `Ignore(Error)` — subsequent errors from the same
+injected sub-request — by popping and returning `Action::Ignore` directly.
 
+See also: `test_injected_prepare_error_full_lifecycle` in `state.rs`.
 ---
 
-## Issue 2 — Double `action()` call in `forward()` for server CopyDone
+## 🔴 Issue 2 — Double `action()` call in `forward()` for server CopyDone
 
 **Severity:** Medium — requires the client to omit a trailing `Sync`.
 
@@ -270,7 +270,7 @@ way, the invariant must be made explicit in code comments.
 
 ---
 
-## Issue 3 — Stale ReadyForQuery hits an `Ignore(ParseComplete)` slot
+## 🔴 Issue 3 — Stale ReadyForQuery hits an `Ignore(ParseComplete)` slot
 
 **Severity:** Low — practically unreachable in normal operation.
 
@@ -509,4 +509,8 @@ while let Some(item) = self.queue.pop_front() {
 }
 ```
 
-The current `pop_back()` / `clear()` / `push_back()` pattern was written assuming one sync group per queue. Replacing it with a forward scan to the first `ReadyForQuery` boundary makes the handler correct for both the single-group and multi-group cases.
+Resetting only when `is_empty()` is safe: pipelined requests still in the queue keep `extended = true`
+until the entire pipeline finishes.
+
+A post-fix test should verify: (a) phase 3 above now produces `out_of_sync == false`, and (b) an
+intermediate `ReadyForQuery` inside a pipelined extended request does not prematurely reset `extended`.
