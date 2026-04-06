@@ -1052,7 +1052,7 @@ impl General {
     }
 
     pub fn query_cache_limit() -> usize {
-        Self::env_or_default("PGDOG_QUERY_CACHE_LIMIT", 50_000)
+        Self::env_or_default("PGDOG_QUERY_CACHE_LIMIT", 1_000)
     }
 
     pub fn log_format() -> LogFormat {
@@ -1400,7 +1400,7 @@ mod tests {
         assert_eq!(General::broadcast_port(), General::port() + 1);
         assert_eq!(General::openmetrics_port(), None);
         assert_eq!(General::prepared_statements_limit(), i64::MAX as usize);
-        assert_eq!(General::query_cache_limit(), 50_000);
+        assert_eq!(General::query_cache_limit(), 1_000);
         assert_eq!(General::connect_attempts(), 1);
         assert_eq!(General::mirror_queue(), 128);
         assert_eq!(General::mirror_exposure(), 1.0);
