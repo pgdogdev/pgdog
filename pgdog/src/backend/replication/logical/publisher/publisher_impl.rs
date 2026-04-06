@@ -106,7 +106,6 @@ impl Publisher {
             let shard = shard_index % self.cluster.shards().len();
             if let Some(tables) = self.tables.get_mut(&shard) {
                 tables.push(table);
-            } else {
             }
             shard_index += 1;
         }
