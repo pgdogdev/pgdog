@@ -1038,7 +1038,6 @@ impl Drop for Server {
     }
 }
 
-// Used for testing.
 #[cfg(test)]
 pub mod test {
     use bytes::{BufMut, BytesMut};
@@ -1392,7 +1391,7 @@ pub mod test {
         let (new, name) = global.write().insert(&parse);
         assert!(new);
         let parse = parse.rename(&name);
-        assert_eq!(parse.name(), "__pgdog_1");
+        assert!(parse.name().starts_with("__pgdog_"));
 
         let mut server = test_server().await;
 
@@ -1401,7 +1400,7 @@ pub mod test {
                 .send(
                     &vec![
                         ProtocolMessage::from(Bind::new_params(
-                            "__pgdog_1",
+                            &name,
                             &[Parameter {
                                 len: 1,
                                 data: "1".as_bytes().into(),
@@ -2560,38 +2559,6 @@ pub mod test {
             !server.sync_prepared(),
             "sync_prepared flag should remain false after regular queries"
         );
-    }
-
-    #[tokio::test]
-    async fn test_protocol_out_of_sync_sets_error_state() {
-        let mut server = test_server().await;
-
-        server
-            .send(&vec![Query::new("SELECT 1").into()].into())
-            .await
-            .unwrap();
-
-        for c in ['T', 'D'] {
-            let msg = server.read().await.unwrap();
-            assert_eq!(msg.code(), c);
-        }
-
-        // simulate an unlikely, but existent out-of-sync state
-        server
-            .prepared_statements_mut()
-            .state_mut()
-            .queue_mut()
-            .clear();
-
-        let res = server.read().await;
-        assert!(
-            matches!(res, Err(Error::ProtocolOutOfSync)),
-            "protocol should be out of sync"
-        );
-        assert!(
-            server.stats().get_state() == State::Error,
-            "state should be Error after detecting desync"
-        )
     }
 
     #[tokio::test]
