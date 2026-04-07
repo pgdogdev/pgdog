@@ -16,6 +16,7 @@ use pg_query::{
     NodeEnum,
 };
 use pgdog_config::QueryParserEngine;
+use pgdog_postgres_types::Oid;
 use tracing::{debug, trace};
 
 use super::super::{publisher::Table, Error};
@@ -123,19 +124,19 @@ pub struct StreamSubscriber {
 
     // Relation markers sent by the publisher.
     // Happens once per connection.
-    relations: HashMap<i32, Relation>,
+    relations: HashMap<Oid, Relation>,
 
     // Tables in the publication on the publisher.
     tables: HashMap<Key, Table>,
 
     // Statements
-    statements: HashMap<i32, Statements>,
+    statements: HashMap<Oid, Statements>,
 
     // Partitioned tables dedup.
     partitioned_dedup: HashSet<Key>,
 
     // LSNs for each table
-    table_lsns: HashMap<i32, i64>,
+    table_lsns: HashMap<Oid, i64>,
 
     // Connections to shards.
     connections: Vec<Server>,
@@ -388,7 +389,7 @@ impl StreamSubscriber {
         Ok(())
     }
 
-    pub(crate) fn lsn_applied(&self, oid: &i32) -> bool {
+    pub(crate) fn lsn_applied(&self, oid: &Oid) -> bool {
         if let Some(table_lsn) = self.table_lsns.get(oid) {
             // Don't apply change if table is ahead.
             if self.lsn < *table_lsn {

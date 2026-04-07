@@ -1,5 +1,6 @@
 use bytes::Bytes;
 use pgdog_config::QueryParserEngine;
+use pgdog_postgres_types::Oid;
 use rand::Rng;
 
 use crate::{
@@ -57,7 +58,7 @@ fn make_sharded_table() -> Table {
             parent_name: "".to_string(),
         },
         identity: ReplicaIdentity {
-            oid: 1,
+            oid: Oid(1),
             identity: "".to_string(),
             kind: "".to_string(),
         },
@@ -65,13 +66,13 @@ fn make_sharded_table() -> Table {
             PublicationTableColumn {
                 oid: 1,
                 name: "id".to_string(),
-                type_oid: 20, // bigint
+                type_oid: Oid(20), // bigint
                 identity: true,
             },
             PublicationTableColumn {
                 oid: 1,
                 name: "value".to_string(),
-                type_oid: 25, // text
+                type_oid: Oid(25), // text
                 identity: false,
             },
         ],
@@ -91,7 +92,7 @@ fn make_sharded_test_b_table() -> Table {
             parent_name: "".to_string(),
         },
         identity: ReplicaIdentity {
-            oid: 2,
+            oid: Oid(2),
             identity: "".to_string(),
             kind: "".to_string(),
         },
@@ -99,13 +100,13 @@ fn make_sharded_test_b_table() -> Table {
             PublicationTableColumn {
                 oid: 2,
                 name: "id".to_string(),
-                type_oid: 20,
+                type_oid: Oid(20),
                 identity: true,
             },
             PublicationTableColumn {
                 oid: 2,
                 name: "value".to_string(),
-                type_oid: 25,
+                type_oid: Oid(25),
                 identity: false,
             },
         ],
@@ -114,7 +115,7 @@ fn make_sharded_test_b_table() -> Table {
     }
 }
 
-fn sharded_relation(oid: i32) -> Relation {
+fn sharded_relation(oid: Oid) -> Relation {
     Relation {
         oid,
         namespace: "public".to_string(),
@@ -124,20 +125,20 @@ fn sharded_relation(oid: i32) -> Relation {
             RelColumn {
                 flag: 1,
                 name: "id".to_string(),
-                oid: 20,
+                oid: Oid(20),
                 type_modifier: -1,
             },
             RelColumn {
                 flag: 0,
                 name: "value".to_string(),
-                oid: 25,
+                oid: Oid(25),
                 type_modifier: -1,
             },
         ],
     }
 }
 
-fn sharded_test_b_relation(oid: i32) -> Relation {
+fn sharded_test_b_relation(oid: Oid) -> Relation {
     Relation {
         oid,
         namespace: "public".to_string(),
@@ -147,13 +148,13 @@ fn sharded_test_b_relation(oid: i32) -> Relation {
             RelColumn {
                 flag: 1,
                 name: "id".to_string(),
-                oid: 20,
+                oid: Oid(20),
                 type_modifier: -1,
             },
             RelColumn {
                 flag: 0,
                 name: "value".to_string(),
-                oid: 25,
+                oid: Oid(25),
                 type_modifier: -1,
             },
         ],
@@ -193,15 +194,15 @@ fn commit_copy_data(end_lsn: i64) -> CopyData {
     )
 }
 
-fn relation_copy_data(oid: i32) -> CopyData {
+fn relation_copy_data(oid: Oid) -> CopyData {
     xlog_copy_data(sharded_relation(oid).to_bytes().unwrap())
 }
 
-fn sharded_test_b_relation_copy_data(oid: i32) -> CopyData {
+fn sharded_test_b_relation_copy_data(oid: Oid) -> CopyData {
     xlog_copy_data(sharded_test_b_relation(oid).to_bytes().unwrap())
 }
 
-fn insert_copy_data(oid: i32, id: &str, value: &str) -> CopyData {
+fn insert_copy_data(oid: Oid, id: &str, value: &str) -> CopyData {
     xlog_copy_data(
         XLogInsert {
             xid: None,
@@ -215,7 +216,7 @@ fn insert_copy_data(oid: i32, id: &str, value: &str) -> CopyData {
     )
 }
 
-fn delete_copy_data(oid: i32, id: &str) -> CopyData {
+fn delete_copy_data(oid: Oid, id: &str) -> CopyData {
     xlog_copy_data(
         XLogDelete {
             oid,
@@ -354,7 +355,7 @@ async fn relation_inside_transaction() {
     sub.handle(begin_copy_data(100)).await.unwrap();
     assert!(sub.in_transaction());
 
-    sub.handle(relation_copy_data(16384)).await.unwrap();
+    sub.handle(relation_copy_data(Oid(16384))).await.unwrap();
     assert!(sub.in_transaction());
 }
 
@@ -365,7 +366,7 @@ async fn relation_outside_transaction() {
     sub.connect().await.unwrap();
 
     assert!(!sub.in_transaction());
-    sub.handle(relation_copy_data(16384)).await.unwrap();
+    sub.handle(relation_copy_data(Oid(16384))).await.unwrap();
     assert!(!sub.in_transaction());
 }
 
@@ -389,8 +390,8 @@ async fn relation_after_insert_inside_transaction() {
 
     sub.connect().await.unwrap();
 
-    let oid_a = 16384;
-    let oid_b = 16385;
+    let oid_a = Oid(16384);
+    let oid_b = Oid(16385);
     let id_a = random_id();
     let id_b = random_id();
 
@@ -443,7 +444,7 @@ async fn full_insert_transaction() {
     let mut verify = test_server().await;
     sub.connect().await.unwrap();
 
-    let oid = 16384;
+    let oid = Oid(16384);
     let id = random_id();
 
     cleanup(&mut verify, "public.sharded", &[&id]).await;
@@ -472,7 +473,7 @@ async fn full_delete_transaction() {
     let mut verify = test_server().await;
     sub.connect().await.unwrap();
 
-    let oid = 16384;
+    let oid = Oid(16384);
     let id = random_id();
 
     cleanup(&mut verify, "public.sharded", &[&id]).await;
@@ -504,7 +505,7 @@ async fn multiple_transactions() {
     let mut verify = test_server().await;
     sub.connect().await.unwrap();
 
-    let oid = 16384;
+    let oid = Oid(16384);
     let id1 = random_id();
     let id2 = random_id();
 
@@ -543,7 +544,7 @@ async fn lsn_gating_skips_old_inserts() {
     let mut verify = test_server().await;
     sub.connect().await.unwrap();
 
-    let oid = 16384;
+    let oid = Oid(16384);
     let id = random_id();
     let id2 = random_id();
 
@@ -597,7 +598,7 @@ fn copy_data_round_trip_commit() {
 
 #[test]
 fn copy_data_round_trip_relation() {
-    let cd = relation_copy_data(16384);
+    let cd = relation_copy_data(Oid(16384));
     let xlog = cd.xlog_data().unwrap();
     let payload = xlog.payload().unwrap();
     assert!(matches!(
@@ -608,7 +609,7 @@ fn copy_data_round_trip_relation() {
 
 #[test]
 fn copy_data_round_trip_insert() {
-    let cd = insert_copy_data(16384, "1", "hello");
+    let cd = insert_copy_data(Oid(16384), "1", "hello");
     let xlog = cd.xlog_data().unwrap();
     let payload = xlog.payload().unwrap();
     assert!(matches!(
@@ -619,7 +620,7 @@ fn copy_data_round_trip_insert() {
 
 #[test]
 fn copy_data_round_trip_delete() {
-    let cd = delete_copy_data(16384, "1");
+    let cd = delete_copy_data(Oid(16384), "1");
     let xlog = cd.xlog_data().unwrap();
     let payload = xlog.payload().unwrap();
     assert!(matches!(

@@ -1,5 +1,6 @@
 use fnv::FnvHashMap as HashMap;
 use fnv::FnvHashSet as HashSet;
+use pgdog_postgres_types::Oid;
 use std::collections::VecDeque;
 
 use crate::backend::ShardingSchema;
@@ -23,10 +24,10 @@ pub struct Buffer {
     replication_config: ReplicationConfig,
     begin: Option<XLogData>,
     message: Option<XLogData>,
-    relations: HashMap<i32, Relation>,
-    sent_relations: HashSet<i32>,
+    relations: HashMap<Oid, Relation>,
+    sent_relations: HashSet<Oid>,
     shard: Shard,
-    oid: Option<i32>,
+    oid: Option<Oid>,
     buffer: VecDeque<Message>,
     sharding_schema: ShardingSchema,
 }
@@ -163,7 +164,7 @@ impl Buffer {
         Ok(())
     }
 
-    fn sharding_key(&self, oid: i32) -> Result<(&str, Vec<&str>), Error> {
+    fn sharding_key(&self, oid: Oid) -> Result<(&str, Vec<&str>), Error> {
         let relation = self.relations.get(&oid).ok_or(Error::NoRelationMessage)?;
         let columns = relation.columns();
         let name = relation.name();

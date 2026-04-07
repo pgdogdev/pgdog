@@ -5,6 +5,8 @@
 //!
 use std::fmt::Display;
 
+use pgdog_postgres_types::Oid;
+
 use crate::{
     backend::Server,
     net::{DataRow, Format},
@@ -101,7 +103,7 @@ ON (c.relnamespace = n.oid) WHERE n.nspname = $1 AND c.relname = $2";
 /// Identifies the columns part of the replica identity for a table.
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct ReplicaIdentity {
-    pub oid: i32,
+    pub oid: Oid,
     pub identity: String,
     pub kind: String,
 }
@@ -148,9 +150,11 @@ FROM
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PublicationTableColumn {
+    /// Column number (`pg_attribute.attnum`). Despite the name, this is not an OID.
     pub oid: i32,
     pub name: String,
-    pub type_oid: i32,
+    /// Type OID (`pg_attribute.atttypid`).
+    pub type_oid: Oid,
     pub identity: bool,
 }
 
@@ -182,6 +186,56 @@ mod test {
     use crate::backend::server::test::test_server;
 
     use super::*;
+
+    #[test]
+    fn test_replica_identity_decodes_oid_above_i32_max() {
+        // Regression for issue #847: pg_class.oid is unsigned 32-bit, and in
+        // long-lived databases it routinely exceeds i32::MAX. Decoding such an
+        // OID as i32 used to silently produce 0, which caused PgDog to send
+        // queries against OID 0 and trigger Postgres' "could not open relation
+        // with OID 0" error. With Oid (u32), this round-trips correctly.
+        let mut row = DataRow::new();
+        row.add(Oid(2_500_000_000))
+            .add("d".to_string())
+            .add("r".to_string());
+        let identity = ReplicaIdentity::from(row);
+        assert_eq!(identity.oid, Oid(2_500_000_000));
+        assert_eq!(identity.identity, "d");
+        assert_eq!(identity.kind, "r");
+    }
+
+    #[test]
+    fn test_replica_identity_substitutes_high_oid_into_columns_query() {
+        // The COLUMNS query embeds identity.oid as text via Display. Verify
+        // that a high OID renders as an unsigned decimal, not a negative i32.
+        let identity = ReplicaIdentity {
+            oid: Oid(2_500_000_000),
+            identity: "d".to_string(),
+            kind: "r".to_string(),
+        };
+        let rendered = COLUMNS
+            .replace("$1", &identity.oid.to_string())
+            .replace("$2", &identity.oid.to_string());
+        assert!(rendered.contains("pg_get_replica_identity_index(2500000000)"));
+        assert!(rendered.contains("a.attrelid = 2500000000"));
+        assert!(!rendered.contains("(0)"));
+        assert!(!rendered.contains("= 0 "));
+    }
+
+    #[test]
+    fn test_publication_table_column_decodes_high_type_oid() {
+        // pg_attribute.atttypid is also of type oid; user-defined types in
+        // long-lived databases can exceed i32::MAX.
+        let mut row = DataRow::new();
+        row.add(1_i64.to_string()) // attnum
+            .add("col".to_string())
+            .add(Oid(3_000_000_000)) // atttypid
+            .add("t".to_string()); // identity bool
+        let column = PublicationTableColumn::from(row);
+        assert_eq!(column.type_oid, Oid(3_000_000_000));
+        assert_eq!(column.name, "col");
+        assert!(column.identity);
+    }
 
     #[tokio::test]
     async fn test_logical_publisher_queries() {
