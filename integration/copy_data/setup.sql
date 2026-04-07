@@ -45,7 +45,7 @@ CREATE TABLE copy_data.with_identity(
     tenant_id BIGINT NOT NULL
 );
 
-<<<<<<< HEAD
+
 -- Omni (non-sharded) tables: no tenant_id column.
 CREATE TABLE IF NOT EXISTS copy_data.countries (
     id BIGSERIAL PRIMARY KEY,
