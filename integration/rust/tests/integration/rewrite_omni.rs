@@ -17,7 +17,7 @@ async fn test_omni_only_pk_rewrite() {
         pool.execute("CREATE TABLE IF NOT EXISTS public.test_omni_rewrite_pk_sharded(id BIGSERIAL PRIMARY KEY, customer_id BIGINT NOT NULL, value TEXT NOT NULL)").await.unwrap();
 
         pool.execute(
-            "SELECT pgdog.install_shadow_table('public', 'test_omni_rewrite_pk_sharded', 'id')",
+            "SELECT pgdog.install_sharded_sequence('public', 'test_omni_rewrite_pk_sharded', 'id')",
         )
         .await
         .unwrap();

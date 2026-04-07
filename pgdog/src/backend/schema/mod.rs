@@ -118,7 +118,7 @@ impl Schema {
             .cloned()
             // Skip partition children: PostgreSQL forbids ALTER TABLE <child>
             // DROP IDENTITY (error 42P16). The partitioned parent's
-            // install_shadow_table call handles the entire hierarchy because
+            // install_sharded_sequence call handles the entire hierarchy because
             // DROP IDENTITY and SET DEFAULT on a partitioned parent propagate
             // to all partition children automatically.
             .filter(|table| {
@@ -145,7 +145,7 @@ impl Schema {
                 );
 
                 let query = format!(
-                    "SELECT pgdog.install_shadow_table('{}', '{}', '{}')",
+                    "SELECT pgdog.install_sharded_sequence('{}', '{}', '{}')",
                     column.1.table_schema, column.1.table_name, column.1.column_name,
                 );
 

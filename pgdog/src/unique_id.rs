@@ -100,12 +100,12 @@ impl State {
 
 impl CompactState {
     fn next_id(&mut self, node_id: u64, id_offset: u64) -> u64 {
-        let mut now = wait_until(self.last_timestamp_ms);
+        let mut now = wait_until_with(self.last_timestamp_ms, &mut now_ms);
 
         if now == self.last_timestamp_ms {
             self.sequence = (self.sequence + 1) & COMPACT_MAX_SEQUENCE;
             if self.sequence == 0 {
-                now = wait_until(now + 1);
+                now = wait_until_with(now + 1, &mut now_ms);
             }
         } else {
             self.sequence = 0;

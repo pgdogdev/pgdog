@@ -245,7 +245,7 @@ $body$ LANGUAGE plpgsql;
 --
 -- This will create the table and the sequence.
 --
-CREATE OR REPLACE FUNCTION pgdog.install_shadow_table(
+CREATE OR REPLACE FUNCTION pgdog.install_sharded_sequence(
     schema_name TEXT,
     table_name TEXT,
     column_name TEXT,
@@ -277,9 +277,9 @@ BEGIN
     IF EXISTS (
         SELECT 1
         FROM information_schema.columns c
-        WHERE c.table_schema = install_shadow_table.schema_name
-        AND c.table_name = install_shadow_table.table_name
-        AND c.column_name = install_shadow_table.column_name
+        WHERE c.table_schema = install_sharded_sequence.schema_name
+        AND c.table_name = install_sharded_sequence.table_name
+        AND c.column_name = install_sharded_sequence.column_name
         AND c.is_identity = 'YES'
     ) THEN
         EXECUTE format('ALTER TABLE "%s"."%s" ALTER COLUMN "%s" DROP IDENTITY', schema_name, table_name, column_name);
