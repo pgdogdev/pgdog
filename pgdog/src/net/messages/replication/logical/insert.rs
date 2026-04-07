@@ -1,4 +1,5 @@
 use bytes::BytesMut;
+use pgdog_postgres_types::Oid;
 
 use super::super::super::code;
 use super::super::super::prelude::*;
@@ -8,7 +9,7 @@ use super::tuple_data::TupleData;
 #[derive(Debug, Clone)]
 pub struct Insert {
     pub xid: Option<i32>,
-    pub oid: i32,
+    pub oid: Oid,
     pub tuple_data: TupleData,
 }
 
@@ -23,7 +24,7 @@ impl ToBytes for Insert {
     fn to_bytes(&self) -> Result<Bytes, Error> {
         let mut buf = BytesMut::new();
         buf.put_u8(b'I');
-        buf.put_i32(self.oid);
+        buf.put_u32(self.oid.0);
         buf.put_u8(b'N');
         buf.put(self.tuple_data.to_bytes()?);
         Ok(buf.freeze())
@@ -38,7 +39,7 @@ impl FromBytes for Insert {
         // We are parsing logical streams.
         // let xid = bytes.get_i32();
 
-        let oid = bytes.get_i32();
+        let oid = Oid(bytes.get_u32());
         code!(bytes, 'N');
         let tuple_data = TupleData::from_bytes(bytes)?;
 

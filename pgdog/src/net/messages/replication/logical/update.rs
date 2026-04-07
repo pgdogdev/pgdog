@@ -1,10 +1,12 @@
+use pgdog_postgres_types::Oid;
+
 use super::super::super::code;
 use super::super::super::prelude::*;
 use super::tuple_data::{Column, TupleData};
 
 #[derive(Debug, Clone)]
 pub struct Update {
-    pub oid: i32,
+    pub oid: Oid,
     pub key: Option<TupleData>,
     pub old: Option<TupleData>,
     pub new: TupleData,
@@ -20,7 +22,7 @@ impl Update {
 impl FromBytes for Update {
     fn from_bytes(mut bytes: Bytes) -> Result<Self, Error> {
         code!(bytes, 'U');
-        let oid = bytes.get_i32();
+        let oid = Oid(bytes.get_u32());
         let identifier = bytes.get_u8() as char;
 
         let key = if identifier == 'K' {

@@ -306,7 +306,7 @@ mod test {
                 parent_name: "".to_string(),
             },
             identity: ReplicaIdentity {
-                oid: 1,
+                oid: pgdog_postgres_types::Oid(1),
                 identity: "".to_string(),
                 kind: "".to_string(),
             },
@@ -315,7 +315,7 @@ mod test {
                 .map(|(name, identity)| PublicationTableColumn {
                     oid: 1,
                     name: name.to_string(),
-                    type_oid: 23,
+                    type_oid: pgdog_postgres_types::Oid(23),
                     identity,
                 })
                 .collect(),
