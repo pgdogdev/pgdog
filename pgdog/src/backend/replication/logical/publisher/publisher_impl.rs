@@ -23,6 +23,21 @@ use crate::backend::{pool::Request, Cluster};
 use crate::config::Role;
 use crate::net::replication::ReplicationMeta;
 
+fn merge_table_lsns(
+    tables: Vec<Table>,
+    existing_lsns: Option<&HashMap<(String, String), Lsn>>,
+) -> Vec<Table> {
+    tables
+        .into_iter()
+        .map(|mut table| {
+            if let Some(lsn) = existing_lsns.and_then(|tables| tables.get(&table.key())) {
+                table.lsn = *lsn;
+            }
+            table
+        })
+        .collect()
+}
+
 #[derive(Debug, Default)]
 pub struct Publisher {
     /// Destination cluster.
@@ -72,6 +87,19 @@ impl Publisher {
     /// Synchronize tables for all shards.
     pub async fn sync_tables(&mut self, data_sync: bool, dest: &Cluster) -> Result<(), Error> {
         let sharding_tables = dest.sharding_schema().tables;
+        let existing_lsns: HashMap<usize, HashMap<(String, String), Lsn>> = self
+            .tables
+            .iter()
+            .map(|(shard, tables)| {
+                (
+                    *shard,
+                    tables
+                        .iter()
+                        .map(|table| (table.key(), table.lsn))
+                        .collect::<HashMap<_, _>>(),
+                )
+            })
+            .collect();
 
         // Omnisharded tables are split evenly between shards
         // during copy to avoid duplicate key errors.
@@ -96,6 +124,7 @@ impl Publisher {
                 }
             } else {
                 // For replication, process changes from all shards.
+                let tables = merge_table_lsns(tables, existing_lsns.get(&number));
                 self.tables.insert(number, tables);
             }
         }
@@ -387,5 +416,63 @@ impl Waiter {
             streams: vec![],
             stop: Arc::new(Notify::new()),
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use crate::backend::replication::logical::publisher::{
+        PublicationTable, PublicationTableColumn, ReplicaIdentity,
+    };
+
+    fn make_table(schema: &str, name: &str, lsn: i64) -> Table {
+        Table {
+            publication: "test".to_string(),
+            table: PublicationTable {
+                schema: schema.to_string(),
+                name: name.to_string(),
+                attributes: String::new(),
+                parent_schema: String::new(),
+                parent_name: String::new(),
+            },
+            identity: ReplicaIdentity {
+                oid: pgdog_postgres_types::Oid(1),
+                identity: String::new(),
+                kind: String::new(),
+            },
+            columns: vec![PublicationTableColumn {
+                oid: 1,
+                name: "tenant_id".to_string(),
+                type_oid: pgdog_postgres_types::Oid(20),
+                identity: true,
+            }],
+            lsn: Lsn::from_i64(lsn),
+            query_parser_engine: QueryParserEngine::default(),
+        }
+    }
+
+    #[test]
+    fn merge_table_lsns_preserves_existing_offsets() {
+        let existing = HashMap::from([(
+            ("copy_data".to_string(), "users".to_string()),
+            Lsn::from_i64(123),
+        )]);
+
+        let merged = merge_table_lsns(vec![make_table("copy_data", "users", 0)], Some(&existing));
+
+        assert_eq!(merged[0].lsn, Lsn::from_i64(123));
+    }
+
+    #[test]
+    fn merge_table_lsns_leaves_unknown_tables_unset() {
+        let existing = HashMap::from([(
+            ("copy_data".to_string(), "users".to_string()),
+            Lsn::from_i64(123),
+        )]);
+
+        let merged = merge_table_lsns(vec![make_table("copy_data", "orders", 0)], Some(&existing));
+
+        assert_eq!(merged[0].lsn, Lsn::default());
     }
 }
