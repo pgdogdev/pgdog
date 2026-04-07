@@ -2,7 +2,9 @@
 
 require_relative 'rspec_helper'
 
-# Triggers the failed-prepare/orphaned-EXECUTE bug (Issue 1).
+# Triggers the Issue 1 scenario: PREPARE fails, pgdog injects a retry PREPARE that also fails,
+# leaving an orphaned EXECUTE response. After the fix, pgdog drains the orphaned E+Z internally
+# so no stale bytes remain on the wire when this helper returns.
 def trigger_prepare_inject_failure(conn, statement_name:)
   # 1. PREPARE fails — pgdog keeps the statement in its local cache despite the error.
   expect { conn.exec "PREPARE #{statement_name} AS SELECT 1 FROM __pgdog_nonexistent_table__" }
@@ -23,7 +25,7 @@ describe 'protocol out of sync regressions' do
   # Bug: stale E+Z left on wire; next query consumed stale E, orphaned Z hit empty queue → ConnectionBad.
   # Fix: Error handler must preserve Code(ReadyForQuery) for the outer EXECUTE when an injected
   #      PREPARE fails; no stale bytes reach the client.
-  it 'orphaned EXECUTE RFQ hits empty queue in session mode' do
+  it 'next query succeeds after failed injected PREPARE in session mode' do
     conn = connect_pgdog(user: 'pgdog_session')
     begin
       trigger_prepare_inject_failure(conn, statement_name: 'pgdog_prepare_inject_session')
@@ -36,11 +38,12 @@ describe 'protocol out of sync regressions' do
     end
   end
 
-  # Transaction mode (pool_size=1): stale-chain — 'T'-status RFQ keeps server alive; INSERT hits empty queue (got: C).
-  it 'stale-chain in transaction mode produces ProtocolOutOfSync got: C' do
+  # Transaction mode (pool_size=1): Issue 1 fix drains orphaned EXECUTE E+Z internally;
+  # no stale bytes reach the pool — subsequent queries on pool-recycled connections must succeed.
+  it 'next query succeeds after failed injected PREPARE in transaction mode' do
     conn = connect_pgdog(user: 'pgdog_tx_single')
     begin
-      # 1. Leave stale EXECUTE E+'I'-Z on TCP buffer.
+      # 1. Trigger PREPARE injection failure; pgdog drains orphaned EXECUTE E+Z internally.
       trigger_prepare_inject_failure(conn, statement_name: 'pgdog_prepare_inject_tx')
 
       tmp = "#{Process.pid}_#{rand(1_000_000)}"
@@ -68,7 +71,7 @@ describe 'protocol out of sync regressions' do
   # Bug: same as Test 1; extended=true additionally sets out_of_sync=true in the Error handler,
   #      changing connection-lifecycle behaviour. Either way, the next query must not fail.
   # Fix: same root fix; extended flag behaviour (Issue 4) is a separate concern.
-  it 'orphaned EXECUTE RFQ hits empty queue after extended query in session mode' do
+  it 'next query succeeds after failed injected PREPARE when prior extended query ran first' do
     conn = connect_pgdog(user: 'pgdog_session')
     begin
       # Parameterised query runs first — sets extended=true on the connection.

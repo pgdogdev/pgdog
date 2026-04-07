@@ -3432,9 +3432,12 @@ pub mod test {
         assert_eq!(msg.code(), 'Z'); // 'Z' RFQ — queue now empty
     }
 
-    // Extended Execute + Flush (no Sync): no RFQ backstop — double action('c') raises ProtocolOutOfSync.
+    // Extended Execute + Flush (no Sync): single action('c') now succeeds.
+    // CopyDone is forwarded to client; the trailing CommandComplete then hits an empty
+    // queue (no RFQ backstop, no Sync) and raises ProtocolOutOfSync.
+    // This is distinct from the former double-action bug, which fired on CopyDone itself.
     #[tokio::test]
-    async fn test_copydone_double_action_oos_without_sync() {
+    async fn test_copydone_single_action_without_sync() {
         let mut server = test_server().await;
 
         // 1. Parse + Bind + Execute + Flush (not Sync); no RFQ backstop in queue.
@@ -3459,10 +3462,14 @@ pub mod test {
         assert_eq!(server.read().await.unwrap().code(), 'H'); // CopyOutResponse
         assert_eq!(server.read().await.unwrap().code(), 'd'); // CopyData row 1
         assert_eq!(server.read().await.unwrap().code(), 'd'); // CopyData row 2
-                                                              // 3. BUG: CopyDone — first action() pops ExecutionCompleted; second hits empty queue.
+
+        // 3. CopyDone — fixed: single action() pops ExecutionCompleted; no second call.
+        assert_eq!(server.read().await.unwrap().code(), 'c'); // CopyDone forwarded
+
+        // 4. CommandComplete hits empty queue (no RFQ backstop without Sync).
         assert!(
             matches!(server.read().await.unwrap_err(), Error::ProtocolOutOfSync),
-            "expected ProtocolOutOfSync"
+            "expected ProtocolOutOfSync on CommandComplete with empty queue"
         );
     }
 
@@ -3500,9 +3507,10 @@ pub mod test {
         );
     }
 
-    // extended=true sticks after any parameterised query; Error handler sets out_of_sync on every subsequent error.
+    // After a parameterised query, extended resets once the RFQ drains the queue.
+    // Subsequent simple-query errors must NOT set out_of_sync.
     #[tokio::test]
-    async fn test_extended_flag_never_resets_spurious_out_of_sync() {
+    async fn test_extended_resets_after_rfq_drain() {
         use crate::net::bind::Parameter;
 
         let mut server = test_server().await;
@@ -3519,7 +3527,8 @@ pub mod test {
         assert_eq!(msg.code(), 'Z');
         assert!(server.done());
 
-        // 2. Parameterised query sets extended=true permanently.
+        // 2. Parameterised query: Parse+Bind+Execute+Sync sets extended=true, then
+        //    the final RFQ drains the queue and resets extended to false.
         let bind = Bind::new_params_codes(
             "",
             &[Parameter {
@@ -3545,29 +3554,31 @@ pub mod test {
             let msg = server.read().await.unwrap();
             assert_eq!(msg.code(), c);
         }
-        assert!(server.done());
+        assert!(server.done()); // extended was reset when 'Z' drained the queue
 
-        // 3. Same error on same connection: extended stuck → out_of_sync=true spuriously.
+        // 3. Simple-query error after extended resets: out_of_sync must be false.
         server
             .send(&vec![Query::new("SELECT 1/0").into()].into())
             .await
             .unwrap();
         let msg = server.read().await.unwrap();
         assert_eq!(msg.code(), 'E');
-        assert!(server.out_of_sync()); // spurious: extended=true even for plain simple query
+        assert!(
+            !server.out_of_sync(),
+            "out_of_sync must be false: extended was reset by prior RFQ drain"
+        );
         let msg = server.read().await.unwrap();
-        assert_eq!(msg.code(), 'Z'); // RFQ clears out_of_sync but leaves extended stuck
+        assert_eq!(msg.code(), 'Z');
+        assert!(server.done());
+
+        // 4. Confirm: same result on the next error — extended stays reset across requests.
+        server
+            .send(&vec![Query::new("SELECT 1/0").into()].into())
+            .await
+            .unwrap();
+        let msg = server.read().await.unwrap();
+        assert_eq!(msg.code(), 'E');
         assert!(!server.out_of_sync());
-        assert!(server.done());
-
-        // 4. Confirm extended remains stuck across RFQ resets.
-        server
-            .send(&vec![Query::new("SELECT 1/0").into()].into())
-            .await
-            .unwrap();
-        let msg = server.read().await.unwrap();
-        assert_eq!(msg.code(), 'E');
-        assert!(server.out_of_sync());
         let msg = server.read().await.unwrap();
         assert_eq!(msg.code(), 'Z');
         assert!(server.done());

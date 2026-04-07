@@ -224,6 +224,11 @@ impl ProtocolState {
                     && in_queue_code == ExecutionCode::ReadyForQuery
                 {
                     self.queue.push_front(in_queue);
+                } else if in_queue_code == ExecutionCode::ReadyForQuery && self.queue.is_empty() {
+                    // The last RFQ of this pipeline was just consumed and nothing remains.
+                    // Reset extended so subsequent simple-query errors are not spuriously
+                    // treated as mid-extended-pipeline and do not trigger out_of_sync.
+                    self.extended = false;
                 }
 
                 Ok(Action::Forward)
@@ -380,7 +385,8 @@ mod test {
         assert_eq!(state.action('C').unwrap(), Action::Forward);
         assert_eq!(state.action('Z').unwrap(), Action::Forward);
         assert!(state.is_empty());
-        assert!(state.extended);
+        // extended resets to false once the final RFQ drains the queue.
+        assert!(!state.extended);
     }
 
     #[test]
@@ -913,18 +919,22 @@ mod test {
         assert_eq!(state.len(), 1); // RFQ still present for the server's ReadyForQuery
     }
 
-    // Failure path: no Code(ReadyForQuery) backstop — second action('c') hits empty queue.
+    // Documents raw state-machine behavior: calling action('c') twice with no RFQ backstop
+    // causes ProtocolOutOfSync. forward() was the only caller that did this; the second call
+    // has been removed from the 'c' arm in prepared_statements.rs, making this path unreachable
+    // through normal protocol flow. The test is kept to pin the underlying invariant.
     #[test]
     fn test_copydone_double_action_oos_without_rfq_backstop() {
         let mut state = ProtocolState::default();
-        // 1. Queue: Execute + Flush (no Sync) — no RFQ backstop.
+        // Queue: Execute + Flush (no Sync) — no RFQ backstop.
         state.add('C'); // ExecutionCompleted
 
-        // 2. First action('c'): pops ExecutionCompleted; queue empty.
+        // First action('c'): pops ExecutionCompleted; queue empty.
         assert_eq!(state.action('c').unwrap(), Action::Forward);
         assert!(state.is_empty());
 
-        // 3. Second action('c'): empty queue → ProtocolOutOfSync.
+        // Second action('c') directly: empty queue → ProtocolOutOfSync.
+        // This is the raw state machine. forward() no longer makes this second call.
         assert!(state.action('c').is_err());
     }
 
@@ -1033,5 +1043,75 @@ mod test {
         // Code(Z) is at front → forwarded to client.
         assert_eq!(state.action('Z').unwrap(), Action::Forward);
         assert!(state.is_empty());
+    }
+    // ========================================
+    // extended flag reset tests (Issue 4)
+    // ========================================
+
+    // extended resets to false once the last RFQ of a pipeline is consumed.
+    #[test]
+    fn test_extended_resets_on_rfq_drain() {
+        let mut state = ProtocolState::default();
+        // add_ignore('1') sets extended=true (ParseComplete is an extended-protocol code).
+        state.add_ignore('1'); // ParseComplete — injected, sets extended=true
+        state.add('Z'); // RFQ — client-visible
+
+        assert_eq!(state.action('1').unwrap(), Action::Ignore);
+        assert!(state.extended, "extended must be true before RFQ");
+
+        assert_eq!(state.action('Z').unwrap(), Action::Forward);
+        assert!(
+            !state.extended,
+            "extended must reset to false after last RFQ drains queue"
+        );
+        assert!(state.is_empty());
+    }
+
+    // extended must NOT reset mid-pipeline: an RFQ that still has items behind it
+    // belongs to a pipelined request and should not prematurely clear the flag.
+    #[test]
+    fn test_extended_stays_true_mid_pipeline() {
+        let mut state = ProtocolState::default();
+        state.add_ignore('1'); // ParseComplete — sets extended=true
+        state.add('Z'); // first pipeline RFQ
+        state.add('Z'); // second pipeline RFQ
+
+        assert_eq!(state.action('1').unwrap(), Action::Ignore);
+        assert_eq!(state.action('Z').unwrap(), Action::Forward); // first RFQ, one item remains
+        assert!(
+            state.extended,
+            "extended must stay true while pipeline is not fully drained"
+        );
+
+        assert_eq!(state.action('Z').unwrap(), Action::Forward); // second RFQ drains queue
+        assert!(
+            !state.extended,
+            "extended must reset once queue is fully drained"
+        );
+    }
+
+    // After extended resets, a plain simple-query error must not set out_of_sync.
+    // Before the fix, extended stuck permanently and every subsequent error triggered
+    // out_of_sync=true spuriously.
+    #[test]
+    fn test_no_spurious_out_of_sync_after_extended_reset() {
+        let mut state = ProtocolState::default();
+
+        // Phase 1: parameterised query sets extended=true, then resets on drain.
+        state.add_ignore('1'); // ParseComplete
+        state.add('Z');
+        assert_eq!(state.action('1').unwrap(), Action::Ignore);
+        assert_eq!(state.action('Z').unwrap(), Action::Forward);
+        assert!(!state.extended);
+
+        // Phase 2: simple-query error on a now-reset connection.
+        state.add('Z'); // RFQ from simple query
+        assert_eq!(state.action('E').unwrap(), Action::Forward); // error forwarded
+        assert!(
+            !state.out_of_sync(),
+            "out_of_sync must be false: extended was reset"
+        );
+        assert_eq!(state.action('Z').unwrap(), Action::Forward);
+        assert!(state.done());
     }
 }

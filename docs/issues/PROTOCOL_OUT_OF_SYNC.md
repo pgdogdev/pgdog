@@ -9,9 +9,8 @@ per anticipated response before forwarding any client message. As server bytes a
 calls `action(code)` which pops the queue front and checks the match. Two conditions raise
 `ProtocolOutOfSync`:
 
-- **Empty queue** (`state.rs:168`) — a tracked message arrives but nothing was expected.
-- **Ignore mismatch** (`state.rs:188–191`) — queue front is an `Ignore` slot but the server sent a
-  different code.
+- **Empty queue** — a tracked message arrives but nothing was expected.
+- **Ignore mismatch** — queue front is an `Ignore` slot but the server sent a different code.
 
 ---
 
@@ -25,8 +24,8 @@ calls `action(code)` which pops the queue front and checks the match. Two condit
 ### Description
 
 When pgdog injects a `PREPARE` to rewrite a simple-query `EXECUTE` and that `PREPARE` fails on the
-server, the Error handler incorrectly clears the queue. The subsequent `ReadyForQuery` from the now-
-orphaned `EXECUTE` hits an empty queue and raises `ProtocolOutOfSync`.
+server, the old Error handler incorrectly cleared the queue. The subsequent `ReadyForQuery` from the
+now-orphaned `EXECUTE` hit an empty queue and raised `ProtocolOutOfSync`.
 
 ### Code path
 
@@ -38,11 +37,9 @@ independently by `handle()`. After both calls the queue is:
   ↑──────────── handle(Prepare) ─────────────↑  ↑─── handle(Query) ───↑
 ```
 
-If the injected `PREPARE` fails on the server:
-
-The Error handler's old behaviour was to pop the last item, clear the queue, and optionally re-add
-a trailing `Code(ReadyForQuery)`. That assumed a flat, single-request queue. With the injected
-sub-request the queue is compound, so clearing it discarded the client's own `Code(ReadyForQuery)`:
+The old handler popped the last item, cleared the queue, and optionally re-added a trailing
+`Code(ReadyForQuery)`. That assumed a flat, single-request queue. With the injected sub-request the
+queue is compound, so clearing it discarded the client's own `Code(ReadyForQuery)`:
 
 | Step | Server sends | Old handler action | Queue after |
 |---|---|---|---|
@@ -51,22 +48,12 @@ sub-request the queue is compound, so clearing it discarded the client's own `Co
 | 3 | `Error` for EXECUTE (statement absent) | `pop_back` → None; nothing re-added | **empty** |
 | 4 | `ReadyForQuery` for EXECUTE | `pop_front` on empty → **ProtocolOutOfSync** | — |
 
-The handler only re-added a trailing `ReadyForQuery` when it found `Code(ReadyForQuery)` at the
-back. The two `Ignore` items representing the PREPARE sub-request were invisible to it; once they
-were cleared the queue no longer knew the EXECUTE was still in-flight.
-
 Under high concurrency this became near-deterministic: the pool fast-path (`Guard::drop` → `checkin`
-→ `put`) hands a connection directly to a waiting client with no healthcheck, no idle time, and no
-opportunity to drain the kernel socket buffer. The next query on that client consumed the stale
-EXECUTE `Error + ReadyForQuery`, producing `ProtocolOutOfSync`.
+→ `put`) hands a connection directly to a waiting client with no healthcheck and no opportunity to
+drain the kernel socket buffer. The next query consumed the stale EXECUTE `Error + ReadyForQuery`,
+producing `ProtocolOutOfSync`.
 
 ### Reproduction (historical)
-
-1. Connect to pgdog with session or transaction pooling.
-2. Issue a simple-query `EXECUTE` for a statement that will fail to prepare (schema mismatch, syntax
-   error, or stale local cache with a duplicate name).
-3. Issue any subsequent query on the same connection.
-4. The second query fails with `PG::ConnectionBad` / `protocol is out of sync`.
 
 ```sh
 cd integration/prepared_statements_full && bash run.sh
@@ -79,63 +66,54 @@ cd integration/prepared_statements_full && bash run.sh
 - **`test_injected_prepare_error_full_lifecycle`** — builds the exact queue that
   `prepared_statements.rs` produces (`add_ignore('C')`, `add_ignore('Z')`, `add('Z')`), fires
   `action('E')` and asserts the intermediate queue shape `[Ignore(RFQ), Ignore(Error), Code(Z)]`,
-  then walks the remaining Z→Ignore, E→Ignore, Z→Forward sequence to completion.
+  then walks the remaining Z→Ignore, E→Ignore (fast-path), Z→Forward sequence to completion.
 
 **Server-level integration test (`server.rs`, requires PostgreSQL)**
 
-The test that previously asserted `ProtocolOutOfSync` on the fourth message now asserts `E` then `Z`
-(two messages, both forwarded). Tests 2 and 3 below remain unresolved and are tracked separately.
+The test that previously asserted `ProtocolOutOfSync` on the fourth message now asserts `E` then
+`Z` (both forwarded). All three configurations now pass.
 
 | Test | Pool mode | `got:` | `extended` | What it proves |
 |---|---|---|---|---|
 | 1 | session | Z | false | Failed PREPARE no longer orphans the EXECUTE RFQ — **fixed** |
-| 2 | transaction | C | false | Stale-chain: DML CommandComplete hits empty queue |
-| 3 | session | Z | true | `extended = true` changes Error handler behavior (`out_of_sync`) |
+| 2 | transaction | — | false | Stale-chain: injected E+Z drained internally; pool socket is clean — **fixed** |
+| 3 | session | Z | true | `extended` now resets after RFQ drain — **fixed by Issue 4** |
 
-- **Test 1 — Session mode, `got: Z`, `extended: false`.**
-  Session-pooled user pinned to one backend. The failed PREPARE now produces `E` (forwarded) then `Z`
-  (forwarded, closing RFQ). No orphaned RFQ remains. Client no longer sees `PG::ConnectionBad`.
+- **Test 1** (`pgdog_session`): session-pooled connection; failed PREPARE then EXECUTE; subsequent `SELECT 1` must succeed.
+- **Test 2** (`pgdog_tx_single`, `pool_size=1`): same failure sequence in transaction mode. Issue 1 drains the orphaned EXECUTE E+Z internally before the connection returns to the pool, so no stale bytes shift subsequent queries.
+- **Test 3** (`pgdog_session` with prior `exec_params`): `extended=true` before the failure; Issue 4 ensures the flag resets after the RFQ drains the queue.
 
-- **Test 2 — Transaction mode stale-chain, `got: C`, `extended: false`.**
-  `pgdog_tx_single` (transaction mode, pool_size=1). Each query consumes the previous query's stale
-  response, creating a one-slot-shifted chain. A `BEGIN` that consumes a `'T'`-status RFQ keeps the
-  connection open (`in_transaction = true`); the actual INSERT response then hits an empty queue
-  (`got: C`). Client sees `PG::ConnectionBad`.
-
-- **Test 3 — Session mode, `got: Z`, `extended: true`.**
-  Same as Test 1 (pre-fix), but a prior `exec_params` call (`SELECT $1::int`) permanently sets
-  `extended = true` on the connection. The Error handler then sets `out_of_sync = true` before
-  clearing the queue, changing connection-lifecycle behaviour. Client sees `PG::ConnectionBad`.
+See `integration/prepared_statements_full/protocol_out_of_sync_spec.rb` for full test bodies.
 
 ### Fix
 
-Error handler in `state.rs`, `ExecutionCode::Error` arm. See inline comments for full detail.
-
-On error, find the first `Code(ReadyForQuery)` in the queue (the client's RFQ boundary), drain
-everything before it, count the `Ignore(RFQ)` slots in the drained portion, and prepend one
-`[Ignore(RFQ), Ignore(Error)]` pair per slot. A separate fast-path at the top of the arm handles
-the case where the queue front is already `Ignore(Error)` — subsequent errors from the same
-injected sub-request — by popping and returning `Action::Ignore` directly.
+Error handler in `state.rs`, `ExecutionCode::Error` arm. On error, find the first
+`Code(ReadyForQuery)` in the queue (the client's RFQ boundary), drain everything before it, count
+the `Ignore(RFQ)` slots in the drained portion, and prepend one `[Ignore(RFQ), Ignore(Error)]` pair
+per slot. A fast-path at the top of the arm handles subsequent errors from the same injected
+sub-request — when the queue front is already `Ignore(Error)` — by popping and returning
+`Action::Ignore` directly.
 
 See also: `test_injected_prepare_error_full_lifecycle` in `state.rs`.
+
 ---
 
-## 🔴 Issue 2 — Double `action()` call in `forward()` for server CopyDone
+## ✅ Issue 2 — Double `action()` call in `forward()` for server CopyDone
 
 **Severity:** Medium — requires the client to omit a trailing `Sync`.
 
-**Location:** `pgdog/src/backend/prepared_statements.rs`, `forward()`, lines ~198 and ~237.
+**Location:** `pgdog/src/backend/prepared_statements.rs`, `forward()`.
 
 ### Description
 
-`forward()` calls `state.action(code)` unconditionally at line 198, then a second time inside the
-`'c'` (CopyDone) match arm at line 237. When no `Code(ReadyForQuery)` backstop is present in the
-queue, the second call hits an empty queue and raises `ProtocolOutOfSync`.
+`forward()` called `state.action(code)` unconditionally near the top of the function, then called
+it a second time inside the `'c'` (CopyDone) match arm. Without a `Code(ReadyForQuery)` backstop in
+the queue the second call hit an empty queue and raised `ProtocolOutOfSync`.
 
 ### Code path
 
-Normal path (safe): `Code(ReadyForQuery)` is always in the queue. `action('Z')` pushes it back rather
-than consuming it, making the double call idempotent.
+Normal path (safe): `Code(ReadyForQuery)` is always in the queue. `action('Z')` pushes it back
+rather than consuming it, making the double call idempotent.
 
 Unsafe path — client sends `Parse + Bind + Execute + Flush` (no `Sync`). `handle()` builds:
 
@@ -143,20 +121,20 @@ Unsafe path — client sends `Parse + Bind + Execute + Flush` (no `Sync`). `hand
 [Code(ParseComplete), Code(BindComplete), Code(ExecutionCompleted)]
 ```
 
-No `Code(ReadyForQuery)` is added. When the server responds with CopyDone:
+No `Code(ReadyForQuery)` is added. When the server responded with CopyDone:
 
 ```
 First  action('c'): pops Code(ExecutionCompleted) — consumed
 Second action('c'): empty queue → ProtocolOutOfSync
 ```
 
-### Reproduction
+### Reproduction (historical)
 
 Not triggerable via the `pg` gem or any libpq-based driver — libpq always appends `Sync` after
-`Execute`. Requires sending raw protocol messages directly.
+`Execute`. Required sending raw protocol messages directly.
 
 ```sh
-cargo test -p pgdog test_copy_out_done_double_action_out_of_sync_without_sync
+cargo test -p pgdog --lib -- test_copydone_double_action_oos_without_rfq_backstop
 ```
 
 ### Tests
@@ -165,30 +143,33 @@ cargo test -p pgdog test_copy_out_done_double_action_out_of_sync_without_sync
 
 - **`test_copydone_double_action_safe_with_rfq_backstop`** — queue `[Code(Copy), Code(ReadyForQuery)]`;
   two `action('c')` calls both succeed; RFQ slot is pushed back and survives.
-- **`test_copydone_double_action_oos_without_rfq_backstop`** — queue `[Code(ExecutionCompleted)]`;
-  second `action('c')` returns `Err(ProtocolOutOfSync)`.
+- **`test_copydone_double_action_oos_without_rfq_backstop`** — documents the raw state-machine
+  invariant: calling `action('c')` twice with no RFQ backstop still causes `ProtocolOutOfSync`
+  directly on the state machine. `forward()` no longer makes this second call; this path is
+  unreachable through normal protocol flow. Test is retained to pin the underlying invariant.
 
 **Server-level tests (`server.rs`, require PostgreSQL)**
 
-- **`test_copydone_double_action_oos_without_sync`** — `Parse + Bind + Execute + Flush`
-  (no Sync); reads ParseComplete, BindComplete, CopyOutResponse, CopyData ×2, then asserts
-  `ProtocolOutOfSync` on CopyDone.
+- **`test_copydone_single_action_without_sync`** — `Parse + Bind + Execute + Flush` (no Sync);
+  reads ParseComplete, BindComplete, CopyOutResponse, CopyData ×2, then asserts CopyDone is
+  forwarded successfully. The trailing CommandComplete then hits an empty queue (no RFQ backstop)
+  and raises `ProtocolOutOfSync` — that is the correct remaining behavior with no `Sync`.
 - **`test_copydone_double_action_safe_with_sync`** — same pipeline with `Sync`; full sequence
   completes without error; asserts `server.done()`.
 
 ```sh
-cargo test -p pgdog test_copydone_double_action
+cargo test -p pgdog --lib -- test_copydone_double_action
+cargo test -p pgdog -- test_copydone
 ```
 
 ### Fix
 
-Remove the second `action()` call in the `'c'` arm of `forward()`, or guarantee that a
-`Code(ReadyForQuery)` backstop is always in the queue before the CopyDone path is reached. Either
-way, the invariant must be made explicit in code comments.
+Removed the redundant `self.state.action(code)?` from the `'c'` arm in `forward()`. The call at
+the top of the function already advances the state machine for CopyDone; the arm body is now empty.
 
 ---
 
-## 🔴 Issue 3 — Stale ReadyForQuery hits an `Ignore(ParseComplete)` slot
+## ✅ Issue 3 — Stale ReadyForQuery hits an `Ignore(ParseComplete)` slot
 
 **Severity:** Low — practically unreachable in normal operation.
 
@@ -234,7 +215,7 @@ integration test is not practical; the precondition cannot be reached through no
 protocol flow.
 
 ```sh
-cargo test -p pgdog test_stale_rfq
+cargo test -p pgdog --lib -- test_stale_rfq
 ```
 
 ### Fix
@@ -245,96 +226,90 @@ before reuse, bounding the blast radius to a single request.
 
 ---
 
-## 🔴 Issue 4 — `extended` flag is permanently set and never resets
+## ✅ Issue 4 — `extended` flag is permanently set and never resets
 
 **Severity:** Low-medium — affects connection-lifecycle semantics and silently changes Error handler
 behaviour for all subsequent requests on a connection.
 
-**Location:** `pgdog/src/backend/protocol/state.rs`, `add()` / `add_ignore()`; `state.rs:151–153`,
-Error handler.
+**Location:** `pgdog/src/backend/protocol/state.rs`, `add()` / `add_ignore()`; `Code` arm of
+`action()`.
 
 ### Description
 
-`ProtocolState.extended` is set to `true` the first time any parameterised query runs on a connection
-and is never reset. The Error handler checks this flag to set `out_of_sync = true`; because the flag
-is permanent, every error on that connection — including plain simple-query errors — sets
-`out_of_sync = true` spuriously.
+`ProtocolState.extended` was set to `true` the first time any parameterised query ran on a
+connection and was never reset. The Error handler checked this flag to set `out_of_sync = true`;
+because the flag was permanent, every subsequent error on that connection — including plain
+simple-query errors — set `out_of_sync = true` spuriously.
 
 ### Code path
 
-`add()` and `add_ignore()` set the flag whenever `ParseComplete ('1')` or `BindComplete ('2')` is
-enqueued:
-
-```rust
-self.extended = self.extended || code.extended();
-```
-
-The Error handler (`state.rs:151–153`):
-
-```rust
-ExecutionCode::Error => {
-    if self.extended {
-        self.out_of_sync = true;  // fires on every error, forever
-    }
-    // ...
-}
-```
-
-There is no reset path.
+`add()` and `add_ignore()` latch the flag via `self.extended = self.extended || code.extended()`
+whenever `ParseComplete ('1')` or `BindComplete ('2')` is enqueued. Once set, the Error handler
+checked `self.extended` to set `out_of_sync = true`, with no reset path, so every subsequent
+error on the connection triggered it regardless of whether the current request was parameterised.
 
 ### Consequences
 
-- `done()` stays `false` one extra round-trip (until RFQ clears `out_of_sync`) on simple-query
-  errors for connections that have ever served a parameterised query. Harmless in practice today, but
-  more conservative than necessary.
-- Future changes to the Error handler that add `extended`-specific behaviour will silently apply to
-  all long-lived connections, not just those currently mid-pipeline.
-- `extended` reads as "has this connection *ever* been in extended-protocol mode", not "is this
-  connection *currently* in extended-protocol mode" — a semantic mismatch that will mislead future
-  readers.
+- `done()` stayed `false` one extra round-trip (until RFQ cleared `out_of_sync`) on simple-query
+  errors for connections that had ever served a parameterised query.
+- Future changes to the Error handler that added `extended`-specific behaviour would silently apply
+  to all long-lived connections, not just those currently mid-pipeline.
+- `extended` read as "has this connection *ever* been in extended-protocol mode", not "is this
+  connection *currently* in extended-protocol mode" — a semantic mismatch.
 
-### Reproduction
+### Reproduction (historical)
 
 1. Connect to pgdog.
-2. Execute a parameterised query (any `$1` placeholder) — sets `extended = true`.
+2. Execute a parameterised query (any `$1` placeholder) — permanently sets `extended = true`.
 3. Execute `SELECT 1/0` (simple query).
 4. Observe `server.out_of_sync() == true` immediately after the `'E'` response, before RFQ arrives.
    Expected: `false`.
 
 ```sh
-cargo test -p pgdog test_extended_flag_never_resets
+cargo test -p pgdog -- test_extended_resets_after_rfq_drain
 ```
 
 ### Tests
 
-**`test_extended_flag_never_resets_spurious_out_of_sync`** in `server.rs` (requires PostgreSQL) —
-three phases on one connection:
+**State-machine unit tests (`state.rs`, no backend needed)**
 
-1. *Baseline* — fresh connection (`extended = false`); `SELECT 1/0`; asserts `out_of_sync == false`.
-2. *Trigger* — `Parse + Bind + Execute + Sync` for `SELECT $1::int`; permanently sets `extended = true`.
-3. *Regression* — `SELECT 1/0` twice more; asserts `out_of_sync == true` after each `'E'`. Each
-   `ReadyForQuery` resets `out_of_sync` to `false` but leaves `extended` unchanged.
+- **`test_extended_resets_on_rfq_drain`** — parameterised queue drains; `extended` is `true` before
+  the final RFQ and `false` after.
+- **`test_extended_stays_true_mid_pipeline`** — an intermediate RFQ with items still queued behind
+  it does not prematurely reset `extended`; only the last RFQ that drains the queue resets it.
+- **`test_no_spurious_out_of_sync_after_extended_reset`** — after a parameterised pipeline
+  completes and `extended` resets, a subsequent simple-query error does not set `out_of_sync`.
+
+**Server-level test (`server.rs`, requires PostgreSQL)**
+
+- **`test_extended_resets_after_rfq_drain`** — four phases on one connection: (1) baseline simple
+  error, no `out_of_sync`; (2) parameterised query sets `extended`, RFQ drain resets it; (3) and
+  (4) simple errors after reset, both assert `out_of_sync == false`.
 
 ```sh
-cargo test -p pgdog test_extended_flag_never_resets
+cargo test -p pgdog --lib -- test_extended_resets
+cargo test -p pgdog -- test_extended_resets_after_rfq_drain
 ```
 
 ### Fix
 
-Reset `extended` to `false` at the same point `out_of_sync` resets — when `ReadyForQuery` is
-processed and the queue is fully drained:
+In the `Code(in_queue_code)` arm of `action()`, after `pop_front()` has already consumed the
+RFQ item, `self.extended` is reset to `false` when the queue is now empty. The check must live
+here — after the pop — so `is_empty()` reflects the post-pop state. Placing it in the outer
+`ReadyForQuery` match arm (as originally proposed) runs before `pop_front()` and would never
+observe an empty queue. Resetting only when `is_empty()` is safe: pipelined requests still in
+the queue keep `extended = true` until the entire pipeline finishes.
 
-```rust
-ExecutionCode::ReadyForQuery => {
-    self.out_of_sync = false;
-    if self.is_empty() {
-        self.extended = false;  // pipeline complete; reset for next request
-    }
-}
-```
+---
 
-Resetting only when `is_empty()` is safe: pipelined requests still in the queue keep `extended = true`
-until the entire pipeline finishes.
+## Common thread
 
-A post-fix test should verify: (a) phase 3 above now produces `out_of_sync == false`, and (b) an
-intermediate `ReadyForQuery` inside a pipelined extended request does not prematurely reset `extended`.
+All four issues share the same underlying fragility: the `ProtocolState` queue and the actual server
+response stream diverge whenever an error or unexpected message interrupts a multi-message
+sub-request injected transparently by pgdog. The Error handler was written for a single
+client-visible request and did not account for the compound structures the prepared-statement
+rewriter produces.
+
+Issue 4 was a secondary consequence: `extended` was added as a guard for the Error handler but was
+attached to the connection rather than the current pipeline, so it outlived the requests it was meant
+to describe.
