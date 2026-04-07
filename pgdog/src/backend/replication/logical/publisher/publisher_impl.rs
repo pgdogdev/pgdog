@@ -176,6 +176,9 @@ impl Publisher {
             let stop = self.stop.clone();
             let last_transaction = self.last_transaction.clone();
 
+            let source = self.cluster.clone();
+            let dest = dest.clone();
+
             // Replicate in parallel.
             let handle = spawn(async move {
                 slot.start_replication().await?;
@@ -230,7 +233,7 @@ impl Publisher {
 
                             let missed = stream.missed_rows();
                             if missed.non_zero() {
-                                warn!("replication has missing rows: {}", missed);
+                                warn!("replication {} => {} has missing rows: {}", source.name(), dest.name(), missed);
                             }
 
                         }
