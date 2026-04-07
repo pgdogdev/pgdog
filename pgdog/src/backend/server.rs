@@ -3688,9 +3688,12 @@ pub mod test {
         assert_eq!(msg.code(), 'Z'); // 'Z' RFQ — queue now empty
     }
 
-    // Extended Execute + Flush (no Sync): no RFQ backstop — double action('c') raises ProtocolOutOfSync.
+    // Extended Execute + Flush (no Sync): single action('c') now succeeds.
+    // CopyDone is forwarded to client; the trailing CommandComplete then hits an empty
+    // queue (no RFQ backstop, no Sync) and raises ProtocolOutOfSync.
+    // This is distinct from the former double-action bug, which fired on CopyDone itself.
     #[tokio::test]
-    async fn test_copydone_double_action_oos_without_sync() {
+    async fn test_copydone_single_action_without_sync() {
         let mut server = test_server().await;
 
         // 1. Parse + Bind + Execute + Flush (not Sync); no RFQ backstop in queue.
@@ -3715,10 +3718,14 @@ pub mod test {
         assert_eq!(server.read().await.unwrap().code(), 'H'); // CopyOutResponse
         assert_eq!(server.read().await.unwrap().code(), 'd'); // CopyData row 1
         assert_eq!(server.read().await.unwrap().code(), 'd'); // CopyData row 2
-                                                              // 3. BUG: CopyDone — first action() pops ExecutionCompleted; second hits empty queue.
+
+        // 3. CopyDone — fixed: single action() pops ExecutionCompleted; no second call.
+        assert_eq!(server.read().await.unwrap().code(), 'c'); // CopyDone forwarded
+
+        // 4. CommandComplete hits empty queue (no RFQ backstop without Sync).
         assert!(
             matches!(server.read().await.unwrap_err(), Error::ProtocolOutOfSync),
-            "expected ProtocolOutOfSync"
+            "expected ProtocolOutOfSync on CommandComplete with empty queue"
         );
     }
 
