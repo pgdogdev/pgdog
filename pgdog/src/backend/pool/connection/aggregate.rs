@@ -66,19 +66,11 @@ impl<'a> Accumulator<'a> {
                     .copied()
                     .unwrap_or_default();
 
-                let mut accumulator = match target.function() {
-                    AggregateFunction::Count => Accumulator {
-                        target,
-                        datum: Datum::Bigint(0),
-                        avg: None,
-                        variance: None,
-                    },
-                    _ => Accumulator {
-                        target,
-                        datum: Datum::Null,
-                        avg: None,
-                        variance: None,
-                    },
+                let mut accumulator = Accumulator {
+                    target,
+                    datum: Datum::Null,
+                    avg: None,
+                    variance: None,
                 };
 
                 if matches!(target.function(), AggregateFunction::Avg) {
@@ -111,7 +103,11 @@ impl<'a> Accumulator<'a> {
             .ok_or(Error::DecoderRowError)?;
         match self.target.function() {
             AggregateFunction::Count => {
-                self.datum = self.datum.clone() + column.value;
+                if !self.datum.is_null() {
+                    self.datum = self.datum.clone() + column.value;
+                } else {
+                    self.datum = column.value;
+                }
             }
             AggregateFunction::Max => {
                 if !self.datum.is_null() {
@@ -747,6 +743,95 @@ mod test {
         let count = Datum::Bigint(0);
         let result = divide_for_average(&sum, &count).unwrap();
         assert!(matches!(result, Datum::Null));
+    }
+
+    fn integer_field(name: &str) -> Field {
+        Field {
+            name: name.into(),
+            table_oid: 0,
+            column: 0,
+            type_oid: 23, // PostgreSQL OID for int4/integer
+            type_size: 4,
+            type_modifier: -1,
+            format: 0,
+        }
+    }
+
+    #[test]
+    fn aggregate_count_with_int_typecast() {
+        // Regression test for https://github.com/pgdogdev/pgdog/issues/861
+        // SELECT COUNT(*)::int returns int4 from each shard; the accumulator
+        // must merge the per-shard values and preserve the requested type.
+        let stmt = pg_query::parse("SELECT COUNT(*)::int FROM users")
+            .unwrap()
+            .protobuf
+            .stmts
+            .first()
+            .cloned()
+            .unwrap();
+        let aggregate = match stmt.stmt.unwrap().node.unwrap() {
+            pg_query::NodeEnum::SelectStmt(stmt) => Aggregate::parse(&stmt),
+            _ => panic!("expected select stmt"),
+        };
+
+        let rd = RowDescription::new(&[integer_field("count")]);
+        let decoder = Decoder::from(&rd);
+
+        let mut rows = VecDeque::new();
+        let mut shard0 = DataRow::new();
+        shard0.add("2");
+        rows.push_back(shard0);
+
+        let mut shard1 = DataRow::new();
+        shard1.add("3");
+        rows.push_back(shard1);
+
+        let plan = AggregateRewritePlan::default();
+        let mut result = Aggregates::new(&rows, &decoder, &aggregate, &plan)
+            .aggregate()
+            .unwrap();
+
+        assert_eq!(result.len(), 1);
+        let row = result.pop_front().unwrap();
+        let total_count = row.get::<i32>(0, Format::Text).unwrap();
+        assert_eq!(total_count, 5);
+    }
+
+    #[test]
+    fn aggregate_count_default_bigint() {
+        // SELECT COUNT(*) (no cast) should still merge correctly and stay bigint.
+        let stmt = pg_query::parse("SELECT COUNT(*) FROM users")
+            .unwrap()
+            .protobuf
+            .stmts
+            .first()
+            .cloned()
+            .unwrap();
+        let aggregate = match stmt.stmt.unwrap().node.unwrap() {
+            pg_query::NodeEnum::SelectStmt(stmt) => Aggregate::parse(&stmt),
+            _ => panic!("expected select stmt"),
+        };
+
+        let rd = RowDescription::new(&[Field::bigint("count")]);
+        let decoder = Decoder::from(&rd);
+
+        let mut rows = VecDeque::new();
+        let mut shard0 = DataRow::new();
+        shard0.add(7_i64);
+        rows.push_back(shard0);
+        let mut shard1 = DataRow::new();
+        shard1.add(11_i64);
+        rows.push_back(shard1);
+
+        let plan = AggregateRewritePlan::default();
+        let mut result = Aggregates::new(&rows, &decoder, &aggregate, &plan)
+            .aggregate()
+            .unwrap();
+
+        assert_eq!(result.len(), 1);
+        let row = result.pop_front().unwrap();
+        let total_count = row.get::<i64>(0, Format::Text).unwrap();
+        assert_eq!(total_count, 18);
     }
 
     #[test]

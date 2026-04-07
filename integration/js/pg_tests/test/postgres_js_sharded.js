@@ -109,8 +109,8 @@ describe("postgres.js sharded CRUD", function () {
 
   it("cross-shard count", async function () {
     const [{ count }] =
-      await sql`SELECT COUNT(*) AS count FROM pjs_sh_orders_9k`;
-    assert.strictEqual(count, "24");
+      await sql`SELECT COUNT(*)::int AS count FROM pjs_sh_orders_9k`;
+    assert.strictEqual(count, 24);
   });
 
   it("cross-shard select all", async function () {
@@ -195,9 +195,9 @@ describe("postgres.js sharded unsafe (simple protocol)", function () {
 
   it("unsafe cross-shard count", async function () {
     const rows = await sql.unsafe(
-      "SELECT COUNT(*) AS count FROM pjs_sh_unsafe_9k",
+      "SELECT COUNT(*)::int AS count FROM pjs_sh_unsafe_9k",
     );
-    assert.strictEqual(rows[0].count, "10");
+    assert.strictEqual(rows[0].count, 10);
   });
 
   it("unsafe insert with RETURNING", async function () {
