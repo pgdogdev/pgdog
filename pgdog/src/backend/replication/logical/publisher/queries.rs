@@ -238,6 +238,24 @@ mod test {
     }
 
     #[tokio::test]
+    async fn test_oid_above_i32_max_round_trips_from_postgres() {
+        // Regression for issue #847: ask Postgres to emit a real `oid` value
+        // above i32::MAX on the wire and verify our text-format decode handles
+        // it. With the previous i32-based parser this returned 0; with Oid(u32)
+        // the value round-trips correctly.
+        let mut server = test_server().await;
+        let rows: Vec<DataRow> = server
+            .fetch_all("SELECT 2500000000::oid, 4294967295::oid")
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        let high: Oid = rows[0].get(0, Format::Text).unwrap();
+        let max: Oid = rows[0].get(1, Format::Text).unwrap();
+        assert_eq!(high, Oid(2_500_000_000));
+        assert_eq!(max, Oid(u32::MAX));
+    }
+
+    #[tokio::test]
     async fn test_logical_publisher_queries() {
         let mut server = test_server().await;
 
