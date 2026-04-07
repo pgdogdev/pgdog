@@ -166,7 +166,10 @@ mod test {
     }
 
     fn fake_clock(readings: &[u64]) -> impl FnMut() -> u64 + '_ {
-        assert!(!readings.is_empty(), "fake clock requires at least one reading");
+        assert!(
+            !readings.is_empty(),
+            "fake clock requires at least one reading"
+        );
 
         let mut index = 0;
         let last = readings[readings.len() - 1];
