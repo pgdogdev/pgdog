@@ -1,6 +1,7 @@
 //! CommandComplete (B) message.
 
 use std::fmt::Debug;
+use std::fmt::Display;
 use std::str::from_utf8;
 use std::str::from_utf8_unchecked;
 
@@ -31,6 +32,12 @@ impl CommandComplete {
             .ok_or(Error::CommandCompleteNoRows)?
             .parse()
             .ok())
+    }
+
+    /// Get command tag.
+    pub fn tag(&self) -> &str {
+        // SAFETY: split always returns at least one element.
+        self.command().split(" ").next().unwrap()
     }
 
     #[inline]
@@ -80,6 +87,12 @@ impl CommandComplete {
 impl ToBytes for CommandComplete {
     fn to_bytes(&self) -> Result<Bytes, Error> {
         Ok(self.payload.clone())
+    }
+}
+
+impl Display for CommandComplete {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.command())
     }
 }
 

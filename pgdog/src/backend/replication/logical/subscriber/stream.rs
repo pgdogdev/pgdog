@@ -29,7 +29,8 @@ use crate::{
             xlog_data::XLogPayload, Commit as XLogCommit, Delete as XLogDelete,
             Insert as XLogInsert, Relation, StatusUpdate, Update as XLogUpdate,
         },
-        Bind, CopyData, ErrorResponse, Execute, Flush, FromBytes, Parse, Protocol, Sync, ToBytes,
+        Bind, CommandComplete, CopyData, ErrorResponse, Execute, Flush, FromBytes, Parse, Protocol,
+        Sync, ToBytes,
     },
     util::postgres_now,
 };
@@ -149,6 +150,9 @@ pub struct StreamSubscriber {
 
     // Query parser engine.
     query_parser_engine: QueryParserEngine,
+
+    // Missed rows.
+    missed_rows: MissedRows,
 }
 
 impl StreamSubscriber {
@@ -182,6 +186,7 @@ impl StreamSubscriber {
             lsn_changed: true,
             in_transaction: false,
             query_parser_engine,
+            missed_rows: MissedRows::default(),
         }
     }
 
@@ -259,7 +264,23 @@ impl StreamSubscriber {
             for _ in 0..2 {
                 let msg = conn.read().await?;
                 match msg.code() {
-                    '2' | 'C' => (),
+                    'C' => {
+                        let cmd = CommandComplete::try_from(msg)?;
+                        let rows = cmd
+                            .rows()?
+                            .ok_or(Error::CommandCompleteNoRows(cmd.clone()))?;
+                        // A direct-to-shard update indicates a row has changed on source.
+                        // This row must exist on the destination, or we missed some data during sync.
+                        if rows == 0 && val.is_direct() {
+                            match cmd.tag() {
+                                "UPDATE" => self.missed_rows.update += 1,
+                                "DELETE" => self.missed_rows.delete += 1,
+                                "INSERT" => self.missed_rows.insert += 1,
+                                _ => (),
+                            }
+                        }
+                    }
+                    '2' => (),
                     'E' => {
                         return Err(Error::PgError(Box::new(ErrorResponse::from_bytes(
                             msg.to_bytes()?,
@@ -351,8 +372,6 @@ impl StreamSubscriber {
         }
 
         if let Some(statements) = self.statements.get(&delete.oid) {
-            // Convert TupleData into a Bind message. We can now insert that tuple
-            // using a prepared statement.
             if let Some(key) = delete.key_non_null() {
                 let mut context =
                     StreamContext::new(&self.cluster, &key, statements.delete.parse());
@@ -578,5 +597,52 @@ impl StreamSubscriber {
     #[cfg(test)]
     pub(crate) fn in_transaction(&self) -> bool {
         self.in_transaction
+    }
+
+    /// Get and reset missing rows.
+    pub(crate) fn missed_rows(&mut self) -> MissedRows {
+        std::mem::take(&mut self.missed_rows)
+    }
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct MissedRows {
+    insert: usize,
+    delete: usize,
+    update: usize,
+}
+
+impl MissedRows {
+    pub(crate) fn non_zero(&self) -> bool {
+        self.insert > 0 || self.delete > 0 || self.update > 0
+    }
+}
+
+impl Display for MissedRows {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut written = false;
+        if self.insert > 0 {
+            write!(f, "inserts={}", self.insert)?;
+            written = true;
+        }
+        if self.update > 0 {
+            write!(
+                f,
+                "{}update={} ",
+                if written { " " } else { "" },
+                self.update
+            )?;
+            written = true;
+        }
+        if self.delete > 0 {
+            write!(
+                f,
+                "{}delete={}",
+                if written { " " } else { "" },
+                self.delete
+            )?;
+        }
+
+        Ok(())
     }
 }
