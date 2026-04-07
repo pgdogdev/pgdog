@@ -236,6 +236,11 @@ fn make_subscriber() -> StreamSubscriber {
     StreamSubscriber::new(&cluster, &tables, QueryParserEngine::default())
 }
 
+fn make_subscriber_with_tables(tables: Vec<Table>) -> StreamSubscriber {
+    let cluster = Cluster::new_test(&config());
+    StreamSubscriber::new(&cluster, &tables, QueryParserEngine::default())
+}
+
 fn make_subscriber_single_shard() -> StreamSubscriber {
     let cluster = Cluster::new_test_single_shard(&config());
     let tables = vec![make_sharded_table(), make_sharded_test_b_table()];
@@ -257,8 +262,34 @@ async fn count_row(server: &mut Server, table: &str, id: &str) -> i64 {
         .unwrap_or(0)
 }
 
+async fn ensure_table(server: &mut Server, table: &str) {
+    match table {
+        "public.sharded" => {
+            server
+                .execute(
+                    "CREATE TABLE IF NOT EXISTS public.sharded (\
+                     id BIGINT PRIMARY KEY, value TEXT)",
+                )
+                .await
+                .unwrap();
+        }
+        "public.sharded_test_b" => {
+            server
+                .execute(
+                    "CREATE TABLE IF NOT EXISTS public.sharded_test_b (\
+                     id BIGINT PRIMARY KEY, value TEXT)",
+                )
+                .await
+                .unwrap();
+        }
+        _ => (),
+    }
+}
+
 /// Delete rows by id, cleaning up test data.
 async fn cleanup(server: &mut Server, table: &str, ids: &[&str]) {
+    ensure_table(server, table).await;
+
     for id in ids {
         server
             .execute(format!("DELETE FROM {} WHERE id = {}", table, id))
@@ -570,6 +601,60 @@ async fn lsn_gating_skips_old_inserts() {
     assert_eq!(count_row(&mut verify, "public.sharded", &id2).await, 0);
 
     cleanup(&mut verify, "public.sharded", &[&id]).await;
+}
+
+/// Equal LSNs are skipped so streaming does not replay rows already copied by COPY.
+#[tokio::test]
+async fn lsn_gating_skips_copy_boundary_inserts() {
+    let mut table = make_sharded_table();
+    table.lsn = Lsn::from_i64(100);
+
+    let mut sub = make_subscriber_with_tables(vec![table, make_sharded_test_b_table()]);
+    let mut verify = test_server().await;
+    sub.connect().await.unwrap();
+
+    let oid = Oid(16384);
+    let id = random_id();
+
+    cleanup(&mut verify, "public.sharded", &[&id]).await;
+
+    sub.handle(begin_copy_data(100)).await.unwrap();
+    sub.handle(relation_copy_data(oid)).await.unwrap();
+    sub.handle(insert_copy_data(oid, &id, "copied_already"))
+        .await
+        .unwrap();
+    sub.handle(commit_copy_data(200)).await.unwrap();
+
+    assert_eq!(count_row(&mut verify, "public.sharded", &id).await, 0);
+}
+
+/// Multiple rows in the same transaction must still be applied after inclusive LSN gating.
+#[tokio::test]
+async fn multiple_inserts_same_transaction_are_applied() {
+    let mut sub = make_subscriber();
+    let mut verify = test_server().await;
+    sub.connect().await.unwrap();
+
+    let oid = Oid(16384);
+    let id1 = random_id();
+    let id2 = random_id();
+
+    cleanup(&mut verify, "public.sharded", &[&id1, &id2]).await;
+
+    sub.handle(begin_copy_data(100)).await.unwrap();
+    sub.handle(relation_copy_data(oid)).await.unwrap();
+    sub.handle(insert_copy_data(oid, &id1, "first"))
+        .await
+        .unwrap();
+    sub.handle(insert_copy_data(oid, &id2, "second"))
+        .await
+        .unwrap();
+    sub.handle(commit_copy_data(200)).await.unwrap();
+
+    assert_eq!(count_row(&mut verify, "public.sharded", &id1).await, 1);
+    assert_eq!(count_row(&mut verify, "public.sharded", &id2).await, 1);
+
+    cleanup(&mut verify, "public.sharded", &[&id1, &id2]).await;
 }
 
 // ── CopyData round-trip tests ───────────────────────────────────────

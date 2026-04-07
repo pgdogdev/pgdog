@@ -138,6 +138,10 @@ pub struct StreamSubscriber {
     // LSNs for each table
     table_lsns: HashMap<Oid, i64>,
 
+    // Tables changed in the current transaction. We advance their replay
+    // watermark on commit so equal-LSN rows in the same transaction are not skipped.
+    changed_tables: HashSet<Oid>,
+
     // Connections to shards.
     connections: Vec<Server>,
 
@@ -169,6 +173,7 @@ impl StreamSubscriber {
             statements: HashMap::new(),
             partitioned_dedup: HashSet::new(),
             table_lsns: HashMap::new(),
+            changed_tables: HashSet::new(),
             tables: tables
                 .iter()
                 .map(|table| {
@@ -322,8 +327,7 @@ impl StreamSubscriber {
             self.send(&shard, &bind).await?;
         }
 
-        // Update table LSN.
-        self.table_lsns.insert(insert.oid, self.lsn);
+        self.mark_table_changed(insert.oid);
 
         Ok(())
     }
@@ -361,8 +365,7 @@ impl StreamSubscriber {
             }
         }
 
-        // Update table LSN.
-        self.table_lsns.insert(update.oid, self.lsn);
+        self.mark_table_changed(update.oid);
 
         Ok(())
     }
@@ -383,21 +386,29 @@ impl StreamSubscriber {
             }
         }
 
-        // Update table LSN.
-        self.table_lsns.insert(delete.oid, self.lsn);
+        self.mark_table_changed(delete.oid);
 
         Ok(())
     }
 
     pub(crate) fn lsn_applied(&self, oid: &Oid) -> bool {
         if let Some(table_lsn) = self.table_lsns.get(oid) {
-            // Don't apply change if table is ahead.
-            if self.lsn < *table_lsn {
+            // Don't apply change if the table has already been copied or replayed
+            // through this transaction boundary.
+            if self.lsn <= *table_lsn {
                 return true;
             }
         }
 
         false
+    }
+
+    fn mark_table_changed(&mut self, oid: Oid) {
+        if self.in_transaction {
+            self.changed_tables.insert(oid);
+        } else {
+            self.table_lsns.insert(oid, self.lsn);
+        }
     }
 
     // Handle Commit message.
@@ -422,6 +433,11 @@ impl StreamSubscriber {
                 'Z' => (),
                 c => return Err(Error::CommitOutOfSync(c)),
             }
+        }
+
+        let transaction_lsn = self.lsn;
+        for oid in self.changed_tables.drain() {
+            self.table_lsns.insert(oid, transaction_lsn);
         }
 
         self.set_current_lsn(commit.end_lsn);
@@ -546,6 +562,7 @@ impl StreamSubscriber {
                     }
                     XLogPayload::Relation(relation) => self.relation(relation).await?,
                     XLogPayload::Begin(begin) => {
+                        self.changed_tables.clear();
                         self.set_current_lsn(begin.final_transaction_lsn);
                         self.in_transaction = true;
                     }
@@ -645,5 +662,54 @@ impl Display for MissedRows {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::config;
+
+    fn make_subscriber() -> StreamSubscriber {
+        let cluster = Cluster::new_test(&config());
+        StreamSubscriber::new(&cluster, &[], QueryParserEngine::default())
+    }
+
+    #[test]
+    fn lsn_gating_is_inclusive_at_copy_boundary() {
+        let mut sub = make_subscriber();
+        let oid = Oid(42);
+
+        sub.table_lsns.insert(oid, 100);
+        sub.set_current_lsn(100);
+
+        assert!(sub.lsn_applied(&oid));
+    }
+
+    #[tokio::test]
+    async fn table_watermarks_advance_on_commit() {
+        let mut sub = make_subscriber();
+        let oid = Oid(42);
+
+        sub.table_lsns.insert(oid, 50);
+        sub.in_transaction = true;
+        sub.set_current_lsn(100);
+        sub.mark_table_changed(oid);
+
+        // Rows from the current transaction must remain eligible until commit.
+        assert!(!sub.lsn_applied(&oid));
+
+        sub.commit(XLogCommit {
+            flags: 0,
+            commit_lsn: 0,
+            end_lsn: 200,
+            commit_timestamp: 0,
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(sub.table_lsns.get(&oid), Some(&100));
+        assert_eq!(sub.lsn(), 200);
+        assert!(sub.changed_tables.is_empty());
     }
 }
