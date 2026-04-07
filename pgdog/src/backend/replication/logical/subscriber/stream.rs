@@ -628,7 +628,7 @@ impl Display for MissedRows {
         if self.update > 0 {
             write!(
                 f,
-                "{}update={} ",
+                "{}update={}",
                 if written { " " } else { "" },
                 self.update
             )?;
