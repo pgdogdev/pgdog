@@ -2,7 +2,10 @@ use std::num::ParseIntError;
 
 use thiserror::Error;
 
-use crate::{backend::replication::publisher::PublicationTable, net::ErrorResponse};
+use crate::{
+    backend::replication::publisher::PublicationTable,
+    net::{CommandComplete, ErrorResponse},
+};
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -125,6 +128,9 @@ pub enum Error {
 
     #[error("binary format mismatch (likely int -> bigint), use text copy instead: {0}")]
     BinaryFormatMistmatch(ErrorResponse),
+
+    #[error("command complete has no rows: {0}")]
+    CommandCompleteNoRows(CommandComplete),
 }
 
 impl From<ErrorResponse> for Error {

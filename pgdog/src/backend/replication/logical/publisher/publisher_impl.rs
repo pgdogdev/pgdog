@@ -8,7 +8,7 @@ use tokio::sync::Notify;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 use tokio::{select, spawn, time::interval};
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use super::super::{publisher::Table, Error};
 use super::ReplicationSlot;
@@ -176,6 +176,9 @@ impl Publisher {
             let stop = self.stop.clone();
             let last_transaction = self.last_transaction.clone();
 
+            let source = self.cluster.clone();
+            let dest = dest.clone();
+
             // Replicate in parallel.
             let handle = spawn(async move {
                 slot.start_replication().await?;
@@ -228,6 +231,10 @@ impl Publisher {
                             let mut guard = replication_lag.lock();
                             guard.insert(number, lag);
 
+                            let missed = stream.missed_rows();
+                            if missed.non_zero() {
+                                warn!("replication {} => {} has missing rows: {}", source.name(), dest.name(), missed);
+                            }
 
                         }
                     }
