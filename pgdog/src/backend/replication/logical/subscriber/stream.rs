@@ -622,7 +622,7 @@ impl Display for MissedRows {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut written = false;
         if self.insert > 0 {
-            write!(f, "inserts={}", self.insert)?;
+            write!(f, "insert={}", self.insert)?;
             written = true;
         }
         if self.update > 0 {
