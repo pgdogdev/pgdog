@@ -49,6 +49,10 @@ impl From<Relation> for StatsRelation {
 
 impl From<DataRow> for Relation {
     fn from(value: DataRow) -> Self {
+        // get_text returns Some("") for NULL columns (the wire-protocol decoder
+        // produces empty Bytes for nulls). For optional fields like the parent
+        // table info we want None, not Some("").
+        let non_empty = |s: Option<String>| s.filter(|v| !v.is_empty());
         Self {
             inner: StatsRelation {
                 schema: value.get_text(0).unwrap_or_default(),
@@ -59,8 +63,8 @@ impl From<DataRow> for Relation {
                 access_method: value.get_text(5).unwrap_or_default(),
                 description: value.get_text(6).unwrap_or_default(),
                 oid: value.get::<i32>(7, Format::Text).unwrap_or_default(),
-                parent_table_schema: value.get_text(8),
-                parent_table_name: value.get_text(9),
+                parent_table_schema: non_empty(value.get_text(8)),
+                parent_table_name: non_empty(value.get_text(9)),
                 columns: IndexMap::new(),
             },
         }

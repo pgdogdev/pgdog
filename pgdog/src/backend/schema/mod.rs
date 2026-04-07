@@ -112,15 +112,20 @@ impl Schema {
         Self::setup(server).await?;
         let schema = Self::load(server).await?;
 
-        let mut tables = schema
+        let tables = schema
             .tables()
             .iter()
             .cloned()
-            .filter(|table| !matches!(table.schema.as_str(), "pgdog" | "pgdog_shadow"))
+            // Skip partition children: PostgreSQL forbids ALTER TABLE <child>
+            // DROP IDENTITY (error 42P16). The partitioned parent's
+            // install_shadow_table call handles the entire hierarchy because
+            // DROP IDENTITY and SET DEFAULT on a partitioned parent propagate
+            // to all partition children automatically.
+            .filter(|table| {
+                !matches!(table.schema.as_str(), "pgdog" | "pgdog_shadow")
+                    && table.parent_table_name.is_none()
+            })
             .collect::<Vec<_>>();
-
-        // Process partition parents before their children.
-        tables.sort_by_key(|table| table.parent_table_name.is_some());
 
         info!(
             "[schema] checking {} tables for sharded sequences [{}]",
@@ -714,10 +719,54 @@ mod test {
     #[tokio::test]
     async fn test_identity_column() {
         let mut server = test_server().await;
+        // Drop and recreate the schema so the test is repeatable.
+        server
+            .execute_checked("DROP SCHEMA IF EXISTS pgdog_schema_test CASCADE")
+            .await
+            .unwrap();
+        server
+            .execute_checked("DROP SCHEMA IF EXISTS pgdog_shadow CASCADE")
+            .await
+            .unwrap();
         server
             .execute_checked(include_str!("test_schema.sql"))
             .await
             .unwrap();
         Schema::install_server(&mut server).await.unwrap();
+
+        // Verify the partitioned parents had identity dropped and a sharded
+        // sequence default installed. Children inherit the default from the
+        // parent so they should NOT have been touched directly (which would
+        // raise error 42P16).
+        let parents = ["partitioned_identity", "partitioned_identity_compound"];
+        for parent in parents {
+            let identity: Vec<String> = server
+                .fetch_all::<String>(&format!(
+                    "SELECT is_identity FROM information_schema.columns \
+                     WHERE table_schema = 'pgdog_schema_test' \
+                     AND table_name = '{parent}' AND column_name = 'id'"
+                ))
+                .await
+                .unwrap();
+            assert_eq!(
+                identity.first().map(String::as_str),
+                Some("NO"),
+                "{parent}.id should no longer be identity after install_server",
+            );
+
+            let default: Vec<String> = server
+                .fetch_all::<String>(&format!(
+                    "SELECT column_default FROM information_schema.columns \
+                     WHERE table_schema = 'pgdog_schema_test' \
+                     AND table_name = '{parent}' AND column_name = 'id'"
+                ))
+                .await
+                .unwrap();
+            assert!(
+                default.first().is_some_and(|d| d.contains("next_id_seq")),
+                "{parent}.id should have a next_id_seq default, got {:?}",
+                default.first(),
+            );
+        }
     }
 }
