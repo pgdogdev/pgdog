@@ -466,6 +466,67 @@ async fn relation_after_insert_inside_transaction() {
     cleanup(&mut verify, "public.sharded_test_b", &[&id_b]).await;
 }
 
+/// Two source tables (e.g. partition leaves) that map to the same destination
+/// must each register their oid so DML for *both* oids is applied. Regression
+/// test for the partition-dedup row-drop bug: previously the second leaf's
+/// Relation message returned early without registering its oid in `statements`,
+/// causing all subsequent inserts on that oid to be silently dropped.
+#[tokio::test]
+async fn partition_leaves_share_destination() {
+    let mut leaf_a = make_sharded_table();
+    leaf_a.table.name = "sharded_p1".to_string();
+    leaf_a.table.parent_schema = "public".to_string();
+    leaf_a.table.parent_name = "sharded".to_string();
+
+    let mut leaf_b = make_sharded_table();
+    leaf_b.table.name = "sharded_p2".to_string();
+    leaf_b.table.parent_schema = "public".to_string();
+    leaf_b.table.parent_name = "sharded".to_string();
+
+    let cluster = Cluster::new_test_single_shard(&config());
+    let mut sub = StreamSubscriber::new(&cluster, &[leaf_a, leaf_b], QueryParserEngine::default());
+    let mut verify = test_server().await;
+    sub.connect().await.unwrap();
+
+    let oid_a = Oid(16384);
+    let oid_b = Oid(16385);
+    let id_a = random_id();
+    let id_b = random_id();
+
+    cleanup(&mut verify, "public.sharded", &[&id_a, &id_b]).await;
+
+    // Each leaf has its own oid in the WAL stream but resolves to the same
+    // destination table via parent_schema/parent_name.
+    let mut relation_a = sharded_relation(oid_a);
+    relation_a.name = "sharded_p1".to_string();
+    let mut relation_b = sharded_relation(oid_b);
+    relation_b.name = "sharded_p2".to_string();
+
+    sub.handle(begin_copy_data(100)).await.unwrap();
+    sub.handle(xlog_copy_data(relation_a.to_bytes().unwrap()))
+        .await
+        .unwrap();
+    sub.handle(xlog_copy_data(relation_b.to_bytes().unwrap()))
+        .await
+        .unwrap();
+
+    sub.handle(insert_copy_data(oid_a, &id_a, "leaf_a"))
+        .await
+        .unwrap();
+    sub.handle(insert_copy_data(oid_b, &id_b, "leaf_b"))
+        .await
+        .unwrap();
+
+    sub.handle(commit_copy_data(200)).await.unwrap();
+
+    // Both inserts must land in the shared destination table. Before the fix,
+    // leaf_b's row would be silently dropped.
+    assert_eq!(count_row(&mut verify, "public.sharded", &id_a).await, 1);
+    assert_eq!(count_row(&mut verify, "public.sharded", &id_b).await, 1);
+
+    cleanup(&mut verify, "public.sharded", &[&id_a, &id_b]).await;
+}
+
 // ── Data flow tests ─────────────────────────────────────────────────
 
 /// Full transaction: Begin → Relation → Insert → Commit, verified in Postgres.
