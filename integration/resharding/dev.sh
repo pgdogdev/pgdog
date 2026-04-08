@@ -33,11 +33,11 @@ done
 pgbench -f pgbench.sql -P 1 source -c 5 -t 1000000 &
 PGBENCH_PID="$!"
 
-sleep 15
+sleep 10
 
 psql admin -c 'COPY_DATA source destination pgdog'
 
-sleep 15
+sleep 10
 
 kill -TERM ${PGBENCH_PID}
 
