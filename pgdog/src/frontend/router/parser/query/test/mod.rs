@@ -293,6 +293,28 @@ fn test_select_for_update() {
 }
 
 #[test]
+fn test_select_for_update_in_cte() {
+    // FOR UPDATE buried inside a CTE should still route to the primary.
+    let route = query!(
+        "WITH locked AS (SELECT * FROM sharded WHERE id = 1 FOR UPDATE) SELECT * FROM locked"
+    );
+    assert!(route.is_write());
+
+    // Doubly-nested CTE: the locking clause is two WITH levels deep.
+    let route = query!(
+        "WITH outer_cte AS (\
+            WITH inner_cte AS (SELECT * FROM sharded WHERE id = 1 FOR UPDATE) \
+            SELECT * FROM inner_cte\
+         ) SELECT * FROM outer_cte"
+    );
+    assert!(route.is_write());
+
+    // Sanity check: a plain SELECT inside a CTE without locking is still a read.
+    let route = query!("WITH plain AS (SELECT * FROM sharded WHERE id = 1) SELECT * FROM plain");
+    assert!(route.is_read());
+}
+
+#[test]
 fn test_omni() {
     let mut omni_round_robin = HashSet::new();
     let q = "SELECT sharded_omni.* FROM sharded_omni WHERE sharded_omni.id = 1";
