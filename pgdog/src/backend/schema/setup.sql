@@ -273,8 +273,9 @@ BEGIN
     -- Make the sequence owned by the shadow table.
     EXECUTE format('ALTER SEQUENCE pgdog_shadow."%s" OWNED BY pgdog_shadow.%s.%s', shadow_seq_name, shadow_table_name, column_name);
 
-    -- Drop identity constraint if one exists, since we're replacing it with a custom default.
-    IF EXISTS (
+    -- Only PostgreSQL 17+ should have identity removed before installing
+    -- the custom default.
+    IF current_setting('server_version_num')::INTEGER >= 170000 AND EXISTS (
         SELECT 1
         FROM information_schema.columns c
         WHERE c.table_schema = install_sharded_sequence.schema_name

@@ -505,6 +505,13 @@ mod test {
     #[tokio::test]
     async fn test_identity_column() {
         let mut server = test_server().await;
+        let server_version_num = server
+            .fetch_all::<i32>("SELECT current_setting('server_version_num')::int")
+            .await
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap();
         // Drop and recreate the schema so the test is repeatable.
         server
             .execute_checked("DROP SCHEMA IF EXISTS pgdog_schema_test CASCADE")
@@ -536,8 +543,12 @@ mod test {
                 .unwrap();
             assert_eq!(
                 identity.first().map(String::as_str),
-                Some("NO"),
-                "{parent}.id should no longer be identity after install_server",
+                Some(if server_version_num >= 170000 {
+                    "NO"
+                } else {
+                    "YES"
+                }),
+                "{parent}.id identity state should match install_server behavior for PostgreSQL {server_version_num}",
             );
 
             let default: Vec<String> = server
