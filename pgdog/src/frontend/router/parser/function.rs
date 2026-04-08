@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use once_cell::sync::Lazy;
 use pg_query::{protobuf, Node, NodeEnum};
@@ -20,6 +20,9 @@ static WRITE_ONLY: Lazy<HashMap<&'static str, LockingBehavior>> = Lazy::new(|| {
     ])
 });
 
+static CROSS_SHARD: Lazy<HashSet<(&'static str, &'static str)>> =
+    Lazy::new(|| HashSet::from([("pgdog", "install_sharded_sequence")]));
+
 #[derive(Debug, Copy, Clone, PartialEq, Default)]
 pub enum LockingBehavior {
     Lock,
@@ -32,6 +35,7 @@ pub enum LockingBehavior {
 pub struct FunctionBehavior {
     pub writes: bool,
     pub locking_behavior: LockingBehavior,
+    pub cross_shard: bool,
 }
 
 impl FunctionBehavior {
@@ -45,28 +49,49 @@ impl FunctionBehavior {
 
 pub struct Function<'a> {
     pub name: &'a str,
+    pub schema: Option<&'a str>,
 }
 
 impl<'a> Function<'a> {
-    fn from_string(node: &'a Option<NodeEnum>) -> Result<Self, ()> {
-        match node {
-            Some(NodeEnum::String(protobuf::String { sval })) => Ok(Self {
-                name: sval.as_str(),
+    /// Build a Function from a qualified name list (as found in `FuncCall.funcname`).
+    /// The last element is the function name; the preceding element (if any) is the
+    /// schema.
+    fn from_strings(parts: &'a [Node]) -> Result<Self, ()> {
+        let str_of = |node: &'a Node| match &node.node {
+            Some(NodeEnum::String(protobuf::String { sval })) => Ok(sval.as_str()),
+            _ => Err(()),
+        };
+        match parts {
+            [name] => Ok(Self {
+                name: str_of(name)?,
+                schema: None,
             }),
-
+            [.., schema, name] => Ok(Self {
+                name: str_of(name)?,
+                schema: Some(str_of(schema)?),
+            }),
             _ => Err(()),
         }
     }
 
     /// This function likely writes.
     pub fn behavior(&self) -> FunctionBehavior {
+        let cross_shard = self
+            .schema
+            .map(|schema| CROSS_SHARD.contains(&(schema, self.name)))
+            .unwrap_or(false);
+
         if let Some(locks) = WRITE_ONLY.get(&self.name) {
             FunctionBehavior {
                 writes: true,
                 locking_behavior: *locks,
+                cross_shard,
             }
         } else {
-            FunctionBehavior::default()
+            FunctionBehavior {
+                cross_shard,
+                ..FunctionBehavior::default()
+            }
         }
     }
 }
@@ -76,9 +101,7 @@ impl<'a> TryFrom<&'a Node> for Function<'a> {
     fn try_from(value: &'a Node) -> Result<Self, Self::Error> {
         match &value.node {
             Some(NodeEnum::FuncCall(func)) => {
-                if let Some(node) = func.funcname.last() {
-                    return Self::from_string(&node.node);
-                }
+                return Self::from_strings(&func.funcname);
             }
 
             Some(NodeEnum::TypeCast(cast)) => {
@@ -123,10 +146,52 @@ mod test {
                 for node in &stmt.target_list {
                     let func = Function::try_from(node).unwrap();
                     assert!(func.name.contains("advisory_lock"));
+                    assert!(func.schema.is_none());
+                    assert!(!func.behavior().cross_shard);
                 }
             }
 
             _ => panic!("not a select"),
         }
+    }
+
+    fn first_func<R>(query: &str, check: impl FnOnce(Function<'_>) -> R) -> R {
+        let ast = parse(query).unwrap();
+        let root = ast.protobuf.stmts.first().unwrap().stmt.as_ref().unwrap();
+        match root.node.as_ref() {
+            Some(NodeEnum::SelectStmt(stmt)) => {
+                let target = stmt.target_list.first().unwrap();
+                check(Function::try_from(target).unwrap())
+            }
+            _ => panic!("not a select"),
+        }
+    }
+
+    #[test]
+    fn test_cross_shard_function() {
+        first_func(
+            "SELECT pgdog.install_sharded_sequence('foo', 'id')",
+            |func| {
+                assert_eq!(func.name, "install_sharded_sequence");
+                assert_eq!(func.schema, Some("pgdog"));
+                assert!(func.behavior().cross_shard);
+            },
+        );
+
+        // Same function name without the schema should not be flagged.
+        first_func("SELECT install_sharded_sequence('foo', 'id')", |func| {
+            assert_eq!(func.name, "install_sharded_sequence");
+            assert!(func.schema.is_none());
+            assert!(!func.behavior().cross_shard);
+        });
+
+        // Different schema should not be flagged.
+        first_func(
+            "SELECT other.install_sharded_sequence('foo', 'id')",
+            |func| {
+                assert_eq!(func.schema, Some("other"));
+                assert!(!func.behavior().cross_shard);
+            },
+        );
     }
 }

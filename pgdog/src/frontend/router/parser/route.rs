@@ -273,16 +273,17 @@ impl Route {
         self.rollback_savepoint
     }
 
-    pub fn with_write(mut self, write: FunctionBehavior) -> Self {
-        self.set_write(write);
+    pub fn with_functions(mut self, function: FunctionBehavior) -> Self {
+        self.set_functions(function);
         self
     }
 
-    pub fn set_write(&mut self, write: FunctionBehavior) {
+    pub fn set_functions(&mut self, function: FunctionBehavior) {
         let FunctionBehavior {
             writes,
             locking_behavior,
-        } = write;
+            ..
+        } = function;
         self.read = !writes;
         self.lock_session = match locking_behavior {
             LockingBehavior::Lock => Some(true),
@@ -364,6 +365,7 @@ pub enum OverrideReason {
     Transaction,
     OnlyOneShard,
     RewriteUpdate,
+    CrossShardFunction,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Ord, PartialOrd)]
@@ -421,6 +423,13 @@ impl ShardWithPriority {
         Self {
             shard,
             source: ShardSource::Override(OverrideReason::RewriteUpdate),
+        }
+    }
+
+    pub fn new_override_cross_shard_function() -> Self {
+        Self {
+            shard: Shard::All,
+            source: ShardSource::Override(OverrideReason::CrossShardFunction),
         }
     }
 
