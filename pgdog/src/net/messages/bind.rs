@@ -307,35 +307,74 @@ impl FromBytes for Bind {
     fn from_bytes(mut bytes: Bytes) -> Result<Self, Error> {
         let original = bytes.clone();
         code!(bytes, 'B');
-        let _len = bytes.get_i32();
 
-        let portal = bytes.split_to(c_string_buf_len(&bytes));
-        let statement = bytes.split_to(c_string_buf_len(&bytes));
+        let len = bytes.get_i32() as usize;
+        // Declared length includes itself (4 bytes) but not the code byte.
+        // Verify the remaining buffer has enough data.
+        if bytes.remaining() + 4 < len {
+            return Err(Error::UnexpectedEof);
+        }
+
+        let portal_len = c_string_buf_len(&bytes);
+        if portal_len == 0 {
+            return Err(Error::UnexpectedEof);
+        }
+        let portal = bytes.split_to(portal_len);
+
+        let statement_len = c_string_buf_len(&bytes);
+        if statement_len == 0 {
+            return Err(Error::UnexpectedEof);
+        }
+        let statement = bytes.split_to(statement_len);
+
         from_utf8(&portal[0..portal.len() - 1])?;
         from_utf8(&statement[0..statement.len() - 1])?;
 
+        if bytes.remaining() < 2 {
+            return Err(Error::UnexpectedEof);
+        }
         let num_codes = bytes.get_u16();
+        if bytes.remaining() < num_codes as usize * 2 {
+            return Err(Error::UnexpectedEof);
+        }
         let codes = (0..num_codes as usize)
             .map(|_| match bytes.get_i16() {
                 0 => Format::Text,
                 _ => Format::Binary,
             })
             .collect();
+
+        if bytes.remaining() < 2 {
+            return Err(Error::UnexpectedEof);
+        }
         let num_params = bytes.get_u16();
-        let params = (0..num_params as usize)
-            .map(|_| {
-                let len = bytes.get_i32();
-                let data = if len >= 0 {
-                    bytes.split_to(len as usize)
-                } else {
-                    Bytes::new()
-                };
-                Parameter { len, data }
-            })
-            .collect();
+        let mut params = Vec::with_capacity(num_params as usize);
+        for _ in 0..num_params as usize {
+            if bytes.remaining() < 4 {
+                return Err(Error::UnexpectedEof);
+            }
+            let len = bytes.get_i32();
+            let data = if len >= 0 {
+                if bytes.remaining() < len as usize {
+                    return Err(Error::UnexpectedEof);
+                }
+                bytes.split_to(len as usize)
+            } else {
+                Bytes::new()
+            };
+            params.push(Parameter { len, data });
+        }
+
+        if bytes.remaining() < 2 {
+            return Err(Error::UnexpectedEof);
+        }
         let num_results = bytes.get_i16();
         let results = if num_results > 0 {
-            bytes.split_to((num_results * 2) as usize)
+            let results_len = num_results as usize * 2;
+            if bytes.remaining() < results_len {
+                return Err(Error::UnexpectedEof);
+            }
+            bytes.split_to(results_len)
         } else {
             Bytes::new()
         };

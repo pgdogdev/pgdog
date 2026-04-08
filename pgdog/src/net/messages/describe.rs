@@ -27,6 +27,11 @@ impl FromBytes for Describe {
         let original = bytes.clone();
         code!(bytes, 'D');
 
+        // Minimum: code(1) + len(4) + kind(1) + null(1) = 7 bytes
+        if original.len() < 7 {
+            return Err(Error::UnexpectedEof);
+        }
+
         from_utf8(&original[6..original.len() - 1])?;
 
         Ok(Self {
