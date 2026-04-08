@@ -3,11 +3,11 @@ use crate::{
         databases::{cancel_all, cutover},
         maintenance_mode,
         schema::sync::{pg_dump::PgDumpOutput, PgDump},
-        Cluster,
+        Cluster, Schema,
     },
     util::{format_bytes, human_duration, random_string},
 };
-use pgdog_config::{ConfigAndUsers, CutoverTimeoutAction};
+use pgdog_config::{ConfigAndUsers, CutoverTimeoutAction, RewriteMode};
 use std::{fmt::Display, sync::Arc, time::Duration};
 use tokio::{
     select,
@@ -108,6 +108,12 @@ impl Orchestrator {
         self.destination.wait_schema_loaded().await;
 
         self.refresh_publisher();
+
+        if self.destination.rewrite().primary_key == RewriteMode::RewriteOmni {
+            // Install the sharded sequence and supporting schema
+            // and functions.
+            Schema::install(&self.destination).await?;
+        }
 
         Ok(())
     }

@@ -45,6 +45,7 @@ CREATE TABLE copy_data.with_identity(
     tenant_id BIGINT NOT NULL
 );
 
+
 -- Omni (non-sharded) tables: no tenant_id column.
 CREATE TABLE IF NOT EXISTS copy_data.countries (
     id BIGSERIAL PRIMARY KEY,
@@ -63,6 +64,12 @@ CREATE TABLE IF NOT EXISTS copy_data.categories (
     id BIGSERIAL PRIMARY KEY,
     name VARCHAR NOT NULL,
     parent_id INT
+);
+
+CREATE TABLE copy_data.settings (
+    id BIGSERIAL PRIMARY KEY,
+    setting_name TEXT NOT NULL UNIQUE,
+    setting_value TEXT NOT NULL
 );
 
 DROP PUBLICATION IF EXISTS pgdog;

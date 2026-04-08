@@ -836,80 +836,7 @@ impl PgDumpOutput {
                                             }
                                         }
 
-                                        AlterTableType::AtAddIdentity => {
-                                            if state == SyncState::Cutover {
-                                                // Add identity constraint during cutover
-                                                result.push(original.into());
-
-                                                // Set sequence to max(column) value
-                                                if let Some(ref node) = cmd.def {
-                                                    if let Some(NodeEnum::Constraint(
-                                                        ref constraint,
-                                                    )) = node.node
-                                                    {
-                                                        for option in &constraint.options {
-                                                            if let Some(NodeEnum::DefElem(
-                                                                ref elem,
-                                                            )) = option.node
-                                                            {
-                                                                if elem.defname == "sequence_name" {
-                                                                    if let Some(ref node) = elem.arg
-                                                                    {
-                                                                        if let Some(
-                                                                            NodeEnum::List(
-                                                                                ref list,
-                                                                            ),
-                                                                        ) = node.node
-                                                                        {
-                                                                            let table = Table::try_from(list).map_err(|_| Error::MissingEntity)?;
-                                                                            let sequence =
-                                                                                Sequence::from(
-                                                                                    table,
-                                                                                );
-                                                                            let table = stmt
-                                                                                .relation
-                                                                                .as_ref()
-                                                                                .map(Table::from);
-                                                                            let schema = table
-                                                                                .and_then(
-                                                                                    |table| {
-                                                                                        table.schema
-                                                                                    },
-                                                                                );
-                                                                            let table = table.map(
-                                                                                |table| table.name,
-                                                                            );
-                                                                            let column = Column {
-                                                                                table,
-                                                                                name: cmd
-                                                                                    .name
-                                                                                    .as_str(),
-                                                                                schema,
-                                                                            };
-                                                                            let sql = sequence.setval_from_column(&column).map_err(|_| Error::MissingEntity)?;
-
-                                                                            result.push(Statement::SequenceSetMax { sequence, sql });
-                                                                        }
-                                                                    }
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                            } else if state == SyncState::PostCutover {
-                                                // Drop identity constraint after cutover
-                                                if let Some(ref relation) = stmt.relation {
-                                                    let sql = format!(
-                                                        "ALTER TABLE \"{}\".\"{}\" ALTER COLUMN \"{}\" DROP IDENTITY IF EXISTS",
-                                                        crate::util::escape_identifier(schema_name(relation)),
-                                                        crate::util::escape_identifier(&relation.relname),
-                                                        crate::util::escape_identifier(&cmd.name)
-                                                    );
-                                                    result.push(sql.into());
-                                                }
-                                            }
-                                            // Skip identity constraint in PreData - it will be added in Cutover
-                                        }
+                                        AlterTableType::AtAddIdentity => (),
                                         // AlterTableType::AtChangeOwner => {
                                         //     continue; // Don't change owners, for now.
                                         // }
@@ -1326,30 +1253,9 @@ ALTER TABLE ONLY public.users
         let statements = output.statements(SyncState::PreData).unwrap();
         assert!(statements.is_empty());
 
-        // Identity constraints should be added in Cutover
+        // Identity constraints should be skipped in Cutover
         let statements = output.statements(SyncState::Cutover).unwrap();
-        assert_eq!(statements.len(), 2);
-
-        // First statement is the original identity constraint
-        assert!(statements[0]
-            .deref()
-            .contains("ADD GENERATED ALWAYS AS IDENTITY"));
-
-        // Second statement is the sequence setval
-        match &statements[1] {
-            Statement::SequenceSetMax { sequence, sql } => {
-                assert_eq!(sequence.table.name, "users_id_seq");
-                assert_eq!(
-                    sequence.table.schema().map(|schema| schema.name),
-                    Some("public")
-                );
-                assert_eq!(
-                    sql,
-                    r#"SELECT setval('"public"."users_id_seq"', COALESCE((SELECT MAX("id") FROM "public"."users"), 1), true);"#
-                );
-            }
-            _ => panic!("not a set sequence max"),
-        }
+        assert!(statements.is_empty());
 
         let statements = output.statements(SyncState::PostData).unwrap();
         assert!(statements.is_empty());
@@ -1371,13 +1277,9 @@ ALTER TABLE ONLY public.users
             original: q.to_string(),
         };
 
-        // PostCutover should drop identity constraints
+        // PostCutover should skip identity constraints
         let statements = output.statements(SyncState::PostCutover).unwrap();
-        assert_eq!(statements.len(), 1);
-        assert!(statements[0].deref().contains("DROP IDENTITY IF EXISTS"));
-        assert!(statements[0].deref().contains("public"));
-        assert!(statements[0].deref().contains("users"));
-        assert!(statements[0].deref().contains("id"));
+        assert!(statements.is_empty());
     }
 
     #[test]

@@ -6,7 +6,7 @@ use pg_query::{Node, NodeEnum};
 use pgdog_config::RewriteMode;
 
 use super::{Error, RewritePlan, StatementRewrite};
-use crate::frontend::router::parser::Table;
+use crate::frontend::router::parser::{StatementParser, Table};
 
 impl StatementRewrite<'_> {
     /// Handle BIGINT primary key columns in INSERT statements based on config.
@@ -26,7 +26,7 @@ impl StatementRewrite<'_> {
             return Ok(());
         }
 
-        let Some(table) = self.get_insert_table() else {
+        let Some((table, is_sharded)) = self.get_insert_table() else {
             return Ok(());
         };
 
@@ -62,8 +62,11 @@ impl StatementRewrite<'_> {
             .copied()
             .collect();
 
+        let rewrite =
+            mode == RewriteMode::Rewrite || mode == RewriteMode::RewriteOmni && !is_sharded;
+
         // Replace DEFAULT values with unique_id() for present columns (only in rewrite mode)
-        if mode == RewriteMode::Rewrite {
+        if rewrite {
             let replaced = self.replace_set_to_default_at_positions(&present_pk_positions);
             if replaced > 0 {
                 plan.auto_id_injected += replaced as u16;
@@ -75,31 +78,32 @@ impl StatementRewrite<'_> {
             return Ok(());
         }
 
-        match mode {
-            RewriteMode::Error => {
-                return Err(Error::MissingPrimaryKey);
+        if mode == RewriteMode::Error {
+            return Err(Error::MissingPrimaryKey);
+        }
+
+        if rewrite {
+            for column in missing_columns {
+                self.inject_column_with_unique_id(column)?;
+                plan.auto_id_injected += 1;
             }
-            RewriteMode::Rewrite => {
-                for column in missing_columns {
-                    self.inject_column_with_unique_id(column)?;
-                    plan.auto_id_injected += 1;
-                }
-                self.rewritten = true;
-            }
-            RewriteMode::Ignore => unreachable!(),
+            self.rewritten = true;
         }
 
         Ok(())
     }
 
     /// Get the table from an INSERT statement.
-    fn get_insert_table(&self) -> Option<Table<'_>> {
+    fn get_insert_table(&self) -> Option<(Table<'_>, bool)> {
         let stmt = self.stmt.stmts.first()?;
         let node = stmt.stmt.as_ref()?;
 
         if let NodeEnum::InsertStmt(insert) = node.node.as_ref()? {
             let relation = insert.relation.as_ref()?;
-            return Some(Table::from(relation));
+            let is_sharded = StatementParser::from_insert(insert, None, self.schema, None)
+                .is_sharded(self.db_schema, self.user, self.search_path);
+
+            return Some((Table::from(relation), is_sharded));
         }
 
         None
@@ -243,13 +247,13 @@ fn is_bigint_type(data_type: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use indexmap::IndexMap;
-    use pgdog_config::Rewrite;
+    use pgdog_config::{Rewrite, ShardedTable, SystemCatalogsBehavior};
     use std::collections::HashMap;
 
     use super::*;
     use crate::backend::schema::columns::StatsColumn as SchemaColumn;
     use crate::backend::schema::{Relation, Schema};
-    use crate::backend::ShardingSchema;
+    use crate::backend::{ShardedTables, ShardingSchema};
     use crate::frontend::router::parser::StatementRewriteContext;
     use crate::frontend::PreparedStatements;
 
@@ -531,5 +535,95 @@ mod tests {
 
         // DEFAULT should NOT be replaced in error mode
         assert!(sql.to_uppercase().contains("DEFAULT"));
+    }
+
+    fn sharding_schema_with_sharded_users(mode: RewriteMode) -> ShardingSchema {
+        ShardingSchema {
+            shards: 3,
+            tables: ShardedTables::new(
+                vec![ShardedTable {
+                    column: "id".into(),
+                    name: Some("users".into()),
+                    ..Default::default()
+                }],
+                vec![],
+                false,
+                SystemCatalogsBehavior::default(),
+            ),
+            rewrite: Rewrite {
+                primary_key: mode,
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    fn rewrite_sql_with_sharding_schema(
+        sql: &str,
+        db_schema: &Schema,
+        schema: &ShardingSchema,
+    ) -> Result<(String, RewritePlan), Error> {
+        unsafe {
+            std::env::set_var("NODE_ID", "pgdog-1");
+        }
+        let mut ast = pg_query::parse(sql).unwrap().protobuf;
+        let mut prepared = PreparedStatements::default();
+        let mut rewriter = StatementRewrite::new(StatementRewriteContext {
+            stmt: &mut ast,
+            extended: false,
+            prepared: false,
+            prepared_statements: &mut prepared,
+            schema,
+            db_schema,
+            user: "",
+            search_path: None,
+        });
+        let plan = rewriter.maybe_rewrite()?;
+        let result = if plan.stmt.is_some() {
+            plan.stmt.clone().unwrap()
+        } else {
+            ast.deparse().unwrap()
+        };
+        Ok((result, plan))
+    }
+
+    #[test]
+    fn test_rewrite_omni_skips_sharded_table() {
+        let db_schema = make_schema_with_bigint_pk();
+        let schema = sharding_schema_with_sharded_users(RewriteMode::RewriteOmni);
+        let (sql, plan) = rewrite_sql_with_sharding_schema(
+            "INSERT INTO users (name) VALUES ('test')",
+            &db_schema,
+            &schema,
+        )
+        .unwrap();
+
+        // users is sharded, so RewriteOmni should NOT inject auto id
+        assert_eq!(plan.auto_id_injected, 0);
+        assert!(!sql.contains("::bigint"));
+    }
+
+    #[test]
+    fn test_rewrite_omni_injects_for_non_sharded_table() {
+        let db_schema = make_schema_with_bigint_pk();
+        // No sharded tables configured, so "users" is not sharded
+        let schema = ShardingSchema {
+            shards: 3,
+            rewrite: Rewrite {
+                primary_key: RewriteMode::RewriteOmni,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let (sql, plan) = rewrite_sql_with_sharding_schema(
+            "INSERT INTO users (name) VALUES ('test')",
+            &db_schema,
+            &schema,
+        )
+        .unwrap();
+
+        // users is NOT sharded, so RewriteOmni should inject auto id
+        assert_eq!(plan.auto_id_injected, 1);
+        assert!(sql.contains("::bigint"));
     }
 }

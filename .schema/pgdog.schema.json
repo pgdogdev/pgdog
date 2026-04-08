@@ -102,6 +102,7 @@
         "tls_verify": "prefer",
         "two_phase_commit": false,
         "two_phase_commit_auto": null,
+        "unique_id_function": "standard",
         "unique_id_min": 0,
         "workers": 2
       }
@@ -1025,6 +1026,11 @@
           ],
           "default": null
         },
+        "unique_id_function": {
+          "description": "Unique ID generation function.",
+          "$ref": "#/$defs/UniqueIdFunction",
+          "default": "standard"
+        },
         "unique_id_min": {
           "description": "Minimum ID for unique ID generator.",
           "type": "integer",
@@ -1495,6 +1501,11 @@
           "description": "Automatically rewrite the query and execute it.",
           "type": "string",
           "const": "rewrite"
+        },
+        {
+          "description": "Rewrite only for omnisharded tables.",
+          "type": "string",
+          "const": "rewrite_omni"
         }
       ]
     },
@@ -1814,6 +1825,20 @@
           "description": "Validate the server certificate and that the hostname matches.",
           "type": "string",
           "const": "verify_full"
+        }
+      ]
+    },
+    "UniqueIdFunction": {
+      "oneOf": [
+        {
+          "description": "Standard 64-bit function using the entire 64-bit range.",
+          "type": "string",
+          "const": "standard"
+        },
+        {
+          "description": "Compact function using the leftest 53-bit range, making it\nJavaScript-safe, so you can pass it as an integer directly\nto the frontend apps.\n\nThe year is 2026 and JavaScript continues to be a pain in the ass.",
+          "type": "string",
+          "const": "compact"
         }
       ]
     },
