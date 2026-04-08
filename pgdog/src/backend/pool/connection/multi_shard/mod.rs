@@ -1,6 +1,7 @@
 //! Multi-shard connection state.
 
 use context::Context;
+use std::collections::HashMap;
 
 use crate::{
     frontend::{router::Route, PreparedStatements},
@@ -358,5 +359,17 @@ impl MultiShard {
                 self.validator.set_row_description(rd);
             }
         }
+    }
+
+    pub fn display_table(&self) -> bool {
+        self.route.display_table()
+    }
+
+    pub fn set_table_shard_map(&mut self, map: Option<HashMap<String, Vec<usize>>>) {
+        self.route.set_table_shard_map(map);
+    }
+
+    pub fn table_shard_map(&self) -> Option<HashMap<String, Vec<usize>>> {
+        self.route.table_shard_map()
     }
 }
