@@ -1,3 +1,4 @@
 source 'https://rubygems.org'
+gem 'csv'
 gem 'pg'
 gem 'rspec', '~> 3.4'

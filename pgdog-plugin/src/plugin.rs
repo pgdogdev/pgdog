@@ -8,7 +8,7 @@ use std::path::Path;
 
 use libloading::{library_filename, Library, Symbol};
 
-use crate::{PdConfig, PdRoute, PdRouterContext, PdStr};
+use crate::{PdConfig, PdCopyRow, PdRoute, PdRouterContext, PdStr};
 
 /// Plugin interface.
 ///
@@ -30,6 +30,8 @@ pub struct Plugin<'a> {
     config: Option<Symbol<'a, unsafe extern "C" fn(PdConfig, *mut u8)>>,
     /// Route query.
     route: Option<Symbol<'a, unsafe extern "C" fn(PdRouterContext, *mut PdRoute)>>,
+    /// Route copy row.
+    route_copy_row: Option<Symbol<'a, unsafe extern "C" fn(PdCopyRow, *mut PdRoute)>>,
     /// Compiler version.
     rustc_version: Option<Symbol<'a, unsafe extern "C" fn(*mut PdStr)>>,
     /// Plugin API version.
@@ -82,6 +84,7 @@ impl<'a> Plugin<'a> {
         let plugin_version = unsafe { library.get(b"pgdog_plugin_version\0") }.ok();
         let config = unsafe { library.get(b"pgdog_config\0") }.ok();
         let logging_init = unsafe { library.get(b"pgdog_logging_init\0") }.ok();
+        let route_copy_row = unsafe { library.get(b"pgdog_route_copy_row\0") }.ok();
 
         Self {
             name: name.to_owned(),
@@ -93,6 +96,7 @@ impl<'a> Plugin<'a> {
             plugin_version,
             config,
             logging_init,
+            route_copy_row,
         }
     }
 
@@ -144,10 +148,23 @@ impl<'a> Plugin<'a> {
     /// * `context`: Statement context created by PgDog's query router.
     ///
     pub fn route(&self, context: PdRouterContext) -> Option<PdRoute> {
-        if let Some(ref route) = &self.route {
+        if let Some(ref route) = self.route {
             let mut output = PdRoute::default();
             unsafe {
                 route(context, &mut output as *mut PdRoute);
+            }
+            Some(output)
+        } else {
+            None
+        }
+    }
+
+    /// Route copy row.
+    pub fn route_copy_row(&self, context: PdCopyRow) -> Option<PdRoute> {
+        if let Some(ref route_copy_row) = self.route_copy_row {
+            let mut output = PdRoute::default();
+            unsafe {
+                route_copy_row(context, &mut output as *mut PdRoute);
             }
             Some(output)
         } else {
