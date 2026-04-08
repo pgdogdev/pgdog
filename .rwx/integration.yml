@@ -103,6 +103,11 @@ tasks:
         python3-venv \
         python3-virtualenv \
         ruby-full
+      sudo install -d /usr/share/keyrings
+      curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor -o /usr/share/keyrings/postgresql.gpg
+      echo "deb [signed-by=/usr/share/keyrings/postgresql.gpg] https://apt.postgresql.org/pub/repos/apt $(. /etc/os-release && echo "${VERSION_CODENAME}")-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null
+      sudo apt-get update
+      sudo apt-get install -y postgresql-client-18
       sudo apt-get remove -y cmake || true
       sudo pip3 install --break-system-packages cmake==3.31.6
       cmake --version
