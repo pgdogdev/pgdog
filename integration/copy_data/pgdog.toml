@@ -56,6 +56,3 @@ data_type = "bigint"
 
 [admin]
 password = "pgdog"
-
-[rewrite]
-primary_key = "rewrite_omni"

@@ -7,7 +7,7 @@ use crate::{
     },
     util::{format_bytes, human_duration, random_string},
 };
-use pgdog_config::{ConfigAndUsers, CutoverTimeoutAction};
+use pgdog_config::{ConfigAndUsers, CutoverTimeoutAction, RewriteMode};
 use std::{fmt::Display, sync::Arc, time::Duration};
 use tokio::{
     select,
@@ -109,8 +109,11 @@ impl Orchestrator {
 
         self.refresh_publisher();
 
-        // Install our stuff.
-        Schema::install(&self.destination).await?;
+        if self.destination.rewrite().primary_key == RewriteMode::RewriteOmni {
+            // Install the sharded sequence and supporting schema
+            // and functions.
+            Schema::install(&self.destination).await?;
+        }
 
         Ok(())
     }
