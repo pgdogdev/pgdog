@@ -318,11 +318,28 @@ impl QueryParser {
             }
         }
 
-        Ok(if stmt.locking_clause.is_empty() {
-            FunctionBehavior::default()
-        } else {
-            FunctionBehavior::writes_only()
-        })
+        if !stmt.locking_clause.is_empty() {
+            return Ok(FunctionBehavior::writes_only());
+        }
+
+        // Recurse into CTEs so a locking clause or write-only function
+        // nested inside a WITH clause still routes to the primary.
+        if let Some(ref with_clause) = stmt.with_clause {
+            for cte in &with_clause.ctes {
+                if let Some(NodeEnum::CommonTableExpr(ref expr)) = cte.node {
+                    if let Some(ref query) = expr.ctequery {
+                        if let Some(NodeEnum::SelectStmt(ref inner)) = query.node {
+                            let behavior = Self::functions(inner)?;
+                            if behavior.writes {
+                                return Ok(behavior);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(FunctionBehavior::default())
     }
 
     /// Check for CTEs that could trigger this query to go to a primary.
