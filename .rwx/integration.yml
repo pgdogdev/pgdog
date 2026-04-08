@@ -430,6 +430,33 @@ tasks:
         - key: lcov-copy-data
           path: copy-data.lcov
 
+  - key: integration-resharding
+    use: integration-build-pgdog-cov
+    docker: true
+    timeout: 20m
+    agent:
+      cpus: 4
+      memory: 16gb
+    run: |
+      export LLVM_PROFILE_FILE="$PWD/target/llvm-cov-target/profiles/resharding-%p-%m.profraw"
+
+      cleanup() {
+        (cd integration/resharding && docker-compose down >/dev/null 2>&1 || true)
+        killall -TERM pgdog 2>/dev/null || true
+        sleep 1
+        killall -KILL pgdog 2>/dev/null || true
+      }
+      trap cleanup EXIT
+
+      timeout --signal=TERM --kill-after=90s 16m bash integration/resharding/dev.sh
+
+      cargo llvm-cov report --release --package pgdog --lcov --output-path resharding.lcov
+    outputs:
+      filesystem: false
+      artifacts:
+        - key: lcov-resharding
+          path: resharding.lcov
+
   - key: integration-python
     use: integration-build-pgdog-cov
     background-processes: *postgres-bg–processes
@@ -534,6 +561,7 @@ tasks:
         -a "$LCOV_TOXI" \
         -a "$LCOV_RUST" \
         -a "$LCOV_COPY_DATA" \
+        -a "$LCOV_RESHARDING" \
         -a "$LCOV_PYTHON" \
         -a "$LCOV_LOAD_BALANCER" \
         -a "$LCOV_COMPLEX" \
@@ -551,6 +579,7 @@ tasks:
       LCOV_TOXI: ${{ tasks.integration-toxi.artifacts.lcov-toxi }}
       LCOV_RUST: ${{ tasks.integration-rust.artifacts.lcov-rust }}
       LCOV_COPY_DATA: ${{ tasks.integration-copy-data.artifacts.lcov-copy-data }}
+      LCOV_RESHARDING: ${{ tasks.integration-resharding.artifacts.lcov-resharding }}
       LCOV_PYTHON: ${{ tasks.integration-python.artifacts.lcov-python }}
       LCOV_LOAD_BALANCER: ${{ tasks.integration-load-balancer.artifacts.lcov-load-balancer }}
       LCOV_COMPLEX: ${{ tasks.integration-complex.artifacts.lcov-complex }}

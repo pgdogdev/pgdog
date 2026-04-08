@@ -1,0 +1,53 @@
+[[databases]]
+name = "source"
+host = "127.0.0.1"
+port = 15432
+shard = 0
+database_name = "postgres"
+
+[[databases]]
+name = "source"
+host = "127.0.0.1"
+port = 15433
+shard = 1
+database_name = "postgres"
+
+[[databases]]
+name = "destination"
+host = "127.0.0.1"
+port = 15434
+shard = 0
+database_name = "postgres"
+
+[[databases]]
+name = "destination"
+host = "127.0.0.1"
+port = 15435
+shard = 1
+database_name = "postgres"
+
+[[sharded_tables]]
+database = "source"
+name = "tenants"
+column = "id"
+data_type = "bigint"
+
+[[sharded_tables]]
+database = "source"
+column = "tenant_id"
+data_type = "bigint"
+
+[[sharded_tables]]
+database = "destination"
+name = "tenants"
+column = "id"
+data_type = "bigint"
+
+[[sharded_tables]]
+database = "destination"
+column = "tenant_id"
+data_type = "bigint"
+
+[admin]
+password = "pgdog"
+user = "pgdog"
