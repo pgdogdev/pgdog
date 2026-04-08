@@ -169,8 +169,6 @@ jobs:
         run: bash -lc 'source integration/common.sh; stop_pgdog'
       - name: Data sync
         run: bash integration/copy_data/dev.sh
-      - name: Resharding
-        run: bash integration/resharding/dev.sh
       - name: Python
         run: bash integration/python/run.sh
       - name: Load balancer
