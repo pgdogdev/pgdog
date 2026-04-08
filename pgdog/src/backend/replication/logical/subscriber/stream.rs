@@ -131,9 +131,8 @@ pub struct StreamSubscriber {
 
     // Statements
     statements: HashMap<Oid, Statements>,
-
-    // Partitioned tables dedup.
-    partitioned_dedup: HashSet<Key>,
+    // Mapping of table keys to their oid.
+    keys: HashMap<Key, Oid>,
 
     // LSNs for each table
     table_lsns: HashMap<Oid, i64>,
@@ -171,7 +170,6 @@ impl StreamSubscriber {
             cluster,
             relations: HashMap::new(),
             statements: HashMap::new(),
-            partitioned_dedup: HashSet::new(),
             table_lsns: HashMap::new(),
             changed_tables: HashSet::new(),
             tables: tables
@@ -193,6 +191,7 @@ impl StreamSubscriber {
             in_transaction: false,
             query_parser_engine,
             missed_rows: MissedRows::default(),
+            keys: HashMap::default(),
         }
     }
 
@@ -466,73 +465,78 @@ impl StreamSubscriber {
                 name: table.table.destination_name().to_string(),
             };
 
-            if self.partitioned_dedup.contains(&dest_key) {
+            // Partition child tables target the parent on the destination shard,
+            // we don't need to prepare the same statement per child.
+            if let Some(oid) = self.keys.get(&dest_key) {
+                let statements = self.statements.get(oid).ok_or(Error::MissingKey)?;
+                self.statements.insert(relation.oid, statements.clone());
+
                 debug!("queries for table {} already prepared", dest_key);
-                return Ok(());
-            }
+            } else {
+                let insert = Statement::new(&table.insert(false), self.query_parser_engine)?;
+                let upsert = Statement::new(&table.insert(true), self.query_parser_engine)?;
+                let update = Statement::new(&table.update(), self.query_parser_engine)?;
+                let delete = Statement::new(&table.delete(), self.query_parser_engine)?;
 
-            let insert = Statement::new(&table.insert(false), self.query_parser_engine)?;
-            let upsert = Statement::new(&table.insert(true), self.query_parser_engine)?;
-            let update = Statement::new(&table.update(), self.query_parser_engine)?;
-            let delete = Statement::new(&table.delete(), self.query_parser_engine)?;
+                for server in &mut self.connections {
+                    for stmt in &[&insert, &upsert, &update, &delete] {
+                        debug!("preparing \"{}\" [{}]", stmt.query(), server.addr());
+                    }
 
-            for server in &mut self.connections {
-                for stmt in &[&insert, &upsert, &update, &delete] {
-                    debug!("preparing \"{}\" [{}]", stmt.query(), server.addr());
+                    server
+                        .send(
+                            &vec![
+                                insert.parse().clone().into(),
+                                upsert.parse().clone().into(),
+                                update.parse().clone().into(),
+                                delete.parse().clone().into(),
+                                if self.in_transaction {
+                                    Flush.into()
+                                } else {
+                                    Sync.into()
+                                },
+                            ]
+                            .into(),
+                        )
+                        .await?;
                 }
 
-                server
-                    .send(
-                        &vec![
-                            insert.parse().clone().into(),
-                            upsert.parse().clone().into(),
-                            update.parse().clone().into(),
-                            delete.parse().clone().into(),
-                            if self.in_transaction {
-                                Flush.into()
-                            } else {
-                                Sync.into()
-                            },
-                        ]
-                        .into(),
-                    )
-                    .await?;
-            }
+                for server in &mut self.connections {
+                    let num_messages = if self.in_transaction { 4 } else { 5 };
+                    for _ in 0..num_messages {
+                        let msg = server.read().await?;
+                        trace!("[{}] --> {:?}", server.addr(), msg);
 
-            for server in &mut self.connections {
-                let num_messages = if self.in_transaction { 4 } else { 5 };
-                for _ in 0..num_messages {
-                    let msg = server.read().await?;
-                    trace!("[{}] --> {:?}", server.addr(), msg);
-
-                    match msg.code() {
-                        'E' => {
-                            return Err(Error::PgError(Box::new(ErrorResponse::from_bytes(
-                                msg.to_bytes()?,
-                            )?)))
+                        match msg.code() {
+                            'E' => {
+                                return Err(Error::PgError(Box::new(ErrorResponse::from_bytes(
+                                    msg.to_bytes()?,
+                                )?)))
+                            }
+                            'Z' => break,
+                            '1' => continue,
+                            c => return Err(Error::RelationOutOfSync(c)),
                         }
-                        'Z' => break,
-                        '1' => continue,
-                        c => return Err(Error::RelationOutOfSync(c)),
                     }
                 }
-            }
 
-            self.statements.insert(
-                relation.oid,
-                Statements {
-                    insert,
-                    upsert,
-                    update,
-                    delete,
-                    omni: !table.is_sharded(&self.cluster.sharding_schema().tables),
-                },
-            );
+                self.statements.insert(
+                    relation.oid,
+                    Statements {
+                        insert,
+                        upsert,
+                        update,
+                        delete,
+                        omni: !table.is_sharded(&self.cluster.sharding_schema().tables),
+                    },
+                );
+
+                self.keys.insert(dest_key, relation.oid);
+            }
 
             // Only record tables we expect to stream changes for.
             self.table_lsns.insert(relation.oid, table.lsn.lsn);
             self.relations.insert(relation.oid, relation);
-            self.partitioned_dedup.insert(dest_key);
         }
 
         Ok(())

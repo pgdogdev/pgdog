@@ -4,6 +4,18 @@ SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 DEFAULT_BIN="${SCRIPT_DIR}/../../target/debug/pgdog"
 PGDOG_BIN=${PGDOG_BIN:-$DEFAULT_BIN}
 
+# Run in our own process group so we can kill every child on exit.
+set -m
+cleanup() {
+    trap - EXIT INT TERM
+    # Signal every process in this script's process group except ourselves.
+    pkill -TERM -P $$ 2> /dev/null || true
+    # Give children a moment to exit cleanly, then force-kill anything left.
+    sleep 1
+    pkill -KILL -P $$ 2> /dev/null || true
+}
+trap cleanup EXIT INT TERM
+
 pushd ${SCRIPT_DIR}
 docker-compose down && docker-compose up -d
 

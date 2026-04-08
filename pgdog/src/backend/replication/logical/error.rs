@@ -131,6 +131,9 @@ pub enum Error {
 
     #[error("command complete has no rows: {0}")]
     CommandCompleteNoRows(CommandComplete),
+
+    #[error("missing key in replication stream, out of sync")]
+    MissingKey,
 }
 
 impl From<ErrorResponse> for Error {
