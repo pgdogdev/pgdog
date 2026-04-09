@@ -141,6 +141,14 @@
             "null"
           ]
         },
+        "passwords": {
+          "description": "Multiple passwords for this user, all of which will be attempted during auth to server and client.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
         "pool_size": {
           "description": "Overrides [`default_pool_size`](https://docs.pgdog.dev/configuration/pgdog.toml/general/) for this user. No more than this many server connections will be open at any given time to serve requests for this connection pool.\n\nhttps://docs.pgdog.dev/configuration/users.toml/users/#pool_size",
           "type": [
