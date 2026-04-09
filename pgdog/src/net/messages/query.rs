@@ -50,6 +50,11 @@ impl Query {
 
 impl FromBytes for Query {
     fn from_bytes(payload: Bytes) -> Result<Self, Error> {
+        // Minimum: code(1) + length(4) + null terminator(1) = 6 bytes
+        if payload.len() < 6 {
+            return Err(Error::UnexpectedEof);
+        }
+
         // Check for UTF-8 so we don't have to later.
         from_utf8(&payload[5..payload.len() - 1])?;
 

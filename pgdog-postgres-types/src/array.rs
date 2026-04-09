@@ -22,6 +22,10 @@ impl FromDataType for Array {
             Format::Text => todo!(),
             Format::Binary => {
                 let mut bytes = Bytes::copy_from_slice(bytes);
+                // Header: dims(4) + flags(4) + oid(4) + dim_size(4) + lower_bound(4) = 20 bytes minimum
+                if bytes.remaining() < 20 {
+                    return Err(Error::UnexpectedPayload);
+                }
                 let dims = bytes.get_i32() as usize;
                 if dims > 1 {
                     return Err(Error::ArrayDimensions(dims));
@@ -37,10 +41,16 @@ impl FromDataType for Array {
                 let mut payload = vec![];
 
                 while bytes.has_remaining() {
+                    if bytes.remaining() < 4 {
+                        return Err(Error::UnexpectedPayload);
+                    }
                     let len = bytes.get_i32();
                     if len < 0 {
                         payload.push(Bytes::new())
                     } else {
+                        if bytes.remaining() < len as usize {
+                            return Err(Error::UnexpectedPayload);
+                        }
                         let element = bytes.split_to(len as usize);
                         payload.push(element);
                     }

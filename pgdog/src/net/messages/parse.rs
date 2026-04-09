@@ -145,10 +145,22 @@ impl FromBytes for Parse {
     fn from_bytes(mut bytes: Bytes) -> Result<Self, Error> {
         let original = bytes.clone();
         code!(bytes, 'P');
-        let _len = bytes.get_i32();
+
+        let len = bytes.get_i32() as usize;
+        if bytes.remaining() + 4 < len {
+            return Err(Error::UnexpectedEof);
+        }
+
         let name_len = c_string_buf_len(&bytes);
+        if name_len == 0 {
+            return Err(Error::UnexpectedEof);
+        }
         let name = bytes.split_to(name_len);
+
         let query_len = c_string_buf_len(&bytes);
+        if query_len == 0 {
+            return Err(Error::UnexpectedEof);
+        }
         let query = bytes.split_to(query_len);
         let data_types = bytes;
 
