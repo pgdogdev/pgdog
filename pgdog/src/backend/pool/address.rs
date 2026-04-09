@@ -36,7 +36,7 @@ impl From<Address> for pgdog_stats::Address {
             port: value.port,
             database_name: value.database_name,
             user: value.user,
-            password: value.passwords.first().cloned().unwrap_or_default(),
+            passwords: value.passwords.clone(),
             server_auth: value.server_auth,
             server_iam_region: value.server_iam_region,
             database_number: value.database_number,
