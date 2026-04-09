@@ -196,6 +196,61 @@ async fn test_multiple_passwords_server_side() {
 }
 
 #[tokio::test]
+#[serial]
+async fn test_multi_password_server_rotation() {
+    let admin = admin_sqlx().await;
+    admin.execute("RELOAD").await.unwrap();
+
+    // Direct connection to Postgres so we can rotate `pgdog2`'s password
+    // out from under PgDog.
+    let mut direct =
+        PgConnection::connect("postgres://pgdog:pgdog@127.0.0.1:5432/pgdog?sslmode=disable")
+            .await
+            .unwrap();
+
+    // Make sure pgdog2 starts in the known-good state.
+    direct
+        .execute("ALTER USER pgdog2 PASSWORD 'pgdog'")
+        .await
+        .unwrap();
+
+    // The `pgdog_pw_rotate` user is configured with
+    //   passwords = ["rotated_pass", "pgdog"]
+    //   server_user = "pgdog2"
+    // PgDog tries each password in order against the upstream Postgres until
+    // one succeeds. Initially "pgdog" is the live password, so PgDog falls
+    // through past "rotated_pass" and connects with "pgdog".
+    let url = "postgres://pgdog_pw_rotate:rotated_pass@127.0.0.1:6432/pgdog";
+    let mut conn = PgConnection::connect(url).await.unwrap();
+    conn.execute("SELECT 1").await.unwrap();
+    conn.close().await.unwrap();
+
+    // Rotate the upstream password to the OTHER configured password.
+    direct
+        .execute("ALTER USER pgdog2 PASSWORD 'rotated_pass'")
+        .await
+        .unwrap();
+
+    // Force PgDog to drop its existing pooled connections so the next client
+    // request opens a fresh upstream connection that has to re-authenticate.
+    admin.execute("RELOAD").await.unwrap();
+    admin.execute("RECONNECT").await.unwrap();
+
+    // PgDog should now succeed by trying "rotated_pass" first and matching.
+    let mut conn = PgConnection::connect(url).await.unwrap();
+    conn.execute("SELECT 1").await.unwrap();
+    conn.close().await.unwrap();
+
+    // Cleanup: restore the original upstream password and pool state.
+    direct
+        .execute("ALTER USER pgdog2 PASSWORD 'pgdog'")
+        .await
+        .unwrap();
+    admin.execute("RELOAD").await.unwrap();
+    admin.execute("RECONNECT").await.unwrap();
+}
+
+#[tokio::test]
 async fn test_passthrough_password_change() {
     let admin = admin_sqlx().await;
     let mut direct =

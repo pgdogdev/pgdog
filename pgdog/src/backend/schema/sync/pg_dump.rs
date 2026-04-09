@@ -216,7 +216,9 @@ impl PgDump {
         let mut command = build_pg_dump_command(
             pg_dump_path,
             &addr,
-            &auth_secret.first().expect("database has no password"),
+            &auth_secret
+                .first()
+                .ok_or(Error::PgDump("server has no configured passwords".into()))?,
         );
         let output = command.output().await?;
 

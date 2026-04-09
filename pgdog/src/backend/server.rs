@@ -103,9 +103,10 @@ impl Server {
                 Err(Error::ConnectionError(error)) => {
                     if error.code == "28P01" {
                         warn!(
-                            "{}/{} password is wrong, attempting next password [{}]",
+                            "{}/{} passwords is incorrect, {} password candidates remaining [{}]",
                             idx + 1,
                             total,
+                            total - idx - 1,
                             addr
                         );
                         continue;

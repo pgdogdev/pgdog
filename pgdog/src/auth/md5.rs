@@ -66,3 +66,148 @@ impl<'a> Client<'a> {
         self.passwords.iter().any(|p| self.encrypt(p) == encrypted)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pw(s: &str) -> String {
+        s.to_string()
+    }
+
+    /// Reference MD5 password hash exactly as Postgres computes it:
+    ///   "md5" || md5_hex(md5_hex(password || user) || salt)
+    fn reference_hash(user: &str, password: &str, salt: &[u8]) -> String {
+        let inner = format!("{:x}", md5::compute(format!("{password}{user}").as_bytes()));
+        let mut outer = inner.into_bytes();
+        outer.extend_from_slice(salt);
+        format!("md5{:x}", md5::compute(&outer))
+    }
+
+    #[test]
+    fn new_uses_random_salt() {
+        // Two clients should almost always pick different salts.
+        let a = Client::new("alice", &[pw("hunter2")]);
+        let b = Client::new("alice", &[pw("hunter2")]);
+        assert_ne!(
+            a.salt, b.salt,
+            "two fresh clients should pick independent salts"
+        );
+    }
+
+    #[test]
+    fn new_salt_rejects_wrong_size() {
+        // Postgres MD5 salts are exactly 4 bytes.
+        assert!(Client::new_salt("alice", &[pw("hunter2")], b"123").is_err());
+        assert!(Client::new_salt("alice", &[pw("hunter2")], b"12345").is_err());
+        assert!(Client::new_salt("alice", &[pw("hunter2")], b"1234").is_ok());
+    }
+
+    #[test]
+    fn challenge_carries_the_clients_salt() {
+        let salt = [0xAA, 0xBB, 0xCC, 0xDD];
+        let client = Client::new_salt("alice", &[pw("hunter2")], &salt).unwrap();
+        match client.challenge() {
+            Authentication::Md5(bytes) => assert_eq!(bytes.as_ref(), &salt),
+            other => panic!("expected Md5 challenge, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn encrypted_matches_postgres_reference() {
+        let salt = [1u8, 2, 3, 4];
+        let client = Client::new_salt("alice", &[pw("hunter2")], &salt).unwrap();
+        assert_eq!(
+            client.encrypted(),
+            reference_hash("alice", "hunter2", &salt)
+        );
+    }
+
+    #[test]
+    fn encrypted_uses_first_password_when_multiple() {
+        let salt = [1u8, 2, 3, 4];
+        let client = Client::new_salt("alice", &[pw("first"), pw("second")], &salt).unwrap();
+        assert_eq!(client.encrypted(), reference_hash("alice", "first", &salt));
+    }
+
+    #[test]
+    fn encrypted_handles_empty_password_list() {
+        // No configured passwords falls back to hashing the empty string —
+        // it must not panic.
+        let salt = [1u8, 2, 3, 4];
+        let client = Client::new_salt("alice", &[], &salt).unwrap();
+        assert_eq!(client.encrypted(), reference_hash("alice", "", &salt));
+    }
+
+    #[test]
+    fn response_wraps_encrypted_password() {
+        let salt = [1u8, 2, 3, 4];
+        let client = Client::new_salt("alice", &[pw("hunter2")], &salt).unwrap();
+        // The wire-format password is null-terminated; strip it before comparing.
+        let on_wire = client.response().password().unwrap().to_string();
+        assert_eq!(on_wire.trim_end_matches('\0'), client.encrypted());
+    }
+
+    #[test]
+    fn check_accepts_correct_password() {
+        let salt = [9u8, 8, 7, 6];
+        let client = Client::new_salt("alice", &[pw("hunter2")], &salt).unwrap();
+        let hash = reference_hash("alice", "hunter2", &salt);
+        assert!(client.check(&hash));
+    }
+
+    #[test]
+    fn check_rejects_wrong_password() {
+        let salt = [9u8, 8, 7, 6];
+        let client = Client::new_salt("alice", &[pw("hunter2")], &salt).unwrap();
+        let hash = reference_hash("alice", "wrong", &salt);
+        assert!(!client.check(&hash));
+    }
+
+    #[test]
+    fn check_is_user_specific() {
+        // Same password, different user → different MD5; check must reject.
+        let salt = [9u8, 8, 7, 6];
+        let client = Client::new_salt("alice", &[pw("hunter2")], &salt).unwrap();
+        let bob_hash = reference_hash("bob", "hunter2", &salt);
+        assert!(!client.check(&bob_hash));
+    }
+
+    #[test]
+    fn check_is_salt_specific() {
+        // Same password and user, different salt → check must reject.
+        let salt = [9u8, 8, 7, 6];
+        let other_salt = [1u8, 2, 3, 4];
+        let client = Client::new_salt("alice", &[pw("hunter2")], &salt).unwrap();
+        let other_hash = reference_hash("alice", "hunter2", &other_salt);
+        assert!(!client.check(&other_hash));
+    }
+
+    #[test]
+    fn check_accepts_any_configured_password() {
+        let salt = [9u8, 8, 7, 6];
+        let client =
+            Client::new_salt("alice", &[pw("alpha"), pw("beta"), pw("gamma")], &salt).unwrap();
+
+        for password in ["alpha", "beta", "gamma"] {
+            let hash = reference_hash("alice", password, &salt);
+            assert!(
+                client.check(&hash),
+                "expected {password} to be accepted in multi-password mode"
+            );
+        }
+
+        let bad = reference_hash("alice", "delta", &salt);
+        assert!(!client.check(&bad), "delta is not configured");
+    }
+
+    #[test]
+    fn check_rejects_when_no_passwords_configured() {
+        // An empty password list should not authenticate anything — even
+        // the hash of the empty string.
+        let salt = [9u8, 8, 7, 6];
+        let client = Client::new_salt("alice", &[], &salt).unwrap();
+        let empty_hash = reference_hash("alice", "", &salt);
+        assert!(!client.check(&empty_hash));
+    }
+}
