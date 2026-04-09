@@ -137,15 +137,20 @@ mod tests {
     }
 
     #[test]
-    fn encrypted_handles_empty_password_list() {
-        // No configured passwords falls back to hashing the empty string —
-        // it must not panic.
+    fn encrypted_errors_when_no_passwords_configured() {
+        // `encrypted()` is the server-side path (pgdog -> postgres) and only
+        // gets one shot per connection, so an empty password list must error
+        // out instead of silently hashing the empty string.
         let salt = [1u8, 2, 3, 4];
         let client = Client::new_salt("alice", &[], &salt).unwrap();
-        assert_eq!(
-            client.encrypted().unwrap(),
-            reference_hash("alice", "", &salt)
-        );
+        assert!(matches!(
+            client.encrypted(),
+            Err(Error::ServerSideOnePassword)
+        ));
+        assert!(matches!(
+            client.response(),
+            Err(Error::ServerSideOnePassword)
+        ));
     }
 
     #[test]
