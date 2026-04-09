@@ -15,7 +15,7 @@ use crate::{
 use super::Error;
 use super::{
     protocol::{state::Action, ProtocolState},
-    state::ExecutionCode,
+    state::{ExecutionCode, ExecutionItem},
 };
 
 /// Approximate memory used by a String.
@@ -31,6 +31,50 @@ pub enum HandleResult {
     Prepend(ProtocolMessage),
 }
 
+#[derive(Debug, Clone, PartialEq)]
+struct PendingPrepare {
+    name: String,
+    ack: ExecutionItem,
+}
+
+impl PendingPrepare {
+    fn parse(name: impl Into<String>, ignore: bool) -> Self {
+        let ack = if ignore {
+            ExecutionItem::Ignore(ExecutionCode::ParseComplete)
+        } else {
+            ExecutionItem::Code(ExecutionCode::ParseComplete)
+        };
+
+        Self {
+            name: name.into(),
+            ack,
+        }
+    }
+
+    fn command_complete(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            ack: ExecutionItem::Ignore(ExecutionCode::ExecutionCompleted),
+        }
+    }
+
+    fn matches_front(&self, front: Option<&ExecutionItem>, code: char) -> bool {
+        front == Some(&self.ack)
+            && matches!(
+                (&self.ack, code),
+                (
+                    ExecutionItem::Code(ExecutionCode::ParseComplete)
+                        | ExecutionItem::Ignore(ExecutionCode::ParseComplete),
+                    '1'
+                ) | (
+                    ExecutionItem::Code(ExecutionCode::ExecutionCompleted)
+                        | ExecutionItem::Ignore(ExecutionCode::ExecutionCompleted),
+                    'C'
+                )
+            )
+    }
+}
+
 /// Server-specific prepared statements.
 ///
 /// The global cache has names and Parse messages,
@@ -41,8 +85,8 @@ pub struct PreparedStatements {
     global_cache: Arc<RwLock<GlobalCache>>,
     local_cache: LruCache<String, ()>,
     state: ProtocolState,
-    // Prepared statements being prepared now on the connection.
-    parses: VecDeque<String>,
+    // Prepared statements waiting for a specific backend acknowledgement.
+    pending_prepares: VecDeque<PendingPrepare>,
     // Describes being executed now on the connection.
     describes: VecDeque<String>,
     capacity: usize,
@@ -62,7 +106,7 @@ impl PreparedStatements {
             global_cache: frontend::PreparedStatements::global(),
             local_cache: LruCache::unbounded(),
             state: ProtocolState::default(),
-            parses: VecDeque::new(),
+            pending_prepares: VecDeque::new(),
             describes: VecDeque::new(),
             capacity: usize::MAX,
             memory_used: 0,
@@ -89,7 +133,8 @@ impl PreparedStatements {
                     match message {
                         Some(message) => {
                             self.state.add_ignore('1');
-                            self.parses.push_back(bind.statement().to_string());
+                            self.pending_prepares
+                                .push_back(PendingPrepare::parse(bind.statement(), true));
                             self.state.add('2');
                             return Ok(HandleResult::Prepend(message));
                         }
@@ -109,7 +154,8 @@ impl PreparedStatements {
                     match message {
                         Some(message) => {
                             self.state.add_ignore('1');
-                            self.parses.push_back(describe.statement().to_string());
+                            self.pending_prepares
+                                .push_back(PendingPrepare::parse(describe.statement(), true));
                             self.state.add(ExecutionCode::DescriptionOrNothing); // t
                             self.state.add(ExecutionCode::DescriptionOrNothing); // T
                             return Ok(HandleResult::Prepend(message));
@@ -150,7 +196,8 @@ impl PreparedStatements {
                         return Ok(HandleResult::Drop);
                     } else {
                         self.state.add('1');
-                        self.parses.push_back(parse.name().to_string());
+                        self.pending_prepares
+                            .push_back(PendingPrepare::parse(parse.name(), false));
                     }
                 } else {
                     self.state.add('1');
@@ -168,10 +215,11 @@ impl PreparedStatements {
                 }
             }
             ProtocolMessage::Prepare { name, .. } => {
-                if self.contains(name) {
+                if self.contains(name) || self.pending_prepare(name) {
                     return Ok(HandleResult::Drop);
                 } else {
-                    self.parses.push_back(name.clone());
+                    self.pending_prepares
+                        .push_back(PendingPrepare::command_complete(name.clone()));
                     self.state.add_ignore('C');
                     self.state.add_ignore('Z');
                     return Ok(HandleResult::Forward);
@@ -194,6 +242,11 @@ impl PreparedStatements {
     /// Should we forward the message to the client.
     pub fn forward(&mut self, message: &Message) -> Result<bool, Error> {
         let code = message.code();
+        let prepare_completed = self
+            .pending_prepares
+            .front()
+            .map(|pending| pending.matches_front(self.state.front(), code))
+            .unwrap_or(false);
         let action = self.state.action(code)?;
 
         // Cleanup prepared statements state.
@@ -203,7 +256,7 @@ impl PreparedStatements {
                 // These prepared statements have not been prepared, even if they
                 // are syntactically valid.
                 self.describes.clear();
-                self.parses.clear();
+                self.pending_prepares.clear();
             }
 
             'T' => {
@@ -221,8 +274,10 @@ impl PreparedStatements {
             }
 
             '1' | 'C' => {
-                if let Some(name) = self.parses.pop_front() {
-                    self.prepared(&name);
+                if prepare_completed {
+                    if let Some(pending) = self.pending_prepares.pop_front() {
+                        self.prepared(&pending.name);
+                    }
                 }
             }
 
@@ -246,7 +301,7 @@ impl PreparedStatements {
 
     /// Extended protocol is in sync.
     pub(crate) fn done(&self) -> bool {
-        self.state.done() && self.parses.is_empty() && self.describes.is_empty()
+        self.state.done() && self.pending_prepares.is_empty() && self.describes.is_empty()
     }
 
     /// The server connection has more messages to send
@@ -266,7 +321,7 @@ impl PreparedStatements {
     }
 
     fn check_prepared(&mut self, name: &str) -> Result<Option<ProtocolMessage>, Error> {
-        if !self.contains(name) && !self.parses.iter().any(|s| s == name) {
+        if !self.contains(name) && !self.pending_prepare(name) {
             let parse = self.parse(name);
             if let Some(parse) = parse {
                 Ok(Some(ProtocolMessage::Parse(parse)))
@@ -276,6 +331,12 @@ impl PreparedStatements {
         } else {
             Ok(None)
         }
+    }
+
+    fn pending_prepare(&self, name: &str) -> bool {
+        self.pending_prepares
+            .iter()
+            .any(|pending| pending.name == name)
     }
 
     /// The server has prepared this statement already.
@@ -372,5 +433,86 @@ impl PreparedStatements {
         }
 
         close
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::net::{CommandComplete, Execute, Query, ReadyForQuery};
+
+    #[test]
+    fn test_parse_waits_for_parse_complete() {
+        let mut prepared = PreparedStatements::new();
+        let name = "mixed_ack_stmt";
+
+        prepared.handle(&Execute::new().into()).unwrap();
+        prepared
+            .handle(&Parse::named(name, "SELECT 1").into())
+            .unwrap();
+
+        prepared
+            .forward(&CommandComplete::new("SELECT 1").message().unwrap())
+            .unwrap();
+        assert!(
+            !prepared.contains(name),
+            "execution CommandComplete must not complete a pending Parse"
+        );
+
+        prepared.forward(&ParseComplete.message().unwrap()).unwrap();
+        assert!(
+            prepared.contains(name),
+            "ParseComplete should mark the statement as prepared"
+        );
+    }
+
+    #[test]
+    fn test_simple_prepare_waits_for_its_own_command_complete() {
+        let mut prepared = PreparedStatements::new();
+        let name = "__pgdog_simple_prepare";
+        let prepare = ProtocolMessage::Prepare {
+            name: name.into(),
+            statement: "SELECT 1".into(),
+        };
+
+        prepared.handle(&Query::new("BEGIN").into()).unwrap();
+        prepared.handle(&prepare).unwrap();
+
+        prepared
+            .forward(&CommandComplete::new_begin().message().unwrap())
+            .unwrap();
+        assert!(
+            !prepared.contains(name),
+            "unrelated CommandComplete must not complete an in-flight PREPARE"
+        );
+
+        prepared
+            .forward(&ReadyForQuery::idle().message().unwrap())
+            .unwrap();
+        prepared
+            .forward(&CommandComplete::new("PREPARE").message().unwrap())
+            .unwrap();
+        assert!(
+            prepared.contains(name),
+            "the PREPARE command's own CommandComplete should complete it"
+        );
+    }
+
+    #[test]
+    fn test_duplicate_simple_prepare_is_dropped_while_pending() {
+        let mut prepared = PreparedStatements::new();
+        let prepare = ProtocolMessage::Prepare {
+            name: "__pgdog_dup".into(),
+            statement: "SELECT 1".into(),
+        };
+
+        assert!(matches!(
+            prepared.handle(&prepare).unwrap(),
+            HandleResult::Forward
+        ));
+        assert!(matches!(
+            prepared.handle(&prepare).unwrap(),
+            HandleResult::Drop
+        ));
     }
 }

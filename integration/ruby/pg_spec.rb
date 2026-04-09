@@ -2,8 +2,90 @@
 
 require_relative 'rspec_helper'
 
-def connect(dbname = 'pgdog', user = 'pgdog')
-  PG.connect(dbname: dbname, user: user, password: 'pgdog', port: 6432, host: '127.0.0.1')
+PIPELINE_RESULT_COUNT = 5
+PIPELINE_RESULT_TIMEOUT = 5
+
+def connect(dbname = 'pgdog', user = 'pgdog', port: 6432)
+  PG.connect(dbname: dbname, user: user, password: 'pgdog', port: port, host: '127.0.0.1')
+end
+
+def connect_direct(dbname = 'pgdog', user = 'pgdog')
+  connect(dbname, user, port: 5432)
+end
+
+def drain_pipeline_results(conn)
+  results = []
+
+  while results.length < PIPELINE_RESULT_COUNT
+    unless conn.block(PIPELINE_RESULT_TIMEOUT)
+      raise "timed out waiting for pipeline results: #{results.inspect}, pipeline_status=#{conn.pipeline_status}"
+    end
+
+    result = conn.sync_get_result
+    next if result.nil?
+
+    trace = {
+      status: result.res_status,
+      cmd_status: result.cmd_status
+    }
+
+    if result.result_status == PG::PGRES_TUPLES_OK
+      trace[:values] = result.values
+    end
+
+    error = result.error_message
+    trace[:error] = error unless error.nil? || error.empty?
+
+    results << trace
+  end
+
+  results
+end
+
+def run_named_prepare_pipeline(conn, name, value)
+  conn.enter_pipeline_mode
+
+  conn.send_query_params('BEGIN', [])
+  conn.send_prepare(name, 'SELECT $1::bigint AS one')
+  conn.send_query_prepared(name, [value])
+  conn.send_query_params('COMMIT', [])
+  conn.pipeline_sync
+
+  results = drain_pipeline_results(conn)
+  conn.exit_pipeline_mode
+  results
+ensure
+  begin
+    conn.discard_results
+  rescue PG::Error
+    nil
+  end
+
+  begin
+    conn.exit_pipeline_mode
+  rescue PG::Error
+    nil
+  end
+end
+
+def expect_named_prepare_pipeline_trace(trace, value)
+  expect(trace.map { |result| result[:status] }).to eq([
+    'PGRES_COMMAND_OK',
+    'PGRES_COMMAND_OK',
+    'PGRES_TUPLES_OK',
+    'PGRES_COMMAND_OK',
+    'PGRES_PIPELINE_SYNC'
+  ])
+
+  tuple_results = trace.select { |result| result[:status] == 'PGRES_TUPLES_OK' }
+
+  expect(tuple_results).to eq([
+    {
+      status: 'PGRES_TUPLES_OK',
+      cmd_status: 'SELECT 1',
+      values: [[value.to_s]]
+    }
+  ])
 end
 
 describe 'pg' do
@@ -109,6 +191,26 @@ describe 'pg' do
       conn.exec 'DEALLOCATE deallocate_ignored' # Ignored
       res = conn.exec_prepared 'deallocate_ignored', [2]
       expect(res[0]['one']).to eq('2')
+    end
+  end
+
+  it 'matches direct postgres for a pipelined extended transaction with a named prepared statement' do
+    direct = connect_direct
+    proxied = connect
+    value = 42
+
+    begin
+      direct_trace = run_named_prepare_pipeline(direct, 'pipeline_stmt_direct', value)
+      proxied_trace = run_named_prepare_pipeline(proxied, 'pipeline_stmt_pgdog', value)
+
+      expect_named_prepare_pipeline_trace(direct_trace, value)
+      expect(proxied_trace).to eq(direct_trace)
+
+      expect(direct.exec('SELECT 1::bigint AS one')[0]['one']).to eq('1')
+      expect(proxied.exec('SELECT 1::bigint AS one')[0]['one']).to eq('1')
+    ensure
+      direct.close
+      proxied.close
     end
   end
 end

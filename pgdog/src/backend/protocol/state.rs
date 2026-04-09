@@ -86,6 +86,10 @@ impl MemoryUsage for ProtocolState {
 }
 
 impl ProtocolState {
+    pub(crate) fn front(&self) -> Option<&ExecutionItem> {
+        self.queue.front()
+    }
+
     /// Add a message to the ignore list.
     ///
     /// The server will return this message, but we won't send it to the client.
