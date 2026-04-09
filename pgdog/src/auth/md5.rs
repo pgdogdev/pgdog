@@ -53,12 +53,15 @@ impl<'a> Client<'a> {
         format!("md5{:x}", md5.compute())
     }
 
-    pub fn encrypted(&self) -> String {
-        self.encrypt(self.passwords.first().map(String::as_str).unwrap_or(""))
+    /// Used for pgdog->postgres auth which can only be
+    /// attempted once per connection, so we expect
+    /// this code to accept only one password.
+    fn encrypted(&self) -> Result<String, Error> {
+        Ok(self.encrypt(self.passwords.first().ok_or(Error::ServerSideOnePassword)?))
     }
 
-    pub fn response(&self) -> Password {
-        Password::new_password(self.encrypted())
+    pub fn response(&self) -> Result<Password, Error> {
+        Ok(Password::new_password(self.encrypted()?))
     }
 
     /// Check encrypted password against any of the configured passwords.
@@ -118,7 +121,7 @@ mod tests {
         let salt = [1u8, 2, 3, 4];
         let client = Client::new_salt("alice", &[pw("hunter2")], &salt).unwrap();
         assert_eq!(
-            client.encrypted(),
+            client.encrypted().unwrap(),
             reference_hash("alice", "hunter2", &salt)
         );
     }
@@ -127,7 +130,10 @@ mod tests {
     fn encrypted_uses_first_password_when_multiple() {
         let salt = [1u8, 2, 3, 4];
         let client = Client::new_salt("alice", &[pw("first"), pw("second")], &salt).unwrap();
-        assert_eq!(client.encrypted(), reference_hash("alice", "first", &salt));
+        assert_eq!(
+            client.encrypted().unwrap(),
+            reference_hash("alice", "first", &salt)
+        );
     }
 
     #[test]
@@ -136,7 +142,10 @@ mod tests {
         // it must not panic.
         let salt = [1u8, 2, 3, 4];
         let client = Client::new_salt("alice", &[], &salt).unwrap();
-        assert_eq!(client.encrypted(), reference_hash("alice", "", &salt));
+        assert_eq!(
+            client.encrypted().unwrap(),
+            reference_hash("alice", "", &salt)
+        );
     }
 
     #[test]
@@ -144,8 +153,8 @@ mod tests {
         let salt = [1u8, 2, 3, 4];
         let client = Client::new_salt("alice", &[pw("hunter2")], &salt).unwrap();
         // The wire-format password is null-terminated; strip it before comparing.
-        let on_wire = client.response().password().unwrap().to_string();
-        assert_eq!(on_wire.trim_end_matches('\0'), client.encrypted());
+        let on_wire = client.response().unwrap().password().unwrap().to_string();
+        assert_eq!(on_wire.trim_end_matches('\0'), client.encrypted().unwrap());
     }
 
     #[test]

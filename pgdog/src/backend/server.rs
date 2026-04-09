@@ -255,7 +255,7 @@ impl Server {
                                 &[auth_secret.to_string()],
                                 &salt,
                             )?;
-                            stream.send_flush(&client.response()).await?;
+                            stream.send_flush(&client.response()?).await?;
                         }
                     }
                 }
