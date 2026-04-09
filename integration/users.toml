@@ -91,3 +91,25 @@ pool_size = 5
 database = "pgdog"
 min_pool_size = 1
 statement_timeout = 45_999
+
+[[users]]
+name = "pgdog_multi_pass"
+database = "pgdog"
+passwords = ["alpha_pass", "beta_pass"]
+server_user = "pgdog"
+server_password = "pgdog"
+min_pool_size = 0
+
+[[users]]
+name = "pgdog_multi_pass_server"
+database = "pgdog"
+passwords = ["wrong_password", "pgdog"]
+server_user = "pgdog"
+min_pool_size = 0
+
+[[users]]
+name = "pgdog_pw_rotate"
+database = "pgdog"
+passwords = ["rotated_pass", "pgdog"]
+server_user = "pgdog2"
+min_pool_size = 0

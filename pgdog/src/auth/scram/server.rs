@@ -18,19 +18,25 @@ enum Provider {
     Hashed(HashedPassword),
 }
 
-/// Derive the SCRAM-SHA-256 auth
-/// from a plain text password.
+/// Derive the SCRAM-SHA-256 auth from one or more plain text passwords.
+///
+/// Multiple passwords share a single salt and iteration count so the SCRAM
+/// `server-first-message` can be unambiguous. The server will accept a client
+/// proof matching any of the configured passwords.
 #[derive(Clone)]
 pub struct UserPassword {
-    password: String,
+    passwords: Vec<String>,
+    salt: Vec<u8>,
+    iterations: u16,
 }
 
 /// Used a prehashed password obtained from
 /// pg_shadow. This allows operators not to store
 /// passwords in plain text in the config.
 ///
-/// TODO: Doesn't work yet. I'm not sure how to actually
-/// implement this.
+/// Note: prehashed passwords from `pg_shadow` come with their own salt and
+/// iteration count baked in, so multi-password support is not possible here —
+/// only the first hash is used.
 #[derive(Clone)]
 pub struct HashedPassword {
     hash: String,
@@ -51,10 +57,17 @@ use base64::prelude::*;
 impl AuthenticationProvider for UserPassword {
     fn get_password_for(&self, _user: &str) -> Option<PasswordInfo> {
         // TODO: This is slow. We should move it to its own thread pool.
-        let iterations = 4096;
-        let salt = rand::rng().random::<[u8; 16]>().to_vec();
-        let hash = hash_password(&self.password, NonZeroU32::new(iterations).unwrap(), &salt);
-        Some(PasswordInfo::new(hash.to_vec(), iterations as u16, salt))
+        let iterations = NonZeroU32::new(self.iterations as u32).unwrap();
+        let hashed_passwords = self
+            .passwords
+            .iter()
+            .map(|password| hash_password(password, iterations, &self.salt).to_vec())
+            .collect();
+        Some(PasswordInfo::new_multi(
+            hashed_passwords,
+            self.iterations,
+            self.salt.clone(),
+        ))
     }
 }
 
@@ -106,100 +119,96 @@ impl AuthenticationProvider for HashedPassword {
 /// authenticating clients.
 pub struct Server {
     provider: Provider,
-    client_response: String,
 }
 
 impl Server {
-    /// Create new SCRAM server.
-    pub fn new(password: &str) -> Self {
+    /// Create new SCRAM server. Any of the given plain text passwords will be
+    /// accepted.
+    pub fn new(passwords: &[String]) -> Self {
+        let salt = rand::rng().random::<[u8; 16]>().to_vec();
         Self {
             provider: Provider::Plain(UserPassword {
-                password: password.to_owned(),
+                passwords: passwords.to_vec(),
+                salt,
+                iterations: 4096,
             }),
-            client_response: String::new(),
         }
     }
 
-    pub fn hashed(hash: &str) -> Self {
+    /// Create a new SCRAM server using a prehashed `pg_shadow` style password.
+    /// Only the first hash is used; prehashed passwords cannot share salts so
+    /// multi-password verification is not supported in this mode.
+    pub fn hashed(hashes: &[String]) -> Self {
+        let hash = hashes.first().cloned().unwrap_or_default();
         Self {
-            provider: Provider::Hashed(HashedPassword {
-                hash: hash.to_owned(),
-            }),
-            client_response: String::new(),
+            provider: Provider::Hashed(HashedPassword { hash }),
+        }
+    }
+
+    /// Read the next password message from the client, ignoring error
+    /// responses by logging them.
+    async fn read_password(stream: &mut Stream) -> Result<Option<Password>, Error> {
+        let message = stream.read().await?;
+        match message.code() {
+            'p' => Ok(Some(Password::from_bytes(message.to_bytes()?)?)),
+            'E' => {
+                let err = ErrorResponse::from_bytes(message.to_bytes()?)?;
+                error!("{}", err);
+                Ok(None)
+            }
+            c => Err(Error::UnexpectedMessage(c)),
         }
     }
 
     /// Handle authentication.
-    pub async fn handle(mut self, stream: &mut Stream) -> Result<bool, Error> {
+    pub async fn handle(self, stream: &mut Stream) -> Result<bool, Error> {
         let scram = match self.provider {
             Provider::Plain(plain) => Scram::Plain(ScramServer::new(plain)),
             Provider::Hashed(hashed) => Scram::Hashed(ScramServer::new(hashed)),
         };
 
-        let mut scram_client = None;
+        // SASLInitialResponse / client-first phase.
+        let client_response = match Self::read_password(stream).await? {
+            Some(Password::SASLInitialResponse { response, .. }) => response,
+            Some(_) => return Ok(false),
+            None => return Ok(false),
+        };
 
-        loop {
-            let message = stream.read().await?;
-            match message.code() {
-                'p' => {
-                    let password = Password::from_bytes(message.to_bytes()?)?;
-
-                    match password {
-                        Password::SASLInitialResponse { response, .. } => {
-                            self.client_response = response;
-                            let reply = match scram {
-                                Scram::Plain(ref plain) => {
-                                    let server =
-                                        plain.handle_client_first(&self.client_response)?;
-                                    let (client, reply) = server.server_first();
-                                    scram_client = Some(ScramFinal::Plain(client));
-                                    reply
-                                }
-                                Scram::Hashed(ref hashed) => {
-                                    let server =
-                                        hashed.handle_client_first(&self.client_response)?;
-                                    let (client, reply) = server.server_first();
-                                    scram_client = Some(ScramFinal::Hashed(client));
-                                    reply
-                                }
-                            };
-                            let reply = Authentication::SaslContinue(reply);
-                            stream.send_flush(&reply).await?;
-                        }
-
-                        Password::PasswordMessage { response } => {
-                            if let Some(scram_client) = scram_client {
-                                let server_final = match scram_client {
-                                    ScramFinal::Plain(plain) => {
-                                        plain.handle_client_final(&response)?
-                                    }
-                                    ScramFinal::Hashed(hashed) => {
-                                        hashed.handle_client_final(&response)?
-                                    }
-                                };
-                                let (status, reply) = server_final.server_final();
-
-                                match status {
-                                    AuthenticationStatus::Authenticated => {
-                                        stream.send(&Authentication::SaslFinal(reply)).await?;
-                                        return Ok(true);
-                                    }
-
-                                    _ => return Ok(false),
-                                }
-                            }
-                        }
-                    }
-                }
-
-                'E' => {
-                    let err = ErrorResponse::from_bytes(message.to_bytes()?)?;
-                    error!("{}", err);
-                    return Ok(false);
-                }
-
-                c => return Err(Error::UnexpectedMessage(c)),
+        let (scram_final, reply) = match &scram {
+            Scram::Plain(plain) => {
+                let server = plain.handle_client_first(&client_response)?;
+                let (client, reply) = server.server_first();
+                (ScramFinal::Plain(client), reply)
             }
+            Scram::Hashed(hashed) => {
+                let server = hashed.handle_client_first(&client_response)?;
+                let (client, reply) = server.server_first();
+                (ScramFinal::Hashed(client), reply)
+            }
+        };
+
+        stream
+            .send_flush(&Authentication::SaslContinue(reply))
+            .await?;
+
+        // Client-final phase.
+        let response = match Self::read_password(stream).await? {
+            Some(Password::PasswordMessage { response }) => response,
+            Some(_) => return Ok(false),
+            None => return Ok(false),
+        };
+
+        let server_final = match scram_final {
+            ScramFinal::Plain(plain) => plain.handle_client_final(&response)?,
+            ScramFinal::Hashed(hashed) => hashed.handle_client_final(&response)?,
+        };
+
+        let (status, reply) = server_final.server_final();
+        if matches!(status, AuthenticationStatus::Authenticated) {
+            stream.send(&Authentication::SaslFinal(reply)).await?;
+            Ok(true)
+        } else {
+            Ok(false)
         }
     }
 }
@@ -211,7 +220,7 @@ mod tests {
 
     #[test]
     fn user_password_provider_generates_info() {
-        let server = Server::new("secret");
+        let server = Server::new(&["secret".to_string()]);
         let provider = match server.provider {
             Provider::Plain(ref inner) => inner.clone(),
             _ => unreachable!(),

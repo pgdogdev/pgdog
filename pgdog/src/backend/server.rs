@@ -88,6 +88,50 @@ impl Server {
         options: ServerOptions,
         connect_reason: ConnectReason,
     ) -> Result<Self, Error> {
+        let auth_secrets = addr.auth_secrets().await?;
+        let total = auth_secrets.len();
+        for (idx, auth_secret) in auth_secrets.into_iter().enumerate() {
+            match Self::connect_with_auth_secret(
+                addr,
+                options.clone(),
+                connect_reason,
+                &auth_secret,
+            )
+            .await
+            {
+                Ok(server) => return Ok(server),
+                Err(Error::ConnectionError(error)) => {
+                    if error.code == "28P01" {
+                        warn!(
+                            "{}/{} password is incorrect, {} password candidates remaining [{}]",
+                            idx + 1,
+                            total,
+                            total - idx - 1,
+                            addr
+                        );
+                        continue;
+                    } else {
+                        return Err(Error::ConnectionError(error));
+                    }
+                }
+
+                Err(err) => return Err(err),
+            }
+        }
+
+        Err(Error::ConnectionError(Box::new(ErrorResponse::auth(
+            &addr.user,
+            &addr.database_name,
+        ))))
+    }
+
+    /// Create new PostgreSQL server connection with the given auth secret (e.g. password).
+    async fn connect_with_auth_secret(
+        addr: &Address,
+        options: ServerOptions,
+        connect_reason: ConnectReason,
+        auth_secret: &str,
+    ) -> Result<Self, Error> {
         debug!("=> {}", addr);
         let stream = TcpStream::connect(addr.addr().await?).await?;
         let config = config();
@@ -170,8 +214,7 @@ impl Server {
         stream.flush().await?;
 
         // Perform authentication.
-        let auth_secret = addr.auth_secret().await?;
-        let mut scram = Client::new(&addr.user, &auth_secret);
+        let mut scram = Client::new(&addr.user, auth_secret);
         let mut auth_type = AuthType::Trust;
         loop {
             let message = stream.read().await?;
@@ -207,8 +250,12 @@ impl Server {
                         }
                         Authentication::Md5(salt) => {
                             auth_type = AuthType::Md5;
-                            let client = md5::Client::new_salt(&addr.user, &auth_secret, &salt)?;
-                            stream.send_flush(&client.response()).await?;
+                            let client = md5::Client::new_salt(
+                                &addr.user,
+                                &[auth_secret.to_string()],
+                                &salt,
+                            )?;
+                            stream.send_flush(&client.response()?).await?;
                         }
                     }
                 }
@@ -1182,7 +1229,7 @@ pub mod test {
         addr.port = port;
         addr.server_auth = crate::config::ServerAuth::RdsIam;
         addr.server_iam_region = Some("us-east-1".into());
-        addr.password = "wrong-password".into();
+        addr.passwords = vec!["wrong-password".into()];
 
         crate::backend::auth::rds_iam::set_test_token_override(Some(expected_secret));
         let result = Server::connect(&addr, ServerOptions::default(), ConnectReason::Other).await;

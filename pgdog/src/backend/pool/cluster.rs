@@ -55,7 +55,7 @@ struct Readiness {
 pub struct Cluster {
     identifier: Arc<DatabaseUser>,
     shards: Vec<Shard>,
-    password: String,
+    passwords: Vec<String>,
     pooler_mode: PoolerMode,
     sharded_tables: ShardedTables,
     sharded_schemas: ShardedSchemas,
@@ -130,7 +130,7 @@ pub struct ClusterConfig<'a> {
     pub shards: &'a [ClusterShardConfig],
     pub lb_strategy: LoadBalancingStrategy,
     pub user: &'a str,
-    pub password: &'a str,
+    pub passwords: Vec<String>,
     pub pooler_mode: PoolerMode,
     pub sharded_tables: ShardedTables,
     pub replication_sharding: Option<String>,
@@ -175,7 +175,7 @@ impl<'a> ClusterConfig<'a> {
 
         Self {
             name: &user.database,
-            password: user.password(),
+            passwords: user.passwords(),
             user: &user.name,
             replication_sharding: user.replication_sharding.clone(),
             pooler_mode,
@@ -218,7 +218,7 @@ impl Cluster {
             shards,
             lb_strategy,
             user,
-            password,
+            passwords,
             pooler_mode,
             sharded_tables,
             replication_sharding,
@@ -266,7 +266,7 @@ impl Cluster {
                     })
                 })
                 .collect(),
-            password: password.to_owned(),
+            passwords,
             pooler_mode,
             sharded_tables,
             sharded_schemas,
@@ -348,9 +348,8 @@ impl Cluster {
         &self.shards
     }
 
-    /// Get the password the user should use to connect to the database.
-    pub fn password(&self) -> &str {
-        &self.password
+    pub fn passwords(&self) -> &[String] {
+        &self.passwords
     }
 
     /// User name.

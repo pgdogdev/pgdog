@@ -55,7 +55,7 @@ pub struct Address {
     /// Username.
     pub user: String,
     /// Password.
-    pub password: String,
+    pub passwords: Vec<String>,
     /// Server auth mode for backend connections.
     #[serde(default)]
     pub server_auth: ServerAuth,

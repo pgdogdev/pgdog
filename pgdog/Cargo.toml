@@ -38,7 +38,7 @@ toml = "0.8"
 pgdog-plugin.workspace = true
 tokio-util = { version = "0.7", features = ["rt"] }
 fnv = "1"
-scram = { git = "https://github.com/pgdogdev/scram.git", rev = "848003d" }
+scram = { git = "https://github.com/pgdogdev/scram.git", rev = "66f34fd60d393405c75ff6f416e67142b5d15223" }
 base64 = "0.22"
 md5 = "0.7"
 futures = "0.3"
