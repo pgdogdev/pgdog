@@ -244,7 +244,7 @@ pub struct User {
 }
 
 impl User {
-    pub fn password(&self) -> &str {
+    fn password(&self) -> &str {
         if let Some(ref s) = self.password {
             s.as_str()
         } else {
