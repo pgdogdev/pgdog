@@ -116,6 +116,86 @@ async fn test_passthrough_auth() {
 }
 
 #[tokio::test]
+#[serial]
+async fn test_multiple_passwords() {
+    let admin = admin_sqlx().await;
+    admin.execute("RELOAD").await.unwrap();
+
+    // The `pgdog_multi_pass` user in `integration/users.toml` is configured
+    // with `passwords = ["alpha_pass", "beta_pass"]`. Both should be accepted
+    // by every password-based auth type.
+    for auth_type in ["md5", "scram", "plain"] {
+        admin
+            .execute(format!("SET auth_type TO '{auth_type}'").as_str())
+            .await
+            .unwrap();
+        assert_setting_str("auth_type", auth_type).await;
+
+        for password in ["alpha_pass", "beta_pass"] {
+            let url = format!("postgres://pgdog_multi_pass:{password}@127.0.0.1:6432/pgdog");
+            let mut conn = PgConnection::connect(&url)
+                .await
+                .unwrap_or_else(|e| panic!("{auth_type}: {password} failed to connect: {e}"));
+            conn.execute("SELECT 1").await.unwrap();
+            conn.close().await.unwrap();
+        }
+
+        // Wrong password should still be rejected.
+        let bad = "postgres://pgdog_multi_pass:not_a_password@127.0.0.1:6432/pgdog";
+        let err = PgConnection::connect(bad).await.err().unwrap();
+        assert!(
+            err.to_string()
+                .contains("password for user \"pgdog_multi_pass\" and database \"pgdog\" is wrong"),
+            "{auth_type}: wrong password should fail: {err}"
+        );
+    }
+
+    admin.execute("RELOAD").await.unwrap();
+}
+
+#[tokio::test]
+#[serial]
+async fn test_multiple_passwords_server_side() {
+    let admin = admin_sqlx().await;
+    admin.execute("RELOAD").await.unwrap();
+
+    // The `pgdog_multi_pass_server` user has no `server_password`, so PgDog
+    // uses the user's `passwords` to authenticate against Postgres. The list
+    // is `["wrong_password", "pgdog"]` — only the second one actually works
+    // upstream. PgDog must try both and fall through to the working one.
+    //
+    // The same list is also offered to the client, so connecting with either
+    // password should succeed.
+    for auth_type in ["md5", "scram", "plain"] {
+        admin
+            .execute(format!("SET auth_type TO '{auth_type}'").as_str())
+            .await
+            .unwrap();
+        assert_setting_str("auth_type", auth_type).await;
+
+        for password in ["wrong_password", "pgdog"] {
+            let url = format!("postgres://pgdog_multi_pass_server:{password}@127.0.0.1:6432/pgdog");
+            let mut conn = PgConnection::connect(&url)
+                .await
+                .unwrap_or_else(|e| panic!("{auth_type}: {password} failed to connect: {e}"));
+            conn.execute("SELECT 1").await.unwrap();
+            conn.close().await.unwrap();
+        }
+
+        let bad = "postgres://pgdog_multi_pass_server:not_a_password@127.0.0.1:6432/pgdog";
+        let err = PgConnection::connect(bad).await.err().unwrap();
+        assert!(
+            err.to_string().contains(
+                "password for user \"pgdog_multi_pass_server\" and database \"pgdog\" is wrong"
+            ),
+            "{auth_type}: wrong password should fail: {err}"
+        );
+    }
+
+    admin.execute("RELOAD").await.unwrap();
+}
+
+#[tokio::test]
 async fn test_passthrough_password_change() {
     let admin = admin_sqlx().await;
     let mut direct =
