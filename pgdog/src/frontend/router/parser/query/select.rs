@@ -21,21 +21,27 @@ impl QueryParser {
         context: &mut QueryParserContext,
     ) -> Result<Command, Error> {
         let cte_writes = Self::cte_writes(stmt);
-        let mut writes = Self::functions(stmt)?;
+        let mut overrides = Self::functions(stmt)?;
 
         // Write overwrite because of conservative read/write split.
         if self.write_override {
-            writes.writes = true;
+            overrides.writes = true;
         }
 
         if cte_writes {
-            writes.writes = true;
+            overrides.writes = true;
+        }
+
+        if overrides.cross_shard {
+            context
+                .shards_calculator
+                .push(ShardWithPriority::new_override_cross_shard_function());
         }
 
         // Early return for any direct-to-shard queries.
         if context.shards_calculator.shard().is_direct() {
             return Ok(Command::Query(
-                Route::read(context.shards_calculator.shard().clone()).with_write(writes),
+                Route::read(context.shards_calculator.shard().clone()).with_functions(overrides),
             ));
         }
 
@@ -83,7 +89,7 @@ impl QueryParser {
                 .push(ShardWithPriority::new_rr_no_table(shard));
 
             return Ok(Command::Query(
-                Route::read(context.shards_calculator.shard().clone()).with_write(writes),
+                Route::read(context.shards_calculator.shard().clone()).with_functions(overrides),
             ));
         }
 
@@ -201,7 +207,7 @@ impl QueryParser {
             query.with_aggregate_rewrite_plan_mut(cached_ast.rewrite_plan.aggregates.clone());
         }
 
-        Ok(Command::Query(query.with_write(writes)))
+        Ok(Command::Query(query.with_functions(overrides)))
     }
 
     /// Handle the `ORDER BY` clause of a `SELECT` statement.
