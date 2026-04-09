@@ -172,18 +172,19 @@ impl Client {
                 false
             }
         } else {
-            let password = if admin {
-                Some(admin_password.clone())
+            let passwords = if admin {
+                Some(vec![admin_password.clone()])
             } else {
                 databases::databases()
-                    .password((user, database))
-                    .map(|p| p.to_string())
+                    .passwords((user, database))
+                    .clone()
+                    .map(|p| p.to_vec())
             };
 
-            if let Some(password) = password {
+            if let Some(passwords) = passwords {
                 match auth_type {
                     AuthType::Md5 => {
-                        let md5 = md5::Client::new(user, &password);
+                        let md5 = md5::Client::new(user, &passwords);
                         stream.send_flush(&md5.challenge()).await?;
                         let password = Password::from_bytes(stream.read().await?.to_bytes()?)?;
                         if let Password::PasswordMessage { response } = password {
@@ -196,7 +197,7 @@ impl Client {
                     AuthType::Scram => {
                         stream.send_flush(&Authentication::scram()).await?;
 
-                        let scram = Server::new(&password);
+                        let scram = Server::new(&passwords);
                         let res = scram.handle(&mut stream).await;
                         matches!(res, Ok(true))
                     }
@@ -207,7 +208,10 @@ impl Client {
                             .await?;
                         let response = stream.read().await?;
                         let response = Password::from_bytes(response.to_bytes()?)?;
-                        response.password() == Some(&password)
+                        passwords
+                            .iter()
+                            .find(|p| Some(p.as_str()) == response.password())
+                            .is_some()
                     }
 
                     AuthType::Trust => true,

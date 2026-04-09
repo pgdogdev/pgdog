@@ -212,8 +212,12 @@ impl PgDump {
             .to_str()
             .unwrap_or("pg_dump");
 
-        let auth_secret = addr.auth_secret().await?;
-        let mut command = build_pg_dump_command(pg_dump_path, &addr, &auth_secret);
+        let auth_secret = addr.auth_secrets().await?;
+        let mut command = build_pg_dump_command(
+            pg_dump_path,
+            &addr,
+            &auth_secret.first().expect("database has no password"),
+        );
         let output = command.output().await?;
 
         if !output.status.success() {

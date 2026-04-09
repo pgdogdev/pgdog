@@ -31,7 +31,7 @@ pub fn pool() -> Pool {
             port: 5432,
             database_name: "pgdog".into(),
             user: "pgdog".into(),
-            password: "pgdog".into(),
+            passwords: vec!["pgdog".into()],
             ..Default::default()
         },
         config,
@@ -56,7 +56,7 @@ pub fn pool_with_prepared_capacity(capacity: usize) -> Pool {
             port: 5432,
             database_name: "pgdog".into(),
             user: "pgdog".into(),
-            password: "pgdog".into(),
+            passwords: vec!["pgdog".into()],
             ..Default::default()
         },
         config,
@@ -327,7 +327,7 @@ async fn test_server_force_close_discards_connection() {
             port: 5432,
             database_name: "pgdog".into(),
             user: "pgdog".into(),
-            password: "pgdog".into(),
+            passwords: vec!["pgdog".into()],
             ..Default::default()
         },
         config,
@@ -498,7 +498,7 @@ async fn test_idle_healthcheck_loop() {
             port: 5432,
             database_name: "pgdog".into(),
             user: "pgdog".into(),
-            password: "pgdog".into(),
+            passwords: vec!["pgdog".into()],
             ..Default::default()
         },
         config,
@@ -572,7 +572,7 @@ async fn test_move_conns_to() {
             port: 5432,
             database_name: "pgdog".into(),
             user: "pgdog".into(),
-            password: "pgdog".into(),
+            passwords: vec!["pgdog".into()],
             ..Default::default()
         },
         config,
@@ -585,7 +585,7 @@ async fn test_move_conns_to() {
             port: 5432,
             database_name: "pgdog".into(),
             user: "pgdog".into(),
-            password: "pgdog".into(),
+            passwords: vec!["pgdog".into()],
             ..Default::default()
         },
         config,

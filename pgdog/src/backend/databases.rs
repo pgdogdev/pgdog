@@ -315,12 +315,12 @@ pub struct Databases {
 
 impl Databases {
     /// Get the database user password, if one is configured.
-    pub fn password(&self, user: impl ToUser) -> Option<&str> {
+    pub fn passwords(&self, user: impl ToUser) -> Option<&[String]> {
         if let Some(cluster) = self.databases.get(&user.to_user()) {
-            if cluster.password().is_empty() {
+            if cluster.passwords().is_empty() {
                 None
             } else {
-                Some(cluster.password())
+                Some(cluster.passwords())
             }
         } else {
             None

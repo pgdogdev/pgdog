@@ -53,7 +53,7 @@ mod test {
                 host: host.into(),
                 port,
                 user: "pgdog".into(),
-                password: "pgdog".into(),
+                passwords: vec!["pgdog".into()],
                 database_name: "pgdog".into(),
                 ..Default::default()
             },

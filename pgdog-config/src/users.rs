@@ -171,6 +171,9 @@ pub struct User {
     ///
     /// https://docs.pgdog.dev/configuration/users.toml/users/#password
     pub password: Option<String>,
+    /// Multiple passwords for this user, all of which will be attempted during auth to server and client.
+    #[serde(default)]
+    pub passwords: Vec<String>,
     /// Overrides [`default_pool_size`](https://docs.pgdog.dev/configuration/pgdog.toml/general/) for this user. No more than this many server connections will be open at any given time to serve requests for this connection pool.
     ///
     /// https://docs.pgdog.dev/configuration/users.toml/users/#pool_size
@@ -247,6 +250,15 @@ impl User {
         } else {
             ""
         }
+    }
+
+    pub fn passwords(&self) -> Vec<String> {
+        let mut passwords = self.passwords.clone();
+        if !self.password().is_empty() {
+            passwords.push(self.password().to_string());
+        }
+
+        passwords
     }
 
     /// New user from user, password and database.

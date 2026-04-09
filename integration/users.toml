@@ -1,7 +1,7 @@
 [[users]]
 name = "pgdog"
 database = "pgdog"
-password = "pgdog"
+passwords = ["random", "pgdog"]
 
 [[users]]
 name = "pgdog_session"

@@ -15,7 +15,7 @@ fn create_test_pool_config(host: &str, port: u16) -> PoolConfig {
             host: host.into(),
             port,
             user: "pgdog".into(),
-            password: "pgdog".into(),
+            passwords: vec!["pgdog".into()],
             database_name: "pgdog".into(),
             ..Default::default()
         },
@@ -726,7 +726,7 @@ async fn test_monitor_does_not_ban_with_zero_ban_timeout() {
             host: "127.0.0.1".into(),
             port: 5432,
             user: "pgdog".into(),
-            password: "pgdog".into(),
+            passwords: vec!["pgdog".into()],
             database_name: "pgdog".into(),
             ..Default::default()
         },
@@ -745,7 +745,7 @@ async fn test_monitor_does_not_ban_with_zero_ban_timeout() {
             host: "localhost".into(),
             port: 5432,
             user: "pgdog".into(),
-            password: "pgdog".into(),
+            passwords: vec!["pgdog".into()],
             database_name: "pgdog".into(),
             ..Default::default()
         },
@@ -1086,7 +1086,7 @@ fn create_test_pool_config_weighted(host: &str, port: u16, lb_weight: u8) -> Poo
             host: host.into(),
             port,
             user: "pgdog".into(),
-            password: "pgdog".into(),
+            passwords: vec!["pgdog".into()],
             database_name: "pgdog".into(),
             ..Default::default()
         },
@@ -1499,7 +1499,7 @@ fn test_ban_check_does_not_ban_with_zero_ban_timeout() {
             host: "127.0.0.1".into(),
             port: 5432,
             user: "pgdog".into(),
-            password: "pgdog".into(),
+            passwords: vec!["pgdog".into()],
             database_name: "pgdog".into(),
             ..Default::default()
         },
@@ -1518,7 +1518,7 @@ fn test_ban_check_does_not_ban_with_zero_ban_timeout() {
             host: "localhost".into(),
             port: 5432,
             user: "pgdog".into(),
-            password: "pgdog".into(),
+            passwords: vec!["pgdog".into()],
             database_name: "pgdog".into(),
             ..Default::default()
         },

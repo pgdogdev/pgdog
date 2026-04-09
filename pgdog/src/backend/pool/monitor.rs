@@ -453,7 +453,7 @@ mod test {
                 port: 1,
                 database_name: "pgdog".into(),
                 user: "pgdog".into(),
-                password: "pgdog".into(),
+                passwords: vec!["pgdog".into()],
                 ..Default::default()
             },
             config,
@@ -487,7 +487,7 @@ mod test {
                 port: 5432,
                 database_name: "pgdog".into(),
                 user: "pgdog".into(),
-                password: "pgdog".into(),
+                passwords: vec!["pgdog".into()],
                 ..Default::default()
             },
             config,

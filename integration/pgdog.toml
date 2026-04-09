@@ -25,6 +25,7 @@ system_catalogs = "omnisharded_sticky"
 reload_schema_on_ddl = false
 #idle_healthcheck_delay = 50000000
 unique_id_function = "standard"
+auth_type = "scram"
 
 [memory]
 net_buffer = 8096

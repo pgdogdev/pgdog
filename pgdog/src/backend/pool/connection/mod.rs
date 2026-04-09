@@ -328,7 +328,7 @@ impl Connection {
         // only load databases from the config. RELOAD effectively removes all passthrough
         // connection pools until a client needs to query it and we re-create it.
         //
-        if config.config.general.passthrough_auth() && databases().password(user).is_none() {
+        if config.config.general.passthrough_auth() && databases().passwords(user).is_none() {
             if let Some(ref cluster) = self.cluster {
                 databases::add(User::new(&self.user, cluster.password(), &self.database))?;
             }
