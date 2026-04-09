@@ -130,8 +130,7 @@ pub struct ClusterConfig<'a> {
     pub shards: &'a [ClusterShardConfig],
     pub lb_strategy: LoadBalancingStrategy,
     pub user: &'a str,
-    pub password: &'a str,
-    pub passwords: &'a [String],
+    pub passwords: Vec<String>,
     pub pooler_mode: PoolerMode,
     pub sharded_tables: ShardedTables,
     pub replication_sharding: Option<String>,
@@ -176,8 +175,7 @@ impl<'a> ClusterConfig<'a> {
 
         Self {
             name: &user.database,
-            password: user.password(),
-            passwords: &user.passwords,
+            passwords: user.passwords(),
             user: &user.name,
             replication_sharding: user.replication_sharding.clone(),
             pooler_mode,
@@ -220,7 +218,6 @@ impl Cluster {
             shards,
             lb_strategy,
             user,
-            password,
             passwords,
             pooler_mode,
             sharded_tables,
@@ -269,11 +266,7 @@ impl Cluster {
                     })
                 })
                 .collect(),
-            passwords: {
-                let mut passwords = passwords.to_vec();
-                passwords.push(password.to_string());
-                passwords
-            },
+            passwords,
             pooler_mode,
             sharded_tables,
             sharded_schemas,
@@ -353,11 +346,6 @@ impl Cluster {
     /// Get all shards.
     pub fn shards(&self) -> &[Shard] {
         &self.shards
-    }
-
-    /// Get the password the user should use to connect to the database.
-    pub fn password(&self) -> &str {
-        &self.passwords.first().unwrap()
     }
 
     pub fn passwords(&self) -> &[String] {

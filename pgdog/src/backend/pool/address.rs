@@ -36,7 +36,7 @@ impl From<Address> for pgdog_stats::Address {
             port: value.port,
             database_name: value.database_name,
             user: value.user,
-            password: value.passwords.first().unwrap().clone(),
+            password: value.passwords.first().cloned().unwrap_or_default(),
             server_auth: value.server_auth,
             server_iam_region: value.server_iam_region,
             database_number: value.database_number,
@@ -210,7 +210,10 @@ mod test {
         };
 
         let address = Address::new(&database, &user, 0);
-        assert_eq!(address.passwords.first().unwrap(), "");
+        assert!(
+            address.passwords.is_empty(),
+            "RDS IAM addresses must not carry static passwords"
+        );
         assert_eq!(address.server_auth, ServerAuth::RdsIam);
         assert_eq!(address.server_iam_region.as_deref(), Some("us-east-1"));
     }
