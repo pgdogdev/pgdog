@@ -3,12 +3,21 @@
 require_relative 'rspec_helper'
 
 def connect(dbname = 'pgdog', user = 'pgdog')
-  PG.connect(dbname: dbname, user: user, password: 'pgdog', port: 6432, host: '127.0.0.1')
+  PG.connect(dbname: dbname, user: user, password: 'pgdog', port: 6432, host: '127.0.0.1', application_name: '')
 end
 
 describe 'pg' do
   after do
-    ensure_done
+    # ensure_done
+  end
+
+  it 'out of sync' do
+    conn = connect 'pgdog', 'pgdog'
+    conn.exec_params 'SELECT $1', [1]
+    conn.exec "SELECT 1"
+    conn.exec "SET lock_timeout TO sdfs"
+    conn.exec "SET statement_timeout TO '1s'"
+    conn.exec 'SELECT 1'
   end
 
   it 'simple query' do

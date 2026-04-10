@@ -67,6 +67,14 @@ impl MemoryUsage for ExecutionItem {
     }
 }
 
+impl ExecutionItem {
+    fn extended(&self) -> bool {
+        match self {
+            Self::Code(code) | Self::Ignore(code) => code.extended(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct ProtocolState {
     queue: VecDeque<ExecutionItem>,
@@ -146,6 +154,18 @@ impl ProtocolState {
         match code {
             ExecutionCode::Untracked => return Ok(Action::Forward),
             ExecutionCode::Error => {
+                if !self.extended {
+                    // A simple-query error only aborts the current simple query.
+                    // Keep any later pipelined simple query RFQs queued.
+                    while !self.queue.is_empty()
+                        && self.queue.front()
+                            != Some(&ExecutionItem::Code(ExecutionCode::ReadyForQuery))
+                    {
+                        self.queue.pop_front();
+                    }
+                    return Ok(Action::Forward);
+                }
+
                 // Remove everything from the execution queue.
                 // The connection is out of sync until client re-syncs it.
                 if self.extended {
@@ -166,7 +186,7 @@ impl ProtocolState {
             _ => (),
         };
         let in_queue = self.queue.pop_front().ok_or(Error::ProtocolOutOfSync)?;
-        match in_queue {
+        let action = match in_queue {
             // The queue is waiting for the server to send ReadyForQuery,
             // but it sent something else. That means the execution pipeline
             // isn't done. We are not tracking every single message, so this is expected.
@@ -188,7 +208,13 @@ impl ProtocolState {
                     Err(Error::ProtocolOutOfSync)
                 }
             }
+        }?;
+
+        if code == ExecutionCode::ReadyForQuery {
+            self.extended = self.queue.iter().any(ExecutionItem::extended);
         }
+
+        Ok(action)
     }
 
     pub(crate) fn in_copy_mode(&self) -> bool {
@@ -334,7 +360,7 @@ mod test {
         assert_eq!(state.action('C').unwrap(), Action::Forward);
         assert_eq!(state.action('Z').unwrap(), Action::Forward);
         assert!(state.is_empty());
-        assert!(state.extended);
+        assert!(!state.extended);
     }
 
     #[test]
@@ -588,6 +614,23 @@ mod test {
         // Note: The ForwardAndRemove logic in the Ignore arm (line 192-193)
         // is unreachable because Error is handled at the top of action()
         // This may be dead code or a bug in the implementation.
+    }
+
+    #[test]
+    fn test_pipelined_simple_query_error_keeps_next_query_response() {
+        let mut state = ProtocolState::default();
+        state.add('Z'); // First simple query.
+        state.add('Z'); // Second simple query.
+
+        assert_eq!(state.action('E').unwrap(), Action::Forward);
+        assert_eq!(state.len(), 2);
+        assert_eq!(state.action('Z').unwrap(), Action::Forward);
+        assert_eq!(state.len(), 1);
+
+        // The next response belongs to the second simple query.
+        assert_eq!(state.action('C').unwrap(), Action::Forward);
+        assert_eq!(state.action('Z').unwrap(), Action::Forward);
+        assert!(state.is_empty());
     }
 
     #[test]
