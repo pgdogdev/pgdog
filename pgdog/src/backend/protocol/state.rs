@@ -36,6 +36,10 @@ impl ExecutionCode {
     fn extended(&self) -> bool {
         matches!(self, Self::ParseComplete | Self::BindComplete)
     }
+
+    fn done(&self) -> bool {
+        matches!(self, Self::ReadyForQuery)
+    }
 }
 
 impl From<char> for ExecutionCode {
@@ -94,7 +98,7 @@ impl ProtocolState {
     ///
     pub(crate) fn add_ignore(&mut self, code: impl Into<ExecutionCode>) {
         let code = code.into();
-        self.extended = self.extended || code.extended();
+        self.extended = (self.extended || code.extended()) && !code.done();
         self.queue.push_back(ExecutionItem::Ignore(code));
     }
 
@@ -102,7 +106,7 @@ impl ProtocolState {
     /// to be returned by the server.
     pub(crate) fn add(&mut self, code: impl Into<ExecutionCode>) {
         let code = code.into();
-        self.extended = self.extended || code.extended();
+        self.extended = (self.extended || code.extended()) && !code.done();
         self.queue.push_back(ExecutionItem::Code(code))
     }
 
@@ -164,10 +168,12 @@ impl ProtocolState {
                 self.out_of_sync = false;
             }
             ExecutionCode::Copy => {
-                // Remove any RFQ messages from the queue
-                // in case the client sent Sync during copy mode.
-                self.queue
-                    .retain(|item| item != &ExecutionItem::Code(ExecutionCode::ReadyForQuery));
+                if self.extended {
+                    // Remove any RFQ messages from the queue
+                    // in case the client sent Sync during copy mode.
+                    self.queue
+                        .retain(|item| item != &ExecutionItem::Code(ExecutionCode::ReadyForQuery));
+                }
             }
             _ => (),
         };
