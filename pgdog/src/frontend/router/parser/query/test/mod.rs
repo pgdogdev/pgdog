@@ -35,6 +35,7 @@ pub mod test_rr;
 pub mod test_schema_sharding;
 pub mod test_search_path;
 pub mod test_select;
+pub mod test_session_control;
 pub mod test_set;
 pub mod test_sharding;
 pub mod test_special;

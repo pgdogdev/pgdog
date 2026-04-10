@@ -1390,6 +1390,11 @@
           "description": "Always disable the query parser.",
           "type": "string",
           "const": "off"
+        },
+        {
+          "description": "Control statements only.",
+          "type": "string",
+          "const": "session_control"
         }
       ]
     },

@@ -144,6 +144,27 @@ fn test_set_transaction_level() {
 }
 
 #[test]
+fn test_reset() {
+    let mut test = QueryParserTest::new();
+
+    let command = test.execute(vec![Query::new("RESET statement_timeout").into()]);
+    match &command {
+        Command::Set { params, .. } => {
+            assert_eq!(params.len(), 1);
+            assert_eq!(params[0].name, "statement_timeout");
+            assert!(params[0].reset);
+        }
+        _ => panic!("expected Command::Set, got {command:#?}"),
+    }
+
+    let command = test.execute(vec![Query::new("RESET ALL").into()]);
+    assert!(
+        matches!(command, Command::ResetAll),
+        "expected Command::ResetAll, got {command:#?}",
+    );
+}
+
+#[test]
 fn test_set_single_primary() {
     let mut test = QueryParserTest::new_single_primary(&config());
     let command = test.execute(vec![Query::new("SET statement_timeout TO 1").into()].into());

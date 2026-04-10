@@ -26,7 +26,7 @@ use crate::{
         ConnectionRecovery, MultiTenant, PoolerMode, ReadWriteSplit, ReadWriteStrategy,
         ShardedTable, User,
     },
-    frontend::ClientRequest,
+    frontend::{ClientRequest, RegexParser},
     net::{messages::BackendKeyData, Query},
 };
 
@@ -458,13 +458,14 @@ impl Cluster {
         match self.query_parser() {
             QueryParserLevel::Off => false,
             QueryParserLevel::On => true,
+            QueryParserLevel::SessionControl => RegexParser::use_parser(request),
             QueryParserLevel::Auto => {
                 self.multi_tenant().is_some()
                     || self.router_needed()
                     || self.dry_run()
                     || self.prepared_statements() == &PreparedStatements::Full
                     || self.pub_sub_enabled()
-                    || request.is_set()
+                    || RegexParser::use_parser(request)
             }
         }
     }
