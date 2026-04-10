@@ -1294,6 +1294,19 @@ pub mod test {
     }
 
     #[tokio::test]
+    async fn test_execute_batch_simple_query_error_then_success() {
+        let mut server = test_server().await;
+
+        let err = server
+            .execute_batch(&[Query::new("syntax error"), Query::new("SELECT 1")])
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, Error::ExecutionError(_)));
+        assert!(server.done());
+    }
+
+    #[tokio::test]
     async fn test_set() {
         let mut server = test_server().await;
         server
@@ -1676,6 +1689,39 @@ pub mod test {
         let msg = server.read().await.unwrap();
         assert_eq!(msg.code(), 'Z');
 
+        assert!(server.done());
+    }
+
+    #[tokio::test]
+    async fn test_out_of_sync_regression() {
+        let mut server = test_server().await;
+        server
+            .send(
+                &vec![
+                    Parse::new_anonymous("SELECT 1").into(),
+                    Bind::new_statement("").into(),
+                    Execute::new().into(),
+                    Sync.into(),
+                ]
+                .into(),
+            )
+            .await
+            .unwrap();
+
+        for c in ['1', '2', 'D', 'C', 'Z'] {
+            let msg = server.read().await.unwrap();
+            assert_eq!(msg.code(), c);
+        }
+
+        let err = server
+            .execute_batch(&[
+                "SET statement_timeout TO null".into(),
+                "SET statement_timeout TO '1s'".into(),
+            ])
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, Error::ExecutionError(_)));
         assert!(server.done());
     }
 
