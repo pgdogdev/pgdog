@@ -35,6 +35,8 @@ pub struct RouterContext<'a> {
     pub ast: Option<Ast>,
     /// Schema.
     pub schema: Schema,
+    /// Original client request.
+    pub client_request: &'a ClientRequest,
 }
 
 impl<'a> RouterContext<'a> {
@@ -62,6 +64,7 @@ impl<'a> RouterContext<'a> {
             query,
             ast: buffer.ast.clone(),
             schema: cluster.schema(),
+            client_request: buffer,
         })
     }
 
