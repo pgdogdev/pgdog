@@ -1693,7 +1693,7 @@ pub mod test {
     }
 
     #[tokio::test]
-    async fn test_ooo() {
+    async fn test_out_of_sync_regression() {
         let mut server = test_server().await;
         server
             .send(
