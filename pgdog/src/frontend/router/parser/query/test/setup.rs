@@ -65,6 +65,13 @@ impl QueryParserTest {
         }
     }
 
+    pub(crate) fn new_single_primary(config: &ConfigAndUsers) -> Self {
+        let mut me = Self::new_with_config(config);
+        me.cluster = Cluster::new_test_single_primary(config);
+
+        me
+    }
+
     /// Set whether we're in a transaction.
     pub(crate) fn in_transaction(mut self, in_tx: bool) -> Self {
         self.transaction = if in_tx {

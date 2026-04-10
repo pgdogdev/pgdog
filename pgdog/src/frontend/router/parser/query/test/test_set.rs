@@ -1,5 +1,12 @@
 use crate::{
-    frontend::{router::parser::Shard, Command},
+    config::config,
+    frontend::{
+        router::parser::{
+            route::{OverrideReason, ShardSource},
+            Shard,
+        },
+        Command,
+    },
     net::parameter::ParameterValue,
 };
 
@@ -134,4 +141,24 @@ fn test_set_transaction_level() {
             _ => panic!("expected Command::Query for '{query}', got {command:#?}"),
         }
     }
+}
+
+#[test]
+fn test_set_single_primary() {
+    let mut test = QueryParserTest::new_single_primary(&config());
+    let command = test.execute(vec![Query::new("SET statement_timeout TO 1").into()].into());
+    assert!(matches!(command, Command::Set { .. }));
+
+    let mut config = (*config()).clone();
+    config.config.general.query_parser = pgdog_config::QueryParserLevel::Off;
+
+    let mut test = QueryParserTest::new_single_primary(&config);
+    let command = test.execute(vec![Query::new("SET statement_timeout TO 1").into()].into());
+    match command {
+        Command::Query(query) => assert_eq!(
+            query.shard_with_priority().source(),
+            &ShardSource::Override(OverrideReason::ParserDisabled)
+        ),
+        _ => panic!("expected Query, got {:?}", command),
+    };
 }

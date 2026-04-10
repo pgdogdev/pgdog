@@ -34,7 +34,7 @@ impl QueryEngine {
         let use_parser = self
             .backend
             .cluster()
-            .map(|cluster| cluster.use_query_parser())
+            .map(|cluster| cluster.use_query_parser(context.client_request))
             .unwrap_or(false);
 
         if !use_parser {

@@ -26,6 +26,7 @@ use crate::{
         ConnectionRecovery, MultiTenant, PoolerMode, ReadWriteSplit, ReadWriteStrategy,
         ShardedTable, User,
     },
+    frontend::ClientRequest,
     net::{messages::BackendKeyData, Query},
 };
 
@@ -453,7 +454,7 @@ impl Cluster {
     }
 
     /// Use the query parser.
-    pub fn use_query_parser(&self) -> bool {
+    pub(crate) fn use_query_parser(&self, request: &ClientRequest) -> bool {
         match self.query_parser() {
             QueryParserLevel::Off => false,
             QueryParserLevel::On => true,
@@ -463,6 +464,7 @@ impl Cluster {
                     || self.dry_run()
                     || self.prepared_statements() == &PreparedStatements::Full
                     || self.pub_sub_enabled()
+                    || request.is_set()
             }
         }
     }
@@ -651,7 +653,7 @@ impl Cluster {
 mod test {
     use std::{sync::Arc, time::Duration};
 
-    use pgdog_config::{ConfigAndUsers, OmnishardedTable, ShardedSchema};
+    use pgdog_config::{ConfigAndUsers, OmnishardedTable, QueryParserLevel, ShardedSchema};
 
     use crate::{
         backend::{
@@ -660,9 +662,11 @@ mod test {
             Shard, ShardedTables,
         },
         config::{
-            DataType, Hasher, LoadBalancingStrategy, MultiTenant, ReadWriteSplit,
+            config, DataType, Hasher, LoadBalancingStrategy, MultiTenant, ReadWriteSplit,
             ReadWriteStrategy, ShardedTable,
         },
+        frontend::ClientRequest,
+        net::Query,
     };
 
     use super::{Cluster, DatabaseUser};
@@ -753,6 +757,38 @@ mod test {
         pub fn new_test_single_shard(config: &ConfigAndUsers) -> Cluster {
             let mut cluster = Self::new_test(config);
             cluster.shards.pop();
+
+            cluster
+        }
+
+        pub fn new_test_single_primary(config: &ConfigAndUsers) -> Cluster {
+            let identifier = Arc::new(DatabaseUser {
+                user: "pgdog".into(),
+                database: "pgdog".into(),
+            });
+
+            let cluster = Cluster {
+                shards: vec![Shard::new(ShardConfig {
+                    number: 0,
+                    primary: &Some(PoolConfig {
+                        address: Address::new_test(),
+                        config: Config::default(),
+                    }),
+                    replicas: &[],
+                    lb_strategy: LoadBalancingStrategy::default(),
+                    rw_split: ReadWriteSplit::default(),
+                    identifier: identifier.clone(),
+                    lsn_check_interval: Duration::default(),
+                })],
+                prepared_statements: config.config.general.prepared_statements,
+                dry_run: config.config.general.dry_run,
+                expanded_explain: config.config.general.expanded_explain,
+                query_parser: config.config.general.query_parser,
+                rewrite: config.config.rewrite.clone(),
+                two_phase_commit: config.config.general.two_phase_commit,
+                two_phase_commit_auto: config.config.general.two_phase_commit_auto.unwrap_or(false),
+                ..Default::default()
+            };
 
             cluster
         }
@@ -928,5 +964,29 @@ mod test {
         // Should wait for notification and complete within timeout
         let result = timeout(Duration::from_millis(100), cluster.wait_schema_loaded()).await;
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_use_query_parser_set() {
+        let mut cluster = Cluster::new_test(&config());
+        let req = ClientRequest::from(vec![Query::new("SET statement_timeout TO 1").into()]);
+
+        for level in [QueryParserLevel::Auto, QueryParserLevel::On] {
+            cluster.query_parser = level;
+            assert!(cluster.use_query_parser(&req));
+        }
+
+        cluster.query_parser = QueryParserLevel::Off;
+        assert!(!cluster.use_query_parser(&req));
+
+        let mut cluster = Cluster::new_test_single_primary(&config());
+
+        for level in [QueryParserLevel::Auto, QueryParserLevel::On] {
+            cluster.query_parser = level;
+            assert!(cluster.use_query_parser(&req));
+        }
+
+        cluster.query_parser = QueryParserLevel::Off;
+        assert!(!cluster.use_query_parser(&req));
     }
 }
