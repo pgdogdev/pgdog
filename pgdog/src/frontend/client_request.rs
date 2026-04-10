@@ -149,26 +149,6 @@ impl ClientRequest {
         false
     }
 
-    /// Quick and cheap way to find out if this
-    /// request contains a SET statement.
-    ///
-    /// We use this to temporaily turn on the query
-    /// parser and extract the parameter so we can
-    /// maintain application state in transaction mode.
-    pub(crate) fn is_set(&self) -> bool {
-        lazy_static! {
-            static ref SET: Regex = Regex::new("(?i)^ *SET").unwrap();
-        }
-
-        for message in &self.messages {
-            if let ProtocolMessage::Query(query) = message {
-                return SET.is_match(query.query());
-            }
-        }
-
-        false
-    }
-
     /// If this buffer contains bound parameters, retrieve them.
     pub fn parameters(&self) -> Result<Option<&Bind>, Error> {
         for message in &self.messages {
@@ -580,23 +560,5 @@ mod test {
             Describe::new_statement("test").into(),
         ]);
         assert!(!req.is_complete());
-    }
-
-    #[test]
-    fn test_is_set() {
-        for query in [
-            "SET statement_timeout TO 1",
-            "   SET staement_timeout to 1",
-            "set statement_timeout to 1",
-            "   set statement_timeout to 1",
-        ] {
-            let req = ClientRequest::from(vec![Query::new(query).into()]);
-            assert!(req.is_set());
-        }
-
-        for query in ["SELECT 1", "insert into users values (1)"] {
-            let req = ClientRequest::from(vec![Query::new(query).into()]);
-            assert!(!req.is_set());
-        }
     }
 }

@@ -403,6 +403,8 @@ pub enum QueryParserLevel {
     Auto,
     /// Always disable the query parser.
     Off,
+    /// Control statements only.
+    SessionControl,
 }
 
 /// Underlying parser implementation used to analyze SQL queries.
