@@ -163,6 +163,12 @@ impl ProtocolState {
             ExecutionCode::ReadyForQuery => {
                 self.out_of_sync = false;
             }
+            ExecutionCode::Copy => {
+                // Remove any RFQ messages from the queue
+                // in case the client sent Sync during copy mode.
+                self.queue
+                    .retain(|item| item != &ExecutionItem::Code(ExecutionCode::ReadyForQuery));
+            }
             _ => (),
         };
         let in_queue = self.queue.pop_front().ok_or(Error::ProtocolOutOfSync)?;
