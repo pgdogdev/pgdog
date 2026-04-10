@@ -8,7 +8,7 @@ end
 
 describe 'pg' do
   after do
-    # ensure_done
+    ensure_done
   end
 
   it 'out of sync' do
@@ -17,7 +17,7 @@ describe 'pg' do
     conn.exec "SELECT 1"
     conn.exec "SET lock_timeout TO sdfs"
     conn.exec "SET statement_timeout TO '1s'"
-    conn.exec 'SELECT 1'
+    expect { conn.exec 'SELECT 1' }.to raise_error(/invalid value for parameter/)
   end
 
   it 'simple query' do
