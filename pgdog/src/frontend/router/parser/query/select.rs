@@ -21,6 +21,7 @@ impl QueryParser {
         context: &mut QueryParserContext,
     ) -> Result<Command, Error> {
         let cte_writes = Self::cte_writes(stmt);
+        let has_locking = Self::has_locking_clause(stmt);
         let mut overrides = Self::functions(stmt)?;
 
         // Write overwrite because of conservative read/write split.
@@ -28,7 +29,7 @@ impl QueryParser {
             overrides.writes = true;
         }
 
-        if cte_writes {
+        if cte_writes || has_locking {
             overrides.writes = true;
         }
 
@@ -318,23 +319,13 @@ impl QueryParser {
     /// * `stmt`: SELECT statement from pg_query.
     ///
     fn functions(stmt: &SelectStmt) -> Result<FunctionBehavior, Error> {
-        let mut result = FunctionBehavior::default();
-
         for target in &stmt.target_list {
             if let Ok(func) = Function::try_from(target) {
-                let behavior = func.behavior();
-                if behavior.writes {
-                    return Ok(behavior);
-                }
-                result.cross_shard |= behavior.cross_shard;
+                return Ok(func.behavior());
             }
         }
 
-        if !stmt.locking_clause.is_empty() {
-            return Ok(FunctionBehavior::writes_only());
-        }
-
-        // Recurse into CTEs so a locking clause or write-only function
+        // Recurse into CTEs so a write-only function
         // nested inside a WITH clause still routes to the primary.
         if let Some(ref with_clause) = stmt.with_clause {
             for cte in &with_clause.ctes {
@@ -345,14 +336,37 @@ impl QueryParser {
                             if behavior.writes {
                                 return Ok(behavior);
                             }
-                            result.cross_shard |= behavior.cross_shard;
                         }
                     }
                 }
             }
         }
 
-        Ok(result)
+        Ok(FunctionBehavior::default())
+    }
+
+    /// Recursively check for a locking clause (FOR UPDATE, FOR SHARE, etc.)
+    /// on this statement or any CTE nested within it.
+    fn has_locking_clause(stmt: &SelectStmt) -> bool {
+        if !stmt.locking_clause.is_empty() {
+            return true;
+        }
+
+        if let Some(ref with_clause) = stmt.with_clause {
+            for cte in &with_clause.ctes {
+                if let Some(NodeEnum::CommonTableExpr(ref expr)) = cte.node {
+                    if let Some(ref query) = expr.ctequery {
+                        if let Some(NodeEnum::SelectStmt(ref inner)) = query.node {
+                            if Self::has_locking_clause(inner) {
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        false
     }
 
     /// Check for CTEs that could trigger this query to go to a primary.
