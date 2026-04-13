@@ -318,9 +318,15 @@ impl QueryParser {
     /// * `stmt`: SELECT statement from pg_query.
     ///
     fn functions(stmt: &SelectStmt) -> Result<FunctionBehavior, Error> {
+        let mut result = FunctionBehavior::default();
+
         for target in &stmt.target_list {
             if let Ok(func) = Function::try_from(target) {
-                return Ok(func.behavior());
+                let behavior = func.behavior();
+                if behavior.writes {
+                    return Ok(behavior);
+                }
+                result.cross_shard |= behavior.cross_shard;
             }
         }
 
@@ -339,13 +345,14 @@ impl QueryParser {
                             if behavior.writes {
                                 return Ok(behavior);
                             }
+                            result.cross_shard |= behavior.cross_shard;
                         }
                     }
                 }
             }
         }
 
-        Ok(FunctionBehavior::default())
+        Ok(result)
     }
 
     /// Check for CTEs that could trigger this query to go to a primary.

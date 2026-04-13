@@ -310,6 +310,16 @@ fn test_select_for_update_in_cte() {
     );
     assert!(route.is_write());
 
+    // FOR UPDATE SKIP LOCKED inside a CTE should route to the primary.
+    let route = query!(
+        "WITH retries_available AS (\
+            SELECT 1 FROM pdo_rw_test_retries \
+            WHERE next_retry_at <= NOW() AND deleted_at IS NULL \
+            FOR UPDATE SKIP LOCKED\
+         ) SELECT COUNT(*) FROM retries_available"
+    );
+    assert!(route.is_write());
+
     // Sanity check: a plain SELECT inside a CTE without locking is still a read.
     let route = query!("WITH plain AS (SELECT * FROM sharded WHERE id = 1) SELECT * FROM plain");
     assert!(route.is_read());
