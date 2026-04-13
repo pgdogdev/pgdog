@@ -12,6 +12,8 @@ pub use copy::*;
 pub use parallel_sync::ParallelSyncManager;
 pub use queries::*;
 pub use table::*;
+pub mod wal_archive;
+pub use wal_archive::*;
 
 #[cfg(test)]
 mod test {

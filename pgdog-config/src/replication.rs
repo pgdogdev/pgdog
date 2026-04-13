@@ -115,11 +115,25 @@ pub struct Replication {
     /// _Default:_ `pg_dump`
     #[serde(default = "Replication::pg_dump_path")]
     pub pg_dump_path: PathBuf,
+
+    /// Archive upload parallel workers.
+    #[serde(default = "Replication::archive_max_workers")]
+    pub archive_max_workers: usize,
+
+    /// Archive S3 path.
+    pub archive_s3_bucket: Option<String>,
+
+    /// Archive S3 prefix.
+    pub archive_s3_prefix: Option<String>,
 }
 
 impl Replication {
     fn pg_dump_path() -> PathBuf {
         PathBuf::from("pg_dump")
+    }
+
+    fn archive_max_workers() -> usize {
+        4
     }
 }
 
@@ -127,6 +141,9 @@ impl Default for Replication {
     fn default() -> Self {
         Self {
             pg_dump_path: Self::pg_dump_path(),
+            archive_max_workers: Self::archive_max_workers(),
+            archive_s3_bucket: None,
+            archive_s3_prefix: None,
         }
     }
 }

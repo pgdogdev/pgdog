@@ -1,4 +1,5 @@
 //! CopyData (F & B) message.
+use serde::{Deserialize, Serialize};
 use std::str::from_utf8;
 
 use super::code;
@@ -7,7 +8,7 @@ use super::replication::ReplicationMeta;
 use super::replication::XLogData;
 
 /// CopyData (F & B) message.
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct CopyData {
     data: Bytes,
 }
