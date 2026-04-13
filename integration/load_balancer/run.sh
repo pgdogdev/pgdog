@@ -56,6 +56,8 @@ go get
 go test -v -count 3
 popd
 
+php ${SCRIPT_DIR}/pdo_read_write_split.php
+
 stop_pgdog
 
 docker-compose down
