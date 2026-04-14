@@ -31,6 +31,28 @@ def test_connect():
     no_out_of_sync()
 
 
+def test_admin_pgcli_detection():
+    """Test that pgcli can detect PgDog admin as a virtual database.
+
+    pgcli sends SELECT 1 to detect pgbouncer-like virtual databases.
+    It expects psycopg.errors.ProtocolViolation (08P01) — if the admin
+    database returns a syntax error (42601) instead, pgcli fails to
+    detect PgDog and breaks.
+
+    See: https://github.com/pgdogdev/pgdog/issues/539
+    """
+    from pgcli.pgexecute import PGExecute
+
+    executor = PGExecute(
+        database="admin",
+        user="admin",
+        password="pgdog",
+        host="127.0.0.1",
+        port=6432,
+    )
+    assert executor.is_virtual_database()
+
+
 def test_insert_sharded():
     _run_insert_test(sharded_sync())
 

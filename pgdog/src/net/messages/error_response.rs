@@ -159,6 +159,18 @@ impl ErrorResponse {
         }
     }
 
+    pub fn protocol_violation(err: &str) -> ErrorResponse {
+        Self {
+            severity: "ERROR".into(),
+            code: "08P01".into(),
+            message: err.into(),
+            detail: None,
+            context: None,
+            file: None,
+            routine: None,
+        }
+    }
+
     pub fn tls_required() -> ErrorResponse {
         Self {
             severity: "FATAL".into(),
