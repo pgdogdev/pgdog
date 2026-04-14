@@ -3144,6 +3144,63 @@ pub mod test {
         assert!(!server.needs_drain());
     }
 
+    // In pipeline mode, a failed request must not prevent subsequent pipelined
+    // requests from being processed. All three sequences are sent in one batch;
+    // seq1 fails, seq2 and seq3 must still return their rows.
+    //
+    // Currently FAILS: the error in seq1 causes seq2 and seq3 to receive
+    // ProtocolOutOfSync instead of their expected responses.
+    #[tokio::test]
+    async fn test_pipelined_multiple_syncs_first_fails() {
+        let mut server = test_server().await;
+
+        // Three pipelined sequences sent in one batch.
+        server
+            .send(
+                &vec![
+                    // Seq1 — will fail.
+                    Parse::new_anonymous("SELECT 1/0").into(),
+                    Bind::default().into(),
+                    Execute::new().into(),
+                    Sync.into(),
+                    // Seq2 — must succeed.
+                    Parse::new_anonymous("SELECT 2").into(),
+                    Bind::default().into(),
+                    Execute::new().into(),
+                    Sync.into(),
+                    // Seq3 — must succeed.
+                    Parse::new_anonymous("SELECT 3").into(),
+                    Bind::default().into(),
+                    Execute::new().into(),
+                    Sync.into(),
+                ]
+                .into(),
+            )
+            .await
+            .unwrap();
+
+        // Seq1: fails — seq2 and seq3 must still respond.
+        assert_eq!(server.read().await.unwrap().code(), '1'); // ParseComplete
+        assert_eq!(server.read().await.unwrap().code(), 'E'); // ErrorResponse
+        assert_eq!(server.read().await.unwrap().code(), 'Z'); // ReadyForQuery
+
+        // Seq2: must return data despite seq1 erroring.
+        assert_eq!(server.read().await.unwrap().code(), '1'); // ParseComplete
+        assert_eq!(server.read().await.unwrap().code(), '2'); // BindComplete
+        assert_eq!(server.read().await.unwrap().code(), 'D'); // DataRow
+        assert_eq!(server.read().await.unwrap().code(), 'C'); // CommandComplete
+        assert_eq!(server.read().await.unwrap().code(), 'Z'); // ReadyForQuery
+
+        // Seq3: must return data.
+        assert_eq!(server.read().await.unwrap().code(), '1'); // ParseComplete
+        assert_eq!(server.read().await.unwrap().code(), '2'); // BindComplete
+        assert_eq!(server.read().await.unwrap().code(), 'D'); // DataRow
+        assert_eq!(server.read().await.unwrap().code(), 'C'); // CommandComplete
+        assert_eq!(server.read().await.unwrap().code(), 'Z'); // ReadyForQuery
+        assert!(server.done());
+        assert!(!server.has_more_messages());
+    }
+
     #[tokio::test]
     async fn test_empty_query_extended() {
         let mut server = test_server().await;
