@@ -1,0 +1,18 @@
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: pgdog
+  title: PgDog
+  description: PgDog is a proxy for scaling PostgreSQL.
+  annotations:
+    github.com/project-slug: revenexx/pgdog
+    backstage.io/techdocs-ref: url:https://github.com/revenexx/pgdog/tree/main/
+  links:
+    - url: https://docs.pgdog.dev/
+      title: Documentation
+      icon: docs
+spec:
+  type: service
+  lifecycle: production
+  owner: group:default/platform-team
+  system: revenue-cloud
