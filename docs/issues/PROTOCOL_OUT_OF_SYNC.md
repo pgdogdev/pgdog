@@ -423,13 +423,76 @@ intermediate `ReadyForQuery` inside a pipelined extended request does not premat
 
 ---
 
-## Common thread
+## Issue 5 — Error in first pipelined request clears subsequent requests' queue entries
 
-All four issues share the same underlying fragility: the `ProtocolState` queue and the actual server
-response stream diverge whenever an error or unexpected message interrupts a multi-message sub-request
-injected transparently by pgdog. The Error handler was written for a single client-visible request and
-does not account for the compound structures the prepared-statement rewriter produces.
+**Severity:** Low — not reproducible through production code paths; included for completeness and as a guard against future refactoring.
 
-Issue 4 is a secondary consequence: `extended` was added as a guard for the Error handler but was
-attached to the connection rather than the current pipeline, so it outlives the requests it was meant
-to describe.
+**Location:** `pgdog/src/backend/protocol/state.rs`, Error handler (`action()`, extended branch).
+
+### Description
+
+When a client pipelines multiple extended-query sequences — each terminated by its own `Sync` — and the first sequence errors, the Error handler calls `queue.clear()` on the entire queue. This destroys the pending entries for all subsequent sequences, causing `ProtocolOutOfSync` when their backend responses arrive.
+
+### Code path
+
+Suppose three sequences share one `ProtocolState` queue:
+
+```
+[1,2,C,Z,  1,2,C,Z,  1,2,C,Z]
+ ^─seq1─^   ^─seq2─^   ^─seq3─^
+```
+
+After seq1 consumes ParseComplete (`1`) and BindComplete (`2`), the queue is:
+
+```
+[C, Z, 1, 2, C, Z, 1, 2, C, Z]
+```
+
+Seq1 then errors:
+
+| Step | Action | Queue after |
+|---|---|---|
+| Error arm fires | `pop_back()` → seq3's `Z`; `clear()` removes `[C,Z,1,2,C,Z,1,2,C]`; `push_back(Z)` | `[Z]` |
+| seq1 ReadyForQuery arrives | pops `Z` normally | **empty** |
+| seq2 ParseComplete arrives | `pop_front()` on empty queue | **ProtocolOutOfSync** |
+
+### Why it does not affect production
+
+`ClientRequest::spliced()` in `pgdog/src/frontend/client_request.rs` splits every multi-Execute pipeline into sub-requests at `Execute` boundaries, placing each `Sync` in its own standalone sub-request. Sub-requests are processed sequentially: each one is sent and fully drained before the next one is enqueued. The `ProtocolState` queue therefore only ever holds the entries for a single sync group at a time, so `queue.clear()` on error only ever sees that one group's entries.
+
+This property is a load-bearing invariant. If `spliced()` is ever changed — for example to batch multiple sync groups into one send — this bug will surface immediately.
+
+### Reproduction
+
+Not reproducible through normal pool operation. Reproduced by loading all three sync groups into one `ProtocolState` directly:
+
+```sh
+cargo test -p pgdog test_pipeline_single_queue_error_only_clears_failing_sync_group
+cargo test -p pgdog test_pipelined_multiple_syncs_first_fails
+```
+
+Both tests currently **fail** with `ProtocolOutOfSync`.
+
+### Tests
+
+| Test | Level | Status | What it covers |
+|---|---|---|---|
+| `test_pipeline_single_queue_error_clears_subsequent_sync_groups` | unit (`state.rs`) | passes | documents current (broken) behaviour: seq2 entries are gone |
+| `test_pipeline_single_queue_error_only_clears_failing_sync_group` | unit (`state.rs`) | **fails** | specifies correct behaviour: seq2 and seq3 must survive |
+| `test_pipelined_multiple_syncs_first_fails` | integration (`server.rs`) | **fails** | end-to-end reproduction against a real backend |
+
+### Fix
+
+The Error arm must clear only the failing sync group's entries — from the current queue head up to and including its own `ReadyForQuery` — leaving everything beyond that boundary intact:
+
+```rust
+// Remove entries up to and including this sync group's ReadyForQuery.
+while let Some(item) = self.queue.pop_front() {
+    if item == ExecutionItem::Code(ExecutionCode::ReadyForQuery) {
+        break;
+    }
+}
+```
+
+The current `pop_back()` / `clear()` / `push_back()` pattern was written assuming one sync group per queue. Replacing it with a forward scan to the first `ReadyForQuery` boundary makes the handler correct for both the single-group and multi-group cases.
+

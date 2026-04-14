@@ -975,4 +975,98 @@ mod test {
         assert_eq!(state.action('Z').unwrap(), Action::Forward); // forwarded
         assert!(state.is_empty());
     }
+
+    // =========================================
+    // Pipeline multi-sync tests
+    // =========================================
+
+    // In pipeline mode, each request runs in isolation; a failure in one must not affect the others.
+    #[test]
+    fn test_pipeline_multi_sync_error_in_seq1_does_not_affect_seq2_seq3() {
+        // Setup: seq1 expects ParseComplete, BindComplete, CommandComplete, ReadyForQuery.
+        let mut seq1 = ProtocolState::default();
+        seq1.add('1'); // ParseComplete
+        seq1.add('2'); // BindComplete
+        seq1.add('C'); // CommandComplete (won't arrive — execute errors)
+        seq1.add('Z'); // ReadyForQuery
+
+        // Seq1: fails — seq2 and seq3 must still respond.
+        assert_eq!(seq1.action('1').unwrap(), Action::Forward); // ParseComplete
+        assert_eq!(seq1.action('2').unwrap(), Action::Forward); // BindComplete
+        assert_eq!(seq1.action('E').unwrap(), Action::Forward); // ErrorResponse
+        assert!(seq1.out_of_sync);
+        assert_eq!(seq1.len(), 1);
+        assert_eq!(seq1.action('Z').unwrap(), Action::Forward); // ReadyForQuery
+        assert!(!seq1.out_of_sync);
+        assert!(seq1.is_empty());
+
+        // Seq2: independent state; seq1's error must not affect it.
+        let mut seq2 = ProtocolState::default();
+        seq2.add('1');
+        seq2.add('2');
+        seq2.add('C');
+        seq2.add('Z');
+
+        assert_eq!(seq2.action('1').unwrap(), Action::Forward); // ParseComplete
+        assert_eq!(seq2.action('2').unwrap(), Action::Forward); // BindComplete
+        assert_eq!(seq2.action('C').unwrap(), Action::Forward); // CommandComplete
+        assert_eq!(seq2.action('Z').unwrap(), Action::Forward); // ReadyForQuery
+        assert!(seq2.is_empty());
+
+        // Seq3: independent state; seq1's error must not affect it.
+        let mut seq3 = ProtocolState::default();
+        seq3.add('1');
+        seq3.add('2');
+        seq3.add('C');
+        seq3.add('Z');
+
+        assert_eq!(seq3.action('1').unwrap(), Action::Forward); // ParseComplete
+        assert_eq!(seq3.action('2').unwrap(), Action::Forward); // BindComplete
+        assert_eq!(seq3.action('C').unwrap(), Action::Forward); // CommandComplete
+        assert_eq!(seq3.action('Z').unwrap(), Action::Forward); // ReadyForQuery
+        assert!(seq3.is_empty());
+    }
+
+    // In pipeline mode, a failed request must not prevent subsequent pipelined
+    // requests from being processed. Seq1 errors; seq2 and seq3 must still
+    // receive their responses.
+    //
+    // Currently FAILS: when seq1 errors, seq2 and seq3 receive errors instead
+    // of their expected responses.
+    #[test]
+    fn test_pipeline_single_queue_error_only_clears_failing_sync_group() {
+        let mut state = ProtocolState::default();
+        // Setup: all three sync groups loaded into a single shared queue.
+        state.add('1');
+        state.add('2');
+        state.add('C');
+        state.add('Z'); // seq1
+        state.add('1');
+        state.add('2');
+        state.add('C');
+        state.add('Z'); // seq2
+        state.add('1');
+        state.add('2');
+        state.add('C');
+        state.add('Z'); // seq3
+
+        // Seq1: fails — seq2 and seq3 must still be reachable.
+        assert_eq!(state.action('1').unwrap(), Action::Forward); // ParseComplete
+        assert_eq!(state.action('2').unwrap(), Action::Forward); // BindComplete
+        assert_eq!(state.action('E').unwrap(), Action::Forward); // error — must not clear seq2/seq3
+        assert_eq!(state.action('Z').unwrap(), Action::Forward); // ReadyForQuery
+
+        // Seq2: must process normally.
+        assert_eq!(state.action('1').unwrap(), Action::Forward); // ParseComplete
+        assert_eq!(state.action('2').unwrap(), Action::Forward); // BindComplete
+        assert_eq!(state.action('C').unwrap(), Action::Forward); // CommandComplete
+        assert_eq!(state.action('Z').unwrap(), Action::Forward); // ReadyForQuery
+
+        // Seq3: must process normally.
+        assert_eq!(state.action('1').unwrap(), Action::Forward); // ParseComplete
+        assert_eq!(state.action('2').unwrap(), Action::Forward); // BindComplete
+        assert_eq!(state.action('C').unwrap(), Action::Forward); // CommandComplete
+        assert_eq!(state.action('Z').unwrap(), Action::Forward); // ReadyForQuery
+        assert!(state.is_empty());
+    }
 }
