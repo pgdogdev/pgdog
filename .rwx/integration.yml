@@ -49,6 +49,8 @@ aliases:
         sudo -u postgres psql -c 'ALTER SYSTEM SET wal_level TO logical;'
         sudo -u postgres psql -c 'ALTER SYSTEM SET max_prepared_transactions TO 1000;'
         sudo -u postgres psql -c 'ALTER SYSTEM SET max_connections TO 1000;'
+        sudo -u postgres psql -c 'ALTER SYSTEM SET max_workers TO 64';
+        sudo -u postgres psql -c 'ALTER SYSTEM SET max_wal_senders TO 32';
         sudo service postgresql restart
         touch .pg_isready
       ready-check: |
