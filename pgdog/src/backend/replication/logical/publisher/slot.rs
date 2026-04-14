@@ -2,6 +2,7 @@ use super::super::status::ReplicationSlot as ReplicationSlotTracker;
 use super::super::Error;
 use crate::{
     backend::{self, pool::Address, ConnectReason, Server, ServerOptions},
+    frontend::client::query_engine::two_pc::TwoPcTransactions,
     net::{
         replication::{StatusUpdate, XLogData},
         CopyData, CopyDone, DataRow, ErrorResponse, Format, FromBytes, Protocol, Query, ToBytes,
@@ -160,6 +161,16 @@ impl ReplicationSlot {
             "creating replication slot \"{}\" [{}]",
             self.name, self.address
         );
+
+        let two_pc = TwoPcTransactions::load(self.server()?).await?;
+
+        if !two_pc.is_empty() {
+            warn!(
+                "{} open two-phase transactions, this may block replication slot creation [{}]",
+                two_pc.len(),
+                self.server()?.addr()
+            );
+        }
 
         if self.kind == SlotKind::DataSync {
             self.server()?

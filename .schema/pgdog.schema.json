@@ -89,6 +89,7 @@
         "read_write_strategy": "conservative",
         "reload_schema_on_ddl": true,
         "resharding_copy_format": "binary",
+        "resharding_parallel_copies": 1,
         "rollback_timeout": 5000,
         "server_lifetime": 86400000,
         "shutdown_termination_timeout": null,
@@ -938,6 +939,13 @@
           "description": "Which format to use for `COPY` statements during resharding.\n\n**Note:** Text format is required when migrating from `INTEGER` to `BIGINT` primary keys during resharding.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#resharding_copy_format",
           "$ref": "#/$defs/CopyFormat",
           "default": "binary"
+        },
+        "resharding_parallel_copies": {
+          "description": "How many parallel copies to launch, irrespective of the number of available replicas.",
+          "type": "integer",
+          "format": "uint",
+          "default": 1,
+          "minimum": 0
         },
         "rollback_timeout": {
           "description": "How long to allow for `ROLLBACK` queries to run on server connections with unfinished transactions.\n\n_Default:_ `5000`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#rollback_timeout",

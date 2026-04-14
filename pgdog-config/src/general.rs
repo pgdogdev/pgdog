@@ -574,6 +574,10 @@ pub struct General {
     #[serde(default)]
     pub resharding_copy_format: CopyFormat,
 
+    /// How many parallel copies to launch, irrespective of the number of available replicas.
+    #[serde(default = "General::resharding_parallel_copies")]
+    pub resharding_parallel_copies: usize,
+
     /// Automatically reload the schema cache used by PgDog to route queries upon detecting DDL statements.
     ///
     /// **Note:** This setting requires PgDog Enterprise Edition to work as expected. If using the open source edition, it will only work with single-node PgDog deployments, e.g., in local development or CI.
@@ -715,6 +719,7 @@ impl Default for General {
             system_catalogs: Self::default_system_catalogs(),
             omnisharded_sticky: bool::default(),
             resharding_copy_format: CopyFormat::default(),
+            resharding_parallel_copies: Self::resharding_parallel_copies(),
             reload_schema_on_ddl: Self::reload_schema_on_ddl(),
             load_schema: Self::load_schema(),
             cutover_replication_lag_threshold: Self::cutover_replication_lag_threshold(),
@@ -926,6 +931,10 @@ impl General {
 
     fn default_system_catalogs() -> SystemCatalogsBehavior {
         Self::env_enum_or_default("PGDOG_SYSTEM_CATALOGS")
+    }
+
+    fn resharding_parallel_copies() -> usize {
+        1
     }
 
     fn default_shutdown_termination_timeout() -> Option<u64> {

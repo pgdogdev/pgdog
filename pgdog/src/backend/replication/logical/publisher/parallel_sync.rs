@@ -89,7 +89,9 @@ impl ParallelSyncManager {
         }
 
         Ok(Self {
-            permit: Arc::new(Semaphore::new(replicas.len())),
+            permit: Arc::new(Semaphore::new(
+                replicas.len() * dest.resharding_parallel_copies(),
+            )),
             tables,
             replicas,
             dest: dest.clone(),
@@ -99,8 +101,9 @@ impl ParallelSyncManager {
     /// Run parallel table sync and return table LSNs when everything is done.
     pub async fn run(self) -> Result<Vec<Table>, Error> {
         info!(
-            "starting parallel table copy using {} replicas",
-            self.replicas.len()
+            "starting parallel table copy using {} replicas and {} parallel copies",
+            self.replicas.len(),
+            self.permit.available_permits() / self.replicas.len(),
         );
 
         let mut replicas_iter = self.replicas.iter();
