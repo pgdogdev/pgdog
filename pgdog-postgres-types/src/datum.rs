@@ -5,8 +5,8 @@ use pgdog_vector::{Float, Vector};
 use uuid::Uuid;
 
 use crate::{
-    Data, Double, Error, Format, FromDataType, Interval, Numeric, Timestamp, TimestampTz,
-    ToDataRowColumn,
+    Array, Data, Double, Error, Format, FromDataType, Interval, Numeric, Oid, Timestamp,
+    TimestampTz, ToDataRowColumn,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -35,6 +35,10 @@ pub enum Datum {
     Double(Double),
     /// Vector
     Vector(Vector),
+    /// OID.
+    Oid(Oid),
+    /// Array.
+    Array(Array),
     /// We don't know.
     Unknown(Bytes),
     /// NULL.
@@ -74,6 +78,8 @@ impl std::hash::Hash for Datum {
                 }
             }
             Vector(v) => v.hash(state),
+            Oid(v) => v.hash(state),
+            Array(v) => v.hash(state),
             Unknown(v) => v.hash(state),
             Null => {}
             Boolean(v) => v.hash(state),
@@ -103,6 +109,8 @@ impl Ord for Datum {
             (Float(a), Float(b)) => a.cmp(b),
             (Double(a), Double(b)) => a.cmp(b),
             (Vector(a), Vector(b)) => a.cmp(b),
+            (Oid(a), Oid(b)) => a.cmp(b),
+            (Array(a), Array(b)) => a.cmp(b),
             (Unknown(a), Unknown(b)) => a.cmp(b),
             (Boolean(a), Boolean(b)) => a.cmp(b),
             (Null, Null) => std::cmp::Ordering::Equal,
@@ -122,9 +130,11 @@ impl Ord for Datum {
                         Datum::Float(_) => 9,
                         Datum::Double(_) => 10,
                         Datum::Vector(_) => 11,
-                        Datum::Unknown(_) => 12,
-                        Datum::Null => 13,
-                        Datum::Boolean(_) => 14,
+                        Datum::Oid(_) => 12,
+                        Datum::Array(_) => 13,
+                        Datum::Unknown(_) => 14,
+                        Datum::Null => 15,
+                        Datum::Boolean(_) => 16,
                     }
                 }
                 variant_index(self).cmp(&variant_index(other))
@@ -150,6 +160,11 @@ impl ToDataRowColumn for Datum {
             Float(val) => val.to_data_row_column(),
             Double(val) => val.to_data_row_column(),
             Vector(vector) => vector.to_data_row_column(),
+            Oid(oid) => oid.to_data_row_column(),
+            Array(array) => array
+                .encode(Format::Text)
+                .expect("array text encode should succeed for any decoded array")
+                .into(),
             Unknown(bytes) => bytes.clone().into(),
             Null => Data::null(),
             Boolean(val) => val.to_data_row_column(),
@@ -201,7 +216,15 @@ impl Datum {
             DataType::Timestamp => Ok(Datum::Timestamp(Timestamp::decode(bytes, encoding)?)),
             DataType::TimestampTz => Ok(Datum::TimestampTz(TimestampTz::decode(bytes, encoding)?)),
             DataType::Vector => Ok(Datum::Vector(Vector::decode(bytes, encoding)?)),
+            DataType::SmallInt => Ok(Datum::SmallInt(i16::decode(bytes, encoding)?)),
+            DataType::Oid => Ok(Datum::Oid(Oid::decode(bytes, encoding)?)),
             DataType::Bool => Ok(Datum::Boolean(bool::decode(bytes, encoding)?)),
+            DataType::Array(element_oid) => match Array::decode_typed(bytes, encoding, element_oid)
+            {
+                Ok(array) => Ok(Datum::Array(array)),
+                Err(Error::ArrayDimensions(_)) => Ok(Datum::Unknown(Bytes::copy_from_slice(bytes))),
+                Err(err) => Err(err),
+            },
             _ => Ok(Datum::Unknown(Bytes::copy_from_slice(bytes))),
         }
     }
@@ -222,8 +245,13 @@ impl Datum {
             Datum::Numeric(n) => n.encode(format),
             Datum::Timestamp(t) => t.encode(format),
             Datum::TimestampTz(tz) => tz.encode(format),
+            Datum::SmallInt(i) => i.encode(format),
+            Datum::Interval(i) => i.encode(format),
+            Datum::Vector(v) => v.encode(format),
+            Datum::Oid(o) => o.encode(format),
+            Datum::Array(a) => a.encode(format),
             Datum::Null => Ok(Bytes::new()),
-            _ => Err(Error::UnsupportedDataTypeForEncoding),
+            Datum::Unknown(bytes) => Ok(bytes.clone()),
         }
     }
 }
@@ -245,5 +273,87 @@ pub enum DataType {
     Numeric,
     Other(i32),
     Uuid,
+    Oid,
     Vector,
+    /// Array type, carrying the element type OID.
+    Array(i32),
+}
+
+impl DataType {
+    /// Map a PostgreSQL type OID to a DataType.
+    pub fn from_oid(oid: i32) -> Self {
+        match oid {
+            16 => DataType::Bool,
+            20 => DataType::Bigint,
+            21 => DataType::SmallInt,
+            23 => DataType::Integer,
+            25 => DataType::Text,
+            26 => DataType::Oid,
+            700 => DataType::Real,
+            701 => DataType::DoublePrecision,
+            1043 => DataType::Text, // varchar
+            1114 => DataType::Timestamp,
+            1184 => DataType::TimestampTz,
+            1186 => DataType::Interval,
+            1700 => DataType::Numeric,
+            2950 => DataType::Uuid,
+            // Array OIDs → Array(element_oid)
+            1000 => DataType::Array(16),   // bool[]
+            1005 => DataType::Array(21),   // int2[]
+            1007 => DataType::Array(23),   // int4[]
+            1009 => DataType::Array(25),   // text[]
+            1015 => DataType::Array(1043), // varchar[]
+            1016 => DataType::Array(20),   // int8[]
+            1021 => DataType::Array(700),  // float4[]
+            1022 => DataType::Array(701),  // float8[]
+            1028 => DataType::Array(26),   // oid[]
+            1115 => DataType::Array(1114), // timestamp[]
+            1185 => DataType::Array(1184), // timestamptz[]
+            1187 => DataType::Array(1186), // interval[]
+            1231 => DataType::Array(1700), // numeric[]
+            2951 => DataType::Array(2950), // uuid[]
+            _ => DataType::Other(oid),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bytes::{BufMut, BytesMut};
+
+    #[test]
+    fn test_multidimensional_text_array_falls_back_to_unknown() {
+        let input = b"{{1,2},{3,4}}";
+        let datum = Datum::new(input, DataType::Array(23), Format::Text, false).unwrap();
+
+        assert!(matches!(datum, Datum::Unknown(_)));
+        assert_eq!(
+            datum.encode(Format::Text).unwrap(),
+            Bytes::from_static(input)
+        );
+    }
+
+    #[test]
+    fn test_multidimensional_binary_array_falls_back_to_unknown() {
+        let mut buf = BytesMut::new();
+        buf.put_i32(2);
+        buf.put_i32(0);
+        buf.put_i32(23);
+        buf.put_i32(2);
+        buf.put_i32(1);
+        buf.put_i32(2);
+        buf.put_i32(1);
+
+        for value in [1_i32, 2, 3, 4] {
+            buf.put_i32(4);
+            buf.put_i32(value);
+        }
+
+        let input = buf.freeze();
+        let datum = Datum::new(&input, DataType::Array(23), Format::Binary, false).unwrap();
+
+        assert!(matches!(datum, Datum::Unknown(_)));
+        assert_eq!(datum.encode(Format::Binary).unwrap(), input);
+    }
 }
