@@ -1,5 +1,6 @@
 [general]
 resharding_copy_format = "binary"
+resharding_parallel_copies = 5
 
 #
 # Source of data.

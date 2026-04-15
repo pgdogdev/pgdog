@@ -80,6 +80,7 @@ pub struct Cluster {
     query_parser_engine: QueryParserEngine,
     reload_schema_on_ddl: bool,
     load_schema: LoadSchema,
+    resharding_parallel_copies: usize,
 }
 
 /// Sharding configuration from the cluster.
@@ -155,6 +156,7 @@ pub struct ClusterConfig<'a> {
     pub lsn_check_interval: Duration,
     pub reload_schema_on_ddl: bool,
     pub load_schema: LoadSchema,
+    pub resharding_parallel_copies: usize,
 }
 
 impl<'a> ClusterConfig<'a> {
@@ -207,6 +209,7 @@ impl<'a> ClusterConfig<'a> {
             lsn_check_interval: Duration::from_millis(general.lsn_check_interval),
             reload_schema_on_ddl: general.reload_schema_on_ddl,
             load_schema: general.load_schema,
+            resharding_parallel_copies: general.resharding_parallel_copies,
         }
     }
 }
@@ -243,6 +246,7 @@ impl Cluster {
             query_parser_engine,
             reload_schema_on_ddl,
             load_schema,
+            resharding_parallel_copies,
         } = config;
 
         let identifier = Arc::new(DatabaseUser {
@@ -291,6 +295,7 @@ impl Cluster {
             query_parser_engine,
             reload_schema_on_ddl,
             load_schema,
+            resharding_parallel_copies,
         }
     }
 
@@ -532,6 +537,12 @@ impl Cluster {
     /// for single-statement cross-shard writes.
     pub fn two_pc_auto_enabled(&self) -> bool {
         self.two_phase_commit_auto && self.two_pc_enabled()
+    }
+
+    /// How many parallel COPY commands can we
+    /// run to re-shard this cluster.
+    pub fn resharding_parallel_copies(&self) -> usize {
+        self.resharding_parallel_copies
     }
 
     /// Launch the connection pools.

@@ -55,7 +55,9 @@ impl AdminServer {
 
                 messages
             }
-            Err(err) => vec![ErrorResponse::syntax(err.to_string().as_str()).message()?],
+            Err(err) => {
+                vec![ErrorResponse::protocol_violation(err.to_string().as_str()).message()?]
+            }
         };
 
         self.messages.extend(messages);

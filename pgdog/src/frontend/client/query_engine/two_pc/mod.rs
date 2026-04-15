@@ -8,11 +8,13 @@ use super::Error;
 pub mod guard;
 pub mod manager;
 pub mod phase;
+pub mod server_transactions;
 pub mod transaction;
 
 pub use guard::TwoPcGuard;
 pub use manager::Manager;
 pub use phase::TwoPcPhase;
+pub(crate) use server_transactions::TwoPcTransactions;
 pub use transaction::TwoPcTransaction;
 
 #[cfg(test)]
