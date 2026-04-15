@@ -89,3 +89,90 @@ fn test_insert_bypassed() {
         "expected Command::Query (bypass), got {command:#?}",
     );
 }
+
+fn setup_with_locks() -> QueryParserTest {
+    let mut config = (*config()).clone();
+    config.config.general.query_parser = QueryParserLevel::SessionControlAndLocks;
+    QueryParserTest::new_single_primary(&config)
+}
+
+#[test]
+fn test_advisory_lock_detected() {
+    let lock_queries = [
+        "SELECT pg_advisory_lock(1)",
+        "SELECT pg_advisory_lock_shared(1)",
+        "SELECT pg_try_advisory_lock(1)",
+        "SELECT pg_try_advisory_lock_shared(1)",
+    ];
+
+    for query in lock_queries {
+        let mut test = setup_with_locks();
+        let command = test.execute(vec![Query::new(query).into()]);
+        match command {
+            Command::Query(route) => assert!(
+                route.is_lock_session(),
+                "expected lock_session for '{query}', got {route:#?}"
+            ),
+            _ => panic!("expected Command::Query for '{query}', got {command:#?}"),
+        }
+    }
+
+    let unlock_queries = [
+        "SELECT pg_advisory_unlock(1)",
+        "SELECT pg_advisory_unlock_all()",
+    ];
+
+    for query in unlock_queries {
+        let mut test = setup_with_locks();
+        let command = test.execute(vec![Query::new(query).into()]);
+        match command {
+            Command::Query(route) => assert!(
+                route.is_unlock_session(),
+                "expected unlock_session for '{query}', got {route:#?}"
+            ),
+            _ => panic!("expected Command::Query for '{query}', got {command:#?}"),
+        }
+    }
+
+    // xact variants are scoped to the transaction — parsed but not flagged as session lock/unlock.
+    let xact_queries = [
+        "SELECT pg_advisory_xact_lock(1)",
+        "SELECT pg_advisory_xact_lock_shared(1)",
+        "SELECT pg_try_advisory_xact_lock(1)",
+        "SELECT pg_try_advisory_xact_lock_shared(1)",
+    ];
+
+    for query in xact_queries {
+        let mut test = setup_with_locks();
+        let command = test.execute(vec![Query::new(query).into()]);
+        match command {
+            Command::Query(route) => {
+                assert!(!route.is_lock_session());
+                assert!(!route.is_unlock_session());
+            }
+            _ => panic!("expected Command::Query for '{query}', got {command:#?}"),
+        }
+    }
+}
+
+#[test]
+fn test_advisory_lock_not_detected_without_locks_level() {
+    use crate::frontend::router::parser::route::{OverrideReason, ShardSource};
+
+    let mut test = setup();
+    let command = test.execute(vec![Query::new("SELECT pg_advisory_lock(1)").into()]);
+    match command {
+        Command::Query(route) => {
+            assert!(
+                !route.is_lock_session(),
+                "SessionControl level should not classify advisory locks",
+            );
+            assert_eq!(
+                route.shard_with_priority().source(),
+                &ShardSource::Override(OverrideReason::ParserDisabled),
+                "advisory lock should bypass the parser at SessionControl level"
+            );
+        }
+        _ => panic!("expected Command::Query, got {command:#?}"),
+    }
+}

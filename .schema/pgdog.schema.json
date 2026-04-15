@@ -89,6 +89,7 @@
         "query_timeout": 9223372036854775807,
         "read_write_split": "include_primary",
         "read_write_strategy": "conservative",
+        "regex_parser_limit": 256,
         "reload_schema_on_ddl": true,
         "resharding_copy_format": "binary",
         "resharding_parallel_copies": 1,
@@ -946,6 +947,13 @@
           "$ref": "#/$defs/ReadWriteStrategy",
           "default": "conservative"
         },
+        "regex_parser_limit": {
+          "description": "Limit on the size of the query the regex parser will inspect.",
+          "type": "integer",
+          "format": "uint",
+          "default": 256,
+          "minimum": 0
+        },
         "reload_schema_on_ddl": {
           "description": "Automatically reload the schema cache used by PgDog to route queries upon detecting DDL statements.\n\n**Note:** This setting requires PgDog Enterprise Edition to work as expected. If using the open source edition, it will only work with single-node PgDog deployments, e.g., in local development or CI.\n\n_Default:_ `true`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#reload_schema_on_ddl",
           "type": "boolean",
@@ -1419,6 +1427,11 @@
           "description": "Control statements only.",
           "type": "string",
           "const": "session_control"
+        },
+        {
+          "description": "Control & advisory locks.",
+          "type": "string",
+          "const": "session_control_and_locks"
         }
       ]
     },

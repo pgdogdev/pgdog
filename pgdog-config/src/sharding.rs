@@ -405,6 +405,8 @@ pub enum QueryParserLevel {
     Off,
     /// Control statements only.
     SessionControl,
+    /// Control & advisory locks.
+    SessionControlAndLocks,
 }
 
 /// Underlying parser implementation used to analyze SQL queries.
