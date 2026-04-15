@@ -61,6 +61,8 @@
         "load_balancing_strategy": "random",
         "load_schema": "auto",
         "log_connections": true,
+        "log_dedup_threshold": 0,
+        "log_dedup_window": 0,
         "log_disconnections": true,
         "log_format": "text",
         "log_level": "info",
@@ -767,6 +769,20 @@
           "description": "If enabled, log every time a user creates a new connection to PgDog.\n\n_Default:_ `true`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#log_connections",
           "type": "boolean",
           "default": true
+        },
+        "log_dedup_threshold": {
+          "description": "Number of identical log messages allowed within `log_dedup_window` before further duplicates are suppressed. Set to `0` to disable throttling.\n\n_Default:_ `0`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#log_dedup_threshold",
+          "type": "integer",
+          "format": "uint64",
+          "default": 0,
+          "minimum": 0
+        },
+        "log_dedup_window": {
+          "description": "Window, in milliseconds, over which to deduplicate identical log messages. Set to `0` to disable throttling.\n\n**Note:** When enabled, identical messages (same level, target, and body) that exceed `log_dedup_threshold` within this window are suppressed and replaced with a single summary line at the end of the window.\n\n_Default:_ `0`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#log_dedup_window",
+          "type": "integer",
+          "format": "uint64",
+          "default": 0,
+          "minimum": 0
         },
         "log_disconnections": {
           "description": "If enabled, log every time a user disconnects from PgDog.\n\n_Default:_ `true`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#log_disconnections",

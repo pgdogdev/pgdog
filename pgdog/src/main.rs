@@ -15,7 +15,6 @@ use pgdog::plugin;
 use pgdog::stats;
 use pgdog::util::pgdog_version;
 use pgdog::{healthcheck, net};
-use serde::Deserialize;
 use tokio::runtime::Builder;
 use tracing::{error, info};
 
@@ -82,24 +81,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     plugin::load_from_config()?;
 
-    let runtime = match config.config.general.workers {
-        0 => {
-            let mut binding = Builder::new_current_thread();
-            binding
-                .enable_all()
-                .thread_stack_size(config.config.memory.stack_size);
-            binding
-        }
-        workers => {
-            let mut builder = Builder::new_multi_thread();
-            builder
-                .worker_threads(workers)
-                .enable_all()
-                .thread_stack_size(config.config.memory.stack_size);
-            builder
-        }
-    }
-    .build()?;
+    let runtime = build_runtime(
+        config.config.general.workers,
+        config.config.memory.stack_size,
+    )?;
 
     info!(
         "spawning {} threads (stack size: {}MiB)",
@@ -125,6 +110,8 @@ async fn pgdog(command: Option<Commands>) -> Result<(), Box<dyn std::error::Erro
     databases::init()?;
 
     let general = &config::config().config.general;
+
+    pgdog::install_log_throttle(general);
 
     if let Some(broadcast_addr) = general.broadcast_address {
         net::discovery::Listener::get().run(broadcast_addr, general.broadcast_port);
@@ -205,32 +192,26 @@ async fn pgdog(command: Option<Commands>) -> Result<(), Box<dyn std::error::Erro
     Ok(())
 }
 
-#[derive(Debug, Default, Deserialize)]
-struct BootstrapLoggingConfig {
-    #[serde(default)]
-    general: BootstrapLoggingGeneral,
-}
-
-#[derive(Debug, Default, Deserialize)]
-struct BootstrapLoggingGeneral {
-    log_format: Option<pgdog::config::LogFormat>,
-    log_level: Option<String>,
+fn build_runtime(workers: usize, stack_size: usize) -> std::io::Result<tokio::runtime::Runtime> {
+    match workers {
+        0 => Builder::new_current_thread()
+            .enable_all()
+            .thread_stack_size(stack_size)
+            .build(),
+        workers => Builder::new_multi_thread()
+            .worker_threads(workers)
+            .enable_all()
+            .thread_stack_size(stack_size)
+            .build(),
+    }
 }
 
 fn bootstrap_logger(config_path: &Path) {
-    let mut general = pgdog::config::General::default();
-
-    if let Ok(config) = read_to_string(config_path) {
-        if let Ok(bootstrap) = toml::from_str::<BootstrapLoggingConfig>(&config) {
-            if let Some(log_format) = bootstrap.general.log_format {
-                general.log_format = log_format;
-            }
-
-            if let Some(log_level) = bootstrap.general.log_level {
-                general.log_level = log_level;
-            }
-        }
-    }
+    let general = read_to_string(config_path)
+        .ok()
+        .and_then(|config| toml::from_str::<pgdog::config::Config>(&config).ok())
+        .map(|config| config.general)
+        .unwrap_or_default();
 
     pgdog::logger_with_config(&general);
 }
