@@ -64,7 +64,8 @@ impl RegexParser {
     /// Check if we should enable the parser just for this request.
     pub(crate) fn use_parser(&self, request: &ClientRequest) -> bool {
         let with_locks = self.level == QueryParserLevel::SessionControlAndLocks;
-        let session_control = with_locks || self.level == QueryParserLevel::SessionControl;
+        let session_control =
+            self.level == QueryParserLevel::SessionControl || self.level == QueryParserLevel::Auto;
 
         if with_locks || session_control {
             for message in request.iter() {
