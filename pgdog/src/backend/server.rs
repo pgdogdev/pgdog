@@ -1241,6 +1241,11 @@ pub mod test {
     }
 
     #[tokio::test]
+    async fn test_connect_azure_sql_workload_identity_uses_dynamic_token_not_static_password() {
+        // TODO_AZURE_WORKLOAD_IDENTITY
+    }
+
+    #[tokio::test]
     async fn test_simple_query() {
         let mut server = test_server().await;
         for _ in 0..25 {

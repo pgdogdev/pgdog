@@ -66,6 +66,8 @@ impl Address {
             },
             passwords: if server_auth.rds_iam() {
                 vec![]
+            } else if server_auth.azure_workload_identity() {
+                vec![]
             } else if let Some(password) = database.password.clone() {
                 vec![password]
             } else if let Some(password) = user.server_password.clone() {
@@ -83,6 +85,9 @@ impl Address {
         match self.server_auth {
             ServerAuth::Password => Ok(self.passwords.clone()),
             ServerAuth::RdsIam => Ok(vec![crate::backend::auth::rds_iam::token(self).await?]),
+            ServerAuth::AzureWorkloadIdentity => Ok(vec![
+                crate::backend::auth::azure_workload_identity::token(self).await?,
+            ]),
         }
     }
 

@@ -135,11 +135,16 @@ pub enum ServerAuth {
     Password,
     /// Generate an AWS RDS IAM auth token per connection attempt.
     RdsIam,
+    AzureWorkloadIdentity,
 }
 
 impl ServerAuth {
     pub fn rds_iam(&self) -> bool {
         matches!(self, Self::RdsIam)
+    }
+
+    pub fn azure_workload_identity(&self) -> bool {
+        matches!(self, Self::AzureWorkloadIdentity)
     }
 }
 
@@ -538,5 +543,20 @@ server_iam_region = "us-east-1"
         let user = users.users.first().unwrap();
         assert_eq!(user.server_auth, ServerAuth::RdsIam);
         assert_eq!(user.server_iam_region.as_deref(), Some("us-east-1"));
+    }
+
+    #[test]
+    fn test_user_server_auth_azure_workload_identity() {
+        let source = r#"
+[[users]]
+name = "alice"
+database = "db"
+password = "secret"
+server_auth = "azure_workload_identity"
+"#;
+
+        let users: Users = toml::from_str(source).unwrap();
+        let user = users.users.first().unwrap();
+        assert_eq!(user.server_auth, ServerAuth::AzureWorkloadIdentity);
     }
 }

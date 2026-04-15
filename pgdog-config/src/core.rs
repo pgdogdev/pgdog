@@ -112,25 +112,23 @@ impl ConfigAndUsers {
     }
 
     fn validate_server_auth(&self) -> Result<(), Error> {
-        let has_rds_iam_user = self
-            .users
-            .users
-            .iter()
-            .any(|user| user.server_auth == ServerAuth::RdsIam);
+        let is_external_identity = self.users.users.iter().any(|user| {
+            [ServerAuth::RdsIam, ServerAuth::AzureWorkloadIdentity].contains(&user.server_auth)
+        });
 
-        if !has_rds_iam_user {
+        if !is_external_identity {
             return Ok(());
         }
 
         if self.config.general.passthrough_auth != PassthroughAuth::Disabled {
             return Err(Error::ParseError(
-                "\"passthrough_auth\" must be \"disabled\" when any user has \"server_auth = \\\"rds_iam\\\"\"".into(),
+                "\"passthrough_auth\" must be \"disabled\" when any user has \"server_auth = \\\"rds_iam\\\"\" or \"server_auth = \\\"azure_workload_identity\\\"\"".into(),
             ));
         }
 
         if self.config.general.tls_verify == TlsVerifyMode::Disabled {
             return Err(Error::ParseError(
-                "\"tls_verify\" cannot be \"disabled\" when any user has \"server_auth = \\\"rds_iam\\\"\"".into(),
+                "\"tls_verify\" cannot be \"disabled\" when any user has \"server_auth = \\\"rds_iam\\\"\" or \"server_auth = \\\"azure_workload_identity\\\"\"".into(),
             ));
         }
 
