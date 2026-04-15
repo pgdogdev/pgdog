@@ -1,5 +1,5 @@
 use once_cell::sync::Lazy;
-use pgdog_config::QueryParserLevel;
+use pgdog_config::{General, QueryParserLevel};
 use regex::RegexSet;
 
 use crate::{frontend::ClientRequest, net::ProtocolMessage};
@@ -50,7 +50,7 @@ pub(crate) struct RegexParser {
 impl Default for RegexParser {
     fn default() -> Self {
         Self {
-            limit: 256,
+            limit: General::regex_parser_limit(),
             level: QueryParserLevel::default(),
         }
     }
@@ -96,7 +96,7 @@ mod test {
 
     fn matches_at(query: &str, level: QueryParserLevel) -> bool {
         let req = ClientRequest::from(vec![Query::new(query).into()]);
-        RegexParser::new(1_000, level).use_parser(&req)
+        RegexParser::new(General::regex_parser_limit(), level).use_parser(&req)
     }
 
     #[test]

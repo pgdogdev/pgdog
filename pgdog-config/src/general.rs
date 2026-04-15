@@ -836,8 +836,8 @@ impl General {
         Self::env_option("PGDOG_HEALTHCHECK_PORT")
     }
 
-    fn regex_parser_limit() -> usize {
-        256
+    pub fn regex_parser_limit() -> usize {
+        1_000
     }
 
     fn ban_timeout() -> u64 {
