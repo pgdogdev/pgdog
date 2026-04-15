@@ -474,6 +474,24 @@ pub struct General {
     #[serde(default = "General::log_disconnections")]
     pub log_disconnections: bool,
 
+    /// Window, in milliseconds, over which to deduplicate identical log messages. Set to `0` to disable throttling.
+    ///
+    /// **Note:** When enabled, identical messages (same level, target, and body) that exceed `log_dedup_threshold` within this window are suppressed and replaced with a single summary line at the end of the window.
+    ///
+    /// _Default:_ `0`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#log_dedup_window
+    #[serde(default)]
+    pub log_dedup_window: u64,
+
+    /// Number of identical log messages allowed within `log_dedup_window` before further duplicates are suppressed. Set to `0` to disable throttling.
+    ///
+    /// _Default:_ `0`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#log_dedup_threshold
+    #[serde(default)]
+    pub log_dedup_threshold: u64,
+
     /// Enable two-phase commit for write, cross-shard transactions.
     ///
     /// _Default:_ `false`
@@ -705,6 +723,8 @@ impl Default for General {
             log_level: Self::log_level(),
             log_connections: Self::log_connections(),
             log_disconnections: Self::log_disconnections(),
+            log_dedup_window: 0,
+            log_dedup_threshold: 0,
             two_phase_commit: bool::default(),
             two_phase_commit_auto: None,
             expanded_explain: Self::expanded_explain(),

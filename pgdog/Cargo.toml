@@ -21,6 +21,7 @@ pin-project = "1"
 tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "std"] }
+tracing-throttle = "0.4"
 parking_lot = "0.12"
 thiserror = "2"
 bytes = "1"
