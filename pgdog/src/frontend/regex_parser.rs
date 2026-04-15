@@ -50,7 +50,7 @@ pub(crate) struct RegexParser {
 impl Default for RegexParser {
     fn default() -> Self {
         Self {
-            limit: 1_000,
+            limit: 256,
             level: QueryParserLevel::default(),
         }
     }
