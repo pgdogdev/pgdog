@@ -770,6 +770,18 @@ mod test {
         }
     }
 
+    fn interval_array_field(name: &str) -> Field {
+        Field {
+            name: name.into(),
+            table_oid: 0,
+            column: 0,
+            type_oid: 1187,
+            type_size: -1,
+            type_modifier: -1,
+            format: 0,
+        }
+    }
+
     #[test]
     fn aggregate_count_with_int_typecast() {
         // Regression test for https://github.com/pgdogdev/pgdog/issues/861
@@ -1368,5 +1380,54 @@ mod test {
             groups,
             vec![("{{1,2},{3,4}}".into(), 2), ("{{5,6},{7,8}}".into(), 1),]
         );
+    }
+
+    #[test]
+    fn aggregate_group_by_interval_arrays_preserves_postgres_text_output() {
+        let stmt = pg_query::parse("SELECT sample_interval_array, COUNT(*) FROM samples GROUP BY 1")
+            .unwrap()
+            .protobuf
+            .stmts
+            .first()
+            .cloned()
+            .unwrap();
+        let aggregate = match stmt.stmt.unwrap().node.unwrap() {
+            pg_query::NodeEnum::SelectStmt(stmt) => Aggregate::parse(&stmt),
+            _ => panic!("expected select stmt"),
+        };
+
+        let rd = RowDescription::new(&[
+            interval_array_field("sample_interval_array"),
+            Field::bigint("count"),
+        ]);
+        let decoder = Decoder::from(&rd);
+
+        let input = Bytes::from_static(br#"{"1 year 2 mons 1 day 04:05:06.7"}"#);
+
+        let mut rows = VecDeque::new();
+        let mut shard0 = DataRow::new();
+        shard0.add(input.clone()).add(1_i64);
+        rows.push_back(shard0);
+
+        let mut shard1 = DataRow::new();
+        shard1.add(input.clone()).add(1_i64);
+        rows.push_back(shard1);
+
+        let mut result = Aggregates::new(
+            &rows,
+            &decoder,
+            &aggregate,
+            &AggregateRewritePlan::default(),
+        )
+        .aggregate()
+        .unwrap();
+
+        assert_eq!(result.len(), 1);
+        let row = result.pop_front().unwrap();
+        let intervals = row.get::<String>(0, Format::Text).unwrap();
+        let count = row.get::<i64>(1, Format::Text).unwrap();
+
+        assert_eq!(intervals, r#"{"1 year 2 mons 1 day 04:05:06.7"}"#);
+        assert_eq!(count, 2);
     }
 }

@@ -83,12 +83,7 @@ fn format_fractional_micros(micros: i32) -> String {
     while digits.ends_with('0') {
         digits.pop();
     }
-
-    if micros < 0 {
-        format!("-{digits}")
-    } else {
-        digits
-    }
+    digits
 }
 
 impl FromDataType for Interval {
@@ -134,9 +129,9 @@ impl FromDataType for Interval {
 
                     if let Some(format) = format {
                         match format {
-                            "years" => result.years = bigint(value)?,
-                            "mons" => result.months = int32(value)?,
-                            "days" => result.days = int32(value)?,
+                            "year" | "years" => result.years = bigint(value)?,
+                            "mon" | "mons" => result.months = int32(value)?,
+                            "day" | "days" => result.days = int32(value)?,
                             _ => (),
                         }
                     } else {
@@ -173,19 +168,45 @@ impl FromDataType for Interval {
 
     fn encode(&self, encoding: Format) -> Result<Bytes, Error> {
         match encoding {
-            Format::Text => Ok(Bytes::copy_from_slice(
-                format!(
-                    "{} years {} mons {} days {}:{}:{}.{}",
-                    self.years,
-                    self.months,
-                    self.days,
-                    self.hours,
-                    self.minutes,
-                    self.seconds,
-                    format_fractional_micros(self.micros)
-                )
-                .as_bytes(),
-            )),
+            Format::Text => {
+                let years_label = if self.years == 1 { "year" } else { "years" };
+                let days_label = if self.days == 1 { "day" } else { "days" };
+
+                // Collapse time fields into a signed total so a negative fractional
+                // component produces a single leading `-` on the time portion rather
+                // than an unparseable `0:0:0.-5`.
+                let total_micros: i64 = self
+                    .hours
+                    .saturating_mul(3_600_000_000)
+                    .saturating_add(self.minutes.saturating_mul(60_000_000))
+                    .saturating_add(self.seconds.saturating_mul(1_000_000))
+                    .saturating_add(self.micros as i64);
+                let negative = total_micros < 0;
+                let abs_total = total_micros.unsigned_abs();
+                let total_secs = (abs_total / 1_000_000) as i64;
+                let remaining_micros = (abs_total % 1_000_000) as i32;
+                let hours = total_secs / 3600;
+                let minutes = (total_secs % 3600) / 60;
+                let seconds = total_secs % 60;
+                let sign = if negative { "-" } else { "" };
+
+                Ok(Bytes::copy_from_slice(
+                    format!(
+                        "{} {} {} mons {} {} {}{:02}:{:02}:{:02}.{}",
+                        self.years,
+                        years_label,
+                        self.months,
+                        self.days,
+                        days_label,
+                        sign,
+                        hours,
+                        minutes,
+                        seconds,
+                        format_fractional_micros(remaining_micros)
+                    )
+                    .as_bytes(),
+                ))
+            }
             Format::Binary => {
                 let mut buf = BytesMut::with_capacity(16);
                 let microseconds = self.hours * 3_600_000_000
@@ -245,8 +266,13 @@ mod test {
     #[test]
     fn test_interval_binary_roundtrip_preserves_fractional_seconds() {
         let cases = [
-            ("00:00:00.006", 0, 6_000, "0 years 0 mons 0 days 0:0:0.006"),
-            ("00:00:06.7", 6, 700_000, "0 years 0 mons 0 days 0:0:6.7"),
+            (
+                "00:00:00.006",
+                0,
+                6_000,
+                "0 years 0 mons 0 days 00:00:00.006",
+            ),
+            ("00:00:06.7", 6, 700_000, "0 years 0 mons 0 days 00:00:06.7"),
         ];
 
         for (input, expected_seconds, expected_micros, expected_text) in cases {
@@ -302,5 +328,40 @@ mod test {
         assert!(parse_fractional_micros("1234567").is_err());
         assert!(parse_fractional_micros("").is_err());
         assert!(parse_fractional_micros("12a4").is_err());
+    }
+
+    #[test]
+    fn test_interval_decode_postgres_style_singular_units_and_padding() {
+        let s = "1 year 2 mons 1 day 04:05:06.7";
+        let interval = Interval::decode(s.as_bytes(), Format::Text).unwrap();
+
+        assert_eq!(interval.years, 1);
+        assert_eq!(interval.months, 2);
+        assert_eq!(interval.days, 1);
+        assert_eq!(interval.hours, 4);
+        assert_eq!(interval.minutes, 5);
+        assert_eq!(interval.seconds, 6);
+        assert_eq!(interval.micros, 700_000);
+
+        let encoded = interval.encode(Format::Text).unwrap();
+        assert_eq!(&encoded[..], s.as_bytes());
+    }
+
+    #[test]
+    fn test_negative_fractional_interval_binary_text_output_is_self_parseable() {
+        let original = Interval {
+            micros: -500_000,
+            ..Default::default()
+        };
+
+        let binary = original.encode(Format::Binary).unwrap();
+        let decoded = Interval::decode(&binary, Format::Binary).unwrap();
+        let text = decoded.encode(Format::Text).unwrap();
+
+        assert!(
+            Interval::decode(&text, Format::Text).is_ok(),
+            "binary->text interval output should remain parseable: {}",
+            std::str::from_utf8(&text).unwrap()
+        );
     }
 }

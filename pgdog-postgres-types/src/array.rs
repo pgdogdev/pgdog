@@ -92,12 +92,17 @@ impl Array {
         let mut result = String::new();
         if self.dim.lower_bound != 1 {
             use std::fmt::Write;
-            let ub = self
-            .dim
-            .lower_bound
-            .checked_add(self.dim.size)
-            .and_then(|v| v.checked_sub(1))
-            .ok_or(Error::UnexpectedPayload)?;
+            let ub = if self.dim.size == 0 {
+                self.dim
+                    .lower_bound
+                    .checked_sub(1)
+                    .ok_or(Error::UnexpectedPayload)?
+            } else {
+                self.dim
+                    .lower_bound
+                    .checked_add(self.dim.size - 1)
+                    .ok_or(Error::UnexpectedPayload)?
+            };
             write!(result, "[{}:{}]=", self.dim.lower_bound, ub).unwrap();
         }
         result.push('{');
@@ -379,9 +384,11 @@ fn decode_binary(bytes: &[u8], expected_element_oid: i32) -> Result<Array, Error
             return Err(Error::UnexpectedPayload);
         }
         let lower_bound = bytes.get_i32();
-        lower_bound
-            .checked_add(size)
-            .ok_or(Error::UnexpectedPayload)?;
+        if size > 0 {
+            lower_bound
+                .checked_add(size - 1)
+                .ok_or(Error::UnexpectedPayload)?;
+        }
         Dimension { size, lower_bound }
     };
 
@@ -767,7 +774,7 @@ mod tests {
 
     #[test]
     fn test_interval_array_datum_roundtrip() {
-        let input = br#"{"1 years 0 mons 0 days 0:0:0.0"}"#;
+        let input = br#"{"1 year 0 mons 0 days 00:00:00.0"}"#;
         let datum = Datum::new(input, DataType::Array(1186), Format::Text, false).unwrap();
         let encoded = datum.encode(Format::Text).unwrap();
         assert_eq!(&encoded[..], input);
@@ -775,7 +782,7 @@ mod tests {
 
     #[test]
     fn test_interval_array_binary_roundtrip() {
-        let input = br#"{"1 years 2 mons 3 days 4:5:6.006"}"#;
+        let input = br#"{"1 year 2 mons 3 days 04:05:06.006"}"#;
         let datum = Datum::new(input, DataType::Array(1186), Format::Text, false).unwrap();
 
         let binary = datum.encode(Format::Binary).unwrap();
@@ -869,5 +876,24 @@ mod tests {
             Array::decode_typed(payload, Format::Binary, 23).is_err(),
             "should reject lower_bound + size overflow"
         );
+    }
+
+    #[test]
+    fn test_binary_decode_accepts_max_singleton_lower_bound() {
+        #[rustfmt::skip]
+        let payload: &[u8] = &[
+            0,0,0,1,                // ndims=1
+            0,0,0,0,                // flags=0
+            0,0,0,23,               // element OID = int4
+            0,0,0,1,                // size=1
+            0x7F,0xFF,0xFF,0xFF,    // lower_bound=i32::MAX
+            0,0,0,4,                // element len
+            0,0,0,1,                // element value
+        ];
+
+        let decoded = Array::decode_typed(payload, Format::Binary, 23)
+            .expect("size=1 at i32::MAX lower bound is a valid array");
+        let text = decoded.encode(Format::Text).unwrap();
+        assert_eq!(&text[..], b"[2147483647:2147483647]={1}");
     }
 }
