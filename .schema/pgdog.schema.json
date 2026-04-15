@@ -89,7 +89,7 @@
         "query_timeout": 9223372036854775807,
         "read_write_split": "include_primary",
         "read_write_strategy": "conservative",
-        "regex_parser_limit": 256,
+        "regex_parser_limit": 1000,
         "reload_schema_on_ddl": true,
         "resharding_copy_format": "binary",
         "resharding_parallel_copies": 1,
@@ -951,7 +951,7 @@
           "description": "Limit on the size of the query the regex parser will inspect.",
           "type": "integer",
           "format": "uint",
-          "default": 256,
+          "default": 1000,
           "minimum": 0
         },
         "reload_schema_on_ddl": {
