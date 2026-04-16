@@ -25,7 +25,7 @@ use crate::{
         replication::{publisher::PublicationTable, status::SchemaStatement},
         Cluster,
     },
-    config::{config, ServerAuth},
+    config::config,
     frontend::router::parser::{sequence::Sequence, Column, Table},
 };
 

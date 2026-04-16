@@ -46,10 +46,10 @@ static TEST_TOKEN_OVERRIDE: once_cell::sync::Lazy<parking_lot::Mutex<Option<Stri
 
 #[cfg(test)]
 mod tests {
-    use std::env;
-
     use crate::backend::pool::Address;
     use crate::config::ServerAuth;
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+    use std::env;
 
     use super::*;
 
@@ -77,6 +77,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires AKS environment with Workload Identity injection"]
     async fn test_token_contains_expected_query_fields() {
         let _azure_client_id = EnvVarGuard::set("AZURE_CLIENT_ID", "EXAMPLE");
         let _azure_tenant_id = EnvVarGuard::set("AZURE_TENANT_ID", "EXAMPLE");
@@ -93,7 +94,18 @@ mod tests {
             server_iam_region: None,
         };
 
-        let token = token(&addr).await.unwrap();
+        let b64_token = token(&addr).await.unwrap();
+
+        // Use functional chaining to extract and decode
+        let token = b64_token
+            .split('.')
+            .nth(1)
+            .map(|payload| URL_SAFE_NO_PAD.decode(payload))
+            .transpose()
+            .expect("Invalid JWT format") // Converts Option<Result<T, E>> to Result<Option<T>, E>
+            .and_then(|bytes| String::from_utf8(bytes).ok())
+            .expect("Failed to parse JWT payload as valid UTF-8 JSON");
+
         assert!(token.contains("https://sts.windows.net/"));
         assert!(token.contains("https://management.azure.com"));
         assert!(token.contains("appid"));
