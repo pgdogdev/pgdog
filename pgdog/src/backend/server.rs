@@ -1242,7 +1242,60 @@ pub mod test {
 
     #[tokio::test]
     async fn test_connect_azure_sql_workload_identity_uses_dynamic_token_not_static_password() {
-        // TODO_AZURE_WORKLOAD_IDENTITY
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let expected_secret = "token-for-test".to_string();
+        let server_task = tokio::spawn({
+            let expected_secret = expected_secret.clone();
+            async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+
+                let startup = Startup::from_stream(&mut socket).await.unwrap();
+                let startup = if matches!(startup, Startup::Ssl) {
+                    socket.write_all(b"N").await.unwrap();
+                    Startup::from_stream(&mut socket).await.unwrap()
+                } else {
+                    startup
+                };
+                assert!(matches!(startup, Startup::Startup { .. }));
+
+                socket
+                    .write_all(&Authentication::ClearTextPassword.to_bytes().unwrap())
+                    .await
+                    .unwrap();
+
+                let password = read_password_message(&mut socket).await;
+                assert_eq!(password.password(), Some(expected_secret.as_str()));
+
+                socket
+                    .write_all(&Authentication::Ok.to_bytes().unwrap())
+                    .await
+                    .unwrap();
+                socket
+                    .write_all(&BackendKeyData::new().to_bytes().unwrap())
+                    .await
+                    .unwrap();
+                socket
+                    .write_all(&ReadyForQuery::idle().to_bytes().unwrap())
+                    .await
+                    .unwrap();
+            }
+        });
+
+        let mut addr = Address::new_test();
+        addr.port = port;
+        addr.server_auth = crate::config::ServerAuth::AzureWorkloadIdentity;
+        addr.passwords = vec!["wrong-password".into()];
+
+        crate::backend::auth::azure_workload_identity::set_test_token_override(Some(
+            expected_secret,
+        ));
+        let result = Server::connect(&addr, ServerOptions::default(), ConnectReason::Other).await;
+        crate::backend::auth::azure_workload_identity::set_test_token_override(None);
+
+        let server = result.unwrap();
+        drop(server);
+        server_task.await.unwrap();
     }
 
     #[tokio::test]
