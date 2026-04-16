@@ -112,7 +112,11 @@ impl ConfigAndUsers {
     }
 
     fn validate_server_auth(&self) -> Result<(), Error> {
-        let is_external_identity = self.users.users.iter().any(|user| user.is_external_identity());
+        let is_external_identity = self
+            .users
+            .users
+            .iter()
+            .any(|user| user.is_external_identity());
 
         if !is_external_identity {
             return Ok(());
@@ -1322,7 +1326,7 @@ shard = 0
         assert!(err.contains("rds_iam"));
     }
 
-        #[test]
+    #[test]
     fn test_azure_workload_identity_rejects_passthrough_auth() {
         let mut config = ConfigAndUsers::default();
         config.config.general.passthrough_auth = PassthroughAuth::EnabledPlain;

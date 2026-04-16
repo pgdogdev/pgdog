@@ -221,7 +221,7 @@ mod test {
         assert_eq!(address.server_iam_region.as_deref(), Some("us-east-1"));
     }
 
-       #[test]
+    #[test]
     fn test_azure_workload_identity_does_not_use_static_password() {
         let database = Database {
             name: "pgdog".into(),
@@ -289,13 +289,15 @@ mod test {
         assert_eq!(secret, "token-from-iam");
     }
 
-        #[tokio::test]
+    #[tokio::test]
     async fn test_auth_secret_azure_workload_identity_mode_uses_generator() {
         let mut addr = Address::new_test();
         addr.server_auth = ServerAuth::AzureWorkloadIdentity;
         addr.passwords = vec!["wrong".into()];
 
-        crate::backend::auth::azure_workload_identity::set_test_token_override(Some("token-from-iam".into()));
+        crate::backend::auth::azure_workload_identity::set_test_token_override(Some(
+            "token-from-iam".into(),
+        ));
         let secret = addr
             .auth_secrets()
             .await
