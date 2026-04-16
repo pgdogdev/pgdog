@@ -2,15 +2,255 @@ use std::collections::{HashMap, HashSet};
 
 use pg_query::{
     protobuf::{
-        AExprKind, BoolExprType, DeleteStmt, InsertStmt, RangeVar, RawStmt, SelectStmt, UpdateStmt,
+        self, a_const::Val, AConst, AExprKind, BoolExprType, DeleteStmt, FuncCall, InsertStmt,
+        Integer, RangeVar, RawStmt, SelectStmt, UpdateStmt,
     },
     Node, NodeEnum,
 };
+
+pub(super) fn advisory_locks_from_func_call(
+    func: &FuncCall,
+    bind: Option<&Bind>,
+    values_columns: Option<&ValuesColumns<'_>>,
+) -> Vec<AdvisoryLock> {
+    // Only unqualified calls (no schema) map to the real advisory lock builtins.
+    let (schema, name) = match func.funcname.as_slice() {
+        [only] => (None, name_of_string_node(only)),
+        [.., s, n] => (name_of_string_node(s), name_of_string_node(n)),
+        _ => return Vec::new(),
+    };
+    if schema.is_some() {
+        return Vec::new();
+    }
+    let Some(name) = name else {
+        return Vec::new();
+    };
+
+    let (unlock, scope) = match name {
+        "pg_advisory_lock"
+        | "pg_advisory_lock_shared"
+        | "pg_try_advisory_lock"
+        | "pg_try_advisory_lock_shared" => (false, LockScope::Session),
+        "pg_advisory_xact_lock"
+        | "pg_advisory_xact_lock_shared"
+        | "pg_try_advisory_xact_lock"
+        | "pg_try_advisory_xact_lock_shared" => (false, LockScope::Transaction),
+        // Session-scoped unlocks. xact locks can't be released by name;
+        // Postgres drops them automatically at COMMIT/ROLLBACK.
+        "pg_advisory_unlock" => (true, LockScope::Session),
+        "pg_advisory_unlock_all" => {
+            return vec![AdvisoryLock {
+                id: None,
+                unlock: true,
+                scope: LockScope::Session,
+            }];
+        }
+        _ => return Vec::new(),
+    };
+
+    let Some(arg) = func.args.first() else {
+        return vec![AdvisoryLock {
+            id: None,
+            unlock,
+            scope,
+        }];
+    };
+
+    // Fast path: the key is a literal / param / cast we can resolve directly.
+    if let Some(id) = integer_arg(arg, bind) {
+        return vec![AdvisoryLock {
+            id: Some(id),
+            unlock,
+            scope,
+        }];
+    }
+
+    // If the argument is a parameter placeholder ($1) and we have no Bind message,
+    // this is just a prepared statement being parsed — the lock isn't actually
+    // being taken yet. Return empty so we don't route as if a lock is held.
+    if bind.is_none() && is_param_ref(arg) {
+        return Vec::new();
+    }
+
+    // Slow path: `SELECT pg_advisory_lock(value) FROM (VALUES (1),(2)) AS t(value)`.
+    // The function is called once per row, so we emit one lock per resolved value.
+    if let Some(NodeEnum::ColumnRef(cref)) = arg.node.as_ref() {
+        if let Some(col) = last_column_name(&cref.fields) {
+            if let Some(rows) = values_columns.and_then(|m| m.get(col)) {
+                return rows
+                    .iter()
+                    // Skip unresolvable param refs when there is no Bind.
+                    .filter(|v| bind.is_some() || !is_param_ref(v))
+                    .map(|v| AdvisoryLock {
+                        id: integer_arg(v, bind),
+                        unlock,
+                        scope,
+                    })
+                    .collect();
+            }
+        }
+    }
+
+    vec![AdvisoryLock {
+        id: None,
+        unlock,
+        scope,
+    }]
+}
+
+fn last_column_name(fields: &[Node]) -> Option<&str> {
+    match fields.last()?.node.as_ref()? {
+        NodeEnum::String(protobuf::String { sval }) => Some(sval.as_str()),
+        _ => None,
+    }
+}
+
+/// Map from unqualified VALUES column alias to the list of value nodes — one
+/// per row — introduced by a `FROM (VALUES (...), ...) AS t(col, ...)` in the
+/// current SELECT's FROM clause.
+pub(super) type ValuesColumns<'a> = std::collections::HashMap<&'a str, Vec<&'a Node>>;
+
+pub(super) fn collect_values_columns(stmt: &SelectStmt) -> ValuesColumns<'_> {
+    let mut out: ValuesColumns<'_> = ValuesColumns::default();
+    for node in &stmt.from_clause {
+        let Some(NodeEnum::RangeSubselect(rs)) = node.node.as_ref() else {
+            continue;
+        };
+        let Some(alias) = rs.alias.as_ref() else {
+            continue;
+        };
+        let Some(subquery) = rs.subquery.as_deref() else {
+            continue;
+        };
+        let Some(NodeEnum::SelectStmt(inner)) = subquery.node.as_ref() else {
+            continue;
+        };
+        if inner.values_lists.is_empty() {
+            continue;
+        }
+        let colnames: Vec<&str> = alias
+            .colnames
+            .iter()
+            .filter_map(|n| match n.node.as_ref()? {
+                NodeEnum::String(protobuf::String { sval }) => Some(sval.as_str()),
+                _ => None,
+            })
+            .collect();
+        for row in &inner.values_lists {
+            let Some(NodeEnum::List(list)) = row.node.as_ref() else {
+                continue;
+            };
+            for (idx, item) in list.items.iter().enumerate() {
+                if let Some(col) = colnames.get(idx) {
+                    out.entry(*col).or_default().push(item);
+                }
+            }
+        }
+    }
+    out
+}
+
+fn name_of_string_node(node: &Node) -> Option<&str> {
+    match node.node.as_ref()? {
+        NodeEnum::String(protobuf::String { sval }) => Some(sval.as_str()),
+        _ => None,
+    }
+}
+
+fn integer_arg(node: &Node, bind: Option<&Bind>) -> Option<i64> {
+    match node.node.as_ref()? {
+        NodeEnum::AConst(AConst { val: Some(val), .. }) => match val {
+            Val::Ival(Integer { ival }) => Some(*ival as i64),
+            // pg_query stores integers wider than i32 (e.g. bigint keys) as Float
+            // with a numeric string payload.
+            Val::Fval(f) => f.fval.parse().ok(),
+            _ => None,
+        },
+        NodeEnum::TypeCast(cast) => integer_arg(cast.arg.as_deref()?, bind),
+        // Resolve $N via the Bind message. pg_query numbers parameters from 1.
+        NodeEnum::ParamRef(param_ref) => {
+            let bind = bind?;
+            let index = (param_ref.number as usize).checked_sub(1)?;
+            let param = bind.parameter(index).ok().flatten()?;
+            param.decode::<i64>()
+        }
+        _ => None,
+    }
+}
+
+/// Check whether a node is (or wraps) a parameter placeholder (`$N`).
+fn is_param_ref(node: &Node) -> bool {
+    match node.node.as_ref() {
+        Some(NodeEnum::ParamRef(_)) => true,
+        Some(NodeEnum::TypeCast(cast)) => cast.arg.as_deref().map_or(false, is_param_ref),
+        _ => false,
+    }
+}
 
 use super::{
     super::sharding::Value as ShardingValue, explain_trace::ExplainRecorder, Column, Error, Table,
     Value,
 };
+
+/// Lifetime of an advisory lock.
+///
+/// Used by the query engine to decide whether the lock should survive
+/// COMMIT/ROLLBACK (`Session`) or be dropped along with the transaction
+/// (`Transaction` — the `pg_advisory_xact_lock*` family).
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
+pub enum LockScope {
+    Session,
+    Transaction,
+}
+
+/// A pg_advisory_lock / pg_advisory_unlock call observed in a statement.
+///
+/// `id` is `None` when the key isn't a literal we can resolve (parameter placeholder,
+/// subquery, etc.) or when the call takes no key at all (`pg_advisory_unlock_all()`).
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
+pub struct AdvisoryLock {
+    pub id: Option<i64>,
+    pub unlock: bool,
+    pub scope: LockScope,
+}
+
+/// Set of advisory locks discovered while walking a statement.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AdvisoryLocks {
+    locks: HashSet<AdvisoryLock>,
+}
+
+impl AdvisoryLocks {
+    pub fn iter(&self) -> impl Iterator<Item = &AdvisoryLock> {
+        self.locks.iter()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.locks.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.locks.len()
+    }
+
+    /// True if any advisory lock (pg_advisory_lock, etc.) was taken.
+    pub fn has_lock(&self) -> bool {
+        self.locks.iter().any(|l| !l.unlock)
+    }
+
+    /// True if an unlock call appears in the statement.
+    pub fn has_unlock(&self) -> bool {
+        self.locks.iter().any(|l| l.unlock)
+    }
+}
+
+/// Accumulator shared across statement walkers — lets a single traversal
+/// collect tables and advisory locks without walking the AST twice.
+#[derive(Debug, Clone, Default)]
+struct Walk<'a> {
+    tables: Vec<Table<'a>>,
+    advisory_locks: HashSet<AdvisoryLock>,
+}
 use crate::{
     backend::{Schema, ShardingSchema},
     config::ShardedTable,
@@ -186,8 +426,8 @@ pub struct StatementParser<'a, 'b, 'c> {
     /// Optional schema lookup context for INSERT without column list.
     schema_lookup: Option<SchemaLookupContext<'b>>,
     hooks: ParserHooks,
-    /// Cached extracted tables (None = not yet computed)
-    cached_tables: Option<Vec<Table<'a>>>,
+    /// Cached walk result (tables + advisory locks).
+    cached_walk: Option<Walk<'a>>,
     /// Cached result of all_omnisharded check (None = not yet computed)
     all_omnisharded: Option<bool>,
 }
@@ -206,17 +446,21 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
             recorder,
             schema_lookup: None,
             hooks: ParserHooks::default(),
-            cached_tables: None,
+            cached_walk: None,
             all_omnisharded: None,
         }
     }
 
+    fn walk(&mut self) -> &Walk<'a> {
+        if self.cached_walk.is_none() {
+            self.cached_walk = Some(self.run_walk());
+        }
+        self.cached_walk.as_ref().unwrap()
+    }
+
     /// Get extracted tables, caching the result.
     fn tables(&mut self) -> &[Table<'a>] {
-        if self.cached_tables.is_none() {
-            self.cached_tables = Some(self.extract_tables());
-        }
-        self.cached_tables.as_ref().unwrap()
+        &self.walk().tables
     }
 
     /// Check if all tables in the query are in the omnisharded config.
@@ -342,7 +586,7 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
         // Ensure tables are cached first
         let _ = self.tables();
         let mut schema_sharder = SchemaSharder::default();
-        for table in self.cached_tables.as_ref().unwrap() {
+        for table in &self.cached_walk.as_ref().unwrap().tables {
             schema_sharder.resolve(table.schema(), &self.schema.schemas);
         }
 
@@ -414,28 +658,54 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
 
     /// Extract all tables referenced in the statement.
     pub fn extract_tables(&self) -> Vec<Table<'a>> {
-        let mut tables = Vec::new();
-        match self.stmt {
-            Statement::Select(stmt) => self.extract_tables_from_select(stmt, &mut tables),
-            Statement::Update(stmt) => self.extract_tables_from_update(stmt, &mut tables),
-            Statement::Delete(stmt) => self.extract_tables_from_delete(stmt, &mut tables),
-            Statement::Insert(stmt) => self.extract_tables_from_insert(stmt, &mut tables),
-        }
-        tables
+        self.run_walk().tables
     }
 
-    fn extract_tables_from_select(&self, stmt: &'a SelectStmt, tables: &mut Vec<Table<'a>>) {
+    /// Extract pg_advisory_lock / pg_advisory_unlock calls with literal integer keys.
+    pub fn extract_advisory_locks(&mut self) -> AdvisoryLocks {
+        AdvisoryLocks {
+            locks: self.walk().advisory_locks.clone(),
+        }
+    }
+
+    fn run_walk(&self) -> Walk<'a> {
+        let mut walk = Walk::default();
+        match self.stmt {
+            Statement::Select(stmt) => self.walk_select(stmt, &mut walk),
+            Statement::Update(stmt) => self.walk_update(stmt, &mut walk),
+            Statement::Delete(stmt) => self.walk_delete(stmt, &mut walk),
+            Statement::Insert(stmt) => self.walk_insert(stmt, &mut walk),
+        }
+        walk
+    }
+
+    fn walk_select(&self, stmt: &'a SelectStmt, walk: &mut Walk<'a>) {
+        // Build a VALUES-column lookup for the current SELECT scope so a call
+        // like `pg_advisory_lock(value) FROM (VALUES (1),(2)) AS t(value)`
+        // can be expanded to one lock per row.
+        let values_columns = collect_values_columns(stmt);
+        let values = if values_columns.is_empty() {
+            None
+        } else {
+            Some(&values_columns)
+        };
+
         // Handle UNION/INTERSECT/EXCEPT
         if let Some(ref larg) = stmt.larg {
-            self.extract_tables_from_select(larg, tables);
+            self.walk_select(larg, walk);
         }
         if let Some(ref rarg) = stmt.rarg {
-            self.extract_tables_from_select(rarg, tables);
+            self.walk_select(rarg, walk);
+        }
+
+        // Target list — advisory lock function calls usually live here.
+        for node in &stmt.target_list {
+            self.walk_node(node, walk, values);
         }
 
         // FROM clause
         for node in &stmt.from_clause {
-            self.extract_tables_from_node(node, tables);
+            self.walk_node(node, walk, values);
         }
 
         // WITH clause (CTEs)
@@ -444,7 +714,7 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
                 if let Some(NodeEnum::CommonTableExpr(ref cte_expr)) = cte.node {
                     if let Some(ref ctequery) = cte_expr.ctequery {
                         if let Some(NodeEnum::SelectStmt(ref inner_select)) = ctequery.node {
-                            self.extract_tables_from_select(inner_select, tables);
+                            self.walk_select(inner_select, walk);
                         }
                     }
                 }
@@ -453,138 +723,155 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
 
         // WHERE clause subqueries
         if let Some(ref where_clause) = stmt.where_clause {
-            self.extract_tables_from_node(where_clause, tables);
+            self.walk_node(where_clause, walk, values);
         }
     }
 
-    fn extract_tables_from_update(&self, stmt: &'a UpdateStmt, tables: &mut Vec<Table<'a>>) {
-        // Main relation
+    fn walk_update(&self, stmt: &'a UpdateStmt, walk: &mut Walk<'a>) {
         if let Some(ref relation) = stmt.relation {
-            tables.push(Table::from(relation));
+            walk.tables.push(Table::from(relation));
         }
 
-        // FROM clause
         for node in &stmt.from_clause {
-            self.extract_tables_from_node(node, tables);
+            self.walk_node(node, walk, None);
         }
 
-        // WITH clause (CTEs)
         if let Some(ref with_clause) = stmt.with_clause {
             for cte in &with_clause.ctes {
                 if let Some(NodeEnum::CommonTableExpr(ref cte_expr)) = cte.node {
                     if let Some(ref ctequery) = cte_expr.ctequery {
                         if let Some(NodeEnum::SelectStmt(ref inner_select)) = ctequery.node {
-                            self.extract_tables_from_select(inner_select, tables);
+                            self.walk_select(inner_select, walk);
                         }
                     }
                 }
             }
         }
 
-        // WHERE clause subqueries
         if let Some(ref where_clause) = stmt.where_clause {
-            self.extract_tables_from_node(where_clause, tables);
+            self.walk_node(where_clause, walk, None);
         }
     }
 
-    fn extract_tables_from_delete(&self, stmt: &'a DeleteStmt, tables: &mut Vec<Table<'a>>) {
-        // Main relation
+    fn walk_delete(&self, stmt: &'a DeleteStmt, walk: &mut Walk<'a>) {
         if let Some(ref relation) = stmt.relation {
-            tables.push(Table::from(relation));
+            walk.tables.push(Table::from(relation));
         }
 
-        // USING clause
         for node in &stmt.using_clause {
-            self.extract_tables_from_node(node, tables);
+            self.walk_node(node, walk, None);
         }
 
-        // WITH clause (CTEs)
         if let Some(ref with_clause) = stmt.with_clause {
             for cte in &with_clause.ctes {
                 if let Some(NodeEnum::CommonTableExpr(ref cte_expr)) = cte.node {
                     if let Some(ref ctequery) = cte_expr.ctequery {
                         if let Some(NodeEnum::SelectStmt(ref inner_select)) = ctequery.node {
-                            self.extract_tables_from_select(inner_select, tables);
+                            self.walk_select(inner_select, walk);
                         }
                     }
                 }
             }
         }
 
-        // WHERE clause subqueries
         if let Some(ref where_clause) = stmt.where_clause {
-            self.extract_tables_from_node(where_clause, tables);
+            self.walk_node(where_clause, walk, None);
         }
     }
 
-    fn extract_tables_from_insert(&self, stmt: &'a InsertStmt, tables: &mut Vec<Table<'a>>) {
-        // Main relation
+    fn walk_insert(&self, stmt: &'a InsertStmt, walk: &mut Walk<'a>) {
         if let Some(ref relation) = stmt.relation {
-            tables.push(Table::from(relation));
+            walk.tables.push(Table::from(relation));
         }
 
-        // WITH clause (CTEs)
         if let Some(ref with_clause) = stmt.with_clause {
             for cte in &with_clause.ctes {
                 if let Some(NodeEnum::CommonTableExpr(ref cte_expr)) = cte.node {
                     if let Some(ref ctequery) = cte_expr.ctequery {
                         if let Some(NodeEnum::SelectStmt(ref inner_select)) = ctequery.node {
-                            self.extract_tables_from_select(inner_select, tables);
+                            self.walk_select(inner_select, walk);
                         }
                     }
                 }
             }
         }
 
-        // SELECT part of INSERT ... SELECT
         if let Some(ref select_stmt) = stmt.select_stmt {
             if let Some(NodeEnum::SelectStmt(ref inner_select)) = select_stmt.node {
-                self.extract_tables_from_select(inner_select, tables);
+                self.walk_select(inner_select, walk);
             }
         }
     }
 
-    fn extract_tables_from_node(&self, node: &'a Node, tables: &mut Vec<Table<'a>>) {
+    fn walk_node(&self, node: &'a Node, walk: &mut Walk<'a>, values: Option<&ValuesColumns<'a>>) {
         match &node.node {
             Some(NodeEnum::RangeVar(range_var)) => {
-                tables.push(Table::from(range_var));
+                walk.tables.push(Table::from(range_var));
             }
             Some(NodeEnum::JoinExpr(join)) => {
                 if let Some(ref larg) = join.larg {
-                    self.extract_tables_from_node(larg, tables);
+                    self.walk_node(larg, walk, values);
                 }
                 if let Some(ref rarg) = join.rarg {
-                    self.extract_tables_from_node(rarg, tables);
+                    self.walk_node(rarg, walk, values);
                 }
             }
             Some(NodeEnum::RangeSubselect(subselect)) => {
                 if let Some(ref subquery) = subselect.subquery {
                     if let Some(NodeEnum::SelectStmt(ref inner_select)) = subquery.node {
-                        self.extract_tables_from_select(inner_select, tables);
+                        self.walk_select(inner_select, walk);
                     }
                 }
             }
             Some(NodeEnum::SubLink(sublink)) => {
                 if let Some(ref subselect) = sublink.subselect {
                     if let Some(NodeEnum::SelectStmt(ref inner_select)) = subselect.node {
-                        self.extract_tables_from_select(inner_select, tables);
+                        self.walk_select(inner_select, walk);
                     }
                 }
             }
             Some(NodeEnum::SelectStmt(inner_select)) => {
-                self.extract_tables_from_select(inner_select, tables);
+                self.walk_select(inner_select, walk);
             }
             Some(NodeEnum::BoolExpr(bool_expr)) => {
                 for arg in &bool_expr.args {
-                    self.extract_tables_from_node(arg, tables);
+                    self.walk_node(arg, walk, values);
                 }
             }
             Some(NodeEnum::AExpr(a_expr)) => {
                 if let Some(ref lexpr) = a_expr.lexpr {
-                    self.extract_tables_from_node(lexpr, tables);
+                    self.walk_node(lexpr, walk, values);
                 }
                 if let Some(ref rexpr) = a_expr.rexpr {
-                    self.extract_tables_from_node(rexpr, tables);
+                    self.walk_node(rexpr, walk, values);
+                }
+            }
+            Some(NodeEnum::ResTarget(res)) => {
+                if let Some(ref val) = res.val {
+                    self.walk_node(val, walk, values);
+                }
+            }
+            Some(NodeEnum::TypeCast(cast)) => {
+                if let Some(ref arg) = cast.arg {
+                    self.walk_node(arg, walk, values);
+                }
+            }
+            Some(NodeEnum::NullTest(test)) => {
+                if let Some(ref arg) = test.arg {
+                    self.walk_node(arg, walk, values);
+                }
+            }
+            Some(NodeEnum::FuncCall(func)) => {
+                for lock in advisory_locks_from_func_call(func, self.bind, values) {
+                    walk.advisory_locks.insert(lock);
+                }
+                for arg in &func.args {
+                    self.walk_node(arg, walk, values);
+                }
+            }
+            Some(NodeEnum::List(list)) => {
+                for item in &list.items {
+                    self.walk_node(item, walk, values);
                 }
             }
             _ => {}
@@ -2643,5 +2930,283 @@ mod test {
             !result,
             "DELETE from omnisharded table should not be sharded"
         );
+    }
+
+    mod advisory_locks {
+        use super::*;
+        use pg_query::parse;
+
+        fn locks(query: &str) -> Vec<AdvisoryLock> {
+            locks_with_bind(query, None)
+        }
+
+        fn locks_with_bind(query: &str, bind: Option<&Bind>) -> Vec<AdvisoryLock> {
+            let ast = parse(query).unwrap().protobuf;
+            let schema = ShardingSchema::default();
+            let raw = ast.stmts.first().unwrap();
+            let mut parser = StatementParser::from_raw(raw, bind, &schema, None).unwrap();
+            let mut v: Vec<_> = parser.extract_advisory_locks().iter().copied().collect();
+            v.sort_by_key(|l| (l.id, l.unlock));
+            v
+        }
+
+        fn session(id: Option<i64>, unlock: bool) -> AdvisoryLock {
+            AdvisoryLock {
+                id,
+                unlock,
+                scope: LockScope::Session,
+            }
+        }
+
+        fn xact(id: Option<i64>, unlock: bool) -> AdvisoryLock {
+            AdvisoryLock {
+                id,
+                unlock,
+                scope: LockScope::Transaction,
+            }
+        }
+
+        #[test]
+        fn lock_and_unlock() {
+            assert_eq!(
+                locks("SELECT pg_advisory_lock(42)"),
+                vec![session(Some(42), false)],
+            );
+            assert_eq!(
+                locks("SELECT pg_advisory_unlock(42)"),
+                vec![session(Some(42), true)],
+            );
+        }
+
+        #[test]
+        fn bigint_argument() {
+            // Values larger than i32 are encoded as Float in pg_query.
+            assert_eq!(
+                locks("SELECT pg_advisory_lock(9000000000)"),
+                vec![session(Some(9_000_000_000), false)],
+            );
+        }
+
+        #[test]
+        fn all_session_lock_variants() {
+            for q in [
+                "SELECT pg_try_advisory_lock(7)",
+                "SELECT pg_advisory_lock_shared(7)",
+                "SELECT pg_try_advisory_lock_shared(7)",
+            ] {
+                assert_eq!(locks(q), vec![session(Some(7), false)], "{q}");
+            }
+        }
+
+        #[test]
+        fn xact_variants_have_transaction_scope() {
+            // xact locks must still pin the backend for the lifetime of the transaction,
+            // but the engine drops them at COMMIT/ROLLBACK.
+            for q in [
+                "SELECT pg_advisory_xact_lock(7)",
+                "SELECT pg_advisory_xact_lock_shared(7)",
+                "SELECT pg_try_advisory_xact_lock(7)",
+                "SELECT pg_try_advisory_xact_lock_shared(7)",
+            ] {
+                assert_eq!(locks(q), vec![xact(Some(7), false)], "{q}");
+            }
+        }
+
+        #[test]
+        fn multiple_and_dedup() {
+            assert_eq!(
+                locks("SELECT pg_advisory_lock(5), pg_advisory_lock(5), pg_advisory_lock(6)"),
+                vec![session(Some(5), false), session(Some(6), false)],
+            );
+        }
+
+        #[test]
+        fn cast_and_cte() {
+            assert_eq!(
+                locks("SELECT pg_try_advisory_lock(9)::bool"),
+                vec![session(Some(9), false)],
+            );
+            assert_eq!(
+                locks("WITH x AS (SELECT pg_advisory_lock(11)) SELECT * FROM x"),
+                vec![session(Some(11), false)],
+            );
+        }
+
+        #[test]
+        fn param_without_bind_is_ignored() {
+            // Without a Bind message, a parameter placeholder means the prepared
+            // statement is only being parsed — no lock is actually taken.
+            assert!(locks("SELECT pg_advisory_lock($1)").is_empty());
+        }
+
+        #[test]
+        fn unlock_all_without_bind() {
+            // unlock_all takes no arguments, so it always applies.
+            assert_eq!(
+                locks("SELECT pg_advisory_unlock_all()"),
+                vec![session(None, true)],
+            );
+        }
+
+        #[test]
+        fn ignored_cases() {
+            // Schema-qualified — not the builtin.
+            assert!(locks("SELECT other.pg_advisory_lock(1)").is_empty());
+            // Unrelated functions.
+            assert!(locks("SELECT 1, now()").is_empty());
+        }
+
+        #[test]
+        fn key_from_values_subquery_no_bind() {
+            // Without a Bind, parameter-based VALUES rows are skipped — the
+            // prepared statement is only being parsed, no lock is taken.
+            assert!(
+                locks("SELECT pg_advisory_lock(value) FROM (VALUES ($1)) AS t(value)").is_empty()
+            );
+            assert!(
+                locks("SELECT pg_advisory_unlock(value) FROM (VALUES ($1)) AS t(value)").is_empty()
+            );
+            assert!(
+                locks("SELECT pg_try_advisory_lock(value) FROM (VALUES ($1)) AS t(value)")
+                    .is_empty()
+            );
+        }
+
+        #[test]
+        fn xact_lock_with_param_no_bind() {
+            // Without a Bind the prepared statement is just being parsed.
+            assert!(locks("SELECT pg_advisory_xact_lock($1)").is_empty());
+        }
+
+        #[test]
+        fn param_resolved_from_bind() {
+            let bind = Bind::new_params("", &[Parameter::new(b"4242")]);
+            assert_eq!(
+                locks_with_bind("SELECT pg_advisory_lock($1)", Some(&bind)),
+                vec![session(Some(4242), false)],
+            );
+            assert_eq!(
+                locks_with_bind("SELECT pg_advisory_xact_lock($1)", Some(&bind)),
+                vec![xact(Some(4242), false)],
+            );
+            assert_eq!(
+                locks_with_bind("SELECT pg_advisory_unlock($1)", Some(&bind)),
+                vec![session(Some(4242), true)],
+            );
+        }
+
+        #[test]
+        fn bind_bigint_value() {
+            // Keys wider than i32 are encoded as text on the wire but still
+            // decode cleanly through FromDataType<i64>.
+            let bind = Bind::new_params("", &[Parameter::new(b"9000000000")]);
+            assert_eq!(
+                locks_with_bind("SELECT pg_advisory_lock($1)", Some(&bind)),
+                vec![session(Some(9_000_000_000), false)],
+            );
+        }
+
+        #[test]
+        fn multiple_locks_in_one_query_with_bind() {
+            // Single query taking multiple advisory locks from distinct bind params.
+            let bind = Bind::new_params(
+                "",
+                &[
+                    Parameter::new(b"11"),
+                    Parameter::new(b"22"),
+                    Parameter::new(b"33"),
+                ],
+            );
+            assert_eq!(
+                locks_with_bind(
+                    "SELECT pg_advisory_lock($1), pg_advisory_xact_lock($2), pg_advisory_unlock($3)",
+                    Some(&bind),
+                ),
+                vec![
+                    session(Some(11), false),
+                    xact(Some(22), false),
+                    session(Some(33), true),
+                ],
+            );
+        }
+
+        #[test]
+        fn multiple_literal_locks_in_one_query() {
+            assert_eq!(
+                locks(
+                    "SELECT pg_advisory_lock(10), pg_advisory_xact_lock(20), \
+                     pg_advisory_unlock(30), pg_advisory_unlock_all()",
+                ),
+                vec![
+                    session(None, true),
+                    session(Some(10), false),
+                    xact(Some(20), false),
+                    session(Some(30), true),
+                ],
+            );
+        }
+
+        #[test]
+        fn values_multiple_rows_expand_to_multiple_locks() {
+            // `pg_advisory_lock(value) FROM (VALUES (1),(2),(3)) AS t(value)` is
+            // called once per row, so the parser should emit one lock per row.
+            assert_eq!(
+                locks("SELECT pg_advisory_lock(value) FROM (VALUES (10), (20), (30)) AS t(value)",),
+                vec![
+                    session(Some(10), false),
+                    session(Some(20), false),
+                    session(Some(30), false),
+                ],
+            );
+        }
+
+        #[test]
+        fn values_multiple_rows_with_bind() {
+            let bind = Bind::new_params(
+                "",
+                &[
+                    Parameter::new(b"41"),
+                    Parameter::new(b"42"),
+                    Parameter::new(b"43"),
+                ],
+            );
+            assert_eq!(
+                locks_with_bind(
+                    "SELECT pg_advisory_lock(value) FROM (VALUES ($1), ($2), ($3)) AS t(value)",
+                    Some(&bind),
+                ),
+                vec![
+                    session(Some(41), false),
+                    session(Some(42), false),
+                    session(Some(43), false),
+                ],
+            );
+        }
+
+        #[test]
+        fn values_multi_rows_unlock_and_xact() {
+            // Same multi-row expansion for unlock and xact variants.
+            assert_eq!(
+                locks("SELECT pg_advisory_unlock(value) FROM (VALUES (1), (2)) AS t(value)",),
+                vec![session(Some(1), true), session(Some(2), true)],
+            );
+            assert_eq!(
+                locks("SELECT pg_advisory_xact_lock(value) FROM (VALUES (5), (6)) AS t(value)",),
+                vec![xact(Some(5), false), xact(Some(6), false)],
+            );
+        }
+
+        #[test]
+        fn param_out_of_range_fallback() {
+            // $2 has no bound value — we should still record the lock but leave id=None.
+            let bind = Bind::new_params("", &[Parameter::new(b"99")]);
+            assert_eq!(
+                locks_with_bind(
+                    "SELECT pg_advisory_lock($1), pg_advisory_lock($2)",
+                    Some(&bind),
+                ),
+                vec![session(None, false), session(Some(99), false)],
+            );
+        }
     }
 }

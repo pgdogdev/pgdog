@@ -61,6 +61,8 @@
         "load_balancing_strategy": "random",
         "load_schema": "auto",
         "log_connections": true,
+        "log_dedup_threshold": 0,
+        "log_dedup_window": 0,
         "log_disconnections": true,
         "log_format": "text",
         "log_level": "info",
@@ -87,6 +89,7 @@
         "query_timeout": 9223372036854775807,
         "read_write_split": "include_primary",
         "read_write_strategy": "conservative",
+        "regex_parser_limit": 1000,
         "reload_schema_on_ddl": true,
         "resharding_copy_format": "binary",
         "resharding_parallel_copies": 1,
@@ -768,6 +771,20 @@
           "type": "boolean",
           "default": true
         },
+        "log_dedup_threshold": {
+          "description": "Number of identical log messages allowed within `log_dedup_window` before further duplicates are suppressed. Set to `0` to disable throttling.\n\n_Default:_ `0`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#log_dedup_threshold",
+          "type": "integer",
+          "format": "uint64",
+          "default": 0,
+          "minimum": 0
+        },
+        "log_dedup_window": {
+          "description": "Window, in milliseconds, over which to deduplicate identical log messages. Set to `0` to disable throttling.\n\n**Note:** When enabled, identical messages (same level, target, and body) that exceed `log_dedup_threshold` within this window are suppressed and replaced with a single summary line at the end of the window.\n\n_Default:_ `0`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#log_dedup_window",
+          "type": "integer",
+          "format": "uint64",
+          "default": 0,
+          "minimum": 0
+        },
         "log_disconnections": {
           "description": "If enabled, log every time a user disconnects from PgDog.\n\n_Default:_ `true`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#log_disconnections",
           "type": "boolean",
@@ -929,6 +946,13 @@
           "description": "How aggressive the query parser should be in determining read vs. write queries.\n\n_Default:_ `conservative`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#read_write_strategy",
           "$ref": "#/$defs/ReadWriteStrategy",
           "default": "conservative"
+        },
+        "regex_parser_limit": {
+          "description": "Limit on the size of the query the regex parser will inspect.",
+          "type": "integer",
+          "format": "uint",
+          "default": 1000,
+          "minimum": 0
         },
         "reload_schema_on_ddl": {
           "description": "Automatically reload the schema cache used by PgDog to route queries upon detecting DDL statements.\n\n**Note:** This setting requires PgDog Enterprise Edition to work as expected. If using the open source edition, it will only work with single-node PgDog deployments, e.g., in local development or CI.\n\n_Default:_ `true`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#reload_schema_on_ddl",
@@ -1403,6 +1427,11 @@
           "description": "Control statements only.",
           "type": "string",
           "const": "session_control"
+        },
+        {
+          "description": "Control & advisory locks.",
+          "type": "string",
+          "const": "session_control_and_locks"
         }
       ]
     },

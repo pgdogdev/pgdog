@@ -292,6 +292,10 @@ pub struct General {
     #[serde(default)]
     pub query_parser: QueryParserLevel,
 
+    /// Limit on the size of the query the regex parser will inspect.
+    #[serde(default = "General::regex_parser_limit")]
+    pub regex_parser_limit: usize,
+
     /// Underlying parser implementation used to analyze SQL queries.
     #[serde(default)]
     pub query_parser_engine: QueryParserEngine,
@@ -473,6 +477,24 @@ pub struct General {
     /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#log_disconnections
     #[serde(default = "General::log_disconnections")]
     pub log_disconnections: bool,
+
+    /// Window, in milliseconds, over which to deduplicate identical log messages. Set to `0` to disable throttling.
+    ///
+    /// **Note:** When enabled, identical messages (same level, target, and body) that exceed `log_dedup_threshold` within this window are suppressed and replaced with a single summary line at the end of the window.
+    ///
+    /// _Default:_ `0`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#log_dedup_window
+    #[serde(default)]
+    pub log_dedup_window: u64,
+
+    /// Number of identical log messages allowed within `log_dedup_window` before further duplicates are suppressed. Set to `0` to disable throttling.
+    ///
+    /// _Default:_ `0`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#log_dedup_threshold
+    #[serde(default)]
+    pub log_dedup_threshold: u64,
 
     /// Enable two-phase commit for write, cross-shard transactions.
     ///
@@ -681,6 +703,7 @@ impl Default for General {
             prepared_statements: Self::prepared_statements(),
             query_parser_enabled: Self::query_parser_enabled(),
             query_parser: QueryParserLevel::default(),
+            regex_parser_limit: Self::regex_parser_limit(),
             query_parser_engine: QueryParserEngine::default(),
             prepared_statements_limit: Self::prepared_statements_limit(),
             query_cache_limit: Self::query_cache_limit(),
@@ -705,6 +728,8 @@ impl Default for General {
             log_level: Self::log_level(),
             log_connections: Self::log_connections(),
             log_disconnections: Self::log_disconnections(),
+            log_dedup_window: 0,
+            log_dedup_threshold: 0,
             two_phase_commit: bool::default(),
             two_phase_commit_auto: None,
             expanded_explain: Self::expanded_explain(),
@@ -809,6 +834,10 @@ impl General {
 
     fn healthcheck_port() -> Option<u16> {
         Self::env_option("PGDOG_HEALTHCHECK_PORT")
+    }
+
+    pub fn regex_parser_limit() -> usize {
+        1_000
     }
 
     fn ban_timeout() -> u64 {

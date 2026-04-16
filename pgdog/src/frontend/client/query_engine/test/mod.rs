@@ -7,6 +7,7 @@ use crate::{
     net::{Parameters, Stream},
 };
 
+mod advisory_lock;
 mod close_parse;
 mod close_parse_global_cache;
 mod extended;

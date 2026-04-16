@@ -563,7 +563,7 @@ fn test_show_shards() {
 fn test_write_functions() {
     let route = query!("SELECT pg_advisory_lock($1)");
     assert!(route.is_write());
-    assert!(route.is_lock_session());
+    assert!(!route.is_lock_session()); // Need Bind
 }
 
 #[test]

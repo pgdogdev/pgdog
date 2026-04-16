@@ -1,26 +1,80 @@
 use once_cell::sync::Lazy;
+use pgdog_config::{General, QueryParserLevel};
 use regex::RegexSet;
 
-use crate::{frontend::ClientRequest, net::ProtocolMessage};
+use crate::frontend::ClientRequest;
 
-static CMD_RE: Lazy<RegexSet> = Lazy::new(|| {
-    RegexSet::new([
-        "(?i)^ *(RE)?SET",
-        "(?i)^ *BEGIN",
-        "(?i)^ *COMMIT",
-        "(?i)^ *ROLLBACK",
-    ])
-    .unwrap()
-});
+static CMD_BASE: &[&str] = &[
+    "(?i)^ *(RE)?SET",
+    "(?i)^ *BEGIN",
+    "(?i)^ *COMMIT",
+    "(?i)^ *ROLLBACK",
+];
 
-pub(crate) struct RegexParser {}
+static CMD_ADVISORY: &[&str] = &[
+    r"(?i)\bpg_advisory_lock\b",
+    r"(?i)\bpg_advisory_unlock\b",
+    r"(?i)\bpg_advisory_unlock_all\b",
+    r"(?i)\bpg_advisory_xact_lock\b",
+    r"(?i)\bpg_try_advisory_lock\b",
+    r"(?i)\bpg_try_advisory_xact_lock\b",
+    r"(?i)\bpg_advisory_lock_shared\b",
+    r"(?i)\bpg_advisory_unlock_shared\b",
+    r"(?i)\bpg_advisory_xact_lock_shared\b",
+    r"(?i)\bpg_try_advisory_lock_shared\b",
+    r"(?i)\bpg_try_advisory_xact_lock_shared\b",
+];
+
+static CMD_RE: Lazy<RegexSet> = Lazy::new(|| RegexSet::new(CMD_BASE).unwrap());
+static CMD_RE_ADVISORY: Lazy<RegexSet> =
+    Lazy::new(|| RegexSet::new(CMD_BASE.iter().chain(CMD_ADVISORY.iter())).unwrap());
+
+fn scan_prefix(query: &str, limit: usize) -> &str {
+    if query.len() <= limit {
+        query
+    } else {
+        let mut end = limit;
+        while !query.is_char_boundary(end) {
+            end -= 1;
+        }
+        &query[..end]
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct RegexParser {
+    limit: usize,
+    level: QueryParserLevel,
+}
+
+impl Default for RegexParser {
+    fn default() -> Self {
+        Self {
+            limit: General::regex_parser_limit(),
+            level: QueryParserLevel::default(),
+        }
+    }
+}
 
 impl RegexParser {
+    pub(crate) fn new(limit: usize, level: QueryParserLevel) -> Self {
+        Self { level, limit }
+    }
+
     /// Check if we should enable the parser just for this request.
-    pub(crate) fn use_parser(request: &ClientRequest) -> bool {
-        for message in request.iter() {
-            if let ProtocolMessage::Query(query) = message {
-                return CMD_RE.is_match(query.query());
+    pub(crate) fn use_parser(&self, request: &ClientRequest) -> bool {
+        let with_locks = self.level == QueryParserLevel::SessionControlAndLocks;
+        let session_control =
+            self.level == QueryParserLevel::SessionControl || self.level == QueryParserLevel::Auto;
+
+        if with_locks || session_control {
+            if let Ok(Some(query)) = request.query() {
+                let prefix = scan_prefix(query.query(), self.limit);
+                if with_locks {
+                    return CMD_RE_ADVISORY.is_match(prefix);
+                } else {
+                    return CMD_RE.is_match(prefix);
+                }
             }
         }
 
@@ -30,13 +84,25 @@ impl RegexParser {
 
 #[cfg(test)]
 mod test {
-    use crate::net::Query;
+    use crate::net::{Parse, ProtocolMessage, Query};
 
     use super::*;
 
     fn matches(query: &str) -> bool {
-        let req = ClientRequest::from(vec![Query::new(query).into()]);
-        RegexParser::use_parser(&req)
+        matches_at(query, QueryParserLevel::SessionControl)
+    }
+
+    fn matches_at(query: &str, level: QueryParserLevel) -> bool {
+        let mut yes = false;
+        for req in [
+            ProtocolMessage::from(Query::new(query)),
+            Parse::new_anonymous(query).into(),
+        ] {
+            let req = ClientRequest::from(vec![req]);
+            yes = RegexParser::new(General::regex_parser_limit(), level).use_parser(&req);
+        }
+
+        yes
     }
 
     #[test]
@@ -77,6 +143,42 @@ mod test {
         assert!(matches("ROLLBACK"));
         assert!(matches("rollback"));
         assert!(matches("   ROLLBACK"));
+    }
+
+    #[test]
+    fn test_advisory_lock() {
+        let l = QueryParserLevel::SessionControlAndLocks;
+        assert!(matches_at("SELECT pg_advisory_lock(1)", l));
+        assert!(matches_at("select pg_advisory_lock(1, 2)", l));
+        assert!(matches_at("SELECT pg_advisory_unlock(1)", l));
+        assert!(matches_at("SELECT pg_advisory_unlock_all()", l));
+        assert!(matches_at("SELECT pg_advisory_xact_lock(1)", l));
+        assert!(matches_at("SELECT pg_try_advisory_lock(1)", l));
+        assert!(matches_at("SELECT pg_try_advisory_xact_lock(1)", l));
+        assert!(matches_at("SELECT pg_advisory_lock_shared(1)", l));
+        assert!(matches_at("SELECT pg_advisory_unlock_shared(1)", l));
+        assert!(matches_at("SELECT pg_advisory_xact_lock_shared(1)", l));
+        assert!(matches_at("SELECT pg_try_advisory_lock_shared(1)", l));
+        assert!(matches_at("SELECT pg_try_advisory_xact_lock_shared(1)", l));
+        assert!(matches_at(
+            "SELECT pg_try_advisory_lock(? value) FROM (VALUES (?)) (value);",
+            l
+        ));
+
+        assert!(!matches_at(
+            "SELECT pg_advisory_lock(1)",
+            QueryParserLevel::SessionControl
+        ));
+    }
+
+    #[test]
+    fn test_scan_prefix_limit() {
+        let l = QueryParserLevel::SessionControlAndLocks;
+        let long = format!("{}pg_advisory_lock(1)", " ".repeat(1_000));
+        assert!(!matches_at(&long, l));
+
+        let short = format!("{}pg_advisory_lock(1)", " ".repeat(900));
+        assert!(matches_at(&short, l));
     }
 
     #[test]

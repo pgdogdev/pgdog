@@ -143,6 +143,16 @@ log_format = "text"
 #
 # Default: info
 log_level = "info"
+# Window (milliseconds) over which to deduplicate identical log messages.
+# Set to 0 to disable throttling.
+#
+# Default: 0
+log_dedup_window = 0
+# Number of identical log messages allowed within log_dedup_window before
+# further duplicates are suppressed. Set to 0 to disable throttling.
+#
+# Default: 0
+log_dedup_threshold = 0
 # Configure levels of support for prepared statements.
 #
 # Default: enabled
