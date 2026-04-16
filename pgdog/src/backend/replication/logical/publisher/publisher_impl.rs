@@ -10,16 +10,16 @@ use tokio::time::Instant;
 use tokio::{select, spawn, time::interval};
 use tracing::{debug, info, warn};
 
-use super::super::{publisher::Table, Error};
+use super::super::{Error, publisher::Table};
 use super::ReplicationSlot;
 
 use crate::backend::replication::logical::subscriber::stream::StreamSubscriber;
-use crate::backend::replication::publisher::progress::Progress;
 use crate::backend::replication::publisher::Lsn;
+use crate::backend::replication::publisher::progress::Progress;
 use crate::backend::replication::{
     logical::publisher::ReplicationData, publisher::ParallelSyncManager,
 };
-use crate::backend::{pool::Request, Cluster};
+use crate::backend::{Cluster, pool::Request};
 use crate::config::Role;
 use crate::net::replication::ReplicationMeta;
 
@@ -84,6 +84,21 @@ impl Publisher {
         &self.slot_name
     }
 
+    fn distribute_omnisharded_tables(&mut self, omnisharded: HashMap<(String, String), Table>) {
+        let shard_count = self.cluster.shards().len();
+        // Downstream paths (e.g. Publisher::replicate) iterate every shard and
+        // require a (possibly empty) entry in `self.tables` for each one.
+        for number in 0..shard_count {
+            self.tables.entry(number).or_default();
+        }
+        for (shard_index, table) in omnisharded.into_values().enumerate() {
+            let shard = shard_index % shard_count;
+            if let Some(tables) = self.tables.get_mut(&shard) {
+                tables.push(table);
+            }
+        }
+    }
+
     /// Synchronize tables for all shards.
     pub async fn sync_tables(&mut self, data_sync: bool, dest: &Cluster) -> Result<(), Error> {
         let sharding_tables = dest.sharding_schema().tables;
@@ -129,15 +144,8 @@ impl Publisher {
             }
         }
 
-        // Distribute omni tables rougly equally between all shards.
-        let mut shard_index = 0;
-        for table in omnisharded.into_values() {
-            let shard = shard_index % self.cluster.shards().len();
-            if let Some(tables) = self.tables.get_mut(&shard) {
-                tables.push(table);
-            }
-            shard_index += 1;
-        }
+        // Distribute omni tables roughly equally between all shards.
+        self.distribute_omnisharded_tables(omnisharded);
 
         Ok(())
     }
@@ -425,6 +433,7 @@ mod test {
     use crate::backend::replication::logical::publisher::{
         PublicationTable, PublicationTableColumn, ReplicaIdentity,
     };
+    use crate::config::config;
 
     fn make_table(schema: &str, name: &str, lsn: i64) -> Table {
         Table {
@@ -474,5 +483,34 @@ mod test {
         let merged = merge_table_lsns(vec![make_table("copy_data", "orders", 0)], Some(&existing));
 
         assert_eq!(merged[0].lsn, Lsn::default());
+    }
+
+    #[test]
+    fn distribute_omnisharded_tables_initializes_missing_shards() {
+        let config = config();
+        let cluster = Cluster::new_test(&config);
+        let mut publisher = Publisher::new(
+            &cluster,
+            "test",
+            QueryParserEngine::default(),
+            "slot".into(),
+        );
+        let table = make_table("public", "omni_only", 0);
+
+        publisher.distribute_omnisharded_tables(HashMap::from([(table.key(), table)]));
+
+        assert!(
+            publisher.tables.contains_key(&0),
+            "omni-only publications should initialize shard 0 even when no sharded tables exist"
+        );
+        assert!(
+            publisher.tables.contains_key(&1),
+            "data_sync iterates every shard and needs an entry for shard 1 even if it is empty"
+        );
+        assert_eq!(
+            publisher.tables.values().map(Vec::len).sum::<usize>(),
+            1,
+            "the omnisharded table should still be assigned exactly once"
+        );
     }
 }

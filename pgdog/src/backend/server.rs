@@ -230,7 +230,7 @@ impl Server {
                     match auth {
                         Authentication::Ok => break,
                         Authentication::ClearTextPassword => {
-                            let password = Password::new_password(&auth_secret);
+                            let password = Password::new_password(auth_secret);
                             stream.send_flush(&password).await?;
                         }
                         Authentication::Sasl(_) => {
