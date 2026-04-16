@@ -81,6 +81,7 @@ pub struct Cluster {
     reload_schema_on_ddl: bool,
     load_schema: LoadSchema,
     resharding_parallel_copies: usize,
+    regex_parser: RegexParser,
 }
 
 /// Sharding configuration from the cluster.
@@ -157,6 +158,7 @@ pub struct ClusterConfig<'a> {
     pub reload_schema_on_ddl: bool,
     pub load_schema: LoadSchema,
     pub resharding_parallel_copies: usize,
+    pub regex_parser_limit: usize,
 }
 
 impl<'a> ClusterConfig<'a> {
@@ -210,6 +212,7 @@ impl<'a> ClusterConfig<'a> {
             reload_schema_on_ddl: general.reload_schema_on_ddl,
             load_schema: general.load_schema,
             resharding_parallel_copies: general.resharding_parallel_copies,
+            regex_parser_limit: general.regex_parser_limit,
         }
     }
 }
@@ -247,6 +250,7 @@ impl Cluster {
             reload_schema_on_ddl,
             load_schema,
             resharding_parallel_copies,
+            regex_parser_limit,
         } = config;
 
         let identifier = Arc::new(DatabaseUser {
@@ -296,6 +300,7 @@ impl Cluster {
             reload_schema_on_ddl,
             load_schema,
             resharding_parallel_copies,
+            regex_parser: RegexParser::new(regex_parser_limit, query_parser),
         }
     }
 
@@ -463,14 +468,16 @@ impl Cluster {
         match self.query_parser() {
             QueryParserLevel::Off => false,
             QueryParserLevel::On => true,
-            QueryParserLevel::SessionControl => RegexParser::use_parser(request),
+            QueryParserLevel::SessionControl | QueryParserLevel::SessionControlAndLocks => {
+                self.regex_parser.use_parser(request)
+            }
             QueryParserLevel::Auto => {
                 self.multi_tenant().is_some()
                     || self.router_needed()
                     || self.dry_run()
                     || self.prepared_statements() == &PreparedStatements::Full
                     || self.pub_sub_enabled()
-                    || RegexParser::use_parser(request)
+                    || self.regex_parser.use_parser(request)
             }
         }
     }
@@ -759,6 +766,10 @@ mod test {
                 dry_run: config.config.general.dry_run,
                 expanded_explain: config.config.general.expanded_explain,
                 query_parser: config.config.general.query_parser,
+                regex_parser: crate::frontend::RegexParser::new(
+                    config.config.general.regex_parser_limit,
+                    config.config.general.query_parser,
+                ),
                 rewrite: config.config.rewrite.clone(),
                 two_phase_commit: config.config.general.two_phase_commit,
                 two_phase_commit_auto: config.config.general.two_phase_commit_auto.unwrap_or(false),
@@ -796,6 +807,10 @@ mod test {
                 dry_run: config.config.general.dry_run,
                 expanded_explain: config.config.general.expanded_explain,
                 query_parser: config.config.general.query_parser,
+                regex_parser: crate::frontend::RegexParser::new(
+                    config.config.general.regex_parser_limit,
+                    config.config.general.query_parser,
+                ),
                 rewrite: config.config.rewrite.clone(),
                 two_phase_commit: config.config.general.two_phase_commit,
                 two_phase_commit_auto: config.config.general.two_phase_commit_auto.unwrap_or(false),

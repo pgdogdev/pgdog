@@ -527,7 +527,9 @@ impl Config {
                 }
                 let parser_enabled = match self.general.query_parser {
                     QueryParserLevel::On => true,
-                    QueryParserLevel::Off | QueryParserLevel::SessionControl => false,
+                    QueryParserLevel::Off
+                    | QueryParserLevel::SessionControl
+                    | QueryParserLevel::SessionControlAndLocks => false,
                     QueryParserLevel::Auto => check.have_replicas || check.sharded,
                 };
                 if !parser_enabled {

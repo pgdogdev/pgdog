@@ -292,6 +292,10 @@ pub struct General {
     #[serde(default)]
     pub query_parser: QueryParserLevel,
 
+    /// Limit on the size of the query the regex parser will inspect.
+    #[serde(default = "General::regex_parser_limit")]
+    pub regex_parser_limit: usize,
+
     /// Underlying parser implementation used to analyze SQL queries.
     #[serde(default)]
     pub query_parser_engine: QueryParserEngine,
@@ -699,6 +703,7 @@ impl Default for General {
             prepared_statements: Self::prepared_statements(),
             query_parser_enabled: Self::query_parser_enabled(),
             query_parser: QueryParserLevel::default(),
+            regex_parser_limit: Self::regex_parser_limit(),
             query_parser_engine: QueryParserEngine::default(),
             prepared_statements_limit: Self::prepared_statements_limit(),
             query_cache_limit: Self::query_cache_limit(),
@@ -829,6 +834,10 @@ impl General {
 
     fn healthcheck_port() -> Option<u16> {
         Self::env_option("PGDOG_HEALTHCHECK_PORT")
+    }
+
+    pub fn regex_parser_limit() -> usize {
+        1_000
     }
 
     fn ban_timeout() -> u64 {

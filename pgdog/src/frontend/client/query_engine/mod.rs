@@ -12,6 +12,7 @@ use crate::{
 
 use tracing::debug;
 
+pub mod advisory_lock;
 pub mod connect;
 pub mod context;
 pub mod deallocate;
@@ -38,6 +39,7 @@ pub mod two_pc;
 pub mod unknown_command;
 
 use self::query::ExplainResponseState;
+pub(crate) use advisory_lock::AdvisoryLocks;
 pub use context::QueryEngineContext;
 use notify_buffer::NotifyBuffer;
 pub use two_pc::phase::TwoPcPhase;
@@ -55,6 +57,7 @@ pub struct QueryEngine {
     notify_buffer: NotifyBuffer,
     pending_explain: Option<ExplainResponseState>,
     hooks: QueryEngineHooks,
+    advisory_locks: AdvisoryLocks,
 }
 
 impl QueryEngine {
@@ -76,6 +79,7 @@ impl QueryEngine {
             pending_explain: None,
             begin_stmt: None,
             router: Router::default(),
+            advisory_locks: AdvisoryLocks::default(),
         })
     }
 
@@ -167,6 +171,10 @@ impl QueryEngine {
                     .await?
             }
             Command::CommitTransaction { extended } => {
+                self.advisory_locks.commit();
+                self.backend.lock(self.advisory_locks.locked());
+                self.stats.locked(self.advisory_locks.locked());
+
                 if self.backend.connected() || *extended {
                     let extended = *extended;
                     let transaction_route =
@@ -183,6 +191,10 @@ impl QueryEngine {
                 }
             }
             Command::RollbackTransaction { extended } => {
+                self.advisory_locks.rollback();
+                self.backend.lock(self.advisory_locks.locked());
+                self.stats.locked(self.advisory_locks.locked());
+
                 if self.backend.connected() || *extended {
                     let extended = *extended;
                     let transaction_route =

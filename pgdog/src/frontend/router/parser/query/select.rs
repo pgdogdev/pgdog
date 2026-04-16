@@ -41,14 +41,23 @@ impl QueryParser {
 
         // Early return for any direct-to-shard queries.
         if context.shards_calculator.shard().is_direct() {
+            let advisory_locks = StatementParser::from_select(
+                stmt,
+                context.router_context.bind,
+                &context.sharding_schema,
+                None,
+            )
+            .extract_advisory_locks();
             return Ok(Command::Query(
-                Route::read(context.shards_calculator.shard().clone()).with_functions(overrides),
+                Route::read(context.shards_calculator.shard().clone())
+                    .with_functions(overrides)
+                    .with_advisory_locks(advisory_locks),
             ));
         }
 
         let mut shards = HashSet::new();
 
-        let (shard, is_sharded, tables) = {
+        let (shard, is_sharded, tables, advisory_locks) = {
             let mut statement_parser = StatementParser::from_select(
                 stmt,
                 context.router_context.bind,
@@ -58,8 +67,12 @@ impl QueryParser {
 
             let shard = statement_parser.shard()?;
 
+            // Piggyback on the parser's single AST walk — this reuses the cached
+            // traversal used for sharding / table extraction.
+            let advisory_locks = statement_parser.extract_advisory_locks();
+
             if shard.is_some() {
-                (shard, true, vec![])
+                (shard, true, vec![], advisory_locks)
             } else {
                 (
                     None,
@@ -69,6 +82,7 @@ impl QueryParser {
                         context.router_context.parameter_hints.search_path,
                     ),
                     statement_parser.extract_tables(),
+                    advisory_locks,
                 )
             }
         };
@@ -90,7 +104,9 @@ impl QueryParser {
                 .push(ShardWithPriority::new_rr_no_table(shard));
 
             return Ok(Command::Query(
-                Route::read(context.shards_calculator.shard().clone()).with_functions(overrides),
+                Route::read(context.shards_calculator.shard().clone())
+                    .with_functions(overrides)
+                    .with_advisory_locks(advisory_locks),
             ));
         }
 
@@ -208,7 +224,11 @@ impl QueryParser {
             query.with_aggregate_rewrite_plan_mut(cached_ast.rewrite_plan.aggregates.clone());
         }
 
-        Ok(Command::Query(query.with_functions(overrides)))
+        Ok(Command::Query(
+            query
+                .with_functions(overrides)
+                .with_advisory_locks(advisory_locks),
+        ))
     }
 
     /// Handle the `ORDER BY` clause of a `SELECT` statement.
