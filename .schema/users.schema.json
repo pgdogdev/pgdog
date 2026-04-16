@@ -99,7 +99,10 @@
         },
         "cross_shard_disabled": {
           "description": "Disable cross-shard queries for this user.",
-          "type": ["boolean", "null"]
+          "type": [
+            "boolean",
+            "null"
+          ]
         },
         "database": {
           "description": "Name of the database cluster this user belongs to. This refers to `name` setting in [`pgdog.toml`](https://docs.pgdog.dev/configuration/pgdog.toml/databases/), databases section.\n\nhttps://docs.pgdog.dev/configuration/users.toml/users/#database",
@@ -116,13 +119,19 @@
         },
         "idle_timeout": {
           "description": "Overrides [`idle_timeout`](https://docs.pgdog.dev/configuration/pgdog.toml/general/#idle_timeout) for this user. Server connections that have been idle for this long, without affecting [`min_pool_size`](https://docs.pgdog.dev/configuration/pgdog.toml/general/#min_pool_size), will be closed.\n\nhttps://docs.pgdog.dev/configuration/users.toml/users/#idle_timeout",
-          "type": ["integer", "null"],
+          "type": [
+            "integer",
+            "null"
+          ],
           "format": "uint64",
           "minimum": 0
         },
         "min_pool_size": {
           "description": "Overrides [`min_pool_size`](https://docs.pgdog.dev/configuration/pgdog.toml/general/#min_pool_size) for this user. Opens at least this many connections on pooler startup and keeps them open despite [`idle_timeout`](https://docs.pgdog.dev/configuration/pgdog.toml/general/#idle_timeout).\n\nhttps://docs.pgdog.dev/configuration/users.toml/users/#min_pool_size",
-          "type": ["integer", "null"],
+          "type": [
+            "integer",
+            "null"
+          ],
           "format": "uint",
           "minimum": 0
         },
@@ -132,7 +141,10 @@
         },
         "password": {
           "description": "The password for the user. Clients will need to provide this when connecting to PgDog.\n\nhttps://docs.pgdog.dev/configuration/users.toml/users/#password",
-          "type": ["string", "null"]
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "passwords": {
           "description": "Multiple passwords for this user, all of which will be attempted during auth to server and client.",
@@ -144,7 +156,10 @@
         },
         "pool_size": {
           "description": "Overrides [`default_pool_size`](https://docs.pgdog.dev/configuration/pgdog.toml/general/) for this user. No more than this many server connections will be open at any given time to serve requests for this connection pool.\n\nhttps://docs.pgdog.dev/configuration/users.toml/users/#pool_size",
-          "type": ["integer", "null"],
+          "type": [
+            "integer",
+            "null"
+          ],
           "format": "uint",
           "minimum": 0
         },
@@ -161,7 +176,10 @@
         },
         "read_only": {
           "description": "Sets `default_transaction_read_only` to `on` for all connections.",
-          "type": ["boolean", "null"]
+          "type": [
+            "boolean",
+            "null"
+          ]
         },
         "replication_mode": {
           "description": "Sets the `replication=database` parameter on user connections to Postgres. Allows this user to use replication commands.\n\n_Default:_ `false`\n\nhttps://docs.pgdog.dev/configuration/users.toml/users/#replication_mode",
@@ -170,7 +188,10 @@
         },
         "replication_sharding": {
           "description": "Sharding target database for replication.",
-          "type": ["string", "null"]
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "schema_admin": {
           "description": "Schema owner with elevated DDL privileges.",
@@ -184,39 +205,62 @@
         },
         "server_iam_region": {
           "description": "Optional region override for RDS IAM token generation.",
-          "type": ["string", "null"]
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "server_lifetime": {
           "description": "Server connections older than this (in milliseconds) will be closed when returned to the pool.",
-          "type": ["integer", "null"],
+          "type": [
+            "integer",
+            "null"
+          ],
           "format": "uint64",
           "minimum": 0
         },
         "server_password": {
           "description": "Which password to connect with when creating backend connections from PgDog to PostgreSQL. By default, the password configured in `password` is used. This setting allows you to override this configuration and use a different password, decoupling server passwords from user passwords given to clients.\n\n**Note:** Values specified in `pgdog.toml` take priority over this configuration.\n\nhttps://docs.pgdog.dev/configuration/users.toml/users/#server_password",
-          "type": ["string", "null"]
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "server_user": {
           "description": "Which user to connect with when creating backend connections from PgDog to PostgreSQL. By default, the user configured in `name` is used. This setting allows you to override this configuration and use a different user.\n\n**Note:** Values specified in `pgdog.toml` take priority over this configuration.\n\nhttps://docs.pgdog.dev/configuration/users.toml/users/#server_user",
-          "type": ["string", "null"]
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "statement_timeout": {
           "description": "Statement timeout.\n\nSets the `statement_timeout` on all server connections at connection creation. This allows you to set a reasonable default for each user without modifying `postgresql.conf` or using `ALTER USER`.\n\n**Note:** Nothing is preventing the user from manually changing this setting at runtime, e.g., by running `SET statement_timeout TO 0`;\n\nhttps://docs.pgdog.dev/configuration/users.toml/users/#statement_timeout",
-          "type": ["integer", "null"],
+          "type": [
+            "integer",
+            "null"
+          ],
           "format": "uint64",
           "minimum": 0
         },
         "two_phase_commit": {
           "description": "Overrides [`two_phase_commit`](https://docs.pgdog.dev/configuration/pgdog.toml/general/#two_phase_commit) for this user.\n\nhttps://docs.pgdog.dev/configuration/users.toml/users/#two_phase_commit",
-          "type": ["boolean", "null"]
+          "type": [
+            "boolean",
+            "null"
+          ]
         },
         "two_phase_commit_auto": {
           "description": "Overrides [`two_phase_commit_auto`](https://docs.pgdog.dev/configuration/pgdog.toml/general/#two_phase_commit_auto) for this user.\n\nhttps://docs.pgdog.dev/configuration/users.toml/users/#two_phase_commit_auto",
-          "type": ["boolean", "null"]
+          "type": [
+            "boolean",
+            "null"
+          ]
         }
       },
       "additionalProperties": false,
-      "required": ["name"]
+      "required": [
+        "name"
+      ]
     }
   }
 }
