@@ -6,8 +6,9 @@ password = "pgdog"
 [[users]]
 name = "pgdog_hashed"
 database = "pgdog"
-password_hash = "SCRAM-SHA-256$4096:vX3StexTjqoOwxSBznak2w==$xCwPbcvOarL6qRsDaigEDPdUaDvdMUnZz2uptvDXud4=:aqhNv3LmJIcjFGoxf9smU/yP/gMsbniA/7eCDbTCHoY="
+password_hash = "SCRAM-SHA-256$4096:b6lksqhYfkXiN2hDMl3zfA==$9Rh0FdfjsbECkf289/WO2yHGiUBnNOOb1uNHVtOCCDE=:V7jC7GHvIr4guRsI66S3u4aXNhHWj1Pz71ymRM7bLFU="
 server_password = "pgdog" # Pointless obviously, but we can test scram hash is working as expected. pgdog -> server auth is expected to be passwordless, e.g. rds iam, trust, azure working directory, etc.
+server_user = "pgdog"
 min_pool_size = 0
 
 [[users]]
