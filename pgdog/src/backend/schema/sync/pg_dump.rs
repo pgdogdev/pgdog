@@ -1183,6 +1183,21 @@ mod test {
         assert_eq!(sslmode, Some(OsStr::new("require")));
     }
 
+        #[test]
+    fn test_build_pg_dump_command_sets_tls_for_azure_workload_identity() {
+        let mut addr = backend::pool::Address::new_test();
+        addr.server_auth = ServerAuth::AzureWorkloadIdentity;
+        let command = build_pg_dump_command("pg_dump", &addr, "token");
+
+        let sslmode = command
+            .as_std()
+            .get_envs()
+            .find(|(key, _)| *key == OsStr::new("PGSSLMODE"))
+            .and_then(|(_, value)| value);
+
+        assert_eq!(sslmode, Some(OsStr::new("require")));
+    }
+
     #[test]
     fn test_specific_dump() {
         let dump = r#"

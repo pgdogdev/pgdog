@@ -1321,4 +1321,40 @@ shard = 0
         assert!(err.contains("tls_verify"));
         assert!(err.contains("rds_iam"));
     }
+
+        #[test]
+    fn test_azure_workload_identity_rejects_passthrough_auth() {
+        let mut config = ConfigAndUsers::default();
+        config.config.general.passthrough_auth = PassthroughAuth::EnabledPlain;
+        config.config.general.tls_verify = TlsVerifyMode::VerifyFull;
+        config.users.users.push(crate::User {
+            name: "alice".into(),
+            database: "db".into(),
+            password: Some("secret".into()),
+            server_auth: ServerAuth::AzureWorkloadIdentity,
+            ..Default::default()
+        });
+
+        let err = config.check().unwrap_err().to_string();
+        assert!(err.contains("passthrough_auth"));
+        assert!(err.contains("azure_workload_identity"));
+    }
+
+    #[test]
+    fn test_azure_workload_identity_rejects_tls_verify_disabled() {
+        let mut config = ConfigAndUsers::default();
+        config.config.general.tls_verify = TlsVerifyMode::Disabled;
+        config.config.general.passthrough_auth = PassthroughAuth::Disabled;
+        config.users.users.push(crate::User {
+            name: "alice".into(),
+            database: "db".into(),
+            password: Some("secret".into()),
+            server_auth: ServerAuth::AzureWorkloadIdentity,
+            ..Default::default()
+        });
+
+        let err = config.check().unwrap_err().to_string();
+        assert!(err.contains("tls_verify"));
+        assert!(err.contains("azure_workload_identity"));
+    }
 }

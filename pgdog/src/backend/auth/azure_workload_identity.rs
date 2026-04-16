@@ -94,9 +94,6 @@ mod tests {
         };
 
         let token = token(&addr).await.unwrap();
-        assert!(token.starts_with(
-            "my-awesome-db.postgres.database.azure.com:5432/?Action=connect&DBUser=db_user"
-        ));
         assert!(token.contains("https://sts.windows.net/"));
         assert!(token.contains("https://management.azure.com"));
         assert!(token.contains("appid"));

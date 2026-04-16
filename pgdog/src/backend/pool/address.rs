@@ -221,6 +221,34 @@ mod test {
         assert_eq!(address.server_iam_region.as_deref(), Some("us-east-1"));
     }
 
+       #[test]
+    fn test_azure_workload_identity_does_not_use_static_password() {
+        let database = Database {
+            name: "pgdog".into(),
+            host: "127.0.0.1".into(),
+            port: 6432,
+            password: Some("db-level-pass".into()),
+            ..Default::default()
+        };
+
+        let user = User {
+            name: "pgdog".into(),
+            password: Some("user-pass".into()),
+            server_password: Some("server-pass".into()),
+            server_auth: ServerAuth::AzureWorkloadIdentity,
+            server_iam_region: None,
+            database: "pgdog".into(),
+            ..Default::default()
+        };
+
+        let address = Address::new(&database, &user, 0);
+        assert!(
+            address.passwords.is_empty(),
+            "RDS IAM addresses must not carry static passwords"
+        );
+        assert_eq!(address.server_auth, ServerAuth::AzureWorkloadIdentity);
+    }
+
     #[test]
     fn test_addr_from_url() {
         let addr =
@@ -257,6 +285,25 @@ mod test {
             .unwrap()
             .to_string();
         crate::backend::auth::rds_iam::set_test_token_override(None);
+
+        assert_eq!(secret, "token-from-iam");
+    }
+
+        #[tokio::test]
+    async fn test_auth_secret_azure_workload_identity_mode_uses_generator() {
+        let mut addr = Address::new_test();
+        addr.server_auth = ServerAuth::AzureWorkloadIdentity;
+        addr.passwords = vec!["wrong".into()];
+
+        crate::backend::auth::azure_workload_identity::set_test_token_override(Some("token-from-iam".into()));
+        let secret = addr
+            .auth_secrets()
+            .await
+            .unwrap()
+            .first()
+            .unwrap()
+            .to_string();
+        crate::backend::auth::azure_workload_identity::set_test_token_override(None);
 
         assert_eq!(secret, "token-from-iam");
     }

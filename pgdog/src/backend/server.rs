@@ -1241,7 +1241,7 @@ pub mod test {
     }
 
     #[tokio::test]
-    async fn test_connect_azure_sql_workload_identity_uses_dynamic_token_not_static_password() {
+    async fn test_connect_azure_workload_identity_uses_dynamic_token_not_static_password() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         let expected_secret = "token-for-test".to_string();
