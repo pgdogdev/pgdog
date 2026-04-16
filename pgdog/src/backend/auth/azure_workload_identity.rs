@@ -36,6 +36,11 @@ fn test_token_override() -> Option<String> {
 }
 
 #[cfg(test)]
+pub(crate) fn set_test_token_override(token: Option<String>) {
+    *TEST_TOKEN_OVERRIDE.lock() = token;
+}
+
+#[cfg(test)]
 static TEST_TOKEN_OVERRIDE: once_cell::sync::Lazy<parking_lot::Mutex<Option<String>>> =
     once_cell::sync::Lazy::new(|| parking_lot::Mutex::new(None));
 
