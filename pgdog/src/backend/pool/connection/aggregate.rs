@@ -1384,13 +1384,14 @@ mod test {
 
     #[test]
     fn aggregate_group_by_interval_arrays_preserves_postgres_text_output() {
-        let stmt = pg_query::parse("SELECT sample_interval_array, COUNT(*) FROM samples GROUP BY 1")
-            .unwrap()
-            .protobuf
-            .stmts
-            .first()
-            .cloned()
-            .unwrap();
+        let stmt =
+            pg_query::parse("SELECT sample_interval_array, COUNT(*) FROM samples GROUP BY 1")
+                .unwrap()
+                .protobuf
+                .stmts
+                .first()
+                .cloned()
+                .unwrap();
         let aggregate = match stmt.stmt.unwrap().node.unwrap() {
             pg_query::NodeEnum::SelectStmt(stmt) => Aggregate::parse(&stmt),
             _ => panic!("expected select stmt"),
