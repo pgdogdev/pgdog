@@ -131,9 +131,21 @@ impl FromDataType for Numeric {
                 let mut buf = bytes;
 
                 let ndigits = buf.get_i16();
+                if ndigits < 0 {
+                    return Err(Error::UnexpectedPayload);
+                }
                 let weight = buf.get_i16();
                 let sign = buf.get_u16();
                 let dscale = buf.get_i16();
+
+                if dscale < 0 {
+                    return Err(Error::UnexpectedPayload);
+                }
+                // Downstream arithmetic computes (-weight - 1) * 4 as i16.
+                // That overflows when -weight - 1 > 8191, i.e. weight < -8192.
+                if weight < -8192 {
+                    return Err(Error::UnexpectedPayload);
+                }
 
                 // Handle special sign values using pattern matching
                 let is_negative = match sign {
@@ -1045,5 +1057,37 @@ mod tests {
                 test_value, original_numeric, decoded_numeric
             );
         }
+    }
+
+    #[test]
+    fn test_negative_dscale_binary_format_rejected() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&1i16.to_be_bytes()); // ndigits
+        bytes.extend_from_slice(&0i16.to_be_bytes()); // weight
+        bytes.extend_from_slice(&0u16.to_be_bytes()); // sign
+        bytes.extend_from_slice(&(-1i16).to_be_bytes()); // invalid dscale
+        bytes.extend_from_slice(&1i16.to_be_bytes()); // digit
+
+        let result = Numeric::decode(&bytes, Format::Binary);
+        assert!(
+            result.is_err(),
+            "negative dscale is malformed and should be rejected"
+        );
+    }
+
+    #[test]
+    fn test_minimum_weight_binary_format_rejected() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&1i16.to_be_bytes()); // ndigits
+        bytes.extend_from_slice(&i16::MIN.to_be_bytes()); // invalid weight for decoder math
+        bytes.extend_from_slice(&0u16.to_be_bytes()); // sign
+        bytes.extend_from_slice(&1i16.to_be_bytes()); // dscale
+        bytes.extend_from_slice(&1i16.to_be_bytes()); // digit
+
+        let result = Numeric::decode(&bytes, Format::Binary);
+        assert!(
+            result.is_err(),
+            "minimum i16 weight should be rejected instead of panicking"
+        );
     }
 }

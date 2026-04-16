@@ -3890,7 +3890,7 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 [[package]]
 name = "scram"
 version = "0.6.0"
-source = "git+https://github.com/pgdogdev/scram.git?rev=66f34fd60d393405c75ff6f416e67142b5d15223#66f34fd60d393405c75ff6f416e67142b5d15223"
+source = "git+https://github.com/pgdogdev/scram.git?rev=90c511f703d2856dddd029ea062239c3132f902d#90c511f703d2856dddd029ea062239c3132f902d"
 dependencies = [
  "base64 0.13.1",
  "rand 0.8.5",

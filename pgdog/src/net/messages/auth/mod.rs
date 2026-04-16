@@ -37,6 +37,10 @@ impl FromBytes for Authentication {
     fn from_bytes(mut bytes: Bytes) -> Result<Self, Error> {
         code!(bytes, 'R');
 
+        if bytes.remaining() < 8 {
+            return Err(Error::UnexpectedPayload);
+        }
+
         let _len = bytes.get_i32();
 
         let status = bytes.get_i32();
@@ -45,6 +49,9 @@ impl FromBytes for Authentication {
             0 => Ok(Authentication::Ok),
             3 => Ok(Authentication::ClearTextPassword),
             5 => {
+                if bytes.remaining() < 4 {
+                    return Err(Error::UnexpectedPayload);
+                }
                 let mut salt = vec![0u8; 4];
                 bytes.copy_to_slice(&mut salt);
                 Ok(Authentication::Md5(Bytes::from(salt)))

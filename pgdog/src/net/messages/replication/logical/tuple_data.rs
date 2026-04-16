@@ -31,10 +31,19 @@ impl std::fmt::Debug for TupleData {
 
 impl TupleData {
     pub fn from_buffer(bytes: &mut Bytes) -> Result<Self, Error> {
+        if bytes.remaining() < 2 {
+            return Err(Error::UnexpectedPayload);
+        }
         let num_columns = bytes.get_i16();
+        if num_columns < 0 {
+            return Err(Error::UnexpectedPayload);
+        }
         let mut columns = vec![];
 
         for _ in 0..num_columns {
+            if bytes.remaining() < 1 {
+                return Err(Error::UnexpectedPayload);
+            }
             let ident = bytes.get_u8() as char;
             let identifier = match ident {
                 'n' => Identifier::Null,
@@ -46,8 +55,21 @@ impl TupleData {
 
             let len = match identifier {
                 Identifier::Null | Identifier::Toasted => 0,
-                _ => bytes.get_i32(),
+                _ => {
+                    if bytes.remaining() < 4 {
+                        return Err(Error::UnexpectedPayload);
+                    }
+                    let l = bytes.get_i32();
+                    if l < 0 {
+                        return Err(Error::UnexpectedPayload);
+                    }
+                    l
+                }
             };
+
+            if bytes.remaining() < len as usize {
+                return Err(Error::UnexpectedPayload);
+            }
             let data = bytes.split_to(len as usize);
 
             columns.push(Column {
@@ -181,5 +203,21 @@ mod test {
         assert!(bind.parameter(0).unwrap().unwrap().is_null());
         assert!(!bind.parameter(1).unwrap().unwrap().is_null());
         assert_eq!(bind.parameter(1).unwrap().unwrap().bigint().unwrap(), 1234);
+    }
+
+    #[test]
+    fn test_truncated_buffer_rejected() {
+        // Empty buffer
+        assert!(TupleData::from_bytes(Bytes::new()).is_err());
+        // 1 byte (need 2 for column count)
+        assert!(TupleData::from_bytes(Bytes::from_static(&[0])).is_err());
+        // Negative column counts are malformed
+        assert!(TupleData::from_bytes(Bytes::from_static(&[0xff, 0xff])).is_err());
+        // Declares 1 column but no column data follows
+        assert!(TupleData::from_bytes(Bytes::from_static(&[0, 1])).is_err());
+        // Has identifier byte 't' but no length
+        assert!(TupleData::from_bytes(Bytes::from_static(&[0, 1, b't'])).is_err());
+        // Has identifier + length but data is truncated
+        assert!(TupleData::from_bytes(Bytes::from_static(&[0, 1, b't', 0, 0, 0, 4, 1])).is_err());
     }
 }

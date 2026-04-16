@@ -177,7 +177,6 @@ impl Client {
             } else {
                 databases::databases()
                     .passwords((user, database))
-                    .clone()
                     .map(|p| p.to_vec())
             };
 
@@ -210,8 +209,7 @@ impl Client {
                         let response = Password::from_bytes(response.to_bytes()?)?;
                         passwords
                             .iter()
-                            .find(|p| Some(p.as_str()) == response.password())
-                            .is_some()
+                            .any(|p| Some(p.as_str()) == response.password())
                     }
 
                     AuthType::Trust => true,
