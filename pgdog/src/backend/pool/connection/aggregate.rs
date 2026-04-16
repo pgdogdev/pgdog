@@ -713,6 +713,7 @@ mod test {
         messages::{Field, Format, RowDescription},
         Decoder,
     };
+    use bytes::Bytes;
     use std::collections::VecDeque;
 
     #[test]
@@ -752,6 +753,30 @@ mod test {
             column: 0,
             type_oid: 23, // PostgreSQL OID for int4/integer
             type_size: 4,
+            type_modifier: -1,
+            format: 0,
+        }
+    }
+
+    fn integer_array_field(name: &str) -> Field {
+        Field {
+            name: name.into(),
+            table_oid: 0,
+            column: 0,
+            type_oid: 1007,
+            type_size: -1,
+            type_modifier: -1,
+            format: 0,
+        }
+    }
+
+    fn interval_array_field(name: &str) -> Field {
+        Field {
+            name: name.into(),
+            table_oid: 0,
+            column: 0,
+            type_oid: 1187,
+            type_size: -1,
             type_modifier: -1,
             format: 0,
         }
@@ -1299,5 +1324,111 @@ mod test {
         groups.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
         assert_eq!(groups[0], (10.0, 12));
         assert_eq!(groups[1], (20.0, 4));
+    }
+
+    #[test]
+    fn aggregate_group_by_multidimensional_arrays_uses_raw_bytes() {
+        let stmt = pg_query::parse("SELECT matrix, COUNT(*) FROM samples GROUP BY 1")
+            .unwrap()
+            .protobuf
+            .stmts
+            .first()
+            .cloned()
+            .unwrap();
+        let aggregate = match stmt.stmt.unwrap().node.unwrap() {
+            pg_query::NodeEnum::SelectStmt(stmt) => Aggregate::parse(&stmt),
+            _ => panic!("expected select stmt"),
+        };
+
+        let rd = RowDescription::new(&[integer_array_field("matrix"), Field::bigint("count")]);
+        let decoder = Decoder::from(&rd);
+
+        let mut rows = VecDeque::new();
+
+        let mut shard0 = DataRow::new();
+        shard0.add(Bytes::from_static(b"{{1,2},{3,4}}")).add(1_i64);
+        rows.push_back(shard0);
+
+        let mut shard1 = DataRow::new();
+        shard1.add(Bytes::from_static(b"{{1,2},{3,4}}")).add(1_i64);
+        rows.push_back(shard1);
+
+        let mut shard2 = DataRow::new();
+        shard2.add(Bytes::from_static(b"{{5,6},{7,8}}")).add(1_i64);
+        rows.push_back(shard2);
+
+        let mut result = Aggregates::new(
+            &rows,
+            &decoder,
+            &aggregate,
+            &AggregateRewritePlan::default(),
+        )
+        .aggregate()
+        .unwrap();
+
+        let mut groups: Vec<(String, i64)> = result
+            .drain(..)
+            .map(|row| {
+                let matrix = row.get::<String>(0, Format::Text).unwrap();
+                let count = row.get::<i64>(1, Format::Text).unwrap();
+                (matrix, count)
+            })
+            .collect();
+        groups.sort();
+
+        assert_eq!(
+            groups,
+            vec![("{{1,2},{3,4}}".into(), 2), ("{{5,6},{7,8}}".into(), 1),]
+        );
+    }
+
+    #[test]
+    fn aggregate_group_by_interval_arrays_preserves_postgres_text_output() {
+        let stmt =
+            pg_query::parse("SELECT sample_interval_array, COUNT(*) FROM samples GROUP BY 1")
+                .unwrap()
+                .protobuf
+                .stmts
+                .first()
+                .cloned()
+                .unwrap();
+        let aggregate = match stmt.stmt.unwrap().node.unwrap() {
+            pg_query::NodeEnum::SelectStmt(stmt) => Aggregate::parse(&stmt),
+            _ => panic!("expected select stmt"),
+        };
+
+        let rd = RowDescription::new(&[
+            interval_array_field("sample_interval_array"),
+            Field::bigint("count"),
+        ]);
+        let decoder = Decoder::from(&rd);
+
+        let input = Bytes::from_static(br#"{"1 year 2 mons 1 day 04:05:06.7"}"#);
+
+        let mut rows = VecDeque::new();
+        let mut shard0 = DataRow::new();
+        shard0.add(input.clone()).add(1_i64);
+        rows.push_back(shard0);
+
+        let mut shard1 = DataRow::new();
+        shard1.add(input.clone()).add(1_i64);
+        rows.push_back(shard1);
+
+        let mut result = Aggregates::new(
+            &rows,
+            &decoder,
+            &aggregate,
+            &AggregateRewritePlan::default(),
+        )
+        .aggregate()
+        .unwrap();
+
+        assert_eq!(result.len(), 1);
+        let row = result.pop_front().unwrap();
+        let intervals = row.get::<String>(0, Format::Text).unwrap();
+        let count = row.get::<i64>(1, Format::Text).unwrap();
+
+        assert_eq!(intervals, r#"{"1 year 2 mons 1 day 04:05:06.7"}"#);
+        assert_eq!(count, 2);
     }
 }

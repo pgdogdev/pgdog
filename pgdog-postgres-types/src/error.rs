@@ -9,9 +9,6 @@ pub enum Error {
     #[error("unexpected payload")]
     UnexpectedPayload,
 
-    #[error("data type not supported for encoding")]
-    UnsupportedDataTypeForEncoding,
-
     #[error("not text encoding")]
     NotTextEncoding,
 

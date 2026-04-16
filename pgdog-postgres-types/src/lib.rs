@@ -12,6 +12,7 @@ pub mod interface;
 pub mod interval;
 pub mod numeric;
 pub mod oid;
+pub mod smallint;
 pub mod text;
 pub mod timestamp;
 pub mod timestamptz;

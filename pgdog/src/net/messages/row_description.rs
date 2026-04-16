@@ -174,22 +174,7 @@ impl Field {
     /// Get the column data type.
     #[inline]
     pub fn data_type(&self) -> DataType {
-        match self.type_oid {
-            16 => DataType::Bool,
-            20 => DataType::Bigint,
-            23 => DataType::Integer,
-            21 => DataType::SmallInt,
-            25 => DataType::Text,
-            700 => DataType::Real,
-            701 => DataType::DoublePrecision,
-            1043 => DataType::Text,
-            1114 => DataType::Timestamp,
-            1184 => DataType::TimestampTz,
-            1186 => DataType::Interval,
-            1700 => DataType::Numeric,
-            2950 => DataType::Uuid,
-            _ => DataType::Other(self.type_oid),
-        }
+        DataType::from_oid(self.type_oid)
     }
 
     #[inline]
