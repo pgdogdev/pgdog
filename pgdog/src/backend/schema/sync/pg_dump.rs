@@ -138,7 +138,7 @@ fn build_pg_dump_command(
         .arg("-d")
         .arg(&addr.database_name);
 
-    if addr.server_auth == ServerAuth::RdsIam {
+    if addr.server_auth.is_external_identity() {
         command.env("PGSSLMODE", "require");
     }
 
