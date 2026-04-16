@@ -77,17 +77,16 @@ pub(super) fn advisory_locks_from_func_call(
     if let Some(NodeEnum::ColumnRef(cref)) = arg.node.as_ref() {
         if let Some(col) = last_column_name(&cref.fields) {
             if let Some(rows) = values_columns.and_then(|m| m.get(col)) {
-                let locks: Vec<_> = rows
+                return rows
                     .iter()
+                    // Skip unresolvable param refs when there is no Bind.
+                    .filter(|v| bind.is_some() || !is_param_ref(v))
                     .map(|v| AdvisoryLock {
                         id: integer_arg(v, bind),
                         unlock,
                         scope,
                     })
                     .collect();
-                if !locks.is_empty() {
-                    return locks;
-                }
             }
         }
     }
@@ -3034,13 +3033,15 @@ mod test {
         }
 
         #[test]
-        fn non_literal_and_unlock_all() {
-            // Non-literal arg still registers the lock — we just can't resolve the id.
-            assert_eq!(
-                locks("SELECT pg_advisory_lock($1)"),
-                vec![session(None, false)],
-            );
-            // unlock_all releases every held session lock.
+        fn param_without_bind_is_ignored() {
+            // Without a Bind message, a parameter placeholder means the prepared
+            // statement is only being parsed — no lock is actually taken.
+            assert!(locks("SELECT pg_advisory_lock($1)").is_empty());
+        }
+
+        #[test]
+        fn unlock_all_without_bind() {
+            // unlock_all takes no arguments, so it always applies.
             assert_eq!(
                 locks("SELECT pg_advisory_unlock_all()"),
                 vec![session(None, true)],
@@ -3056,33 +3057,25 @@ mod test {
         }
 
         #[test]
-        fn key_from_values_subquery() {
-            // Key is a column reference resolved from a VALUES subquery: we can
-            // still see the call, but the concrete id is unknown. These used to
-            // bypass the walker entirely when advisory locks only visited the
-            // target list without descending through the FROM clause.
-            assert_eq!(
-                locks("SELECT pg_advisory_lock(value) FROM (VALUES ($1)) AS t(value)",),
-                vec![session(None, false)],
+        fn key_from_values_subquery_no_bind() {
+            // Without a Bind, parameter-based VALUES rows are skipped — the
+            // prepared statement is only being parsed, no lock is taken.
+            assert!(
+                locks("SELECT pg_advisory_lock(value) FROM (VALUES ($1)) AS t(value)").is_empty()
             );
-            assert_eq!(
-                locks("SELECT pg_advisory_unlock(value) FROM (VALUES ($1)) AS t(value)",),
-                vec![session(None, true)],
+            assert!(
+                locks("SELECT pg_advisory_unlock(value) FROM (VALUES ($1)) AS t(value)").is_empty()
             );
-            assert_eq!(
-                locks("SELECT pg_try_advisory_lock(value) FROM (VALUES ($1)) AS t(value)",),
-                vec![session(None, false)],
+            assert!(
+                locks("SELECT pg_try_advisory_lock(value) FROM (VALUES ($1)) AS t(value)")
+                    .is_empty()
             );
         }
 
         #[test]
-        fn xact_lock_with_param() {
-            // Without a Bind we can't resolve the parameter, but the call is
-            // still registered with id=None so the backend still gets pinned.
-            assert_eq!(
-                locks("SELECT pg_advisory_xact_lock($1)"),
-                vec![xact(None, false)],
-            );
+        fn xact_lock_with_param_no_bind() {
+            // Without a Bind the prepared statement is just being parsed.
+            assert!(locks("SELECT pg_advisory_xact_lock($1)").is_empty());
         }
 
         #[test]

@@ -1,10 +1,12 @@
+use bytes::Bytes;
+
 use super::setup::*;
 
 #[test]
 fn test_write_function_advisory_lock() {
     let mut test = QueryParserTest::new();
 
-    let command = test.execute(vec![Query::new("SELECT pg_advisory_lock($1)").into()]);
+    let command = test.execute(vec![Query::new("SELECT pg_advisory_lock(123)").into()]);
 
     assert!(command.route().is_write());
     assert!(command.route().is_lock_session());
@@ -13,11 +15,17 @@ fn test_write_function_advisory_lock() {
 #[test]
 fn test_write_functions_prepared() {
     let mut test = QueryParserTest::new();
-    let command = test.execute(vec![Parse::named(
-        "test",
-        "SELECT pg_advisory_lock($1) IS NOT NULL",
-    )
-    .into()]);
+    let command = test.execute(vec![
+        Parse::named("test", "SELECT pg_advisory_lock($1) IS NOT NULL").into(),
+        Bind::new_params(
+            "test",
+            &[crate::net::bind::Parameter {
+                len: 4,
+                data: Bytes::from(b"1234".to_vec()),
+            }],
+        )
+        .into(),
+    ]);
     assert!(command.route().is_write());
     assert!(command.route().is_lock_session());
 }
