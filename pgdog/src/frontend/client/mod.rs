@@ -4,6 +4,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use pgdog_config::users::PasswordKind;
 use timeouts::Timeouts;
 use tokio::{select, spawn, time::timeout};
 use tracing::{debug, enabled, error, info, trace, Level as LogLevel};
@@ -173,7 +174,7 @@ impl Client {
             }
         } else {
             let passwords = if admin {
-                Some(vec![admin_password.clone()])
+                Some(vec![PasswordKind::Plain(admin_password.clone())])
             } else {
                 databases::databases()
                     .passwords((user, database))
@@ -183,7 +184,10 @@ impl Client {
             if let Some(passwords) = passwords {
                 match auth_type {
                     AuthType::Md5 => {
-                        let md5 = md5::Client::new(user, &passwords);
+                        let md5 = md5::Client::new(
+                            user,
+                            &passwords.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+                        );
                         stream.send_flush(&md5.challenge()).await?;
                         let password = Password::from_bytes(stream.read().await?.to_bytes()?)?;
                         if let Password::PasswordMessage { response } = password {

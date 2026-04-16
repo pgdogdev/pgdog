@@ -1,6 +1,7 @@
 //! Server connection requested by a frontend.
 
 use mirror::MirrorHandler;
+use pgdog_config::users::PasswordKind;
 use tokio::{select, time::sleep};
 use tracing::debug;
 
@@ -330,12 +331,24 @@ impl Connection {
         //
         if config.config.general.passthrough_auth() && databases().passwords(user).is_none() {
             if let Some(ref cluster) = self.cluster {
-                databases::add(User {
+                let mut user = User {
                     name: self.user.clone(),
                     database: self.database.clone(),
-                    passwords: cluster.passwords().to_vec(),
                     ..Default::default()
-                })?;
+                };
+                for pass in cluster.passwords() {
+                    match pass {
+                        PasswordKind::Hashed(hashed) => {
+                            user.password_hash = Some(hashed.clone());
+                        }
+
+                        PasswordKind::Plain(plain) => {
+                            user.passwords.push(plain.clone());
+                        }
+                    }
+                }
+
+                databases::add(user)?;
             }
         }
 

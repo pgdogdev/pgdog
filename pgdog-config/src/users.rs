@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::env;
+use std::fmt::Display;
 use std::path::PathBuf;
 use tracing::warn;
 
@@ -48,7 +49,7 @@ impl Users {
     pub fn check(&mut self, config: &Config) {
         for user in &mut self.users {
             if user.password().is_empty() {
-                if !config.general.passthrough_auth() {
+                if !config.general.passthrough_auth() && user.password_hash.is_none() {
                     warn!(
                         "user \"{}\" doesn't have a password and passthrough auth is disabled",
                         user.name
@@ -143,6 +144,31 @@ impl ServerAuth {
     }
 }
 
+/// The kind of password configured on the user.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PasswordKind {
+    Plain(String),
+    Hashed(String),
+}
+
+impl PasswordKind {
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Plain(plain) => plain.as_str(),
+            Self::Hashed(hash) => hash.as_str(),
+        }
+    }
+}
+
+impl Display for PasswordKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Plain(plain) => write!(f, "{}", plain),
+            Self::Hashed(hashed) => write!(f, "{}", hashed),
+        }
+    }
+}
+
 /// User allowed to connect to pgDog.
 /// A user entry in `users.toml`, controlling which users are allowed to connect to PgDog.
 ///
@@ -174,6 +200,9 @@ pub struct User {
     /// Multiple passwords for this user, all of which will be attempted during auth to server and client.
     #[serde(default)]
     pub passwords: Vec<String>,
+    /// Passwords hash. Can be used to validate user logins without storing passwords in users.toml.
+    /// Server authentication must use RDS IAM or some other passwordless authentication, e.g. trust.
+    pub password_hash: Option<String>,
     /// Overrides [`default_pool_size`](https://docs.pgdog.dev/configuration/pgdog.toml/general/) for this user. No more than this many server connections will be open at any given time to serve requests for this connection pool.
     ///
     /// https://docs.pgdog.dev/configuration/users.toml/users/#pool_size
@@ -252,10 +281,19 @@ impl User {
         }
     }
 
-    pub fn passwords(&self) -> Vec<String> {
-        let mut passwords = self.passwords.clone();
+    pub fn passwords(&self) -> Vec<PasswordKind> {
+        let mut passwords: Vec<_> = self
+            .passwords
+            .clone()
+            .into_iter()
+            .map(|p| PasswordKind::Plain(p))
+            .collect();
         if !self.password().is_empty() {
-            passwords.push(self.password().to_string());
+            passwords.push(PasswordKind::Plain(self.password().to_string()));
+        }
+
+        if let Some(hash) = self.password_hash.clone() {
+            passwords.push(PasswordKind::Hashed(hash));
         }
 
         passwords
