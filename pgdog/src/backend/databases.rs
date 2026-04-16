@@ -9,6 +9,7 @@ use futures::future::try_join_all;
 use once_cell::sync::Lazy;
 use parking_lot::lock_api::MutexGuard;
 use parking_lot::{Mutex, RawMutex};
+use pgdog_config::users::PasswordKind;
 use tracing::{debug, error, info, warn};
 
 use crate::backend::replication::ShardedSchemas;
@@ -315,7 +316,7 @@ pub struct Databases {
 
 impl Databases {
     /// Get the database user password, if one is configured.
-    pub fn passwords(&self, user: impl ToUser) -> Option<&[String]> {
+    pub fn passwords(&self, user: impl ToUser) -> Option<&[PasswordKind]> {
         if let Some(cluster) = self.databases.get(&user.to_user()) {
             if cluster.passwords().is_empty() {
                 None

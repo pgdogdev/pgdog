@@ -62,7 +62,7 @@ impl ConfigAndUsers {
         }
 
         let mut users: Users = if let Ok(users) = read_to_string(users_path) {
-            let mut users: Users = match toml::from_str(&users) {
+            let users: Users = match toml::from_str(&users) {
                 Ok(config) => config,
                 Err(err) => {
                     let error = Error::config(&users, err);
@@ -70,7 +70,6 @@ impl ConfigAndUsers {
                     return Err(error);
                 }
             };
-            users.check(&config);
             info!("loaded \"{}\"", users_path.display());
             users
         } else {

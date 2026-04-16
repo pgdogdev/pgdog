@@ -4,6 +4,7 @@ use crate::frontend::Error;
 use crate::net::messages::*;
 use crate::net::Stream;
 
+use pgdog_config::users::PasswordKind;
 use scram::server::ClientFinal;
 use tracing::error;
 
@@ -39,7 +40,7 @@ pub struct UserPassword {
 /// only the first hash is used.
 #[derive(Clone)]
 pub struct HashedPassword {
-    hash: String,
+    pub(crate) hash: String,
 }
 
 enum Scram {
@@ -73,45 +74,26 @@ impl AuthenticationProvider for UserPassword {
 
 impl AuthenticationProvider for HashedPassword {
     fn get_password_for(&self, _user: &str) -> Option<PasswordInfo> {
-        let mut parts = self.hash.split("$");
-        if let Some(algo) = parts.next() {
-            if algo != "SCRAM-SHA-256" {
-                return None;
-            }
-        } else {
+        let mut parts = self.hash.split('$');
+
+        if parts.next()? != "SCRAM-SHA-256" {
             return None;
         }
 
-        let (mut salt, mut iter) = (None, None);
-        if let Some(iter_salt) = parts.next() {
-            let mut split = iter_salt.split(":");
-            let maybe_iter = split.next().map(|iter| iter.parse::<u16>());
-            let maybe_salt = split.next().map(|salt| BASE64_STANDARD.decode(salt));
+        let iter_salt = parts.next()?;
+        let keys_part = parts.next()?;
 
-            if let Some(Ok(num)) = maybe_iter {
-                iter = Some(num);
-            }
+        let mut is = iter_salt.split(':');
+        let iterations: u16 = is.next()?.parse().ok()?;
+        let salt = BASE64_STANDARD.decode(is.next()?).ok()?;
 
-            if let Some(Ok(s)) = maybe_salt {
-                salt = Some(s);
-            }
-        };
+        let mut ks = keys_part.split(':');
+        let stored_key = BASE64_STANDARD.decode(ks.next()?).ok()?;
+        let server_key = BASE64_STANDARD.decode(ks.next()?).ok()?;
 
-        let hashes = parts.next().map(|hashes| hashes.split(":"));
-
-        if let Some(hashes) = hashes {
-            if let Some(last) = hashes.last() {
-                if let Ok(hash) = BASE64_STANDARD.decode(last) {
-                    if let Some(iter) = iter {
-                        if let Some(salt) = salt {
-                            return Some(PasswordInfo::new(hash, iter, salt));
-                        }
-                    }
-                }
-            }
-        }
-
-        None
+        Some(PasswordInfo::from_stored_keys(
+            stored_key, server_key, iterations, salt,
+        ))
     }
 }
 
@@ -124,11 +106,22 @@ pub struct Server {
 impl Server {
     /// Create new SCRAM server. Any of the given plain text passwords will be
     /// accepted.
-    pub fn new(passwords: &[String]) -> Self {
+    pub fn new(passwords: &[PasswordKind]) -> Self {
+        let hash = passwords
+            .iter()
+            .find(|p| matches!(p, PasswordKind::Hashed(_)));
+        if let Some(hash) = hash {
+            return Self {
+                provider: Provider::Hashed(HashedPassword {
+                    hash: hash.to_string(),
+                }),
+            };
+        }
+
         let salt = rand::rng().random::<[u8; 16]>().to_vec();
         Self {
             provider: Provider::Plain(UserPassword {
-                passwords: passwords.to_vec(),
+                passwords: passwords.iter().map(|s| s.to_string()).collect(),
                 salt,
                 iterations: 4096,
             }),
@@ -138,10 +131,11 @@ impl Server {
     /// Create a new SCRAM server using a prehashed `pg_shadow` style password.
     /// Only the first hash is used; prehashed passwords cannot share salts so
     /// multi-password verification is not supported in this mode.
-    pub fn hashed(hashes: &[String]) -> Self {
-        let hash = hashes.first().cloned().unwrap_or_default();
+    pub fn hashed(hash: &str) -> Self {
         Self {
-            provider: Provider::Hashed(HashedPassword { hash }),
+            provider: Provider::Hashed(HashedPassword {
+                hash: hash.to_string(),
+            }),
         }
     }
 
@@ -216,11 +210,14 @@ impl Server {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use base64::engine::general_purpose::STANDARD;
+    use crate::auth::scram::Client;
+    use scram::AuthenticationStatus;
+
+    const SCRAM_HASH: &str = "SCRAM-SHA-256$4096:B6lJyg12n6SawAu1kD9maA==$huWaU6t+WsvcS9ZrDvocZeYtlLJ60hdP46tjszFBbW0=:706OTwYyqH5WpfNpZdgt0gxuP5ff4DPUpHYu3F3w6TY=";
 
     #[test]
     fn user_password_provider_generates_info() {
-        let server = Server::new(&["secret".to_string()]);
+        let server = Server::new(&[PasswordKind::Plain("secret".to_string())]);
         let provider = match server.provider {
             Provider::Plain(ref inner) => inner.clone(),
             _ => unreachable!(),
@@ -234,32 +231,102 @@ mod tests {
 
     #[test]
     fn hashed_password_provider_parses_scram_hash() {
-        let iterations = std::num::NonZeroU32::new(4096).unwrap();
-        let salt = b"testsalt";
-        let hash = hash_password("secret", iterations, salt);
-        let salt_b64 = STANDARD.encode(salt);
-        let hash_b64 = STANDARD.encode(hash.as_ref());
-        let scram_hash = format!("SCRAM-SHA-256${}:{salt_b64}:${hash_b64}", iterations.get());
-
-        let provider = HashedPassword { hash: scram_hash };
-
+        let provider = HashedPassword {
+            hash: SCRAM_HASH.to_string(),
+        };
         assert!(
             provider.get_password_for("user").is_some(),
             "hashed provider should produce password info"
         );
     }
-}
-
-#[cfg(test)]
-mod test {
-    use super::*;
 
     #[test]
-    fn test_hashed_password() {
-        let hash = "SCRAM-SHA-256$4096:lApbvrTR0W7WOZLcVrbz0A==$O+AwRnblFCJwEezpaozQfC6iKmbJFHQ7+0WZBsR+hFU=:wWjPizZvFjc5jmIkdN/EsuLGz/9FMjOhJ7IHxZI8eqE="
-            .to_string();
-        let hashed = HashedPassword { hash };
-        let info = hashed.get_password_for("user");
-        assert!(info.is_some());
+    fn hashed_password_rejects_invalid_algo() {
+        let hash = "SCRAM-SHA-1$4096:c2FsdA==$c3RvcmVka2V5:c2VydmVya2V5".to_string();
+        let provider = HashedPassword { hash };
+        assert!(provider.get_password_for("user").is_none());
+    }
+
+    /// Drive a full SCRAM handshake between the pgdog Client and a
+    /// ScramServer<HashedPassword>, returning the authentication status.
+    fn scram_login(user: &str, password: &str, hash: &str) -> AuthenticationStatus {
+        let provider = HashedPassword {
+            hash: hash.to_string(),
+        };
+        let scram_server = ScramServer::new(provider);
+        let mut client = Client::new(user, password);
+
+        let client_first = client.first().expect("client first");
+        let server_first_state = scram_server
+            .handle_client_first(&client_first)
+            .expect("server handle client first");
+        let (server_client_final, server_first_msg) = server_first_state.server_first();
+
+        client
+            .server_first(&server_first_msg)
+            .expect("client handle server first");
+        let client_final = client.last().expect("client final");
+
+        let server_final = server_client_final
+            .handle_client_final(&client_final)
+            .expect("server handle client final");
+        let (status, server_final_msg) = server_final.server_final();
+
+        if status == AuthenticationStatus::Authenticated {
+            client
+                .server_last(&server_final_msg)
+                .expect("client verify server final");
+        }
+
+        status
+    }
+
+    #[test]
+    fn hashed_scram_accepts_correct_password() {
+        assert_eq!(
+            scram_login("user", "pgdog", SCRAM_HASH),
+            AuthenticationStatus::Authenticated,
+        );
+    }
+
+    #[test]
+    fn hashed_scram_rejects_wrong_password() {
+        assert_eq!(
+            scram_login("user", "wrong", SCRAM_HASH),
+            AuthenticationStatus::NotAuthenticated,
+        );
+    }
+
+    #[test]
+    fn hashed_scram_rejects_empty_password() {
+        assert_eq!(
+            scram_login("user", "", SCRAM_HASH),
+            AuthenticationStatus::NotAuthenticated,
+        );
+    }
+
+    #[test]
+    fn generated_hash_accepts_correct_password() {
+        let iterations = std::num::NonZeroU32::new(4096).unwrap();
+        let salt = b"pgdog_test_salt!";
+        let hash = crate::auth::scram::generate_hash("pgdog", iterations, salt);
+
+        assert!(hash.starts_with("SCRAM-SHA-256$4096:"));
+        assert_eq!(
+            scram_login("user", "pgdog", &hash),
+            AuthenticationStatus::Authenticated,
+        );
+    }
+
+    #[test]
+    fn generated_hash_rejects_wrong_password() {
+        let iterations = std::num::NonZeroU32::new(4096).unwrap();
+        let salt = b"pgdog_test_salt!";
+        let hash = crate::auth::scram::generate_hash("pgdog", iterations, salt);
+
+        assert_eq!(
+            scram_login("user", "wrong", &hash),
+            AuthenticationStatus::NotAuthenticated,
+        );
     }
 }

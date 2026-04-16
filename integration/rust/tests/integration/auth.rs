@@ -301,3 +301,22 @@ async fn test_passthrough_password_change() {
 
     admin.execute("RELOAD").await.unwrap();
 }
+
+#[tokio::test]
+async fn test_scram_hashed_passthrough() {
+    let mut conn =
+        sqlx::PgConnection::connect("postgres://pgdog_hashed:pgdog@127.0.0.1:6432/pgdog")
+            .await
+            .unwrap();
+    conn.execute("SELECT 1").await.unwrap();
+
+    let conn =
+        sqlx::PgConnection::connect("postgres://pgdog_hashed:badpw@127.0.0.1:6432/pgdog").await;
+    assert!(conn.is_err());
+    assert!(
+        conn.err()
+            .unwrap()
+            .to_string()
+            .contains("password for user")
+    );
+}

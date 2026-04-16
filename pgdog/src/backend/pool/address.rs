@@ -1,6 +1,7 @@
 //! Server address.
 use std::net::{SocketAddr, ToSocketAddrs};
 
+use pgdog_config::users::PasswordKind;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
@@ -72,6 +73,10 @@ impl Address {
                 vec![password]
             } else {
                 user.passwords()
+                    .into_iter()
+                    .filter(|p| matches!(p, PasswordKind::Plain(_)))
+                    .map(|p| p.to_string())
+                    .collect()
             },
             server_auth,
             server_iam_region: user.server_iam_region.clone(),

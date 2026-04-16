@@ -51,6 +51,13 @@ pub enum Commands {
         session_mode: Option<bool>,
     },
 
+    /// Generate a SCRAM-SHA-256 hash from a plaintext password.
+    /// Output can be stored directly in users.toml.
+    Hash {
+        /// The plaintext password to hash.
+        password: String,
+    },
+
     /// Fingerprint a query.
     Fingerprint {
         #[arg(short, long)]
@@ -172,6 +179,19 @@ pub enum Commands {
         #[arg(long)]
         database: String,
     },
+}
+
+/// Generate and print a SCRAM-SHA-256 hash from a plaintext password.
+#[allow(clippy::print_stdout)]
+pub fn hash_password(password: &str) {
+    use rand::Rng;
+
+    let salt: [u8; 16] = rand::rng().random();
+    let iterations = std::num::NonZeroU32::new(4096).unwrap();
+    println!(
+        "{}",
+        crate::auth::scram::generate_hash(password, iterations, &salt)
+    );
 }
 
 /// Fingerprint some queries.

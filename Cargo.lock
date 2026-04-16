@@ -2844,6 +2844,7 @@ dependencies = [
  "rand 0.9.2",
  "ratatui",
  "regex",
+ "ring 0.16.20",
  "rmp-serde",
  "rust_decimal",
  "rustls-native-certs 0.8.1",
@@ -3890,7 +3891,7 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 [[package]]
 name = "scram"
 version = "0.6.0"
-source = "git+https://github.com/pgdogdev/scram.git?rev=90c511f703d2856dddd029ea062239c3132f902d#90c511f703d2856dddd029ea062239c3132f902d"
+source = "git+https://github.com/pgdogdev/scram.git?rev=2c259426941a61f30e4252b9186e5f93e42fc924#2c259426941a61f30e4252b9186e5f93e42fc924"
 dependencies = [
  "base64 0.13.1",
  "rand 0.8.5",

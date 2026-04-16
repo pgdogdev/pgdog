@@ -24,6 +24,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut overrides = pgdog::config::Overrides::default();
 
     match command.as_ref() {
+        Some(Commands::Hash { ref password }) => {
+            pgdog::cli::hash_password(password);
+            exit(0);
+        }
+
         Some(Commands::Fingerprint { query, path }) => {
             pgdog::cli::fingerprint(query.clone(), path.clone())?;
             exit(0);

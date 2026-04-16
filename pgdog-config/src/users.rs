@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::env;
+use std::fmt::Display;
 use std::path::PathBuf;
 use tracing::warn;
 
@@ -47,11 +48,11 @@ impl Users {
     /// Run configuration checks.
     pub fn check(&mut self, config: &Config) {
         for user in &mut self.users {
-            if user.password().is_empty() {
+            if user.passwords().is_empty() {
                 if !config.general.passthrough_auth() {
                     warn!(
-                        "user \"{}\" doesn't have a password and passthrough auth is disabled",
-                        user.name
+                        r#"user "{}" (database "{}") doesn't have a password and passthrough auth is disabled"#,
+                        user.name, user.database,
                     );
                 }
 
@@ -64,24 +65,36 @@ impl Users {
 
                     for database in databases {
                         if min_pool_size > 0 {
-                            warn!("user \"{}\" (database \"{}\") doesn't have a password configured, \
-                            so we can't connect to the server to maintain min_pool_size of {}; setting it to 0", user.name, database, min_pool_size);
+                            warn!(
+                                r#"user "{}" (database "{}") does not have a password configured, PgDog cannot connect to the server to maintain "min_pool_size" of {}, setting it to 0"#,
+                                user.name, database, min_pool_size
+                            );
                             user.min_pool_size = Some(0);
                         }
                     }
                 }
             }
 
+            if user.server_password.is_none()
+                && user.server_auth == ServerAuth::Password
+                && user.password_hash.is_some()
+            {
+                warn!(
+                    r#"user "{}" (database "{}") is using hash authentication but does not specify a "server_password""#,
+                    user.name, user.database
+                );
+            }
+
             if !user.database.is_empty() && !user.databases.is_empty() {
                 warn!(
-                    r#"user "{}" is configured for both "database" and "databases", defaulting to "database""#,
-                    user.name
+                    r#"user "{}" is configured for both "{}" and "{:?}", defaulting to "{}""#,
+                    user.name, user.database, user.databases, user.database,
                 );
             }
 
             if user.all_databases && (!user.databases.is_empty() || !user.database.is_empty()) {
                 warn!(
-                    r#"user "{}" is configured for "all_databases" and specific databases, defaulting to "all_databases""#,
+                    r#"user "{}" is configured for all databases and a specific database, defaulting to all databases""#,
                     user.name
                 );
             }
@@ -143,6 +156,31 @@ impl ServerAuth {
     }
 }
 
+/// The kind of password configured on the user.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PasswordKind {
+    Plain(String),
+    Hashed(String),
+}
+
+impl PasswordKind {
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Plain(plain) => plain.as_str(),
+            Self::Hashed(hash) => hash.as_str(),
+        }
+    }
+}
+
+impl Display for PasswordKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Plain(plain) => write!(f, "{}", plain),
+            Self::Hashed(hashed) => write!(f, "{}", hashed),
+        }
+    }
+}
+
 /// User allowed to connect to pgDog.
 /// A user entry in `users.toml`, controlling which users are allowed to connect to PgDog.
 ///
@@ -174,6 +212,9 @@ pub struct User {
     /// Multiple passwords for this user, all of which will be attempted during auth to server and client.
     #[serde(default)]
     pub passwords: Vec<String>,
+    /// Passwords hash. Can be used to validate user logins without storing passwords in users.toml.
+    /// Server authentication must use RDS IAM or some other passwordless authentication, e.g. trust.
+    pub password_hash: Option<String>,
     /// Overrides [`default_pool_size`](https://docs.pgdog.dev/configuration/pgdog.toml/general/) for this user. No more than this many server connections will be open at any given time to serve requests for this connection pool.
     ///
     /// https://docs.pgdog.dev/configuration/users.toml/users/#pool_size
@@ -252,10 +293,19 @@ impl User {
         }
     }
 
-    pub fn passwords(&self) -> Vec<String> {
-        let mut passwords = self.passwords.clone();
+    pub fn passwords(&self) -> Vec<PasswordKind> {
+        let mut passwords: Vec<_> = self
+            .passwords
+            .clone()
+            .into_iter()
+            .map(|p| PasswordKind::Plain(p))
+            .collect();
         if !self.password().is_empty() {
-            passwords.push(self.password().to_string());
+            passwords.push(PasswordKind::Plain(self.password().to_string()));
+        }
+
+        if let Some(hash) = self.password_hash.clone() {
+            passwords.push(PasswordKind::Hashed(hash));
         }
 
         passwords

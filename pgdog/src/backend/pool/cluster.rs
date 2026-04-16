@@ -3,7 +3,8 @@
 use futures::future::try_join_all;
 use parking_lot::Mutex;
 use pgdog_config::{
-    LoadSchema, PreparedStatements, QueryParserEngine, QueryParserLevel, Rewrite, RewriteMode,
+    users::PasswordKind, LoadSchema, PreparedStatements, QueryParserEngine, QueryParserLevel,
+    Rewrite, RewriteMode,
 };
 use std::{
     sync::{
@@ -56,7 +57,7 @@ struct Readiness {
 pub struct Cluster {
     identifier: Arc<DatabaseUser>,
     shards: Vec<Shard>,
-    passwords: Vec<String>,
+    passwords: Vec<PasswordKind>,
     pooler_mode: PoolerMode,
     sharded_tables: ShardedTables,
     sharded_schemas: ShardedSchemas,
@@ -133,7 +134,7 @@ pub struct ClusterConfig<'a> {
     pub shards: &'a [ClusterShardConfig],
     pub lb_strategy: LoadBalancingStrategy,
     pub user: &'a str,
-    pub passwords: Vec<String>,
+    pub passwords: Vec<PasswordKind>,
     pub pooler_mode: PoolerMode,
     pub sharded_tables: ShardedTables,
     pub replication_sharding: Option<String>,
@@ -359,7 +360,7 @@ impl Cluster {
         &self.shards
     }
 
-    pub fn passwords(&self) -> &[String] {
+    pub fn passwords(&self) -> &[PasswordKind] {
         &self.passwords
     }
 
