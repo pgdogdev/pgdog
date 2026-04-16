@@ -198,10 +198,11 @@ role = "auto"
 
 &#128216; **[Authentication](https://docs.pgdog.dev/features/authentication/)**
 
-PgDog supports two authentication methods:
+PgDog supports three authentication methods:
 
 1. Password-based
 2. AWS RDS IAM
+3. Azure Workload Identity
 
 #### Password-based authentication
 
