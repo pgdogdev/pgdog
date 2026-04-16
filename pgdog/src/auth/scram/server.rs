@@ -64,7 +64,6 @@ impl AuthenticationProvider for UserPassword {
             .iter()
             .map(|password| hash_password(password, iterations, &self.salt).to_vec())
             .collect();
-        println!("hashed");
         Some(PasswordInfo::new_multi(
             hashed_passwords,
             self.iterations,
@@ -91,8 +90,6 @@ impl AuthenticationProvider for HashedPassword {
         let mut ks = keys_part.split(':');
         let stored_key = BASE64_STANDARD.decode(ks.next()?).ok()?;
         let server_key = BASE64_STANDARD.decode(ks.next()?).ok()?;
-
-        println!("stored keys");
 
         Some(PasswordInfo::from_stored_keys(
             stored_key, server_key, iterations, salt,
