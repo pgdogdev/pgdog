@@ -48,11 +48,11 @@ impl Users {
     /// Run configuration checks.
     pub fn check(&mut self, config: &Config) {
         for user in &mut self.users {
-            if user.password().is_empty() {
-                if !config.general.passthrough_auth() && user.password_hash.is_none() {
+            if user.passwords().is_empty() {
+                if !config.general.passthrough_auth() {
                     warn!(
-                        "user \"{}\" doesn't have a password and passthrough auth is disabled",
-                        user.name
+                        r#"user "{}" (database "{}") doesn't have a password and passthrough auth is disabled"#,
+                        user.name, user.database,
                     );
                 }
 
@@ -65,24 +65,36 @@ impl Users {
 
                     for database in databases {
                         if min_pool_size > 0 {
-                            warn!("user \"{}\" (database \"{}\") doesn't have a password configured, \
-                            so we can't connect to the server to maintain min_pool_size of {}; setting it to 0", user.name, database, min_pool_size);
+                            warn!(
+                                r#"user "{}" (database "{}") does not have a password configured, PgDog cannot connect to the server to maintain "min_pool_size" of {}, setting it to 0"#,
+                                user.name, database, min_pool_size
+                            );
                             user.min_pool_size = Some(0);
                         }
                     }
                 }
             }
 
+            if user.server_password.is_none()
+                && user.server_auth == ServerAuth::Password
+                && user.password_hash.is_some()
+            {
+                warn!(
+                    r#"user "{}" (database "{}") is using hash authentication but does not specify a "server_password""#,
+                    user.name, user.database
+                );
+            }
+
             if !user.database.is_empty() && !user.databases.is_empty() {
                 warn!(
-                    r#"user "{}" is configured for both "database" and "databases", defaulting to "database""#,
-                    user.name
+                    r#"user "{}" is configured for both "{}" and "{:?}", defaulting to "{}""#,
+                    user.name, user.database, user.databases, user.database,
                 );
             }
 
             if user.all_databases && (!user.databases.is_empty() || !user.database.is_empty()) {
                 warn!(
-                    r#"user "{}" is configured for "all_databases" and specific databases, defaulting to "all_databases""#,
+                    r#"user "{}" is configured for all databases and a specific database, defaulting to all databases""#,
                     user.name
                 );
             }
