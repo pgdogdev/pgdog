@@ -3,8 +3,8 @@ use std::{fmt::Display, ops::Deref};
 use lazy_static::lazy_static;
 
 use super::{
-    explain_trace::ExplainTrace, rewrite::statement::aggregate::AggregateRewritePlan, Aggregate,
-    DistinctBy, FunctionBehavior, Limit, LockingBehavior, OrderBy,
+    explain_trace::ExplainTrace, rewrite::statement::aggregate::AggregateRewritePlan,
+    statement::AdvisoryLocks, Aggregate, DistinctBy, FunctionBehavior, Limit, OrderBy,
 };
 
 /// The shard destination for a statement.
@@ -81,7 +81,7 @@ pub struct Route {
     order_by: Vec<OrderBy>,
     aggregate: Aggregate,
     limit: Limit,
-    lock_session: Option<bool>,
+    advisory_locks: AdvisoryLocks,
     distinct: Option<DistinctBy>,
     maintenance: bool,
     rewrite_plan: AggregateRewritePlan,
@@ -279,29 +279,43 @@ impl Route {
     }
 
     pub fn set_functions(&mut self, function: FunctionBehavior) {
-        let FunctionBehavior {
-            writes,
-            locking_behavior,
-            ..
-        } = function;
-        self.read = !writes;
-        self.lock_session = match locking_behavior {
-            LockingBehavior::Lock => Some(true),
-            LockingBehavior::Unlock => Some(false),
-            LockingBehavior::None => None,
-        };
+        self.read = !function.writes;
     }
 
+    pub fn with_advisory_locks(mut self, locks: AdvisoryLocks) -> Self {
+        self.advisory_locks = locks;
+        self
+    }
+
+    pub fn set_advisory_locks(&mut self, locks: AdvisoryLocks) {
+        self.advisory_locks = locks;
+    }
+
+    pub fn advisory_locks(&self) -> &AdvisoryLocks {
+        &self.advisory_locks
+    }
+
+    /// True when the statement acquires an advisory lock whose lifetime outlives
+    /// a single transaction — the client must stay pinned to the same backend.
     pub fn is_lock_session(&self) -> bool {
-        self.lock_session == Some(true)
+        self.advisory_locks.has_lock()
     }
 
-    pub fn lock_session(&self) -> Option<bool> {
-        self.lock_session
-    }
-
+    /// True when the statement only releases advisory locks — safe to unpin.
     pub fn is_unlock_session(&self) -> bool {
-        self.lock_session == Some(false)
+        !self.advisory_locks.is_empty() && !self.advisory_locks.has_lock()
+    }
+
+    /// Tri-state used by `connect.rs` / tests:
+    /// `Some(true)` — lock, `Some(false)` — unlock, `None` — no advisory lock activity.
+    pub fn lock_session(&self) -> Option<bool> {
+        if self.is_lock_session() {
+            Some(true)
+        } else if self.is_unlock_session() {
+            Some(false)
+        } else {
+            None
+        }
     }
 
     pub fn distinct(&self) -> &Option<DistinctBy> {

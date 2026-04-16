@@ -8,4 +8,8 @@ impl QueryEngine {
     pub fn stats(&mut self) -> &mut Stats {
         &mut self.stats
     }
+
+    pub fn advisory_locks(&mut self) -> &mut AdvisoryLocks {
+        &mut self.advisory_locks
+    }
 }

@@ -38,21 +38,9 @@ impl QueryEngine {
         let connected = match self.backend.connect(&request, connect_route).await {
             Ok(_) => {
                 self.stats.connected();
-                self.stats
-                    .locked(context.client_request.route().is_lock_session());
-                // This connection will be locked to this client
-                // until they disconnect.
-                //
-                // Used in case the client runs an advisory lock
-                // or another leaky transaction mode abstraction.
-                if let Some(true) = context.client_request.route().lock_session() {
-                    self.backend.lock(true);
-                }
-
                 self.debug_connected(context, false);
 
                 let query_timeout = context.timeouts.query_timeout(&self.stats.state);
-
                 let begin_stmt = self.begin_stmt.take();
 
                 // We may need to sync params with the server and that reads from the socket.

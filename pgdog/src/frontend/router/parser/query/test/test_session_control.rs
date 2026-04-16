@@ -134,7 +134,9 @@ fn test_advisory_lock_detected() {
         }
     }
 
-    // xact variants are scoped to the transaction — parsed but not flagged as session lock/unlock.
+    // xact variants pin the backend for the life of the transaction, but the
+    // query engine drops them at COMMIT/ROLLBACK rather than treating them as
+    // session-persistent locks.
     let xact_queries = [
         "SELECT pg_advisory_xact_lock(1)",
         "SELECT pg_advisory_xact_lock_shared(1)",
@@ -147,7 +149,10 @@ fn test_advisory_lock_detected() {
         let command = test.execute(vec![Query::new(query).into()]);
         match command {
             Command::Query(route) => {
-                assert!(!route.is_lock_session());
+                assert!(
+                    route.is_lock_session(),
+                    "xact locks still need to pin the backend for '{query}'"
+                );
                 assert!(!route.is_unlock_session());
             }
             _ => panic!("expected Command::Query for '{query}', got {command:#?}"),

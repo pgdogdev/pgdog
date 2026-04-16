@@ -69,13 +69,17 @@ impl RegexParser {
 
         if with_locks || session_control {
             for message in request.iter() {
-                if let ProtocolMessage::Query(query) = message {
-                    let prefix = scan_prefix(query.query(), self.limit);
-                    if with_locks {
-                        return CMD_RE_ADVISORY.is_match(prefix);
-                    } else {
-                        return CMD_RE.is_match(prefix);
-                    }
+                let query = match message {
+                    ProtocolMessage::Parse(query) => query.query(),
+                    ProtocolMessage::Query(query) => query.query(),
+                    _ => continue,
+                };
+
+                let prefix = scan_prefix(query, self.limit);
+                if with_locks {
+                    return CMD_RE_ADVISORY.is_match(prefix);
+                } else {
+                    return CMD_RE.is_match(prefix);
                 }
             }
         }
@@ -86,7 +90,7 @@ impl RegexParser {
 
 #[cfg(test)]
 mod test {
-    use crate::net::Query;
+    use crate::net::{Parse, Query};
 
     use super::*;
 
@@ -95,8 +99,16 @@ mod test {
     }
 
     fn matches_at(query: &str, level: QueryParserLevel) -> bool {
-        let req = ClientRequest::from(vec![Query::new(query).into()]);
-        RegexParser::new(General::regex_parser_limit(), level).use_parser(&req)
+        let mut yes = false;
+        for req in [
+            ProtocolMessage::from(Query::new(query)),
+            Parse::new_anonymous(query).into(),
+        ] {
+            let req = ClientRequest::from(vec![req]);
+            yes = RegexParser::new(General::regex_parser_limit(), level).use_parser(&req);
+        }
+
+        yes
     }
 
     #[test]
