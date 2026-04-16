@@ -65,6 +65,13 @@ pub(super) fn advisory_locks_from_func_call(
         }];
     }
 
+    // If the argument is a parameter placeholder ($1) and we have no Bind message,
+    // this is just a prepared statement being parsed — the lock isn't actually
+    // being taken yet. Return empty so we don't route as if a lock is held.
+    if bind.is_none() && is_param_ref(arg) {
+        return Vec::new();
+    }
+
     // Slow path: `SELECT pg_advisory_lock(value) FROM (VALUES (1),(2)) AS t(value)`.
     // The function is called once per row, so we emit one lock per resolved value.
     if let Some(NodeEnum::ColumnRef(cref)) = arg.node.as_ref() {
@@ -169,6 +176,15 @@ fn integer_arg(node: &Node, bind: Option<&Bind>) -> Option<i64> {
             param.decode::<i64>()
         }
         _ => None,
+    }
+}
+
+/// Check whether a node is (or wraps) a parameter placeholder (`$N`).
+fn is_param_ref(node: &Node) -> bool {
+    match node.node.as_ref() {
+        Some(NodeEnum::ParamRef(_)) => true,
+        Some(NodeEnum::TypeCast(cast)) => cast.arg.as_deref().map_or(false, is_param_ref),
+        _ => false,
     }
 }
 

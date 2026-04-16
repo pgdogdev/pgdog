@@ -2,7 +2,7 @@ use once_cell::sync::Lazy;
 use pgdog_config::{General, QueryParserLevel};
 use regex::RegexSet;
 
-use crate::{frontend::ClientRequest, net::ProtocolMessage};
+use crate::frontend::ClientRequest;
 
 static CMD_BASE: &[&str] = &[
     "(?i)^ *(RE)?SET",
@@ -68,14 +68,8 @@ impl RegexParser {
             self.level == QueryParserLevel::SessionControl || self.level == QueryParserLevel::Auto;
 
         if with_locks || session_control {
-            for message in request.iter() {
-                let query = match message {
-                    ProtocolMessage::Parse(query) => query.query(),
-                    ProtocolMessage::Query(query) => query.query(),
-                    _ => continue,
-                };
-
-                let prefix = scan_prefix(query, self.limit);
+            if let Ok(Some(query)) = request.query() {
+                let prefix = scan_prefix(query.query(), self.limit);
                 if with_locks {
                     return CMD_RE_ADVISORY.is_match(prefix);
                 } else {
@@ -90,7 +84,7 @@ impl RegexParser {
 
 #[cfg(test)]
 mod test {
-    use crate::net::{Parse, Query};
+    use crate::net::{Parse, ProtocolMessage, Query};
 
     use super::*;
 

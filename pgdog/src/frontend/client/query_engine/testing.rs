@@ -9,7 +9,7 @@ impl QueryEngine {
         &mut self.stats
     }
 
-    pub fn advisory_locks(&mut self) -> &mut AdvisoryLocks {
+    pub(crate) fn advisory_locks(&mut self) -> &mut AdvisoryLocks {
         &mut self.advisory_locks
     }
 }
