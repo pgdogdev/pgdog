@@ -21,7 +21,7 @@ use super::pooling::PoolerMode;
 use super::replication::{MirrorConfig, Mirroring, MirroringLevel, ReplicaLag, Replication};
 use super::rewrite::Rewrite;
 use super::sharding::{ManualQuery, OmnishardedTables, ShardedMapping, ShardedTable};
-use super::users::{Admin, Plugin, ServerAuth, Users};
+use super::users::{Admin, Plugin, Users};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ConfigAndUsers {
@@ -112,9 +112,7 @@ impl ConfigAndUsers {
     }
 
     fn validate_server_auth(&self) -> Result<(), Error> {
-        let is_external_identity = self.users.users.iter().any(|user| {
-            [ServerAuth::RdsIam, ServerAuth::AzureWorkloadIdentity].contains(&user.server_auth)
-        });
+        let is_external_identity = self.users.users.iter().any(|user| user.is_external_identity());
 
         if !is_external_identity {
             return Ok(());

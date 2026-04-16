@@ -140,12 +140,8 @@ pub enum ServerAuth {
 }
 
 impl ServerAuth {
-    pub fn rds_iam(&self) -> bool {
-        matches!(self, Self::RdsIam)
-    }
-
-    pub fn azure_workload_identity(&self) -> bool {
-        matches!(self, Self::AzureWorkloadIdentity)
+    pub fn is_external_identity(&self) -> bool {
+        matches!(self, Self::RdsIam | Self::AzureWorkloadIdentity)
     }
 }
 
@@ -275,6 +271,10 @@ impl User {
             password: Some(password.to_owned()),
             ..Default::default()
         }
+    }
+
+    pub fn is_external_identity(&self) -> bool {
+        self.server_auth.is_external_identity()
     }
 }
 

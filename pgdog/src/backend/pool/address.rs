@@ -64,9 +64,7 @@ impl Address {
             } else {
                 user.name.clone()
             },
-            passwords: if server_auth.rds_iam() {
-                vec![]
-            } else if server_auth.azure_workload_identity() {
+            passwords: if server_auth.is_external_identity() {
                 vec![]
             } else if let Some(password) = database.password.clone() {
                 vec![password]
