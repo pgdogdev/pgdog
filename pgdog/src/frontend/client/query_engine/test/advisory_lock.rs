@@ -11,9 +11,8 @@ async fn test_session_lock_tracked_outside_transaction() {
 
     {
         let locks = client.engine.advisory_locks();
-        assert!(locks.session_contains(101));
-        assert_eq!(locks.session_len(), 1);
-        assert_eq!(locks.xact_len(), 0);
+        assert!(locks.contains(101));
+        assert_eq!(locks.len(), 1);
     }
 
     assert!(client.backend_connected());
@@ -26,7 +25,7 @@ async fn test_session_lock_tracked_outside_transaction() {
 
     assert!(client.backend_connected());
     assert!(client.backend_locked());
-    assert!(client.engine.advisory_locks().session_contains(101));
+    assert!(client.engine.advisory_locks().contains(101));
 }
 
 #[tokio::test]
@@ -43,7 +42,7 @@ async fn test_session_lock_inside_transaction_survives_commit() {
         .await;
     client.read_until('Z').await.unwrap();
 
-    assert!(client.engine.advisory_locks().session_contains(202));
+    assert!(client.engine.advisory_locks().contains(202));
     assert!(client.backend_connected());
     assert!(client.backend_locked());
 
@@ -51,7 +50,7 @@ async fn test_session_lock_inside_transaction_survives_commit() {
     client.read_until('Z').await.unwrap();
 
     assert!(
-        client.engine.advisory_locks().session_contains(202),
+        client.engine.advisory_locks().contains(202),
         "session-scoped lock must survive COMMIT"
     );
     assert!(client.backend_connected());
@@ -74,7 +73,7 @@ async fn test_session_lock_inside_transaction_survives_rollback() {
         .await;
     client.read_until('Z').await.unwrap();
 
-    assert!(client.engine.advisory_locks().session_contains(303));
+    assert!(client.engine.advisory_locks().contains(303));
     assert!(client.backend_connected());
     assert!(client.backend_locked());
 
@@ -82,7 +81,7 @@ async fn test_session_lock_inside_transaction_survives_rollback() {
     client.read_until('Z').await.unwrap();
 
     assert!(
-        client.engine.advisory_locks().session_contains(303),
+        client.engine.advisory_locks().contains(303),
         "session-scoped lock must survive ROLLBACK"
     );
     assert!(client.backend_connected());
@@ -98,7 +97,7 @@ async fn test_unlock_removes_session_lock() {
         .await;
     client.read_until('Z').await.unwrap();
 
-    assert!(client.engine.advisory_locks().session_contains(404));
+    assert!(client.engine.advisory_locks().contains(404));
     assert!(client.backend_connected());
     assert!(client.backend_locked());
 
@@ -108,8 +107,8 @@ async fn test_unlock_removes_session_lock() {
     client.read_until('Z').await.unwrap();
 
     let locks = client.engine.advisory_locks();
-    assert!(!locks.session_contains(404));
-    assert_eq!(locks.session_len(), 0);
+    assert!(!locks.contains(404));
+    assert_eq!(locks.len(), 0);
     assert!(
         !client.backend_locked(),
         "backend must be released once the last session lock is dropped"
@@ -130,7 +129,7 @@ async fn test_unlock_all_clears_session_locks() {
         .await;
     client.read_until('Z').await.unwrap();
 
-    assert_eq!(client.engine.advisory_locks().session_len(), 2);
+    assert_eq!(client.engine.advisory_locks().len(), 2);
     assert!(client.backend_connected());
     assert!(client.backend_locked());
 
@@ -140,8 +139,7 @@ async fn test_unlock_all_clears_session_locks() {
     client.read_until('Z').await.unwrap();
 
     let locks = client.engine.advisory_locks();
-    assert_eq!(locks.session_len(), 0);
-    assert_eq!(locks.xact_len(), 0);
+    assert_eq!(locks.len(), 0);
     assert!(
         !client.backend_locked(),
         "backend must be released after pg_advisory_unlock_all()"
@@ -149,11 +147,8 @@ async fn test_unlock_all_clears_session_locks() {
 }
 
 #[tokio::test]
-async fn test_xact_lock_pins_backend_and_released_on_commit() {
-    // pg_advisory_xact_lock pins the backend for the lifetime of the
-    // transaction — otherwise subsequent queries could land on a different
-    // backend that doesn't hold the lock. PostgreSQL releases the lock at
-    // COMMIT/ROLLBACK, so the engine clears it at the same time.
+async fn test_xact_lock_does_not_pin_backend_and_releases_on_commit() {
+    // pg_advisory_xact_lock isn't tracked.
     let mut client = TestClient::new_sharded(Parameters::default()).await;
 
     client.send_simple(Query::new("BEGIN")).await;
@@ -164,26 +159,15 @@ async fn test_xact_lock_pins_backend_and_released_on_commit() {
         .await;
     client.read_until('Z').await.unwrap();
 
-    {
-        let locks = client.engine.advisory_locks();
-        assert!(
-            locks.xact_contains(999),
-            "xact lock should be tracked under xact_locks"
-        );
-        assert_eq!(locks.session_len(), 0);
-    }
+    let locks = client.engine.advisory_locks();
+    assert_eq!(locks.len(), 0);
     assert!(client.backend_connected());
-    assert!(
-        client.backend_locked(),
-        "xact lock must pin the backend during the transaction"
-    );
 
     client.send_simple(Query::new("COMMIT")).await;
     client.read_until('Z').await.unwrap();
 
     let locks = client.engine.advisory_locks();
-    assert_eq!(locks.xact_len(), 0, "xact locks are released at COMMIT");
-    assert_eq!(locks.session_len(), 0);
+    assert_eq!(locks.len(), 0);
     assert!(
         !client.backend_locked(),
         "backend must be released after xact lock is dropped"
@@ -202,14 +186,13 @@ async fn test_xact_lock_released_on_rollback() {
         .await;
     client.read_until('Z').await.unwrap();
 
-    assert!(client.engine.advisory_locks().xact_contains(777));
+    assert_eq!(client.engine.advisory_locks().len(), 0);
     assert!(client.backend_connected());
-    assert!(client.backend_locked());
 
     client.send_simple(Query::new("ROLLBACK")).await;
     client.read_until('Z').await.unwrap();
 
     let locks = client.engine.advisory_locks();
-    assert_eq!(locks.xact_len(), 0);
+    assert_eq!(locks.len(), 0);
     assert!(!client.backend_locked());
 }

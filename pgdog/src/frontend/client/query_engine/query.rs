@@ -222,10 +222,8 @@ impl QueryEngine {
             self.stats.idle(context.in_transaction());
             // N.B. Call this before self.cleanup_backend(), since that resets
             // the router and the command state.
-            self.advisory_locks.merge(
-                self.router.command().route().advisory_locks(),
-                context.in_transaction(),
-            );
+            self.advisory_locks
+                .merge(self.router.command().route().advisory_locks());
             self.backend.lock(self.advisory_locks.locked());
             self.stats.locked(self.advisory_locks.locked());
 

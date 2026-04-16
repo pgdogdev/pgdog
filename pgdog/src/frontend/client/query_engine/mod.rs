@@ -171,7 +171,6 @@ impl QueryEngine {
                     .await?
             }
             Command::CommitTransaction { extended } => {
-                self.advisory_locks.commit();
                 self.backend.lock(self.advisory_locks.locked());
                 self.stats.locked(self.advisory_locks.locked());
 
@@ -191,7 +190,6 @@ impl QueryEngine {
                 }
             }
             Command::RollbackTransaction { extended } => {
-                self.advisory_locks.rollback();
                 self.backend.lock(self.advisory_locks.locked());
                 self.stats.locked(self.advisory_locks.locked());
 
