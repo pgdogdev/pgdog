@@ -10,16 +10,16 @@ use tokio::time::Instant;
 use tokio::{select, spawn, time::interval};
 use tracing::{debug, info, warn};
 
-use super::super::{Error, publisher::Table};
+use super::super::{publisher::Table, Error};
 use super::ReplicationSlot;
 
 use crate::backend::replication::logical::subscriber::stream::StreamSubscriber;
-use crate::backend::replication::publisher::Lsn;
 use crate::backend::replication::publisher::progress::Progress;
+use crate::backend::replication::publisher::Lsn;
 use crate::backend::replication::{
     logical::publisher::ReplicationData, publisher::ParallelSyncManager,
 };
-use crate::backend::{Cluster, pool::Request};
+use crate::backend::{pool::Request, Cluster};
 use crate::config::Role;
 use crate::net::replication::ReplicationMeta;
 
