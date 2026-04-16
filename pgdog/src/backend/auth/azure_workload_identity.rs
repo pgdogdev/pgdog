@@ -9,7 +9,7 @@ pub async fn token(addr: &Address) -> Result<String, Error> {
     }
 
     let credential = WorkloadIdentityCredential::new(None).map_err(|error| {
-        Error::AzureIamToken(format!(
+        Error::AzureWorkloadIdentityToken(format!(
             "failed to build workload identity credential for {}@{}:{}: {}",
             addr.user, addr.host, addr.port, error
         ))
@@ -23,7 +23,7 @@ pub async fn token(addr: &Address) -> Result<String, Error> {
         .await
         .map(|token| token.token.secret().to_string())
         .map_err(|error| {
-            Error::AzureIamToken(format!(
+            Error::AzureWorkloadIdentityToken(format!(
                 "failed to get Azure AD token for {}@{}:{}: {}",
                 addr.user, addr.host, addr.port, error
             ))
@@ -33,11 +33,6 @@ pub async fn token(addr: &Address) -> Result<String, Error> {
 #[cfg(test)]
 fn test_token_override() -> Option<String> {
     TEST_TOKEN_OVERRIDE.lock().clone()
-}
-
-#[cfg(test)]
-pub(crate) fn set_test_token_override(token: Option<String>) {
-    *TEST_TOKEN_OVERRIDE.lock() = token;
 }
 
 #[cfg(test)]
@@ -97,7 +92,7 @@ mod tests {
         assert!(token.starts_with(
             "my-awesome-db.postgres.database.azure.com:5432/?Action=connect&DBUser=db_user"
         ));
-        assert!(token.contains("https://sts.windows.net"));
+        assert!(token.contains("https://sts.windows.net/"));
         assert!(token.contains("https://management.azure.com"));
         assert!(token.contains("appid"));
     }
