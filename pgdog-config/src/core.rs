@@ -652,7 +652,7 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{PoolerMode, PreparedStatements};
+    use crate::{PoolerMode, PreparedStatements, ServerAuth};
     use std::time::Duration;
 
     #[test]
