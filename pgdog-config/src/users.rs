@@ -135,6 +135,7 @@ pub enum ServerAuth {
     Password,
     /// Generate an AWS RDS IAM auth token per connection attempt.
     RdsIam,
+    /// Generate an Azure Workload Identity auth token per connection attempt.
     AzureWorkloadIdentity,
 }
 
