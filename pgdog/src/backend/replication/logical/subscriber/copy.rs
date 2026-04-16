@@ -145,7 +145,7 @@ impl CopySubscriber {
                     let error = ErrorResponse::from_bytes(command_complete.to_bytes()?)?;
                     if error.code == "08P01" && error.message == "insufficient data left in message"
                     {
-                        return Err(Error::BinaryFormatMistmatch(error));
+                        return Err(Error::BinaryFormatMismatch(Box::new(error)));
                     } else {
                         return Err(Error::PgError(Box::new(error)));
                     }

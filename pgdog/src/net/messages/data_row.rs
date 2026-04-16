@@ -247,6 +247,7 @@ impl From<DataRow> for Lsn {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::net::{Decoder, Field};
 
     #[test]
     fn test_insert() {
@@ -297,5 +298,27 @@ mod test {
         assert_eq!(dr.len(), 2);
         assert_eq!(dr.get::<String>(0, Format::Text).unwrap(), "a");
         assert_eq!(dr.get::<String>(1, Format::Text).unwrap(), "c");
+    }
+
+    #[test]
+    fn test_array_field_should_not_decode_as_unknown() {
+        let rd = RowDescription::new(&[Field {
+            name: "ints".into(),
+            table_oid: 0,
+            column: 0,
+            type_oid: 1007, // int4[]
+            type_size: -1,
+            type_modifier: -1,
+            format: 0,
+        }]);
+        let decoder = Decoder::from(&rd);
+
+        let row = DataRow::from_columns(vec![Bytes::from_static(b"{1,2,3}")]);
+        let column = row.get_column(0, &decoder).unwrap().unwrap();
+
+        assert!(
+            !matches!(column.value, Datum::Unknown(_)),
+            "array columns should participate in typed decoding"
+        );
     }
 }

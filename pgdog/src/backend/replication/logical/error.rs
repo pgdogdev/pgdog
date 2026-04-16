@@ -127,7 +127,7 @@ pub enum Error {
     NotReplication,
 
     #[error("binary format mismatch (likely int -> bigint), use text copy instead: {0}")]
-    BinaryFormatMistmatch(ErrorResponse),
+    BinaryFormatMismatch(Box<ErrorResponse>),
 
     #[error("command complete has no rows: {0}")]
     CommandCompleteNoRows(CommandComplete),
