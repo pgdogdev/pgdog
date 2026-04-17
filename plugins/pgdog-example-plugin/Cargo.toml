@@ -8,6 +8,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 pgdog-plugin.workspace = true
+csv = "1"
 once_cell = "1"
 parking_lot = "0.12"
 thiserror = "2"

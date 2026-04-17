@@ -1243,6 +1243,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "csv"
+version = "1.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "52cd9d68cf7efc6ddfaaee42e7288d3a99d613d4b50f76ce9827ae0c6e14f938"
+dependencies = [
+ "csv-core",
+ "itoa",
+ "ryu",
+ "serde_core",
+]
+
+[[package]]
 name = "csv-core"
 version = "0.1.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3255,6 +3267,7 @@ dependencies = [
 name = "pgdog-example-plugin"
 version = "0.1.0"
 dependencies = [
+ "csv",
  "once_cell",
  "parking_lot",
  "pgdog-plugin",
