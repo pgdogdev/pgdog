@@ -69,7 +69,7 @@ tasks:
   - key: rust
     call: rust-lang/install 1.0.6
     with:
-      rust-version: 1.91.0
+      rust-version: 1.95.0
 
   - key: integration-node
     call: nodejs/install 1.1.13
