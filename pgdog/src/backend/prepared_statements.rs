@@ -228,6 +228,10 @@ impl PreparedStatements {
 
             'G' => {
                 self.state.prepend('G'); // Next thing we'll see is a CopyFail or CopyDone.
+                // PostgreSQL ignores Sync during COPY IN (protocol spec §55.2.6).
+                // Remove the ReadyForQuery that was expected from the initial
+                // Bind+Execute+Sync — the server won't send it.
+                self.state.remove_one_rfq();
             }
 
             // Backend told us the copy is done.
@@ -372,5 +376,55 @@ impl PreparedStatements {
         }
 
         close
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use crate::net::messages::Payload;
+
+    /// Build a minimal backend Message with the given code byte.
+    fn msg(code: char) -> Message {
+        Message::new(Payload::named(code).freeze())
+    }
+
+    /// Simulate a client that sends Bind+Execute+Sync for COPY FROM STDIN
+    /// (the tokio-postgres double-Sync pattern).  PostgreSQL ignores Sync
+    /// during COPY IN mode, so only one ReadyForQuery is produced.
+    ///
+    /// This test exercises the real `forward()` code path — it must clean
+    /// up the stale ReadyForQuery when it sees CopyInResponse.
+    #[test]
+    fn test_copy_in_with_client_double_sync() {
+        let mut ps = PreparedStatements::new();
+
+        // Client: Bind + Execute + Sync  →  state expects [BindComplete, ExecutionCompleted, RFQ]
+        ps.state_mut().add('2');
+        ps.state_mut().add(ExecutionCode::ExecutionCompleted);
+        ps.state_mut().add('Z');
+
+        // Server responds: BindComplete
+        assert!(ps.forward(&msg('2')).unwrap());
+
+        // Server responds: CopyInResponse — forward() should drop the stale RFQ
+        assert!(ps.forward(&msg('G')).unwrap());
+
+        // Queue should be [Copy] only — no stale ReadyForQuery.
+        assert!(ps.in_copy_mode());
+        assert!(!ps.done()); // still in COPY mode
+
+        // Client sends CopyDone (handled through handle())
+        ps.state_mut().action('c').unwrap();
+
+        // Client sends second Sync
+        ps.state_mut().add('Z');
+
+        // Server: CommandComplete + ReadyForQuery (one pair, not two)
+        assert!(ps.forward(&msg('C')).unwrap());
+        assert!(ps.forward(&msg('Z')).unwrap());
+
+        // Clean — no stale entries.
+        assert!(ps.done());
     }
 }
