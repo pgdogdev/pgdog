@@ -108,11 +108,12 @@ async fn test_client_connection_recovery_default() {
     let result = conn.simple_query("SELECT 1").await;
     assert!(result.is_err(), "Expected error when pools are banned");
     let err = result.unwrap_err();
-    let err_str = err.to_string().to_lowercase();
+    let db_err = err.as_db_error().expect("Expected a DbError");
+    let err_str = db_err.message().to_lowercase();
     assert!(
         err_str.contains("all replicas down"),
         "Expected 'all replicas down' error, got: {}",
-        err
+        err_str
     );
 
     // Unban pools
