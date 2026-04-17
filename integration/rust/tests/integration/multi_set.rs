@@ -52,10 +52,11 @@ async fn test_multi_set_mixed_returns_error() {
             .batch_execute("SET statement_timeout TO '10s'; SELECT 1")
             .await
             .unwrap_err();
+        let db_err = err.as_db_error().expect("Expected a DbError");
+        let msg = db_err.message();
         assert!(
-            err.to_string()
-                .contains("multi-statement queries cannot mix SET with other commands"),
-            "unexpected error: {err}",
+            msg.contains("multi-statement queries cannot mix SET with other commands"),
+            "unexpected error: {msg}",
         );
     }
 }
