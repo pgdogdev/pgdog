@@ -65,7 +65,7 @@ impl Address {
             } else {
                 user.name.clone()
             },
-            passwords: if server_auth.rds_iam() {
+            passwords: if server_auth.is_external_identity() {
                 vec![]
             } else if let Some(password) = database.password.clone() {
                 vec![password]
@@ -88,6 +88,9 @@ impl Address {
         match self.server_auth {
             ServerAuth::Password => Ok(self.passwords.clone()),
             ServerAuth::RdsIam => Ok(vec![crate::backend::auth::rds_iam::token(self).await?]),
+            ServerAuth::AzureWorkloadIdentity => Ok(vec![
+                crate::backend::auth::azure_workload_identity::token(self).await?,
+            ]),
         }
     }
 
@@ -224,6 +227,34 @@ mod test {
     }
 
     #[test]
+    fn test_azure_workload_identity_does_not_use_static_password() {
+        let database = Database {
+            name: "pgdog".into(),
+            host: "127.0.0.1".into(),
+            port: 6432,
+            password: Some("db-level-pass".into()),
+            ..Default::default()
+        };
+
+        let user = User {
+            name: "pgdog".into(),
+            password: Some("user-pass".into()),
+            server_password: Some("server-pass".into()),
+            server_auth: ServerAuth::AzureWorkloadIdentity,
+            server_iam_region: None,
+            database: "pgdog".into(),
+            ..Default::default()
+        };
+
+        let address = Address::new(&database, &user, 0);
+        assert!(
+            address.passwords.is_empty(),
+            "RDS IAM addresses must not carry static passwords"
+        );
+        assert_eq!(address.server_auth, ServerAuth::AzureWorkloadIdentity);
+    }
+
+    #[test]
     fn test_addr_from_url() {
         let addr =
             Address::try_from(Url::parse("postgres://user:password@127.0.0.1:6432/pgdb").unwrap())
@@ -259,6 +290,27 @@ mod test {
             .unwrap()
             .to_string();
         crate::backend::auth::rds_iam::set_test_token_override(None);
+
+        assert_eq!(secret, "token-from-iam");
+    }
+
+    #[tokio::test]
+    async fn test_auth_secret_azure_workload_identity_mode_uses_generator() {
+        let mut addr = Address::new_test();
+        addr.server_auth = ServerAuth::AzureWorkloadIdentity;
+        addr.passwords = vec!["wrong".into()];
+
+        crate::backend::auth::azure_workload_identity::set_test_token_override(Some(
+            "token-from-iam".into(),
+        ));
+        let secret = addr
+            .auth_secrets()
+            .await
+            .unwrap()
+            .first()
+            .unwrap()
+            .to_string();
+        crate::backend::auth::azure_workload_identity::set_test_token_override(None);
 
         assert_eq!(secret, "token-from-iam");
     }

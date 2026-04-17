@@ -25,7 +25,7 @@ use crate::{
         replication::{publisher::PublicationTable, status::SchemaStatement},
         Cluster,
     },
-    config::{config, ServerAuth},
+    config::config,
     frontend::router::parser::{sequence::Sequence, Column, Table},
 };
 
@@ -138,7 +138,7 @@ fn build_pg_dump_command(
         .arg("-d")
         .arg(&addr.database_name);
 
-    if addr.server_auth == ServerAuth::RdsIam {
+    if addr.server_auth.is_external_identity() {
         command.env("PGSSLMODE", "require");
     }
 
@@ -1172,6 +1172,21 @@ mod test {
     fn test_build_pg_dump_command_sets_tls_for_rds_iam() {
         let mut addr = backend::pool::Address::new_test();
         addr.server_auth = ServerAuth::RdsIam;
+        let command = build_pg_dump_command("pg_dump", &addr, "token");
+
+        let sslmode = command
+            .as_std()
+            .get_envs()
+            .find(|(key, _)| *key == OsStr::new("PGSSLMODE"))
+            .and_then(|(_, value)| value);
+
+        assert_eq!(sslmode, Some(OsStr::new("require")));
+    }
+
+    #[test]
+    fn test_build_pg_dump_command_sets_tls_for_azure_workload_identity() {
+        let mut addr = backend::pool::Address::new_test();
+        addr.server_auth = ServerAuth::AzureWorkloadIdentity;
         let command = build_pg_dump_command("pg_dump", &addr, "token");
 
         let sslmode = command

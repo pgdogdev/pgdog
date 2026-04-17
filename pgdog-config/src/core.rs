@@ -21,7 +21,7 @@ use super::pooling::PoolerMode;
 use super::replication::{MirrorConfig, Mirroring, MirroringLevel, ReplicaLag, Replication};
 use super::rewrite::Rewrite;
 use super::sharding::{ManualQuery, OmnishardedTables, ShardedMapping, ShardedTable};
-use super::users::{Admin, Plugin, ServerAuth, Users};
+use super::users::{Admin, Plugin, Users};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ConfigAndUsers {
@@ -111,25 +111,25 @@ impl ConfigAndUsers {
     }
 
     fn validate_server_auth(&self) -> Result<(), Error> {
-        let has_rds_iam_user = self
+        let is_external_identity = self
             .users
             .users
             .iter()
-            .any(|user| user.server_auth == ServerAuth::RdsIam);
+            .any(|user| user.is_external_identity());
 
-        if !has_rds_iam_user {
+        if !is_external_identity {
             return Ok(());
         }
 
         if self.config.general.passthrough_auth != PassthroughAuth::Disabled {
             return Err(Error::ParseError(
-                "\"passthrough_auth\" must be \"disabled\" when any user has \"server_auth = \\\"rds_iam\\\"\"".into(),
+                "\"passthrough_auth\" must be \"disabled\" when any user has \"server_auth = \\\"rds_iam\\\"\" or \"server_auth = \\\"azure_workload_identity\\\"\"".into(),
             ));
         }
 
         if self.config.general.tls_verify == TlsVerifyMode::Disabled {
             return Err(Error::ParseError(
-                "\"tls_verify\" cannot be \"disabled\" when any user has \"server_auth = \\\"rds_iam\\\"\"".into(),
+                "\"tls_verify\" cannot be \"disabled\" when any user has \"server_auth = \\\"rds_iam\\\"\" or \"server_auth = \\\"azure_workload_identity\\\"\"".into(),
             ));
         }
 
@@ -655,7 +655,7 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{PoolerMode, PreparedStatements};
+    use crate::{PoolerMode, PreparedStatements, ServerAuth};
     use std::time::Duration;
 
     #[test]
@@ -1323,5 +1323,41 @@ shard = 0
         let err = config.check().unwrap_err().to_string();
         assert!(err.contains("tls_verify"));
         assert!(err.contains("rds_iam"));
+    }
+
+    #[test]
+    fn test_azure_workload_identity_rejects_passthrough_auth() {
+        let mut config = ConfigAndUsers::default();
+        config.config.general.passthrough_auth = PassthroughAuth::EnabledPlain;
+        config.config.general.tls_verify = TlsVerifyMode::VerifyFull;
+        config.users.users.push(crate::User {
+            name: "alice".into(),
+            database: "db".into(),
+            password: Some("secret".into()),
+            server_auth: ServerAuth::AzureWorkloadIdentity,
+            ..Default::default()
+        });
+
+        let err = config.check().unwrap_err().to_string();
+        assert!(err.contains("passthrough_auth"));
+        assert!(err.contains("azure_workload_identity"));
+    }
+
+    #[test]
+    fn test_azure_workload_identity_rejects_tls_verify_disabled() {
+        let mut config = ConfigAndUsers::default();
+        config.config.general.tls_verify = TlsVerifyMode::Disabled;
+        config.config.general.passthrough_auth = PassthroughAuth::Disabled;
+        config.users.users.push(crate::User {
+            name: "alice".into(),
+            database: "db".into(),
+            password: Some("secret".into()),
+            server_auth: ServerAuth::AzureWorkloadIdentity,
+            ..Default::default()
+        });
+
+        let err = config.check().unwrap_err().to_string();
+        assert!(err.contains("tls_verify"));
+        assert!(err.contains("azure_workload_identity"));
     }
 }

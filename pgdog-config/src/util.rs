@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use rand::{distr::Alphanumeric, Rng};
+use rand::{distr::Alphanumeric, RngExt};
 
 pub fn human_duration_optional(duration: Option<Duration>) -> String {
     if let Some(duration) = duration {

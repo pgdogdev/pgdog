@@ -17,3 +17,8 @@ password = "pgdog"
 # this only affects how PgDog authenticates to PostgreSQL servers.
 # server_auth = "rds_iam"
 # server_iam_region = "us-east-1" # optional; auto-inferred from RDS hostname when omitted
+
+# Example: backend authentication with Azure Workload Identity token generation.
+# PgDog still authenticates the client as configured by `general.auth_type`;
+# this only affects how PgDog authenticates to PostgreSQL servers.
+# server_auth = "azure_workload_identiy"

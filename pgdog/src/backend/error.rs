@@ -120,6 +120,9 @@ pub enum Error {
     #[error("RDS IAM token generation failed: {0}")]
     RdsIamToken(String),
 
+    #[error("Azure Workload Identity token generation failed: {0}")]
+    AzureWorkloadIdentityToken(String),
+
     #[error("pub/sub channel disabled")]
     PubSubDisabled,
 
