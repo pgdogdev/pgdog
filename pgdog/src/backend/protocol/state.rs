@@ -512,6 +512,76 @@ mod test {
         assert_eq!(state.action('Z').unwrap(), Action::Forward);
     }
 
+    // A simple query that errors must not set out_of_sync, even when extended-
+    // protocol requests are queued after it. add() currently sets extended=true
+    // as soon as any ParseComplete is enqueued, causing the error arm to take
+    // the extended path for the preceding simple query.
+    //
+    // Currently FAILS: extended=true from queuing the future extended request
+    // causes out_of_sync to be set on the simple-query error.
+    #[test]
+    fn test_simple_query_error_before_queued_extended_request_does_not_set_out_of_sync() {
+        // Setup: simple query followed by an extended query in the same queue.
+        let mut state = ProtocolState::default();
+        state.add('C'); // CommandComplete (simple query, won't arrive)
+        state.add('Z'); // ReadyForQuery (simple query)
+        state.add('1'); // ParseComplete (extended query)
+        state.add('2'); // BindComplete (extended query)
+        state.add('C'); // CommandComplete (extended query)
+        state.add('Z'); // ReadyForQuery (extended query)
+
+        // Simple query errors — must take the simple-query path.
+        assert_eq!(state.action('E').unwrap(), Action::Forward);
+        // out_of_sync must not be set: this was a simple-query error.
+        assert!(!state.out_of_sync);
+        // Simple query's ReadyForQuery remains; extended entries intact.
+        assert_eq!(state.action('Z').unwrap(), Action::Forward); // simple query RFQ
+                                                                 // Extended query is still processable.
+        assert_eq!(state.action('1').unwrap(), Action::Forward); // ParseComplete
+        assert_eq!(state.action('2').unwrap(), Action::Forward); // BindComplete
+        assert_eq!(state.action('C').unwrap(), Action::Forward); // CommandComplete
+        assert_eq!(state.action('Z').unwrap(), Action::Forward); // ReadyForQuery
+        assert!(state.is_empty());
+    }
+
+    // The extended flag recalculation at ReadyForQuery scans the entire remaining
+    // queue, so a simple query that sits before an extended query inherits
+    // extended=true after the preceding ReadyForQuery is consumed.
+    //
+    // Currently FAILS: after the first simple query's RFQ, extended is set to
+    // true because the scan finds ParseComplete/BindComplete further in the queue.
+    // The second simple query's error then incorrectly takes the extended path.
+    #[test]
+    fn test_simple_query_error_after_rfq_before_extended_does_not_set_out_of_sync() {
+        // Setup: two simple queries, then an extended query.
+        let mut state = ProtocolState::default();
+        state.add('C'); // CommandComplete (simple query 1)
+        state.add('Z'); // ReadyForQuery (simple query 1)
+        state.add('C'); // CommandComplete (simple query 2, won't arrive)
+        state.add('Z'); // ReadyForQuery (simple query 2)
+        state.add('1'); // ParseComplete (extended query)
+        state.add('2'); // BindComplete (extended query)
+        state.add('C'); // CommandComplete (extended query)
+        state.add('Z'); // ReadyForQuery (extended query)
+
+        // Simple query 1 runs normally.
+        assert_eq!(state.action('C').unwrap(), Action::Forward); // CommandComplete
+        assert_eq!(state.action('Z').unwrap(), Action::Forward); // ReadyForQuery
+
+        // Simple query 2 errors — must still take the simple-query path.
+        assert_eq!(state.action('E').unwrap(), Action::Forward);
+        // out_of_sync must not be set: this was a simple-query error.
+        assert!(!state.out_of_sync);
+        // Simple query 2's ReadyForQuery remains; extended entries intact.
+        assert_eq!(state.action('Z').unwrap(), Action::Forward); // simple query 2 RFQ
+                                                                 // Extended query is still processable.
+        assert_eq!(state.action('1').unwrap(), Action::Forward); // ParseComplete
+        assert_eq!(state.action('2').unwrap(), Action::Forward); // BindComplete
+        assert_eq!(state.action('C').unwrap(), Action::Forward); // CommandComplete
+        assert_eq!(state.action('Z').unwrap(), Action::Forward); // ReadyForQuery
+        assert!(state.is_empty());
+    }
+
     #[test]
     fn test_extended_error_in_pipeline() {
         let mut state = ProtocolState::default();
