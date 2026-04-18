@@ -327,99 +327,114 @@ before reuse, bounding the blast radius to a single request.
 
 ---
 
-## Issue 4 — `extended` flag is permanently set and never resets
+## Issue 4 — `extended` flag set at enqueue time, not at processing time
 
-**Severity:** Low-medium — affects connection-lifecycle semantics and silently changes Error handler
-behaviour for all subsequent requests on a connection.
+**Severity:** Low in production — not triggerable through current code paths. Dangerous if triggered:
+a write-query executed on the backend may never be confirmed to the client.
 
-**Location:** `pgdog/src/backend/protocol/state.rs`, `add()` / `add_ignore()`; `state.rs:151–153`,
-Error handler.
+**Location:** `pgdog/src/backend/protocol/state.rs`, `add()` / `add_ignore()` and the
+`ReadyForQuery` recalculation in `action()`.
 
 ### Description
 
-`ProtocolState.extended` is set to `true` the first time any parameterised query runs on a connection
-and is never reset. The Error handler checks this flag to set `out_of_sync = true`; because the flag
-is permanent, every error on that connection — including plain simple-query errors — sets
-`out_of_sync = true` spuriously.
+Two related bugs in how `extended` is maintained:
 
-### Code path
-
-`add()` and `add_ignore()` set the flag whenever `ParseComplete ('1')` or `BindComplete ('2')` is
-enqueued:
+**Bug A — `add()` sets the flag too early.**
+`add()` and `add_ignore()` update `extended` the moment any `ParseComplete` or `BindComplete` is
+enqueued, regardless of where in the queue that item sits:
 
 ```rust
 self.extended = self.extended || code.extended();
 ```
 
-The Error handler (`state.rs:151–153`):
+If a simple query occupies the head of the queue and an extended query is enqueued behind it,
+`extended` flips to `true` before any message has been processed. When the simple query then errors,
+the Error handler sees `extended == true` and takes the extended path: sets `out_of_sync = true` and
+clears the queue — destroying the extended query's pending entries.
+
+**Bug B — `ReadyForQuery` recalculation scans the entire remaining queue.**
+After consuming a `ReadyForQuery`, the flag is recalculated as:
 
 ```rust
-ExecutionCode::Error => {
-    if self.extended {
-        self.out_of_sync = true;  // fires on every error, forever
+self.extended = self.queue.iter().any(ExecutionItem::extended);
+```
+
+This scans all remaining entries, not just those belonging to the next sub-request. If two simple
+queries precede an extended query, after the first simple query's `ReadyForQuery` is consumed the
+scan finds the extended items two hops away and sets `extended = true`. The second simple query's
+error then incorrectly takes the extended path.
+
+### Why it does not affect production
+
+`ClientRequest::spliced()` never places a simple query and an extended query in the same
+`ProtocolState` queue. Each sub-request — whether simple or extended — gets its own fresh state.
+The flag therefore always starts at `false` for a simple sub-request and becomes `true` only for
+sub-requests that actually contain `Parse`/`Bind` messages.
+
+### Why it is dangerous if triggered
+
+If a simple query and an extended query share one queue and the simple query errors:
+1. The extended query's pending entries are destroyed.
+2. pgdog forwards the extended query's wire messages to the backend before reading any responses.
+3. When the backend's response for the extended query arrives, pgdog hits `ProtocolOutOfSync` and
+   discards the connection.
+4. For a write query (`INSERT`/`UPDATE`/`DELETE`) the statement executed on the backend but the
+   client receives no confirmation — silent data inconsistency.
+
+### Reproduction
+
+Not reproducible through normal pool operation. Reproduced at the `server.rs` level by bypassing
+the splicing layer:
+
+```sh
+cargo test -p pgdog test_simple_query_error_before_queued_extended_request_does_not_set_out_of_sync
+cargo test -p pgdog test_simple_query_error_after_rfq_before_extended_does_not_set_out_of_sync
+cargo test -p pgdog test_simple_query_error_before_extended_query_in_same_batch
+```
+
+The first two unit tests fail at `assert!(!state.out_of_sync)`. The server test fails with
+`ProtocolOutOfSync` when the extended query's `ParseComplete` arrives against an empty queue.
+
+The integration test `extended query succeeds after preceding simple query error` in
+`integration/ruby/protocol_out_of_sync_spec.rb` currently **passes** — pgdog's splicing prevents
+the bug from reaching production — and serves as a regression guard.
+
+### Tests
+
+| Test | Level | Status | What it covers |
+|---|---|---|---|
+| `test_simple_query_error_before_queued_extended_request_does_not_set_out_of_sync` | unit (`state.rs`) | **fails** | Bug A: flag set by future enqueue poisons simple error path |
+| `test_simple_query_error_after_rfq_before_extended_does_not_set_out_of_sync` | unit (`state.rs`) | **fails** | Bug B: full-queue scan sets flag for wrong sub-request |
+| `test_simple_query_error_before_extended_query_in_same_batch` | server (`server.rs`) | **fails** | end-to-end: extended query lost after simple error in same batch |
+| `extended query succeeds after preceding simple query error` | integration (Ruby) | passes | regression guard via normal pgdog path |
+
+### Fix
+
+**Bug A:** Remove the `extended` update from `add()` and `add_ignore()`. The flag must not be set
+at enqueue time. Instead, set it in `action()` when a `ParseComplete` or `BindComplete` is
+actually consumed from the queue front:
+
+```rust
+ExecutionItem::Code(in_queue_code) => {
+    if in_queue_code.extended() {
+        self.extended = true;
     }
     // ...
 }
 ```
 
-There is no reset path.
-
-### Consequences
-
-- `done()` stays `false` one extra round-trip (until RFQ clears `out_of_sync`) on simple-query
-  errors for connections that have ever served a parameterised query. Harmless in practice today, but
-  more conservative than necessary.
-- Future changes to the Error handler that add `extended`-specific behaviour will silently apply to
-  all long-lived connections, not just those currently mid-pipeline.
-- `extended` reads as "has this connection *ever* been in extended-protocol mode", not "is this
-  connection *currently* in extended-protocol mode" — a semantic mismatch that will mislead future
-  readers.
-
-### Reproduction
-
-1. Connect to pgdog.
-2. Execute a parameterised query (any `$1` placeholder) — sets `extended = true`.
-3. Execute `SELECT 1/0` (simple query).
-4. Observe `server.out_of_sync() == true` immediately after the `'E'` response, before RFQ arrives.
-   Expected: `false`.
-
-```sh
-cargo test -p pgdog test_extended_flag_never_resets
-```
-
-### Tests
-
-**`test_extended_flag_never_resets_spurious_out_of_sync`** in `server.rs` (requires PostgreSQL) —
-three phases on one connection:
-
-1. *Baseline* — fresh connection (`extended = false`); `SELECT 1/0`; asserts `out_of_sync == false`.
-2. *Trigger* — `Parse + Bind + Execute + Sync` for `SELECT $1::int`; permanently sets `extended = true`.
-3. *Regression* — `SELECT 1/0` twice more; asserts `out_of_sync == true` after each `'E'`. Each
-   `ReadyForQuery` resets `out_of_sync` to `false` but leaves `extended` unchanged.
-
-```sh
-cargo test -p pgdog test_extended_flag_never_resets
-```
-
-### Fix
-
-Reset `extended` to `false` at the same point `out_of_sync` resets — when `ReadyForQuery` is
-processed and the queue is fully drained:
+**Bug B:** The `ReadyForQuery` recalculation must scan only to the next `ReadyForQuery` boundary,
+not the entire remaining queue:
 
 ```rust
-ExecutionCode::ReadyForQuery => {
-    self.out_of_sync = false;
-    if self.is_empty() {
-        self.extended = false;  // pipeline complete; reset for next request
-    }
-}
+self.extended = self.queue
+    .iter()
+    .take_while(|item| *item != &ExecutionItem::Code(ExecutionCode::ReadyForQuery))
+    .any(ExecutionItem::extended);
 ```
 
-Resetting only when `is_empty()` is safe: pipelined requests still in the queue keep `extended = true`
-until the entire pipeline finishes.
-
-A post-fix test should verify: (a) phase 3 above now produces `out_of_sync == false`, and (b) an
-intermediate `ReadyForQuery` inside a pipelined extended request does not prematurely reset `extended`.
+This correctly reflects whether the **next sub-request** uses extended protocol, without being
+contaminated by sub-requests further down the queue.
 
 ---
 
@@ -495,4 +510,3 @@ while let Some(item) = self.queue.pop_front() {
 ```
 
 The current `pop_back()` / `clear()` / `push_back()` pattern was written assuming one sync group per queue. Replacing it with a forward scan to the first `ReadyForQuery` boundary makes the handler correct for both the single-group and multi-group cases.
-

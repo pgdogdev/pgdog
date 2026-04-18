@@ -1350,6 +1350,44 @@ pub mod test {
         assert!(server.done());
     }
 
+    // A simple query that errors must not prevent a subsequent extended query
+    // from executing when both are sent in the same batch.
+    //
+    // Currently FAILS: queuing the extended items sets extended=true before the
+    // simple query is processed, so the simple query error incorrectly clears
+    // the extended query's pending entries.
+    #[tokio::test]
+    async fn test_simple_query_error_before_extended_query_in_same_batch() {
+        let mut server = test_server().await;
+
+        // Setup: simple query that errors, immediately followed by an extended query.
+        server
+            .send(
+                &vec![
+                    Query::new("SELECT 1/0").into(),
+                    Parse::new_anonymous("SELECT 1").into(),
+                    Bind::default().into(),
+                    Execute::new().into(),
+                    Sync.into(),
+                ]
+                .into(),
+            )
+            .await
+            .unwrap();
+
+        // Simple query: errors, then ReadyForQuery.
+        assert_eq!(server.read().await.unwrap().code(), 'E'); // ErrorResponse
+        assert_eq!(server.read().await.unwrap().code(), 'Z'); // ReadyForQuery
+
+        // Extended query must still return its results.
+        assert_eq!(server.read().await.unwrap().code(), '1'); // ParseComplete
+        assert_eq!(server.read().await.unwrap().code(), '2'); // BindComplete
+        assert_eq!(server.read().await.unwrap().code(), 'D'); // DataRow
+        assert_eq!(server.read().await.unwrap().code(), 'C'); // CommandComplete
+        assert_eq!(server.read().await.unwrap().code(), 'Z'); // ReadyForQuery
+        assert!(server.done());
+    }
+
     #[tokio::test]
     async fn test_execute_batch_simple_query_error_then_success() {
         let mut server = test_server().await;
@@ -3718,78 +3756,5 @@ pub mod test {
             server.done(),
             "server must be done after full response sequence"
         );
-    }
-
-    // extended=true sticks after any parameterised query; Error handler sets out_of_sync on every subsequent error.
-    #[tokio::test]
-    async fn test_extended_flag_never_resets_spurious_out_of_sync() {
-        use crate::net::bind::Parameter;
-
-        let mut server = test_server().await;
-
-        // 1. Baseline: extended=false; simple-query error must not set out_of_sync.
-        server
-            .send(&vec![Query::new("SELECT 1/0").into()].into())
-            .await
-            .unwrap();
-        let msg = server.read().await.unwrap();
-        assert_eq!(msg.code(), 'E');
-        assert!(!server.out_of_sync());
-        let msg = server.read().await.unwrap();
-        assert_eq!(msg.code(), 'Z');
-        assert!(server.done());
-
-        // 2. Parameterised query sets extended=true permanently.
-        let bind = Bind::new_params_codes(
-            "",
-            &[Parameter {
-                len: 1,
-                data: "1".as_bytes().into(),
-            }],
-            &[Format::Text],
-        );
-        server
-            .send(
-                &vec![
-                    ProtocolMessage::from(Parse::new_anonymous("SELECT $1::int")),
-                    ProtocolMessage::from(bind),
-                    ProtocolMessage::from(Execute::new()),
-                    ProtocolMessage::from(Sync),
-                ]
-                .into(),
-            )
-            .await
-            .unwrap();
-
-        for c in ['1', '2', 'D', 'C', 'Z'] {
-            let msg = server.read().await.unwrap();
-            assert_eq!(msg.code(), c);
-        }
-        assert!(server.done());
-
-        // 3. Same error on same connection: extended stuck → out_of_sync=true spuriously.
-        server
-            .send(&vec![Query::new("SELECT 1/0").into()].into())
-            .await
-            .unwrap();
-        let msg = server.read().await.unwrap();
-        assert_eq!(msg.code(), 'E');
-        assert!(server.out_of_sync()); // spurious: extended=true even for plain simple query
-        let msg = server.read().await.unwrap();
-        assert_eq!(msg.code(), 'Z'); // RFQ clears out_of_sync but leaves extended stuck
-        assert!(!server.out_of_sync());
-        assert!(server.done());
-
-        // 4. Confirm extended remains stuck across RFQ resets.
-        server
-            .send(&vec![Query::new("SELECT 1/0").into()].into())
-            .await
-            .unwrap();
-        let msg = server.read().await.unwrap();
-        assert_eq!(msg.code(), 'E');
-        assert!(server.out_of_sync());
-        let msg = server.read().await.unwrap();
-        assert_eq!(msg.code(), 'Z');
-        assert!(server.done());
     }
 }

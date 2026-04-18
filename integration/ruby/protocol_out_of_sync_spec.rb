@@ -11,6 +11,22 @@ describe 'protocol out of sync' do
     ensure_done
   end
 
+  # A simple query that errors must not prevent a subsequent extended query
+  # from executing. Both are sent as separate requests; pgdog must process
+  # each independently.
+  it 'extended query succeeds after preceding simple query error' do
+    conn = connect
+
+    # Simple query that errors.
+    expect { conn.exec 'SELECT 1/0' }.to raise_error(PG::Error, /division by zero/)
+
+    # Extended query must succeed despite the preceding error.
+    res = conn.exec_params 'SELECT $1::integer AS val', [42]
+    expect(res[0]['val']).to eq('42')
+
+    conn.close
+  end
+
   # In pipeline mode, a failed first query must not prevent subsequent queries
   # from executing. Seq2 and seq3 must return rows even when seq1 errors.
   it 'extended query pipeline: error in seq1 does not drop seq2 and seq3' do
