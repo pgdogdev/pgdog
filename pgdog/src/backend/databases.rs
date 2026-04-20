@@ -71,7 +71,7 @@ pub fn replace_databases(new_databases: Databases, reload: bool) -> Result<(), E
 pub fn reconnect() -> Result<(), Error> {
     let config = config();
     let databases = from_config(&config);
-
+    warn!("reconnect: dropping all server connections and re-creating pools");
     replace_databases(databases, false)?;
     Ok(())
 }
@@ -80,10 +80,9 @@ pub fn reconnect() -> Result<(), Error> {
 /// preserving connections.
 pub fn reload_from_existing() -> Result<(), Error> {
     let _lock = lock();
-
     let config = config();
     let databases = from_config(&config);
-
+    info!("reloading pools from current config (connections preserved where possible)");
     replace_databases(databases, true)?;
     Ok(())
 }
@@ -126,19 +125,18 @@ pub fn reload() -> Result<(), Error> {
     let old_config = config();
     let new_config = load(&old_config.config_path, &old_config.users_path)?;
     let databases = from_config(&new_config);
-
+    info!(
+        "reloading pools from config file: {}",
+        old_config.config_path.display()
+    );
     replace_databases(databases, true)?;
-
     tls::reload()?;
-
     // Remove any unused prepared statements.
     PreparedStatements::global()
         .write()
         .close_unused(new_config.config.general.prepared_statements_limit);
-
     // Resize query cache
     Cache::resize(new_config.config.general.query_cache_limit);
-
     Ok(())
 }
 

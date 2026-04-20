@@ -74,6 +74,19 @@ impl Orchestrator {
         self.publisher = Arc::new(Mutex::new(publisher));
     }
 
+    /// Refresh cluster references and the publisher's source pool after a
+    /// long-running operation (e.g. data_sync).  Must NOT recreate the
+    /// publisher — that would discard the table LSN state accumulated during
+    /// the copy.  Instead, only the cluster reference inside the existing
+    /// publisher is updated so that subsequent pool.get() calls target the
+    /// live pool rather than a stale, potentially-offline one.
+    pub(crate) async fn refresh_before_replicate(&mut self) -> Result<(), Error> {
+        self.source = databases().schema_owner(&self.source.identifier().database)?;
+        self.destination = databases().schema_owner(&self.destination.identifier().database)?;
+        self.publisher.lock().await.update_cluster(&self.source);
+        Ok(())
+    }
+
     pub(crate) fn replication_slot(&self) -> &str {
         &self.replication_slot
     }
@@ -183,6 +196,10 @@ impl Orchestrator {
         self.schema_sync_post(true).await?;
 
         // Start replication to catch up and cutover once done.
+        // Refresh cluster references: data_sync can take hours and the pools
+        // may have been reloaded (e.g. by a client DDL) in the meantime.
+        self.refresh_before_replicate().await?;
+
         self.replicate().await?.cutover().await?;
 
         Ok(())

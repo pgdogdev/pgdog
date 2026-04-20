@@ -74,11 +74,14 @@ impl Table {
     }
 
     /// Check that the table supports replication.
+    ///
+    /// Requires at least one column with a replica identity flag. Tables with
+    /// REPLICA IDENTITY FULL or NOTHING have no identity columns and fail here
+    /// with NoPrimaryKey.
     pub fn valid(&self) -> Result<(), Error> {
         if !self.columns.iter().any(|c| c.identity) {
             return Err(Error::NoPrimaryKey(self.table.clone()));
         }
-
         Ok(())
     }
 
@@ -313,8 +316,12 @@ impl Table {
 
 #[cfg(test)]
 mod test {
-
     use crate::backend::replication::logical::publisher::test::setup_publication;
+    use crate::backend::{
+        replication::logical::publisher::queries::{PublicationTableColumn, ReplicaIdentity},
+        server::test::test_server,
+        Server,
+    };
     use crate::config::config;
 
     use super::*;
@@ -346,6 +353,18 @@ mod test {
             lsn: Lsn::default(),
             query_parser_engine: QueryParserEngine::default(),
         }
+    }
+
+    #[test]
+    fn valid_with_pk() {
+        let t = make_table(vec![("id", true), ("name", false)]);
+        assert!(t.valid().is_ok());
+    }
+
+    #[test]
+    fn valid_without_pk() {
+        let t = make_table(vec![("id", false), ("name", false)]);
+        assert!(matches!(t.valid(), Err(Error::NoPrimaryKey(_))));
     }
 
     #[test]
@@ -483,5 +502,110 @@ mod test {
         }
 
         publication.cleanup().await;
+    }
+
+    // Load identity + columns for a named table that already exists in the current session.
+    // Uses pg_catalog directly — no publication required.
+    async fn load_table(server: &mut Server, name: &str) -> Table {
+        let pub_table = PublicationTable {
+            schema: "public".into(),
+            name: name.into(),
+            attributes: "".into(),
+            parent_schema: "".into(),
+            parent_name: "".into(),
+        };
+        let identity = ReplicaIdentity::load(&pub_table, server).await.unwrap();
+        let columns = PublicationTableColumn::load(&identity, server)
+            .await
+            .unwrap();
+        Table {
+            publication: "".into(),
+            table: pub_table,
+            identity,
+            columns,
+            lsn: Lsn::default(),
+            query_parser_engine: QueryParserEngine::default(),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_valid_pk() {
+        crate::logger();
+        let mut s = test_server().await;
+        s.execute("BEGIN").await.unwrap();
+        s.execute("CREATE TABLE public.valid_test_pk (id BIGSERIAL PRIMARY KEY, name TEXT)")
+            .await
+            .unwrap();
+        assert!(load_table(&mut s, "valid_test_pk").await.valid().is_ok());
+        s.execute("ROLLBACK").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_valid_no_pk() {
+        crate::logger();
+        let mut s = test_server().await;
+        s.execute("BEGIN").await.unwrap();
+        s.execute("CREATE TABLE public.valid_test_nopk (id BIGINT, name TEXT)")
+            .await
+            .unwrap();
+        assert!(matches!(
+            load_table(&mut s, "valid_test_nopk").await.valid(),
+            Err(Error::NoPrimaryKey(_))
+        ));
+        s.execute("ROLLBACK").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_valid_replica_identity_full() {
+        crate::logger();
+        let mut s = test_server().await;
+        s.execute("BEGIN").await.unwrap();
+        s.execute("CREATE TABLE public.valid_test_full (id BIGINT, name TEXT)")
+            .await
+            .unwrap();
+        s.execute("ALTER TABLE valid_test_full REPLICA IDENTITY FULL")
+            .await
+            .unwrap();
+        let table = load_table(&mut s, "valid_test_full").await;
+        assert_eq!(table.identity.identity, "f");
+        assert!(matches!(table.valid(), Err(Error::NoPrimaryKey(_))));
+        s.execute("ROLLBACK").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_valid_replica_identity_nothing() {
+        crate::logger();
+        let mut s = test_server().await;
+        s.execute("BEGIN").await.unwrap();
+        s.execute("CREATE TABLE public.valid_test_nothing (id BIGSERIAL PRIMARY KEY, name TEXT)")
+            .await
+            .unwrap();
+        s.execute("ALTER TABLE valid_test_nothing REPLICA IDENTITY NOTHING")
+            .await
+            .unwrap();
+        let table = load_table(&mut s, "valid_test_nothing").await;
+        assert_eq!(table.identity.identity, "n");
+        assert!(matches!(table.valid(), Err(Error::NoPrimaryKey(_))));
+        s.execute("ROLLBACK").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_valid_replica_identity_using_index() {
+        crate::logger();
+        let mut s = test_server().await;
+        s.execute("BEGIN").await.unwrap();
+        s.execute("CREATE TABLE public.valid_test_idx (email TEXT NOT NULL, name TEXT)")
+            .await
+            .unwrap();
+        s.execute("CREATE UNIQUE INDEX valid_test_idx_uidx ON valid_test_idx (email)")
+            .await
+            .unwrap();
+        s.execute("ALTER TABLE valid_test_idx REPLICA IDENTITY USING INDEX valid_test_idx_uidx")
+            .await
+            .unwrap();
+        let table = load_table(&mut s, "valid_test_idx").await;
+        assert_eq!(table.identity.identity, "i");
+        assert!(table.valid().is_ok());
+        s.execute("ROLLBACK").await.unwrap();
     }
 }

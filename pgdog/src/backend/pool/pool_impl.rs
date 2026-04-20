@@ -9,7 +9,7 @@ use once_cell::sync::{Lazy, OnceCell};
 use parking_lot::RwLock;
 use parking_lot::{lock_api::MutexGuard, Mutex, RawMutex};
 use tokio::time::{timeout, Instant};
-use tracing::error;
+use tracing::{error, warn};
 
 use crate::backend::pool::LsnStats;
 use crate::backend::{ConnectReason, DisconnectReason, Server, ServerOptions};
@@ -358,8 +358,15 @@ impl Pool {
 
     /// Shutdown the pool.
     pub fn shutdown(&self) {
+        let addr = self.addr();
+        warn!(
+            host = %addr.host,
+            port = addr.port,
+            database = %addr.database_name,
+            user = %addr.user,
+            "pool offline: connection pool shut down"
+        );
         let mut guard = self.lock();
-
         guard.online = false;
         guard.dump_idle();
         guard.close_waiters(Error::Offline);

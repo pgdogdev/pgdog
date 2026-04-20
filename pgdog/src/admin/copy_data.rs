@@ -61,6 +61,13 @@ impl Command for CopyData {
             orchestrator.load_schema().await?;
             orchestrator.schema_sync_pre(true).await?;
             orchestrator.data_sync().await?;
+            // Refresh cluster references before starting replication.
+            // data_sync can run for hours; a config reload triggered by any
+            // client DDL during that window shuts down the pools the publisher
+            // was constructed with.  refresh_before_replicate() swaps in the
+            // current live pool without discarding the table LSN state.
+            orchestrator.refresh_before_replicate().await?;
+
             AsyncTasks::insert(TaskType::Replication(Box::new(
                 orchestrator.replicate().await?,
             )));

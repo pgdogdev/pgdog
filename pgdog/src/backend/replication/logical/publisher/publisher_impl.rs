@@ -289,6 +289,15 @@ impl Publisher {
         })
     }
 
+    /// Replace the source cluster reference without disturbing accumulated
+    /// table LSN state or replication slot state.
+    ///
+    /// Called after a long data_sync to pick up any pool reload that occurred
+    /// while the copy was running (e.g. triggered by a client DDL).
+    pub fn update_cluster(&mut self, cluster: &Cluster) {
+        self.cluster = cluster.clone();
+    }
+
     /// Request the publisher to stop replication.
     pub fn request_stop(&self) {
         self.stop.notify_one();
@@ -313,6 +322,15 @@ impl Publisher {
         self.create_slots().await?;
         // Fetch schema.
         self.sync_tables(true, dest).await?;
+
+        // Validate all tables support replication before committing to
+        // what can be a multi-hour copy.  A table with no primary key or
+        // unique replica-identity index cannot be replicated correctly.
+        for tables in self.tables.values() {
+            for table in tables {
+                table.valid()?;
+            }
+        }
 
         let mut handles = vec![];
 
