@@ -93,7 +93,7 @@ impl<'a> QueryParserContext<'a> {
     pub(super) fn use_parser(&self) -> bool {
         self.router_context
             .cluster
-            .use_query_parser(&self.router_context.client_request)
+            .use_query_parser(self.router_context.client_request)
     }
 
     /// Get the query we're parsing, if any.

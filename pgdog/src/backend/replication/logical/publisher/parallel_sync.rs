@@ -13,7 +13,7 @@ use tokio::{
     },
     task::JoinHandle,
 };
-use tracing::info;
+use tracing::{info, warn};
 
 use super::super::Error;
 use super::AbortSignal;
@@ -40,9 +40,10 @@ impl ParallelSync {
 
             // This won't acquire until we have at least 1 available permit.
             // Permit will be given back when this task completes.
-            let _permit = self
-                .permit
-                .acquire()
+            // acquire_owned() consumes a cloned Arc, returning an OwnedSemaphorePermit with
+            // no lifetime tied to `self`, which allows the subsequent `&mut self` borrow.
+            let _permit = Arc::clone(&self.permit)
+                .acquire_owned()
                 .await
                 .map_err(|_| Error::ParallelConnection)?;
 
@@ -50,26 +51,60 @@ impl ParallelSync {
                 return Err(Error::DataSyncAborted);
             }
 
+            self.run_with_retry(&tracker).await
+        })
+    }
+
+    /// Retry loop: attempt the table copy up to `max_retries` times.
+    /// Before each retry, TRUNCATE the destination to avoid PK violations from
+    /// partially-committed rows. Abort signals and schema errors are not retried.
+    async fn run_with_retry(&mut self, tracker: &TableCopy) -> Result<(), Error> {
+        let max_retries = self.dest.resharding_copy_retry_max_attempts();
+        let base_delay = self.dest.resharding_copy_retry_min_delay();
+        let mut attempt = 0usize;
+
+        loop {
             let abort = AbortSignal::new(self.tx.clone());
 
-            let result = match self
+            match self
                 .table
-                .data_sync(&self.addr, &self.dest, abort, &tracker)
+                .data_sync(&self.addr, &self.dest, abort, tracker)
                 .await
             {
-                Ok(_) => Ok(self.table),
-                Err(err) => {
+                Ok(_) => {
+                    self.tx
+                        .send(Ok(self.table.clone()))
+                        .map_err(|_| Error::ParallelConnection)?;
+                    return Ok(());
+                }
+                Err(err) if !err.is_retryable() || attempt >= max_retries => {
                     tracker.error(&err);
                     return Err(err);
                 }
-            };
+                Err(err) => {
+                    let backoff = base_delay * 2u32.pow(attempt.min(5) as u32);
+                    attempt += 1;
 
-            self.tx
-                .send(result)
-                .map_err(|_| Error::ParallelConnection)?;
+                    warn!(
+                        "data sync for \"{}\".\"{}\" failed (attempt {}/{}): {err}, retrying after {}ms...",
+                        self.table.table.schema,
+                        self.table.table.name,
+                        attempt,
+                        max_retries,
+                        backoff.as_millis(),
+                    );
 
-            Ok::<(), Error>(())
-        })
+                    tokio::time::sleep(backoff).await;
+
+                    if let Err(trunc_err) = self.table.truncate_destination(&self.dest).await {
+                        warn!(
+                            "truncate before retry failed for \"{}\".\"{}\" : {trunc_err}",
+                            self.table.table.schema, self.table.table.name,
+                        );
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -89,6 +124,11 @@ impl ParallelSyncManager {
         }
 
         Ok(Self {
+            // TODO: this single shared semaphore cannot enforce per-replica limits — all
+            // permits could be consumed by tasks that round-robin happened to assign to the
+            // same replica, leaving others idle. Fix: replace with one Semaphore per replica,
+            // each sized to `parallel_copies`, and have each ParallelSync acquire from its
+            // assigned replica's semaphore.
             permit: Arc::new(Semaphore::new(
                 replicas.len() * dest.resharding_parallel_copies(),
             )),
@@ -106,22 +146,19 @@ impl ParallelSyncManager {
             self.permit.available_permits() / self.replicas.len(),
         );
 
-        let mut replicas_iter = self.replicas.iter();
-        // Loop through replicas, one at a time.
-        // This works around Rust iterators not having a "rewind" function.
-        let replica = loop {
-            if let Some(replica) = replicas_iter.next() {
-                break replica;
-            } else {
-                replicas_iter = self.replicas.iter();
-            }
-        };
+        // cycle() is the idiomatic "rewind": it restarts the iterator from the
+        // beginning once exhausted, giving round-robin distribution across replicas.
+        let mut replicas_iter = self.replicas.iter().cycle();
 
         let (tx, mut rx) = unbounded_channel();
         let mut tables = vec![];
         let mut handles = vec![];
 
         for table in self.tables {
+            // SAFETY: cycle() on a non-empty slice never returns None.
+            let replica = replicas_iter
+                .next()
+                .expect("replicas is non-empty; checked in new()");
             handles.push(
                 ParallelSync {
                     table,

@@ -300,7 +300,7 @@ impl User {
             .passwords
             .clone()
             .into_iter()
-            .map(|p| PasswordKind::Plain(p))
+            .map(PasswordKind::Plain)
             .collect();
         if !self.password().is_empty() {
             passwords.push(PasswordKind::Plain(self.password().to_string()));

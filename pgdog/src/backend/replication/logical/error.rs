@@ -147,3 +147,53 @@ impl From<crate::backend::schema::sync::error::Error> for Error {
         Self::SchemaSync(Box::new(value))
     }
 }
+
+impl Error {
+    /// Whether the table copy should be retried after this error.
+    pub fn is_retryable(&self) -> bool {
+        match self {
+            // Shard was unreachable; each retry opens a fresh connection.
+            // Some sub-variants (TLS, protocol errors) aren't truly transient but
+            // will just exhaust the budget and fail cleanly.
+            Self::Net(_) | Self::Pool(_) => true,
+
+            // No connection yet, or primary is down — worth retrying.
+            Self::NotConnected | Self::NoPrimary => true,
+
+            // Replication stalled; temporary slot is gone, next attempt starts fresh.
+            Self::ReplicationTimeout => true,
+
+            // Abort signals, schema mismatches, protocol violations — retrying won't help.
+            _ => false,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::backend::pool::Error as PE;
+    use crate::backend::replication::publisher::PublicationTable;
+    use crate::net::Error as NE;
+
+    #[test]
+    fn retryable() {
+        let io = std::io::Error::new(std::io::ErrorKind::ConnectionReset, "reset");
+        assert!(Error::Net(NE::Io(io)).is_retryable());
+        assert!(Error::Net(NE::UnexpectedEof).is_retryable());
+        assert!(Error::Pool(PE::NoPrimary).is_retryable());
+        assert!(Error::Pool(PE::CheckoutTimeout).is_retryable());
+        assert!(Error::NotConnected.is_retryable());
+        assert!(Error::NoPrimary.is_retryable());
+        assert!(Error::ReplicationTimeout.is_retryable());
+    }
+
+    #[test]
+    fn not_retryable() {
+        assert!(!Error::CopyAborted(PublicationTable::default()).is_retryable());
+        assert!(!Error::DataSyncAborted.is_retryable());
+        assert!(!Error::NoPrimaryKey(PublicationTable::default()).is_retryable());
+        assert!(!Error::NoReplicaIdentity("s".into(), "t".into()).is_retryable());
+        assert!(!Error::ParallelConnection.is_retryable());
+    }
+}

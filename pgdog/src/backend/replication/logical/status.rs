@@ -79,6 +79,19 @@ impl TableCopy {
             state.sql = Arc::new(sql.to_owned());
         }
     }
+
+    /// Reset byte and row counters before retrying a failed table copy.
+    /// Prevents accumulated counts from a discarded attempt inflating totals
+    /// and throughput calculations across retries.
+    pub(crate) fn reset(&self) {
+        if let Some(mut state) = TableCopies::get().get_mut(self) {
+            state.bytes = 0;
+            state.rows = 0;
+            state.bytes_per_sec = 0;
+            state.last_update = SystemTime::now();
+            data_sync_progress(self, &state);
+        }
+    }
 }
 
 impl Drop for TableCopy {

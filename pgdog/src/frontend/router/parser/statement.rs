@@ -182,7 +182,7 @@ fn integer_arg(node: &Node, bind: Option<&Bind>) -> Option<i64> {
 fn is_param_ref(node: &Node) -> bool {
     match node.node.as_ref() {
         Some(NodeEnum::ParamRef(_)) => true,
-        Some(NodeEnum::TypeCast(cast)) => cast.arg.as_deref().map_or(false, is_param_ref),
+        Some(NodeEnum::TypeCast(cast)) => cast.arg.as_deref().is_some_and(is_param_ref),
         _ => false,
     }
 }

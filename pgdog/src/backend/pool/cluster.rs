@@ -82,6 +82,8 @@ pub struct Cluster {
     reload_schema_on_ddl: bool,
     load_schema: LoadSchema,
     resharding_parallel_copies: usize,
+    resharding_copy_retry_max_attempts: usize,
+    resharding_copy_retry_min_delay: u64,
     regex_parser: RegexParser,
 }
 
@@ -159,6 +161,8 @@ pub struct ClusterConfig<'a> {
     pub reload_schema_on_ddl: bool,
     pub load_schema: LoadSchema,
     pub resharding_parallel_copies: usize,
+    pub resharding_copy_retry_max_attempts: usize,
+    pub resharding_copy_retry_min_delay: u64,
     pub regex_parser_limit: usize,
 }
 
@@ -213,6 +217,8 @@ impl<'a> ClusterConfig<'a> {
             reload_schema_on_ddl: general.reload_schema_on_ddl,
             load_schema: general.load_schema,
             resharding_parallel_copies: general.resharding_parallel_copies,
+            resharding_copy_retry_max_attempts: general.resharding_copy_retry_max_attempts,
+            resharding_copy_retry_min_delay: general.resharding_copy_retry_min_delay,
             regex_parser_limit: general.regex_parser_limit,
         }
     }
@@ -251,6 +257,8 @@ impl Cluster {
             reload_schema_on_ddl,
             load_schema,
             resharding_parallel_copies,
+            resharding_copy_retry_max_attempts,
+            resharding_copy_retry_min_delay,
             regex_parser_limit,
         } = config;
 
@@ -301,6 +309,8 @@ impl Cluster {
             reload_schema_on_ddl,
             load_schema,
             resharding_parallel_copies,
+            resharding_copy_retry_max_attempts,
+            resharding_copy_retry_min_delay,
             regex_parser: RegexParser::new(regex_parser_limit, query_parser),
         }
     }
@@ -551,6 +561,16 @@ impl Cluster {
     /// run to re-shard this cluster.
     pub fn resharding_parallel_copies(&self) -> usize {
         self.resharding_parallel_copies
+    }
+
+    /// Maximum retries for a per-table copy during resharding.
+    pub fn resharding_copy_retry_max_attempts(&self) -> usize {
+        self.resharding_copy_retry_max_attempts
+    }
+
+    /// Base delay between table copy retry attempts. Doubles each attempt, capped at 32×.
+    pub fn resharding_copy_retry_min_delay(&self) -> std::time::Duration {
+        std::time::Duration::from_millis(self.resharding_copy_retry_min_delay)
     }
 
     /// Launch the connection pools.

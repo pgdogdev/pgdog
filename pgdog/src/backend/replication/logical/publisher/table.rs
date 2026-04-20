@@ -285,6 +285,30 @@ impl Table {
 
         Ok(self.lsn)
     }
+
+    /// Generate a `TRUNCATE` SQL statement for the given schema and table name.
+    /// Used before retrying a failed table copy to ensure a clean destination.
+    pub fn truncate_statement(schema: &str, name: &str) -> String {
+        format!(
+            "TRUNCATE \"{}\".\"{}\"",
+            escape_identifier(schema),
+            escape_identifier(name),
+        )
+    }
+
+    /// Truncate this table on all destination primaries before a retry.
+    ///
+    /// Always safe: if the previous copy attempt auto-rolled back (mid-stream
+    /// failure), this is a no-op. If rows were partially or fully committed,
+    /// this wipes them so the retry starts clean and avoids PK violations.
+    pub async fn truncate_destination(&self, dest: &Cluster) -> Result<(), Error> {
+        dest.execute(Self::truncate_statement(
+            self.table.destination_schema(),
+            self.table.destination_name(),
+        ))
+        .await
+        .map_err(Error::Backend)
+    }
 }
 
 #[cfg(test)]
@@ -459,5 +483,23 @@ mod test {
         }
 
         publication.cleanup().await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn truncate_statement_basic() {
+        let sql = Table::truncate_statement("public", "users");
+        assert_eq!(sql, r#"TRUNCATE "public"."users""#);
+    }
+
+    #[test]
+    fn truncate_statement_quotes_identifiers() {
+        // escape_identifier doubles embedded double-quotes per Postgres convention.
+        let sql = Table::truncate_statement("my\"schema", "my\"table");
+        assert_eq!(sql, "TRUNCATE \"my\"\"schema\".\"my\"\"table\"");
     }
 }
