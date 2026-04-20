@@ -40,8 +40,6 @@ fn merge_table_lsns(
 
 #[derive(Debug, Default)]
 pub struct Publisher {
-    /// Destination cluster.
-    cluster: Cluster,
     /// Name of the publication.
     publication: String,
     /// Shard -> Tables mapping.
@@ -62,13 +60,11 @@ pub struct Publisher {
 
 impl Publisher {
     pub fn new(
-        cluster: &Cluster,
         publication: &str,
         query_parser_engine: QueryParserEngine,
         slot_name: String,
     ) -> Self {
         Self {
-            cluster: cluster.clone(),
             publication: publication.to_string(),
             tables: HashMap::new(),
             slots: HashMap::new(),
@@ -84,8 +80,12 @@ impl Publisher {
         &self.slot_name
     }
 
-    fn distribute_omnisharded_tables(&mut self, omnisharded: HashMap<(String, String), Table>) {
-        let shard_count = self.cluster.shards().len();
+    fn distribute_omnisharded_tables(
+        &mut self,
+        omnisharded: HashMap<(String, String), Table>,
+        source: &Cluster,
+    ) {
+        let shard_count = source.shards().len();
         // Downstream paths (e.g. Publisher::replicate) iterate every shard and
         // require a (possibly empty) entry in `self.tables` for each one.
         for number in 0..shard_count {
@@ -100,7 +100,12 @@ impl Publisher {
     }
 
     /// Synchronize tables for all shards.
-    pub async fn sync_tables(&mut self, data_sync: bool, dest: &Cluster) -> Result<(), Error> {
+    pub async fn sync_tables(
+        &mut self,
+        data_sync: bool,
+        source: &Cluster,
+        dest: &Cluster,
+    ) -> Result<(), Error> {
         let sharding_tables = dest.sharding_schema().tables;
         let existing_lsns: HashMap<usize, HashMap<(String, String), Lsn>> = self
             .tables
@@ -120,7 +125,7 @@ impl Publisher {
         // during copy to avoid duplicate key errors.
         let mut omnisharded = HashMap::new();
 
-        for (number, shard) in self.cluster.shards().iter().enumerate() {
+        for (number, shard) in source.shards().iter().enumerate() {
             // Load tables from publication.
             let mut primary = shard.primary(&Request::default()).await?;
             let tables =
@@ -145,7 +150,7 @@ impl Publisher {
         }
 
         // Distribute omni tables roughly equally between all shards.
-        self.distribute_omnisharded_tables(omnisharded);
+        self.distribute_omnisharded_tables(omnisharded, source);
 
         Ok(())
     }
@@ -157,8 +162,8 @@ impl Publisher {
     /// If you're doing a cross-shard transaction, parts of it can be lost.
     ///
     /// TODO: Add support for 2-phase commit.
-    async fn create_slots(&mut self) -> Result<(), Error> {
-        for (number, shard) in self.cluster.shards().iter().enumerate() {
+    async fn create_slots(&mut self, source: &Cluster) -> Result<(), Error> {
+        for (number, shard) in source.shards().iter().enumerate() {
             let addr = shard.primary(&Request::default()).await?.addr().clone();
 
             let mut slot = ReplicationSlot::replication(
@@ -179,19 +184,19 @@ impl Publisher {
     ///
     /// This uses a dedicated replication slot which will survive crashes and reboots.
     /// N.B.: The slot needs to be manually dropped!
-    pub async fn replicate(&mut self, dest: &Cluster) -> Result<Waiter, Error> {
+    pub async fn replicate(&mut self, source: &Cluster, dest: &Cluster) -> Result<Waiter, Error> {
         // Replicate shards in parallel.
         let mut streams = vec![];
 
         // Synchronize tables from publication.
-        self.sync_tables(false, dest).await?;
+        self.sync_tables(false, source, dest).await?;
 
         // Create replication slots if we haven't already.
         if self.slots.is_empty() {
-            self.create_slots().await?;
+            self.create_slots(source).await?;
         }
 
-        for (number, _) in self.cluster.shards().iter().enumerate() {
+        for (number, _) in source.shards().iter().enumerate() {
             // Use table offsets from data sync
             // or from loading them above.
             let tables = self
@@ -213,7 +218,7 @@ impl Publisher {
             let stop = self.stop.clone();
             let last_transaction = self.last_transaction.clone();
 
-            let source = self.cluster.clone();
+            let source_cluster = source.clone();
             let dest = dest.clone();
 
             // Replicate in parallel.
@@ -270,7 +275,7 @@ impl Publisher {
 
                             let missed = stream.missed_rows();
                             if missed.non_zero() {
-                                warn!("replication {} => {} has missing rows: {}", source.name(), dest.name(), missed);
+                                warn!("replication {} => {} has missing rows: {}", source_cluster.name(), dest.name(), missed);
                             }
 
                         }
@@ -287,15 +292,6 @@ impl Publisher {
             streams,
             stop: self.stop.clone(),
         })
-    }
-
-    /// Replace the source cluster reference without disturbing accumulated
-    /// table LSN state or replication slot state.
-    ///
-    /// Called after a long data_sync to pick up any pool reload that occurred
-    /// while the copy was running (e.g. triggered by a client DDL).
-    pub fn update_cluster(&mut self, cluster: &Cluster) {
-        self.cluster = cluster.clone();
     }
 
     /// Request the publisher to stop replication.
@@ -317,11 +313,9 @@ impl Publisher {
     /// re-sharding the cluster in the process.
     ///
     /// TODO: Parallelize shard syncs.
-    pub async fn data_sync(&mut self, dest: &Cluster) -> Result<(), Error> {
-        // Create replication slots.
-        self.create_slots().await?;
-        // Fetch schema.
-        self.sync_tables(true, dest).await?;
+    pub async fn data_sync(&mut self, source: &Cluster, dest: &Cluster) -> Result<(), Error> {
+        // Fetch schema and column metadata first — valid() depends on it.
+        self.sync_tables(true, source, dest).await?;
 
         // Validate all tables support replication before committing to
         // what can be a multi-hour copy.  A table with no primary key or
@@ -332,9 +326,13 @@ impl Publisher {
             }
         }
 
+        // Create replication slots only after validation passes — a slot
+        // created before valid() would be orphaned on a NoPrimaryKey error.
+        self.create_slots(source).await?;
+
         let mut handles = vec![];
 
-        for (number, shard) in self.cluster.shards().iter().enumerate() {
+        for (number, shard) in source.shards().iter().enumerate() {
             let tables = self
                 .tables
                 .get(&number)
@@ -370,7 +368,7 @@ impl Publisher {
 
             let dest = dest.clone();
             handles.push(spawn(async move {
-                let manager = ParallelSyncManager::new(tables, replicas, &dest)?;
+                let manager = ParallelSyncManager::new(tables, replicas, dest)?;
                 let tables = manager.run().await?;
 
                 Ok::<Vec<Table>, Error>(tables)
@@ -383,7 +381,7 @@ impl Publisher {
             info!(
                 "table sync for {} tables complete [{}, shard: {}]",
                 tables.len(),
-                self.cluster.name(),
+                source.name(),
                 number,
             );
 
@@ -451,6 +449,7 @@ mod test {
     use crate::backend::replication::logical::publisher::{
         PublicationTable, PublicationTableColumn, ReplicaIdentity,
     };
+    use crate::backend::server::test::test_replication_server;
     use crate::config::config;
 
     fn make_table(schema: &str, name: &str, lsn: i64) -> Table {
@@ -507,15 +506,10 @@ mod test {
     fn distribute_omnisharded_tables_initializes_missing_shards() {
         let config = config();
         let cluster = Cluster::new_test(&config);
-        let mut publisher = Publisher::new(
-            &cluster,
-            "test",
-            QueryParserEngine::default(),
-            "slot".into(),
-        );
+        let mut publisher = Publisher::new("test", QueryParserEngine::default(), "slot".into());
         let table = make_table("public", "omni_only", 0);
 
-        publisher.distribute_omnisharded_tables(HashMap::from([(table.key(), table)]));
+        publisher.distribute_omnisharded_tables(HashMap::from([(table.key(), table)]), &cluster);
 
         assert!(
             publisher.tables.contains_key(&0),
@@ -530,5 +524,61 @@ mod test {
             1,
             "the omnisharded table should still be assigned exactly once"
         );
+    }
+
+    /// Tables without a primary key or replica identity index must be rejected
+    /// before the copy starts, not after. Validates that `data_sync` returns
+    /// `NoPrimaryKey` and leaves no replication slots behind.
+    #[tokio::test]
+    async fn data_sync_rejects_no_pk_table_before_slots_created() {
+        crate::logger();
+
+        // Three tables with no replica identity — each would fail replication.
+        let mut server = test_replication_server().await;
+        for ddl in &[
+            "CREATE TABLE IF NOT EXISTS publication_test_no_pk   (data TEXT NOT NULL)",
+            "CREATE TABLE IF NOT EXISTS publication_test_no_pk_2 (payload JSONB)",
+            "CREATE TABLE IF NOT EXISTS publication_test_no_pk_3 (ts TIMESTAMPTZ NOT NULL DEFAULT now(), value FLOAT8)",
+            "DROP PUBLICATION IF EXISTS publication_no_pk_validation",
+            "CREATE PUBLICATION publication_no_pk_validation FOR TABLE publication_test_no_pk, publication_test_no_pk_2, publication_test_no_pk_3",
+        ] {
+            server.execute(*ddl).await.unwrap();
+        }
+
+        // Real cluster so metadata is fetched from Postgres, not synthetic.
+        let source = Cluster::new_test(&config());
+        source.launch();
+        let dest = Cluster::new_test(&config());
+
+        let mut publisher = Publisher::new(
+            "publication_no_pk_validation",
+            QueryParserEngine::default(),
+            "sync_test_slot".into(),
+        );
+
+        // Validation must fire before the copy begins.
+        let result = publisher.data_sync(&source, &dest).await;
+
+        let err = result.expect_err("data_sync must fail for a publication with no-pk tables");
+        assert!(
+            matches!(err, Error::NoPrimaryKey(_)),
+            "expected NoPrimaryKey, got: {:?}",
+            err
+        );
+
+        assert!(
+            publisher.slots.is_empty(),
+            "no replication slots should be created when valid() fails"
+        );
+
+        source.shutdown();
+        for ddl in &[
+            "DROP PUBLICATION IF EXISTS publication_no_pk_validation",
+            "DROP TABLE IF EXISTS publication_test_no_pk_3",
+            "DROP TABLE IF EXISTS publication_test_no_pk_2",
+            "DROP TABLE IF EXISTS publication_test_no_pk",
+        ] {
+            server.execute(*ddl).await.unwrap();
+        }
     }
 }

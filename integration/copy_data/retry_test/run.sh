@@ -1,12 +1,8 @@
 #!/bin/bash
-# Integration test: data-sync retries when a destination shard connection drops mid-copy.
+# Integration test: COPY_DATA survives a mid-copy shard outage and a concurrent pool RELOAD,
+# then confirms replication delivers writes made after the copy completes.
 #
-# What is tested:
-#   - data-sync --sync-only completes (exit 0) when shard_1 is killed mid-copy and
-#     brought back while the retry loop is running.
-#   - Row counts on all destination tables match the source after sync completes.
-#
-# Manages its own docker-compose stack — no pre-started containers required.
+# Manages its own docker-compose stack and pgdog server process.
 set -euo pipefail
 
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
@@ -15,22 +11,40 @@ DEFAULT_BIN="${SCRIPT_DIR}/../../../target/debug/pgdog"
 PGDOG_BIN=${PGDOG_BIN:-$DEFAULT_BIN}
 PGDOG_CONFIG="${SCRIPT_DIR}/pgdog.toml"
 USERS_CONFIG="${SCRIPT_DIR}/users.toml"
+PGDOG_PORT=${PGDOG_PORT:-6440}
 export PGPASSWORD=pgdog
 
-SYNC_PID=""
+# Worst case: remaining retry backoff (≤16s) + copy of ~60k rows (~5s) + replication startup (~1s).
+REPLICATION_TIMEOUT=60
+
+PGDOG_PID=""
 
 cleanup() {
-    if [ -n "${SYNC_PID}" ]; then
-        kill "${SYNC_PID}" 2>/dev/null || true
-        wait "${SYNC_PID}" 2>/dev/null || true
+    if [ -n "${PGDOG_PID}" ]; then
+        kill "${PGDOG_PID}" 2>/dev/null || true
+        wait "${PGDOG_PID}" 2>/dev/null || true
     fi
     cd "${COMPOSE_DIR}" && docker compose down 2>/dev/null || true
 }
 trap cleanup EXIT
 
+# Admin connection using the [admin] section credentials from pgdog.toml.
+admin_psql() { psql -h 127.0.0.1 -p "${PGDOG_PORT}" -U admin -d admin "$@"; }
+
+# Per-database psql helpers (PGPASSWORD already exported).
+src_psql()    { psql -h 127.0.0.1 -p 15432 -U pgdog pgdog  "$@"; }
+shard0_psql() { psql -h 127.0.0.1 -p 15433 -U pgdog pgdog1 "$@"; }
+shard1_psql() { psql -h 127.0.0.1 -p 15434 -U pgdog pgdog2 "$@"; }
+
+src_count()    { src_psql    -tAc "SELECT COUNT(*) FROM $1"; }
+shard0_count() { shard0_psql -tAc "SELECT COUNT(*) FROM $1"; }
+shard1_count() { shard1_psql -tAc "SELECT COUNT(*) FROM $1"; }
+
+# Pass a psql helper as $1; checks whether the canary row is present on that node.
+has_canary() { local fn=$1; "${fn}" -tAc "SELECT 1 FROM copy_data.settings WHERE setting_name='${CANARY}' LIMIT 1" 2>/dev/null | grep -q 1; }
+
 pushd "${COMPOSE_DIR}"
 
-# Start the docker-compose stack and wait for all three postgres instances.
 echo "[retry_test] Starting docker-compose stack..."
 docker compose up -d
 
@@ -48,56 +62,74 @@ for PORT in 15432 15433 15434; do
 done
 echo "[retry_test] All postgres instances ready."
 
-# Reset destination shards then source — each is a separate container.
-psql -h 127.0.0.1 -p 15433 -U pgdog pgdog1 -c "DROP SCHEMA IF EXISTS copy_data CASCADE;"
-psql -h 127.0.0.1 -p 15434 -U pgdog pgdog2 -c "DROP SCHEMA IF EXISTS copy_data CASCADE;"
-psql -h 127.0.0.1 -p 15432 -U pgdog pgdog -f "${SCRIPT_DIR}/init.sql"
+# Reset destination shards, then seed the source.
+shard0_psql -c "DROP SCHEMA IF EXISTS copy_data CASCADE;"
+shard1_psql -c "DROP SCHEMA IF EXISTS copy_data CASCADE;"
+src_psql -f "${SCRIPT_DIR}/init.sql"
 
-# Schema sync: create tables on destination shards.
+# Create tables on destination shards via the CLI (no server required).
 "${PGDOG_BIN}" --config "${PGDOG_CONFIG}" --users "${USERS_CONFIG}" \
     schema-sync --from-database source --to-database destination --publication pgdog
 
-# Start data-sync with all shards up so the connection pool initialises cleanly
-# and CopySubscriber can connect to both shards before we inject a failure.
-"${PGDOG_BIN}" --config "${PGDOG_CONFIG}" --users "${USERS_CONFIG}" \
-    data-sync --sync-only \
-    --from-database source \
-    --to-database destination \
-    --publication pgdog &
-SYNC_PID=$!
+echo "[retry_test] Starting pgdog server on port ${PGDOG_PORT}..."
+PGDOG_PORT="${PGDOG_PORT}" "${PGDOG_BIN}" --config "${PGDOG_CONFIG}" --users "${USERS_CONFIG}" &
+PGDOG_PID=$!
 
-# Wait until data-sync has created a temporary replication slot on the source.
-# The slot is created after copy_sub.connect() — meaning CopySubscriber already
-# holds open connections to both shards. Killing shard_1 now lands a mid-copy
-# network error that run_with_retry() must handle, not a pre-connection timeout.
-echo "[retry_test] Waiting for data-sync to start copying..."
-WAIT_ATTEMPTS=0
-until psql -h 127.0.0.1 -p 15432 -U pgdog pgdog -tAc \
-    "SELECT 1 FROM pg_replication_slots WHERE temporary = true LIMIT 1" 2>/dev/null | grep -q 1; do
-    WAIT_ATTEMPTS=$((WAIT_ATTEMPTS + 1))
-    if [ "${WAIT_ATTEMPTS}" -ge 200 ]; then
-        echo "[retry_test] FAIL: data-sync never created a replication slot after $((WAIT_ATTEMPTS / 20))s"
+READY_ATTEMPTS=0
+until admin_psql -c 'SHOW VERSION' >/dev/null 2>&1; do
+    READY_ATTEMPTS=$((READY_ATTEMPTS + 1))
+    if [ "${READY_ATTEMPTS}" -ge 60 ]; then
+        echo "[retry_test] FAIL: pgdog admin not reachable after 30s"
         exit 1
     fi
-    if ! kill -0 "${SYNC_PID}" 2>/dev/null; then
-        echo "[retry_test] FAIL: data-sync exited before copy started"
+    if ! kill -0 "${PGDOG_PID}" 2>/dev/null; then
+        echo "[retry_test] FAIL: pgdog server exited before admin became reachable"
+        exit 1
+    fi
+    sleep 0.5
+done
+echo "[retry_test] pgdog admin is ready."
+
+# Start the copy; returns immediately, work runs in background.
+admin_psql -c "COPY_DATA source destination pgdog"
+
+# A temporary replication slot on the source means copying is active; kill now to inject a mid-copy failure.
+echo "[retry_test] Waiting for COPY_DATA to start copying..."
+WAIT_ATTEMPTS=0
+until src_psql -tAc "SELECT 1 FROM pg_replication_slots WHERE temporary = true LIMIT 1" 2>/dev/null | grep -q 1; do
+    WAIT_ATTEMPTS=$((WAIT_ATTEMPTS + 1))
+    if [ "${WAIT_ATTEMPTS}" -ge 200 ]; then
+        echo "[retry_test] FAIL: COPY_DATA never created a replication slot after $((WAIT_ATTEMPTS / 20))s"
+        exit 1
+    fi
+    if ! kill -0 "${PGDOG_PID}" 2>/dev/null; then
+        echo "[retry_test] FAIL: pgdog server exited before copy started"
         exit 1
     fi
     sleep 0.05
 done
 
-# SIGKILL the container immediately — no grace period — so the kill lands before
-# the in-flight COPY can finish. docker compose stop has a 10s grace period.
+# SIGKILL skips docker's 10s grace period, ensuring the kill lands before the in-flight COPY finishes.
 echo "[retry_test] Killing shard_1 during active copy..."
 docker compose kill shard_1
 
-# Let the retry loop run a few cycles before bringing shard_1 back.
+# RELOAD while shard_1 is down races with the active copy retry.
+echo "[retry_test] Issuing RELOAD while shard_1 is down..."
+admin_psql -c 'RELOAD'
+
+# Insert the canary only after replication is confirmed live (Assertion 1).
+# The copy runs under a REPEATABLE READ snapshot taken at slot creation, so
+# rows inserted after that point are invisible to the copy regardless of timing.
+# Inserting here rather than earlier is a deliberate choice: it makes the test
+# assertion unambiguous — any canary arrival must have come via the replication
+# stream, not copied rows.
+
+# Let the retry loop run a few cycles before restoring shard_1.
 sleep 2
 
 echo "[retry_test] Starting shard_1..."
 docker compose start shard_1
 
-# Wait for shard_1 postgres to be ready.
 READY_ATTEMPTS=0
 until pg_isready -h 127.0.0.1 -p 15434 -U pgdog -d pgdog2 -q; do
     READY_ATTEMPTS=$((READY_ATTEMPTS + 1))
@@ -109,30 +141,71 @@ until pg_isready -h 127.0.0.1 -p 15434 -U pgdog -d pgdog2 -q; do
 done
 echo "[retry_test] shard_1 is ready."
 
-# Wait for data-sync to complete.
-set +e
-wait "${SYNC_PID}"
-SYNC_EXIT=$?
-set -e
-SYNC_PID=""
+# Assertion 1: replication started after the pool reload.
+echo "[retry_test] Waiting for SHOW TASKS to report a Replication task..."
+REPLICATION_TASK_SEEN=0
+for _ in $(seq 1 "${REPLICATION_TIMEOUT}"); do
+    if admin_psql -tAc 'SHOW TASKS' 2>/dev/null | grep -q '|replication|'; then
+        REPLICATION_TASK_SEEN=1
+        break
+    fi
+    if ! kill -0 "${PGDOG_PID}" 2>/dev/null; then
+        echo "[retry_test] FAIL: pgdog server exited before replication started"
+        exit 1
+    fi
+    sleep 1
+done
 
-if [ "${SYNC_EXIT}" -ne 0 ]; then
-    echo "[retry_test] FAIL: data-sync exited with code ${SYNC_EXIT}"
-    exit "${SYNC_EXIT}"
+if [ "${REPLICATION_TASK_SEEN}" -ne 1 ]; then
+    echo "[retry_test] FAIL: no Replication task within ${REPLICATION_TIMEOUT}s after shard_1 was restored"
+    echo "[retry_test]   replication did not start after the copy completed"
+    echo "[retry_test] --- SHOW TASKS ---"
+    admin_psql -c 'SHOW TASKS' || true
+    echo "[retry_test] --- SHOW REPLICATION_SLOTS ---"
+    admin_psql -c 'SHOW REPLICATION_SLOTS' || true
+    exit 1
 fi
+echo "[retry_test] OK: Replication task is live."
+
+# Assertion 2: writes made after the copy reach both destination shards via replication.
+CANARY="canary_$(date +%s)_$$"
+echo "[retry_test] Inserting canary ${CANARY} into source..."
+src_psql -c "INSERT INTO copy_data.settings (setting_name, setting_value) VALUES ('${CANARY}', 'canary');"
+
+echo "[retry_test] Waiting for canary to reach both destinations via replication..."
+CANARY_DELIVERED=0
+for _ in $(seq 1 "${REPLICATION_TIMEOUT}"); do
+    if has_canary shard0_psql && has_canary shard1_psql; then
+        CANARY_DELIVERED=1
+        break
+    fi
+    if ! kill -0 "${PGDOG_PID}" 2>/dev/null; then
+        echo "[retry_test] FAIL: pgdog server exited while waiting for canary"
+        exit 1
+    fi
+    sleep 1
+done
+
+if [ "${CANARY_DELIVERED}" -ne 1 ]; then
+    echo "[retry_test] FAIL: canary ${CANARY} not replicated within ${REPLICATION_TIMEOUT}s"
+    echo "[retry_test]   Replication task was running but the stream did not deliver"
+    admin_psql -c 'SHOW REPLICATION_SLOTS' || true
+    exit 1
+fi
+echo "[retry_test] OK: canary replicated to both shards."
 
 # Verify row counts.
 # Sharded tables: sum across both destination shards must equal source.
 SHARDED_TABLES="copy_data.users copy_data.orders copy_data.order_items copy_data.log_actions copy_data.with_identity"
 # Omni tables: each shard must have the full source row count.
-OMNI_TABLES="copy_data.countries copy_data.currencies copy_data.categories"
+OMNI_TABLES="copy_data.countries copy_data.currencies copy_data.categories copy_data.settings"
 
 FAILED=0
 
 for TABLE in ${SHARDED_TABLES}; do
-    SRC=$(psql -h 127.0.0.1 -p 15432 -U pgdog pgdog -tAc "SELECT COUNT(*) FROM ${TABLE}")
-    DST0=$(psql -h 127.0.0.1 -p 15433 -U pgdog pgdog1 -tAc "SELECT COUNT(*) FROM ${TABLE}")
-    DST1=$(psql -h 127.0.0.1 -p 15434 -U pgdog pgdog2 -tAc "SELECT COUNT(*) FROM ${TABLE}")
+    SRC=$(src_count    "${TABLE}")
+    DST0=$(shard0_count "${TABLE}")
+    DST1=$(shard1_count "${TABLE}")
     DST=$((DST0 + DST1))
     if [ "${SRC}" -ne "${DST}" ]; then
         echo "[retry_test] MISMATCH ${TABLE}: source=${SRC} total_dest=${DST} (shard0=${DST0} shard1=${DST1})"
@@ -143,9 +216,9 @@ for TABLE in ${SHARDED_TABLES}; do
 done
 
 for TABLE in ${OMNI_TABLES}; do
-    SRC=$(psql -h 127.0.0.1 -p 15432 -U pgdog pgdog -tAc "SELECT COUNT(*) FROM ${TABLE}")
-    DST0=$(psql -h 127.0.0.1 -p 15433 -U pgdog pgdog1 -tAc "SELECT COUNT(*) FROM ${TABLE}")
-    DST1=$(psql -h 127.0.0.1 -p 15434 -U pgdog pgdog2 -tAc "SELECT COUNT(*) FROM ${TABLE}")
+    SRC=$(src_count    "${TABLE}")
+    DST0=$(shard0_count "${TABLE}")
+    DST1=$(shard1_count "${TABLE}")
     if [ "${SRC}" -ne "${DST0}" ] || [ "${SRC}" -ne "${DST1}" ]; then
         echo "[retry_test] MISMATCH ${TABLE} (omni): source=${SRC} shard0=${DST0} shard1=${DST1}"
         FAILED=1
@@ -159,6 +232,12 @@ if [ "${FAILED}" -ne 0 ]; then
     exit 1
 fi
 
-echo "[retry_test] PASS: all row counts match. Retry test succeeded."
+echo "[retry_test] PASS: COPY_DATA survived shard outage + pool reload; replication delivered canary."
+
+# Stop pgdog cleanly before tearing down compose.
+kill "${PGDOG_PID}" 2>/dev/null || true
+wait "${PGDOG_PID}" 2>/dev/null || true
+PGDOG_PID=""
+
 docker compose down
 popd

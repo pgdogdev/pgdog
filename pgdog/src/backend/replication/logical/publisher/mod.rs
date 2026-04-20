@@ -14,7 +14,7 @@ pub use queries::*;
 pub use table::*;
 
 #[cfg(test)]
-mod test {
+pub mod test {
 
     use crate::backend::{server::test::test_replication_server, Server};
 

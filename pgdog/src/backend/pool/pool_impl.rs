@@ -9,7 +9,7 @@ use once_cell::sync::{Lazy, OnceCell};
 use parking_lot::RwLock;
 use parking_lot::{lock_api::MutexGuard, Mutex, RawMutex};
 use tokio::time::{timeout, Instant};
-use tracing::{error, warn};
+use tracing::{error, info};
 
 use crate::backend::pool::LsnStats;
 use crate::backend::{ConnectReason, DisconnectReason, Server, ServerOptions};
@@ -356,15 +356,16 @@ impl Pool {
         Monitor::create_connection(self, reason).await
     }
 
-    /// Shutdown the pool.
+    /// Mark this pool generation offline. Called during atomic pool replacement;
+    /// a new generation is swapped in immediately after, so this is not a real shutdown.
     pub fn shutdown(&self) {
         let addr = self.addr();
-        warn!(
+        info!(
             host = %addr.host,
             port = addr.port,
             database = %addr.database_name,
             user = %addr.user,
-            "pool offline: connection pool shut down"
+            "pool generation replaced"
         );
         let mut guard = self.lock();
         guard.online = false;

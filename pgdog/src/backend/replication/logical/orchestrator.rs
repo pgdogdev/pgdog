@@ -56,35 +56,22 @@ impl Orchestrator {
         Ok(orchestrator)
     }
 
-    fn refresh(&mut self) -> Result<(), Error> {
+    /// Reload source/dest cluster references from the live databases registry.
+    pub(crate) fn refresh(&mut self) -> Result<(), Error> {
         self.source = databases().schema_owner(&self.source.identifier().database)?;
         self.destination = databases().schema_owner(&self.destination.identifier().database)?;
-        self.refresh_publisher();
-
         Ok(())
     }
 
+    /// Replace the publisher entirely (discards LSN state).  Only valid
+    /// when starting a fresh replication phase, e.g. after cutover.
     fn refresh_publisher(&mut self) {
         let publisher = Publisher::new(
-            &self.source,
             &self.publication,
             config().config.general.query_parser_engine,
             self.replication_slot.clone(),
         );
         self.publisher = Arc::new(Mutex::new(publisher));
-    }
-
-    /// Refresh cluster references and the publisher's source pool after a
-    /// long-running operation (e.g. data_sync).  Must NOT recreate the
-    /// publisher — that would discard the table LSN state accumulated during
-    /// the copy.  Instead, only the cluster reference inside the existing
-    /// publisher is updated so that subsequent pool.get() calls target the
-    /// live pool rather than a stale, potentially-offline one.
-    pub(crate) async fn refresh_before_replicate(&mut self) -> Result<(), Error> {
-        self.source = databases().schema_owner(&self.source.identifier().database)?;
-        self.destination = databases().schema_owner(&self.destination.identifier().database)?;
-        self.publisher.lock().await.update_cluster(&self.source);
-        Ok(())
     }
 
     pub(crate) fn replication_slot(&self) -> &str {
@@ -151,10 +138,9 @@ impl Orchestrator {
         let mut publisher = self.publisher.lock().await;
 
         orchestrator_state(OrchestratorState::DataSync);
-
         // Run data sync for all tables in parallel using multiple replicas,
         // if available.
-        publisher.data_sync(&self.destination).await?;
+        publisher.data_sync(&self.source, &self.destination).await?;
 
         Ok(())
     }
@@ -165,7 +151,7 @@ impl Orchestrator {
     ///
     pub(crate) async fn replicate(&self) -> Result<ReplicationWaiter, Error> {
         let mut publisher = self.publisher.lock().await;
-        let waiter = publisher.replicate(&self.destination).await?;
+        let waiter = publisher.replicate(&self.source, &self.destination).await?;
 
         orchestrator_state(OrchestratorState::Replication);
 
@@ -198,7 +184,7 @@ impl Orchestrator {
         // Start replication to catch up and cutover once done.
         // Refresh cluster references: data_sync can take hours and the pools
         // may have been reloaded (e.g. by a client DDL) in the meantime.
-        self.refresh_before_replicate().await?;
+        self.refresh()?;
 
         self.replicate().await?.cutover().await?;
 
@@ -468,8 +454,10 @@ impl ReplicationWaiter {
             .await
         );
 
-        // Source is now destination and vice versa.
+        // Source is now destination and vice versa; reload cluster refs and
+        // create a fresh publisher for reverse replication.
         ok_or_abort!(self.orchestrator.refresh());
+        self.orchestrator.refresh_publisher();
 
         info!("[cutover] setting up reverse replication");
 

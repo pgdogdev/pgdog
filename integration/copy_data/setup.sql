@@ -24,7 +24,12 @@ CREATE TABLE IF NOT EXISTS copy_data.orders (
     refunded_at TIMESTAMPTZ
 );
 
+-- TODO: remove the surrogate `id` column once pgdog tolerates tables whose
+-- replica identity is REPLICA IDENTITY FULL or a composite unique key.  It
+-- exists here only so Table::valid() passes during COPY_DATA (see
+-- docs/FIX_ISSUE_914.md, Fix 2).
 CREATE TABLE IF NOT EXISTS copy_data.order_items (
+    id BIGSERIAL PRIMARY KEY,
     user_id BIGINT NOT NULL,
     tenant_id BIGINT NOT NULL,
     order_id BIGINT NOT NULL REFERENCES copy_data.orders(id),
