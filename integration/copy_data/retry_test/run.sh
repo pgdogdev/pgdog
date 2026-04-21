@@ -1,18 +1,19 @@
 #!/bin/bash
-# Integration test: data-sync retries when a destination shard is temporarily unavailable.
+# Integration test: data-sync retries when a destination shard connection drops mid-copy.
 #
 # What is tested:
-#   - data-sync --sync-only completes (exit 0) when shard_1 is stopped before the
-#     sync starts and brought back while retries are in flight.
+#   - data-sync --sync-only completes (exit 0) when shard_1 is killed mid-copy and
+#     brought back while the retry loop is running.
 #   - Row counts on all destination tables match the source after sync completes.
 #
-# Requires: the copy_data docker-compose stack to be running.
-set -e
+# Manages its own docker-compose stack — no pre-started containers required.
+set -euo pipefail
 
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
-DEFAULT_BIN="${SCRIPT_DIR}/../../target/debug/pgdog"
+COMPOSE_DIR="${SCRIPT_DIR}/.."
+DEFAULT_BIN="${SCRIPT_DIR}/../../../target/debug/pgdog"
 PGDOG_BIN=${PGDOG_BIN:-$DEFAULT_BIN}
-PGDOG_CONFIG="${SCRIPT_DIR}/pgdog.retry_test.toml"
+PGDOG_CONFIG="${SCRIPT_DIR}/pgdog.toml"
 USERS_CONFIG="${SCRIPT_DIR}/users.toml"
 export PGPASSWORD=pgdog
 
@@ -23,27 +24,41 @@ cleanup() {
         kill "${SYNC_PID}" 2>/dev/null || true
         wait "${SYNC_PID}" 2>/dev/null || true
     fi
-    # Always bring shard_1 back on exit so the stack is not left broken.
-    cd "${SCRIPT_DIR}" && docker compose start shard_1 2>/dev/null || true
+    cd "${COMPOSE_DIR}" && docker compose down 2>/dev/null || true
 }
 trap cleanup EXIT
 
-pushd "${SCRIPT_DIR}"
+pushd "${COMPOSE_DIR}"
 
-# Reset destination and reload source data.
-psql -h 127.0.0.1 -p 15432 -U pgdog pgdog -f init.sql
+# Start the docker-compose stack and wait for all three postgres instances.
+echo "[retry_test] Starting docker-compose stack..."
+docker compose up -d
+
+echo "[retry_test] Waiting for postgres instances to be ready..."
+for PORT in 15432 15433 15434; do
+    READY_ATTEMPTS=0
+    until pg_isready -h 127.0.0.1 -p "${PORT}" -q 2>/dev/null; do
+        READY_ATTEMPTS=$((READY_ATTEMPTS + 1))
+        if [ "${READY_ATTEMPTS}" -ge 60 ]; then
+            echo "[retry_test] FAIL: postgres on port ${PORT} not ready after 30s"
+            exit 1
+        fi
+        sleep 0.5
+    done
+done
+echo "[retry_test] All postgres instances ready."
+
+# Reset destination shards then source — each is a separate container.
+psql -h 127.0.0.1 -p 15433 -U pgdog pgdog1 -c "DROP SCHEMA IF EXISTS copy_data CASCADE;"
+psql -h 127.0.0.1 -p 15434 -U pgdog pgdog2 -c "DROP SCHEMA IF EXISTS copy_data CASCADE;"
+psql -h 127.0.0.1 -p 15432 -U pgdog pgdog -f "${SCRIPT_DIR}/init.sql"
 
 # Schema sync: create tables on destination shards.
 "${PGDOG_BIN}" --config "${PGDOG_CONFIG}" --users "${USERS_CONFIG}" \
     schema-sync --from-database source --to-database destination --publication pgdog
 
-# Stop shard_1 before the copy starts.
-# Every table copy connects to all destination shards, so all tables will fail on the
-# first attempt and enter the retry loop.
-echo "[retry_test] Stopping shard_1..."
-docker compose stop shard_1
-
-# Start data-sync in the background.
+# Start data-sync with all shards up so the connection pool initialises cleanly
+# and CopySubscriber can connect to both shards before we inject a failure.
 "${PGDOG_BIN}" --config "${PGDOG_CONFIG}" --users "${USERS_CONFIG}" \
     data-sync --sync-only \
     --from-database source \
@@ -51,10 +66,34 @@ docker compose stop shard_1
     --publication pgdog &
 SYNC_PID=$!
 
-# Let data-sync start and hit connection failures on shard_1.
+# Wait until data-sync has created a temporary replication slot on the source.
+# The slot is created after copy_sub.connect() — meaning CopySubscriber already
+# holds open connections to both shards. Killing shard_1 now lands a mid-copy
+# network error that run_with_retry() must handle, not a pre-connection timeout.
+echo "[retry_test] Waiting for data-sync to start copying..."
+WAIT_ATTEMPTS=0
+until psql -h 127.0.0.1 -p 15432 -U pgdog pgdog -tAc \
+    "SELECT 1 FROM pg_replication_slots WHERE temporary = true LIMIT 1" 2>/dev/null | grep -q 1; do
+    WAIT_ATTEMPTS=$((WAIT_ATTEMPTS + 1))
+    if [ "${WAIT_ATTEMPTS}" -ge 200 ]; then
+        echo "[retry_test] FAIL: data-sync never created a replication slot after $((WAIT_ATTEMPTS / 20))s"
+        exit 1
+    fi
+    if ! kill -0 "${SYNC_PID}" 2>/dev/null; then
+        echo "[retry_test] FAIL: data-sync exited before copy started"
+        exit 1
+    fi
+    sleep 0.05
+done
+
+# SIGKILL the container immediately — no grace period — so the kill lands before
+# the in-flight COPY can finish. docker compose stop has a 10s grace period.
+echo "[retry_test] Killing shard_1 during active copy..."
+docker compose kill shard_1
+
+# Let the retry loop run a few cycles before bringing shard_1 back.
 sleep 2
 
-# Bring shard_1 back while retries are in flight.
 echo "[retry_test] Starting shard_1..."
 docker compose start shard_1
 
@@ -121,4 +160,5 @@ if [ "${FAILED}" -ne 0 ]; then
 fi
 
 echo "[retry_test] PASS: all row counts match. Retry test succeeded."
+docker compose down
 popd

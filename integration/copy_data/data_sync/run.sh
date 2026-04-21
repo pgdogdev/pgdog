@@ -1,14 +1,29 @@
 #!/bin/bash
-set -e
+# Integration test: 0→2 and 2→2 resharding with live write traffic.
+#
+# Requires:
+#   - local postgres at port 5432
+#   - databases: pgdog, pgdog1, pgdog2, shard_0, shard_1 (created by integration/setup.sh)
+#   - max_replication_slots >= 32 in postgresql.conf
+#     Each data-sync creates one permanent slot per source shard plus one temporary
+#     slot per parallel table copy. With resharding_parallel_copies=5 and a 2-shard
+#     source, peak usage is 3 permanent + 2×5 temporary = 13 slots. The default of 10
+#     is not enough; set max_replication_slots = 32 in postgresql.conf and reload.
+set -euo pipefail
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
-DEFAULT_BIN="${SCRIPT_DIR}/../../target/debug/pgdog"
+DEFAULT_BIN="${SCRIPT_DIR}/../../../target/debug/pgdog"
 PGDOG_BIN=${PGDOG_BIN:-$DEFAULT_BIN}
+PGDOG_CONFIG="${SCRIPT_DIR}/pgdog.toml"
+PGDOG_USERS="${SCRIPT_DIR}/users.toml"
 
 export PGUSER=pgdog
 export PGDATABASE=pgdog
 export PGHOST=127.0.0.1
 export PGPORT=5432
 export PGPASSWORD=pgdog
+
+BENCH_PID=""
+REPL_PID=""
 
 cleanup() {
     if [ -n "${BENCH_PID}" ]; then
@@ -24,7 +39,6 @@ trap cleanup EXIT
 
 start_pgbench() {
     (
-
         pgbench -h 127.0.0.1 -p 5432 -U pgdog pgdog \
             -t 100000000 -c 3 --protocol extended \
             -f "${SCRIPT_DIR}/pgbench.sql" -P 1
@@ -41,16 +55,24 @@ stop_pgbench() {
     fi
 }
 
+SHARDED_TABLES="copy_data.users copy_data.orders copy_data.order_items copy_data.log_actions copy_data.with_identity"
+OMNI_TABLES="copy_data.countries copy_data.currencies copy_data.categories"
+
 pushd ${SCRIPT_DIR}
 
-psql -f init.sql
+# Teardown: drop stale slots and schemas.
+psql -f "${SCRIPT_DIR}/init.sql"
+# Setup: populate source database.
+psql -f "${SCRIPT_DIR}/../setup.sql"
 
 #
 # 0 -> 2
 #
-${PGDOG_BIN} schema-sync --from-database source --to-database destination --publication pgdog
+${PGDOG_BIN} --config "${PGDOG_CONFIG}" --users "${PGDOG_USERS}" \
+    schema-sync --from-database source --to-database destination --publication pgdog
 start_pgbench
-${PGDOG_BIN} data-sync --from-database source --to-database destination --publication pgdog &
+${PGDOG_BIN} --config "${PGDOG_CONFIG}" --users "${PGDOG_USERS}" \
+    data-sync --from-database source --to-database destination --publication pgdog &
 REPL_PID=$!
 
 # Give replication a moment to connect.
@@ -82,14 +104,18 @@ if [ ${REPL_EXIT} -ne 0 ] && [ ${REPL_EXIT} -ne 130 ] && [ ${REPL_EXIT} -ne 143 
 fi
 
 stop_pgbench
-${PGDOG_BIN} schema-sync --from-database source --to-database destination --publication pgdog --cutover
+${PGDOG_BIN} --config "${PGDOG_CONFIG}" --users "${PGDOG_USERS}" \
+    schema-sync --from-database source --to-database destination --publication pgdog --cutover
 
 #
 # 2 --> 2
 #
-${PGDOG_BIN} schema-sync --from-database destination --to-database destination2 --publication pgdog
-${PGDOG_BIN} data-sync --sync-only --from-database destination --to-database destination2 --publication pgdog --replication-slot copy_data_2
-${PGDOG_BIN} schema-sync --from-database destination --to-database destination2 --publication pgdog --cutover
+${PGDOG_BIN} --config "${PGDOG_CONFIG}" --users "${PGDOG_USERS}" \
+    schema-sync --from-database destination --to-database destination2 --publication pgdog
+${PGDOG_BIN} --config "${PGDOG_CONFIG}" --users "${PGDOG_USERS}" \
+    data-sync --sync-only --from-database destination --to-database destination2 --publication pgdog --replication-slot copy_data_2
+${PGDOG_BIN} --config "${PGDOG_CONFIG}" --users "${PGDOG_USERS}" \
+    schema-sync --from-database destination --to-database destination2 --publication pgdog --cutover
 
 # Check row counts: destination (pgdog1 + pgdog2) vs destination2 (shard_0 + shard_1)
 echo "Checking row counts: destination -> destination2..."
@@ -118,6 +144,6 @@ for TABLE in ${OMNI_TABLES}; do
     echo "OK ${TABLE}: ${SRC} rows on each shard"
 done
 
-psql -f init.sql
+psql -f "${SCRIPT_DIR}/init.sql"
 
 popd

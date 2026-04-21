@@ -1,6 +1,6 @@
 [general]
 resharding_copy_format = "binary"
-resharding_copy_retry_max_attempts = 5
+resharding_copy_retry_max_attempts = 8
 resharding_copy_retry_min_delay = 500
 
 [[databases]]

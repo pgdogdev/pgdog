@@ -10,4 +10,3 @@ DROP SCHEMA IF EXISTS copy_data CASCADE;
 DROP SCHEMA IF EXISTS copy_data CASCADE;
 \c pgdog
 SELECT pg_drop_replication_slot(slot_name) FROM pg_replication_slots;
-\i setup.sql

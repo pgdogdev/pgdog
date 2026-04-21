@@ -423,13 +423,14 @@ tasks:
 
   - key: integration-copy-data
     use: integration-build-pgdog-cov
+    docker: true
     background-processes: *postgres-bg–processes
-    timeout: 15m
+    timeout: 20m
     run: |
       export LLVM_PROFILE_FILE="$PWD/target/llvm-cov-target/profiles/copy-data-%p-%m.profraw"
 
       bash integration/setup.sh
-      timeout --signal=TERM --kill-after=30s 10m bash integration/copy_data/dev.sh
+      timeout --signal=TERM --kill-after=30s 18m bash integration/copy_data/run.sh
 
       cargo llvm-cov report --release --package pgdog --lcov --output-path copy-data.lcov
     outputs:

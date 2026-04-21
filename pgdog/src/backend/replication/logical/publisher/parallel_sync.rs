@@ -118,13 +118,6 @@ impl ParallelSync {
                     sleep(backoff).await;
                     // FUTURE: truncate before retry to handle the COPY-committed-but-dropped
                     // race (rows remain → PK violations). Safe once source-guard checks exist.
-                    //
-                    // if let Err(trunc_err) = self.table.truncate_destination(&self.dest).await {
-                    //     warn!(
-                    //         "truncate before retry failed for \"{}\".\"{}\" : {trunc_err}",
-                    //         self.table.table.schema, self.table.table.name,
-                    //     );
-                    // }
                 }
             }
         }
