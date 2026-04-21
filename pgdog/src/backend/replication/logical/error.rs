@@ -81,9 +81,6 @@ pub enum Error {
     #[error("shard {0} has no replication slot")]
     NoReplicationSlot(usize),
 
-    #[error("parallel connection error")]
-    ParallelConnection,
-
     #[error("no replicas available for table sync")]
     NoReplicas,
 
@@ -223,6 +220,5 @@ mod tests {
         assert!(!Error::DataSyncAborted.is_retryable());
         assert!(!Error::NoPrimaryKey(PublicationTable::default()).is_retryable());
         assert!(!Error::NoReplicaIdentity("s".into(), "t".into()).is_retryable());
-        assert!(!Error::ParallelConnection.is_retryable());
     }
 }

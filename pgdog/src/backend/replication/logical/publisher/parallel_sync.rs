@@ -46,7 +46,7 @@ impl ParallelSync {
             let _permit = Arc::clone(&self.permit)
                 .acquire_owned()
                 .await
-                .map_err(|_| Error::ParallelConnection)?;
+                .map_err(|_| Error::DataSyncAborted)?;
 
             if self.tx.is_closed() {
                 return Err(Error::DataSyncAborted);
@@ -72,9 +72,10 @@ impl ParallelSync {
                 .await
             {
                 Ok(_) => {
-                    self.tx
-                        .send(Ok(self.table.clone()))
-                        .map_err(|_| Error::ParallelConnection)?;
+                    // Best-effort report: if the coordinator receiver is already gone,
+                    // the whole sync is shutting down and our result is irrelevant.
+                    // The copy succeeded; don't mask that with a channel error.
+                    let _ = self.tx.send(Ok(self.table.clone()));
                     return Ok(());
                 }
                 Err(err) if !err.is_retryable() || attempt >= max_retries => {
