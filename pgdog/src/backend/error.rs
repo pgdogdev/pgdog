@@ -21,9 +21,6 @@ pub enum Error {
     #[error("unexpected message: {0}")]
     UnexpectedMessage(char),
 
-    #[error("server did not provide key data")]
-    NoBackendKeyData,
-
     #[error("unexpected transaction status: {0}")]
     UnexpectedTransactionStatus(char),
 
