@@ -161,7 +161,7 @@ bulk-copied in Step 3 and is skipped. Watermarks advance per-table on `COMMIT`.
 
 **Omnisharded tables** (`statements.omni = true`): upsert is sent to all shards simultaneously.
 
-**Routing**: `StreamContext::shard()` runs `ContextBuilder` + `Context::apply()` on the sharding
+**Routing**: `StreamContext::shard()` in [`subscriber/context.rs`](../pgdog/src/backend/replication/logical/subscriber/context.rs) runs `ContextBuilder` + `Context::apply()` on the sharding
 key column extracted from the WAL tuple — identical to the live query routing path.
 
 ### Cutover phases

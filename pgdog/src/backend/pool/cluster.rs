@@ -83,7 +83,7 @@ pub struct Cluster {
     load_schema: LoadSchema,
     resharding_parallel_copies: usize,
     resharding_copy_retry_max_attempts: usize,
-    resharding_copy_retry_min_delay: u64,
+    resharding_copy_retry_min_delay: Duration,
     regex_parser: RegexParser,
 }
 
@@ -310,7 +310,7 @@ impl Cluster {
             load_schema,
             resharding_parallel_copies,
             resharding_copy_retry_max_attempts,
-            resharding_copy_retry_min_delay,
+            resharding_copy_retry_min_delay: Duration::from_millis(resharding_copy_retry_min_delay),
             regex_parser: RegexParser::new(regex_parser_limit, query_parser),
         }
     }
@@ -569,8 +569,8 @@ impl Cluster {
     }
 
     /// Base delay between table copy retry attempts. Doubles each attempt, capped at 32×.
-    pub fn resharding_copy_retry_min_delay(&self) -> std::time::Duration {
-        std::time::Duration::from_millis(self.resharding_copy_retry_min_delay)
+    pub fn resharding_copy_retry_min_delay(&self) -> &Duration {
+        &self.resharding_copy_retry_min_delay
     }
 
     /// Launch the connection pools.
@@ -811,7 +811,7 @@ mod test {
                 database: "pgdog".into(),
             });
 
-            let cluster = Cluster {
+            Cluster {
                 shards: vec![Shard::new(ShardConfig {
                     number: 0,
                     primary: &Some(PoolConfig {
@@ -836,9 +836,7 @@ mod test {
                 two_phase_commit: config.config.general.two_phase_commit,
                 two_phase_commit_auto: config.config.general.two_phase_commit_auto.unwrap_or(false),
                 ..Default::default()
-            };
-
-            cluster
+            }
         }
 
         pub fn set_read_write_strategy(&mut self, rw_strategy: ReadWriteStrategy) {

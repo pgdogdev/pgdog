@@ -10,10 +10,12 @@ use crate::backend::pool::Address;
 use crate::backend::replication::publisher::progress::Progress;
 use crate::backend::replication::publisher::Lsn;
 
+use crate::backend::pool::Request;
 use crate::backend::replication::status::TableCopy;
 use crate::backend::{Cluster, Server, ShardedTables};
 use crate::config::config;
 use crate::frontend::router::parser::Column;
+use crate::net::messages::Protocol;
 use crate::net::replication::StatusUpdate;
 use crate::util::escape_identifier;
 
@@ -286,28 +288,26 @@ impl Table {
         Ok(self.lsn)
     }
 
-    /// Generate a `TRUNCATE` SQL statement for the given schema and table name.
-    /// Used before retrying a failed table copy to ensure a clean destination.
-    pub fn truncate_statement(schema: &str, name: &str) -> String {
-        format!(
-            "TRUNCATE \"{}\".\"{}\"",
-            escape_identifier(schema),
-            escape_identifier(name),
-        )
-    }
-
-    /// Truncate this table on all destination primaries before a retry.
+    /// Returns `true` if the destination table has any rows on any shard.
     ///
-    /// Always safe: if the previous copy attempt auto-rolled back (mid-stream
-    /// failure), this is a no-op. If rows were partially or fully committed,
-    /// this wipes them so the retry starts clean and avoids PK violations.
-    pub async fn truncate_destination(&self, dest: &Cluster) -> Result<(), Error> {
-        dest.execute(Self::truncate_statement(
-            self.table.destination_schema(),
-            self.table.destination_name(),
-        ))
-        .await
-        .map_err(Error::Backend)
+    /// COPY is transactional and normally auto-rolls back on failure, leaving
+    /// the destination empty. This check catches the rare race where COPY
+    /// committed but an error was returned afterward (e.g., network drop during
+    /// CommandComplete), resulting in rows the retry would collide with.
+    pub async fn destination_has_rows(&self, dest: &Cluster) -> Result<bool, Error> {
+        let sql = format!(
+            "SELECT 1 FROM \"{}\".\"{}\" LIMIT 1",
+            escape_identifier(self.table.destination_schema()),
+            escape_identifier(self.table.destination_name()),
+        );
+        for (shard, _) in dest.shards().iter().enumerate() {
+            let mut server = dest.primary(shard, &Request::default()).await?;
+            let messages = server.execute_checked(sql.as_str()).await?;
+            if messages.iter().any(|m| m.code() == 'D') {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 }
 
@@ -483,23 +483,5 @@ mod test {
         }
 
         publication.cleanup().await;
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn truncate_statement_basic() {
-        let sql = Table::truncate_statement("public", "users");
-        assert_eq!(sql, r#"TRUNCATE "public"."users""#);
-    }
-
-    #[test]
-    fn truncate_statement_quotes_identifiers() {
-        // escape_identifier doubles embedded double-quotes per Postgres convention.
-        let sql = Table::truncate_statement("my\"schema", "my\"table");
-        assert_eq!(sql, "TRUNCATE \"my\"\"schema\".\"my\"\"table\"");
     }
 }

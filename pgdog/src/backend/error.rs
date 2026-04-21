@@ -163,4 +163,22 @@ impl Error {
             _ => false,
         }
     }
+
+    /// Transient network/pool fault worth retrying.
+    pub fn is_retryable(&self) -> bool {
+        match self {
+            Self::Io(_) => true,
+            Self::Net(inner) => inner.is_retryable(),
+            Self::Pool(inner) => inner.is_retryable(),
+            // Connection dropped between operations.
+            Self::NotConnected
+            | Self::DirectToShardNotConnected
+            | Self::MultiShardNotConnected
+            | Self::CopyNotConnected
+            | Self::ClusterNotConnected => true,
+            // Server stopped responding mid-stream.
+            Self::ReadTimeout => true,
+            _ => false,
+        }
+    }
 }

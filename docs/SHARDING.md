@@ -92,7 +92,7 @@ After the pre-parse phase, the root `NodeEnum` is matched:
 |---|---|---|
 | `SelectStmt` | `select()` | Key extraction + aggregation metadata |
 | `InsertStmt` | `insert()` | Key from VALUES column list |
-| `UpdateStmt` | `update()` | Key from SET + WHERE |
+| `UpdateStmt` | `update()` | Key from SET + WHERE; may trigger shard-key rewrite (see below) |
 | `DeleteStmt` | `delete()` | Key from WHERE |
 | `CopyStmt` | `copy()` | Sets up `Command::Copy` for row-level routing |
 | `VariableSetStmt` | `set()` | Handles `SET pgdog.shard` / `SET pgdog.role` |
@@ -131,6 +131,15 @@ Cross-shard queries (`Shard::All` or `Shard::Multi`) carry `AggregateRewritePlan
 The plan describes which columns are aggregated (`COUNT`, `SUM`, `MAX`, `MIN`, `AVG`, etc.) so the
 response handler can merge partial results from each shard before returning them to the client.
 
+### UPDATE on the sharding key
+
+When an UPDATE sets the sharding key to a new value the row must move shards. `StatementRewrite` in
+[`pgdog/src/frontend/router/parser/rewrite/statement/`](../pgdog/src/frontend/router/parser/rewrite/statement/) detects this case and rewrites the statement
+as three operations: `SELECT` (fetch the full old row), `DELETE` (remove from the source shard), and
+`INSERT ... ON CONFLICT DO UPDATE` (upsert on the destination shard). The rewrite is transparent to
+the client. It is enabled by default and can be disabled via `rewrite.shard_key = "ignore"` in
+`pgdog.toml`.
+
 ---
 
 ## Sharding functions
@@ -138,7 +147,7 @@ response handler can merge partial results from each shard before returning them
 ### Operator selection
 
 `ContextBuilder` in [`pgdog/src/frontend/router/sharding/context_builder.rs`](../pgdog/src/frontend/router/sharding/context_builder.rs) reads the `ShardedTable`
-config entry for the matched column and constructs an `Operator` in this priority order:
+config entry for the matched column and constructs an [`Operator`](../pgdog/src/frontend/router/sharding/operator.rs) in this priority order:
 
 1. `centroids` populated → `Operator::Centroids { shards, probes, centroids }`
 2. `mapping` is `Mapping::Range(_)` → `Operator::Range(ranges)`
@@ -224,7 +233,18 @@ Key fields on `ShardedTable`:
 | `centroids_path` | `Option<PathBuf>` | External JSON file for large centroid sets |
 | `centroid_probes` | `usize` | Probes per query; defaults to `√(centroid count)` |
 | `mapping` | `Option<Mapping>` | Resolved from `[[sharded_mappings]]` at startup; not set in TOML directly |
+| `primary` | `bool` | Marks this table as the sharding anchor for FK-based query resolution |
 
 `[[sharded_mappings]]` entries resolve to either `Mapping::List(ListShards)` or `Mapping::Range(Ranges)`
 and are joined to their `ShardedTable` at startup. A mapping that covers only some values leaves the
 rest as `Shard::All` — there is no error. A `ShardedMappingKind::Default` entry acts as a catch-all.
+
+### Schema-based sharding
+
+`[[sharded_schemas]]` in `pgdog.toml` maps a PostgreSQL schema name to a fixed shard index. This is
+useful for schema-per-tenant deployments where each tenant's data lives in a dedicated schema.
+`SchemaSharder` in [`pgdog/src/frontend/router/sharding/schema.rs`](../pgdog/src/frontend/router/sharding/schema.rs) resolves the current
+`search_path` against the `ShardedSchema` list (`pgdog-config/src/sharding.rs`). A `name = null`
+entry acts as the catch-all; a specific schema name overrides it even if the catch-all was matched first.
+
+Schema routing takes effect at the connection level and is re-evaluated whenever `search_path` changes.

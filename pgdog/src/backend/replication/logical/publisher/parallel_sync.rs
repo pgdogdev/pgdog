@@ -12,6 +12,7 @@ use tokio::{
         Semaphore,
     },
     task::JoinHandle,
+    time::sleep,
 };
 use tracing::{info, warn};
 
@@ -56,11 +57,10 @@ impl ParallelSync {
     }
 
     /// Retry loop: attempt the table copy up to `max_retries` times.
-    /// Before each retry, TRUNCATE the destination to avoid PK violations from
-    /// partially-committed rows. Abort signals and schema errors are not retried.
+    /// Abort signals and schema errors are not retried.
     async fn run_with_retry(&mut self, tracker: &TableCopy) -> Result<(), Error> {
         let max_retries = self.dest.resharding_copy_retry_max_attempts();
-        let base_delay = self.dest.resharding_copy_retry_min_delay();
+        let base_delay = *self.dest.resharding_copy_retry_min_delay();
         let mut attempt = 0usize;
 
         loop {
@@ -79,6 +79,24 @@ impl ParallelSync {
                 }
                 Err(err) if !err.is_retryable() || attempt >= max_retries => {
                     tracker.error(&err);
+                    // COPY is usually atomic, but rows may remain if the connection dropped
+                    // after COMMIT. Warn so the user can truncate manually before retrying.
+                    match self.table.destination_has_rows(&self.dest).await {
+                        Ok(true) => warn!(
+                            "data sync for \"{}\".\"{}\" failed with rows remaining in destination; \
+                             truncate manually before retrying: TRUNCATE \"{}\".\"{}\";",
+                            self.table.table.schema,
+                            self.table.table.name,
+                            self.table.table.destination_schema(),
+                            self.table.table.destination_name(),
+                        ),
+                        Ok(false) => {} // destination is clean; next run starts fresh
+                        Err(check_err) => warn!(
+                            "could not check destination row count for \"{}\".\"{}\" after failure: {check_err}",
+                            self.table.table.schema,
+                            self.table.table.name,
+                        ),
+                    }
                     return Err(err);
                 }
                 Err(err) => {
@@ -94,14 +112,19 @@ impl ParallelSync {
                         backoff.as_millis(),
                     );
 
-                    tokio::time::sleep(backoff).await;
+                    // Reset counters so the next attempt's progress is reported accurately.
+                    tracker.reset();
 
-                    if let Err(trunc_err) = self.table.truncate_destination(&self.dest).await {
-                        warn!(
-                            "truncate before retry failed for \"{}\".\"{}\" : {trunc_err}",
-                            self.table.table.schema, self.table.table.name,
-                        );
-                    }
+                    sleep(backoff).await;
+                    // FUTURE: truncate before retry to handle the COPY-committed-but-dropped
+                    // race (rows remain → PK violations). Safe once source-guard checks exist.
+                    //
+                    // if let Err(trunc_err) = self.table.truncate_destination(&self.dest).await {
+                    //     warn!(
+                    //         "truncate before retry failed for \"{}\".\"{}\" : {trunc_err}",
+                    //         self.table.table.schema, self.table.table.name,
+                    //     );
+                    // }
                 }
             }
         }

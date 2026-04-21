@@ -300,7 +300,7 @@ mod test {
         let global = statements.global.read();
         assert_eq!(global.statements().len(), 2);
 
-        for (_, stmt) in global.statements() {
+        for stmt in global.statements().values() {
             if stmt.name() == first_name {
                 // Old entry: should be decremented to 0 (no longer referenced).
                 assert_eq!(stmt.used, 0, "old entry should be decremented");

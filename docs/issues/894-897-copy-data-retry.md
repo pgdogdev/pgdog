@@ -10,7 +10,7 @@ populated (276 started, 63 finished in the reported case).
 1. **Destination shard is down** — connection to dest fails or drops mid-COPY
 2. **Origin shard is down** — source connection drops, temporary replication slot is lost
 
-The fix: add per-table retry logic with TRUNCATE-before-retry inside `ParallelSync`.
+The fix: add per-table retry logic with exponential backoff inside `ParallelSync`.
 
 ## Why a Single Top-Level Retry Handles Both #897 Scenarios
 
@@ -32,7 +32,7 @@ On any failure and retry, `data_sync` is called from scratch:
   re-creates the temporary slot. The old slot was `TEMPORARY` → auto-dropped by Postgres when
   its connection closed. No slot cleanup needed.
 
-## Destination Commit Model and TRUNCATE Safety
+## Destination Commit Model
 
 **How the copy works per-table:**
 - Source side: `slot.create_slot()` opens `BEGIN READ ONLY ISOLATION LEVEL REPEATABLE READ`
@@ -46,39 +46,39 @@ On any failure and retry, `data_sync` is called from scratch:
 
 **Failure scenarios and destination state:**
 
-| Failure point | Destination state | TRUNCATE effect |
-|---|---|---|
-| During row streaming (conn drops mid-COPY) | PG auto-rolls back implicit tx → dest empty | No-op (safe) |
-| Inside `copy_done()` — some shards committed, others not | Partially committed | Wipes committed shards; retry starts clean |
-| After `copy_done()`, before `data_sync` returns `Ok` | All shards committed rows | Wipes all shards; retry starts clean |
+| Failure point | Destination state |
+|---|---|
+| During row streaming (conn drops mid-COPY) | PG auto-rolls back implicit tx → dest empty |
+| Inside `copy_done()` — some shards committed, others not | Partially committed |
+| After `copy_done()`, before `data_sync` returns `Ok` | All shards committed rows |
 
-**Why TRUNCATE before retry is required (not optional):**
+The common case (connection drop during streaming) leaves the destination clean — PostgreSQL
+rolls back the implicit transaction automatically. The rare race is when `copy_done()` has
+already committed on some or all shards and then the connection drops before `data_sync`
+returns `Ok`. In that case, rows survive in the destination and a naive retry would immediately
+hit primary key constraint violations.
 
-Without TRUNCATE, a retry after a partial or full `copy_done()` would attempt to insert the
-same rows again via `COPY FROM STDIN`. Since destination tables have primary keys, this
-produces **primary key constraint violations** → the retry fails immediately on those shards.
-TRUNCATE is the only correct way to get a clean destination for retry.
+**Current behavior — manual TRUNCATE guidance:**
 
-**Why TRUNCATE is safe:**
+PgDog does not automatically truncate the destination before retrying. Auto-TRUNCATE is the
+correct long-term fix but requires reliable "is destination" guards that don't yet exist;
+running TRUNCATE on the wrong cluster would be catastrophic. That logic is stubbed out as a
+commented future extension in `run_with_retry()` in `parallel_sync.rs`.
 
-These are fresh destination shards being populated as part of resharding. Any rows in the
-destination tables for this table were put there by a previous COPY attempt. Wiping and
-retrying is idempotent with respect to the final goal.
+Instead, when a table copy fails fatally (non-retryable error or max attempts exhausted),
+`Table::destination_has_rows` queries each shard's primary with `SELECT 1 … LIMIT 1`. If
+any rows are found, PgDog logs a `warn!` that includes the exact TRUNCATE statement to run:
 
-Truncation of one table's destination does not affect parallel copies of other tables;
-each `ParallelSync` handles exactly one table.
+```
+data sync for "public"."orders" failed with rows remaining in destination;
+truncate manually before retrying: TRUNCATE "public"."orders_new";
+```
 
-**TRUNCATE itself fails (destination still down):**
-
-If the destination is still down when we try TRUNCATE, we log a warning and continue.
-The retry attempt that follows will also fail to connect. Eventually the shard comes back;
-at that point TRUNCATE succeeds and COPY proceeds. If the shard was down when `copy_done()`
-was attempted, it has no committed data (auto-rollback) — TRUNCATE is a no-op when it
-eventually runs successfully.
+If the row-count check itself fails (destination unreachable), a separate warning is emitted.
+The original error is always returned regardless.
 
 **Non-retryable errors** (`CopyAborted`, `DataSyncAborted`, `NoPrimaryKey`, `NoReplicaIdentity`,
-`ParallelConnection`) bypass the retry loop immediately. `Cluster::execute` runs against all
-primaries — correct for TRUNCATE.
+`ParallelConnection`) bypass the retry loop immediately and still trigger the row check.
 
 ## Code Path
 
@@ -116,17 +116,22 @@ Add both fields to `ClusterConfig<'a>` and the private `Cluster` struct; populat
 `ClusterConfig::new()` from `general.*`; wire through `Cluster::new()`; expose via:
 ```rust
 pub fn resharding_copy_retry_max_attempts(&self) -> usize { ... }
-pub fn resharding_copy_retry_min_delay(&self) -> Duration { ... }
+pub fn resharding_copy_retry_min_delay(&self) -> &Duration { ... }
 ```
 
-### 3. Table — truncate helpers (`pgdog/src/backend/replication/logical/publisher/table.rs`)
+### 3. Table — helpers (`pgdog/src/backend/replication/logical/publisher/table.rs`)
 
 ```rust
 /// Generate a TRUNCATE SQL statement for the given schema and table name.
 pub fn truncate_statement(schema: &str, name: &str) -> String { ... }
 
-/// Truncate this table on all destination primaries before a retry.
+/// Truncate this table on all destination primaries.
+/// Not called automatically — preserved for future use once "is destination" guards exist.
 pub async fn truncate_destination(&self, dest: &Cluster) -> Result<(), Error> { ... }
+
+/// Returns true if any shard's primary has rows in the destination table.
+/// Used after fatal failure to detect the COPY-committed-before-error race.
+pub async fn destination_has_rows(&self, dest: &Cluster) -> Result<bool, Error> { ... }
 ```
 
 ### 4. Error — retryability predicate (`pgdog/src/backend/replication/logical/error.rs`)
@@ -158,19 +163,23 @@ pub fn is_retryable(&self) -> bool {
 
 Split `run()` into `run()` (public entry point, spawns task) and `run_with_retry()` (private).
 
-On each failed attempt:
+On each retryable failed attempt:
 1. Compute exponential backoff: `min_delay * 2^attempt`, capped at 32×.
 2. Log the error and how long we are waiting, e.g. `failed (attempt 1/5): …, retrying after 500ms…`
-3. Sleep for the backoff duration (gives the shard time to recover before TRUNCATE is attempted).
-4. TRUNCATE the destination table; log a warning and continue if TRUNCATE itself fails.
-5. Increment attempt counter and loop.
+3. Sleep for the backoff duration.
+4. Increment attempt counter and loop.
+
+On fatal failure (non-retryable error or attempts exhausted):
+1. Record the error via `tracker.error()`.
+2. Call `Table::destination_has_rows` — if rows are found, emit a `warn!` with the exact TRUNCATE SQL.
+3. Return the original error to the caller.
 
 ## Configuration Reference
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `resharding_copy_retry_max_attempts` | `usize` | `5` | Maximum per-table retry attempts |
-| `resharding_copy_retry_min_delay` | `u64` | `1000` | Base backoff delay in milliseconds; doubles each attempt, capped at 32× |
+| `resharding_copy_retry_min_delay` | `u64` (ms) | `1000` | Base backoff delay in milliseconds; doubles each attempt, capped at 32× |
 
 ## Integration Test
 
