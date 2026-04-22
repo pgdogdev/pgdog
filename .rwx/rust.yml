@@ -130,10 +130,8 @@ tasks:
       sudo service postgresql start
       sudo -u postgres createuser --superuser --login "$USER" || true
       sudo -u postgres createdb "$USER" || true
-      sudo -u postgres psql -c 'ALTER SYSTEM SET max_prepared_transactions TO 1000;' -c 'ALTER SYSTEM SET wal_level TO logical;'
-      sudo service postgresql restart
 
-      bash integration/setup.sh
+      bash integration/setup.sh || (sudo service postgresql restart && bash integration/setup.sh)
 
       cargo llvm-cov nextest \
         --workspace \
@@ -329,7 +327,7 @@ tasks:
       sudo -u postgres createuser --superuser --login "$USER" || true
       sudo -u postgres createdb "$USER" || true
 
-      bash integration/setup.sh
+      bash integration/setup.sh || (sudo service postgresql restart && bash integration/setup.sh)
 
       cargo build --release -p pgdog --bin pgdog
       export PGDOG_BIN="$PWD/target/release/pgdog"

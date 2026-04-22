@@ -61,10 +61,7 @@ jobs:
           sudo service postgresql start
           sudo -u postgres createuser --superuser --login $USER
           sudo -u postgres createdb $USER
-          sudo -u postgres psql -c 'ALTER SYSTEM SET max_prepared_transactions TO 1000;'
-          sudo -u postgres psql -c 'ALTER SYSTEM SET wal_level TO logical;'
-          sudo service postgresql restart
-          bash integration/setup.sh
+          bash integration/setup.sh || (sudo service postgresql restart && bash integration/setup.sh)
           sudo apt update && sudo apt install -y python3-virtualenv mold
           sudo gem install bundler
           sudo apt remove -y cmake
@@ -112,14 +109,7 @@ jobs:
           sudo service postgresql start
           sudo -u postgres createuser --superuser --login $USER
           sudo -u postgres createdb $USER
-          sudo -u postgres psql -c 'ALTER SYSTEM SET max_connections TO 1000;'
-          sudo -u postgres psql -c 'ALTER SYSTEM SET max_prepared_transactions TO 1000;'
-          sudo -u postgres psql -c 'ALTER SYSTEM SET wal_level TO logical;'
-          sudo -u postgres psql -c 'ALTER SYSTEM SET max_worker_processes TO 64';
-          sudo -u postgres psql -c 'ALTER SYSTEM SET max_wal_senders TO 32';
-          sudo -u postgres psql -c 'ALTER SYSTEM SET max_replication_slots TO 32';
-          sudo service postgresql restart
-          bash integration/setup.sh
+          bash integration/setup.sh || (sudo service postgresql restart && bash integration/setup.sh)
           sudo apt update && sudo apt install -y python3-virtualenv mold php-cli php-pgsql
           sudo gem install bundler
           sudo apt remove -y cmake
@@ -237,7 +227,7 @@ jobs:
           sudo service postgresql start
           sudo -u postgres createuser --superuser --login $USER
           sudo -u postgres createdb $USER
-          bash integration/setup.sh
+          bash integration/setup.sh || (sudo service postgresql restart && bash integration/setup.sh)
       - name: Install dependencies
         run: |
           sudo apt update && sudo apt install -y python3-virtualenv mold
