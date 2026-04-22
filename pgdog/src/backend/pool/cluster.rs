@@ -164,6 +164,7 @@ pub struct ClusterConfig<'a> {
     pub resharding_copy_retry_max_attempts: usize,
     pub resharding_copy_retry_min_delay: u64,
     pub regex_parser_limit: usize,
+    pub pub_sub_enabled: bool,
 }
 
 impl<'a> ClusterConfig<'a> {
@@ -220,6 +221,7 @@ impl<'a> ClusterConfig<'a> {
             resharding_copy_retry_max_attempts: general.resharding_copy_retry_max_attempts,
             resharding_copy_retry_min_delay: general.resharding_copy_retry_min_delay,
             regex_parser_limit: general.regex_parser_limit,
+            pub_sub_enabled: general.pub_sub_enabled(),
         }
     }
 }
@@ -260,6 +262,7 @@ impl Cluster {
             resharding_copy_retry_max_attempts,
             resharding_copy_retry_min_delay,
             regex_parser_limit,
+            pub_sub_enabled,
         } = config;
 
         let identifier = Arc::new(DatabaseUser {
@@ -281,6 +284,7 @@ impl Cluster {
                         rw_split,
                         identifier: identifier.clone(),
                         lsn_check_interval,
+                        pub_sub_enabled,
                     })
                 })
                 .collect(),
@@ -736,6 +740,7 @@ mod test {
                         rw_split: ReadWriteSplit::IncludePrimary,
                         identifier: identifier.clone(),
                         lsn_check_interval: Duration::MAX,
+                        pub_sub_enabled: false,
                     })
                 })
                 .collect::<Vec<_>>();
@@ -823,6 +828,7 @@ mod test {
                     rw_split: ReadWriteSplit::default(),
                     identifier: identifier.clone(),
                     lsn_check_interval: Duration::default(),
+                    pub_sub_enabled: false,
                 })],
                 prepared_statements: config.config.general.prepared_statements,
                 dry_run: config.config.general.dry_run,

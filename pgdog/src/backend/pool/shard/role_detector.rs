@@ -20,7 +20,12 @@ impl RoleDetector {
     /// Detect role change in the shard.
     pub(super) fn changed(&mut self) -> bool {
         if self.enabled() {
-            self.shard.redetect_roles()
+            let changed = self.shard.redetect_roles();
+            if changed {
+                // Re-initialize pub/sub channel.
+                self.shard.init_pub_sub();
+            }
+            changed
         } else {
             false
         }
@@ -78,6 +83,7 @@ mod test {
                 database: "pgdog".into(),
             }),
             lsn_check_interval: Duration::MAX,
+            pub_sub_enabled: false,
         })
     }
 
