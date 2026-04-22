@@ -512,6 +512,42 @@ pub struct General {
     #[serde(default)]
     pub two_phase_commit_auto: Option<bool>,
 
+    /// Directory where the two-phase commit write-ahead log is stored.
+    ///
+    /// **Note:** PgDog probes this directory at startup. If it cannot be created or written to, the WAL is silently disabled and a warning is logged: 2PC will continue to function but will not be durable across restarts.
+    ///
+    /// _Default:_ `./pgdog_wal`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#two_phase_commit_wal_dir
+    #[serde(default = "General::two_phase_commit_wal_dir")]
+    pub two_phase_commit_wal_dir: PathBuf,
+
+    /// Maximum size, in bytes, of a single two-phase commit WAL segment file before it is rotated.
+    ///
+    /// _Default:_ `16777216` (16 MiB)
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#two_phase_commit_wal_segment_size
+    #[serde(default = "General::two_phase_commit_wal_segment_size")]
+    pub two_phase_commit_wal_segment_size: u64,
+
+    /// How long, in milliseconds, the two-phase commit WAL writer waits to coalesce concurrent appends into a single fsync.
+    ///
+    /// **Note:** Setting this to `0` fsyncs every record individually, maximising durability latency. Higher values trade per-transaction commit latency for fewer fsyncs.
+    ///
+    /// _Default:_ `2`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#two_phase_commit_wal_fsync_interval
+    #[serde(default = "General::two_phase_commit_wal_fsync_interval")]
+    pub two_phase_commit_wal_fsync_interval: u64,
+
+    /// How often, in seconds, to write a checkpoint record to the two-phase commit WAL and garbage-collect old segments.
+    ///
+    /// _Default:_ `60`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#two_phase_commit_wal_checkpoint_interval
+    #[serde(default = "General::two_phase_commit_wal_checkpoint_interval")]
+    pub two_phase_commit_wal_checkpoint_interval: u64,
+
     /// Enable expanded (`\x`) output for `EXPLAIN` results returned by PgDog's built-in query plan aggregation.
     #[serde(default = "General::expanded_explain")]
     pub expanded_explain: bool,
@@ -744,6 +780,11 @@ impl Default for General {
             log_dedup_threshold: 0,
             two_phase_commit: bool::default(),
             two_phase_commit_auto: None,
+            two_phase_commit_wal_dir: Self::two_phase_commit_wal_dir(),
+            two_phase_commit_wal_segment_size: Self::two_phase_commit_wal_segment_size(),
+            two_phase_commit_wal_fsync_interval: Self::two_phase_commit_wal_fsync_interval(),
+            two_phase_commit_wal_checkpoint_interval: Self::two_phase_commit_wal_checkpoint_interval(
+            ),
             expanded_explain: Self::expanded_explain(),
             server_lifetime: Self::server_lifetime(),
             stats_period: Self::stats_period(),
@@ -900,6 +941,24 @@ impl General {
 
     fn rollback_timeout() -> u64 {
         Self::env_or_default("PGDOG_ROLLBACK_TIMEOUT", 5_000)
+    }
+
+    fn two_phase_commit_wal_dir() -> PathBuf {
+        Self::env_option_string("PGDOG_TWO_PHASE_COMMIT_WAL_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("./pgdog_wal"))
+    }
+
+    fn two_phase_commit_wal_segment_size() -> u64 {
+        Self::env_or_default("PGDOG_TWO_PHASE_COMMIT_WAL_SEGMENT_SIZE", 16 * 1024 * 1024)
+    }
+
+    fn two_phase_commit_wal_fsync_interval() -> u64 {
+        Self::env_or_default("PGDOG_TWO_PHASE_COMMIT_WAL_FSYNC_INTERVAL", 2)
+    }
+
+    fn two_phase_commit_wal_checkpoint_interval() -> u64 {
+        Self::env_or_default("PGDOG_TWO_PHASE_COMMIT_WAL_CHECKPOINT_INTERVAL", 60)
     }
 
     fn idle_timeout() -> u64 {

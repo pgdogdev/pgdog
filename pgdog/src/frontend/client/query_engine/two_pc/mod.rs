@@ -10,6 +10,7 @@ pub mod manager;
 pub mod phase;
 pub mod server_transactions;
 pub mod transaction;
+pub mod wal;
 
 pub use guard::TwoPcGuard;
 pub use manager::Manager;
