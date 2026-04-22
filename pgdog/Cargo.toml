@@ -74,6 +74,7 @@ pgdog-stats = { path = "../pgdog-stats" }
 pgdog-postgres-types = { path = "../pgdog-postgres-types"}
 azure_identity = "0.34.0"
 azure_core = "0.34.0"
+crc32c = "0.6.8"
 
 [target.'cfg(not(target_env = "msvc"))'.dependencies]
 tikv-jemallocator = "0.6"

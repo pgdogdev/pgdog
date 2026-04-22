@@ -1,0 +1,23 @@
+//! Two-phase commit WAL errors.
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error("encode: {0}")]
+    Encode(#[from] rmp_serde::encode::Error),
+
+    #[error("decode: {0}")]
+    Decode(#[from] rmp_serde::decode::Error),
+
+    #[error("crc mismatch: expected {expected:#010x}, got {actual:#010x}")]
+    Crc { expected: u32, actual: u32 },
+
+    #[error("invalid record tag {0}")]
+    InvalidTag(u8),
+
+    #[error("record body length is zero")]
+    EmptyRecord,
+
+    #[error("record of {0} bytes exceeds u32 framing")]
+    RecordTooLarge(usize),
+}
