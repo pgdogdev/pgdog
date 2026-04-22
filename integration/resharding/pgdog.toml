@@ -51,6 +51,3 @@ data_type = "bigint"
 [admin]
 password = "pgdog"
 user = "pgdog"
-
-[replication]
-pg_dump_path = "/usr/lib/postgresql/18/bin/pg_dump"
