@@ -1,6 +1,6 @@
 services:
   source_0:
-    image: postgres:18
+    image: postgres:16
     command: postgres -c wal_level=logical
     environment:
       POSTGRES_USER: pgdog
@@ -14,7 +14,7 @@ services:
       - postgres
 
   source_1:
-    image: postgres:18
+    image: postgres:16
     command: postgres -c wal_level=logical
     environment:
       POSTGRES_USER: pgdog
@@ -28,7 +28,7 @@ services:
       - postgres
 
   destination_0:
-    image: postgres:18
+    image: postgres:16
     command: postgres -c wal_level=logical
     environment:
       POSTGRES_USER: pgdog
@@ -40,7 +40,7 @@ services:
       - postgres
 
   destination_1:
-    image: postgres:18
+    image: postgres:16
     command: postgres -c wal_level=logical
     environment:
       POSTGRES_USER: pgdog
