@@ -55,44 +55,6 @@ and `ReplicationTimeout` return `true`; everything else defaults to `false`. Non
 errors (`CopyAborted`, `DataSyncAborted`, `NoPrimaryKey`, `NoReplicaIdentity`) bypass the
 retry loop immediately but still trigger the destination row check.
 
-### `ParallelConnection` issue
-
-`CopySubscriber` originally held a `Vec<ParallelConnection>`, each wrapping a `Server` in a
-background Tokio task. The intent was parallel shard writes; the reality was a sequential
-loop:
-
-```rust
-for server in &mut self.connections {
-    server.send_one(&stmt.clone().into()).await?;  // channel push — fast
-    server.flush().await?;                         // channel push — fast
-    let msg = server.read().await?;                // BLOCKS until shard replies
-}
-```
-
-`send_one` and `flush` pushed to the mpsc channel and returned immediately, but `read()`
-blocked on the reply channel until the background task completed a full socket round-trip.
-Shard 1 never started until shard 0 finished. No parallelism at all.
-
-The `Listener` task's `select!` also polled `server.read()` continuously, including during
-COPY IN when Postgres never sends unsolicited messages. When the socket died, the real error
-surfaced inside the `Listener`, which exited — but the `JoinHandle` was fire-and-forget, so
-the error was dropped. The main task found the channel closed and returned
-`Error::ParallelConnection` with `is_retryable() = false`. The retry loop never fired.
-
-#### Solution
-
-`ParallelConnection` was removed. `CopySubscriber` (`subscriber/copy.rs`) now holds
-`Vec<Server>` directly. `start_copy`, the per-buffer `flush`, and `copy_done` all use
-`futures::future::try_join_all` to drive every shard concurrently — this is the first version
-that is actually parallel. Real errors propagate directly up the call stack and
-`is_retryable()` sees the true failure.
-
-| Phase | Before | After |
-|---|---|---|
-| `start_copy` | N × RTT | 1 × RTT |
-| `flush` (per buffer) | N × RTT | 1 × RTT |
-| `copy_done` | N × RTT | 1 × RTT |
-
 ### Tests
 
 `integration/copy_data/retry_test/run.sh` kills shard_1 mid-sync, brings it back after ~2 s,

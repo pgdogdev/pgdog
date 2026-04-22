@@ -1,13 +1,12 @@
 //! Shard COPY stream from one source
 //! between N shards.
 
-use futures::future::try_join_all;
 use pg_query::{parse_raw, NodeEnum};
 use pgdog_config::QueryParserEngine;
 use tracing::debug;
 
 use crate::{
-    backend::{Cluster, ConnectReason, Server},
+    backend::{replication::subscriber::ParallelConnection, Cluster, ConnectReason},
     config::Role,
     frontend::router::parser::{CopyParser, Shard},
     net::{CopyData, CopyDone, ErrorResponse, FromBytes, Protocol, Query, ToBytes},
@@ -25,7 +24,7 @@ pub struct CopySubscriber {
     copy: CopyParser,
     cluster: Cluster,
     buffer: Vec<CopyData>,
-    connections: Vec<Server>,
+    connections: Vec<ParallelConnection>,
     stmt: CopyStatement,
     bytes_sharded: usize,
 }
@@ -86,7 +85,7 @@ impl CopySubscriber {
                 .1
                 .standalone(ConnectReason::Replication)
                 .await?;
-            servers.push(primary);
+            servers.push(ParallelConnection::new(primary)?);
         }
 
         self.connections = servers;
@@ -96,38 +95,38 @@ impl CopySubscriber {
 
     /// Disconnect from all shards.
     pub async fn disconnect(&mut self) -> Result<(), Error> {
-        self.connections.clear();
+        for conn in std::mem::take(&mut self.connections) {
+            conn.reattach().await?;
+        }
 
         Ok(())
     }
 
     /// Start COPY on all shards.
     pub async fn start_copy(&mut self) -> Result<(), Error> {
+        let stmt = Query::new(self.stmt.copy_in());
+
         if self.connections.is_empty() {
             self.connect().await?;
         }
 
-        let stmt = Query::new(self.stmt.copy_in());
-
-        // Start COPY IN on all shards concurrently.
-        try_join_all(self.connections.iter_mut().map(|server| {
-            let msg: crate::net::ProtocolMessage = stmt.clone().into();
+        for server in &mut self.connections {
             debug!("{} [{}]", stmt.query(), server.addr());
 
-            async move {
-                server.send_one(&msg).await?;
-                server.flush().await?;
-                let reply = server.read().await?;
-                match reply.code() {
-                    'G' => Ok(()),
-                    'E' => Err(Error::PgError(Box::new(ErrorResponse::from_bytes(
-                        reply.to_bytes()?,
-                    )?))),
-                    c => Err(Error::OutOfSync(c)),
+            server.send_one(&stmt.clone().into()).await?;
+            server.flush().await?;
+
+            let msg = server.read().await?;
+            match msg.code() {
+                'G' => (),
+                'E' => {
+                    return Err(Error::PgError(Box::new(ErrorResponse::from_bytes(
+                        msg.to_bytes()?,
+                    )?)))
                 }
+                c => return Err(Error::OutOfSync(c)),
             }
-        }))
-        .await?;
+        }
 
         Ok(())
     }
@@ -136,20 +135,20 @@ impl CopySubscriber {
     pub async fn copy_done(&mut self) -> Result<(), Error> {
         self.flush().await?;
 
-        // Finalise COPY on all shards concurrently.
-        try_join_all(self.connections.iter_mut().map(|server| async move {
+        for server in &mut self.connections {
             server.send_one(&CopyDone.into()).await?;
             server.flush().await?;
 
-            let cc = server.read().await?;
-            match cc.code() {
+            let command_complete = server.read().await?;
+            match command_complete.code() {
                 'E' => {
-                    let error = ErrorResponse::from_bytes(cc.to_bytes()?)?;
+                    let error = ErrorResponse::from_bytes(command_complete.to_bytes()?)?;
                     if error.code == "08P01" && error.message == "insufficient data left in message"
                     {
                         return Err(Error::BinaryFormatMismatch(Box::new(error)));
+                    } else {
+                        return Err(Error::PgError(Box::new(error)));
                     }
-                    return Err(Error::PgError(Box::new(error)));
                 }
                 'C' => (),
                 c => return Err(Error::OutOfSync(c)),
@@ -159,9 +158,7 @@ impl CopySubscriber {
             if rfq.code() != 'Z' {
                 return Err(Error::OutOfSync(rfq.code()));
             }
-            Ok(())
-        }))
-        .await?;
+        }
 
         Ok(())
     }
@@ -177,19 +174,12 @@ impl CopySubscriber {
     }
 
     async fn flush(&mut self) -> Result<(usize, usize), Error> {
-        if self.buffer.is_empty() {
-            return Ok((0, 0));
-        }
-
         let result = self.copy.shard(&self.buffer)?;
         self.buffer.clear();
 
         let rows = result.len();
         let bytes = result.iter().map(|row| row.len()).sum::<usize>();
-        self.bytes_sharded += bytes;
 
-        // Route each row to the right shard(s). send_one is a buffered write
-        // so this loop does no I/O — no concurrency needed here.
         for row in &result {
             for (shard, server) in self.connections.iter_mut().enumerate() {
                 match row.shard() {
@@ -208,8 +198,7 @@ impl CopySubscriber {
             }
         }
 
-        // Flush all shards concurrently — this is the actual socket write.
-        try_join_all(self.connections.iter_mut().map(|s| s.flush())).await?;
+        self.bytes_sharded += result.iter().map(|c| c.len()).sum::<usize>();
 
         Ok((rows, bytes))
     }
