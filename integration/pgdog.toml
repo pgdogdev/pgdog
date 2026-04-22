@@ -26,8 +26,8 @@ reload_schema_on_ddl = false
 #idle_healthcheck_delay = 50000000
 unique_id_function = "standard"
 auth_type = "scram"
-log_dedup_window = 30_000
-log_dedup_threshold = 1
+# log_dedup_window = 30_000
+# log_dedup_threshold = 1
 
 [memory]
 net_buffer = 8096

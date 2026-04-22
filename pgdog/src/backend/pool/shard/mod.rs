@@ -1,5 +1,6 @@
 //! A shard is a collection of replicas and an optional primary.
 
+use arc_swap::ArcSwap;
 use std::ops::Deref;
 use std::sync::Arc;
 use std::time::Duration;
@@ -11,7 +12,7 @@ use crate::backend::databases::User;
 use crate::backend::pool::lb::ban::Ban;
 use crate::backend::PubSubListener;
 use crate::backend::Schema;
-use crate::config::{config, LoadBalancingStrategy, ReadWriteSplit, Role};
+use crate::config::{LoadBalancingStrategy, ReadWriteSplit, Role};
 use crate::net::messages::BackendKeyData;
 use crate::net::{NotificationResponse, Parameters};
 
@@ -38,6 +39,8 @@ pub(super) struct ShardConfig<'a> {
     pub(super) identifier: Arc<User>,
     /// LSN check interval
     pub(super) lsn_check_interval: Duration,
+    /// Pub/sub enabled
+    pub(super) pub_sub_enabled: bool,
 }
 
 /// Connection pools for a single database shard.
@@ -109,7 +112,7 @@ impl Shard {
         &self,
         channel: &str,
     ) -> Result<broadcast::Receiver<NotificationResponse>, Error> {
-        if let Some(ref listener) = self.pub_sub {
+        if let Some(listener) = self.pub_sub.load_full().deref() {
             listener.listen(channel).await
         } else {
             Err(Error::PubSubDisabled)
@@ -118,7 +121,7 @@ impl Shard {
 
     /// Notify channel with optional payload (payload can be empty string).
     pub async fn notify(&self, channel: &str, payload: &str) -> Result<(), Error> {
-        if let Some(ref listener) = self.pub_sub {
+        if let Some(listener) = self.pub_sub.load_full().deref() {
             listener.notify(channel, payload).await
         } else {
             Err(Error::PubSubDisabled)
@@ -148,9 +151,7 @@ impl Shard {
     pub fn launch(&self) {
         self.lb.launch();
         ShardMonitor::run(self);
-        if let Some(ref listener) = self.pub_sub {
-            listener.launch();
-        }
+        self.init_pub_sub();
     }
 
     /// Returns true if the shard has a primary database.
@@ -208,9 +209,7 @@ impl Shard {
     /// Shutdown every pool and maintenance task in this shard.
     pub fn shutdown(&self) {
         self.comms.shutdown.notify_waiters();
-        if let Some(ref listener) = self.pub_sub {
-            listener.shutdown();
-        }
+        self.shutdown_pub_sub();
         self.lb.shutdown();
     }
 
@@ -241,6 +240,31 @@ impl Shard {
     pub async fn params(&self, request: &Request) -> Result<&Parameters, Error> {
         self.lb.params(request).await
     }
+
+    /// (Re)initialize the pub/sub listener.
+    pub(crate) fn init_pub_sub(&self) {
+        if self.inner.pub_sub_enabled {
+            // Remove old listener, if any.
+            self.shutdown_pub_sub();
+
+            // Create new listener.
+            // This is useful if we promoted a primary
+            // from a replica.
+            let primary = self.lb.primary().cloned();
+            let pub_sub = primary.as_ref().map(PubSubListener::new);
+            self.inner.pub_sub.store(Arc::new(pub_sub));
+            if let Some(pub_sub) = self.inner.pub_sub.load_full().deref() {
+                pub_sub.launch();
+            }
+        }
+    }
+
+    /// Shutdown pub/sub listener.
+    pub(crate) fn shutdown_pub_sub(&self) {
+        if let Some(pub_sub) = self.inner.pub_sub.swap(Arc::new(None)).deref() {
+            pub_sub.shutdown();
+        }
+    }
 }
 
 impl Deref for Shard {
@@ -258,9 +282,10 @@ pub struct ShardInner {
     number: usize,
     lb: LoadBalancer,
     comms: Arc<ShardComms>,
-    pub_sub: Option<PubSubListener>,
+    pub_sub: Arc<ArcSwap<Option<PubSubListener>>>,
     identifier: Arc<User>,
     schema: Arc<OnceCell<Schema>>,
+    pub_sub_enabled: bool,
 }
 
 impl ShardInner {
@@ -273,6 +298,7 @@ impl ShardInner {
             rw_split,
             identifier,
             lsn_check_interval,
+            pub_sub_enabled,
         } = shard;
         let primary = primary.as_ref().map(Pool::new);
         let lb = LoadBalancer::new(&primary, replicas, lb_strategy, rw_split);
@@ -280,19 +306,15 @@ impl ShardInner {
             shutdown: Notify::new(),
             lsn_check_interval,
         });
-        let pub_sub = if config().pub_sub_enabled() {
-            primary.as_ref().map(PubSubListener::new)
-        } else {
-            None
-        };
 
         Self {
             number,
             lb,
             comms,
-            pub_sub,
+            pub_sub: Arc::new(ArcSwap::new(Arc::new(None))),
             identifier,
             schema: Arc::new(OnceCell::new()),
+            pub_sub_enabled,
         }
     }
 }
@@ -330,6 +352,7 @@ mod test {
                 database: "pgdog".into(),
             }),
             lsn_check_interval: Duration::MAX,
+            pub_sub_enabled: false,
         });
         shard.launch();
 
@@ -368,6 +391,7 @@ mod test {
                 database: "pgdog".into(),
             }),
             lsn_check_interval: Duration::MAX,
+            pub_sub_enabled: false,
         });
         shard.launch();
         let mut ids = BTreeSet::new();
