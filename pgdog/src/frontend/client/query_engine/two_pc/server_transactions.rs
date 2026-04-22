@@ -32,11 +32,11 @@ impl TwoPcTransactions {
         let mut transactions = vec![];
 
         for record in records {
-            let transaction = record.get_text(1).and_then(|name| {
+            let transaction = record.get_text(1).map(|name| {
                 if let Ok(ours) = TwoPcTransaction::from_str(&name) {
-                    Some(TwoPcServerTransaction::Ours(ours))
+                    TwoPcServerTransaction::Ours(ours)
                 } else {
-                    Some(TwoPcServerTransaction::Other { name })
+                    TwoPcServerTransaction::Other { name }
                 }
             });
 

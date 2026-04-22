@@ -161,7 +161,7 @@ jobs:
       - name: Stop shared PgDog
         run: bash -lc 'source integration/common.sh; stop_pgdog'
       - name: Data sync
-        run: bash integration/copy_data/dev.sh
+        run: bash integration/copy_data/run.sh
       - name: Python
         run: bash integration/python/run.sh
       - name: Load balancer

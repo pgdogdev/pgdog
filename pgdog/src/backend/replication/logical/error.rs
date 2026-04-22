@@ -147,3 +147,86 @@ impl From<crate::backend::schema::sync::error::Error> for Error {
         Self::SchemaSync(Box::new(value))
     }
 }
+
+impl Error {
+    /// Whether the table copy should be retried after this error.
+    pub fn is_retryable(&self) -> bool {
+        match self {
+            Self::Net(inner) => inner.is_retryable(),
+            Self::Pool(inner) => inner.is_retryable(),
+            Self::Backend(inner) => inner.is_retryable(),
+            // No connection yet, or primary is down.
+            Self::NotConnected | Self::NoPrimary => true,
+            // Replication stalled; temporary slot is gone, next attempt starts fresh.
+            Self::ReplicationTimeout => true,
+            // TODO: escape-hatch when using ParallelConnection wrapper
+            // the underlying error could be anything and to handler it properly
+            // either the ParallelConnection wrapper should be removed or
+            // the proper error should be propagated
+            Self::ParallelConnection => true,
+            _ => false,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::backend::pool::Error as PE;
+    use crate::backend::replication::publisher::PublicationTable;
+    use crate::net::Error as NE;
+
+    #[test]
+    fn retryable() {
+        let io = std::io::Error::new(std::io::ErrorKind::ConnectionReset, "reset");
+        assert!(Error::Net(NE::Io(io)).is_retryable());
+        assert!(Error::Net(NE::UnexpectedEof).is_retryable());
+        assert!(Error::Pool(PE::NoPrimary).is_retryable());
+        assert!(Error::Pool(PE::CheckoutTimeout).is_retryable());
+        assert!(Error::NotConnected.is_retryable());
+        assert!(Error::NoPrimary.is_retryable());
+        assert!(Error::ReplicationTimeout.is_retryable());
+    }
+
+    #[test]
+    fn retryable_via_backend_wrapper() {
+        use crate::backend::Error as BE;
+
+        // IO reset wrapped as Backend — the common path for network drops during COPY.
+        let io = std::io::Error::new(std::io::ErrorKind::ConnectionReset, "reset");
+        assert!(Error::Backend(BE::Io(io)).is_retryable());
+
+        // Read timeout mid-stream.
+        assert!(Error::Backend(BE::ReadTimeout).is_retryable());
+
+        // Pool couldn't hand out a connection.
+        assert!(Error::Backend(BE::Pool(PE::CheckoutTimeout)).is_retryable());
+        assert!(Error::Backend(BE::Pool(PE::NoPrimary)).is_retryable());
+        assert!(Error::Backend(BE::Pool(PE::AllReplicasDown)).is_retryable());
+
+        // Connection variants.
+        assert!(Error::Backend(BE::NotConnected).is_retryable());
+        assert!(Error::Backend(BE::ClusterNotConnected).is_retryable());
+    }
+
+    #[test]
+    fn not_retryable_via_backend_wrapper() {
+        use crate::backend::Error as BE;
+        use crate::net::messages::ErrorResponse;
+
+        // Postgres-level error response: permanent, not a network fault.
+        let pg_err = ErrorResponse::default();
+        assert!(!Error::Backend(BE::ConnectionError(Box::new(pg_err))).is_retryable());
+
+        // Protocol violations are not transient.
+        assert!(!Error::Backend(BE::ProtocolOutOfSync).is_retryable());
+    }
+
+    #[test]
+    fn not_retryable() {
+        assert!(!Error::CopyAborted(PublicationTable::default()).is_retryable());
+        assert!(!Error::DataSyncAborted.is_retryable());
+        assert!(!Error::NoPrimaryKey(PublicationTable::default()).is_retryable());
+        assert!(!Error::NoReplicaIdentity("s".into(), "t".into()).is_retryable());
+    }
+}

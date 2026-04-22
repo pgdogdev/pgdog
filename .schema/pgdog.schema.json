@@ -92,6 +92,8 @@
         "regex_parser_limit": 1000,
         "reload_schema_on_ddl": true,
         "resharding_copy_format": "binary",
+        "resharding_copy_retry_max_attempts": 5,
+        "resharding_copy_retry_min_delay": 1000,
         "resharding_parallel_copies": 1,
         "rollback_timeout": 5000,
         "server_lifetime": 86400000,
@@ -963,6 +965,20 @@
           "description": "Which format to use for `COPY` statements during resharding.\n\n**Note:** Text format is required when migrating from `INTEGER` to `BIGINT` primary keys during resharding.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#resharding_copy_format",
           "$ref": "#/$defs/CopyFormat",
           "default": "binary"
+        },
+        "resharding_copy_retry_max_attempts": {
+          "description": "Maximum number of retries for a failed table copy during resharding (per-table).\nRetries use exponential backoff starting at `resharding_copy_retry_min_delay`.\n_Default:_ `5`",
+          "type": "integer",
+          "format": "uint",
+          "default": 5,
+          "minimum": 0
+        },
+        "resharding_copy_retry_min_delay": {
+          "description": "Base delay in milliseconds between table copy retries.\nEach successive attempt doubles the delay, capped at 32×.\n_Default:_ `1000`",
+          "type": "integer",
+          "format": "uint64",
+          "default": 1000,
+          "minimum": 0
         },
         "resharding_parallel_copies": {
           "description": "How many parallel copies to launch, irrespective of the number of available replicas.",

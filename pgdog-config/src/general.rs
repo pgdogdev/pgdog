@@ -600,6 +600,18 @@ pub struct General {
     #[serde(default = "General::resharding_parallel_copies")]
     pub resharding_parallel_copies: usize,
 
+    /// Maximum number of retries for a failed table copy during resharding (per-table).
+    /// Retries use exponential backoff starting at `resharding_copy_retry_min_delay`.
+    /// _Default:_ `5`
+    #[serde(default = "General::resharding_copy_retry_max_attempts")]
+    pub resharding_copy_retry_max_attempts: usize,
+
+    /// Base delay in milliseconds between table copy retries.
+    /// Each successive attempt doubles the delay, capped at 32×.
+    /// _Default:_ `1000`
+    #[serde(default = "General::resharding_copy_retry_min_delay")]
+    pub resharding_copy_retry_min_delay: u64,
+
     /// Automatically reload the schema cache used by PgDog to route queries upon detecting DDL statements.
     ///
     /// **Note:** This setting requires PgDog Enterprise Edition to work as expected. If using the open source edition, it will only work with single-node PgDog deployments, e.g., in local development or CI.
@@ -745,6 +757,8 @@ impl Default for General {
             omnisharded_sticky: bool::default(),
             resharding_copy_format: CopyFormat::default(),
             resharding_parallel_copies: Self::resharding_parallel_copies(),
+            resharding_copy_retry_max_attempts: Self::resharding_copy_retry_max_attempts(),
+            resharding_copy_retry_min_delay: Self::resharding_copy_retry_min_delay(),
             reload_schema_on_ddl: Self::reload_schema_on_ddl(),
             load_schema: Self::load_schema(),
             cutover_replication_lag_threshold: Self::cutover_replication_lag_threshold(),
@@ -964,6 +978,14 @@ impl General {
 
     fn resharding_parallel_copies() -> usize {
         1
+    }
+
+    fn resharding_copy_retry_max_attempts() -> usize {
+        5
+    }
+
+    fn resharding_copy_retry_min_delay() -> u64 {
+        1000
     }
 
     fn default_shutdown_termination_timeout() -> Option<u64> {

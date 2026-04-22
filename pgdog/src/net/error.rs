@@ -103,3 +103,34 @@ pub enum Error {
     #[error("{0}")]
     TypeError(#[from] pgdog_postgres_types::Error),
 }
+
+impl Error {
+    /// Transient network fault worth retrying.
+    pub fn is_retryable(&self) -> bool {
+        matches!(
+            self,
+            Self::Io(_) | Self::UnexpectedEof | Self::ConnectionDown
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn retryable() {
+        let io = std::io::Error::new(std::io::ErrorKind::ConnectionReset, "reset");
+        assert!(Error::Io(io).is_retryable());
+        assert!(Error::UnexpectedEof.is_retryable());
+        assert!(Error::ConnectionDown.is_retryable());
+    }
+
+    #[test]
+    fn not_retryable() {
+        // TLS and protocol errors are permanent.
+        assert!(!Error::UnexpectedMessage('Z', 'Q').is_retryable());
+        assert!(!Error::NotTextEncoding.is_retryable());
+        assert!(!Error::UnexpectedPayload.is_retryable());
+    }
+}

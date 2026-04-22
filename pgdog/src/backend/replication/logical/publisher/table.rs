@@ -10,10 +10,12 @@ use crate::backend::pool::Address;
 use crate::backend::replication::publisher::progress::Progress;
 use crate::backend::replication::publisher::Lsn;
 
+use crate::backend::pool::Request;
 use crate::backend::replication::status::TableCopy;
 use crate::backend::{Cluster, Server, ShardedTables};
 use crate::config::config;
 use crate::frontend::router::parser::Column;
+use crate::net::messages::Protocol;
 use crate::net::replication::StatusUpdate;
 use crate::util::escape_identifier;
 
@@ -284,6 +286,28 @@ impl Table {
         );
 
         Ok(self.lsn)
+    }
+
+    /// Returns `true` if the destination table has any rows on any shard.
+    ///
+    /// COPY is transactional and normally auto-rolls back on failure, leaving
+    /// the destination empty. This check catches the rare race where COPY
+    /// committed but an error was returned afterward (e.g., network drop during
+    /// CommandComplete), resulting in rows the retry would collide with.
+    pub async fn destination_has_rows(&self, dest: &Cluster) -> Result<bool, Error> {
+        let sql = format!(
+            "SELECT 1 FROM \"{}\".\"{}\" LIMIT 1",
+            escape_identifier(self.table.destination_schema()),
+            escape_identifier(self.table.destination_name()),
+        );
+        for (shard, _) in dest.shards().iter().enumerate() {
+            let mut server = dest.primary(shard, &Request::default()).await?;
+            let messages = server.execute_checked(sql.as_str()).await?;
+            if messages.iter().any(|m| m.code() == 'D') {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 }
 
