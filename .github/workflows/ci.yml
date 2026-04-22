@@ -72,6 +72,7 @@ jobs:
           - { name: dry-run,       script: integration/dry_run/run.sh }
           - { name: copy-data,     script: integration/copy_data/run.sh }
           - { name: load-balancer, script: integration/load_balancer/run.sh }
+          - { name: resharding, script: integration/resharding/run.sh }
           # plugins/run.sh builds 4 plugin crates with cargo, so it needs
           # the workspace target/ cache; the other entries just run the
           # cached pgdog binary.
