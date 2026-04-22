@@ -159,6 +159,11 @@ impl Error {
             Self::NotConnected | Self::NoPrimary => true,
             // Replication stalled; temporary slot is gone, next attempt starts fresh.
             Self::ReplicationTimeout => true,
+            // TODO: escape-hatch when using ParallelConnection wrapper
+            // the underlying error could be anything and to handler it properly
+            // either the ParallelConnection wrapper should be removed or
+            // the proper error should be propagated
+            Self::ParallelConnection => true,
             _ => false,
         }
     }
