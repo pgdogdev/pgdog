@@ -46,6 +46,30 @@ describe 'active record' do
         expect(Sharded.find(1).id).to eq(1)
       end
     end
+
+    it 'handles idle transaction timeout correctly' do
+      ActiveRecord::Base.transaction do
+        ActiveRecord::Base.connection.execute "SET idle_in_transaction_session_timeout TO '250'"
+        ActiveRecord::Base.connection.execute "SELECT 1"
+        sleep(0.3)
+        expect { ActiveRecord::Base.connection.execute "SELECT 2" }.to raise_error /terminating connection due to idle-in-transaction timeout/
+
+        # Catching errors inside a transaction block will cause the rest of it to fail
+        # The connection has been closed.
+        expect { ActiveRecord::Base.connection.execute "SELECT 3"}.to raise_error /can't get socket descriptor/ # PG::ConnectionBad
+      end
+      ActiveRecord::Base.connection.execute "SELECT 1"
+    end
+
+    it 'handles statement timeout correctly' do
+      ActiveRecord::Base.transaction do
+        ActiveRecord::Base.connection.execute "SET statement_timeout TO '100'"
+        ActiveRecord::Base.connection.execute "SELECT 1"
+        expect { ActiveRecord::Base.connection.execute "SELECT pg_sleep(1)" }.to raise_error /canceling statement due to statement timeout/
+        expect { ActiveRecord::Base.connection.execute "SELECT 2" }.to raise_error /current transaction is aborted, commands ignored until end of transaction block/
+      end
+      ActiveRecord::Base.connection.execute "SELECT 1"
+    end
   end
 
   describe 'sharded' do
