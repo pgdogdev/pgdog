@@ -15,7 +15,7 @@ crate-type = ["rlib", "cdylib"]
 
 [dependencies]
 libloading = "0.8"
-pg_query = { git = "https://github.com/pgdogdev/pg_query.rs.git", rev = "d30dcb47fdf3fa77d102b813a34392146642903a" }
+pg_query = { git = "https://github.com/pgdogdev/pg_query.rs.git", rev = "e634c71c61055f21b8d2c1e058a37503157475d6" }
 pgdog-macros = { path = "../pgdog-macros", version = "0.1.1" }
 
 tracing = "0.1"
