@@ -449,16 +449,7 @@ tasks:
     run: |
       export LLVM_PROFILE_FILE="$PWD/target/llvm-cov-target/profiles/resharding-%p-%m.profraw"
 
-      cleanup() {
-        (cd integration/resharding && docker-compose down >/dev/null 2>&1 || true)
-        killall -TERM pgdog 2>/dev/null || true
-        sleep 1
-        killall -KILL pgdog 2>/dev/null || true
-      }
-      trap cleanup EXIT
-
-      timeout --signal=TERM --kill-after=90s 16m bash integration/resharding/dev.sh
-
+      bash integration/resharding/run.sh
       cargo llvm-cov report --release --package pgdog --lcov --output-path resharding.lcov
     outputs:
       filesystem: false
