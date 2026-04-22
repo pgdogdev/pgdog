@@ -244,23 +244,26 @@ impl Shard {
     /// (Re)initialize the pub/sub listener.
     pub(crate) fn init_pub_sub(&self) {
         if self.inner.pub_sub_enabled {
-            // Remove old listener, if any.
-            self.shutdown_pub_sub();
-
             // Create new listener.
             // This is useful if we promoted a primary
             // from a replica.
             let primary = self.lb.primary().cloned();
             let pub_sub = primary.as_ref().map(PubSubListener::new);
-            self.inner.pub_sub.store(Arc::new(pub_sub));
-            if let Some(pub_sub) = self.inner.pub_sub.load_full().deref() {
+
+            // Launch the new listener first!
+            if let Some(ref pub_sub) = pub_sub {
                 pub_sub.launch();
+            }
+
+            // Shutdown the old listener.
+            if let Some(pub_sub) = self.inner.pub_sub.swap(Arc::new(pub_sub)).deref() {
+                pub_sub.shutdown();
             }
         }
     }
 
     /// Shutdown pub/sub listener.
-    pub(crate) fn shutdown_pub_sub(&self) {
+    fn shutdown_pub_sub(&self) {
         if let Some(pub_sub) = self.inner.pub_sub.swap(Arc::new(None)).deref() {
             pub_sub.shutdown();
         }
