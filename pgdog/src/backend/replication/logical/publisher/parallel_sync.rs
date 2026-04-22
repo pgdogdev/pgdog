@@ -44,7 +44,7 @@ impl ParallelSync {
                 .permit
                 .acquire()
                 .await
-                .map_err(|_| Error::ParallelConnection)?;
+                .map_err(|_| Error::DataSyncAborted)?;
 
             if self.tx.is_closed() {
                 return Err(Error::DataSyncAborted);
@@ -64,9 +64,7 @@ impl ParallelSync {
                 }
             };
 
-            self.tx
-                .send(result)
-                .map_err(|_| Error::ParallelConnection)?;
+            self.tx.send(result).map_err(|_| Error::DataSyncAborted)?;
 
             Ok::<(), Error>(())
         })
