@@ -159,6 +159,7 @@ pub struct Database {
     /// **Note:** We strongly recommend keeping this value well below the supported connections of the backend database(s) to allow connections for maintenance in high load scenarios.
     ///
     /// https://docs.pgdog.dev/configuration/pgdog.toml/databases/#pool_size
+    #[serde(alias = "max_pool_size")]
     pub pool_size: Option<usize>,
     /// Overrides the `min_pool_size` setting. The connection pool will maintain at minimum this many connections.
     ///

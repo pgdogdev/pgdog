@@ -94,7 +94,7 @@ pub struct General {
     /// _Default:_ `10`
     ///
     /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#default_pool_size
-    #[serde(default = "General::default_pool_size")]
+    #[serde(default = "General::default_pool_size", alias = "max_pool_size")]
     pub default_pool_size: usize,
 
     /// Default minimum number of connections per database pool to keep open at all times.
