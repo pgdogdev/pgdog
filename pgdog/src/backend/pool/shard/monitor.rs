@@ -42,6 +42,9 @@ impl ShardMonitor {
 
 impl ShardMonitor {
     async fn spawn(&self) {
+        if self.shard.comms().lsn_check_interval == Duration::MAX {
+            return;
+        }
         let maintenance = (self.shard.comms().lsn_check_interval / 2)
             .clamp(Duration::from_millis(333), Duration::MAX);
         let mut maintenance = interval(maintenance);
