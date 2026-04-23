@@ -19,12 +19,12 @@ static SHARDING_KEY: Lazy<Regex> = Lazy::new(|| {
 static ROLE: Lazy<Regex> = Lazy::new(|| Regex::new(r#"pgdog_role: *(primary|replica)"#).unwrap());
 
 #[derive(Default, Debug, Clone)]
-pub(crate) struct QueryAndComment {
-    pub(crate) query: String,
+pub struct QueryAndComment {
+    pub query: String,
     #[cfg(test)]
-    pub(crate) comment: String,
-    pub(crate) role: Option<Role>,
-    pub(crate) shard: Option<Shard>,
+    pub comment: String,
+    pub role: Option<Role>,
+    pub shard: Option<Shard>,
 }
 
 fn is_edge_whitespace(c: char) -> bool {
@@ -67,10 +67,7 @@ fn trailing_block_comment(q: &str) -> Option<(&str, &str)> {
     Some((rest, comment))
 }
 
-pub(crate) fn parse_edge_comment(
-    query: &str,
-    schema: &ShardingSchema,
-) -> Result<QueryAndComment, Error> {
+pub fn parse_edge_comment(query: &str, schema: &ShardingSchema) -> Result<QueryAndComment, Error> {
     let Some((stripped, comment)) =
         leading_block_comment(query).or_else(|| trailing_block_comment(query))
     else {

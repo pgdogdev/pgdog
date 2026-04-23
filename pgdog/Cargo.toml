@@ -85,3 +85,8 @@ cc = "1"
 [dev-dependencies]
 tempfile = "3.23.0"
 stats_alloc = "0.1.10"
+brunch = "0.5"
+
+[[bench]]
+name = "comment_parser"
+harness = false
