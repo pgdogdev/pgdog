@@ -2,6 +2,7 @@
 
 use crate::net::{
     c_string,
+    messages::{BackendKeyData, ProtocolVersion},
     parameter::{ParameterValue, Parameters},
     Error,
 };
@@ -17,22 +18,26 @@ use super::{super::Parameter, FromBytes, Payload, Protocol, ToBytes};
 /// and a server expects from a client.
 ///
 /// See: <https://www.postgresql.org/docs/current/protocol-message-formats.html>
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum Startup {
     /// SSLRequest (F)
     Ssl,
     /// GSSENCRequest (F)
     GssEnc,
     /// StartupMessage (F)
-    Startup { params: Parameters },
+    Startup {
+        version: ProtocolVersion,
+        params: Parameters,
+        unrecognized_options: Vec<String>,
+    },
     /// CancelRequet (F)
-    Cancel { pid: i32, secret: i32 },
+    Cancel { id: BackendKeyData },
 }
 
 impl Startup {
     /// Read Startup message from a stream.
     pub async fn from_stream(stream: &mut (impl AsyncRead + Unpin)) -> Result<Self, Error> {
-        let _len = stream.read_i32().await?;
+        let len = stream.read_i32().await?;
         let code = stream.read_i32().await?;
 
         debug!("📡 => {}", code);
@@ -42,9 +47,34 @@ impl Startup {
             80877103 => Ok(Startup::Ssl),
             // GSSENCRequest (F)
             80877104 => Ok(Startup::GssEnc),
+            // CancelRequest (F)
+            80877102 => {
+                let pid = stream.read_i32().await?;
+                // CancelRequest secrets became variable-length in protocol 3.2.
+                let secret_len = usize::try_from(len)
+                    .ok()
+                    .and_then(|len| len.checked_sub(12))
+                    .ok_or(Error::UnexpectedPayload)?;
+                let mut secret = vec![0_u8; secret_len];
+                stream.read_exact(&mut secret).await?;
+
+                Ok(Startup::Cancel {
+                    id: BackendKeyData {
+                        pid,
+                        secret: crate::net::messages::backend_key::SecretKey::from_slice(&secret)?,
+                    },
+                })
+            }
             // StartupMessage (F)
-            196608 => {
+            code => {
+                let version =
+                    ProtocolVersion::from_i32(code).ok_or(Error::UnsupportedStartup(code))?;
+                if version.major() != 3 {
+                    return Err(Error::UnsupportedStartup(code));
+                }
+
                 let mut params = Parameters::default();
+                let mut unrecognized_options = vec![];
                 loop {
                     let name = c_string(stream).await?;
 
@@ -54,7 +84,12 @@ impl Startup {
 
                     let value = c_string(stream).await?;
 
-                    if name == "search_path" {
+                    if name.starts_with("_pq_.") {
+                        // Reserved protocol options are reported back via
+                        // NegotiateProtocolVersion rather than treated as
+                        // normal startup parameters.
+                        unrecognized_options.push(name);
+                    } else if name == "search_path" {
                         let value = search_path(&value);
                         params.insert(name, value);
                     } else if name == "options" {
@@ -84,17 +119,12 @@ impl Startup {
                     }
                 }
 
-                Ok(Startup::Startup { params })
+                Ok(Startup::Startup {
+                    version,
+                    params,
+                    unrecognized_options,
+                })
             }
-            // CancelRequest (F)
-            80877102 => {
-                let pid = stream.read_i32().await?;
-                let secret = stream.read_i32().await?;
-
-                Ok(Startup::Cancel { pid, secret })
-            }
-
-            code => Err(Error::UnsupportedStartup(code)),
         }
     }
 
@@ -104,12 +134,22 @@ impl Startup {
     pub fn parameter(&self, name: &str) -> Option<&str> {
         match self {
             Startup::Ssl | Startup::GssEnc | Startup::Cancel { .. } => None,
-            Startup::Startup { params } => params.get(name).and_then(|s| s.as_str()),
+            Startup::Startup { params, .. } => params.get(name).and_then(|s| s.as_str()),
         }
     }
 
     /// Create new startup message from config.
-    pub fn new(user: &str, database: &str, mut params: Vec<Parameter>) -> Self {
+    pub fn new(user: &str, database: &str, params: Vec<Parameter>) -> Self {
+        Self::new_with_protocol_version(ProtocolVersion::V3_0, user, database, params)
+    }
+
+    /// Create new startup message with a specific protocol version.
+    pub fn new_with_protocol_version(
+        version: ProtocolVersion,
+        user: &str,
+        database: &str,
+        mut params: Vec<Parameter>,
+    ) -> Self {
         params.extend(vec![
             Parameter {
                 name: "user".into(),
@@ -121,7 +161,9 @@ impl Startup {
             },
         ]);
         Self::Startup {
+            version,
             params: params.into(),
+            unrecognized_options: vec![],
         }
     }
 
@@ -157,17 +199,21 @@ impl super::ToBytes for Startup {
                 Ok(buf.freeze())
             }
 
-            Startup::Cancel { pid, secret } => {
+            Startup::Cancel { id } => {
                 let mut payload = Payload::new();
 
                 payload.put_i32(80877102);
-                payload.put_i32(*pid);
-                payload.put_i32(*secret);
+                payload.put_i32(id.pid);
+                payload.put_slice(id.secret.as_slice());
 
                 Ok(payload.freeze())
             }
 
-            Startup::Startup { params } => {
+            Startup::Startup {
+                version,
+                params,
+                unrecognized_options: _,
+            } => {
                 let mut params_buf = BytesMut::new();
 
                 for (name, value) in params.deref() {
@@ -182,7 +228,7 @@ impl super::ToBytes for Startup {
 
                 let mut payload = Payload::new();
 
-                payload.put_i32(196608);
+                payload.put_i32(version.as_i32());
                 payload.put(params_buf);
                 payload.put_u8(0); // Terminating null character.
 
@@ -251,7 +297,7 @@ fn search_path(value: &str) -> ParameterValue {
 
 #[cfg(test)]
 mod test {
-    use crate::net::messages::ToBytes;
+    use crate::net::messages::{BackendKeyData, ProtocolVersion, ToBytes};
 
     use super::*;
     use bytes::{Buf, BufMut, BytesMut};
@@ -278,6 +324,7 @@ mod test {
     #[tokio::test]
     async fn test_startup() {
         let startup = Startup::Startup {
+            version: ProtocolVersion::V3_0,
             params: vec![
                 Parameter {
                     name: "user".into(),
@@ -289,6 +336,7 @@ mod test {
                 },
             ]
             .into(),
+            unrecognized_options: vec![],
         };
 
         let bytes = startup.to_bytes().unwrap();
@@ -308,5 +356,78 @@ mod test {
 
         let startup = Startup::from_stream(&mut read).await.unwrap();
         assert!(matches!(startup, Startup::GssEnc));
+    }
+
+    #[tokio::test]
+    async fn test_read_startup_protocol_3_2() {
+        let (mut write, mut read) = tokio::io::duplex(128);
+        tokio::spawn(async move {
+            let startup = Startup::new_with_protocol_version(
+                ProtocolVersion::V3_2,
+                "postgres",
+                "postgres",
+                vec![],
+            );
+            write.write_all(&startup.to_bytes().unwrap()).await.unwrap();
+        });
+
+        let startup = Startup::from_stream(&mut read).await.unwrap();
+        assert!(matches!(
+            startup,
+            Startup::Startup {
+                version: ProtocolVersion::V3_2,
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_read_startup_collects_unrecognized_protocol_options() {
+        let (mut write, mut read) = tokio::io::duplex(128);
+        tokio::spawn(async move {
+            let mut payload = BytesMut::new();
+            payload.put_i32(ProtocolVersion::V3_2.as_i32());
+            payload.put_slice(b"user\0postgres\0");
+            payload.put_slice(b"_pq_.command_tag\0v2\0");
+            payload.put_u8(0);
+
+            let mut bytes = BytesMut::new();
+            bytes.put_i32(payload.len() as i32 + 4);
+            bytes.put(payload);
+            write.write_all(&bytes).await.unwrap();
+        });
+
+        let startup = Startup::from_stream(&mut read).await.unwrap();
+        let Startup::Startup {
+            version,
+            params,
+            unrecognized_options,
+        } = startup
+        else {
+            panic!("expected startup message");
+        };
+
+        assert_eq!(version, ProtocolVersion::V3_2);
+        assert_eq!(
+            params.get("user").and_then(|v| v.as_str()),
+            Some("postgres")
+        );
+        assert_eq!(unrecognized_options, vec!["_pq_.command_tag"]);
+    }
+
+    #[tokio::test]
+    async fn test_cancel_roundtrip_extended_secret() {
+        let cancel = Startup::Cancel {
+            id: BackendKeyData::new_client(ProtocolVersion::V3_2),
+        };
+        let bytes = cancel.to_bytes().unwrap();
+
+        let (mut write, mut read) = tokio::io::duplex(512);
+        tokio::spawn(async move {
+            write.write_all(&bytes).await.unwrap();
+        });
+
+        let roundtrip = Startup::from_stream(&mut read).await.unwrap();
+        assert_eq!(roundtrip, cancel);
     }
 }

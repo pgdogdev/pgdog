@@ -7,8 +7,7 @@ use std::sync::Arc;
 use crate::backend::databases::{databases, reload, shutdown};
 use crate::config::config;
 use crate::frontend::client::query_engine::two_pc::Manager;
-use crate::net::messages::BackendKeyData;
-use crate::net::messages::{hello::SslReply, Startup};
+use crate::net::messages::{hello::SslReply, NegotiateProtocolVersion, Startup};
 use crate::net::{self, tls::acceptor};
 use crate::net::{tweak, Stream};
 use crate::sighup::Sighup;
@@ -204,13 +203,32 @@ impl Listener {
                     stream.send_flush(&SslReply::No).await?;
                 }
 
-                Startup::Startup { params } => {
-                    Client::spawn(stream, params, addr, config).await?;
+                Startup::Startup {
+                    version,
+                    params,
+                    unrecognized_options,
+                } => {
+                    let negotiated = version
+                        .negotiated()
+                        .ok_or_else(|| net::Error::UnsupportedStartup(version.as_i32()))?;
+
+                    if negotiated != version || !unrecognized_options.is_empty() {
+                        // Send the negotiated minor version before auth so the
+                        // client can interpret later messages, including
+                        // BackendKeyData / CancelRequest, using the right shape.
+                        stream
+                            .send(&NegotiateProtocolVersion::new(
+                                negotiated,
+                                unrecognized_options,
+                            ))
+                            .await?;
+                    }
+
+                    Client::spawn(stream, params, addr, config, negotiated).await?;
                     break;
                 }
 
-                Startup::Cancel { pid, secret } => {
-                    let id = BackendKeyData { pid, secret };
+                Startup::Cancel { id } => {
                     let _ = databases().cancel(&id).await;
                     break;
                 }

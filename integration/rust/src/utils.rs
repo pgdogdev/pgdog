@@ -79,18 +79,34 @@ impl Message {
 
 /// Create a startup message.
 pub fn startup(user: &str, database: &str) -> Bytes {
+    startup_with_version(user, database, 196608, &[])
+}
+
+/// Create a startup message with a specific protocol version and extra parameters.
+pub fn startup_with_version(
+    user: &str,
+    database: &str,
+    protocol_version: i32,
+    extra_params: &[(&str, &str)],
+) -> Bytes {
     let mut payload = BytesMut::new();
-    payload.put_i32(196608);
+    payload.put_i32(protocol_version);
     payload.put_slice("user\0".as_bytes());
     payload.put_slice(user.as_bytes());
     payload.put_u8(0);
     payload.put_slice("database\0".as_bytes());
     payload.put_slice(database.as_bytes());
     payload.put_u8(0);
+    for (name, value) in extra_params {
+        payload.put_slice(name.as_bytes());
+        payload.put_u8(0);
+        payload.put_slice(value.as_bytes());
+        payload.put_u8(0);
+    }
     payload.put_u8(0);
 
     let mut bytes = BytesMut::new();
-    bytes.put_i32(payload.len() as i32);
+    bytes.put_i32(payload.len() as i32 + 4);
     bytes.put(payload);
 
     bytes.freeze()

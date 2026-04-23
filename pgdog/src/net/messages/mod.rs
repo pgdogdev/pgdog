@@ -18,6 +18,7 @@ pub mod error_response;
 pub mod execute;
 pub mod flush;
 pub mod hello;
+pub mod negotiate_protocol_version;
 pub mod no_data;
 pub mod notice_response;
 pub mod notification_response;
@@ -27,6 +28,7 @@ pub mod parse;
 pub mod parse_complete;
 pub mod payload;
 pub mod prelude;
+pub mod protocol_version;
 pub mod query;
 pub mod replication;
 pub mod rfq;
@@ -53,6 +55,7 @@ pub use error_response::ErrorResponse;
 pub use execute::Execute;
 pub use flush::Flush;
 pub use hello::Startup;
+pub use negotiate_protocol_version::NegotiateProtocolVersion;
 pub use no_data::NoData;
 pub use notice_response::NoticeResponse;
 pub use notification_response::NotificationResponse;
@@ -61,6 +64,7 @@ pub use parameter_status::ParameterStatus;
 pub use parse::Parse;
 pub use parse_complete::ParseComplete;
 pub use payload::Payload;
+pub use protocol_version::ProtocolVersion;
 pub use query::Query;
 pub use rfq::{ReadyForQuery, TransactionState};
 pub use row_description::{Field, RowDescription};
@@ -161,6 +165,9 @@ impl std::fmt::Debug for Message {
                 Source::Frontend => Close::from_bytes(self.payload()).unwrap().fmt(f),
             },
             'd' => CopyData::from_bytes(self.payload()).unwrap().fmt(f),
+            'v' => NegotiateProtocolVersion::from_bytes(self.payload())
+                .unwrap()
+                .fmt(f),
             'W' => f.debug_struct("CopyBothResponse").finish(),
             'I' => f.debug_struct("EmptyQueryResponse").finish(),
             't' => ParameterDescription::from_bytes(self.payload())
@@ -300,6 +307,7 @@ from_message!(EmptyQueryResponse);
 from_message!(ErrorResponse);
 from_message!(Execute);
 from_message!(Flush);
+from_message!(NegotiateProtocolVersion);
 from_message!(NoData);
 from_message!(NoticeResponse);
 from_message!(NotificationResponse);
