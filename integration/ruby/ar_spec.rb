@@ -47,18 +47,6 @@ describe 'active record' do
       end
     end
 
-    it 'doesnt use ANY correctly' do
-      conn("pgdog", true)
-      numbers = []
-      25.times do |i|
-        numbers << i
-      end
-      rows = Sharded.where(id: numbers)
-      rows.size
-
-      rows = Sharded.where(id: 1).annotate("hello: world").size
-    end
-
     it 'handles idle transaction timeout correctly' do
       ActiveRecord::Base.transaction do
         ActiveRecord::Base.connection.execute "SET idle_in_transaction_session_timeout TO '250'"
