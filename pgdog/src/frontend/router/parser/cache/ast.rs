@@ -1,3 +1,4 @@
+use arc_swap::ArcSwap;
 use pg_query::{parse, parse_raw, protobuf::ObjectType, NodeEnum, NodeRef, ParseResult};
 use pgdog_config::QueryParserEngine;
 use std::fmt::Debug;
@@ -10,10 +11,11 @@ use std::sync::Arc;
 use super::super::{
     comment::comment, Error, Route, Shard, StatementRewrite, StatementRewriteContext, Table,
 };
-use super::{Fingerprint, Stats};
+use super::{Cache, Fingerprint, Stats};
 use crate::backend::schema::Schema;
+use crate::frontend::router::parser::cache::AstQuery;
 use crate::frontend::router::parser::rewrite::statement::RewritePlan;
-use crate::frontend::{BufferedQuery, PreparedStatements};
+use crate::frontend::PreparedStatements;
 use crate::net::parameter::ParameterValue;
 use crate::{backend::ShardingSchema, config::Role};
 
@@ -27,7 +29,8 @@ pub struct Ast {
     pub comment_shard: Option<Shard>,
     /// Role.
     pub comment_role: Option<Role>,
-
+    /// Parser query engine used.
+    pub query_parser_engine: QueryParserEngine,
     /// Inner sync.
     inner: Arc<AstInner>,
 }
@@ -41,7 +44,9 @@ pub struct AstInner {
     /// Rewrite plan.
     pub rewrite_plan: RewritePlan,
     /// Fingerprint.
-    pub fingerprint: Fingerprint,
+    pub fingerprint: ArcSwap<Option<Fingerprint>>,
+    /// Original query.
+    pub original_query: Arc<String>,
 }
 
 impl AstInner {
@@ -51,7 +56,8 @@ impl AstInner {
             ast,
             stats: Mutex::new(Stats::new()),
             rewrite_plan: RewritePlan::default(),
-            fingerprint: Fingerprint::default(),
+            fingerprint: ArcSwap::new(Arc::new(None)),
+            original_query: Arc::new(String::new()),
         }
     }
 }
@@ -67,7 +73,7 @@ impl Deref for Ast {
 impl Ast {
     /// Parse statement and run the rewrite engine, if necessary.
     pub fn new(
-        query: &BufferedQuery,
+        query: &AstQuery,
         schema: &ShardingSchema,
         db_schema: &Schema,
         prepared_statements: &mut PreparedStatements,
@@ -76,21 +82,21 @@ impl Ast {
     ) -> Result<Self, Error> {
         let now = Instant::now();
         let mut ast = match schema.query_parser_engine {
-            QueryParserEngine::PgQueryProtobuf => parse(query),
-            QueryParserEngine::PgQueryRaw => parse_raw(query),
+            QueryParserEngine::PgQueryProtobuf => parse(query.cache_key),
+            QueryParserEngine::PgQueryRaw => parse_raw(query.cache_key),
         }
         .map_err(Error::PgQuery)?;
-        let (comment_shard, comment_role) = comment(query, schema)?;
-        let fingerprint =
-            Fingerprint::new(query, schema.query_parser_engine).map_err(Error::PgQuery)?;
+        let (comment_shard, comment_role) = comment(query.query.query(), schema)?;
+        // let fingerprint = Fingerprint::new(query.cache_key, schema.query_parser_engine)
+        // .map_err(Error::PgQuery)?;
 
         // Don't rewrite statements that will be
         // sent to a direct shard.
         let rewrite_plan = if comment_shard.is_none() {
             StatementRewrite::new(StatementRewriteContext {
                 stmt: &mut ast.protobuf,
-                extended: query.extended(),
-                prepared: query.prepared(),
+                extended: query.query.extended(),
+                prepared: query.query.prepared(),
                 prepared_statements,
                 schema,
                 db_schema,
@@ -110,18 +116,20 @@ impl Ast {
             cached: true,
             comment_shard,
             comment_role,
+            query_parser_engine: schema.query_parser_engine,
             inner: Arc::new(AstInner {
                 stats: Mutex::new(stats),
                 ast,
                 rewrite_plan,
-                fingerprint,
+                fingerprint: ArcSwap::new(Arc::new(None)),
+                original_query: Arc::new(query.cache_key.to_string()),
             }),
         })
     }
 
     /// Parse statement using AstContext for schema and user information.
     pub fn with_context(
-        query: &BufferedQuery,
+        query: &AstQuery,
         ctx: &super::AstContext<'_>,
         prepared_statements: &mut PreparedStatements,
     ) -> Result<Self, Error> {
@@ -147,6 +155,7 @@ impl Ast {
             cached: true,
             comment_role: None,
             comment_shard: None,
+            query_parser_engine,
             inner: Arc::new(AstInner::new(ast)),
         })
     }
@@ -157,6 +166,7 @@ impl Ast {
             cached: true,
             comment_role: None,
             comment_shard: None,
+            query_parser_engine: QueryParserEngine::default(),
             inner: Arc::new(AstInner::new(parse_result)),
         }
     }
@@ -247,6 +257,36 @@ impl Ast {
 
             _ => StatementType::Ddl,
         }
+    }
+
+    /// Get a pre-computed fingerprint, or compute it again.
+    pub fn fingerprint(&self) -> Result<Arc<Option<Fingerprint>>, Error> {
+        let fingerprint = self.fingerprint.load_full();
+
+        if fingerprint.is_some() {
+            return Ok(fingerprint);
+        }
+
+        let start = Instant::now();
+        let fingerprint = Arc::new(Some(
+            Fingerprint::new(&self.original_query, self.query_parser_engine)
+                .map_err(|e| Error::PgQuery(e))?,
+        ));
+        let elapsed = start.elapsed();
+
+        // Bump up the parse time for this statement.
+        self.stats.lock().parse_time += elapsed;
+
+        // Globally too.
+        {
+            let cache = Cache::get();
+            cache.lock().stats.parse_time += elapsed;
+        }
+
+        // Cache the fingerprint.
+        self.fingerprint.store(fingerprint.clone());
+
+        Ok(fingerprint)
     }
 }
 

@@ -427,16 +427,19 @@ impl QueryParser {
                 // Only fingerprint the query if some manual queries are configured.
                 // Otherwise, we're wasting time parsing SQL.
                 if !databases.manual_queries().is_empty() {
-                    let fingerprint = &statement.fingerprint.hex;
-                    debug!("fingerprint: {}", fingerprint);
-                    let manual_route = databases.manual_query(fingerprint).cloned();
+                    let fingerprint = statement.fingerprint()?;
+                    if let Some(fingerprint) = fingerprint.deref() {
+                        let fingerprint = &fingerprint.hex;
+                        debug!("fingerprint: {}", fingerprint);
+                        let manual_route = databases.manual_query(fingerprint).cloned();
 
-                    // TODO: check routing logic required by config.
-                    if manual_route.is_some() {
-                        context.shards_calculator.push(ShardWithPriority::new_table(
-                            Shard::Direct(round_robin::next() % context.shards),
-                        ));
-                        route.set_shard_mut(context.shards_calculator.shard().clone());
+                        // TODO: check routing logic required by config.
+                        if manual_route.is_some() {
+                            context.shards_calculator.push(ShardWithPriority::new_table(
+                                Shard::Direct(round_robin::next() % context.shards),
+                            ));
+                            route.set_shard_mut(context.shards_calculator.shard().clone());
+                        }
                     }
                 }
             }

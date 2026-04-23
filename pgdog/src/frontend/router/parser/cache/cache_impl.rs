@@ -1,16 +1,17 @@
 use lru::LruCache;
 use once_cell::sync::Lazy;
+use parking_lot::lock_api::MutexGuard;
 use pg_query::normalize;
 use pgdog_config::QueryParserEngine;
 use std::collections::HashMap;
 use std::time::Duration;
 
-use parking_lot::Mutex;
+use parking_lot::{Mutex, RawMutex};
 use std::sync::Arc;
 use tracing::debug;
 
 use super::super::{Error, Route};
-use super::{super::parse_edge_comment, Ast, AstContext};
+use super::{super::parse_edge_comment, Ast, AstContext, AstQuery};
 use crate::frontend::{BufferedQuery, PreparedStatements};
 
 static CACHE: Lazy<Cache> = Lazy::new(Cache::new);
@@ -42,11 +43,11 @@ impl Stats {
 
 /// Mutex-protected query cache.
 #[derive(Debug)]
-struct Inner {
+pub(super) struct Inner {
     /// Least-recently-used cache.
-    queries: LruCache<String, Ast>,
+    queries: LruCache<Arc<String>, Ast>,
     /// Cache global stats.
-    stats: Stats,
+    pub(super) stats: Stats,
 }
 
 /// AST cache.
@@ -94,6 +95,11 @@ impl Cache {
         }
     }
 
+    /// Get the inner struct.
+    pub(super) fn lock<'a>(&'a self) -> MutexGuard<'a, RawMutex, Inner> {
+        self.inner.lock()
+    }
+
     /// Parse a statement by either getting it from cache
     /// or using pg_query parser.
     ///
@@ -108,10 +114,7 @@ impl Cache {
     ) -> Result<Ast, Error> {
         let comment_parser_result = parse_edge_comment(query.query(), &ctx.sharding_schema)?;
 
-        let cache_key = comment_parser_result
-            .as_ref()
-            .map(|wc| wc.query.as_str())
-            .unwrap_or(query.query());
+        let cache_key = &comment_parser_result.query;
         {
             let mut guard = self.inner.lock();
             let ast = guard.queries.get_mut(cache_key).map(|entry| {
@@ -123,21 +126,21 @@ impl Cache {
                 // Override the cache-stored routing with what we got from the
                 // query. If the incoming query has no comment, clear the hints
                 // so cached values don't leak to unrelated clients.
-                ast.comment_role = comment_parser_result.as_ref().and_then(|wc| wc.role);
-                ast.comment_shard = comment_parser_result
-                    .as_ref()
-                    .and_then(|wc| wc.shard.clone());
+                ast.comment_role = comment_parser_result.role;
+                ast.comment_shard = comment_parser_result.shard.clone();
 
                 return Ok(ast);
             }
         }
 
         // Parse query without holding lock.
-        let entry = Ast::with_context(query, ctx, prepared_statements)?;
+        let entry = Ast::with_context(&AstQuery { query, cache_key }, ctx, prepared_statements)?;
         let parse_time = entry.stats.lock().parse_time;
 
         let mut guard = self.inner.lock();
-        guard.queries.put(cache_key.to_string(), entry.clone());
+        guard
+            .queries
+            .put(entry.original_query.clone(), entry.clone());
         guard.stats.misses += 1;
         guard.stats.parse_time += parse_time;
 
@@ -152,8 +155,14 @@ impl Cache {
         ctx: &AstContext<'_>,
         prepared_statements: &mut PreparedStatements,
     ) -> Result<Ast, Error> {
-        let mut entry = Ast::with_context(query, ctx, prepared_statements)?;
+        let comment_parser_result = parse_edge_comment(query.query(), &ctx.sharding_schema)?;
+        let cache_key = &comment_parser_result.query;
+
+        let mut entry =
+            Ast::with_context(&AstQuery { query, cache_key }, ctx, prepared_statements)?;
         entry.cached = false;
+        entry.comment_role = comment_parser_result.role;
+        entry.comment_shard = comment_parser_result.shard.clone();
 
         let parse_time = entry.stats.lock().parse_time;
 
@@ -189,7 +198,7 @@ impl Cache {
         entry.update_stats(route);
 
         let mut guard = self.inner.lock();
-        guard.queries.put(normalized, entry);
+        guard.queries.put(Arc::new(normalized), entry);
         guard.stats.misses += 1;
 
         Ok(())
@@ -223,7 +232,7 @@ impl Cache {
     }
 
     /// Get a copy of all queries stored in the cache.
-    pub fn queries() -> HashMap<String, Ast> {
+    pub fn queries() -> HashMap<Arc<String>, Ast> {
         Self::get()
             .inner
             .lock()

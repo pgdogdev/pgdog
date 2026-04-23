@@ -1,8 +1,11 @@
 //! AST parsing context.
 
+use std::sync::Arc;
+
 use crate::backend::pool::Cluster;
 use crate::backend::schema::Schema;
 use crate::backend::ShardingSchema;
+use crate::frontend::BufferedQuery;
 use crate::net::parameter::ParameterValue;
 use crate::net::Parameters;
 
@@ -43,4 +46,12 @@ impl<'a> AstContext<'a> {
             search_path: None,
         }
     }
+}
+
+/// Query passed to the parser.
+pub struct AstQuery<'a> {
+    /// The original request.
+    pub query: &'a BufferedQuery,
+    /// Query without comments and other noise.
+    pub cache_key: &'a str,
 }

@@ -18,6 +18,7 @@ static SHARDING_KEY: Lazy<Regex> = Lazy::new(|| {
 });
 static ROLE: Lazy<Regex> = Lazy::new(|| Regex::new(r#"pgdog_role: *(primary|replica)"#).unwrap());
 
+#[derive(Default, Debug, Clone)]
 pub(crate) struct QueryAndComment {
     pub(crate) query: String,
     #[cfg(test)]
@@ -69,22 +70,27 @@ fn trailing_block_comment(q: &str) -> Option<(&str, &str)> {
 pub(crate) fn parse_edge_comment(
     query: &str,
     schema: &ShardingSchema,
-) -> Result<Option<QueryAndComment>, Error> {
+) -> Result<QueryAndComment, Error> {
     let Some((stripped, comment)) =
         leading_block_comment(query).or_else(|| trailing_block_comment(query))
     else {
-        return Ok(None);
+        return Ok(QueryAndComment {
+            query: query.to_string(),
+            #[cfg(test)]
+            comment: String::new(),
+            ..Default::default()
+        });
     };
 
     let (shard, role) = shard_role_from_comment(comment, schema)?;
 
-    Ok(Some(QueryAndComment {
+    Ok(QueryAndComment {
         query: stripped.to_string(),
         #[cfg(test)]
         comment: comment.to_string(),
         shard,
         role,
-    }))
+    })
 }
 
 fn get_matched_value<'a>(caps: &'a regex::Captures<'a>) -> Option<&'a str> {
