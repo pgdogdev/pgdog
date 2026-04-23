@@ -10,7 +10,7 @@ use tokio::time::Instant;
 use tokio::{select, spawn, time::interval};
 use tracing::{debug, info, warn};
 
-use super::super::{publisher::Table, Error};
+use super::super::{publisher::Table, Error, TableValidationError, TableValidationErrors};
 use super::ReplicationSlot;
 
 use crate::backend::replication::logical::subscriber::stream::StreamSubscriber;
@@ -320,14 +320,25 @@ impl Publisher {
         // Validate all tables support replication before committing to
         // what can be a multi-hour copy.  A table with no primary key or
         // unique replica-identity index cannot be replicated correctly.
-        for tables in self.tables.values() {
-            for table in tables {
-                table.valid()?;
-            }
+        let mut validation_errors: Vec<_> = self
+            .tables
+            .values()
+            .flat_map(|t| t.iter())
+            .filter_map(|t| t.valid().err())
+            .collect();
+
+        if !validation_errors.is_empty() {
+            validation_errors.sort_by_key(|e| match e {
+                TableValidationError::NoIdentityColumns(table) => table.name.clone(),
+            });
+
+            return Err(Error::TableValidation(TableValidationErrors(
+                validation_errors,
+            )));
         }
 
         // Create replication slots only after validation passes — a slot
-        // created before valid() would be orphaned on a NoPrimaryKey error.
+        // created before valid() would be orphaned on a NoIdentityColumns error.
         self.create_slots(source).await?;
 
         let mut handles = vec![];
@@ -528,7 +539,7 @@ mod test {
 
     /// Tables without a primary key or replica identity index must be rejected
     /// before the copy starts, not after. Validates that `data_sync` returns
-    /// `NoPrimaryKey` and leaves no replication slots behind.
+    /// `TableValidation` carrying one entry per bad table and leaves no replication slots behind.
     #[tokio::test]
     async fn data_sync_rejects_no_pk_table_before_slots_created() {
         crate::logger();
@@ -560,15 +571,19 @@ mod test {
         let result = publisher.data_sync(&source, &dest).await;
 
         let err = result.expect_err("data_sync must fail for a publication with no-pk tables");
-        assert!(
-            matches!(err, Error::NoPrimaryKey(_)),
-            "expected NoPrimaryKey, got: {:?}",
-            err
+
+        // Errors are sorted by table name — assert the exact rendered output.
+        assert_eq!(
+            err.to_string(),
+            "Table validation failed:\n\
+            \ttable \"pgdog\".\"publication_test_no_pk\" has no replica identity columns\n\
+            \ttable \"pgdog\".\"publication_test_no_pk_2\" has no replica identity columns\n\
+            \ttable \"pgdog\".\"publication_test_no_pk_3\" has no replica identity columns",
         );
 
         assert!(
             publisher.slots.is_empty(),
-            "no replication slots should be created when valid() fails"
+            "no replication slots should be created when valid() fails",
         );
 
         source.shutdown();

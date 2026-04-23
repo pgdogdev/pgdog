@@ -1,3 +1,4 @@
+use std::fmt;
 use std::num::ParseIntError;
 
 use thiserror::Error;
@@ -6,6 +7,29 @@ use crate::{
     backend::replication::publisher::PublicationTable,
     net::{CommandComplete, ErrorResponse},
 };
+
+/// A single table-level validation failure.
+#[derive(Debug, Error)]
+pub enum TableValidationError {
+    #[error("table {0} has no replica identity columns")]
+    NoIdentityColumns(PublicationTable),
+}
+
+/// Newtype that `Display`s a slice of `TableValidationError` as a human-readable list.
+#[derive(Debug)]
+pub struct TableValidationErrors(pub Vec<TableValidationError>);
+
+impl fmt::Display for TableValidationErrors {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Table validation failed:")?;
+        for err in &self.0 {
+            write!(f, "\n\t{err}")?;
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for TableValidationErrors {}
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -87,8 +111,8 @@ pub enum Error {
     #[error("no replicas available for table sync")]
     NoReplicas,
 
-    #[error("table {0} doesn't have a primary key")]
-    NoPrimaryKey(PublicationTable),
+    #[error("{0}")]
+    TableValidation(TableValidationErrors),
 
     #[error("router returned incorrect command")]
     IncorrectCommand,
@@ -145,6 +169,12 @@ impl From<ErrorResponse> for Error {
 impl From<crate::backend::schema::sync::error::Error> for Error {
     fn from(value: crate::backend::schema::sync::error::Error) -> Self {
         Self::SchemaSync(Box::new(value))
+    }
+}
+
+impl From<TableValidationError> for Error {
+    fn from(e: TableValidationError) -> Self {
+        Self::TableValidation(TableValidationErrors(vec![e]))
     }
 }
 
@@ -226,7 +256,42 @@ mod tests {
     fn not_retryable() {
         assert!(!Error::CopyAborted(PublicationTable::default()).is_retryable());
         assert!(!Error::DataSyncAborted.is_retryable());
-        assert!(!Error::NoPrimaryKey(PublicationTable::default()).is_retryable());
+        assert!(!Error::from(TableValidationError::NoIdentityColumns(
+            PublicationTable::default()
+        ))
+        .is_retryable());
         assert!(!Error::NoReplicaIdentity("s".into(), "t".into()).is_retryable());
+    }
+
+    #[test]
+    fn table_validation_error_display() {
+        // Single error: header + one indented entry.
+        let single = Error::from(TableValidationError::NoIdentityColumns(PublicationTable {
+            schema: "public".into(),
+            name: "orders".into(),
+            ..Default::default()
+        }));
+        assert_eq!(
+            single.to_string(),
+            "Table validation failed:\n\ttable \"public\".\"orders\" has no replica identity columns",
+        );
+
+        // Multiple errors: header + one indented line per entry.
+        let multi = Error::TableValidation(TableValidationErrors(vec![
+            TableValidationError::NoIdentityColumns(PublicationTable {
+                schema: "public".into(),
+                name: "orders".into(),
+                ..Default::default()
+            }),
+            TableValidationError::NoIdentityColumns(PublicationTable {
+                schema: "public".into(),
+                name: "items".into(),
+                ..Default::default()
+            }),
+        ]));
+        assert_eq!(
+            multi.to_string(),
+            "Table validation failed:\n\ttable \"public\".\"orders\" has no replica identity columns\n\ttable \"public\".\"items\" has no replica identity columns",
+        );
     }
 }

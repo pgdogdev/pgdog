@@ -66,7 +66,7 @@ columns with `identity=false`. The error was always going to appear; it just
 appeared at the worst possible time.
 
 A secondary ordering bug was also present: `create_slots()` ran before
-`valid()`, so a `NoPrimaryKey` failure left orphaned replication slots on the
+`valid()`, so a `TableValidation(NoIdentityColumns)` failure left orphaned replication slots on the
 source that required manual cleanup.
 
 ---
@@ -89,18 +89,19 @@ and `replicate_and_cutover()` in [`orchestrator.rs`](../pgdog/src/backend/replic
 `Publisher` entirely, discarding the per-table LSN watermarks accumulated
 during the copy. Discarding those watermarks would cause the replication stream
 to re-apply all WAL from slot creation and produce duplicates.
-`refresh_publisher()` is only called at construction time and after cutover,
-where a clean slate is correct.
+`refresh_publisher()` is called at three points: construction, inside `schema_sync_pre()`
+after the destination schema is reloaded, and after cutover. In all three cases the publisher
+is reset to a clean slate with no per-table LSN watermarks, which is correct because no data
+has been copied yet (or the cutover has already completed and a fresh stream is starting).
 
 **Fix 2 — Validate tables before the copy starts**
 
 [`Publisher::data_sync()`](../pgdog/src/backend/replication/logical/publisher/publisher_impl.rs)
 now runs `sync_tables()` first (column metadata that `valid()` reads), then
 `valid()` (rejects any table with no replica identity before touching resources),
-then `create_slots()`. The ordering matters: a `NoPrimaryKey` error raised
+then `create_slots()`. The ordering matters: a `TableValidation` error raised
 before slot creation leaves no orphaned slots on the source that would require
-manual cleanup. `Error::NoPrimaryKey` is returned with no data moved.
-
+manual cleanup. `Error::TableValidation(TableValidationErrors([NoIdentityColumns(...)]))` is returned with no data moved.
 ---
 
 ## Future risks
@@ -145,4 +146,4 @@ target is deterministic.
 
 **`REPLICA IDENTITY FULL` is not sufficient.** `pg_get_replica_identity_index()`
 returns `NULL` for FULL mode; no columns get `identity=true` and `valid()`
-fails with `NoPrimaryKey`. Use `REPLICA IDENTITY USING INDEX` instead.
+fails with `NoIdentityColumns`. Use `REPLICA IDENTITY USING INDEX` instead.

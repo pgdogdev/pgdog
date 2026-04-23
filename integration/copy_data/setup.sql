@@ -24,10 +24,11 @@ CREATE TABLE IF NOT EXISTS copy_data.orders (
     refunded_at TIMESTAMPTZ
 );
 
--- TODO: remove the surrogate `id` column once pgdog tolerates tables whose
--- replica identity is REPLICA IDENTITY FULL or a composite unique key.  It
--- exists here only so Table::valid() passes during COPY_DATA (see
--- docs/FIX_ISSUE_914.md, Fix 2).
+-- TODO: remove the surrogate `id` column once pgdog supports replicating tables
+-- that have no primary key and no `REPLICA IDENTITY USING INDEX`. Without a PK
+-- (or unique index promoted via REPLICA IDENTITY USING INDEX), no column carries
+-- the replica identity flag, Table::valid() fails with NoIdentityColumns, and the
+-- table is rejected before the copy starts. See docs/FIX_ISSUE_914.md, Fix 2.
 CREATE TABLE IF NOT EXISTS copy_data.order_items (
     id BIGSERIAL PRIMARY KEY,
     user_id BIGINT NOT NULL,

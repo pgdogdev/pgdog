@@ -19,7 +19,7 @@ use crate::net::messages::Protocol;
 use crate::net::replication::StatusUpdate;
 use crate::util::escape_identifier;
 
-use super::super::{subscriber::CopySubscriber, Error};
+use super::super::{subscriber::CopySubscriber, Error, TableValidationError};
 use super::{
     AbortSignal, Copy, PublicationTable, PublicationTableColumn, ReplicaIdentity, ReplicationSlot,
 };
@@ -77,10 +77,10 @@ impl Table {
     ///
     /// Requires at least one column with a replica identity flag. Tables with
     /// REPLICA IDENTITY FULL or NOTHING have no identity columns and fail here
-    /// with NoPrimaryKey.
-    pub fn valid(&self) -> Result<(), Error> {
+    /// with NoIdentityColumns.
+    pub fn valid(&self) -> Result<(), TableValidationError> {
         if !self.columns.iter().any(|c| c.identity) {
-            return Err(Error::NoPrimaryKey(self.table.clone()));
+            return Err(TableValidationError::NoIdentityColumns(self.table.clone()));
         }
         Ok(())
     }
@@ -364,7 +364,10 @@ mod test {
     #[test]
     fn valid_without_pk() {
         let t = make_table(vec![("id", false), ("name", false)]);
-        assert!(matches!(t.valid(), Err(Error::NoPrimaryKey(_))));
+        assert!(matches!(
+            t.valid(),
+            Err(TableValidationError::NoIdentityColumns(_))
+        ));
     }
 
     #[test]
@@ -550,7 +553,7 @@ mod test {
             .unwrap();
         assert!(matches!(
             load_table(&mut s, "valid_test_nopk").await.valid(),
-            Err(Error::NoPrimaryKey(_))
+            Err(TableValidationError::NoIdentityColumns(_))
         ));
         s.execute("ROLLBACK").await.unwrap();
     }
@@ -568,7 +571,10 @@ mod test {
             .unwrap();
         let table = load_table(&mut s, "valid_test_full").await;
         assert_eq!(table.identity.identity, "f");
-        assert!(matches!(table.valid(), Err(Error::NoPrimaryKey(_))));
+        assert!(matches!(
+            table.valid(),
+            Err(TableValidationError::NoIdentityColumns(_))
+        ));
         s.execute("ROLLBACK").await.unwrap();
     }
 
@@ -585,7 +591,10 @@ mod test {
             .unwrap();
         let table = load_table(&mut s, "valid_test_nothing").await;
         assert_eq!(table.identity.identity, "n");
-        assert!(matches!(table.valid(), Err(Error::NoPrimaryKey(_))));
+        assert!(matches!(
+            table.valid(),
+            Err(TableValidationError::NoIdentityColumns(_))
+        ));
         s.execute("ROLLBACK").await.unwrap();
     }
 
