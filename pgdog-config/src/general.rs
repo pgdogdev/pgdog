@@ -514,7 +514,7 @@ pub struct General {
 
     /// Directory where the two-phase commit write-ahead log is stored.
     ///
-    /// **Note:** PgDog probes this directory at startup. If it cannot be created or written to, the WAL is silently disabled and a warning is logged: 2PC will continue to function but will not be durable across restarts.
+    /// **Note:** This setting cannot be changed at runtime. PgDog probes this directory at startup. If it cannot be created or written to, the WAL is silently disabled and a warning is logged: 2PC will continue to function but will not be durable across restarts.
     ///
     /// _Default:_ `./pgdog_wal`
     ///

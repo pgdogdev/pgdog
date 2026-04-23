@@ -5,3 +5,4 @@
 mod error;
 mod record;
 mod segment;
+mod writer;
