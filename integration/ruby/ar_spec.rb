@@ -23,7 +23,7 @@ end
 
 describe 'active record' do
   after do
-    # ensure_done
+    ensure_done
   end
   describe 'normal' do
     before do
