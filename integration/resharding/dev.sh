@@ -57,7 +57,12 @@ replace_copy_with_replicate() {
     local table="$1"
     local column="$2"
 
-    psql source -c "UPDATE ${table} SET ${column} = regexp_replace(${column}, '-copy$', '-replicate') WHERE ${column} LIKE '%-copy';"
+    # Capture `UPDATE N` from psql so we know how many rows the replication stream
+    # must propagate before wait_for_no_copy_rows can succeed on this table.
+    local tag
+    tag=$(psql source -c "UPDATE ${table} SET ${column} = regexp_replace(${column}, '-copy\$', '-replicate') WHERE ${column} LIKE '%-copy';" | grep -E '^UPDATE')
+    local updated="${tag#UPDATE }"
+    echo "${table}.${column}: replace_copy updated ${updated} rows on source"
 }
 
 replace_copy_with_replicate tenants name
@@ -71,16 +76,34 @@ wait_for_no_copy_rows() {
     local table="$1"
     local column="$2"
 
-    while true; do
+    # If source still has -copy rows, destination can never reach 0.
+    local src_copy
+    src_copy=$(psql -d source -tAc "SELECT COUNT(*) FROM ${table} WHERE ${column} LIKE '%-copy'")
+    if [ "${src_copy}" -ne 0 ]; then
+        echo "FAIL ${table}.${column}: source still has ${src_copy} -copy rows"
+        exit 1
+    fi
+
+    local count=0
+    local caught_up=0
+    for _ in $(seq 1 180); do
         count=$(psql -d destination -tAc "SELECT COUNT(*) FROM ${table} WHERE ${column} LIKE '%-copy'")
         if [ "${count}" -eq 0 ]; then
-            echo "${table}.${column}: replication caught up"
+            caught_up=1
             break
         fi
-
-        echo "${table}.${column}: waiting for ${count} rows ending in -copy"
         sleep 1
     done
+
+    if [ "${caught_up}" -ne 1 ]; then
+        echo "FAIL ${table}.${column}: destination still has ${count} rows ending in -copy after 180s"
+        for port in 15432 15433; do
+            PGPASSWORD=pgdog psql -h 127.0.0.1 -p ${port} -U pgdog -d postgres -c \
+                "SELECT slot_name, active, confirmed_flush_lsn, pg_current_wal_lsn() - confirmed_flush_lsn AS lag_bytes FROM pg_replication_slots" || true
+        done
+        exit 1
+    fi
+    echo "${table}.${column}: replication caught up"
 }
 
 wait_for_no_copy_rows tenants name

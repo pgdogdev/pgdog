@@ -107,6 +107,20 @@ stop_pgbench
 ${PGDOG_BIN} --config "${PGDOG_CONFIG}" --users "${PGDOG_USERS}" \
     schema-sync --from-database source --to-database destination --publication pgdog --cutover
 
+# Check row counts: source -> destination
+echo "Checking row counts: source -> destination..."
+for TABLE in ${SHARDED_TABLES}; do
+    SRC=$(psql -d pgdog -tAc "SELECT COUNT(*) FROM ${TABLE}")
+    DST1=$(psql -d pgdog1 -tAc "SELECT COUNT(*) FROM ${TABLE}")
+    DST2=$(psql -d pgdog2 -tAc "SELECT COUNT(*) FROM ${TABLE}")
+    DST=$((DST1 + DST2))
+    if [ "${SRC}" -ne "${DST}" ]; then
+        echo "MISMATCH ${TABLE}: source=${SRC} destination=${DST} (pgdog1=${DST1} pgdog2=${DST2})"
+        exit 1
+    fi
+    echo "OK ${TABLE}: ${SRC} rows"
+done
+
 #
 # 2 --> 2
 #
