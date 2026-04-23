@@ -20,4 +20,13 @@ pub enum Error {
 
     #[error("record of {0} bytes exceeds u32 framing")]
     RecordTooLarge(usize),
+
+    #[error("io: {0}")]
+    Io(#[from] std::io::Error),
+
+    #[error("segment header is missing or has wrong magic")]
+    BadSegmentHeader,
+
+    #[error("segment filename is not a valid LSN: {0}")]
+    BadSegmentName(String),
 }
