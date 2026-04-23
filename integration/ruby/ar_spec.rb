@@ -23,7 +23,7 @@ end
 
 describe 'active record' do
   after do
-    ensure_done
+    # ensure_done
   end
   describe 'normal' do
     before do
@@ -45,6 +45,18 @@ describe 'active record' do
       250.times do
         expect(Sharded.find(1).id).to eq(1)
       end
+    end
+
+    it 'doesnt use ANY correctly' do
+      conn("pgdog", true)
+      numbers = []
+      25.times do |i|
+        numbers << i
+      end
+      rows = Sharded.where(id: numbers)
+      rows.size
+
+      rows = Sharded.where(id: 1).annotate("hello: world").size
     end
 
     it 'handles idle transaction timeout correctly' do

@@ -3195,6 +3195,7 @@ dependencies = [
  "lazy_static",
  "lru",
  "md5",
+ "memchr",
  "once_cell",
  "parking_lot",
  "pg_query",

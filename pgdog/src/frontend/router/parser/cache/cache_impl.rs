@@ -10,7 +10,7 @@ use std::sync::Arc;
 use tracing::debug;
 
 use super::super::{Error, Route};
-use super::{Ast, AstContext};
+use super::{super::parse_edge_comment, Ast, AstContext};
 use crate::frontend::{BufferedQuery, PreparedStatements};
 
 static CACHE: Lazy<Cache> = Lazy::new(Cache::new);
@@ -106,14 +106,28 @@ impl Cache {
         ctx: &AstContext<'_>,
         prepared_statements: &mut PreparedStatements,
     ) -> Result<Ast, Error> {
+        let comment_parser_result = parse_edge_comment(query.query(), &ctx.sharding_schema)?;
+
+        let cache_key = comment_parser_result
+            .as_ref()
+            .map(|wc| wc.query.as_str())
+            .unwrap_or(query.query());
         {
             let mut guard = self.inner.lock();
-            let ast = guard.queries.get_mut(query.query()).map(|entry| {
+            let ast = guard.queries.get_mut(cache_key).map(|entry| {
                 entry.stats.lock().hits += 1; // No contention on this.
                 entry.clone()
             });
-            if let Some(ast) = ast {
+            if let Some(mut ast) = ast {
                 guard.stats.hits += 1;
+                // Override the cache-stored routing with what we got from the
+                // query. If the incoming query has no comment, clear the hints
+                // so cached values don't leak to unrelated clients.
+                ast.comment_role = comment_parser_result.as_ref().and_then(|wc| wc.role);
+                ast.comment_shard = comment_parser_result
+                    .as_ref()
+                    .and_then(|wc| wc.shard.clone());
+
                 return Ok(ast);
             }
         }
@@ -123,7 +137,7 @@ impl Cache {
         let parse_time = entry.stats.lock().parse_time;
 
         let mut guard = self.inner.lock();
-        guard.queries.put(query.query().to_string(), entry.clone());
+        guard.queries.put(cache_key.to_string(), entry.clone());
         guard.stats.misses += 1;
         guard.stats.parse_time += parse_time;
 

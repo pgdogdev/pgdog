@@ -23,6 +23,11 @@ use crate::{backend::ShardingSchema, config::Role};
 pub struct Ast {
     /// Was this entry cached?
     pub cached: bool,
+    /// Shard.
+    pub comment_shard: Option<Shard>,
+    /// Role.
+    pub comment_role: Option<Role>,
+
     /// Inner sync.
     inner: Arc<AstInner>,
 }
@@ -33,10 +38,6 @@ pub struct AstInner {
     pub ast: ParseResult,
     /// AST stats.
     pub stats: Mutex<Stats>,
-    /// Shard.
-    pub comment_shard: Option<Shard>,
-    /// Role.
-    pub comment_role: Option<Role>,
     /// Rewrite plan.
     pub rewrite_plan: RewritePlan,
     /// Fingerprint.
@@ -49,8 +50,6 @@ impl AstInner {
         Self {
             ast,
             stats: Mutex::new(Stats::new()),
-            comment_role: None,
-            comment_shard: None,
             rewrite_plan: RewritePlan::default(),
             fingerprint: Fingerprint::default(),
         }
@@ -109,10 +108,10 @@ impl Ast {
 
         Ok(Self {
             cached: true,
+            comment_shard,
+            comment_role,
             inner: Arc::new(AstInner {
                 stats: Mutex::new(stats),
-                comment_shard,
-                comment_role,
                 ast,
                 rewrite_plan,
                 fingerprint,
@@ -146,6 +145,8 @@ impl Ast {
 
         Ok(Self {
             cached: true,
+            comment_role: None,
+            comment_shard: None,
             inner: Arc::new(AstInner::new(ast)),
         })
     }
@@ -154,6 +155,8 @@ impl Ast {
     pub fn from_parse_result(parse_result: ParseResult) -> Self {
         Self {
             cached: true,
+            comment_role: None,
+            comment_shard: None,
             inner: Arc::new(AstInner::new(parse_result)),
         }
     }
