@@ -265,11 +265,13 @@ impl StreamSubscriber {
         }
 
         for conn in &mut conns {
-            // Keep server connections always synchronized.
-            for _ in 0..2 {
+            let mut got_bind = false;
+            let mut got_cmd = false;
+            while !got_bind || !got_cmd {
                 let msg = conn.read().await?;
                 match msg.code() {
                     'C' => {
+                        got_cmd = true;
                         let cmd = CommandComplete::try_from(msg)?;
                         let rows = cmd
                             .rows()?
@@ -285,12 +287,15 @@ impl StreamSubscriber {
                             }
                         }
                     }
-                    '2' => (),
+                    '2' => {
+                        got_bind = true;
+                    }
                     'E' => {
                         return Err(Error::PgError(Box::new(ErrorResponse::from_bytes(
                             msg.to_bytes()?,
                         )?)))
                     }
+                    'N' | 'S' | 'A' => {}
                     c => return Err(Error::SendOutOfSync(c)),
                 }
             }
@@ -419,18 +424,20 @@ impl StreamSubscriber {
             server.flush().await?;
         }
         for server in &mut self.connections {
-            // Drain responses from server.
-            let msg = server.read().await?;
-            trace!("[{}] --> {:?}", server.addr(), msg);
+            loop {
+                let msg = server.read().await?;
+                trace!("[{}] --> {:?}", server.addr(), msg);
 
-            match msg.code() {
-                'E' => {
-                    return Err(Error::PgError(Box::new(ErrorResponse::from_bytes(
-                        msg.to_bytes()?,
-                    )?)))
+                match msg.code() {
+                    'E' => {
+                        return Err(Error::PgError(Box::new(ErrorResponse::from_bytes(
+                            msg.to_bytes()?,
+                        )?)))
+                    }
+                    'Z' => break,
+                    'N' | 'S' | 'A' => {}
+                    c => return Err(Error::CommitOutOfSync(c)),
                 }
-                'Z' => (),
-                c => return Err(Error::CommitOutOfSync(c)),
             }
         }
 
@@ -502,8 +509,8 @@ impl StreamSubscriber {
                 }
 
                 for server in &mut self.connections {
-                    let num_messages = if self.in_transaction { 4 } else { 5 };
-                    for _ in 0..num_messages {
+                    let mut parse_completes = 0;
+                    loop {
                         let msg = server.read().await?;
                         trace!("[{}] --> {:?}", server.addr(), msg);
 
@@ -513,8 +520,16 @@ impl StreamSubscriber {
                                     msg.to_bytes()?,
                                 )?)))
                             }
+                            // Not-in-transaction: Sync was sent, ReadyForQuery terminates.
+                            // In-transaction: Flush was sent, count 4 ParseCompletes instead.
                             'Z' => break,
-                            '1' => continue,
+                            '1' => {
+                                parse_completes += 1;
+                                if self.in_transaction && parse_completes == 4 {
+                                    break;
+                                }
+                            }
+                            'N' | 'S' | 'A' => {}
                             c => return Err(Error::RelationOutOfSync(c)),
                         }
                     }
