@@ -29,4 +29,7 @@ pub enum Error {
 
     #[error("segment filename is not a valid LSN: {0}")]
     BadSegmentName(String),
+
+    #[error("writer task is no longer running")]
+    WriterGone,
 }

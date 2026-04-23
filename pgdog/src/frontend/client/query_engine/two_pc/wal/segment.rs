@@ -112,11 +112,7 @@ impl SegmentReader {
             .ok_or_else(|| Error::BadSegmentName(path.display().to_string()))?;
         let start_lsn = parse_segment_filename(name)?;
 
-        let mut file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(path)
-            .await?;
+        let mut file = OpenOptions::new().read(true).write(true).open(path).await?;
 
         let mut header = [0u8; HEADER_BYTES as usize];
         match file.read_exact(&mut header).await {
@@ -237,7 +233,6 @@ impl SegmentReader {
             start_lsn,
             next_lsn,
             size_bytes: last_good_offset,
-            encode_buf: BytesMut::new(),
         })
     }
 
@@ -265,7 +260,6 @@ pub struct Segment {
     start_lsn: u64,
     next_lsn: u64,
     size_bytes: u64,
-    encode_buf: BytesMut,
 }
 
 impl Segment {
@@ -290,21 +284,19 @@ impl Segment {
             start_lsn,
             next_lsn: start_lsn,
             size_bytes: HEADER_BYTES,
-            encode_buf: BytesMut::new(),
         })
     }
 
-    /// Encode and append a single record. Does NOT fsync; the caller must
-    /// call [`Segment::sync`] once they want durability for prior appends.
-    /// Returns the LSN assigned to this record.
-    pub async fn append(&mut self, record: &Record) -> Result<u64, Error> {
-        self.encode_buf.clear();
-        record.encode(&mut self.encode_buf)?;
-        self.file.write_all(&self.encode_buf).await?;
-        let lsn = self.next_lsn;
-        self.next_lsn += 1;
-        self.size_bytes += self.encode_buf.len() as u64;
-        Ok(lsn)
+    /// Append a pre-encoded batch of `records` records to the segment without
+    /// syncing. The caller must call [`Segment::sync`] when durability is
+    /// required for prior appends. Returns the LSN assigned to the first
+    /// record in the batch; subsequent records have LSNs `start + i`.
+    pub async fn append_batch(&mut self, encoded: &[u8], records: u32) -> Result<u64, Error> {
+        self.file.write_all(encoded).await?;
+        let start = self.next_lsn;
+        self.next_lsn += records as u64;
+        self.size_bytes += encoded.len() as u64;
+        Ok(start)
     }
 
     /// Flush all previously appended bytes to durable storage.
@@ -380,11 +372,12 @@ mod tests {
         let r2 = Record::End(TxnPayload {
             txn: TwoPcTransaction::new(),
         });
-        let l1 = seg.append(&r1).await.unwrap();
-        let l2 = seg.append(&r2).await.unwrap();
+        let mut buf = BytesMut::new();
+        r1.encode(&mut buf).unwrap();
+        r2.encode(&mut buf).unwrap();
+        let start = seg.append_batch(&buf, 2).await.unwrap();
         seg.sync().await.unwrap();
-        assert_eq!(l1, 0);
-        assert_eq!(l2, 1);
+        assert_eq!(start, 0);
         assert_eq!(seg.next_lsn(), 2);
         drop(seg);
 
@@ -403,17 +396,19 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = {
             let mut seg = Segment::create(dir.path(), 0).await.unwrap();
-            seg.append(&Record::Begin(BeginPayload {
+            let mut buf = BytesMut::new();
+            Record::Begin(BeginPayload {
                 txn: TwoPcTransaction::new(),
                 user: "u".into(),
                 database: "d".into(),
                 shards: vec![0, 1],
-            }))
-            .await
+            })
+            .encode(&mut buf)
             .unwrap();
+            seg.append_batch(&buf, 1).await.unwrap();
             seg.sync().await.unwrap();
             // Append half a second record's framing to simulate a torn write.
-            let mut buf = Vec::new();
+            buf.clear();
             Record::End(TxnPayload {
                 txn: TwoPcTransaction::new(),
             })
@@ -422,7 +417,9 @@ mod tests {
             tokio::io::AsyncWriteExt::write_all(&mut seg.file, &buf[..buf.len() / 2])
                 .await
                 .unwrap();
-            tokio::io::AsyncWriteExt::flush(&mut seg.file).await.unwrap();
+            tokio::io::AsyncWriteExt::flush(&mut seg.file)
+                .await
+                .unwrap();
             seg.path().to_path_buf()
         };
 
@@ -450,12 +447,14 @@ mod tests {
             database: "d".into(),
             shards: vec![0, 1],
         });
-        seg.append(&r1).await.unwrap();
-        seg.append(&Record::End(TxnPayload {
+        let mut buf = BytesMut::new();
+        r1.encode(&mut buf).unwrap();
+        Record::End(TxnPayload {
             txn: TwoPcTransaction::new(),
-        }))
-        .await
+        })
+        .encode(&mut buf)
         .unwrap();
+        seg.append_batch(&buf, 2).await.unwrap();
         seg.sync().await.unwrap();
         let path = seg.path().to_path_buf();
         drop(seg);
@@ -503,6 +502,7 @@ mod tests {
         let mut seg = Segment::create(dir.path(), 100).await.unwrap();
         let payload = "x".repeat(1024);
         let mut expected = Vec::new();
+        let mut buf = BytesMut::new();
         for _ in 0..200 {
             let r = Record::Begin(BeginPayload {
                 txn: TwoPcTransaction::new(),
@@ -510,9 +510,10 @@ mod tests {
                 database: "d".into(),
                 shards: vec![0; 16],
             });
-            seg.append(&r).await.unwrap();
+            r.encode(&mut buf).unwrap();
             expected.push(r);
         }
+        seg.append_batch(&buf, expected.len() as u32).await.unwrap();
         seg.sync().await.unwrap();
         let path = seg.path().to_path_buf();
         drop(seg);
