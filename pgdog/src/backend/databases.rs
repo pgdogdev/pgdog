@@ -125,10 +125,7 @@ pub fn reload() -> Result<(), Error> {
     let old_config = config();
     let new_config = load(&old_config.config_path, &old_config.users_path)?;
     let databases = from_config(&new_config);
-    info!(
-        "reloading pools from config file: {}",
-        old_config.config_path.display()
-    );
+    info!("reloading configuration");
     replace_databases(databases, true)?;
     tls::reload()?;
     // Remove any unused prepared statements.
