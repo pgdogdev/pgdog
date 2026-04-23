@@ -336,9 +336,7 @@ mod tests {
     #[test]
     fn test_remove_comment_leading() {
         let schema = test_schema();
-        let qac = parse_edge_comment("/* hello */ SELECT 1", &schema)
-            .unwrap()
-            .unwrap();
+        let qac = parse_edge_comment("/* hello */ SELECT 1", &schema).unwrap();
         assert_eq!(qac.query, "SELECT 1");
         assert_eq!(qac.comment, "/* hello */");
     }
@@ -346,9 +344,7 @@ mod tests {
     #[test]
     fn test_remove_comment_trailing() {
         let schema = test_schema();
-        let qac = parse_edge_comment("SELECT 1 /* hello */", &schema)
-            .unwrap()
-            .unwrap();
+        let qac = parse_edge_comment("SELECT 1 /* hello */", &schema).unwrap();
         assert_eq!(qac.query, "SELECT 1");
         assert_eq!(qac.comment, "/* hello */");
     }
@@ -356,15 +352,11 @@ mod tests {
     #[test]
     fn test_remove_comment_no_surrounding_whitespace() {
         let schema = test_schema();
-        let qac = parse_edge_comment("/*a*/SELECT 1", &schema)
-            .unwrap()
-            .unwrap();
+        let qac = parse_edge_comment("/*a*/SELECT 1", &schema).unwrap();
         assert_eq!(qac.query, "SELECT 1");
         assert_eq!(qac.comment, "/*a*/");
 
-        let qac = parse_edge_comment("SELECT 1/*b*/", &schema)
-            .unwrap()
-            .unwrap();
+        let qac = parse_edge_comment("SELECT 1/*b*/", &schema).unwrap();
         assert_eq!(qac.query, "SELECT 1");
         assert_eq!(qac.comment, "/*b*/");
     }
@@ -372,9 +364,9 @@ mod tests {
     #[test]
     fn test_remove_comment_none() {
         let schema = test_schema();
-        assert!(parse_edge_comment("SELECT 1", &schema).unwrap().is_none());
-        assert!(parse_edge_comment("", &schema).unwrap().is_none());
-        assert!(parse_edge_comment("   ", &schema).unwrap().is_none());
+        assert_eq!(parse_edge_comment("SELECT 1", &schema).unwrap().comment, "");
+        assert_eq!(parse_edge_comment("", &schema).unwrap().comment, "");
+        assert_eq!(parse_edge_comment("   ", &schema).unwrap().comment, "");
     }
 
     #[test]
@@ -382,19 +374,25 @@ mod tests {
         let schema = test_schema();
         // Comment sandwiched between query content is not at the start or end
         // so the regex must not match it.
-        assert!(parse_edge_comment("SELECT /* inline */ 1", &schema)
-            .unwrap()
-            .is_none());
-        assert!(parse_edge_comment("SELECT 1 /* a */ FROM t", &schema)
-            .unwrap()
-            .is_none());
+        assert_eq!(
+            parse_edge_comment("SELECT /* inline */ 1", &schema)
+                .unwrap()
+                .comment,
+            ""
+        );
+        assert_eq!(
+            parse_edge_comment("SELECT 1 /* a */ FROM t", &schema)
+                .unwrap()
+                .comment,
+            ""
+        );
     }
 
     #[test]
     fn test_remove_comment_multiline_block() {
         let schema = test_schema();
         let query = "/* line1\n line2\n line3 */ SELECT 1";
-        let qac = parse_edge_comment(query, &schema).unwrap().unwrap();
+        let qac = parse_edge_comment(query, &schema).unwrap();
         assert_eq!(qac.query, "SELECT 1");
         assert_eq!(qac.comment, "/* line1\n line2\n line3 */");
     }
@@ -402,15 +400,11 @@ mod tests {
     #[test]
     fn test_remove_comment_with_surrounding_newlines() {
         let schema = test_schema();
-        let qac = parse_edge_comment("\n\t/* hi */\n SELECT 1", &schema)
-            .unwrap()
-            .unwrap();
+        let qac = parse_edge_comment("\n\t/* hi */\n SELECT 1", &schema).unwrap();
         assert_eq!(qac.query, "SELECT 1");
         assert_eq!(qac.comment, "/* hi */");
 
-        let qac = parse_edge_comment("SELECT 1\n /* hi */\n\t", &schema)
-            .unwrap()
-            .unwrap();
+        let qac = parse_edge_comment("SELECT 1\n /* hi */\n\t", &schema).unwrap();
         assert_eq!(qac.query, "SELECT 1");
         assert_eq!(qac.comment, "/* hi */");
     }
@@ -418,7 +412,7 @@ mod tests {
     #[test]
     fn test_remove_comment_only_comment() {
         let schema = test_schema();
-        let qac = parse_edge_comment("/* only */", &schema).unwrap().unwrap();
+        let qac = parse_edge_comment("/* only */", &schema).unwrap();
         assert_eq!(qac.query, "");
         assert_eq!(qac.comment, "/* only */");
     }
@@ -426,9 +420,7 @@ mod tests {
     #[test]
     fn test_remove_comment_preserves_inner_content() {
         let schema = test_schema();
-        let qac = parse_edge_comment("SELECT 'a/*b*/c' /* pgdog_shard: 1 */", &schema)
-            .unwrap()
-            .unwrap();
+        let qac = parse_edge_comment("SELECT 'a/*b*/c' /* pgdog_shard: 1 */", &schema).unwrap();
         assert_eq!(qac.query, "SELECT 'a/*b*/c'");
         assert_eq!(qac.comment, "/* pgdog_shard: 1 */");
         assert_eq!(qac.shard, Some(Shard::Direct(1)));
@@ -438,15 +430,11 @@ mod tests {
     fn test_remove_comment_non_greedy() {
         let schema = test_schema();
         // Ensure the regex doesn't greedily span across two separate comments.
-        let qac = parse_edge_comment("/* first */ SELECT /* mid */ 1", &schema)
-            .unwrap()
-            .unwrap();
+        let qac = parse_edge_comment("/* first */ SELECT /* mid */ 1", &schema).unwrap();
         assert_eq!(qac.query, "SELECT /* mid */ 1");
         assert_eq!(qac.comment, "/* first */");
 
-        let qac = parse_edge_comment("SELECT /* mid */ 1 /* last */", &schema)
-            .unwrap()
-            .unwrap();
+        let qac = parse_edge_comment("SELECT /* mid */ 1 /* last */", &schema).unwrap();
         assert_eq!(qac.query, "SELECT /* mid */ 1");
         assert_eq!(qac.comment, "/* last */");
     }
@@ -454,9 +442,7 @@ mod tests {
     #[test]
     fn test_remove_comment_empty_body() {
         let schema = test_schema();
-        let qac = parse_edge_comment("/**/ SELECT 1", &schema)
-            .unwrap()
-            .unwrap();
+        let qac = parse_edge_comment("/**/ SELECT 1", &schema).unwrap();
         assert_eq!(qac.query, "SELECT 1");
         assert_eq!(qac.comment, "/**/");
     }
@@ -464,9 +450,8 @@ mod tests {
     #[test]
     fn test_remove_comment_pgdog_directive() {
         let schema = test_schema();
-        let qac = parse_edge_comment("SELECT * FROM users /* pgdog_role: primary */", &schema)
-            .unwrap()
-            .unwrap();
+        let qac =
+            parse_edge_comment("SELECT * FROM users /* pgdog_role: primary */", &schema).unwrap();
         assert_eq!(qac.query, "SELECT * FROM users");
         assert_eq!(qac.comment, "/* pgdog_role: primary */");
         assert_eq!(qac.role, Some(Role::Primary));

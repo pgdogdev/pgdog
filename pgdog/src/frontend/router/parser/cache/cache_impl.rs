@@ -29,6 +29,8 @@ pub struct Stats {
     pub multi: usize,
     /// Parse time.
     pub parse_time: Duration,
+    /// Fingerprints calculated.
+    pub fingerprints: usize,
 }
 
 impl Stats {
@@ -113,8 +115,8 @@ impl Cache {
         prepared_statements: &mut PreparedStatements,
     ) -> Result<Ast, Error> {
         let comment_parser_result = parse_edge_comment(query.query(), &ctx.sharding_schema)?;
-
         let cache_key = &comment_parser_result.query;
+
         {
             let mut guard = self.inner.lock();
             let ast = guard.queries.get_mut(cache_key).map(|entry| {
@@ -134,7 +136,17 @@ impl Cache {
         }
 
         // Parse query without holding lock.
-        let entry = Ast::with_context(&AstQuery { query, cache_key }, ctx, prepared_statements)?;
+        let mut entry = Ast::with_context(
+            &AstQuery {
+                query,
+                cache_key,
+                comment_shard: comment_parser_result.shard.as_ref(),
+            },
+            ctx,
+            prepared_statements,
+        )?;
+        entry.comment_role = comment_parser_result.role;
+        entry.comment_shard = comment_parser_result.shard.clone();
         let parse_time = entry.stats.lock().parse_time;
 
         let mut guard = self.inner.lock();
@@ -158,8 +170,15 @@ impl Cache {
         let comment_parser_result = parse_edge_comment(query.query(), &ctx.sharding_schema)?;
         let cache_key = &comment_parser_result.query;
 
-        let mut entry =
-            Ast::with_context(&AstQuery { query, cache_key }, ctx, prepared_statements)?;
+        let mut entry = Ast::with_context(
+            &AstQuery {
+                query,
+                cache_key,
+                comment_shard: comment_parser_result.shard.as_ref(),
+            },
+            ctx,
+            prepared_statements,
+        )?;
         entry.cached = false;
         entry.comment_role = comment_parser_result.role;
         entry.comment_shard = comment_parser_result.shard.clone();

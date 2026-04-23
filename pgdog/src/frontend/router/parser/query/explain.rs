@@ -76,8 +76,9 @@ mod tests {
         let cluster = Cluster::new_test(&config());
         let mut stmts = PreparedStatements::default();
 
+        let buffered = BufferedQuery::Query(Query::new(sql));
         let ast = Ast::new(
-            &BufferedQuery::Query(Query::new(sql)),
+            &AstQuery::from_query(&buffered),
             &cluster.sharding_schema(),
             &cluster.schema(),
             &mut stmts,
@@ -114,8 +115,9 @@ mod tests {
         let cluster = Cluster::new_test(&config());
         let mut stmts = PreparedStatements::default();
 
+        let buffered = BufferedQuery::Prepared(Parse::new_anonymous(sql));
         let ast = Ast::new(
-            &BufferedQuery::Prepared(Parse::new_anonymous(sql)),
+            &AstQuery::from_query(&buffered),
             &cluster.sharding_schema(),
             &cluster.schema(),
             &mut stmts,
@@ -240,14 +242,6 @@ mod tests {
         let r = route("EXPLAIN (FORMAT JSON) SELECT * FROM sharded WHERE id = 1");
         assert!(matches!(r.shard(), Shard::Direct(_)));
         assert!(r.is_read());
-    }
-
-    #[test]
-    fn test_explain_with_comment_override() {
-        let r = route("/* pgdog_shard: 5 */ EXPLAIN SELECT * FROM sharded");
-        assert_eq!(r.shard(), &Shard::Direct(5));
-        let lines = r.explain().unwrap().render_lines();
-        assert_eq!(lines[3], "  Shard 5: manual override to shard=5");
     }
 
     #[test]

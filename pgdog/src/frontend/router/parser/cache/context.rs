@@ -1,10 +1,9 @@
 //! AST parsing context.
 
-use std::sync::Arc;
-
 use crate::backend::pool::Cluster;
 use crate::backend::schema::Schema;
 use crate::backend::ShardingSchema;
+use crate::frontend::router::parser::Shard;
 use crate::frontend::BufferedQuery;
 use crate::net::parameter::ParameterValue;
 use crate::net::Parameters;
@@ -54,4 +53,17 @@ pub struct AstQuery<'a> {
     pub query: &'a BufferedQuery,
     /// Query without comments and other noise.
     pub cache_key: &'a str,
+    /// Comment shard.
+    pub comment_shard: Option<&'a Shard>,
+}
+
+impl<'a> AstQuery<'a> {
+    /// Create an AstQuery using the raw query text as the cache key.
+    pub fn from_query(query: &'a BufferedQuery) -> Self {
+        Self {
+            cache_key: query.query(),
+            query,
+            comment_shard: None,
+        }
+    }
 }

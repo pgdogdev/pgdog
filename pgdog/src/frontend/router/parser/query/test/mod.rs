@@ -1,9 +1,7 @@
 #![allow(clippy::print_stdout)]
 
-use std::ops::Deref;
-
 use crate::{
-    config::{self, config},
+    config::config,
     net::{
         messages::{parse::Parse, Parameter},
         Close, Format, Parameters, Sync,
@@ -16,7 +14,7 @@ use crate::backend::Cluster;
 use crate::config::ReadWriteStrategy;
 use crate::frontend::{
     client::{Sticky, TransactionType},
-    router::Ast,
+    router::{Ast, AstQuery},
     BufferedQuery, ClientRequest, PreparedStatements, RouterContext,
 };
 use crate::net::messages::Query;
@@ -45,8 +43,9 @@ pub mod test_transaction;
 fn parse_query(query: &str) -> Command {
     let mut query_parser = QueryParser::default();
     let cluster = Cluster::new_test(&config());
+    let buffered = BufferedQuery::Query(Query::new(query));
     let ast = Ast::new(
-        &BufferedQuery::Query(Query::new(query)),
+        &AstQuery::from_query(&buffered),
         &cluster.sharding_schema(),
         &cluster.schema(),
         &mut PreparedStatements::default(),
@@ -73,8 +72,9 @@ macro_rules! command {
         let query = $query;
         let mut query_parser = QueryParser::default();
         let cluster = Cluster::new_test(&crate::config::config());
+        let buffered = BufferedQuery::Query(Query::new($query));
         let mut ast = Ast::new(
-            &BufferedQuery::Query(Query::new($query)),
+            &AstQuery::from_query(&buffered),
             &cluster.sharding_schema(),
             &cluster.schema(),
             &mut PreparedStatements::default(),
@@ -135,7 +135,7 @@ macro_rules! query_parser {
         let mut prep_stmts = PreparedStatements::default();
 
         let mut ast = Ast::new(
-            &buffered_query,
+            &AstQuery::from_query(&buffered_query),
             &cluster.sharding_schema(),
             &cluster.schema(),
             &mut prep_stmts,
@@ -191,8 +191,9 @@ macro_rules! parse {
             .collect::<Vec<_>>();
         let bind = Bind::new_params_codes($name, &params, $codes);
         let cluster = Cluster::new_test(&crate::config::config());
+        let buffered = BufferedQuery::Prepared(Parse::new_anonymous($query));
         let ast = Ast::new(
-            &BufferedQuery::Prepared(Parse::new_anonymous($query)),
+            &AstQuery::from_query(&buffered),
             &cluster.sharding_schema(),
             &cluster.schema(),
             &mut PreparedStatements::default(),
@@ -458,7 +459,7 @@ fn test_set() {
     let mut prep_stmts = PreparedStatements::default();
     let buffered_query = BufferedQuery::Query(Query::new(query_str));
     let mut ast = Ast::new(
-        &buffered_query,
+        &AstQuery::from_query(&buffered_query),
         &cluster.sharding_schema(),
         &cluster.schema(),
         &mut prep_stmts,
@@ -604,7 +605,7 @@ WHERE t2.account = (
 	";
     let buffered_query = BufferedQuery::Query(Query::new(query_str));
     let mut ast = Ast::new(
-        &buffered_query,
+        &AstQuery::from_query(&buffered_query),
         &cluster.sharding_schema(),
         &cluster.schema(),
         &mut prep_stmts,
@@ -624,32 +625,6 @@ WHERE t2.account = (
     match route {
         Command::Query(query) => assert!(query.is_write()),
         _ => panic!("not a select"),
-    }
-}
-
-#[test]
-fn test_comment() {
-    let query = "/* pgdog_role: primary */ SELECT 1";
-    let route = query!(query);
-    assert!(route.is_write());
-
-    let query = "/* pgdog_shard: 1234 */ SELECT 1234";
-    let route = query!(query);
-    assert_eq!(route.shard(), &Shard::Direct(1234));
-
-    // Comment is ignored.
-    let command = query_parser!(
-        QueryParser::default(),
-        Parse::named(
-            "test",
-            "/* pgdog_shard: 1234 */ SELECT * FROM sharded WHERE id = $1"
-        ),
-        false
-    );
-
-    match command {
-        Command::Query(query) => assert_eq!(query.shard(), &Shard::Direct(1234)),
-        _ => panic!("not a query"),
     }
 }
 
@@ -721,26 +696,6 @@ fn test_any() {
 fn test_commit_prepared() {
     let stmt = pg_query::parse("COMMIT PREPARED 'test'").unwrap();
     println!("{:?}", stmt);
-}
-
-#[test]
-fn test_dry_run_simple() {
-    let mut config = config().deref().clone();
-    config.config.general.dry_run = true;
-    config::set(config.clone()).unwrap();
-
-    let cluster = Cluster::new_test_single_shard(&config);
-    let command = query_parser!(
-        QueryParser::default(),
-        Query::new("/* pgdog_sharding_key: 1234 */ SELECT * FROM sharded"),
-        false,
-        cluster
-    );
-    let cache = Cache::queries();
-    let stmt = cache.values().next().unwrap();
-    assert_eq!(stmt.stats.lock().direct, 1);
-    assert_eq!(stmt.stats.lock().multi, 0);
-    assert_eq!(command.route().shard(), &Shard::Direct(0));
 }
 
 #[test]

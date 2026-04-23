@@ -264,6 +264,75 @@ fn test_cache_miss_different_bodies() {
 }
 
 #[test]
+fn test_cache_key_strips_leading_comment() {
+    let _guard = CACHE_STATS_LOCK.lock();
+    Cache::reset();
+
+    let ast = run_prepared("/* trace_id=abc */ SELECT 1 FROM cache_key_leading");
+    assert_eq!(
+        ast.original_query.as_str(),
+        "SELECT 1 FROM cache_key_leading",
+        "cache key must be the query without the leading comment"
+    );
+
+    // The LRU map key must also be the stripped query.
+    let queries = Cache::queries();
+    assert!(
+        queries.contains_key(&"SELECT 1 FROM cache_key_leading".to_string()),
+        "cache map key must be the comment-stripped query"
+    );
+}
+
+#[test]
+fn test_cache_key_strips_trailing_comment() {
+    let _guard = CACHE_STATS_LOCK.lock();
+    Cache::reset();
+
+    let ast = run_prepared("SELECT 1 FROM cache_key_trailing /* trace_id=xyz */");
+    assert_eq!(
+        ast.original_query.as_str(),
+        "SELECT 1 FROM cache_key_trailing",
+        "cache key must be the query without the trailing comment"
+    );
+}
+
+#[test]
+fn test_cache_key_no_comment_unchanged() {
+    let _guard = CACHE_STATS_LOCK.lock();
+    Cache::reset();
+
+    let q = "SELECT 1 FROM cache_key_plain";
+    let ast = run_prepared(q);
+    assert_eq!(
+        ast.original_query.as_str(),
+        q,
+        "cache key must equal the original query when there is no comment"
+    );
+}
+
+#[test]
+fn test_cache_key_shared_across_different_comments() {
+    let _guard = CACHE_STATS_LOCK.lock();
+    Cache::reset();
+
+    run_prepared("/* a */ SELECT 1 FROM cache_key_shared");
+    run_prepared("/* b */ SELECT 1 FROM cache_key_shared");
+    run_prepared("SELECT 1 FROM cache_key_shared /* c */");
+
+    let queries = Cache::queries();
+    let matching: Vec<_> = queries
+        .keys()
+        .filter(|k| k.contains("cache_key_shared"))
+        .collect();
+    assert_eq!(
+        matching.len(),
+        1,
+        "all three queries must share a single cache entry"
+    );
+    assert_eq!(matching[0].as_str(), "SELECT 1 FROM cache_key_shared");
+}
+
+#[test]
 fn test_normalize() {
     let q = "SELECT * FROM users WHERE id = 1";
     let normalized = normalize(q).unwrap();
@@ -281,7 +350,8 @@ fn test_tables_list() {
         "DELETE FROM private_schema.test",
         "DROP TABLE private_schema.test",
     ] {
-        let ast = Ast::new(&BufferedQuery::Query(Query::new(q)), &ShardingSchema::default(), &db_schema, &mut prepared_statements, "", None).unwrap();
+        let buffered = BufferedQuery::Query(Query::new(q));
+        let ast = Ast::new(&AstQuery::from_query(&buffered), &ShardingSchema::default(), &db_schema, &mut prepared_statements, "", None).unwrap();
         let tables = ast.tables();
         println!("{:?}", tables);
     }

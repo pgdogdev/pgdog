@@ -88,6 +88,15 @@ impl QueryParserTest {
         self
     }
 
+    /// Enable expanded explain for this test.
+    pub(crate) fn with_expanded_explain(mut self) -> Self {
+        let mut updated = config().deref().clone();
+        updated.config.general.expanded_explain = true;
+        config::set(updated).unwrap();
+        self.cluster = Cluster::new_test(&config());
+        self
+    }
+
     /// Enable dry run mode for this test.
     pub(crate) fn with_dry_run(mut self) -> Self {
         let mut updated = config().deref().clone();
