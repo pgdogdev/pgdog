@@ -47,6 +47,7 @@
 //! - **Type changes** on existing fields (e.g. `Vec<u32>` → `Vec<u64>`)
 //!   also require a new tag.
 
+use bytes::{Buf, BufMut};
 use serde::{Deserialize, Serialize};
 
 use super::error::Error;
@@ -142,7 +143,7 @@ impl Record {
     }
 
     /// Append a framed copy of this record to `out`.
-    pub fn encode(&self, out: &mut Vec<u8>) -> Result<(), Error> {
+    pub fn encode<B: BufMut>(&self, out: &mut B) -> Result<(), Error> {
         let payload = match self {
             Record::Begin(p) => rmp_serde::to_vec_named(p)?,
             Record::Committing(p) => rmp_serde::to_vec_named(p)?,
@@ -157,10 +158,10 @@ impl Record {
         let mut crc = crc32c::crc32c(&[tag]);
         crc = crc32c::crc32c_append(crc, &payload);
 
-        out.extend_from_slice(&body_len.to_le_bytes());
-        out.extend_from_slice(&crc.to_le_bytes());
-        out.push(tag);
-        out.extend_from_slice(&payload);
+        out.put_u32_le(body_len);
+        out.put_u32_le(crc);
+        out.put_u8(tag);
+        out.put_slice(&payload);
         Ok(())
     }
 
@@ -177,7 +178,8 @@ impl Record {
         if buf.len() < HEADER_BYTES {
             return Ok(None);
         }
-        let body_len = u32::from_le_bytes(buf[..4].try_into().unwrap()) as usize;
+        let mut hdr = &buf[..HEADER_BYTES];
+        let body_len = hdr.get_u32_le() as usize;
         if body_len == 0 {
             return Err(Error::EmptyRecord);
         }
@@ -185,7 +187,7 @@ impl Record {
         if buf.len() < total {
             return Ok(None);
         }
-        let expected_crc = u32::from_le_bytes(buf[4..8].try_into().unwrap());
+        let expected_crc = hdr.get_u32_le();
         let body = &buf[HEADER_BYTES..total];
         let actual_crc = crc32c::crc32c(body);
         if actual_crc != expected_crc {
