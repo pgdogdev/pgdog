@@ -204,3 +204,29 @@ INSERT INTO copy_data.categories (name, parent_id) VALUES
     ('Home & Garden', NULL), ('Sports', NULL);
 INSERT INTO copy_data.categories (name, parent_id) VALUES
     ('Phones', 1), ('Laptops', 1), ('Shirts', 2), ('Pants', 2), ('Fiction', 3);
+
+
+-- Table used to verify unchanged-TOAST replication.
+--
+-- `body` is forced to out-of-line EXTERNAL storage so that any UPDATE which
+-- does not touch `body` will emit a 'u' marker for that column in the logical
+-- replication stream. The replication subscriber must NOT write an empty string
+-- into `body` when it sees that marker — it must issue a filtered UPDATE that
+-- skips `body` entirely.
+CREATE TABLE IF NOT EXISTS copy_data.posts (
+    id        BIGINT PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    title     TEXT NOT NULL,
+    body      TEXT NOT NULL
+);
+
+ALTER TABLE copy_data.posts ALTER COLUMN body SET STORAGE EXTERNAL;
+
+INSERT INTO copy_data.posts (id, tenant_id, title, body)
+SELECT
+    gs.id,
+    ((gs.id - 1) % 20) + 1,
+    format('title_%s', gs.id),
+    -- ~32 KB per row: large enough to guarantee out-of-line TOAST storage.
+    repeat(md5(gs.id::text), 1024)
+FROM generate_series(1, 50) AS gs(id);

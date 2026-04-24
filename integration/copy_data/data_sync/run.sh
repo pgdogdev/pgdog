@@ -55,7 +55,7 @@ stop_pgbench() {
     fi
 }
 
-SHARDED_TABLES="copy_data.users copy_data.orders copy_data.order_items copy_data.log_actions copy_data.with_identity"
+SHARDED_TABLES="copy_data.users copy_data.orders copy_data.order_items copy_data.log_actions copy_data.with_identity copy_data.posts"
 OMNI_TABLES="copy_data.countries copy_data.currencies copy_data.categories"
 
 pushd ${SCRIPT_DIR}
@@ -85,9 +85,40 @@ if ! kill -0 ${REPL_PID} 2>/dev/null; then
     exit $?
 fi
 
-# Let data sync and replication catch up
-echo "Letting replication run for 20 seconds..."
-sleep 20
+# Let the initial table copy finish before injecting streaming DML.
+echo "Letting replication run for 15 seconds..."
+sleep 15
+
+# TOAST stream test: rows were seeded in setup.sql and copied to the destination
+# during the initial snapshot. Now UPDATE only `title`, leaving `body` untouched.
+# PostgreSQL emits a 'u' (unchanged-TOAST) marker for `body` in the WAL record.
+# The subscriber must issue a filtered UPDATE that skips `body` entirely;
+# if it instead writes an empty string the body sum check below will catch it.
+psql -d pgdog -c "UPDATE copy_data.posts SET title = title || '_updated' WHERE id BETWEEN 1 AND 50"
+
+stop_pgbench
+
+# Poll the destination until the expected data is replicated
+echo "Waiting for title update to reach destination (timeout 120s)..."
+DEADLINE=$((SECONDS + 120))
+while true; do
+    UPDATED_DST=$((
+        $(psql -d pgdog1 -tAc "SELECT COUNT(*) FROM copy_data.posts WHERE title LIKE '%_updated'" 2>/dev/null || echo 0) +
+        $(psql -d pgdog2 -tAc "SELECT COUNT(*) FROM copy_data.posts WHERE title LIKE '%_updated'" 2>/dev/null || echo 0)
+    ))
+    if [ "${UPDATED_DST}" -ge 50 ]; then
+        break
+    fi
+    if ! kill -0 "${REPL_PID}" 2>/dev/null; then
+        echo "ERROR: replication process exited before delivering title update (${UPDATED_DST}/50)"
+        exit 1
+    fi
+    if [ "${SECONDS}" -ge "${DEADLINE}" ]; then
+        echo "ERROR: title update did not reach destination within 120s (${UPDATED_DST}/50)"
+        exit 1
+    fi
+    sleep 1
+done
 
 # Stop replication and capture its exit code.
 kill ${REPL_PID} 2>/dev/null || true
@@ -103,7 +134,6 @@ if [ ${REPL_EXIT} -ne 0 ] && [ ${REPL_EXIT} -ne 130 ] && [ ${REPL_EXIT} -ne 143 
     exit ${REPL_EXIT}
 fi
 
-stop_pgbench
 ${PGDOG_BIN} --config "${PGDOG_CONFIG}" --users "${PGDOG_USERS}" \
     schema-sync --from-database source --to-database destination --publication pgdog --cutover
 
@@ -143,6 +173,30 @@ for TABLE in ${OMNI_TABLES}; do
     fi
     echo "OK ${TABLE}: ${SRC} rows on each shard"
 done
+
+# TOAST invariant: destination body bytes must equal source body bytes.
+# If the subscriber wrote an empty string instead of skipping the column,
+# the destination sum will be far smaller than the source.
+BODY_SRC=$(psql -d pgdog -tAc "SELECT COALESCE(SUM(octet_length(body)),0) FROM copy_data.posts")
+BODY_DST1=$(psql -d shard_0 -tAc "SELECT COALESCE(SUM(octet_length(body)),0) FROM copy_data.posts" 2>/dev/null || echo 0)
+BODY_DST2=$(psql -d shard_1 -tAc "SELECT COALESCE(SUM(octet_length(body)),0) FROM copy_data.posts" 2>/dev/null || echo 0)
+BODY_DST=$((BODY_DST1 + BODY_DST2))
+if [ "${BODY_SRC}" -ne "${BODY_DST}" ]; then
+    echo "ERROR unchanged-TOAST: source body sum=${BODY_SRC}, destination sum=${BODY_DST}"
+    exit 1
+fi
+echo "OK unchanged-TOAST body preserved: ${BODY_DST} bytes"
+
+# Title update must have propagated through both resharding hops.
+UPDATED_DST=$((
+    $(psql -d shard_0 -tAc "SELECT COUNT(*) FROM copy_data.posts WHERE title LIKE '%_updated'" 2>/dev/null || echo 0) +
+    $(psql -d shard_1 -tAc "SELECT COUNT(*) FROM copy_data.posts WHERE title LIKE '%_updated'" 2>/dev/null || echo 0)
+))
+if [ "${UPDATED_DST}" -lt 50 ]; then
+    echo "ERROR: title update did not propagate (${UPDATED_DST}/50 rows updated on destination)"
+    exit 1
+fi
+echo "OK title propagated: ${UPDATED_DST}/50 rows updated"
 
 psql -f "${SCRIPT_DIR}/init.sql"
 
