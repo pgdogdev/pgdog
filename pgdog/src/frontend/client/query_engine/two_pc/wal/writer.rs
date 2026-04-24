@@ -136,9 +136,7 @@ async fn run(
         let Some(first) = first else { return };
         batch.push(first);
         let deadline = Instant::now()
-            + Duration::from_millis(
-                config().config.general.two_phase_commit_wal_fsync_interval,
-            );
+            + Duration::from_millis(config().config.general.two_phase_commit_wal_fsync_interval);
 
         // Greedy drain of immediately-available requests, no yields.
         while batch.len() < MAX_BATCH {
