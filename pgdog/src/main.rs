@@ -9,6 +9,7 @@ use pgdog::backend::databases;
 use pgdog::backend::pool::dns_cache::DnsCache;
 use pgdog::cli::{self, Commands};
 use pgdog::config::{self, config};
+use pgdog::frontend::client::query_engine::two_pc::Manager;
 use pgdog::frontend::listener::Listener;
 use pgdog::frontend::prepared_statements;
 use pgdog::plugin;
@@ -146,6 +147,12 @@ async fn pgdog(command: Option<Commands>) -> Result<(), Box<dyn std::error::Erro
         None | Some(Commands::Run { .. }) => {
             if config().config.general.dry_run {
                 info!("dry run mode enabled");
+            }
+
+            if general.two_phase_commit {
+                Manager::get()
+                    .start(general.two_phase_commit_wal_dir.clone())
+                    .await;
             }
 
             let mut listener = Listener::new(format!("{}:{}", general.host, general.port));
