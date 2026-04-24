@@ -1,3 +1,6 @@
+use std::borrow::Borrow;
+use std::ops::Deref;
+
 use memchr::memmem;
 use once_cell::sync::Lazy;
 use pg_query::scan_raw;
@@ -18,9 +21,50 @@ static SHARDING_KEY: Lazy<Regex> = Lazy::new(|| {
 });
 static ROLE: Lazy<Regex> = Lazy::new(|| Regex::new(r#"pgdog_role: *(primary|replica)"#).unwrap());
 
+#[derive(Debug, Clone)]
+pub enum QueryWithoutComment<'a> {
+    Original(&'a str),
+    Stripped(String),
+}
+
+impl PartialEq for QueryWithoutComment<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        self.deref() == other.deref()
+    }
+}
+
+impl PartialEq<&str> for QueryWithoutComment<'_> {
+    fn eq(&self, other: &&str) -> bool {
+        self.deref() == *other
+    }
+}
+
+impl Borrow<str> for QueryWithoutComment<'_> {
+    fn borrow(&self) -> &str {
+        self.deref()
+    }
+}
+
+impl Default for QueryWithoutComment<'_> {
+    fn default() -> Self {
+        QueryWithoutComment::Original("")
+    }
+}
+
+impl<'a> Deref for QueryWithoutComment<'a> {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        match self {
+            Self::Original(original) => original,
+            Self::Stripped(stripped) => stripped.as_str(),
+        }
+    }
+}
+
 #[derive(Default, Debug, Clone)]
-pub struct QueryAndComment {
-    pub query: String,
+pub struct QueryAndComment<'a> {
+    pub query: QueryWithoutComment<'a>,
     #[cfg(test)]
     pub comment: String,
     pub role: Option<Role>,
@@ -67,12 +111,15 @@ fn trailing_block_comment(q: &str) -> Option<(&str, &str)> {
     Some((rest, comment))
 }
 
-pub fn parse_edge_comment(query: &str, schema: &ShardingSchema) -> Result<QueryAndComment, Error> {
+pub fn parse_edge_comment<'a>(
+    query: &'a str,
+    schema: &ShardingSchema,
+) -> Result<QueryAndComment<'a>, Error> {
     let Some((stripped, comment)) =
         leading_block_comment(query).or_else(|| trailing_block_comment(query))
     else {
         return Ok(QueryAndComment {
-            query: query.to_string(),
+            query: QueryWithoutComment::Original(query),
             #[cfg(test)]
             comment: String::new(),
             ..Default::default()
@@ -82,7 +129,7 @@ pub fn parse_edge_comment(query: &str, schema: &ShardingSchema) -> Result<QueryA
     let (shard, role) = shard_role_from_comment(comment, schema)?;
 
     Ok(QueryAndComment {
-        query: stripped.to_string(),
+        query: QueryWithoutComment::Stripped(stripped.to_string()),
         #[cfg(test)]
         comment: comment.to_string(),
         shard,

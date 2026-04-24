@@ -3,7 +3,9 @@ use once_cell::sync::Lazy;
 use parking_lot::lock_api::MutexGuard;
 use pg_query::normalize;
 use pgdog_config::QueryParserEngine;
+use std::borrow::Borrow;
 use std::collections::HashMap;
+use std::ops::Deref;
 use std::time::Duration;
 
 use parking_lot::{Mutex, RawMutex};
@@ -43,11 +45,23 @@ impl Stats {
     }
 }
 
+/// Newtype wrapper around `Arc<String>` that lets us look up cache entries
+/// with any `&str` (e.g. a `QueryWithoutComment`, which derefs to `str`).
+/// Stdlib only provides `Arc<T>: Borrow<T>`, not `Arc<String>: Borrow<str>`.
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+pub(super) struct CacheKey(pub(super) Arc<String>);
+
+impl Borrow<str> for CacheKey {
+    fn borrow(&self) -> &str {
+        self.0.as_str()
+    }
+}
+
 /// Mutex-protected query cache.
 #[derive(Debug)]
 pub(super) struct Inner {
     /// Least-recently-used cache.
-    queries: LruCache<Arc<String>, Ast>,
+    queries: LruCache<CacheKey, Ast>,
     /// Cache global stats.
     pub(super) stats: Stats,
 }
@@ -119,7 +133,7 @@ impl Cache {
 
         {
             let mut guard = self.inner.lock();
-            let ast = guard.queries.get_mut(cache_key).map(|entry| {
+            let ast = guard.queries.get_mut(cache_key.deref()).map(|entry| {
                 entry.stats.lock().hits += 1; // No contention on this.
                 entry.clone()
             });
@@ -149,7 +163,7 @@ impl Cache {
         let mut guard = self.inner.lock();
         guard
             .queries
-            .put(entry.original_query.clone(), entry.clone());
+            .put(CacheKey(entry.original_query.clone()), entry.clone());
         guard.stats.misses += 1;
         guard.stats.parse_time += parse_time;
 
@@ -203,7 +217,7 @@ impl Cache {
 
         {
             let mut guard = self.inner.lock();
-            if let Some(entry) = guard.queries.get(&normalized) {
+            if let Some(entry) = guard.queries.get(normalized.as_str()) {
                 entry.update_stats(route);
                 guard.stats.hits += 1;
                 return Ok(());
@@ -214,7 +228,7 @@ impl Cache {
         entry.update_stats(route);
 
         let mut guard = self.inner.lock();
-        guard.queries.put(Arc::new(normalized), entry);
+        guard.queries.put(CacheKey(Arc::new(normalized)), entry);
         guard.stats.misses += 1;
 
         Ok(())
@@ -254,7 +268,7 @@ impl Cache {
             .lock()
             .queries
             .iter()
-            .map(|i| (i.0.clone(), i.1.clone()))
+            .map(|i| (i.0 .0.clone(), i.1.clone()))
             .collect()
     }
 
