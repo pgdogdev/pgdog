@@ -50,9 +50,9 @@ impl<'a> AstContext<'a> {
 /// Query passed to the parser.
 pub struct AstQuery<'a> {
     /// The original request.
-    pub query: &'a BufferedQuery,
+    pub original_query: &'a BufferedQuery,
     /// Query without comments and other noise.
-    pub cache_key: &'a str,
+    pub query_without_comment: &'a str,
     /// Comment shard.
     pub comment_shard: Option<&'a Shard>,
 }
@@ -61,8 +61,8 @@ impl<'a> AstQuery<'a> {
     /// Create an AstQuery using the raw query text as the cache key.
     pub fn from_query(query: &'a BufferedQuery) -> Self {
         Self {
-            cache_key: query.query(),
-            query,
+            query_without_comment: query.query(),
+            original_query: query,
             comment_shard: None,
         }
     }

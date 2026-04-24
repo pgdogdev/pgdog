@@ -128,19 +128,23 @@ impl Cache {
         ctx: &AstContext<'_>,
         prepared_statements: &mut PreparedStatements,
     ) -> Result<Ast, Error> {
-        let comment_parser_result = parse_edge_comment(query.query(), &ctx.sharding_schema)?;
-        let cache_key = &comment_parser_result.query;
+        // Separate query from comment, if one is present.
+        let query_and_comment = parse_edge_comment(query.query(), &ctx.sharding_schema)?;
+        let cache_key = &query_and_comment.query;
 
         {
             let mut guard = self.inner.lock();
-            let ast = guard.queries.get_mut(cache_key.deref()).map(|entry| {
-                entry.stats.lock().hits += 1; // No contention on this.
-                entry.clone()
-            });
+            let ast = guard
+                .queries
+                .get_mut(cache_key.deref()) // Use the query without comment as the cache key.
+                .map(|entry| {
+                    entry.stats.lock().hits += 1; // No contention on this.
+                    entry.clone()
+                });
             if let Some(mut ast) = ast {
                 guard.stats.hits += 1;
-                ast.comment_role = comment_parser_result.role;
-                ast.comment_shard = comment_parser_result.shard.clone();
+                ast.comment_role = query_and_comment.role;
+                ast.comment_shard = query_and_comment.shard.clone();
 
                 return Ok(ast);
             }
@@ -149,21 +153,21 @@ impl Cache {
         // Parse query without holding lock.
         let mut entry = Ast::with_context(
             &AstQuery {
-                query,
-                cache_key,
-                comment_shard: comment_parser_result.shard.as_ref(),
+                original_query: query,
+                query_without_comment: &query_and_comment.query,
+                comment_shard: query_and_comment.shard.as_ref(),
             },
             ctx,
             prepared_statements,
         )?;
-        entry.comment_role = comment_parser_result.role;
-        entry.comment_shard = comment_parser_result.shard.clone();
+        entry.comment_role = query_and_comment.role;
+        entry.comment_shard = query_and_comment.shard.clone();
         let parse_time = entry.stats.lock().parse_time;
 
         let mut guard = self.inner.lock();
         guard
             .queries
-            .put(CacheKey(entry.original_query.clone()), entry.clone());
+            .put(CacheKey(entry.query_without_comment.clone()), entry.clone());
         guard.stats.misses += 1;
         guard.stats.parse_time += parse_time;
 
@@ -178,21 +182,20 @@ impl Cache {
         ctx: &AstContext<'_>,
         prepared_statements: &mut PreparedStatements,
     ) -> Result<Ast, Error> {
-        let comment_parser_result = parse_edge_comment(query.query(), &ctx.sharding_schema)?;
-        let cache_key = &comment_parser_result.query;
+        let query_and_comment = parse_edge_comment(query.query(), &ctx.sharding_schema)?;
 
         let mut entry = Ast::with_context(
             &AstQuery {
-                query,
-                cache_key,
-                comment_shard: comment_parser_result.shard.as_ref(),
+                original_query: query,
+                query_without_comment: &query_and_comment.query,
+                comment_shard: query_and_comment.shard.as_ref(),
             },
             ctx,
             prepared_statements,
         )?;
         entry.cached = false;
-        entry.comment_role = comment_parser_result.role;
-        entry.comment_shard = comment_parser_result.shard.clone();
+        entry.comment_role = query_and_comment.role;
+        entry.comment_shard = query_and_comment.shard.clone();
 
         let parse_time = entry.stats.lock().parse_time;
 

@@ -44,7 +44,7 @@ pub struct AstInner {
     /// Fingerprint.
     pub fingerprint: OnceCell<Fingerprint>,
     /// Original query.
-    pub original_query: Arc<String>,
+    pub query_without_comment: Arc<String>,
 }
 
 impl AstInner {
@@ -55,7 +55,7 @@ impl AstInner {
             stats: Mutex::new(Stats::new()),
             rewrite_plan: RewritePlan::default(),
             fingerprint: OnceCell::new(),
-            original_query: Arc::new(String::new()),
+            query_without_comment: Arc::new(String::new()),
         }
     }
 }
@@ -80,8 +80,8 @@ impl Ast {
     ) -> Result<Self, Error> {
         let now = Instant::now();
         let mut ast = match schema.query_parser_engine {
-            QueryParserEngine::PgQueryProtobuf => parse(query.cache_key),
-            QueryParserEngine::PgQueryRaw => parse_raw(query.cache_key),
+            QueryParserEngine::PgQueryProtobuf => parse(query.query_without_comment),
+            QueryParserEngine::PgQueryRaw => parse_raw(query.query_without_comment),
         }
         .map_err(Error::PgQuery)?;
 
@@ -90,8 +90,8 @@ impl Ast {
         let rewrite_plan = if query.comment_shard.is_none() {
             StatementRewrite::new(StatementRewriteContext {
                 stmt: &mut ast.protobuf,
-                extended: query.query.extended(),
-                prepared: query.query.prepared(),
+                extended: query.original_query.extended(),
+                prepared: query.original_query.prepared(),
                 prepared_statements,
                 schema,
                 db_schema,
@@ -117,7 +117,7 @@ impl Ast {
                 ast,
                 rewrite_plan,
                 fingerprint: OnceCell::new(),
-                original_query: Arc::new(query.cache_key.to_string()),
+                query_without_comment: Arc::new(query.query_without_comment.to_string()),
             }),
         })
     }
@@ -263,7 +263,7 @@ impl Ast {
         }
 
         let start = Instant::now();
-        let fingerprint = Fingerprint::new(&self.original_query, self.query_parser_engine)
+        let fingerprint = Fingerprint::new(&self.query_without_comment, self.query_parser_engine)
             .map_err(|e| Error::PgQuery(e))?;
         let elapsed = start.elapsed();
 
