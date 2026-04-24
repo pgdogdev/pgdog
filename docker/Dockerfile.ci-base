@@ -1,0 +1,74 @@
+FROM ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8
+
+ARG PSQL_VERSION=18
+ARG NEXTEST_VERSION=0.9.78
+ARG LLVM_COV_VERSION=0.6.10
+ARG CMAKE_VERSION=3.31.6
+ARG DOCKER_COMPOSE_VERSION=2.36.1
+ARG TOXIPROXY_VERSION=2.12.0
+
+# Core build + language toolchains + deps used by integration tests.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      build-essential clang mold pkg-config libssl-dev git curl ca-certificates \
+      sudo unzip lsb-release gnupg procps psmisc jq \
+      python3 python3-pip python3-venv python3-virtualenv python-is-python3 \
+      ruby ruby-dev \
+      php-cli php-pgsql \
+      openjdk-21-jdk-headless maven \
+      golang-go \
+      nodejs npm \
+    && rm -rf /var/lib/apt/lists/*
+
+# PostgreSQL server + client from the PGDG apt repo.
+RUN install -d /usr/share/postgresql-common/pgdg && \
+    curl -fsSLo /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc && \
+    . /etc/os-release && \
+    echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt ${VERSION_CODENAME}-pgdg main" \
+      > /etc/apt/sources.list.d/pgdg.list && \
+    apt-get update && apt-get install -y --no-install-recommends \
+      postgresql-${PSQL_VERSION} postgresql-client-${PSQL_VERSION} \
+    && rm -rf /var/lib/apt/lists/*
+
+# Rust toolchain (installed system-wide so all users/caches see it).
+ENV RUSTUP_HOME=/usr/local/rustup \
+    CARGO_HOME=/usr/local/cargo \
+    PATH=/usr/local/cargo/bin:$PATH
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
+      sh -s -- -y --profile minimal --default-toolchain stable --component llvm-tools-preview rustfmt clippy && \
+    chmod -R a+w "$RUSTUP_HOME" "$CARGO_HOME"
+
+# CMake pinned to the version the repo expects (replaces the apt cmake).
+RUN pip3 install --no-cache-dir --break-system-packages "cmake==${CMAKE_VERSION}"
+
+RUN gem install bundler --no-document
+
+# Prebuilt cargo-nextest — avoids a long compile on every run.
+RUN curl -LsSf "https://get.nexte.st/${NEXTEST_VERSION}/linux" | tar zxf - -C /usr/local/cargo/bin
+
+# Prebuilt cargo-llvm-cov.
+RUN curl -LsSf "https://github.com/taiki-e/cargo-llvm-cov/releases/download/v${LLVM_COV_VERSION}/cargo-llvm-cov-x86_64-unknown-linux-gnu.tar.gz" \
+      | tar zxf - -C /usr/local/cargo/bin
+
+# docker CLI (static binary) + docker-compose standalone CLI. The job mounts
+# /var/run/docker.sock so integration tests can drive the host daemon.
+ARG DOCKER_CLI_VERSION=27.5.1
+RUN curl -fsSL "https://download.docker.com/linux/static/stable/x86_64/docker-${DOCKER_CLI_VERSION}.tgz" \
+      | tar zxf - -C /tmp && \
+    mv /tmp/docker/docker /usr/local/bin/docker && \
+    rm -rf /tmp/docker && \
+    curl -fsSL "https://github.com/docker/compose/releases/download/v${DOCKER_COMPOSE_VERSION}/docker-compose-linux-x86_64" \
+      -o /usr/local/bin/docker-compose && \
+    chmod +x /usr/local/bin/docker-compose && \
+    mkdir -p /usr/local/lib/docker/cli-plugins && \
+    ln -s /usr/local/bin/docker-compose /usr/local/lib/docker/cli-plugins/docker-compose
+
+# Toxiproxy — integration tests expect server + cli on PATH.
+RUN for bin in toxiproxy-server toxiproxy-cli; do \
+      curl -fsSL "https://github.com/Shopify/toxiproxy/releases/download/v${TOXIPROXY_VERSION}/${bin}-linux-amd64" \
+        -o "/usr/local/bin/${bin}" && \
+      chmod +x "/usr/local/bin/${bin}"; \
+    done

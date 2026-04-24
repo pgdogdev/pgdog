@@ -9,6 +9,8 @@ on:
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
+  BUILDER_BASE: ghcr.io/${{ github.repository }}-base-builder:latest
+  RUNTIME_BASE: ghcr.io/${{ github.repository }}-base-runtime:latest
 jobs:
   build:
     runs-on: ${{ matrix.runner }}
@@ -19,7 +21,7 @@ jobs:
           - platform: linux/amd64
             runner: blacksmith-4vcpu-ubuntu-2404
           - platform: linux/arm64
-            runner: ubuntu-24.04-arm
+            runner: blacksmith-4vcpu-ubuntu-2404-arm
     permissions:
       contents: read
       packages: write
@@ -62,6 +64,9 @@ jobs:
           tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME}}
           labels: ${{ steps.meta.outputs.labels }}
           platforms: ${{ matrix.platform }}
+          build-args: |
+            BUILDER_BASE=${{ env.BUILDER_BASE }}
+            RUNTIME_BASE=${{ env.RUNTIME_BASE }}
           outputs: type=image,push-by-digest=true,name-canonical=true,push=true
 
       - name: Export digest
