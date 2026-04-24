@@ -30,47 +30,126 @@ struct Entry {
 /// Scan every segment in `dir` in LSN order, hand each in-flight
 /// transaction to `manager`, and return the [`Segment`] for the writer
 /// task to continue appending to.
+///
+/// Corrupt segments are renamed to `<lsn>.wal.broken` and skipped. If
+/// any corruption is detected the restore phase is skipped — partial
+/// restore could silently invert a committed transaction by losing a
+/// `Committing` record. The operator handles orphan prepared xacts via
+/// `SHOW TRANSACTIONS` / `pg_prepared_xacts`. Genuine IO errors
+/// propagate; the caller treats those as "WAL not usable."
 pub(super) async fn recover_transactions(manager: &Manager, dir: &Path) -> Result<Segment, Error> {
     let segments = list_segments(dir).await?;
     let mut working: HashMap<TwoPcTransaction, Entry> = HashMap::default();
+    let mut corruption = false;
+    let mut next_lsn: u64 = 0;
 
     let Some((last_path, prior_paths)) = segments.split_last() else {
         return Segment::create(dir, 0).await;
     };
 
     for path in prior_paths {
-        let mut reader = SegmentReader::open(path).await?;
-        while let Some(record) = reader.next().await? {
-            apply(&mut working, record);
+        let mut reader = match SegmentReader::open(path).await {
+            Ok(reader) => reader,
+            Err(err) if err.is_corruption() => {
+                quarantine(path, &err).await;
+                corruption = true;
+                continue;
+            }
+            Err(err) => return Err(err),
+        };
+        let drained = drain(&mut reader, &mut working).await;
+        next_lsn = reader.next_lsn();
+        match drained {
+            Ok(()) => {}
+            Err(err) if err.is_corruption() => {
+                drop(reader);
+                quarantine(path, &err).await;
+                corruption = true;
+            }
+            Err(err) => return Err(err),
         }
     }
 
-    let mut last_reader = SegmentReader::open(last_path).await?;
-    while let Some(record) = last_reader.next().await? {
-        apply(&mut working, record);
+    let last_writable = match SegmentReader::open(last_path).await {
+        Ok(mut reader) => {
+            let drained = drain(&mut reader, &mut working).await;
+            next_lsn = reader.next_lsn();
+            match drained {
+                Ok(()) | Err(Error::TornTail { .. }) => Some(reader.into_writable().await?),
+                Err(err) if err.is_corruption() => {
+                    drop(reader);
+                    quarantine(last_path, &err).await;
+                    corruption = true;
+                    None
+                }
+                Err(err) => return Err(err),
+            }
+        }
+        Err(err) if err.is_corruption() => {
+            quarantine(last_path, &err).await;
+            corruption = true;
+            None
+        }
+        Err(err) => return Err(err),
+    };
+
+    if corruption {
+        tracing::warn!(
+            "[2pc] wal recovery detected corruption; skipping restore. \
+             operator must reconcile orphan prepared transactions via \
+             SHOW TRANSACTIONS / pg_prepared_xacts"
+        );
+    } else {
+        let restored = working.len();
+        for (txn, entry) in working {
+            let phase = if entry.decided {
+                TwoPcPhase::Phase2
+            } else {
+                TwoPcPhase::Phase1
+            };
+            manager.restore_transaction(txn, entry.user, entry.database, phase);
+        }
+        if restored > 0 {
+            tracing::info!(
+                "[2pc] wal: restored {} in-flight transaction(s) from {} segment(s)",
+                restored,
+                segments.len()
+            );
+        }
     }
 
-    // Restore before truncating the last segment: if `into_writable`
-    // fails we still surface the recovered txns to the manager so they
-    // can be driven to a terminal state on the backends.
-    let restored = working.len();
-    for (txn, entry) in working {
-        let phase = if entry.decided {
-            TwoPcPhase::Phase2
-        } else {
-            TwoPcPhase::Phase1
-        };
-        manager.restore_transaction(txn, entry.user, entry.database, phase);
+    match last_writable {
+        Some(segment) => Ok(segment),
+        None => Segment::create(dir, next_lsn).await,
     }
-    if restored > 0 {
-        tracing::info!(
-            "2pc wal: restored {} in-flight transaction(s) from {} segment(s)",
-            restored,
-            segments.len()
+}
+
+/// Drain every record in `reader` into `working`. Errors propagate as
+/// usual; the caller decides what to do based on the error variant.
+async fn drain(
+    reader: &mut SegmentReader,
+    working: &mut HashMap<TwoPcTransaction, Entry>,
+) -> Result<(), Error> {
+    while let Some(record) = reader.next().await? {
+        apply(working, record);
+    }
+    Ok(())
+}
+
+/// Log corruption and rename the segment to `<original>.broken` so
+/// subsequent recoveries skip it. Best-effort: rename failures are
+/// logged.
+async fn quarantine(path: &Path, err: &Error) {
+    tracing::warn!("[2pc] corrupt wal segment {}: {}", path.display(), err);
+    let broken = path.with_extension("wal.broken");
+    if let Err(rename_err) = tokio::fs::rename(path, &broken).await {
+        tracing::warn!(
+            "[2pc] could not rename corrupt wal segment {} to {}: {}",
+            path.display(),
+            broken.display(),
+            rename_err
         );
     }
-
-    last_reader.into_writable().await
 }
 
 fn apply(working: &mut HashMap<TwoPcTransaction, Entry>, record: Record) {

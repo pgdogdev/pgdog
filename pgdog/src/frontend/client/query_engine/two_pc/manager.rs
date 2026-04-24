@@ -1,9 +1,11 @@
 //! Global two-phase commit transaction manager.
+use arc_swap::ArcSwapOption;
 use fnv::FnvHashMap as HashMap;
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 use std::{
     collections::VecDeque,
+    path::PathBuf,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -11,7 +13,7 @@ use std::{
     time::Duration,
 };
 use tokio::{select, spawn, sync::Notify, time::interval};
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 use crate::{
     backend::{
@@ -20,7 +22,7 @@ use crate::{
     },
     frontend::{
         client::query_engine::{
-            two_pc::{TwoPcGuard, TwoPcTransaction},
+            two_pc::{wal::Wal, TwoPcGuard, TwoPcTransaction},
             TwoPcPhase,
         },
         router::{
@@ -40,6 +42,10 @@ static MAINTENANCE: Duration = Duration::from_millis(333);
 pub struct Manager {
     inner: Arc<Mutex<Inner>>,
     notify: Arc<InnerNotify>,
+    /// Durable log handle. `None` until [`Self::start`] succeeds; if WAL
+    /// initialization fails or `start` is never called, the manager
+    /// continues to coordinate 2PC in memory only.
+    wal: Arc<ArcSwapOption<Wal>>,
 }
 
 impl Manager {
@@ -56,6 +62,7 @@ impl Manager {
                 offline: AtomicBool::new(false),
                 done: Notify::new(),
             }),
+            wal: Arc::new(ArcSwapOption::const_empty()),
         };
 
         let monitor = manager.clone();
@@ -64,6 +71,25 @@ impl Manager {
         });
 
         manager
+    }
+
+    /// Open the WAL at `dir`, replay any in-flight transactions back into
+    /// this manager, and start the writer task. If probing or recovery
+    /// fail, the manager keeps running without durability and a warning
+    /// is logged so operators can investigate.
+    pub async fn start(&self, dir: PathBuf) {
+        match Wal::open(self, dir).await {
+            Ok(wal) => {
+                self.wal.store(Some(Arc::new(wal)));
+                info!("[2pc] wal enabled");
+            }
+            Err(err) => {
+                warn!(
+                    "[2pc] wal disabled: {}; 2pc will run without durability",
+                    err
+                );
+            }
+        }
     }
 
     #[cfg(test)]
