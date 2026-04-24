@@ -103,6 +103,12 @@ function stop_toxi() {
 
 function active_venv() {
     pushd ${COMMON_DIR}/python
-    source venv/bin/activate
+    if [[ ! -f venv/bin/activate ]]; then
+        virtualenv venv
+        source venv/bin/activate
+        pip install -r requirements.txt
+    else
+        source venv/bin/activate
+    fi
     popd
 }
