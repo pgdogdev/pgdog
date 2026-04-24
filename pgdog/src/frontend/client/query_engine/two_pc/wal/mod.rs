@@ -23,6 +23,14 @@ impl Wal {
     /// Returns `Err` if the directory isn't writable or recovery fails;
     /// the caller is responsible for deciding whether to continue running
     /// without WAL durability.
+    ///
+    /// Multiple PgDog instances must be configured with distinct
+    /// directories; sharing a `dir` between processes will corrupt the
+    /// log.
+    ///
+    /// TODO: acquire a flock on `<dir>/.lock` (with our PID + start time
+    /// written into it for diagnostics) so accidental sharing is caught
+    /// at startup with a clear error rather than silently corrupting.
     pub async fn open(manager: &Manager, dir: PathBuf) -> Result<Wal, Error> {
         probe(&dir).await?;
         let segment = recovery::recover_transactions(manager, &dir).await?;
