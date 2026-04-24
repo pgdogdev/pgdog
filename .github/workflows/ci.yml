@@ -176,6 +176,16 @@ jobs:
             killall -TERM pgdog
             sleep 5
           fi
+      - name: Verify coverage profiles (pgbench)
+        run: bash integration/verify_profiles.sh pgbench
+      - name: Verify coverage profiles (go)
+        run: bash integration/verify_profiles.sh go
+      - name: Verify coverage profiles (sql)
+        run: bash integration/verify_profiles.sh sql
+      - name: Verify coverage profiles (python)
+        run: bash integration/verify_profiles.sh python
+      - name: Verify coverage profiles (rust)
+        run: bash integration/verify_profiles.sh rust
       - name: Generate integration coverage report
         run: cargo llvm-cov report --release --package pgdog --lcov --output-path integration.lcov
       # Requires CODECOV_TOKEN secret for upload
