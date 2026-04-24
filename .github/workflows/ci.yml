@@ -75,32 +75,24 @@ jobs:
     needs: [build]
     container:
       image: ghcr.io/pgdogdev/pgdog-ci-base:latest
-      # Host network: sibling containers launched via the mounted docker socket
-      # publish ports on the host, and the in-container pgdog needs to reach them
-      # on localhost. Host also mounted for the docker CLI.
-      options: --network=host
-      volumes:
-        - /var/run/docker.sock:/var/run/docker.sock
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { name: pgbench,        script: integration/pgbench/run.sh }
-          - { name: schema-sync,    script: integration/schema_sync/run.sh }
-          - { name: go,             script: integration/go/run.sh }
-          - { name: js,             script: integration/js/pg_tests/run.sh }
-          - { name: ruby,           script: integration/ruby/run.sh }
-          - { name: java,           script: integration/java/run.sh }
-          - { name: mirror,         script: integration/mirror/run.sh }
-          - { name: sql,            script: integration/sql/run.sh }
-          - { name: toxi,           script: integration/toxi/run.sh }
-          - { name: rust,           script: integration/rust/run.sh }
-          - { name: copy-data,      script: integration/copy_data/run.sh }
-          - { name: python,         script: integration/python/run.sh }
-          - { name: load-balancer,  script: integration/load_balancer/run.sh }
-          - { name: complex,        script: integration/complex/run.sh }
-          - { name: dry-run,        script: integration/dry_run/run.sh }
+          - { name: pgbench,      script: integration/pgbench/run.sh }
+          - { name: schema-sync,  script: integration/schema_sync/run.sh }
+          - { name: go,           script: integration/go/run.sh }
+          - { name: js,           script: integration/js/pg_tests/run.sh }
+          - { name: ruby,         script: integration/ruby/run.sh }
+          - { name: java,         script: integration/java/run.sh }
+          - { name: mirror,       script: integration/mirror/run.sh }
+          - { name: sql,          script: integration/sql/run.sh }
+          - { name: toxi,         script: integration/toxi/run.sh }
+          - { name: rust,         script: integration/rust/run.sh }
+          - { name: python,       script: integration/python/run.sh }
+          - { name: complex,      script: integration/complex/run.sh }
+          - { name: dry-run,      script: integration/dry_run/run.sh }
     env:
       PGDOG_BIN: ${{ github.workspace }}/target/release/pgdog
     steps:
@@ -114,6 +106,43 @@ jobs:
         run: chmod +x target/debug/pgdog target/release/pgdog
       - name: Setup dependencies
         run: bash integration/ci/setup.sh --with-toxi
+      - name: Run ${{ matrix.name }}
+        run: bash ${{ matrix.script }}
+      - name: Ensure PgDog stopped
+        if: always()
+        run: bash integration/ci/ensure-pgdog-stopped.sh
+
+  # Tests that launch their own docker-compose stacks. They need direct host
+  # access to reach sibling containers, so we run them on the bare runner
+  # rather than inside the CI base container.
+  integration-docker:
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    needs: [build]
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: copy-data,     script: integration/copy_data/run.sh }
+          - { name: load-balancer, script: integration/load_balancer/run.sh }
+    env:
+      PGDOG_BIN: ${{ github.workspace }}/target/release/pgdog
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download pgdog binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: pgdog-binaries
+          path: .
+      - name: Restore exec bit on binaries
+        run: chmod +x target/debug/pgdog target/release/pgdog
+      - name: Setup dependencies
+        run: |
+          sudo service postgresql start
+          sudo -u postgres createuser --superuser --login "$(id -un)"
+          sudo -u postgres createdb "$(id -un)"
+          bash integration/setup.sh || (sudo service postgresql restart && bash integration/setup.sh)
+          bash integration/toxi/setup.sh
       - name: Run ${{ matrix.name }}
         run: bash ${{ matrix.script }}
       - name: Ensure PgDog stopped
