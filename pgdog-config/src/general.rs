@@ -783,8 +783,8 @@ impl Default for General {
             two_phase_commit_wal_dir: Self::two_phase_commit_wal_dir(),
             two_phase_commit_wal_segment_size: Self::two_phase_commit_wal_segment_size(),
             two_phase_commit_wal_fsync_interval: Self::two_phase_commit_wal_fsync_interval(),
-            two_phase_commit_wal_checkpoint_interval: Self::two_phase_commit_wal_checkpoint_interval(
-            ),
+            two_phase_commit_wal_checkpoint_interval:
+                Self::two_phase_commit_wal_checkpoint_interval(),
             expanded_explain: Self::expanded_explain(),
             server_lifetime: Self::server_lifetime(),
             stats_period: Self::stats_period(),
