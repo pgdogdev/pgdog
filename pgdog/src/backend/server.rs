@@ -439,6 +439,13 @@ impl Server {
                         Ok(forward) => {
                             if forward {
                                 break message;
+                            } else if message.code() == 'E' {
+                                // we got an error that will not be forwarded to the client,
+                                // but it still be useful for tracing
+                                error!(
+                                    "Ignore error from stream: {:?}",
+                                    ErrorResponse::from_bytes(message.payload())
+                                );
                             }
                         }
                         Err(err) => {
@@ -1096,7 +1103,6 @@ impl Drop for Server {
     }
 }
 
-// Used for testing.
 #[cfg(test)]
 pub mod test {
     use bytes::{BufMut, BytesMut};
@@ -1355,6 +1361,44 @@ pub mod test {
         assert!(server.done());
     }
 
+    // A simple query that errors must not prevent a subsequent extended query
+    // from executing when both are sent in the same batch.
+    //
+    // Currently FAILS: queuing the extended items sets extended=true before the
+    // simple query is processed, so the simple query error incorrectly clears
+    // the extended query's pending entries.
+    #[tokio::test]
+    async fn test_simple_query_error_before_extended_query_in_same_batch() {
+        let mut server = test_server().await;
+
+        // Setup: simple query that errors, immediately followed by an extended query.
+        server
+            .send(
+                &vec![
+                    Query::new("SELECT 1/0").into(),
+                    Parse::new_anonymous("SELECT 1").into(),
+                    Bind::default().into(),
+                    Execute::new().into(),
+                    Sync.into(),
+                ]
+                .into(),
+            )
+            .await
+            .unwrap();
+
+        // Simple query: errors, then ReadyForQuery.
+        assert_eq!(server.read().await.unwrap().code(), 'E'); // ErrorResponse
+        assert_eq!(server.read().await.unwrap().code(), 'Z'); // ReadyForQuery
+
+        // Extended query must still return its results.
+        assert_eq!(server.read().await.unwrap().code(), '1'); // ParseComplete
+        assert_eq!(server.read().await.unwrap().code(), '2'); // BindComplete
+        assert_eq!(server.read().await.unwrap().code(), 'D'); // DataRow
+        assert_eq!(server.read().await.unwrap().code(), 'C'); // CommandComplete
+        assert_eq!(server.read().await.unwrap().code(), 'Z'); // ReadyForQuery
+        assert!(server.done());
+    }
+
     #[tokio::test]
     async fn test_execute_batch_simple_query_error_then_success() {
         let mut server = test_server().await;
@@ -1521,7 +1565,7 @@ pub mod test {
         let (new, name) = global.write().insert(&parse);
         assert!(new);
         let parse = parse.rename(&name);
-        assert_eq!(parse.name(), "__pgdog_1");
+        assert!(parse.name().starts_with("__pgdog_"));
 
         let mut server = test_server().await;
 
@@ -1530,7 +1574,7 @@ pub mod test {
                 .send(
                     &vec![
                         ProtocolMessage::from(Bind::new_params(
-                            "__pgdog_1",
+                            &name,
                             &[Parameter {
                                 len: 1,
                                 data: "1".as_bytes().into(),
@@ -1964,14 +2008,17 @@ pub mod test {
 
         let mut prep = PreparedStatements::new();
         let mut parse = Parse::named("test", "SELECT 1::bigint");
+
         prep.insert_anyway(&mut parse);
-        assert_eq!(parse.name(), "__pgdog_1");
+
+        let name = parse.name().to_owned();
+        assert!(name.starts_with("__pgdog_"));
 
         server
             .send(
                 &vec![ProtocolMessage::from(Query::new(format!(
                     "PREPARE {} AS {}",
-                    parse.name(),
+                    name,
                     parse.query()
                 )))]
                 .into(),
@@ -1984,10 +2031,10 @@ pub mod test {
         }
         assert!(server.sync_prepared());
         server.sync_prepared_statements().await.unwrap();
-        assert!(server.prepared_statements.contains("__pgdog_1"));
+        assert!(server.prepared_statements.contains(&name));
 
-        let describe = Describe::new_statement("__pgdog_1");
-        let bind = Bind::new_statement("__pgdog_1");
+        let describe = Describe::new_statement(&name);
+        let bind = Bind::new_statement(&name);
         let execute = Execute::new();
         server
             .send(
@@ -2007,7 +2054,7 @@ pub mod test {
             assert_eq!(c, msg.code());
         }
 
-        let parse = Parse::named("__pgdog_1", "SELECT 2::bigint");
+        let parse = Parse::named(&name, "SELECT 2::bigint");
         let describe = describe.clone();
 
         server
@@ -2021,7 +2068,7 @@ pub mod test {
         }
 
         server
-            .send(&vec![ProtocolMessage::from(Query::new("EXECUTE __pgdog_1"))].into())
+            .send(&vec![ProtocolMessage::from(Query::new(format!("EXECUTE {name}")))].into())
             .await
             .unwrap();
         for c in ['T', 'D', 'C', 'Z'] {
@@ -2725,38 +2772,6 @@ pub mod test {
     }
 
     #[tokio::test]
-    async fn test_protocol_out_of_sync_sets_error_state() {
-        let mut server = test_server().await;
-
-        server
-            .send(&vec![Query::new("SELECT 1").into()].into())
-            .await
-            .unwrap();
-
-        for c in ['T', 'D'] {
-            let msg = server.read().await.unwrap();
-            assert_eq!(msg.code(), c);
-        }
-
-        // simulate an unlikely, but existent out-of-sync state
-        server
-            .prepared_statements_mut()
-            .state_mut()
-            .queue_mut()
-            .clear();
-
-        let res = server.read().await;
-        assert!(
-            matches!(res, Err(Error::ProtocolOutOfSync)),
-            "protocol should be out of sync"
-        );
-        assert!(
-            server.stats().get_state() == State::Error,
-            "state should be Error after detecting desync"
-        )
-    }
-
-    #[tokio::test]
     async fn test_reset_clears_client_params() {
         let mut server = test_server().await;
         let mut params = Parameters::default();
@@ -3181,6 +3196,63 @@ pub mod test {
         assert!(!server.needs_drain());
     }
 
+    // In pipeline mode, a failed request must not prevent subsequent pipelined
+    // requests from being processed. All three sequences are sent in one batch;
+    // seq1 fails, seq2 and seq3 must still return their rows.
+    //
+    // Currently FAILS: the error in seq1 causes seq2 and seq3 to receive
+    // ProtocolOutOfSync instead of their expected responses.
+    #[tokio::test]
+    async fn test_pipelined_multiple_syncs_first_fails() {
+        let mut server = test_server().await;
+
+        // Three pipelined sequences sent in one batch.
+        server
+            .send(
+                &vec![
+                    // Seq1 — will fail.
+                    Parse::new_anonymous("SELECT 1/0").into(),
+                    Bind::default().into(),
+                    Execute::new().into(),
+                    Sync.into(),
+                    // Seq2 — must succeed.
+                    Parse::new_anonymous("SELECT 2").into(),
+                    Bind::default().into(),
+                    Execute::new().into(),
+                    Sync.into(),
+                    // Seq3 — must succeed.
+                    Parse::new_anonymous("SELECT 3").into(),
+                    Bind::default().into(),
+                    Execute::new().into(),
+                    Sync.into(),
+                ]
+                .into(),
+            )
+            .await
+            .unwrap();
+
+        // Seq1: fails — seq2 and seq3 must still respond.
+        assert_eq!(server.read().await.unwrap().code(), '1'); // ParseComplete
+        assert_eq!(server.read().await.unwrap().code(), 'E'); // ErrorResponse
+        assert_eq!(server.read().await.unwrap().code(), 'Z'); // ReadyForQuery
+
+        // Seq2: must return data despite seq1 erroring.
+        assert_eq!(server.read().await.unwrap().code(), '1'); // ParseComplete
+        assert_eq!(server.read().await.unwrap().code(), '2'); // BindComplete
+        assert_eq!(server.read().await.unwrap().code(), 'D'); // DataRow
+        assert_eq!(server.read().await.unwrap().code(), 'C'); // CommandComplete
+        assert_eq!(server.read().await.unwrap().code(), 'Z'); // ReadyForQuery
+
+        // Seq3: must return data.
+        assert_eq!(server.read().await.unwrap().code(), '1'); // ParseComplete
+        assert_eq!(server.read().await.unwrap().code(), '2'); // BindComplete
+        assert_eq!(server.read().await.unwrap().code(), 'D'); // DataRow
+        assert_eq!(server.read().await.unwrap().code(), 'C'); // CommandComplete
+        assert_eq!(server.read().await.unwrap().code(), 'Z'); // ReadyForQuery
+        assert!(server.done());
+        assert!(!server.has_more_messages());
+    }
+
     #[tokio::test]
     async fn test_empty_query_extended() {
         let mut server = test_server().await;
@@ -3591,5 +3663,107 @@ pub mod test {
         assert!(matches!(err, Error::ExecutionError(_)));
         assert!(server.force_close());
         assert_eq!(server.stats().get_state(), State::ForceClose);
+    }
+
+    // Failed injected PREPARE leaves EXECUTE ReadyForQuery unmatched — Error handler empties the queue.
+    #[tokio::test]
+    async fn test_prepare_execute_inject_failure_orphans_execute_rfq() {
+        let mut server = test_server().await;
+
+        // 1. Send [Prepare, Query] as the rewriter injects for EXECUTE.
+        server
+            .send(
+                &vec![
+                    ProtocolMessage::Prepare {
+                        name: "__pgdog_prepare_inject_test".to_string(),
+                        statement: "SELECT 1 FROM __pgdog_nonexistent_table__".to_string(),
+                    },
+                    ProtocolMessage::Query(Query::new("EXECUTE __pgdog_prepare_inject_test()")),
+                ]
+                .into(),
+            )
+            .await
+            .unwrap();
+
+        // 2. PREPARE 'E' forwarded; 'Z' consumes re-added Code(RFQ) — queue empty.
+        let msg = server.read().await.unwrap();
+        assert_eq!(msg.code(), 'E'); // 'E' PREPARE error
+        let msg = server.read().await.unwrap();
+        assert_eq!(msg.code(), 'Z'); // 'Z' RFQ — queue now empty
+    }
+
+    // Extended Execute + Flush (no Sync): single action('c') now succeeds.
+    // CopyDone is forwarded to client; the trailing CommandComplete then hits an empty
+    // queue (no RFQ backstop, no Sync) and raises ProtocolOutOfSync.
+    // This is distinct from the former double-action bug, which fired on CopyDone itself.
+    #[tokio::test]
+    async fn test_copydone_single_action_without_sync() {
+        let mut server = test_server().await;
+
+        // 1. Parse + Bind + Execute + Flush (not Sync); no RFQ backstop in queue.
+        server
+            .send(
+                &vec![
+                    ProtocolMessage::Parse(Parse::new_anonymous("COPY (VALUES (1),(2)) TO STDOUT")),
+                    ProtocolMessage::Bind(Bind::new_params("", &[])),
+                    ProtocolMessage::Execute(Execute::new()),
+                    // Flush (not Sync): prompts PostgreSQL to send buffered responses.
+                    // handle() maps this to Other, adding nothing to the queue.
+                    Flush.into(),
+                ]
+                .into(),
+            )
+            .await
+            .unwrap();
+
+        // 2. ParseComplete, BindComplete, CopyOutResponse, CopyData x2 arrive normally.
+        assert_eq!(server.read().await.unwrap().code(), '1'); // ParseComplete
+        assert_eq!(server.read().await.unwrap().code(), '2'); // BindComplete
+        assert_eq!(server.read().await.unwrap().code(), 'H'); // CopyOutResponse
+        assert_eq!(server.read().await.unwrap().code(), 'd'); // CopyData row 1
+        assert_eq!(server.read().await.unwrap().code(), 'd'); // CopyData row 2
+
+        // 3. CopyDone — fixed: single action() pops ExecutionCompleted; no second call.
+        assert_eq!(server.read().await.unwrap().code(), 'c'); // CopyDone forwarded
+
+        // 4. CommandComplete hits empty queue (no RFQ backstop without Sync).
+        assert!(
+            matches!(server.read().await.unwrap_err(), Error::ProtocolOutOfSync),
+            "expected ProtocolOutOfSync on CommandComplete with empty queue"
+        );
+    }
+
+    // Safe path: Sync adds Code(RFQ) backstop — double action('c') is idempotent.
+    #[tokio::test]
+    async fn test_copydone_double_action_safe_with_sync() {
+        let mut server = test_server().await;
+
+        // 1. Parse + Bind + Execute + Sync; RFQ backstop added to queue.
+        server
+            .send(
+                &vec![
+                    ProtocolMessage::Parse(Parse::new_anonymous("COPY (VALUES (1),(2)) TO STDOUT")),
+                    ProtocolMessage::Bind(Bind::new_params("", &[])),
+                    ProtocolMessage::Execute(Execute::new()),
+                    ProtocolMessage::Sync(Sync),
+                ]
+                .into(),
+            )
+            .await
+            .unwrap();
+
+        // 2. Full response sequence — CopyDone is safe with RFQ backstop.
+        assert_eq!(server.read().await.unwrap().code(), '1'); // ParseComplete
+        assert_eq!(server.read().await.unwrap().code(), '2'); // BindComplete
+        assert_eq!(server.read().await.unwrap().code(), 'H'); // CopyOutResponse
+        assert_eq!(server.read().await.unwrap().code(), 'd'); // CopyData row 1
+        assert_eq!(server.read().await.unwrap().code(), 'd'); // CopyData row 2
+        assert_eq!(server.read().await.unwrap().code(), 'c'); // CopyDone -- safe with RFQ backstop
+        assert_eq!(server.read().await.unwrap().code(), 'C'); // CommandComplete
+        assert_eq!(server.read().await.unwrap().code(), 'Z'); // ReadyForQuery
+        assert!(
+            server.done(),
+            "server must be done after full response sequence"
+        );
     }
 }

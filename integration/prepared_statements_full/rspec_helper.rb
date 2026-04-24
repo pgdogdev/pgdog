@@ -99,3 +99,8 @@ def ensure_done
     expect(client['state']).to eq('idle')
   end
 end
+
+
+def connect_pgdog(user: 'pgdog')
+  PG.connect(dbname: 'pgdog', user:, password: 'pgdog', port: 6432, host: '127.0.0.1')
+end
