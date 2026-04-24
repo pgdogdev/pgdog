@@ -134,7 +134,7 @@ pub struct ParallelSyncManager {
 
 impl ParallelSyncManager {
     /// Create parallel sync manager.
-    pub fn new(tables: Vec<Table>, replicas: Vec<Pool>, dest: &Cluster) -> Result<Self, Error> {
+    pub fn new(tables: Vec<Table>, replicas: Vec<Pool>, dest: Cluster) -> Result<Self, Error> {
         if replicas.is_empty() {
             return Err(Error::NoReplicas);
         }
@@ -150,7 +150,7 @@ impl ParallelSyncManager {
             )),
             tables,
             replicas,
-            dest: dest.clone(),
+            dest,
         })
     }
 

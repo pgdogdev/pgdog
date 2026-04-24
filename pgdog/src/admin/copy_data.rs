@@ -61,6 +61,10 @@ impl Command for CopyData {
             orchestrator.load_schema().await?;
             orchestrator.schema_sync_pre(true).await?;
             orchestrator.data_sync().await?;
+            // data_sync can run for hours; any pool reload during the copy marks self.source
+            // offline.  Re-fetch live cluster refs from databases() before starting replication.
+            orchestrator.refresh()?;
+
             AsyncTasks::insert(TaskType::Replication(Box::new(
                 orchestrator.replicate().await?,
             )));

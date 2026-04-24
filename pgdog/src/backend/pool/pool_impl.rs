@@ -9,7 +9,7 @@ use once_cell::sync::{Lazy, OnceCell};
 use parking_lot::RwLock;
 use parking_lot::{lock_api::MutexGuard, Mutex, RawMutex};
 use tokio::time::{timeout, Instant};
-use tracing::error;
+use tracing::{debug, error};
 
 use crate::backend::pool::LsnStats;
 use crate::backend::{ConnectReason, DisconnectReason, Server, ServerOptions};
@@ -356,10 +356,21 @@ impl Pool {
         Monitor::create_connection(self, reason).await
     }
 
-    /// Shutdown the pool.
+    /// Mark this pool offline and evict idle connections.
+    ///
+    /// Called from two contexts: atomic pool replacement (where a new generation
+    /// is swapped in immediately after) and process shutdown. The operation is the
+    /// same in both cases: set `online = false`, dump idle connections, and notify
+    /// any waiters so they return `Error::Offline` rather than blocking forever.
     pub fn shutdown(&self) {
+        debug!(
+            host = %self.addr().host,
+            port = self.addr().port,
+            database = %self.addr().database_name,
+            user = %self.addr().user,
+            "pool offline"
+        );
         let mut guard = self.lock();
-
         guard.online = false;
         guard.dump_idle();
         guard.close_waiters(Error::Offline);
