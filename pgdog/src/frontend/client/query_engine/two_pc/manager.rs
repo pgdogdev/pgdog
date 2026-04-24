@@ -5,7 +5,6 @@ use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 use std::{
     collections::VecDeque,
-    path::PathBuf,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -73,12 +72,12 @@ impl Manager {
         manager
     }
 
-    /// Open the WAL at `dir`, replay any in-flight transactions back into
-    /// this manager, and start the writer task. If probing or recovery
-    /// fail, the manager keeps running without durability and a warning
-    /// is logged so operators can investigate.
-    pub async fn start(&self, dir: PathBuf) {
-        match Wal::open(self, dir).await {
+    /// Open the WAL at the configured directory, replay any in-flight
+    /// transactions back into this manager, and start the writer task.
+    /// If probing or recovery fail, the manager keeps running without
+    /// durability and a warning is logged so operators can investigate.
+    pub async fn start(&self) {
+        match Wal::open(self).await {
             Ok(wal) => {
                 self.wal.store(Some(Arc::new(wal)));
                 info!("[2pc] wal enabled");
@@ -131,9 +130,9 @@ impl Manager {
                     .await
                 }
                 TwoPcPhase::Phase2 => wal.append_committing(*transaction).await,
-                TwoPcPhase::Rollback => unreachable!(
-                    "rollback is not a state transition; it's the cleanup direction"
-                ),
+                TwoPcPhase::Rollback => {
+                    unreachable!("rollback is not a state transition; it's the cleanup direction")
+                }
             };
             if let Err(err) = result {
                 warn!(
@@ -236,10 +235,7 @@ impl Manager {
     async fn remove(&self, transaction: &TwoPcTransaction) {
         if let Some(wal) = self.wal.load_full() {
             if let Err(err) = wal.append_end(*transaction).await {
-                warn!(
-                    "[2pc] wal end record failed for {}: {}",
-                    transaction, err
-                );
+                warn!("[2pc] wal end record failed for {}: {}", transaction, err);
             }
         }
         self.inner.lock().transactions.remove(transaction);

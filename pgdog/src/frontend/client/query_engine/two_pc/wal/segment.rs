@@ -401,7 +401,7 @@ mod tests {
                 txn: TwoPcTransaction::new(),
                 user: "u".into(),
                 database: "d".into(),
-                })
+            })
             .encode(&mut buf)
             .unwrap();
             seg.append_batch(&buf, 1).await.unwrap();

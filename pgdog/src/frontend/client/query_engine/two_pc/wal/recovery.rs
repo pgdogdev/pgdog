@@ -282,7 +282,7 @@ mod tests {
                     txn: txn(99),
                     user: "u99".into(),
                     database: "d99".into(),
-                        decided: true,
+                    decided: true,
                 }],
             }),
         );
