@@ -53,6 +53,39 @@ fn parse_segment_filename(name: &str) -> Result<u64, Error> {
     u64::from_str(stem).map_err(|_| Error::BadSegmentName(name.to_string()))
 }
 
+/// Delete every segment in `dir` whose contents lie strictly before
+/// `lsn` — i.e. segments whose successor's start LSN is `<= lsn`. The
+/// segment that *contains* `lsn` is preserved because it still has live
+/// records after the checkpoint that future recovery needs to replay.
+/// Per-file deletion errors are logged but don't abort the GC.
+pub async fn gc_before_lsn(dir: &Path, lsn: u64) -> Result<(), Error> {
+    let segments = list_segments(dir).await?;
+    let mut last_kept = None;
+    for (i, path) in segments.iter().enumerate() {
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .ok_or_else(|| Error::BadSegmentName(path.display().to_string()))?;
+        if parse_segment_filename(name)? > lsn {
+            break;
+        }
+        last_kept = Some(i);
+    }
+    let Some(keep) = last_kept else {
+        return Ok(());
+    };
+    for path in &segments[..keep] {
+        if let Err(err) = tokio::fs::remove_file(path).await {
+            warn!(
+                "[2pc] could not delete old wal segment {}: {}",
+                path.display(),
+                err
+            );
+        }
+    }
+    Ok(())
+}
+
 /// List the WAL segment files in `dir`, sorted ascending by start LSN.
 ///
 /// Files in `dir` whose names don't parse as a segment are skipped with a
