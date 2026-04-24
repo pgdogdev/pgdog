@@ -85,20 +85,19 @@ impl Wal {
         Self { tx, shutdown }
     }
 
-    /// Log that `txn` is about to issue PREPARE TRANSACTION on `shards`.
-    /// Must complete before any PREPARE leaves the coordinator.
+    /// Log that `txn` is about to issue PREPARE TRANSACTION on its
+    /// participants. Must complete before any PREPARE leaves the
+    /// coordinator.
     pub async fn append_begin(
         &self,
         txn: TwoPcTransaction,
         user: String,
         database: String,
-        shards: Vec<u32>,
     ) -> Result<u64, Arc<Error>> {
         self.append(Record::Begin(BeginPayload {
             txn,
             user,
             database,
-            shards,
         }))
         .await
     }

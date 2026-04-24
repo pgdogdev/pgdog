@@ -211,7 +211,6 @@ mod tests {
                 txn: txn(1),
                 user: "alice".into(),
                 database: "shop".into(),
-                shards: vec![0, 1],
             }),
         );
         let entry = w.get(&txn(1)).unwrap();
@@ -229,7 +228,6 @@ mod tests {
                 txn: txn(1),
                 user: "u".into(),
                 database: "d".into(),
-                shards: vec![0],
             }),
         );
         apply(&mut w, Record::Committing(TxnPayload { txn: txn(1) }));
@@ -252,7 +250,6 @@ mod tests {
                 txn: txn(1),
                 user: "u".into(),
                 database: "d".into(),
-                shards: vec![0],
             }),
         );
         apply(&mut w, Record::End(TxnPayload { txn: txn(1) }));
@@ -268,7 +265,6 @@ mod tests {
                 txn: txn(1),
                 user: "u1".into(),
                 database: "d1".into(),
-                shards: vec![0],
             }),
         );
         apply(
@@ -277,7 +273,6 @@ mod tests {
                 txn: txn(2),
                 user: "u2".into(),
                 database: "d2".into(),
-                shards: vec![0],
             }),
         );
         apply(
@@ -287,8 +282,7 @@ mod tests {
                     txn: txn(99),
                     user: "u99".into(),
                     database: "d99".into(),
-                    shards: vec![0],
-                    decided: true,
+                        decided: true,
                 }],
             }),
         );
