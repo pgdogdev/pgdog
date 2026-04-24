@@ -33,8 +33,8 @@ mod test_show {
     use crate::backend::Cluster;
     use crate::config::config;
     use crate::frontend::client::Sticky;
-    use crate::frontend::router::parser::Shard;
-    use crate::frontend::router::{Ast, QueryParser};
+    use crate::frontend::router::parser::{AstContext, Cache, Shard};
+    use crate::frontend::router::QueryParser;
     use crate::frontend::{BufferedQuery, ClientRequest, PreparedStatements, RouterContext};
     use crate::net::messages::Query;
     use crate::net::Parameters;
@@ -43,22 +43,17 @@ mod test_show {
     fn show_runs_on_a_direct_shard_round_robin() {
         let c = Cluster::new_test(&config());
         let mut parser = QueryParser::default();
+        let params = Parameters::default();
+        let ctx = AstContext::from_cluster(&c, &params);
 
         // First call
         let query = "SHOW TRANSACTION ISOLATION LEVEL";
-        let mut ast = Ast::new(
-            &BufferedQuery::Query(Query::new(query)),
-            &c.sharding_schema(),
-            &c.schema(),
-            &mut PreparedStatements::default(),
-            "",
-            None,
-        )
-        .unwrap();
-        ast.cached = false;
+        let buffered = BufferedQuery::Query(Query::new(query));
+        let ast = Cache::get()
+            .query(&buffered, &ctx, &mut PreparedStatements::default())
+            .unwrap();
         let mut buffer = ClientRequest::from(vec![Query::new(query).into()]);
         buffer.ast = Some(ast);
-        let params = Parameters::default();
         let context = RouterContext::new(&buffer, &c, &params, None, Sticky::new()).unwrap();
 
         let first = parser.parse(context).unwrap().clone();
@@ -67,19 +62,12 @@ mod test_show {
 
         // Second call
         let query = "SHOW TRANSACTION ISOLATION LEVEL";
-        let mut ast = Ast::new(
-            &BufferedQuery::Query(Query::new(query)),
-            &c.sharding_schema(),
-            &c.schema(),
-            &mut PreparedStatements::default(),
-            "",
-            None,
-        )
-        .unwrap();
-        ast.cached = false;
+        let buffered = BufferedQuery::Query(Query::new(query));
+        let ast = Cache::get()
+            .query(&buffered, &ctx, &mut PreparedStatements::default())
+            .unwrap();
         let mut buffer = ClientRequest::from(vec![Query::new(query).into()]);
         buffer.ast = Some(ast);
-        let params = Parameters::default();
         let context = RouterContext::new(&buffer, &c, &params, None, Sticky::new()).unwrap();
 
         let second = parser.parse(context).unwrap().clone();

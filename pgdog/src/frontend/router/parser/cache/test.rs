@@ -5,6 +5,8 @@ use tokio::spawn;
 
 use crate::{
     backend::{schema::Schema, ShardingSchema},
+    config::Role,
+    frontend::router::parser::Shard,
     frontend::{BufferedQuery, PreparedStatements},
     net::{Parse, Query},
 };
@@ -105,6 +107,231 @@ async fn bench_ast_cache() {
     assert!(faster > 10.0);
 }
 
+// Serialize tests that read or write the global Cache stats. These tests
+// reset the cache and assert on `hits`/`misses` counters, so they cannot run
+// concurrently without clobbering each other.
+static CACHE_STATS_LOCK: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
+
+fn run_prepared(query: &str) -> Ast {
+    let ctx = test_context();
+    let mut prepared_statements = PreparedStatements::default();
+    Cache::get()
+        .query(
+            &BufferedQuery::Prepared(Parse::new_anonymous(query)),
+            &ctx,
+            &mut prepared_statements,
+        )
+        .unwrap()
+}
+
+#[test]
+fn test_cache_hit_same_query_no_comment() {
+    let _guard = CACHE_STATS_LOCK.lock();
+    Cache::reset();
+
+    // Sanity baseline: repeating an identical query with no comment should
+    // produce exactly one miss and one hit.
+    let q = "SELECT 1 FROM cache_comment_sanity";
+    run_prepared(q);
+    run_prepared(q);
+
+    let (stats, _) = Cache::stats();
+    assert_eq!(stats.misses, 1);
+    assert_eq!(stats.hits, 1);
+}
+
+#[test]
+fn test_cache_hit_different_leading_comments() {
+    let _guard = CACHE_STATS_LOCK.lock();
+    Cache::reset();
+
+    // Two queries with the same body but different leading comments should
+    // share a cache entry because comment stripping normalizes the key.
+    run_prepared("/* client=foo */ SELECT 1 FROM cache_comment_leading");
+    run_prepared("/* client=bar */ SELECT 1 FROM cache_comment_leading");
+
+    let (stats, _) = Cache::stats();
+    assert_eq!(
+        stats.misses, 1,
+        "second query should hit the cache — comments should be stripped"
+    );
+    assert_eq!(stats.hits, 1);
+}
+
+#[test]
+fn test_cache_hit_different_trailing_comments() {
+    let _guard = CACHE_STATS_LOCK.lock();
+    Cache::reset();
+
+    run_prepared("SELECT 1 FROM cache_comment_trailing /* client=foo */");
+    run_prepared("SELECT 1 FROM cache_comment_trailing /* client=bar */");
+
+    let (stats, _) = Cache::stats();
+    assert_eq!(
+        stats.misses, 1,
+        "second query should hit the cache — trailing comments should be stripped"
+    );
+    assert_eq!(stats.hits, 1);
+}
+
+#[test]
+fn test_cache_hit_commented_after_uncommented() {
+    let _guard = CACHE_STATS_LOCK.lock();
+    Cache::reset();
+
+    // Seed with no comment, then query the same body with a comment. The
+    // second lookup strips the comment and should hit the uncommented entry.
+    run_prepared("SELECT 1 FROM cache_comment_mixed");
+    run_prepared("/* traced */ SELECT 1 FROM cache_comment_mixed");
+
+    let (stats, _) = Cache::stats();
+    assert_eq!(stats.misses, 1);
+    assert_eq!(stats.hits, 1);
+}
+
+#[test]
+fn test_cache_hit_overrides_role_hint() {
+    let _guard = CACHE_STATS_LOCK.lock();
+    Cache::reset();
+
+    // Seed with a primary role hint; cache stores an entry keyed by the
+    // stripped body.
+    let first = run_prepared("/* pgdog_role: primary */ SELECT 1 FROM cache_role_override");
+    assert_eq!(first.comment_role, Some(Role::Primary));
+
+    // Second query, same body, replica hint. Must hit cache AND return
+    // an Ast whose role reflects the new hint, not the cached one.
+    let second = run_prepared("/* pgdog_role: replica */ SELECT 1 FROM cache_role_override");
+    let (stats, _) = Cache::stats();
+    assert_eq!(stats.hits, 1, "second query should hit cache");
+    assert_eq!(
+        second.comment_role,
+        Some(Role::Replica),
+        "cached Ast must be overridden with the incoming role hint"
+    );
+}
+
+#[test]
+fn test_cache_hit_clears_role_hint_when_absent() {
+    let _guard = CACHE_STATS_LOCK.lock();
+    Cache::reset();
+
+    // Seed with a primary hint.
+    let _ = run_prepared("/* pgdog_role: primary */ SELECT 1 FROM cache_role_clear");
+
+    // Re-run same body without any comment. Must hit cache and the role
+    // must be cleared (None), not inherit the cached primary.
+    let second = run_prepared("SELECT 1 FROM cache_role_clear");
+    let (stats, _) = Cache::stats();
+    assert_eq!(stats.hits, 1);
+    assert_eq!(
+        second.comment_role, None,
+        "incoming query has no role hint — cached role must be cleared"
+    );
+}
+
+#[test]
+fn test_cache_hit_overrides_shard_hint() {
+    let _guard = CACHE_STATS_LOCK.lock();
+    Cache::reset();
+
+    let first = run_prepared("/* pgdog_shard: 0 */ SELECT 1 FROM cache_shard_override");
+    assert_eq!(first.comment_shard, Some(Shard::Direct(0)));
+
+    let second = run_prepared("/* pgdog_shard: 1 */ SELECT 1 FROM cache_shard_override");
+    let (stats, _) = Cache::stats();
+    assert_eq!(stats.hits, 1, "second query should hit cache");
+    assert_eq!(
+        second.comment_shard,
+        Some(Shard::Direct(1)),
+        "cached Ast must be overridden with the incoming shard hint"
+    );
+}
+
+#[test]
+fn test_cache_miss_different_bodies() {
+    let _guard = CACHE_STATS_LOCK.lock();
+    Cache::reset();
+
+    // Sanity: different statement bodies must not collide regardless of
+    // comment stripping.
+    run_prepared("/* x */ SELECT 1 FROM cache_comment_distinct_a");
+    run_prepared("/* x */ SELECT 2 FROM cache_comment_distinct_b");
+
+    let (stats, _) = Cache::stats();
+    assert_eq!(stats.misses, 2);
+    assert_eq!(stats.hits, 0);
+}
+
+#[test]
+fn test_cache_key_strips_leading_comment() {
+    let _guard = CACHE_STATS_LOCK.lock();
+    Cache::reset();
+
+    let ast = run_prepared("/* trace_id=abc */ SELECT 1 FROM cache_key_leading");
+    assert_eq!(
+        ast.query_without_comment.as_str(),
+        "SELECT 1 FROM cache_key_leading",
+        "cache key must be the query without the leading comment"
+    );
+
+    // The LRU map key must also be the stripped query.
+    let queries = Cache::queries();
+    assert!(
+        queries.contains_key(&"SELECT 1 FROM cache_key_leading".to_string()),
+        "cache map key must be the comment-stripped query"
+    );
+}
+
+#[test]
+fn test_cache_key_strips_trailing_comment() {
+    let _guard = CACHE_STATS_LOCK.lock();
+    Cache::reset();
+
+    let ast = run_prepared("SELECT 1 FROM cache_key_trailing /* trace_id=xyz */");
+    assert_eq!(
+        ast.query_without_comment.as_str(),
+        "SELECT 1 FROM cache_key_trailing",
+        "cache key must be the query without the trailing comment"
+    );
+}
+
+#[test]
+fn test_cache_key_no_comment_unchanged() {
+    let _guard = CACHE_STATS_LOCK.lock();
+    Cache::reset();
+
+    let q = "SELECT 1 FROM cache_key_plain";
+    let ast = run_prepared(q);
+    assert_eq!(
+        ast.query_without_comment.as_str(),
+        q,
+        "cache key must equal the original query when there is no comment"
+    );
+}
+
+#[test]
+fn test_cache_key_shared_across_different_comments() {
+    let _guard = CACHE_STATS_LOCK.lock();
+    Cache::reset();
+
+    run_prepared("/* a */ SELECT 1 FROM cache_key_shared");
+    run_prepared("/* b */ SELECT 1 FROM cache_key_shared");
+    run_prepared("SELECT 1 FROM cache_key_shared /* c */");
+
+    let queries = Cache::queries();
+    let matching: Vec<_> = queries
+        .keys()
+        .filter(|k| k.contains("cache_key_shared"))
+        .collect();
+    assert_eq!(
+        matching.len(),
+        1,
+        "all three queries must share a single cache entry"
+    );
+    assert_eq!(matching[0].as_str(), "SELECT 1 FROM cache_key_shared");
+}
+
 #[test]
 fn test_normalize() {
     let q = "SELECT * FROM users WHERE id = 1";
@@ -123,7 +350,8 @@ fn test_tables_list() {
         "DELETE FROM private_schema.test",
         "DROP TABLE private_schema.test",
     ] {
-        let ast = Ast::new(&BufferedQuery::Query(Query::new(q)), &ShardingSchema::default(), &db_schema, &mut prepared_statements, "", None).unwrap();
+        let buffered = BufferedQuery::Query(Query::new(q));
+        let ast = Ast::new(&AstQuery::from_query(&buffered), &ShardingSchema::default(), &db_schema, &mut prepared_statements, "", None).unwrap();
         let tables = ast.tables();
         println!("{:?}", tables);
     }

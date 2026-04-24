@@ -67,6 +67,20 @@ impl RewriteResult {
 }
 
 impl RewritePlan {
+    /// True if the plan would not modify the query or its messages.
+    /// `params` is purely informational (count of original `$N` placeholders)
+    /// and doesn't count as a rewrite.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.unique_ids == 0
+            && self.auto_id_injected == 0
+            && self.stmt.is_none()
+            && self.prepares.is_empty()
+            && self.insert_split.is_empty()
+            && self.aggregates.is_noop()
+            && self.sharding_key_update.is_none()
+            && self.offset.is_none()
+    }
+
     /// Apply the rewrite plan to a Bind message by appending generated unique IDs.
     pub(crate) fn apply_bind(&self, bind: &mut Bind) -> Result<(), Error> {
         let format = bind.default_param_format();

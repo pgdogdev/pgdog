@@ -1,16 +1,19 @@
 use lru::LruCache;
 use once_cell::sync::Lazy;
+use parking_lot::lock_api::MutexGuard;
 use pg_query::normalize;
 use pgdog_config::QueryParserEngine;
+use std::borrow::Borrow;
 use std::collections::HashMap;
+use std::ops::Deref;
 use std::time::Duration;
 
-use parking_lot::Mutex;
+use parking_lot::{Mutex, RawMutex};
 use std::sync::Arc;
 use tracing::debug;
 
 use super::super::{Error, Route};
-use super::{Ast, AstContext};
+use super::{super::parse_edge_comment, Ast, AstContext, AstQuery};
 use crate::frontend::{BufferedQuery, PreparedStatements};
 
 static CACHE: Lazy<Cache> = Lazy::new(Cache::new);
@@ -28,6 +31,8 @@ pub struct Stats {
     pub multi: usize,
     /// Parse time.
     pub parse_time: Duration,
+    /// Fingerprints calculated.
+    pub fingerprints: usize,
 }
 
 impl Stats {
@@ -40,13 +45,25 @@ impl Stats {
     }
 }
 
+/// Newtype wrapper around `Arc<String>` that lets us look up cache entries
+/// with any `&str` (e.g. a `QueryWithoutComment`, which derefs to `str`).
+/// Stdlib only provides `Arc<T>: Borrow<T>`, not `Arc<String>: Borrow<str>`.
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+pub(super) struct CacheKey(pub(super) Arc<String>);
+
+impl Borrow<str> for CacheKey {
+    fn borrow(&self) -> &str {
+        self.0.as_str()
+    }
+}
+
 /// Mutex-protected query cache.
 #[derive(Debug)]
-struct Inner {
+pub(super) struct Inner {
     /// Least-recently-used cache.
-    queries: LruCache<String, Ast>,
+    queries: LruCache<CacheKey, Ast>,
     /// Cache global stats.
-    stats: Stats,
+    pub(super) stats: Stats,
 }
 
 /// AST cache.
@@ -94,6 +111,11 @@ impl Cache {
         }
     }
 
+    /// Get the inner struct.
+    pub(super) fn lock<'a>(&'a self) -> MutexGuard<'a, RawMutex, Inner> {
+        self.inner.lock()
+    }
+
     /// Parse a statement by either getting it from cache
     /// or using pg_query parser.
     ///
@@ -106,24 +128,53 @@ impl Cache {
         ctx: &AstContext<'_>,
         prepared_statements: &mut PreparedStatements,
     ) -> Result<Ast, Error> {
+        // Separate query from comment, if one is present.
+        let query_and_comment = parse_edge_comment(query.query(), &ctx.sharding_schema)?;
+        let cache_key = &query_and_comment.query;
+
         {
             let mut guard = self.inner.lock();
-            let ast = guard.queries.get_mut(query.query()).map(|entry| {
-                entry.stats.lock().hits += 1; // No contention on this.
-                entry.clone()
-            });
-            if let Some(ast) = ast {
+            let ast = guard
+                .queries
+                .get_mut(cache_key.deref()) // Use the query without comment as the cache key.
+                .map(|entry| {
+                    entry.stats.lock().hits += 1; // No contention on this.
+                    entry.clone()
+                });
+            if let Some(mut ast) = ast {
                 guard.stats.hits += 1;
+                ast.comment_role = query_and_comment.role;
+                ast.comment_shard = query_and_comment.shard.clone();
+
                 return Ok(ast);
             }
         }
 
         // Parse query without holding lock.
-        let entry = Ast::with_context(query, ctx, prepared_statements)?;
+        let mut entry = Ast::with_context(
+            &AstQuery {
+                original_query: query,
+                query_without_comment: &query_and_comment.query,
+            },
+            ctx,
+            prepared_statements,
+        )?;
+        entry.comment_role = query_and_comment.role;
+        entry.comment_shard = query_and_comment.shard.clone();
         let parse_time = entry.stats.lock().parse_time;
 
         let mut guard = self.inner.lock();
-        guard.queries.put(query.query().to_string(), entry.clone());
+        // Don't cache when a shard comment routed the query AND a rewrite
+        // was applied: the cache key is the comment-stripped body, so a
+        // subsequent uncommented lookup would hit this entry and receive an
+        // already-rewritten plan that was built against the commented
+        // (direct-shard) variant.
+        let cacheable = entry.comment_shard.is_none() || entry.rewrite_plan.is_empty();
+        if cacheable {
+            guard
+                .queries
+                .put(CacheKey(entry.query_without_comment.clone()), entry.clone());
+        }
         guard.stats.misses += 1;
         guard.stats.parse_time += parse_time;
 
@@ -138,8 +189,19 @@ impl Cache {
         ctx: &AstContext<'_>,
         prepared_statements: &mut PreparedStatements,
     ) -> Result<Ast, Error> {
-        let mut entry = Ast::with_context(query, ctx, prepared_statements)?;
+        let query_and_comment = parse_edge_comment(query.query(), &ctx.sharding_schema)?;
+
+        let mut entry = Ast::with_context(
+            &AstQuery {
+                original_query: query,
+                query_without_comment: &query_and_comment.query,
+            },
+            ctx,
+            prepared_statements,
+        )?;
         entry.cached = false;
+        entry.comment_role = query_and_comment.role;
+        entry.comment_shard = query_and_comment.shard.clone();
 
         let parse_time = entry.stats.lock().parse_time;
 
@@ -164,7 +226,7 @@ impl Cache {
 
         {
             let mut guard = self.inner.lock();
-            if let Some(entry) = guard.queries.get(&normalized) {
+            if let Some(entry) = guard.queries.get(normalized.as_str()) {
                 entry.update_stats(route);
                 guard.stats.hits += 1;
                 return Ok(());
@@ -175,7 +237,7 @@ impl Cache {
         entry.update_stats(route);
 
         let mut guard = self.inner.lock();
-        guard.queries.put(normalized, entry);
+        guard.queries.put(CacheKey(Arc::new(normalized)), entry);
         guard.stats.misses += 1;
 
         Ok(())
@@ -209,13 +271,13 @@ impl Cache {
     }
 
     /// Get a copy of all queries stored in the cache.
-    pub fn queries() -> HashMap<String, Ast> {
+    pub fn queries() -> HashMap<Arc<String>, Ast> {
         Self::get()
             .inner
             .lock()
             .queries
             .iter()
-            .map(|i| (i.0.clone(), i.1.clone()))
+            .map(|i| (i.0 .0.clone(), i.1.clone()))
             .collect()
     }
 

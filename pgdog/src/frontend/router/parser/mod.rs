@@ -36,9 +36,10 @@ pub use expression::ExpressionRegistry;
 
 pub use aggregate::{Aggregate, AggregateFunction, AggregateTarget};
 pub use binary::BinaryStream;
-pub use cache::{Ast, AstContext, Cache};
+pub use cache::{Ast, AstContext, AstQuery, Cache};
 pub use column::{Column, OwnedColumn};
 pub use command::{Command, SetParam};
+pub(crate) use comment::parse_edge_comment;
 pub use context::QueryParserContext;
 pub use copy::{CopyFormat, CopyParser};
 pub use csv::{CsvStream, Record};

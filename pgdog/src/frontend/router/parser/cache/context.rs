@@ -3,6 +3,7 @@
 use crate::backend::pool::Cluster;
 use crate::backend::schema::Schema;
 use crate::backend::ShardingSchema;
+use crate::frontend::BufferedQuery;
 use crate::net::parameter::ParameterValue;
 use crate::net::Parameters;
 
@@ -41,6 +42,24 @@ impl<'a> AstContext<'a> {
             db_schema: Schema::default(),
             user: "",
             search_path: None,
+        }
+    }
+}
+
+/// Query passed to the parser.
+pub struct AstQuery<'a> {
+    /// The original request.
+    pub original_query: &'a BufferedQuery,
+    /// Query without comments and other noise.
+    pub query_without_comment: &'a str,
+}
+
+impl<'a> AstQuery<'a> {
+    /// Create an AstQuery using the raw query text as the cache key.
+    pub fn from_query(query: &'a BufferedQuery) -> Self {
+        Self {
+            query_without_comment: query.query(),
+            original_query: query,
         }
     }
 }

@@ -15,8 +15,8 @@ describe 'pg' do
   it 'out of sync' do
     conn = connect 'pgdog', 'pgdog'
     conn.exec_params 'SELECT $1', [1]
-    conn.exec "SELECT 1"
-    conn.exec "SET lock_timeout TO sdfs"
+    conn.exec 'SELECT 1'
+    conn.exec 'SET lock_timeout TO sdfs'
     conn.exec "SET statement_timeout TO '1s'"
     expect { conn.exec 'SELECT 1' }.to raise_error(/invalid value for parameter/)
   end

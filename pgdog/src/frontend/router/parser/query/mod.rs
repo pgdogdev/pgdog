@@ -427,7 +427,8 @@ impl QueryParser {
                 // Only fingerprint the query if some manual queries are configured.
                 // Otherwise, we're wasting time parsing SQL.
                 if !databases.manual_queries().is_empty() {
-                    let fingerprint = &statement.fingerprint.hex;
+                    let fingerprint = statement.fingerprint()?;
+                    let fingerprint = &fingerprint.hex;
                     debug!("fingerprint: {}", fingerprint);
                     let manual_route = databases.manual_query(fingerprint).cloned();
 

@@ -47,6 +47,7 @@ futures = "0.3"
 csv-core = "0.1"
 pg_query = { git = "https://github.com/pgdogdev/pg_query.rs.git", rev = "e634c71c61055f21b8d2c1e058a37503157475d6" }
 regex = "1"
+memchr = "2"
 semver = "1"
 uuid = { version = "1", features = ["v4", "serde"] }
 url = "2"
@@ -84,3 +85,8 @@ cc = "1"
 [dev-dependencies]
 tempfile = "3.23.0"
 stats_alloc = "0.1.10"
+brunch = "0.5"
+
+[[bench]]
+name = "comment_parser"
+harness = false
