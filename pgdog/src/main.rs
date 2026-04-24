@@ -150,7 +150,7 @@ async fn pgdog(command: Option<Commands>) -> Result<(), Box<dyn std::error::Erro
             }
 
             if general.two_phase_commit {
-                Manager::get().start().await;
+                Manager::get().enable_wal().await;
             }
 
             let mut listener = Listener::new(format!("{}:{}", general.host, general.port));
