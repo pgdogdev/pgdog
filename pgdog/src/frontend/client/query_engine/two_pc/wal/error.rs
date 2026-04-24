@@ -32,4 +32,25 @@ pub enum Error {
 
     #[error("writer task is no longer running")]
     WriterGone,
+
+    #[error("wal directory {dir} is not accessible: {source}")]
+    DirNotAccessible {
+        dir: std::path::PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("wal directory {dir} is not readable: {source}")]
+    DirNotReadable {
+        dir: std::path::PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("wal directory {dir} is not writable: {source}")]
+    DirNotWritable {
+        dir: std::path::PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
 }
