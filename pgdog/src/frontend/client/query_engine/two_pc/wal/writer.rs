@@ -29,9 +29,11 @@ use tokio::sync::{mpsc, oneshot, Notify};
 use tokio::time::{sleep_until, Instant};
 use tracing::{error, warn};
 
+use fnv::FnvHashMap as HashMap;
+
 use super::error::Error;
-use super::record::{BeginPayload, Record, TxnPayload};
-use super::segment::Segment;
+use super::record::{BeginPayload, CheckpointEntry, CheckpointPayload, Record, TxnPayload};
+use super::segment::{gc_before_lsn, Segment};
 use crate::config::config;
 use crate::frontend::client::query_engine::two_pc::TwoPcTransaction;
 
@@ -42,9 +44,18 @@ const ENCODE_BUF_INITIAL: usize = 64 * 1024;
 /// Channel capacity for incoming write requests.
 const CHANNEL_CAPACITY: usize = 1024;
 
+/// What a [`WriteRequest`] asks the writer to append.
+pub(super) enum WalAppend {
+    /// Append this record verbatim.
+    Record(Record),
+    /// Materialize a [`Record::Checkpoint`] from the writer's snapshot
+    /// at this point in the batch, then append it.
+    Checkpoint,
+}
+
 /// One outstanding append request from a [`Wal`] caller.
 pub(super) struct WriteRequest {
-    pub record: Record,
+    pub append: WalAppend,
     pub ack: oneshot::Sender<Result<u64, Arc<Error>>>,
 }
 
@@ -63,8 +74,10 @@ pub struct Wal {
 }
 
 impl Wal {
-    /// Spawn the writer task with `initial` as the active segment.
-    pub fn new(initial: Segment) -> Self {
+    /// Spawn the writer task with `initial` as the active segment and
+    /// `snapshot` as the initial set of in-flight 2PC transactions
+    /// (built by recovery from the existing log).
+    pub fn new(initial: Segment, snapshot: HashMap<TwoPcTransaction, CheckpointEntry>) -> Self {
         let (tx, rx) = mpsc::channel::<WriteRequest>(CHANNEL_CAPACITY);
         let shutdown = Arc::new(WalShutdown::default());
 
@@ -72,7 +85,8 @@ impl Wal {
             let shutdown = Arc::clone(&shutdown);
 
             async move {
-                let fut = std::panic::AssertUnwindSafe(run(initial, rx, Arc::clone(&shutdown)));
+                let fut =
+                    std::panic::AssertUnwindSafe(run(initial, snapshot, rx, Arc::clone(&shutdown)));
                 if fut.catch_unwind().await.is_err() {
                     error!("2pc wal writer task panicked");
                 }
@@ -112,12 +126,32 @@ impl Wal {
         self.append(Record::End(TxnPayload { txn })).await
     }
 
+    /// Snapshot the active 2PC set into a [`Record::Checkpoint`] and
+    /// garbage-collect any segment fully superseded by it. The snapshot
+    /// is taken inside the writer task so any records ahead of this
+    /// marker in the same group-commit batch are reflected. Returns the
+    /// LSN of the checkpoint record.
+    pub async fn checkpoint(&self) -> Result<u64, Arc<Error>> {
+        let (ack, rx) = oneshot::channel();
+        self.tx
+            .send(WriteRequest {
+                append: WalAppend::Checkpoint,
+                ack,
+            })
+            .await
+            .map_err(|_| Arc::new(Error::WriterGone))?;
+        rx.await.map_err(|_| Arc::new(Error::WriterGone))?
+    }
+
     /// Send a record to the writer task. Resolves once the record (and
     /// any other records in its group-commit batch) have been fsynced.
     async fn append(&self, record: Record) -> Result<u64, Arc<Error>> {
         let (ack, rx) = oneshot::channel();
         self.tx
-            .send(WriteRequest { record, ack })
+            .send(WriteRequest {
+                append: WalAppend::Record(record),
+                ack,
+            })
             .await
             .map_err(|_| Arc::new(Error::WriterGone))?;
         rx.await.map_err(|_| Arc::new(Error::WriterGone))?
@@ -136,11 +170,15 @@ impl Wal {
 
 async fn run(
     mut segment: Segment,
+    mut snapshot: HashMap<TwoPcTransaction, CheckpointEntry>,
     mut rx: mpsc::Receiver<WriteRequest>,
     shutdown: Arc<WalShutdown>,
 ) {
     let mut batch: Vec<WriteRequest> = Vec::with_capacity(MAX_BATCH);
     let mut encode_buf = BytesMut::with_capacity(ENCODE_BUF_INITIAL);
+    // Holds the in-flight GC if one is still running; awaited before
+    // the next GC spawns so segment GCs never overlap.
+    let mut gc_handle: Option<tokio::task::JoinHandle<()>> = None;
 
     loop {
         if shutdown.cancelled.load(Ordering::Relaxed) {
@@ -149,7 +187,7 @@ async fn run(
                 batch.push(req);
             }
             if !batch.is_empty() {
-                process_batch(&mut segment, &mut batch, &mut encode_buf).await;
+                process_batch(&mut segment, &mut batch, &mut encode_buf, &mut snapshot).await;
             }
             return;
         }
@@ -186,7 +224,25 @@ async fn run(
             }
         }
 
-        process_batch(&mut segment, &mut batch, &mut encode_buf).await;
+        let checkpoint_lsn =
+            process_batch(&mut segment, &mut batch, &mut encode_buf, &mut snapshot).await;
+
+        if let Some(lsn) = checkpoint_lsn {
+            // Run GC off the writer task — filesystem work shouldn't
+            // hold up the next batch. Chain through `gc_handle` so two
+            // GCs never race on the same directory: the new task awaits
+            // the previous one before starting.
+            let prev = gc_handle.take();
+            gc_handle = Some(tokio::spawn(async move {
+                if let Some(prev) = prev {
+                    let _ = prev.await;
+                }
+                let dir = &config().config.general.two_phase_commit_wal_dir;
+                if let Err(err) = gc_before_lsn(dir, lsn).await {
+                    warn!("[2pc] wal checkpoint gc failed: {}", err);
+                }
+            }));
+        }
 
         if segment.size_bytes() >= config().config.general.two_phase_commit_wal_segment_size {
             match Segment::create(
@@ -213,23 +269,44 @@ async fn process_batch(
     segment: &mut Segment,
     batch: &mut Vec<WriteRequest>,
     encode_buf: &mut BytesMut,
-) {
+    snapshot: &mut HashMap<TwoPcTransaction, CheckpointEntry>,
+) -> Option<u64> {
     encode_buf.clear();
     let mut encode_err: Option<Error> = None;
-    for req in batch.iter() {
-        if let Err(err) = req.record.encode(encode_buf) {
+    let mut last_checkpoint_idx: Option<usize> = None;
+    // Records every snapshot mutation in batch order so we can roll
+    // back to the start-of-batch state if encode or sync fails. Sized
+    // O(batch), independent of the active set.
+    let mut undo: Vec<Undo> = Vec::with_capacity(batch.len());
+
+    for (i, req) in batch.iter().enumerate() {
+        let result = match &req.append {
+            WalAppend::Record(r) => {
+                apply_to_snapshot(snapshot, r, &mut undo);
+                r.encode(encode_buf)
+            }
+            WalAppend::Checkpoint => {
+                last_checkpoint_idx = Some(i);
+                Record::Checkpoint(CheckpointPayload {
+                    active: snapshot.values().cloned().collect(),
+                })
+                .encode(encode_buf)
+            }
+        };
+        if let Err(err) = result {
             encode_err = Some(err);
             break;
         }
     }
 
     if let Some(err) = encode_err {
+        replay_undo(snapshot, undo);
         warn!("2pc wal: encode failed for batch: {}", err);
         let shared = Arc::new(err);
         for req in batch.drain(..) {
             let _ = req.ack.send(Err(Arc::clone(&shared)));
         }
-        return;
+        return None;
     }
 
     let count = batch.len() as u32;
@@ -246,12 +323,80 @@ async fn process_batch(
             for (i, req) in batch.drain(..).enumerate() {
                 let _ = req.ack.send(Ok(start + i as u64));
             }
+            last_checkpoint_idx.map(|i| start + i as u64)
         }
         Err(err) => {
+            replay_undo(snapshot, undo);
             warn!("2pc wal: write/sync failed for batch: {}", err);
             let shared = Arc::new(err);
             for req in batch.drain(..) {
                 let _ = req.ack.send(Err(Arc::clone(&shared)));
+            }
+            None
+        }
+    }
+}
+
+/// One snapshot mutation captured for rollback.
+struct Undo {
+    txn: TwoPcTransaction,
+    /// Value the txn held before the mutation; `None` means the txn
+    /// wasn't in the snapshot at all and should be removed on undo.
+    prior: Option<CheckpointEntry>,
+}
+
+/// Apply `record` to `snapshot` and push an entry onto `undo` capturing
+/// what to revert to if the batch later fails.
+fn apply_to_snapshot(
+    snapshot: &mut HashMap<TwoPcTransaction, CheckpointEntry>,
+    record: &Record,
+    undo: &mut Vec<Undo>,
+) {
+    match record {
+        Record::Begin(p) => {
+            let prior = snapshot.insert(
+                p.txn,
+                CheckpointEntry {
+                    txn: p.txn,
+                    user: p.user.clone(),
+                    database: p.database.clone(),
+                    decided: false,
+                },
+            );
+            undo.push(Undo { txn: p.txn, prior });
+        }
+        Record::Committing(p) => {
+            if let Some(entry) = snapshot.get_mut(&p.txn) {
+                let prior = entry.clone();
+                entry.decided = true;
+                undo.push(Undo {
+                    txn: p.txn,
+                    prior: Some(prior),
+                });
+            }
+        }
+        Record::End(p) => {
+            if let Some(prior) = snapshot.remove(&p.txn) {
+                undo.push(Undo {
+                    txn: p.txn,
+                    prior: Some(prior),
+                });
+            }
+        }
+        Record::Checkpoint(_) => {}
+    }
+}
+
+/// Replay `undo` in reverse to restore `snapshot` to its state before
+/// the batch started.
+fn replay_undo(snapshot: &mut HashMap<TwoPcTransaction, CheckpointEntry>, undo: Vec<Undo>) {
+    for u in undo.into_iter().rev() {
+        match u.prior {
+            Some(entry) => {
+                snapshot.insert(u.txn, entry);
+            }
+            None => {
+                snapshot.remove(&u.txn);
             }
         }
     }

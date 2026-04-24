@@ -27,9 +27,18 @@ struct Entry {
     decided: bool,
 }
 
+/// What [`recover_transactions`] hands back to the WAL setup path.
+pub(super) struct Recovered {
+    /// The writable segment the writer task should continue appending to.
+    pub segment: Segment,
+    /// Initial active-2PC snapshot derived from replay so the writer
+    /// can serve checkpoints without rebuilding it.
+    pub snapshot: HashMap<TwoPcTransaction, CheckpointEntry>,
+}
+
 /// Scan every segment in `dir` in LSN order, hand each in-flight
-/// transaction to `manager`, and return the [`Segment`] for the writer
-/// task to continue appending to.
+/// transaction to `manager`, and return a [`Recovered`] describing the
+/// writable segment plus the initial active-2PC snapshot.
 ///
 /// Corrupt segments are renamed to `<lsn>.wal.broken` and skipped. If
 /// any corruption is detected the restore phase is skipped — partial
@@ -37,14 +46,20 @@ struct Entry {
 /// `Committing` record. The operator handles orphan prepared xacts via
 /// `SHOW TRANSACTIONS` / `pg_prepared_xacts`. Genuine IO errors
 /// propagate; the caller treats those as "WAL not usable."
-pub(super) async fn recover_transactions(manager: &Manager, dir: &Path) -> Result<Segment, Error> {
+pub(super) async fn recover_transactions(
+    manager: &Manager,
+    dir: &Path,
+) -> Result<Recovered, Error> {
     let segments = list_segments(dir).await?;
     let mut working: HashMap<TwoPcTransaction, Entry> = HashMap::default();
     let mut corruption = false;
     let mut next_lsn: u64 = 0;
 
     let Some((last_path, prior_paths)) = segments.split_last() else {
-        return Segment::create(dir, 0).await;
+        return Ok(Recovered {
+            segment: Segment::create(dir, 0).await?,
+            snapshot: HashMap::default(),
+        });
     };
 
     for path in prior_paths {
@@ -99,12 +114,22 @@ pub(super) async fn recover_transactions(manager: &Manager, dir: &Path) -> Resul
     // be restored when there was no corruption — otherwise their
     // Committing might have been in a lost segment and rolling back
     // would silently invert a committed transaction.
+    let mut snapshot: HashMap<TwoPcTransaction, CheckpointEntry> = HashMap::default();
     for (txn, entry) in working {
         let phase = match (entry.decided, corruption) {
             (true, _) => TwoPcPhase::Phase2,
             (false, false) => TwoPcPhase::Phase1,
             (false, true) => continue,
         };
+        snapshot.insert(
+            txn,
+            CheckpointEntry {
+                txn,
+                user: entry.user.clone(),
+                database: entry.database.clone(),
+                decided: entry.decided,
+            },
+        );
         manager.restore_transaction(txn, entry.user, entry.database, phase);
     }
     if corruption {
@@ -114,10 +139,11 @@ pub(super) async fn recover_transactions(manager: &Manager, dir: &Path) -> Resul
         );
     }
 
-    match last_writable {
-        Some(segment) => Ok(segment),
-        None => Segment::create(dir, next_lsn).await,
-    }
+    let segment = match last_writable {
+        Some(segment) => segment,
+        None => Segment::create(dir, next_lsn).await?,
+    };
+    Ok(Recovered { segment, snapshot })
 }
 
 /// Drain every record in `reader` into `working`. Errors propagate as

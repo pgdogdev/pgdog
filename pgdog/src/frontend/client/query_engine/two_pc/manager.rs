@@ -19,6 +19,7 @@ use crate::{
         databases::User,
         pool::{Connection, Request},
     },
+    config::config,
     frontend::{
         client::query_engine::{
             two_pc::{wal::Wal, TwoPcGuard, TwoPcTransaction},
@@ -81,12 +82,48 @@ impl Manager {
             Ok(wal) => {
                 self.wal.store(Some(Arc::new(wal)));
                 info!("[2pc] wal enabled");
+                spawn(Self::checkpoint_loop());
             }
             Err(err) => {
                 warn!(
                     "[2pc] wal disabled: {}; 2pc will run without durability",
                     err
                 );
+            }
+        }
+    }
+
+    /// Periodically ask the WAL writer to emit a [`crate::frontend::
+    /// client::query_engine::two_pc::wal`] checkpoint record so older
+    /// segments can be GC'd. A zero interval disables the loop.
+    async fn checkpoint_loop() {
+        let interval_ms = config()
+            .config
+            .general
+            .two_phase_commit_wal_checkpoint_interval;
+        if interval_ms == 0 {
+            return;
+        }
+        let manager = Self::get();
+        let mut tick = tokio::time::interval(Duration::from_millis(interval_ms));
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        // First tick fires immediately; skip it so we don't checkpoint
+        // an empty WAL right at startup.
+        tick.tick().await;
+
+        loop {
+            tokio::select! {
+                _ = tick.tick() => {}
+                _ = manager.notify.done.notified() => return,
+            }
+            if manager.notify.offline.load(Ordering::Relaxed) {
+                return;
+            }
+            let Some(wal) = manager.wal.load_full() else {
+                continue;
+            };
+            if let Err(err) = wal.checkpoint().await {
+                warn!("[2pc] checkpoint failed: {}", err);
             }
         }
     }
@@ -108,17 +145,29 @@ impl Manager {
         Ok(())
     }
 
-    /// Record a phase transition for a 2PC transaction. Writes the
-    /// corresponding WAL record (Begin for Phase1, Committing for
-    /// Phase2) before mutating in-memory state so the on-disk log
-    /// always leads the coordinator. WAL write failures are logged but
-    /// do not block the 2PC operation — durability is best-effort.
+    /// Record a phase transition for a 2PC transaction. Updates the
+    /// in-memory state first, then writes the corresponding WAL record
+    /// (Begin for Phase1, Committing for Phase2). The write-ahead
+    /// invariant — WAL durable before the corresponding PREPARE /
+    /// COMMIT PREPARED reaches a backend — is still honored because
+    /// the caller awaits this method before issuing those backend
+    /// calls. The inner-first ordering exists so checkpoint snapshots
+    /// always see in-memory state that's at least as fresh as any WAL
+    /// record they might be ordered against. WAL write failures are
+    /// logged but do not block the 2PC operation.
     pub(super) async fn transaction_state(
         &self,
         transaction: &TwoPcTransaction,
         identifier: &Arc<User>,
         phase: TwoPcPhase,
     ) -> Result<TwoPcGuard, Error> {
+        {
+            let mut guard = self.inner.lock();
+            let entry = guard.transactions.entry(*transaction).or_default();
+            entry.identifier = identifier.clone();
+            entry.phase = phase;
+        }
+
         if let Some(wal) = self.wal.load_full() {
             let result = match phase {
                 TwoPcPhase::Phase1 => {
@@ -140,13 +189,6 @@ impl Manager {
                     transaction, phase, err
                 );
             }
-        }
-
-        {
-            let mut guard = self.inner.lock();
-            let entry = guard.transactions.entry(*transaction).or_default();
-            entry.identifier = identifier.clone();
-            entry.phase = phase;
         }
 
         Ok(TwoPcGuard {
@@ -233,12 +275,12 @@ impl Manager {
     }
 
     async fn remove(&self, transaction: &TwoPcTransaction) {
+        self.inner.lock().transactions.remove(transaction);
         if let Some(wal) = self.wal.load_full() {
             if let Err(err) = wal.append_end(*transaction).await {
                 warn!("[2pc] wal end record failed for {}: {}", transaction, err);
             }
         }
-        self.inner.lock().transactions.remove(transaction);
     }
 
     /// Reconnect to cluster if available and rollback the two-phase transaction.

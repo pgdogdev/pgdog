@@ -36,8 +36,8 @@ impl Wal {
             .general
             .two_phase_commit_wal_dir;
         probe(dir).await?;
-        let segment = recovery::recover_transactions(manager, dir).await?;
-        Ok(Wal::new(segment))
+        let recovered = recovery::recover_transactions(manager, dir).await?;
+        Ok(Wal::new(recovered.segment, recovered.snapshot))
     }
 }
 
