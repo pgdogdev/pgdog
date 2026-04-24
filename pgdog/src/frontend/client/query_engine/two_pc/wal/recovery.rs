@@ -93,29 +93,25 @@ pub(super) async fn recover_transactions(manager: &Manager, dir: &Path) -> Resul
         Err(err) => return Err(err),
     };
 
+    // Decided txns (Committing was logged) are safe to restore even if
+    // corruption was detected later: COMMIT PREPARED is idempotent and
+    // matches the decision we durably recorded. Undecided txns can only
+    // be restored when there was no corruption — otherwise their
+    // Committing might have been in a lost segment and rolling back
+    // would silently invert a committed transaction.
+    for (txn, entry) in working {
+        let phase = match (entry.decided, corruption) {
+            (true, _) => TwoPcPhase::Phase2,
+            (false, false) => TwoPcPhase::Phase1,
+            (false, true) => continue,
+        };
+        manager.restore_transaction(txn, entry.user, entry.database, phase);
+    }
     if corruption {
         tracing::warn!(
-            "[2pc] wal recovery detected corruption; skipping restore. \
-             operator must reconcile orphan prepared transactions via \
-             SHOW TRANSACTIONS / pg_prepared_xacts"
+            "[2pc] wal recovery detected corruption; undecided transactions \
+             must be reconciled via SHOW TRANSACTIONS / pg_prepared_xacts"
         );
-    } else {
-        let restored = working.len();
-        for (txn, entry) in working {
-            let phase = if entry.decided {
-                TwoPcPhase::Phase2
-            } else {
-                TwoPcPhase::Phase1
-            };
-            manager.restore_transaction(txn, entry.user, entry.database, phase);
-        }
-        if restored > 0 {
-            tracing::info!(
-                "[2pc] wal: restored {} in-flight transaction(s) from {} segment(s)",
-                restored,
-                segments.len()
-            );
-        }
     }
 
     match last_writable {
