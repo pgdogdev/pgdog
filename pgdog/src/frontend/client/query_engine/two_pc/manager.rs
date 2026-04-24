@@ -145,13 +145,9 @@ impl Manager {
         let identifier = Arc::new(User { user, database });
         {
             let mut guard = self.inner.lock();
-            guard.transactions.insert(
-                transaction,
-                TransactionInfo {
-                    phase,
-                    identifier,
-                },
-            );
+            guard
+                .transactions
+                .insert(transaction, TransactionInfo { phase, identifier });
             guard.queue.push_back(transaction);
         }
         self.notify.notify.notify_one();
