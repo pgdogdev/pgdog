@@ -7,30 +7,31 @@ on:
     types: [opened, synchronize, reopened]
 
 jobs:
-  fmt:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
-    container:
-      image: ghcr.io/pgdogdev/pgdog-ci-base:latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Format
-        run: cargo fmt --all -- --check
-      - name: Clippy
-        working-directory: pgdog
-        run: cargo clippy
-
   build:
     runs-on: blacksmith-4vcpu-ubuntu-2404
     container:
       image: ghcr.io/pgdogdev/pgdog-ci-base:latest
     steps:
       - uses: actions/checkout@v4
+      # rust-cache restores dep fingerprints/deps but deliberately strips
+      # final binaries, so linking still runs. The cache step below skips the
+      # build entirely when no source has changed.
       - uses: useblacksmith/rust-cache@v3
         with:
           prefix-key: build-v1
+      - name: Cache pgdog binaries
+        id: pgdog-bin
+        uses: actions/cache@v4
+        with:
+          path: |
+            target/debug/pgdog
+            target/release/pgdog
+          key: pgdog-bin-${{ runner.os }}-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml', '**/*.rs') }}
       - name: Build (debug)
+        if: steps.pgdog-bin.outputs.cache-hit != 'true'
         run: cargo build --bin pgdog
       - name: Build (release)
+        if: steps.pgdog-bin.outputs.cache-hit != 'true'
         run: cargo build --release --bin pgdog
       - name: Upload pgdog binaries
         uses: actions/upload-artifact@v4
@@ -41,34 +42,6 @@ jobs:
             target/release/pgdog
           if-no-files-found: error
           retention-days: 1
-
-  tests:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
-    container:
-      image: ghcr.io/pgdogdev/pgdog-ci-base:latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: useblacksmith/rust-cache@v3
-        with:
-          prefix-key: "v1" # Change this when updating tooling
-      - name: Setup PostgreSQL
-        run: bash integration/ci/setup.sh --with-toxi
-      - name: Run tests with coverage
-        env:
-          RUSTFLAGS: "-C link-dead-code"
-        run: |
-          cargo llvm-cov clean --workspace
-          cargo llvm-cov nextest --lcov --output-path lcov.info --no-fail-fast --test-threads=1 --filter-expr "package(pgdog) | package(pgdog-config) | package(pgdog-vector) | package(pgdog-stats) | package(pgdog-postgres-types)"
-      - name: Run documentation tests
-        run: cargo test --doc
-      # Requires CODECOV_TOKEN secret for upload
-      - uses: codecov/codecov-action@v4
-        env:
-          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
-        with:
-          files: lcov.info
-          flags: unit
-          fail_ci_if_error: true
 
   integration:
     runs-on: blacksmith-4vcpu-ubuntu-2404
@@ -152,39 +125,3 @@ jobs:
       - name: Ensure PgDog stopped
         if: always()
         run: bash integration/ci/ensure-pgdog-stopped.sh
-
-  plugin-unit-tests:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
-    container:
-      image: ghcr.io/pgdogdev/pgdog-ci-base:latest
-    continue-on-error: true
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
-      - uses: useblacksmith/rust-cache@v3
-        with:
-          prefix-key: "plugin-unit-v1"
-      - name: Run plugin unit tests
-        run: cargo nextest run -E 'package(pgdog-example-plugin)' --no-fail-fast
-
-  plugin-integration-tests:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
-    container:
-      image: ghcr.io/pgdogdev/pgdog-ci-base:latest
-    continue-on-error: true
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
-      - uses: useblacksmith/rust-cache@v3
-        with:
-          prefix-key: "plugin-integration-v1"
-      - name: Setup PostgreSQL
-        run: bash integration/ci/setup.sh
-      - name: Build plugin
-        run: |
-          cargo build --release
-          pushd plugins/pgdog-example-plugin
-          cargo build --release
-          popd
-      - name: Run plugin integration tests
-        run: bash integration/plugins/run.sh

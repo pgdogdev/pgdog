@@ -1,0 +1,44 @@
+name: plugin-ci
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  plugin-unit-tests:
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    container:
+      image: ghcr.io/pgdogdev/pgdog-ci-base:latest
+    continue-on-error: true
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: useblacksmith/rust-cache@v3
+        with:
+          prefix-key: "plugin-unit-v1"
+      - name: Run plugin unit tests
+        run: cargo nextest run -E 'package(pgdog-example-plugin)' --no-fail-fast
+
+  plugin-integration-tests:
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    container:
+      image: ghcr.io/pgdogdev/pgdog-ci-base:latest
+    continue-on-error: true
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: useblacksmith/rust-cache@v3
+        with:
+          prefix-key: "plugin-integration-v1"
+      - name: Setup PostgreSQL
+        run: bash integration/ci/setup.sh
+      - name: Build plugin
+        run: |
+          cargo build --release
+          pushd plugins/pgdog-example-plugin
+          cargo build --release
+          popd
+      - name: Run plugin integration tests
+        run: bash integration/plugins/run.sh

@@ -1,0 +1,36 @@
+name: tests
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  tests:
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    container:
+      image: ghcr.io/pgdogdev/pgdog-ci-base:latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: useblacksmith/rust-cache@v3
+        with:
+          prefix-key: "v1" # Change this when updating tooling
+      - name: Setup PostgreSQL
+        run: bash integration/ci/setup.sh --with-toxi
+      - name: Run tests with coverage
+        env:
+          RUSTFLAGS: "-C link-dead-code"
+        run: |
+          cargo llvm-cov clean --workspace
+          cargo llvm-cov nextest --lcov --output-path lcov.info --no-fail-fast --test-threads=1 --filter-expr "package(pgdog) | package(pgdog-config) | package(pgdog-vector) | package(pgdog-stats) | package(pgdog-postgres-types)"
+      - name: Run documentation tests
+        run: cargo test --doc
+      # Requires CODECOV_TOKEN secret for upload
+      - uses: codecov/codecov-action@v4
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+        with:
+          files: lcov.info
+          flags: unit
+          fail_ci_if_error: true
