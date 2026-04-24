@@ -1,4 +1,4 @@
-use arc_swap::ArcSwap;
+use once_cell::sync::OnceCell;
 use pg_query::{parse, parse_raw, protobuf::ObjectType, NodeEnum, NodeRef, ParseResult};
 use pgdog_config::QueryParserEngine;
 use std::fmt::Debug;
@@ -42,7 +42,7 @@ pub struct AstInner {
     /// Rewrite plan.
     pub rewrite_plan: RewritePlan,
     /// Fingerprint.
-    pub fingerprint: ArcSwap<Option<Fingerprint>>,
+    pub fingerprint: OnceCell<Fingerprint>,
     /// Original query.
     pub original_query: Arc<String>,
 }
@@ -54,7 +54,7 @@ impl AstInner {
             ast,
             stats: Mutex::new(Stats::new()),
             rewrite_plan: RewritePlan::default(),
-            fingerprint: ArcSwap::new(Arc::new(None)),
+            fingerprint: OnceCell::new(),
             original_query: Arc::new(String::new()),
         }
     }
@@ -70,7 +70,7 @@ impl Deref for Ast {
 
 impl Ast {
     /// Parse statement and run the rewrite engine, if necessary.
-    pub fn new(
+    pub(super) fn new(
         query: &AstQuery,
         schema: &ShardingSchema,
         db_schema: &Schema,
@@ -116,14 +116,14 @@ impl Ast {
                 stats: Mutex::new(stats),
                 ast,
                 rewrite_plan,
-                fingerprint: ArcSwap::new(Arc::new(None)),
+                fingerprint: OnceCell::new(),
                 original_query: Arc::new(query.cache_key.to_string()),
             }),
         })
     }
 
     /// Parse statement using AstContext for schema and user information.
-    pub fn with_context(
+    pub(super) fn with_context(
         query: &AstQuery,
         ctx: &super::AstContext<'_>,
         prepared_statements: &mut PreparedStatements,
@@ -255,18 +255,16 @@ impl Ast {
     }
 
     /// Get a pre-computed fingerprint, or compute it again.
-    pub fn fingerprint(&self) -> Result<Arc<Option<Fingerprint>>, Error> {
-        let fingerprint = self.fingerprint.load_full();
+    pub fn fingerprint(&self) -> Result<&Fingerprint, Error> {
+        let fingerprint = self.fingerprint.get();
 
-        if fingerprint.is_some() {
+        if let Some(fingerprint) = fingerprint {
             return Ok(fingerprint);
         }
 
         let start = Instant::now();
-        let fingerprint = Arc::new(Some(
-            Fingerprint::new(&self.original_query, self.query_parser_engine)
-                .map_err(|e| Error::PgQuery(e))?,
-        ));
+        let fingerprint = Fingerprint::new(&self.original_query, self.query_parser_engine)
+            .map_err(|e| Error::PgQuery(e))?;
         let elapsed = start.elapsed();
 
         // Bump up the parse time for this statement.
@@ -283,9 +281,12 @@ impl Ast {
         }
 
         // Cache the fingerprint.
-        self.fingerprint.store(fingerprint.clone());
+        let _ = self.fingerprint.set(fingerprint);
 
-        Ok(fingerprint)
+        Ok(self
+            .fingerprint
+            .get()
+            .expect("fingerprint cell must be set"))
     }
 }
 
@@ -318,21 +319,18 @@ mod tests {
     }
 
     #[test]
-    fn test_fingerprint_returns_some() {
+    fn test_fingerprint_returns_ok() {
         let ast = make_ast("SELECT 1");
-        let fp = ast.fingerprint().unwrap();
-        assert!(fp.is_some());
+        ast.fingerprint().unwrap();
     }
 
     #[test]
     fn test_fingerprint_is_cached() {
         let ast = make_ast("SELECT 2");
-        let fp1 = ast.fingerprint().unwrap();
-        let fp2 = ast.fingerprint().unwrap();
-        assert!(fp1.is_some());
-        assert!(fp2.is_some());
-        // Second call should return the cached value (same Arc pointer).
-        assert!(Arc::ptr_eq(&fp1, &fp2));
+        let fp1 = ast.fingerprint().unwrap() as *const _;
+        let fp2 = ast.fingerprint().unwrap() as *const _;
+        // Second call should return the cached reference (same address).
+        assert_eq!(fp1, fp2);
     }
 
     #[test]
@@ -342,8 +340,7 @@ mod tests {
         let fp_a = a.fingerprint().unwrap();
         let fp_b = b.fingerprint().unwrap();
         assert_eq!(
-            fp_a.as_ref().as_ref().unwrap().value,
-            fp_b.as_ref().as_ref().unwrap().value,
+            fp_a.value, fp_b.value,
             "queries differing only in constants should have the same fingerprint"
         );
     }
@@ -355,8 +352,7 @@ mod tests {
         let fp_a = a.fingerprint().unwrap();
         let fp_b = b.fingerprint().unwrap();
         assert_ne!(
-            fp_a.as_ref().as_ref().unwrap().value,
-            fp_b.as_ref().as_ref().unwrap().value,
+            fp_a.value, fp_b.value,
             "structurally different queries should have different fingerprints"
         );
     }
@@ -422,9 +418,10 @@ mod tests {
         let before = Cache::stats().0.fingerprints;
         ast.fingerprint().unwrap();
         let after = Cache::stats().0.fingerprints;
-        assert_eq!(
-            after,
-            before + 1,
+        // Other tests share the global counter under parallel execution,
+        // so only assert it moved forward.
+        assert!(
+            after > before,
             "fingerprint() must increment global fingerprints counter"
         );
     }

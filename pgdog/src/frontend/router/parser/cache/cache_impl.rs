@@ -125,9 +125,6 @@ impl Cache {
             });
             if let Some(mut ast) = ast {
                 guard.stats.hits += 1;
-                // Override the cache-stored routing with what we got from the
-                // query. If the incoming query has no comment, clear the hints
-                // so cached values don't leak to unrelated clients.
                 ast.comment_role = comment_parser_result.role;
                 ast.comment_shard = comment_parser_result.shard.clone();
 

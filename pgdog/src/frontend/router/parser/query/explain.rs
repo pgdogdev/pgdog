@@ -52,7 +52,7 @@ mod tests {
     use crate::backend::Cluster;
     use crate::config::{self, config};
     use crate::frontend::client::Sticky;
-    use crate::frontend::router::Ast;
+    use crate::frontend::router::parser::{AstContext, Cache};
     use crate::frontend::{BufferedQuery, ClientRequest, PreparedStatements, RouterContext};
     use crate::net::{
         messages::{Bind, Parameter, Parse, Query},
@@ -75,21 +75,14 @@ mod tests {
         enable_expanded_explain();
         let cluster = Cluster::new_test(&config());
         let mut stmts = PreparedStatements::default();
+        let params = Parameters::default();
+        let ast_ctx = AstContext::from_cluster(&cluster, &params);
 
         let buffered = BufferedQuery::Query(Query::new(sql));
-        let ast = Ast::new(
-            &AstQuery::from_query(&buffered),
-            &cluster.sharding_schema(),
-            &cluster.schema(),
-            &mut stmts,
-            "",
-            None,
-        )
-        .unwrap();
+        let ast = Cache::get().query(&buffered, &ast_ctx, &mut stmts).unwrap();
         let mut buffer = ClientRequest::from(vec![Query::new(sql).into()]);
         buffer.ast = Some(ast);
 
-        let params = Parameters::default();
         let ctx = RouterContext::new(&buffer, &cluster, &params, None, Sticky::new()).unwrap();
 
         match QueryParser::default().parse(ctx).unwrap().clone() {
@@ -114,21 +107,14 @@ mod tests {
 
         let cluster = Cluster::new_test(&config());
         let mut stmts = PreparedStatements::default();
+        let params = Parameters::default();
+        let ast_ctx = AstContext::from_cluster(&cluster, &params);
 
         let buffered = BufferedQuery::Prepared(Parse::new_anonymous(sql));
-        let ast = Ast::new(
-            &AstQuery::from_query(&buffered),
-            &cluster.sharding_schema(),
-            &cluster.schema(),
-            &mut stmts,
-            "",
-            None,
-        )
-        .unwrap();
+        let ast = Cache::get().query(&buffered, &ast_ctx, &mut stmts).unwrap();
         let mut buffer: ClientRequest = vec![parse_msg.into(), bind.into()].into();
         buffer.ast = Some(ast);
 
-        let params = Parameters::default();
         let ctx = RouterContext::new(&buffer, &cluster, &params, None, Sticky::new()).unwrap();
 
         match QueryParser::default().parse(ctx).unwrap().clone() {

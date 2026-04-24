@@ -1,0 +1,6 @@
+[general]
+query_parser = "on"
+
+[[databases]]
+name = "pgdog"
+host = "127.0.0.1"
