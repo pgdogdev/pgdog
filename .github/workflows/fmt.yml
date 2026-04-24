@@ -9,10 +9,10 @@ on:
 jobs:
   fmt:
     runs-on: blacksmith-4vcpu-ubuntu-2404
-    container:
-      image: ghcr.io/pgdogdev/pgdog-ci-base:latest
     steps:
       - uses: actions/checkout@v4
+      - name: Install CI deps
+        run: bash integration/ci/install-deps.sh
       - name: Format
         run: cargo fmt --all -- --check
       - name: Clippy

@@ -9,19 +9,20 @@ on:
 jobs:
   build:
     runs-on: blacksmith-4vcpu-ubuntu-2404
-    container:
-      image: ghcr.io/pgdogdev/pgdog-ci-base:latest
     steps:
       - uses: actions/checkout@v4
+      - name: Install CI deps
+        run: bash integration/ci/install-deps.sh
       # rust-cache restores dep fingerprints/deps but deliberately strips
-      # final binaries, so linking still runs. The cache step below skips the
-      # build entirely when no source has changed.
+      # final binaries, so linking still runs. The binary cache below skips
+      # the build entirely when no source has changed, and also serves as
+      # the transport to downstream jobs via the same cache key.
       - uses: useblacksmith/rust-cache@v3
         with:
           prefix-key: build-v1
       - name: Cache pgdog binaries
         id: pgdog-bin
-        uses: actions/cache@v4
+        uses: useblacksmith/cache@v5
         with:
           path: |
             target/debug/pgdog
@@ -33,21 +34,10 @@ jobs:
       - name: Build (release)
         if: steps.pgdog-bin.outputs.cache-hit != 'true'
         run: cargo build --release --bin pgdog
-      - name: Upload pgdog binaries
-        uses: actions/upload-artifact@v4
-        with:
-          name: pgdog-binaries
-          path: |
-            target/debug/pgdog
-            target/release/pgdog
-          if-no-files-found: error
-          retention-days: 1
 
   integration:
     runs-on: blacksmith-4vcpu-ubuntu-2404
     needs: [build]
-    container:
-      image: ghcr.io/pgdogdev/pgdog-ci-base:latest
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -70,15 +60,16 @@ jobs:
       PGDOG_BIN: ${{ github.workspace }}/target/release/pgdog
     steps:
       - uses: actions/checkout@v4
-      - name: Download pgdog binaries
-        uses: actions/download-artifact@v4
+      - name: Install CI deps
+        run: bash integration/ci/install-deps.sh
+      - name: Restore pgdog binaries
+        uses: useblacksmith/cache/restore@v5
         with:
-          name: pgdog-binaries
-          # upload-artifact@v4 strips the common ancestor (target/) from the
-          # archive, so extract it back here rather than into the repo root.
-          path: target
-      - name: Restore exec bit on binaries
-        run: chmod +x target/debug/pgdog target/release/pgdog
+          path: |
+            target/debug/pgdog
+            target/release/pgdog
+          key: pgdog-bin-${{ runner.os }}-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml', '**/*.rs') }}
+          fail-on-cache-miss: true
       - name: Setup dependencies
         run: bash integration/ci/setup.sh --with-toxi
       - name: Run ${{ matrix.name }}
@@ -87,9 +78,7 @@ jobs:
         if: always()
         run: bash integration/ci/ensure-pgdog-stopped.sh
 
-  # Tests that launch their own docker-compose stacks. They need direct host
-  # access to reach sibling containers, so we run them on the bare runner
-  # rather than inside the CI base container.
+  # Tests that launch their own docker-compose stacks.
   integration-docker:
     runs-on: blacksmith-4vcpu-ubuntu-2404
     needs: [build]
@@ -104,22 +93,18 @@ jobs:
       PGDOG_BIN: ${{ github.workspace }}/target/release/pgdog
     steps:
       - uses: actions/checkout@v4
-      - name: Download pgdog binaries
-        uses: actions/download-artifact@v4
+      - name: Install CI deps
+        run: bash integration/ci/install-deps.sh
+      - name: Restore pgdog binaries
+        uses: useblacksmith/cache/restore@v5
         with:
-          name: pgdog-binaries
-          # upload-artifact@v4 strips the common ancestor (target/) from the
-          # archive, so extract it back here rather than into the repo root.
-          path: target
-      - name: Restore exec bit on binaries
-        run: chmod +x target/debug/pgdog target/release/pgdog
+          path: |
+            target/debug/pgdog
+            target/release/pgdog
+          key: pgdog-bin-${{ runner.os }}-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml', '**/*.rs') }}
+          fail-on-cache-miss: true
       - name: Setup dependencies
-        run: |
-          sudo service postgresql start
-          sudo -u postgres createuser --superuser --login "$(id -un)"
-          sudo -u postgres createdb "$(id -un)"
-          bash integration/setup.sh || (sudo service postgresql restart && bash integration/setup.sh)
-          bash integration/toxi/setup.sh
+        run: bash integration/ci/setup.sh --with-toxi
       - name: Run ${{ matrix.name }}
         run: bash ${{ matrix.script }}
       - name: Ensure PgDog stopped
