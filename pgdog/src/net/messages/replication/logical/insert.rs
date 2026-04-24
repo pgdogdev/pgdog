@@ -6,6 +6,8 @@ use super::super::super::prelude::*;
 use super::tuple_data::Column;
 use super::tuple_data::TupleData;
 
+/// WAL INSERT record. Use with [`Table::insert`](crate::backend::replication::logical::publisher::Table::insert)
+/// or [`Table::upsert`](crate::backend::replication::logical::publisher::Table::upsert).
 #[derive(Debug, Clone)]
 pub struct Insert {
     pub xid: Option<i32>,

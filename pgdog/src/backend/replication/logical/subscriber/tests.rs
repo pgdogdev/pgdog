@@ -22,6 +22,7 @@ use crate::{
                 insert::Insert as XLogInsert,
                 relation::{Column as RelColumn, Relation},
                 tuple_data::{Column as TupleColumn, Identifier, TupleData},
+                update::Update as XLogUpdate,
             },
             XLogData,
         },
@@ -230,6 +231,18 @@ fn delete_copy_data(oid: Oid, id: &str) -> CopyData {
     )
 }
 
+fn toasted_column() -> TupleColumn {
+    TupleColumn {
+        identifier: Identifier::Toasted,
+        len: 0,
+        data: Bytes::new(),
+    }
+}
+
+fn x_update(u: XLogUpdate) -> CopyData {
+    xlog_copy_data(u.to_bytes().unwrap())
+}
+
 fn make_subscriber() -> StreamSubscriber {
     let cluster = Cluster::new_test(&config());
     let tables = vec![make_sharded_table(), make_sharded_test_b_table()];
@@ -278,6 +291,15 @@ async fn ensure_table(server: &mut Server, table: &str) {
                 .execute(
                     "CREATE TABLE IF NOT EXISTS public.sharded_test_b (\
                      id BIGINT PRIMARY KEY, value TEXT)",
+                )
+                .await
+                .unwrap();
+        }
+        "public.posts" => {
+            server
+                .execute(
+                    "CREATE TABLE IF NOT EXISTS public.posts (\
+                     id BIGINT PRIMARY KEY, title TEXT, body TEXT)",
                 )
                 .await
                 .unwrap();
@@ -773,4 +795,391 @@ fn copy_data_round_trip_delete() {
         payload,
         crate::net::replication::xlog_data::XLogPayload::Delete(_)
     ));
+}
+
+fn make_posts_table() -> Table {
+    Table {
+        publication: "test".to_string(),
+        table: PublicationTable {
+            schema: "public".to_string(),
+            name: "posts".to_string(),
+            attributes: "".to_string(),
+            parent_schema: "".to_string(),
+            parent_name: "".to_string(),
+        },
+        identity: ReplicaIdentity {
+            oid: Oid(3),
+            identity: "".to_string(),
+            kind: "".to_string(),
+        },
+        columns: vec![
+            PublicationTableColumn {
+                oid: 3,
+                name: "id".to_string(),
+                type_oid: Oid(20),
+                identity: true,
+            },
+            PublicationTableColumn {
+                oid: 3,
+                name: "title".to_string(),
+                type_oid: Oid(25),
+                identity: false,
+            },
+            PublicationTableColumn {
+                oid: 3,
+                name: "body".to_string(),
+                type_oid: Oid(25),
+                identity: false,
+            },
+        ],
+        lsn: Lsn::default(),
+        query_parser_engine: QueryParserEngine::default(),
+    }
+}
+
+fn posts_relation(oid: Oid) -> Relation {
+    Relation {
+        oid,
+        namespace: "public".to_string(),
+        name: "posts".to_string(),
+        replica_identity: 100,
+        columns: vec![
+            RelColumn {
+                flag: 1,
+                name: "id".to_string(),
+                oid: Oid(20),
+                type_modifier: -1,
+            },
+            RelColumn {
+                flag: 0,
+                name: "title".to_string(),
+                oid: Oid(25),
+                type_modifier: -1,
+            },
+            RelColumn {
+                flag: 0,
+                name: "body".to_string(),
+                oid: Oid(25),
+                type_modifier: -1,
+            },
+        ],
+    }
+}
+
+fn posts_relation_copy_data(oid: Oid) -> CopyData {
+    xlog_copy_data(posts_relation(oid).to_bytes().unwrap())
+}
+
+fn posts_insert_copy_data(oid: Oid, id: &str, title: &str, body: &str) -> CopyData {
+    xlog_copy_data(
+        XLogInsert {
+            xid: None,
+            oid,
+            tuple_data: TupleData {
+                columns: vec![text_column(id), text_column(title), text_column(body)],
+            },
+        }
+        .to_bytes()
+        .unwrap(),
+    )
+}
+
+/// UPDATE for posts: title is set to `new_title`; body is marked Toasted (`'u'`).
+/// This produces a tuple where exactly one non-identity column is absent, forcing
+/// the subscriber through the slow-path `update_partial` code.
+fn posts_update_title_copy_data(oid: Oid, id: &str, new_title: &str) -> CopyData {
+    xlog_copy_data(
+        XLogUpdate {
+            oid,
+            key: None,
+            old: None,
+            new: TupleData {
+                columns: vec![text_column(id), text_column(new_title), toasted_column()],
+            },
+        }
+        .to_bytes()
+        .unwrap(),
+    )
+}
+
+async fn fetch_posts_row(server: &mut Server, id: &str) -> Option<(String, String)> {
+    let query = format!("SELECT title, body FROM public.posts WHERE id = {}", id);
+    let rows: Vec<crate::net::DataRow> = server.fetch_all(query).await.unwrap();
+    rows.first().and_then(|row| {
+        let title = row
+            .column(0)
+            .map(|c| std::str::from_utf8(&c[..]).unwrap().to_string())?;
+        let body = row
+            .column(1)
+            .map(|c| std::str::from_utf8(&c[..]).unwrap().to_string())?;
+        Some((title, body))
+    })
+}
+
+// ── Unchanged-TOAST handling tests ───────────────────────────────
+
+/// UPDATE with an unchanged-TOAST column alongside a real updated column
+/// exercises the slow path in the subscriber (`update_partial` + `partial_new`).
+///
+/// Fixture: `posts(id PK, title text, body text)`.  `body` is Toasted (`'u'`);
+/// `title` carries a new value.  The subscriber must emit
+/// `UPDATE posts SET title=$1 WHERE id=$2`, updating `title` and leaving `body` intact.
+#[tokio::test]
+async fn toast_update_preserves_unchanged_column() {
+    let oid = Oid(16384);
+    let mut sub = make_subscriber_with_tables(vec![make_posts_table()]);
+    let mut verify = test_server().await;
+    sub.connect().await.unwrap();
+
+    let id = random_id();
+    cleanup(&mut verify, "public.posts", &[&id]).await;
+
+    // Seed the destination row.
+    sub.handle(begin_copy_data(100)).await.unwrap();
+    sub.handle(posts_relation_copy_data(oid)).await.unwrap();
+    sub.handle(posts_insert_copy_data(
+        oid,
+        &id,
+        "original-title",
+        "original-large-body",
+    ))
+    .await
+    .unwrap();
+    sub.handle(commit_copy_data(200)).await.unwrap();
+
+    let row = fetch_posts_row(&mut verify, &id)
+        .await
+        .expect("seed INSERT did not land");
+    assert_eq!(row.0, "original-title");
+    assert_eq!(row.1, "original-large-body");
+
+    // UPDATE: title gets a new value; body is Toasted — slow path must execute.
+    sub.handle(begin_copy_data(300)).await.unwrap();
+    sub.handle(posts_update_title_copy_data(oid, &id, "updated-title"))
+        .await
+        .unwrap();
+    sub.handle(commit_copy_data(400)).await.unwrap();
+
+    let row = fetch_posts_row(&mut verify, &id)
+        .await
+        .expect("row disappeared after UPDATE");
+    assert_eq!(row.0, "updated-title", "title was not updated");
+    assert_eq!(
+        row.1, "original-large-body",
+        "unchanged-TOAST body was overwritten"
+    );
+
+    cleanup(&mut verify, "public.posts", &[&id]).await;
+}
+
+/// Two UPDATEs with the same TOAST shape (body Toasted, title updated) must
+/// reuse the cached prepared statement generated by `ensure_update_shape` on the
+/// first pass.  Both updates must apply correctly end-to-end.
+#[tokio::test]
+async fn toast_update_shape_reuse() {
+    let oid = Oid(16384);
+    let mut sub = make_subscriber_with_tables(vec![make_posts_table()]);
+    let mut verify = test_server().await;
+    sub.connect().await.unwrap();
+
+    let id = random_id();
+    cleanup(&mut verify, "public.posts", &[&id]).await;
+
+    sub.handle(begin_copy_data(100)).await.unwrap();
+    sub.handle(posts_relation_copy_data(oid)).await.unwrap();
+    sub.handle(posts_insert_copy_data(oid, &id, "seed-title", "seed-body"))
+        .await
+        .unwrap();
+    sub.handle(commit_copy_data(200)).await.unwrap();
+
+    // Two UPDATEs with identical TOAST shape: title changes each time, body stays
+    // Toasted.  The second must hit the shape cache without re-preparing.
+    sub.handle(begin_copy_data(300)).await.unwrap();
+    sub.handle(posts_update_title_copy_data(oid, &id, "first-update"))
+        .await
+        .unwrap();
+    sub.handle(posts_update_title_copy_data(oid, &id, "second-update"))
+        .await
+        .unwrap();
+    sub.handle(commit_copy_data(400)).await.unwrap();
+
+    let row = fetch_posts_row(&mut verify, &id)
+        .await
+        .expect("row disappeared after shape-reuse UPDATEs");
+    assert_eq!(row.0, "second-update", "second UPDATE title did not apply");
+    assert_eq!(
+        row.1, "seed-body",
+        "body was overwritten during shape-reuse"
+    );
+
+    cleanup(&mut verify, "public.posts", &[&id]).await;
+}
+
+/// UPDATE where ALL non-identity columns are Toasted — the no-op branch must fire.
+/// The destination row must be exactly as seeded; the LSN watermark must still advance.
+#[tokio::test]
+async fn toast_update_all_toasted_is_noop() {
+    let oid = Oid(16384);
+    let mut sub = make_subscriber_with_tables(vec![make_posts_table()]);
+    let mut verify = test_server().await;
+    sub.connect().await.unwrap();
+
+    let id = random_id();
+    cleanup(&mut verify, "public.posts", &[&id]).await;
+
+    // Seed a row with known values.
+    sub.handle(begin_copy_data(100)).await.unwrap();
+    sub.handle(posts_relation_copy_data(oid)).await.unwrap();
+    sub.handle(posts_insert_copy_data(
+        oid,
+        &id,
+        "original-title",
+        "original-body",
+    ))
+    .await
+    .unwrap();
+    sub.handle(commit_copy_data(200)).await.unwrap();
+
+    let row = fetch_posts_row(&mut verify, &id)
+        .await
+        .expect("seed INSERT did not land");
+    assert_eq!(row.0, "original-title");
+    assert_eq!(row.1, "original-body");
+
+    // UPDATE where both non-identity columns are Toasted — no-op path.
+    sub.handle(begin_copy_data(300)).await.unwrap();
+    sub.handle(xlog_copy_data(
+        XLogUpdate {
+            oid,
+            key: None,
+            old: None,
+            new: TupleData {
+                columns: vec![text_column(&id), toasted_column(), toasted_column()],
+            },
+        }
+        .to_bytes()
+        .unwrap(),
+    ))
+    .await
+    .unwrap();
+    sub.handle(commit_copy_data(400)).await.unwrap();
+
+    // Watermark advanced even though we took the no-op path.
+    assert_eq!(sub.lsn(), 400);
+
+    // Row unchanged — the no-op path must not have touched either column.
+    let row = fetch_posts_row(&mut verify, &id)
+        .await
+        .expect("row disappeared after all-TOAST no-op UPDATE");
+    assert_eq!(
+        row.0, "original-title",
+        "title changed during all-TOAST no-op"
+    );
+    assert_eq!(
+        row.1, "original-body",
+        "body changed during all-TOAST no-op"
+    );
+
+    cleanup(&mut verify, "public.posts", &[&id]).await;
+}
+
+/// PK-change UPDATE with 'u' in the new tuple fails with ToastedRowMigration.
+#[tokio::test]
+async fn toast_pk_change_with_u_rejects() {
+    let mut sub = make_subscriber();
+    sub.connect().await.unwrap();
+
+    let oid = Oid(16384);
+
+    sub.handle(begin_copy_data(100)).await.unwrap();
+    sub.handle(relation_copy_data(oid)).await.unwrap();
+    let err = sub
+        .handle(x_update(XLogUpdate {
+            oid,
+            key: Some(TupleData {
+                columns: vec![text_column("old")],
+            }),
+            old: None,
+            new: TupleData {
+                columns: vec![text_column("new"), toasted_column()],
+            },
+        }))
+        .await
+        .expect_err("expected ToastedRowMigration");
+    assert!(
+        matches!(
+            err,
+            crate::backend::replication::logical::Error::ToastedRowMigration { .. }
+        ),
+        "got: {:?}",
+        err
+    );
+}
+
+/// No key: pgoutput emits 'u' for an out-of-line identity column that didn't change.
+#[tokio::test]
+async fn update_rejects_toasted_identity_no_key() {
+    let oid = Oid(16384);
+    let mut sub = make_subscriber_with_tables(vec![make_posts_table()]);
+    sub.connect().await.unwrap();
+
+    sub.handle(begin_copy_data(100)).await.unwrap();
+    sub.handle(posts_relation_copy_data(oid)).await.unwrap();
+    let err = sub
+        .handle(x_update(XLogUpdate {
+            oid,
+            key: None,
+            old: None,
+            new: TupleData {
+                columns: vec![
+                    toasted_column(),
+                    text_column("new-title"),
+                    text_column("new-body"),
+                ],
+            },
+        }))
+        .await
+        .expect_err("toasted identity must be rejected");
+    assert!(
+        matches!(
+            err,
+            crate::backend::replication::logical::Error::ToastedIdentityColumn { .. }
+        ),
+        "got: {err:?}"
+    );
+}
+
+/// Key present (USING INDEX replica identity): identity column is still 'u' in the new tuple.
+#[tokio::test]
+async fn update_rejects_toasted_identity_with_key() {
+    let oid = Oid(16384);
+    let mut sub = make_subscriber_with_tables(vec![make_posts_table()]);
+    sub.connect().await.unwrap();
+
+    sub.handle(begin_copy_data(100)).await.unwrap();
+    sub.handle(posts_relation_copy_data(oid)).await.unwrap();
+    let err = sub
+        .handle(x_update(XLogUpdate {
+            oid,
+            key: Some(TupleData {
+                columns: vec![text_column("42")],
+            }),
+            old: None,
+            new: TupleData {
+                columns: vec![
+                    toasted_column(),
+                    text_column("new-title"),
+                    text_column("new-body"),
+                ],
+            },
+        }))
+        .await
+        .expect_err("toasted identity with key must be rejected");
+    assert!(
+        matches!(
+            err,
+            crate::backend::replication::logical::Error::ToastedIdentityColumn { .. }
+        ),
+        "got: {err:?}"
+    );
 }

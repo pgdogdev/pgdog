@@ -92,7 +92,9 @@ impl TupleData {
         Ok(format!("({})", columns))
     }
 
-    /// Create Bind message from this Tuple.
+    /// Create a [`Bind`] message from this tuple. Column index N maps to parameter `$N+1`.
+    /// Used by [`Table`](crate::backend::replication::logical::publisher::Table) DML methods
+    /// — the `$N` they emit must agree with the column ordering of the tuple passed here.
     pub fn to_bind(&self, name: &str) -> Bind {
         let params = self
             .columns
@@ -105,8 +107,14 @@ impl TupleData {
                 }
             })
             .collect::<Vec<_>>();
-
         Bind::new_params(name, &params)
+    }
+
+    /// Does this tuple contain any unchanged-TOAST (`'u'`) column?
+    pub fn has_toasted(&self) -> bool {
+        self.columns
+            .iter()
+            .any(|c| c.identifier == Identifier::Toasted)
     }
 }
 
@@ -132,7 +140,7 @@ impl Column {
         match self.identifier {
             Identifier::Null => Ok("NULL".into()),
             Identifier::Format(Format::Binary) => Err(Error::NotTextEncoding),
-            Identifier::Toasted => Ok("NULL".into()),
+            Identifier::Toasted => Ok("<unchanged toast>".into()),
             Identifier::Format(Format::Text) => match from_utf8(&self.data[..]) {
                 Ok(text) => Ok(unescape(text)),
                 Err(_) => Err(Error::NotTextEncoding),
@@ -178,6 +186,24 @@ impl ToBytes for TupleData {
 }
 
 #[cfg(test)]
+pub(crate) fn text_col(s: &str) -> Column {
+    Column {
+        identifier: Identifier::Format(Format::Text),
+        len: s.len() as i32,
+        data: bytes::Bytes::copy_from_slice(s.as_bytes()),
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn toasted_col() -> Column {
+    Column {
+        identifier: Identifier::Toasted,
+        len: 0,
+        data: bytes::Bytes::new(),
+    }
+}
+
+#[cfg(test)]
 mod test {
     use super::*;
 
@@ -219,5 +245,23 @@ mod test {
         assert!(TupleData::from_bytes(Bytes::from_static(&[0, 1, b't'])).is_err());
         // Has identifier + length but data is truncated
         assert!(TupleData::from_bytes(Bytes::from_static(&[0, 1, b't', 0, 0, 0, 4, 1])).is_err());
+    }
+
+    #[test]
+    fn has_toasted_detects_u() {
+        let t = TupleData {
+            columns: vec![text_col("1"), toasted_col(), text_col("x")],
+        };
+        assert!(t.has_toasted());
+        let t2 = TupleData {
+            columns: vec![text_col("1"), text_col("x")],
+        };
+        assert!(!t2.has_toasted());
+    }
+
+    #[test]
+    fn to_sql_renders_toasted_marker() {
+        let c = toasted_col();
+        assert_eq!(c.to_sql().unwrap(), "<unchanged toast>");
     }
 }

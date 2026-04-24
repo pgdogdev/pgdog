@@ -20,6 +20,7 @@ use crate::net::replication::StatusUpdate;
 use crate::util::escape_identifier;
 
 use super::super::{subscriber::CopySubscriber, Error, TableValidationError};
+use super::non_identity_columns_presence::NonIdentityColumnsPresence;
 use super::{
     AbortSignal, Copy, PublicationTable, PublicationTableColumn, ReplicaIdentity, ReplicationSlot,
 };
@@ -62,6 +63,20 @@ where
 {
     fn new(inner: I) -> Self {
         Self { inner }
+    }
+
+    /// Retain only identity columns, preserving their indices.
+    fn filter_identity(
+        self,
+    ) -> Columns<'a, impl Iterator<Item = (usize, &'a PublicationTableColumn)>> {
+        Columns::new(self.inner.filter(|(_, c)| c.identity))
+    }
+
+    /// Retain only non-identity columns, preserving their indices.
+    fn filter_non_identity(
+        self,
+    ) -> Columns<'a, impl Iterator<Item = (usize, &'a PublicationTableColumn)>> {
+        Columns::new(self.inner.filter(|(_, c)| !c.identity))
     }
 
     /// Drop original indices and assign sequential ones starting from 0.
@@ -149,10 +164,12 @@ impl Table {
         Ok(())
     }
 
+    /// Returns all the columns, enumerated
     fn all_columns(&self) -> Columns<'_, impl Iterator<Item = (usize, &PublicationTableColumn)>> {
         Columns::new(self.columns.iter().enumerate())
     }
 
+    /// Returns all the identity columns with their index within all columns
     fn identity_columns(
         &self,
     ) -> Columns<'_, impl Iterator<Item = (usize, &PublicationTableColumn)>> {
@@ -165,7 +182,35 @@ impl Table {
         Columns::new(self.columns.iter().enumerate().filter(|(_, c)| !c.identity))
     }
 
-    /// Insert record into table.
+    /// All columns that should appear in a partial UPDATE for `present`:
+    /// identity columns (always) and non-identity columns that are not toasted.
+    ///
+    /// Returned in original table order with sequential parameter indices
+    /// (via [`Columns::reindexed`]), so callers can split into SET and WHERE
+    /// parts using [`Columns::filter_non_identity`] and [`Columns::filter_identity`]
+    /// while preserving correct `$N` numbering.
+    fn present_columns<'a>(
+        &'a self,
+        present: &'a NonIdentityColumnsPresence,
+    ) -> Columns<'a, impl Iterator<Item = (usize, &'a PublicationTableColumn)>> {
+        let mut identity_count = 0;
+
+        Columns::new(self.columns.iter().enumerate().filter(move |(i, c)| {
+            if c.identity {
+                identity_count += 1;
+                true
+            } else {
+                // i - identity_count converts the original column index to the
+                // non-identity position that NonIdentityColumnsPresence::is_set expects.
+                present.is_set(i - identity_count)
+            }
+        }))
+        .reindexed()
+    }
+
+    /// Generate the query for the insertion. Use all the columns in the query.
+    /// The related [bind](crate::net::messages::replication::TupleData::to_bind) should set all
+    /// the values in the default column order
     pub fn insert(&self) -> String {
         format!(
             "INSERT INTO \"{}\".\"{}\" ({}) VALUES ({})",
@@ -176,7 +221,10 @@ impl Table {
         )
     }
 
-    /// Insert or update record in table (INSERT ... ON CONFLICT DO UPDATE).
+    /// Generate the upsert query (INSERT … ON CONFLICT DO UPDATE).
+    /// Uses all columns in VALUES; DO UPDATE SET reuses the same `$N` positions — no reindex.
+    /// The related [bind](crate::net::messages::replication::TupleData::to_bind) should set all
+    /// the values in the default column order
     pub fn upsert(&self) -> String {
         format!(
             "INSERT INTO \"{}\".\"{}\" ({}) VALUES ({}) ON CONFLICT ({}) DO UPDATE SET {}",
@@ -189,7 +237,10 @@ impl Table {
         )
     }
 
-    /// Update record in table.
+    /// Generate the UPDATE query for all columns.
+    /// Identity columns are in the WHERE part and non-identity in the SET part.
+    /// The related [bind](crate::net::messages::replication::TupleData::to_bind) should set all
+    /// the values in the default column order
     pub fn update(&self) -> String {
         format!(
             "UPDATE \"{}\".\"{}\" SET {} WHERE {}",
@@ -200,7 +251,34 @@ impl Table {
         )
     }
 
-    /// Delete record from table.
+    /// Generated partial UPDATE query - the identity column are present in the WHERE part
+    /// and the columns that are changed (not unchanged-toasted) in the SET part.
+    /// The ordering of columns corresponds with the whole column ordering after filtering
+    /// the unchanged-toasted fields.
+    ///
+    /// Paired with [`Update::partial_new`](crate::net::messages::replication::Update::partial_new) to
+    /// generate proper [bind](crate::net::messages::replication::TupleData::to_bind) with proper order.
+    pub fn update_partial(&self, present: &NonIdentityColumnsPresence) -> String {
+        debug_assert!(
+            !present.no_non_identity_present(),
+            "update_partial called with no non-identity columns present — would emit empty SET clause"
+        );
+
+        format!(
+            "UPDATE \"{}\".\"{}\" SET {} WHERE {}",
+            escape_identifier(self.table.destination_schema()),
+            escape_identifier(self.table.destination_name()),
+            self.present_columns(present)
+                .filter_non_identity()
+                .assignments(),
+            self.present_columns(present).filter_identity().predicates(),
+        )
+    }
+
+    /// Generate the DELETE query filtering by identity columns.
+    /// Identity columns are in the WHERE part.
+    /// Paired with [`Delete::key_non_null`](crate::net::messages::replication::Delete::key_non_null)
+    /// to generate proper [bind](crate::net::messages::replication::TupleData::to_bind) with proper order.
     pub fn delete(&self) -> String {
         format!(
             "DELETE FROM \"{}\".\"{}\" WHERE {}",
@@ -349,7 +427,11 @@ mod test {
         server::test::test_server,
         Server,
     };
+
     use crate::config::config;
+    use crate::net::messages::replication::logical::tuple_data::{
+        text_col, toasted_col, TupleData,
+    };
 
     use super::*;
 
@@ -433,36 +515,68 @@ mod test {
 
     #[test]
     fn test_delete_sequential_params_identity_not_first() {
-        // Regression: when identity columns aren't at the start of the column list,
-        // delete() must still produce sequential $1, $2, ... parameters.
+        // reindexed() always starts from $1 regardless of the column's position in the row.
         let table = make_table(vec![("name", false), ("value", false), ("id", true)]);
-        let delete = table.delete();
-        assert!(delete.contains("$1"), "expected $1 in delete: {}", delete);
-        assert!(
-            !delete.contains("$3"),
-            "delete should not skip to $3: {}",
-            delete
+        assert_eq!(
+            table.delete(),
+            r#"DELETE FROM "public"."test_table" WHERE "id" = $1"#
         );
-        assert!(pg_query::parse(&delete).is_ok(), "delete: {}", delete);
     }
 
     #[test]
     fn test_delete_sequential_params_composite_key() {
-        // Regression: composite key with non-contiguous identity columns
-        // must produce $1, $2 not $1, $3.
+        // Non-contiguous identity columns (idx 0, 2) reindex to $1, $2; non-identity never appears.
         let table = make_table(vec![("id", true), ("name", false), ("version", true)]);
-        let delete = table.delete();
-        assert!(
-            delete.contains("$1") && delete.contains("$2"),
-            "expected $1 and $2 in delete: {}",
-            delete
+        assert_eq!(
+            table.delete(),
+            r#"DELETE FROM "public"."test_table" WHERE "id" = $1 AND "version" = $2"#,
         );
-        assert!(
-            !delete.contains("$3"),
-            "delete should not reference $3: {}",
-            delete
+    }
+
+    #[test]
+    fn test_delete_identity_first_correct() {
+        let table = make_table(vec![("id", true), ("name", false)]);
+        assert_eq!(
+            table.delete(),
+            r#"DELETE FROM "public"."test_table" WHERE "id" = $1"#
         );
-        assert!(pg_query::parse(&delete).is_ok(), "delete: {}", delete);
+    }
+
+    #[test]
+    fn test_update_param_numbering_identity_trailing() {
+        let table = make_table(vec![("name", false), ("id", true)]);
+        assert_eq!(
+            table.update(),
+            r#"UPDATE "public"."test_table" SET "name" = $1 WHERE "id" = $2"#,
+        );
+    }
+
+    #[test]
+    fn test_update_param_numbering_identity_leading() {
+        let table = make_table(vec![("id", true), ("name", false), ("value", false)]);
+        assert_eq!(
+            table.update(),
+            r#"UPDATE "public"."test_table" SET "name" = $2, "value" = $3 WHERE "id" = $1"#,
+        );
+    }
+
+    #[test]
+    fn test_upsert_param_numbering_identity_trailing() {
+        // DO UPDATE SET reuses the original non-identity positions; same $N as in VALUES.
+        let table = make_table(vec![("name", false), ("value", false), ("id", true)]);
+        assert_eq!(
+            table.upsert(),
+            r#"INSERT INTO "public"."test_table" ("name", "value", "id") VALUES ($1, $2, $3) ON CONFLICT ("id") DO UPDATE SET "name" = $1, "value" = $2"#,
+        );
+    }
+
+    #[test]
+    fn test_upsert_param_numbering_identity_leading() {
+        let table = make_table(vec![("id", true), ("name", false), ("value", false)]);
+        assert_eq!(
+            table.upsert(),
+            r#"INSERT INTO "public"."test_table" ("id", "name", "value") VALUES ($1, $2, $3) ON CONFLICT ("id") DO UPDATE SET "name" = $2, "value" = $3"#,
+        );
     }
 
     #[test]
@@ -503,6 +617,115 @@ mod test {
 
         let delete = table.delete();
         assert!(pg_query::parse(&delete).is_ok(), "delete: {}", delete);
+    }
+
+    #[test]
+    fn update_partial_all_columns() {
+        let table = make_table(vec![("id", true), ("a", false), ("b", false)]);
+        let present = NonIdentityColumnsPresence::all(&table);
+        assert_eq!(
+            table.update_partial(&present),
+            r#"UPDATE "public"."test_table" SET "a" = $2, "b" = $3 WHERE "id" = $1"#,
+        );
+    }
+
+    #[test]
+    fn update_partial_skips_toasted_column() {
+        let table = make_table(vec![("id", true), ("a", false), ("b", false), ("c", false)]);
+        let tuple = TupleData {
+            columns: vec![text_col("1"), text_col("x"), toasted_col(), text_col("z")],
+        };
+        let present = NonIdentityColumnsPresence::from_tuple(&tuple, &table).unwrap();
+        assert_eq!(
+            table.update_partial(&present),
+            r#"UPDATE "public"."test_table" SET "a" = $2, "c" = $3 WHERE "id" = $1"#,
+        );
+    }
+
+    #[test]
+    fn update_partial_identity_not_first() {
+        // Identity column last — params must still be sequential.
+        let table = make_table(vec![("name", false), ("value", false), ("id", true)]);
+        let present = NonIdentityColumnsPresence::all(&table);
+        assert_eq!(
+            table.update_partial(&present),
+            r#"UPDATE "public"."test_table" SET "name" = $1, "value" = $2 WHERE "id" = $3"#,
+        );
+    }
+
+    #[test]
+    fn update_partial_identity_in_middle() {
+        // Identity column sits between two non-identity columns.
+        // The SET column before identity gets $1; identity gets $2;
+        // the SET column after identity gets $3.
+        let table = make_table(vec![("a", false), ("id", true), ("b", false)]);
+        let present = NonIdentityColumnsPresence::all(&table);
+        assert_eq!(
+            table.update_partial(&present),
+            r#"UPDATE "public"."test_table" SET "a" = $1, "b" = $3 WHERE "id" = $2"#,
+        );
+    }
+
+    #[test]
+    fn update_partial_multiple_identity_columns() {
+        // Compound primary key: two identity columns followed by two non-identity columns.
+        // Identity columns occupy $1 and $2; non-identity columns follow at $3 and $4.
+        let table = make_table(vec![
+            ("id1", true),
+            ("id2", true),
+            ("a", false),
+            ("b", false),
+        ]);
+        let present = NonIdentityColumnsPresence::all(&table);
+        assert_eq!(
+            table.update_partial(&present),
+            r#"UPDATE "public"."test_table" SET "a" = $3, "b" = $4 WHERE "id1" = $1 AND "id2" = $2"#,
+        );
+    }
+
+    #[test]
+    fn update_partial_first_non_identity_toasted() {
+        // Non-identity column at position 0 is toasted; identity is last.
+        // Only the second non-identity column is present, so it gets $1
+        // and identity follows at $2.
+        let table = make_table(vec![("a", false), ("b", false), ("id", true)]);
+        let tuple = TupleData {
+            columns: vec![toasted_col(), text_col("bv"), text_col("1")],
+        };
+        let present = NonIdentityColumnsPresence::from_tuple(&tuple, &table).unwrap();
+        assert_eq!(
+            table.update_partial(&present),
+            r#"UPDATE "public"."test_table" SET "b" = $1 WHERE "id" = $2"#,
+        );
+    }
+
+    #[test]
+    fn update_partial_two_identity_interleaved_two_toasted() {
+        // Table: a, id1 (identity), b, c, id2 (identity).
+        // a and c are toasted; only b survives the non-identity filter.
+        // present_columns produces [(0,id1),(1,b),(2,id2)] after reindexing,
+        // so b lands at $2 between the two identity params.
+        let table = make_table(vec![
+            ("a", false),
+            ("id1", true),
+            ("b", false),
+            ("c", false),
+            ("id2", true),
+        ]);
+        let tuple = TupleData {
+            columns: vec![
+                toasted_col(),  // a — unchanged TOAST
+                text_col("1"),  // id1
+                text_col("bv"), // b
+                toasted_col(),  // c — unchanged TOAST
+                text_col("2"),  // id2
+            ],
+        };
+        let present = NonIdentityColumnsPresence::from_tuple(&tuple, &table).unwrap();
+        assert_eq!(
+            table.update_partial(&present),
+            r#"UPDATE "public"."test_table" SET "b" = $2 WHERE "id1" = $1 AND "id2" = $3"#,
+        );
     }
 
     #[tokio::test]

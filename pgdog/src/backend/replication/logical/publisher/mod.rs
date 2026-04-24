@@ -1,3 +1,6 @@
+pub mod non_identity_columns_presence;
+pub use non_identity_columns_presence::*;
+
 pub mod slot;
 pub use slot::*;
 pub mod abort;

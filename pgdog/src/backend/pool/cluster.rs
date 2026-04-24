@@ -747,18 +747,32 @@ mod test {
 
             Cluster {
                 sharded_tables: ShardedTables::new(
-                    vec![ShardedTable {
-                        database: "pgdog".into(),
-                        name: Some("sharded".into()),
-                        column: "id".into(),
-                        primary: true,
-                        centroids: vec![],
-                        data_type: DataType::Bigint,
-                        centroids_path: None,
-                        centroid_probes: 1,
-                        hasher: Hasher::Postgres,
-                        ..Default::default()
-                    }],
+                    vec![
+                        ShardedTable {
+                            database: "pgdog".into(),
+                            name: Some("sharded".into()),
+                            column: "id".into(),
+                            primary: true,
+                            centroids: vec![],
+                            data_type: DataType::Bigint,
+                            centroids_path: None,
+                            centroid_probes: 1,
+                            hasher: Hasher::Postgres,
+                            ..Default::default()
+                        },
+                        ShardedTable {
+                            database: "pgdog".into(),
+                            name: Some("posts".into()),
+                            column: "id".into(),
+                            primary: true,
+                            centroids: vec![],
+                            data_type: DataType::Bigint,
+                            centroids_path: None,
+                            centroid_probes: 1,
+                            hasher: Hasher::Postgres,
+                            ..Default::default()
+                        },
+                    ],
                     vec![
                         OmnishardedTable {
                             name: "sharded_omni".into(),
