@@ -42,6 +42,70 @@ pub struct Table {
     pub query_parser_engine: QueryParserEngine,
 }
 
+/// An enumerated view over a subset of a table's columns.
+///
+/// Each item is `(original_index, &column)` where `original_index` is the
+/// 0-based position of the column in the full column list. This preserves
+/// parameter numbers (`$N`) that must line up with a bound value slice
+/// containing all columns (INSERT, UPDATE). Call [`Columns::reindexed`]
+/// when only the subset's values are bound (DELETE).
+struct Columns<'a, I>
+where
+    I: Iterator<Item = (usize, &'a PublicationTableColumn)>,
+{
+    inner: I,
+}
+
+impl<'a, I> Columns<'a, I>
+where
+    I: Iterator<Item = (usize, &'a PublicationTableColumn)>,
+{
+    fn new(inner: I) -> Self {
+        Self { inner }
+    }
+
+    /// Drop original indices and assign sequential ones starting from 0.
+    ///
+    /// Use when only this subset's values are bound as parameters, so `$1`
+    /// refers to the first column in the subset, not its position in the
+    /// full row (e.g. DELETE binds only identity column values).
+    fn reindexed(self) -> Columns<'a, impl Iterator<Item = (usize, &'a PublicationTableColumn)>> {
+        Columns::new(self.inner.map(|(_, c)| c).enumerate())
+    }
+
+    /// Quoted column names joined by `, `: `"col1", "col2"`.
+    fn names(self) -> String {
+        self.inner
+            .map(|(_, c)| format!("\"{}\"", escape_identifier(&c.name)))
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
+    /// Positional parameter placeholders joined by `, `: `$1, $2`.
+    fn placeholders(self) -> String {
+        self.inner
+            .map(|(i, _)| format!("${}", i + 1))
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
+    /// `"col" = $pos` pairs joined by `, `. Used in SET clauses.
+    fn assignments(self) -> String {
+        self.inner
+            .map(|(i, c)| format!("\"{}\" = ${}", escape_identifier(&c.name), i + 1))
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
+    /// `"col" = $pos` pairs joined by ` AND `. Used in WHERE clauses.
+    fn predicates(self) -> String {
+        self.inner
+            .map(|(i, c)| format!("\"{}\" = ${}", escape_identifier(&c.name), i + 1))
+            .collect::<Vec<_>>()
+            .join(" AND ")
+    }
+}
+
 impl Table {
     pub async fn load(
         publication: &str,
@@ -85,101 +149,64 @@ impl Table {
         Ok(())
     }
 
-    /// Upsert record into table.
-    pub fn insert(&self, upsert: bool) -> String {
-        let names = format!(
-            "({})",
-            self.columns
-                .iter()
-                .map(|c| format!("\"{}\"", escape_identifier(&c.name)))
-                .collect::<Vec<_>>()
-                .join(", ")
-        );
-        let values = format!(
-            "VALUES ({})",
-            self.columns
-                .iter()
-                .enumerate()
-                .map(|(i, _)| format!("${}", i + 1))
-                .collect::<Vec<_>>()
-                .join(", ")
-        );
-        let on_conflict = if upsert {
-            format!(
-                "ON CONFLICT ({}) DO UPDATE SET {}",
-                self.columns
-                    .iter()
-                    .filter(|c| c.identity)
-                    .map(|c| format!("\"{}\"", escape_identifier(&c.name)))
-                    .collect::<Vec<_>>()
-                    .join(", "),
-                self.columns
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, c)| !c.identity)
-                    .map(|(i, c)| format!("\"{}\" = ${}", escape_identifier(&c.name), i + 1))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )
-        } else {
-            "".to_string()
-        };
+    fn all_columns(&self) -> Columns<'_, impl Iterator<Item = (usize, &PublicationTableColumn)>> {
+        Columns::new(self.columns.iter().enumerate())
+    }
 
+    fn identity_columns(
+        &self,
+    ) -> Columns<'_, impl Iterator<Item = (usize, &PublicationTableColumn)>> {
+        Columns::new(self.columns.iter().enumerate().filter(|(_, c)| c.identity))
+    }
+
+    fn non_identity_columns(
+        &self,
+    ) -> Columns<'_, impl Iterator<Item = (usize, &PublicationTableColumn)>> {
+        Columns::new(self.columns.iter().enumerate().filter(|(_, c)| !c.identity))
+    }
+
+    /// Insert record into table.
+    pub fn insert(&self) -> String {
         format!(
-            "INSERT INTO \"{}\".\"{}\" {} {} {}",
+            "INSERT INTO \"{}\".\"{}\" ({}) VALUES ({})",
             escape_identifier(self.table.destination_schema()),
             escape_identifier(self.table.destination_name()),
-            names,
-            values,
-            on_conflict
+            self.all_columns().names(),
+            self.all_columns().placeholders(),
+        )
+    }
+
+    /// Insert or update record in table (INSERT ... ON CONFLICT DO UPDATE).
+    pub fn upsert(&self) -> String {
+        format!(
+            "INSERT INTO \"{}\".\"{}\" ({}) VALUES ({}) ON CONFLICT ({}) DO UPDATE SET {}",
+            escape_identifier(self.table.destination_schema()),
+            escape_identifier(self.table.destination_name()),
+            self.all_columns().names(),
+            self.all_columns().placeholders(),
+            self.identity_columns().names(),
+            self.non_identity_columns().assignments(),
         )
     }
 
     /// Update record in table.
     pub fn update(&self) -> String {
-        let set_clause = self
-            .columns
-            .iter()
-            .enumerate()
-            .filter(|(_, c)| !c.identity)
-            .map(|(i, c)| format!("\"{}\" = ${}", escape_identifier(&c.name), i + 1))
-            .collect::<Vec<_>>()
-            .join(", ");
-
-        let where_clause = self
-            .columns
-            .iter()
-            .enumerate()
-            .filter(|(_, c)| c.identity)
-            .map(|(i, c)| format!("\"{}\" = ${}", escape_identifier(&c.name), i + 1))
-            .collect::<Vec<_>>()
-            .join(" AND ");
-
         format!(
             "UPDATE \"{}\".\"{}\" SET {} WHERE {}",
             escape_identifier(self.table.destination_schema()),
             escape_identifier(self.table.destination_name()),
-            set_clause,
-            where_clause
+            self.non_identity_columns().assignments(),
+            self.identity_columns().predicates(),
         )
     }
 
     /// Delete record from table.
     pub fn delete(&self) -> String {
-        let where_clause = self
-            .columns
-            .iter()
-            .filter(|c| c.identity)
-            .enumerate()
-            .map(|(i, c)| format!("\"{}\" = ${}", escape_identifier(&c.name), i + 1))
-            .collect::<Vec<_>>()
-            .join(" AND ");
-
         format!(
             "DELETE FROM \"{}\".\"{}\" WHERE {}",
             escape_identifier(self.table.destination_schema()),
             escape_identifier(self.table.destination_name()),
-            where_clause
+            self.identity_columns().reindexed().predicates(),
         )
     }
 
@@ -374,10 +401,10 @@ mod test {
     fn test_sql_generation_simple() {
         let table = make_table(vec![("id", true), ("name", false), ("value", false)]);
 
-        let insert = table.insert(false);
+        let insert = table.insert();
         assert!(pg_query::parse(&insert).is_ok(), "insert: {}", insert);
 
-        let upsert = table.insert(true);
+        let upsert = table.upsert();
         assert!(pg_query::parse(&upsert).is_ok(), "upsert: {}", upsert);
 
         let update = table.update();
@@ -391,10 +418,10 @@ mod test {
     fn test_sql_generation_quoted_column() {
         let table = make_table(vec![("id", true), ("has\"quote", false), ("normal", false)]);
 
-        let insert = table.insert(false);
+        let insert = table.insert();
         assert!(pg_query::parse(&insert).is_ok(), "insert: {}", insert);
 
-        let upsert = table.insert(true);
+        let upsert = table.upsert();
         assert!(pg_query::parse(&upsert).is_ok(), "upsert: {}", upsert);
 
         let update = table.update();
@@ -446,10 +473,10 @@ mod test {
             ("UPPER", false),
         ]);
 
-        let insert = table.insert(false);
+        let insert = table.insert();
         assert!(pg_query::parse(&insert).is_ok(), "insert: {}", insert);
 
-        let upsert = table.insert(true);
+        let upsert = table.upsert();
         assert!(pg_query::parse(&upsert).is_ok(), "upsert: {}", upsert);
 
         let update = table.update();
@@ -465,10 +492,10 @@ mod test {
         table.table.name = "table\"with\"quotes".to_string();
         table.table.schema = "schema\"quote".to_string();
 
-        let insert = table.insert(false);
+        let insert = table.insert();
         assert!(pg_query::parse(&insert).is_ok(), "insert: {}", insert);
 
-        let upsert = table.insert(true);
+        let upsert = table.upsert();
         assert!(pg_query::parse(&upsert).is_ok(), "upsert: {}", upsert);
 
         let update = table.update();
@@ -494,7 +521,7 @@ mod test {
         assert_eq!(tables.len(), 2);
 
         for table in tables {
-            let upsert = table.insert(true);
+            let upsert = table.upsert();
             assert!(pg_query::parse(&upsert).is_ok());
 
             let update = table.update();

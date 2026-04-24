@@ -473,8 +473,8 @@ impl StreamSubscriber {
 
                 debug!("queries for table {} already prepared", dest_key);
             } else {
-                let insert = Statement::new(&table.insert(false), self.query_parser_engine)?;
-                let upsert = Statement::new(&table.insert(true), self.query_parser_engine)?;
+                let insert = Statement::new(&table.insert(), self.query_parser_engine)?;
+                let upsert = Statement::new(&table.upsert(), self.query_parser_engine)?;
                 let update = Statement::new(&table.update(), self.query_parser_engine)?;
                 let delete = Statement::new(&table.delete(), self.query_parser_engine)?;
 
