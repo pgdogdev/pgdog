@@ -3,6 +3,10 @@ set -e
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 source ${SCRIPT_DIR}/../common.sh
 
+# Uses the legacy standalone `docker-compose` binary; newer Docker installs
+# only ship the `docker compose` plugin.
+bash ${SCRIPT_DIR}/../ci/apt.sh docker-compose
+
 pushd ${SCRIPT_DIR}
 
 export PGUSER=postgres

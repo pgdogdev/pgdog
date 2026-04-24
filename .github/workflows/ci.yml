@@ -13,13 +13,13 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install CI deps
         run: bash integration/ci/install-deps.sh
-      # rust-cache restores dep fingerprints/deps but deliberately strips
-      # final binaries, so linking still runs. The binary cache below skips
-      # the build entirely when no source has changed, and also serves as
-      # the transport to downstream jobs via the same cache key.
-      - uses: useblacksmith/rust-cache@v3
-        with:
-          prefix-key: build-v1
+      # Binary cache runs first: its key must be computed against a clean
+      # tree so it matches what downstream jobs compute. rust-cache runs
+      # after — it restores target/ which contains generated *.rs under
+      # target/*/build/*/out/ that would otherwise destabilize the hash.
+      - name: Compute cache key
+        id: cache-key
+        run: echo "key=pgdog-bin-${{ runner.os }}-$(bash integration/ci/cache-key.sh)" >> "$GITHUB_OUTPUT"
       - name: Cache pgdog binaries
         id: pgdog-bin
         uses: useblacksmith/cache@v5
@@ -27,7 +27,11 @@ jobs:
           path: |
             target/debug/pgdog
             target/release/pgdog
-          key: pgdog-bin-${{ runner.os }}-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml', '**/*.rs') }}
+          key: ${{ steps.cache-key.outputs.key }}
+      - uses: useblacksmith/rust-cache@v3
+        if: steps.pgdog-bin.outputs.cache-hit != 'true'
+        with:
+          prefix-key: build-v1
       - name: Build (debug)
         if: steps.pgdog-bin.outputs.cache-hit != 'true'
         run: cargo build --bin pgdog
@@ -62,13 +66,16 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install CI deps
         run: bash integration/ci/install-deps.sh
+      - name: Compute cache key
+        id: cache-key
+        run: echo "key=pgdog-bin-${{ runner.os }}-$(bash integration/ci/cache-key.sh)" >> "$GITHUB_OUTPUT"
       - name: Restore pgdog binaries
         uses: useblacksmith/cache/restore@v5
         with:
           path: |
             target/debug/pgdog
             target/release/pgdog
-          key: pgdog-bin-${{ runner.os }}-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml', '**/*.rs') }}
+          key: ${{ steps.cache-key.outputs.key }}
           fail-on-cache-miss: true
       - name: Setup dependencies
         run: bash integration/ci/setup.sh --with-toxi
@@ -95,13 +102,16 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install CI deps
         run: bash integration/ci/install-deps.sh
+      - name: Compute cache key
+        id: cache-key
+        run: echo "key=pgdog-bin-${{ runner.os }}-$(bash integration/ci/cache-key.sh)" >> "$GITHUB_OUTPUT"
       - name: Restore pgdog binaries
         uses: useblacksmith/cache/restore@v5
         with:
           path: |
             target/debug/pgdog
             target/release/pgdog
-          key: pgdog-bin-${{ runner.os }}-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml', '**/*.rs') }}
+          key: ${{ steps.cache-key.outputs.key }}
           fail-on-cache-miss: true
       - name: Setup dependencies
         run: bash integration/ci/setup.sh --with-toxi
