@@ -53,4 +53,26 @@ pub enum Error {
         #[source]
         source: std::io::Error,
     },
+
+    #[error("torn tail: {unconsumed} unconsumed bytes at offset {offset}")]
+    TornTail { offset: u64, unconsumed: usize },
+}
+
+impl Error {
+    /// True for errors that signal on-disk data is malformed or partial:
+    /// CRC mismatch, unknown tag, decode failure, missing magic, bad
+    /// filename, torn tail. Recovery quarantines these and skips the
+    /// segment instead of failing the whole process.
+    pub fn is_corruption(&self) -> bool {
+        matches!(
+            self,
+            Error::BadSegmentName(_)
+                | Error::BadSegmentHeader
+                | Error::Crc { .. }
+                | Error::InvalidTag(_)
+                | Error::EmptyRecord
+                | Error::Decode(_)
+                | Error::TornTail { .. }
+        )
+    }
 }

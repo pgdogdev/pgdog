@@ -84,10 +84,22 @@ pub async fn list_segments(dir: &Path) -> Result<Vec<PathBuf>, Error> {
 /// Iterates records out of an existing segment file.
 ///
 /// `next` returns one record at a time, reading from the file in chunks.
-/// On clean EOF, on a torn tail, or on a decoded-record CRC/parse error,
-/// `next` returns `Ok(None)` and remembers the byte offset of the last
-/// good record so [`SegmentReader::into_writable`] can truncate the file
-/// there.
+/// Each terminal condition is reported explicitly:
+///
+/// - `Ok(Some(record))` — a record was decoded; iteration continues.
+/// - `Ok(None)` — clean end of stream (EOF with no leftover bytes).
+/// - `Err(Error::TornTail { .. })` — file ends mid-record. Normal at
+///   the last segment after a crash; suspicious anywhere else.
+/// - `Err(Error::Crc | InvalidTag | EmptyRecord | Decode)` — record
+///   framing or payload is corrupt.
+/// - `Err(Error::Io(_))` — disk-side IO error.
+///
+/// `last_good_offset` always points at the end of the last successfully
+/// decoded record so [`SegmentReader::into_writable`] can truncate the
+/// file there regardless of how iteration terminated.
+///
+/// After any terminal condition, subsequent `next` calls return
+/// `Ok(None)` (the error is reported once).
 #[derive(Debug)]
 pub struct SegmentReader {
     file: File,
@@ -99,8 +111,8 @@ pub struct SegmentReader {
     /// File offset (in bytes) of the end of the last successfully decoded
     /// record, or `HEADER_BYTES` if no records have been decoded yet.
     last_good_offset: u64,
-    /// True once we've seen a clean EOF or a corrupt/torn tail; further
-    /// `next` calls return `Ok(None)`.
+    /// True once iteration has terminated; further `next` calls return
+    /// `Ok(None)`.
     done: bool,
 }
 
@@ -155,8 +167,8 @@ impl SegmentReader {
         &self.path
     }
 
-    /// Decode and return the next record, or `Ok(None)` if the segment has
-    /// been fully drained (clean EOF, torn tail, or corruption).
+    /// Decode and return the next record. See the type-level docs for
+    /// the full set of return values.
     pub async fn next(&mut self) -> Result<Option<Record>, Error> {
         if self.done {
             return Ok(None);
@@ -174,30 +186,19 @@ impl SegmentReader {
                 Ok(None) => {
                     let read_more = self.read_chunk().await?;
                     if !read_more {
-                        // No more bytes: either clean EOF (buf empty) or torn
-                        // tail (buf still has unconsumed bytes that don't form
-                        // a complete record). Both are terminal.
-                        if !self.buf.is_empty() {
-                            warn!(
-                                "torn tail in {} at offset {} ({} unconsumed bytes)",
-                                self.path.display(),
-                                self.last_good_offset,
-                                self.buf.len()
-                            );
-                        }
                         self.done = true;
-                        return Ok(None);
+                        if self.buf.is_empty() {
+                            return Ok(None);
+                        }
+                        return Err(Error::TornTail {
+                            offset: self.last_good_offset,
+                            unconsumed: self.buf.len(),
+                        });
                     }
                 }
                 Err(err) => {
-                    warn!(
-                        "corrupt record in {} at offset {}: {}",
-                        self.path.display(),
-                        self.last_good_offset,
-                        err
-                    );
                     self.done = true;
-                    return Ok(None);
+                    return Err(err);
                 }
             }
         }
@@ -425,10 +426,15 @@ mod tests {
 
         let mut reader = SegmentReader::open(&path).await.unwrap();
         let mut records = Vec::new();
-        while let Some(r) = reader.next().await.unwrap() {
-            records.push(r);
-        }
+        let term = loop {
+            match reader.next().await {
+                Ok(Some(r)) => records.push(r),
+                Ok(None) => break Ok(()),
+                Err(err) => break Err(err),
+            }
+        };
         assert_eq!(records.len(), 1);
+        assert!(matches!(term, Err(Error::TornTail { .. })));
         let last_good = reader.last_good_offset();
         let seg = reader.into_writable().await.unwrap();
         assert_eq!(seg.size_bytes(), last_good);
@@ -466,10 +472,15 @@ mod tests {
 
         let mut reader = SegmentReader::open(&path).await.unwrap();
         let mut records = Vec::new();
-        while let Some(r) = reader.next().await.unwrap() {
-            records.push(r);
-        }
+        let term = loop {
+            match reader.next().await {
+                Ok(Some(r)) => records.push(r),
+                Ok(None) => break Ok(()),
+                Err(err) => break Err(err),
+            }
+        };
         assert_eq!(records, vec![r1]);
+        assert!(matches!(term, Err(Error::Crc { .. })));
     }
 
     #[tokio::test]

@@ -31,9 +31,10 @@ use tokio::time::{sleep_until, Instant};
 use tracing::{error, warn};
 
 use super::error::Error;
-use super::record::Record;
+use super::record::{BeginPayload, Record, TxnPayload};
 use super::segment::Segment;
 use crate::config::config;
+use crate::frontend::client::query_engine::two_pc::TwoPcTransaction;
 
 /// Maximum number of records coalesced into a single fsync.
 const MAX_BATCH: usize = 1024;
@@ -84,9 +85,39 @@ impl Wal {
         Self { tx, shutdown }
     }
 
-    /// Append a record. Resolves once the record (and any other records in
-    /// its group-commit batch) have been fsynced.
-    pub async fn append(&self, record: Record) -> Result<u64, Arc<Error>> {
+    /// Log that `txn` is about to issue PREPARE TRANSACTION on `shards`.
+    /// Must complete before any PREPARE leaves the coordinator.
+    pub async fn append_begin(
+        &self,
+        txn: TwoPcTransaction,
+        user: String,
+        database: String,
+        shards: Vec<u32>,
+    ) -> Result<u64, Arc<Error>> {
+        self.append(Record::Begin(BeginPayload {
+            txn,
+            user,
+            database,
+            shards,
+        }))
+        .await
+    }
+
+    /// Log that `txn` has crossed the point of no return: every
+    /// participant must now be driven to COMMIT PREPARED.
+    pub async fn append_committing(&self, txn: TwoPcTransaction) -> Result<u64, Arc<Error>> {
+        self.append(Record::Committing(TxnPayload { txn })).await
+    }
+
+    /// Log that `txn` is fully resolved (committed or aborted on every
+    /// participant) and recovery may forget it.
+    pub async fn append_end(&self, txn: TwoPcTransaction) -> Result<u64, Arc<Error>> {
+        self.append(Record::End(TxnPayload { txn })).await
+    }
+
+    /// Send a record to the writer task. Resolves once the record (and
+    /// any other records in its group-commit batch) have been fsynced.
+    async fn append(&self, record: Record) -> Result<u64, Arc<Error>> {
         let (ack, rx) = oneshot::channel();
         self.tx
             .send(WriteRequest { record, ack })
