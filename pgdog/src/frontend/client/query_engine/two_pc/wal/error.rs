@@ -56,6 +56,12 @@ pub enum Error {
 
     #[error("torn tail: {unconsumed} unconsumed bytes at offset {offset}")]
     TornTail { offset: u64, unconsumed: usize },
+
+    #[error("wal directory {dir} is locked by another process:\n{holder}")]
+    DirLocked {
+        dir: std::path::PathBuf,
+        holder: String,
+    },
 }
 
 impl Error {

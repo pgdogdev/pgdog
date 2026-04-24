@@ -19,12 +19,15 @@
 //! The writer's body is wrapped in `catch_unwind` so a panic doesn't hang
 //! shutdown: any unwinding is logged and the `done` notify still fires.
 
+use std::io::{Read, Seek, SeekFrom, Write};
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::BytesMut;
 use futures::FutureExt;
+use tokio::io::AsyncWriteExt;
 use tokio::sync::{mpsc, oneshot, Notify};
 use tokio::time::{sleep_until, Instant};
 use tracing::{error, warn};
@@ -33,9 +36,115 @@ use fnv::FnvHashMap as HashMap;
 
 use super::error::Error;
 use super::record::{BeginPayload, CheckpointEntry, CheckpointPayload, Record, TxnPayload};
+use super::recovery;
 use super::segment::{gc_before_lsn, Segment};
 use crate::config::config;
-use crate::frontend::client::query_engine::two_pc::TwoPcTransaction;
+use crate::frontend::client::query_engine::two_pc::{Manager, TwoPcTransaction};
+
+/// Diagnose whether `dir` is usable as a WAL directory by exercising
+/// the operations the writer and recovery code will perform: directory
+/// existence, listing, creating + writing + fsync of a probe file.
+async fn probe(dir: &Path) -> Result<(), Error> {
+    tokio::fs::create_dir_all(dir)
+        .await
+        .map_err(|source| Error::DirNotAccessible {
+            dir: dir.to_path_buf(),
+            source,
+        })?;
+
+    let _ = tokio::fs::read_dir(dir)
+        .await
+        .map_err(|source| Error::DirNotReadable {
+            dir: dir.to_path_buf(),
+            source,
+        })?;
+
+    let probe_path = dir.join(".probe");
+    let mut file = tokio::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(&probe_path)
+        .await
+        .map_err(|source| Error::DirNotWritable {
+            dir: dir.to_path_buf(),
+            source,
+        })?;
+    file.write_all(b"pgdog wal probe\n")
+        .await
+        .map_err(|source| Error::DirNotWritable {
+            dir: dir.to_path_buf(),
+            source,
+        })?;
+    file.sync_all()
+        .await
+        .map_err(|source| Error::DirNotWritable {
+            dir: dir.to_path_buf(),
+            source,
+        })?;
+    drop(file);
+    let _ = tokio::fs::remove_file(&probe_path).await;
+
+    Ok(())
+}
+
+/// Acquire an exclusive flock on `<dir>/.lock` and stamp it with our
+/// PID + start time. Returns the locked `File`; dropping it releases
+/// the lock. If another process holds the lock, the existing file is
+/// read back and surfaced verbatim in [`Error::DirLocked`] so an
+/// operator can see who's holding it.
+fn lock_dir(dir: &Path) -> Result<std::fs::File, Error> {
+    let lock_path = dir.join(".lock");
+    let mut file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&lock_path)
+        .map_err(|source| Error::DirNotAccessible {
+            dir: dir.to_path_buf(),
+            source,
+        })?;
+
+    match file.try_lock() {
+        Ok(()) => {}
+        Err(std::fs::TryLockError::WouldBlock) => {
+            let mut holder = String::new();
+            let _ = file.read_to_string(&mut holder);
+            return Err(Error::DirLocked {
+                dir: dir.to_path_buf(),
+                holder,
+            });
+        }
+        Err(std::fs::TryLockError::Error(source)) => {
+            return Err(Error::DirNotWritable {
+                dir: dir.to_path_buf(),
+                source,
+            });
+        }
+    }
+
+    let stamp = format!(
+        "pid={}\nstarted={}\n",
+        std::process::id(),
+        chrono::Utc::now().to_rfc3339(),
+    );
+    file.set_len(0).map_err(|source| Error::DirNotWritable {
+        dir: dir.to_path_buf(),
+        source,
+    })?;
+    file.seek(SeekFrom::Start(0))
+        .map_err(|source| Error::DirNotWritable {
+            dir: dir.to_path_buf(),
+            source,
+        })?;
+    file.write_all(stamp.as_bytes())
+        .map_err(|source| Error::DirNotWritable {
+            dir: dir.to_path_buf(),
+            source,
+        })?;
+    Ok(file)
+}
 
 /// Maximum number of records coalesced into a single fsync.
 const MAX_BATCH: usize = 1024;
@@ -74,10 +183,23 @@ pub struct Wal {
 }
 
 impl Wal {
-    /// Spawn the writer task with `initial` as the active segment and
-    /// `snapshot` as the initial set of in-flight 2PC transactions
-    /// (built by recovery from the existing log).
-    pub fn new(initial: Segment, snapshot: HashMap<TwoPcTransaction, CheckpointEntry>) -> Self {
+    /// Probe the configured WAL directory, take an exclusive flock on
+    /// `<dir>/.lock` so a second pgdog can't race us, replay any
+    /// existing log into `manager`, and spawn the writer task. The
+    /// flock is held for the lifetime of the writer task; on shutdown
+    /// or panic the underlying `File` drops and the kernel releases
+    /// the lock.
+    ///
+    /// Returns `Err` if the directory isn't usable, another pgdog
+    /// already holds the dir, or recovery fails; the caller is
+    /// responsible for deciding whether to continue running without
+    /// WAL durability.
+    pub async fn open(manager: &Manager) -> Result<Self, Error> {
+        let dir = &config().config.general.two_phase_commit_wal_dir;
+        probe(dir).await?;
+        let lock = lock_dir(dir)?;
+        let recovered = recovery::recover_transactions(manager, dir).await?;
+
         let (tx, rx) = mpsc::channel::<WriteRequest>(CHANNEL_CAPACITY);
         let shutdown = Arc::new(WalShutdown::default());
 
@@ -85,8 +207,13 @@ impl Wal {
             let shutdown = Arc::clone(&shutdown);
 
             async move {
-                let fut =
-                    std::panic::AssertUnwindSafe(run(initial, snapshot, rx, Arc::clone(&shutdown)));
+                let fut = std::panic::AssertUnwindSafe(run(
+                    recovered.segment,
+                    recovered.snapshot,
+                    rx,
+                    Arc::clone(&shutdown),
+                    lock,
+                ));
                 if fut.catch_unwind().await.is_err() {
                     error!("2pc wal writer task panicked");
                 }
@@ -94,7 +221,7 @@ impl Wal {
             }
         });
 
-        Self { tx, shutdown }
+        Ok(Self { tx, shutdown })
     }
 
     /// Log that `txn` is about to issue PREPARE TRANSACTION on its
@@ -173,6 +300,9 @@ async fn run(
     mut snapshot: HashMap<TwoPcTransaction, CheckpointEntry>,
     mut rx: mpsc::Receiver<WriteRequest>,
     shutdown: Arc<WalShutdown>,
+    // Held for the writer's lifetime so the kernel keeps our flock on
+    // `<dir>/.lock`; dropped when this function returns or panics.
+    _dir_lock: std::fs::File,
 ) {
     let mut batch: Vec<WriteRequest> = Vec::with_capacity(MAX_BATCH);
     let mut encode_buf = BytesMut::with_capacity(ENCODE_BUF_INITIAL);
