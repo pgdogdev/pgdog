@@ -3,7 +3,6 @@
 use crate::backend::pool::Cluster;
 use crate::backend::schema::Schema;
 use crate::backend::ShardingSchema;
-use crate::frontend::router::parser::Shard;
 use crate::frontend::BufferedQuery;
 use crate::net::parameter::ParameterValue;
 use crate::net::Parameters;
@@ -53,8 +52,6 @@ pub struct AstQuery<'a> {
     pub original_query: &'a BufferedQuery,
     /// Query without comments and other noise.
     pub query_without_comment: &'a str,
-    /// Comment shard.
-    pub comment_shard: Option<&'a Shard>,
 }
 
 impl<'a> AstQuery<'a> {
@@ -63,7 +60,6 @@ impl<'a> AstQuery<'a> {
         Self {
             query_without_comment: query.query(),
             original_query: query,
-            comment_shard: None,
         }
     }
 }

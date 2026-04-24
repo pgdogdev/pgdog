@@ -155,7 +155,6 @@ impl Cache {
             &AstQuery {
                 original_query: query,
                 query_without_comment: &query_and_comment.query,
-                comment_shard: query_and_comment.shard.as_ref(),
             },
             ctx,
             prepared_statements,
@@ -165,9 +164,17 @@ impl Cache {
         let parse_time = entry.stats.lock().parse_time;
 
         let mut guard = self.inner.lock();
-        guard
-            .queries
-            .put(CacheKey(entry.query_without_comment.clone()), entry.clone());
+        // Don't cache when a shard comment routed the query AND a rewrite
+        // was applied: the cache key is the comment-stripped body, so a
+        // subsequent uncommented lookup would hit this entry and receive an
+        // already-rewritten plan that was built against the commented
+        // (direct-shard) variant.
+        let cacheable = entry.comment_shard.is_none() || entry.rewrite_plan.is_empty();
+        if cacheable {
+            guard
+                .queries
+                .put(CacheKey(entry.query_without_comment.clone()), entry.clone());
+        }
         guard.stats.misses += 1;
         guard.stats.parse_time += parse_time;
 
@@ -188,7 +195,6 @@ impl Cache {
             &AstQuery {
                 original_query: query,
                 query_without_comment: &query_and_comment.query,
-                comment_shard: query_and_comment.shard.as_ref(),
             },
             ctx,
             prepared_statements,

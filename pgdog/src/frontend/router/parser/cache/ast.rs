@@ -85,23 +85,21 @@ impl Ast {
         }
         .map_err(Error::PgQuery)?;
 
-        // Don't rewrite statements that will be
-        // sent to a direct shard.
-        let rewrite_plan = if query.comment_shard.is_none() {
-            StatementRewrite::new(StatementRewriteContext {
-                stmt: &mut ast.protobuf,
-                extended: query.original_query.extended(),
-                prepared: query.original_query.prepared(),
-                prepared_statements,
-                schema,
-                db_schema,
-                user,
-                search_path,
-            })
-            .maybe_rewrite()?
-        } else {
-            RewritePlan::default()
-        };
+        // Run the rewrite unconditionally. Even when a shard comment will
+        // route the query to a specific shard, we need to know whether the
+        // same query body (without the comment) would require a rewrite, so
+        // `Cache::query` can decide whether this entry is safe to cache.
+        let rewrite_plan = StatementRewrite::new(StatementRewriteContext {
+            stmt: &mut ast.protobuf,
+            extended: query.original_query.extended(),
+            prepared: query.original_query.prepared(),
+            prepared_statements,
+            schema,
+            db_schema,
+            user,
+            search_path,
+        })
+        .maybe_rewrite()?;
 
         let elapsed = now.elapsed();
         let mut stats = Stats::new();
