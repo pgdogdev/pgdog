@@ -23,46 +23,6 @@ pub(super) fn get_matched_value<'a>(caps: &'a regex::Captures<'a>) -> Option<&'a
         .map(|m| m.as_str())
 }
 
-/// Extract shard number from a comment.
-///
-/// Comment style uses the C-style comments (not SQL comments!)
-/// as to allow the comment to appear anywhere in the query.
-///
-/// See [`SHARD`] and [`SHARDING_KEY`] for the style of comment we expect.
-///
-/// Kept for tests only: the production path (`parse_edge_comment`) no longer
-/// uses pg_query for comment scanning.
-#[cfg(test)]
-pub fn comment(
-    query: &str,
-    schema: &ShardingSchema,
-) -> Result<(Option<Shard>, Option<Role>), Error> {
-    use pg_query::scan_raw;
-    use pg_query::{protobuf::Token, scan};
-    use pgdog_config::QueryParserEngine;
-
-    let tokens = match schema.query_parser_engine {
-        QueryParserEngine::PgQueryProtobuf => scan(query),
-        QueryParserEngine::PgQueryRaw => scan_raw(query),
-    }
-    .map_err(Error::PgQuery)?;
-    let mut role = None;
-
-    for token in tokens.tokens.iter() {
-        if token.token == Token::CComment as i32 {
-            let comment = &query[token.start as usize..token.end as usize];
-            let (shard, comment_role) = shard_role_from_comment(comment, schema)?;
-            role = comment_role;
-
-            if shard.is_some() {
-                return Ok((shard, role));
-            }
-        }
-    }
-
-    Ok((None, role))
-}
-
 pub(super) fn shard_role_from_comment(
     comment: &str,
     schema: &ShardingSchema,

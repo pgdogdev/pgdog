@@ -4,6 +4,33 @@ require 'active_record'
 require 'rspec'
 require 'pg'
 require 'toxiproxy'
+require 'datadog'
+require 'securerandom'
+
+# Configure Datadog APM so ActiveRecord auto-injects sqlcommenter-style
+# trailing comments (traceparent, tracestate, dddbs, dde, ddps, ddpv, ddh,
+# controller/action metadata, etc.) on every query. This lets the PgDog
+# comment parser be exercised against realistic Rails-with-APM traffic.
+Datadog.configure do |c|
+  c.service = 'pgdog-integration'
+  c.env = 'test'
+  c.version = '1.0.0'
+
+  c.diagnostics.startup_logs.enabled = false
+  c.logger.level = ::Logger::ERROR
+
+  # Keep spans in memory — no agent is running in CI.
+  c.tracing.test_mode.enabled = true
+
+  # Inject full sqlcommenter comments (service info + W3C traceparent) into
+  # every ActiveRecord and pg query.
+  c.tracing.instrument :active_record, comments_propagation: :full
+  c.tracing.instrument :pg, comments_propagation: :full
+
+  # Emit IDs in every propagation style so downstream systems (including
+  # the PgDog comment parser) see the full matrix.
+  c.tracing.propagation_style = %w[datadog tracecontext b3 b3multi baggage]
+end
 
 def admin
   PG.connect('postgres://admin:pgdog@127.0.0.1:6432/admin')
@@ -35,6 +62,7 @@ def ensure_done
   clients = conn.exec 'SHOW CLIENTS'
   clients.each do |client|
     next if client['id'].to_i == current_client_id
+
     expect(client['state']).to eq('idle')
   end
   servers = conn.exec 'SHOW SERVERS'
