@@ -109,21 +109,46 @@ impl Manager {
         Ok(())
     }
 
-    /// Sync transaction state.
+    /// Record a phase transition for a 2PC transaction. Writes the
+    /// corresponding WAL record (Begin for Phase1, Committing for
+    /// Phase2) before mutating in-memory state so the on-disk log
+    /// always leads the coordinator. WAL write failures are logged but
+    /// do not block the 2PC operation — durability is best-effort.
     pub(super) async fn transaction_state(
         &self,
         transaction: &TwoPcTransaction,
         identifier: &Arc<User>,
         phase: TwoPcPhase,
     ) -> Result<TwoPcGuard, Error> {
+        if let Some(wal) = self.wal.load_full() {
+            let result = match phase {
+                TwoPcPhase::Phase1 => {
+                    wal.append_begin(
+                        *transaction,
+                        identifier.user.clone(),
+                        identifier.database.clone(),
+                    )
+                    .await
+                }
+                TwoPcPhase::Phase2 => wal.append_committing(*transaction).await,
+                TwoPcPhase::Rollback => unreachable!(
+                    "rollback is not a state transition; it's the cleanup direction"
+                ),
+            };
+            if let Err(err) = result {
+                warn!(
+                    "[2pc] wal append failed for {} ({}): {}; transaction proceeds without durability",
+                    transaction, phase, err
+                );
+            }
+        }
+
         {
             let mut guard = self.inner.lock();
             let entry = guard.transactions.entry(*transaction).or_default();
             entry.identifier = identifier.clone();
             entry.phase = phase;
         }
-
-        // TODO: Sync to durable backend.
 
         Ok(TwoPcGuard {
             transaction: *transaction,
@@ -209,8 +234,15 @@ impl Manager {
     }
 
     async fn remove(&self, transaction: &TwoPcTransaction) {
+        if let Some(wal) = self.wal.load_full() {
+            if let Err(err) = wal.append_end(*transaction).await {
+                warn!(
+                    "[2pc] wal end record failed for {}: {}",
+                    transaction, err
+                );
+            }
+        }
         self.inner.lock().transactions.remove(transaction);
-        // TODO: sync to durable stage manager here.
     }
 
     /// Reconnect to cluster if available and rollback the two-phase transaction.
@@ -254,6 +286,8 @@ impl Manager {
     }
 
     /// Shutdown manager and wait for all transactions to be cleaned up.
+    /// Once the monitor has drained the cleanup queue, the WAL is shut
+    /// down too so any final End records make it to disk before exit.
     pub async fn shutdown(&self) {
         let waiter = self.notify.done.notified();
         self.notify.offline.store(true, Ordering::Relaxed);
@@ -262,6 +296,10 @@ impl Manager {
         info!("cleaning up {} two-phase transactions", transactions);
 
         waiter.await;
+
+        if let Some(wal) = self.wal.load_full() {
+            wal.shutdown().await;
+        }
     }
 }
 

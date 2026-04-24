@@ -96,7 +96,6 @@ pub struct BeginPayload {
     pub txn: TwoPcTransaction,
     pub user: String,
     pub database: String,
-    pub shards: Vec<u32>,
 }
 
 /// Payload for records that carry only a transaction id
@@ -117,7 +116,6 @@ pub struct CheckpointEntry {
     pub txn: TwoPcTransaction,
     pub user: String,
     pub database: String,
-    pub shards: Vec<u32>,
     /// `true` iff a [`Record::Committing`] had been fsynced for this txn.
     pub decided: bool,
 }
@@ -229,7 +227,6 @@ mod tests {
             txn: TwoPcTransaction::new(),
             user: "alice".into(),
             database: "shop".into(),
-            shards: vec![0, 1, 2],
         }));
     }
 
@@ -255,14 +252,12 @@ mod tests {
                     txn: TwoPcTransaction::new(),
                     user: "u1".into(),
                     database: "d1".into(),
-                    shards: vec![0],
                     decided: false,
                 },
                 CheckpointEntry {
                     txn: TwoPcTransaction::new(),
                     user: "u2".into(),
                     database: "d2".into(),
-                    shards: vec![0, 1],
                     decided: true,
                 },
             ],
@@ -318,7 +313,6 @@ mod tests {
             txn: TwoPcTransaction::new(),
             user: "u".into(),
             database: "d".into(),
-            shards: vec![0, 1],
         });
         let b = Record::Committing(TxnPayload {
             txn: TwoPcTransaction::new(),

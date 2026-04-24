@@ -368,7 +368,6 @@ mod tests {
             txn: TwoPcTransaction::new(),
             user: "u".into(),
             database: "d".into(),
-            shards: vec![0, 1],
         });
         let r2 = Record::End(TxnPayload {
             txn: TwoPcTransaction::new(),
@@ -402,8 +401,7 @@ mod tests {
                 txn: TwoPcTransaction::new(),
                 user: "u".into(),
                 database: "d".into(),
-                shards: vec![0, 1],
-            })
+                })
             .encode(&mut buf)
             .unwrap();
             seg.append_batch(&buf, 1).await.unwrap();
@@ -451,7 +449,6 @@ mod tests {
             txn: TwoPcTransaction::new(),
             user: "u".into(),
             database: "d".into(),
-            shards: vec![0, 1],
         });
         let mut buf = BytesMut::new();
         r1.encode(&mut buf).unwrap();
@@ -519,7 +516,6 @@ mod tests {
                 txn: TwoPcTransaction::new(),
                 user: payload.clone(),
                 database: "d".into(),
-                shards: vec![0; 16],
             });
             r.encode(&mut buf).unwrap();
             expected.push(r);
