@@ -71,6 +71,18 @@ wait_for_no_copy_rows() {
     local table="$1"
     local column="$2"
 
+    # Guard: the test assumes `replace_copy_with_replicate` leaves the source
+    # with zero rows ending in `-copy`. If pgbench was killed mid-iteration
+    # (INSERT committed, UPDATE to `-replicate` never ran due to autocommit),
+    # the source may still have `-copy` rows that `replace_copy` missed —
+    # in that case destination can never reach 0, so fail loudly instead of hanging.
+    local source_copy
+    source_copy=$(psql -d source -tAc "SELECT COUNT(*) FROM ${table} WHERE ${column} LIKE '%-copy'")
+    if [ "${source_copy}" -ne 0 ]; then
+        echo "FAIL ${table}.${column}: source still has ${source_copy} rows ending in -copy after replace_copy_with_replicate"
+        exit 1
+    fi
+
     while true; do
         count=$(psql -d destination -tAc "SELECT COUNT(*) FROM ${table} WHERE ${column} LIKE '%-copy'")
         if [ "${count}" -eq 0 ]; then

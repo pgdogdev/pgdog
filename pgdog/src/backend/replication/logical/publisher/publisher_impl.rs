@@ -8,7 +8,7 @@ use tokio::sync::Notify;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 use tokio::{select, spawn, time::interval};
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 use super::super::{publisher::Table, Error, TableValidationError, TableValidationErrors};
 use super::ReplicationSlot;
@@ -214,6 +214,8 @@ impl Publisher {
             stream.set_current_lsn(slot.lsn().lsn);
 
             let mut check_lag = interval(Duration::from_secs(1));
+            // Prevent burst: a slow lag check must not starve slot.replicate().
+            check_lag.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             let replication_lag = self.replication_lag.clone();
             let stop = self.stop.clone();
             let last_transaction = self.last_transaction.clone();
@@ -223,66 +225,78 @@ impl Publisher {
 
             // Replicate in parallel.
             let handle = spawn(async move {
-                slot.start_replication().await?;
-                let progress = Progress::new_stream();
+                let result = async {
+                    slot.start_replication().await?;
+                    let progress = Progress::new_stream();
 
-                loop {
-                    select! {
-                        _ = stop.notified() => {
-                            slot.stop_replication().await?;
-                        }
-
-                        // This is cancellation-safe.
-                        replication_data = slot.replicate(Duration::MAX) => {
-                            let replication_data = replication_data?;
-
-                            match replication_data {
-                                Some(ReplicationData::CopyData(data)) => {
-                                    let lsn = if let Some(ReplicationMeta::KeepAlive(ka)) =
-                                        data.replication_meta()
-                                    {
-                                        if ka.reply() {
-                                            slot.status_update(stream.status_update()).await?;
-                                        }
-                                        debug!(
-                                            "origin at lsn {} [{}]",
-                                            Lsn::from_i64(ka.wal_end),
-                                            slot.server()?.addr()
-                                        );
-                                        ka.wal_end
-                                    } else {
-                                        if let Some(status_update) = stream.handle(data).await? {
-                                            slot.status_update(status_update).await?;
-                                            *last_transaction.lock() = Some(Instant::now());
-                                        }
-                                        stream.lsn()
-                                    };
-                                    progress.update(stream.bytes_sharded(), lsn);
-                                }
-                                Some(ReplicationData::CopyDone) => (),
-                                None => {
-                                    slot.drop_slot().await?;
-                                    break;
-                                }
-                            }
-                        }
-
-                        _ = check_lag.tick() => {
-                            let lag = slot.replication_lag().await?;
-
-                            let mut guard = replication_lag.lock();
-                            guard.insert(number, lag);
-
-                            let missed = stream.missed_rows();
-                            if missed.non_zero() {
-                                warn!("replication {} => {} has missing rows: {}", source_cluster.name(), dest.name(), missed);
+                    loop {
+                        select! {
+                            _ = stop.notified() => {
+                                slot.stop_replication().await?;
                             }
 
+                            // This is cancellation-safe.
+                            replication_data = slot.replicate(Duration::MAX) => {
+                                let replication_data = replication_data?;
+
+                                match replication_data {
+                                    Some(ReplicationData::CopyData(data)) => {
+                                        let lsn = if let Some(ReplicationMeta::KeepAlive(ka)) =
+                                            data.replication_meta()
+                                        {
+                                            if ka.reply() {
+                                                slot.status_update(stream.status_update()).await?;
+                                            }
+                                            debug!(
+                                                "origin at lsn {} [{}]",
+                                                Lsn::from_i64(ka.wal_end),
+                                                slot.server()?.addr()
+                                            );
+                                            ka.wal_end
+                                        } else {
+                                            if let Some(status_update) = stream.handle(data).await? {
+                                                slot.status_update(status_update).await?;
+                                                *last_transaction.lock() = Some(Instant::now());
+                                            }
+                                            stream.lsn()
+                                        };
+                                        progress.update(stream.bytes_sharded(), lsn);
+                                    }
+                                    Some(ReplicationData::CopyDone) => (),
+                                    None => {
+                                        slot.drop_slot().await?;
+                                        break;
+                                    }
+                                }
+                            }
+
+                            _ = check_lag.tick() => {
+                                match slot.replication_lag().await {
+                                    Ok(lag) => { replication_lag.lock().insert(number, lag); }
+                                    Err(e) => warn!("replication lag check [{}]: {}", source_cluster.name(), e),
+                                }
+
+                                let missed = stream.missed_rows();
+                                if missed.non_zero() {
+                                    warn!("replication {} => {} has missing rows: {}", source_cluster.name(), dest.name(), missed);
+                                }
+                            }
                         }
                     }
-                }
 
-                Ok::<(), Error>(())
+                    Ok::<(), Error>(())
+                }.await;
+
+                if let Err(ref err) = result {
+                    error!(
+                        "replication stream {} => {} shard={} terminated: {}",
+                        source_cluster.name(),
+                        dest.name(),
+                        number,
+                        err
+                    );
+                }
+                result
             });
 
             streams.push(handle);

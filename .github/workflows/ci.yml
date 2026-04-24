@@ -170,6 +170,8 @@ jobs:
         run: bash integration/complex/run.sh
       - name: Dry run
         run: bash integration/dry_run/run.sh
+      - name: Resharding
+        run: bash integration/resharding/run.sh
       - name: Ensure PgDog stopped
         run: |
           if pgrep -x pgdog > /dev/null; then
