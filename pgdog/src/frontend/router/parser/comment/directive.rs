@@ -1,7 +1,4 @@
 use once_cell::sync::Lazy;
-use pg_query::scan_raw;
-use pg_query::{protobuf::Token, scan};
-use pgdog_config::QueryParserEngine;
 use regex::Regex;
 
 use crate::backend::ShardingSchema;
@@ -32,10 +29,18 @@ pub(super) fn get_matched_value<'a>(caps: &'a regex::Captures<'a>) -> Option<&'a
 /// as to allow the comment to appear anywhere in the query.
 ///
 /// See [`SHARD`] and [`SHARDING_KEY`] for the style of comment we expect.
+///
+/// Kept for tests only: the production path (`parse_edge_comment`) no longer
+/// uses pg_query for comment scanning.
+#[cfg(test)]
 pub fn comment(
     query: &str,
     schema: &ShardingSchema,
 ) -> Result<(Option<Shard>, Option<Role>), Error> {
+    use pg_query::scan_raw;
+    use pg_query::{protobuf::Token, scan};
+    use pgdog_config::QueryParserEngine;
+
     let tokens = match schema.query_parser_engine {
         QueryParserEngine::PgQueryProtobuf => scan(query),
         QueryParserEngine::PgQueryRaw => scan_raw(query),

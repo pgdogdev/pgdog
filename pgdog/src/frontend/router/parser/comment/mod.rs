@@ -5,6 +5,7 @@ mod strip;
 #[cfg(test)]
 mod tests;
 
+#[cfg(test)]
 pub use directive::comment;
 pub use query::QueryWithoutComment;
 

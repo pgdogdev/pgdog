@@ -256,37 +256,34 @@ impl Ast {
 
     /// Get a pre-computed fingerprint, or compute it again.
     pub fn fingerprint(&self) -> Result<&Fingerprint, Error> {
-        let fingerprint = self.fingerprint.get();
-
-        if let Some(fingerprint) = fingerprint {
+        if let Some(fingerprint) = self.fingerprint.get() {
             return Ok(fingerprint);
         }
 
         let start = Instant::now();
         let fingerprint = Fingerprint::new(&self.query_without_comment, self.query_parser_engine)
-            .map_err(|e| Error::PgQuery(e))?;
+            .map_err(Error::PgQuery)?;
         let elapsed = start.elapsed();
 
-        // Bump up the parse time for this statement.
-        let mut my_stats = self.stats.lock();
-        my_stats.parse_time += elapsed;
-        my_stats.fingerprints += 1;
+        // try_insert is non-blocking: if another thread beat us to it, we
+        // return their value and drop ours. Only the winner bumps stats so
+        // we don't double-count under contention.
+        match self.fingerprint.try_insert(fingerprint) {
+            Ok(inserted) => {
+                let mut my_stats = self.stats.lock();
+                my_stats.parse_time += elapsed;
+                my_stats.fingerprints += 1;
+                drop(my_stats);
 
-        // Globally too.
-        {
-            let cache = Cache::get();
-            let mut lock = cache.lock();
-            lock.stats.parse_time += elapsed;
-            lock.stats.fingerprints += 1;
+                let cache = Cache::get();
+                let mut lock = cache.lock();
+                lock.stats.parse_time += elapsed;
+                lock.stats.fingerprints += 1;
+
+                Ok(inserted)
+            }
+            Err((existing, _)) => Ok(existing),
         }
-
-        // Cache the fingerprint.
-        let _ = self.fingerprint.set(fingerprint);
-
-        Ok(self
-            .fingerprint
-            .get()
-            .expect("fingerprint cell must be set"))
     }
 }
 
