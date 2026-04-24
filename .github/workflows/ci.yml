@@ -47,53 +47,19 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { name: pgbench,      script: integration/pgbench/run.sh }
-          - { name: schema-sync,  script: integration/schema_sync/run.sh }
-          - { name: go,           script: integration/go/run.sh }
-          - { name: js,           script: integration/js/pg_tests/run.sh }
-          - { name: ruby,         script: integration/ruby/run.sh }
-          - { name: java,         script: integration/java/run.sh }
-          - { name: mirror,       script: integration/mirror/run.sh }
-          - { name: sql,          script: integration/sql/run.sh }
-          - { name: toxi,         script: integration/toxi/run.sh }
-          - { name: rust,         script: integration/rust/run.sh }
-          - { name: python,       script: integration/python/run.sh }
-          - { name: complex,      script: integration/complex/run.sh }
-          - { name: dry-run,      script: integration/dry_run/run.sh }
-    env:
-      PGDOG_BIN: ${{ github.workspace }}/target/release/pgdog
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install CI deps
-        run: bash integration/ci/install-deps.sh
-      - name: Compute cache key
-        id: cache-key
-        run: echo "key=pgdog-bin-${{ runner.os }}-$(bash integration/ci/cache-key.sh)" >> "$GITHUB_OUTPUT"
-      - name: Restore pgdog binaries
-        uses: useblacksmith/cache/restore@v5
-        with:
-          path: |
-            target/debug/pgdog
-            target/release/pgdog
-          key: ${{ steps.cache-key.outputs.key }}
-          fail-on-cache-miss: true
-      - name: Setup dependencies
-        run: bash integration/ci/setup.sh --with-toxi
-      - name: Run ${{ matrix.name }}
-        run: bash ${{ matrix.script }}
-      - name: Ensure PgDog stopped
-        if: always()
-        run: bash integration/ci/ensure-pgdog-stopped.sh
-
-  # Tests that launch their own docker-compose stacks.
-  integration-docker:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
-    needs: [build]
-    timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
+          - { name: pgbench,       script: integration/pgbench/run.sh }
+          - { name: schema-sync,   script: integration/schema_sync/run.sh }
+          - { name: go,            script: integration/go/run.sh }
+          - { name: js,            script: integration/js/pg_tests/run.sh }
+          - { name: ruby,          script: integration/ruby/run.sh }
+          - { name: java,          script: integration/java/run.sh }
+          - { name: mirror,        script: integration/mirror/run.sh }
+          - { name: sql,           script: integration/sql/run.sh }
+          - { name: toxi,          script: integration/toxi/run.sh }
+          - { name: rust,          script: integration/rust/run.sh }
+          - { name: python,        script: integration/python/run.sh }
+          - { name: complex,       script: integration/complex/run.sh }
+          - { name: dry-run,       script: integration/dry_run/run.sh }
           - { name: copy-data,     script: integration/copy_data/run.sh }
           - { name: load-balancer, script: integration/load_balancer/run.sh }
     env:
