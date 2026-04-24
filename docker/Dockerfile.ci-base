@@ -38,7 +38,8 @@ ENV RUSTUP_HOME=/usr/local/rustup \
     CARGO_HOME=/usr/local/cargo \
     PATH=/usr/local/cargo/bin:$PATH
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
-      sh -s -- -y --profile minimal --default-toolchain stable --component llvm-tools-preview rustfmt clippy && \
+      sh -s -- -y --profile minimal --default-toolchain stable \
+        -c llvm-tools-preview -c rustfmt -c clippy && \
     chmod -R a+w "$RUSTUP_HOME" "$CARGO_HOME"
 
 # CMake pinned to the version the repo expects (replaces the apt cmake).
