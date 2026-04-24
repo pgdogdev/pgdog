@@ -101,7 +101,9 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: pgdog-binaries
-          path: .
+          # upload-artifact@v4 strips the common ancestor (target/) from the
+          # archive, so extract it back here rather than into the repo root.
+          path: target
       - name: Restore exec bit on binaries
         run: chmod +x target/debug/pgdog target/release/pgdog
       - name: Setup dependencies
@@ -133,7 +135,9 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: pgdog-binaries
-          path: .
+          # upload-artifact@v4 strips the common ancestor (target/) from the
+          # archive, so extract it back here rather than into the repo root.
+          path: target
       - name: Restore exec bit on binaries
         run: chmod +x target/debug/pgdog target/release/pgdog
       - name: Setup dependencies
