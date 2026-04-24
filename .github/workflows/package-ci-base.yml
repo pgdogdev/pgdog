@@ -4,6 +4,8 @@ on:
   schedule:
     # Weekly: Mondays at 06:00 UTC.
     - cron: '0 6 * * 1'
+  push:
+    branches: ['levkk-base-package-images']
 
 env:
   REGISTRY: ghcr.io
