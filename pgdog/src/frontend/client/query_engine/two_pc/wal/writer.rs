@@ -19,7 +19,6 @@
 //! The writer's body is wrapped in `catch_unwind` so a panic doesn't hang
 //! shutdown: any unwinding is logged and the `done` notify still fires.
 
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -65,7 +64,7 @@ pub struct Wal {
 
 impl Wal {
     /// Spawn the writer task with `initial` as the active segment.
-    pub fn new(initial: Segment, dir: PathBuf) -> Self {
+    pub fn new(initial: Segment) -> Self {
         let (tx, rx) = mpsc::channel::<WriteRequest>(CHANNEL_CAPACITY);
         let shutdown = Arc::new(WalShutdown::default());
 
@@ -73,8 +72,7 @@ impl Wal {
             let shutdown = Arc::clone(&shutdown);
 
             async move {
-                let fut =
-                    std::panic::AssertUnwindSafe(run(initial, dir, rx, Arc::clone(&shutdown)));
+                let fut = std::panic::AssertUnwindSafe(run(initial, rx, Arc::clone(&shutdown)));
                 if fut.catch_unwind().await.is_err() {
                     error!("2pc wal writer task panicked");
                 }
@@ -138,7 +136,6 @@ impl Wal {
 
 async fn run(
     mut segment: Segment,
-    dir: PathBuf,
     mut rx: mpsc::Receiver<WriteRequest>,
     shutdown: Arc<WalShutdown>,
 ) {
@@ -192,7 +189,12 @@ async fn run(
         process_batch(&mut segment, &mut batch, &mut encode_buf).await;
 
         if segment.size_bytes() >= config().config.general.two_phase_commit_wal_segment_size {
-            match Segment::create(&dir, segment.next_lsn()).await {
+            match Segment::create(
+                &config().config.general.two_phase_commit_wal_dir,
+                segment.next_lsn(),
+            )
+            .await
+            {
                 Ok(new_seg) => segment = new_seg,
                 Err(err) => {
                     error!(
