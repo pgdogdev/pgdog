@@ -105,6 +105,32 @@ impl Manager {
         })
     }
 
+    /// Restore an in-flight 2PC transaction discovered during WAL
+    /// recovery. Inserts it into the transaction table and pushes it onto
+    /// the cleanup queue so the monitor task drives it to a terminal
+    /// state via [`Self::cleanup_phase`].
+    pub(super) fn restore_transaction(
+        &self,
+        transaction: TwoPcTransaction,
+        user: String,
+        database: String,
+        phase: TwoPcPhase,
+    ) {
+        let identifier = Arc::new(User { user, database });
+        {
+            let mut guard = self.inner.lock();
+            guard.transactions.insert(
+                transaction,
+                TransactionInfo {
+                    phase,
+                    identifier,
+                },
+            );
+            guard.queue.push_back(transaction);
+        }
+        self.notify.notify.notify_one();
+    }
+
     pub(super) fn return_guard(&self, guard: &TwoPcGuard) {
         let exists = self
             .inner
