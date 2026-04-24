@@ -74,10 +74,11 @@ impl Manager {
     }
 
     /// Open the WAL at the configured directory, replay any in-flight
-    /// transactions back into this manager, and start the writer task.
-    /// If probing or recovery fail, the manager keeps running without
-    /// durability and a warning is logged so operators can investigate.
-    pub async fn start(&self) {
+    /// transactions back into this manager, and start the writer +
+    /// checkpoint tasks. If probing or recovery fail, the manager keeps
+    /// running without durability and a warning is logged so operators
+    /// can investigate.
+    pub async fn enable_wal(&self) {
         match Wal::open(self).await {
             Ok(wal) => {
                 self.wal.store(Some(Arc::new(wal)));
