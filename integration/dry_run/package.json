@@ -1,4 +1,5 @@
 {
+  "type": "module",
   "dependencies": {
     "@sequelize/postgres": "^7.0.0-alpha.46",
     "pg": "^8.16.3"

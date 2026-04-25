@@ -1,0 +1,22 @@
+name: plugin-ci
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  plugin-unit-tests:
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    continue-on-error: true
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install CI deps
+        run: bash integration/ci/install-deps.sh
+      - uses: useblacksmith/rust-cache@v3
+        with:
+          prefix-key: "plugin-unit-v1"
+      - name: Run plugin unit tests
+        run: cargo nextest run -E 'package(pgdog-example-plugin)' --no-fail-fast

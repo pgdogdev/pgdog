@@ -3,6 +3,10 @@ set -e
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 source ${SCRIPT_DIR}/../common.sh
 
+# dev.sh runs rspec via bundler; native gem extensions need yaml + libpq headers.
+bash ${SCRIPT_DIR}/../ci/apt.sh ruby-dev libyaml-dev libpq-dev build-essential
+command -v bundle >/dev/null || sudo gem install bundler --no-document
+
 export CARGO_TARGET_DIR=${SCRIPT_DIR}/target
 
 pushd ${SCRIPT_DIR}/test-plugins/test-plugin-compatible

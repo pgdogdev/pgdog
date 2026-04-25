@@ -690,7 +690,7 @@ describe("postgres.js unsafe stress test (50k unique statements, 5 clients)", fu
     assert.strictEqual(completed, TOTAL_QUERIES);
 
     // Verify backend prepared statement evictions are happening.
-    const res = await fetch("http://localhost:9090");
+    const res = await fetch("http://127.0.0.1:9090");
     const metrics = await res.text();
     const evictions = metrics
       .split("\n")
