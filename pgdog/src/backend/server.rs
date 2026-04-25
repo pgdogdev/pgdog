@@ -345,13 +345,7 @@ impl Server {
     pub async fn cancel(addr: &Address, id: &BackendKeyData) -> Result<(), Error> {
         let mut stream = TcpStream::connect(addr.addr().await?).await?;
         stream
-            .write_all(
-                &Startup::Cancel {
-                    pid: id.pid,
-                    secret: id.secret,
-                }
-                .to_bytes()?,
-            )
+            .write_all(&Startup::Cancel { id: *id }.to_bytes()?)
             .await?;
         stream.flush().await?;
 

@@ -153,9 +153,9 @@ fn test_omni_command_complete_not_summed() {
     let route = Route::write(ShardWithPriority::new_table_omni(Shard::All));
     let mut multi_shard = MultiShard::new(vec![0, 1, 2], &route);
 
-    let backend1 = BackendKeyData { pid: 1, secret: 1 };
-    let backend2 = BackendKeyData { pid: 2, secret: 2 };
-    let backend3 = BackendKeyData { pid: 3, secret: 3 };
+    let backend1 = BackendKeyData::legacy(1, 1);
+    let backend2 = BackendKeyData::legacy(2, 2);
+    let backend3 = BackendKeyData::legacy(3, 3);
 
     // All shards report UPDATE 5
     multi_shard
@@ -195,8 +195,8 @@ fn test_omni_command_complete_uses_first_shard_row_count() {
     let route = Route::write(ShardWithPriority::new_table_omni(Shard::All));
     let mut multi_shard = MultiShard::new(vec![0, 1], &route);
 
-    let backend1 = BackendKeyData { pid: 1, secret: 1 };
-    let backend2 = BackendKeyData { pid: 2, secret: 2 };
+    let backend1 = BackendKeyData::legacy(1, 1);
+    let backend2 = BackendKeyData::legacy(2, 2);
 
     // First shard reports 7 rows
     multi_shard
@@ -230,8 +230,8 @@ fn test_omni_data_rows_only_from_first_server() {
     let route = Route::write(ShardWithPriority::new_table_omni(Shard::All));
     let mut multi_shard = MultiShard::new(vec![0, 1], &route);
 
-    let backend1 = BackendKeyData { pid: 1, secret: 1 };
-    let backend2 = BackendKeyData { pid: 2, secret: 2 };
+    let backend1 = BackendKeyData::legacy(1, 1);
+    let backend2 = BackendKeyData::legacy(2, 2);
 
     // Setup: send RowDescription from both shards
     let rd = RowDescription::new(&[Field::bigint("id")]);

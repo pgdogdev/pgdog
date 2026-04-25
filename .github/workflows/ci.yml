@@ -110,7 +110,15 @@ jobs:
           sudo -u postgres createuser --superuser --login $USER
           sudo -u postgres createdb $USER
           bash integration/setup.sh || (sudo service postgresql restart && bash integration/setup.sh)
-          sudo apt update && sudo apt install -y python3-virtualenv mold php-cli php-pgsql
+          sudo apt update && sudo apt install -y python3-virtualenv mold php-cli php-pgsql curl ca-certificates
+          # Use a versioned PostgreSQL 18 client so the protocol-version smoke
+          # test does not depend on whatever libpq the runner image ships.
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc --fail https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          . /etc/os-release
+          sudo sh -c "echo 'deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $VERSION_CODENAME-pgdg main' > /etc/apt/sources.list.d/pgdg.list"
+          sudo apt update && sudo apt install -y postgresql-client-18
+          echo "PSQL_BIN=/usr/lib/postgresql/18/bin/psql" >> "$GITHUB_ENV"
           sudo gem install bundler
           sudo apt remove -y cmake
           sudo pip3 install cmake==3.31.6

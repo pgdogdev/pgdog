@@ -23,7 +23,7 @@ use crate::frontend::client::query_engine::{QueryEngine, QueryEngineContext};
 use crate::frontend::ClientComms;
 use crate::net::messages::{
     Authentication, BackendKeyData, ErrorResponse, FromBytes, Message, Password, Protocol,
-    ReadyForQuery, ToBytes,
+    ProtocolVersion, ReadyForQuery, ToBytes,
 };
 use crate::net::{parameter::Parameters, MessageBuffer, ProtocolMessage, Stream};
 use crate::state::State;
@@ -103,10 +103,16 @@ impl Client {
         params: Parameters,
         addr: SocketAddr,
         config: Arc<ConfigAndUsers>,
+        protocol_version: ProtocolVersion,
     ) -> Result<(), Error> {
         let login_timeout = Duration::from_millis(config.config.general.client_login_timeout);
 
-        match timeout(login_timeout, Self::login(stream, params, addr, config)).await {
+        match timeout(
+            login_timeout,
+            Self::login(stream, params, addr, config, protocol_version),
+        )
+        .await
+        {
             Ok(Ok(Some(mut client))) => {
                 if client.admin {
                     // Admin clients are not waited on during shutdown.
@@ -134,6 +140,7 @@ impl Client {
         params: Parameters,
         addr: SocketAddr,
         config: Arc<ConfigAndUsers>,
+        protocol_version: ProtocolVersion,
     ) -> Result<Option<Client>, Error> {
         // Bail immediately if TLS is required but the connection isn't using it.
         if config.config.general.tls_client_required && !stream.is_tls() {
@@ -146,7 +153,7 @@ impl Client {
         let admin_password = &config.config.admin.password;
         let auth_type = &config.config.general.auth_type;
         let passthrough = config.config.general.passthrough_auth();
-        let id = BackendKeyData::new_client();
+        let id = BackendKeyData::new_client(protocol_version);
         let comms = ClientComms::new(&id);
 
         // Check if we need to ask the client for its password in plaintext

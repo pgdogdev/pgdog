@@ -19,6 +19,7 @@ pub mod offset;
 pub mod partial_req;
 pub mod per_stmt_routing;
 pub mod prepared;
+pub mod protocol_version;
 pub mod reload;
 pub mod reset;
 pub mod rewrite;

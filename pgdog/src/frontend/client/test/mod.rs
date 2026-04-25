@@ -21,8 +21,8 @@ use crate::{
     },
     net::{
         Bind, Close, CommandComplete, DataRow, Describe, ErrorResponse, Execute, Field, Flush,
-        Format, FromBytes, Message, Parameters, Parse, Query, ReadyForQuery, RowDescription, Sync,
-        Terminate, ToBytes,
+        Format, FromBytes, Message, Parameters, Parse, ProtocolVersion, Query, ReadyForQuery,
+        RowDescription, Sync, Terminate, ToBytes,
     },
     state::State,
 };
@@ -362,7 +362,14 @@ async fn test_client_login_timeout() {
         params.insert("user", "pgdog");
         params.insert("database", "pgdog");
 
-        Client::spawn(stream, params, addr, crate::config::config()).await
+        Client::spawn(
+            stream,
+            params,
+            addr,
+            crate::config::config(),
+            ProtocolVersion::V3_0,
+        )
+        .await
     });
 
     let conn = TcpStream::connect(&format!("127.0.0.1:{}", port))
