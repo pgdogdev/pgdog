@@ -17,6 +17,7 @@ use crate::{
     plugin::plugins,
 };
 
+use super::statement::SchemaShardState;
 use super::{
     explain_trace::{ExplainRecorder, ExplainSummary},
     *,
@@ -530,18 +531,29 @@ impl QueryParser {
         )
         .with_schema_lookup(schema_lookup);
 
-        let is_sharded = parser.is_sharded(
-            &context.router_context.schema,
-            context.router_context.cluster.user(),
-            context.router_context.parameter_hints.search_path,
-        );
+        let shard = parser.shard()?;
 
-        let shard = parser.shard()?.unwrap_or(Shard::All);
-
-        context.shards_calculator.push(if is_sharded {
-            ShardWithPriority::new_table(shard.clone())
+        context.shards_calculator.push(if let Some(shard) = shard {
+            ShardWithPriority::new_table(shard)
         } else {
-            ShardWithPriority::new_table_omni(shard)
+            let schema_shard_state = parser.schema_shard_state(
+                &context.router_context.schema,
+                context.router_context.cluster.user(),
+                context.router_context.parameter_hints.search_path,
+            );
+            let is_sharded = parser.is_sharded(
+                &context.router_context.schema,
+                context.router_context.cluster.user(),
+                context.router_context.parameter_hints.search_path,
+            );
+
+            if let SchemaShardState::Resolved { shard, schema } = schema_shard_state {
+                ShardWithPriority::new_search_path(shard, &schema)
+            } else if matches!(schema_shard_state, SchemaShardState::Ambiguous) || is_sharded {
+                ShardWithPriority::new_table(Shard::All)
+            } else {
+                ShardWithPriority::new_table_omni(Shard::All)
+            }
         });
 
         let shard = context.shards_calculator.shard();
