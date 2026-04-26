@@ -317,7 +317,12 @@ async fn run(
                 batch.push(req);
             }
             if !batch.is_empty() {
-                process_batch(&mut segment, &mut batch, &mut encode_buf, &mut snapshot).await;
+                // Drain-on-shutdown: process_batch acks the callers and
+                // warns on its own; the rotate/gc signal in the result
+                // has nothing to act on because we're about to return,
+                // and recovery handles whatever state we leave on disk.
+                let _ =
+                    process_batch(&mut segment, &mut batch, &mut encode_buf, &mut snapshot).await;
             }
             return;
         }
@@ -354,24 +359,39 @@ async fn run(
             }
         }
 
-        let checkpoint_lsn =
+        let outcome =
             process_batch(&mut segment, &mut batch, &mut encode_buf, &mut snapshot).await;
 
-        if let Some(lsn) = checkpoint_lsn {
-            // Run GC off the writer task — filesystem work shouldn't
-            // hold up the next batch. Chain through `gc_handle` so two
-            // GCs never race on the same directory: the new task awaits
-            // the previous one before starting.
-            let prev = gc_handle.take();
-            gc_handle = Some(tokio::spawn(async move {
-                if let Some(prev) = prev {
-                    let _ = prev.await;
-                }
-                let dir = &config().config.general.two_phase_commit_wal_dir;
-                if let Err(err) = gc_before_lsn(dir, lsn).await {
-                    warn!("[2pc] wal checkpoint gc failed: {}", err);
-                }
-            }));
+        match outcome {
+            Ok(Some(lsn)) => {
+                // Run GC off the writer task — filesystem work shouldn't
+                // hold up the next batch. Chain through `gc_handle` so two
+                // GCs never race on the same directory: the new task awaits
+                // the previous one before starting.
+                let prev = gc_handle.take();
+                gc_handle = Some(tokio::spawn(async move {
+                    if let Some(prev) = prev {
+                        let _ = prev.await;
+                    }
+                    let dir = &config().config.general.two_phase_commit_wal_dir;
+                    if let Err(err) = gc_before_lsn(dir, lsn).await {
+                        warn!("[2pc] wal checkpoint gc failed: {}", err);
+                    }
+                }));
+            }
+            Ok(None) => {}
+            Err(ref err) if matches!(**err, Error::SegmentBroken) => {
+                // Broken segment can't take more writes. Failing to
+                // create a replacement here means the disk is gone
+                // and we have nowhere to log: panic.
+                segment = Segment::create(
+                    &config().config.general.two_phase_commit_wal_dir,
+                    segment.next_lsn(),
+                )
+                .await
+                .expect("2pc wal: cannot create new segment after segment broken; disk unusable");
+            }
+            Err(_) => {}
         }
 
         if segment.size_bytes() >= config().config.general.two_phase_commit_wal_segment_size {
@@ -400,7 +420,7 @@ async fn process_batch(
     batch: &mut Vec<WriteRequest>,
     encode_buf: &mut BytesMut,
     snapshot: &mut HashMap<TwoPcTransaction, CheckpointEntry>,
-) -> Option<u64> {
+) -> Result<Option<u64>, Arc<Error>> {
     encode_buf.clear();
     let mut encode_err: Option<Error> = None;
     let mut last_checkpoint_idx: Option<usize> = None;
@@ -436,24 +456,16 @@ async fn process_batch(
         for req in batch.drain(..) {
             let _ = req.ack.send(Err(Arc::clone(&shared)));
         }
-        return None;
+        return Err(shared);
     }
 
     let count = batch.len() as u32;
-    let result = match segment.append_batch(encode_buf, count).await {
-        Ok(start) => match segment.sync().await {
-            Ok(()) => Ok(start),
-            Err(err) => Err(err),
-        },
-        Err(err) => Err(err),
-    };
-
-    match result {
+    match segment.commit(encode_buf, count).await {
         Ok(start) => {
             for (i, req) in batch.drain(..).enumerate() {
                 let _ = req.ack.send(Ok(start + i as u64));
             }
-            last_checkpoint_idx.map(|i| start + i as u64)
+            Ok(last_checkpoint_idx.map(|i| start + i as u64))
         }
         Err(err) => {
             replay_undo(snapshot, undo);
@@ -462,7 +474,7 @@ async fn process_batch(
             for req in batch.drain(..) {
                 let _ = req.ack.send(Err(Arc::clone(&shared)));
             }
-            None
+            Err(shared)
         }
     }
 }

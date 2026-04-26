@@ -321,21 +321,55 @@ impl Segment {
         })
     }
 
-    /// Append a pre-encoded batch of `records` records to the segment without
-    /// syncing. The caller must call [`Segment::sync`] when durability is
-    /// required for prior appends. Returns the LSN assigned to the first
-    /// record in the batch; subsequent records have LSNs `start + i`.
-    pub async fn append_batch(&mut self, encoded: &[u8], records: u32) -> Result<u64, Error> {
-        self.file.write_all(encoded).await?;
-        let start = self.next_lsn;
-        self.next_lsn += records as u64;
+    /// Append a pre-encoded batch of `count` records and fsync.
+    /// Returns the LSN assigned to the first record in the batch;
+    /// subsequent records have LSNs `start + i`.
+    ///
+    /// On a write or fsync failure the segment is rewound to its
+    /// pre-call state so on-disk content matches the caller-visible
+    /// `Err`: the records did not land. If the rewind itself fails the
+    /// segment's true on-disk state is unknown and `Error::SegmentBroken`
+    /// is returned so the writer rotates to a fresh segment instead of
+    /// continuing to write at a corrupted offset.
+    pub async fn commit(&mut self, encoded: &[u8], count: u32) -> Result<u64, Error> {
+        let pre_size = self.size_bytes;
+        let pre_lsn = self.next_lsn;
+
+        if let Err(err) = self.file.write_all(encoded).await {
+            self.rewind_to(pre_size, pre_lsn).await?;
+            return Err(err.into());
+        }
         self.size_bytes += encoded.len() as u64;
-        Ok(start)
+        self.next_lsn += count as u64;
+
+        if let Err(err) = self.file.sync_all().await {
+            self.rewind_to(pre_size, pre_lsn).await?;
+            return Err(err.into());
+        }
+        Ok(pre_lsn)
     }
 
-    /// Flush all previously appended bytes to durable storage.
-    pub async fn sync(&mut self) -> Result<(), Error> {
-        self.file.sync_all().await?;
+    /// Truncate the segment back to `size` and reset the next-LSN to
+    /// `next_lsn`, fsyncing the truncation. Used to roll back a batch
+    /// whose write or fsync failed so on-disk state matches what we
+    /// told callers: the records did not land. Any failure here means
+    /// the segment's on-disk state is unknown, so it returns
+    /// `Error::SegmentBroken` and the caller must rotate.
+    async fn rewind_to(&mut self, size: u64, next_lsn: u64) -> Result<(), Error> {
+        self.file
+            .set_len(size)
+            .await
+            .map_err(|_| Error::SegmentBroken)?;
+        self.file
+            .seek(SeekFrom::Start(size))
+            .await
+            .map_err(|_| Error::SegmentBroken)?;
+        self.file
+            .sync_all()
+            .await
+            .map_err(|_| Error::SegmentBroken)?;
+        self.size_bytes = size;
+        self.next_lsn = next_lsn;
         Ok(())
     }
 
@@ -408,8 +442,7 @@ mod tests {
         let mut buf = BytesMut::new();
         r1.encode(&mut buf).unwrap();
         r2.encode(&mut buf).unwrap();
-        let start = seg.append_batch(&buf, 2).await.unwrap();
-        seg.sync().await.unwrap();
+        let start = seg.commit(&buf, 2).await.unwrap();
         assert_eq!(start, 0);
         assert_eq!(seg.next_lsn(), 2);
         drop(seg);
@@ -437,8 +470,7 @@ mod tests {
             })
             .encode(&mut buf)
             .unwrap();
-            seg.append_batch(&buf, 1).await.unwrap();
-            seg.sync().await.unwrap();
+            seg.commit(&buf, 1).await.unwrap();
             // Append half a second record's framing to simulate a torn write.
             buf.clear();
             Record::End(TxnPayload {
@@ -490,8 +522,7 @@ mod tests {
         })
         .encode(&mut buf)
         .unwrap();
-        seg.append_batch(&buf, 2).await.unwrap();
-        seg.sync().await.unwrap();
+        seg.commit(&buf, 2).await.unwrap();
         let path = seg.path().to_path_buf();
         drop(seg);
 
@@ -553,8 +584,7 @@ mod tests {
             r.encode(&mut buf).unwrap();
             expected.push(r);
         }
-        seg.append_batch(&buf, expected.len() as u32).await.unwrap();
-        seg.sync().await.unwrap();
+        seg.commit(&buf, expected.len() as u32).await.unwrap();
         let path = seg.path().to_path_buf();
         drop(seg);
 

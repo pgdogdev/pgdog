@@ -62,6 +62,13 @@ pub enum Error {
         dir: std::path::PathBuf,
         holder: String,
     },
+
+    /// A batch's write or fsync failed and the rewind that should have
+    /// restored on-disk consistency also failed. The segment's true
+    /// state on disk is unknown; the writer must rotate to a fresh
+    /// segment before accepting more writes.
+    #[error("segment broken: write or sync failed and rewind could not restore on-disk state")]
+    SegmentBroken,
 }
 
 impl Error {
