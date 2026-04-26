@@ -27,7 +27,6 @@ use std::time::Duration;
 
 use bytes::BytesMut;
 use futures::FutureExt;
-use tokio::io::AsyncWriteExt;
 use tokio::sync::{mpsc, oneshot, Notify};
 use tokio::time::{sleep_until, Instant};
 use tracing::{error, warn};
@@ -40,53 +39,6 @@ use super::recovery;
 use super::segment::{gc_before_lsn, Segment};
 use crate::config::config;
 use crate::frontend::client::query_engine::two_pc::{Manager, TwoPcTransaction};
-
-/// Diagnose whether `dir` is usable as a WAL directory by exercising
-/// the operations the writer and recovery code will perform: directory
-/// existence, listing, creating + writing + fsync of a probe file.
-async fn probe(dir: &Path) -> Result<(), Error> {
-    tokio::fs::create_dir_all(dir)
-        .await
-        .map_err(|source| Error::DirNotAccessible {
-            dir: dir.to_path_buf(),
-            source,
-        })?;
-
-    let _ = tokio::fs::read_dir(dir)
-        .await
-        .map_err(|source| Error::DirNotReadable {
-            dir: dir.to_path_buf(),
-            source,
-        })?;
-
-    let probe_path = dir.join(".probe");
-    let mut file = tokio::fs::OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(true)
-        .open(&probe_path)
-        .await
-        .map_err(|source| Error::DirNotWritable {
-            dir: dir.to_path_buf(),
-            source,
-        })?;
-    file.write_all(b"pgdog wal probe\n")
-        .await
-        .map_err(|source| Error::DirNotWritable {
-            dir: dir.to_path_buf(),
-            source,
-        })?;
-    file.sync_all()
-        .await
-        .map_err(|source| Error::DirNotWritable {
-            dir: dir.to_path_buf(),
-            source,
-        })?;
-    drop(file);
-    let _ = tokio::fs::remove_file(&probe_path).await;
-
-    Ok(())
-}
 
 /// Acquire an exclusive flock on `<dir>/.lock` and stamp it with our
 /// PID + start time. Returns the locked `File`; dropping it releases
@@ -196,7 +148,13 @@ impl Wal {
     /// WAL durability.
     pub async fn open(manager: &Manager) -> Result<Self, Error> {
         let dir = &config().config.general.two_phase_commit_wal_dir;
-        probe(dir).await?;
+        // Ensure the dir exists before lock_dir tries to open .lock in it.
+        tokio::fs::create_dir_all(dir)
+            .await
+            .map_err(|source| Error::DirNotAccessible {
+                dir: dir.to_path_buf(),
+                source,
+            })?;
         let lock = lock_dir(dir)?;
         let recovered = recovery::recover_transactions(manager, dir).await?;
 
