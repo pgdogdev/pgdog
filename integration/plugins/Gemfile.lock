@@ -1,6 +1,7 @@
 GEM
   remote: https://rubygems.org/
   specs:
+    csv (3.3.5)
     diff-lcs (1.6.1)
     pg (1.5.9)
     rspec (3.13.0)
@@ -22,6 +23,7 @@ PLATFORMS
   ruby
 
 DEPENDENCIES
+  csv
   pg
   rspec (~> 3.4)
 
