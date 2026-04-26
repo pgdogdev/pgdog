@@ -364,7 +364,7 @@ async fn run(
 
         match outcome {
             Ok(Some(lsn)) => {
-                // Run GC off the writer task — filesystem work shouldn't
+                // Run GC off the writer task; filesystem work shouldn't
                 // hold up the next batch. Chain through `gc_handle` so two
                 // GCs never race on the same directory: the new task awaits
                 // the previous one before starting.
