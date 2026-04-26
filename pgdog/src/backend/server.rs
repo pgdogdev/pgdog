@@ -406,8 +406,9 @@ impl Server {
 
     /// Flush all pending messages making sure they are sent to the server immediately.
     pub async fn flush(&mut self) -> Result<(), Error> {
+        trace!("😳 [{}]", self.addr());
+
         if let Err(err) = self.stream().flush().await {
-            trace!("😳");
             self.stats.state(State::Error);
             Err(err.into())
         } else {
@@ -2273,6 +2274,134 @@ pub mod test {
 
         server.execute("ROLLBACK").await.unwrap();
         assert!(server.in_sync());
+    }
+
+    #[tokio::test]
+    async fn test_extended_set_back_to_normal_when_done() {
+        crate::logger();
+        let mut server = test_server().await;
+        server
+            .send(
+                &vec![
+                    Parse::new_anonymous("SET statement_timeout TO '1s'").into(),
+                    Bind::new_statement("").into(),
+                    Execute::new().into(),
+                    Sync.into(),
+                ]
+                .into(),
+            )
+            .await
+            .unwrap();
+
+        for c in ['1', '2', 'C', 'Z'] {
+            let msg = server.read().await.unwrap();
+            assert_eq!(c, msg.code());
+        }
+
+        assert!(server.done());
+
+        server
+            .send(
+                &vec![
+                    Query::new("COPY public.sharded FROM STDIN").into(),
+                    CopyDone.into(),
+                ]
+                .into(),
+            )
+            .await
+            .unwrap();
+
+        for c in ['G', 'C', 'Z'] {
+            let msg = server.read().await.unwrap();
+            assert_eq!(c, msg.code());
+        }
+
+        assert!(server.done());
+
+        server
+            .send(
+                &vec![
+                    Parse::new_anonymous("SET statement_timeout TO '1s'").into(),
+                    Bind::new_statement("").into(),
+                    Execute::new().into(),
+                    Sync.into(),
+                ]
+                .into(),
+            )
+            .await
+            .unwrap();
+
+        for c in ['1', '2', 'C', 'Z'] {
+            let msg = server.read().await.unwrap();
+            assert_eq!(c, msg.code());
+        }
+
+        assert!(server.done());
+    }
+
+    #[tokio::test]
+    async fn test_copy_protocol_extended() {
+        crate::logger();
+
+        let mut server = test_server().await;
+        server.execute("BEGIN").await.unwrap();
+        server
+            .execute("CREATE TABLE test_copy_protocol_extended (id BIGINT)")
+            .await
+            .unwrap();
+
+        server
+            .send(
+                &vec![
+                    Parse::new_anonymous("COPY test_copy_protocol_extended FROM STDIN").into(),
+                    Bind::new_statement("").into(),
+                    Execute::new().into(),
+                    Sync.into(),
+                ]
+                .into(),
+            )
+            .await
+            .unwrap();
+        for c in ['1', '2', 'G'] {
+            let msg = server.read().await.unwrap();
+            assert_eq!(msg.code(), c);
+        }
+
+        server
+            .send_one(&CopyData::new("1\n".as_bytes()).into())
+            .await
+            .unwrap();
+
+        server.send_one(&CopyDone.into()).await.unwrap();
+        server.send_one(&Sync.into()).await.unwrap();
+        server.flush().await.unwrap();
+
+        for c in ['C', 'Z'] {
+            let msg = server.read().await.unwrap();
+            assert_eq!(msg.code(), c);
+        }
+
+        assert!(server.prepared_statements().done());
+
+        server
+            .send(
+                &vec![
+                    Parse::new_anonymous("ROLLBACK").into(),
+                    Bind::new_statement("").into(),
+                    Execute::new().into(),
+                    Sync.into(),
+                ]
+                .into(),
+            )
+            .await
+            .unwrap();
+
+        for c in ['1', '2', 'C', 'Z'] {
+            let msg = server.read().await.unwrap();
+            assert_eq!(msg.code(), c);
+        }
+
+        assert!(server.done());
     }
 
     #[tokio::test]
