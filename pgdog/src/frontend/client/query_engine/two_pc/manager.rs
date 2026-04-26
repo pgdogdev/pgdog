@@ -148,26 +148,30 @@ impl Manager {
 
     /// Record a phase transition for a 2PC transaction. Updates the
     /// in-memory state first, then writes the corresponding WAL record
-    /// (Begin for Phase1, Committing for Phase2). The write-ahead
-    /// invariant — WAL durable before the corresponding PREPARE /
-    /// COMMIT PREPARED reaches a backend — is still honored because
-    /// the caller awaits this method before issuing those backend
-    /// calls. The inner-first ordering exists so checkpoint snapshots
-    /// always see in-memory state that's at least as fresh as any WAL
-    /// record they might be ordered against. WAL write failures are
-    /// logged but do not block the 2PC operation.
+    /// (Begin for Phase1, Committing for Phase2). The inner-first
+    /// ordering means checkpoint snapshots always see in-memory state
+    /// that's at least as fresh as any WAL record they might be
+    /// ordered against.
+    ///
+    /// If the WAL append fails the in-memory mutation is rolled back
+    /// and the operation is refused: returning Ok here would cause the
+    /// caller to issue PREPARE / COMMIT PREPARED to backends without a
+    /// durable record, which is exactly the orphan-prepared-xact case
+    /// the WAL exists to prevent.
     pub(super) async fn transaction_state(
         &self,
         transaction: &TwoPcTransaction,
         identifier: &Arc<User>,
         phase: TwoPcPhase,
     ) -> Result<TwoPcGuard, Error> {
-        {
+        let prior = {
             let mut guard = self.inner.lock();
+            let prior = guard.transactions.get(transaction).cloned();
             let entry = guard.transactions.entry(*transaction).or_default();
             entry.identifier = identifier.clone();
             entry.phase = phase;
-        }
+            prior
+        };
 
         if let Some(wal) = self.wal.load_full() {
             let result = match phase {
@@ -185,10 +189,20 @@ impl Manager {
                 }
             };
             if let Err(err) = result {
+                let mut guard = self.inner.lock();
+                match prior {
+                    Some(prior) => {
+                        guard.transactions.insert(*transaction, prior);
+                    }
+                    None => {
+                        guard.transactions.remove(transaction);
+                    }
+                }
                 warn!(
-                    "[2pc] wal append failed for {} ({}): {}; transaction proceeds without durability",
+                    "[2pc] wal append failed for {} ({}): {}; refusing 2pc operation",
                     transaction, phase, err
                 );
+                return Err(Error::TwoPcWal(err));
             }
         }
 
