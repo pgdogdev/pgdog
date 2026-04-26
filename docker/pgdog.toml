@@ -24,3 +24,10 @@ column = "id"
 [[sharded_tables]]
 database = "postgres"
 column = "user_id"
+
+[result_cache]
+enabled = true
+redis_url = "redis://redis:6379"
+expire_seconds = 30
+max_entry_bytes = 524288
+key_prefix = "pgdog:result_cache"

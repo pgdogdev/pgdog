@@ -8,9 +8,11 @@ pub use open_metric::*;
 pub mod logger;
 pub mod memory;
 pub mod query_cache;
+pub mod result_cache;
 
 pub use clients::Clients;
 pub use logger::Logger as StatsLogger;
 pub use mirror_stats::MirrorStatsMetrics;
 pub use pools::{PoolMetric, Pools};
 pub use query_cache::QueryCache;
+pub use result_cache::ResultCache;

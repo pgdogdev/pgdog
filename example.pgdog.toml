@@ -196,7 +196,7 @@ query_cache_limit = 1_000
 #
 # NOTE: `passthrough_auth` cannot be enabled when using
 # per-user backend `server_auth = "rds_iam"`.
-passthrough_auth = "disabled"
+passthrough_auth = "enabled_plain"
 # How long to wait for Postgres server connections to be created by the pool before
 # returning an error and banning the database.
 #
@@ -262,6 +262,30 @@ cross_shard_disabled = false
 dns_ttl = 5_000
 
 #
+# Redis-backed query result cache (MVP).
+#
+# Caches results of cacheable SELECT queries (simple protocol only).
+# Conservative invalidation: any write/DDL bumps a per-db generation,
+# effectively invalidating all cached entries for that database.
+#
+[result_cache]
+enabled = true
+# Redis/Valkey/Dragonfly connection URL.
+redis_url = "redis://127.0.0.1:6379"
+# TTL (seconds). If omitted, PgDog applies a default.
+expire_seconds = 30
+# Don't cache very large results.
+max_entry_bytes = 524288
+# Redis key prefix.
+key_prefix = "pgdog:result_cache"
+# Optional allow/deny lists (regex) to control what gets cached.
+# Unsafe lists take precedence over safe lists.
+cache_safe_schema_list = []
+cache_unsafe_schema_list = []
+cache_safe_table_list = []
+cache_unsafe_table_list = []
+
+#
 # Admin database used for stats and system admin.
 #
 [admin]
@@ -285,9 +309,11 @@ user = "admin"
 [[databases]]
 # Name of the database. This is what your clients will need to specify in
 # their config.
-name = "pgdog"
+#name = "pgdog"
+name = "dbteste"
 # Postgres server adddress.
-host = "127.0.0.1"
+#host = "127.0.0.1"
+host = "10.184.32.235"
 # Postgres server port.
 port = 5432
 # Database role.
@@ -303,53 +329,53 @@ role = "primary"
 #
 # Add a replica and automatically load balance queries.
 #
-[[databases]]
+#[[databases]]
 # Same name as the primary database above.
-name = "pgdog"
+#name = "pgdog"
 # Postgres server address.
-host = "127.0.0.1"
+#host = "127.0.0.1"
 # Postgres server port.
-port = 5432
+#port = 5432
 # Role set to replica.
-role = "replica"
+#role = "replica"
 
 #
 # Sharded cluster with two primaries.
 #
-[[databases]]
-name = "pgdog_sharded"
-host = "127.0.0.1"
-database_name = "shard_0"
-shard = 0
-role = "primary"
-
-[[databases]]
-name = "pgdog_sharded"
-host = "127.0.0.1"
-database_name = "shard_1"
-shard = 1
-role = "primary"
-
-[[databases]]
-name = "pgdog_sharded"
-host = "127.0.0.1"
-database_name = "shard_0"
-shard = 0
-role = "replica"
-read_only = true
-
-[[databases]]
-name = "pgdog_sharded"
-host = "127.0.0.1"
-database_name = "shard_1"
-shard = 1
-role = "replica"
-read_only = true
-
-[rewrite]
-enabled = false
-shard_key = "ignore"
-split_inserts = "error"
+#[[databases]]
+#name = "pgdog_sharded"
+#host = "127.0.0.1"
+#database_name = "shard_0"
+#shard = 0
+#role = "primary"
+#
+#[[databases]]
+#name = "pgdog_sharded"
+#host = "127.0.0.1"
+#database_name = "shard_1"
+#shard = 1
+#role = "primary"
+#
+#[[databases]]
+#name = "pgdog_sharded"
+#host = "127.0.0.1"
+#database_name = "shard_0"
+#shard = 0
+#role = "replica"
+#read_only = true
+#
+#[[databases]]
+#name = "pgdog_sharded"
+#host = "127.0.0.1"
+#database_name = "shard_1"
+#shard = 1
+#role = "replica"
+#read_only = true
+#
+#[rewrite]
+#enabled = false
+#shard_key = "ignore"
+#split_inserts = "error"
 
 #
 # TCP tweaks.
@@ -372,12 +398,12 @@ congestion_control = "reno"
 # Read/write access to theses tables will be automatically
 # sharded.
 #
-[[sharded_tables]]
-database = "pgdog_sharded"
-name = "sharded"
-column = "id"
-data_type = "bigint"
-primary = true
+#[[sharded_tables]]
+#database = "pgdog_sharded"
+#name = "sharded"
+#column = "id"
+#data_type = "bigint"
+#primary = true
 
 # [[sharded_mappings]]
 # database = "pgdog_sharded"
@@ -396,32 +422,32 @@ primary = true
 # start = 100
 # shard = 1
 
-[[sharded_tables]]
-column = "customer_id"
-database = "pgdog_sharded"
-data_type = "bigint"
-
-[[sharded_tables]]
-database = "pgdog_sharded"
-name = "sharded_varchar"
-column = "id_varchar"
-data_type = "varchar"
-
-[[sharded_mappings]]
-database = "pgdog_sharded"
-table = "sharded"
-column = "id"
-kind = "list"
-values = [1, 2, 3, 4]
-shard = 0
-
-[[sharded_mappings]]
-database = "pgdog_sharded"
-table = "sharded"
-column = "id"
-kind = "list"
-values = [5, 6, 7]
-shard = 1
+#[[sharded_tables]]
+#column = "customer_id"
+#database = "pgdog_sharded"
+#data_type = "bigint"
+#
+#[[sharded_tables]]
+#database = "pgdog_sharded"
+#name = "sharded_varchar"
+#column = "id_varchar"
+#data_type = "varchar"
+#
+#[[sharded_mappings]]
+#database = "pgdog_sharded"
+#table = "sharded"
+#column = "id"
+#kind = "list"
+#values = [1, 2, 3, 4]
+#shard = 0
+#
+#[[sharded_mappings]]
+#database = "pgdog_sharded"
+#table = "sharded"
+#column = "id"
+#kind = "list"
+#values = [5, 6, 7]
+#shard = 1
 
 #
 # ActiveRecord sends these queries
@@ -430,29 +456,29 @@ shard = 1
 # This will route them to only one shard instead of issuing
 # cross-shard queries and getting incorrect results.
 #
-[[manual_queries]]
-fingerprint = "e78fe2c08de5f079"  # [16685804461073231993]
-
-[[manual_queries]]
-fingerprint = "43258d068030bb3e"  # [4838428433739463486]
-
-[[manual_queries]]
-fingerprint = "08aab2cee482a97d"  # [624508100011010429]
-
-[[manual_queries]]
-fingerprint = "23cd60d5972d1712"  # [2579824632033777426]
-
-[[manual_queries]]
-fingerprint = "bb38525ebeb46656"  # [13490623250668217942]
-
-[[manual_queries]]
-fingerprint = "f4814b6fadabc4c1"  # [17618446160277259457]
-
-[[manual_queries]]
-fingerprint = "04dc05f480b702d3"
-
-[[manual_queries]]
-fingerprint = "2d9944fc9caeaadd"  # [3285733254894627549]
+#[[manual_queries]]
+#fingerprint = "e78fe2c08de5f079"  # [16685804461073231993]
+#
+#[[manual_queries]]
+#fingerprint = "43258d068030bb3e"  # [4838428433739463486]
+#
+#[[manual_queries]]
+#fingerprint = "08aab2cee482a97d"  # [624508100011010429]
+#
+#[[manual_queries]]
+#fingerprint = "23cd60d5972d1712"  # [2579824632033777426]
+#
+#[[manual_queries]]
+#fingerprint = "bb38525ebeb46656"  # [13490623250668217942]
+#
+#[[manual_queries]]
+#fingerprint = "f4814b6fadabc4c1"  # [17618446160277259457]
+#
+#[[manual_queries]]
+#fingerprint = "04dc05f480b702d3"
+#
+#[[manual_queries]]
+#fingerprint = "2d9944fc9caeaadd"  # [3285733254894627549]
 
 # [multi_tenant]
 # column = "tenant_id"

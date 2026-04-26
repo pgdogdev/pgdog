@@ -1,0 +1,18 @@
+[general]
+host = "0.0.0.0"
+port = 6432
+
+[result_cache]
+enabled = true
+redis_url = "redis://127.0.0.1:6379"
+expire_seconds = 60
+max_entry_bytes = 524288
+key_prefix = "pgdog:result_cache"
+
+[[databases]]
+name = "pgdog"
+host = "127.0.0.1"
+port = 5432
+role = "primary"
+database_name = "pgdog"
+

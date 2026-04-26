@@ -232,6 +232,21 @@ impl QueryEngine {
             }
         }
 
+        // Result cache capture (store exactly what we send).
+        if let Some(ref mut capture) = self.result_cache_capture {
+            if code == 'E' {
+                capture.errored = true;
+            }
+
+            if !capture.errored {
+                if let Ok(bytes) = message.to_bytes() {
+                    capture.bytes.extend_from_slice(&bytes);
+                } else {
+                    capture.errored = true;
+                }
+            }
+        }
+
         self.stats.sent(message.len());
 
         // Do this before flushing, because flushing can take time.
@@ -247,6 +262,23 @@ impl QueryEngine {
 
         if code == 'Z' {
             self.pending_explain = None;
+
+            // Store cached payload at the end of a successful exchange.
+            if let Some(capture) = self.result_cache_capture.take() {
+                if !capture.errored && !context.in_transaction() {
+                    if let Some(ref cache) = self.result_cache {
+                        cache
+                            .set_with_table_tags(
+                                capture.db.as_str(),
+                                &capture.key,
+                                &capture.bytes,
+                                &capture.tables,
+                            )
+                            .await;
+                        crate::stats::ResultCache::store(capture.bytes.len());
+                    }
+                }
+            }
         }
         self.hooks.on_server_message(context, &message)?;
 

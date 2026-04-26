@@ -10,7 +10,7 @@ use crate::util::random_string;
 use crate::{
     system_catalogs, EnumeratedDatabase, Memory, OmnishardedTable, PassthroughAuth,
     PreparedStatements, QueryParserEngine, QueryParserLevel, ReadWriteSplit, RewriteMode, Role,
-    SystemCatalogsBehavior,
+    ResultCache, SystemCatalogsBehavior,
 };
 
 use super::database::Database;
@@ -268,6 +268,10 @@ pub struct Config {
     /// https://docs.pgdog.dev/configuration/pgdog.toml/memory/
     #[serde(default)]
     pub memory: Memory,
+
+    /// Result cache settings control Redis-backed caching of SELECT results.
+    #[serde(default)]
+    pub result_cache: Option<ResultCache>,
 }
 
 impl Config {

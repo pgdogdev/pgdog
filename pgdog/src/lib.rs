@@ -11,6 +11,7 @@ pub mod frontend;
 pub mod healthcheck;
 pub mod net;
 pub mod plugin;
+pub mod result_cache;
 pub mod sighup;
 pub mod state;
 pub mod stats;

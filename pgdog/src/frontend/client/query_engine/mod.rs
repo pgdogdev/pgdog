@@ -7,6 +7,7 @@ use crate::{
         BufferedQuery, Client, ClientComms, Command, Error, Router, RouterContext, Stats,
     },
     net::{ErrorResponse, Message, Parameters},
+    result_cache::{redis::RedisResultCache, CacheableRequest},
     state::State,
 };
 
@@ -58,6 +59,19 @@ pub struct QueryEngine {
     pending_explain: Option<ExplainResponseState>,
     hooks: QueryEngineHooks,
     advisory_locks: AdvisoryLocks,
+    result_cache: Option<RedisResultCache>,
+    result_cache_capture: Option<ResultCacheCapture>,
+    query_errored: bool,
+    pending_invalidations: Vec<crate::frontend::router::parser::OwnedTable>,
+}
+
+#[derive(Debug, Default, Clone)]
+struct ResultCacheCapture {
+    key: crate::result_cache::ResultCacheKey,
+    db: String,
+    tables: Vec<crate::frontend::router::parser::OwnedTable>,
+    bytes: Vec<u8>,
+    errored: bool,
 }
 
 impl QueryEngine {
@@ -80,6 +94,10 @@ impl QueryEngine {
             begin_stmt: None,
             router: Router::default(),
             advisory_locks: AdvisoryLocks::default(),
+            result_cache: None,
+            result_cache_capture: None,
+            query_errored: false,
+            pending_invalidations: Vec::new(),
         })
     }
 
@@ -134,6 +152,59 @@ impl QueryEngine {
         }
 
         self.hooks.before_execution(context)?;
+
+        // Lazily initialize result cache (if enabled).
+        if self.result_cache.is_none() && !context.admin {
+            self.result_cache = RedisResultCache::global().await;
+        }
+
+        // Table-based invalidation: invalidate cache entries dependent on touched tables.
+        if let (Some(ref cache), Ok(cluster)) = (&self.result_cache, self.backend.cluster()) {
+            let route = context.client_request.route();
+            if route.is_write() && context.client_request.is_executable() && !context.in_transaction()
+            {
+                let tables = context
+                    .client_request
+                    .ast
+                    .as_ref()
+                    .map(|ast| ast.tables().into_iter().map(|t| t.to_owned()).collect::<Vec<_>>())
+                    .unwrap_or_default();
+                if !tables.is_empty() {
+                    cache.invalidate_tables(cluster.name(), &tables).await;
+                }
+            }
+        }
+
+        // Cache lookup (MVP: simple SELECT only, outside transactions).
+        if let (Some(ref cache), Ok(cluster)) = (&self.result_cache, self.backend.cluster()) {
+            if !context.in_transaction() && context.client_request.is_executable() {
+                if let Some(req) = CacheableRequest::from_client_request(context.client_request) {
+                    let user = context.params.get_required("user").unwrap_or("unknown");
+                    if let Some(key) =
+                        cache
+                            .build_key(cluster.name(), user, context.params, &req)
+                            .await
+                    {
+                        if let Some(payload) = cache.get(&key).await {
+                            crate::stats::ResultCache::hit(payload.len());
+                            let bytes_sent = context.stream.send_raw_flush(&payload).await?;
+                            self.stats.sent(bytes_sent);
+                            self.set_state(State::Idle);
+                            return Ok(());
+                        }
+
+                        crate::stats::ResultCache::miss();
+                        self.result_cache_capture = Some(ResultCacheCapture {
+                            key,
+                            db: cluster.name().to_string(),
+                            tables: req.tables.clone(),
+                            bytes: Vec::new(),
+                            errored: false,
+                        });
+                    }
+                }
+            }
+        }
 
         // Queue up request to mirrors, if any.
         // Do this before sending query to actual server

@@ -58,6 +58,32 @@ SELECT * FROM payments WHERE user_id = 1;
 
 ## Features
 
+### Result Cache (Redis)
+
+PgDog includes a **Redis-backed query result cache** capable of caching `SELECT` queries to drastically improve read latency. It intelligently invalidates cache entries *only* when a DML/DDL transaction is successfully committed.
+
+#### How it works
+
+- **Caching**: Stores the Postgres protocol response for read queries directly in Redis. Subsequent identical queries will hit the cache instead of the Postgres shards.
+- **Smart Invalidation**: When an `INSERT`, `UPDATE`, or `DELETE` statement is parsed, PgDog identifies the affected tables. It waits for the transaction to successfully `COMMIT` (or the autocommit to finish) before removing the associated keys from Redis. If the transaction rolls back or fails, the cache is preserved.
+
+#### Configuration
+
+To enable the result cache, add the `[result_cache]` section to your `pgdog.toml`:
+
+```toml
+[result_cache]
+enabled = true
+# Provide the URL of your Redis server
+redis_url = "redis://127.0.0.1:6379"
+# Default Time-To-Live for cache entries
+expire_seconds = 30
+# Maximum size of a single cached response
+max_entry_bytes = 524288
+# Prefix for all Redis keys
+key_prefix = "pgdog:result_cache"
+```
+
 &#128216; **[Configuration](https://docs.pgdog.dev/configuration/)**
 
 All PgDog features are configurable and can be turned on and off. PgDog requires 2 configuration files to operate:

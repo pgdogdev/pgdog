@@ -33,6 +33,16 @@ impl QueryEngine {
         self.begin_stmt = None;
         context.transaction = None; // Clear transaction state
 
+        if !rollback && !self.query_errored && !self.pending_invalidations.is_empty() {
+            if let (Some(ref cache), Ok(cluster)) = (&self.result_cache, self.backend.cluster()) {
+                cache
+                    .invalidate_tables(cluster.name(), &self.pending_invalidations)
+                    .await;
+            }
+        }
+        self.pending_invalidations.clear();
+        self.query_errored = false;
+
         if rollback {
             self.notify_buffer.clear();
         }
