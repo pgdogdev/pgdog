@@ -54,7 +54,7 @@ fn parse_segment_filename(name: &str) -> Result<u64, Error> {
 }
 
 /// Delete every segment in `dir` whose contents lie strictly before
-/// `lsn` — i.e. segments whose successor's start LSN is `<= lsn`. The
+/// `lsn`, i.e. segments whose successor's start LSN is `<= lsn`. The
 /// segment that *contains* `lsn` is preserved because it still has live
 /// records after the checkpoint that future recovery needs to replay.
 /// Per-file deletion errors are logged but don't abort the GC.
@@ -119,13 +119,13 @@ pub async fn list_segments(dir: &Path) -> Result<Vec<PathBuf>, Error> {
 /// `next` returns one record at a time, reading from the file in chunks.
 /// Each terminal condition is reported explicitly:
 ///
-/// - `Ok(Some(record))` — a record was decoded; iteration continues.
-/// - `Ok(None)` — clean end of stream (EOF with no leftover bytes).
-/// - `Err(Error::TornTail { .. })` — file ends mid-record. Normal at
+/// - `Ok(Some(record))`: a record was decoded; iteration continues.
+/// - `Ok(None)`: clean end of stream (EOF with no leftover bytes).
+/// - `Err(Error::TornTail { .. })`: file ends mid-record. Normal at
 ///   the last segment after a crash; suspicious anywhere else.
-/// - `Err(Error::Crc | InvalidTag | EmptyRecord | Decode)` — record
+/// - `Err(Error::Crc | InvalidTag | EmptyRecord | Decode)`: record
 ///   framing or payload is corrupt.
-/// - `Err(Error::Io(_))` — disk-side IO error.
+/// - `Err(Error::Io(_))`: disk-side IO error.
 ///
 /// `last_good_offset` always points at the end of the last successfully
 /// decoded record so [`SegmentReader::into_writable`] can truncate the

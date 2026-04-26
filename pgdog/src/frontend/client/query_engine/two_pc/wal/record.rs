@@ -22,10 +22,10 @@
 //! invariants that the [`super::Wal`] writer must honour:
 //!
 //! 1. [`Record::Begin`] is fsynced before any `PREPARE TRANSACTION` reaches
-//!    a shard — otherwise a crash can leave prepared xacts with no record
+//!    a shard. Otherwise a crash can leave prepared xacts with no record
 //!    of them.
 //! 2. [`Record::Committing`] is fsynced before any `COMMIT PREPARED` reaches
-//!    a shard — otherwise a crash can leave a partial commit with no way to
+//!    a shard. Otherwise a crash can leave a partial commit with no way to
 //!    know the coordinator had decided to commit.
 //!
 //! [`Record::End`] lets recovery forget a finished txn and is not safety
@@ -42,9 +42,9 @@
 //!   struct must carry `#[serde(default)]` so older versions that wrote
 //!   records without the field can still be deserialized.
 //! - **Fields may not be removed or renamed.** To change a variant's
-//!   shape, introduce a new tag with a new payload struct and deprecate
-//!   the old tag after a checkpoint window.
-//! - **Type changes** on existing fields (e.g. `Vec<u32>` → `Vec<u64>`)
+//!   shape, introduce a new tag with a new payload struct. The old tag
+//!   stays defined so historical records still decode during recovery.
+//! - **Type changes** on existing fields (e.g. `Vec<u32>` to `Vec<u64>`)
 //!   also require a new tag.
 
 use bytes::{Buf, BufMut};
@@ -165,11 +165,11 @@ impl Record {
 
     /// Try to decode the next record from `buf`.
     ///
-    /// - `Ok(Some(d))` — a complete record was decoded; advance the cursor
+    /// - `Ok(Some(d))`: a complete record was decoded; advance the cursor
     ///   by `d.consumed`.
-    /// - `Ok(None)` — `buf` doesn't contain a complete record yet. Read
+    /// - `Ok(None)`: `buf` doesn't contain a complete record yet. Read
     ///   more bytes and call again. This is normal flow at end-of-segment.
-    /// - `Err(_)` — the record is corrupt (bad framing, CRC mismatch,
+    /// - `Err(_)`: the record is corrupt (bad framing, CRC mismatch,
     ///   unknown tag, or undecodable payload). The WAL stream effectively
     ///   ends here.
     pub fn decode(buf: &[u8]) -> Result<Option<Decoded>, Error> {

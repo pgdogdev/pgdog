@@ -42,9 +42,9 @@ static MAINTENANCE: Duration = Duration::from_millis(333);
 pub struct Manager {
     inner: Arc<Mutex<Inner>>,
     notify: Arc<InnerNotify>,
-    /// Durable log handle. `None` until [`Self::start`] succeeds; if WAL
-    /// initialization fails or `start` is never called, the manager
-    /// continues to coordinate 2PC in memory only.
+    /// Durable log handle. `None` until [`Self::enable_wal`] succeeds;
+    /// if WAL initialization fails or `enable_wal` is never called, the
+    /// manager continues to coordinate 2PC in memory only.
     wal: Arc<ArcSwapOption<Wal>>,
 }
 
@@ -94,9 +94,8 @@ impl Manager {
         }
     }
 
-    /// Periodically ask the WAL writer to emit a [`crate::frontend::
-    /// client::query_engine::two_pc::wal`] checkpoint record so older
-    /// segments can be GC'd. A zero interval disables the loop.
+    /// Periodically ask the WAL writer to emit a checkpoint record so
+    /// older segments can be GC'd. A zero interval disables the loop.
     async fn checkpoint_loop() {
         let interval_ms = config()
             .config

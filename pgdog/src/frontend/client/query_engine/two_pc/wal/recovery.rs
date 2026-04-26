@@ -41,7 +41,7 @@ pub(super) struct Recovered {
 /// writable segment plus the initial active-2PC snapshot.
 ///
 /// Corrupt segments are renamed to `<lsn>.wal.broken` and skipped. If
-/// any corruption is detected the restore phase is skipped — partial
+/// any corruption is detected the restore phase is skipped: partial
 /// restore could silently invert a committed transaction by losing a
 /// `Committing` record. The operator handles orphan prepared xacts via
 /// `SHOW TRANSACTIONS` / `pg_prepared_xacts`. Genuine IO errors
@@ -111,7 +111,7 @@ pub(super) async fn recover_transactions(
     // Decided txns (Committing was logged) are safe to restore even if
     // corruption was detected later: COMMIT PREPARED is idempotent and
     // matches the decision we durably recorded. Undecided txns can only
-    // be restored when there was no corruption — otherwise their
+    // be restored when there was no corruption: otherwise their
     // Committing might have been in a lost segment and rolling back
     // would silently invert a committed transaction.
     let mut snapshot: HashMap<TwoPcTransaction, CheckpointEntry> = HashMap::default();
