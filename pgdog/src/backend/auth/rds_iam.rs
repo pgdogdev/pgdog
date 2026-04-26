@@ -1,3 +1,4 @@
+use super::token_cache::{self, CacheKey};
 use aws_config::{BehaviorVersion, Region};
 use aws_sdk_rds::auth_token::{AuthTokenGenerator, Config as AuthTokenConfig};
 
@@ -49,6 +50,19 @@ pub async fn token(addr: &Address) -> Result<String, Error> {
         return Ok(token);
     }
 
+    let key = CacheKey::from(addr);
+
+    if let Some(cached) = token_cache::get(&key) {
+        return Ok(cached);
+    }
+
+    let (token, expires_at) = fetch_token(addr).await?;
+    token_cache::set(key, token.clone(), expires_at);
+
+    Ok(token)
+}
+
+async fn fetch_token(addr: &Address) -> Result<(String, std::time::SystemTime), Error> {
     let region = resolve_region(addr)?;
     let sdk_config = aws_config::load_defaults(BehaviorVersion::latest()).await;
 
@@ -65,7 +79,7 @@ pub async fn token(addr: &Address) -> Result<String, Error> {
             ))
         })?;
 
-    AuthTokenGenerator::new(config)
+    let token = AuthTokenGenerator::new(config)
         .auth_token(&sdk_config)
         .await
         .map(|token| token.to_string())
@@ -74,8 +88,15 @@ pub async fn token(addr: &Address) -> Result<String, Error> {
                 "failed to generate RDS IAM token for {}@{}:{} in region {}: {}",
                 addr.user, addr.host, addr.port, region, error
             ))
-        })
+        })?;
+
+    // RDS IAM tokens are valid for 15 minutes
+    let expires_at = std::time::SystemTime::now() + std::time::Duration::from_secs(900);
+
+    Ok((token, expires_at))
 }
+
+// ── test helpers ─────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 fn test_token_override() -> Option<String> {
@@ -94,9 +115,11 @@ static TEST_TOKEN_OVERRIDE: once_cell::sync::Lazy<parking_lot::Mutex<Option<Stri
 #[cfg(test)]
 mod tests {
     use std::env;
+    use std::time::{Duration, SystemTime};
 
     use crate::backend::pool::Address;
     use crate::config::ServerAuth;
+    use token_cache::{CacheKey, CachedToken, TOKEN_CACHE};
 
     use super::*;
 
@@ -142,22 +165,45 @@ mod tests {
         assert!(region.is_none());
     }
 
+    #[test]
+    fn token_override_bypasses_cache() {
+        set_test_token_override(Some("override-token".into()));
+        let result = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(token(&make_addr()))
+            .unwrap();
+        assert_eq!(result, "override-token");
+        set_test_token_override(None);
+    }
+
+    #[test]
+    fn cache_returns_same_token_on_second_call() {
+        let addr = make_addr();
+        let key = CacheKey::from(&addr);
+        let sentinel = "cached-sentinel-token".to_string();
+        TOKEN_CACHE.lock().insert(
+            key,
+            CachedToken::new(
+                sentinel.clone(),
+                SystemTime::now() + Duration::from_secs(3600),
+            ),
+        );
+
+        let result = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(token(&addr))
+            .unwrap();
+
+        assert_eq!(result, sentinel);
+    }
+
     #[tokio::test]
     async fn test_token_contains_expected_query_fields() {
         let _access_key = EnvVarGuard::set("AWS_ACCESS_KEY_ID", "AKIDEXAMPLE");
         let _secret_key = EnvVarGuard::set("AWS_SECRET_ACCESS_KEY", "SECRETEXAMPLE");
         let _session = EnvVarGuard::set("AWS_SESSION_TOKEN", "SESSIONEXAMPLE");
 
-        let addr = Address {
-            host: "db.cluster-abc123.us-east-1.rds.amazonaws.com".into(),
-            port: 5432,
-            database_name: "postgres".into(),
-            user: "db_user".into(),
-            passwords: vec![String::new()],
-            database_number: 0,
-            server_auth: ServerAuth::RdsIam,
-            server_iam_region: Some("us-east-1".into()),
-        };
+        let addr = make_addr();
 
         let token = token(&addr).await.unwrap();
         assert!(token.starts_with(
@@ -166,5 +212,18 @@ mod tests {
         assert!(token.contains("X-Amz-Algorithm=AWS4-HMAC-SHA256"));
         assert!(token.contains("X-Amz-Credential="));
         assert!(token.contains("X-Amz-Signature="));
+    }
+
+    fn make_addr() -> Address {
+        Address {
+            host: "db.cluster-abc123.us-east-1.rds.amazonaws.com".into(),
+            port: 5432,
+            database_name: "postgres".into(),
+            user: "db_user".into(),
+            passwords: vec![String::new()],
+            database_number: 0,
+            server_auth: ServerAuth::RdsIam,
+            server_iam_region: Some("us-east-1".into()),
+        }
     }
 }
