@@ -317,8 +317,7 @@ async fn run(
             }
         }
 
-        let outcome =
-            process_batch(&mut segment, &mut batch, &mut encode_buf, &mut snapshot).await;
+        let outcome = process_batch(&mut segment, &mut batch, &mut encode_buf, &mut snapshot).await;
 
         match outcome {
             Ok(Some(lsn)) => {
