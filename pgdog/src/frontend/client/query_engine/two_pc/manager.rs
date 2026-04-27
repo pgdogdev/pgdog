@@ -22,7 +22,7 @@ use crate::{
     config::config,
     frontend::{
         client::query_engine::{
-            two_pc::{wal::Wal, TwoPcGuard, TwoPcTransaction},
+            two_pc::{wal::Wal, TwoPcGuard, TwoPcStats, TwoPcTransaction},
             TwoPcPhase,
         },
         router::{
@@ -46,6 +46,7 @@ pub struct Manager {
     /// if WAL initialization fails or `enable_wal` is never called, the
     /// manager continues to coordinate 2PC in memory only.
     wal: Arc<ArcSwapOption<Wal>>,
+    stats: Arc<TwoPcStats>,
 }
 
 impl Manager {
@@ -63,6 +64,7 @@ impl Manager {
                 done: Notify::new(),
             }),
             wal: Arc::new(ArcSwapOption::const_empty()),
+            stats: Arc::new(TwoPcStats::default()),
         };
 
         let monitor = manager.clone();
@@ -136,6 +138,11 @@ impl Manager {
     /// Get all active two-phase transactions.
     pub fn transactions(&self) -> HashMap<TwoPcTransaction, TransactionInfo> {
         self.inner.lock().transactions.clone()
+    }
+
+    /// Process-level 2PC counters.
+    pub fn stats(&self) -> Arc<TwoPcStats> {
+        Arc::clone(&self.stats)
     }
 
     /// Two-pc transaction finished.
@@ -230,6 +237,7 @@ impl Manager {
                 .insert(transaction, TransactionInfo { phase, identifier });
             guard.queue.push_back(transaction);
         }
+        self.stats.incr_recovered();
         self.notify.notify.notify_one();
     }
 
