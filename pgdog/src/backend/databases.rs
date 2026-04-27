@@ -52,16 +52,23 @@ pub fn databases() -> Arc<Databases> {
 pub fn replace_databases(new_databases: Databases, reload: bool) -> Result<(), Error> {
     // Order of operations is important
     // to ensure zero downtime for clients.
+    //
+    // 1. Prevent concurrent reloads.
+    let _guard = reload_notify::started();
+
+    // 2. Move connections from old databases into new ones.
     let old_databases = databases();
     let new_databases = Arc::new(new_databases);
-    reload_notify::started();
     if reload {
         // Move whatever connections we can over to new pools.
         old_databases.move_conns_to(&new_databases)?;
     }
+    // 3. Launch new databases first.
     new_databases.launch();
     DATABASES.store(new_databases);
+    // 4. Shutdown all databases.
     old_databases.shutdown();
+    // 5. Tell clients the reload is complete.
     reload_notify::done();
 
     Ok(())
@@ -71,7 +78,6 @@ pub fn replace_databases(new_databases: Databases, reload: bool) -> Result<(), E
 pub fn reconnect() -> Result<(), Error> {
     let config = config();
     let databases = from_config(&config);
-    warn!("reconnect: dropping all server connections and re-creating pools");
     replace_databases(databases, false)?;
     Ok(())
 }
@@ -82,7 +88,6 @@ pub fn reload_from_existing() -> Result<(), Error> {
     let _lock = lock();
     let config = config();
     let databases = from_config(&config);
-    info!("reloading pools from current config (connections preserved where possible)");
     replace_databases(databases, true)?;
     Ok(())
 }
@@ -122,18 +127,27 @@ pub async fn cancel_all(database: &str) -> Result<(), Error> {
 
 /// Re-create pools from config.
 pub fn reload() -> Result<(), Error> {
+    info!("reloading configuration");
+
+    // Load config from disk.
     let old_config = config();
     let new_config = load(&old_config.config_path, &old_config.users_path)?;
     let databases = from_config(&new_config);
-    info!("reloading configuration");
+
+    // Replace databases.
     replace_databases(databases, true)?;
+
+    // Reload TLS connectors.
     tls::reload()?;
+
     // Remove any unused prepared statements.
     PreparedStatements::global()
         .write()
         .close_unused(new_config.config.general.prepared_statements_limit);
-    // Resize query cache
+
+    // Resize query cache.
     Cache::resize(new_config.config.general.query_cache_limit);
+
     Ok(())
 }
 

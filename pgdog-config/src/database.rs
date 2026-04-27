@@ -236,6 +236,28 @@ pub enum Role {
     Auto,
 }
 
+impl TryFrom<u8> for Role {
+    type Error = ();
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        Ok(match value {
+            0 => Role::Auto,
+            1 => Role::Primary,
+            2 => Role::Replica,
+            _ => return Err(()),
+        })
+    }
+}
+
+impl From<Role> for u8 {
+    fn from(value: Role) -> Self {
+        match value {
+            Role::Auto => 0,
+            Role::Primary => 1,
+            Role::Replica => 2,
+        }
+    }
+}
+
 impl std::fmt::Display for Role {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

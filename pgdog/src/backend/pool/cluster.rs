@@ -13,8 +13,8 @@ use std::{
     },
     time::Duration,
 };
-use tokio::{spawn, sync::Notify};
-use tracing::{error, info};
+use tokio::spawn;
+use tracing::error;
 
 use crate::{
     backend::{
@@ -46,9 +46,6 @@ pub struct PoolConfig {
 #[derive(Default, Debug)]
 struct Readiness {
     online: AtomicBool,
-    schema_loading_started: AtomicBool,
-    schemas_loaded: AtomicUsize,
-    schemas_ready: Notify,
 }
 
 /// A collection of sharded replicas and primaries
@@ -583,23 +580,26 @@ impl Cluster {
             shard.launch();
         }
 
-        // Only spawn schema loading once per cluster, even if launch() is called multiple times.
-        let already_started = self
-            .readiness
-            .schema_loading_started
-            .swap(true, Ordering::SeqCst);
+        self.readiness.online.store(true, Ordering::Relaxed);
 
-        if self.load_schema() && !already_started {
-            for shard in self.shards() {
-                let identifier = self.identifier();
-                let readiness = self.readiness.clone();
-                let shard = shard.clone();
-                let shards = self.shards.len();
+        if !self.load_schema() {
+            for shard in &self.shards {
+                shard.schema_not_needed();
+            }
+            return;
+        }
 
-                spawn(async move {
-                    use tokio::time::sleep;
+        for shard in self.shards() {
+            let identifier = self.identifier();
+            let shard = shard.clone();
 
-                    while let Err(err) = shard.update_schema().await {
+            spawn(async move {
+                use tokio::time::sleep;
+
+                match shard.load_schema().await {
+                    Ok(true) => schema_changed_hook(&shard.schema(), &identifier, &shard),
+                    Ok(false) => (),
+                    Err(err) => {
                         // Retry.
                         if shard.online() {
                             error!("error loading schema for shard {}: {}", shard.number(), err);
@@ -608,22 +608,9 @@ impl Cluster {
                             return;
                         }
                     }
-
-                    let done = readiness.schemas_loaded.fetch_add(1, Ordering::SeqCst);
-
-                    info!("loaded schema from {}/{} shards", done + 1, shards);
-
-                    schema_changed_hook(&shard.schema(), &identifier, &shard);
-
-                    // Loaded schema on all shards.
-                    if done >= shards - 1 {
-                        readiness.schemas_ready.notify_waiters();
-                    }
-                });
-            }
+                }
+            });
         }
-
-        self.readiness.online.store(true, Ordering::Relaxed);
     }
 
     /// Shutdown the connection pools.
@@ -661,22 +648,9 @@ impl Cluster {
             return;
         }
 
-        fn check_loaded(cluster: &Cluster) -> bool {
-            cluster.readiness.schemas_loaded.load(Ordering::Acquire) == cluster.shards.len()
+        for shard in &self.shards {
+            shard.wait_schema_loaded().await;
         }
-
-        // Fast path.
-        if check_loaded(self) {
-            return;
-        }
-
-        // Queue up.
-        let notified = self.readiness.schemas_ready.notified();
-        // Race condition check.
-        if check_loaded(self) {
-            return;
-        }
-        notified.await;
     }
 
     /// Execute a query on every primary in the cluster.
@@ -935,27 +909,7 @@ mod test {
 
     #[tokio::test]
     async fn test_launch_schema_loading_idempotent() {
-        use std::sync::atomic::Ordering;
-        use tokio::time::{sleep, Duration};
-
-        let config = ConfigAndUsers::default();
-        let mut cluster = Cluster::new_test(&config);
-        cluster.sharded_schemas = ShardedSchemas::default();
-
-        assert!(cluster.load_schema());
-
-        cluster.launch();
-        cluster.wait_schema_loaded().await;
-
-        let count_after_first = cluster.readiness.schemas_loaded.load(Ordering::SeqCst);
-        assert_eq!(count_after_first, cluster.shards.len());
-
-        // Second launch should not spawn additional schema loading tasks
-        cluster.launch();
-        sleep(Duration::from_millis(50)).await;
-
-        let count_after_second = cluster.readiness.schemas_loaded.load(Ordering::SeqCst);
-        assert_eq!(count_after_second, count_after_first);
+        todo!()
     }
 
     #[tokio::test]
@@ -972,50 +926,12 @@ mod test {
 
     #[tokio::test]
     async fn test_wait_schema_loaded_fast_path_when_already_loaded() {
-        use std::sync::atomic::Ordering;
-
-        let config = ConfigAndUsers::default();
-        let mut cluster = Cluster::new_test(&config);
-        cluster.sharded_schemas = ShardedSchemas::default();
-
-        assert!(cluster.load_schema());
-
-        // Simulate that all schemas have been loaded
-        cluster
-            .readiness
-            .schemas_loaded
-            .store(cluster.shards.len(), Ordering::SeqCst);
-
-        // Should return immediately via fast path
-        cluster.wait_schema_loaded().await;
+        todo!()
     }
 
     #[tokio::test]
     async fn test_wait_schema_loaded_waits_for_notification() {
-        use std::sync::atomic::Ordering;
-        use tokio::time::{timeout, Duration};
-
-        let config = ConfigAndUsers::default();
-        let mut cluster = Cluster::new_test(&config);
-        cluster.sharded_schemas = ShardedSchemas::default();
-
-        assert!(cluster.load_schema());
-
-        let readiness = cluster.readiness.clone();
-        let shards_count = cluster.shards.len();
-
-        // Spawn a task that will complete schema loading after a short delay
-        tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_millis(10)).await;
-            readiness
-                .schemas_loaded
-                .store(shards_count, Ordering::SeqCst);
-            readiness.schemas_ready.notify_waiters();
-        });
-
-        // Should wait for notification and complete within timeout
-        let result = timeout(Duration::from_millis(100), cluster.wait_schema_loaded()).await;
-        assert!(result.is_ok());
+        todo!()
     }
 
     #[test]

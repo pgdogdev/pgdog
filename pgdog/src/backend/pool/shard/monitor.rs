@@ -64,7 +64,11 @@ impl ShardMonitor {
 
         loop {
             select! {
-                _ = maintenance.tick() => {},
+                _ = maintenance.tick() => {
+                    if !self.shard.online() {
+                        break;
+                    }
+                },
                 _ = self.shard.comms().shutdown.notified() => {
                     break;
                 },

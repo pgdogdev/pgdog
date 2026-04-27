@@ -18,6 +18,7 @@ auth_type = "trust"
 read_write_split = "exclude_primary"
 expanded_explain = true
 lsn_check_delay = 0
+lsn_check_interval = 1_000
 
 [rewrite]
 enabled = false
@@ -48,6 +49,27 @@ role = "replica"
 name = "postgres"
 host = "localhost"
 role = "replica"
+port = 45002
+
+[[databases]]
+name = "postgres_auto"
+host = "localhost"
+database_name = "postgres"
+role = "auto"
+port = 45000
+
+[[databases]]
+name = "postgres_auto"
+host = "localhost"
+database_name = "postgres"
+port = 45001
+role = "auto"
+
+[[databases]]
+name = "postgres_auto"
+host = "localhost"
+database_name = "postgres"
+role = "auto"
 port = 45002
 
 

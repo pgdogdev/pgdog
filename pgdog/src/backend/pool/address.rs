@@ -2,6 +2,7 @@
 use std::net::{SocketAddr, ToSocketAddrs};
 
 use pgdog_config::users::PasswordKind;
+use pgdog_config::Role;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
@@ -28,6 +29,9 @@ pub struct Address {
     pub server_iam_region: Option<String>,
     /// Database number (in the config).
     pub database_number: usize,
+    /// Role given to the database at configuration time.
+    /// For automatic roles, this can change at runtime.
+    pub configured_role: Role,
 }
 
 impl From<Address> for pgdog_stats::Address {
@@ -81,6 +85,7 @@ impl Address {
             server_auth,
             server_iam_region: user.server_iam_region.clone(),
             database_number,
+            configured_role: database.role,
         }
     }
 
@@ -121,6 +126,7 @@ impl Address {
             server_auth: ServerAuth::Password,
             server_iam_region: None,
             database_number: 0,
+            configured_role: Role::Primary,
         }
     }
 }
@@ -154,6 +160,7 @@ impl TryFrom<Url> for Address {
             server_auth: ServerAuth::Password,
             server_iam_region: None,
             database_number: 0,
+            configured_role: Role::Replica,
         })
     }
 }
