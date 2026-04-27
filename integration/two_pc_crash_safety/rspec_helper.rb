@@ -1,9 +1,12 @@
 # frozen_string_literal: true
 
 require 'fileutils'
+require 'net/http'
 require 'pg'
 require 'tmpdir'
 require 'toxiproxy'
+
+OPENMETRICS_PORT = 9090
 
 PGDOG_HOST = '127.0.0.1'
 PGDOG_PORT = 6432
@@ -114,3 +117,12 @@ def wait_for_no_prepared_xacts(timeout: 30)
 end
 
 Toxiproxy.host = 'http://127.0.0.1:8474'
+
+# Fetch /metrics from pgdog and return the integer value of the named
+# counter, or nil if it isn't present.
+def metric(name)
+  body = Net::HTTP.get(URI("http://127.0.0.1:#{OPENMETRICS_PORT}/metrics"))
+  prefix = "#{name} "
+  line = body.lines.find { |l| l.start_with?(prefix) }
+  line&.split&.last&.to_i
+end
