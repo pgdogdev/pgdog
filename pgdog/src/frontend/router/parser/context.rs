@@ -84,7 +84,7 @@ impl<'a> QueryParserContext<'a> {
 
     /// Are we using the conservative read/write separation strategy?
     pub(super) fn rw_conservative(&self) -> bool {
-        self.rw_strategy == &ReadWriteStrategy::Conservative
+        self.rw_strategy.is_conservative()
     }
 
     /// We need to parse queries using pg_query.

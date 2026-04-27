@@ -262,6 +262,18 @@ impl Shard {
         }
     }
 
+    /// Wait for the first primary detection.
+    pub(super) async fn wait_primary_detected(&self) {
+        if self.lb.has_primary() {
+            return;
+        }
+        let waiter = self.role_detected.notified();
+        if self.lb.has_primary() {
+            return;
+        }
+        waiter.await
+    }
+
     /// Shutdown pub/sub listener.
     fn shutdown_pub_sub(&self) {
         if let Some(pub_sub) = self.inner.pub_sub.swap(Arc::new(None)).deref() {
@@ -280,15 +292,16 @@ impl Deref for Shard {
 
 /// Shard connection pools
 /// and internal state.
-#[derive(Default, Debug, Clone)]
+#[derive(Default, Debug)]
 pub struct ShardInner {
     number: usize,
     lb: LoadBalancer,
-    comms: Arc<ShardComms>,
-    pub_sub: Arc<ArcSwap<Option<PubSubListener>>>,
+    comms: ShardComms,
+    pub_sub: ArcSwap<Option<PubSubListener>>,
     identifier: Arc<User>,
-    schema: Arc<OnceCell<Schema>>,
+    schema: OnceCell<Schema>,
     pub_sub_enabled: bool,
+    role_detected: Notify,
 }
 
 impl ShardInner {
@@ -305,19 +318,20 @@ impl ShardInner {
         } = shard;
         let primary = primary.as_ref().map(Pool::new);
         let lb = LoadBalancer::new(&primary, replicas, lb_strategy, rw_split);
-        let comms = Arc::new(ShardComms {
+        let comms = ShardComms {
             shutdown: Notify::new(),
             lsn_check_interval,
-        });
+        };
 
         Self {
             number,
             lb,
             comms,
-            pub_sub: Arc::new(ArcSwap::new(Arc::new(None))),
+            pub_sub: ArcSwap::new(Arc::new(None)),
             identifier,
-            schema: Arc::new(OnceCell::new()),
+            schema: OnceCell::new(),
             pub_sub_enabled,
+            role_detected: Notify::new(),
         }
     }
 }

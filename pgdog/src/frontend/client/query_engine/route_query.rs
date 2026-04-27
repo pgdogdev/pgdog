@@ -52,10 +52,10 @@ impl QueryEngine {
             if let Ok(cluster) = self.backend.cluster() {
                 timeout(
                     context.timeouts.query_timeout(&State::Active),
-                    cluster.wait_schema_loaded(),
+                    cluster.wait_ready(),
                 )
                 .await
-                .map_err(|_| Error::SchemaLoad)?;
+                .map_err(|_| Error::ClusterReady)?;
             }
             res
         } else {

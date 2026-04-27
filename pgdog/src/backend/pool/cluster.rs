@@ -679,6 +679,17 @@ impl Cluster {
         notified.await;
     }
 
+    /// Wait for the cluster to be ready to serve queries.
+    pub(crate) async fn wait_ready(&self) {
+        self.wait_schema_loaded().await;
+
+        if self.read_write_strategy().primary_required() {
+            for shard in &self.shards {
+                shard.wait_primary_detected().await;
+            }
+        }
+    }
+
     /// Execute a query on every primary in the cluster.
     pub async fn execute(
         &self,

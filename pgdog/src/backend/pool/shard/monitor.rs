@@ -76,6 +76,7 @@ impl ShardMonitor {
                     self.shard.number(),
                     self.shard.identifier()
                 );
+                self.shard.role_detected.notify_waiters();
             }
 
             let pool_with_stats = self

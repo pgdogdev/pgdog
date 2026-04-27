@@ -201,6 +201,13 @@ impl LoadBalancer {
         self.targets.iter().all(|target| target.pool.lock().online)
     }
 
+    /// Load balancer has a primary database.
+    pub(crate) fn has_primary(&self) -> bool {
+        self.targets
+            .iter()
+            .any(|target| target.role() == Role::Primary)
+    }
+
     /// Get a live connection from the pool.
     pub async fn get(&self, request: &Request) -> Result<Guard, Error> {
         match timeout(self.checkout_timeout, self.get_internal(request)).await {
