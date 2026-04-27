@@ -25,29 +25,26 @@ describe '2pc crash safety' do
     client.exec("INSERT INTO crash_safety_test (id, value) VALUES (1, 'b')")
 
     # Hold shard_1's responses so PREPARE TRANSACTION on shard_1 hangs
-    # waiting for the reply (latency, not timeout: latency delays bytes
-    # without closing the connection, which is what we need to catch
-    # pgdog mid-2PC instead of letting it bail and roll back).
+    # waiting for the reply. Latency keeps the connection open so pgdog
+    # stays mid-2PC.
     Toxiproxy[:crash_safety_shard_1].toxic(:latency, latency: 30_000).apply do
       Thread.new do
         begin
           client.exec('COMMIT')
         rescue PG::Error
-          # connection drops when we kill pgdog; expected.
+          # connection drops when we kill pgdog.
         end
       end
-      # Give pgdog enough time to issue PREPARE on shard_0 (real
-      # backend, fast) and then start blocking on shard_1's response
-      # before we kill it.
+      # Wait for pgdog to issue PREPARE on shard_0 and start blocking
+      # on shard_1's response before we kill it.
       sleep 1.0
       Process.kill('KILL', @pid)
       Process.waitpid(@pid)
       @pid = nil
     end
 
-    # Sanity check: at least one shard should have an orphan prepared
-    # xact left behind. Otherwise the test passes trivially because
-    # there was nothing for recovery to clean up.
+    # At least one shard must have an orphan prepared xact left behind,
+    # otherwise recovery has nothing to clean up.
     leftover = SHARDS.flat_map { |s| prepared_xacts(s) }
     expect(leftover).not_to be_empty,
       'no prepared xacts after kill; the kill landed before any PREPARE made it through'
@@ -75,13 +72,12 @@ describe '2pc crash safety' do
   end
 
   it 'commits orphan prepared xacts after a kill mid-COMMIT-PREPARED' do
-    # Catching pgdog reliably between "Committing record durable" and
-    # "all COMMIT PREPAREDs done" from outside is impractical:
-    # toxiproxy is byte-level (any delay on shard_1 also blocks
-    # PREPARE), and Postgres has no extensible hook in COMMIT PREPARED
-    # itself. Instead we synthesize the on-disk state pgdog would
-    # leave behind if it crashed mid-Phase2, then start pgdog and
-    # verify it commits the orphans.
+    # Synthesize the on-disk state pgdog would leave behind if it
+    # crashed mid-Phase2, then start pgdog and verify it commits the
+    # orphans. Catching pgdog reliably between "Committing record
+    # durable" and "all COMMIT PREPAREDs done" from outside isn't
+    # practical: toxiproxy is byte-level so any delay on shard_1 also
+    # blocks PREPARE, and Postgres has no hook in COMMIT PREPARED.
     stop_pgdog(@pid)
     @pid = nil
     FileUtils.rm_rf(@wal_dir)
