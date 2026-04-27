@@ -8,7 +8,7 @@ use pgdog_config::{
 };
 use std::{
     sync::{
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+        atomic::{AtomicBool, Ordering},
         Arc,
     },
     time::Duration,
@@ -681,7 +681,7 @@ mod test {
         },
         config::{
             config, DataType, Hasher, LoadBalancingStrategy, MultiTenant, ReadWriteSplit,
-            ReadWriteStrategy, ShardedTable,
+            ReadWriteStrategy, Role, ShardedTable,
         },
         frontend::ClientRequest,
         net::Query,
@@ -700,7 +700,10 @@ mod test {
                 config: Config::default(),
             });
             let replicas = &[PoolConfig {
-                address: Address::new_test(),
+                address: Address {
+                    configured_role: Role::Replica,
+                    ..Address::new_test()
+                },
                 config: Config::default(),
             }];
 
@@ -909,7 +912,28 @@ mod test {
 
     #[tokio::test]
     async fn test_launch_schema_loading_idempotent() {
-        todo!()
+        use tokio::time::{sleep, Duration};
+
+        let config = ConfigAndUsers::default();
+        let mut cluster = Cluster::new_test(&config);
+        cluster.sharded_schemas = ShardedSchemas::default();
+
+        assert!(cluster.load_schema());
+
+        // Pre-populate per-shard schemas so launch's spawned loaders become
+        // no-ops (Shard::load_schema returns Ok(false) when already initialized).
+        // This avoids touching a real database in the test.
+        for shard in &cluster.shards {
+            shard.schema_not_needed();
+        }
+
+        cluster.launch();
+        cluster.wait_schema_loaded().await;
+
+        // Second launch must be safe: per-shard OnceCell prevents any reload.
+        cluster.launch();
+        sleep(Duration::from_millis(50)).await;
+        cluster.wait_schema_loaded().await;
     }
 
     #[tokio::test]
@@ -926,12 +950,44 @@ mod test {
 
     #[tokio::test]
     async fn test_wait_schema_loaded_fast_path_when_already_loaded() {
-        todo!()
+        let config = ConfigAndUsers::default();
+        let mut cluster = Cluster::new_test(&config);
+        cluster.sharded_schemas = ShardedSchemas::default();
+
+        assert!(cluster.load_schema());
+
+        // Mark every shard's schema as already loaded.
+        for shard in &cluster.shards {
+            shard.schema_not_needed();
+        }
+
+        // Each shard's wait_schema_loaded() takes the fast path and returns
+        // immediately because schema.initialized() is true.
+        cluster.wait_schema_loaded().await;
     }
 
     #[tokio::test]
     async fn test_wait_schema_loaded_waits_for_notification() {
-        todo!()
+        use tokio::time::{timeout, Duration};
+
+        let config = ConfigAndUsers::default();
+        let mut cluster = Cluster::new_test(&config);
+        cluster.sharded_schemas = ShardedSchemas::default();
+
+        assert!(cluster.load_schema());
+
+        // Trigger schema_not_needed on each shard after a short delay so the
+        // waiter wakes up via the per-shard schema_waiter notification.
+        let shards: Vec<_> = cluster.shards.iter().cloned().collect();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            for shard in &shards {
+                shard.schema_not_needed();
+            }
+        });
+
+        let result = timeout(Duration::from_millis(200), cluster.wait_schema_loaded()).await;
+        assert!(result.is_ok());
     }
 
     #[test]

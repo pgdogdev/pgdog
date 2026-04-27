@@ -364,7 +364,10 @@ mod test {
         });
 
         let replicas = &[PoolConfig {
-            address: Address::new_test(),
+            address: Address {
+                configured_role: Role::Replica,
+                ..Address::new_test()
+            },
             ..Default::default()
         }];
 

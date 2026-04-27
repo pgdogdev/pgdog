@@ -3,7 +3,7 @@ use std::time::Duration;
 use tokio::time::sleep;
 
 use crate::backend::pool::{Address, Config, Error, PoolConfig, Request};
-use crate::config::LoadBalancingStrategy;
+use crate::config::{LoadBalancingStrategy, Role};
 use pgdog_stats::ReplicaLag;
 
 use super::*;
@@ -17,6 +17,7 @@ fn create_test_pool_config(host: &str, port: u16) -> PoolConfig {
             user: "pgdog".into(),
             passwords: vec!["pgdog".into()],
             database_name: "pgdog".into(),
+            configured_role: Role::Replica,
             ..Default::default()
         },
         config: Config {
@@ -1088,6 +1089,7 @@ fn create_test_pool_config_weighted(host: &str, port: u16, lb_weight: u8) -> Poo
             user: "pgdog".into(),
             passwords: vec!["pgdog".into()],
             database_name: "pgdog".into(),
+            configured_role: Role::Replica,
             ..Default::default()
         },
         config: Config {
