@@ -126,3 +126,17 @@ def metric(name)
   line = body.lines.find { |l| l.start_with?(prefix) }
   line&.split&.last&.to_i
 end
+
+# Synthesize a WAL containing a Begin + Committing pair for `gid` so
+# pgdog's recovery sees an in-flight Phase2 txn and drives COMMIT
+# PREPARED on its participants.
+def synthesize_phase2_wal(wal_dir, gid, user, database)
+  workspace = File.expand_path('../..', __dir__)
+  ok = system(
+    'cargo', 'run', '--quiet', '--release',
+    '-p', 'two-pc-crash-safety-wal-helper', '--',
+    wal_dir, gid, user, database,
+    chdir: workspace
+  )
+  raise 'wal_helper failed' unless ok
+end

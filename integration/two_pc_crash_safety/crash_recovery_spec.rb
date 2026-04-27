@@ -74,6 +74,53 @@ describe '2pc crash safety' do
     end
   end
 
+  it 'commits orphan prepared xacts after a kill mid-COMMIT-PREPARED' do
+    # Catching pgdog reliably between "Committing record durable" and
+    # "all COMMIT PREPAREDs done" from outside is impractical:
+    # toxiproxy is byte-level (any delay on shard_1 also blocks
+    # PREPARE), and Postgres has no extensible hook in COMMIT PREPARED
+    # itself. Instead we synthesize the on-disk state pgdog would
+    # leave behind if it crashed mid-Phase2, then start pgdog and
+    # verify it commits the orphans.
+    stop_pgdog(@pid)
+    @pid = nil
+    FileUtils.rm_rf(@wal_dir)
+    Dir.mkdir(@wal_dir)
+
+    gid = "__pgdog_2pc_#{rand(1..(1 << 62))}"
+    synthesize_phase2_wal(@wal_dir, gid, 'pgdog', 'pgdog')
+
+    # PgDog suffixes the gid with `_<shard_idx>` per shard so the
+    # names don't collide on a single cluster (pgdog/src/backend/pool/
+    # connection/binding.rs). Mirror that scheme here.
+    SHARDS.each_with_index do |shard, idx|
+      c = shard_conn(shard)
+      c.exec('BEGIN')
+      c.exec("INSERT INTO crash_safety_test (id, value) VALUES (#{idx}, 'r')")
+      c.exec("PREPARE TRANSACTION '#{gid}_#{idx}'")
+      c.close
+    end
+
+    @pid, _ = spawn_pgdog(CONFIG_DIR, wal_dir: @wal_dir)
+    wait_for_pgdog
+
+    expect(metric('two_pc_recovered_total')).to be > 0,
+      'restarted pgdog reports zero recovered txns; recovery did not run'
+
+    expect(wait_for_no_prepared_xacts).to be(true),
+      lambda {
+        leftover = SHARDS.flat_map { |s| prepared_xacts(s) }
+        "prepared xacts did not drain: #{leftover.inspect}"
+      }
+
+    SHARDS.each do |shard|
+      c = shard_conn(shard)
+      count = c.exec('SELECT COUNT(*) FROM crash_safety_test').to_a[0]['count'].to_i
+      c.close
+      expect(count).to eq(1), "expected 1 row on #{shard[:db]}, found #{count}"
+    end
+  end
+
   it 'no recovery work after a clean shutdown' do
     client = pgdog_conn
     client.exec('BEGIN')
