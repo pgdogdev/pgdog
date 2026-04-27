@@ -76,6 +76,14 @@ jobs:
       - name: Compute cache key
         id: cache-key
         run: echo "key=pgdog-bin-${{ runner.os }}-$(bash integration/ci/cache-key.sh)" >> "$GITHUB_OUTPUT"
+      # rust-cache must run before the binary restore: it lays down a
+      # stale target/ that can otherwise wipe target/release/pgdog when
+      # cargo reconciles fingerprints during plugin builds.
+      - name: Restore Rust cache for plugin builds
+        if: matrix.needs_rust_cache
+        uses: useblacksmith/rust-cache@v3
+        with:
+          prefix-key: build-v1
       - name: Restore pgdog binaries
         uses: useblacksmith/cache/restore@v5
         with:
@@ -84,11 +92,6 @@ jobs:
             target/release/pgdog
           key: ${{ steps.cache-key.outputs.key }}
           fail-on-cache-miss: true
-      - name: Restore Rust cache for plugin builds
-        if: matrix.needs_rust_cache
-        uses: useblacksmith/rust-cache@v3
-        with:
-          prefix-key: build-v1
       - name: Setup dependencies
         run: bash integration/ci/setup.sh --with-toxi
       - name: Run ${{ matrix.name }}

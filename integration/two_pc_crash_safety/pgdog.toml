@@ -1,0 +1,40 @@
+[general]
+two_phase_commit = true
+openmetrics_port = 9090
+
+[[databases]]
+name = "pgdog"
+host = "127.0.0.1"
+shard = 0
+database_name = "shard_0"
+
+# shard_1 is reached via the toxiproxy listener so the spec can hold
+# requests in flight (timeout toxic) and SIGKILL pgdog mid-2PC.
+[[databases]]
+name = "pgdog"
+host = "127.0.0.1"
+port = 5435
+shard = 1
+database_name = "shard_1"
+
+[[sharded_tables]]
+database = "pgdog"
+column = "id"
+data_type = "bigint"
+
+[[sharded_mappings]]
+database = "pgdog"
+column = "id"
+kind = "list"
+values = [0]
+shard = 0
+
+[[sharded_mappings]]
+database = "pgdog"
+column = "id"
+kind = "list"
+values = [1]
+shard = 1
+
+[admin]
+password = "pgdog"

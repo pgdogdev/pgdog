@@ -9,6 +9,7 @@ use pgdog::backend::databases;
 use pgdog::backend::pool::dns_cache::DnsCache;
 use pgdog::cli::{self, Commands};
 use pgdog::config::{self, config};
+use pgdog::frontend::client::query_engine::two_pc::Manager;
 use pgdog::frontend::listener::Listener;
 use pgdog::frontend::prepared_statements;
 use pgdog::plugin;
@@ -16,7 +17,7 @@ use pgdog::stats;
 use pgdog::util::pgdog_version;
 use pgdog::{healthcheck, net};
 use tokio::runtime::Builder;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = cli::Cli::parse();
@@ -146,6 +147,14 @@ async fn pgdog(command: Option<Commands>) -> Result<(), Box<dyn std::error::Erro
         None | Some(Commands::Run { .. }) => {
             if config().config.general.dry_run {
                 info!("dry run mode enabled");
+            }
+
+            if general.two_phase_commit {
+                if let Some(ref wal_dir) = general.two_phase_commit_wal_dir {
+                    Manager::get().enable_wal(wal_dir).await;
+                } else {
+                    warn!("[2pc] wal disabled, 2pc will run without durability")
+                }
             }
 
             let mut listener = Listener::new(format!("{}:{}", general.host, general.port));
