@@ -10,10 +10,10 @@ use std::str::FromStr;
 
 use bytes::BytesMut;
 
+use pgdog::frontend::client::query_engine::two_pc::TwoPcTransaction;
 use pgdog::frontend::client::query_engine::two_pc::wal::{
     BeginPayload, Record, Segment, TxnPayload,
 };
-use pgdog::frontend::client::query_engine::two_pc::TwoPcTransaction;
 
 #[tokio::main]
 async fn main() {
