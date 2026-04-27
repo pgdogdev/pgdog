@@ -135,7 +135,8 @@ pub async fn list_segments(dir: &Path) -> Result<Vec<PathBuf>, Error> {
 #[derive(Debug)]
 pub struct SegmentReader {
     file: File,
-    path: PathBuf,
+    /// Identifies the segment for diagnostics.
+    #[allow(dead_code)]
     start_lsn: u64,
     next_lsn: u64,
     /// Bytes that have been read from the file but not yet decoded.
@@ -172,7 +173,6 @@ impl SegmentReader {
 
         Ok(Self {
             file,
-            path: path.to_path_buf(),
             start_lsn,
             next_lsn: start_lsn,
             buf: BytesMut::new(),
@@ -181,22 +181,9 @@ impl SegmentReader {
         })
     }
 
-    pub fn start_lsn(&self) -> u64 {
-        self.start_lsn
-    }
-
     /// LSN of the next record this reader will return.
     pub fn next_lsn(&self) -> u64 {
         self.next_lsn
-    }
-
-    /// File offset (in bytes) of the end of the last good record.
-    pub fn last_good_offset(&self) -> u64 {
-        self.last_good_offset
-    }
-
-    pub fn path(&self) -> &Path {
-        &self.path
     }
 
     /// Decode and return the next record. See the type-level docs for
@@ -246,7 +233,6 @@ impl SegmentReader {
     pub async fn into_writable(self) -> Result<Segment, Error> {
         let SegmentReader {
             mut file,
-            path,
             start_lsn,
             next_lsn,
             last_good_offset,
@@ -262,7 +248,6 @@ impl SegmentReader {
 
         Ok(Segment {
             file,
-            path,
             start_lsn,
             next_lsn,
             size_bytes: last_good_offset,
@@ -288,7 +273,8 @@ impl SegmentReader {
 #[derive(Debug)]
 pub struct Segment {
     file: File,
-    path: PathBuf,
+    /// Identifies the segment for diagnostics.
+    #[allow(dead_code)]
     start_lsn: u64,
     next_lsn: u64,
     size_bytes: u64,
@@ -312,7 +298,6 @@ impl Segment {
 
         Ok(Self {
             file,
-            path,
             start_lsn,
             next_lsn: start_lsn,
             size_bytes: HEADER_BYTES,
@@ -371,11 +356,7 @@ impl Segment {
         Ok(())
     }
 
-    pub fn start_lsn(&self) -> u64 {
-        self.start_lsn
-    }
-
-    /// LSN that will be assigned to the next [`Segment::append`] call.
+    /// LSN that will be assigned to the next [`Segment::commit`] call.
     pub fn next_lsn(&self) -> u64 {
         self.next_lsn
     }
@@ -383,10 +364,6 @@ impl Segment {
     /// Total file size on disk, including the header.
     pub fn size_bytes(&self) -> u64 {
         self.size_bytes
-    }
-
-    pub fn path(&self) -> &Path {
-        &self.path
     }
 }
 
@@ -422,7 +399,7 @@ mod tests {
         let path = dir.path().join(segment_filename(0));
         let mut reader = SegmentReader::open(&path).await.unwrap();
         assert!(reader.next().await.unwrap().is_none());
-        assert_eq!(reader.last_good_offset(), HEADER_BYTES);
+        assert_eq!(reader.last_good_offset, HEADER_BYTES);
     }
 
     #[tokio::test]
@@ -482,7 +459,7 @@ mod tests {
             tokio::io::AsyncWriteExt::flush(&mut seg.file)
                 .await
                 .unwrap();
-            seg.path().to_path_buf()
+            dir.path().join(segment_filename(0))
         };
 
         let mut reader = SegmentReader::open(&path).await.unwrap();
@@ -496,7 +473,7 @@ mod tests {
         };
         assert_eq!(records.len(), 1);
         assert!(matches!(term, Err(Error::TornTail { .. })));
-        let last_good = reader.last_good_offset();
+        let last_good = reader.last_good_offset;
         let seg = reader.into_writable().await.unwrap();
         assert_eq!(seg.size_bytes(), last_good);
 
@@ -521,7 +498,7 @@ mod tests {
         .encode(&mut buf)
         .unwrap();
         seg.commit(&buf, 2).await.unwrap();
-        let path = seg.path().to_path_buf();
+        let path = dir.path().join(segment_filename(0));
         drop(seg);
 
         let mut on_disk = tokio::fs::read(&path).await.unwrap();
@@ -569,7 +546,8 @@ mod tests {
     #[tokio::test]
     async fn many_records_span_multiple_read_chunks() {
         let dir = TempDir::new().unwrap();
-        let mut seg = Segment::create(dir.path(), 100).await.unwrap();
+        let start_lsn = 100;
+        let mut seg = Segment::create(dir.path(), start_lsn).await.unwrap();
         let payload = "x".repeat(1024);
         let mut expected = Vec::new();
         let mut buf = BytesMut::new();
@@ -583,7 +561,7 @@ mod tests {
             expected.push(r);
         }
         seg.commit(&buf, expected.len() as u32).await.unwrap();
-        let path = seg.path().to_path_buf();
+        let path = dir.path().join(segment_filename(start_lsn));
         drop(seg);
 
         let mut reader = SegmentReader::open(&path).await.unwrap();
@@ -592,6 +570,6 @@ mod tests {
             records.push(r);
         }
         assert_eq!(records, expected);
-        assert_eq!(reader.next_lsn(), 100 + expected.len() as u64);
+        assert_eq!(reader.next_lsn(), start_lsn + expected.len() as u64);
     }
 }
