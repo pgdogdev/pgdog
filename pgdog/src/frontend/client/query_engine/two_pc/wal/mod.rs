@@ -9,4 +9,6 @@ mod segment;
 mod writer;
 
 pub use error::Error;
+pub use record::{BeginPayload, Record, TxnPayload};
+pub use segment::Segment;
 pub use writer::Wal;
