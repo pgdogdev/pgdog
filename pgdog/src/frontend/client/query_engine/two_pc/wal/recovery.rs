@@ -6,9 +6,10 @@
 //! task drives them to a terminal state via the existing
 //! `cleanup_phase` machinery.
 //!
-//! Returns the writable [`Segment`] the writer task should continue
-//! appending to. If the directory had no segments, a fresh one is created
-//! at LSN 0.
+//! Returns a [`Recovered`] containing the writable [`Segment`] the writer
+//! task should continue appending to and the active-2PC snapshot the
+//! writer uses to serve checkpoints. If the directory had no segments, a
+//! fresh one is created at LSN 0.
 
 use std::path::Path;
 

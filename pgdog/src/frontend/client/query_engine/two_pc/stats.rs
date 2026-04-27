@@ -1,7 +1,7 @@
-//! Process-level 2PC counters surfaced via admin SQL and OpenMetrics.
+//! Process-level 2PC counters surfaced via the OpenMetrics endpoint.
 //!
-//! Counters are bumped from the manager / WAL paths; readers snapshot
-//! them with relaxed atomic loads. No locks involved.
+//! Counters are bumped from the manager during recovery and read by
+//! `pgdog::stats::two_pc::TwoPc::load`.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 

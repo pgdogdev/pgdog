@@ -127,7 +127,7 @@ struct WalShutdown {
     done: Notify,
 }
 
-/// Cheaply-cloneable handle to the WAL writer task.
+/// Handle to the WAL writer task.
 #[derive(Debug, Clone)]
 pub struct Wal {
     tx: mpsc::Sender<WriteRequest>,
@@ -135,12 +135,11 @@ pub struct Wal {
 }
 
 impl Wal {
-    /// Probe the configured WAL directory, take an exclusive flock on
-    /// `<dir>/.lock` so a second pgdog can't race us, replay any
-    /// existing log into `manager`, and spawn the writer task. The
-    /// flock is held for the lifetime of the writer task; on shutdown
-    /// or panic the underlying `File` drops and the kernel releases
-    /// the lock.
+    /// Take an exclusive flock on the configured WAL directory's
+    /// `.lock` so a second pgdog can't race us, replay any existing
+    /// log into `manager`, and spawn the writer task. The flock is
+    /// held for the lifetime of the writer task; on shutdown or panic
+    /// the underlying `File` drops and the kernel releases the lock.
     ///
     /// Returns `Err` if the directory isn't usable, another pgdog
     /// already holds the dir, or recovery fails; the caller is
@@ -382,8 +381,7 @@ async fn process_batch(
     let mut encode_err: Option<Error> = None;
     let mut last_checkpoint_idx: Option<usize> = None;
     // Records every snapshot mutation in batch order so we can roll
-    // back to the start-of-batch state if encode or sync fails. Sized
-    // O(batch), independent of the active set.
+    // back to the start-of-batch state if encode or sync fails.
     let mut undo: Vec<Undo> = Vec::with_capacity(batch.len());
 
     for (i, req) in batch.iter().enumerate() {
