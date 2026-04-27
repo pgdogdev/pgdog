@@ -124,15 +124,43 @@ impl Aggregate {
     pub fn parse(stmt: &SelectStmt) -> Self {
         let mut targets = vec![];
         let mut registry = ExpressionRegistry::new();
+
+        // Canonical id of every SELECT-list expression, indexed by position.
+        // Used to match arbitrary GROUP BY expressions like `clientip - 1`
+        // back to their SELECT-list slot when neither an ordinal nor a bare
+        // ColumnRef applies.
+        let mut group_by_registry = ExpressionRegistry::new();
+        let target_canonical_ids: Vec<Option<usize>> = stmt
+            .target_list
+            .iter()
+            .map(|node| {
+                let NodeEnum::ResTarget(res) = node.node.as_ref()? else {
+                    return None;
+                };
+                res.val
+                    .as_ref()
+                    .map(|val| group_by_registry.intern(val.as_ref()))
+            })
+            .collect();
+
+        let lookup_canonical = |registry: &mut ExpressionRegistry, node: &Node| -> Option<usize> {
+            let id = registry.intern(node);
+            target_canonical_ids
+                .iter()
+                .position(|target_id| *target_id == Some(id))
+        };
+
         let group_by = stmt
             .group_clause
             .iter()
             .filter_map(|node| {
-                node.node.as_ref().map(|node| match node {
-                    NodeEnum::AConst(aconst) => aconst.val.as_ref().map(|val| match val {
-                        Val::Ival(Integer { ival }) => Some(*ival as usize - 1), // We use 0-indexed arrays, Postgres uses 1-indexed.
+                let inner = node.node.as_ref()?;
+                match inner {
+                    NodeEnum::AConst(aconst) => match aconst.val.as_ref()? {
+                        // GROUP BY 1 -- 1-based ordinal into the SELECT list.
+                        Val::Ival(Integer { ival }) => (*ival as usize).checked_sub(1),
                         _ => None,
-                    }),
+                    },
                     NodeEnum::ColumnRef(column_ref) => {
                         let column_names: Vec<&String> = column_ref
                             .fields
@@ -145,13 +173,14 @@ impl Aggregate {
                                 _ => None,
                             })
                             .collect();
-                        Some(target_list_to_index(stmt, column_names))
+                        target_list_to_index(stmt, column_names)
+                            .or_else(|| lookup_canonical(&mut group_by_registry, node))
                     }
-                    _ => None,
-                })
+                    // Arbitrary expressions (AExpr, FuncCall, TypeCast, ...).
+                    // Match them to a SELECT-list entry by canonical form.
+                    _ => lookup_canonical(&mut group_by_registry, node),
+                }
             })
-            .flatten()
-            .flatten()
             .collect::<Vec<_>>();
 
         for (idx, node) in stmt.target_list.iter().enumerate() {
@@ -537,6 +566,56 @@ mod test {
                 let target = &aggr.targets()[0];
                 assert!(matches!(target.function(), AggregateFunction::Sum));
                 assert_eq!(target.column(), 2);
+            }
+            _ => panic!("not a select"),
+        }
+    }
+
+    #[test]
+    fn test_parse_group_by_arithmetic_expression() {
+        // ClickBench Q36 shape: arithmetic expressions appear in both
+        // SELECT and GROUP BY. The parser used to recognize only ordinals
+        // and bare column refs, so columns 1..3 were dropped and the merger
+        // emitted NULLs for them.
+        let query = pg_query::parse(
+            "SELECT clientip, clientip - 1, clientip - 2, clientip - 3, COUNT(*) \
+             FROM hits \
+             GROUP BY clientip, clientip - 1, clientip - 2, clientip - 3",
+        )
+        .unwrap()
+        .protobuf
+        .stmts
+        .first()
+        .cloned()
+        .unwrap();
+        match query.stmt.unwrap().node.unwrap() {
+            NodeEnum::SelectStmt(stmt) => {
+                let aggr = Aggregate::parse(&stmt);
+                assert_eq!(aggr.group_by(), &[0, 1, 2, 3]);
+                assert_eq!(aggr.targets().len(), 1);
+                assert_eq!(aggr.targets()[0].column(), 4);
+            }
+            _ => panic!("not a select"),
+        }
+    }
+
+    #[test]
+    fn test_parse_group_by_function_expression() {
+        // GROUP BY DATE_TRUNC(...) -- another non-ColumnRef shape (FuncCall).
+        let query = pg_query::parse(
+            "SELECT DATE_TRUNC('minute', t), COUNT(*) FROM hits \
+             GROUP BY DATE_TRUNC('minute', t)",
+        )
+        .unwrap()
+        .protobuf
+        .stmts
+        .first()
+        .cloned()
+        .unwrap();
+        match query.stmt.unwrap().node.unwrap() {
+            NodeEnum::SelectStmt(stmt) => {
+                let aggr = Aggregate::parse(&stmt);
+                assert_eq!(aggr.group_by(), &[0]);
             }
             _ => panic!("not a select"),
         }

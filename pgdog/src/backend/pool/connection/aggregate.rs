@@ -1,6 +1,6 @@
 //! Aggregate buffer.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::{
     frontend::router::parser::{
@@ -16,7 +16,7 @@ use crate::{
     },
 };
 use rust_decimal::prelude::{FromPrimitive, ToPrimitive};
-use rust_decimal::Decimal;
+use rust_decimal::{Decimal, RoundingStrategy};
 
 use super::Error;
 
@@ -50,6 +50,7 @@ struct Accumulator<'a> {
     datum: Datum,
     avg: Option<AvgState>,
     variance: Option<VarianceState>,
+    distinct: Option<DistinctState>,
 }
 
 impl<'a> Accumulator<'a> {
@@ -71,10 +72,15 @@ impl<'a> Accumulator<'a> {
                     datum: Datum::Null,
                     avg: None,
                     variance: None,
+                    distinct: None,
                 };
 
                 if matches!(target.function(), AggregateFunction::Avg) {
                     accumulator.avg = Some(AvgState::new(helper.count));
+                }
+
+                if matches!(target.function(), AggregateFunction::Count) && target.is_distinct() {
+                    accumulator.distinct = Some(DistinctState::new(helper.distinct));
                 }
 
                 if matches!(
@@ -103,7 +109,34 @@ impl<'a> Accumulator<'a> {
             .ok_or(Error::DecoderRowError)?;
         match self.target.function() {
             AggregateFunction::Count => {
-                if !self.datum.is_null() {
+                if let Some(state) = self.distinct.as_mut() {
+                    if !state.supported {
+                        return Ok(false);
+                    }
+                    let Some(distinct_column) = state.distinct_column else {
+                        state.supported = false;
+                        return Ok(false);
+                    };
+                    let helper = row
+                        .get_column(distinct_column, decoder)?
+                        .ok_or(Error::DecoderRowError)?;
+                    match helper.value {
+                        Datum::Null => {}
+                        Datum::Array(array) => {
+                            for element in array.elements() {
+                                if let Some(value) = element {
+                                    state.values.insert(value.clone());
+                                }
+                            }
+                        }
+                        // Helper column wasn't decoded as an array — we can't
+                        // dedupe correctly, so fall back to per-shard rows.
+                        _ => {
+                            state.supported = false;
+                            return Ok(false);
+                        }
+                    }
+                } else if !self.datum.is_null() {
                     self.datum = self.datum.clone() + column.value;
                 } else {
                     self.datum = column.value;
@@ -182,6 +215,14 @@ impl<'a> Accumulator<'a> {
     }
 
     fn finalize(&mut self) -> Result<bool, Error> {
+        if let Some(state) = self.distinct.as_mut() {
+            if !state.supported {
+                return Ok(false);
+            }
+            self.datum = Datum::Bigint(state.values.len() as i64);
+            return Ok(true);
+        }
+
         if let Some(state) = self.avg.as_mut() {
             if !state.supported {
                 return Ok(false);
@@ -242,6 +283,24 @@ struct HelperColumns {
     count: Option<usize>,
     sum: Option<usize>,
     sumsq: Option<usize>,
+    distinct: Option<usize>,
+}
+
+#[derive(Debug)]
+struct DistinctState {
+    distinct_column: Option<usize>,
+    values: HashSet<Datum>,
+    supported: bool,
+}
+
+impl DistinctState {
+    fn new(distinct_column: Option<usize>) -> Self {
+        Self {
+            distinct_column,
+            values: HashSet::new(),
+            supported: distinct_column.is_some(),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -476,12 +535,17 @@ impl<'a> Aggregates<'a> {
                 HelperKind::Count => entry.count = Some(index),
                 HelperKind::Sum => entry.sum = Some(index),
                 HelperKind::SumSquares => entry.sumsq = Some(index),
+                HelperKind::Distinct => entry.distinct = Some(index),
             }
         }
 
         let merge_supported = aggregate.targets().iter().all(|target| {
             let key = (target.expr_id(), target.is_distinct());
             match target.function() {
+                AggregateFunction::Count if target.is_distinct() => helper_columns
+                    .get(&key)
+                    .and_then(|columns| columns.distinct)
+                    .is_some(),
                 AggregateFunction::Avg => helper_columns
                     .get(&key)
                     .and_then(|columns| columns.count)
@@ -636,17 +700,33 @@ fn divide_for_average(sum: &Datum, count: &Datum) -> Option<Datum> {
             (float.0 as f64 / divisor_i128 as f64) as f32,
         ))),
         Datum::Numeric(numeric) => {
-            let decimal = numeric.as_decimal()?.to_owned();
+            let dividend = numeric.as_decimal()?.to_owned();
             let divisor = Decimal::from_i128_with_scale(divisor_i128, 0);
             if divisor == Decimal::ZERO {
                 Some(Datum::Null)
             } else {
-                Some(Datum::Numeric(Numeric::from(decimal / divisor)))
+                // Postgres's numeric_div (used by AVG) picks the result
+                // scale via select_div_scale: at least NUMERIC_MIN_SIG_DIGITS
+                // (16), bumped up by the inputs' dscale. rust_decimal's
+                // Decimal::div returns whatever scale fits in 28 total digits
+                // -- typically more than 16 for small averages -- so the wire
+                // format ends up wider than a non-sharded query. Match
+                // Postgres by rounding to the same scale, half-away-from-zero
+                // like numeric_div does.
+                let target_scale = dividend.scale().max(NUMERIC_AVG_MIN_SCALE);
+                let rescaled = (dividend / divisor)
+                    .round_dp_with_strategy(target_scale, RoundingStrategy::MidpointAwayFromZero);
+                Some(Datum::Numeric(Numeric::from(rescaled)))
             }
         }
         _ => None,
     }
 }
+
+/// Postgres's `select_div_scale` floors the result of `numeric_div` at
+/// `NUMERIC_MIN_SIG_DIGITS` (16) decimal places, which is what `AVG` over
+/// integer columns ends up emitting on the wire.
+const NUMERIC_AVG_MIN_SCALE: u32 = 16;
 
 fn datum_as_i128(datum: &Datum) -> Option<i128> {
     match datum {
@@ -739,6 +819,45 @@ mod test {
     }
 
     #[test]
+    fn divide_for_average_numeric_matches_postgres_avg_scale() {
+        // SELECT AVG(x) FROM hits; where x is int2 -- baseline Postgres
+        // emits "1228.7333333333333333" (scale 16). Pgdog used to emit
+        // scale 20 because rust_decimal's Decimal::div picks the widest
+        // scale that fits in 28 digits. Verify the divider rescales to
+        // match Postgres.
+        let sum = Datum::Numeric(Numeric::from(Decimal::from_i128_with_scale(18431, 0)));
+        let count = Datum::Bigint(15);
+        let result = divide_for_average(&sum, &count).unwrap();
+        match result {
+            Datum::Numeric(numeric) => {
+                let decimal = numeric.as_decimal().unwrap();
+                assert_eq!(decimal.scale(), 16);
+                assert_eq!(decimal.to_string(), "1228.7333333333333333");
+            }
+            other => panic!("unexpected datum variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn divide_for_average_numeric_preserves_input_scale_when_higher() {
+        // AVG(numeric(20, 20)) where the input scale (20) exceeds the
+        // 16-digit floor -- Postgres keeps the larger scale, and so should pgdog.
+        let sum = Datum::Numeric(Numeric::from(Decimal::from_i128_with_scale(
+            12345678901234567890,
+            20,
+        )));
+        let count = Datum::Bigint(1);
+        let result = divide_for_average(&sum, &count).unwrap();
+        match result {
+            Datum::Numeric(numeric) => {
+                let decimal = numeric.as_decimal().unwrap();
+                assert_eq!(decimal.scale(), 20);
+            }
+            other => panic!("unexpected datum variant: {other:?}"),
+        }
+    }
+
+    #[test]
     fn divide_for_average_zero_count() {
         let sum = Datum::Double(Double(30.0));
         let count = Datum::Bigint(0);
@@ -764,6 +883,18 @@ mod test {
             table_oid: 0,
             column: 0,
             type_oid: 1007,
+            type_size: -1,
+            type_modifier: -1,
+            format: 0,
+        }
+    }
+
+    fn text_array_field(name: &str) -> Field {
+        Field {
+            name: name.into(),
+            table_oid: 0,
+            column: 0,
+            type_oid: 1009, // text[]
             type_size: -1,
             type_modifier: -1,
             format: 0,
@@ -1192,6 +1323,109 @@ mod test {
         let row = result.pop_front().unwrap();
         let variance = row.get::<Double>(0, Format::Text).unwrap().0;
         assert!((variance - 20.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn aggregate_count_distinct_dedupes_across_shards() {
+        // SELECT COUNT(DISTINCT phrase) FROM hits with two shards where
+        // some phrases overlap ({a,b,c} vs {b,c,d}). The naive sum gives 6;
+        // Postgres returns 4. Pgdog now matches by deduping the per-shard
+        // array_agg(DISTINCT) helper into a HashSet before counting.
+        let stmt = pg_query::parse("SELECT COUNT(DISTINCT phrase) FROM hits")
+            .unwrap()
+            .protobuf
+            .stmts
+            .first()
+            .cloned()
+            .unwrap();
+        let aggregate = match stmt.stmt.unwrap().node.unwrap() {
+            pg_query::NodeEnum::SelectStmt(stmt) => Aggregate::parse(&stmt),
+            _ => panic!("expected select stmt"),
+        };
+
+        let rd = RowDescription::new(&[
+            Field::bigint("count"),
+            text_array_field("__pgdog_distinct_expr0_col0"),
+        ]);
+        let decoder = Decoder::from(&rd);
+
+        let mut rows = VecDeque::new();
+        let mut shard0 = DataRow::new();
+        shard0.add(3_i64).add(Bytes::from_static(b"{a,b,c}"));
+        rows.push_back(shard0);
+        let mut shard1 = DataRow::new();
+        shard1.add(3_i64).add(Bytes::from_static(b"{b,c,d}"));
+        rows.push_back(shard1);
+
+        let mut plan = AggregateRewritePlan::default();
+        plan.add_drop_column(1);
+        plan.add_helper(HelperMapping {
+            target_column: 0,
+            helper_column: 1,
+            expr_id: 0,
+            distinct: true,
+            kind: HelperKind::Distinct,
+            alias: "__pgdog_distinct_expr0_col0".into(),
+        });
+
+        let aggregates = Aggregates::new(&rows, &decoder, &aggregate, &plan);
+        assert!(aggregates.merge_supported);
+        let mut result = aggregates.aggregate().unwrap();
+
+        assert_eq!(result.len(), 1);
+        let row = result.pop_front().unwrap();
+        let count = row.get::<i64>(0, Format::Text).unwrap();
+        assert_eq!(count, 4);
+    }
+
+    #[test]
+    fn aggregate_count_distinct_skips_nulls() {
+        // Postgres COUNT(DISTINCT x) ignores NULLs, but array_agg(DISTINCT x)
+        // includes a single NULL. Make sure the merger doesn't count it.
+        let stmt = pg_query::parse("SELECT COUNT(DISTINCT phrase) FROM hits")
+            .unwrap()
+            .protobuf
+            .stmts
+            .first()
+            .cloned()
+            .unwrap();
+        let aggregate = match stmt.stmt.unwrap().node.unwrap() {
+            pg_query::NodeEnum::SelectStmt(stmt) => Aggregate::parse(&stmt),
+            _ => panic!("expected select stmt"),
+        };
+
+        let rd = RowDescription::new(&[
+            Field::bigint("count"),
+            text_array_field("__pgdog_distinct_expr0_col0"),
+        ]);
+        let decoder = Decoder::from(&rd);
+
+        let mut rows = VecDeque::new();
+        let mut shard0 = DataRow::new();
+        shard0.add(2_i64).add(Bytes::from_static(b"{a,NULL}"));
+        rows.push_back(shard0);
+        let mut shard1 = DataRow::new();
+        shard1.add(2_i64).add(Bytes::from_static(b"{b,NULL}"));
+        rows.push_back(shard1);
+
+        let mut plan = AggregateRewritePlan::default();
+        plan.add_drop_column(1);
+        plan.add_helper(HelperMapping {
+            target_column: 0,
+            helper_column: 1,
+            expr_id: 0,
+            distinct: true,
+            kind: HelperKind::Distinct,
+            alias: "__pgdog_distinct_expr0_col0".into(),
+        });
+
+        let mut result = Aggregates::new(&rows, &decoder, &aggregate, &plan)
+            .aggregate()
+            .unwrap();
+        assert_eq!(result.len(), 1);
+        let row = result.pop_front().unwrap();
+        let count = row.get::<i64>(0, Format::Text).unwrap();
+        assert_eq!(count, 2);
     }
 
     #[test]
