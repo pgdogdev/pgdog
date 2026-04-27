@@ -506,7 +506,7 @@ pub struct General {
 
     /// Enable automatic conversion of single-statement write transactions to use two-phase commit.
     ///
-    /// _Default:_ `true`
+    /// _Default:_ `false`
     ///
     /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#two_phase_commit_auto
     #[serde(default)]

@@ -1067,7 +1067,7 @@
           "default": false
         },
         "two_phase_commit_auto": {
-          "description": "Enable automatic conversion of single-statement write transactions to use two-phase commit.\n\n_Default:_ `true`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#two_phase_commit_auto",
+          "description": "Enable automatic conversion of single-statement write transactions to use two-phase commit.\n\n_Default:_ `false`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#two_phase_commit_auto",
           "type": [
             "boolean",
             "null"
