@@ -17,8 +17,21 @@ pub enum ReadWriteStrategy {
     /// Transactions are writes, standalone `SELECT` are reads (default).
     #[default]
     Conservative,
+    /// Same as conservative, except primary is required before accepting queries.
+    ConservativePrimaryRequired,
     /// Use first statement inside a transaction for determining query route.
     Aggressive,
+}
+
+impl ReadWriteStrategy {
+    pub fn is_conservative(&self) -> bool {
+        matches!(self, Self::Conservative | Self::ConservativePrimaryRequired)
+    }
+
+    /// Requires primary database before serving traffic.
+    pub fn primary_required(&self) -> bool {
+        matches!(self, Self::ConservativePrimaryRequired)
+    }
 }
 
 impl FromStr for ReadWriteStrategy {

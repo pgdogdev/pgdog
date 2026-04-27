@@ -2,6 +2,7 @@
 lsn_check_delay = 0
 lsn_check_interval = 5_000
 idle_timeout = 1_000
+read_write_strategy = "conservative_primary_required"
 
 [[databases]]
 name = "postgres"
