@@ -7,21 +7,20 @@
 //!
 //! [`Segment`] is the writable handle over an open segment file; it is
 //! intentionally not `Send`-shared and is owned by a single writer task.
-//! Records are appended one at a time with [`Segment::append`]; durability
-//! is achieved by calling [`Segment::sync`] separately, which lets a
-//! caller batch many appends behind a single fsync (group commit).
+//! Records are written in batches via [`Segment::commit`], which appends
+//! a pre-encoded buffer and fsyncs as one atomic operation (group commit).
 //!
 //! [`SegmentReader`] iterates an existing segment one record at a time.
 //! It tracks the byte offset of the last good record so that a torn or
 //! corrupt tail can be truncated when a reader is converted into a
-//! writable segment via [`Segment::from_reader`].
+//! writable segment via [`SegmentReader::into_writable`].
 //!
 //! # Durability
 //!
-//! [`Segment::sync`] calls `tokio::fs::File::sync_all`, which on Linux
-//! issues `fsync(2)` and provides true durability. On macOS, `fsync(2)`
-//! flushes only kernel buffers and does not guarantee that data has
-//! reached the physical device; true durability there requires
+//! [`Segment::commit`] ends with `tokio::fs::File::sync_all`, which on
+//! Linux issues `fsync(2)` and provides true durability. On macOS,
+//! `fsync(2)` flushes only kernel buffers and does not guarantee that
+//! data has reached the physical device; true durability there requires
 //! `F_FULLFSYNC`, which is not exposed by tokio.
 
 use std::path::{Path, PathBuf};
@@ -283,10 +282,9 @@ impl SegmentReader {
 
 /// A writable WAL segment.
 ///
-/// Owned by a single writer task. Records are appended via
-/// [`Segment::append`]; durability is requested separately via
-/// [`Segment::sync`] so a caller can batch multiple appends behind one
-/// fsync (group commit).
+/// Owned by a single writer task. Records are written via
+/// [`Segment::commit`], which appends a pre-encoded batch and fsyncs
+/// atomically (group commit).
 #[derive(Debug)]
 pub struct Segment {
     file: File,
