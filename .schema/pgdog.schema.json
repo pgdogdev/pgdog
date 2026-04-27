@@ -108,6 +108,10 @@
         "tls_verify": "prefer",
         "two_phase_commit": false,
         "two_phase_commit_auto": null,
+        "two_phase_commit_wal_checkpoint_interval": 60,
+        "two_phase_commit_wal_dir": "./pgdog_wal",
+        "two_phase_commit_wal_fsync_interval": 2,
+        "two_phase_commit_wal_segment_size": 16777216,
         "unique_id_function": "standard",
         "unique_id_min": 0,
         "workers": 2
@@ -1073,6 +1077,32 @@
             "null"
           ],
           "default": null
+        },
+        "two_phase_commit_wal_checkpoint_interval": {
+          "description": "How often, in seconds, to write a checkpoint record to the two-phase commit WAL and garbage-collect old segments.\n\n_Default:_ `60`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#two_phase_commit_wal_checkpoint_interval",
+          "type": "integer",
+          "format": "uint64",
+          "default": 60,
+          "minimum": 0
+        },
+        "two_phase_commit_wal_dir": {
+          "description": "Directory where the two-phase commit write-ahead log is stored.\n\n**Note:** This setting cannot be changed at runtime. PgDog acquires an exclusive `flock` on `<dir>/.lock` at startup. If the directory cannot be created or written to, or another PgDog process already holds the lock, the WAL is disabled and a warning is logged: 2PC will continue to function but will not be durable across restarts.\n\n_Default:_ `./pgdog_wal`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#two_phase_commit_wal_dir",
+          "type": "string",
+          "default": "./pgdog_wal"
+        },
+        "two_phase_commit_wal_fsync_interval": {
+          "description": "How long, in milliseconds, the two-phase commit WAL writer waits to coalesce concurrent appends into a single fsync.\n\n**Note:** Setting this to `0` disables waiting for additional appends; records already queued in the channel when the writer wakes are still batched into one fsync. Higher values trade per-transaction commit latency for fewer fsyncs under load.\n\n_Default:_ `2`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#two_phase_commit_wal_fsync_interval",
+          "type": "integer",
+          "format": "uint64",
+          "default": 2,
+          "minimum": 0
+        },
+        "two_phase_commit_wal_segment_size": {
+          "description": "Maximum size, in bytes, of a single two-phase commit WAL segment file before it is rotated.\n\n_Default:_ `16777216` (16 MiB)\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#two_phase_commit_wal_segment_size",
+          "type": "integer",
+          "format": "uint64",
+          "default": 16777216,
+          "minimum": 0
         },
         "unique_id_function": {
           "description": "Unique ID generation function.",

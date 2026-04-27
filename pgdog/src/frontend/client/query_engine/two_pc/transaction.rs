@@ -1,7 +1,8 @@
 use rand::{rng, Rng};
+use serde::{Deserialize, Serialize};
 use std::{fmt::Display, str::FromStr};
 
-#[derive(Debug, Clone, Copy, PartialEq, Hash, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Hash, Eq, Serialize, Deserialize)]
 pub struct TwoPcTransaction(usize);
 
 static PREFIX: &str = "__pgdog_2pc_";

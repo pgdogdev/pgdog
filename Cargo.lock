@@ -1149,6 +1149,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "19d374276b40fb8bbdee95aef7c7fa6b5316ec764510eb64b8dd0e2ed0d7e7f5"
 
 [[package]]
+name = "crc32c"
+version = "0.6.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3a47af21622d091a8f0fb295b88bc886ac74efcc613efc19f5d0b21de5c89e47"
+dependencies = [
+ "rustc_version",
+]
+
+[[package]]
 name = "crc32fast"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3199,6 +3208,7 @@ dependencies = [
  "cc",
  "chrono",
  "clap",
+ "crc32c",
  "csv-core",
  "dashmap",
  "derive_builder",
@@ -5552,6 +5562,15 @@ name = "try-lock"
 version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
+
+[[package]]
+name = "two-pc-crash-safety-wal-helper"
+version = "0.0.0"
+dependencies = [
+ "bytes",
+ "pgdog",
+ "tokio",
+]
 
 [[package]]
 name = "typenum"

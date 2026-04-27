@@ -1,0 +1,14 @@
+[package]
+name = "two-pc-crash-safety-wal-helper"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[[bin]]
+name = "wal_helper"
+path = "src/main.rs"
+
+[dependencies]
+bytes = "1"
+pgdog = { path = "../../../pgdog" }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
