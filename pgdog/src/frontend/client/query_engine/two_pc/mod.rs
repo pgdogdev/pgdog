@@ -9,6 +9,7 @@ pub mod guard;
 pub mod manager;
 pub mod phase;
 pub mod server_transactions;
+pub mod stats;
 pub mod transaction;
 pub mod wal;
 
@@ -16,6 +17,7 @@ pub use guard::TwoPcGuard;
 pub use manager::Manager;
 pub use phase::TwoPcPhase;
 pub(crate) use server_transactions::TwoPcTransactions;
+pub use stats::TwoPcStats;
 pub use transaction::TwoPcTransaction;
 
 #[cfg(test)]

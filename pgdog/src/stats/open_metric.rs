@@ -40,6 +40,12 @@ impl From<i64> for MeasurementType {
     }
 }
 
+impl From<u64> for MeasurementType {
+    fn from(value: u64) -> Self {
+        Self::Integer(value as i64)
+    }
+}
+
 impl From<usize> for MeasurementType {
     fn from(value: usize) -> Self {
         Self::Integer(value as i64)
