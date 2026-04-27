@@ -20,7 +20,7 @@
 //! shutdown: any unwinding is logged and the `done` notify still fires.
 
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -145,8 +145,7 @@ impl Wal {
     /// already holds the dir, or recovery fails; the caller is
     /// responsible for deciding whether to continue running without
     /// WAL durability.
-    pub async fn open(manager: &Manager) -> Result<Self, Error> {
-        let dir = &config().config.general.two_phase_commit_wal_dir;
+    pub async fn open(manager: &Manager, dir: &PathBuf) -> Result<Self, Error> {
         // Ensure the dir exists before lock_dir tries to open .lock in it.
         tokio::fs::create_dir_all(dir)
             .await
@@ -266,6 +265,12 @@ async fn run(
     // Holds the in-flight GC if one is still running; awaited before
     // the next GC spawns so segment GCs never overlap.
     let mut gc_handle: Option<tokio::task::JoinHandle<()>> = None;
+    let wal_dir = config()
+        .config
+        .general
+        .two_phase_commit_wal_dir
+        .clone()
+        .expect("two_phase_commit_wal_dir must be set");
 
     loop {
         if shutdown.cancelled.load(Ordering::Relaxed) {
@@ -325,12 +330,12 @@ async fn run(
                 // GCs never race on the same directory: the new task awaits
                 // the previous one before starting.
                 let prev = gc_handle.take();
+                let wal_dir = wal_dir.clone();
                 gc_handle = Some(tokio::spawn(async move {
                     if let Some(prev) = prev {
                         let _ = prev.await;
                     }
-                    let dir = &config().config.general.two_phase_commit_wal_dir;
-                    if let Err(err) = gc_before_lsn(dir, lsn).await {
+                    if let Err(err) = gc_before_lsn(&wal_dir, lsn).await {
                         warn!("[2pc] wal checkpoint gc failed: {}", err);
                     }
                 }));
@@ -340,23 +345,15 @@ async fn run(
                 // Broken segment can't take more writes. Failing to
                 // create a replacement here means the disk is gone
                 // and we have nowhere to log: panic.
-                segment = Segment::create(
-                    &config().config.general.two_phase_commit_wal_dir,
-                    segment.next_lsn(),
-                )
-                .await
-                .expect("2pc wal: cannot create new segment after segment broken; disk unusable");
+                segment = Segment::create(&wal_dir, segment.next_lsn()).await.expect(
+                    "2pc wal: cannot create new segment after segment broken; disk unusable",
+                );
             }
             Err(_) => {}
         }
 
         if segment.size_bytes() >= config().config.general.two_phase_commit_wal_segment_size {
-            match Segment::create(
-                &config().config.general.two_phase_commit_wal_dir,
-                segment.next_lsn(),
-            )
-            .await
-            {
+            match Segment::create(&wal_dir, segment.next_lsn()).await {
                 Ok(new_seg) => segment = new_seg,
                 Err(err) => {
                     error!(

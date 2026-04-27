@@ -520,7 +520,7 @@ pub struct General {
     ///
     /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#two_phase_commit_wal_dir
     #[serde(default = "General::two_phase_commit_wal_dir")]
-    pub two_phase_commit_wal_dir: PathBuf,
+    pub two_phase_commit_wal_dir: Option<PathBuf>,
 
     /// Maximum size, in bytes, of a single two-phase commit WAL segment file before it is rotated.
     ///
@@ -943,10 +943,8 @@ impl General {
         Self::env_or_default("PGDOG_ROLLBACK_TIMEOUT", 5_000)
     }
 
-    fn two_phase_commit_wal_dir() -> PathBuf {
-        Self::env_option_string("PGDOG_TWO_PHASE_COMMIT_WAL_DIR")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from("./pgdog_wal"))
+    fn two_phase_commit_wal_dir() -> Option<PathBuf> {
+        Self::env_option_string("PGDOG_TWO_PHASE_COMMIT_WAL_DIR").map(PathBuf::from)
     }
 
     fn two_phase_commit_wal_segment_size() -> u64 {

@@ -17,7 +17,7 @@ use pgdog::stats;
 use pgdog::util::pgdog_version;
 use pgdog::{healthcheck, net};
 use tokio::runtime::Builder;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = cli::Cli::parse();
@@ -150,7 +150,11 @@ async fn pgdog(command: Option<Commands>) -> Result<(), Box<dyn std::error::Erro
             }
 
             if general.two_phase_commit {
-                Manager::get().enable_wal().await;
+                if let Some(ref wal_dir) = general.two_phase_commit_wal_dir {
+                    Manager::get().enable_wal(wal_dir).await;
+                } else {
+                    warn!("[2pc] wal disabled, 2pc will run without durability")
+                }
             }
 
             let mut listener = Listener::new(format!("{}:{}", general.host, general.port));

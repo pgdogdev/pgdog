@@ -5,6 +5,7 @@ use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 use std::{
     collections::VecDeque,
+    path::PathBuf,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -81,8 +82,8 @@ impl Manager {
     /// disk error, corrupt segment that can't be quarantined), the
     /// manager keeps running without durability and a warning is logged
     /// so operators can investigate.
-    pub async fn enable_wal(&self) {
-        match Wal::open(self).await {
+    pub async fn enable_wal(&self, wal_dir: &PathBuf) {
+        match Wal::open(self, wal_dir).await {
             Ok(wal) => {
                 self.wal.store(Some(Arc::new(wal)));
                 info!("[2pc] wal enabled");
