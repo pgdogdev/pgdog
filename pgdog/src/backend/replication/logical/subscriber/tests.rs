@@ -246,18 +246,18 @@ fn x_update(u: XLogUpdate) -> CopyData {
 fn make_subscriber() -> StreamSubscriber {
     let cluster = Cluster::new_test(&config());
     let tables = vec![make_sharded_table(), make_sharded_test_b_table()];
-    StreamSubscriber::new(&cluster, &tables, QueryParserEngine::default())
+    StreamSubscriber::new(&cluster, &tables)
 }
 
 fn make_subscriber_with_tables(tables: Vec<Table>) -> StreamSubscriber {
     let cluster = Cluster::new_test(&config());
-    StreamSubscriber::new(&cluster, &tables, QueryParserEngine::default())
+    StreamSubscriber::new(&cluster, &tables)
 }
 
 fn make_subscriber_single_shard() -> StreamSubscriber {
     let cluster = Cluster::new_test_single_shard(&config());
     let tables = vec![make_sharded_table(), make_sharded_test_b_table()];
-    StreamSubscriber::new(&cluster, &tables, QueryParserEngine::default())
+    StreamSubscriber::new(&cluster, &tables)
 }
 
 /// Count rows matching the given id using a separate connection.
@@ -506,7 +506,7 @@ async fn partition_leaves_share_destination() {
     leaf_b.table.parent_name = "sharded".to_string();
 
     let cluster = Cluster::new_test_single_shard(&config());
-    let mut sub = StreamSubscriber::new(&cluster, &[leaf_a, leaf_b], QueryParserEngine::default());
+    let mut sub = StreamSubscriber::new(&cluster, &[leaf_a, leaf_b]);
     let mut verify = test_server().await;
     sub.connect().await.unwrap();
 

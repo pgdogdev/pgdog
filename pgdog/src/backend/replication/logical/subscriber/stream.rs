@@ -10,12 +10,6 @@ use std::{
 };
 
 use once_cell::sync::Lazy;
-use pg_query::{
-    parse_raw,
-    protobuf::{InsertStmt, ParseResult},
-    NodeEnum,
-};
-use pgdog_config::QueryParserEngine;
 use pgdog_postgres_types::Oid;
 use tracing::{debug, trace};
 
@@ -75,7 +69,6 @@ struct Statements {
 
 #[derive(Default, Debug, Clone)]
 struct Statement {
-    ast: ParseResult,
     parse: Parse,
 }
 
@@ -84,21 +77,11 @@ impl Statement {
         &self.parse
     }
 
-    fn new(query: &str, query_parser_engine: QueryParserEngine) -> Result<Self, Error> {
-        let ast = match query_parser_engine {
-            QueryParserEngine::PgQueryProtobuf => pg_query::parse(query),
-            QueryParserEngine::PgQueryRaw => parse_raw(query),
-        }?
-        .protobuf;
+    fn new(query: &str) -> Result<Self, Error> {
         let name = statement_name();
         Ok(Self {
-            ast,
             parse: Parse::named(name, query.to_string()),
         })
-    }
-
-    fn query(&self) -> &str {
-        self.parse.query()
     }
 }
 #[derive(Debug, Default)]
@@ -136,19 +119,12 @@ pub struct StreamSubscriber {
     // Bytes sharded
     bytes_sharded: usize,
 
-    // Query parser engine.
-    query_parser_engine: QueryParserEngine,
-
     // Missed rows.
     missed_rows: MissedRows,
 }
 
 impl StreamSubscriber {
-    pub fn new(
-        cluster: &Cluster,
-        tables: &[Table],
-        query_parser_engine: QueryParserEngine,
-    ) -> Self {
+    pub fn new(cluster: &Cluster, tables: &[Table]) -> Self {
         let cluster = cluster.logical_stream();
         Self {
             cluster,
@@ -173,7 +149,6 @@ impl StreamSubscriber {
             bytes_sharded: 0,
             lsn_changed: true,
             in_transaction: false,
-            query_parser_engine,
             missed_rows: MissedRows::default(),
             keys: HashMap::default(),
         }
@@ -443,6 +418,46 @@ impl StreamSubscriber {
     ///
     /// Returns the (possibly freshly prepared) `Statement` so the caller can
     /// use it directly without a second cache lookup.
+    /// Send a batch of [`Parse`] messages to every server and drain the
+    /// acknowledgment cycle (`ParseComplete` × N, then `ReadyForQuery` when
+    /// not in a transaction).
+    async fn prepare_statements(&mut self, parses: &[Parse]) -> Result<(), Error> {
+        let in_txn = self.in_transaction;
+        let mut msgs: Vec<_> = parses.iter().map(|p| p.clone().into()).collect();
+        msgs.push(if in_txn { Flush.into() } else { Sync.into() });
+        let payload = msgs.into();
+
+        for server in &mut self.connections {
+            for p in parses {
+                debug!("preparing \"{}\" [{}]", p.query(), server.addr());
+            }
+            server.send(&payload).await?;
+        }
+
+        let num_acks = if in_txn {
+            parses.len()
+        } else {
+            parses.len() + 1
+        };
+        for server in &mut self.connections {
+            for _ in 0..num_acks {
+                let msg = server.read().await?;
+                trace!("[{}] --> {:?}", server.addr(), msg);
+                match msg.code() {
+                    'E' => {
+                        return Err(Error::PgError(Box::new(ErrorResponse::from_bytes(
+                            msg.to_bytes()?,
+                        )?)))
+                    }
+                    'Z' => break,
+                    '1' => continue,
+                    c => return Err(Error::RelationOutOfSync(c)),
+                }
+            }
+        }
+        Ok(())
+    }
+
     async fn ensure_update_shape(
         &mut self,
         oid: Oid,
@@ -458,40 +473,8 @@ impl StreamSubscriber {
         }
 
         let sql = table.update_partial(present);
-        let stmt = Statement::new(&sql, self.query_parser_engine)?;
-        let parse = stmt.parse().clone();
-        let in_txn = self.in_transaction;
-
-        for server in &mut self.connections {
-            debug!("preparing shape \"{}\" [{}]", parse.query(), server.addr());
-            server
-                .send(
-                    &vec![
-                        parse.clone().into(),
-                        if in_txn { Flush.into() } else { Sync.into() },
-                    ]
-                    .into(),
-                )
-                .await?;
-        }
-
-        for server in &mut self.connections {
-            let num_messages = if in_txn { 1 } else { 2 };
-            for _ in 0..num_messages {
-                let msg = server.read().await?;
-                trace!("[{}] --> {:?}", server.addr(), msg);
-                match msg.code() {
-                    'E' => {
-                        return Err(Error::PgError(Box::new(ErrorResponse::from_bytes(
-                            msg.to_bytes()?,
-                        )?)))
-                    }
-                    'Z' => break,
-                    '1' => continue,
-                    c => return Err(Error::RelationOutOfSync(c)),
-                }
-            }
-        }
+        let stmt = Statement::new(&sql)?;
+        self.prepare_statements(&[stmt.parse().clone()]).await?;
 
         self.statements
             .get_mut(&oid)
@@ -581,10 +564,13 @@ impl StreamSubscriber {
     // Prepare upsert statement and record table info for future use
     // by Insert, Update and Delete messages.
     async fn relation(&mut self, relation: Relation) -> Result<(), Error> {
-        let table = self.tables.get(&Key {
-            schema: relation.namespace.clone(),
-            name: relation.name.clone(),
-        });
+        let table = self
+            .tables
+            .get(&Key {
+                schema: relation.namespace.clone(),
+                name: relation.name.clone(),
+            })
+            .cloned();
 
         if let Some(table) = table {
             // Prepare queries for this table. Prepared statements
@@ -605,52 +591,19 @@ impl StreamSubscriber {
 
                 debug!("queries for table {} already prepared", dest_key);
             } else {
-                let insert = Statement::new(&table.insert(), self.query_parser_engine)?;
-                let upsert = Statement::new(&table.upsert(), self.query_parser_engine)?;
-                let update = Statement::new(&table.update(), self.query_parser_engine)?;
-                let delete = Statement::new(&table.delete(), self.query_parser_engine)?;
+                let insert = Statement::new(&table.insert())?;
+                let upsert = Statement::new(&table.upsert())?;
+                let update = Statement::new(&table.update())?;
+                let delete = Statement::new(&table.delete())?;
+                let omni = !table.is_sharded(&self.cluster.sharding_schema().tables);
 
-                for server in &mut self.connections {
-                    for stmt in &[&insert, &upsert, &update, &delete] {
-                        debug!("preparing \"{}\" [{}]", stmt.query(), server.addr());
-                    }
-
-                    server
-                        .send(
-                            &vec![
-                                insert.parse().clone().into(),
-                                upsert.parse().clone().into(),
-                                update.parse().clone().into(),
-                                delete.parse().clone().into(),
-                                if self.in_transaction {
-                                    Flush.into()
-                                } else {
-                                    Sync.into()
-                                },
-                            ]
-                            .into(),
-                        )
-                        .await?;
-                }
-
-                for server in &mut self.connections {
-                    let num_messages = if self.in_transaction { 4 } else { 5 };
-                    for _ in 0..num_messages {
-                        let msg = server.read().await?;
-                        trace!("[{}] --> {:?}", server.addr(), msg);
-
-                        match msg.code() {
-                            'E' => {
-                                return Err(Error::PgError(Box::new(ErrorResponse::from_bytes(
-                                    msg.to_bytes()?,
-                                )?)))
-                            }
-                            'Z' => break,
-                            '1' => continue,
-                            c => return Err(Error::RelationOutOfSync(c)),
-                        }
-                    }
-                }
+                self.prepare_statements(&[
+                    insert.parse().clone(),
+                    upsert.parse().clone(),
+                    update.parse().clone(),
+                    delete.parse().clone(),
+                ])
+                .await?;
 
                 self.statements.insert(
                     relation.oid,
@@ -659,7 +612,7 @@ impl StreamSubscriber {
                         upsert,
                         update,
                         delete,
-                        omni: !table.is_sharded(&self.cluster.sharding_schema().tables),
+                        omni,
                         update_shapes: HashMap::new(),
                     },
                 );
@@ -809,7 +762,7 @@ mod tests {
 
     fn make_subscriber() -> StreamSubscriber {
         let cluster = Cluster::new_test(&config());
-        StreamSubscriber::new(&cluster, &[], QueryParserEngine::default())
+        StreamSubscriber::new(&cluster, &[])
     }
 
     #[test]
