@@ -100,15 +100,15 @@ impl Manager {
     /// Periodically ask the WAL writer to emit a checkpoint record so
     /// older segments can be GC'd. A zero interval disables the loop.
     async fn checkpoint_loop() {
-        let interval_ms = config()
+        let interval_secs = config()
             .config
             .general
             .two_phase_commit_wal_checkpoint_interval;
-        if interval_ms == 0 {
+        if interval_secs == 0 {
             return;
         }
         let manager = Self::get();
-        let mut tick = tokio::time::interval(Duration::from_millis(interval_ms));
+        let mut tick = tokio::time::interval(Duration::from_secs(interval_secs));
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         // First tick fires immediately; skip it so we don't checkpoint
         // an empty WAL right at startup.
