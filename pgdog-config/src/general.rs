@@ -532,7 +532,7 @@ pub struct General {
 
     /// How long, in milliseconds, the two-phase commit WAL writer waits to coalesce concurrent appends into a single fsync.
     ///
-    /// **Note:** Setting this to `0` fsyncs every record individually, maximising durability latency. Higher values trade per-transaction commit latency for fewer fsyncs.
+    /// **Note:** Setting this to `0` disables waiting for additional appends; records already queued in the channel when the writer wakes are still batched into one fsync. Higher values trade per-transaction commit latency for fewer fsyncs under load.
     ///
     /// _Default:_ `2`
     ///
