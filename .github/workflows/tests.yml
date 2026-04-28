@@ -10,10 +10,10 @@ jobs:
   tests:
     runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Install CI deps
         run: bash integration/ci/install-deps.sh
-      - uses: useblacksmith/rust-cache@v3
+      - uses: Swatinem/rust-cache@v2
         with:
           prefix-key: "v1" # Change this when updating tooling
       - name: Setup PostgreSQL

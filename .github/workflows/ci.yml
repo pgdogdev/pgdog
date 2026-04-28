@@ -10,25 +10,26 @@ jobs:
   build:
     runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Install CI deps
         run: bash integration/ci/install-deps.sh
-      # Binary cache runs first: its key must be computed against a clean
-      # tree so it matches what downstream jobs compute. rust-cache runs
-      # after — it restores target/ which contains generated *.rs under
-      # target/*/build/*/out/ that would otherwise destabilize the hash.
+      # Compute the binary key before restoring rust-cache: rust-cache restores
+      # target/ build outputs that would otherwise change the key. Use the
+      # split cache actions so pgdog binaries are saved immediately after the
+      # build, before rust-cache's post-job cleanup prunes workspace binaries
+      # from target/{debug,release}.
       - name: Compute cache key
         id: cache-key
         run: echo "key=pgdog-bin-${{ runner.os }}-$(bash integration/ci/cache-key.sh)" >> "$GITHUB_OUTPUT"
-      - name: Cache pgdog binaries
+      - name: Restore pgdog binaries
         id: pgdog-bin
-        uses: useblacksmith/cache@v5
+        uses: actions/cache/restore@v5
         with:
           path: |
             target/debug/pgdog
             target/release/pgdog
           key: ${{ steps.cache-key.outputs.key }}
-      - uses: useblacksmith/rust-cache@v3
+      - uses: Swatinem/rust-cache@v2
         if: steps.pgdog-bin.outputs.cache-hit != 'true'
         with:
           prefix-key: build-v1
@@ -38,6 +39,14 @@ jobs:
       - name: Build (release)
         if: steps.pgdog-bin.outputs.cache-hit != 'true'
         run: cargo build --release --bin pgdog
+      - name: Save pgdog binaries
+        if: steps.pgdog-bin.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            target/debug/pgdog
+            target/release/pgdog
+          key: ${{ steps.cache-key.outputs.key }}
 
   ci:
     runs-on: blacksmith-4vcpu-ubuntu-2404
@@ -70,7 +79,7 @@ jobs:
     env:
       PGDOG_BIN: ${{ github.workspace }}/target/release/pgdog
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Install CI deps
         run: bash integration/ci/install-deps.sh
       - name: Compute cache key
@@ -81,11 +90,11 @@ jobs:
       # cargo reconciles fingerprints during plugin builds.
       - name: Restore Rust cache for plugin builds
         if: matrix.needs_rust_cache
-        uses: useblacksmith/rust-cache@v3
+        uses: Swatinem/rust-cache@v2
         with:
           prefix-key: build-v1
       - name: Restore pgdog binaries
-        uses: useblacksmith/cache/restore@v5
+        uses: actions/cache/restore@v5
         with:
           path: |
             target/debug/pgdog

@@ -10,7 +10,7 @@ jobs:
   fmt:
     runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Install CI deps
         run: bash integration/ci/install-deps.sh
       - name: Format
