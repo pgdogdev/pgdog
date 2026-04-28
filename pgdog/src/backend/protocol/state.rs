@@ -221,6 +221,21 @@ impl ProtocolState {
         self.queue.front() == Some(&ExecutionItem::Code(ExecutionCode::Copy))
     }
 
+    /// Remove one ReadyForQuery expectation from the queue.
+    ///
+    /// Called when the server enters COPY IN mode (sends CopyInResponse).
+    /// PostgreSQL ignores Sync during COPY IN (protocol spec §55.2.6),
+    /// so the ReadyForQuery that was expected from the initial
+    /// Bind+Execute+Sync will never arrive.  Leaving it in the queue
+    /// would desync the state machine on the next query.
+    pub(crate) fn remove_one_rfq(&mut self) {
+        if let Some(pos) = self.queue.iter().position(|item| {
+            matches!(item, ExecutionItem::Code(ExecutionCode::ReadyForQuery))
+        }) {
+            self.queue.remove(pos);
+        }
+    }
+
     pub(crate) fn is_empty(&self) -> bool {
         self.len() == 0
     }
@@ -890,4 +905,5 @@ mod test {
         assert_eq!(state.action('Z').unwrap(), Action::Forward);
         assert!(state.is_empty());
     }
+
 }
