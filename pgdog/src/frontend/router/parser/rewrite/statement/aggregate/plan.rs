@@ -7,6 +7,8 @@ pub enum HelperKind {
     Sum,
     /// SUM(POWER(column, 2))
     SumSquares,
+    /// array_agg(DISTINCT column) — used to dedupe COUNT(DISTINCT) across shards.
+    Distinct,
 }
 
 impl HelperKind {
@@ -16,6 +18,7 @@ impl HelperKind {
             HelperKind::Count => "count",
             HelperKind::Sum => "sum",
             HelperKind::SumSquares => "sumsq",
+            HelperKind::Distinct => "distinct",
         }
     }
 }
