@@ -17,7 +17,7 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 pushd ${SCRIPT_DIR}
-docker-compose down && docker-compose up -d
+docker compose down && docker compose up -d
 
 # Give it a second to boot up.
 # It restarts the DB during initialization.
@@ -114,4 +114,4 @@ check_row_count_matches task_comments
 check_row_count_matches settings
 
 kill -TERM ${PGDOG_PID}
-docker-compose down
+docker compose down
