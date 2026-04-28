@@ -5,6 +5,7 @@ prerequisites, step-by-step guide, and cutover configuration see
 [Resharding Postgres](https://docs.pgdog.dev/features/sharding/resharding/) and the companion
 blog post [Shard Postgres with one command](https://pgdog.dev/blog/shard-postgres-with-one-command).
 For sharding routing internals see [SHARDING.md](./SHARDING.md).
+For the replication engine internals see [REPLICATION.md](./REPLICATION.md).
 
 ---
 
@@ -133,36 +134,16 @@ index maintenance overhead during the high-throughput copy phase.
 
 ### Publisher and StreamSubscriber
 
-`Publisher` in [`publisher/publisher_impl.rs`](../pgdog/src/backend/replication/logical/publisher/publisher_impl.rs) owns the replication slot, table list, and lag map.
-It opens a logical replication connection to the source and streams `XLogPayload` messages to
-`StreamSubscriber` in [`subscriber/stream.rs`](../pgdog/src/backend/replication/logical/subscriber/stream.rs).
+See [REPLICATION.md](./REPLICATION.md) for the full engine description — WAL message flow,
+module responsibilities, and unchanged-TOAST handling.
 
-`StreamSubscriber` maintains:
-- `relations: HashMap<Oid, Relation>` — table OID metadata sent once per connection
-- `statements: HashMap<Oid, Statements>` — one set of prepared statements per table OID,
-  generated once from `Table::insert()` / `update()` / `delete()`:
-  - `insert`: `INSERT INTO "schema"."table" ($1,$2,...) ON CONFLICT (pk_cols) DO UPDATE SET non_pk=$N`
-  - `update`: `UPDATE "schema"."table" SET non_pk=$N WHERE pk=$M`
-  - `delete`: `DELETE FROM "schema"."table" WHERE pk=$N`
-- `table_lsns: HashMap<Oid, i64>` — per-table replay watermark (set from Step 3 LSNs)
-- `connections: Vec<Server>` — one open connection per destination shard
+Two behaviours are specific to the resharding context:
 
-**Per-message handling:**
-
-| WAL message | Action |
-|---|---|
-| `Insert` | Check `lsn_applied(oid)` → if above watermark, run upsert prepared statement on correct shard |
-| `Update` | PK change → decomposed into `delete(old) + insert(new)`; no PK change → `update` statement |
-| `Delete` | `delete` prepared statement on correct shard |
-| `Commit` | Send `Sync` to all open shard connections to close the transaction |
-
-**LSN guard** (`lsn_applied()`): if `current_lsn ≤ table_lsns[oid]`, the row was already
-bulk-copied in Step 3 and is skipped. Watermarks advance per-table on `COMMIT`.
-
-**Omnisharded tables** (`statements.omni = true`): upsert is sent to all shards simultaneously.
-
-**Routing**: `StreamContext::shard()` in [`subscriber/context.rs`](../pgdog/src/backend/replication/logical/subscriber/context.rs) runs `ContextBuilder` + `Context::apply()` on the sharding
-key column extracted from the WAL tuple — identical to the live query routing path.
+- **LSN watermark**: each table's replay starts from the LSN recorded at the end of its Step 3
+  COPY. Messages at or below that LSN are skipped; the row is already on the destination.
+- **Omnisharded tables** (`statements.omni = true`): upsert is broadcast to all shards
+  simultaneously rather than routed to a single shard.
+---
 
 ### Cutover phases
 

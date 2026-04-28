@@ -10,17 +10,13 @@ use std::{
 };
 
 use once_cell::sync::Lazy;
-use pg_query::{
-    parse_raw,
-    protobuf::{InsertStmt, ParseResult},
-    NodeEnum,
-};
-use pgdog_config::QueryParserEngine;
 use pgdog_postgres_types::Oid;
 use tracing::{debug, trace};
 
+use super::super::publisher::NonIdentityColumnsPresence;
 use super::super::{publisher::Table, Error};
 use super::StreamContext;
+use crate::net::messages::replication::logical::tuple_data::{Identifier, TupleData};
 use crate::{
     backend::{Cluster, ConnectReason, Server},
     config::Role,
@@ -61,16 +57,18 @@ impl Display for Key {
 #[derive(Default, Debug, Clone)]
 struct Statements {
     insert: Statement,
-    #[allow(dead_code)]
     upsert: Statement,
     update: Statement,
     delete: Statement,
     omni: bool,
+    /// Cached UPDATE statements keyed by the observed `NonIdentityColumnsPresence` shape —
+    /// one entry per distinct set of unchanged-TOAST columns. Populated lazily
+    /// by [`StreamSubscriber::ensure_update_shape`].
+    update_shapes: HashMap<NonIdentityColumnsPresence, Statement>,
 }
 
 #[derive(Default, Debug, Clone)]
 struct Statement {
-    ast: ParseResult,
     parse: Parse,
 }
 
@@ -79,42 +77,11 @@ impl Statement {
         &self.parse
     }
 
-    fn new(query: &str, query_parser_engine: QueryParserEngine) -> Result<Self, Error> {
-        let ast = match query_parser_engine {
-            QueryParserEngine::PgQueryProtobuf => pg_query::parse(query),
-            QueryParserEngine::PgQueryRaw => parse_raw(query),
-        }?
-        .protobuf;
+    fn new(query: &str) -> Result<Self, Error> {
         let name = statement_name();
         Ok(Self {
-            ast,
             parse: Parse::named(name, query.to_string()),
         })
-    }
-
-    #[allow(clippy::borrowed_box)]
-    #[allow(dead_code)]
-    fn insert(&self) -> Option<&Box<InsertStmt>> {
-        self.ast
-            .stmts
-            .first()
-            .and_then(|stmt| {
-                stmt.stmt.as_ref().map(|stmt| {
-                    stmt.node.as_ref().map(|node| {
-                        if let NodeEnum::InsertStmt(ref insert) = node {
-                            Some(insert)
-                        } else {
-                            None
-                        }
-                    })
-                })
-            })
-            .flatten()
-            .flatten()
-    }
-
-    fn query(&self) -> &str {
-        self.parse.query()
     }
 }
 #[derive(Debug, Default)]
@@ -152,19 +119,12 @@ pub struct StreamSubscriber {
     // Bytes sharded
     bytes_sharded: usize,
 
-    // Query parser engine.
-    query_parser_engine: QueryParserEngine,
-
     // Missed rows.
     missed_rows: MissedRows,
 }
 
 impl StreamSubscriber {
-    pub fn new(
-        cluster: &Cluster,
-        tables: &[Table],
-        query_parser_engine: QueryParserEngine,
-    ) -> Self {
+    pub fn new(cluster: &Cluster, tables: &[Table]) -> Self {
         let cluster = cluster.logical_stream();
         Self {
             cluster,
@@ -189,7 +149,6 @@ impl StreamSubscriber {
             bytes_sharded: 0,
             lsn_changed: true,
             in_transaction: false,
-            query_parser_engine,
             missed_rows: MissedRows::default(),
             keys: HashMap::default(),
         }
@@ -336,37 +295,193 @@ impl StreamSubscriber {
             return Ok(());
         }
 
-        if let Some(statements) = self.statements.get(&update.oid) {
-            // Primary key update.
-            //
-            // Convert it into a delete of the old row
-            // and an insert with the new row.
-            if let Some(key) = update.key {
-                let delete = XLogDelete {
-                    key: Some(key),
-                    oid: update.oid,
-                    old: None,
-                };
-                let insert = XLogInsert {
-                    xid: None,
-                    oid: update.oid,
-                    tuple_data: update.new,
-                };
-                self.delete(delete).await?;
-                self.insert(insert).await?;
-            } else {
-                let mut context =
-                    StreamContext::new(&self.cluster, &update.new, statements.update.parse());
-                let bind = context.bind().clone();
-                let shard = context.shard()?;
-
-                self.send(&shard, &bind).await?;
-            }
+        if !self.statements.contains_key(&update.oid) {
+            self.mark_table_changed(update.oid);
+            return Ok(());
         }
 
-        self.mark_table_changed(update.oid);
+        self.check_toasted_identity(&update)?;
 
+        // PK changed: delete old row by key, insert new row.
+        // Toasted column in new tuple means incomplete data — fail.
+        if let Some(key) = update.key {
+            if update.new.has_toasted() {
+                let table = self.get_table(update.oid)?;
+
+                return Err(Error::ToastedRowMigration {
+                    table: table.publication,
+                    oid: update.oid,
+                });
+            }
+            let delete = XLogDelete {
+                key: Some(key),
+                oid: update.oid,
+                old: None,
+            };
+            let insert = XLogInsert {
+                xid: None,
+                oid: update.oid,
+                tuple_data: update.new,
+            };
+            self.delete(delete).await?;
+            self.insert(insert).await?;
+            return Ok(());
+        }
+
+        if !update.new.has_toasted() {
+            return self.update_full(update.oid, &update.new).await;
+        }
+
+        self.update_with_toasted(update.oid, update).await
+    }
+
+    /// Resolve the `Table` for a relation OID.
+    fn get_table(&self, oid: Oid) -> Result<Table, Error> {
+        let key = self
+            .relations
+            .get(&oid)
+            .map(|r| Key {
+                schema: r.namespace.clone(),
+                name: r.name.clone(),
+            })
+            .ok_or(Error::MissingKey)?;
+        self.tables.get(&key).cloned().ok_or(Error::MissingKey)
+    }
+
+    /// Fast-path UPDATE: no unchanged-TOAST columns — bind every column in
+    /// tuple order and reuse the pre-prepared `update` statement.
+    async fn update_full(&mut self, oid: Oid, new: &TupleData) -> Result<(), Error> {
+        let statements = self
+            .statements
+            .get(&oid)
+            .expect("statements entry checked before dispatch");
+        let mut context = StreamContext::new(&self.cluster, new, statements.update.parse());
+        let bind = context.bind().clone();
+        let shard = context.shard()?;
+        self.send(&shard, &bind).await?;
+        self.mark_table_changed(oid);
         Ok(())
+    }
+
+    /// Slow-path UPDATE: at least one unchanged-TOAST column. Build a shape
+    /// bitmask, look up or prepare the matching partial UPDATE statement, then
+    /// bind and execute it.
+    async fn update_with_toasted(&mut self, oid: Oid, update: XLogUpdate) -> Result<(), Error> {
+        let table = self.get_table(update.oid)?;
+        let present = NonIdentityColumnsPresence::from_tuple(&update.new, &table)?;
+
+        if present.no_non_identity_present() {
+            // All non-identity columns are unchanged-TOAST and identity didn't
+            // change — the destination row already has every value we would
+            // write. No-op, but still advance the watermark so equal-LSN replay
+            // after commit is gated correctly.
+            self.mark_table_changed(oid);
+            return Ok(());
+        }
+
+        let shape_stmt = self.ensure_update_shape(oid, &table, &present).await?;
+        let partial_new = update.partial_new();
+        let shape_parse = shape_stmt.parse();
+
+        // Route via the shape's AST/bind — param positions match by construction.
+        let mut context = StreamContext::new(&self.cluster, &partial_new, shape_parse);
+        let bind = context.bind().clone(); // clone before mutable shard() borrow
+        let shard = context.shard()?;
+        self.send(&shard, &bind).await?;
+        self.mark_table_changed(oid);
+        Ok(())
+    }
+
+    /// Return `Err(ToastedIdentityColumn)` if any identity column in the new tuple is `'u'`.
+    fn check_toasted_identity(&self, update: &XLogUpdate) -> Result<(), Error> {
+        if update.new.has_toasted() {
+            let table = self.get_table(update.oid)?;
+
+            let has_toasted_identity = update
+                .new
+                .columns
+                .iter()
+                .zip(table.columns.iter())
+                .any(|(col, tcol)| tcol.identity && col.identifier == Identifier::Toasted);
+            if has_toasted_identity {
+                return Err(Error::ToastedIdentityColumn {
+                    table: table.publication.clone(),
+                    oid: update.oid,
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// Prepare the UPDATE statement matching `present` on every shard and
+    /// cache it under `statements[oid].update_shapes[present]`.
+    ///
+    /// Returns the (possibly freshly prepared) `Statement` so the caller can
+    /// use it directly without a second cache lookup.
+    /// Send a batch of [`Parse`] messages to every server and drain the
+    /// acknowledgment cycle (`ParseComplete` × N, then `ReadyForQuery` when
+    /// not in a transaction).
+    async fn prepare_statements(&mut self, parses: &[Parse]) -> Result<(), Error> {
+        let in_txn = self.in_transaction;
+        let mut msgs: Vec<_> = parses.iter().map(|p| p.clone().into()).collect();
+        msgs.push(if in_txn { Flush.into() } else { Sync.into() });
+        let payload = msgs.into();
+
+        for server in &mut self.connections {
+            for p in parses {
+                debug!("preparing \"{}\" [{}]", p.query(), server.addr());
+            }
+            server.send(&payload).await?;
+        }
+
+        let num_acks = if in_txn {
+            parses.len()
+        } else {
+            parses.len() + 1
+        };
+        for server in &mut self.connections {
+            for _ in 0..num_acks {
+                let msg = server.read().await?;
+                trace!("[{}] --> {:?}", server.addr(), msg);
+                match msg.code() {
+                    'E' => {
+                        return Err(Error::PgError(Box::new(ErrorResponse::from_bytes(
+                            msg.to_bytes()?,
+                        )?)))
+                    }
+                    'Z' => break,
+                    '1' => continue,
+                    c => return Err(Error::RelationOutOfSync(c)),
+                }
+            }
+        }
+        Ok(())
+    }
+
+    async fn ensure_update_shape(
+        &mut self,
+        oid: Oid,
+        table: &Table,
+        present: &NonIdentityColumnsPresence,
+    ) -> Result<Statement, Error> {
+        if let Some(stmt) = self
+            .statements
+            .get(&oid)
+            .and_then(|s| s.update_shapes.get(present))
+        {
+            return Ok(stmt.clone());
+        }
+
+        let sql = table.update_partial(present);
+        let stmt = Statement::new(&sql)?;
+        self.prepare_statements(&[stmt.parse().clone()]).await?;
+
+        self.statements
+            .get_mut(&oid)
+            .ok_or(Error::MissingKey)?
+            .update_shapes
+            .insert(present.clone(), stmt.clone());
+        Ok(stmt)
     }
 
     async fn delete(&mut self, delete: XLogDelete) -> Result<(), Error> {
@@ -449,10 +564,13 @@ impl StreamSubscriber {
     // Prepare upsert statement and record table info for future use
     // by Insert, Update and Delete messages.
     async fn relation(&mut self, relation: Relation) -> Result<(), Error> {
-        let table = self.tables.get(&Key {
-            schema: relation.namespace.clone(),
-            name: relation.name.clone(),
-        });
+        let table = self
+            .tables
+            .get(&Key {
+                schema: relation.namespace.clone(),
+                name: relation.name.clone(),
+            })
+            .cloned();
 
         if let Some(table) = table {
             // Prepare queries for this table. Prepared statements
@@ -473,52 +591,19 @@ impl StreamSubscriber {
 
                 debug!("queries for table {} already prepared", dest_key);
             } else {
-                let insert = Statement::new(&table.insert(false), self.query_parser_engine)?;
-                let upsert = Statement::new(&table.insert(true), self.query_parser_engine)?;
-                let update = Statement::new(&table.update(), self.query_parser_engine)?;
-                let delete = Statement::new(&table.delete(), self.query_parser_engine)?;
+                let insert = Statement::new(&table.insert())?;
+                let upsert = Statement::new(&table.upsert())?;
+                let update = Statement::new(&table.update())?;
+                let delete = Statement::new(&table.delete())?;
+                let omni = !table.is_sharded(&self.cluster.sharding_schema().tables);
 
-                for server in &mut self.connections {
-                    for stmt in &[&insert, &upsert, &update, &delete] {
-                        debug!("preparing \"{}\" [{}]", stmt.query(), server.addr());
-                    }
-
-                    server
-                        .send(
-                            &vec![
-                                insert.parse().clone().into(),
-                                upsert.parse().clone().into(),
-                                update.parse().clone().into(),
-                                delete.parse().clone().into(),
-                                if self.in_transaction {
-                                    Flush.into()
-                                } else {
-                                    Sync.into()
-                                },
-                            ]
-                            .into(),
-                        )
-                        .await?;
-                }
-
-                for server in &mut self.connections {
-                    let num_messages = if self.in_transaction { 4 } else { 5 };
-                    for _ in 0..num_messages {
-                        let msg = server.read().await?;
-                        trace!("[{}] --> {:?}", server.addr(), msg);
-
-                        match msg.code() {
-                            'E' => {
-                                return Err(Error::PgError(Box::new(ErrorResponse::from_bytes(
-                                    msg.to_bytes()?,
-                                )?)))
-                            }
-                            'Z' => break,
-                            '1' => continue,
-                            c => return Err(Error::RelationOutOfSync(c)),
-                        }
-                    }
-                }
+                self.prepare_statements(&[
+                    insert.parse().clone(),
+                    upsert.parse().clone(),
+                    update.parse().clone(),
+                    delete.parse().clone(),
+                ])
+                .await?;
 
                 self.statements.insert(
                     relation.oid,
@@ -527,7 +612,8 @@ impl StreamSubscriber {
                         upsert,
                         update,
                         delete,
-                        omni: !table.is_sharded(&self.cluster.sharding_schema().tables),
+                        omni,
+                        update_shapes: HashMap::new(),
                     },
                 );
 
@@ -676,7 +762,7 @@ mod tests {
 
     fn make_subscriber() -> StreamSubscriber {
         let cluster = Cluster::new_test(&config());
-        StreamSubscriber::new(&cluster, &[], QueryParserEngine::default())
+        StreamSubscriber::new(&cluster, &[])
     }
 
     #[test]

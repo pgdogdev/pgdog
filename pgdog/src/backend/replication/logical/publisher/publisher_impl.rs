@@ -204,7 +204,7 @@ impl Publisher {
                 .get(&number)
                 .ok_or(Error::NoReplicationTables(number))?;
             // Handles the logical replication stream messages.
-            let mut stream = StreamSubscriber::new(dest, tables, self.query_parser_engine);
+            let mut stream = StreamSubscriber::new(dest, tables);
 
             // Take ownership of the slot for replication.
             let mut slot = self

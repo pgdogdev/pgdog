@@ -158,6 +158,18 @@ pub enum Error {
 
     #[error("missing key in replication stream, out of sync")]
     MissingKey,
+
+    #[error("toasted identity column in UPDATE: {table} (oid {oid})")]
+    ToastedIdentityColumn {
+        table: String,
+        oid: pgdog_postgres_types::Oid,
+    },
+
+    #[error("toasted column in PK-change UPDATE: {table} (oid {oid})")]
+    ToastedRowMigration {
+        table: String,
+        oid: pgdog_postgres_types::Oid,
+    },
 }
 
 impl From<ErrorResponse> for Error {
