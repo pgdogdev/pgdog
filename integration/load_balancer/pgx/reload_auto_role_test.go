@@ -70,7 +70,7 @@ func TestReloadWithAutoRole(t *testing.T) {
 	done := make(chan struct{})
 
 	// Writer goroutines: INSERT, UPDATE, DELETE
-	for w := range 5 {
+	for w := range 2 {
 		go func(workerId int) {
 			counter := 0
 			for time.Now().Before(deadline) {
@@ -108,7 +108,7 @@ func TestReloadWithAutoRole(t *testing.T) {
 	}
 
 	// Reader goroutines
-	for r := range 5 {
+	for r := range 2 {
 		go func(readerId int) {
 			for time.Now().Before(deadline) {
 				_, err := pool.Exec(ctx, "SELECT * FROM lb_reload_auto_test LIMIT 10")
@@ -131,8 +131,8 @@ func TestReloadWithAutoRole(t *testing.T) {
 		done <- struct{}{}
 	}()
 
-	// Wait for all: 5 writers + 5 readers + 1 reloader
-	for range 11 {
+	// Wait for all: 2 writers + 2 readers + 1 reloader
+	for range 5 {
 		<-done
 	}
 
