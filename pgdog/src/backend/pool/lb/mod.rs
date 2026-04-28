@@ -2,7 +2,7 @@
 
 use std::{
     sync::{
-        atomic::{AtomicBool, AtomicI64, AtomicUsize, Ordering},
+        atomic::{AtomicI64, AtomicU8, AtomicUsize, Ordering},
         Arc,
     },
     time::{Duration, SystemTime},
@@ -36,7 +36,7 @@ mod test;
 pub struct Target {
     pub pool: Pool,
     pub ban: Ban,
-    replica: Arc<AtomicBool>,
+    role: Arc<AtomicU8>,
     pub health: TargetHealth,
     /// Smooth weighted round-robin current weight tracker.
     current_weight: Arc<AtomicI64>,
@@ -47,7 +47,7 @@ impl Target {
         let ban = Ban::new(&pool);
         Self {
             ban,
-            replica: Arc::new(AtomicBool::new(role == Role::Replica)),
+            role: Arc::new(AtomicU8::new(role.into())),
             health: pool.inner().health.clone(),
             pool,
             current_weight: Arc::new(AtomicI64::new(0)),
@@ -56,17 +56,14 @@ impl Target {
 
     /// Get role.
     pub(super) fn role(&self) -> Role {
-        if self.replica.load(Ordering::Relaxed) {
-            Role::Replica
-        } else {
-            Role::Primary
-        }
+        let role = self.role.load(Ordering::Relaxed);
+        role.try_into().expect("valid role")
     }
 
     /// Set role.
     pub(super) fn set_role(&self, role: Role) -> bool {
-        let value = role == Role::Replica;
-        let old = self.replica.swap(value, Ordering::Relaxed);
+        let value = u8::from(role);
+        let old = self.role.swap(value, Ordering::Relaxed);
         value != old
     }
 }
@@ -84,6 +81,8 @@ pub struct LoadBalancer {
     pub(super) lb_strategy: LoadBalancingStrategy,
     /// Maintenance. notification.
     pub(super) maintenance: Arc<Notify>,
+    /// Role detection waiter.
+    pub(super) role_detection: Arc<Notify>,
     /// Read/write split.
     pub(super) rw_split: ReadWriteSplit,
 }
@@ -107,7 +106,7 @@ impl LoadBalancer {
 
         let mut targets: Vec<_> = addrs
             .iter()
-            .map(|config| Target::new(Pool::new(config), Role::Replica))
+            .map(|config| Target::new(Pool::new(config), config.address.configured_role))
             .collect();
 
         let primary_target = primary
@@ -124,6 +123,7 @@ impl LoadBalancer {
             round_robin: Arc::new(AtomicUsize::new(0)),
             lb_strategy,
             maintenance: Arc::new(Notify::new()),
+            role_detection: Arc::new(Notify::new()),
             rw_split,
         }
     }
@@ -187,6 +187,10 @@ impl LoadBalancer {
             }
         }
 
+        if promoted {
+            self.role_detection.notify_one();
+        }
+
         promoted
     }
 
@@ -225,6 +229,11 @@ impl LoadBalancer {
 
         for (from, to) in self.targets.iter().zip(destination.targets.iter()) {
             from.pool.move_conns_to(&to.pool)?;
+
+            // Carry over detected roles and LSN stats so the new load balancer
+            // doesn't briefly appear read-only before the role detector runs.
+            to.set_role(from.role());
+            *to.pool.inner().lsn_stats.write() = from.pool.lsn_stats();
         }
 
         Ok(())
@@ -240,11 +249,15 @@ impl LoadBalancer {
                 .all(|(a, b)| a.pool.can_move_conns_to(&b.pool))
     }
 
-    /// There are no replicas.
+    /// True if the LB has any target that can serve replica reads.
+    ///
+    /// An `Auto` target counts as a potential replica until role detection
+    /// converges, so callers may briefly route reads to a target that turns
+    /// out to be the primary.
     pub fn has_replicas(&self) -> bool {
         self.targets
             .iter()
-            .any(|target| target.role() == Role::Replica)
+            .any(|target| matches!(target.role(), Role::Replica | Role::Auto))
     }
 
     /// Cancel a query if one is running.
@@ -272,6 +285,44 @@ impl LoadBalancer {
         result
     }
 
+    /// Block until role detection has assigned every `Auto` target to
+    /// `Primary` or `Replica`. The wakeup is driven by `pick_primary`, so
+    /// if no primary is ever elected (e.g. LSN stats never populate),
+    /// callers will block until their `checkout_timeout` fires.
+    async fn wait_roles_detected(&self) {
+        if !self.roles_detected() {
+            self.role_detection.notified().await;
+            // Chain the wakeup so any other waiter that arrived after us
+            // also gets released without needing another promotion event.
+            self.role_detection.notify_one();
+        }
+    }
+
+    /// True once no target is still in the `Auto` state.
+    pub fn roles_detected(&self) -> bool {
+        !self
+            .targets
+            .iter()
+            .any(|target| target.role() == Role::Auto)
+    }
+
+    pub(super) async fn get_primary(&self, request: &Request) -> Result<Guard, Error> {
+        match timeout(self.checkout_timeout, self.get_primary_internal(request)).await {
+            Ok(Ok(guard)) => Ok(guard),
+            Err(_) => Err(Error::CheckoutTimeout),
+            Ok(Err(err)) => Err(err.into()),
+        }
+    }
+
+    async fn get_primary_internal(&self, request: &Request) -> Result<Guard, Error> {
+        self.wait_roles_detected().await;
+        self.primary_target()
+            .ok_or(Error::NoPrimary)?
+            .pool
+            .get(request)
+            .await
+    }
+
     async fn get_internal(&self, request: &Request) -> Result<Guard, Error> {
         use LoadBalancingStrategy::*;
         use ReadWriteSplit::*;
@@ -288,11 +339,11 @@ impl LoadBalancer {
             // we read from the primary if we have no replicas
             ExcludePrimary => !candidates
                 .iter()
-                .any(|target| target.role() == Role::Replica),
+                .any(|target| matches!(target.role(), Role::Replica | Role::Auto)),
         };
 
         if !primary_reads {
-            candidates.retain(|target| target.role() == Role::Replica);
+            candidates.retain(|target| matches!(target.role(), Role::Replica | Role::Auto));
         }
 
         if candidates.is_empty() {

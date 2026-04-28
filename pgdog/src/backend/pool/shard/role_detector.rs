@@ -46,7 +46,7 @@ mod test {
     use crate::backend::pool::lsn_monitor::LsnStats;
     use crate::backend::pool::{Address, Config, PoolConfig};
     use crate::backend::replication::publisher::Lsn;
-    use crate::config::{LoadBalancingStrategy, ReadWriteSplit};
+    use crate::config::{LoadBalancingStrategy, ReadWriteSplit, Role};
     use pgdog_stats::LsnStats as StatsLsnStats;
 
     use super::super::ShardConfig;
@@ -60,6 +60,11 @@ mod test {
                 user: "pgdog".into(),
                 passwords: vec!["pgdog".into()],
                 database_name: "pgdog".into(),
+                configured_role: if role_detection {
+                    Role::Auto
+                } else {
+                    Role::Replica
+                },
                 ..Default::default()
             },
             config: Config {

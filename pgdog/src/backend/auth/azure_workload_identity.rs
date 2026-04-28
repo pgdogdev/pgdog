@@ -49,6 +49,7 @@ mod tests {
     use crate::backend::pool::Address;
     use crate::config::ServerAuth;
     use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+    use pgdog_config::Role;
     use std::env;
 
     use super::*;
@@ -92,6 +93,7 @@ mod tests {
             database_number: 0,
             server_auth: ServerAuth::AzureWorkloadIdentity,
             server_iam_region: None,
+            configured_role: Role::Auto,
         };
 
         let b64_token = token(&addr).await.unwrap();

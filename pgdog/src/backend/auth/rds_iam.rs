@@ -95,6 +95,8 @@ static TEST_TOKEN_OVERRIDE: once_cell::sync::Lazy<parking_lot::Mutex<Option<Stri
 mod tests {
     use std::env;
 
+    use pgdog_config::Role;
+
     use crate::backend::pool::Address;
     use crate::config::ServerAuth;
 
@@ -157,6 +159,7 @@ mod tests {
             database_number: 0,
             server_auth: ServerAuth::RdsIam,
             server_iam_region: Some("us-east-1".into()),
+            configured_role: Role::Auto,
         };
 
         let token = token(&addr).await.unwrap();

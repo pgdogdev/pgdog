@@ -69,11 +69,7 @@ impl Shard {
 
     /// Get connection to the primary database.
     pub async fn primary(&self, request: &Request) -> Result<Guard, Error> {
-        self.lb
-            .primary()
-            .ok_or(Error::NoPrimary)?
-            .get(request)
-            .await
+        self.lb.get_primary(request).await
     }
 
     /// Get connection to one of the replica databases, using the configured
@@ -129,7 +125,11 @@ impl Shard {
     }
 
     /// Load schema from the shard's primary.
-    pub async fn update_schema(&self) -> Result<(), crate::backend::Error> {
+    pub async fn load_schema(&self) -> Result<bool, crate::backend::Error> {
+        if self.schema.initialized() {
+            return Ok(false);
+        }
+
         let mut server = self.primary_or_replica(&Request::default()).await?;
         let schema = Schema::load(&mut server).await?;
         info!(
@@ -139,7 +139,26 @@ impl Shard {
             server.addr()
         );
         let _ = self.schema.set(schema);
-        Ok(())
+        self.schema_waiter.notify_one();
+        Ok(true)
+    }
+
+    /// Set the schema to its default value.
+    /// We don't need it for this shard.
+    pub(super) fn schema_not_needed(&self) {
+        let _ = self.schema.set(Schema::default());
+        self.schema_waiter.notify_one();
+    }
+
+    /// Wait for the shard to load the schema.
+    /// If the schema is loaded already, this returns immediately.
+    pub(super) async fn wait_schema_loaded(&self) {
+        if self.schema.initialized() {
+            return;
+        }
+        // Once the schema is loaded, ensure there is always a permit available.
+        self.schema_waiter.notified().await;
+        self.schema_waiter.notify_one();
     }
 
     /// Check that the shard LB targets are all launched.
@@ -156,7 +175,10 @@ impl Shard {
 
     /// Returns true if the shard has a primary database.
     pub fn has_primary(&self) -> bool {
-        self.lb.primary().is_some()
+        match self.lb.primary() {
+            Some(_) => true,
+            None => !self.lb.roles_detected(), // Assume there is a primary, until proven otherwise.
+        }
     }
 
     /// Returns true if the shard has any replica databases.
@@ -280,7 +302,7 @@ impl Deref for Shard {
 
 /// Shard connection pools
 /// and internal state.
-#[derive(Default, Debug, Clone)]
+#[derive(Default, Debug)]
 pub struct ShardInner {
     number: usize,
     lb: LoadBalancer,
@@ -288,6 +310,7 @@ pub struct ShardInner {
     pub_sub: Arc<ArcSwap<Option<PubSubListener>>>,
     identifier: Arc<User>,
     schema: Arc<OnceCell<Schema>>,
+    schema_waiter: Notify,
     pub_sub_enabled: bool,
 }
 
@@ -317,6 +340,7 @@ impl ShardInner {
             pub_sub: Arc::new(ArcSwap::new(Arc::new(None))),
             identifier,
             schema: Arc::new(OnceCell::new()),
+            schema_waiter: Notify::new(),
             pub_sub_enabled,
         }
     }
@@ -340,7 +364,10 @@ mod test {
         });
 
         let replicas = &[PoolConfig {
-            address: Address::new_test(),
+            address: Address {
+                configured_role: Role::Replica,
+                ..Address::new_test()
+            },
             ..Default::default()
         }];
 
