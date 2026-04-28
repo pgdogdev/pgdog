@@ -9,7 +9,7 @@ homepage = "https://pgdog.dev"
 repository = "https://github.com/pgdogdev/pgdog"
 readme = "README.md"
 default-run = "pgdog"
-
+# some generic change
 
 [features]
 tui = ["ratatui"]
@@ -75,6 +75,7 @@ pgdog-postgres-types = { path = "../pgdog-postgres-types"}
 azure_identity = "0.34.0"
 azure_core = "0.34.0"
 crc32c = "0.6.8"
+hitbox = "0.2.4"
 bit-vec = "0.8"
 
 [target.'cfg(not(target_env = "msvc"))'.dependencies]
