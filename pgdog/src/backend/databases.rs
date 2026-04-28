@@ -53,7 +53,8 @@ pub fn replace_databases(new_databases: Databases, reload: bool) -> Result<(), E
     // Order of operations is important
     // to ensure zero downtime for clients.
     //
-    // 1. Prevent concurrent reloads.
+    // 1. Prevent concurrent reloads. The guard restores the ready flag and
+    //    wakes waiters on drop, even if a step below errors out.
     let _guard = reload_notify::started();
 
     // 2. Move connections from old databases into new ones.
@@ -68,8 +69,6 @@ pub fn replace_databases(new_databases: Databases, reload: bool) -> Result<(), E
     DATABASES.store(new_databases);
     // 4. Shutdown all databases.
     old_databases.shutdown();
-    // 5. Tell clients the reload is complete.
-    reload_notify::done();
 
     Ok(())
 }

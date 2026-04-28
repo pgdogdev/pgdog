@@ -596,16 +596,27 @@ impl Cluster {
             spawn(async move {
                 use tokio::time::sleep;
 
-                match shard.load_schema().await {
-                    Ok(true) => schema_changed_hook(&shard.schema(), &identifier, &shard),
-                    Ok(false) => (),
-                    Err(err) => {
-                        // Retry.
-                        if shard.online() {
-                            error!("error loading schema for shard {}: {}", shard.number(), err);
-                            sleep(Duration::from_millis(100)).await;
-                        } else {
+                loop {
+                    match shard.load_schema().await {
+                        Ok(true) => {
+                            schema_changed_hook(&shard.schema(), &identifier, &shard);
                             return;
+                        }
+                        Ok(false) => return,
+                        Err(err) => {
+                            if shard.online() {
+                                error!(
+                                    "error loading schema for shard {}: {}",
+                                    shard.number(),
+                                    err
+                                );
+                                sleep(Duration::from_millis(100)).await;
+                            } else {
+                                // Cluster is shutting down: unblock any
+                                // wait_schema_loaded callers.
+                                shard.schema_not_needed();
+                                return;
+                            }
                         }
                     }
                 }

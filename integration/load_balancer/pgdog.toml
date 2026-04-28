@@ -62,8 +62,8 @@ port = 45000
 name = "postgres_auto"
 host = "localhost"
 database_name = "postgres"
-port = 45001
 role = "auto"
+port = 45001
 
 [[databases]]
 name = "postgres_auto"

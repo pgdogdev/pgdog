@@ -115,6 +115,8 @@ impl Address {
             .ok_or(Error::DnsResolutionFailed(self.host.clone()))
     }
 
+    /// Test convention: `new_test()` represents a primary. Tests that need
+    /// a replica do `Address { configured_role: Role::Replica, ..new_test() }`.
     #[cfg(test)]
     pub fn new_test() -> Self {
         Self {
@@ -151,6 +153,9 @@ impl TryFrom<Url> for Address {
         let password = value.password().ok_or(())?.to_string();
         let database_name = value.path().replace("/", "").to_string();
 
+        // A URL says nothing about role; fall through to `Role::Auto`
+        // via the derived `Default`. The PROBE command (the only caller)
+        // never reads `configured_role` anyway.
         Ok(Self {
             host,
             port,
@@ -158,9 +163,7 @@ impl TryFrom<Url> for Address {
             user,
             database_name,
             server_auth: ServerAuth::Password,
-            server_iam_region: None,
-            database_number: 0,
-            configured_role: Role::Replica,
+            ..Default::default()
         })
     }
 }

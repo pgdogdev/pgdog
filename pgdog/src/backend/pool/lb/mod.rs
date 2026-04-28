@@ -249,7 +249,11 @@ impl LoadBalancer {
                 .all(|(a, b)| a.pool.can_move_conns_to(&b.pool))
     }
 
-    /// There are no replicas.
+    /// True if the LB has any target that can serve replica reads.
+    ///
+    /// An `Auto` target counts as a potential replica until role detection
+    /// converges, so callers may briefly route reads to a target that turns
+    /// out to be the primary.
     pub fn has_replicas(&self) -> bool {
         self.targets
             .iter()
@@ -281,13 +285,20 @@ impl LoadBalancer {
         result
     }
 
+    /// Block until role detection has assigned every `Auto` target to
+    /// `Primary` or `Replica`. The wakeup is driven by `pick_primary`, so
+    /// if no primary is ever elected (e.g. LSN stats never populate),
+    /// callers will block until their `checkout_timeout` fires.
     async fn wait_roles_detected(&self) {
         if !self.roles_detected() {
             self.role_detection.notified().await;
+            // Chain the wakeup so any other waiter that arrived after us
+            // also gets released without needing another promotion event.
             self.role_detection.notify_one();
         }
     }
 
+    /// True once no target is still in the `Auto` state.
     pub fn roles_detected(&self) -> bool {
         !self
             .targets
