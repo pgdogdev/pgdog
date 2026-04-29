@@ -150,6 +150,10 @@ pub enum ServerAuth {
     RdsIam,
     /// Generate an Azure Workload Identity auth token per connection attempt.
     AzureWorkloadIdentity,
+    /// Credentials are managed by the Vault integration. pgdog fetches
+    /// `server_user` and `server_password` from Vault at runtime; never
+    /// falls back to static client passwords for backend connections.
+    Vault,
 }
 
 impl ServerAuth {
@@ -284,6 +288,13 @@ pub struct User {
     pub two_phase_commit_auto: Option<bool>,
     /// Server connections older than this (in milliseconds) will be closed when returned to the pool.
     pub server_lifetime: Option<u64>,
+    /// Vault database credential path for this pool, e.g. `database/creds/dml-role`.
+    ///
+    /// When set, pgdog manages backend credentials via Vault: it fetches a fresh
+    /// username/password from this path and rotates them before the lease expires.
+    /// The `[vault]` block in `pgdog.toml` must also be configured.
+    #[serde(default)]
+    pub vault_path: Option<String>,
 }
 
 impl User {

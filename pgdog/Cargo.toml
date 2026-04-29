@@ -76,7 +76,7 @@ azure_identity = "0.34.0"
 azure_core = "0.34.0"
 crc32c = "0.6.8"
 bit-vec = "0.8"
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-webpki-roots-no-provider"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-webpki-roots-no-provider"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

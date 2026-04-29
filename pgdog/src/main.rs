@@ -115,8 +115,23 @@ async fn pgdog(command: Option<Commands>) -> Result<(), Box<dyn std::error::Erro
     // are async, so doing this after Tokio launched seems prudent.
     net::tls::load()?;
 
+    // Fetch Vault credentials BEFORE creating pools so Address::new() picks up
+    // the vault-generated username/password from the very first connection.
+    let cfg = config::config();
+    let vault_initial_delay = if let Some(vault_cfg) = cfg.config.vault.as_ref() {
+        pgdog::backend::auth::vault::init(vault_cfg, &cfg.users.users).await
+    } else {
+        std::time::Duration::ZERO
+    };
+
     // Load databases and connect if needed.
     databases::init()?;
+
+    // Start background renewal task. Sleeps vault_initial_delay before first
+    // refresh so it doesn't redundantly re-fetch credentials just obtained above.
+    let _vault_manager = cfg.config.vault.as_ref().map(|vault_cfg| {
+        pgdog::backend::auth::vault::VaultManager::start(vault_cfg, &cfg.users.users, vault_initial_delay)
+    });
 
     let general = &config::config().config.general;
 
