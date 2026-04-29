@@ -705,7 +705,8 @@ describe("postgres.js unsafe stress test (50k unique statements, 5 clients)", fu
     );
     assert.strictEqual(completed, TOTAL_QUERIES);
 
-    // Verify backend prepared statement evictions are happening.
+    // Verify backend prepared statement evictions are not happening
+    // because prepared statements are not cached (extended_anonymous).
     const res = await fetch("http://127.0.0.1:9090");
     const metrics = await res.text();
     const evictions = metrics
