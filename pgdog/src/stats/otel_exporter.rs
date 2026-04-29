@@ -59,8 +59,6 @@ pub async fn run() {
                     }
                 };
 
-                println!("{}", serde_json::to_string_pretty(&request).unwrap());
-
                 let mut req = client
                     .post(&endpoint)
                     .header("Content-Type", "application/json");
