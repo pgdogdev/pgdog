@@ -127,6 +127,20 @@ pub fn node_id() -> Result<u64, ParseIntError> {
     instance_id().split("-").last().unwrap().parse()
 }
 
+static HOSTNAME: Lazy<String> = Lazy::new(|| {
+    let hostname = env::var("HOSTNAME").unwrap_or_default();
+    let host = env::var("HOST").unwrap_or_default();
+    if hostname.is_empty() {
+        host
+    } else {
+        hostname
+    }
+});
+
+pub fn hostname() -> &'static str {
+    &HOSTNAME
+}
+
 /// Escape PostgreSQL identifiers by doubling any embedded quotes.
 pub fn escape_identifier(s: &str) -> String {
     s.replace("\"", "\"\"")

@@ -20,6 +20,8 @@ use tokio::runtime::Builder;
 use tracing::{error, info, warn};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let _ = tokio_rustls::rustls::crypto::aws_lc_rs::default_provider().install_default();
+
     let args = cli::Cli::parse();
     let command = args.command.clone();
     let mut overrides = pgdog::config::Overrides::default();
@@ -125,6 +127,10 @@ async fn pgdog(command: Option<Commands>) -> Result<(), Box<dyn std::error::Erro
 
     if let Some(openmetrics_port) = general.openmetrics_port {
         tokio::spawn(async move { stats::http_server::server(openmetrics_port).await });
+    }
+
+    if general.otel_endpoint.is_some() {
+        tokio::spawn(stats::otel_exporter::run());
     }
 
     if let Some(healthcheck_port) = general.healthcheck_port {

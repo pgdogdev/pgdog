@@ -713,6 +713,30 @@ pub struct General {
     /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#cutover_save_config
     #[serde(default)]
     pub cutover_save_config: bool,
+
+    /// Full URL of the OTLP metrics ingest endpoint to push metrics to (e.g. `https://api.datadoghq.com/api/v2/otlp/v1/metrics`). When not set, the push exporter is disabled.
+    ///
+    /// Env: `OTEL_EXPORTER_OTLP_ENDPOINT`
+    #[serde(default = "General::otel_endpoint")]
+    pub otel_endpoint: Option<String>,
+
+    /// Comma-separated list of HTTP headers sent with each OTLP push request, in `key=value` format (e.g. `DD-API-KEY=abc123,X-Custom=foo`).
+    ///
+    /// Env: `OTEL_EXPORTER_OTLP_HEADERS`
+    #[serde(default = "General::otel_headers")]
+    pub otel_headers: Option<String>,
+
+    /// Datadog API key. Convenience shorthand that adds a `DD-API-KEY` header to OTLP push requests.
+    #[serde(default = "General::otel_datadog_api_key")]
+    pub otel_datadog_api_key: Option<String>,
+
+    /// How often, in milliseconds, to push metrics to the OTLP endpoint.
+    ///
+    /// _Default:_ `10000`
+    ///
+    /// Env: `OTEL_METRIC_EXPORT_INTERVAL`
+    #[serde(default = "General::otel_push_interval")]
+    pub otel_push_interval: u64,
 }
 
 impl Default for General {
@@ -809,6 +833,10 @@ impl Default for General {
             cutover_timeout_action: Self::cutover_timeout_action(),
             cutover_save_config: bool::default(),
             unique_id_function: Self::unique_id_function(),
+            otel_endpoint: Self::otel_endpoint(),
+            otel_headers: Self::otel_headers(),
+            otel_datadog_api_key: Self::otel_datadog_api_key(),
+            otel_push_interval: Self::otel_push_interval(),
         }
     }
 }
@@ -1270,6 +1298,22 @@ impl General {
     /// Support for LISTEN/NOTIFY.
     pub fn pub_sub_enabled(&self) -> bool {
         self.pub_sub_channel_size > 0
+    }
+
+    fn otel_endpoint() -> Option<String> {
+        Self::env_option_string("OTEL_EXPORTER_OTLP_ENDPOINT")
+    }
+
+    fn otel_headers() -> Option<String> {
+        Self::env_option_string("OTEL_EXPORTER_OTLP_HEADERS")
+    }
+
+    fn otel_datadog_api_key() -> Option<String> {
+        Self::env_option_string("DD_API_KEY")
+    }
+
+    fn otel_push_interval() -> u64 {
+        Self::env_or_default("OTEL_METRIC_EXPORT_INTERVAL", 10_000)
     }
 }
 
