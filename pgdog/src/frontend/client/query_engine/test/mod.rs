@@ -11,6 +11,7 @@ mod advisory_lock;
 mod close_parse;
 mod close_parse_global_cache;
 mod extended;
+mod extended_anonymous;
 mod fatal_error;
 mod graceful_disconnect;
 mod graceful_shutdown;

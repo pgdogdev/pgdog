@@ -3591,4 +3591,295 @@ pub mod test {
         assert!(server.force_close());
         assert_eq!(server.stats().get_state(), State::ForceClose);
     }
+
+    // -------------------------------------------------------
+    // Extended anonymous mode integration tests
+    // -------------------------------------------------------
+
+    /// Set a server's prepared_statements level to ExtendedAnonymous.
+    fn set_extended_anonymous(server: &mut Server) {
+        use pgdog_config::PreparedStatements as PSLevel;
+        server
+            .prepared_statements_mut()
+            .set_prepared_statements_level(PSLevel::ExtendedAnonymous);
+    }
+
+    #[tokio::test]
+    async fn test_extended_anonymous_parse_bind_execute() {
+        use crate::net::bind::Parameter;
+        let mut server = test_server().await;
+        set_extended_anonymous(&mut server);
+
+        for _ in 0..10 {
+            let parse = Parse::named("stmt1", "SELECT $1::int");
+            let bind = Bind::new_params(
+                "stmt1",
+                &[Parameter {
+                    len: 1,
+                    data: "5".as_bytes().into(),
+                }],
+            );
+
+            server
+                .send(
+                    &vec![
+                        ProtocolMessage::from(parse),
+                        ProtocolMessage::from(bind),
+                        Execute::new().into(),
+                        Sync.into(),
+                    ]
+                    .into(),
+                )
+                .await
+                .unwrap();
+
+            for c in ['1', '2', 'D', 'C', 'Z'] {
+                let msg = server.read().await.unwrap();
+                assert_eq!(msg.code(), c);
+            }
+
+            assert!(server.done());
+            // In extended_anonymous mode, local cache is cleared after each transaction.
+            assert_eq!(
+                server.prepared_statements.len(),
+                0,
+                "cache should be cleared after RFQ in extended_anonymous mode"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_extended_anonymous_describe() {
+        let mut server = test_server().await;
+        set_extended_anonymous(&mut server);
+
+        let parse = Parse::named("desc_stmt", "SELECT 1::int AS num, 'hello'::text AS msg");
+        let describe = Describe::new_statement("desc_stmt");
+        let bind = Bind::new_statement("desc_stmt");
+        let execute = Execute::new();
+
+        server
+            .send(
+                &vec![
+                    ProtocolMessage::from(parse),
+                    describe.into(),
+                    bind.into(),
+                    execute.into(),
+                    Sync.into(),
+                ]
+                .into(),
+            )
+            .await
+            .unwrap();
+
+        for c in ['1', 't', 'T', '2', 'D', 'C', 'Z'] {
+            let msg = server.read().await.unwrap();
+            assert_eq!(msg.code(), c);
+        }
+
+        assert!(server.done());
+        assert_eq!(server.prepared_statements.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_extended_anonymous_repeated_same_statement() {
+        use crate::net::bind::Parameter;
+        let mut server = test_server().await;
+        set_extended_anonymous(&mut server);
+
+        // Using the same statement name repeatedly should work because
+        // in extended_anonymous mode, Parse is always anonymized, so Postgres
+        // never stores a named statement. No "already exists" errors.
+        for i in 0..20 {
+            let parse = Parse::named("repeat_stmt", "SELECT $1::int");
+            let bind = Bind::new_params(
+                "repeat_stmt",
+                &[Parameter {
+                    len: 1,
+                    data: "1".as_bytes().into(),
+                }],
+            );
+
+            server
+                .send(
+                    &vec![
+                        ProtocolMessage::from(parse),
+                        ProtocolMessage::from(bind),
+                        Execute::new().into(),
+                        Sync.into(),
+                    ]
+                    .into(),
+                )
+                .await
+                .unwrap();
+
+            for c in ['1', '2', 'D', 'C', 'Z'] {
+                let msg = server.read().await.unwrap();
+                assert_eq!(
+                    msg.code(),
+                    c,
+                    "iteration {}: expected '{}' got '{}'",
+                    i,
+                    c,
+                    msg.code()
+                );
+            }
+
+            assert!(server.done());
+        }
+    }
+
+    #[tokio::test]
+    async fn test_extended_anonymous_close_is_dropped() {
+        let mut server = test_server().await;
+        set_extended_anonymous(&mut server);
+
+        // Parse + Sync first.
+        server
+            .send(&vec![Parse::named("to_close", "SELECT 1").into(), Sync.into()].into())
+            .await
+            .unwrap();
+
+        for c in ['1', 'Z'] {
+            let msg = server.read().await.unwrap();
+            assert_eq!(msg.code(), c);
+        }
+
+        // Close should be dropped (simulated CloseComplete).
+        server
+            .send(&vec![Close::named("to_close").into(), Sync.into()].into())
+            .await
+            .unwrap();
+
+        for c in ['3', 'Z'] {
+            let msg = server.read().await.unwrap();
+            assert_eq!(msg.code(), c);
+        }
+
+        assert!(server.done());
+    }
+
+    #[tokio::test]
+    async fn test_extended_anonymous_error_recovery() {
+        let mut server = test_server().await;
+        set_extended_anonymous(&mut server);
+
+        // Send a bad query via extended protocol.
+        server
+            .send(
+                &vec![
+                    Parse::named("bad_stmt", "SELECT * FROM nonexistent_table_xyz").into(),
+                    Bind::new_statement("bad_stmt").into(),
+                    Execute::new().into(),
+                    Sync.into(),
+                ]
+                .into(),
+            )
+            .await
+            .unwrap();
+
+        // Should get error then RFQ.
+        let msg = server.read().await.unwrap();
+        assert_eq!(msg.code(), 'E');
+        let msg = server.read().await.unwrap();
+        assert_eq!(msg.code(), 'Z');
+
+        assert!(server.done());
+
+        // Server should still be usable.
+        verify_server_usable(&mut server).await;
+    }
+
+    #[tokio::test]
+    async fn test_extended_anonymous_mixed_with_simple_query() {
+        use crate::net::bind::Parameter;
+        let mut server = test_server().await;
+        set_extended_anonymous(&mut server);
+
+        // Extended protocol.
+        server
+            .send(
+                &vec![
+                    Parse::named("mix_stmt", "SELECT $1::int").into(),
+                    Bind::new_params(
+                        "mix_stmt",
+                        &[Parameter {
+                            len: 1,
+                            data: "7".as_bytes().into(),
+                        }],
+                    )
+                    .into(),
+                    Execute::new().into(),
+                    Sync.into(),
+                ]
+                .into(),
+            )
+            .await
+            .unwrap();
+
+        for c in ['1', '2', 'D', 'C', 'Z'] {
+            let msg = server.read().await.unwrap();
+            assert_eq!(msg.code(), c);
+        }
+
+        assert!(server.done());
+
+        // Simple query right after.
+        server
+            .send(&vec![Query::new("SELECT 42").into()].into())
+            .await
+            .unwrap();
+
+        for c in ['T', 'D', 'C', 'Z'] {
+            let msg = server.read().await.unwrap();
+            assert_eq!(msg.code(), c);
+        }
+
+        assert!(server.done());
+    }
+
+    #[tokio::test]
+    async fn test_extended_anonymous_no_evictions() {
+        use crate::net::bind::Parameter;
+        let mut server = test_server().await;
+        set_extended_anonymous(&mut server);
+        server.prepared_statements_mut().set_capacity(3);
+
+        // Send many different "named" statements.
+        // Because they're all anonymized, no named statements are stored in Postgres,
+        // so there should be no evictions.
+        for i in 0..20 {
+            let name = format!("evict_test_{}", i);
+            let parse = Parse::named(&name, "SELECT $1::int");
+            let bind = Bind::new_params(
+                &name,
+                &[Parameter {
+                    len: 1,
+                    data: "1".as_bytes().into(),
+                }],
+            );
+
+            server
+                .send(
+                    &vec![
+                        ProtocolMessage::from(parse),
+                        ProtocolMessage::from(bind),
+                        Execute::new().into(),
+                        Sync.into(),
+                    ]
+                    .into(),
+                )
+                .await
+                .unwrap();
+
+            for c in ['1', '2', 'D', 'C', 'Z'] {
+                let msg = server.read().await.unwrap();
+                assert_eq!(msg.code(), c);
+            }
+
+            assert!(server.done());
+            // Cache should always be empty after RFQ in extended_anonymous mode.
+            assert!(server.prepared_statements.ensure_capacity().is_empty());
+        }
+    }
 }
