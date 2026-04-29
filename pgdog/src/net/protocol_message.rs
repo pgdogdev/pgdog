@@ -42,6 +42,17 @@ impl ProtocolMessage {
         }
     }
 
+    pub fn anonymize(&mut self) {
+        use ProtocolMessage::*;
+
+        match self {
+            Bind(bind) => bind.anonymize(),
+            Parse(parse) => parse.anonymize(),
+            Describe(describe) => describe.anonymize(),
+            _ => (),
+        }
+    }
+
     pub fn len(&self) -> usize {
         match self {
             Self::Bind(bind) => bind.len(),

@@ -385,6 +385,11 @@ impl Server {
             HandleResult::Drop => [None, None],
             HandleResult::Prepend(ref prepare) => [Some(prepare), Some(message)],
             HandleResult::Forward => [Some(message), None],
+            HandleResult::Rewrite(ref message) => [Some(message), None],
+            HandleResult::PrependRewrite {
+                ref prepend,
+                ref rewrite,
+            } => [Some(prepend), Some(rewrite)],
         };
 
         for message in queue.iter().flatten() {

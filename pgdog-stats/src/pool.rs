@@ -3,7 +3,7 @@ use std::{
     time::Duration,
 };
 
-use pgdog_config::{PoolerMode, pooling::ConnectionRecovery};
+use pgdog_config::{PoolerMode, PreparedStatements, pooling::ConnectionRecovery};
 use serde::{Deserialize, Serialize};
 
 use crate::{LsnStats, ReplicaLag};
@@ -329,6 +329,8 @@ pub struct Config {
     pub resharding_only: bool,
     /// LB weight.
     pub lb_weight: u8,
+    /// Prepared statements level.
+    pub prepared_statements_level: PreparedStatements,
 }
 
 impl Default for Config {
@@ -366,6 +368,7 @@ impl Default for Config {
             role_detection: false,
             resharding_only: false,
             lb_weight: 255,
+            prepared_statements_level: PreparedStatements::default(),
         }
     }
 }

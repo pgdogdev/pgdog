@@ -74,6 +74,12 @@ impl Describe {
         self.original = None;
     }
 
+    pub fn anonymize(&mut self) {
+        if !self.anonymous() {
+            self.rename("");
+        }
+    }
+
     pub fn new_statement(name: &str) -> Describe {
         let mut payload = Payload::named('D');
         payload.put_u8(b'S');

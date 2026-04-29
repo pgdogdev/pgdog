@@ -1,8 +1,6 @@
 use lru::LruCache;
 use std::{collections::VecDeque, sync::Arc};
 
-use parking_lot::RwLock;
-
 use crate::{
     frontend::{self, prepared_statements::GlobalCache},
     net::{
@@ -11,6 +9,8 @@ use crate::{
         ToBytes,
     },
 };
+use parking_lot::RwLock;
+use pgdog_config::PreparedStatements as PreparedStatementsLevel;
 
 use super::Error;
 use super::{
@@ -29,6 +29,11 @@ pub enum HandleResult {
     Forward,
     Drop,
     Prepend(ProtocolMessage),
+    Rewrite(ProtocolMessage),
+    PrependRewrite {
+        prepend: ProtocolMessage,
+        rewrite: ProtocolMessage,
+    },
 }
 
 /// Server-specific prepared statements.
@@ -47,6 +52,7 @@ pub struct PreparedStatements {
     describes: VecDeque<String>,
     capacity: usize,
     memory_used: usize,
+    level: PreparedStatementsLevel,
 }
 
 impl Default for PreparedStatements {
@@ -66,6 +72,7 @@ impl PreparedStatements {
             describes: VecDeque::new(),
             capacity: usize::MAX,
             memory_used: 0,
+            level: PreparedStatementsLevel::default(),
         }
     }
 
@@ -73,6 +80,11 @@ impl PreparedStatements {
     #[inline]
     pub fn set_capacity(&mut self, capacity: usize) {
         self.capacity = capacity;
+    }
+
+    #[inline]
+    pub fn set_prepared_statements_level(&mut self, level: PreparedStatementsLevel) {
+        self.level = level;
     }
 
     /// Get prepared statements capacity.
@@ -87,15 +99,30 @@ impl PreparedStatements {
                 if !bind.anonymous() {
                     let message = self.check_prepared(bind.statement())?;
                     match message {
-                        Some(message) => {
+                        Some(mut message) => {
                             self.state.add_ignore('1');
                             self.parses.push_back(bind.statement().to_string());
                             self.state.add('2');
-                            return Ok(HandleResult::Prepend(message));
+                            if self.level.rewrite_anonymous() {
+                                message.anonymize();
+                                let mut bind = bind.clone();
+                                bind.anonymize();
+                                return Ok(HandleResult::PrependRewrite {
+                                    prepend: message,
+                                    rewrite: ProtocolMessage::Bind(bind),
+                                });
+                            } else {
+                                return Ok(HandleResult::Prepend(message));
+                            }
                         }
 
                         None => {
                             self.state.add('2');
+                            if self.level.rewrite_anonymous() {
+                                let mut bind = bind.clone();
+                                bind.anonymize();
+                                return Ok(HandleResult::Rewrite(ProtocolMessage::Bind(bind)));
+                            }
                         }
                     }
                 } else {
@@ -107,22 +134,44 @@ impl PreparedStatements {
                     let message = self.check_prepared(describe.statement())?;
 
                     match message {
-                        Some(message) => {
+                        Some(mut message) => {
                             self.state.add_ignore('1');
                             self.parses.push_back(describe.statement().to_string());
                             self.state.add(ExecutionCode::DescriptionOrNothing); // t
                             self.state.add(ExecutionCode::DescriptionOrNothing); // T
-                            return Ok(HandleResult::Prepend(message));
+
+                            if self.level.rewrite_anonymous() {
+                                // Save the RowDescription because
+                                // we don't actually save prepared statements in the server
+                                // anymore so they can be different every time.
+                                self.describes.push_back(describe.statement().to_string());
+
+                                message.anonymize();
+                                let mut describe = describe.clone();
+                                describe.anonymize();
+                                return Ok(HandleResult::PrependRewrite {
+                                    prepend: message,
+                                    rewrite: ProtocolMessage::Describe(describe),
+                                });
+                            } else {
+                                return Ok(HandleResult::Prepend(message));
+                            }
                         }
 
                         None => {
                             self.state.add(ExecutionCode::DescriptionOrNothing); // t
                             self.state.add(ExecutionCode::DescriptionOrNothing);
                             // T
+                            self.describes.push_back(describe.statement().to_string());
+                            if self.level.rewrite_anonymous() {
+                                let mut describe = describe.clone();
+                                describe.anonymize();
+                                return Ok(HandleResult::Rewrite(ProtocolMessage::Describe(
+                                    describe,
+                                )));
+                            }
                         }
                     }
-
-                    self.describes.push_back(describe.statement().to_string());
                 } else if describe.is_portal() {
                     self.state.add(ExecutionCode::DescriptionOrNothing);
                 } else if describe.is_statement() {
@@ -151,6 +200,15 @@ impl PreparedStatements {
                     } else {
                         self.state.add('1');
                         self.parses.push_back(parse.name().to_string());
+                    }
+                    // If we're naming prepared statements,
+                    // but client is using anonymous ones,
+                    // we should make them anonymous here too
+                    // so we don't store them in Postgres for no reason.
+                    if self.level.rewrite_anonymous() {
+                        let mut parse = parse.clone();
+                        parse.anonymize();
+                        return Ok(HandleResult::Rewrite(ProtocolMessage::Parse(parse)));
                     }
                 } else {
                     self.state.add('1');
@@ -235,7 +293,15 @@ impl PreparedStatements {
                 self.state.action(code)?;
             }
 
+            'Z' => {}
+
             _ => (),
+        }
+
+        // Reset cache, forcing all Bind/Execute, Describe, solo requests
+        // to always re-prepare the statement next time it's sent.
+        if !self.has_more_messages() && self.level.rewrite_anonymous() {
+            self.clear();
         }
 
         match action {

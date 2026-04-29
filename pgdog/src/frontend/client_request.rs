@@ -221,6 +221,18 @@ impl ClientRequest {
         Ok(())
     }
 
+    /// Remove all naming identifiers from this request.
+    pub fn anonymize(&mut self) {
+        for message in &mut self.messages {
+            match message {
+                ProtocolMessage::Bind(bind) => bind.anonymize(),
+                ProtocolMessage::Parse(parse) => parse.anonymize(),
+                ProtocolMessage::Describe(describe) => describe.anonymize(),
+                _ => (),
+            }
+        }
+    }
+
     /// Get the route for this client request.
     pub fn route(&self) -> &Route {
         lazy_static! {

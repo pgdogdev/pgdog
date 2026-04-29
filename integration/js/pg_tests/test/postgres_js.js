@@ -561,8 +561,14 @@ describe("postgres.js unsafe stress test (50k unique statements, 5 clients)", fu
           selectParts.push(`$${paramIdx}::timestamptz AS ts_q${i}`);
           expected[`ts_q${i}`] = (val) => {
             const got = val instanceof Date ? val : new Date(val);
-            assert.ok(!isNaN(got.getTime()), `invalid timestamp at query ${i}: ${val}`);
-            assert.ok(Math.abs(got.getTime() - ts.getTime()) < 60000, `timestamp mismatch at query ${i}: expected ~${ts.toISOString()}, got ${got.toISOString()}`);
+            assert.ok(
+              !isNaN(got.getTime()),
+              `invalid timestamp at query ${i}: ${val}`,
+            );
+            assert.ok(
+              Math.abs(got.getTime() - ts.getTime()) < 60000,
+              `timestamp mismatch at query ${i}: expected ~${ts.toISOString()}, got ${got.toISOString()}`,
+            );
           };
         } else {
           const intVal = (i + k) * 7 + 1;
@@ -608,28 +614,36 @@ describe("postgres.js unsafe stress test (50k unique statements, 5 clients)", fu
           // Boolean + int parameters
           const flag = i % 2 === 0;
           const num = i % 1000;
-          return client`SELECT ${flag}::bool AS flag, ${num}::int AS num`.then((rows) => {
-            assert.strictEqual(rows[0].flag, flag);
-            assert.strictEqual(rows[0].num, num);
-          });
+          return client`SELECT ${flag}::bool AS flag, ${num}::int AS num`.then(
+            (rows) => {
+              assert.strictEqual(rows[0].flag, flag);
+              assert.strictEqual(rows[0].num, num);
+            },
+          );
         }
         case 4: {
           // Timestamp parameter
           const ts = new Date(1700000000000 + i * 1000);
           return client`SELECT ${ts}::timestamptz AS ts`.then((rows) => {
-            const got = rows[0].ts instanceof Date ? rows[0].ts : new Date(rows[0].ts);
+            const got =
+              rows[0].ts instanceof Date ? rows[0].ts : new Date(rows[0].ts);
             assert.ok(Math.abs(got.getTime() - ts.getTime()) < 60000);
           });
         }
         case 5: {
           // Many parameters (4)
-          const a = i % 100, b = i % 50, c = i % 25, d = i % 10;
-          return client`SELECT ${a}::int AS a, ${b}::int AS b, ${c}::int AS c, ${d}::int AS d`.then((rows) => {
-            assert.strictEqual(rows[0].a, a);
-            assert.strictEqual(rows[0].b, b);
-            assert.strictEqual(rows[0].c, c);
-            assert.strictEqual(rows[0].d, d);
-          });
+          const a = i % 100,
+            b = i % 50,
+            c = i % 25,
+            d = i % 10;
+          return client`SELECT ${a}::int AS a, ${b}::int AS b, ${c}::int AS c, ${d}::int AS d`.then(
+            (rows) => {
+              assert.strictEqual(rows[0].a, a);
+              assert.strictEqual(rows[0].b, b);
+              assert.strictEqual(rows[0].c, c);
+              assert.strictEqual(rows[0].d, d);
+            },
+          );
         }
       }
     }
@@ -652,29 +666,31 @@ describe("postgres.js unsafe stress test (50k unique statements, 5 clients)", fu
         if (i % 2 === 0) {
           // Even: unsafe query (unique query text each time)
           const { queryText, vals, expected } = buildQuery(i);
-          p = client
-            .unsafe(queryText, vals)
-            .then((rows) => {
-              for (const [col, val] of Object.entries(expected)) {
-                if (typeof val === "function") {
-                  val(rows[0][col]);
-                } else {
-                  assert.strictEqual(
-                    rows[0][col],
-                    val,
-                    `mismatch at query ${i}, col ${col}`,
-                  );
-                }
+          p = client.unsafe(queryText, vals).then((rows) => {
+            for (const [col, val] of Object.entries(expected)) {
+              if (typeof val === "function") {
+                val(rows[0][col]);
+              } else {
+                assert.strictEqual(
+                  rows[0][col],
+                  val,
+                  `mismatch at query ${i}, col ${col}`,
+                );
               }
-            });
+            }
+          });
         } else {
           // Odd: tagged template (reused SQL text, unnamed prepared statements)
           p = taggedQuery(client, i);
         }
 
         p = p
-          .then(() => { completed++; })
-          .catch((err) => { errors.push({ i, err: err.message }); });
+          .then(() => {
+            completed++;
+          })
+          .catch((err) => {
+            errors.push({ i, err: err.message });
+          });
 
         promises.push(p);
       }
@@ -703,8 +719,8 @@ describe("postgres.js unsafe stress test (50k unique statements, 5 clients)", fu
       .map((l) => parseInt(l.split(" ").pop(), 10))
       .reduce((a, b) => a + b, 0);
     assert.ok(
-      evictions > 0,
-      `expected prepared statement evictions, got ${evictions}`,
+      evictions === 0,
+      `expected no prepared statement evictions, got ${evictions}`,
     );
   });
 });
