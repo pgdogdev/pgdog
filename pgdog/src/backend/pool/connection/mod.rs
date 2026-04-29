@@ -387,8 +387,13 @@ impl Connection {
     }
 
     /// We are done and can disconnect from this server.
-    pub(crate) fn done(&self) -> bool {
+    pub(crate) fn can_disconnect(&self) -> bool {
         self.binding.done() && !self.locked
+    }
+
+    /// The server is idle: no active transaction, no more messages.
+    pub(crate) fn idle(&self) -> bool {
+        self.binding.done()
     }
 
     /// Lock this connection to the client, preventing it's

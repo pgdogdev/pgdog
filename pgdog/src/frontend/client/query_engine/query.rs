@@ -1,6 +1,7 @@
 use tokio::time::timeout;
 use tracing::{info, trace};
 
+pub(super) use super::explain::ExplainResponseState;
 use crate::{
     frontend::{
         client::TransactionType,
@@ -144,12 +145,7 @@ impl QueryEngine {
             self.emit_explain_rows(context).await?;
         }
 
-        if code == 'E' {
-            if let Some(state) = self.pending_explain.as_mut() {
-                state.annotated = true;
-            }
-            self.pending_explain = None;
-        }
+        self.check_error(context, &message)?;
 
         // Messages that we need to send to the client immediately.
         // ReadyForQuery (B) | CopyInResponse (B) | ErrorResponse(B) | NoticeResponse(B) | NotificationResponse (B)
@@ -285,7 +281,7 @@ impl QueryEngine {
         &mut self,
         context: &mut QueryEngineContext<'_>,
     ) -> Result<(), Error> {
-        if self.backend.done() {
+        if self.backend.can_disconnect() {
             let changed_params = self.backend.changed_params();
 
             // Release the connection back into the pool before flushing data to client.
@@ -359,7 +355,7 @@ impl QueryEngine {
 
             self.error_response(context, error).await?;
 
-            if self.backend.connected() && self.backend.done() {
+            if self.backend.connected() && self.backend.can_disconnect() {
                 self.backend.disconnect();
             }
 
@@ -438,38 +434,5 @@ impl QueryEngine {
         self.stats.sent(bytes_sent);
 
         Ok(())
-    }
-}
-
-#[derive(Debug, Default, Clone)]
-pub(super) struct ExplainResponseState {
-    lines: Vec<String>,
-    row_description: Option<RowDescription>,
-    annotated: bool,
-    supported: bool,
-}
-
-impl ExplainResponseState {
-    pub fn new(trace: ExplainTrace) -> Self {
-        Self {
-            lines: trace.render_lines(),
-            row_description: None,
-            annotated: false,
-            supported: false,
-        }
-    }
-
-    pub fn capture_row_description(&mut self, row_description: RowDescription) {
-        self.supported = row_description.fields.len() == 1
-            && matches!(row_description.field(0).map(|f| f.type_oid), Some(25));
-        if self.supported {
-            self.row_description = Some(row_description);
-        } else {
-            self.annotated = true;
-        }
-    }
-
-    pub fn should_emit(&self) -> bool {
-        self.supported && !self.annotated
     }
 }

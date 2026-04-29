@@ -18,6 +18,8 @@ pub mod context;
 pub mod deallocate;
 pub mod discard;
 pub mod end_transaction;
+pub mod error;
+pub mod explain;
 pub mod fake;
 pub mod hooks;
 pub mod incomplete_requests;
@@ -94,7 +96,7 @@ impl QueryEngine {
 
     /// Client can safely disconnect (no active backend connection or pending transaction).
     pub fn can_disconnect(&self) -> bool {
-        self.begin_stmt.is_none() && self.backend.done()
+        self.begin_stmt.is_none() && self.backend.can_disconnect()
     }
 
     /// Current state.

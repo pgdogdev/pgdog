@@ -2,7 +2,7 @@
 
 use crate::{
     frontend::{client::query_engine::TwoPcPhase, ClientRequest},
-    net::{parameter::Parameters, BackendKeyData, ProtocolMessage, Query},
+    net::{parameter::Parameters, BackendKeyData, Close, ProtocolMessage, Query},
     state::State,
 };
 
@@ -452,6 +452,31 @@ impl Binding {
 
     pub fn is_direct(&self) -> bool {
         matches!(self, Binding::Direct(Some(_)))
+    }
+
+    /// The server received an error that indicated a prepared statement failed
+    /// because we changed the table schema.
+    pub fn schema_changed(&self) -> bool {
+        match self {
+            Binding::Direct(Some(ref server)) => server.schema_changed(),
+            Binding::MultiShard(ref servers, _) => {
+                servers.iter().any(|server| server.schema_changed())
+            }
+            _ => false,
+        }
+    }
+
+    pub async fn close_many(&mut self, close: &[Close]) -> Result<(), Error> {
+        match self {
+            Binding::Direct(Some(ref mut server)) => server.close_many(close).await,
+            Binding::MultiShard(ref mut servers, _) => {
+                for server in servers {
+                    server.close_many(close).await?;
+                }
+                Ok(())
+            }
+            _ => Ok(()),
+        }
     }
 
     pub fn in_copy_mode(&self) -> bool {

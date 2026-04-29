@@ -39,6 +39,8 @@ pub struct QueryEngineContext<'a> {
     pub(super) sticky: Sticky,
     /// Rewrite result.
     pub(super) rewrite_result: Option<RewriteResult>,
+    /// Schema changed.
+    pub(super) schema_changed: bool,
 }
 
 impl<'a> QueryEngineContext<'a> {
@@ -60,6 +62,7 @@ impl<'a> QueryEngineContext<'a> {
             rollback: false,
             sticky: client.sticky,
             rewrite_result: None,
+            schema_changed: false,
         }
     }
 
@@ -86,6 +89,7 @@ impl<'a> QueryEngineContext<'a> {
             rollback: false,
             sticky: Sticky::new(),
             rewrite_result: None,
+            schema_changed: false,
         }
     }
 

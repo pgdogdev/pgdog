@@ -11,7 +11,7 @@ use crate::{
     frontend::router::Ast,
     net::{
         messages::{Bind, CopyData, Protocol},
-        Error, Flush, ProtocolMessage,
+        Error, Flush, Parse, ProtocolMessage,
     },
     stats::memory::MemoryUsage,
 };
@@ -118,6 +118,37 @@ impl ClientRequest {
                             .read()
                             .parse(describe.statement())
                             .map(BufferedQuery::Prepared));
+                    }
+                }
+                _ => (),
+            }
+        }
+
+        Ok(None)
+    }
+
+    /// Get the corresponding Parse from this request.
+    ///
+    /// If the Parse is in the request, we just return that. If we have Bind/Describe _without_ a Parse,
+    /// we reach into the global prepared statements cache to get it.
+    ///
+    /// For anonymous statements, the Parse should always be present and located in front
+    /// of Bind/Describe messages.
+    ///
+    pub fn parse(&self) -> Result<Option<Parse>, Error> {
+        for message in &self.messages {
+            match message {
+                ProtocolMessage::Parse(parse) => return Ok(Some(parse.clone())),
+                ProtocolMessage::Bind(bind) => {
+                    if !bind.anonymous() {
+                        return Ok(PreparedStatements::global().read().parse(bind.statement()));
+                    }
+                }
+                ProtocolMessage::Describe(describe) => {
+                    if !describe.anonymous() {
+                        return Ok(PreparedStatements::global()
+                            .read()
+                            .parse(describe.statement()));
                     }
                 }
                 _ => (),

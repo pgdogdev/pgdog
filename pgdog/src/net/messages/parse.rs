@@ -1,5 +1,6 @@
 //! Parse (F) message.
 use crate::net::c_string_buf_len;
+use crate::net::Close;
 use std::fmt::Debug;
 use std::io::Cursor;
 use std::mem::size_of;
@@ -109,6 +110,11 @@ impl Parse {
     pub fn set_query(&mut self, query: &str) {
         self.query = Bytes::from(query.to_string() + "\0");
         self.original = None;
+    }
+
+    /// Create a Close message from this Parse.
+    pub fn new_close(&self) -> Close {
+        Close::named(self.name())
     }
 }
 
