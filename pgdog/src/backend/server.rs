@@ -3645,6 +3645,13 @@ pub mod test {
                 0,
                 "cache should be cleared after RFQ in extended_anonymous mode"
             );
+            // Verify Postgres has no named prepared statements stored.
+            server.sync_prepared_statements().await.unwrap();
+            assert_eq!(
+                server.prepared_statements.len(),
+                0,
+                "Postgres should have no prepared statements in extended_anonymous mode"
+            );
         }
     }
 
@@ -3678,6 +3685,9 @@ pub mod test {
         }
 
         assert!(server.done());
+        assert_eq!(server.prepared_statements.len(), 0);
+        // Verify Postgres has no named prepared statements stored.
+        server.sync_prepared_statements().await.unwrap();
         assert_eq!(server.prepared_statements.len(), 0);
     }
 
@@ -3727,6 +3737,13 @@ pub mod test {
 
             assert!(server.done());
         }
+        // Verify Postgres has no named prepared statements stored.
+        server.sync_prepared_statements().await.unwrap();
+        assert_eq!(
+            server.prepared_statements.len(),
+            0,
+            "Postgres should have no prepared statements after repeated anonymous usage"
+        );
     }
 
     #[tokio::test]
@@ -3757,6 +3774,9 @@ pub mod test {
         }
 
         assert!(server.done());
+        // Verify Postgres has no named prepared statements stored.
+        server.sync_prepared_statements().await.unwrap();
+        assert_eq!(server.prepared_statements.len(), 0);
     }
 
     #[tokio::test]
@@ -3788,6 +3808,9 @@ pub mod test {
 
         // Server should still be usable.
         verify_server_usable(&mut server).await;
+        // Verify Postgres has no named prepared statements stored.
+        server.sync_prepared_statements().await.unwrap();
+        assert_eq!(server.prepared_statements.len(), 0);
     }
 
     #[tokio::test]
@@ -3836,6 +3859,9 @@ pub mod test {
         }
 
         assert!(server.done());
+        // Verify Postgres has no named prepared statements stored.
+        server.sync_prepared_statements().await.unwrap();
+        assert_eq!(server.prepared_statements.len(), 0);
     }
 
     #[tokio::test]
@@ -3881,5 +3907,12 @@ pub mod test {
             // Cache should always be empty after RFQ in extended_anonymous mode.
             assert!(server.prepared_statements.ensure_capacity().is_empty());
         }
+        // Verify Postgres has no named prepared statements stored.
+        server.sync_prepared_statements().await.unwrap();
+        assert_eq!(
+            server.prepared_statements.len(),
+            0,
+            "Postgres should have no prepared statements despite many named parses"
+        );
     }
 }
