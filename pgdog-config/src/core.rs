@@ -23,6 +23,7 @@ use super::replication::{MirrorConfig, Mirroring, MirroringLevel, ReplicaLag, Re
 use super::rewrite::Rewrite;
 use super::sharding::{ManualQuery, OmnishardedTables, ShardedMapping, ShardedTable};
 use super::users::{Admin, Plugin, Users};
+use super::vault::VaultConfig;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ConfigAndUsers {
@@ -221,6 +222,13 @@ pub struct Config {
     #[serde(default)]
     #[schemars(default = "crate::users::Admin::schemars_default_stub")]
     pub admin: Admin,
+
+    /// Vault integration for dynamic credential rotation.
+    ///
+    /// When set, pgdog fetches PostgreSQL credentials from Vault for any pool
+    /// that has `vault_path` configured in `users.toml`.
+    #[serde(default)]
+    pub vault: Option<VaultConfig>,
 
     /// To detect and route queries with sharding keys, PgDog expects the sharded column to be specified in the configuration.
     ///
