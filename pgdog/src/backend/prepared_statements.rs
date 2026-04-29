@@ -201,10 +201,9 @@ impl PreparedStatements {
                         self.state.add('1');
                         self.parses.push_back(parse.name().to_string());
                     }
-                    // If we're naming prepared statements,
-                    // but client is using anonymous ones,
-                    // we should make them anonymous here too
-                    // so we don't store them in Postgres for no reason.
+                    // The client is sending named prepared statements,
+                    // but we're in ExtendedAnonymous mode so we rewrite
+                    // them to anonymous to avoid storing them in Postgres.
                     if self.level.rewrite_anonymous() {
                         let mut parse = parse.clone();
                         parse.anonymize();
@@ -444,7 +443,8 @@ mod test {
     use super::*;
     use crate::frontend::PreparedStatements as FrontendPreparedStatements;
     use crate::net::{
-        bind::Parameter, Bind, Describe, Execute, Parse, ProtocolMessage, Query, Sync,
+        bind::Parameter, messages::ReadyForQuery, Bind, Describe, Execute, Message, Parse,
+        ProtocolMessage, Query, Sync,
     };
     use pgdog_config::PreparedStatements as PreparedStatementsLevel;
 
@@ -520,9 +520,7 @@ mod test {
         ps.prepared("stmt1");
         let parse = Parse::named("stmt1", "SELECT 1");
         let result = ps.handle(&ProtocolMessage::Parse(parse)).unwrap();
-        // Already-prepared Parse is dropped, but since we're in extended_anonymous mode
-        // the named Parse that's not cached still gets a Rewrite.
-        // Actually, contains() returns true -> Drop is returned before rewrite_anonymous check.
+        // contains() returns true so Drop is returned before the rewrite_anonymous check.
         assert!(matches!(result, HandleResult::Drop));
     }
 
@@ -815,7 +813,4 @@ mod test {
             assert!(matches!(result, HandleResult::Forward));
         }
     }
-
-    use crate::net::messages::ReadyForQuery;
-    use crate::net::Message;
 }
