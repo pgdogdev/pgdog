@@ -54,7 +54,7 @@ flowchart TD
     SS -->|Commit| COM
 ```
 
-Every `Insert`, `Update`, and `Delete` passes through the same three-step path before reaching
+Every `Insert`, `Update`, and `Delete` passes through a three-step gate before reaching
 the destination:
 
 ```mermaid
@@ -70,6 +70,153 @@ flowchart LR
     LSN -->|no| ROUTE
     ROUTE --> EXEC
 ```
+
+The execution path after that gate depends on the table's **replica identity**, described in
+the sections below.
+
+---
+
+## REPLICA IDENTITY DEFAULT and INDEX
+
+`REPLICA IDENTITY DEFAULT` uses the primary key columns as the row identity.
+`REPLICA IDENTITY USING INDEX` uses the columns of a nominated unique index.
+In both cases, PostgreSQL writes only those identity columns into UPDATE and DELETE WAL
+records — not the full row.
+
+### What it means for row matching
+
+The identity columns are guaranteed NOT NULL — primary key columns by definition, and
+`REPLICA IDENTITY USING INDEX` requires NOT NULL on every indexed column.
+
+This has a direct consequence for statement shape:
+
+- The WHERE clause in UPDATE and DELETE uses plain `=` predicates. NULL can never appear
+  in identity columns, so `=` always behaves correctly.
+- The sharding key is extracted directly from the event tuple: identity columns for
+  UPDATE/DELETE, all columns for INSERT.
+- Each event routes to exactly one destination shard — no broadcast.
+
+### Statement shapes
+
+`Table` in [`publisher/table.rs`](../pgdog/src/backend/replication/logical/publisher/table.rs)
+prepares the following statement shapes at `relation()` time:
+
+| Operation | Statement shape |
+|---|---|
+| INSERT (sharded) | Plain `INSERT` |
+| INSERT (omni) | `INSERT … ON CONFLICT (identity_cols) DO UPDATE SET …` |
+| UPDATE | `UPDATE … SET non_identity_cols = $N WHERE identity_cols = $M` |
+| UPDATE (partial) | Same WHERE, SET restricted to non-Toasted columns — shape-cached |
+| DELETE | `DELETE … WHERE identity_cols = $N` |
+
+The partial UPDATE path is covered in detail in
+[Handling unchanged-TOAST columns](#handling-unchanged-toast-columns).
+
+---
+
+## REPLICA IDENTITY FULL
+
+`REPLICA IDENTITY FULL` is used on tables with no primary key or suitable unique index.
+Instead of writing only key columns into UPDATE and DELETE WAL records, PostgreSQL writes
+the entire pre-change row. PgDog detects this at `relation()` time
+(`ReplicaIdentity.identity == "f"`) and sets a per-OID `full_identity` flag; all subsequent
+events for that table are dispatched to dedicated handlers in `subscriber/stream.rs`.
+
+### Sharded vs omni
+
+The behavior splits on whether the table has a sharding column:
+
+- *Sharded FULL* tables route via the sharding-key value in the OLD tuple (UPDATE/DELETE)
+  or the NEW tuple (INSERT). No broadcast is needed.
+- *Omni FULL* tables replicate to every shard. Because omni INSERTs fan out during the
+  bulk-copy/replication overlap window, duplicates are possible. PgDog requires a
+  **NULL-safe unique index** on every destination shard — `NULLS NOT DISTINCT` (PG 15+) or
+  all indexed columns `NOT NULL`. A standard nullable unique index does not prevent two
+  `NULL`-keyed rows from coexisting; accepting one would cause silent duplicates that surface
+  later as a non-retryable `FullIdentityAmbiguousMatch`. If any shard lacks a usable index,
+  `relation()` returns `FullIdentityOmniNoUniqueIndex` before any statements are prepared.
+
+### INSERT
+
+A plain `INSERT` for sharded tables. Omni tables use `INSERT … ON CONFLICT DO NOTHING`
+(`upsert_full_identity` in `publisher/table.rs`), silently skipping rows that already
+landed from the COPY phase.
+
+### UPDATE
+
+OLD and NEW tuples are routed through the query router independently to detect whether the
+sharding key changed:
+
+```mermaid
+flowchart TD
+    GUARD{"identity == Old?"}
+    ERR1["FullIdentityMissingOld"]
+    ROUTE["resolve shard for old tuple<br>resolve shard for new tuple"]
+    XSHARD{"shard key changed?"}
+    TOAST{"new has<br>toasted cols?"}
+    ERR2["FullIdentityCrossShardToasted"]
+    FANOUT["DELETE on old shard<br>INSERT on new shard"]
+    FASTCHK{"new has<br>toasted cols?"}
+    FAST["fast path: full UPDATE"]
+    SLOW["slow path: partial UPDATE<br>(shape cache)"]
+    NOOP["skip — nothing changed"]
+
+    GUARD -->|yes| ROUTE
+    GUARD -->|no| ERR1
+    ROUTE --> XSHARD
+    XSHARD -->|yes| TOAST
+    TOAST -->|yes| ERR2
+    TOAST -->|no| FANOUT
+    XSHARD -->|no| FASTCHK
+    FASTCHK -->|no| FAST
+    FASTCHK -->|yes| SLOW
+    SLOW -->|no non-key cols present| NOOP
+```
+
+#### `IS NOT DISTINCT FROM` in the WHERE clause
+
+FULL identity tables impose no NOT NULL constraint on their columns — any column may be
+NULL. In SQL, `col = NULL` is always unknown (never true), so a plain `=` predicate
+silently matches zero rows when the column is NULL.
+
+This has a direct consequence for row matching:
+
+- PgDog uses `IS NOT DISTINCT FROM` in the WHERE clause, which is NULL-safe:
+  `NULL IS NOT DISTINCT FROM NULL` evaluates to true.
+- For DEFAULT/INDEX tables, `=` is correct because the identity columns are guaranteed
+  NOT NULL — primary key columns by definition, and `REPLICA IDENTITY USING INDEX`
+  requires NOT NULL on every indexed column.
+
+#### Cross-shard key change
+
+When OLD and NEW route to different shards, a single `UPDATE` cannot span both.
+PgDog detects this by comparing the shard resolved from each tuple.
+
+This has direct consequences for how the event is applied:
+
+- PgDog falls back to a DELETE on the old shard followed by an INSERT on the new shard,
+  using the table's pre-prepared statements.
+- If `update.new` contains unchanged-TOAST columns, the new row cannot be reconstructed
+  for the INSERT, and the event fails non-retryably with `FullIdentityCrossShardToasted`.
+
+### DELETE
+
+PostgreSQL fetches TOAST values before writing DELETE WAL records, so `delete.old` always
+carries fully materialized column values — `'u'` markers never appear.
+
+This has a direct consequence for row matching:
+
+- Every column in the WHERE clause uses `IS NOT DISTINCT FROM` for the same reason as
+  UPDATE: FULL identity columns have no NOT NULL guarantee.
+
+### Errors
+
+| Error | When | Recovery |
+|---|---|---|
+| `FullIdentityMissingOld` | UPDATE/DELETE arrives without a full OLD tuple | source replica identity changed; re-validate and restart |
+| `FullIdentityCrossShardToasted` | Cross-shard UPDATE with a toasted NEW column | source must emit complete rows for this table |
+| `FullIdentityAmbiguousMatch` | UPDATE/DELETE matched more than one row | destination has duplicates; deduplicate before resuming |
+| `FullIdentityOmniNoUniqueIndex` | No NULL-safe unique index found at startup | add a suitable unique index on the destination |
 
 ---
 

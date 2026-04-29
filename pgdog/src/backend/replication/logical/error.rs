@@ -1,23 +1,39 @@
 use std::fmt;
 use std::num::ParseIntError;
 
-use thiserror::Error;
+use derive_more::{Display, Error};
 
 use crate::{
     backend::replication::publisher::PublicationTable,
     net::{CommandComplete, ErrorResponse},
 };
 
+/// The kind of validation failure, decoupled from which table it occurred on.
+#[derive(Debug, Display)]
+pub enum TableValidationErrorKind {
+    #[display("has no replica identity columns")]
+    NoIdentityColumns,
+    #[display(
+        "found REPLICA IDENTITY NOTHING, the table cannot be replicated; set it to DEFAULT, INDEX, or FULL"
+    )]
+    ReplicaIdentityNothing,
+    #[display(
+        "REPLICA IDENTITY FULL on a non-sharded table requires a unique index on the destination; add a unique index on the source or destination, use REPLICA IDENTITY USING INDEX on the source, or shard the table"
+    )]
+    FullIdentityOmniNoUniqueIndex,
+}
+
 /// A single table-level validation failure.
-#[derive(Debug, Error)]
-pub enum TableValidationError {
-    #[error("table {0} has no replica identity columns")]
-    NoIdentityColumns(PublicationTable),
+#[derive(Debug, Display, Error)]
+#[display("table {table}: {kind}")]
+pub struct TableValidationError {
+    pub table: PublicationTable,
+    pub kind: TableValidationErrorKind,
 }
 
 /// Newtype that `Display`s a slice of `TableValidationError` as a human-readable list.
-#[derive(Debug)]
-pub struct TableValidationErrors(pub Vec<TableValidationError>);
+#[derive(Debug, Error)]
+pub struct TableValidationErrors(#[error(ignore)] pub Vec<TableValidationError>);
 
 impl fmt::Display for TableValidationErrors {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -29,9 +45,7 @@ impl fmt::Display for TableValidationErrors {
     }
 }
 
-impl std::error::Error for TableValidationErrors {}
-
-#[derive(Debug, Error)]
+#[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("backend: {0}")]
     Backend(#[from] crate::backend::Error),
@@ -170,6 +184,41 @@ pub enum Error {
         table: String,
         oid: pgdog_postgres_types::Oid,
     },
+
+    /// A FULL-identity UPDATE or DELETE matched more than one destination row.
+    /// The WHERE clause (all non-Toasted old columns) is not selective enough,
+    /// meaning the destination already holds logically duplicate rows.
+    /// Non-retryable: the same event would produce the same result on every retry.
+    #[error(
+        "FULL identity {op} on {table} (oid {oid}) matched {rows} rows; destination has duplicate rows that FULL identity cannot distinguish - remove duplicates or switch to REPLICA IDENTITY USING INDEX"
+    )]
+    FullIdentityAmbiguousMatch {
+        table: PublicationTable,
+        oid: pgdog_postgres_types::Oid,
+        op: &'static str,
+        rows: u64,
+    },
+
+    /// Source replica identity changed mid-stream: an UPDATE or DELETE arrived without an OLD pre-image
+    /// while the destination expected one. Re-sync the table to recover.
+    #[error(
+        "FULL identity {op} on {table} (oid {oid}): missing OLD pre-image; source replica identity changed mid-stream"
+    )]
+    FullIdentityMissingOld {
+        table: PublicationTable,
+        oid: pgdog_postgres_types::Oid,
+        op: &'static str,
+    },
+
+    /// Sharded FULL UPDATE crossed shards but the new tuple has unchanged-TOAST columns,
+    /// so the destination row cannot be rebuilt on the new shard. Re-sync to recover.
+    #[error(
+        "FULL identity UPDATE on {table} (oid {oid}): shard key changed but new tuple has unchanged-TOAST columns; re-sync to recover"
+    )]
+    FullIdentityCrossShardToasted {
+        table: PublicationTable,
+        oid: pgdog_postgres_types::Oid,
+    },
 }
 
 impl From<ErrorResponse> for Error {
@@ -268,9 +317,32 @@ mod tests {
     fn not_retryable() {
         assert!(!Error::CopyAborted(PublicationTable::default()).is_retryable());
         assert!(!Error::DataSyncAborted.is_retryable());
-        assert!(!Error::from(TableValidationError::NoIdentityColumns(
-            PublicationTable::default()
-        ))
+        assert!(!Error::from(TableValidationError {
+            table: PublicationTable::default(),
+            kind: TableValidationErrorKind::NoIdentityColumns,
+        })
+        .is_retryable());
+        assert!(!Error::FullIdentityAmbiguousMatch {
+            table: PublicationTable {
+                schema: "public".into(),
+                name: "foo".into(),
+                ..Default::default()
+            },
+            oid: pgdog_postgres_types::Oid::from(1234u32),
+            op: "UPDATE",
+            rows: 2,
+        }
+        .is_retryable());
+        assert!(!Error::FullIdentityMissingOld {
+            table: PublicationTable::default(),
+            oid: pgdog_postgres_types::Oid::from(1234u32),
+            op: "UPDATE",
+        }
+        .is_retryable());
+        assert!(!Error::FullIdentityCrossShardToasted {
+            table: PublicationTable::default(),
+            oid: pgdog_postgres_types::Oid::from(1234u32),
+        }
         .is_retryable());
         assert!(!Error::NoReplicaIdentity("s".into(), "t".into()).is_retryable());
     }
@@ -278,32 +350,41 @@ mod tests {
     #[test]
     fn table_validation_error_display() {
         // Single error: header + one indented entry.
-        let single = Error::from(TableValidationError::NoIdentityColumns(PublicationTable {
-            schema: "public".into(),
-            name: "orders".into(),
-            ..Default::default()
-        }));
+        let single = Error::from(TableValidationError {
+            table: PublicationTable {
+                schema: "public".into(),
+                name: "orders".into(),
+                ..Default::default()
+            },
+            kind: TableValidationErrorKind::NoIdentityColumns,
+        });
         assert_eq!(
             single.to_string(),
-            "Table validation failed:\n\ttable \"public\".\"orders\" has no replica identity columns",
+            "Table validation failed:\n\ttable \"public\".\"orders\": has no replica identity columns",
         );
 
         // Multiple errors: header + one indented line per entry.
         let multi = Error::TableValidation(TableValidationErrors(vec![
-            TableValidationError::NoIdentityColumns(PublicationTable {
-                schema: "public".into(),
-                name: "orders".into(),
-                ..Default::default()
-            }),
-            TableValidationError::NoIdentityColumns(PublicationTable {
-                schema: "public".into(),
-                name: "items".into(),
-                ..Default::default()
-            }),
+            TableValidationError {
+                table: PublicationTable {
+                    schema: "public".into(),
+                    name: "orders".into(),
+                    ..Default::default()
+                },
+                kind: TableValidationErrorKind::NoIdentityColumns,
+            },
+            TableValidationError {
+                table: PublicationTable {
+                    schema: "public".into(),
+                    name: "items".into(),
+                    ..Default::default()
+                },
+                kind: TableValidationErrorKind::ReplicaIdentityNothing,
+            },
         ]));
         assert_eq!(
             multi.to_string(),
-            "Table validation failed:\n\ttable \"public\".\"orders\" has no replica identity columns\n\ttable \"public\".\"items\" has no replica identity columns",
+            "Table validation failed:\n\ttable \"public\".\"orders\": has no replica identity columns\n\ttable \"public\".\"items\": found REPLICA IDENTITY NOTHING, the table cannot be replicated; set it to DEFAULT, INDEX, or FULL",
         );
     }
 }

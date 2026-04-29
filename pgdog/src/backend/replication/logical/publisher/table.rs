@@ -19,7 +19,9 @@ use crate::net::messages::Protocol;
 use crate::net::replication::StatusUpdate;
 use crate::util::escape_identifier;
 
-use super::super::{subscriber::CopySubscriber, Error, TableValidationError};
+use super::super::{
+    subscriber::CopySubscriber, Error, TableValidationError, TableValidationErrorKind,
+};
 use super::non_identity_columns_presence::NonIdentityColumnsPresence;
 use super::{
     AbortSignal, Copy, PublicationTable, PublicationTableColumn, ReplicaIdentity, ReplicationSlot,
@@ -79,11 +81,8 @@ where
         Columns::new(self.inner.filter(|(_, c)| !c.identity))
     }
 
-    /// Drop original indices and assign sequential ones starting from 0.
-    ///
-    /// Use when only this subset's values are bound as parameters, so `$1`
-    /// refers to the first column in the subset, not its position in the
-    /// full row (e.g. DELETE binds only identity column values).
+    /// Reindex columns sequentially from 0, discarding original positions.
+    /// Use when binding only this subset's values ($1 = first column in subset).
     fn reindexed(self) -> Columns<'a, impl Iterator<Item = (usize, &'a PublicationTableColumn)>> {
         Columns::new(self.inner.map(|(_, c)| c).enumerate())
     }
@@ -116,6 +115,29 @@ where
     fn predicates(self) -> String {
         self.inner
             .map(|(i, c)| format!("\"{}\" = ${}", escape_identifier(&c.name), i + 1))
+            .collect::<Vec<_>>()
+            .join(" AND ")
+    }
+
+    /// Shift every column's parameter index by `offset`.
+    /// Use when a preceding clause has already consumed `$1..$offset`.
+    fn with_offset(
+        self,
+        offset: usize,
+    ) -> Columns<'a, impl Iterator<Item = (usize, &'a PublicationTableColumn)>> {
+        Columns::new(self.inner.map(move |(i, c)| (i + offset, c)))
+    }
+
+    /// `"col" IS NOT DISTINCT FROM $pos` predicates joined by ` AND `.
+    fn is_not_distinct_from_predicates(self) -> String {
+        self.inner
+            .map(|(i, c)| {
+                format!(
+                    "\"{}\" IS NOT DISTINCT FROM ${}",
+                    escape_identifier(&c.name),
+                    i + 1
+                )
+            })
             .collect::<Vec<_>>()
             .join(" AND ")
     }
@@ -154,14 +176,26 @@ impl Table {
 
     /// Check that the table supports replication.
     ///
-    /// Requires at least one column with a replica identity flag. Tables with
-    /// REPLICA IDENTITY FULL or NOTHING have no identity columns and fail here
-    /// with NoIdentityColumns.
+    /// - FULL (`"f"`): valid — identity comes from `update.old`/`delete.old`, not column metadata.
+    /// - NOTHING (`"n"`): permanently invalid — UPDATE/DELETE carry no row identity.
+    /// - DEFAULT/INDEX: valid only when at least one column carries `identity = true`.
     pub fn valid(&self) -> Result<(), TableValidationError> {
-        if !self.columns.iter().any(|c| c.identity) {
-            return Err(TableValidationError::NoIdentityColumns(self.table.clone()));
+        match self.identity.identity.as_str() {
+            "f" => Ok(()),
+            "n" => Err(TableValidationError {
+                table: self.table.clone(),
+                kind: TableValidationErrorKind::ReplicaIdentityNothing,
+            }),
+            _ => {
+                if !self.columns.iter().any(|c| c.identity) {
+                    return Err(TableValidationError {
+                        table: self.table.clone(),
+                        kind: TableValidationErrorKind::NoIdentityColumns,
+                    });
+                }
+                Ok(())
+            }
         }
-        Ok(())
     }
 
     /// Returns all the columns, enumerated
@@ -285,6 +319,52 @@ impl Table {
             escape_identifier(self.table.destination_schema()),
             escape_identifier(self.table.destination_name()),
             self.identity_columns().reindexed().predicates(),
+        )
+    }
+
+    /// `INSERT … ON CONFLICT DO NOTHING`. For FULL omni tables; deduplicates overlap-window rows.
+    pub fn upsert_full_identity(&self) -> String {
+        format!(
+            "INSERT INTO \"{}\".\"{}\" ({}) VALUES ({}) ON CONFLICT DO NOTHING",
+            escape_identifier(self.table.destination_schema()),
+            escape_identifier(self.table.destination_name()),
+            self.all_columns().names(),
+            self.all_columns().placeholders(),
+        )
+    }
+
+    /// DELETE for REPLICA IDENTITY FULL tables — all columns in WHERE with `IS NOT DISTINCT FROM`.
+    pub fn delete_full_identity(&self) -> String {
+        format!(
+            "DELETE FROM \"{}\".\"{}\" WHERE {}",
+            escape_identifier(self.table.destination_schema()),
+            escape_identifier(self.table.destination_name()),
+            self.all_columns().is_not_distinct_from_predicates(),
+        )
+    }
+
+    /// UPDATE for REPLICA IDENTITY FULL tables.
+    /// Bind as `[old_cols][new_cols]`: WHERE occupies `$1..$k`, SET occupies `$k+1..$n`.
+    pub fn update_full_identity(&self, present: &NonIdentityColumnsPresence) -> String {
+        debug_assert!(
+            !present.no_non_identity_present(),
+            "update_full_identity called with no columns present — would emit empty SET clause"
+        );
+
+        // SET params begin at $k+1.
+        let k = present.count_present();
+
+        format!(
+            "UPDATE \"{}\".\"{}\" SET {} WHERE {}",
+            escape_identifier(self.table.destination_schema()),
+            escape_identifier(self.table.destination_name()),
+            self.present_columns(present)
+                .filter_non_identity()
+                .with_offset(k)
+                .assignments(),
+            self.present_columns(present)
+                .filter_non_identity()
+                .is_not_distinct_from_predicates(),
         )
     }
 
@@ -475,7 +555,10 @@ mod test {
         let t = make_table(vec![("id", false), ("name", false)]);
         assert!(matches!(
             t.valid(),
-            Err(TableValidationError::NoIdentityColumns(_))
+            Err(TableValidationError {
+                kind: TableValidationErrorKind::NoIdentityColumns,
+                ..
+            })
         ));
     }
 
@@ -803,7 +886,10 @@ mod test {
             .unwrap();
         assert!(matches!(
             load_table(&mut s, "valid_test_nopk").await.valid(),
-            Err(TableValidationError::NoIdentityColumns(_))
+            Err(TableValidationError {
+                kind: TableValidationErrorKind::NoIdentityColumns,
+                ..
+            })
         ));
         s.execute("ROLLBACK").await.unwrap();
     }
@@ -821,10 +907,7 @@ mod test {
             .unwrap();
         let table = load_table(&mut s, "valid_test_full").await;
         assert_eq!(table.identity.identity, "f");
-        assert!(matches!(
-            table.valid(),
-            Err(TableValidationError::NoIdentityColumns(_))
-        ));
+        assert!(table.valid().is_ok());
         s.execute("ROLLBACK").await.unwrap();
     }
 
@@ -843,7 +926,10 @@ mod test {
         assert_eq!(table.identity.identity, "n");
         assert!(matches!(
             table.valid(),
-            Err(TableValidationError::NoIdentityColumns(_))
+            Err(TableValidationError {
+                kind: TableValidationErrorKind::ReplicaIdentityNothing,
+                ..
+            })
         ));
         s.execute("ROLLBACK").await.unwrap();
     }
@@ -866,5 +952,154 @@ mod test {
         assert_eq!(table.identity.identity, "i");
         assert!(table.valid().is_ok());
         s.execute("ROLLBACK").await.unwrap();
+    }
+
+    // -------------------------------------------------------------------
+    // REPLICA IDENTITY FULL SQL generators
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn upsert_full_identity_is_valid_sql() {
+        let table = make_table(vec![("a", false), ("b", false), ("c", false)]);
+        let sql = table.upsert_full_identity();
+        assert_eq!(
+            sql,
+            r#"INSERT INTO "public"."test_table" ("a", "b", "c") VALUES ($1, $2, $3) ON CONFLICT DO NOTHING"#,
+        );
+    }
+
+    #[test]
+    fn delete_full_identity_param_numbering() {
+        let table = make_table(vec![("a", false), ("b", false), ("c", false)]);
+        let sql = table.delete_full_identity();
+        assert_eq!(
+            sql,
+            concat!(
+                r#"DELETE FROM "public"."test_table" WHERE "#,
+                r#""a" IS NOT DISTINCT FROM $1 AND "#,
+                r#""b" IS NOT DISTINCT FROM $2 AND "#,
+                r#""c" IS NOT DISTINCT FROM $3"#,
+            ),
+        );
+        assert!(
+            pg_query::parse(&sql).is_ok(),
+            "delete_full_identity: {}",
+            sql
+        );
+    }
+
+    #[test]
+    fn delete_full_identity_single_column() {
+        // Edge case: one-column table — WHERE must still be well-formed.
+        let table = make_table(vec![("id", false)]);
+        let sql = table.delete_full_identity();
+        assert_eq!(
+            sql,
+            r#"DELETE FROM "public"."test_table" WHERE "id" IS NOT DISTINCT FROM $1"#,
+        );
+        assert!(
+            pg_query::parse(&sql).is_ok(),
+            "delete_full_identity single: {}",
+            sql
+        );
+    }
+
+    #[test]
+    fn update_full_identity_all_present() {
+        // All columns present (no TOAST). WHERE $1..$3; SET $4..$6.
+        let table = make_table(vec![("a", false), ("b", false), ("c", false)]);
+        let present = NonIdentityColumnsPresence::all(&table);
+        let sql = table.update_full_identity(&present);
+        assert_eq!(
+            sql,
+            concat!(
+                r#"UPDATE "public"."test_table" SET "#,
+                r#""a" = $4, "b" = $5, "c" = $6 "#,
+                r#"WHERE "#,
+                r#""a" IS NOT DISTINCT FROM $1 AND "#,
+                r#""b" IS NOT DISTINCT FROM $2 AND "#,
+                r#""c" IS NOT DISTINCT FROM $3"#,
+            ),
+        );
+        assert!(
+            pg_query::parse(&sql).is_ok(),
+            "update_full_identity all_present: {}",
+            sql
+        );
+    }
+
+    #[test]
+    fn update_full_identity_partial_present() {
+        // b is Toasted. K=2 (a, c); WHERE $1..$2; SET $3..$4.
+        let table = make_table(vec![("a", false), ("b", false), ("c", false)]);
+        let tuple = TupleData {
+            columns: vec![text_col("1"), toasted_col(), text_col("3")],
+        };
+        let present = NonIdentityColumnsPresence::from_tuple(&tuple, &table).unwrap();
+        let sql = table.update_full_identity(&present);
+        assert_eq!(
+            sql,
+            concat!(
+                r#"UPDATE "public"."test_table" SET "#,
+                r#""a" = $3, "c" = $4 "#,
+                r#"WHERE "#,
+                r#""a" IS NOT DISTINCT FROM $1 AND "#,
+                r#""c" IS NOT DISTINCT FROM $2"#,
+            ),
+        );
+        assert!(
+            pg_query::parse(&sql).is_ok(),
+            "update_full_identity partial: {}",
+            sql
+        );
+    }
+
+    #[test]
+    fn update_full_identity_first_column_toasted() {
+        // a is Toasted; b and c present. K=2; WHERE $1..$2; SET $3..$4.
+        let table = make_table(vec![("a", false), ("b", false), ("c", false)]);
+        let tuple = TupleData {
+            columns: vec![toasted_col(), text_col("2"), text_col("3")],
+        };
+        let present = NonIdentityColumnsPresence::from_tuple(&tuple, &table).unwrap();
+        let sql = table.update_full_identity(&present);
+        assert_eq!(
+            sql,
+            concat!(
+                r#"UPDATE "public"."test_table" SET "#,
+                r#""b" = $3, "c" = $4 "#,
+                r#"WHERE "#,
+                r#""b" IS NOT DISTINCT FROM $1 AND "#,
+                r#""c" IS NOT DISTINCT FROM $2"#,
+            ),
+        );
+        assert!(
+            pg_query::parse(&sql).is_ok(),
+            "update_full_identity first_toasted: {}",
+            sql
+        );
+    }
+
+    #[test]
+    fn update_full_identity_only_one_column_present() {
+        // Only c is present; K=1; WHERE $1; SET $2.
+        let table = make_table(vec![("a", false), ("b", false), ("c", false)]);
+        let tuple = TupleData {
+            columns: vec![toasted_col(), toasted_col(), text_col("3")],
+        };
+        let present = NonIdentityColumnsPresence::from_tuple(&tuple, &table).unwrap();
+        let sql = table.update_full_identity(&present);
+        assert_eq!(
+            sql,
+            concat!(
+                r#"UPDATE "public"."test_table" SET "c" = $2 "#,
+                r#"WHERE "c" IS NOT DISTINCT FROM $1"#,
+            ),
+        );
+        assert!(
+            pg_query::parse(&sql).is_ok(),
+            "update_full_identity single col: {}",
+            sql
+        );
     }
 }

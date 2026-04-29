@@ -10,7 +10,7 @@ use tokio::time::Instant;
 use tokio::{select, spawn, time::interval};
 use tracing::{debug, info, warn};
 
-use super::super::{publisher::Table, Error, TableValidationError, TableValidationErrors};
+use super::super::{publisher::Table, Error, TableValidationErrors};
 use super::ReplicationSlot;
 
 use crate::backend::replication::logical::subscriber::stream::StreamSubscriber;
@@ -328,9 +328,7 @@ impl Publisher {
             .collect();
 
         if !validation_errors.is_empty() {
-            validation_errors.sort_by_key(|e| match e {
-                TableValidationError::NoIdentityColumns(table) => table.name.clone(),
-            });
+            validation_errors.sort_by_key(|e| e.table.name.clone());
 
             return Err(Error::TableValidation(TableValidationErrors(
                 validation_errors,
@@ -592,6 +590,125 @@ mod test {
             "DROP TABLE IF EXISTS publication_test_no_pk_3",
             "DROP TABLE IF EXISTS publication_test_no_pk_2",
             "DROP TABLE IF EXISTS publication_test_no_pk",
+        ] {
+            server.execute(*ddl).await.unwrap();
+        }
+    }
+
+    /// `REPLICA IDENTITY NOTHING` must be rejected at `data_sync` time,
+    /// before any replication slot is created. This test executes against
+    /// a real Postgres instance so it validates the full metadata-fetch + valid() path.
+    #[tokio::test]
+    async fn data_sync_rejects_replica_identity_nothing() {
+        crate::logger();
+
+        let mut server = test_replication_server().await;
+        for ddl in &[
+            "CREATE TABLE IF NOT EXISTS pub_test_nothing (data TEXT NOT NULL)",
+            "ALTER TABLE pub_test_nothing REPLICA IDENTITY NOTHING",
+            "DROP PUBLICATION IF EXISTS pub_full_identity_nothing_test",
+            "CREATE PUBLICATION pub_full_identity_nothing_test FOR TABLE pub_test_nothing",
+        ] {
+            server.execute(*ddl).await.unwrap();
+        }
+
+        let source = Cluster::new_test(&config());
+        source.launch();
+        let dest = Cluster::new_test(&config());
+
+        let mut publisher = Publisher::new(
+            "pub_full_identity_nothing_test",
+            QueryParserEngine::default(),
+            "pub_full_identity_nothing_slot".into(),
+        );
+
+        let result = publisher.data_sync(&source, &dest).await;
+
+        let err = result.expect_err("data_sync must fail for REPLICA IDENTITY NOTHING table");
+        assert!(
+            err.to_string().contains("REPLICA IDENTITY NOTHING"),
+            "expected NOTHING in error message, got: {err}"
+        );
+        assert!(
+            publisher.slots.is_empty(),
+            "no replication slot must be created when NOTHING table is present"
+        );
+
+        source.shutdown();
+        for ddl in &[
+            "DROP PUBLICATION IF EXISTS pub_full_identity_nothing_test",
+            "DROP TABLE IF EXISTS pub_test_nothing",
+        ] {
+            server.execute(*ddl).await.unwrap();
+        }
+    }
+
+    /// A table with `REPLICA IDENTITY FULL` (no primary key) must pass validation
+    /// when its metadata is loaded from Postgres. This test exercises the full
+    /// `sync_tables()` -> `valid()` pipeline against real Postgres catalog data.
+    ///
+    /// NOTE: we test `sync_tables` directly rather than the full `data_sync()` because
+    /// `data_sync` blocks in a COPY drain loop (Duration::MAX) that is not compatible with
+    /// the unit-test environment. The slot-creation + COPY path is exercised by the
+    /// subscriber stream tests in `logical/subscriber/tests.rs` (Phase 5).
+    #[tokio::test]
+    async fn sync_tables_accepts_replica_identity_full() {
+        crate::logger();
+
+        let mut server = test_replication_server().await;
+        for ddl in &[
+            "CREATE TABLE IF NOT EXISTS pub_test_full_identity (a TEXT NOT NULL, b TEXT NOT NULL)",
+            "ALTER TABLE pub_test_full_identity REPLICA IDENTITY FULL",
+            "DROP PUBLICATION IF EXISTS pub_full_identity_accept_test",
+            "CREATE PUBLICATION pub_full_identity_accept_test FOR TABLE pub_test_full_identity",
+        ] {
+            server.execute(*ddl).await.unwrap();
+        }
+
+        let source = Cluster::new_test(&config());
+        source.launch();
+        let dest = Cluster::new_test(&config());
+
+        let mut publisher = Publisher::new(
+            "pub_full_identity_accept_test",
+            QueryParserEngine::default(),
+            "pub_full_identity_accept_slot".into(),
+        );
+
+        // sync_tables loads metadata: REPLICA IDENTITY FULL must be represented as
+        // ReplicaIdentity.identity == "f" with no identity columns.
+        publisher
+            .sync_tables(true, &source, &dest)
+            .await
+            .expect("sync_tables must succeed for a REPLICA IDENTITY FULL table");
+
+        // Every table in the publisher must pass valid().
+        let validation_errors: Vec<_> = publisher
+            .tables
+            .values()
+            .flat_map(|t| t.iter())
+            .filter_map(|t| t.valid().err())
+            .collect();
+        assert!(
+            validation_errors.is_empty(),
+            "FULL identity table must pass valid(); errors: {validation_errors:?}"
+        );
+
+        // Verify the table was correctly classified as FULL identity.
+        let has_full = publisher
+            .tables
+            .values()
+            .flat_map(|t| t.iter())
+            .any(|t| t.identity.identity == "f");
+        assert!(
+            has_full,
+            "at least one table must carry identity == 'f' after sync_tables"
+        );
+
+        source.shutdown();
+        for ddl in &[
+            "DROP PUBLICATION IF EXISTS pub_full_identity_accept_test",
+            "DROP TABLE IF EXISTS pub_test_full_identity",
         ] {
             server.execute(*ddl).await.unwrap();
         }

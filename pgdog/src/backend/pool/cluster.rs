@@ -760,6 +760,20 @@ mod test {
                             hasher: Hasher::Postgres,
                             ..Default::default()
                         },
+                        // Duplicate-row table for FULL identity ambiguous-match tests.
+                        // No primary key on destination — allows identical rows.
+                        ShardedTable {
+                            database: "pgdog".into(),
+                            name: Some("full_dup_rows".into()),
+                            column: "id".into(),
+                            primary: true,
+                            centroids: vec![],
+                            data_type: DataType::Bigint,
+                            centroids_path: None,
+                            centroid_probes: 1,
+                            hasher: Hasher::Postgres,
+                            ..Default::default()
+                        },
                     ],
                     vec![
                         OmnishardedTable {

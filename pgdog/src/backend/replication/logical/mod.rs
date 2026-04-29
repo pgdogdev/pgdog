@@ -9,7 +9,7 @@ pub mod subscriber;
 
 pub use admin::*;
 pub use copy_statement::CopyStatement;
-pub use error::{Error, TableValidationError, TableValidationErrors};
+pub use error::{Error, TableValidationError, TableValidationErrorKind, TableValidationErrors};
 
 use ee::*;
 use orchestrator::*;

@@ -14,6 +14,10 @@ use crate::{
 
 use super::super::Error;
 
+fn quote_literal(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "''"))
+}
+
 /// Get list of tables in publication.
 static TABLES: &str = "SELECT DISTINCT
   n.nspname,
@@ -55,8 +59,10 @@ impl PublicationTable {
         publication: &str,
         server: &mut Server,
     ) -> Result<Vec<PublicationTable>, Error> {
+        // fetch_all (simple query protocol) is required: replication connections
+        // do not support the extended query protocol (error 08P01).
         Ok(server
-            .fetch_all(TABLES.replace("$1", &format!("'{}'", publication)))
+            .fetch_all(TABLES.replace("$1", &quote_literal(publication)))
             .await?)
     }
 
@@ -113,8 +119,8 @@ impl ReplicaIdentity {
         let identity: ReplicaIdentity = server
             .fetch_all(
                 REPLICA_IDENTIFY
-                    .replace("$1", &format!("'{}'", &table.schema))
-                    .replace("$2", &format!("'{}'", &table.name)),
+                    .replace("$1", &quote_literal(&table.schema))
+                    .replace("$2", &quote_literal(&table.name)),
             )
             .await?
             .pop()
@@ -163,7 +169,7 @@ impl PublicationTableColumn {
         Ok(server
             .fetch_all(
                 COLUMNS
-                    .replace("$1", &identity.oid.to_string()) // Don't feel like using prepared statements.
+                    .replace("$1", &identity.oid.to_string())
                     .replace("$2", &identity.oid.to_string()),
             )
             .await?)
@@ -179,6 +185,55 @@ impl From<DataRow> for PublicationTableColumn {
             identity: value.get(3, Format::Text).unwrap_or_default(),
         }
     }
+}
+
+/// True when the table has at least one full unique index safe for `ON CONFLICT DO NOTHING`
+/// deduplication during the copy↔replication overlap window.
+///
+/// Filters applied:
+/// - `indisvalid/indisready/indislive`: skip indexes mid-build or mid-drop.
+/// - `indpred IS NULL`: skip partial indexes (predicate rows are not constrained).
+/// - `indexprs IS NULL`: skip expression indexes (constraint is on computed values).
+/// - All indexed attributes have `attnotnull = true`. PostgreSQL treats NULLs as distinct
+///   in unique indexes, so a nullable column does not prevent two NULL-keyed duplicates.
+///   Requiring NOT NULL is the simplest safe contract and avoids PG-version-specific catalog
+///   probes (`indnullsnotdistinct` was added in PG15).
+static HAS_UNIQUE_INDEX: &str = "SELECT 1
+FROM pg_catalog.pg_index i
+JOIN pg_catalog.pg_class c ON c.oid = i.indrelid
+JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+WHERE n.nspname = $1
+  AND c.relname = $2
+  AND i.indisunique
+  AND i.indisvalid
+  AND i.indisready
+  AND i.indislive
+  AND i.indpred IS NULL
+  AND i.indexprs IS NULL
+  AND NOT EXISTS (
+    SELECT 1
+    FROM unnest(i.indkey) AS k(attnum)
+    JOIN pg_catalog.pg_attribute a
+      ON a.attrelid = i.indrelid AND a.attnum = k.attnum
+    WHERE NOT a.attnotnull
+  )
+LIMIT 1";
+
+/// Returns `true` when the named table has at least one unique index that is
+/// fully built and valid on the given server connection.
+pub async fn has_unique_index(
+    schema: &str,
+    name: &str,
+    server: &mut Server,
+) -> Result<bool, Error> {
+    let rows: Vec<DataRow> = server
+        .fetch_all(
+            HAS_UNIQUE_INDEX
+                .replace("$1", &quote_literal(schema))
+                .replace("$2", &quote_literal(name)),
+        )
+        .await?;
+    Ok(!rows.is_empty())
 }
 
 #[cfg(test)]
@@ -299,6 +354,87 @@ mod test {
                 .unwrap();
             assert_eq!(columns.len(), 2);
         }
+        server.execute("ROLLBACK").await.unwrap();
+    }
+
+    /// Table with no unique index of any kind: `has_unique_index` must return `false`.
+    #[tokio::test]
+    async fn test_has_unique_index_no_index() {
+        let mut server = test_server().await;
+        server.execute("BEGIN").await.unwrap();
+        server
+            .execute(
+                "CREATE TABLE huidx_no_index (
+                    a TEXT,
+                    b INTEGER
+                )",
+            )
+            .await
+            .unwrap();
+        let result = has_unique_index("public", "huidx_no_index", &mut server)
+            .await
+            .unwrap();
+        assert!(!result, "expected false: table has no unique index");
+        server.execute("ROLLBACK").await.unwrap();
+    }
+
+    /// Unique index on a NOT NULL column: `has_unique_index` must return `true`.
+    #[tokio::test]
+    async fn test_has_unique_index_with_index() {
+        let mut server = test_server().await;
+        server.execute("BEGIN").await.unwrap();
+        server
+            .execute(
+                "CREATE TABLE huidx_with_index (
+                    a TEXT NOT NULL,
+                    b INTEGER
+                )",
+            )
+            .await
+            .unwrap();
+        server
+            .execute("CREATE UNIQUE INDEX ON huidx_with_index (a)")
+            .await
+            .unwrap();
+        let result = has_unique_index("public", "huidx_with_index", &mut server)
+            .await
+            .unwrap();
+        assert!(
+            result,
+            "expected true: NOT NULL unique key column is safe for ON CONFLICT dedup"
+        );
+        server.execute("ROLLBACK").await.unwrap();
+    }
+
+    /// Unique index over a nullable column without `NULLS NOT DISTINCT`: must return `false`.
+    /// Standard PostgreSQL treats NULLs as distinct in unique indexes, so the index does not
+    /// prevent two NULL-keyed duplicates — accepting it would let `ON CONFLICT DO NOTHING`
+    /// silently insert duplicates that surface later as a non-retryable
+    /// `FullIdentityAmbiguousMatch`.
+    #[tokio::test]
+    async fn test_has_unique_index_rejects_nullable_unique_column() {
+        let mut server = test_server().await;
+        server.execute("BEGIN").await.unwrap();
+        server
+            .execute(
+                "CREATE TABLE huidx_nullable (
+                    a TEXT,
+                    b INTEGER
+                )",
+            )
+            .await
+            .unwrap();
+        server
+            .execute("CREATE UNIQUE INDEX ON huidx_nullable (a)")
+            .await
+            .unwrap();
+        let result = has_unique_index("public", "huidx_nullable", &mut server)
+            .await
+            .unwrap();
+        assert!(
+            !result,
+            "nullable unique column does not enforce NULL-vs-NULL conflict; must be rejected"
+        );
         server.execute("ROLLBACK").await.unwrap();
     }
 }

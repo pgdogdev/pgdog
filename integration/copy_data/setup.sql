@@ -24,13 +24,7 @@ CREATE TABLE IF NOT EXISTS copy_data.orders (
     refunded_at TIMESTAMPTZ
 );
 
--- TODO: remove the surrogate `id` column once pgdog supports replicating tables
--- that have no primary key and no `REPLICA IDENTITY USING INDEX`. Without a PK
--- (or unique index promoted via REPLICA IDENTITY USING INDEX), no column carries
--- the replica identity flag, Table::valid() fails with NoIdentityColumns, and the
--- table is rejected before the copy starts. See docs/FIX_ISSUE_914.md, Fix 2.
 CREATE TABLE IF NOT EXISTS copy_data.order_items (
-    id BIGSERIAL PRIMARY KEY,
     user_id BIGINT NOT NULL,
     tenant_id BIGINT NOT NULL,
     order_id BIGINT NOT NULL REFERENCES copy_data.orders(id),
@@ -38,6 +32,9 @@ CREATE TABLE IF NOT EXISTS copy_data.order_items (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     refunded_at TIMESTAMPTZ
 );
+
+-- No primary key: replica identity is carried by all columns.
+ALTER TABLE copy_data.order_items REPLICA IDENTITY FULL;
 
 CREATE TABLE IF NOT EXISTS copy_data.log_actions(
     id BIGSERIAL PRIMARY KEY,
@@ -230,3 +227,46 @@ SELECT
     -- ~32 KB per row: large enough to guarantee out-of-line TOAST storage.
     repeat(md5(gs.id::text), 1024)
 FROM generate_series(1, 50) AS gs(id);
+
+
+-- Sharded table with no primary key and REPLICA IDENTITY FULL.
+-- Rows are uniquely identifiable by (tenant_id, seq) for controlled UPDATE/DELETE testing.
+-- seq 1..50 will be UPDATEd (label set to 'updated_N'); seq 51..100 will be DELETEd.
+CREATE TABLE IF NOT EXISTS copy_data.full_identity_events (
+    tenant_id BIGINT NOT NULL,
+    seq       INT    NOT NULL,
+    label     VARCHAR NOT NULL
+);
+
+ALTER TABLE copy_data.full_identity_events REPLICA IDENTITY FULL;
+
+INSERT INTO copy_data.full_identity_events (tenant_id, seq, label)
+SELECT
+    ((gs.id - 1) % 10) + 1 AS tenant_id,
+    gs.id                  AS seq,
+    'event_' || gs.id      AS label
+FROM generate_series(1, 100) AS gs(id);
+
+-- Omni (non-sharded) table with REPLICA IDENTITY FULL.
+-- The standalone unique index is PostData and is not copied to the destination
+-- by schema-sync pre-data. run.sh creates it explicitly on each destination shard
+-- after schema-sync and before data-sync, satisfying has_unique_index().
+-- 'click' row will be UPDATEd (label set to 'Click Updated') during the test run.
+CREATE TABLE IF NOT EXISTS copy_data.event_types (
+    code        VARCHAR NOT NULL,
+    label       VARCHAR NOT NULL,
+    description TEXT
+);
+
+CREATE UNIQUE INDEX ON copy_data.event_types (code);
+ALTER TABLE copy_data.event_types REPLICA IDENTITY FULL;
+
+INSERT INTO copy_data.event_types (code, label, description) VALUES
+    ('click',    'Click',    'User clicked an element'),
+    ('view',     'View',     'User viewed a page'),
+    ('purchase', 'Purchase', 'User made a purchase'),
+    ('login',    'Login',    'User logged in'),
+    ('logout',   'Logout',   'User logged out'),
+    -- NULL description: exercises IS NOT DISTINCT FROM NULL in the FULL identity WHERE clause.
+    -- A plain = predicate would silently skip this row on UPDATE/DELETE.
+    ('null_desc', 'Null Description', NULL);

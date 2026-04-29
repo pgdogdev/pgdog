@@ -116,6 +116,18 @@ impl TupleData {
             .iter()
             .any(|c| c.identifier == Identifier::Toasted)
     }
+
+    /// Return a copy with unchanged-TOAST (`'u'`) columns removed.
+    pub fn without_toasted(&self) -> TupleData {
+        TupleData {
+            columns: self
+                .columns
+                .iter()
+                .filter(|c| c.identifier != Identifier::Toasted)
+                .cloned()
+                .collect(),
+        }
+    }
 }
 
 /// Explains what's inside the column.

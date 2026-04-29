@@ -2,15 +2,28 @@ use pgdog_postgres_types::Oid;
 
 use super::super::super::code;
 use super::super::super::prelude::*;
-use super::tuple_data::{Column, Identifier, TupleData};
+use super::tuple_data::{Column, TupleData};
+
+/// Pre-image carried by a WAL UPDATE record.
+///
+/// Exactly one variant is present per record — the three states are mutually exclusive
+/// by protocol design:
+/// - `Key`  — WAL byte `'K'`: a replica identity index changed; old key columns sent.
+/// - `Old`  — WAL byte `'O'`: `REPLICA IDENTITY FULL`; all old columns sent.
+/// - `Nothing` — WAL byte `'N'` follows the OID directly; no pre-image.
+#[derive(Debug, Clone)]
+pub enum UpdateIdentity {
+    Key(TupleData),
+    Old(TupleData),
+    Nothing,
+}
 
 /// WAL UPDATE record. Use with [`Table::update`](crate::backend::replication::logical::publisher::Table::update)
 /// or [`Table::update_partial`](crate::backend::replication::logical::publisher::Table::update_partial).
 #[derive(Debug, Clone)]
 pub struct Update {
     pub oid: Oid,
-    pub key: Option<TupleData>,
-    pub old: Option<TupleData>,
+    pub identity: UpdateIdentity,
     pub new: TupleData,
 }
 
@@ -23,15 +36,7 @@ impl Update {
     /// Filters unchanged-TOAST columns out of `new` for use with
     /// [`Table::update_partial`](crate::backend::replication::logical::publisher::Table::update_partial).
     pub fn partial_new(&self) -> TupleData {
-        TupleData {
-            columns: self
-                .new
-                .columns
-                .iter()
-                .filter(|c| c.identifier != Identifier::Toasted)
-                .cloned()
-                .collect(),
-        }
+        self.new.without_toasted()
     }
 }
 
@@ -41,28 +46,23 @@ impl FromBytes for Update {
         let oid = Oid(bytes.get_u32());
         let identifier = bytes.get_u8() as char;
 
-        let key = if identifier == 'K' {
-            let key = TupleData::from_buffer(&mut bytes)?;
-            Some(key)
-        } else {
-            None
+        let identity = match identifier {
+            'K' => UpdateIdentity::Key(TupleData::from_buffer(&mut bytes)?),
+            'O' => UpdateIdentity::Old(TupleData::from_buffer(&mut bytes)?),
+            'N' => UpdateIdentity::Nothing,
+            other => return Err(Error::UnexpectedMessage('N', other)),
         };
 
-        let old = if identifier == 'O' {
-            let old = TupleData::from_buffer(&mut bytes)?;
-            Some(old)
-        } else {
-            None
-        };
-
-        let new = if identifier == 'N' {
+        // 'K' and 'O' are followed by the 'N' marker that introduces the new tuple.
+        // For Nothing, the identifier byte we already consumed *was* that 'N'.
+        let new = if matches!(identity, UpdateIdentity::Nothing) {
             TupleData::from_bytes(bytes)?
         } else {
             code!(bytes, 'N');
             TupleData::from_bytes(bytes)?
         };
 
-        Ok(Self { oid, key, old, new })
+        Ok(Self { oid, identity, new })
     }
 }
 
@@ -72,12 +72,16 @@ impl ToBytes for Update {
         let mut buf = bytes::BytesMut::new();
         buf.put_u8(b'U');
         buf.put_u32(self.oid.0);
-        if let Some(ref key) = self.key {
-            buf.put_u8(b'K');
-            buf.put(key.to_bytes()?);
-        } else if let Some(ref old) = self.old {
-            buf.put_u8(b'O');
-            buf.put(old.to_bytes()?);
+        match &self.identity {
+            UpdateIdentity::Key(key) => {
+                buf.put_u8(b'K');
+                buf.put(key.to_bytes()?);
+            }
+            UpdateIdentity::Old(old) => {
+                buf.put_u8(b'O');
+                buf.put(old.to_bytes()?);
+            }
+            UpdateIdentity::Nothing => {}
         }
         buf.put_u8(b'N');
         buf.put(self.new.to_bytes()?);
@@ -89,23 +93,32 @@ impl ToBytes for Update {
 mod test {
     use super::*;
     use crate::net::messages::replication::logical::tuple_data::{
-        text_col, toasted_col, TupleData,
+        text_col, toasted_col, Identifier, TupleData,
     };
     use pgdog_postgres_types::Oid;
 
-    fn update(columns: Vec<super::Column>) -> Update {
+    fn make_update(new_cols: Vec<super::Column>) -> Update {
         Update {
             oid: Oid(1),
-            key: None,
-            old: None,
-            new: TupleData { columns },
+            identity: UpdateIdentity::Nothing,
+            new: TupleData { columns: new_cols },
         }
     }
+
+    fn make_update_with_old(new_cols: Vec<super::Column>, old_cols: Vec<super::Column>) -> Update {
+        Update {
+            oid: Oid(1),
+            identity: UpdateIdentity::Old(TupleData { columns: old_cols }),
+            new: TupleData { columns: new_cols },
+        }
+    }
+
+    // ── partial_new ───────────────────────────────────────────────────────
 
     #[test]
     fn partial_new_all_present() {
         // No TOAST columns — every column passes through unchanged.
-        let result = update(vec![text_col("1"), text_col("x"), text_col("y")]).partial_new();
+        let result = make_update(vec![text_col("1"), text_col("x"), text_col("y")]).partial_new();
         assert_eq!(result.columns.len(), 3);
         assert!(result
             .columns
@@ -120,7 +133,7 @@ mod test {
     #[test]
     fn partial_new_filters_toasted_columns() {
         // id, a, b (TOAST), c — b is dropped; bind order is id($1), a($2), c($3).
-        let bind = update(vec![
+        let bind = make_update(vec![
             text_col("42"),
             text_col("aa"),
             toasted_col(),
@@ -138,7 +151,7 @@ mod test {
     #[test]
     fn partial_new_identity_in_middle() {
         // a, id (middle), b (TOAST) — b is dropped; bind order is a($1), id($2).
-        let bind = update(vec![text_col("av"), text_col("1"), toasted_col()])
+        let bind = make_update(vec![text_col("av"), text_col("1"), toasted_col()])
             .partial_new()
             .to_bind("__pgdog");
         assert_eq!(bind.statement(), "__pgdog");
@@ -150,7 +163,7 @@ mod test {
     #[test]
     fn partial_new_multiple_identity_columns() {
         // id1, id2, a (TOAST), b — a is dropped; bind order is id1($1), id2($2), b($3).
-        let bind = update(vec![
+        let bind = make_update(vec![
             text_col("1"),
             text_col("2"),
             toasted_col(),
@@ -168,7 +181,7 @@ mod test {
     #[test]
     fn partial_new_two_identity_interleaved_two_toasted() {
         // a (TOAST), id1, b, c (TOAST), id2 — a and c dropped; bind order is id1($1), b($2), id2($3).
-        let bind = update(vec![
+        let bind = make_update(vec![
             toasted_col(),  // a — dropped
             text_col("1"),  // id1
             text_col("bv"), // b
@@ -182,5 +195,65 @@ mod test {
         assert_eq!(bind.parameter(1).unwrap().unwrap().text(), Some("bv")); // b
         assert_eq!(bind.parameter(2).unwrap().unwrap().bigint(), Some(2)); // id2
         assert!(matches!(bind.parameter(3), Ok(None) | Err(_))); // no 4th param
+    }
+
+    fn assert_round_trip(u: &Update) {
+        let bytes = u.to_bytes().unwrap();
+        let parsed = Update::from_bytes(bytes).unwrap();
+        assert_eq!(parsed.oid, u.oid);
+        assert_eq!(parsed.new.columns.len(), u.new.columns.len());
+        match (&parsed.identity, &u.identity) {
+            (UpdateIdentity::Key(a), UpdateIdentity::Key(b))
+            | (UpdateIdentity::Old(a), UpdateIdentity::Old(b)) => {
+                assert_eq!(a.columns.len(), b.columns.len());
+            }
+            (UpdateIdentity::Nothing, UpdateIdentity::Nothing) => {}
+            _ => panic!("identity variant changed across round-trip"),
+        }
+    }
+
+    #[test]
+    fn round_trip_nothing() {
+        assert_round_trip(&make_update(vec![text_col("v")]));
+    }
+
+    #[test]
+    fn round_trip_key() {
+        let u = Update {
+            oid: Oid(7),
+            identity: UpdateIdentity::Key(TupleData {
+                columns: vec![text_col("42")],
+            }),
+            new: TupleData {
+                columns: vec![text_col("42"), text_col("new")],
+            },
+        };
+        assert_round_trip(&u);
+    }
+
+    #[test]
+    fn round_trip_old() {
+        let u = make_update_with_old(
+            vec![text_col("a"), text_col("b")],
+            vec![text_col("x"), text_col("y")],
+        );
+        assert_round_trip(&u);
+    }
+
+    #[test]
+    fn from_bytes_rejects_unknown_marker() {
+        // 'U' + oid(4) + 'X' (not K/O/N) + … must error rather than silently fall through.
+        let mut buf = bytes::BytesMut::new();
+        use bytes::BufMut;
+        buf.put_u8(b'U');
+        buf.put_u32(1);
+        buf.put_u8(b'X');
+        // Plausible TupleData header so the test fails because of marker, not framing.
+        buf.put_i16(0);
+        let err = Update::from_bytes(buf.freeze());
+        assert!(
+            matches!(err, Err(Error::UnexpectedMessage('N', 'X'))),
+            "got: {err:?}"
+        );
     }
 }
