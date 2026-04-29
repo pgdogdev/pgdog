@@ -1,8 +1,6 @@
 use lru::LruCache;
 use std::{collections::VecDeque, sync::Arc};
 
-use parking_lot::RwLock;
-
 use crate::{
     frontend::{self, prepared_statements::GlobalCache},
     net::{
@@ -11,6 +9,8 @@ use crate::{
         ToBytes,
     },
 };
+use parking_lot::RwLock;
+use pgdog_config::PreparedStatements as PreparedStatementsLevel;
 
 use super::Error;
 use super::{
@@ -29,6 +29,11 @@ pub enum HandleResult {
     Forward,
     Drop,
     Prepend(ProtocolMessage),
+    Rewrite(ProtocolMessage),
+    PrependRewrite {
+        prepend: ProtocolMessage,
+        rewrite: ProtocolMessage,
+    },
 }
 
 /// Server-specific prepared statements.
@@ -47,6 +52,7 @@ pub struct PreparedStatements {
     describes: VecDeque<String>,
     capacity: usize,
     memory_used: usize,
+    level: PreparedStatementsLevel,
 }
 
 impl Default for PreparedStatements {
@@ -66,6 +72,7 @@ impl PreparedStatements {
             describes: VecDeque::new(),
             capacity: usize::MAX,
             memory_used: 0,
+            level: PreparedStatementsLevel::default(),
         }
     }
 
@@ -73,6 +80,11 @@ impl PreparedStatements {
     #[inline]
     pub fn set_capacity(&mut self, capacity: usize) {
         self.capacity = capacity;
+    }
+
+    #[inline]
+    pub fn set_prepared_statements_level(&mut self, level: PreparedStatementsLevel) {
+        self.level = level;
     }
 
     /// Get prepared statements capacity.
@@ -87,15 +99,30 @@ impl PreparedStatements {
                 if !bind.anonymous() {
                     let message = self.check_prepared(bind.statement())?;
                     match message {
-                        Some(message) => {
+                        Some(mut message) => {
                             self.state.add_ignore('1');
                             self.parses.push_back(bind.statement().to_string());
                             self.state.add('2');
-                            return Ok(HandleResult::Prepend(message));
+                            if self.level.rewrite_anonymous() {
+                                message.anonymize();
+                                let mut bind = bind.clone();
+                                bind.anonymize();
+                                return Ok(HandleResult::PrependRewrite {
+                                    prepend: message,
+                                    rewrite: ProtocolMessage::Bind(bind),
+                                });
+                            } else {
+                                return Ok(HandleResult::Prepend(message));
+                            }
                         }
 
                         None => {
                             self.state.add('2');
+                            if self.level.rewrite_anonymous() {
+                                let mut bind = bind.clone();
+                                bind.anonymize();
+                                return Ok(HandleResult::Rewrite(ProtocolMessage::Bind(bind)));
+                            }
                         }
                     }
                 } else {
@@ -107,22 +134,44 @@ impl PreparedStatements {
                     let message = self.check_prepared(describe.statement())?;
 
                     match message {
-                        Some(message) => {
+                        Some(mut message) => {
                             self.state.add_ignore('1');
                             self.parses.push_back(describe.statement().to_string());
                             self.state.add(ExecutionCode::DescriptionOrNothing); // t
                             self.state.add(ExecutionCode::DescriptionOrNothing); // T
-                            return Ok(HandleResult::Prepend(message));
+
+                            if self.level.rewrite_anonymous() {
+                                // Save the RowDescription because
+                                // we don't actually save prepared statements in the server
+                                // anymore so they can be different every time.
+                                self.describes.push_back(describe.statement().to_string());
+
+                                message.anonymize();
+                                let mut describe = describe.clone();
+                                describe.anonymize();
+                                return Ok(HandleResult::PrependRewrite {
+                                    prepend: message,
+                                    rewrite: ProtocolMessage::Describe(describe),
+                                });
+                            } else {
+                                return Ok(HandleResult::Prepend(message));
+                            }
                         }
 
                         None => {
                             self.state.add(ExecutionCode::DescriptionOrNothing); // t
                             self.state.add(ExecutionCode::DescriptionOrNothing);
                             // T
+                            self.describes.push_back(describe.statement().to_string());
+                            if self.level.rewrite_anonymous() {
+                                let mut describe = describe.clone();
+                                describe.anonymize();
+                                return Ok(HandleResult::Rewrite(ProtocolMessage::Describe(
+                                    describe,
+                                )));
+                            }
                         }
                     }
-
-                    self.describes.push_back(describe.statement().to_string());
                 } else if describe.is_portal() {
                     self.state.add(ExecutionCode::DescriptionOrNothing);
                 } else if describe.is_statement() {
@@ -151,6 +200,14 @@ impl PreparedStatements {
                     } else {
                         self.state.add('1');
                         self.parses.push_back(parse.name().to_string());
+                    }
+                    // The client is sending named prepared statements,
+                    // but we're in ExtendedAnonymous mode so we rewrite
+                    // them to anonymous to avoid storing them in Postgres.
+                    if self.level.rewrite_anonymous() {
+                        let mut parse = parse.clone();
+                        parse.anonymize();
+                        return Ok(HandleResult::Rewrite(ProtocolMessage::Parse(parse)));
                     }
                 } else {
                     self.state.add('1');
@@ -236,6 +293,12 @@ impl PreparedStatements {
             }
 
             _ => (),
+        }
+
+        // Reset cache, forcing all Bind/Execute, Describe, solo requests
+        // to always re-prepare the statement next time it's sent.
+        if !self.has_more_messages() && self.level.rewrite_anonymous() {
+            self.clear();
         }
 
         match action {
@@ -372,5 +435,382 @@ impl PreparedStatements {
         }
 
         close
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use crate::frontend::PreparedStatements as FrontendPreparedStatements;
+    use crate::net::{
+        bind::Parameter, messages::ReadyForQuery, Bind, Describe, Execute, Message, Parse,
+        ProtocolMessage, Query, Sync,
+    };
+    use pgdog_config::PreparedStatements as PreparedStatementsLevel;
+
+    /// Build a PreparedStatements instance configured for ExtendedAnonymous mode.
+    fn new_extended_anonymous() -> PreparedStatements {
+        let mut ps = PreparedStatements::new();
+        ps.set_prepared_statements_level(PreparedStatementsLevel::ExtendedAnonymous);
+        ps
+    }
+
+    /// Build a PreparedStatements instance configured for Extended (default) mode.
+    fn new_extended() -> PreparedStatements {
+        let mut ps = PreparedStatements::new();
+        ps.set_prepared_statements_level(PreparedStatementsLevel::Extended);
+        ps
+    }
+
+    /// Insert a prepared statement into the global cache so check_prepared can find it.
+    fn insert_global(name: &str, query: &str) -> String {
+        let parse = Parse::named(name, query);
+        let (_, rewritten_name) = FrontendPreparedStatements::global().write().insert(&parse);
+        rewritten_name
+    }
+
+    // -------------------------------------------------------
+    // Parse message tests
+    // -------------------------------------------------------
+
+    #[test]
+    fn parse_named_extended_mode_forwards() {
+        let mut ps = new_extended();
+        let parse = Parse::named("stmt1", "SELECT 1");
+        let result = ps.handle(&ProtocolMessage::Parse(parse)).unwrap();
+        assert!(matches!(result, HandleResult::Forward));
+    }
+
+    #[test]
+    fn parse_named_extended_anonymous_mode_rewrites_to_anonymous() {
+        let mut ps = new_extended_anonymous();
+        let parse = Parse::named("stmt1", "SELECT 1");
+        let result = ps.handle(&ProtocolMessage::Parse(parse)).unwrap();
+        match result {
+            HandleResult::Rewrite(ProtocolMessage::Parse(p)) => {
+                assert!(p.anonymous(), "Parse should be anonymized");
+                assert_eq!(p.query(), "SELECT 1");
+            }
+            other => panic!("expected Rewrite(Parse), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_anonymous_unchanged_in_extended_anonymous_mode() {
+        let mut ps = new_extended_anonymous();
+        let parse = Parse::new_anonymous("SELECT 1");
+        let result = ps.handle(&ProtocolMessage::Parse(parse)).unwrap();
+        assert!(matches!(result, HandleResult::Forward));
+    }
+
+    #[test]
+    fn parse_already_prepared_returns_drop_in_extended_mode() {
+        let mut ps = new_extended();
+        // Simulate the statement being already prepared on this connection.
+        ps.prepared("stmt1");
+        let parse = Parse::named("stmt1", "SELECT 1");
+        let result = ps.handle(&ProtocolMessage::Parse(parse)).unwrap();
+        assert!(matches!(result, HandleResult::Drop));
+    }
+
+    #[test]
+    fn parse_already_prepared_returns_rewrite_in_extended_anonymous() {
+        let mut ps = new_extended_anonymous();
+        // Simulate the statement being already prepared on this connection.
+        ps.prepared("stmt1");
+        let parse = Parse::named("stmt1", "SELECT 1");
+        let result = ps.handle(&ProtocolMessage::Parse(parse)).unwrap();
+        // contains() returns true so Drop is returned before the rewrite_anonymous check.
+        assert!(matches!(result, HandleResult::Drop));
+    }
+
+    // -------------------------------------------------------
+    // Bind message tests
+    // -------------------------------------------------------
+
+    #[test]
+    fn bind_named_not_in_cache_extended_mode_forwards() {
+        let mut ps = new_extended();
+        let bind = Bind::new_statement("stmt1");
+        let result = ps.handle(&ProtocolMessage::Bind(bind)).unwrap();
+        // Not in cache, no global parse -> Forward
+        assert!(matches!(result, HandleResult::Forward));
+    }
+
+    #[test]
+    fn bind_named_not_in_cache_extended_anonymous_rewrites() {
+        let mut ps = new_extended_anonymous();
+        let bind = Bind::new_statement("stmt1");
+        let result = ps.handle(&ProtocolMessage::Bind(bind)).unwrap();
+        match result {
+            HandleResult::Rewrite(ProtocolMessage::Bind(b)) => {
+                assert!(b.anonymous(), "Bind should be anonymized");
+            }
+            other => panic!("expected Rewrite(Bind), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn bind_anonymous_unchanged_in_extended_anonymous() {
+        let mut ps = new_extended_anonymous();
+        let bind = Bind::new_statement("");
+        let result = ps.handle(&ProtocolMessage::Bind(bind)).unwrap();
+        assert!(matches!(result, HandleResult::Forward));
+    }
+
+    #[test]
+    fn bind_named_in_global_cache_extended_mode_prepends() {
+        let mut ps = new_extended();
+        let name = insert_global("my_stmt", "SELECT $1");
+        let bind = Bind::new_statement(&name);
+        let result = ps.handle(&ProtocolMessage::Bind(bind)).unwrap();
+        match result {
+            HandleResult::Prepend(ProtocolMessage::Parse(p)) => {
+                assert_eq!(p.query(), "SELECT $1");
+            }
+            other => panic!("expected Prepend(Parse), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn bind_named_in_global_cache_extended_anonymous_prepend_rewrite() {
+        let mut ps = new_extended_anonymous();
+        let name = insert_global("bind_test", "SELECT $1");
+        let bind = Bind::new_statement(&name);
+        let result = ps.handle(&ProtocolMessage::Bind(bind)).unwrap();
+        match result {
+            HandleResult::PrependRewrite { prepend, rewrite } => {
+                // The prepended Parse should be anonymized.
+                if let ProtocolMessage::Parse(p) = &prepend {
+                    assert!(p.anonymous(), "prepended Parse should be anonymous");
+                    assert_eq!(p.query(), "SELECT $1");
+                } else {
+                    panic!("expected prepend to be Parse");
+                }
+                // The rewritten Bind should be anonymized.
+                if let ProtocolMessage::Bind(b) = &rewrite {
+                    assert!(b.anonymous(), "rewritten Bind should be anonymous");
+                } else {
+                    panic!("expected rewrite to be Bind");
+                }
+            }
+            other => panic!("expected PrependRewrite, got {:?}", other),
+        }
+    }
+
+    // -------------------------------------------------------
+    // Describe message tests
+    // -------------------------------------------------------
+
+    #[test]
+    fn describe_named_not_in_cache_extended_anonymous_rewrites() {
+        let mut ps = new_extended_anonymous();
+        let describe = Describe::new_statement("stmt1");
+        let result = ps.handle(&ProtocolMessage::Describe(describe)).unwrap();
+        match result {
+            HandleResult::Rewrite(ProtocolMessage::Describe(d)) => {
+                assert!(d.anonymous(), "Describe should be anonymized");
+            }
+            other => panic!("expected Rewrite(Describe), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn describe_named_in_global_cache_extended_anonymous_prepend_rewrite() {
+        let mut ps = new_extended_anonymous();
+        let name = insert_global("desc_test", "SELECT $1");
+        let describe = Describe::new_statement(&name);
+        let result = ps.handle(&ProtocolMessage::Describe(describe)).unwrap();
+        match result {
+            HandleResult::PrependRewrite { prepend, rewrite } => {
+                if let ProtocolMessage::Parse(p) = &prepend {
+                    assert!(p.anonymous(), "prepended Parse should be anonymous");
+                } else {
+                    panic!("expected prepend to be Parse");
+                }
+                if let ProtocolMessage::Describe(d) = &rewrite {
+                    assert!(d.anonymous(), "rewritten Describe should be anonymous");
+                } else {
+                    panic!("expected rewrite to be Describe");
+                }
+            }
+            other => panic!("expected PrependRewrite, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn describe_named_not_in_cache_extended_mode_forwards() {
+        let mut ps = new_extended();
+        let describe = Describe::new_statement("stmt1");
+        let result = ps.handle(&ProtocolMessage::Describe(describe)).unwrap();
+        assert!(matches!(result, HandleResult::Forward));
+    }
+
+    #[test]
+    fn describe_portal_unchanged_in_extended_anonymous() {
+        let mut ps = new_extended_anonymous();
+        let describe = Describe::new_portal("myportal");
+        let result = ps.handle(&ProtocolMessage::Describe(describe)).unwrap();
+        // Portal describes are not rewritten.
+        assert!(matches!(result, HandleResult::Forward));
+    }
+
+    // -------------------------------------------------------
+    // Close message tests
+    // -------------------------------------------------------
+
+    #[test]
+    fn close_named_is_dropped_in_both_modes() {
+        for mut ps in [new_extended(), new_extended_anonymous()] {
+            let result = ps
+                .handle(&ProtocolMessage::Close(Close::named("stmt1")))
+                .unwrap();
+            assert!(
+                matches!(result, HandleResult::Drop),
+                "named Close should be dropped"
+            );
+        }
+    }
+
+    // -------------------------------------------------------
+    // Forward response: cache clearing in extended_anonymous
+    // -------------------------------------------------------
+
+    #[test]
+    fn forward_clears_local_cache_on_ready_for_query_in_extended_anonymous() {
+        let mut ps = new_extended_anonymous();
+        ps.prepared("stmt1");
+        ps.prepared("stmt2");
+        assert_eq!(ps.len(), 2);
+
+        // Simulate a ReadyForQuery message.
+        // First we need to add a 'Z' to the state so we can action it.
+        ps.state.add('Z');
+        let rfq = Message::new(ReadyForQuery::idle().to_bytes().unwrap());
+        ps.forward(&rfq).unwrap();
+
+        // In extended_anonymous mode, cache should be cleared after done.
+        assert_eq!(ps.len(), 0, "local cache should be cleared after RFQ");
+    }
+
+    #[test]
+    fn forward_keeps_cache_on_ready_for_query_in_extended_mode() {
+        let mut ps = new_extended();
+        ps.prepared("stmt1");
+        ps.prepared("stmt2");
+        assert_eq!(ps.len(), 2);
+
+        ps.state.add('Z');
+        let rfq = Message::new(ReadyForQuery::idle().to_bytes().unwrap());
+        ps.forward(&rfq).unwrap();
+
+        // In extended mode, cache should be preserved.
+        assert_eq!(
+            ps.len(),
+            2,
+            "local cache should be preserved in extended mode"
+        );
+    }
+
+    // -------------------------------------------------------
+    // Full Parse-Bind-Execute-Sync cycle tests
+    // -------------------------------------------------------
+
+    #[test]
+    fn full_cycle_extended_anonymous_all_messages_anonymized() {
+        let mut ps = new_extended_anonymous();
+
+        // Parse
+        let parse = Parse::named("stmt1", "SELECT $1");
+        let result = ps.handle(&ProtocolMessage::Parse(parse)).unwrap();
+        match &result {
+            HandleResult::Rewrite(ProtocolMessage::Parse(p)) => {
+                assert!(p.anonymous());
+            }
+            other => panic!("expected Rewrite(Parse), got {:?}", other),
+        }
+
+        // Bind
+        let bind = Bind::new_params(
+            "stmt1",
+            &[Parameter {
+                len: 1,
+                data: "1".as_bytes().into(),
+            }],
+        );
+        let result = ps.handle(&ProtocolMessage::Bind(bind)).unwrap();
+        match &result {
+            HandleResult::Rewrite(ProtocolMessage::Bind(b)) => {
+                assert!(b.anonymous());
+            }
+            other => panic!("expected Rewrite(Bind), got {:?}", other),
+        }
+
+        // Execute
+        let result = ps
+            .handle(&ProtocolMessage::Execute(Execute::new()))
+            .unwrap();
+        assert!(matches!(result, HandleResult::Forward));
+
+        // Sync
+        let result = ps.handle(&ProtocolMessage::Sync(Sync)).unwrap();
+        assert!(matches!(result, HandleResult::Forward));
+    }
+
+    #[test]
+    fn full_cycle_extended_mode_no_rewriting() {
+        let mut ps = new_extended();
+
+        let parse = Parse::named("stmt1", "SELECT $1");
+        let result = ps.handle(&ProtocolMessage::Parse(parse)).unwrap();
+        assert!(matches!(result, HandleResult::Forward));
+
+        let bind = Bind::new_params(
+            "stmt1",
+            &[Parameter {
+                len: 1,
+                data: "1".as_bytes().into(),
+            }],
+        );
+        let result = ps.handle(&ProtocolMessage::Bind(bind)).unwrap();
+        assert!(matches!(result, HandleResult::Forward));
+
+        let result = ps
+            .handle(&ProtocolMessage::Execute(Execute::new()))
+            .unwrap();
+        assert!(matches!(result, HandleResult::Forward));
+
+        let result = ps.handle(&ProtocolMessage::Sync(Sync)).unwrap();
+        assert!(matches!(result, HandleResult::Forward));
+    }
+
+    // -------------------------------------------------------
+    // Simple query is unaffected by mode
+    // -------------------------------------------------------
+
+    #[test]
+    fn simple_query_unaffected_by_extended_anonymous() {
+        let mut ps = new_extended_anonymous();
+        let result = ps
+            .handle(&ProtocolMessage::Query(Query::new("SELECT 1")))
+            .unwrap();
+        assert!(matches!(result, HandleResult::Forward));
+    }
+
+    // -------------------------------------------------------
+    // Execute/Sync are always forwarded regardless of mode
+    // -------------------------------------------------------
+
+    #[test]
+    fn execute_and_sync_always_forward() {
+        for mut ps in [new_extended(), new_extended_anonymous()] {
+            let result = ps
+                .handle(&ProtocolMessage::Execute(Execute::new()))
+                .unwrap();
+            assert!(matches!(result, HandleResult::Forward));
+
+            let result = ps.handle(&ProtocolMessage::Sync(Sync)).unwrap();
+            assert!(matches!(result, HandleResult::Forward));
+        }
     }
 }

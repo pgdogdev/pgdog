@@ -145,6 +145,7 @@ impl Config {
                 role_detection: database.role == Role::Auto,
                 resharding_only: database.resharding_only,
                 lb_weight: database.lb_weight,
+                prepared_statements_level: general.prepared_statements,
                 ..Default::default()
             },
         }

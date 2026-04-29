@@ -177,6 +177,13 @@ impl Bind {
         self.original = None;
     }
 
+    /// Make this an anonymous Bind message.
+    pub fn anonymize(&mut self) {
+        if !self.anonymous() {
+            self.rename("");
+        }
+    }
+
     /// Is this Bind message anonymous?
     pub fn anonymous(&self) -> bool {
         self.statement.len() == 1

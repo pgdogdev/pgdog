@@ -3,7 +3,7 @@ workers = 2
 min_pool_size = 0
 prepared_statements_limit = 500
 openmetrics_port = 9090
-query_parser = "session_control_and_locks"
+prepared_statements = "extended"
 
 [[databases]]
 name = "pgdog"

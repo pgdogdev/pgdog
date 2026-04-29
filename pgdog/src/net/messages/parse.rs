@@ -94,6 +94,13 @@ impl Parse {
         self.original = None;
     }
 
+    /// Make this an anonymous Parse.
+    pub fn anonymize(&mut self) {
+        if !self.anonymous() {
+            self.rename_fast("");
+        }
+    }
+
     pub fn data_types(&self) -> DataTypesIter<'_> {
         DataTypesIter {
             data_types: &self.data_types,
