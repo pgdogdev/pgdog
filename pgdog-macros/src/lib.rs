@@ -108,6 +108,57 @@ pub fn fini(_attr: TokenStream, item: TokenStream) -> TokenStream {
     TokenStream::from(expanded)
 }
 
+/// Generates the `pgdog_route_copy_row` method for routing COPY rows.
+///
+/// The decorated function receives a [`PdCopyRow`] and returns a [`Route`].
+///
+/// ### Example
+///
+/// ```ignore
+/// use pgdog_plugin::prelude::*;
+///
+/// #[route_copy_row]
+/// fn route_copy_row(row: PdCopyRow) -> Route {
+///     Route::unknown()
+/// }
+/// ```
+#[proc_macro_attribute]
+pub fn route_copy_row(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    let input_fn = parse_macro_input!(item as ItemFn);
+    let fn_name = &input_fn.sig.ident;
+    let fn_inputs = &input_fn.sig.inputs;
+
+    let (first_param_name, _) = fn_inputs
+        .iter()
+        .filter_map(|input| {
+            if let syn::FnArg::Typed(pat_type) = input {
+                if let syn::Pat::Ident(pat_ident) = &*pat_type.pat {
+                    Some((pat_ident.ident.clone(), pat_type.ty.clone()))
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        })
+        .next()
+        .expect("route_copy_row function must have at least one named parameter");
+
+    let expanded = quote! {
+        #[unsafe(no_mangle)]
+        pub unsafe extern "C" fn pgdog_route_copy_row(#first_param_name: pgdog_plugin::PdCopyRow, output: *mut pgdog_plugin::PdRoute) {
+            #input_fn
+
+            let route: pgdog_plugin::PdRoute = #fn_name(#first_param_name).into();
+            unsafe {
+                *output = route;
+            }
+        }
+    };
+
+    TokenStream::from(expanded)
+}
+
 /// Generates the `pgdog_route` method for routing queries.
 #[proc_macro_attribute]
 pub fn route(_attr: TokenStream, item: TokenStream) -> TokenStream {
