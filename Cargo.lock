@@ -3227,6 +3227,7 @@ dependencies = [
  "hyper-util",
  "indexmap",
  "lazy_static",
+ "libc",
  "lru",
  "md5",
  "memchr",

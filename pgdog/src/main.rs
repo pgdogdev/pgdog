@@ -52,6 +52,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     bootstrap_logger(&args.config);
 
+    let nofile = pgdog::util::raise_nofile_limit();
+
     let config = match config::load(&args.config, &args.users) {
         Ok(config) => config,
         Err(err) => {
@@ -69,6 +71,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     info!("🐕 PgDog {}", pgdog_version());
+    info!("open file descriptor limit is {}", nofile);
 
     // Get databases from environment or from --database-url args.
     let config = if let Some(database_urls) = args.database_url {
