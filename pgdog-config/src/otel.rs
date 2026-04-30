@@ -8,6 +8,8 @@ use serde::{Deserialize, Serialize};
 ///
 /// When `endpoint` is set, PgDog periodically POSTs OTLP JSON metrics
 /// to the configured URL.
+///
+/// https://docs.pgdog.dev/configuration/pgdog.toml/otel/
 #[derive(JsonSchema, Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 #[serde(deny_unknown_fields)]
 pub struct Otel {
@@ -18,6 +20,19 @@ pub struct Otel {
     /// Env: `OTEL_EXPORTER_OTLP_ENDPOINT`
     #[serde(default = "Otel::endpoint")]
     pub endpoint: Option<String>,
+
+    /// Prefix added to all metric names emitted by the OTEL exporter.
+    ///
+    /// **Note:** Trailing `.` and `_` are stripped before PgDog appends metric names, so
+    /// `pgdog`, `pgdog.`, and `pgdog_` all emit `pgdog.clients`.
+    ///
+    /// _Default:_ `pgdog`
+    ///
+    /// Env: `PGDOG_OTEL_NAMESPACE`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/otel/#namespace
+    #[serde(default = "Otel::namespace")]
+    pub namespace: Option<String>,
 
     /// HTTP headers sent with each OTLP push request.
     ///
@@ -55,6 +70,10 @@ impl Otel {
 
     fn endpoint() -> Option<String> {
         Self::env_option_string("OTEL_EXPORTER_OTLP_ENDPOINT")
+    }
+
+    fn namespace() -> Option<String> {
+        Self::env_option_string("PGDOG_OTEL_NAMESPACE")
     }
 
     fn headers() -> HashMap<String, String> {
@@ -120,6 +139,7 @@ mod test {
         let toml = r#"
             [otel]
             endpoint = "https://otlp.us5.datadoghq.com/v1/metrics"
+            namespace = "pgdog_"
             datadog_api_key = "my-key"
             push_interval = 5000
 
@@ -132,11 +152,27 @@ mod test {
             config.otel.endpoint.as_deref(),
             Some("https://otlp.us5.datadoghq.com/v1/metrics")
         );
+        assert_eq!(config.otel.namespace.as_deref(), Some("pgdog_"));
         assert_eq!(config.otel.datadog_api_key.as_deref(), Some("my-key"));
         assert_eq!(config.otel.push_interval, 5000);
         assert_eq!(
             config.otel.headers.get("Authorization").unwrap(),
             "Bearer token"
         );
+    }
+
+    #[test]
+    fn namespace_from_env() {
+        unsafe {
+            env::remove_var("PGDOG_OTEL_NAMESPACE");
+            env::set_var("PGDOG_OTEL_NAMESPACE", "pgdog_");
+        }
+
+        let otel: Otel = toml::from_str("").expect("parse");
+        assert_eq!(otel.namespace.as_deref(), Some("pgdog_"));
+
+        unsafe {
+            env::remove_var("PGDOG_OTEL_NAMESPACE");
+        }
     }
 }

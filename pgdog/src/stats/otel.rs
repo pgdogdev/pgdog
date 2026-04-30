@@ -5,10 +5,10 @@
 
 use std::collections::HashMap;
 use std::env;
-use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use once_cell::sync::Lazy;
+use parking_lot::Mutex;
 use serde::Serialize;
 
 use crate::util::hostname;
@@ -16,6 +16,9 @@ use crate::util::hostname;
 use super::open_metric::{MeasurementType, Metric};
 
 static RESOURCE_ATTRIBUTES: Lazy<Vec<KeyValue>> = Lazy::new(resource_attributes);
+
+#[cfg(test)]
+pub(crate) static TEST_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 
 /// Identity of a single counter data point for delta tracking.
 #[derive(Hash, Eq, PartialEq, Clone)]
@@ -203,20 +206,25 @@ fn measurement_to_f64(m: &MeasurementType) -> f64 {
 pub fn build_request(metrics: &[&Metric]) -> ExportMetricsServiceRequest {
     let now = now_nanos();
     let config = crate::config::config();
-    let prefix = config
+    let namespace = config
         .config
-        .general
-        .openmetrics_namespace
+        .otel
+        .namespace
         .as_deref()
-        .map(|s| s.trim_end_matches(['.', '_']))
-        .unwrap_or("pgdog");
+        .unwrap_or("pgdog")
+        .trim_end_matches(['.', '_']);
+    let namespace = if namespace.is_empty() {
+        "pgdog"
+    } else {
+        namespace
+    };
 
     let common_attrs = &*RESOURCE_ATTRIBUTES;
 
     let otel_metrics: Vec<OtelMetric> = metrics
         .iter()
         .map(|metric| {
-            let name = format!("{}.{}", prefix, metric.name());
+            let name = format!("{}.{}", namespace, metric.name());
             let is_counter = metric.metric_type() == "counter";
 
             let data_points: Vec<NumberDataPoint> = metric
@@ -230,7 +238,7 @@ pub fn build_request(metrics: &[&Metric]) -> ExportMetricsServiceRequest {
                             metric: name.clone(),
                             labels: m.labels.clone(),
                         };
-                        let mut prev = PREV_COUNTERS.lock().expect("counter lock");
+                        let mut prev = PREV_COUNTERS.lock();
                         let delta = cumulative - prev.get(&key).copied().unwrap_or(0.0);
                         prev.insert(key, cumulative);
 
@@ -300,13 +308,7 @@ pub fn build_request(metrics: &[&Metric]) -> ExportMetricsServiceRequest {
             },
             scope_metrics: vec![ScopeMetrics {
                 scope: Scope {
-                    name: crate::config::config()
-                        .config
-                        .general
-                        .openmetrics_namespace
-                        .as_deref()
-                        .map(|s| s.trim_end_matches(['.', '_']).to_string())
-                        .unwrap_or_else(|| "pgdog".into()),
+                    name: namespace.into(),
                     version: env!("CARGO_PKG_VERSION").into(),
                 },
                 metrics: otel_metrics,
@@ -324,6 +326,8 @@ mod test {
 
     #[test]
     fn gauge_metric_produces_gauge_json() {
+        let _test_lock = TEST_LOCK.lock();
+
         let metric = Metric::new(PoolMetric {
             name: "sv_idle".into(),
             measurements: vec![Measurement {
@@ -347,6 +351,8 @@ mod test {
 
     #[test]
     fn counter_metric_produces_sum_json() {
+        let _test_lock = TEST_LOCK.lock();
+
         let metric = Metric::new(PoolMetric {
             name: "total_query_count".into(),
             measurements: vec![Measurement {
@@ -369,10 +375,13 @@ mod test {
 
     #[test]
     fn namespace_used_as_scope_name() {
+        let _test_lock = TEST_LOCK.lock();
+
         use crate::config::{self, ConfigAndUsers};
 
         let mut cfg = ConfigAndUsers::default();
-        cfg.config.general.openmetrics_namespace = Some("pgdog".into());
+        cfg.config.general.openmetrics_namespace = Some("openmetrics_".into());
+        cfg.config.otel.namespace = Some("pgdog_".into());
         config::set(cfg).expect("set config");
 
         let metric = Metric::new(PoolMetric {
@@ -396,6 +405,8 @@ mod test {
 
     #[test]
     fn multiple_data_points_with_labels() {
+        let _test_lock = TEST_LOCK.lock();
+
         let metric = Metric::new(PoolMetric {
             name: "sv_active".into(),
             measurements: vec![
@@ -433,6 +444,8 @@ mod test {
 
     #[test]
     fn millis_measurement_converts_to_double() {
+        let _test_lock = TEST_LOCK.lock();
+
         let metric = Metric::new(PoolMetric {
             name: "total_xact_time".into(),
             measurements: vec![Measurement {
@@ -454,6 +467,8 @@ mod test {
 
     #[test]
     fn float_measurement_preserves_value() {
+        let _test_lock = TEST_LOCK.lock();
+
         let metric = Metric::new(PoolMetric {
             name: "maxwait".into(),
             measurements: vec![Measurement {
@@ -475,6 +490,8 @@ mod test {
 
     #[test]
     fn service_name_and_scope() {
+        let _test_lock = TEST_LOCK.lock();
+
         // Ensure no env overrides leak from other tests.
         unsafe {
             std::env::remove_var("OTEL_SERVICE_NAME");
@@ -512,6 +529,8 @@ mod test {
 
     #[test]
     fn otel_env_var_overrides() {
+        let _test_lock = TEST_LOCK.lock();
+
         // Clean slate.
         unsafe {
             std::env::remove_var("OTEL_SERVICE_NAME");
@@ -546,6 +565,8 @@ mod test {
 
     #[test]
     fn percent_decode_handles_encoded_chars() {
+        let _test_lock = TEST_LOCK.lock();
+
         assert_eq!(percent_decode("key%3Dname"), "key=name");
         assert_eq!(percent_decode("a%2Cb"), "a,b");
         assert_eq!(percent_decode("plain"), "plain");

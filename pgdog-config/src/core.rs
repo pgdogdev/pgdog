@@ -271,6 +271,8 @@ pub struct Config {
     pub memory: Memory,
 
     /// OpenTelemetry push exporter settings.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/otel/
     #[serde(default)]
     pub otel: Otel,
 }
