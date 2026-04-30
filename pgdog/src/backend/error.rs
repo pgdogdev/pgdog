@@ -141,7 +141,7 @@ pub enum Error {
     #[error("toml: {0}")]
     TomlSer(#[from] toml::ser::Error),
 
-    #[error("unsupported handle ignore: {0}")]
+    #[error("cannot ignore response for message type: {0}")]
     UnsupportedHandleIgnore(char),
 }
 

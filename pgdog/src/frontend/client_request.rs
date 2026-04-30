@@ -79,11 +79,12 @@ impl ClientRequest {
 
     /// Remove any saved state from the request.
     pub fn clear(&mut self) {
-        // The saved Parse is only useful until the client actually executes
-        // it (Bind/Execute/Query). A Parse, Describe, Sync sequence — used by
-        // drivers like lib/pq to learn parameter and row types — is not
-        // executable, so we keep `last_parse` around to inject before the
-        // following Bind/Execute/Sync.
+        // We drop `last_parse` once the client has executed it. The gate is
+        // `is_executable` (Bind/Execute/Query present), not the presence of
+        // Sync: lib/pq sends Parse, Describe, Sync to learn parameter/row
+        // types without executing, and we need the saved Parse to survive
+        // that round so it can be injected before the following
+        // Bind/Execute/Sync.
         if self.is_executable() {
             self.last_parse = None;
         }
@@ -253,6 +254,13 @@ impl ClientRequest {
     /// without breaking the state by injecting the last Parse we saw into
     /// the second request and ignoring ParseComplete from the server.
     ///
+    /// Returns true only when every Bind/Describe in the batch is anonymous
+    /// and the batch has no Parse of its own. A single named Bind or Describe
+    /// disqualifies the whole batch: we can only inject one Parse, and it
+    /// would target the wrong shard for the named statement (which routes
+    /// independently). Pipelined batches that mix anonymous and named
+    /// statements are not supported — drivers we care about don't generate
+    /// them.
     pub(crate) fn needs_parse_injection(&self) -> bool {
         let mut references_anonymous = false;
         for message in &self.messages {
