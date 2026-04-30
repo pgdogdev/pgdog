@@ -85,45 +85,56 @@ func TestPqCrud(t *testing.T) {
 	assert.Nil(t, err)
 	defer adminConn.Close()
 
-	_, err = adminConn.Exec("SET prepared_statements TO 'extended_anonymous'")
-	assert.Nil(t, err)
-
 	conns := PqConnections()
 
 	for _, conn := range conns {
 		defer conn.Close()
-		for range 25 {
+		for i := range 25 {
 			tx, err := conn.Begin()
+			assert.Nil(t, err, "iteration %d: begin", i)
 
-			assert.Nil(t, err)
 			id := rand.Intn(1_000_000)
+
 			rows, err := tx.Query("INSERT INTO sharded (id) VALUES ($1) RETURNING id", id)
+			assert.Nil(t, err, "iteration %d: insert id=%d", i, id)
 
-			assert.Nil(t, err)
-
-			var len int
-			var id_val int64
+			seen := 0
+			var idVal int64
 			for rows.Next() {
-				rows.Scan(&id_val)
-				len += 1
-				assert.Equal(t, id_val, int64(id))
+				assert.Nil(t, rows.Scan(&idVal), "iteration %d: insert scan", i)
+				assert.Equal(t, int64(id), idVal, "iteration %d: insert id mismatch", i)
+				seen++
 			}
-			assert.Equal(t, len, 1)
+			assert.Nil(t, rows.Err(), "iteration %d: insert rows.Err", i)
+			assert.Nil(t, rows.Close(), "iteration %d: insert rows.Close", i)
+			assert.Equal(t, 1, seen, "iteration %d: insert row count", i)
 
 			rows, err = tx.Query("SELECT id FROM sharded WHERE id = $1", id)
-			assert.Nil(t, err)
+			assert.Nil(t, err, "iteration %d: select id=%d", i, id)
 
-			len = 0
-			id_val = 0
+			seen = 0
+			idVal = 0
 			for rows.Next() {
-				rows.Scan(&id_val)
-				len += 1
-				assert.Equal(t, id_val, int64(id))
+				assert.Nil(t, rows.Scan(&idVal), "iteration %d: select scan", i)
+				assert.Equal(t, int64(id), idVal, "iteration %d: select id mismatch", i)
+				seen++
 			}
-			assert.Equal(t, len, 1)
+			assert.Nil(t, rows.Err(), "iteration %d: select rows.Err", i)
+			assert.Nil(t, rows.Close(), "iteration %d: select rows.Close", i)
+			assert.Equal(t, 1, seen, "iteration %d: select row count", i)
 
-			err = tx.Rollback()
-			assert.Nil(t, err)
+			// Roll back so the row doesn't persist; the next iteration
+			// uses a fresh random id but we want a clean slate either way.
+			assert.Nil(t, tx.Rollback(), "iteration %d: rollback", i)
+
+			// After rollback the row must be gone — verify outside the
+			// transaction so we know the rollback actually took effect on
+			// the shard the INSERT landed on.
+			var count int
+			assert.Nil(t,
+				conn.QueryRow("SELECT COUNT(*) FROM sharded WHERE id = $1", id).Scan(&count),
+				"iteration %d: post-rollback count", i)
+			assert.Equal(t, 0, count, "iteration %d: row should not survive rollback", i)
 		}
 	}
 }

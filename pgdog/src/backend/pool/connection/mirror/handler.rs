@@ -501,9 +501,8 @@ mod tests {
         use crate::frontend::router::Ast;
         let ast = Ast::from_parse_result(pg_query::parse(query).unwrap());
         ClientRequest {
-            messages: vec![],
-            route: None,
             ast: Some(ast),
+            ..Default::default()
         }
     }
 

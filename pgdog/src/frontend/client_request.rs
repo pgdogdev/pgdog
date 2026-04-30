@@ -11,7 +11,7 @@ use crate::{
     frontend::router::Ast,
     net::{
         messages::{Bind, CopyData, Protocol},
-        Error, Flush, ProtocolMessage,
+        Error, Flush, Parse, ProtocolMessage,
     },
     stats::memory::MemoryUsage,
 };
@@ -31,6 +31,8 @@ pub struct ClientRequest {
     pub route: Option<Route>,
     /// The statement AST, if we parsed the request with our query parser.
     pub ast: Option<Ast>,
+    /// Last Parse we received.
+    pub last_parse: Option<Parse>,
 }
 
 impl MemoryUsage for ClientRequest {
@@ -50,16 +52,43 @@ impl Default for ClientRequest {
 
 impl ClientRequest {
     /// Create new buffer.
-    pub fn new() -> Self {
+    fn new() -> Self {
         Self {
             messages: Vec::with_capacity(5),
             route: None,
             ast: None,
+            last_parse: None,
         }
+    }
+
+    /// Add message to request.
+    ///
+    /// If message is a Parse, we save it in case
+    /// we receive a Bind/Descrive, Sync later.
+    ///
+    pub(crate) fn push(&mut self, message: ProtocolMessage) {
+        if let ProtocolMessage::Parse(ref parse) = message {
+            if parse.anonymous() {
+                self.last_parse = Some(parse.clone());
+            } else {
+                self.last_parse = None;
+            }
+        }
+        self.messages.push(message);
     }
 
     /// Remove any saved state from the request.
     pub fn clear(&mut self) {
+        // We drop `last_parse` once the client has executed it. The gate is
+        // `is_executable` (Bind/Execute/Query present), not the presence of
+        // Sync: lib/pq sends Parse, Describe, Sync to learn parameter/row
+        // types without executing, and we need the saved Parse to survive
+        // that round so it can be injected before the following
+        // Bind/Execute/Sync.
+        if self.is_executable() {
+            self.last_parse = None;
+        }
+
         self.messages.clear();
         self.route = None;
         self.ast = None;
@@ -110,6 +139,8 @@ impl ClientRequest {
                             .read()
                             .parse(bind.statement())
                             .map(BufferedQuery::Prepared));
+                    } else if let Some(ref parse) = self.last_parse {
+                        return Ok(Some(BufferedQuery::Prepared(parse.clone())));
                     }
                 }
                 ProtocolMessage::Describe(describe) => {
@@ -118,6 +149,8 @@ impl ClientRequest {
                             .read()
                             .parse(describe.statement())
                             .map(BufferedQuery::Prepared));
+                    } else if let Some(ref parse) = self.last_parse {
+                        return Ok(Some(BufferedQuery::Prepared(parse.clone())));
                     }
                 }
                 _ => (),
@@ -181,6 +214,7 @@ impl ClientRequest {
             messages,
             route: self.route.clone(),
             ast: self.ast.clone(),
+            last_parse: None,
         }
     }
 
@@ -209,6 +243,45 @@ impl ClientRequest {
         self.messages
             .iter()
             .any(|m| ['E', 'Q', 'B'].contains(&m.code()))
+    }
+
+    /// We split up the extended protocol exhange as soon as we see
+    /// a Flush message. This means we can handle this:
+    ///
+    /// 1. Parse, Describe, Flush
+    /// 2. Bind, Execute, Sync
+    ///
+    /// without breaking the state by injecting the last Parse we saw into
+    /// the second request and ignoring ParseComplete from the server.
+    ///
+    /// Returns true only when every Bind/Describe in the batch is anonymous
+    /// and the batch has no Parse of its own. A single named Bind or Describe
+    /// disqualifies the whole batch: we can only inject one Parse, and it
+    /// would target the wrong shard for the named statement (which routes
+    /// independently). Pipelined batches that mix anonymous and named
+    /// statements are not supported — drivers we care about don't generate
+    /// them.
+    pub(crate) fn needs_parse_injection(&self) -> bool {
+        let mut references_anonymous = false;
+        for message in &self.messages {
+            match message {
+                ProtocolMessage::Parse(_) => return false,
+                ProtocolMessage::Bind(bind) => {
+                    if !bind.anonymous() {
+                        return false;
+                    }
+                    references_anonymous = true;
+                }
+                ProtocolMessage::Describe(describe) => {
+                    if !describe.anonymous() {
+                        return false;
+                    }
+                    references_anonymous = true;
+                }
+                _ => {}
+            }
+        }
+        references_anonymous
     }
 
     /// Rewrite query in buffer.
@@ -310,6 +383,7 @@ impl From<Vec<ProtocolMessage>> for ClientRequest {
             messages,
             route: None,
             ast: None,
+            last_parse: None,
         }
     }
 }
@@ -560,5 +634,208 @@ mod test {
             Describe::new_statement("test").into(),
         ]);
         assert!(!req.is_complete());
+    }
+
+    #[test]
+    fn push_anonymous_parse_saves_last_parse() {
+        let mut req = ClientRequest::new();
+        req.push(Parse::new_anonymous("SELECT $1").into());
+        let saved = req.last_parse.as_ref().expect("last_parse should be set");
+        assert_eq!(saved.query(), "SELECT $1");
+        assert!(saved.anonymous());
+    }
+
+    #[test]
+    fn push_named_parse_clears_last_parse() {
+        // A prior anonymous Parse must be dropped when a named Parse
+        // arrives — otherwise we'd inject a stale anonymous Parse on
+        // a subsequent Bind referring to the named statement.
+        let mut req = ClientRequest::new();
+        req.push(Parse::new_anonymous("SELECT $1").into());
+        assert!(req.last_parse.is_some());
+        req.push(Parse::named("foo", "SELECT 2").into());
+        assert!(req.last_parse.is_none());
+    }
+
+    #[test]
+    fn push_non_parse_message_does_not_touch_last_parse() {
+        // last_parse is only set/cleared by Parse messages.
+        let mut req = ClientRequest::new();
+        req.push(Parse::new_anonymous("SELECT $1").into());
+        req.push(Describe::new_statement("").into());
+        req.push(Flush.into());
+        assert!(req.last_parse.is_some());
+    }
+
+    #[test]
+    fn clear_after_flush_preserves_last_parse() {
+        // The split-extended-protocol case: Parse, Describe, Flush.
+        // After clearing the buffer for the next round, we still
+        // need last_parse so the saved Parse can be injected before
+        // the upcoming Bind/Execute/Sync.
+        let mut req = ClientRequest::new();
+        req.push(Parse::new_anonymous("SELECT $1").into());
+        req.push(Describe::new_statement("").into());
+        req.push(Flush.into());
+        req.clear();
+        assert!(req.last_parse.is_some());
+        assert!(req.messages.is_empty());
+    }
+
+    #[test]
+    fn clear_after_sync_drops_last_parse() {
+        // Sync ends the extended-protocol exchange. The anonymous
+        // statement is gone from the server's perspective, so we
+        // must drop last_parse too.
+        let mut req = ClientRequest::new();
+        req.push(Parse::new_anonymous("SELECT $1").into());
+        req.push(Bind::new_statement("").into());
+        req.push(Execute::new().into());
+        req.push(Sync::new().into());
+        req.clear();
+        assert!(req.last_parse.is_none());
+        assert!(req.messages.is_empty());
+    }
+
+    #[test]
+    fn clear_empty_request_does_not_drop_last_parse() {
+        // contains_sync() is false on an empty buffer, so a stray
+        // clear() between rounds must not wipe last_parse.
+        let mut req = ClientRequest::new();
+        req.push(Parse::new_anonymous("SELECT $1").into());
+        req.messages.clear(); // simulate consumption without going through clear()
+                              // Re-establish: only the saved last_parse remains.
+        assert!(req.last_parse.is_some());
+        req.clear();
+        assert!(req.last_parse.is_some());
+    }
+
+    #[test]
+    fn needs_parse_injection_anonymous_bind_triggers() {
+        // The classic split-extended-protocol case: prior request was
+        // Parse, Describe, Flush; this is the follow-up.
+        let req = ClientRequest::from(vec![
+            Bind::new_statement("").into(),
+            Execute::new().into(),
+            Sync::new().into(),
+        ]);
+        assert!(req.needs_parse_injection());
+    }
+
+    #[test]
+    fn needs_parse_injection_anonymous_describe_triggers() {
+        // Standalone Describe of the anonymous statement also needs
+        // the saved Parse injected.
+        let req = ClientRequest::from(vec![Describe::new_statement("").into(), Flush.into()]);
+        assert!(req.needs_parse_injection());
+    }
+
+    #[test]
+    fn needs_parse_injection_named_bind_disqualifies() {
+        // Named Bind refers to a server-side prepared statement —
+        // injecting an anonymous Parse would be wrong.
+        let req = ClientRequest::from(vec![
+            Bind::new_statement("named_stmt").into(),
+            Execute::new().into(),
+            Sync::new().into(),
+        ]);
+        assert!(!req.needs_parse_injection());
+    }
+
+    #[test]
+    fn needs_parse_injection_named_describe_disqualifies() {
+        let req = ClientRequest::from(vec![
+            Describe::new_statement("named_stmt").into(),
+            Flush.into(),
+        ]);
+        assert!(!req.needs_parse_injection());
+    }
+
+    #[test]
+    fn needs_parse_injection_parse_in_buffer_disqualifies() {
+        // The buffer carries its own Parse — no injection needed.
+        let req = ClientRequest::from(vec![
+            Parse::new_anonymous("SELECT $1").into(),
+            Bind::new_statement("").into(),
+            Execute::new().into(),
+            Sync::new().into(),
+        ]);
+        assert!(!req.needs_parse_injection());
+    }
+
+    #[test]
+    fn needs_parse_injection_named_parse_in_buffer_disqualifies() {
+        let req = ClientRequest::from(vec![
+            Parse::named("foo", "SELECT $1").into(),
+            Bind::new_statement("foo").into(),
+            Execute::new().into(),
+            Sync::new().into(),
+        ]);
+        assert!(!req.needs_parse_injection());
+    }
+
+    #[test]
+    fn needs_parse_injection_execute_sync_only_does_not_trigger() {
+        // Execute and Sync alone don't reference any statement, so
+        // there's nothing for the saved Parse to apply to.
+        let req = ClientRequest::from(vec![Execute::new().into(), Sync::new().into()]);
+        assert!(!req.needs_parse_injection());
+    }
+
+    #[test]
+    fn needs_parse_injection_sync_only_does_not_trigger() {
+        let req = ClientRequest::from(vec![Sync::new().into()]);
+        assert!(!req.needs_parse_injection());
+    }
+
+    #[test]
+    fn needs_parse_injection_empty_request_does_not_trigger() {
+        let req = ClientRequest::from(vec![]);
+        assert!(!req.needs_parse_injection());
+    }
+
+    #[test]
+    fn needs_parse_injection_mixed_anonymous_and_named_bind_disqualifies() {
+        // One named Bind in the batch poisons the whole request:
+        // injecting an anonymous Parse would clobber state for the
+        // named one.
+        let req = ClientRequest::from(vec![
+            Bind::new_statement("").into(),
+            Execute::new().into(),
+            Bind::new_statement("named_stmt").into(),
+            Execute::new().into(),
+            Sync::new().into(),
+        ]);
+        assert!(!req.needs_parse_injection());
+    }
+
+    #[test]
+    fn needs_parse_injection_anonymous_bind_and_describe_triggers() {
+        // Both anonymous — still needs injection.
+        let req = ClientRequest::from(vec![
+            Bind::new_statement("").into(),
+            Describe::new_statement("").into(),
+            Execute::new().into(),
+            Sync::new().into(),
+        ]);
+        assert!(req.needs_parse_injection());
+    }
+
+    #[test]
+    fn needs_parse_injection_anonymous_bind_with_named_describe_disqualifies() {
+        let req = ClientRequest::from(vec![
+            Bind::new_statement("").into(),
+            Describe::new_statement("named_stmt").into(),
+            Execute::new().into(),
+            Sync::new().into(),
+        ]);
+        assert!(!req.needs_parse_injection());
+    }
+
+    #[test]
+    fn needs_parse_injection_flush_only_does_not_trigger() {
+        // Flush alone is meaningless — no statement references.
+        let req = ClientRequest::from(vec![Flush.into()]);
+        assert!(!req.needs_parse_injection());
     }
 }

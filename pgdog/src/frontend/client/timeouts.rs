@@ -76,7 +76,8 @@ mod test {
         let config = config(); // Will be default.
         let timeout = Timeouts::from_config(&config.config.general);
 
-        let actual = timeout.client_idle_timeout(&State::IdleInTransaction, &ClientRequest::new());
+        let actual =
+            timeout.client_idle_timeout(&State::IdleInTransaction, &ClientRequest::default());
         assert_eq!(actual, timeout.idle_in_transaction_timeout);
         assert_eq!(actual.as_millis(), i64::MAX as u128);
 

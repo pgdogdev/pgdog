@@ -56,7 +56,7 @@ impl Statement {
         let query = request.query()?.ok_or(Error::EmptyQuery)?;
         let params = request.parameters()?;
 
-        let mut request = ClientRequest::new();
+        let mut request = ClientRequest::default();
 
         match query {
             BufferedQuery::Query(_) => {

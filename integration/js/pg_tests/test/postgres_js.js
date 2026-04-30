@@ -214,7 +214,6 @@ describe("postgres.js prepared statements", function () {
 
 describe("postgres.js unsafe (simple protocol)", function () {
   before(async function () {
-    await adminSet("prepared_statements", "extended_anonymous");
     await sql`CREATE TABLE IF NOT EXISTS pjs_unsafe_9k (
       id SERIAL PRIMARY KEY,
       name TEXT
@@ -224,7 +223,6 @@ describe("postgres.js unsafe (simple protocol)", function () {
 
   after(async function () {
     await sql`DROP TABLE IF EXISTS pjs_unsafe_9k`;
-    await adminSet("prepared_statements", "extended");
   });
 
   it("unsafe query", async function () {
@@ -255,7 +253,6 @@ describe("postgres.js unsafe (simple protocol)", function () {
 
 describe("postgres.js prepare: false (unnamed prepared statements)", function () {
   before(async function () {
-    await adminSet("prepared_statements", "extended_anonymous");
     await sqlNoPrepare`CREATE TABLE IF NOT EXISTS pjs_noprep_9k (
       id SERIAL PRIMARY KEY,
       value TEXT
@@ -265,7 +262,6 @@ describe("postgres.js prepare: false (unnamed prepared statements)", function ()
 
   after(async function () {
     await sqlNoPrepare`DROP TABLE IF EXISTS pjs_noprep_9k`;
-    await adminSet("prepared_statements", "extended");
   });
 
   it("tagged template without named prepare", async function () {
@@ -447,7 +443,6 @@ describe("postgres.js sql.array()", function () {
 
 describe("postgres.js LIMIT NULL", function () {
   before(async function () {
-    await adminSet("prepared_statements", "extended_anonymous");
     await sqlNoPrepare`CREATE TABLE IF NOT EXISTS pjs_limit_9k (
       id SERIAL PRIMARY KEY,
       value TEXT
@@ -458,7 +453,6 @@ describe("postgres.js LIMIT NULL", function () {
 
   after(async function () {
     await sqlNoPrepare`DROP TABLE IF EXISTS pjs_limit_9k`;
-    await adminSet("prepared_statements", "extended");
   });
 
   it("LIMIT with null parameter returns all rows", async function () {
@@ -524,7 +518,6 @@ describe("postgres.js unsafe stress test (50k unique statements, 5 clients)", fu
   const clients = [];
 
   before(async function () {
-    await adminSet("prepared_statements", "extended_anonymous");
     for (let i = 0; i < NUM_CLIENTS; i++) {
       const c = postgres("postgres://pgdog:pgdog@127.0.0.1:6432/pgdog", {
         prepare: false,
@@ -538,7 +531,6 @@ describe("postgres.js unsafe stress test (50k unique statements, 5 clients)", fu
 
   after(async function () {
     await Promise.all(clients.map((c) => c.end()));
-    await adminSet("prepared_statements", "extended");
   });
 
   it("50k mixed queries (unsafe + tagged template) across 5 clients", async function () {
@@ -706,7 +698,7 @@ describe("postgres.js unsafe stress test (50k unique statements, 5 clients)", fu
     assert.strictEqual(completed, TOTAL_QUERIES);
 
     // Verify backend prepared statement evictions are not happening
-    // because prepared statements are not cached (extended_anonymous).
+    // because prepared statements are not cached.
     const res = await fetch("http://127.0.0.1:9090");
     const metrics = await res.text();
     const evictions = metrics

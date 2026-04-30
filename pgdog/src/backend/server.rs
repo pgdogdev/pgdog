@@ -397,12 +397,32 @@ impl Server {
         }
 
         for message in queue.into_iter().flatten() {
-            match self.stream().send(message).await {
-                Ok(sent) => self.stats.send(sent, message.code() as u8),
-                Err(err) => {
-                    self.stats.state(State::Error);
-                    return Err(err.into());
-                }
+            self.send_stream(message).await?;
+        }
+
+        Ok(())
+    }
+
+    /// Send a message to Postgres and force us to ignore its respose in [`Self::read`].
+    ///
+    /// This is useful for injecting messages into the extended protocol flow
+    /// without waiting on I/O.
+    ///
+    pub async fn send_ignore(&mut self, message: &ProtocolMessage) -> Result<(), Error> {
+        self.prepared_statements.handle_ignore(message)?;
+        self.send_stream(message).await?;
+
+        Ok(())
+    }
+
+    /// Send message to Postgres, checking for any errors
+    /// and setting the server state accordingly.
+    async fn send_stream(&mut self, message: &ProtocolMessage) -> Result<(), Error> {
+        match self.stream().send(message).await {
+            Ok(sent) => self.stats.send(sent, message.code() as u8),
+            Err(err) => {
+                self.stats.state(State::Error);
+                return Err(err.into());
             }
         }
 

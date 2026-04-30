@@ -14,9 +14,9 @@ use crate::{
     config::{config, PoolerMode, User},
     frontend::{
         router::{parser::Shard, CopyRow, Route},
-        Router,
+        ClientRequest, Router,
     },
-    net::{Bind, Message, ParameterStatus, Protocol},
+    net::{Bind, Message, ParameterStatus, Protocol, ProtocolMessage},
     state::State,
 };
 
@@ -283,7 +283,7 @@ impl Connection {
     /// Send buffer in a potentially sharded context.
     pub(crate) async fn handle_client_request(
         &mut self,
-        client_request: &crate::frontend::ClientRequest,
+        client_request: &ClientRequest,
         router: &mut Router,
         streaming: bool,
     ) -> Result<(), Error> {
@@ -298,6 +298,29 @@ impl Connection {
                 self.send(client_request).await?;
             }
         } else {
+            // We split up the extended protocol exhange as soon as we see
+            // a Flush or Sync that doesn't actually execute anything. This
+            // lets us handle drivers that prepare in one round-trip and run
+            // in the next, e.g.:
+            //
+            // 1. Parse, Describe, Flush     (lib/pq uses Sync here)
+            // 2. Bind, Execute, Sync
+            //
+            // without breaking the state by injecting the last Parse we saw
+            // into the second request and ignoring ParseComplete from the
+            // server. The injection has to follow the same route as the
+            // request itself; sending it to extra shards would leave them
+            // with a dangling Ignore expectation that hangs the read loop.
+            if let Some(ref parse) = client_request.last_parse {
+                if client_request.needs_parse_injection() {
+                    self.send_ignore(
+                        &ProtocolMessage::Parse(parse.clone()),
+                        client_request.route(),
+                    )
+                    .await?;
+                }
+            }
+
             // Send query to server.
             self.send(client_request).await?;
         }

@@ -12,7 +12,7 @@ impl QueryEngine {
         context: &mut QueryEngineContext<'_>,
     ) -> Result<(), Error> {
         for message in context.client_request.iter_mut() {
-            if message.extended() {
+            if message.is_extended() {
                 let level = context.prepared_statements.level;
                 match (level, message.anonymous()) {
                     (PreparedStatements::ExtendedAnonymous, _)

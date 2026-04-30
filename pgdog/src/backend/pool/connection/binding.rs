@@ -178,6 +178,50 @@ impl Binding {
         }
     }
 
+    /// Send one message to the server(s) the upcoming request targets and
+    /// ignore the response.
+    ///
+    /// This is only supported for extended protocol messages which usually
+    /// have only one reply. The route must match the route of the request
+    /// that follows — sending to extra shards leaves them with a dangling
+    /// Ignore expectation that blocks the multi-shard read loop.
+    pub async fn send_ignore(
+        &mut self,
+        message: &ProtocolMessage,
+        route: &Route,
+    ) -> Result<(), Error> {
+        match self {
+            Binding::Direct(Some(ref mut server)) => {
+                server.send_ignore(message).await?;
+            }
+            Binding::MultiShard(ref mut servers, state) => {
+                if !servers.is_empty() {
+                    let mut futures = Vec::new();
+                    for (position, server) in servers.iter_mut().enumerate() {
+                        let shard = state.shard_index(position);
+                        let send = match route.shard() {
+                            Shard::Direct(s) => *s == shard,
+                            Shard::Multi(shards) => shards.contains(&shard),
+                            Shard::All => true,
+                        };
+                        if send {
+                            futures.push(server.send_ignore(message));
+                        }
+                    }
+                    let results = join_all(futures).await;
+
+                    for result in results {
+                        result?;
+                    }
+                }
+            }
+
+            _ => return Err(Error::NotConnected),
+        }
+
+        Ok(())
+    }
+
     /// Send copy messages to shards they are destined to go.
     pub async fn send_copy(&mut self, rows: Vec<CopyRow>) -> Result<(), Error> {
         match self {

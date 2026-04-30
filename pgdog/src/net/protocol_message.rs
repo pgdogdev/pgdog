@@ -23,7 +23,7 @@ pub enum ProtocolMessage {
 }
 
 impl ProtocolMessage {
-    pub fn extended(&self) -> bool {
+    pub fn is_extended(&self) -> bool {
         use ProtocolMessage::*;
         matches!(
             self,

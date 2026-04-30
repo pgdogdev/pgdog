@@ -140,6 +140,9 @@ pub enum Error {
 
     #[error("toml: {0}")]
     TomlSer(#[from] toml::ser::Error),
+
+    #[error("cannot ignore response for message type: {0}")]
+    UnsupportedHandleIgnore(char),
 }
 
 impl From<crate::frontend::Error> for Error {
