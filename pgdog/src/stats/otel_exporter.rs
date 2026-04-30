@@ -18,22 +18,22 @@ const BATCH_SIZE: usize = 10;
 /// Run the push exporter loop. Exits only if the task is cancelled.
 pub async fn run() {
     let client = reqwest::Client::new();
-    let general = config().config.general.clone();
-    let interval = Duration::from_millis(general.otel_push_interval);
+    let otel_config = config().config.otel.clone();
+    let interval = Duration::from_millis(otel_config.push_interval);
+
+    let endpoint = match otel_config.endpoint {
+        Some(ref url) => url.clone(),
+        None => return,
+    };
 
     info!(
         "OTEL exporter pushing metrics to {} every {:.1}s",
-        general.otel_endpoint.clone().unwrap(), // SAFETY: This only runs if that setting is set.
+        endpoint,
         interval.as_secs_f64(),
     );
 
     loop {
         sleep(interval).await;
-
-        let endpoint = match general.otel_endpoint {
-            Some(ref url) => url.clone(),
-            None => return,
-        };
 
         let clients = Clients::load();
         let pools = Pools::load().into_metrics();
@@ -63,17 +63,12 @@ pub async fn run() {
                     .post(&endpoint)
                     .header("Content-Type", "application/json");
 
-                if let Some(ref api_key) = general.otel_datadog_api_key {
+                if let Some(ref api_key) = otel_config.datadog_api_key {
                     req = req.header("DD-API-KEY", api_key);
                 }
 
-                if let Some(ref headers) = general.otel_headers {
-                    for pair in headers.split(',') {
-                        let pair = pair.trim();
-                        if let Some((k, v)) = pair.split_once('=') {
-                            req = req.header(k.trim(), v.trim());
-                        }
-                    }
+                for (k, v) in &otel_config.headers {
+                    req = req.header(k.as_str(), v.as_str());
                 }
 
                 Some(req.body(body).send())

@@ -3,7 +3,9 @@
 //! Converts the existing `OpenMetric` trait objects into the OTLP JSON format
 //! (`ExportMetricsServiceRequest`) compatible with Datadog's OTLP ingest endpoint.
 
+use std::collections::HashMap;
 use std::env;
+use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use once_cell::sync::Lazy;
@@ -14,6 +16,17 @@ use crate::util::hostname;
 use super::open_metric::{MeasurementType, Metric};
 
 static RESOURCE_ATTRIBUTES: Lazy<Vec<KeyValue>> = Lazy::new(resource_attributes);
+
+/// Identity of a single counter data point for delta tracking.
+#[derive(Hash, Eq, PartialEq, Clone)]
+struct CounterKey {
+    metric: String,
+    labels: Vec<(String, String)>,
+}
+
+/// Previous cumulative values for delta computation.
+static PREV_COUNTERS: Lazy<Mutex<HashMap<CounterKey, f64>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
 
 fn now_nanos() -> String {
     SystemTime::now()
@@ -85,6 +98,8 @@ pub struct Sum {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NumberDataPoint {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start_time_unix_nano: Option<String>,
     pub time_unix_nano: String,
     pub as_double: f64,
     pub attributes: Vec<KeyValue>,
@@ -107,29 +122,21 @@ pub struct AttributeValue {
 /// Per the OpenTelemetry spec:
 /// - `OTEL_RESOURCE_ATTRIBUTES` is a comma-separated list of `key=value` pairs
 /// - `OTEL_SERVICE_NAME` overrides `service.name` from any other source
+///
+/// Later insertions override earlier ones (HashMap semantics).
 fn resource_attributes() -> Vec<KeyValue> {
-    let mut attrs: Vec<KeyValue> = vec![
-        KeyValue {
-            key: "service.name".into(),
-            value: AttributeValue {
-                string_value: "pgdog".into(),
-            },
-        },
-        KeyValue {
-            key: "service.instance.id".into(),
-            value: AttributeValue {
-                string_value: crate::util::instance_id().into(),
-            },
-        },
-    ];
+    let mut attrs: HashMap<String, String> = HashMap::new();
 
-    if !hostname().is_empty() {
-        attrs.push(KeyValue {
-            key: "host.name".into(),
-            value: AttributeValue {
-                string_value: hostname().to_string(),
-            },
-        });
+    // Defaults (OTEL semantic conventions).
+    attrs.insert("service.name".into(), "pgdog".into());
+    attrs.insert(
+        "service.instance.id".into(),
+        crate::util::instance_id().into(),
+    );
+
+    let host = hostname();
+    if !host.is_empty() {
+        attrs.insert("host.name".into(), host.to_string());
     }
 
     // OTEL_RESOURCE_ATTRIBUTES: key1=value1,key2=value2
@@ -137,32 +144,25 @@ fn resource_attributes() -> Vec<KeyValue> {
         for pair in raw.split(',') {
             let pair = pair.trim();
             if let Some((k, v)) = pair.split_once('=') {
-                let key = percent_decode(k.trim());
-                let value = percent_decode(v.trim());
-
-                // Override existing attribute or append new one.
-                if let Some(existing) = attrs.iter_mut().find(|a| a.key == key) {
-                    existing.value.string_value = value;
-                } else {
-                    attrs.push(KeyValue {
-                        key,
-                        value: AttributeValue {
-                            string_value: value,
-                        },
-                    });
-                }
+                attrs.insert(percent_decode(k.trim()), percent_decode(v.trim()));
             }
         }
     }
 
     // OTEL_SERVICE_NAME takes highest precedence.
     if let Ok(name) = env::var("OTEL_SERVICE_NAME") {
-        if let Some(existing) = attrs.iter_mut().find(|a| a.key == "service.name") {
-            existing.value.string_value = name;
-        }
+        attrs.insert("service.name".into(), name);
     }
 
     attrs
+        .into_iter()
+        .map(|(key, value)| KeyValue {
+            key,
+            value: AttributeValue {
+                string_value: value,
+            },
+        })
+        .collect()
 }
 
 /// Decode percent-encoded characters in OTEL_RESOURCE_ATTRIBUTES keys/values.
@@ -222,7 +222,27 @@ pub fn build_request(metrics: &[&Metric]) -> ExportMetricsServiceRequest {
             let data_points: Vec<NumberDataPoint> = metric
                 .measurements()
                 .iter()
-                .map(|m| {
+                .filter_map(|m| {
+                    let cumulative = measurement_to_f64(&m.measurement);
+
+                    let as_double = if is_counter {
+                        let key = CounterKey {
+                            metric: name.clone(),
+                            labels: m.labels.clone(),
+                        };
+                        let mut prev = PREV_COUNTERS.lock().expect("counter lock");
+                        let delta = cumulative - prev.get(&key).copied().unwrap_or(0.0);
+                        prev.insert(key, cumulative);
+
+                        // Skip negative deltas (counter reset).
+                        if delta < 0.0 {
+                            return None;
+                        }
+                        delta
+                    } else {
+                        cumulative
+                    };
+
                     let mut attributes: Vec<KeyValue> = m
                         .labels
                         .iter()
@@ -241,11 +261,12 @@ pub fn build_request(metrics: &[&Metric]) -> ExportMetricsServiceRequest {
                         },
                     }));
 
-                    NumberDataPoint {
+                    Some(NumberDataPoint {
+                        start_time_unix_nano: None,
                         time_unix_nano: now.clone(),
-                        as_double: measurement_to_f64(&m.measurement),
+                        as_double,
                         attributes,
-                    }
+                    })
                 })
                 .collect();
 
@@ -253,8 +274,7 @@ pub fn build_request(metrics: &[&Metric]) -> ExportMetricsServiceRequest {
                 (
                     None,
                     Some(Sum {
-                        // CUMULATIVE = 2 (Datadog converts to delta internally)
-                        aggregation_temporality: 2,
+                        aggregation_temporality: 1, // DELTA
                         is_monotonic: true,
                         data_points,
                     }),
@@ -344,7 +364,7 @@ mod test {
         assert!(json.contains("\"sum\""));
         assert!(!json.contains("\"gauge\""));
         assert!(json.contains("\"isMonotonic\":true"));
-        assert!(json.contains("\"aggregationTemporality\":2"));
+        assert!(json.contains("\"aggregationTemporality\":1"));
     }
 
     #[test]
