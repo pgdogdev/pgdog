@@ -573,7 +573,7 @@ impl Client {
                     .collect::<Vec<_>>(),
             );
         } else {
-            println!(
+            trace!(
                 "request buffered [{:.4}ms]\n{:#?}",
                 timer.unwrap().elapsed().as_secs_f64() * 1000.0,
                 self.client_request,

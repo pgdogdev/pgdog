@@ -299,18 +299,25 @@ impl Connection {
             }
         } else {
             // We split up the extended protocol exhange as soon as we see
-            // a Flush message. This means we can handle this:
+            // a Flush or Sync that doesn't actually execute anything. This
+            // lets us handle drivers that prepare in one round-trip and run
+            // in the next, e.g.:
             //
-            // 1. Parse, Describe, Flush
+            // 1. Parse, Describe, Flush     (lib/pq uses Sync here)
             // 2. Bind, Execute, Sync
             //
-            // without breaking the state by injecting the last Parse we saw into
-            // the second request and ignoring ParseComplete from the server.
-            //
+            // without breaking the state by injecting the last Parse we saw
+            // into the second request and ignoring ParseComplete from the
+            // server. The injection has to follow the same route as the
+            // request itself; sending it to extra shards would leave them
+            // with a dangling Ignore expectation that hangs the read loop.
             if let Some(ref parse) = client_request.last_parse {
                 if client_request.needs_parse_injection() {
-                    self.send_ignore(&ProtocolMessage::Parse(parse.clone()))
-                        .await?;
+                    self.send_ignore(
+                        &ProtocolMessage::Parse(parse.clone()),
+                        client_request.route(),
+                    )
+                    .await?;
                 }
             }
 

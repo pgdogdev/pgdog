@@ -393,7 +393,7 @@ impl Server {
         };
 
         for message in queue.iter().flatten() {
-            println!("{:#?} >>> [{}]", message, self.addr());
+            trace!("{:#?} >>> [{}]", message, self.addr());
         }
 
         for message in queue.into_iter().flatten() {
