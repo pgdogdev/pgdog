@@ -17,6 +17,7 @@ use super::database::Database;
 use super::error::Error;
 use super::general::General;
 use super::networking::{MultiTenant, Tcp, TlsVerifyMode};
+use super::otel::Otel;
 use super::pooling::PoolerMode;
 use super::replication::{MirrorConfig, Mirroring, MirroringLevel, ReplicaLag, Replication};
 use super::rewrite::Rewrite;
@@ -268,6 +269,12 @@ pub struct Config {
     /// https://docs.pgdog.dev/configuration/pgdog.toml/memory/
     #[serde(default)]
     pub memory: Memory,
+
+    /// OpenTelemetry push exporter settings.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/otel/
+    #[serde(default)]
+    pub otel: Otel,
 }
 
 impl Config {

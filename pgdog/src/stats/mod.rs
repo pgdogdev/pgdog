@@ -3,6 +3,8 @@ pub mod clients;
 pub mod http_server;
 pub mod mirror_stats;
 pub mod open_metric;
+pub mod otel;
+pub mod otel_exporter;
 pub mod pools;
 pub use open_metric::*;
 pub mod logger;

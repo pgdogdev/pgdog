@@ -161,6 +161,17 @@
         "$ref": "#/$defs/OmnishardedTables"
       }
     },
+    "otel": {
+      "description": "OpenTelemetry push exporter settings.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/otel/",
+      "$ref": "#/$defs/Otel",
+      "default": {
+        "datadog_api_key": null,
+        "endpoint": null,
+        "headers": {},
+        "namespace": null,
+        "push_interval": 0
+      }
+    },
     "plugins": {
       "description": "[Plugins](https://docs.pgdog.dev/features/plugins/) are dynamically loaded at PgDog startup. These settings control which plugins are loaded.\n\n**Note:** Plugins can only be configured at PgDog startup. They cannot be changed after the process is running.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/plugins/",
       "type": "array",
@@ -1342,6 +1353,52 @@
         "database",
         "tables"
       ]
+    },
+    "Otel": {
+      "description": "OpenTelemetry push exporter settings.\n\nWhen `endpoint` is set, PgDog periodically POSTs OTLP JSON metrics\nto the configured URL.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/otel/",
+      "type": "object",
+      "properties": {
+        "datadog_api_key": {
+          "description": "Datadog API key. Convenience shorthand that adds a `DD-API-KEY` header\nto OTLP push requests.\n\nEnv: `DD_API_KEY`",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "endpoint": {
+          "description": "Full URL of the OTLP metrics ingest endpoint\n(e.g. `https://otlp.us5.datadoghq.com/v1/metrics`).\nWhen not set, the push exporter is disabled.\n\nEnv: `OTEL_EXPORTER_OTLP_ENDPOINT`",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "headers": {
+          "description": "HTTP headers sent with each OTLP push request.\n\nIn TOML:\n```toml\n[otel.headers]\nDD-API-KEY = \"abc123\"\nX-Custom = \"foo\"\n```\n\nEnv: `OTEL_EXPORTER_OTLP_HEADERS` (comma-separated `key=value` pairs)",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {}
+        },
+        "namespace": {
+          "description": "Prefix added to all metric names emitted by the OTEL exporter.\n\n**Note:** Trailing `.` and `_` are stripped before PgDog appends metric names, so\n`pgdog`, `pgdog.`, and `pgdog_` all emit `pgdog.clients`.\n\n_Default:_ `pgdog`\n\nEnv: `PGDOG_OTEL_NAMESPACE`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/otel/#namespace",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "push_interval": {
+          "description": "How often, in milliseconds, to push metrics to the OTLP endpoint.\n\n_Default:_ `10000`\n\nEnv: `OTEL_METRIC_EXPORT_INTERVAL`",
+          "type": "integer",
+          "format": "uint64",
+          "default": 10000,
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
     },
     "PassthroughAuth": {
       "description": "toggle automatic creation of connection pools given the user name, database and password.\n\nSee [passthrough authentication](https://docs.pgdog.dev/features/authentication/#passthrough-authentication).\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#passthrough_auth",

@@ -130,6 +130,10 @@ async fn pgdog(command: Option<Commands>) -> Result<(), Box<dyn std::error::Erro
         tokio::spawn(async move { stats::http_server::server(openmetrics_port).await });
     }
 
+    if config::config().config.otel.endpoint.is_some() {
+        tokio::spawn(stats::otel_exporter::run());
+    }
+
     if let Some(healthcheck_port) = general.healthcheck_port {
         tokio::spawn(async move { healthcheck::server(healthcheck_port).await });
     }

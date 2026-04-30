@@ -658,6 +658,10 @@ impl Pools {
 
         Pools { metrics }
     }
+
+    pub fn into_metrics(self) -> Vec<Metric> {
+        self.metrics
+    }
 }
 
 #[cfg(test)]

@@ -11,9 +11,9 @@ pub use server::Server;
 /// Generate a `SCRAM-SHA-256$iterations:salt$StoredKey:ServerKey` hash string
 /// from a plaintext password, suitable for storage in `users.toml` or `pg_shadow`.
 pub fn generate_hash(password: &str, iterations: std::num::NonZeroU32, salt: &[u8]) -> String {
+    use aws_lc_rs::digest;
+    use aws_lc_rs::hmac::{self, HMAC_SHA256};
     use base64::prelude::*;
-    use ring::digest;
-    use ring::hmac::{self, HMAC_SHA256};
 
     let salted_password = scram::hash_password(password, iterations, salt);
     let key = hmac::Key::new(HMAC_SHA256, &salted_password);
