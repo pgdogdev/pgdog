@@ -201,3 +201,22 @@ async fn test_extended_anonymous_simple_query_unaffected() {
     expect_message!(client.read().await, CommandComplete);
     expect_message!(client.read().await, ReadyForQuery);
 }
+
+#[tokio::test]
+async fn test_extended_partial() {
+    let mut client = TestClient::new_replicas(Parameters::default()).await;
+    client.send(Parse::named("", "SELECT $1")).await;
+    client.send(Describe::new_statement("")).await;
+    client.send(Flush).await;
+    client.try_process().await.unwrap();
+
+    assert!(client.client.client_request.last_parse.is_some());
+
+    client
+        .send(Bind::new_params("", &[Parameter::new("1".as_bytes())]))
+        .await;
+    client.send(Execute::new()).await;
+    client.send(Sync).await;
+
+    client.try_process().await.unwrap();
+}

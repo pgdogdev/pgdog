@@ -524,7 +524,7 @@ describe("postgres.js unsafe stress test (50k unique statements, 5 clients)", fu
   const clients = [];
 
   before(async function () {
-    await adminSet("prepared_statements", "extended_anonymous");
+    await adminSet("prepared_statements", "extended");
     for (let i = 0; i < NUM_CLIENTS; i++) {
       const c = postgres("postgres://pgdog:pgdog@127.0.0.1:6432/pgdog", {
         prepare: false,

@@ -14,9 +14,9 @@ use crate::{
     config::{config, PoolerMode, User},
     frontend::{
         router::{parser::Shard, CopyRow, Route},
-        Router,
+        ClientRequest, Router,
     },
-    net::{Bind, Message, ParameterStatus, Protocol},
+    net::{Bind, Message, ParameterStatus, Protocol, ProtocolMessage},
     state::State,
 };
 
@@ -283,7 +283,7 @@ impl Connection {
     /// Send buffer in a potentially sharded context.
     pub(crate) async fn handle_client_request(
         &mut self,
-        client_request: &crate::frontend::ClientRequest,
+        client_request: &ClientRequest,
         router: &mut Router,
         streaming: bool,
     ) -> Result<(), Error> {
@@ -298,6 +298,22 @@ impl Connection {
                 self.send(client_request).await?;
             }
         } else {
+            // We split up the extended protocol exhange as soon as we see
+            // a Flush message. This means we can handle this:
+            //
+            // 1. Parse, Describe, Flush
+            // 2. Bind, Execute, Sync
+            //
+            // without breaking the state by injecting the last Parse we saw into
+            // the second request and ignoring ParseComplete from the server.
+            //
+            if let Some(ref parse) = client_request.last_parse {
+                if client_request.needs_parse_injection() {
+                    self.send_ignore(&ProtocolMessage::Parse(parse.clone()))
+                        .await?;
+                }
+            }
+
             // Send query to server.
             self.send(client_request).await?;
         }

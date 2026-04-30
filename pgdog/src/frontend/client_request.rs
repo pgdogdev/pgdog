@@ -11,7 +11,7 @@ use crate::{
     frontend::router::Ast,
     net::{
         messages::{Bind, CopyData, Protocol},
-        Error, Flush, ProtocolMessage,
+        Error, Flush, Parse, ProtocolMessage,
     },
     stats::memory::MemoryUsage,
 };
@@ -31,6 +31,8 @@ pub struct ClientRequest {
     pub route: Option<Route>,
     /// The statement AST, if we parsed the request with our query parser.
     pub ast: Option<Ast>,
+    /// Last Parse we received.
+    pub last_parse: Option<Parse>,
 }
 
 impl MemoryUsage for ClientRequest {
@@ -50,16 +52,37 @@ impl Default for ClientRequest {
 
 impl ClientRequest {
     /// Create new buffer.
-    pub fn new() -> Self {
+    fn new() -> Self {
         Self {
             messages: Vec::with_capacity(5),
             route: None,
             ast: None,
+            last_parse: None,
         }
+    }
+
+    /// Add message to request.
+    ///
+    /// If message is a Parse, we save it in case
+    /// we receive a Bind/Descrive, Sync later.
+    ///
+    pub(crate) fn push(&mut self, message: ProtocolMessage) {
+        if let ProtocolMessage::Parse(ref parse) = message {
+            if parse.anonymous() {
+                self.last_parse = Some(parse.clone());
+            }
+        }
+        self.messages.push(message);
     }
 
     /// Remove any saved state from the request.
     pub fn clear(&mut self) {
+        // We don't need this Parse anymore.
+
+        if self.contains_sync() {
+            self.last_parse = None;
+        }
+
         self.messages.clear();
         self.route = None;
         self.ast = None;
@@ -110,6 +133,8 @@ impl ClientRequest {
                             .read()
                             .parse(bind.statement())
                             .map(BufferedQuery::Prepared));
+                    } else if let Some(ref parse) = self.last_parse {
+                        return Ok(Some(BufferedQuery::Prepared(parse.clone())));
                     }
                 }
                 ProtocolMessage::Describe(describe) => {
@@ -118,6 +143,8 @@ impl ClientRequest {
                             .read()
                             .parse(describe.statement())
                             .map(BufferedQuery::Prepared));
+                    } else if let Some(ref parse) = self.last_parse {
+                        return Ok(Some(BufferedQuery::Prepared(parse.clone())));
                     }
                 }
                 _ => (),
@@ -181,6 +208,7 @@ impl ClientRequest {
             messages,
             route: self.route.clone(),
             ast: self.ast.clone(),
+            last_parse: None,
         }
     }
 
@@ -209,6 +237,50 @@ impl ClientRequest {
         self.messages
             .iter()
             .any(|m| ['E', 'Q', 'B'].contains(&m.code()))
+    }
+
+    /// The request contains a Sync.
+    ///
+    /// INVARIANT: If it does contain a Sync, it will always
+    /// be be the last message due to how [`Self::is_complete`] works.
+    pub(crate) fn contains_sync(&self) -> bool {
+        self.messages
+            .last()
+            .as_ref()
+            .map(|m| m.code() == 'S')
+            .unwrap_or_default()
+    }
+
+    /// We split up the extended protocol exhange as soon as we see
+    /// a Flush message. This means we can handle this:
+    ///
+    /// 1. Parse, Describe, Flush
+    /// 2. Bind, Execute, Sync
+    ///
+    /// without breaking the state by injecting the last Parse we saw into
+    /// the second request and ignoring ParseComplete from the server.
+    ///
+    pub(crate) fn needs_parse_injection(&self) -> bool {
+        let mut references_anonymous = false;
+        for message in &self.messages {
+            match message {
+                ProtocolMessage::Parse(_) => return false,
+                ProtocolMessage::Bind(bind) => {
+                    if !bind.anonymous() {
+                        return false;
+                    }
+                    references_anonymous = true;
+                }
+                ProtocolMessage::Describe(describe) => {
+                    if !describe.anonymous() {
+                        return false;
+                    }
+                    references_anonymous = true;
+                }
+                _ => {}
+            }
+        }
+        references_anonymous
     }
 
     /// Rewrite query in buffer.
@@ -310,6 +382,7 @@ impl From<Vec<ProtocolMessage>> for ClientRequest {
             messages,
             route: None,
             ast: None,
+            last_parse: None,
         }
     }
 }

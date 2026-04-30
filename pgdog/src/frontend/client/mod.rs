@@ -25,6 +25,7 @@ use crate::net::messages::{
     Authentication, BackendKeyData, ErrorResponse, FromBytes, Message, Password, Protocol,
     ProtocolVersion, ReadyForQuery, ToBytes,
 };
+use crate::net::Parse;
 use crate::net::{parameter::Parameters, MessageBuffer, ProtocolMessage, Stream};
 use crate::state::State;
 use crate::stats::memory::MemoryUsage;
@@ -54,6 +55,7 @@ pub struct Client {
     client_request: ClientRequest,
     stream_buffer: MessageBuffer,
     sticky: Sticky,
+    last_parse: Option<Parse>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -93,6 +95,11 @@ impl MemoryUsage for Client {
             + std::mem::size_of::<Timeouts>()
             + self.stream_buffer.capacity()
             + self.client_request.memory_usage()
+            + self
+                .last_parse
+                .as_ref()
+                .map(|p| p.len())
+                .unwrap_or_default()
     }
 }
 
@@ -316,10 +323,11 @@ impl Client {
             prepared_statements: PreparedStatements::new(),
             transaction: None,
             timeouts: Timeouts::from_config(&config.config.general),
-            client_request: ClientRequest::new(),
+            client_request: ClientRequest::default(),
             stream_buffer: MessageBuffer::new(config.config.memory.message_buffer),
             sticky: Sticky::from_params(&params),
             connect_params: params,
+            last_parse: None,
         }))
     }
 
@@ -347,10 +355,11 @@ impl Client {
             admin: false,
             transaction: None,
             timeouts: Timeouts::from_config(&config().config.general),
-            client_request: ClientRequest::new(),
+            client_request: ClientRequest::default(),
             stream_buffer: MessageBuffer::new(4096),
             sticky: Sticky::from_params(&connect_params),
             params: connect_params,
+            last_parse: None,
         }
     }
 
@@ -564,7 +573,7 @@ impl Client {
                     .collect::<Vec<_>>(),
             );
         } else {
-            trace!(
+            println!(
                 "request buffered [{:.4}ms]\n{:#?}",
                 timer.unwrap().elapsed().as_secs_f64() * 1000.0,
                 self.client_request,

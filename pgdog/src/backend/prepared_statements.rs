@@ -92,6 +92,21 @@ impl PreparedStatements {
         self.capacity
     }
 
+    /// Force the server to ignore the response to this message.
+    ///
+    /// This is done to inject messages into the extended request flow
+    /// to set the connection into a particular state.
+    ///
+    pub(super) fn handle_ignore(&mut self, request: &ProtocolMessage) -> Result<(), Error> {
+        match request {
+            ProtocolMessage::Parse(_) => {
+                self.state.add_ignore('1');
+                Ok(())
+            }
+            _ => Err(Error::UnsupportedHandleIgnore(request.code())),
+        }
+    }
+
     /// Handle extended protocol message.
     pub fn handle(&mut self, request: &ProtocolMessage) -> Result<HandleResult, Error> {
         match request {
