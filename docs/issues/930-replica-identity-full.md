@@ -69,8 +69,8 @@ The column-level `identity` flag carries no information for FULL tables.
 `Statements` carries `full_identity: bool`, set at `relation()` time from `ReplicaIdentity.identity == "f"`. Every INSERT, UPDATE, and DELETE dispatch branch checks this flag to route FULL-mode events to their own handlers.
 
 **Additional check at `relation()` time for non-sharded (omni) FULL tables:**
-query `pg_index` on the destination for any unique index whose key columns are NULL-safe
-(either `indnullsnotdistinct = true` on PG15+ or every `indkey` attribute is `attnotnull`).
+query `pg_index` on the destination for any unique index that prevents NULL-keyed duplicates:
+either every key column has `attnotnull = true`, or `indnullsnotdistinct = true` (PG15+).
 PgDog enforces no schema-uniformity invariant across shards, so the probe runs on every
 shard's primary connection — a single-shard probe could miss drift that surfaces later as a
 non-retryable `FullIdentityAmbiguousMatch`. If any shard lacks a usable unique index, return
@@ -82,9 +82,11 @@ Error message: `"table {schema}.{name} has REPLICA IDENTITY FULL and is not shar
 REPLICA IDENTITY USING INDEX"`.
 
 Why NULL-safety matters: standard PostgreSQL treats NULLs as distinct in unique indexes,
-so a unique index over a nullable column does NOT prevent two NULL-keyed duplicates; that
-would let `ON CONFLICT DO NOTHING` admit duplicates during the copy↔replication overlap
-window, then any FULL `UPDATE`/`DELETE` would match both copies and fail.
+so a plain nullable unique index does NOT prevent two NULL-keyed duplicates; that would let
+`ON CONFLICT DO NOTHING` admit duplicates during the copy↔replication overlap window, then
+any FULL `UPDATE`/`DELETE` would match both copies and fail.
+PG15+ `NULLS NOT DISTINCT` indexes are accepted: `indnullsnotdistinct = true` makes NULLs
+compare as equal in the unique constraint, so duplicates cannot exist even for nullable columns.
 
 **Runtime consistency check.** Once FULL identity is accepted, the subscriber detects
 when the source table's replica identity changes mid-stream:
@@ -254,11 +256,10 @@ pre-prepared `update` statement. No cache lookup, no `update_shapes` interaction
    - Inserts into `update_shapes`.
 4. On a **cache hit** (including the just-prepared entry):
    - DEFAULT/INDEX: bind via `update.partial_new().to_bind(name)`.
-   - FULL: build `partial_old_for_present(&update.old, table, &present)` — a positional
-     mask applied to OLD that mirrors the SQL's WHERE column set, since OLD has no
-     `'u'` markers to filter on. Then bind a concatenated tuple
-     `[partial_old_for_present columns][update.partial_new() columns]` so OLD cols
-     occupy `$1..$K` (WHERE) and NEW cols occupy `$K+1..$2K` (SET).
+   - FULL: call `update.old.without_toasted()` (OLD never carries `'u'` markers in real PG,
+     but the filter is defence-in-depth). Slice the result to the present column positions
+     derived from `update.new`. Build a bind tuple `[old_cols_for_present][update.partial_new()]`
+     so old cols occupy `$1..$K` (WHERE) and new cols occupy `$K+1..$2K` (SET).
 5. Send `Bind + Execute + Flush`; read `BindComplete ('2') + CommandComplete ('C')`.
    Identical to the fast path — no extra round-trips after the first occurrence.
 
@@ -272,7 +273,7 @@ a large JSONB column is always unchanged, another where it is modified).
 |-----------|----------------|------|
 | `insert` | Plain `INSERT` (sharded, `omni == false`) | Plain `INSERT` (sharded, `omni == false`) |
 | `upsert` | `INSERT … ON CONFLICT (identity_cols) DO UPDATE SET …` (omni) | `INSERT … ON CONFLICT DO NOTHING` (omni) — no conflict target; covers any unique index on the destination |
-| `update` (fast path) | Prepared at `relation()` time | Prepared at `relation()` time via `update_full_identity` with all columns present — `SET col=$1… WHERE col IS NOT DISTINCT FROM $K+1…` |
+| `update` (fast path) | Prepared at `relation()` time | Prepared at `relation()` time via `update_full_identity` with all columns present — `WHERE col IS NOT DISTINCT FROM $1..$K; SET col=$K+1..$N` |
 | `update_shapes` | Populated lazily per `NonIdentityColumnsPresence` | Populated lazily per `NonIdentityColumnsPresence` — same map, different SQL generator |
 | `delete` | `WHERE identity_col = $N` | `WHERE col IS NOT DISTINCT FROM $N` — all columns, via `Table::delete_full_identity()`, prepared at `relation()` time |
 
@@ -451,7 +452,8 @@ No dependencies. Standalone addition to `impl Update`.
   malformed marker byte → `Error::UnexpectedMessage`.
 - The slow-path subscriber must NOT assume the `'u'` mask of `update.old` matches that of
   `update.new` — in real PG, OLD has no `'u'` markers. Instead, derive `present` from `update.new`
-  alone and apply it positionally to OLD via `partial_old_for_present` when binding the WHERE clause.
+  alone, call `update.old.without_toasted()` (defence-in-depth), and slice the result to the
+  same column positions when binding the WHERE clause.
 
 ### ✅ Phase 4 — Destination unique-index query (`logical/publisher/queries.rs`)
 
@@ -462,7 +464,10 @@ No code dependencies. Required before Phase 5.
   `JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace`
   `WHERE n.nspname = $schema AND c.relname = $name AND i.indisunique`
   `AND i.indisvalid AND i.indisready AND i.indislive`
-  `AND i.indpred IS NULL AND i.indexprs IS NULL LIMIT 1`
+  `AND i.indpred IS NULL AND i.indexprs IS NULL`
+  `AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_attribute a`
+  `WHERE a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey) AND NOT a.attnotnull)`
+  `LIMIT 1`
   - `indisvalid AND indisready AND indislive` filters out indexes mid-build via
     `CREATE UNIQUE INDEX CONCURRENTLY` and indexes being concurrently dropped, neither of
     which can be relied on for `ON CONFLICT DO NOTHING` deduplication.
@@ -493,7 +498,7 @@ Depends on Phases 1–4.
   - Same shard, no Toasted → fast path (pre-prepared `update`,
     bind `[old cols][new cols]`, check `rows > 1`)
   - Same shard, has Toasted → slow path (shape cache via `update_full_identity(present)`,
-    bind `[partial_old_for_present][partial_new]`, check `rows > 1`)
+    bind `[old_cols_for_present][partial_new]`, check `rows > 1`)
   - `update.identity` not `Old` on a FULL table → `Error::FullIdentityMissingOld`
 - `delete()`: when `full_identity`, bind `delete.old` to `statements.delete`;
   check `rows > 1` → `Err(FullIdentityAmbiguousMatch)`. `delete.old` absent → `Error::FullIdentityMissingOld`

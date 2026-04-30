@@ -4,13 +4,10 @@ use super::super::super::code;
 use super::super::super::prelude::*;
 use super::tuple_data::{Column, TupleData};
 
-/// Pre-image carried by a WAL UPDATE record.
-///
-/// Exactly one variant is present per record — the three states are mutually exclusive
-/// by protocol design:
-/// - `Key`  — WAL byte `'K'`: a replica identity index changed; old key columns sent.
-/// - `Old`  — WAL byte `'O'`: `REPLICA IDENTITY FULL`; all old columns sent.
-/// - `Nothing` — WAL byte `'N'` follows the OID directly; no pre-image.
+/// Pre-image in a WAL UPDATE record — exactly one variant per record:
+/// - `Key`     — byte `'K'`: identity index changed; old key columns sent.
+/// - `Old`     — byte `'O'`: `REPLICA IDENTITY FULL`; full old row sent.
+/// - `Nothing` — no K/O block precedes the new-tuple marker; the pre-image is absent.
 #[derive(Debug, Clone)]
 pub enum UpdateIdentity {
     Key(TupleData),
@@ -33,10 +30,26 @@ impl Update {
         self.new.columns.get(index)
     }
 
-    /// Filters unchanged-TOAST columns out of `new` for use with
-    /// [`Table::update_partial`](crate::backend::replication::logical::publisher::Table::update_partial).
+    /// Filters unchanged-TOAST (`'u'`) columns out of `new`.
+    ///
+    /// In a WAL UPDATE record, columns whose value did not change are sent as `'u'`
+    /// (Toasted/unchanged) in the new tuple — the value is not included in the record.
+    /// Stripping them yields only the columns that were actually modified.
     pub fn partial_new(&self) -> TupleData {
         self.new.without_toasted()
+    }
+
+    /// Concatenate `where_cols` then `set_cols` into one `TupleData` for a FULL-identity UPDATE.
+    /// WHERE params (`$1..$k`) come from `where_cols`; SET params (`$k+1..$n`) from `set_cols`.
+    pub fn full_identity_bind_tuple(where_cols: &TupleData, set_cols: &TupleData) -> TupleData {
+        TupleData {
+            columns: where_cols
+                .columns
+                .iter()
+                .chain(set_cols.columns.iter())
+                .cloned()
+                .collect(),
+        }
     }
 }
 
@@ -197,15 +210,32 @@ mod test {
         assert!(matches!(bind.parameter(3), Ok(None) | Err(_))); // no 4th param
     }
 
+    /// Assert that every column in `got` has the same `Identifier` as the corresponding
+    /// column in `want`. Catches byte-level regressions in column-marker serialization
+    /// (e.g. swapping `'t'`/`'b'`/`'n'`/`'u'`) that a length-only check would miss.
+    fn assert_columns_match(got: &TupleData, want: &TupleData, label: &str) {
+        assert_eq!(
+            got.columns.len(),
+            want.columns.len(),
+            "{label}: column count mismatch"
+        );
+        for (i, (g, w)) in got.columns.iter().zip(want.columns.iter()).enumerate() {
+            assert_eq!(
+                g.identifier, w.identifier,
+                "{label}[{i}] identifier mismatch"
+            );
+        }
+    }
+
     fn assert_round_trip(u: &Update) {
         let bytes = u.to_bytes().unwrap();
         let parsed = Update::from_bytes(bytes).unwrap();
         assert_eq!(parsed.oid, u.oid);
-        assert_eq!(parsed.new.columns.len(), u.new.columns.len());
+        assert_columns_match(&parsed.new, &u.new, "new.columns");
         match (&parsed.identity, &u.identity) {
             (UpdateIdentity::Key(a), UpdateIdentity::Key(b))
             | (UpdateIdentity::Old(a), UpdateIdentity::Old(b)) => {
-                assert_eq!(a.columns.len(), b.columns.len());
+                assert_columns_match(a, b, "identity.columns");
             }
             (UpdateIdentity::Nothing, UpdateIdentity::Nothing) => {}
             _ => panic!("identity variant changed across round-trip"),

@@ -42,7 +42,7 @@ impl NonIdentityColumnsPresence {
         let mut count_present = 0usize;
         for (tcol, col) in tuple.columns.iter().zip(table.columns.iter()) {
             if col.identity {
-                // ignore identity since they should be always present
+                // identity columns always carry a value — skip
                 continue;
             }
             if tcol.identifier != Identifier::Toasted {

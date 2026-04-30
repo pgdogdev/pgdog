@@ -130,11 +130,12 @@ The behavior splits on whether the table has a sharding column:
   or the NEW tuple (INSERT). No broadcast is needed.
 - *Omni FULL* tables replicate to every shard. Because omni INSERTs fan out during the
   bulk-copy/replication overlap window, duplicates are possible. PgDog requires a
-  **NULL-safe unique index** on every destination shard — `NULLS NOT DISTINCT` (PG 15+) or
-  all indexed columns `NOT NULL`. A standard nullable unique index does not prevent two
-  `NULL`-keyed rows from coexisting; accepting one would cause silent duplicates that surface
-  later as a non-retryable `FullIdentityAmbiguousMatch`. If any shard lacks a usable index,
-  `relation()` returns `FullIdentityOmniNoUniqueIndex` before any statements are prepared.
+  **unique index that prevents NULL-keyed duplicates** on every destination shard. Either
+  declare every key column `NOT NULL`, or use a PG15+ `NULLS NOT DISTINCT` unique index.
+  A standard nullable unique index allows two `NULL`-keyed rows to coexist; accepting one
+  would cause silent duplicates that surface later as a non-retryable
+  `FullIdentityAmbiguousMatch`. If any shard lacks a usable index, `relation()` returns
+  `FullIdentityOmniNoUniqueIndex` before any statements are prepared.
 
 ### INSERT
 
@@ -216,7 +217,7 @@ This has a direct consequence for row matching:
 | `FullIdentityMissingOld` | UPDATE/DELETE arrives without a full OLD tuple | source replica identity changed; re-validate and restart |
 | `FullIdentityCrossShardToasted` | Cross-shard UPDATE with a toasted NEW column | source must emit complete rows for this table |
 | `FullIdentityAmbiguousMatch` | UPDATE/DELETE matched more than one row | destination has duplicates; deduplicate before resuming |
-| `FullIdentityOmniNoUniqueIndex` | No NULL-safe unique index found at startup | add a suitable unique index on the destination |
+| `FullIdentityOmniNoUniqueIndex` | No NULL-safe unique index found at startup | add a unique index with all key columns `NOT NULL`, or a PG15+ `NULLS NOT DISTINCT` unique index |
 
 ---
 
@@ -315,3 +316,21 @@ Re-fetching the missing value from the source is not an option: a query issued o
 replication stream's transaction context could reflect a newer write, breaking ordering guarantees.
 It is also unnecessary — the destination already holds the correct value from the initial bulk
 COPY or a prior full UPDATE, so skipping the column in the SET clause is exactly right.
+
+---
+
+## Error rollback
+
+WAL events dispatch `Bind/Execute/Flush` (no `Sync`), leaving Postgres in an implicit
+transaction that holds row locks. On `Err`, `StreamSubscriber::handle` in
+[`subscriber/stream.rs`](../pgdog/src/backend/replication/logical/subscriber/stream.rs)
+clears `self.connections` and resets per-session state (`relations`, `statements`, `keys`,
+`changed_tables`, `in_transaction`). Dropping each `Server` closes its TCP socket;
+Postgres FATALs the backend and rolls back the implicit transaction. The next call to
+`handle()` lazily reconnects and rebuilds prepared statements from the Relation messages
+Postgres re-emits after reconnect.
+
+`Sync` would not work: it commits when Postgres saw no error, but PgDog raises errors
+(e.g. `FullIdentityAmbiguousMatch` on `rows > 1`) *after* a successful `CommandComplete`.
+FATAL disconnect is the only signal that rolls back regardless. Connections come from
+`Pool::standalone`, so dropping them closes the socket instead of returning to a pool.

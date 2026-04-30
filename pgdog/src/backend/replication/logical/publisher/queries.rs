@@ -194,10 +194,12 @@ impl From<DataRow> for PublicationTableColumn {
 /// - `indisvalid/indisready/indislive`: skip indexes mid-build or mid-drop.
 /// - `indpred IS NULL`: skip partial indexes (predicate rows are not constrained).
 /// - `indexprs IS NULL`: skip expression indexes (constraint is on computed values).
-/// - All indexed attributes have `attnotnull = true`. PostgreSQL treats NULLs as distinct
-///   in unique indexes, so a nullable column does not prevent two NULL-keyed duplicates.
-///   Requiring NOT NULL is the simplest safe contract and avoids PG-version-specific catalog
-///   probes (`indnullsnotdistinct` was added in PG15).
+/// - NULL-safety: either `indnullsnotdistinct = true` (PG15+, NULLs treated as equal in the
+///   unique constraint) or every indexed attribute has `attnotnull = true` (NULLs impossible).
+///   A plain nullable unique index allows two NULL-keyed rows to coexist, which would later
+///   surface as a non-retryable `FullIdentityAmbiguousMatch`.
+/// Requires PostgreSQL 15+ when an `indnullsnotdistinct` index is present; the column does
+/// not exist on older servers and the query will return an error rather than silently accept.
 static HAS_UNIQUE_INDEX: &str = "SELECT 1
 FROM pg_catalog.pg_index i
 JOIN pg_catalog.pg_class c ON c.oid = i.indrelid
@@ -210,12 +212,15 @@ WHERE n.nspname = $1
   AND i.indislive
   AND i.indpred IS NULL
   AND i.indexprs IS NULL
-  AND NOT EXISTS (
-    SELECT 1
-    FROM unnest(i.indkey) AS k(attnum)
-    JOIN pg_catalog.pg_attribute a
-      ON a.attrelid = i.indrelid AND a.attnum = k.attnum
-    WHERE NOT a.attnotnull
+  AND (
+    i.indnullsnotdistinct
+    OR NOT EXISTS (
+      SELECT 1
+      FROM unnest(i.indkey) AS k(attnum)
+      JOIN pg_catalog.pg_attribute a
+        ON a.attrelid = i.indrelid AND a.attnum = k.attnum
+      WHERE NOT a.attnotnull
+    )
   )
 LIMIT 1";
 
@@ -371,7 +376,7 @@ mod test {
             )
             .await
             .unwrap();
-        let result = has_unique_index("public", "huidx_no_index", &mut server)
+        let result = has_unique_index("pgdog", "huidx_no_index", &mut server)
             .await
             .unwrap();
         assert!(!result, "expected false: table has no unique index");
@@ -396,7 +401,7 @@ mod test {
             .execute("CREATE UNIQUE INDEX ON huidx_with_index (a)")
             .await
             .unwrap();
-        let result = has_unique_index("public", "huidx_with_index", &mut server)
+        let result = has_unique_index("pgdog", "huidx_with_index", &mut server)
             .await
             .unwrap();
         assert!(
@@ -406,11 +411,9 @@ mod test {
         server.execute("ROLLBACK").await.unwrap();
     }
 
-    /// Unique index over a nullable column without `NULLS NOT DISTINCT`: must return `false`.
-    /// Standard PostgreSQL treats NULLs as distinct in unique indexes, so the index does not
-    /// prevent two NULL-keyed duplicates — accepting it would let `ON CONFLICT DO NOTHING`
-    /// silently insert duplicates that surface later as a non-retryable
-    /// `FullIdentityAmbiguousMatch`.
+    /// Unique index on a nullable column must return `false`.
+    /// PG unique indexes treat NULLs as distinct, so nullable columns allow duplicate NULL rows —
+    /// which would later surface as a non-retryable `FullIdentityAmbiguousMatch`.
     #[tokio::test]
     async fn test_has_unique_index_rejects_nullable_unique_column() {
         let mut server = test_server().await;
@@ -428,12 +431,42 @@ mod test {
             .execute("CREATE UNIQUE INDEX ON huidx_nullable (a)")
             .await
             .unwrap();
-        let result = has_unique_index("public", "huidx_nullable", &mut server)
+        let result = has_unique_index("pgdog", "huidx_nullable", &mut server)
             .await
             .unwrap();
         assert!(
             !result,
             "nullable unique column does not enforce NULL-vs-NULL conflict; must be rejected"
+        );
+        server.execute("ROLLBACK").await.unwrap();
+    }
+
+    /// `NULLS NOT DISTINCT` unique index on a nullable column must return `true` (PG15+).
+    /// `indnullsnotdistinct = true` makes NULLs compare as equal, so two NULL-keyed rows
+    /// cannot coexist — the index is safe for `ON CONFLICT DO NOTHING` deduplication.
+    #[tokio::test]
+    async fn test_has_unique_index_accepts_nulls_not_distinct() {
+        let mut server = test_server().await;
+        server.execute("BEGIN").await.unwrap();
+        server
+            .execute(
+                "CREATE TABLE huidx_nulls_not_distinct (
+                    a TEXT,
+                    b INTEGER
+                )",
+            )
+            .await
+            .unwrap();
+        server
+            .execute("CREATE UNIQUE INDEX ON huidx_nulls_not_distinct (a) NULLS NOT DISTINCT")
+            .await
+            .unwrap();
+        let result = has_unique_index("pgdog", "huidx_nulls_not_distinct", &mut server)
+            .await
+            .unwrap();
+        assert!(
+            result,
+            "NULLS NOT DISTINCT index prevents NULL-keyed duplicates; must be accepted"
         );
         server.execute("ROLLBACK").await.unwrap();
     }

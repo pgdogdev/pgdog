@@ -14,7 +14,7 @@ pub enum TableValidationErrorKind {
     #[display("has no replica identity columns")]
     NoIdentityColumns,
     #[display(
-        "found REPLICA IDENTITY NOTHING, the table cannot be replicated; set it to DEFAULT, INDEX, or FULL"
+        "REPLICA IDENTITY NOTHING, UPDATE/DELETE carry no row identity and cannot be replicated; set it to DEFAULT, INDEX, or FULL"
     )]
     ReplicaIdentityNothing,
     #[display(
@@ -185,10 +185,8 @@ pub enum Error {
         oid: pgdog_postgres_types::Oid,
     },
 
-    /// A FULL-identity UPDATE or DELETE matched more than one destination row.
-    /// The WHERE clause (all non-Toasted old columns) is not selective enough,
-    /// meaning the destination already holds logically duplicate rows.
-    /// Non-retryable: the same event would produce the same result on every retry.
+    /// FULL-identity UPDATE or DELETE: WHERE clause matched more than one destination row.
+    /// Non-retryable — remove duplicate rows or switch to REPLICA IDENTITY USING INDEX.
     #[error(
         "FULL identity {op} on {table} (oid {oid}) matched {rows} rows; destination has duplicate rows that FULL identity cannot distinguish - remove duplicates or switch to REPLICA IDENTITY USING INDEX"
     )]
@@ -196,7 +194,7 @@ pub enum Error {
         table: PublicationTable,
         oid: pgdog_postgres_types::Oid,
         op: &'static str,
-        rows: u64,
+        rows: usize,
     },
 
     /// Source replica identity changed mid-stream: an UPDATE or DELETE arrived without an OLD pre-image
@@ -384,7 +382,7 @@ mod tests {
         ]));
         assert_eq!(
             multi.to_string(),
-            "Table validation failed:\n\ttable \"public\".\"orders\": has no replica identity columns\n\ttable \"public\".\"items\": found REPLICA IDENTITY NOTHING, the table cannot be replicated; set it to DEFAULT, INDEX, or FULL",
+            "Table validation failed:\n\ttable \"public\".\"orders\": has no replica identity columns\n\ttable \"public\".\"items\": REPLICA IDENTITY NOTHING, UPDATE/DELETE carry no row identity and cannot be replicated; set it to DEFAULT, INDEX, or FULL",
         );
     }
 }

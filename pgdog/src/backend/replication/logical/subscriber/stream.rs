@@ -17,6 +17,7 @@ use super::super::publisher::{has_unique_index, NonIdentityColumnsPresence};
 use super::super::{publisher::Table, Error, TableValidationError, TableValidationErrorKind};
 use super::StreamContext;
 use crate::net::messages::replication::logical::tuple_data::{Identifier, TupleData};
+use crate::net::messages::replication::logical::update::Update as XLogUpdate;
 use crate::{
     backend::{Cluster, ConnectReason, Server},
     config::Role,
@@ -24,7 +25,7 @@ use crate::{
     net::{
         replication::{
             xlog_data::XLogPayload, Commit as XLogCommit, Delete as XLogDelete,
-            Insert as XLogInsert, Relation, StatusUpdate, Update as XLogUpdate, UpdateIdentity,
+            Insert as XLogInsert, Relation, StatusUpdate, UpdateIdentity,
         },
         Bind, CommandComplete, CopyData, ErrorResponse, Execute, Flush, FromBytes, Parse, Protocol,
         Sync, ToBytes,
@@ -64,9 +65,8 @@ struct Statements {
     /// `true` when the source table has `REPLICA IDENTITY FULL`.
     /// Controls INSERT/UPDATE/DELETE dispatch to FULL-mode handlers.
     full_identity: bool,
-    /// Cached UPDATE statements keyed by the observed `NonIdentityColumnsPresence` shape —
-    /// one entry per distinct set of unchanged-TOAST columns. Populated lazily by
-    /// [`StreamSubscriber::ensure_update_shape_for`] (both DEFAULT/INDEX and FULL identity).
+    /// UPDATE statements keyed by `NonIdentityColumnsPresence` — one per
+    /// distinct TOAST-column shape. Shared by DEFAULT/INDEX and FULL identity.
     update_shapes: HashMap<NonIdentityColumnsPresence, Statement>,
 }
 
@@ -87,6 +87,14 @@ impl Statement {
         })
     }
 }
+
+/// The result of dispatching a single WAL event to one or more shards.
+#[derive(Debug, Default)]
+pub(super) struct SendResult {
+    /// Maximum number of rows affected across all shard connections.
+    pub max_affected_rows: usize,
+}
+
 #[derive(Debug, Default)]
 pub struct StreamSubscriber {
     /// Destination cluster.
@@ -199,6 +207,19 @@ impl StreamSubscriber {
                 }
             }
         }
+        // Validate omni FULL identity tables before the stream starts.
+        let omni_full: Vec<Table> = self
+            .tables
+            .values()
+            .filter(|t| {
+                t.is_identity_full() && !t.is_sharded(&self.cluster.sharding_schema().tables)
+            })
+            .cloned()
+            .collect();
+        for table in &omni_full {
+            self.validate_full_identity_omni_has_unique_index(table)
+                .await?;
+        }
 
         Ok(())
     }
@@ -206,7 +227,7 @@ impl StreamSubscriber {
     // Dispatch a pre-built bind to the matching shard(s).
     //
     // Returns the maximum rows-affected count across all connections.
-    async fn send(&mut self, val: &Shard, bind: &Bind) -> Result<usize, Error> {
+    async fn send(&mut self, val: &Shard, bind: &Bind) -> Result<SendResult, Error> {
         let mut conns: Vec<_> = self
             .connections
             .iter_mut()
@@ -228,7 +249,7 @@ impl StreamSubscriber {
             conn.flush().await?;
         }
 
-        let mut max_rows: usize = 0;
+        let mut max_affected_rows: usize = 0;
         for conn in &mut conns {
             // Keep server connections always synchronized.
             for _ in 0..2 {
@@ -239,7 +260,7 @@ impl StreamSubscriber {
                         let rows = cmd
                             .rows()?
                             .ok_or(Error::CommandCompleteNoRows(cmd.clone()))?;
-                        max_rows = max_rows.max(rows);
+                        max_affected_rows = max_affected_rows.max(rows);
                         // A direct-to-shard update indicates a row has changed on source.
                         // This row must exist on the destination, or we missed some data during sync.
                         if rows == 0 && val.is_direct() {
@@ -262,7 +283,7 @@ impl StreamSubscriber {
             }
         }
 
-        Ok(max_rows)
+        Ok(SendResult { max_affected_rows })
     }
 
     // Handle Insert message.
@@ -279,8 +300,7 @@ impl StreamSubscriber {
                 statements.upsert.parse()
             } else {
                 statements.insert.parse()
-            }
-            .clone();
+            };
             let ctx = StreamContext::new(&self.cluster, &insert.tuple_data, &parse)?;
             self.send(ctx.shard(), ctx.bind()).await?;
         }
@@ -300,24 +320,15 @@ impl StreamSubscriber {
             return Ok(());
         }
 
-        // FULL identity: dispatch before the DEFAULT/INDEX key-based match.
-        // check_toasted_identity is a no-op for FULL tables (no identity columns)
-        // so we skip it and go straight to the FULL handler.
-        if self
-            .statements
-            .get(&update.oid)
-            .is_some_and(|s| s.full_identity)
-        {
-            return self.update_full_identity(update.oid, update).await;
-        }
-
-        self.check_toasted_identity(&update)?;
-
-        // Route by pre-image variant.
+        // Route by pre-image variant — the WAL byte encodes replica identity:
+        //   Key     →  DEFAULT/INDEX, identity column(s) changed
+        //   Old     →  REPLICA IDENTITY FULL (always)
+        //   Nothing →  DEFAULT/INDEX, identity column(s) unchanged
         match update.identity {
-            UpdateIdentity::Key(key) => {
+            UpdateIdentity::Key(ref key) => {
                 // PK changed: delete old row by key, insert new row.
-                // Toasted column in new tuple means incomplete data — fail.
+                // Identity columns must not be toasted — we need them to route the delete.
+                self.check_toasted_identity(&update)?;
                 if update.new.has_toasted() {
                     let table = self.get_table(update.oid)?;
                     return Err(Error::ToastedRowMigration {
@@ -326,7 +337,7 @@ impl StreamSubscriber {
                     });
                 }
                 let delete = XLogDelete {
-                    key: Some(key),
+                    key: Some(key.clone()),
                     oid: update.oid,
                     old: None,
                 };
@@ -339,7 +350,13 @@ impl StreamSubscriber {
                 self.insert(insert).await?;
                 Ok(())
             }
-            UpdateIdentity::Old(_) | UpdateIdentity::Nothing => {
+            UpdateIdentity::Old(_) => {
+                // REPLICA IDENTITY FULL: old row is fully materialised.
+                self.update_full_identity(update.oid, update).await
+            }
+            UpdateIdentity::Nothing => {
+                // Identity columns unchanged; none may be toasted (routing needs them).
+                self.check_toasted_identity(&update)?;
                 if !update.new.has_toasted() {
                     return self.update_full(update.oid, &update.new).await;
                 }
@@ -385,10 +402,8 @@ impl StreamSubscriber {
         let present = NonIdentityColumnsPresence::from_tuple(&update.new, &table)?;
 
         if present.no_non_identity_present() {
-            // All non-identity columns are unchanged-TOAST and identity didn't
-            // change — the destination row already has every value we would
-            // write. No-op, but still advance the watermark so equal-LSN replay
-            // after commit is gated correctly.
+            // All non-identity columns are unchanged-TOAST — destination already
+            // has every value. No-op; still advance the watermark.
             self.mark_table_changed(oid);
             return Ok(());
         }
@@ -466,9 +481,8 @@ impl StreamSubscriber {
 
     // ── Routing helpers ────────────────────────────────────────────────────────────
 
-    /// Resolve the shard for a tuple using `StreamContext` routing, without
-    /// building a full `Bind` message. Used when the bind is constructed from
-    /// multiple tuples (FULL identity UPDATE/DELETE).
+    /// Route a tuple to its shard without constructing a `Bind`.
+    /// Used when the bind merges multiple tuples (FULL identity UPDATE/DELETE).
     fn shard_for(&self, tuple: &TupleData, parse: &Parse) -> Result<Shard, Error> {
         Ok(StreamContext::new(&self.cluster, tuple, parse)?
             .shard()
@@ -477,39 +491,34 @@ impl StreamSubscriber {
 
     /// Return `Err(FullIdentityAmbiguousMatch)` when more than one destination
     /// row was affected — the FULL-identity WHERE clause matched duplicate rows.
-    fn check_ambiguous_match(&self, oid: Oid, op: &'static str, rows: usize) -> Result<(), Error> {
-        if rows > 1 {
+    fn check_ambiguous_match(
+        &self,
+        oid: Oid,
+        op: &'static str,
+        result: &SendResult,
+    ) -> Result<(), Error> {
+        if result.max_affected_rows > 1 {
             let table = self.get_table(oid)?;
             return Err(Error::FullIdentityAmbiguousMatch {
                 table: table.table.clone(),
                 oid,
                 op,
-                rows: rows as u64,
+                rows: result.max_affected_rows,
             });
         }
         Ok(())
     }
 
-    /// Concatenate two `TupleData` column lists in order: `a` first, then `b`.
-    /// Used for FULL identity UPDATE binding where WHERE-predicate columns (`a`)
-    /// occupy `$1..$k` and SET-value columns (`b`) occupy `$k+1..$n`.
-    fn concat_tuples(a: &TupleData, b: &TupleData) -> TupleData {
-        TupleData {
-            columns: a.columns.iter().chain(b.columns.iter()).cloned().collect(),
-        }
-    }
-
     // ── Shape-cache helpers ──────────────────────────────────────────────────────
 
-    /// Look up or prepare the UPDATE statement matching `present` on every shard
-    /// and cache it under `statements[oid].update_shapes[present]`.
+    /// Look up or prepare the UPDATE statement for `present`, cached under
+    /// `statements[oid].update_shapes[present]`.
     ///
     /// `full_identity` selects the SQL generator on a cache miss:
     /// - `false` → `Table::update_partial` (DEFAULT/INDEX)
     /// - `true`  → `Table::update_full_identity` (FULL)
     ///
-    /// Both modes share the same `update_shapes` map — `full_identity` is
-    /// table-scoped so there is no key collision between modes.
+    /// Both modes share `update_shapes`; no collision since `full_identity` is table-scoped.
     async fn ensure_update_shape_for(
         &mut self,
         oid: Oid,
@@ -541,50 +550,22 @@ impl StreamSubscriber {
         Ok(stmt)
     }
 
-    /// Select OLD columns at positions indicated by `present`, mirroring the WHERE layout
-    /// of `Table::update_full_identity`. Used by the slow path because PG detoasts OLD
-    /// before WAL emission — OLD has no 'u' markers to filter on.
-    fn partial_old_for_present(
-        old: &TupleData,
-        table: &Table,
-        present: &NonIdentityColumnsPresence,
-    ) -> TupleData {
-        let mut identity_count = 0usize;
-        let columns = old
-            .columns
-            .iter()
-            .zip(table.columns.iter())
-            .enumerate()
-            .filter_map(|(i, (col, tcol))| {
-                if tcol.identity {
-                    identity_count += 1;
-                    None
-                } else if present.is_set(i - identity_count) {
-                    Some(col.clone())
-                } else {
-                    None
-                }
-            })
-            .collect();
-        TupleData { columns }
-    }
-
     /// FULL identity UPDATE: WHERE on old-row values (`$1..$k`), SET on new-row values (`$k+1..$n`).
     /// On shard-key change fans out DELETE+INSERT across shards.
     async fn update_full_identity(&mut self, oid: Oid, update: XLogUpdate) -> Result<(), Error> {
+        let table = self.get_table(oid)?;
+
         let old_full = match &update.identity {
-            UpdateIdentity::Old(old) => old.clone(),
+            UpdateIdentity::Old(old) => old,
             _ => {
-                let table = self.get_table(oid)?;
                 return Err(Error::FullIdentityMissingOld {
-                    table: table.table.clone(),
+                    table: table.table,
                     oid,
                     op: "UPDATE",
                 });
             }
         };
 
-        let table = self.get_table(oid)?;
         let (update_parse, delete_parse, insert_parse) = {
             let stmts = self.statements.get(&oid).ok_or(Error::MissingKey)?;
             (
@@ -606,8 +587,8 @@ impl StreamSubscriber {
                 });
             }
             let delete_bind = old_full.to_bind(delete_parse.name());
-            let rows = self.send(&old_shard, &delete_bind).await?;
-            self.check_ambiguous_match(oid, "UPDATE", rows)?;
+            let result = self.send(&old_shard, &delete_bind).await?;
+            self.check_ambiguous_match(oid, "UPDATE", &result)?;
 
             let insert_bind = update.new.to_bind(insert_parse.name());
             self.send(&new_shard, &insert_bind).await?;
@@ -617,15 +598,18 @@ impl StreamSubscriber {
 
         let (parse, set_tuple, where_tuple) = if !update.new.has_toasted() {
             // Fast path: all columns present — use the pre-prepared statement.
-            (update_parse, update.new, old_full)
+            (update_parse, update.new, old_full.clone())
         } else {
-            // Slow path: at least one unchanged-TOAST column — use shape cache.
+            // Slow path: at least one unchanged-TOAST (`'u'`) column in new.
+            // WAL omits unchanged TOAST values from both old and new tuples, so
+            // stripping `'u'` from each side independently yields the correct
+            // partial WHERE (old) and SET (new) columns — no cross-referencing needed.
             let present = NonIdentityColumnsPresence::from_tuple(&update.new, &table)?;
             if present.no_non_identity_present() {
                 self.mark_table_changed(oid);
                 return Ok(());
             }
-            let partial_old = Self::partial_old_for_present(&old_full, &table, &present);
+            let partial_old = old_full.without_toasted();
             let partial_new = update.partial_new();
             let stmt = self
                 .ensure_update_shape_for(oid, &table, &present, true)
@@ -634,9 +618,10 @@ impl StreamSubscriber {
         };
 
         // WHERE occupies $1..$k (where_tuple), SET occupies $k+1..$n (set_tuple).
-        let bind = Self::concat_tuples(&where_tuple, &set_tuple).to_bind(parse.name());
-        let rows = self.send(&new_shard, &bind).await?;
-        self.check_ambiguous_match(oid, "UPDATE", rows)?;
+        let bind =
+            XLogUpdate::full_identity_bind_tuple(&where_tuple, &set_tuple).to_bind(parse.name());
+        let result = self.send(&new_shard, &bind).await?;
+        self.check_ambiguous_match(oid, "UPDATE", &result)?;
         self.mark_table_changed(oid);
         Ok(())
     }
@@ -648,37 +633,48 @@ impl StreamSubscriber {
 
         // Extract statement info upfront to release the shared borrow before
         // async calls and the subsequent &mut self borrows in send().
-        let stmt_data = self
-            .statements
-            .get(&delete.oid)
-            .map(|s| (s.full_identity, s.delete.parse().clone()));
+        let Some(stmts) = self.statements.get(&delete.oid) else {
+            self.mark_table_changed(delete.oid);
+            return Ok(());
+        };
+        let full_identity = stmts.full_identity;
+        let delete_parse = stmts.delete.parse().clone();
+        let oid = delete.oid;
 
-        if let Some((full_identity, delete_parse)) = stmt_data {
-            if full_identity {
-                // FULL identity: match on all old-row columns via IS NOT DISTINCT FROM.
-                // PostgreSQL fetches TOAST values before writing DELETE WAL records,
-                // so delete.old never contains Toasted markers.
-                let Some(old) = delete.old.as_ref() else {
-                    let table = self.get_table(delete.oid)?;
-                    return Err(Error::FullIdentityMissingOld {
-                        table: table.table.clone(),
-                        oid: delete.oid,
-                        op: "DELETE",
-                    });
-                };
-                let shard = self.shard_for(old, &delete_parse)?;
-                let bind = old.to_bind(delete_parse.name());
-                let rows = self.send(&shard, &bind).await?;
-                self.check_ambiguous_match(delete.oid, "DELETE", rows)?;
-            } else if let Some(key) = delete.key_non_null() {
-                // DEFAULT/INDEX path: bind the key columns.
-                let shard = self.shard_for(&key, &delete_parse)?;
-                let bind = key.to_bind(delete_parse.name());
-                self.send(&shard, &bind).await?;
-            }
+        // Resolve the tuple used for both shard routing and the WHERE bind.
+        // FULL identity matches on the full old row; DEFAULT/INDEX on key columns only.
+        let tuple = if full_identity {
+            // Postgres materialises all TOAST values before writing DELETE WAL records,
+            // so old never contains 'u' markers.
+            let Some(old) = delete.old else {
+                let table = self.get_table(oid)?;
+                return Err(Error::FullIdentityMissingOld {
+                    table: table.table.clone(),
+                    oid,
+                    op: "DELETE",
+                });
+            };
+            old
+        } else {
+            let Some(key) = delete.key_non_null() else {
+                // No key columns present — nothing to send, watermark still advances.
+                self.mark_table_changed(oid);
+                return Ok(());
+            };
+            key
+        };
+
+        let shard = self.shard_for(&tuple, &delete_parse)?;
+        let bind = tuple.to_bind(delete_parse.name());
+
+        if full_identity {
+            let result = self.send(&shard, &bind).await?;
+            self.check_ambiguous_match(oid, "DELETE", &result)?;
+        } else {
+            self.send(&shard, &bind).await?;
         }
 
-        self.mark_table_changed(delete.oid);
+        self.mark_table_changed(oid);
         Ok(())
     }
 
@@ -736,6 +732,27 @@ impl StreamSubscriber {
         Ok(())
     }
 
+    /// Verify every destination shard has a unique index on `table`.
+    /// FULL-identity omni tables use `ON CONFLICT DO NOTHING` during the
+    /// copy–replication overlap window, which requires a unique constraint.
+    async fn validate_full_identity_omni_has_unique_index(
+        &mut self,
+        table: &Table,
+    ) -> Result<(), Error> {
+        let schema = table.table.destination_schema().to_string();
+        let name = table.table.destination_name().to_string();
+        for dest_server in self.connections.iter_mut() {
+            if !has_unique_index(&schema, &name, dest_server).await? {
+                return Err(TableValidationError {
+                    table: table.table.clone(),
+                    kind: TableValidationErrorKind::FullIdentityOmniNoUniqueIndex,
+                }
+                .into());
+            }
+        }
+        Ok(())
+    }
+
     // Handle Relation message.
     //
     // Prepare upsert statement and record table info for future use
@@ -770,32 +787,18 @@ impl StreamSubscriber {
             } else {
                 let omni = !table.is_sharded(&self.cluster.sharding_schema().tables);
 
-                let statements = if table.identity.identity == "f" {
+                let statements = if table.is_identity_full() {
                     // ── FULL identity path ──────────────────────────────────────────────
                     let all_present = NonIdentityColumnsPresence::all(&table);
                     let insert = Statement::new(&table.insert())?;
                     let update = Statement::new(&table.update_full_identity(&all_present))?;
                     let delete = Statement::new(&table.delete_full_identity())?;
 
-                    // Omni FULL tables require a unique index on the destination for
-                    // ON CONFLICT DO NOTHING deduplication during the copy–replication
-                    // overlap window. Sharded tables route each row to exactly one shard
-                    // so no upsert dedup is needed; warn instead that secondary indexes
-                    // must be present before catch-up replication begins.
+                    // Omni FULL: upsert dedup requires a unique constraint on the destination.
+                    // Sharded FULL: each row routes to one shard — no upsert needed.
+                    // Omni FULL: upsert dedup requires a unique constraint on the destination.
+                    // Validated at connect() time.
                     let upsert = if omni {
-                        let schema = table.table.destination_schema().to_string();
-                        let name_str = table.table.destination_name().to_string();
-                        // Probe every shard — schema can drift, causing FullIdentityAmbiguousMatch.
-                        for dest_server in self.connections.iter_mut() {
-                            let unique = has_unique_index(&schema, &name_str, dest_server).await?;
-                            if !unique {
-                                return Err(TableValidationError {
-                                    table: table.table.clone(),
-                                    kind: TableValidationErrorKind::FullIdentityOmniNoUniqueIndex,
-                                }
-                                .into());
-                            }
-                        }
                         Statement::new(&table.upsert_full_identity())?
                     } else {
                         warn!(
@@ -829,7 +832,7 @@ impl StreamSubscriber {
                         update_shapes: HashMap::new(),
                     }
                 } else {
-                    // ── DEFAULT / INDEX path (unchanged) ────────────────────────────────
+                    // ── DEFAULT / INDEX path ────────────────────────────────────────────
                     let insert = Statement::new(&table.insert())?;
                     let upsert = Statement::new(&table.upsert())?;
                     let update = Statement::new(&table.update())?;
@@ -866,21 +869,24 @@ impl StreamSubscriber {
         Ok(())
     }
 
-    /// Handle replication stream message.
+    /// Handle one replication stream message.
     ///
-    /// On any error, drain and `Sync` every shard connection so the implicit
-    /// transaction left open by `Bind/Execute/Flush` is rolled back. Without
-    /// this cleanup, a `FullIdentityAmbiguousMatch` (or any Postgres-level
-    /// error mid-batch) would leave shards holding row locks until the
-    /// connection is dropped — blocking the next operation on that shard.
+    /// On error, drops shard connections to roll back the implicit transaction left
+    /// by Bind/Execute/Flush, and clears per-session state. See
+    /// `docs/REPLICATION.md` → "Error rollback".
     pub async fn handle(&mut self, data: CopyData) -> Result<Option<StatusUpdate>, Error> {
         match self.handle_inner(data).await {
             Ok(status) => Ok(status),
             Err(err) => {
-                if let Err(abort_err) = self.abort_pending_transaction().await {
-                    // Abort cleanup is best-effort; log so the original error isn't masked.
-                    warn!("abort_pending_transaction failed after stream error: {abort_err:?}");
-                }
+                // Drop sockets → backend FATAL → implicit transaction rolled back.
+                // `Sync` would commit Rust-side errors. See docs/REPLICATION.md.
+                self.connections.clear();
+                // Per-session state — repopulated from Relation messages on reconnect.
+                self.relations.clear();
+                self.statements.clear();
+                self.keys.clear();
+                self.changed_tables.clear();
+                self.in_transaction = false;
                 Err(err)
             }
         }
@@ -918,45 +924,6 @@ impl StreamSubscriber {
         }
 
         Ok(status_update)
-    }
-
-    /// Send `Sync` to every shard and drain to `ReadyForQuery`.
-    ///
-    /// Postgres puts a connection in implicit-transaction mode when it receives
-    /// `Bind/Execute/Flush` without a `Sync`. After an error — either a Postgres-
-    /// level `ErrorResponse` or a client-side abort like `FullIdentityAmbiguousMatch`
-    /// — every connection that participated in the failed dispatch is still
-    /// holding that implicit transaction open (and its row locks). `Sync` causes
-    /// Postgres to roll back the implicit transaction (or commit it if no error
-    /// occurred) and reply with `ReadyForQuery`. Best-effort: each connection's
-    /// drain is independent so one stuck conn does not poison the rest.
-    async fn abort_pending_transaction(&mut self) -> Result<(), Error> {
-        let mut first_err: Option<Error> = None;
-        for server in &mut self.connections {
-            let drained = async {
-                server.send_one(&Sync.into()).await?;
-                server.flush().await?;
-                loop {
-                    let msg = server.read().await?;
-                    if msg.code() == 'Z' {
-                        return Ok::<(), Error>(());
-                    }
-                }
-            }
-            .await;
-            if let Err(e) = drained {
-                debug!("[{}] abort drain failed: {:?}", server.addr(), e);
-                if first_err.is_none() {
-                    first_err = Some(e);
-                }
-            }
-        }
-        self.in_transaction = false;
-        self.changed_tables.clear();
-        match first_err {
-            Some(e) => Err(e),
-            None => Ok(()),
-        }
     }
 
     /// Get latest LSN we flushed to replicas.

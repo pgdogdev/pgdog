@@ -69,6 +69,8 @@ SQL_FULL_EVENTS_COUNT="SELECT COUNT(*) FROM copy_data.full_identity_events"
 SQL_FULL_EVENTS_UPDATED="SELECT COUNT(*) FROM copy_data.full_identity_events WHERE label LIKE 'updated_%'"
 SQL_EVENT_TYPE_CLICK_LABEL="SELECT label FROM copy_data.event_types WHERE code = 'click'"
 SQL_NULL_DESC_LABEL="SELECT label FROM copy_data.event_types WHERE code = 'null_desc'"
+SQL_EVENT_TYPE_CLICK_UPDATED="SELECT (label = 'ClickUpdated')::int FROM copy_data.event_types WHERE code = 'click'"
+SQL_NULL_DESC_UPDATED="SELECT (label = 'NullDescUpdated')::int FROM copy_data.event_types WHERE code = 'null_desc'"
 
 # sum_shards DB1 DB2 SQL [FALLBACK]
 # Runs SQL on DB1 and DB2 independently and returns their integer sum.
@@ -163,15 +165,13 @@ while true; do
     UPDATED_DST=$(sum_shards "${DST_DB1}" "${DST_DB2}" "${SQL_POSTS_UPDATED}")
     FULL_EVENTS_DST=$(sum_shards "${DST_DB1}" "${DST_DB2}" "${SQL_FULL_EVENTS_COUNT}" -1)
     FULL_UPDATED_DST=$(sum_shards "${DST_DB1}" "${DST_DB2}" "${SQL_FULL_EVENTS_UPDATED}")
-    EVENT_TYPE_LABEL=$(psql -d "${DST_DB1}" -tAc "${SQL_EVENT_TYPE_CLICK_LABEL}" 2>/dev/null \
-        | tr -d '[:space:]' || echo "")
-    NULL_DESC_LABEL=$(psql -d "${DST_DB1}" -tAc "${SQL_NULL_DESC_LABEL}" 2>/dev/null \
-        | tr -d '[:space:]' || echo "")
+    CLICK_UPDATED=$(sum_shards "${DST_DB1}" "${DST_DB2}" "${SQL_EVENT_TYPE_CLICK_UPDATED}")
+    NULL_DESC_UPDATED=$(sum_shards "${DST_DB1}" "${DST_DB2}" "${SQL_NULL_DESC_UPDATED}")
     if [ "${UPDATED_DST}" -ge 50 ] && \
        [ "${FULL_EVENTS_DST}" -eq "${FULL_EVENTS_EXPECTED}" ] && \
        [ "${FULL_UPDATED_DST}" -eq "${FULL_UPDATED_SRC}" ] && \
-       [ "${EVENT_TYPE_LABEL}" = "ClickUpdated" ] && \
-       [ "${NULL_DESC_LABEL}" = "NullDescUpdated" ]; then
+       [ "${CLICK_UPDATED}" -eq 2 ] && \
+       [ "${NULL_DESC_UPDATED}" -eq 2 ]; then
         break
     fi
     if ! kill -0 "${REPL_PID}" 2>/dev/null; then
@@ -179,8 +179,8 @@ while true; do
         echo "  posts updated: ${UPDATED_DST}/50"
         echo "  full_identity_events count: ${FULL_EVENTS_DST} (expected ${FULL_EVENTS_EXPECTED})"
         echo "  full_identity_events updated: ${FULL_UPDATED_DST} (expected ${FULL_UPDATED_SRC})"
-        echo "  event_types click label: '${EVENT_TYPE_LABEL}' (expected 'ClickUpdated')"
-        echo "  event_types null_desc label: '${NULL_DESC_LABEL}' (expected 'NullDescUpdated')"
+        echo "  event_types click label shards updated: ${CLICK_UPDATED}/2"
+        echo "  event_types null_desc label shards updated: ${NULL_DESC_UPDATED}/2"
         exit 1
     fi
     if [ "${SECONDS}" -ge "${DEADLINE}" ]; then
@@ -188,8 +188,8 @@ while true; do
         echo "  posts updated: ${UPDATED_DST}/50"
         echo "  full_identity_events count: ${FULL_EVENTS_DST} (expected ${FULL_EVENTS_EXPECTED})"
         echo "  full_identity_events updated: ${FULL_UPDATED_DST} (expected ${FULL_UPDATED_SRC})"
-        echo "  event_types click label: '${EVENT_TYPE_LABEL}' (expected 'ClickUpdated')"
-        echo "  event_types null_desc label: '${NULL_DESC_LABEL}' (expected 'NullDescUpdated')"
+        echo "  event_types click label shards updated: ${CLICK_UPDATED}/2"
+        echo "  event_types null_desc label shards updated: ${NULL_DESC_UPDATED}/2"
         exit 1
     fi
     sleep 1

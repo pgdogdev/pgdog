@@ -344,9 +344,8 @@ async fn ensure_table(server: &mut Server, table: &str) {
                 )
                 .await
                 .unwrap();
-            // Idempotently force NOT NULL even if a previous run created the table without it.
-            // has_unique_index() requires either NULLS NOT DISTINCT or all NOT NULL key columns;
-            // a stale nullable schema would silently cause the omni dedup test to fail.
+            // Idempotently set NOT NULL: has_unique_index() requires all key columns to be NOT NULL.
+            // A stale nullable schema from a prior test run would silently fail the omni dedup test.
             for col in ["a", "b"] {
                 let _ = server
                     .execute(format!(
@@ -1366,14 +1365,16 @@ fn full_update_copy_data(
 }
 
 /// Helper: build a FULL-identity UPDATE where `value` is Toasted in both old and new.
-fn full_update_value_toasted_copy_data(oid: Oid, id: &str) -> CopyData {
+/// `old_id` identifies the row to match; `new_id` is the value written into the SET clause.
+/// Pass `new_id == old_id` for a same-id slow-path; distinct values test the rename path.
+fn full_update_value_toasted_copy_data(oid: Oid, old_id: &str, new_id: &str) -> CopyData {
     x_update(XLogUpdate {
         oid,
         identity: UpdateIdentity::Old(TupleData {
-            columns: vec![text_column(id), toasted_column()],
+            columns: vec![text_column(old_id), toasted_column()],
         }),
         new: TupleData {
-            columns: vec![text_column(id), toasted_column()],
+            columns: vec![text_column(new_id), toasted_column()],
         },
     })
 }
@@ -1408,9 +1409,8 @@ fn full_delete_copy_data(oid: Oid, id: &str, value: &str) -> CopyData {
 
 // ── Helpers for ambiguous-match and omni-dedup tests ───────────────────────────────────────────
 
-/// Table with NO primary key — duplicate rows can be inserted.
-/// `full_dup_rows` is in the test sharding config so `is_sharded()` returns true,
-/// bypassing the omni unique-index check in `relation()`.
+/// Table without a primary key — allows duplicate rows.
+/// In the test sharding config so `is_sharded()` returns `true`, bypassing the omni unique-index check.
 fn make_full_identity_dup_rows_table() -> Table {
     let mut t = make_full_identity_sharded_table();
     t.table.name = "full_dup_rows".to_string();
@@ -1529,13 +1529,27 @@ async fn full_identity_nothing_rejected() {
 
 // ── Omni no-unique-index rejection ────────────────────────────────────────────────────
 
-/// FULL identity omni table with no unique index on the destination must be rejected.
-/// The destination table `full_events_omni` does not exist (or has no unique index),
-/// which is sufficient for `has_unique_index()` to return false.
+/// FULL identity omni table without a unique index on the destination must be rejected.
+/// `full_events_omni` is absent (or has no qualifying index) — enough for `has_unique_index()` to return `false`.
 #[tokio::test]
 async fn full_identity_omni_no_unique_index_rejected() {
     let cluster = Cluster::new_test_single_shard(&config());
     let mut sub = StreamSubscriber::new(&cluster, &[make_full_identity_omni_table()]);
+
+    // Enforce precondition: the table must exist but have no qualifying unique index.
+    // A stale unique index from a prior run would make has_unique_index() return true,
+    // causing expect_err() to panic. Drop and recreate the table to guarantee a clean state.
+    {
+        let mut setup = test_server().await;
+        let _ = setup
+            .execute("DROP TABLE IF EXISTS public.full_events_omni")
+            .await;
+        setup
+            .execute("CREATE TABLE IF NOT EXISTS public.full_events_omni (a TEXT, b TEXT)")
+            .await
+            .unwrap();
+    }
+
     sub.connect().await.unwrap();
 
     let oid = Oid(16391);
@@ -1669,7 +1683,8 @@ async fn full_identity_update_slow_path() {
 
     let oid = Oid(16384);
     let id = random_id();
-    cleanup(&mut verify, "public.sharded", &[&id]).await;
+    let id2 = random_id();
+    cleanup(&mut verify, "public.sharded", &[&id, &id2]).await;
 
     // Insert initial row.
     sub.handle(begin_copy_data(100)).await.unwrap();
@@ -1681,27 +1696,40 @@ async fn full_identity_update_slow_path() {
         .unwrap();
     sub.handle(commit_copy_data(200)).await.unwrap();
 
-    // Update with `value` Toasted (not changed). Only `id` participates in SET and WHERE.
+    // UPDATE: rename id → id2, value Toasted (unchanged).
     // SQL: UPDATE sharded SET id = $2 WHERE id IS NOT DISTINCT FROM $1
+    // $1 = id (old), $2 = id2 (new). With $1 == $2 the SET clause is a no-op and the
+    // value-preservation assertion would be trivially satisfied regardless of SET-clause
+    // correctness. Using a distinct id2 forces a real row rename.
     sub.handle(begin_copy_data(300)).await.unwrap();
-    sub.handle(full_update_value_toasted_copy_data(oid, &id))
+    sub.handle(full_update_value_toasted_copy_data(oid, &id, &id2))
         .await
         .unwrap();
     sub.handle(commit_copy_data(400)).await.unwrap();
 
-    // Row still exists and the unchanged-TOAST `value` was preserved verbatim.
-    // A regression that bound the toasted column would zero/scramble it; assert
-    // explicitly that the original "initial" survives the partial UPDATE.
-    assert_eq!(count_row(&mut verify, "public.sharded", &id).await, 1);
+    // Old row must be gone.
     assert_eq!(
-        fetch_value(&mut verify, "public.sharded", &id)
+        count_row(&mut verify, "public.sharded", &id).await,
+        0,
+        "original id row must be gone after rename"
+    );
+    // New row must exist.
+    assert_eq!(
+        count_row(&mut verify, "public.sharded", &id2).await,
+        1,
+        "renamed id2 row must be present"
+    );
+    // Toasted `value` must survive the rename — a regression that drops or zeroes the
+    // toasted column would produce NULL or an empty string here.
+    assert_eq!(
+        fetch_value(&mut verify, "public.sharded", &id2)
             .await
             .as_deref(),
         Some("initial"),
         "unchanged-TOAST column must be preserved across slow-path UPDATE"
     );
 
-    cleanup(&mut verify, "public.sharded", &[&id]).await;
+    cleanup(&mut verify, "public.sharded", &[&id, &id2]).await;
 }
 
 /// FULL identity UPDATE where every column is Toasted: nothing to do, skip silently.
@@ -1734,7 +1762,15 @@ async fn full_identity_update_all_toasted_is_noop() {
     sub.handle(commit_copy_data(400)).await.unwrap();
 
     assert_eq!(count_row(&mut verify, "public.sharded", &id).await, 1);
-
+    // Value column must be untouched — a no-op that silently zeros a column would
+    // still satisfy the count check but would fail here.
+    assert_eq!(
+        fetch_value(&mut verify, "public.sharded", &id)
+            .await
+            .as_deref(),
+        Some("stable"),
+        "all-toasted no-op must leave value column untouched"
+    );
     cleanup(&mut verify, "public.sharded", &[&id]).await;
 }
 
@@ -1775,10 +1811,8 @@ async fn full_identity_delete() {
 
 // ── Omni dedup test ────────────────────────────────────────────────────────────────────────
 
-/// FULL identity omni INSERT: `ON CONFLICT DO NOTHING` silently drops the second INSERT
-/// when the row is already present. Verifies that the prepared `upsert` slot carries
-/// the correct statement and that duplicate WAL events during the COPY-to-replication
-/// overlap window are idempotent.
+/// FULL identity omni INSERT: verifies `ON CONFLICT DO NOTHING` deduplication during
+/// the COPY-to-replication overlap window — same row inserted twice must land once.
 #[tokio::test]
 async fn full_identity_insert_omni_dedup() {
     let cluster = Cluster::new_test_single_shard(&config());
@@ -1857,10 +1891,8 @@ async fn full_identity_insert_omni_dedup() {
 
 // ── Ambiguous-match tests ────────────────────────────────────────────────────────────────────
 
-/// FULL identity UPDATE that matches more than one destination row must fail with
-/// `FullIdentityAmbiguousMatch`. Two rows are seeded with identical `(id, value)` via a
-/// direct SQL INSERT (bypassing the primary-key enforcement that `public.sharded` would
-/// have); the subscriber's full-row UPDATE WHERE clause then matches both.
+/// FULL identity UPDATE matching duplicate destination rows must fail with `FullIdentityAmbiguousMatch`.
+/// Two identical rows are seeded directly (bypassing primary-key enforcement).
 #[tokio::test]
 async fn full_identity_update_ambiguous_match() {
     let cluster = Cluster::new_test_single_shard(&config());
@@ -1918,13 +1950,11 @@ async fn full_identity_update_ambiguous_match() {
         "expected FullIdentityAmbiguousMatch, got: {result:?}"
     );
 
-    // No `drop(sub)` needed: `handle()` runs `abort_pending_transaction()` on error,
-    // which sends `Sync` to every shard and rolls back the implicit transaction left
-    // open by `Bind/Execute/Flush`. Cleanup proceeds without blocking on row locks.
-
-    // Cleanup.
+    // Cleanup: delete by value rather than id. If the ambiguous-match guard regresses
+    // and the UPDATE succeeds, both rows end up with id = id2 and escape a
+    // `WHERE id = {id}` clause. Matching by value catches them regardless.
     verify
-        .execute(format!("DELETE FROM public.full_dup_rows WHERE id = {id}"))
+        .execute("DELETE FROM public.full_dup_rows WHERE value IN ('dup', 'changed')")
         .await
         .unwrap();
 }
@@ -1979,8 +2009,6 @@ async fn full_identity_delete_ambiguous_match() {
         ),
         "expected FullIdentityAmbiguousMatch, got: {result:?}"
     );
-
-    // No `drop(sub)` needed — see UPDATE variant for rationale (abort_pending_transaction).
 
     // Cleanup (rows may still exist since DELETE was rolled back implicitly).
     verify

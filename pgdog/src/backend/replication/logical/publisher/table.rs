@@ -380,6 +380,11 @@ impl Table {
         Ok(())
     }
 
+    /// `true` when the table uses `REPLICA IDENTITY FULL`.
+    pub fn is_identity_full(&self) -> bool {
+        self.identity.identity == "f"
+    }
+
     /// Check if this table is sharded.
     pub fn is_sharded(&self, tables: &ShardedTables) -> bool {
         for column in &self.columns {
