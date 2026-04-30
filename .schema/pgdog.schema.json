@@ -162,12 +162,13 @@
       }
     },
     "otel": {
-      "description": "OpenTelemetry push exporter settings.",
+      "description": "OpenTelemetry push exporter settings.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/otel/",
       "$ref": "#/$defs/Otel",
       "default": {
         "datadog_api_key": null,
         "endpoint": null,
         "headers": {},
+        "namespace": null,
         "push_interval": 0
       }
     },
@@ -1354,7 +1355,7 @@
       ]
     },
     "Otel": {
-      "description": "OpenTelemetry push exporter settings.\n\nWhen `endpoint` is set, PgDog periodically POSTs OTLP JSON metrics\nto the configured URL.",
+      "description": "OpenTelemetry push exporter settings.\n\nWhen `endpoint` is set, PgDog periodically POSTs OTLP JSON metrics\nto the configured URL.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/otel/",
       "type": "object",
       "properties": {
         "datadog_api_key": {
@@ -1380,6 +1381,14 @@
             "type": "string"
           },
           "default": {}
+        },
+        "namespace": {
+          "description": "Prefix added to all metric names emitted by the OTEL exporter.\n\n**Note:** Trailing `.` and `_` are stripped before PgDog appends metric names, so\n`pgdog`, `pgdog.`, and `pgdog_` all emit `pgdog.clients`.\n\n_Default:_ `pgdog`\n\nEnv: `PGDOG_OTEL_NAMESPACE`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/otel/#namespace",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
         },
         "push_interval": {
           "description": "How often, in milliseconds, to push metrics to the OTLP endpoint.\n\n_Default:_ `10000`\n\nEnv: `OTEL_METRIC_EXPORT_INTERVAL`",
