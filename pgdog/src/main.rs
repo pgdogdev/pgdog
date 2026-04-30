@@ -20,8 +20,6 @@ use tokio::runtime::Builder;
 use tracing::{error, info, warn};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let _ = tokio_rustls::rustls::crypto::aws_lc_rs::default_provider().install_default();
-
     let args = cli::Cli::parse();
     let command = args.command.clone();
     let mut overrides = pgdog::config::Overrides::default();
