@@ -1,25 +1,139 @@
 {
   "title": "PgDog",
-  "description": null,
+  "description": "PgDog is a connection pooler, load balancer and database sharder.",
   "widgets": [
     {
-      "id": 8097007766727272,
+      "id": 8188370737217765,
       "definition": {
-        "title": "Clients",
+        "title": "Connection pooler",
         "show_title": true,
         "type": "group",
         "layout_type": "ordered",
         "widgets": [
           {
-            "id": 4263595811043970,
+            "id": 2621949102613607,
             "definition": {
-              "title": "Clients",
+              "title": "Connection pool utilization",
               "title_size": "16",
               "title_align": "left",
+              "description": "Connection pool utilization as a percentage of the total available connections.",
+              "type": "query_value",
+              "requests": [
+                {
+                  "response_format": "scalar",
+                  "queries": [
+                    {
+                      "name": "query2",
+                      "data_source": "metrics",
+                      "query": "avg:pgdog.sv_active{*}",
+                      "aggregator": "sum"
+                    },
+                    {
+                      "name": "query1",
+                      "data_source": "metrics",
+                      "query": "avg:pgdog.max_connections{*}",
+                      "aggregator": "sum"
+                    }
+                  ],
+                  "formulas": [
+                    {
+                      "number_format": {
+                        "unit": {
+                          "type": "canonical_unit",
+                          "unit_name": "percent"
+                        }
+                      },
+                      "formula": "query2 / query1 * 100"
+                    }
+                  ],
+                  "conditional_formats": [
+                    {
+                      "comparator": ">",
+                      "value": 50,
+                      "palette": "yellow_on_white"
+                    }
+                  ]
+                }
+              ],
+              "autoscale": true,
+              "precision": 2,
+              "timeseries_background": { "type": "area" }
+            },
+            "layout": { "x": 0, "y": 0, "width": 4, "height": 2 }
+          },
+          {
+            "id": 3208416645349346,
+            "definition": {
+              "title": "Client maxwait",
+              "title_size": "16",
+              "title_align": "left",
+              "description": "How long clients had to wait (in the worst case) to receive a connection from the pool. A high value indicates pool overutilization.",
+              "type": "query_value",
+              "requests": [
+                {
+                  "response_format": "scalar",
+                  "queries": [
+                    {
+                      "name": "query1",
+                      "data_source": "metrics",
+                      "query": "avg:pgdog.maxwait{*}",
+                      "aggregator": "max"
+                    }
+                  ],
+                  "conditional_formats": [
+                    {
+                      "comparator": ">",
+                      "value": 10,
+                      "palette": "white_on_yellow"
+                    }
+                  ],
+                  "formulas": [{ "formula": "query1 * 1000" }]
+                }
+              ],
+              "autoscale": true,
+              "precision": 2,
+              "timeseries_background": { "type": "area" }
+            },
+            "layout": { "x": 4, "y": 0, "width": 4, "height": 2 }
+          },
+          {
+            "id": 8479117972864197,
+            "definition": {
+              "title": "QPS",
+              "title_size": "16",
+              "title_align": "left",
+              "description": "Queries per second, the universal metric of database throughput.",
+              "type": "query_value",
+              "requests": [
+                {
+                  "response_format": "scalar",
+                  "queries": [
+                    {
+                      "name": "query1",
+                      "data_source": "metrics",
+                      "query": "sum:pgdog.total_query_count{*}.as_rate()",
+                      "aggregator": "max"
+                    }
+                  ],
+                  "formulas": [{ "formula": "query1" }]
+                }
+              ],
+              "autoscale": true,
+              "precision": 2,
+              "timeseries_background": { "type": "bars" }
+            },
+            "layout": { "x": 8, "y": 0, "width": 4, "height": 2 }
+          },
+          {
+            "id": 6307488900350408,
+            "definition": {
+              "title": "Server connections",
+              "title_size": "16",
+              "title_align": "left",
+              "description": "Total number of connections from PgDog to PostgreSQL.",
               "show_legend": true,
               "legend_layout": "auto",
               "legend_columns": ["avg", "min", "max", "value", "sum"],
-              "time": {},
               "type": "timeseries",
               "requests": [
                 {
@@ -28,7 +142,119 @@
                     {
                       "name": "query1",
                       "data_source": "metrics",
-                      "query": "avg:pgdog.clients{*} by {host}"
+                      "query": "max:pgdog.sv_idle{*} by {service,database,host}"
+                    },
+                    {
+                      "name": "query2",
+                      "data_source": "metrics",
+                      "query": "max:pgdog.sv_active{*} by {service,database,host}"
+                    }
+                  ],
+                  "formulas": [
+                    {
+                      "alias": "sv_idle + sv_active + sv_idle_xact",
+                      "formula": "query1 + query2"
+                    }
+                  ],
+                  "style": {
+                    "palette": "dog_classic",
+                    "order_by": "values",
+                    "line_type": "solid",
+                    "line_width": "normal"
+                  },
+                  "display_type": "bars"
+                },
+                {
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "query0",
+                      "query": "sum:pgdog.max_connections{*} by {host,database,service}"
+                    }
+                  ],
+                  "formulas": [
+                    { "alias": "max_connections", "formula": "query0" }
+                  ],
+                  "style": {
+                    "palette": "red",
+                    "line_type": "solid",
+                    "line_width": "normal"
+                  },
+                  "display_type": "line"
+                }
+              ]
+            },
+            "layout": { "x": 0, "y": 2, "width": 4, "height": 3 }
+          },
+          {
+            "id": 8134735596910621,
+            "definition": {
+              "title": "The connection pie",
+              "title_size": "16",
+              "title_align": "left",
+              "description": "Total connections to PostgreSQL, visualized as a pie chart.",
+              "requests": [
+                {
+                  "response_format": "scalar",
+                  "queries": [
+                    {
+                      "query": "sum:pgdog.sv_active{*} by {service}",
+                      "data_source": "metrics",
+                      "name": "query1",
+                      "aggregator": "sum"
+                    },
+                    {
+                      "query": "sum:pgdog.sv_idle{*} by {service}",
+                      "data_source": "metrics",
+                      "name": "query2",
+                      "aggregator": "sum"
+                    },
+                    {
+                      "query": "sum:pgdog.sv_idle_xact{*} by {service}",
+                      "data_source": "metrics",
+                      "name": "query3",
+                      "aggregator": "sum"
+                    }
+                  ],
+                  "style": { "palette": "datadog16" },
+                  "formulas": [
+                    { "alias": "Active", "formula": "query1" },
+                    { "alias": "Idle", "formula": "query2" },
+                    { "alias": "Idle in transaction", "formula": "query3" }
+                  ],
+                  "sort": {
+                    "count": 500,
+                    "order_by": [
+                      { "type": "formula", "index": 0, "order": "desc" }
+                    ]
+                  }
+                }
+              ],
+              "type": "sunburst",
+              "legend": { "type": "automatic" }
+            },
+            "layout": { "x": 4, "y": 2, "width": 4, "height": 3 }
+          },
+          {
+            "id": 5188123520641478,
+            "definition": {
+              "title": "Client connections",
+              "title_size": "16",
+              "title_align": "left",
+              "description": "Number of connected clients across all PgDog containers that belong to a particular service.",
+              "show_legend": true,
+              "legend_layout": "auto",
+              "legend_columns": ["avg", "min", "max", "value", "sum"],
+              "type": "timeseries",
+              "requests": [
+                {
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "name": "query1",
+                      "data_source": "metrics",
+                      "query": "max:pgdog.clients{*} by {service}"
                     }
                   ],
                   "formulas": [{ "formula": "query1" }],
@@ -42,18 +268,18 @@
                 }
               ]
             },
-            "layout": { "x": 0, "y": 0, "width": 4, "height": 2 }
+            "layout": { "x": 8, "y": 2, "width": 4, "height": 3 }
           },
           {
-            "id": 2443165613681704,
+            "id": 3613509490545526,
             "definition": {
-              "title": "Clients waiting",
+              "title": "Idle in transaction connections",
               "title_size": "16",
               "title_align": "left",
+              "description": "Number of server connections that are currently idle inside a transaction, and which cannot be re-used by other clients.",
               "show_legend": true,
               "legend_layout": "auto",
               "legend_columns": ["avg", "min", "max", "value", "sum"],
-              "time": {},
               "type": "timeseries",
               "requests": [
                 {
@@ -62,81 +288,32 @@
                     {
                       "name": "query1",
                       "data_source": "metrics",
-                      "query": "avg:pgdog.cl_waiting{$user, $database, $role} by {host}"
+                      "query": "max:pgdog.sv_idle_xact{*} by {database,service,host}"
                     }
                   ],
                   "formulas": [{ "formula": "query1" }],
-                  "style": {
-                    "palette": "warm",
-                    "order_by": "values",
-                    "line_type": "solid",
-                    "line_width": "normal"
-                  },
-                  "display_type": "area"
-                }
-              ]
-            },
-            "layout": { "x": 4, "y": 0, "width": 4, "height": 2 }
-          },
-          {
-            "id": 7616740326647932,
-            "definition": {
-              "title": "Clients maximum wait time (ms)",
-              "title_size": "16",
-              "title_align": "left",
-              "show_legend": true,
-              "legend_layout": "auto",
-              "legend_columns": ["avg", "min", "max", "value", "sum"],
-              "time": {},
-              "type": "timeseries",
-              "requests": [
-                {
-                  "response_format": "timeseries",
-                  "queries": [
-                    {
-                      "name": "query1",
-                      "data_source": "metrics",
-                      "query": "avg:pgdog.maxwait{$user, $database, $role} by {host}"
-                    }
-                  ],
-                  "formulas": [
-                    { "formula": "query1" },
-                    { "formula": "query1 * 1000" }
-                  ],
                   "style": {
                     "palette": "orange",
                     "order_by": "values",
                     "line_type": "solid",
                     "line_width": "normal"
                   },
-                  "display_type": "line"
+                  "display_type": "area"
                 }
               ]
             },
-            "layout": { "x": 8, "y": 0, "width": 4, "height": 2 }
-          }
-        ]
-      },
-      "layout": { "x": 0, "y": 0, "width": 12, "height": 3 }
-    },
-    {
-      "id": 6604489953127841,
-      "definition": {
-        "title": "Servers",
-        "show_title": true,
-        "type": "group",
-        "layout_type": "ordered",
-        "widgets": [
+            "layout": { "x": 0, "y": 5, "width": 4, "height": 3 }
+          },
           {
-            "id": 490637341713377,
+            "id": 1123441011881180,
             "definition": {
-              "title": "Total transactions",
+              "title": "Clients waiting",
               "title_size": "16",
               "title_align": "left",
+              "description": "Number of clients waiting for a connection from a pool. Large number here indicates a lot of latency in the system, like a misconfiguration or a slow database.",
               "show_legend": true,
               "legend_layout": "auto",
               "legend_columns": ["avg", "min", "max", "value", "sum"],
-              "time": {},
               "type": "timeseries",
               "requests": [
                 {
@@ -145,198 +322,85 @@
                     {
                       "name": "query1",
                       "data_source": "metrics",
-                      "query": "sum:pgdog.total_xact_count.count{$role, $user, $database} by {host}.as_count()"
+                      "query": "sum:pgdog.cl_waiting{*} by {service,database,host}"
                     }
                   ],
                   "formulas": [{ "formula": "query1" }],
                   "style": {
-                    "palette": "dog_classic",
+                    "palette": "red",
                     "order_by": "values",
                     "line_type": "solid",
                     "line_width": "normal"
                   },
                   "display_type": "area"
-                }
-              ]
-            },
-            "layout": { "x": 0, "y": 0, "width": 4, "height": 2 }
-          },
-          {
-            "id": 7098710186656581,
-            "definition": {
-              "title": "Total queries",
-              "title_size": "16",
-              "title_align": "left",
-              "show_legend": true,
-              "legend_layout": "auto",
-              "legend_columns": ["avg", "min", "max", "value", "sum"],
-              "time": {},
-              "type": "timeseries",
-              "requests": [
+                },
                 {
                   "response_format": "timeseries",
                   "queries": [
                     {
-                      "name": "query1",
                       "data_source": "metrics",
-                      "query": "sum:pgdog.total_query_count.count{$role, $user, $database} by {host}.as_count()"
+                      "name": "query0",
+                      "query": "sum:pgdog.max_connections{*} by {service,database,host}"
                     }
                   ],
-                  "formulas": [{ "formula": "query1" }],
+                  "formulas": [{ "formula": "query0" }],
                   "style": {
-                    "palette": "dog_classic",
-                    "order_by": "values",
-                    "line_type": "solid",
-                    "line_width": "normal"
-                  },
-                  "display_type": "area"
-                }
-              ]
-            },
-            "layout": { "x": 4, "y": 0, "width": 4, "height": 2 }
-          },
-          {
-            "id": 6371369344944380,
-            "definition": {
-              "title": "Active servers",
-              "title_size": "16",
-              "title_align": "left",
-              "show_legend": true,
-              "legend_layout": "auto",
-              "legend_columns": ["avg", "min", "max", "value", "sum"],
-              "time": {},
-              "type": "timeseries",
-              "requests": [
-                {
-                  "response_format": "timeseries",
-                  "queries": [
-                    {
-                      "name": "query1",
-                      "data_source": "metrics",
-                      "query": "avg:pgdog.sv_active{$role, $database, $user} by {host}"
-                    }
-                  ],
-                  "formulas": [{ "formula": "query1" }],
-                  "style": {
-                    "palette": "dog_classic",
-                    "order_by": "values",
-                    "line_type": "solid",
+                    "palette": "warm",
+                    "line_type": "dashed",
                     "line_width": "normal"
                   },
                   "display_type": "line"
                 }
               ]
             },
-            "layout": { "x": 8, "y": 0, "width": 4, "height": 2 }
+            "layout": { "x": 4, "y": 5, "width": 4, "height": 3 }
           },
           {
-            "id": 930185984572653,
-            "definition": {
-              "title": "Total transaction time (ms)",
-              "title_size": "16",
-              "title_align": "left",
-              "show_legend": true,
-              "legend_layout": "auto",
-              "legend_columns": ["avg", "min", "max", "value", "sum"],
-              "time": {},
-              "type": "timeseries",
-              "requests": [
-                {
-                  "response_format": "timeseries",
-                  "queries": [
-                    {
-                      "name": "query1",
-                      "data_source": "metrics",
-                      "query": "sum:pgdog.total_xact_time.count{$database, $user, $role} by {host}.as_count()"
-                    }
-                  ],
-                  "formulas": [{ "formula": "query1" }],
-                  "style": {
-                    "palette": "dog_classic",
-                    "order_by": "values",
-                    "line_type": "solid",
-                    "line_width": "normal"
-                  },
-                  "display_type": "area"
-                }
-              ]
-            },
-            "layout": { "x": 0, "y": 2, "width": 4, "height": 2 }
-          },
-          {
-            "id": 1425288501765045,
-            "definition": {
-              "title": "Total query time (ms)",
-              "title_size": "16",
-              "title_align": "left",
-              "show_legend": true,
-              "legend_layout": "auto",
-              "legend_columns": ["avg", "min", "max", "value", "sum"],
-              "time": {},
-              "type": "timeseries",
-              "requests": [
-                {
-                  "response_format": "timeseries",
-                  "queries": [
-                    {
-                      "name": "query1",
-                      "data_source": "metrics",
-                      "query": "sum:pgdog.total_query_time.count{$database, $user, $role} by {host}.as_count()"
-                    }
-                  ],
-                  "formulas": [{ "formula": "query1" }],
-                  "style": {
-                    "palette": "dog_classic",
-                    "order_by": "values",
-                    "line_type": "solid",
-                    "line_width": "normal"
-                  },
-                  "display_type": "area"
-                }
-              ]
-            },
-            "layout": { "x": 4, "y": 2, "width": 4, "height": 2 }
-          },
-          {
-            "id": 2936048023981368,
-            "definition": {
-              "title": "Average transaction time (ms)",
-              "title_size": "16",
-              "title_align": "left",
-              "show_legend": true,
-              "legend_layout": "auto",
-              "legend_columns": ["avg", "min", "max", "value", "sum"],
-              "time": {},
-              "type": "timeseries",
-              "requests": [
-                {
-                  "response_format": "timeseries",
-                  "queries": [
-                    {
-                      "name": "query1",
-                      "data_source": "metrics",
-                      "query": "sum:pgdog.avg_xact_time{$database, $user, $role} by {host}"
-                    }
-                  ],
-                  "formulas": [{ "formula": "query1" }],
-                  "style": {
-                    "palette": "dog_classic",
-                    "order_by": "values",
-                    "line_type": "solid",
-                    "line_width": "normal"
-                  },
-                  "display_type": "line"
-                }
-              ]
-            },
-            "layout": { "x": 8, "y": 2, "width": 4, "height": 2 }
-          },
-          {
-            "id": 3874023019751427,
+            "id": 2508314742625227,
             "definition": {
               "title": "Average query time (ms)",
               "title_size": "16",
               "title_align": "left",
+              "description": "Average time (in ms) for all query executions.",
+              "show_legend": true,
+              "legend_layout": "auto",
+              "legend_columns": ["avg", "min", "max", "value", "sum"],
+              "type": "timeseries",
+              "requests": [
+                {
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "name": "query1",
+                      "data_source": "metrics",
+                      "query": "sum:pgdog.total_query_time{*} by {host,database,service}.as_count()"
+                    },
+                    {
+                      "name": "query2",
+                      "data_source": "metrics",
+                      "query": "sum:pgdog.total_query_count{*} by {host,database,service}.as_count()"
+                    }
+                  ],
+                  "formulas": [{ "formula": "query1 / query2" }],
+                  "style": {
+                    "palette": "dog_classic",
+                    "order_by": "values",
+                    "line_type": "solid",
+                    "line_width": "normal"
+                  },
+                  "display_type": "area"
+                }
+              ]
+            },
+            "layout": { "x": 8, "y": 5, "width": 4, "height": 3 }
+          },
+          {
+            "id": 3647124529429763,
+            "definition": {
+              "title": "QPS",
+              "title_size": "16",
+              "title_align": "left",
+              "description": "Total number of queries.",
               "show_legend": true,
               "legend_layout": "auto",
               "legend_columns": ["avg", "min", "max", "value", "sum"],
@@ -349,7 +413,7 @@
                     {
                       "name": "query1",
                       "data_source": "metrics",
-                      "query": "sum:pgdog.avg_query_time{$database, $user, $role} by {host}"
+                      "query": "sum:pgdog.total_query_count{*} by {host,database,service}.as_count()"
                     }
                   ],
                   "formulas": [{ "formula": "query1" }],
@@ -359,16 +423,89 @@
                     "line_type": "solid",
                     "line_width": "normal"
                   },
-                  "display_type": "line"
+                  "display_type": "area"
                 }
               ]
             },
-            "layout": { "x": 0, "y": 4, "width": 4, "height": 2 }
+            "layout": { "x": 0, "y": 8, "width": 4, "height": 3 }
           },
           {
-            "id": 3121537562829546,
+            "id": 863702058046104,
             "definition": {
-              "title": "Errors",
+              "title": "TPS",
+              "title_size": "16",
+              "title_align": "left",
+              "description": "Total number of transactions.",
+              "show_legend": true,
+              "legend_layout": "auto",
+              "legend_columns": ["avg", "min", "max", "value", "sum"],
+              "time": {},
+              "type": "timeseries",
+              "requests": [
+                {
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "query0",
+                      "query": "sum:pgdog.total_xact_count{*} by {host,database,service}.as_count()"
+                    }
+                  ],
+                  "formulas": [{ "formula": "query0" }],
+                  "style": {
+                    "palette": "dog_classic",
+                    "line_type": "solid",
+                    "line_width": "normal"
+                  },
+                  "display_type": "area"
+                }
+              ]
+            },
+            "layout": { "x": 4, "y": 8, "width": 4, "height": 3 }
+          },
+          {
+            "id": 7525773204087390,
+            "definition": {
+              "title": "Average queries per transaction",
+              "title_size": "16",
+              "title_align": "left",
+              "description": "Average number of queries per transaction.",
+              "show_legend": true,
+              "legend_layout": "auto",
+              "legend_columns": ["avg", "min", "max", "value", "sum"],
+              "type": "timeseries",
+              "requests": [
+                {
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "name": "query1",
+                      "data_source": "metrics",
+                      "query": "sum:pgdog.total_query_count{*} by {host,database,service}.as_count()"
+                    },
+                    {
+                      "name": "query2",
+                      "data_source": "metrics",
+                      "query": "sum:pgdog.total_xact_count{*} by {host,database,service}.as_count()"
+                    }
+                  ],
+                  "formulas": [{ "formula": "query1 / query2" }],
+                  "style": {
+                    "palette": "dog_classic",
+                    "order_by": "values",
+                    "line_type": "solid",
+                    "line_width": "normal"
+                  },
+                  "display_type": "area"
+                }
+              ]
+            },
+            "layout": { "x": 8, "y": 8, "width": 4, "height": 3 }
+          },
+          {
+            "id": 7628450511913244,
+            "definition": {
+              "title": "Average idle in transaction time (ms)",
               "title_size": "16",
               "title_align": "left",
               "show_legend": true,
@@ -383,12 +520,91 @@
                     {
                       "name": "query1",
                       "data_source": "metrics",
-                      "query": "sum:pgdog.errors.count{$role, $user, $database} by {host}.as_count()"
+                      "query": "sum:pgdog.total_idle_xact_time{*} by {service,host,database}.as_count()"
+                    },
+                    {
+                      "name": "query2",
+                      "data_source": "metrics",
+                      "query": "sum:pgdog.total_xact_count{*} by {service,host,database}.as_count()"
+                    }
+                  ],
+                  "formulas": [{ "formula": "query1 / query2" }],
+                  "style": {
+                    "palette": "dog_classic",
+                    "order_by": "values",
+                    "line_type": "solid",
+                    "line_width": "normal"
+                  },
+                  "display_type": "area"
+                }
+              ]
+            },
+            "layout": { "x": 0, "y": 11, "width": 4, "height": 3 }
+          },
+          {
+            "id": 23821749099358,
+            "definition": {
+              "title": "Average transaction time (ms)",
+              "title_size": "16",
+              "title_align": "left",
+              "description": "Average time (in ms) for all transaction executions.",
+              "show_legend": true,
+              "legend_layout": "auto",
+              "legend_columns": ["avg", "min", "max", "value", "sum"],
+              "type": "timeseries",
+              "requests": [
+                {
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "name": "query1",
+                      "data_source": "metrics",
+                      "query": "sum:pgdog.total_xact_time{*} by {host,database,service}.as_count()"
+                    },
+                    {
+                      "name": "query2",
+                      "data_source": "metrics",
+                      "query": "sum:pgdog.total_xact_count{*} by {host,database,service}.as_count()"
+                    }
+                  ],
+                  "formulas": [{ "formula": "query1 / query2" }],
+                  "style": {
+                    "palette": "dog_classic",
+                    "order_by": "values",
+                    "line_type": "solid",
+                    "line_width": "normal"
+                  },
+                  "display_type": "area"
+                }
+              ]
+            },
+            "layout": { "x": 4, "y": 11, "width": 4, "height": 3 }
+          },
+          {
+            "id": 2938016237776923,
+            "definition": {
+              "title": "New server connections",
+              "title_size": "16",
+              "title_align": "left",
+              "description": "How many server connections PgDog has to create at any given moment.",
+              "show_legend": true,
+              "legend_layout": "auto",
+              "legend_columns": ["avg", "min", "max", "value", "sum"],
+              "time": {},
+              "type": "timeseries",
+              "requests": [
+                {
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "name": "query1",
+                      "data_source": "metrics",
+                      "query": "sum:pgdog.total_connect_count{*} by {service,database,host}.as_count()"
                     }
                   ],
                   "formulas": [{ "formula": "query1" }],
                   "style": {
-                    "palette": "warm",
+                    "palette": "dog_classic",
                     "order_by": "values",
                     "line_type": "solid",
                     "line_width": "normal"
@@ -397,14 +613,134 @@
                 }
               ]
             },
-            "layout": { "x": 4, "y": 4, "width": 4, "height": 2 }
+            "layout": { "x": 8, "y": 11, "width": 4, "height": 3 }
           },
           {
-            "id": 2241597944704282,
+            "id": 3292214130648514,
             "definition": {
-              "title": "Idle servers",
+              "title": "Prepared statements",
               "title_size": "16",
               "title_align": "left",
+              "description": "Number of prepared statements in the cache.",
+              "show_legend": true,
+              "legend_layout": "auto",
+              "legend_columns": ["avg", "min", "max", "value", "sum"],
+              "type": "timeseries",
+              "requests": [
+                {
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "name": "query1",
+                      "data_source": "metrics",
+                      "query": "sum:pgdog.prepared_statements{*} by {service}"
+                    }
+                  ],
+                  "formulas": [{ "formula": "query1" }],
+                  "style": {
+                    "palette": "dog_classic",
+                    "order_by": "values",
+                    "line_type": "solid",
+                    "line_width": "normal"
+                  },
+                  "display_type": "area"
+                },
+                {
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "query0",
+                      "query": "sum:pgdog.prepared_statements_limit{*} by {service}"
+                    }
+                  ],
+                  "formulas": [{ "formula": "query0" }],
+                  "style": {
+                    "palette": "orange",
+                    "line_type": "dashed",
+                    "line_width": "normal"
+                  },
+                  "display_type": "line"
+                }
+              ]
+            },
+            "layout": { "x": 0, "y": 14, "width": 4, "height": 3 }
+          },
+          {
+            "id": 7594274049916865,
+            "definition": {
+              "title": "Prepared statement evictions",
+              "title_size": "16",
+              "title_align": "left",
+              "description": "Large number of evictions indicates a low limit.",
+              "show_legend": true,
+              "legend_layout": "auto",
+              "legend_columns": ["avg", "min", "max", "value", "sum"],
+              "type": "timeseries",
+              "requests": [
+                {
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "name": "query1",
+                      "data_source": "metrics",
+                      "query": "sum:pgdog.total_prepared_evictions{*} by {host,service,database}.as_count()"
+                    }
+                  ],
+                  "formulas": [{ "formula": "query1" }],
+                  "style": {
+                    "palette": "warm",
+                    "order_by": "values",
+                    "line_type": "solid",
+                    "line_width": "normal"
+                  },
+                  "display_type": "area"
+                }
+              ]
+            },
+            "layout": { "x": 4, "y": 14, "width": 4, "height": 3 }
+          },
+          {
+            "id": 2962330975567932,
+            "definition": {
+              "title": "Connection creation time (ms)",
+              "title_size": "16",
+              "title_align": "left",
+              "description": "How much time it takes to create a new connection to Postgres (in ms).",
+              "show_legend": true,
+              "legend_layout": "auto",
+              "legend_columns": ["avg", "min", "max", "value", "sum"],
+              "type": "timeseries",
+              "requests": [
+                {
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "name": "query1",
+                      "data_source": "metrics",
+                      "query": "sum:pgdog.total_connect_count{*} by {service,database,host}.as_count()"
+                    }
+                  ],
+                  "formulas": [{ "formula": "query1" }],
+                  "style": {
+                    "palette": "dog_classic",
+                    "order_by": "values",
+                    "line_type": "solid",
+                    "line_width": "normal"
+                  },
+                  "display_type": "area"
+                }
+              ]
+            },
+            "layout": { "x": 8, "y": 14, "width": 4, "height": 3 }
+          },
+          {
+            "id": 8758728227958124,
+            "definition": {
+              "title": "Abandoned transactions",
+              "title_size": "16",
+              "title_align": "left",
+              "description": "Total number of abandoned transactions per database. PgDog rolls them back automatically, preserving server connections.",
               "show_legend": true,
               "legend_layout": "auto",
               "legend_columns": ["avg", "min", "max", "value", "sum"],
@@ -417,7 +753,519 @@
                     {
                       "name": "query1",
                       "data_source": "metrics",
-                      "query": "avg:pgdog.sv_idle{$role, $user, $database} by {host}"
+                      "query": "sum:pgdog.total_rollbacks{*} by {host,database,service}.as_count()"
+                    }
+                  ],
+                  "formulas": [{ "formula": "query1" }],
+                  "style": {
+                    "palette": "orange",
+                    "order_by": "values",
+                    "line_type": "solid",
+                    "line_width": "normal"
+                  },
+                  "display_type": "area"
+                }
+              ]
+            },
+            "layout": { "x": 0, "y": 17, "width": 4, "height": 3 }
+          },
+          {
+            "id": 3615587059943598,
+            "definition": {
+              "title": "Recovered server connections",
+              "title_size": "16",
+              "title_align": "left",
+              "description": "Number of recovered connections, caused by clients that disconnected in the middle of query execution.",
+              "show_legend": true,
+              "legend_layout": "auto",
+              "legend_columns": ["avg", "min", "max", "value", "sum"],
+              "time": {},
+              "type": "timeseries",
+              "requests": [
+                {
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "name": "query1",
+                      "data_source": "metrics",
+                      "query": "sum:pgdog.total_cleaned{*} by {host,database,service}.as_count()"
+                    }
+                  ],
+                  "formulas": [{ "formula": "query1" }],
+                  "style": {
+                    "palette": "orange",
+                    "order_by": "values",
+                    "line_type": "solid",
+                    "line_width": "normal"
+                  },
+                  "display_type": "area"
+                }
+              ]
+            },
+            "layout": { "x": 4, "y": 17, "width": 4, "height": 3 }
+          }
+        ]
+      },
+      "layout": { "x": 0, "y": 0, "width": 12, "height": 21 }
+    },
+    {
+      "id": 6892709763803032,
+      "definition": {
+        "title": "Load balancer",
+        "show_title": true,
+        "type": "group",
+        "layout_type": "ordered",
+        "widgets": [
+          {
+            "id": 960159978812055,
+            "definition": {
+              "title": "Primary queries",
+              "title_size": "16",
+              "title_align": "left",
+              "description": "How many queries are served a primary database.",
+              "show_legend": true,
+              "legend_layout": "auto",
+              "legend_columns": ["avg", "min", "max", "value", "sum"],
+              "time": {},
+              "type": "timeseries",
+              "requests": [
+                {
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "name": "query1",
+                      "data_source": "metrics",
+                      "query": "sum:pgdog.total_xact_count{role:primary} by {host,database,service}.as_count()"
+                    }
+                  ],
+                  "formulas": [
+                    { "style": { "palette": "red" }, "formula": "query1" }
+                  ],
+                  "style": {
+                    "palette": "red",
+                    "order_by": "values",
+                    "line_type": "solid",
+                    "line_width": "normal"
+                  },
+                  "display_type": "area"
+                }
+              ]
+            },
+            "layout": { "x": 0, "y": 0, "width": 4, "height": 3 }
+          },
+          {
+            "id": 8676791542513568,
+            "definition": {
+              "title": "Replica queries",
+              "title_size": "16",
+              "title_align": "left",
+              "description": "How many read queries are served by PgDog.",
+              "show_legend": true,
+              "legend_layout": "auto",
+              "legend_columns": ["avg", "min", "max", "value", "sum"],
+              "time": {},
+              "type": "timeseries",
+              "requests": [
+                {
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "query0",
+                      "query": "sum:pgdog.total_xact_count{role:replica} by {host,database,service}.as_count()"
+                    }
+                  ],
+                  "formulas": [
+                    { "style": { "palette": "green" }, "formula": "query0" }
+                  ],
+                  "style": {
+                    "palette": "green",
+                    "line_type": "solid",
+                    "line_width": "normal"
+                  },
+                  "display_type": "area"
+                }
+              ]
+            },
+            "layout": { "x": 4, "y": 0, "width": 4, "height": 3 }
+          },
+          {
+            "id": 2052913890656282,
+            "definition": {
+              "title": "Primary load",
+              "title_size": "16",
+              "title_align": "left",
+              "description": "How many queries are served by the primary as a fraction of total queries.",
+              "time": {},
+              "type": "query_value",
+              "requests": [
+                {
+                  "response_format": "scalar",
+                  "queries": [
+                    {
+                      "name": "query1",
+                      "data_source": "metrics",
+                      "query": "sum:pgdog.total_xact_count{role:primary}.as_rate()",
+                      "aggregator": "sum"
+                    },
+                    {
+                      "name": "query2",
+                      "data_source": "metrics",
+                      "query": "sum:pgdog.total_xact_count{role:replica}.as_rate()",
+                      "aggregator": "sum"
+                    }
+                  ],
+                  "conditional_formats": [
+                    {
+                      "comparator": ">",
+                      "value": 50,
+                      "palette": "white_on_yellow"
+                    }
+                  ],
+                  "formulas": [
+                    {
+                      "number_format": {
+                        "unit": {
+                          "type": "canonical_unit",
+                          "unit_name": "percent"
+                        }
+                      },
+                      "formula": "query1 / (query1 + query2) * 100"
+                    }
+                  ]
+                }
+              ],
+              "autoscale": true,
+              "precision": 2,
+              "timeseries_background": { "type": "bars" }
+            },
+            "layout": { "x": 8, "y": 0, "width": 4, "height": 3 }
+          },
+          {
+            "id": 3188046168358423,
+            "definition": {
+              "title": "Reads vs. writes",
+              "title_size": "16",
+              "title_align": "left",
+              "description": "Total number of read queries vs. number of write queries.",
+              "show_legend": true,
+              "legend_layout": "auto",
+              "legend_columns": ["avg", "min", "max", "value", "sum"],
+              "time": {},
+              "type": "timeseries",
+              "requests": [
+                {
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "name": "query1",
+                      "data_source": "metrics",
+                      "query": "sum:pgdog.total_reads{*} by {service}.as_count()"
+                    },
+                    {
+                      "name": "query2",
+                      "data_source": "metrics",
+                      "query": "sum:pgdog.total_writes{*} by {service}.as_count()"
+                    }
+                  ],
+                  "formulas": [
+                    { "style": { "palette": "green" }, "formula": "query1" },
+                    { "style": { "palette": "red" }, "formula": "query2" }
+                  ],
+                  "style": {
+                    "palette": "dog_classic",
+                    "order_by": "values",
+                    "line_type": "solid",
+                    "line_width": "normal"
+                  },
+                  "display_type": "bars"
+                }
+              ]
+            },
+            "layout": { "x": 0, "y": 3, "width": 5, "height": 3 }
+          },
+          {
+            "id": 3367141733160579,
+            "definition": {
+              "title": "Total query count per database",
+              "title_size": "16",
+              "title_align": "left",
+              "description": "Queries per database. When one of the databases loses queries, this means it's banned.",
+              "show_legend": true,
+              "legend_layout": "auto",
+              "legend_columns": ["avg", "min", "max", "value", "sum"],
+              "time": {},
+              "type": "timeseries",
+              "requests": [
+                {
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "name": "query_count",
+                      "data_source": "metrics",
+                      "query": "sum:pgdog.total_query_count{role:replica} by {host}.as_count()"
+                    },
+                    {
+                      "name": "query1",
+                      "data_source": "metrics",
+                      "query": "sum:pgdog.total_query_count{role:primary} by {host}.as_count()"
+                    }
+                  ],
+                  "formulas": [
+                    {
+                      "alias": "Query count",
+                      "style": { "palette": "green" },
+                      "formula": "query_count"
+                    },
+                    {
+                      "alias": "Query count",
+                      "style": { "palette": "red" },
+                      "formula": "query1"
+                    }
+                  ],
+                  "style": {
+                    "palette": "dog_classic",
+                    "order_by": "values",
+                    "line_type": "solid",
+                    "line_width": "normal"
+                  },
+                  "display_type": "bars"
+                }
+              ]
+            },
+            "layout": { "x": 5, "y": 3, "width": 7, "height": 3 }
+          },
+          {
+            "id": 8464841375774507,
+            "definition": {
+              "title": "Query parser overhead",
+              "title_size": "16",
+              "title_align": "left",
+              "description": "Stacked bar chart showing parse time vs execution time per query, grouped by service.",
+              "show_legend": true,
+              "legend_layout": "auto",
+              "legend_columns": ["avg", "min", "max", "value", "sum"],
+              "type": "timeseries",
+              "requests": [
+                {
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "name": "total_time",
+                      "data_source": "metrics",
+                      "query": "sum:pgdog.total_query_time{*} by {service}.as_count()"
+                    },
+                    {
+                      "name": "parse_time",
+                      "data_source": "metrics",
+                      "query": "sum:pgdog.query_cache_parse_time{*} by {service}.as_count()"
+                    },
+                    {
+                      "name": "query_count",
+                      "data_source": "metrics",
+                      "query": "sum:pgdog.total_query_count{*} by {service}.as_count()"
+                    }
+                  ],
+                  "formulas": [
+                    {
+                      "alias": "Execution time per query",
+                      "formula": "(total_time - parse_time) / query_count"
+                    },
+                    {
+                      "alias": "Parse time per query",
+                      "style": { "palette": "red" },
+                      "formula": "parse_time / query_count"
+                    }
+                  ],
+                  "style": {
+                    "palette": "dog_classic",
+                    "order_by": "values",
+                    "line_type": "solid",
+                    "line_width": "normal"
+                  },
+                  "display_type": "bars"
+                }
+              ]
+            },
+            "layout": { "x": 0, "y": 6, "width": 4, "height": 3 }
+          },
+          {
+            "id": 2847193650281744,
+            "definition": {
+              "title": "Parser time per query (ms)",
+              "title_size": "16",
+              "title_align": "left",
+              "description": "Average time spent parsing each query, grouped by service.",
+              "show_legend": true,
+              "legend_layout": "auto",
+              "legend_columns": ["avg", "min", "max", "value", "sum"],
+              "time": {},
+              "type": "timeseries",
+              "requests": [
+                {
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "name": "parse_time",
+                      "data_source": "metrics",
+                      "query": "sum:pgdog.query_cache_parse_time{*} by {service}.as_count()"
+                    },
+                    {
+                      "name": "query_count",
+                      "data_source": "metrics",
+                      "query": "sum:pgdog.total_query_count{*} by {service}.as_count()"
+                    }
+                  ],
+                  "formulas": [
+                    {
+                      "alias": "Parse time per query",
+                      "formula": "parse_time / query_count"
+                    }
+                  ],
+                  "style": {
+                    "palette": "orange",
+                    "order_by": "values",
+                    "line_type": "solid",
+                    "line_width": "normal"
+                  },
+                  "display_type": "bars"
+                }
+              ]
+            },
+            "layout": { "x": 4, "y": 6, "width": 4, "height": 3 }
+          },
+          {
+            "id": 5258080761597002,
+            "definition": {
+              "title": "Query cache hit / miss rate (%)",
+              "title_size": "16",
+              "title_align": "left",
+              "description": "Percentage of queries that were not able to use the query parser cache.",
+              "show_legend": false,
+              "legend_layout": "auto",
+              "legend_columns": ["value"],
+              "type": "timeseries",
+              "requests": [
+                {
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "hits",
+                      "query": "sum:pgdog.query_cache_hits{*}.as_count()"
+                    },
+                    {
+                      "data_source": "metrics",
+                      "name": "misses",
+                      "query": "sum:pgdog.query_cache_misses{*}.as_count()"
+                    }
+                  ],
+                  "formulas": [
+                    {
+                      "formula": "(hits / (hits + misses)) * 100",
+                      "alias": "Cache Hits %",
+                      "style": { "palette": "green", "palette_index": 4 }
+                    },
+                    {
+                      "formula": "(misses / (hits + misses)) * 100",
+                      "alias": "Cache Misses %",
+                      "style": { "palette": "warm", "palette_index": 4 }
+                    }
+                  ],
+                  "style": {
+                    "palette": "dog_classic",
+                    "order_by": "values",
+                    "line_type": "solid",
+                    "line_width": "normal"
+                  },
+                  "display_type": "bars"
+                }
+              ],
+              "yaxis": { "min": "0", "max": "100" }
+            },
+            "layout": { "x": 8, "y": 6, "width": 4, "height": 3 }
+          }
+        ]
+      },
+      "layout": {
+        "x": 0,
+        "y": 21,
+        "width": 12,
+        "height": 10,
+        "is_column_break": true
+      }
+    },
+    {
+      "id": 4542508488486028,
+      "definition": {
+        "title": "Sharding",
+        "show_title": true,
+        "type": "group",
+        "layout_type": "ordered",
+        "widgets": [
+          {
+            "id": 8143644715924712,
+            "definition": {
+              "title": "Direct vs. cross-shard queries",
+              "title_size": "16",
+              "title_align": "left",
+              "description": "Direct queries are sent to only one database. Cross-shard queries typically are executed on all databases.",
+              "show_legend": true,
+              "legend_layout": "auto",
+              "legend_columns": ["avg", "min", "max", "value", "sum"],
+              "time": {},
+              "type": "timeseries",
+              "requests": [
+                {
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "name": "query1",
+                      "data_source": "metrics",
+                      "query": "sum:pgdog.query_cache_direct{*} by {service}.as_count()"
+                    },
+                    {
+                      "name": "query2",
+                      "data_source": "metrics",
+                      "query": "sum:pgdog.query_cache_cross{*} by {service}.as_count()"
+                    }
+                  ],
+                  "formulas": [
+                    { "formula": "query1" },
+                    { "formula": "query2" }
+                  ],
+                  "style": {
+                    "palette": "semantic",
+                    "order_by": "values",
+                    "line_type": "solid",
+                    "line_width": "normal"
+                  },
+                  "display_type": "bars"
+                }
+              ]
+            },
+            "layout": { "x": 0, "y": 0, "width": 4, "height": 3 }
+          },
+          {
+            "id": 1262395943898465,
+            "definition": {
+              "title": "Queries per shard",
+              "title_size": "16",
+              "title_align": "left",
+              "description": "Queries per shard.",
+              "show_legend": true,
+              "legend_layout": "auto",
+              "legend_columns": ["avg", "min", "max", "value", "sum"],
+              "time": {},
+              "type": "timeseries",
+              "requests": [
+                {
+                  "response_format": "timeseries",
+                  "queries": [
+                    {
+                      "name": "query1",
+                      "data_source": "metrics",
+                      "query": "sum:pgdog.total_query_count{*} by {shard}.as_count()"
                     }
                   ],
                   "formulas": [{ "formula": "query1" }],
@@ -427,123 +1275,21 @@
                     "line_type": "solid",
                     "line_width": "normal"
                   },
-                  "display_type": "line"
+                  "display_type": "bars"
                 }
               ]
             },
-            "layout": { "x": 8, "y": 4, "width": 4, "height": 2 }
+            "layout": { "x": 4, "y": 0, "width": 4, "height": 3 }
           }
         ]
       },
-      "layout": { "x": 0, "y": 3, "width": 12, "height": 7 }
-    },
-    {
-      "id": 2900936540316585,
-      "definition": {
-        "title": "Total data sent (bytes)",
-        "title_size": "16",
-        "title_align": "left",
-        "show_legend": true,
-        "legend_layout": "auto",
-        "legend_columns": ["avg", "min", "max", "value", "sum"],
-        "time": {},
-        "type": "timeseries",
-        "requests": [
-          {
-            "response_format": "timeseries",
-            "queries": [
-              {
-                "name": "query1",
-                "data_source": "metrics",
-                "query": "sum:pgdog.total_sent.count{$role, $user, $database} by {host}.as_count()"
-              }
-            ],
-            "formulas": [{ "formula": "query1" }],
-            "style": {
-              "palette": "dog_classic",
-              "order_by": "values",
-              "line_type": "solid",
-              "line_width": "normal"
-            },
-            "display_type": "area"
-          }
-        ]
-      },
-      "layout": {
-        "x": 0,
-        "y": 0,
-        "width": 4,
-        "height": 2,
-        "is_column_break": true
-      }
-    },
-    {
-      "id": 2195641451473208,
-      "definition": {
-        "title": "Total received (bytes)",
-        "title_size": "16",
-        "title_align": "left",
-        "show_legend": true,
-        "legend_layout": "auto",
-        "legend_columns": ["avg", "min", "max", "value", "sum"],
-        "time": {},
-        "type": "timeseries",
-        "requests": [
-          {
-            "response_format": "timeseries",
-            "queries": [
-              {
-                "name": "query1",
-                "data_source": "metrics",
-                "query": "sum:pgdog.total_received.count{$role, $user, $database} by {host}.as_count()"
-              }
-            ],
-            "formulas": [{ "formula": "query1" }],
-            "style": {
-              "palette": "dog_classic",
-              "order_by": "values",
-              "line_type": "solid",
-              "line_width": "normal"
-            },
-            "display_type": "area"
-          }
-        ]
-      },
-      "layout": { "x": 4, "y": 0, "width": 4, "height": 2 }
-    },
-    {
-      "id": 889975308741755,
-      "definition": {
-        "title": "Network",
-        "show_title": true,
-        "type": "group",
-        "layout_type": "ordered",
-        "widgets": []
-      },
-      "layout": { "x": 0, "y": 2, "width": 12, "height": 1 }
+      "layout": { "x": 0, "y": 31, "width": 12, "height": 4 }
     }
   ],
-  "template_variables": [
-    {
-      "name": "role",
-      "prefix": "role",
-      "available_values": [],
-      "default": "*"
-    },
-    {
-      "name": "user",
-      "prefix": "user",
-      "available_values": [],
-      "default": "*"
-    },
-    {
-      "name": "database",
-      "prefix": "database",
-      "available_values": [],
-      "default": "*"
-    }
-  ],
+  "template_variables": [],
   "layout_type": "ordered",
   "notify_list": [],
-  "reflow_type": "fixed"
+  "pause_auto_refresh": false,
+  "reflow_type": "fixed",
+  "tags": ["ai:modified_with_ai"]
 }
