@@ -195,8 +195,8 @@ impl From<DataRow> for PublicationTableColumn {
 /// - `indexprs IS NULL`: skip expression indexes (constraint is on computed values).
 /// - NULL-safety: either `indnullsnotdistinct = true` (PG15+, NULLs treated as equal in the
 ///   unique constraint) or every indexed attribute has `attnotnull = true` (NULLs impossible).
-///   A plain nullable unique index allows two NULL-keyed rows to coexist, which would later
-///   surface as a non-retryable `FullIdentityAmbiguousMatch`.
+///   A plain nullable unique index allows two NULL-keyed rows to coexist during the copy–stream
+///   overlap window, leaving the destination with more rows than the source.
 /// Requires PostgreSQL 15+ when an `indnullsnotdistinct` index is present; the column does
 /// not exist on older servers and the query will return an error rather than silently accept.
 ///
@@ -458,8 +458,8 @@ mod test {
     }
 
     /// Nullable unique index: must appear in missing set (NULLs are not distinct by default).
-    /// PG unique indexes treat NULLs as distinct, so nullable columns allow duplicate NULL rows —
-    /// which would later surface as a non-retryable `FullIdentityAmbiguousMatch`.
+    /// PG unique indexes treat NULLs as distinct, so nullable columns allow duplicate NULL rows
+    /// to be inserted during the copy–stream overlap window, corrupting the destination row count.
     #[tokio::test]
     async fn test_has_unique_index_rejects_nullable_unique_column() {
         let mut server = test_server().await;

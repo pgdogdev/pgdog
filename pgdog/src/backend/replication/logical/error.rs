@@ -206,18 +206,6 @@ pub enum Error {
         oid: pgdog_postgres_types::Oid,
     },
 
-    /// FULL-identity UPDATE or DELETE: WHERE clause matched more than one destination row.
-    /// Non-retryable — remove duplicate rows or switch to REPLICA IDENTITY USING INDEX.
-    #[error(
-        "FULL identity {op} on {table} (oid {oid}) matched {rows} rows; destination has duplicate rows that FULL identity cannot distinguish - remove duplicates or switch to REPLICA IDENTITY USING INDEX"
-    )]
-    FullIdentityAmbiguousMatch {
-        table: PublicationTable,
-        oid: pgdog_postgres_types::Oid,
-        op: &'static str,
-        rows: usize,
-    },
-
     /// Source replica identity changed mid-stream: an UPDATE or DELETE arrived without an OLD pre-image
     /// while the destination expected one. Re-sync the table to recover.
     #[error(
@@ -227,16 +215,6 @@ pub enum Error {
         table: PublicationTable,
         oid: pgdog_postgres_types::Oid,
         op: &'static str,
-    },
-
-    /// Sharded FULL UPDATE crossed shards but the new tuple has unchanged-TOAST columns,
-    /// so the destination row cannot be rebuilt on the new shard. Re-sync to recover.
-    #[error(
-        "FULL identity UPDATE on {table} (oid {oid}): shard key changed but new tuple has unchanged-TOAST columns; re-sync to recover"
-    )]
-    FullIdentityCrossShardToasted {
-        table: PublicationTable,
-        oid: pgdog_postgres_types::Oid,
     },
 }
 
@@ -341,26 +319,10 @@ mod tests {
             kind: TableValidationErrorKind::NoIdentityColumns,
         })
         .is_retryable());
-        assert!(!Error::FullIdentityAmbiguousMatch {
-            table: PublicationTable {
-                schema: "public".into(),
-                name: "foo".into(),
-                ..Default::default()
-            },
-            oid: pgdog_postgres_types::Oid::from(1234u32),
-            op: "UPDATE",
-            rows: 2,
-        }
-        .is_retryable());
         assert!(!Error::FullIdentityMissingOld {
             table: PublicationTable::default(),
             oid: pgdog_postgres_types::Oid::from(1234u32),
             op: "UPDATE",
-        }
-        .is_retryable());
-        assert!(!Error::FullIdentityCrossShardToasted {
-            table: PublicationTable::default(),
-            oid: pgdog_postgres_types::Oid::from(1234u32),
         }
         .is_retryable());
         assert!(!Error::NoReplicaIdentity("s".into(), "t".into()).is_retryable());

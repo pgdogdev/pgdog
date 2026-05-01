@@ -333,43 +333,44 @@ impl Table {
         )
     }
 
-    /// DELETE for REPLICA IDENTITY FULL tables — all columns in WHERE with `IS NOT DISTINCT FROM`.
+    /// DELETE for REPLICA IDENTITY FULL tables.
+    /// Targets exactly one row via a ctid subquery to handle tables with duplicate rows correctly.
     pub fn delete_full_identity(&self) -> String {
         format!(
-            "DELETE FROM \"{}\".\"{}\" WHERE {}",
+            "DELETE FROM \"{}\".\"{}\" WHERE (tableoid, ctid) = {}",
             escape_identifier(self.table.destination_schema()),
             escape_identifier(self.table.destination_name()),
-            self.all_columns().is_not_distinct_from_predicates(),
+            self.ctid_subquery(),
         )
     }
 
     /// UPDATE for REPLICA IDENTITY FULL tables — fast path.
     ///
-    /// All `n` columns appear in both WHERE and SET:
-    /// - WHERE `$1..$n` — `IS NOT DISTINCT FROM` predicates (all OLD columns)
+    /// All `n` columns appear twice:
+    /// - WHERE `$1..$n`   — ctid subquery using `IS NOT DISTINCT FROM` (all OLD columns)
     /// - SET  `$n+1..$2n` — assignments (all NEW columns)
     ///
+    /// Targets exactly one row via ctid to handle tables with duplicate rows correctly.
     /// Bind with `full_identity_bind_tuple(&old_full, &update.new)` → 2n params.
-    /// Analogous to [`update`] for DEFAULT/INDEX identity.
     pub fn update_full_identity(&self) -> String {
         let n = self.columns.len();
         format!(
-            "UPDATE \"{}\".\"{}\" SET {} WHERE {}",
+            "UPDATE \"{}\".\"{}\" SET {} WHERE (tableoid, ctid) = {}",
             escape_identifier(self.table.destination_schema()),
             escape_identifier(self.table.destination_name()),
             self.all_columns().with_offset(n).assignments(),
-            self.all_columns().is_not_distinct_from_predicates(),
+            self.ctid_subquery(),
         )
     }
 
-    /// UPDATE for REPLICA IDENTITY FULL tables — slow path (some NEW columns are Toasted).
+    /// UPDATE for REPLICA IDENTITY FULL tables — slow path (some NEW columns are toasted).
     ///
-    /// WHERE uses all `n` OLD columns; SET uses only the `k` non-Toasted NEW columns:
-    /// - WHERE `$1..$n` — `IS NOT DISTINCT FROM` (all OLD columns; fully materialised by PG)
+    /// WHERE uses the ctid subquery on all `n` OLD columns; SET uses only the `k` non-toasted NEW columns:
+    /// - WHERE `$1..$n`     — ctid subquery with `IS NOT DISTINCT FROM` (all OLD columns)
     /// - SET  `$n+1..$n+k` — assignments for the `k` present columns only
     ///
+    /// Targets exactly one row via ctid to handle tables with duplicate rows correctly.
     /// Bind with `full_identity_bind_tuple(&old_full, &partial_new)` → n+k params.
-    /// Analogous to [`update_partial`] for DEFAULT/INDEX identity.
     pub fn update_full_identity_partial_set(&self, present: &NonIdentityColumnsPresence) -> String {
         debug_assert!(
             !present.no_non_identity_present(),
@@ -378,13 +379,26 @@ impl Table {
 
         let n = self.columns.len();
         format!(
-            "UPDATE \"{}\".\"{}\" SET {} WHERE {}",
+            "UPDATE \"{}\".\"{}\" SET {} WHERE (tableoid, ctid) = {}",
             escape_identifier(self.table.destination_schema()),
             escape_identifier(self.table.destination_name()),
             self.present_columns(present)
                 .filter_non_identity()
                 .with_offset(n)
                 .assignments(),
+            self.ctid_subquery(),
+        )
+    }
+
+    /// `(SELECT tableoid, ctid FROM "s"."t" WHERE col IS NOT DISTINCT FROM $1 AND … LIMIT 1)`
+    ///
+    /// Used by all FULL identity DELETE/UPDATE generators. `tableoid` scopes the ctid to its
+    /// owning heap so the comparison is unambiguous on partitioned destination tables.
+    fn ctid_subquery(&self) -> String {
+        format!(
+            "(SELECT tableoid, ctid FROM \"{}\".\"{}\" WHERE {} LIMIT 1)",
+            escape_identifier(self.table.destination_schema()),
+            escape_identifier(self.table.destination_name()),
             self.all_columns().is_not_distinct_from_predicates(),
         )
     }
@@ -996,141 +1010,122 @@ mod test {
 
     #[test]
     fn delete_full_identity_param_numbering() {
+        // ctid subquery targets exactly one row; param order matches column order.
         let table = make_table(vec![("a", false), ("b", false), ("c", false)]);
         let sql = table.delete_full_identity();
+        let (q, s, t) = ('"', "public", "test_table");
+        let pred = format!("{q}a{q} IS NOT DISTINCT FROM $1 AND {q}b{q} IS NOT DISTINCT FROM $2 AND {q}c{q} IS NOT DISTINCT FROM $3");
+        let subq = format!("(SELECT tableoid, ctid FROM {q}{s}{q}.{q}{t}{q} WHERE {pred} LIMIT 1)");
         assert_eq!(
             sql,
-            concat!(
-                r#"DELETE FROM "public"."test_table" WHERE "#,
-                r#""a" IS NOT DISTINCT FROM $1 AND "#,
-                r#""b" IS NOT DISTINCT FROM $2 AND "#,
-                r#""c" IS NOT DISTINCT FROM $3"#,
-            ),
+            format!("DELETE FROM {q}{s}{q}.{q}{t}{q} WHERE (tableoid, ctid) = {subq}")
         );
-        assert!(
-            pg_query::parse(&sql).is_ok(),
-            "delete_full_identity: {}",
-            sql
-        );
+        assert!(pg_query::parse(&sql).is_ok(), "delete_full_identity: {sql}");
     }
 
     #[test]
     fn delete_full_identity_single_column() {
-        // Edge case: one-column table — WHERE must still be well-formed.
+        // Edge case: one-column table — subquery WHERE must still be well-formed.
         let table = make_table(vec![("id", false)]);
         let sql = table.delete_full_identity();
+        let (q, s, t) = ('"', "public", "test_table");
+        let pred = format!("{q}id{q} IS NOT DISTINCT FROM $1");
+        let subq = format!("(SELECT tableoid, ctid FROM {q}{s}{q}.{q}{t}{q} WHERE {pred} LIMIT 1)");
         assert_eq!(
             sql,
-            r#"DELETE FROM "public"."test_table" WHERE "id" IS NOT DISTINCT FROM $1"#,
+            format!("DELETE FROM {q}{s}{q}.{q}{t}{q} WHERE (tableoid, ctid) = {subq}")
         );
         assert!(
             pg_query::parse(&sql).is_ok(),
-            "delete_full_identity single: {}",
-            sql
+            "delete_full_identity single: {sql}"
         );
     }
 
     #[test]
     fn update_full_identity_all_present() {
-        // All columns present (no TOAST). WHERE $1..$3; SET $4..$6.
+        // All columns present (no TOAST). WHERE in ctid subquery: $1..$3; SET: $4..$6.
         let table = make_table(vec![("a", false), ("b", false), ("c", false)]);
         let sql = table.update_full_identity();
+        let (q, s, t) = ('"', "public", "test_table");
+        let pred = format!("{q}a{q} IS NOT DISTINCT FROM $1 AND {q}b{q} IS NOT DISTINCT FROM $2 AND {q}c{q} IS NOT DISTINCT FROM $3");
+        let subq = format!("(SELECT tableoid, ctid FROM {q}{s}{q}.{q}{t}{q} WHERE {pred} LIMIT 1)");
+        let set = format!("{q}a{q} = $4, {q}b{q} = $5, {q}c{q} = $6 ");
         assert_eq!(
             sql,
-            concat!(
-                r#"UPDATE "public"."test_table" SET "#,
-                r#""a" = $4, "b" = $5, "c" = $6 "#,
-                r#"WHERE "#,
-                r#""a" IS NOT DISTINCT FROM $1 AND "#,
-                r#""b" IS NOT DISTINCT FROM $2 AND "#,
-                r#""c" IS NOT DISTINCT FROM $3"#,
-            ),
+            format!("UPDATE {q}{s}{q}.{q}{t}{q} SET {set}WHERE (tableoid, ctid) = {subq}")
         );
         assert!(
             pg_query::parse(&sql).is_ok(),
-            "update_full_identity all_present: {}",
-            sql
+            "update_full_identity all_present: {sql}"
         );
     }
 
     #[test]
     fn update_full_identity_partial_present() {
-        // b is Toasted. WHERE covers all 3 ($1..$3); SET covers a,c ($4..$5).
+        // b is Toasted. WHERE in ctid subquery: all 3 ($1..$3); SET: a,c ($4..$5).
         let table = make_table(vec![("a", false), ("b", false), ("c", false)]);
         let tuple = TupleData {
             columns: vec![text_col("1"), toasted_col(), text_col("3")],
         };
         let present = NonIdentityColumnsPresence::from_tuple(&tuple, &table).unwrap();
         let sql = table.update_full_identity_partial_set(&present);
+        let (q, s, t) = ('"', "public", "test_table");
+        let pred = format!("{q}a{q} IS NOT DISTINCT FROM $1 AND {q}b{q} IS NOT DISTINCT FROM $2 AND {q}c{q} IS NOT DISTINCT FROM $3");
+        let subq = format!("(SELECT tableoid, ctid FROM {q}{s}{q}.{q}{t}{q} WHERE {pred} LIMIT 1)");
+        let set = format!("{q}a{q} = $4, {q}c{q} = $5 ");
         assert_eq!(
             sql,
-            concat!(
-                r#"UPDATE "public"."test_table" SET "#,
-                r#""a" = $4, "c" = $5 "#,
-                r#"WHERE "#,
-                r#""a" IS NOT DISTINCT FROM $1 AND "#,
-                r#""b" IS NOT DISTINCT FROM $2 AND "#,
-                r#""c" IS NOT DISTINCT FROM $3"#,
-            ),
+            format!("UPDATE {q}{s}{q}.{q}{t}{q} SET {set}WHERE (tableoid, ctid) = {subq}")
         );
         assert!(
             pg_query::parse(&sql).is_ok(),
-            "update_full_identity partial: {}",
-            sql
+            "update_full_identity partial: {sql}"
         );
     }
 
     #[test]
     fn update_full_identity_first_column_toasted() {
-        // a is Toasted; b and c present. WHERE covers all 3 ($1..$3); SET covers b,c ($4..$5).
+        // a is Toasted; b and c present. WHERE in ctid subquery: all 3 ($1..$3); SET: b,c ($4..$5).
         let table = make_table(vec![("a", false), ("b", false), ("c", false)]);
         let tuple = TupleData {
             columns: vec![toasted_col(), text_col("2"), text_col("3")],
         };
         let present = NonIdentityColumnsPresence::from_tuple(&tuple, &table).unwrap();
         let sql = table.update_full_identity_partial_set(&present);
+        let (q, s, t) = ('"', "public", "test_table");
+        let pred = format!("{q}a{q} IS NOT DISTINCT FROM $1 AND {q}b{q} IS NOT DISTINCT FROM $2 AND {q}c{q} IS NOT DISTINCT FROM $3");
+        let subq = format!("(SELECT tableoid, ctid FROM {q}{s}{q}.{q}{t}{q} WHERE {pred} LIMIT 1)");
+        let set = format!("{q}b{q} = $4, {q}c{q} = $5 ");
         assert_eq!(
             sql,
-            concat!(
-                r#"UPDATE "public"."test_table" SET "#,
-                r#""b" = $4, "c" = $5 "#,
-                r#"WHERE "#,
-                r#""a" IS NOT DISTINCT FROM $1 AND "#,
-                r#""b" IS NOT DISTINCT FROM $2 AND "#,
-                r#""c" IS NOT DISTINCT FROM $3"#,
-            ),
+            format!("UPDATE {q}{s}{q}.{q}{t}{q} SET {set}WHERE (tableoid, ctid) = {subq}")
         );
         assert!(
             pg_query::parse(&sql).is_ok(),
-            "update_full_identity first_toasted: {}",
-            sql
+            "update_full_identity first_toasted: {sql}"
         );
     }
 
     #[test]
     fn update_full_identity_only_one_column_present() {
-        // Only c is present. WHERE covers all 3 ($1..$3); SET covers c only ($4).
+        // Only c is present. WHERE in ctid subquery: all 3 ($1..$3); SET: c ($4).
         let table = make_table(vec![("a", false), ("b", false), ("c", false)]);
         let tuple = TupleData {
             columns: vec![toasted_col(), toasted_col(), text_col("3")],
         };
         let present = NonIdentityColumnsPresence::from_tuple(&tuple, &table).unwrap();
         let sql = table.update_full_identity_partial_set(&present);
+        let (q, s, t) = ('"', "public", "test_table");
+        let pred = format!("{q}a{q} IS NOT DISTINCT FROM $1 AND {q}b{q} IS NOT DISTINCT FROM $2 AND {q}c{q} IS NOT DISTINCT FROM $3");
+        let subq = format!("(SELECT tableoid, ctid FROM {q}{s}{q}.{q}{t}{q} WHERE {pred} LIMIT 1)");
+        let set = format!("{q}c{q} = $4 ");
         assert_eq!(
             sql,
-            concat!(
-                r#"UPDATE "public"."test_table" SET "#,
-                r#""c" = $4 "#,
-                r#"WHERE "#,
-                r#""a" IS NOT DISTINCT FROM $1 AND "#,
-                r#""b" IS NOT DISTINCT FROM $2 AND "#,
-                r#""c" IS NOT DISTINCT FROM $3"#,
-            ),
+            format!("UPDATE {q}{s}{q}.{q}{t}{q} SET {set}WHERE (tableoid, ctid) = {subq}")
         );
         assert!(
             pg_query::parse(&sql).is_ok(),
-            "update_full_identity single col: {}",
-            sql
+            "update_full_identity single col: {sql}"
         );
     }
 }

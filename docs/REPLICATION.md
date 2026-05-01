@@ -132,10 +132,9 @@ The behavior splits on whether the table has a sharding column:
   bulk-copy/replication overlap window, duplicates are possible. PgDog requires a
   **unique index that prevents NULL-keyed duplicates** on every destination shard. Either
   declare every key column `NOT NULL`, or use a PG15+ `NULLS NOT DISTINCT` unique index.
-  A standard nullable unique index allows two `NULL`-keyed rows to coexist; accepting one
-  would cause silent duplicates that surface later as a non-retryable
-  `FullIdentityAmbiguousMatch`. If any shard lacks a usable index, `connect()` returns
-  `FullIdentityOmniNoUniqueIndex` before streaming begins.
+  A standard nullable unique index allows two `NULL`-keyed rows to coexist, which corrupts
+  the destination row count during the overlap window. If any shard lacks a usable index,
+  `connect()` rejects the stream with a clear error before streaming begins.
 
 ### INSERT
 
@@ -154,9 +153,7 @@ flowchart TD
     ERR1["FullIdentityMissingOld"]
     ROUTE["resolve shard for old tuple<br>resolve shard for new tuple"]
     XSHARD{"shard key changed?"}
-    TOAST{"new has<br>toasted cols?"}
-    ERR2["FullIdentityCrossShardToasted"]
-    FANOUT["DELETE on old shard<br>INSERT on new shard"]
+    FANOUT["fill 'u' cols in new from old<br>DELETE on old shard<br>INSERT on new shard"]
     FASTCHK{"new has<br>toasted cols?"}
     FAST["fast path: full UPDATE"]
     SLOW["slow path: partial UPDATE<br>(shape cache)"]
@@ -165,28 +162,60 @@ flowchart TD
     GUARD -->|yes| ROUTE
     GUARD -->|no| ERR1
     ROUTE --> XSHARD
-    XSHARD -->|yes| TOAST
-    TOAST -->|yes| ERR2
-    TOAST -->|no| FANOUT
+    XSHARD -->|yes| FANOUT
     XSHARD -->|no| FASTCHK
     FASTCHK -->|no| FAST
     FASTCHK -->|yes| SLOW
     SLOW -->|no non-key cols present| NOOP
 ```
 
-#### `IS NOT DISTINCT FROM` in the WHERE clause
+#### Single-row targeting with `(tableoid, ctid)`
 
-FULL identity tables impose no NOT NULL constraint on their columns — any column may be
-NULL. In SQL, `col = NULL` is always unknown (never true), so a plain `=` predicate
-silently matches zero rows when the column is NULL.
+FULL identity DELETE and UPDATE use a `(tableoid, ctid)` subquery instead of a bare predicate:
 
-This has a direct consequence for row matching:
+```sql
+-- what we emit
+WHERE (tableoid, ctid) = (SELECT tableoid, ctid FROM t WHERE col IS NOT DISTINCT FROM $1 AND … LIMIT 1)
 
-- PgDog uses `IS NOT DISTINCT FROM` in the WHERE clause, which is NULL-safe:
-  `NULL IS NOT DISTINCT FROM NULL` evaluates to true.
-- For DEFAULT/INDEX tables, `=` is correct because the identity columns are guaranteed
-  NOT NULL — primary key columns by definition, and `REPLICA IDENTITY USING INDEX`
-  requires NOT NULL on every indexed column.
+-- what we avoid
+WHERE col1 IS NOT DISTINCT FROM $1 AND col2 IS NOT DISTINCT FROM $2 AND …
+```
+
+**`ctid` is a physical address `(block, offset)` within a heap.** On a plain table this is
+globally unique: one file, one address space. On a partitioned destination table each partition
+is its own heap, and every heap starts its address space at `(0,1)`. Two partitions can both have
+a live row at `(0,1)`. A bare `WHERE ctid = (SELECT ctid … LIMIT 1)` would expand across all
+partitions in the outer DML and delete or update every partition that happens to have a row at
+that address — not the one row we wanted.
+
+**`tableoid`** is the OID of the heap the row physically lives in — for a partitioned parent,
+the specific leaf partition. `(tableoid, ctid)` is unique across the entire partition tree.
+The outer `WHERE (tableoid, ctid) = (…)` Postgres row-constructor comparison pins both the
+partition and the physical slot simultaneously, so only the single identified row is touched.
+On a non-partitioned table `tableoid` is constant for the whole relation; the extra column adds
+no overhead and does not change behaviour.
+
+**Why the subquery also helps with duplicates.** `LIMIT 1` lets the sequential scan stop at the
+first matching row (expected depth N/2 for N rows), and the outer Tid Scan fetches that exact
+page by physical address in a single buffer pin. Without the subquery a bare predicate is a full
+table scan that modifies *every* matching row — incorrect when the destination contains
+byte-for-byte duplicate rows (possible during the copy–stream overlap window).
+
+**When the destination has an index.** Omni FULL tables require a unique index on every
+destination shard. Because that index must have all key columns `NOT NULL` (or use
+`NULLS NOT DISTINCT`), the planner can treat `col IS NOT DISTINCT FROM $1` as plain `=`
+for those columns and use the index for the inner subquery — changing the inner scan from
+O(N) sequential to O(log N). Sharded FULL tables have no such requirement and typically
+no index, so the scan remains sequential with `LIMIT 1` stopping it early.
+
+**Sharded vs omni.** For sharded tables the statement is sent to exactly one shard.
+For omni tables the same bind is sent to every shard; each shard runs the subquery
+independently against its own copy of the table and gets back its own `(tableoid, ctid)`.
+The approach is correct on both: `tableoid` and `ctid` are local to the shard that produced them.
+
+`IS NOT DISTINCT FROM` is used rather than `=` because FULL identity columns have no NOT NULL
+guarantee — `col = NULL` is always unknown in SQL and would silently match zero rows.
+DEFAULT/INDEX identity uses plain `=`; its identity columns are guaranteed NOT NULL.
 
 #### Cross-shard key change
 
@@ -195,29 +224,27 @@ PgDog detects this by comparing the shard resolved from each tuple.
 
 This has direct consequences for how the event is applied:
 
-- PgDog falls back to a DELETE on the old shard followed by an INSERT on the new shard,
-  using the table's pre-prepared statements.
-- If `update.new` contains unchanged-TOAST columns, the new row cannot be reconstructed
-  for the INSERT, and the event fails non-retryably with `FullIdentityCrossShardToasted`.
+- PgDog falls back to a DELETE on the old shard followed by an INSERT on the new shard.
+- If `update.new` contains unchanged-TOAST (`'u'`) columns, PgDog fills them in from
+  `old_full` before constructing the INSERT bind. With FULL identity, `old_full` is always
+  fully materialised, so every `'u'` column has its value available at the same position.
 
 ### DELETE
 
 PostgreSQL fetches TOAST values before writing DELETE WAL records, so `delete.old` always
 carries fully materialized column values — `'u'` markers never appear.
 
-This has a direct consequence for row matching:
-
-- Every column in the WHERE clause uses `IS NOT DISTINCT FROM` for the same reason as
-  UPDATE: FULL identity columns have no NOT NULL guarantee.
+The WHERE clause uses the same `(tableoid, ctid)` subquery pattern as UPDATE: `IS NOT DISTINCT FROM`
+on all columns, wrapped in `(SELECT tableoid, ctid … LIMIT 1)` to delete exactly one row even when
+the destination contains duplicate rows that are byte-for-byte identical, or when the destination
+is a partitioned table where bare `ctid` values are not unique across partitions.
 
 ### Errors
 
 | Error | When | Recovery |
 |---|---|---|
 | `FullIdentityMissingOld` | UPDATE/DELETE arrives without a full OLD tuple | source replica identity changed; re-validate and restart |
-| `FullIdentityCrossShardToasted` | Cross-shard UPDATE with a toasted NEW column | source must emit complete rows for this table |
-| `FullIdentityAmbiguousMatch` | UPDATE/DELETE matched more than one row | destination has duplicates; deduplicate before resuming |
-| `FullIdentityOmniNoUniqueIndex` | No NULL-safe unique index found at startup | add a unique index with all key columns `NOT NULL`, or a PG15+ `NULLS NOT DISTINCT` unique index |
+| `FullIdentityOmniNoUniqueIndex` | Omni table missing a qualifying unique index on any shard | add a unique index with all key columns `NOT NULL`, or a PG15+ `NULLS NOT DISTINCT` unique index |
 
 ---
 
@@ -330,7 +357,7 @@ Postgres FATALs the backend and rolls back the implicit transaction. The next ca
 `handle()` lazily reconnects and rebuilds prepared statements from the Relation messages
 Postgres re-emits after reconnect.
 
-`Sync` would not work: it commits when Postgres saw no error, but PgDog raises errors
-(e.g. `FullIdentityAmbiguousMatch` on `rows > 1`) *after* a successful `CommandComplete`.
+`Sync` would not work: it commits when Postgres saw no error, but PgDog raises some errors
+(e.g. `FullIdentityMissingOld` on a missing OLD tuple) *after* a successful `CommandComplete`.
 FATAL disconnect is the only signal that rolls back regardless. Connections come from
 `Pool::standalone`, so dropping them closes the socket instead of returning to a pool.

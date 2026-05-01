@@ -760,7 +760,7 @@ mod test {
                             hasher: Hasher::Postgres,
                             ..Default::default()
                         },
-                        // Duplicate-row table for FULL identity ambiguous-match tests.
+                        // Duplicate-row table for FULL identity ctid-targeting tests.
                         // No primary key on destination — allows identical rows.
                         ShardedTable {
                             database: "pgdog".into(),

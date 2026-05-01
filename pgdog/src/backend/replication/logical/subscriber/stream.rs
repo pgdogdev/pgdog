@@ -91,13 +91,6 @@ impl Statement {
     }
 }
 
-/// The result of dispatching a single WAL event to one or more shards.
-#[derive(Debug, Default)]
-pub(super) struct SendResult {
-    /// Maximum number of rows affected across all shard connections.
-    pub max_affected_rows: usize,
-}
-
 #[derive(Debug, Default)]
 pub struct StreamSubscriber {
     /// Destination cluster.
@@ -229,9 +222,7 @@ impl StreamSubscriber {
     }
 
     // Dispatch a pre-built bind to the matching shard(s).
-    //
-    // Returns the maximum rows-affected count across all connections.
-    async fn send(&mut self, val: &Shard, bind: &Bind) -> Result<SendResult, Error> {
+    async fn send(&mut self, val: &Shard, bind: &Bind) -> Result<(), Error> {
         let mut conns: Vec<_> = self
             .connections
             .iter_mut()
@@ -253,7 +244,6 @@ impl StreamSubscriber {
             conn.flush().await?;
         }
 
-        let mut max_affected_rows: usize = 0;
         for conn in &mut conns {
             // Keep server connections always synchronized.
             for _ in 0..2 {
@@ -264,7 +254,6 @@ impl StreamSubscriber {
                         let rows = cmd
                             .rows()?
                             .ok_or(Error::CommandCompleteNoRows(cmd.clone()))?;
-                        max_affected_rows = max_affected_rows.max(rows);
                         // A direct-to-shard update indicates a row has changed on source.
                         // This row must exist on the destination, or we missed some data during sync.
                         if rows == 0 && val.is_direct() {
@@ -287,7 +276,7 @@ impl StreamSubscriber {
             }
         }
 
-        Ok(SendResult { max_affected_rows })
+        Ok(())
     }
 
     // Handle Insert message.
@@ -498,26 +487,6 @@ impl StreamSubscriber {
             .clone())
     }
 
-    /// Return `Err(FullIdentityAmbiguousMatch)` when more than one destination
-    /// row was affected — the FULL-identity WHERE clause matched duplicate rows.
-    fn check_ambiguous_match(
-        &self,
-        oid: Oid,
-        op: &'static str,
-        result: &SendResult,
-    ) -> Result<(), Error> {
-        if result.max_affected_rows > 1 {
-            let table = self.get_table(oid)?;
-            return Err(Error::FullIdentityAmbiguousMatch {
-                table: table.table.clone(),
-                oid,
-                op,
-                rows: result.max_affected_rows,
-            });
-        }
-        Ok(())
-    }
-
     // ── Shape-cache helpers ──────────────────────────────────────────────────────
 
     /// Look up or prepare the UPDATE statement for `present`, cached under
@@ -584,22 +553,20 @@ impl StreamSubscriber {
             )
         };
 
-        let new_shard = self.shard_for(&update.new, &update_parse)?;
+        // Fill any 'u' (unchanged-TOAST) columns from old_full before routing.
+        // FULL identity guarantees old_full is fully materialised; 'u' columns in
+        // update.new carry the same value as the corresponding column in old_full.
+        // Routing from a raw 'u' column yields empty bytes → wrong shard.
+        let complete_new = update.new.fill_toasted_from(&old_full)?;
+        let new_shard = self.shard_for(&complete_new, &update_parse)?;
         let old_shard = self.shard_for(&old_full, &update_parse)?;
 
         if new_shard != old_shard {
-            // Shard key changed: DELETE on old shard, INSERT on new.
-            if update.new.has_toasted() {
-                return Err(Error::FullIdentityCrossShardToasted {
-                    table: table.table.clone(),
-                    oid,
-                });
-            }
+            // Shard key changed: DELETE on old shard, INSERT on new shard.
             let delete_bind = old_full.to_bind(delete_parse.name());
-            let result = self.send(&old_shard, &delete_bind).await?;
-            self.check_ambiguous_match(oid, "UPDATE", &result)?;
+            self.send(&old_shard, &delete_bind).await?;
 
-            let insert_bind = update.new.to_bind(insert_parse.name());
+            let insert_bind = complete_new.to_bind(insert_parse.name());
             self.send(&new_shard, &insert_bind).await?;
             self.mark_table_changed(oid);
             return Ok(());
@@ -626,8 +593,7 @@ impl StreamSubscriber {
         // Slow path: WHERE $1..$n (where_tuple=old_full), SET $n+1..$n+k (set_tuple=partial_new).
         let bind =
             XLogUpdate::full_identity_bind_tuple(&where_tuple, &set_tuple).to_bind(parse.name());
-        let result = self.send(&new_shard, &bind).await?;
-        self.check_ambiguous_match(oid, "UPDATE", &result)?;
+        self.send(&new_shard, &bind).await?;
         self.mark_table_changed(oid);
         Ok(())
     }
@@ -673,12 +639,7 @@ impl StreamSubscriber {
         let shard = self.shard_for(&tuple, &delete_parse)?;
         let bind = tuple.to_bind(delete_parse.name());
 
-        if full_identity {
-            let result = self.send(&shard, &bind).await?;
-            self.check_ambiguous_match(oid, "DELETE", &result)?;
-        } else {
-            self.send(&shard, &bind).await?;
-        }
+        self.send(&shard, &bind).await?;
 
         self.mark_table_changed(oid);
         Ok(())
@@ -785,10 +746,9 @@ impl StreamSubscriber {
                         Statement::new(&table.upsert_full_identity())?
                     } else {
                         warn!(
-                            "table {} has REPLICA IDENTITY FULL and is sharded; \
-                            ensure secondary indexes are present on the destination \
-                            before catch-up replication or every UPDATE/DELETE will \
-                            be a sequential scan and lag will compound",
+                            "table {} has REPLICA IDENTITY FULL and no primary key; \
+                            replication performance will be degraded without an index \
+                            on the destination table.",
                             dest_key
                         );
                         // Upsert slot is unused for sharded tables (omni == false).

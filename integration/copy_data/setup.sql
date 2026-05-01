@@ -257,6 +257,20 @@ SELECT
     repeat(md5(gs.id::text), 1024)  AS body  -- ~32 KB per row
 FROM generate_series(1, 100) AS gs(id);
 
+-- Two identical rows for the duplicate-row ctid test.
+-- seq=200 is outside the 1..100 range used by the UPDATE/DELETE DML.
+-- Both rows are byte-for-byte identical; one WAL UPDATE must change exactly one.
+INSERT INTO copy_data.full_identity_events (tenant_id, seq, label, body) VALUES
+    (1, 200, 'dup_label', repeat(md5('dup_label'), 1024)),
+    (1, 200, 'dup_label', repeat(md5('dup_label'), 1024));
+
+-- REPLICATION SENTINEL — not a test assertion target.
+-- seq=999 is updated last in run.sh to 'sentinel_done'. The poll loop waits for that
+-- label to appear on the destination before asserting anything. WAL ordering guarantees
+-- all preceding changes have propagated once this row has landed.
+INSERT INTO copy_data.full_identity_events (tenant_id, seq, label, body) VALUES
+    (1, 999, 'sentinel', repeat(md5('sentinel'), 1024));
+
 -- Omni (non-sharded) table with REPLICA IDENTITY FULL.
 -- The standalone unique index is PostData and is not copied to the destination
 -- by schema-sync pre-data. run.sh creates it explicitly on each destination shard

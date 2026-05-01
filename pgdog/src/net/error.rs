@@ -102,6 +102,11 @@ pub enum Error {
 
     #[error("{0}")]
     TypeError(#[from] pgdog_postgres_types::Error),
+
+    /// Internal invariant violated or API misused — not a network error.
+    /// Carry enough context to identify the violation without a debugger.
+    #[error("invariant violation: {0}")]
+    InvariantViolation(String),
 }
 
 impl Error {

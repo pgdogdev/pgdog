@@ -62,18 +62,6 @@ DST_DB2="pgdog2"    # destination shard 1 (0→2 target)
 DST2_DB1="shard_0"  # destination2 shard 0 (2→2 target)
 DST2_DB2="shard_1"  # destination2 shard 1 (2→2 target)
 
-# SQL query constants reused across source capture, poll loop, and final validation.
-SQL_POSTS_UPDATED="SELECT COUNT(*) FROM copy_data.posts WHERE title LIKE '%_updated'"
-SQL_BODY_SUM="SELECT COALESCE(SUM(octet_length(body)),0) FROM copy_data.posts"
-SQL_FULL_EVENTS_COUNT="SELECT COUNT(*) FROM copy_data.full_identity_events"
-SQL_FULL_EVENTS_UPDATED="SELECT COUNT(*) FROM copy_data.full_identity_events WHERE label LIKE 'updated_%'"
-# body is STORAGE EXTERNAL; the label UPDATE leaves body unchanged, emitting 'u' in NEW.
-SQL_FULL_EVENTS_BODY_SUM="SELECT COALESCE(SUM(octet_length(body)),0) FROM copy_data.full_identity_events"
-SQL_EVENT_TYPE_CLICK_LABEL="SELECT label FROM copy_data.event_types WHERE code = 'click'"
-SQL_NULL_DESC_LABEL="SELECT label FROM copy_data.event_types WHERE code = 'null_desc'"
-SQL_EVENT_TYPE_CLICK_UPDATED="SELECT (label = 'Click Updated')::int FROM copy_data.event_types WHERE code = 'click'"
-SQL_NULL_DESC_UPDATED="SELECT (label = 'Null Desc Updated')::int FROM copy_data.event_types WHERE code = 'null_desc'"
-
 # sum_shards DB1 DB2 SQL [FALLBACK]
 # Runs SQL on DB1 and DB2 independently and returns their integer sum.
 # FALLBACK (default 0) is substituted when a query fails, e.g. while a table
@@ -147,9 +135,12 @@ psql -d "${SRC_DB}" -c "UPDATE copy_data.posts SET title = title || '_updated' W
 # Subscriber must bind the 3 present columns; binding all 4 from OLD causes 08P01.
 psql -d "${SRC_DB}" -c "UPDATE copy_data.full_identity_events SET label = 'updated_' || seq WHERE seq BETWEEN 1 AND 50"
 psql -d "${SRC_DB}" -c "DELETE FROM copy_data.full_identity_events WHERE seq BETWEEN 51 AND 100"
-FULL_EVENTS_EXPECTED=$(query_one "${SRC_DB}" "${SQL_FULL_EVENTS_COUNT}")
-FULL_UPDATED_SRC=$(query_one "${SRC_DB}" "${SQL_FULL_EVENTS_UPDATED}")
-FULL_EVENTS_BODY_SRC=$(query_one "${SRC_DB}" "${SQL_FULL_EVENTS_BODY_SUM}")
+SQL_FIE_COUNT="SELECT COUNT(*) FROM copy_data.full_identity_events"
+SQL_FIE_UPDATED="SELECT COUNT(*) FROM copy_data.full_identity_events WHERE label LIKE 'updated_%'"
+SQL_FIE_BODY="SELECT COALESCE(SUM(octet_length(body)),0) FROM copy_data.full_identity_events"
+FULL_EVENTS_EXPECTED=$(query_one "${SRC_DB}" "${SQL_FIE_COUNT}")
+FULL_UPDATED_SRC=$(query_one "${SRC_DB}" "${SQL_FIE_UPDATED}")
+FULL_EVENTS_BODY_SRC=$(query_one "${SRC_DB}" "${SQL_FIE_BODY}")
 
 # REPLICA IDENTITY FULL test: UPDATE on an omni no-PK table with unique index.
 # The subscriber uses ON CONFLICT DO NOTHING for INSERT; plain UPDATE for WAL UPDATE.
@@ -160,44 +151,41 @@ psql -d "${SRC_DB}" -c "UPDATE copy_data.event_types SET label = 'Click Updated'
 # A plain = predicate would match zero rows; this UPDATE would silently not propagate.
 psql -d "${SRC_DB}" -c "UPDATE copy_data.event_types SET label = 'Null Desc Updated' WHERE code = 'null_desc'"
 
+# Duplicate-row UPDATE test (ctid single-row targeting).
+# Two identical rows (tenant_id=1, seq=200, label='dup_label') were seeded. Update exactly
+# one on the source by targeting its ctid. PgDog receives one WAL UPDATE event whose OLD
+# tuple matches both destination rows; ctid targeting must touch only one.
+psql -d "${SRC_DB}" -c "UPDATE copy_data.full_identity_events SET label = 'dup_changed'
+    WHERE ctid = (SELECT ctid FROM copy_data.full_identity_events WHERE seq = 200 AND label = 'dup_label' LIMIT 1)"
+
+# Cross-shard FULL identity UPDATE test (fill_toasted_from + routing from filled tuple).
+# Move seq=1 from tenant_id=1 (shard 0) to tenant_id=3 (shard 1).
+# hash(1)%2=0, hash(3)%2=1 — verified cross-shard with PgDog's bigint hash.
+# body is STORAGE EXTERNAL so the WAL new tuple carries 'u' for body.
+# PgDog must fill body from old_full before routing (P1 fix) and before building the INSERT.
+psql -d "${SRC_DB}" -c "UPDATE copy_data.full_identity_events SET tenant_id = 3 WHERE seq = 1"
+
+# REPLICATION SENTINEL — must be the last DML issued against the source.
+# Updating this row to 'sentinel_done' produces a WAL record that is downstream of
+# every preceding change. The poll loop below waits for it to land on the destination.
+psql -d "${SRC_DB}" -c "UPDATE copy_data.full_identity_events SET label = 'sentinel_done' WHERE seq = 999"
 stop_pgbench
 
-# Poll the destination until all streaming DML changes have propagated.
+# Wait for the replication sentinel to land on the destination.
+# seq=999 is dedicated solely to this purpose — see setup.sql.
+# WAL is ordered: once the sentinel row has propagated, every preceding change has too.
 echo "Waiting for streaming changes to reach destination (timeout 120s)..."
 DEADLINE=$((SECONDS + 120))
 while true; do
-    UPDATED_DST=$(sum_shards "${DST_DB1}" "${DST_DB2}" "${SQL_POSTS_UPDATED}")
-    FULL_EVENTS_DST=$(sum_shards "${DST_DB1}" "${DST_DB2}" "${SQL_FULL_EVENTS_COUNT}" -1)
-    FULL_UPDATED_DST=$(sum_shards "${DST_DB1}" "${DST_DB2}" "${SQL_FULL_EVENTS_UPDATED}")
-    FULL_EVENTS_BODY_DST=$(sum_shards "${DST_DB1}" "${DST_DB2}" "${SQL_FULL_EVENTS_BODY_SUM}" 0)
-    CLICK_UPDATED=$(sum_shards "${DST_DB1}" "${DST_DB2}" "${SQL_EVENT_TYPE_CLICK_UPDATED}")
-    NULL_DESC_UPDATED=$(sum_shards "${DST_DB1}" "${DST_DB2}" "${SQL_NULL_DESC_UPDATED}")
-    if [ "${UPDATED_DST}" -ge 50 ] && \
-       [ "${FULL_EVENTS_DST}" -eq "${FULL_EVENTS_EXPECTED}" ] && \
-       [ "${FULL_UPDATED_DST}" -eq "${FULL_UPDATED_SRC}" ] && \
-       [ "${FULL_EVENTS_BODY_DST}" -gt 0 ] && \
-       [ "${CLICK_UPDATED}" -eq 2 ] && \
-       [ "${NULL_DESC_UPDATED}" -eq 2 ]; then
-        break
-    fi
+    SENTINEL=$(sum_shards "${DST_DB1}" "${DST_DB2}" \
+        "SELECT COUNT(*) FROM copy_data.full_identity_events WHERE seq = 999 AND label = 'sentinel_done'" 0)
+    [ "${SENTINEL}" -eq 1 ] && break
     if ! kill -0 "${REPL_PID}" 2>/dev/null; then
-        echo "ERROR: replication process exited before delivering all changes"
-        echo "  posts updated: ${UPDATED_DST}/50"
-        echo "  full_identity_events count: ${FULL_EVENTS_DST} (expected ${FULL_EVENTS_EXPECTED})"
-        echo "  full_identity_events updated: ${FULL_UPDATED_DST} (expected ${FULL_UPDATED_SRC})"
-        echo "  full_identity_events body sum: ${FULL_EVENTS_BODY_DST} (expected >0)"
-        echo "  event_types click label shards updated: ${CLICK_UPDATED}/2"
-        echo "  event_types null_desc label shards updated: ${NULL_DESC_UPDATED}/2"
+        echo "ERROR: replication process exited before the sentinel (seq=999 label=sentinel_done) was delivered"
         exit 1
     fi
     if [ "${SECONDS}" -ge "${DEADLINE}" ]; then
         echo "ERROR: streaming changes did not reach destination within 120s"
-        echo "  posts updated: ${UPDATED_DST}/50"
-        echo "  full_identity_events count: ${FULL_EVENTS_DST} (expected ${FULL_EVENTS_EXPECTED})"
-        echo "  full_identity_events updated: ${FULL_UPDATED_DST} (expected ${FULL_UPDATED_SRC})"
-        echo "  full_identity_events body sum: ${FULL_EVENTS_BODY_DST} (expected >0)"
-        echo "  event_types click label shards updated: ${CLICK_UPDATED}/2"
-        echo "  event_types null_desc label shards updated: ${NULL_DESC_UPDATED}/2"
         exit 1
     fi
     sleep 1
@@ -257,8 +245,9 @@ done
 # TOAST invariant: destination body bytes must equal source body bytes.
 # If the subscriber wrote an empty string instead of skipping the column,
 # the destination sum will be far smaller than the source.
-BODY_SRC=$(query_one "${SRC_DB}" "${SQL_BODY_SUM}")
-BODY_DST=$(sum_shards "${DST2_DB1}" "${DST2_DB2}" "${SQL_BODY_SUM}")
+sql="SELECT COALESCE(SUM(octet_length(body)),0) FROM copy_data.posts"
+BODY_SRC=$(query_one "${SRC_DB}" "${sql}")
+BODY_DST=$(sum_shards "${DST2_DB1}" "${DST2_DB2}" "${sql}")
 if [ "${BODY_SRC}" -ne "${BODY_DST}" ]; then
     echo "ERROR unchanged-TOAST: source body sum=${BODY_SRC}, destination sum=${BODY_DST}"
     exit 1
@@ -266,7 +255,7 @@ fi
 echo "OK unchanged-TOAST body preserved: ${BODY_DST} bytes"
 
 # Title update must have propagated through both resharding hops.
-UPDATED_DST=$(sum_shards "${DST2_DB1}" "${DST2_DB2}" "${SQL_POSTS_UPDATED}")
+UPDATED_DST=$(sum_shards "${DST2_DB1}" "${DST2_DB2}" "SELECT COUNT(*) FROM copy_data.posts WHERE title LIKE '%_updated'")
 if [ "${UPDATED_DST}" -lt 50 ]; then
     echo "ERROR: title update did not propagate (${UPDATED_DST}/50 rows updated on destination)"
     exit 1
@@ -274,8 +263,8 @@ fi
 echo "OK title propagated: ${UPDATED_DST}/50 rows updated"
 
 # REPLICA IDENTITY FULL: sharded table UPDATE propagated through 2→2 sync.
-FULL_UPDATED_2=$(sum_shards "${DST2_DB1}" "${DST2_DB2}" "${SQL_FULL_EVENTS_UPDATED}")
-EXPECTED=$(query_one "${SRC_DB}" "${SQL_FULL_EVENTS_UPDATED}")
+FULL_UPDATED_2=$(sum_shards "${DST2_DB1}" "${DST2_DB2}" "${SQL_FIE_UPDATED}")
+EXPECTED=$(query_one "${SRC_DB}" "${SQL_FIE_UPDATED}")
 if [ "${FULL_UPDATED_2}" -ne "${EXPECTED}" ]; then
     echo "ERROR REPLICA IDENTITY FULL UPDATE: expected ${EXPECTED} 'updated_*' rows, got ${FULL_UPDATED_2} on destination2"
     exit 1
@@ -283,8 +272,8 @@ fi
 echo "OK REPLICA IDENTITY FULL sharded UPDATE: ${FULL_UPDATED_2} rows propagated"
 
 # REPLICA IDENTITY FULL: sharded table DELETE propagated — total count matches.
-FULL_TOTAL_2=$(sum_shards "${DST2_DB1}" "${DST2_DB2}" "${SQL_FULL_EVENTS_COUNT}" -1)
-EXPECTED=$(query_one "${SRC_DB}" "${SQL_FULL_EVENTS_COUNT}")
+FULL_TOTAL_2=$(sum_shards "${DST2_DB1}" "${DST2_DB2}" "${SQL_FIE_COUNT}" -1)
+EXPECTED=$(query_one "${SRC_DB}" "${SQL_FIE_COUNT}")
 if [ "${FULL_TOTAL_2}" -ne "${EXPECTED}" ]; then
     echo "ERROR REPLICA IDENTITY FULL DELETE: expected ${EXPECTED} rows, got ${FULL_TOTAL_2} on destination2"
     exit 1
@@ -292,8 +281,9 @@ fi
 echo "OK REPLICA IDENTITY FULL sharded DELETE: ${FULL_TOTAL_2} rows on destination2"
 
 # REPLICA IDENTITY FULL: omni table UPDATE propagated to both shards of destination2.
-OMNI_LABEL_0=$(query_one "${DST2_DB1}" "${SQL_EVENT_TYPE_CLICK_LABEL}")
-OMNI_LABEL_1=$(query_one "${DST2_DB2}" "${SQL_EVENT_TYPE_CLICK_LABEL}")
+sql="SELECT label FROM copy_data.event_types WHERE code = 'click'"
+OMNI_LABEL_0=$(query_one "${DST2_DB1}" "${sql}")
+OMNI_LABEL_1=$(query_one "${DST2_DB2}" "${sql}")
 if [ "${OMNI_LABEL_0}" != "Click Updated" ] || [ "${OMNI_LABEL_1}" != "Click Updated" ]; then
     echo "ERROR REPLICA IDENTITY FULL omni UPDATE: shard_0='${OMNI_LABEL_0}' shard_1='${OMNI_LABEL_1}' (expected 'Click Updated')"
     exit 1
@@ -303,8 +293,9 @@ echo "OK REPLICA IDENTITY FULL omni UPDATE: label='Click Updated' on both shards
 # IS NOT DISTINCT FROM: the null_desc row (description IS NULL) must have propagated
 # through both resharding hops. A plain = predicate would have matched zero rows on the
 # source and left the destination label unchanged.
-NULL_LABEL_0=$(query_one "${DST2_DB1}" "${SQL_NULL_DESC_LABEL}")
-NULL_LABEL_1=$(query_one "${DST2_DB2}" "${SQL_NULL_DESC_LABEL}")
+sql="SELECT label FROM copy_data.event_types WHERE code = 'null_desc'"
+NULL_LABEL_0=$(query_one "${DST2_DB1}" "${sql}")
+NULL_LABEL_1=$(query_one "${DST2_DB2}" "${sql}")
 if [ "${NULL_LABEL_0}" != "Null Desc Updated" ] || [ "${NULL_LABEL_1}" != "Null Desc Updated" ]; then
     echo "ERROR IS NOT DISTINCT FROM: shard_0='${NULL_LABEL_0}' shard_1='${NULL_LABEL_1}' (expected 'Null Desc Updated')"
     exit 1
@@ -316,13 +307,35 @@ echo "OK IS NOT DISTINCT FROM: null_desc label='Null Desc Updated' on both shard
 # If the subscriber bound all 4 from OLD, PG would have rejected with 08P01 and
 # replication would have stalled before the poll completed. If it bound correctly but
 # zeroed body in the SET clause, the byte sum collapses here.
-FULL_EVENTS_BODY_DST=$(sum_shards "${DST2_DB1}" "${DST2_DB2}" "${SQL_FULL_EVENTS_BODY_SUM}")
+FULL_EVENTS_BODY_DST=$(sum_shards "${DST2_DB1}" "${DST2_DB2}" "${SQL_FIE_BODY}")
 if [ "${FULL_EVENTS_BODY_DST}" -ne "${FULL_EVENTS_BODY_SRC}" ]; then
     echo "ERROR FULL identity TOAST slow-path: source body sum=${FULL_EVENTS_BODY_SRC}, destination2 sum=${FULL_EVENTS_BODY_DST}"
     echo "  slow-path UPDATE corrupted or dropped the unchanged body column"
     exit 1
 fi
 echo "OK FULL identity TOAST slow-path: body preserved (${FULL_EVENTS_BODY_DST} bytes)"
+
+# Duplicate-row UPDATE: ctid targeting must have changed exactly one of the two identical rows.
+# Both resharding hops must preserve this invariant.
+DUP_CHANGED_2=$(sum_shards "${DST2_DB1}" "${DST2_DB2}" "SELECT COUNT(*) FROM copy_data.full_identity_events WHERE seq = 200 AND label = 'dup_changed'")
+DUP_TOTAL_2=$(sum_shards "${DST2_DB1}" "${DST2_DB2}" "SELECT COUNT(*) FROM copy_data.full_identity_events WHERE seq = 200")
+if [ "${DUP_CHANGED_2}" -ne 1 ] || [ "${DUP_TOTAL_2}" -ne 2 ]; then
+    echo "ERROR ctid duplicate-row UPDATE: changed=${DUP_CHANGED_2} (expected 1), total=${DUP_TOTAL_2} (expected 2)"
+    echo "  ctid targeting either modified both rows or none"
+    exit 1
+fi
+echo "OK ctid duplicate-row UPDATE: exactly 1 row changed, ${DUP_TOTAL_2} rows total"
+
+# Cross-shard FULL UPDATE: seq=1 moved from tenant_id=1 to tenant_id=3.
+# body was STORAGE EXTERNAL, so WAL new tuple carried 'u' for body — exercises fill_toasted_from.
+# The row must exist exactly once across both shards after both resharding hops.
+XSHARD_TOTAL_2=$(sum_shards "${DST2_DB1}" "${DST2_DB2}" "SELECT COUNT(*) FROM copy_data.full_identity_events WHERE seq = 1")
+if [ "${XSHARD_TOTAL_2}" -ne 1 ]; then
+    echo "ERROR cross-shard FULL UPDATE: found ${XSHARD_TOTAL_2} copies of seq=1 (expected 1)"
+    echo "  row was either duplicated or lost during the shard move"
+    exit 1
+fi
+echo "OK cross-shard FULL UPDATE: seq=1 exists exactly once after shard move"
 
 psql -f "${SCRIPT_DIR}/init.sql"
 

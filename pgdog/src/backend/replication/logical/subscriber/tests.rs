@@ -329,7 +329,7 @@ async fn ensure_table(server: &mut Server, table: &str) {
                 .unwrap();
         }
         // Duplicate-row table: no PK, no unique index.
-        // Allows inserting identical rows to trigger FullIdentityAmbiguousMatch.
+        // Allows inserting identical rows to test ctid-based single-row targeting.
         "public.full_dup_rows" => {
             server
                 .execute(
@@ -1416,7 +1416,7 @@ fn full_delete_copy_data(oid: Oid, id: &str, value: &str) -> CopyData {
     )
 }
 
-// ── Helpers for ambiguous-match and omni-dedup tests ───────────────────────────────────────────
+// ── Helpers for duplicate-row and omni-dedup tests ─────────────────────────────────────────────
 
 /// Table without a primary key — allows duplicate rows.
 /// In the test sharding config so `is_sharded()` returns `true`, bypassing the omni unique-index check.
@@ -1910,17 +1910,18 @@ async fn full_identity_insert_omni_dedup() {
         .unwrap();
 }
 
-// ── Ambiguous-match tests ────────────────────────────────────────────────────────────────────
+// ── Duplicate-row handling tests ──────────────────────────────────────────────────────────────────────────────────
 
-/// FULL identity UPDATE matching duplicate destination rows must fail with `FullIdentityAmbiguousMatch`.
-/// Two identical rows are seeded directly (bypassing primary-key enforcement).
+/// FULL identity UPDATE on a table with two identical rows must succeed and affect exactly one row.
+/// With REPLICA IDENTITY FULL, Postgres materialises all TOAST values into the WAL record, so the
+/// old tuple is always complete. Two rows matching the old tuple are byte-for-byte identical;
+/// the ctid-based WHERE targets one of them, which is semantically correct.
 #[tokio::test]
-async fn full_identity_update_ambiguous_match() {
+async fn full_identity_update_duplicate_rows() {
     let cluster = Cluster::new_test_single_shard(&config());
     let mut sub = StreamSubscriber::new(&cluster, &[make_full_identity_dup_rows_table()]);
     let mut verify = test_server().await;
 
-    // Create table (no PK, no unique index — duplicates are allowed).
     ensure_table(&mut verify, "public.full_dup_rows").await;
 
     let id = random_id();
@@ -1934,14 +1935,13 @@ async fn full_identity_update_ambiguous_match() {
 
     let oid = Oid(16401);
 
-    // Set up relation (prepare UPDATE/DELETE statements for full_dup_rows).
     sub.handle(begin_copy_data(100)).await.unwrap();
     sub.handle(full_dup_rows_relation_copy_data(oid))
         .await
         .unwrap();
     sub.handle(commit_copy_data(200)).await.unwrap();
 
-    // Seed two identical rows directly — bypasses the subscriber's dedup logic.
+    // Seed two identical rows directly.
     verify
         .execute(format!(
             "INSERT INTO public.full_dup_rows VALUES ({id}, 'dup')"
@@ -1955,49 +1955,35 @@ async fn full_identity_update_ambiguous_match() {
         .await
         .unwrap();
 
-    // FULL UPDATE WAL event: old = (id, 'dup'), new = (id, 'changed').
-    // The WHERE clause matches both rows — must return FullIdentityAmbiguousMatch.
+    // FULL UPDATE WAL event: old = (id, 'dup'), new = (id2, 'changed').
+    // The ctid subquery must target exactly one of the two identical rows.
     let id2 = random_id();
     sub.handle(begin_copy_data(300)).await.unwrap();
-    let result = sub
-        .handle(full_update_copy_data(oid, &id, "dup", &id2, "changed"))
-        .await;
-    assert!(
-        matches!(
-            result,
-            Err(crate::backend::replication::logical::Error::FullIdentityAmbiguousMatch { .. })
-        ),
-        "expected FullIdentityAmbiguousMatch, got: {result:?}"
-    );
+    sub.handle(full_update_copy_data(oid, &id, "dup", &id2, "changed"))
+        .await
+        .unwrap();
+    sub.handle(commit_copy_data(400)).await.unwrap();
 
-    // The subscriber's transaction is left dirty after the guard fires. Drain a
-    // commit so the connection state is clean even on failure; the result is
-    // ignored because Postgres is already in an aborted transaction state.
-    let _ = sub.handle(commit_copy_data(400)).await;
-
-    // Post-error state: the failing UPDATE must not be visible from a separate
-    // connection — both seeded rows still match the original (id, 'dup'). A
-    // regression that suppresses the guard would commit the UPDATE and both
-    // rows would now have id = id2, dropping this count to 0.
+    // Exactly one row was updated: the old (id, 'dup') row remains, the other became (id2, 'changed').
     assert_eq!(
         count_row(&mut verify, "public.full_dup_rows", &id).await,
-        2,
-        "failing UPDATE must not be committed: original rows must remain"
+        1,
+        "exactly one of the two duplicate rows must have been updated"
     );
 
-    // Cleanup: delete by value rather than id. If the ambiguous-match guard
-    // regresses, both rows end up with id = id2 and escape a `WHERE id = {id}`
-    // clause. Matching by value catches them regardless.
+    // Cleanup.
     verify
-        .execute("DELETE FROM public.full_dup_rows WHERE value IN ('dup', 'changed')")
+        .execute(format!(
+            "DELETE FROM public.full_dup_rows WHERE id IN ({id}, {id2})"
+        ))
         .await
         .unwrap();
 }
 
-/// FULL identity DELETE that matches more than one destination row must fail with
-/// `FullIdentityAmbiguousMatch`. Same seeding strategy as the UPDATE variant.
+/// FULL identity DELETE on a table with two identical rows must succeed and remove exactly one row.
+/// Same rationale as the UPDATE variant: ctid targets one byte-for-byte identical row.
 #[tokio::test]
-async fn full_identity_delete_ambiguous_match() {
+async fn full_identity_delete_duplicate_rows() {
     let cluster = Cluster::new_test_single_shard(&config());
     let mut sub = StreamSubscriber::new(&cluster, &[make_full_identity_dup_rows_table()]);
     let mut verify = test_server().await;
@@ -2034,32 +2020,21 @@ async fn full_identity_delete_ambiguous_match() {
         .await
         .unwrap();
 
-    // FULL DELETE: old = (id, 'dup') — matches both rows.
+    // FULL DELETE: old = (id, 'dup') — ctid must remove exactly one of the two identical rows.
     sub.handle(begin_copy_data(300)).await.unwrap();
-    let result = sub.handle(full_delete_copy_data(oid, &id, "dup")).await;
-    assert!(
-        matches!(
-            result,
-            Err(crate::backend::replication::logical::Error::FullIdentityAmbiguousMatch { .. })
-        ),
-        "expected FullIdentityAmbiguousMatch, got: {result:?}"
-    );
+    sub.handle(full_delete_copy_data(oid, &id, "dup"))
+        .await
+        .unwrap();
+    sub.handle(commit_copy_data(400)).await.unwrap();
 
-    // The subscriber's transaction is left dirty after the guard fires. Drain a
-    // commit so the connection state is clean even on failure; the result is
-    // ignored because Postgres is already in an aborted transaction state.
-    let _ = sub.handle(commit_copy_data(400)).await;
-
-    // Post-error state: the failing DELETE must not be visible from a separate
-    // connection — both seeded rows survive. A regression that suppresses the
-    // guard would commit the DELETE and drop this count to 0.
+    // Exactly one row deleted: one (id, 'dup') row must remain.
     assert_eq!(
         count_row(&mut verify, "public.full_dup_rows", &id).await,
-        2,
-        "failing DELETE must not be committed: original rows must remain"
+        1,
+        "exactly one of the two duplicate rows must have been deleted"
     );
 
-    // Cleanup: rows are still present because the failing DELETE was rolled back.
+    // Cleanup.
     verify
         .execute(format!("DELETE FROM public.full_dup_rows WHERE id = {id}"))
         .await

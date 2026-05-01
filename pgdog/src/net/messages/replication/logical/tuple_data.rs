@@ -137,6 +137,47 @@ impl TupleData {
                 .collect(),
         }
     }
+
+    /// Return a copy of `self` with every `Toasted` (`'u'`) column replaced by the
+    /// corresponding column from `source`.
+    ///
+    /// Used when a REPLICA IDENTITY FULL cross-shard UPDATE needs to reconstruct the
+    /// complete new row. With FULL identity, `source` (the old tuple) is always fully
+    /// materialised — Postgres flattens every TOAST reference before writing the WAL
+    /// record. `'u'` columns in the new tuple are unchanged, so their values are
+    /// available in the old tuple at the same position.
+    ///
+    /// Both tuples must have the same column count; mismatches are a schema-change
+    /// race that is not recoverable here and should surface as an upstream error.
+    pub fn fill_toasted_from(&self, source: &TupleData) -> Result<TupleData, Error> {
+        if self.columns.len() != source.columns.len() {
+            return Err(Error::InvariantViolation(format!(
+                "fill_toasted_from: column count mismatch ({} vs {}); schema-change race?",
+                self.columns.len(),
+                source.columns.len(),
+            )));
+        }
+        let columns = self
+            .columns
+            .iter()
+            .zip(source.columns.iter())
+            .map(|(new_col, old_col)| {
+                if new_col.identifier == Identifier::Toasted {
+                    if old_col.identifier == Identifier::Toasted {
+                        return Err(Error::InvariantViolation(
+                            "fill_toasted_from: source column is Toasted; \
+                             FULL identity guarantees old tuple is always materialised"
+                                .into(),
+                        ));
+                    }
+                    Ok(old_col.clone())
+                } else {
+                    Ok(new_col.clone())
+                }
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(TupleData { columns })
+    }
 }
 
 /// Explains what's inside the column.
@@ -284,5 +325,72 @@ mod test {
     fn to_sql_renders_toasted_marker() {
         let c = toasted_col();
         assert_eq!(c.to_sql().unwrap(), "<unchanged toast>");
+    }
+
+    #[test]
+    fn fill_toasted_from_replaces_u_columns() {
+        // new tuple: col0 present, col1 toasted, col2 present.
+        let new = TupleData {
+            columns: vec![text_col("a"), toasted_col(), text_col("c")],
+        };
+        // old tuple: all columns materialised (REPLICA IDENTITY FULL guarantee).
+        let old = TupleData {
+            columns: vec![text_col("a_old"), text_col("b_old"), text_col("c_old")],
+        };
+        let filled = new.fill_toasted_from(&old).unwrap();
+        // col0: from new (unchanged — was present)
+        assert_eq!(filled.columns[0].as_str(), Some("a"));
+        // col1: from old (was toasted in new)
+        assert_eq!(filled.columns[1].as_str(), Some("b_old"));
+        // col2: from new
+        assert_eq!(filled.columns[2].as_str(), Some("c"));
+        assert!(
+            !filled.has_toasted(),
+            "filled tuple must contain no toasted markers"
+        );
+    }
+
+    #[test]
+    fn fill_toasted_from_all_present_is_identity() {
+        // When no columns are toasted, the result equals the original.
+        let new = TupleData {
+            columns: vec![text_col("x"), text_col("y")],
+        };
+        let old = TupleData {
+            columns: vec![text_col("x_old"), text_col("y_old")],
+        };
+        let filled = new.fill_toasted_from(&old).unwrap();
+        assert_eq!(filled.columns[0].as_str(), Some("x"));
+        assert_eq!(filled.columns[1].as_str(), Some("y"));
+    }
+
+    #[test]
+    fn fill_toasted_from_all_toasted_uses_old() {
+        // When every column is toasted, the result equals the old tuple.
+        let new = TupleData {
+            columns: vec![toasted_col(), toasted_col()],
+        };
+        let old = TupleData {
+            columns: vec![text_col("p"), text_col("q")],
+        };
+        let filled = new.fill_toasted_from(&old).unwrap();
+        assert_eq!(filled.columns[0].as_str(), Some("p"));
+        assert_eq!(filled.columns[1].as_str(), Some("q"));
+        assert!(!filled.has_toasted());
+    }
+
+    #[test]
+    fn fill_toasted_from_column_count_mismatch_is_err() {
+        // self has 2 columns, source has 1 — schema-change race; must not panic.
+        let new = TupleData {
+            columns: vec![text_col("a"), toasted_col()],
+        };
+        let old = TupleData {
+            columns: vec![text_col("x")],
+        };
+        assert!(
+            new.fill_toasted_from(&old).is_err(),
+            "column count mismatch must return Err, not panic"
+        );
     }
 }
