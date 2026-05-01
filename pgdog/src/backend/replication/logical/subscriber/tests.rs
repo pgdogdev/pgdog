@@ -349,7 +349,7 @@ async fn ensure_table(server: &mut Server, table: &str) {
                 )
                 .await
                 .unwrap();
-            // Idempotently set NOT NULL: has_unique_index() requires all key columns to be NOT NULL.
+            // Idempotently set NOT NULL: tables_missing_unique_index() requires all key columns to be NOT NULL.
             // A stale nullable schema from a prior test run would silently fail the omni dedup test.
             for col in ["a", "b"] {
                 let _ = server
@@ -1539,14 +1539,14 @@ async fn full_identity_nothing_rejected() {
 // ── Omni no-unique-index rejection ────────────────────────────────────────────────────
 
 /// FULL identity omni table without a unique index on the destination must be rejected.
-/// `full_events_omni` is absent (or has no qualifying index) — enough for `has_unique_index()` to return `false`.
+/// `full_events_omni` is absent (or has no qualifying index) — enough for `tables_missing_unique_index()` to return it as missing.
 #[tokio::test]
 async fn full_identity_omni_no_unique_index_rejected() {
     let cluster = Cluster::new_test_single_shard(&config());
     let mut sub = StreamSubscriber::new(&cluster, &[make_full_identity_omni_table()]);
 
     // Enforce precondition: the table must exist but have no qualifying unique index.
-    // A stale unique index from a prior run would make has_unique_index() return true,
+    // A stale unique index from a prior run would make tables_missing_unique_index() return empty,
     // causing expect_err() to panic. Drop and recreate the table to guarantee a clean state.
     {
         let mut setup = test_server().await;
@@ -1873,7 +1873,7 @@ async fn full_identity_insert_omni_dedup() {
     sub.connect().await.unwrap();
 
     let oid = Oid(16400);
-    // Send relation — has_unique_index() must return true or relation() rejects.
+    // Send relation — tables_missing_unique_index() must return empty or relation() rejects.
     sub.handle(begin_copy_data(100)).await.unwrap();
     sub.handle(full_omni_dedup_relation_copy_data(oid))
         .await

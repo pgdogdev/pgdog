@@ -183,13 +183,13 @@ impl Table {
         match self.identity.identity.as_str() {
             "f" => Ok(()),
             "n" => Err(TableValidationError {
-                table: self.table.clone(),
+                table_name: self.table.to_string(),
                 kind: TableValidationErrorKind::ReplicaIdentityNothing,
             }),
             _ => {
                 if !self.columns.iter().any(|c| c.identity) {
                     return Err(TableValidationError {
-                        table: self.table.clone(),
+                        table_name: self.table.to_string(),
                         kind: TableValidationErrorKind::NoIdentityColumns,
                     });
                 }

@@ -111,7 +111,7 @@ ${PGDOG_BIN} --config "${PGDOG_CONFIG}" --users "${PGDOG_USERS}" \
     schema-sync --from-database source --to-database destination --publication pgdog
 # event_types has REPLICA IDENTITY FULL (omni). The unique index on `code` is
 # PostData and is not synced by schema-sync pre-data, so create it explicitly on
-# each destination shard before data-sync so has_unique_index() finds it.
+# each destination shard before data-sync so tables_missing_unique_index() finds it.
 psql -d "${DST_DB1}" -c "CREATE UNIQUE INDEX IF NOT EXISTS event_types_code_idx ON copy_data.event_types (code)"
 psql -d "${DST_DB2}" -c "CREATE UNIQUE INDEX IF NOT EXISTS event_types_code_idx ON copy_data.event_types (code)"
 start_pgbench

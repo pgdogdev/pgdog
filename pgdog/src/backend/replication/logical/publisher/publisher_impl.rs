@@ -10,7 +10,7 @@ use tokio::time::Instant;
 use tokio::{select, spawn, time::interval};
 use tracing::{debug, info, warn};
 
-use super::super::{publisher::Table, Error, TableValidationErrors};
+use super::super::{ensure_validation, publisher::Table, Error};
 use super::ReplicationSlot;
 
 use crate::backend::replication::logical::subscriber::stream::StreamSubscriber;
@@ -320,20 +320,14 @@ impl Publisher {
         // Validate all tables support replication before committing to
         // what can be a multi-hour copy.  A table with no primary key or
         // unique replica-identity index cannot be replicated correctly.
-        let mut validation_errors: Vec<_> = self
+        let validation_errors: Vec<_> = self
             .tables
             .values()
             .flat_map(|t| t.iter())
             .filter_map(|t| t.valid().err())
             .collect();
 
-        if !validation_errors.is_empty() {
-            validation_errors.sort_by_key(|e| e.table.name.clone());
-
-            return Err(Error::TableValidation(TableValidationErrors(
-                validation_errors,
-            )));
-        }
+        ensure_validation!(validation_errors);
 
         // Create replication slots only after validation passes — a slot
         // created before valid() would be orphaned on a NoIdentityColumns error.

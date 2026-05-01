@@ -71,6 +71,11 @@ src_psql -f "${SCRIPT_DIR}/init.sql"
 "${PGDOG_BIN}" --config "${PGDOG_CONFIG}" --users "${USERS_CONFIG}" \
     schema-sync --from-database source --to-database destination --publication pgdog
 
+# event_types has REPLICA IDENTITY FULL (omni). The unique index on `code` is
+# PostData and is not synced by schema-sync pre-data, so create it explicitly on
+# each destination shard before COPY_DATA so tables_missing_unique_index() finds it.
+shard0_psql -c "CREATE UNIQUE INDEX IF NOT EXISTS event_types_code_idx ON copy_data.event_types (code)"
+shard1_psql -c "CREATE UNIQUE INDEX IF NOT EXISTS event_types_code_idx ON copy_data.event_types (code)"
 echo "[retry_test] Starting pgdog server on port ${PGDOG_PORT}..."
 PGDOG_PORT="${PGDOG_PORT}" "${PGDOG_BIN}" --config "${PGDOG_CONFIG}" --users "${USERS_CONFIG}" &
 PGDOG_PID=$!

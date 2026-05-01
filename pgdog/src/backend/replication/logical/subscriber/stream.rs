@@ -9,12 +9,15 @@ use std::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 
+use futures::future::try_join_all;
 use once_cell::sync::Lazy;
 use pgdog_postgres_types::Oid;
 use tracing::{debug, trace, warn};
 
-use super::super::publisher::{has_unique_index, NonIdentityColumnsPresence};
-use super::super::{publisher::Table, Error, TableValidationError, TableValidationErrorKind};
+use super::super::publisher::{tables_missing_unique_index, NonIdentityColumnsPresence};
+use super::super::{
+    ensure_validation, publisher::Table, Error, TableValidationError, TableValidationErrorKind,
+};
 use super::StreamContext;
 use crate::net::messages::replication::logical::tuple_data::{Identifier, TupleData};
 use crate::net::messages::replication::logical::update::Update as XLogUpdate;
@@ -207,7 +210,8 @@ impl StreamSubscriber {
                 }
             }
         }
-        // Validate omni FULL identity tables before the stream starts.
+
+        // Validate omni FULL-identity tables have a unique index on every destination shard.
         let omni_full: Vec<Table> = self
             .tables
             .values()
@@ -216,8 +220,8 @@ impl StreamSubscriber {
             })
             .cloned()
             .collect();
-        for table in &omni_full {
-            self.validate_full_identity_omni_has_unique_index(table)
+        if !omni_full.is_empty() {
+            self.validate_full_identity_omni_has_unique_index(&omni_full)
                 .await?;
         }
 
@@ -734,27 +738,6 @@ impl StreamSubscriber {
         Ok(())
     }
 
-    /// Verify every destination shard has a unique index on `table`.
-    /// FULL-identity omni tables use `ON CONFLICT DO NOTHING` during the
-    /// copy–replication overlap window, which requires a unique constraint.
-    async fn validate_full_identity_omni_has_unique_index(
-        &mut self,
-        table: &Table,
-    ) -> Result<(), Error> {
-        let schema = table.table.destination_schema().to_string();
-        let name = table.table.destination_name().to_string();
-        for dest_server in self.connections.iter_mut() {
-            if !has_unique_index(&schema, &name, dest_server).await? {
-                return Err(TableValidationError {
-                    table: table.table.clone(),
-                    kind: TableValidationErrorKind::FullIdentityOmniNoUniqueIndex,
-                }
-                .into());
-            }
-        }
-        Ok(())
-    }
-
     // Handle Relation message.
     //
     // Prepare upsert statement and record table info for future use
@@ -971,6 +954,35 @@ impl StreamSubscriber {
     /// Get and reset missing rows.
     pub(crate) fn missed_rows(&mut self) -> MissedRows {
         std::mem::take(&mut self.missed_rows)
+    }
+
+    /// Verify every destination shard has a qualifying unique index for all `tables`.
+    /// FULL-identity omni tables use `ON CONFLICT DO NOTHING` during the
+    /// copy-replication overlap window, which requires a unique constraint.
+    /// Queries all shards in parallel (one bulk query per shard) then surfaces
+    /// the complete set of missing indexes across the cluster in a single error.
+    async fn validate_full_identity_omni_has_unique_index(
+        &mut self,
+        tables: &[Table],
+    ) -> Result<(), Error> {
+        // Fan out to all shards concurrently; each gets one IN-list query.
+        let per_shard: Vec<Vec<String>> =
+            try_join_all(self.connections.iter_mut().map(|dest_server| {
+                tables_missing_unique_index(tables.iter().map(|t| &t.table), dest_server)
+            }))
+            .await?;
+
+        // Flatten; ensure_validation! deduplicates and sorts before reporting.
+        let errors: Vec<TableValidationError> = per_shard
+            .into_iter()
+            .flatten()
+            .map(|table_name| TableValidationError {
+                table_name,
+                kind: TableValidationErrorKind::FullIdentityOmniNoUniqueIndex,
+            })
+            .collect();
+        ensure_validation!(errors);
+        Ok(())
     }
 }
 

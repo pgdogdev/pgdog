@@ -25,9 +25,9 @@ pub enum TableValidationErrorKind {
 
 /// A single table-level validation failure.
 #[derive(Debug, Display, Error)]
-#[display("table {table}: {kind}")]
+#[display("table {table_name}: {kind}")]
 pub struct TableValidationError {
-    pub table: PublicationTable,
+    pub table_name: String,
     pub kind: TableValidationErrorKind,
 }
 
@@ -44,6 +44,27 @@ impl fmt::Display for TableValidationErrors {
         Ok(())
     }
 }
+
+/// Sort `errors` by table display name and return `Err(TableValidation)` if non-empty,
+/// otherwise continue. Mirrors `anyhow::ensure!` — uses `return` to exit the calling fn.
+///
+/// Only valid inside a function that returns `Result<_, Error>`.
+macro_rules! ensure_validation {
+    ($errors:expr) => {{
+        let mut __errors = $errors;
+        if !__errors.is_empty() {
+            __errors.sort_by_key(|e| e.table_name.clone());
+            __errors.dedup_by(|a, b| a.table_name == b.table_name);
+            return Err(
+                $crate::backend::replication::logical::Error::TableValidation(
+                    $crate::backend::replication::logical::TableValidationErrors(__errors),
+                ),
+            );
+        }
+    }};
+}
+// export macro
+pub(crate) use ensure_validation;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -316,7 +337,7 @@ mod tests {
         assert!(!Error::CopyAborted(PublicationTable::default()).is_retryable());
         assert!(!Error::DataSyncAborted.is_retryable());
         assert!(!Error::from(TableValidationError {
-            table: PublicationTable::default(),
+            table_name: String::new(),
             kind: TableValidationErrorKind::NoIdentityColumns,
         })
         .is_retryable());
@@ -349,11 +370,7 @@ mod tests {
     fn table_validation_error_display() {
         // Single error: header + one indented entry.
         let single = Error::from(TableValidationError {
-            table: PublicationTable {
-                schema: "public".into(),
-                name: "orders".into(),
-                ..Default::default()
-            },
+            table_name: "\"public\".\"orders\"".into(),
             kind: TableValidationErrorKind::NoIdentityColumns,
         });
         assert_eq!(
@@ -364,19 +381,11 @@ mod tests {
         // Multiple errors: header + one indented line per entry.
         let multi = Error::TableValidation(TableValidationErrors(vec![
             TableValidationError {
-                table: PublicationTable {
-                    schema: "public".into(),
-                    name: "orders".into(),
-                    ..Default::default()
-                },
+                table_name: "\"public\".\"orders\"".into(),
                 kind: TableValidationErrorKind::NoIdentityColumns,
             },
             TableValidationError {
-                table: PublicationTable {
-                    schema: "public".into(),
-                    name: "items".into(),
-                    ..Default::default()
-                },
+                table_name: "\"public\".\"items\"".into(),
                 kind: TableValidationErrorKind::ReplicaIdentityNothing,
             },
         ]));
