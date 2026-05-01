@@ -33,14 +33,12 @@ value from the WAL record and instead emits a `Toasted` marker (protocol byte `'
 
 This has a direct consequence for replication:
 
-- **`update.old` Toasted columns**: the column existed but its old value is not
-  transmitted. It cannot be used in a `WHERE` predicate.
+- **`update.old` Toasted columns**: under `REPLICA IDENTITY FULL`, this cannot occur.
+  PostgreSQL calls `toast_flatten_tuple` on OLD in `ExtractReplicaIdentity` before
+  WAL-logging; OLD is always fully materialised. Toasted markers only appear in `update.new`.
 - **`update.new` Toasted columns**: the column was not changed. It must not appear
-  in the `SET` clause (we have no value to assign).
-
-For actual `DELETE` WAL records, PostgreSQL fetches TOAST values before writing the
-record, so `delete.old` never contains Toasted markers. Toasted markers only appear
-in `update.old` and `update.new`.
+  in the `SET` clause (we have no value to assign). The presence bitmask is derived
+  from `update.new`; OLD is left intact and binds in full to the WHERE clause.
 
 ---
 
@@ -68,25 +66,26 @@ The column-level `identity` flag carries no information for FULL tables.
 
 `Statements` carries `full_identity: bool`, set at `relation()` time from `ReplicaIdentity.identity == "f"`. Every INSERT, UPDATE, and DELETE dispatch branch checks this flag to route FULL-mode events to their own handlers.
 
-**Additional check at `relation()` time for non-sharded (omni) FULL tables:**
-query `pg_index` on the destination for any unique index that prevents NULL-keyed duplicates:
-either every key column has `attnotnull = true`, or `indnullsnotdistinct = true` (PG15+).
+**Additional check at `connect()` time for non-sharded (omni) FULL tables:**
+query `pg_index` on the destination for any unique index whose every key column is `attnotnull`,
+or whose `indnullsnotdistinct = true` (PG15+, NULLs treated as equal in the unique constraint).
 PgDog enforces no schema-uniformity invariant across shards, so the probe runs on every
 shard's primary connection — a single-shard probe could miss drift that surfaces later as a
 non-retryable `FullIdentityAmbiguousMatch`. If any shard lacks a usable unique index, return
 `TableValidationError::FullIdentityOmniNoUniqueIndex(table)` — the same error path as
-`ReplicaIdentityNothing`, surfaced to the operator before any statements are prepared.
+`ReplicaIdentityNothing`, surfaced to the operator before streaming begins.
 
 Error message: `"table {schema}.{name} has REPLICA IDENTITY FULL and is not sharded
 (omni) but the destination has no unique index — add a unique index or use
 REPLICA IDENTITY USING INDEX"`.
 
-Why NULL-safety matters: standard PostgreSQL treats NULLs as distinct in unique indexes,
-so a plain nullable unique index does NOT prevent two NULL-keyed duplicates; that would let
-`ON CONFLICT DO NOTHING` admit duplicates during the copy↔replication overlap window, then
-any FULL `UPDATE`/`DELETE` would match both copies and fail.
-PG15+ `NULLS NOT DISTINCT` indexes are accepted: `indnullsnotdistinct = true` makes NULLs
-compare as equal in the unique constraint, so duplicates cannot exist even for nullable columns.
+Why NOT NULL is required: standard PostgreSQL treats NULLs as distinct in unique indexes,
+so a unique index over a nullable column does NOT prevent two NULL-keyed duplicates; that
+would let `ON CONFLICT DO NOTHING` admit duplicates during the copy/replication overlap
+window, then any FULL `UPDATE`/`DELETE` would match both copies and fail.
+Note: a plain nullable unique index is rejected; the destination probe accepts an index
+only if every key column has `attnotnull = true` or the index has `indnullsnotdistinct = true`
+(PG15+).
 
 **Runtime consistency check.** Once FULL identity is accepted, the subscriber detects
 when the source table's replica identity changes mid-stream:
@@ -115,7 +114,7 @@ Idempotency during the copy-to-replication overlap window is provided by the LSN
 
 **Non-sharded (omni) tables** — unique index required on destination:
 
-At `relation()` time, query `pg_index` on the destination for any unique index
+At `connect()` time, query `pg_index` on the destination for any unique index
 (`indisunique = true`). If none exists, fail with
 `TableValidationError::FullIdentityOmniNoUniqueIndex` before preparing any statements.
 If a unique index is found, use `INSERT … ON CONFLICT DO NOTHING`:
@@ -146,18 +145,18 @@ The correct replication operation is a **single `UPDATE` statement**:
 
 ```sql
 UPDATE "schema"."table"
-SET   "new_col_a" = $K+1, "new_col_b" = $K+2, ...   -- non-Toasted from update.new
-WHERE "old_col_x" IS NOT DISTINCT FROM $1
-  AND "old_col_y" IS NOT DISTINCT FROM $2          -- old columns at the same positions
+SET   "new_col_a" = $N+1, "new_col_b" = $N+2, ...   -- the K non-Toasted cols of update.new
+WHERE "old_col_1" IS NOT DISTINCT FROM $1
+  AND "old_col_2" IS NOT DISTINCT FROM $2          -- all N old columns, in table order
   AND ...
 ```
 
-- **WHERE clause**: occupies parameter indices `$1..$K`. Selects the same column
-  positions that appear in `SET`, taking values from `update.old`. (See "Slow path"
-  below for how the position mask is derived.)
-- **SET clause**: occupies parameter indices `$K+1..$2K`. Columns from `update.new`
-  whose `identifier != Toasted`, in table column order.
-- Bind order is `[where_tuple][set_tuple]`.
+- **WHERE clause**: occupies parameter indices `$1..$N` and covers **all** `N` columns
+  of `update.old`, in table order. PostgreSQL detoasts OLD before WAL-logging, so it is
+  always fully materialised; we never slice it.
+- **SET clause**: occupies parameter indices `$N+1..$N+K`. Columns from `update.new`
+  whose `identifier != Toasted`, in table column order — `K ≤ N`.
+- Bind order is `[where_tuple_full][set_tuple_partial]` for `N+K` parameters total.
 - `IS NOT DISTINCT FROM` is required so that NULL-valued columns participate in the match.
 
 Sharded shard-key change is detected by routing the OLD and NEW tuples through the
@@ -228,11 +227,11 @@ is called on a cache miss; the cache structure is shared.
 pre-prepared `update` statement. No cache lookup, no `update_shapes` interaction.
 - DEFAULT/INDEX: bind `update.new` columns (all); `$N` positions match `update()`'s
   non-identity-in-SET / identity-in-WHERE layout.
-- FULL: bind `[update.old columns][update.new columns]` — all old cols occupy `$1..$K`
-  (WHERE), all new cols occupy `$K+1..$N` (SET). The `update` slot was prepared at
-  `relation()` time via `update_full_identity` with every bit set; this exact shape
-  never appears as an `update_shapes` key because the slow path only fires when
-  `has_toasted()` is true.
+- FULL: bind `[update.old columns][update.new columns]` — all `N` old cols occupy
+  `$1..$N` (WHERE), all `N` new cols occupy `$N+1..$2N` (SET). The `update` slot was
+  prepared at `relation()` time via `Table::update_full_identity()` with all columns
+  present; this exact shape never appears as an `update_shapes` key because the slow
+  path only fires when `update.new.has_toasted()` is true.
 
 **Slow path** (`update.new.has_toasted()`):
 
@@ -246,9 +245,9 @@ pre-prepared `update` statement. No cache lookup, no `update_shapes` interaction
 3. Look up `present` in `update_shapes`. On a **cache miss**:
    - DEFAULT/INDEX: `table.update_partial(&present)` — present non-identity cols in
      `SET`, identity cols in `WHERE` (`"col" = $N`).
-   - FULL: `table.update_full_identity(&present)` — present cols in both `SET` and
-     `WHERE`, with `WHERE` at `$1..$K` (`"col" IS NOT DISTINCT FROM $N`) and
-     `SET` at `$K+1..$2K` (`"col" = $N`).
+   - FULL: `table.update_full_identity_partial_set(&present)` — **all** OLD columns in
+     `WHERE` (`"col" IS NOT DISTINCT FROM $1..$N`), only the `K` present NEW columns
+     in `SET` (`"col" = $N+1..$N+K`).
    - `Statement::new()` assigns a unique `__pgdog_repl_N` name and parses the SQL.
    - Sends `Parse + (Flush|Sync)` to every shard; reads `ParseComplete ('1')`.
      Inside a transaction: `Parse + Flush`, read 1 message. Outside: `Parse + Sync`,
@@ -256,10 +255,12 @@ pre-prepared `update` statement. No cache lookup, no `update_shapes` interaction
    - Inserts into `update_shapes`.
 4. On a **cache hit** (including the just-prepared entry):
    - DEFAULT/INDEX: bind via `update.partial_new().to_bind(name)`.
-   - FULL: call `update.old.without_toasted()` (OLD never carries `'u'` markers in real PG,
-     but the filter is defence-in-depth). Slice the result to the present column positions
-     derived from `update.new`. Build a bind tuple `[old_cols_for_present][update.partial_new()]`
-     so old cols occupy `$1..$K` (WHERE) and new cols occupy `$K+1..$2K` (SET).
+   - FULL: build the bind tuple via
+     `XLogUpdate::full_identity_bind_tuple(&old_full, &update.partial_new())`. OLD is
+     never sliced — it occupies `$1..$N` (WHERE) in full because PostgreSQL detoasts
+     OLD before WAL-logging. NEW is filtered by `partial_new()` to drop `'u'`-marked
+     columns; the remaining `K` values occupy `$N+1..$N+K` (SET). Total bind size is
+     `N+K` parameters, matching the SQL emitted by `update_full_identity_partial_set`.
 5. Send `Bind + Execute + Flush`; read `BindComplete ('2') + CommandComplete ('C')`.
    Identical to the fast path — no extra round-trips after the first occurrence.
 
@@ -273,7 +274,7 @@ a large JSONB column is always unchanged, another where it is modified).
 |-----------|----------------|------|
 | `insert` | Plain `INSERT` (sharded, `omni == false`) | Plain `INSERT` (sharded, `omni == false`) |
 | `upsert` | `INSERT … ON CONFLICT (identity_cols) DO UPDATE SET …` (omni) | `INSERT … ON CONFLICT DO NOTHING` (omni) — no conflict target; covers any unique index on the destination |
-| `update` (fast path) | Prepared at `relation()` time | Prepared at `relation()` time via `update_full_identity` with all columns present — `WHERE col IS NOT DISTINCT FROM $1..$K; SET col=$K+1..$N` |
+| `update` (fast path) | Prepared at `relation()` time | Prepared at `relation()` time via `Table::update_full_identity()` (no `present` arg) — `WHERE col IS NOT DISTINCT FROM $1..$N; SET col=$N+1..$2N` |
 | `update_shapes` | Populated lazily per `NonIdentityColumnsPresence` | Populated lazily per `NonIdentityColumnsPresence` — same map, different SQL generator |
 | `delete` | `WHERE identity_col = $N` | `WHERE col IS NOT DISTINCT FROM $N` — all columns, via `Table::delete_full_identity()`, prepared at `relation()` time |
 
@@ -407,9 +408,14 @@ other phases.
 
 - ✅ Add `upsert_full_identity(&self) -> String` — `INSERT … ON CONFLICT DO NOTHING`
 - ✅ Add `delete_full_identity(&self) -> String` — all columns in WHERE with `IS NOT DISTINCT FROM`
-- ✅ Add `update_full_identity(&self, present: &NonIdentityColumnsPresence) -> String`
-  — WHERE from present old cols ($1..$K), SET from same present new cols ($K+1..$N)
-- ✅ Add `NonIdentityColumnsPresence::count_present()` — count of set bits, used by `update_full_identity`
+- ✅ Add `update_full_identity(&self) -> String` — fast-path SQL with **all** columns in
+  both clauses: `WHERE col IS NOT DISTINCT FROM $1..$N; SET col = $N+1..$2N`. No `present`
+  argument; the fast path only fires when every NEW column is non-Toasted.
+- ✅ Add `update_full_identity_partial_set(&self, present: &NonIdentityColumnsPresence) -> String`
+  — slow-path SQL with **all** OLD columns in `WHERE` ($1..$N) and only the `K` present NEW
+  columns in `SET` ($N+1..$N+K).
+- ✅ Add `NonIdentityColumnsPresence::count_present()` — count of set bits, used by
+  `update_full_identity_partial_set` to size the SET clause.
 - ✅ Add `Columns::with_offset(n)` — index-shift transformer composable with any terminal method
 - ✅ Unit tests: all-present and partial-present cases for all three generators
 
@@ -438,22 +444,25 @@ No dependency on Phase 1 — only touches `error.rs` and the `valid()` switch in
 
 No dependencies. Standalone addition to `impl Update`.
 
-- ✅ Add `partial_old(&self) -> Option<TupleData>`: filter `Identifier::Toasted` from the OLD tuple,
-  return `None` when `self.identity` is not `Old`. Symmetric to `partial_new()`. The filter is
-  defence-in-depth: real PostgreSQL detoasts OLD before emitting the WAL record, so the OLD tuple
-  under FULL identity does not actually contain `'u'` markers in production.
-- ✅ Add `UpdateIdentity` enum (`Key(TupleData) | Old(TupleData) | Nothing`) and strict marker
-  validation in `FromBytes`: any byte after the OID that is not `'K'`/`'O'`/`'N'` returns
-  `Error::UnexpectedMessage` rather than silently falling through to `Nothing`.
-- ✅ Add `TupleData::without_toasted()` so `partial_new`, `partial_old`, and the routing layer
-  share one definition of "drop unchanged-TOAST sentinels".
-- ✅ Unit tests: absent `old` → `None`; Toasted columns stripped; non-Toasted columns preserved;
-  `to_bytes` → `from_bytes` round-trip for `Key`, `Old`, and `Nothing` variants;
+- ✅ Replace the prior `Option<TupleData>` pre-image field with
+  `pub enum UpdateIdentity { Key(TupleData), Old(TupleData), Nothing }` and strict
+  marker validation in `FromBytes`: any byte after the OID that is not `'K'`/`'O'`/`'N'`
+  returns `Error::UnexpectedMessage` rather than silently falling through to `Nothing`.
+- ✅ Add `Update::partial_new(&self) -> TupleData` filtering `Identifier::Toasted` from the
+  NEW tuple. Identity columns never carry `'u'` markers (PG omits them from the unchanged-
+  TOAST set), so this is the SET tuple for both DEFAULT/INDEX and FULL.
+- ✅ Add `Update::full_identity_bind_tuple(where_cols, set_cols) -> TupleData` concatenating
+  the two tuples in a single bind for FULL UPDATE: WHERE params at `$1..$N`, SET params at
+  `$N+1..$N+K` (slow path) or `$N+1..$2N` (fast path).
+- ✅ Add `TupleData::without_toasted()` and `TupleData::all_toasted()` so `partial_new` and
+  the slow-path no-op short-circuit share one definition of "drop unchanged-TOAST sentinels".
+- ✅ Unit tests: Toasted columns stripped; non-Toasted columns preserved;
+  `to_bytes` ↔ `from_bytes` round-trip for `Key`, `Old`, and `Nothing` variants;
   malformed marker byte → `Error::UnexpectedMessage`.
-- The slow-path subscriber must NOT assume the `'u'` mask of `update.old` matches that of
-  `update.new` — in real PG, OLD has no `'u'` markers. Instead, derive `present` from `update.new`
-  alone, call `update.old.without_toasted()` (defence-in-depth), and slice the result to the
-  same column positions when binding the WHERE clause.
+- The slow-path subscriber does NOT slice OLD: PostgreSQL detoasts OLD via `toast_flatten_tuple`
+  before WAL-logging, so OLD already has every column present. Derive `present` from
+  `update.new` and bind `[old_full][partial_new]` of `N+K` parameters via
+  `full_identity_bind_tuple`. The WHERE clause covers all `N` OLD columns at `$1..$N`.
 
 ### ✅ Phase 4 — Destination unique-index query (`logical/publisher/queries.rs`)
 
@@ -485,11 +494,13 @@ No code dependencies. Required before Phase 5.
 Depends on Phases 1–4.
 
 - `Statements`: add `full_identity: bool`
+- `connect()`: for every omni FULL table call `has_unique_index()` on every destination
+  shard. If any shard lacks a usable unique index, return
+  `TableValidationError::FullIdentityOmniNoUniqueIndex` before any streaming begins.
 - `relation()`: after `table.valid()`, branch on `table.identity.identity == "f"`:
-  - Prepare `insert` (plain INSERT), `update` (`update_full_identity` all-columns fast path),
+  - Prepare `insert` (plain INSERT), `update` (`update_full_identity()` all-columns fast path),
     `delete` (`delete_full_identity`)
-  - If `omni`: call `has_unique_index()` on destination — `false` →
-    `Err(FullIdentityOmniNoUniqueIndex)`; `true` → prepare `upsert` (`insert_ignore`)
+  - If `omni`: prepare `upsert` (`INSERT … ON CONFLICT DO NOTHING`)
   - Store `Statements { full_identity: true, … }`; skip DEFAULT/INDEX `upsert`/`update`
 - `update()`: after existing `key` branch, check `statements.full_identity`:
   - Resolve OLD and NEW shards via the router. If they differ on a sharded table:
@@ -497,8 +508,8 @@ Depends on Phases 1–4.
     - Otherwise → `DELETE` on old shard via `delete_full_identity`, `INSERT` on new shard via `insert`
   - Same shard, no Toasted → fast path (pre-prepared `update`,
     bind `[old cols][new cols]`, check `rows > 1`)
-  - Same shard, has Toasted → slow path (shape cache via `update_full_identity(present)`,
-    bind `[old_cols_for_present][partial_new]`, check `rows > 1`)
+  - Same shard, has Toasted → slow path (shape cache via `update_full_identity_partial_set(present)`,
+    bind `[old_full][partial_new]` of `N+K` params via `full_identity_bind_tuple`, check `rows > 1`)
   - `update.identity` not `Old` on a FULL table → `Error::FullIdentityMissingOld`
 - `delete()`: when `full_identity`, bind `delete.old` to `statements.delete`;
   check `rows > 1` → `Err(FullIdentityAmbiguousMatch)`. `delete.old` absent → `Error::FullIdentityMissingOld`
@@ -507,7 +518,8 @@ Depends on Phases 1–4.
   - `full_identity_insert_sharded` — plain INSERT lands once
   - `full_identity_insert_omni_dedup` — `ON CONFLICT DO NOTHING` skips replay duplicate
   - `full_identity_update_fast_path` — all columns non-Toasted; UPDATE applied correctly
-  - `full_identity_update_slow_path` — one Toasted column; partial UPDATE via shape cache
+  - `full_identity_update_slow_path` — one Toasted column in NEW; partial UPDATE via
+     shape cache; OLD bound in full so bind supplies `N+K` params (not `2N`)
   - `full_identity_update_all_toasted_is_noop` — all Toasted → skip, no error
   - `full_identity_update_ambiguous_match` — two identical rows → `FullIdentityAmbiguousMatch`
   - `full_identity_delete` — DELETE via `delete.old`; row removed

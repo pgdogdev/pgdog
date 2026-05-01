@@ -343,28 +343,49 @@ impl Table {
         )
     }
 
-    /// UPDATE for REPLICA IDENTITY FULL tables.
-    /// Bind as `[old_cols][new_cols]`: WHERE occupies `$1..$k`, SET occupies `$k+1..$n`.
-    pub fn update_full_identity(&self, present: &NonIdentityColumnsPresence) -> String {
+    /// UPDATE for REPLICA IDENTITY FULL tables — fast path.
+    ///
+    /// All `n` columns appear in both WHERE and SET:
+    /// - WHERE `$1..$n` — `IS NOT DISTINCT FROM` predicates (all OLD columns)
+    /// - SET  `$n+1..$2n` — assignments (all NEW columns)
+    ///
+    /// Bind with `full_identity_bind_tuple(&old_full, &update.new)` → 2n params.
+    /// Analogous to [`update`] for DEFAULT/INDEX identity.
+    pub fn update_full_identity(&self) -> String {
+        let n = self.columns.len();
+        format!(
+            "UPDATE \"{}\".\"{}\" SET {} WHERE {}",
+            escape_identifier(self.table.destination_schema()),
+            escape_identifier(self.table.destination_name()),
+            self.all_columns().with_offset(n).assignments(),
+            self.all_columns().is_not_distinct_from_predicates(),
+        )
+    }
+
+    /// UPDATE for REPLICA IDENTITY FULL tables — slow path (some NEW columns are Toasted).
+    ///
+    /// WHERE uses all `n` OLD columns; SET uses only the `k` non-Toasted NEW columns:
+    /// - WHERE `$1..$n` — `IS NOT DISTINCT FROM` (all OLD columns; fully materialised by PG)
+    /// - SET  `$n+1..$n+k` — assignments for the `k` present columns only
+    ///
+    /// Bind with `full_identity_bind_tuple(&old_full, &partial_new)` → n+k params.
+    /// Analogous to [`update_partial`] for DEFAULT/INDEX identity.
+    pub fn update_full_identity_partial_set(&self, present: &NonIdentityColumnsPresence) -> String {
         debug_assert!(
             !present.no_non_identity_present(),
-            "update_full_identity called with no columns present — would emit empty SET clause"
+            "update_full_identity_partial_set called with no present columns — would emit empty SET clause"
         );
 
-        // SET params begin at $k+1.
-        let k = present.count_present();
-
+        let n = self.columns.len();
         format!(
             "UPDATE \"{}\".\"{}\" SET {} WHERE {}",
             escape_identifier(self.table.destination_schema()),
             escape_identifier(self.table.destination_name()),
             self.present_columns(present)
                 .filter_non_identity()
-                .with_offset(k)
+                .with_offset(n)
                 .assignments(),
-            self.present_columns(present)
-                .filter_non_identity()
-                .is_not_distinct_from_predicates(),
+            self.all_columns().is_not_distinct_from_predicates(),
         )
     }
 
@@ -1013,8 +1034,7 @@ mod test {
     fn update_full_identity_all_present() {
         // All columns present (no TOAST). WHERE $1..$3; SET $4..$6.
         let table = make_table(vec![("a", false), ("b", false), ("c", false)]);
-        let present = NonIdentityColumnsPresence::all(&table);
-        let sql = table.update_full_identity(&present);
+        let sql = table.update_full_identity();
         assert_eq!(
             sql,
             concat!(
@@ -1035,21 +1055,22 @@ mod test {
 
     #[test]
     fn update_full_identity_partial_present() {
-        // b is Toasted. K=2 (a, c); WHERE $1..$2; SET $3..$4.
+        // b is Toasted. WHERE covers all 3 ($1..$3); SET covers a,c ($4..$5).
         let table = make_table(vec![("a", false), ("b", false), ("c", false)]);
         let tuple = TupleData {
             columns: vec![text_col("1"), toasted_col(), text_col("3")],
         };
         let present = NonIdentityColumnsPresence::from_tuple(&tuple, &table).unwrap();
-        let sql = table.update_full_identity(&present);
+        let sql = table.update_full_identity_partial_set(&present);
         assert_eq!(
             sql,
             concat!(
                 r#"UPDATE "public"."test_table" SET "#,
-                r#""a" = $3, "c" = $4 "#,
+                r#""a" = $4, "c" = $5 "#,
                 r#"WHERE "#,
                 r#""a" IS NOT DISTINCT FROM $1 AND "#,
-                r#""c" IS NOT DISTINCT FROM $2"#,
+                r#""b" IS NOT DISTINCT FROM $2 AND "#,
+                r#""c" IS NOT DISTINCT FROM $3"#,
             ),
         );
         assert!(
@@ -1061,21 +1082,22 @@ mod test {
 
     #[test]
     fn update_full_identity_first_column_toasted() {
-        // a is Toasted; b and c present. K=2; WHERE $1..$2; SET $3..$4.
+        // a is Toasted; b and c present. WHERE covers all 3 ($1..$3); SET covers b,c ($4..$5).
         let table = make_table(vec![("a", false), ("b", false), ("c", false)]);
         let tuple = TupleData {
             columns: vec![toasted_col(), text_col("2"), text_col("3")],
         };
         let present = NonIdentityColumnsPresence::from_tuple(&tuple, &table).unwrap();
-        let sql = table.update_full_identity(&present);
+        let sql = table.update_full_identity_partial_set(&present);
         assert_eq!(
             sql,
             concat!(
                 r#"UPDATE "public"."test_table" SET "#,
-                r#""b" = $3, "c" = $4 "#,
+                r#""b" = $4, "c" = $5 "#,
                 r#"WHERE "#,
-                r#""b" IS NOT DISTINCT FROM $1 AND "#,
-                r#""c" IS NOT DISTINCT FROM $2"#,
+                r#""a" IS NOT DISTINCT FROM $1 AND "#,
+                r#""b" IS NOT DISTINCT FROM $2 AND "#,
+                r#""c" IS NOT DISTINCT FROM $3"#,
             ),
         );
         assert!(
@@ -1087,18 +1109,22 @@ mod test {
 
     #[test]
     fn update_full_identity_only_one_column_present() {
-        // Only c is present; K=1; WHERE $1; SET $2.
+        // Only c is present. WHERE covers all 3 ($1..$3); SET covers c only ($4).
         let table = make_table(vec![("a", false), ("b", false), ("c", false)]);
         let tuple = TupleData {
             columns: vec![toasted_col(), toasted_col(), text_col("3")],
         };
         let present = NonIdentityColumnsPresence::from_tuple(&tuple, &table).unwrap();
-        let sql = table.update_full_identity(&present);
+        let sql = table.update_full_identity_partial_set(&present);
         assert_eq!(
             sql,
             concat!(
-                r#"UPDATE "public"."test_table" SET "c" = $2 "#,
-                r#"WHERE "c" IS NOT DISTINCT FROM $1"#,
+                r#"UPDATE "public"."test_table" SET "#,
+                r#""c" = $4 "#,
+                r#"WHERE "#,
+                r#""a" IS NOT DISTINCT FROM $1 AND "#,
+                r#""b" IS NOT DISTINCT FROM $2 AND "#,
+                r#""c" IS NOT DISTINCT FROM $3"#,
             ),
         );
         assert!(

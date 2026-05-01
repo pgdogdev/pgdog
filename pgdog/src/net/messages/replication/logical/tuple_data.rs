@@ -117,6 +117,15 @@ impl TupleData {
             .any(|c| c.identifier == Identifier::Toasted)
     }
 
+    /// Are every column in this tuple unchanged-TOAST (`'u'`)?
+    ///
+    /// True when nothing changed — used to detect no-op UPDATEs before routing.
+    pub fn all_toasted(&self) -> bool {
+        self.columns
+            .iter()
+            .all(|c| c.identifier == Identifier::Toasted)
+    }
+
     /// Return a copy with unchanged-TOAST (`'u'`) columns removed.
     pub fn without_toasted(&self) -> TupleData {
         TupleData {

@@ -232,19 +232,29 @@ FROM generate_series(1, 50) AS gs(id);
 -- Sharded table with no primary key and REPLICA IDENTITY FULL.
 -- Rows are uniquely identifiable by (tenant_id, seq) for controlled UPDATE/DELETE testing.
 -- seq 1..50 will be UPDATEd (label set to 'updated_N'); seq 51..100 will be DELETEd.
+--
+-- `body` is forced to EXTERNAL storage so that the seq 1..50 UPDATE (which only
+-- changes `label`) produces 'u' in NEW for `body`, exercising the subscriber
+-- slow-path. PG materialises OLD fully inline (toast_flatten_tuple) so OLD carries
+-- all 4 columns; NEW carries 3 present + 1 'u'. The slow path must bind only the 3
+-- present columns (not all 4 from OLD) or PG rejects with a param-count mismatch.
 CREATE TABLE IF NOT EXISTS copy_data.full_identity_events (
-    tenant_id BIGINT NOT NULL,
-    seq       INT    NOT NULL,
-    label     VARCHAR NOT NULL
+    tenant_id BIGINT  NOT NULL,
+    seq       INT     NOT NULL,
+    label     VARCHAR NOT NULL,
+    body      TEXT    NOT NULL
 );
 
 ALTER TABLE copy_data.full_identity_events REPLICA IDENTITY FULL;
+-- Force out-of-line storage: any UPDATE that leaves `body` unchanged emits 'u' in NEW.
+ALTER TABLE copy_data.full_identity_events ALTER COLUMN body SET STORAGE EXTERNAL;
 
-INSERT INTO copy_data.full_identity_events (tenant_id, seq, label)
+INSERT INTO copy_data.full_identity_events (tenant_id, seq, label, body)
 SELECT
-    ((gs.id - 1) % 10) + 1 AS tenant_id,
-    gs.id                  AS seq,
-    'event_' || gs.id      AS label
+    ((gs.id - 1) % 10) + 1         AS tenant_id,
+    gs.id                           AS seq,
+    'event_' || gs.id               AS label,
+    repeat(md5(gs.id::text), 1024)  AS body  -- ~32 KB per row
 FROM generate_series(1, 100) AS gs(id);
 
 -- Omni (non-sharded) table with REPLICA IDENTITY FULL.

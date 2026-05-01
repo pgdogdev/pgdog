@@ -574,9 +574,9 @@ mod test {
         assert_eq!(
             err.to_string(),
             "Table validation failed:\n\
-            \ttable \"pgdog\".\"publication_test_no_pk\" has no replica identity columns\n\
-            \ttable \"pgdog\".\"publication_test_no_pk_2\" has no replica identity columns\n\
-            \ttable \"pgdog\".\"publication_test_no_pk_3\" has no replica identity columns",
+            \ttable \"pgdog\".\"publication_test_no_pk\": has no replica identity columns\n\
+            \ttable \"pgdog\".\"publication_test_no_pk_2\": has no replica identity columns\n\
+            \ttable \"pgdog\".\"publication_test_no_pk_3\": has no replica identity columns",
         );
 
         assert!(

@@ -71,12 +71,11 @@ impl NonIdentityColumnsPresence {
     pub fn count_present(&self) -> usize {
         self.count_present
     }
+}
 
+#[cfg(test)]
+impl NonIdentityColumnsPresence {
     /// Every non-identity column marked present.
-    ///
-    /// Uses the same allocation size as [`Self::from_tuple`] (non-identity
-    /// count only) so that two presences with identical logical shapes compare
-    /// equal under `Eq`/`Hash` and can be used as cache keys.
     pub(crate) fn all(table: &Table) -> Self {
         let non_id_count = table.columns.iter().filter(|c| !c.identity).count();
         Self {
@@ -84,10 +83,7 @@ impl NonIdentityColumnsPresence {
             count_present: non_id_count,
         }
     }
-}
 
-#[cfg(test)]
-impl NonIdentityColumnsPresence {
     /// Whether every non-identity column is present.
     pub(crate) fn is_all_present(&self) -> bool {
         self.mask.all()

@@ -268,9 +268,9 @@ fn make_subscriber_single_shard() -> StreamSubscriber {
     StreamSubscriber::new(&cluster, &tables)
 }
 
-/// Count rows matching the given id using a separate connection.
-async fn count_row(server: &mut Server, table: &str, id: &str) -> i64 {
-    let query = format!("SELECT COUNT(*) FROM {} WHERE id = {}", table, id);
+/// Count rows matching the given `WHERE` predicate using a separate connection.
+async fn count_where(server: &mut Server, table: &str, predicate: &str) -> i64 {
+    let query = format!("SELECT COUNT(*) FROM {} WHERE {}", table, predicate);
     let rows: Vec<crate::net::DataRow> = server.fetch_all(query).await.unwrap();
     rows.first()
         .and_then(|row: &crate::net::DataRow| row.column(0))
@@ -281,6 +281,11 @@ async fn count_row(server: &mut Server, table: &str, id: &str) -> i64 {
                 .unwrap()
         })
         .unwrap_or(0)
+}
+
+/// Count rows matching the given id using a separate connection.
+async fn count_row(server: &mut Server, table: &str, id: &str) -> i64 {
+    count_where(server, table, &format!("id = {}", id)).await
 }
 
 /// Read `value` for a single row, or `None` if absent. Useful when a count check would
@@ -1364,14 +1369,18 @@ fn full_update_copy_data(
     })
 }
 
-/// Helper: build a FULL-identity UPDATE where `value` is Toasted in both old and new.
-/// `old_id` identifies the row to match; `new_id` is the value written into the SET clause.
-/// Pass `new_id == old_id` for a same-id slow-path; distinct values test the rename path.
-fn full_update_value_toasted_copy_data(oid: Oid, old_id: &str, new_id: &str) -> CopyData {
+/// FULL-identity UPDATE: `value` Toasted in NEW (unchanged), fully present in OLD.
+/// Real WAL shape — PG always materialises OLD inline under REPLICA IDENTITY FULL.
+fn full_update_value_toasted_copy_data(
+    oid: Oid,
+    old_id: &str,
+    old_value: &str,
+    new_id: &str,
+) -> CopyData {
     x_update(XLogUpdate {
         oid,
         identity: UpdateIdentity::Old(TupleData {
-            columns: vec![text_column(old_id), toasted_column()],
+            columns: vec![text_column(old_id), text_column(old_value)],
         }),
         new: TupleData {
             columns: vec![text_column(new_id), toasted_column()],
@@ -1550,33 +1559,10 @@ async fn full_identity_omni_no_unique_index_rejected() {
             .unwrap();
     }
 
-    sub.connect().await.unwrap();
-
-    let oid = Oid(16391);
-    let rel = Relation {
-        oid,
-        namespace: "public".to_string(),
-        name: "full_events_omni".to_string(),
-        replica_identity: b'f' as i8,
-        columns: vec![
-            RelColumn {
-                flag: 0,
-                name: "a".to_string(),
-                oid: Oid(25),
-                type_modifier: -1,
-            },
-            RelColumn {
-                flag: 0,
-                name: "b".to_string(),
-                oid: Oid(25),
-                type_modifier: -1,
-            },
-        ],
-    };
     let err = sub
-        .handle(xlog_copy_data(rel.to_bytes().unwrap()))
+        .connect()
         .await
-        .expect_err("omni FULL table without unique index must be rejected");
+        .expect_err("omni FULL table without unique index must be rejected at connect time");
     assert!(
         matches!(
             err,
@@ -1696,15 +1682,14 @@ async fn full_identity_update_slow_path() {
         .unwrap();
     sub.handle(commit_copy_data(200)).await.unwrap();
 
-    // UPDATE: rename id → id2, value Toasted (unchanged).
-    // SQL: UPDATE sharded SET id = $2 WHERE id IS NOT DISTINCT FROM $1
-    // $1 = id (old), $2 = id2 (new). With $1 == $2 the SET clause is a no-op and the
-    // value-preservation assertion would be trivially satisfied regardless of SET-clause
-    // correctness. Using a distinct id2 forces a real row rename.
+    // Rename id → id2; value Toasted in NEW (unchanged), inline in OLD.
+    // Using distinct id2 forces a real row rename so assertions are non-trivial.
     sub.handle(begin_copy_data(300)).await.unwrap();
-    sub.handle(full_update_value_toasted_copy_data(oid, &id, &id2))
-        .await
-        .unwrap();
+    sub.handle(full_update_value_toasted_copy_data(
+        oid, &id, "initial", &id2,
+    ))
+    .await
+    .unwrap();
     sub.handle(commit_copy_data(400)).await.unwrap();
 
     // Old row must be gone.
@@ -1730,6 +1715,65 @@ async fn full_identity_update_slow_path() {
     );
 
     cleanup(&mut verify, "public.sharded", &[&id, &id2]).await;
+}
+
+/// Regression: real PG WAL never has `'u'` markers in OLD under REPLICA IDENTITY FULL
+/// (PG calls `toast_flatten_tuple` on OLD before WAL-logging). Only NEW carries `'u'`.
+/// Exercises the path the prior buggy `old.without_toasted()` failed on (n+k bind vs 2k SQL).
+#[tokio::test]
+async fn full_identity_update_slow_path_realistic_old_tuple() {
+    let cluster = Cluster::new_test_single_shard(&config());
+    let mut sub = StreamSubscriber::new(&cluster, &[make_full_identity_sharded_table()]);
+    let mut verify = test_server().await;
+    sub.connect().await.unwrap();
+
+    let oid = Oid(16384);
+    let id = random_id();
+    cleanup(&mut verify, "public.sharded", &[&id]).await;
+
+    // Seed the row.
+    sub.handle(begin_copy_data(100)).await.unwrap();
+    sub.handle(full_identity_relation_copy_data(oid))
+        .await
+        .unwrap();
+    sub.handle(insert_copy_data(oid, &id, "initial"))
+        .await
+        .unwrap();
+    sub.handle(commit_copy_data(200)).await.unwrap();
+
+    // Realistic UPDATE shape produced by PG: OLD has every column inline,
+    // NEW marks the unchanged `value` column as 'u'.
+    let realistic = x_update(XLogUpdate {
+        oid,
+        identity: UpdateIdentity::Old(TupleData {
+            columns: vec![text_column(&id), text_column("initial")],
+        }),
+        new: TupleData {
+            columns: vec![text_column(&id), toasted_column()],
+        },
+    });
+
+    sub.handle(begin_copy_data(300)).await.unwrap();
+    let result = sub.handle(realistic).await;
+    // Drain the commit so the connection state is clean even on failure.
+    let _ = sub.handle(commit_copy_data(400)).await;
+
+    result.unwrap();
+
+    assert_eq!(
+        count_row(&mut verify, "public.sharded", &id).await,
+        1,
+        "row must still exist after slow-path UPDATE"
+    );
+    assert_eq!(
+        fetch_value(&mut verify, "public.sharded", &id)
+            .await
+            .as_deref(),
+        Some("initial"),
+        "unchanged-TOAST `value` must be preserved across slow-path UPDATE"
+    );
+
+    cleanup(&mut verify, "public.sharded", &[&id]).await;
 }
 
 /// FULL identity UPDATE where every column is Toasted: nothing to do, skip silently.
@@ -1843,20 +1887,8 @@ async fn full_identity_insert_omni_dedup() {
         .unwrap();
     sub.handle(commit_copy_data(400)).await.unwrap();
 
-    let count_query =
-        "SELECT COUNT(*) FROM public.full_omni_dedup WHERE a = 'hello' AND b = 'world'";
-    let count: i64 = {
-        let rows: Vec<crate::net::DataRow> = verify.fetch_all(count_query).await.unwrap();
-        rows.first()
-            .and_then(|row| row.column(0))
-            .map(|col| {
-                std::str::from_utf8(&col[..])
-                    .unwrap()
-                    .parse::<i64>()
-                    .unwrap()
-            })
-            .unwrap_or(0)
-    };
+    let predicate = "a = 'hello' AND b = 'world'";
+    let count = count_where(&mut verify, "public.full_omni_dedup", predicate).await;
     assert_eq!(count, 1, "first INSERT must land");
 
     // Second INSERT: same values — ON CONFLICT DO NOTHING, count stays at 1.
@@ -1866,18 +1898,7 @@ async fn full_identity_insert_omni_dedup() {
         .unwrap();
     sub.handle(commit_copy_data(600)).await.unwrap();
 
-    let count: i64 = {
-        let rows: Vec<crate::net::DataRow> = verify.fetch_all(count_query).await.unwrap();
-        rows.first()
-            .and_then(|row| row.column(0))
-            .map(|col| {
-                std::str::from_utf8(&col[..])
-                    .unwrap()
-                    .parse::<i64>()
-                    .unwrap()
-            })
-            .unwrap_or(0)
-    };
+    let count = count_where(&mut verify, "public.full_omni_dedup", predicate).await;
     assert_eq!(
         count, 1,
         "second INSERT must be silently skipped by ON CONFLICT DO NOTHING"
@@ -1937,8 +1958,7 @@ async fn full_identity_update_ambiguous_match() {
     // FULL UPDATE WAL event: old = (id, 'dup'), new = (id, 'changed').
     // The WHERE clause matches both rows — must return FullIdentityAmbiguousMatch.
     let id2 = random_id();
-    let err = sub.handle(begin_copy_data(300)).await.unwrap();
-    let _ = err; // begin returns None
+    sub.handle(begin_copy_data(300)).await.unwrap();
     let result = sub
         .handle(full_update_copy_data(oid, &id, "dup", &id2, "changed"))
         .await;
@@ -1950,9 +1970,24 @@ async fn full_identity_update_ambiguous_match() {
         "expected FullIdentityAmbiguousMatch, got: {result:?}"
     );
 
-    // Cleanup: delete by value rather than id. If the ambiguous-match guard regresses
-    // and the UPDATE succeeds, both rows end up with id = id2 and escape a
-    // `WHERE id = {id}` clause. Matching by value catches them regardless.
+    // The subscriber's transaction is left dirty after the guard fires. Drain a
+    // commit so the connection state is clean even on failure; the result is
+    // ignored because Postgres is already in an aborted transaction state.
+    let _ = sub.handle(commit_copy_data(400)).await;
+
+    // Post-error state: the failing UPDATE must not be visible from a separate
+    // connection — both seeded rows still match the original (id, 'dup'). A
+    // regression that suppresses the guard would commit the UPDATE and both
+    // rows would now have id = id2, dropping this count to 0.
+    assert_eq!(
+        count_row(&mut verify, "public.full_dup_rows", &id).await,
+        2,
+        "failing UPDATE must not be committed: original rows must remain"
+    );
+
+    // Cleanup: delete by value rather than id. If the ambiguous-match guard
+    // regresses, both rows end up with id = id2 and escape a `WHERE id = {id}`
+    // clause. Matching by value catches them regardless.
     verify
         .execute("DELETE FROM public.full_dup_rows WHERE value IN ('dup', 'changed')")
         .await
@@ -2010,7 +2045,21 @@ async fn full_identity_delete_ambiguous_match() {
         "expected FullIdentityAmbiguousMatch, got: {result:?}"
     );
 
-    // Cleanup (rows may still exist since DELETE was rolled back implicitly).
+    // The subscriber's transaction is left dirty after the guard fires. Drain a
+    // commit so the connection state is clean even on failure; the result is
+    // ignored because Postgres is already in an aborted transaction state.
+    let _ = sub.handle(commit_copy_data(400)).await;
+
+    // Post-error state: the failing DELETE must not be visible from a separate
+    // connection — both seeded rows survive. A regression that suppresses the
+    // guard would commit the DELETE and drop this count to 0.
+    assert_eq!(
+        count_row(&mut verify, "public.full_dup_rows", &id).await,
+        2,
+        "failing DELETE must not be committed: original rows must remain"
+    );
+
+    // Cleanup: rows are still present because the failing DELETE was rolled back.
     verify
         .execute(format!("DELETE FROM public.full_dup_rows WHERE id = {id}"))
         .await

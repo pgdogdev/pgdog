@@ -134,8 +134,8 @@ The behavior splits on whether the table has a sharding column:
   declare every key column `NOT NULL`, or use a PG15+ `NULLS NOT DISTINCT` unique index.
   A standard nullable unique index allows two `NULL`-keyed rows to coexist; accepting one
   would cause silent duplicates that surface later as a non-retryable
-  `FullIdentityAmbiguousMatch`. If any shard lacks a usable index, `relation()` returns
-  `FullIdentityOmniNoUniqueIndex` before any statements are prepared.
+  `FullIdentityAmbiguousMatch`. If any shard lacks a usable index, `connect()` returns
+  `FullIdentityOmniNoUniqueIndex` before streaming begins.
 
 ### INSERT
 
@@ -308,14 +308,14 @@ statement and never enter the partial path. A table whose large columns are freq
 unchanged will accumulate one cached statement per observed presence pattern — in practice a
 small number, since most applications update columns in a consistent subset.
 
-`Update::partial_new()` produces the bind tuple by filtering `'u'` columns out of the WAL tuple
-directly — no schema metadata needed, because PostgreSQL guarantees identity (primary-key) columns
-are never marked `'u'`. The parameter sequence in the SQL and the bind tuple match by construction.
-
-Re-fetching the missing value from the source is not an option: a query issued outside the
-replication stream's transaction context could reflect a newer write, breaking ordering guarantees.
-It is also unnecessary — the destination already holds the correct value from the initial bulk
-COPY or a prior full UPDATE, so skipping the column in the SET clause is exactly right.
+`Update::partial_new()` produces the SET bind tuple by filtering `'u'` columns out of the WAL
+NEW tuple — no schema metadata needed, because PostgreSQL guarantees identity (primary-key)
+columns are never marked `'u'`. For `REPLICA IDENTITY FULL`, PostgreSQL passes OLD through
+`ExtractReplicaIdentity` → `toast_flatten_tuple` before WAL-logging, so OLD always has every
+column present. The slow path keeps OLD intact for the WHERE clause (all `n` columns at
+`$1..$n`) and uses `partial_new` for SET (the `k` non-Toasted columns at `$n+1..$n+k`).
+`Update::full_identity_bind_tuple(&old_full, &partial_new)` then concatenates them into a
+single `n+k`-parameter bind that matches the SQL emitted by `Table::update_full_identity_partial_set`.
 
 ---
 

@@ -67,10 +67,12 @@ SQL_POSTS_UPDATED="SELECT COUNT(*) FROM copy_data.posts WHERE title LIKE '%_upda
 SQL_BODY_SUM="SELECT COALESCE(SUM(octet_length(body)),0) FROM copy_data.posts"
 SQL_FULL_EVENTS_COUNT="SELECT COUNT(*) FROM copy_data.full_identity_events"
 SQL_FULL_EVENTS_UPDATED="SELECT COUNT(*) FROM copy_data.full_identity_events WHERE label LIKE 'updated_%'"
+# body is STORAGE EXTERNAL; the label UPDATE leaves body unchanged, emitting 'u' in NEW.
+SQL_FULL_EVENTS_BODY_SUM="SELECT COALESCE(SUM(octet_length(body)),0) FROM copy_data.full_identity_events"
 SQL_EVENT_TYPE_CLICK_LABEL="SELECT label FROM copy_data.event_types WHERE code = 'click'"
 SQL_NULL_DESC_LABEL="SELECT label FROM copy_data.event_types WHERE code = 'null_desc'"
-SQL_EVENT_TYPE_CLICK_UPDATED="SELECT (label = 'ClickUpdated')::int FROM copy_data.event_types WHERE code = 'click'"
-SQL_NULL_DESC_UPDATED="SELECT (label = 'NullDescUpdated')::int FROM copy_data.event_types WHERE code = 'null_desc'"
+SQL_EVENT_TYPE_CLICK_UPDATED="SELECT (label = 'Click Updated')::int FROM copy_data.event_types WHERE code = 'click'"
+SQL_NULL_DESC_UPDATED="SELECT (label = 'Null Desc Updated')::int FROM copy_data.event_types WHERE code = 'null_desc'"
 
 # sum_shards DB1 DB2 SQL [FALLBACK]
 # Runs SQL on DB1 and DB2 independently and returns their integer sum.
@@ -89,7 +91,7 @@ sum_shards() {
 # Errors are not suppressed — a failure here aborts the script.
 query_one() {
     local db=$1 sql=$2
-    psql -d "$db" -tAc "$sql" | tr -d '[:space:]'
+    psql -d "$db" -tAc "$sql" | tr -d '\n\r'
 }
 
 SHARDED_TABLES="copy_data.users copy_data.orders copy_data.order_items copy_data.log_actions copy_data.with_identity copy_data.posts copy_data.full_identity_events"
@@ -139,13 +141,15 @@ sleep 15
 psql -d "${SRC_DB}" -c "UPDATE copy_data.posts SET title = title || '_updated' WHERE id BETWEEN 1 AND 50"
 
 # REPLICA IDENTITY FULL test: UPDATE and DELETE on a sharded no-PK table.
-# seq 1..50 → UPDATE (label 'event_N' → 'updated_N'); seq 51..100 → DELETE.
-# The WAL record carries all columns in the OLD tuple; the subscriber builds the
-# WHERE clause from those values using IS NOT DISTINCT FROM.
+# seq 1..50 → UPDATE (label only; body unchanged → PG emits 'u' for body in WAL).
+# seq 51..100 → DELETE.
+# WAL shape: OLD = 4 columns inline (toast_flatten_tuple); NEW = 3 present + 1 'u'.
+# Subscriber must bind the 3 present columns; binding all 4 from OLD causes 08P01.
 psql -d "${SRC_DB}" -c "UPDATE copy_data.full_identity_events SET label = 'updated_' || seq WHERE seq BETWEEN 1 AND 50"
 psql -d "${SRC_DB}" -c "DELETE FROM copy_data.full_identity_events WHERE seq BETWEEN 51 AND 100"
 FULL_EVENTS_EXPECTED=$(query_one "${SRC_DB}" "${SQL_FULL_EVENTS_COUNT}")
 FULL_UPDATED_SRC=$(query_one "${SRC_DB}" "${SQL_FULL_EVENTS_UPDATED}")
+FULL_EVENTS_BODY_SRC=$(query_one "${SRC_DB}" "${SQL_FULL_EVENTS_BODY_SUM}")
 
 # REPLICA IDENTITY FULL test: UPDATE on an omni no-PK table with unique index.
 # The subscriber uses ON CONFLICT DO NOTHING for INSERT; plain UPDATE for WAL UPDATE.
@@ -165,11 +169,13 @@ while true; do
     UPDATED_DST=$(sum_shards "${DST_DB1}" "${DST_DB2}" "${SQL_POSTS_UPDATED}")
     FULL_EVENTS_DST=$(sum_shards "${DST_DB1}" "${DST_DB2}" "${SQL_FULL_EVENTS_COUNT}" -1)
     FULL_UPDATED_DST=$(sum_shards "${DST_DB1}" "${DST_DB2}" "${SQL_FULL_EVENTS_UPDATED}")
+    FULL_EVENTS_BODY_DST=$(sum_shards "${DST_DB1}" "${DST_DB2}" "${SQL_FULL_EVENTS_BODY_SUM}" 0)
     CLICK_UPDATED=$(sum_shards "${DST_DB1}" "${DST_DB2}" "${SQL_EVENT_TYPE_CLICK_UPDATED}")
     NULL_DESC_UPDATED=$(sum_shards "${DST_DB1}" "${DST_DB2}" "${SQL_NULL_DESC_UPDATED}")
     if [ "${UPDATED_DST}" -ge 50 ] && \
        [ "${FULL_EVENTS_DST}" -eq "${FULL_EVENTS_EXPECTED}" ] && \
        [ "${FULL_UPDATED_DST}" -eq "${FULL_UPDATED_SRC}" ] && \
+       [ "${FULL_EVENTS_BODY_DST}" -gt 0 ] && \
        [ "${CLICK_UPDATED}" -eq 2 ] && \
        [ "${NULL_DESC_UPDATED}" -eq 2 ]; then
         break
@@ -179,6 +185,7 @@ while true; do
         echo "  posts updated: ${UPDATED_DST}/50"
         echo "  full_identity_events count: ${FULL_EVENTS_DST} (expected ${FULL_EVENTS_EXPECTED})"
         echo "  full_identity_events updated: ${FULL_UPDATED_DST} (expected ${FULL_UPDATED_SRC})"
+        echo "  full_identity_events body sum: ${FULL_EVENTS_BODY_DST} (expected >0)"
         echo "  event_types click label shards updated: ${CLICK_UPDATED}/2"
         echo "  event_types null_desc label shards updated: ${NULL_DESC_UPDATED}/2"
         exit 1
@@ -188,6 +195,7 @@ while true; do
         echo "  posts updated: ${UPDATED_DST}/50"
         echo "  full_identity_events count: ${FULL_EVENTS_DST} (expected ${FULL_EVENTS_EXPECTED})"
         echo "  full_identity_events updated: ${FULL_UPDATED_DST} (expected ${FULL_UPDATED_SRC})"
+        echo "  full_identity_events body sum: ${FULL_EVENTS_BODY_DST} (expected >0)"
         echo "  event_types click label shards updated: ${CLICK_UPDATED}/2"
         echo "  event_types null_desc label shards updated: ${NULL_DESC_UPDATED}/2"
         exit 1
@@ -286,8 +294,8 @@ echo "OK REPLICA IDENTITY FULL sharded DELETE: ${FULL_TOTAL_2} rows on destinati
 # REPLICA IDENTITY FULL: omni table UPDATE propagated to both shards of destination2.
 OMNI_LABEL_0=$(query_one "${DST2_DB1}" "${SQL_EVENT_TYPE_CLICK_LABEL}")
 OMNI_LABEL_1=$(query_one "${DST2_DB2}" "${SQL_EVENT_TYPE_CLICK_LABEL}")
-if [ "${OMNI_LABEL_0}" != "ClickUpdated" ] || [ "${OMNI_LABEL_1}" != "ClickUpdated" ]; then
-    echo "ERROR REPLICA IDENTITY FULL omni UPDATE: shard_0='${OMNI_LABEL_0}' shard_1='${OMNI_LABEL_1}' (expected 'ClickUpdated')"
+if [ "${OMNI_LABEL_0}" != "Click Updated" ] || [ "${OMNI_LABEL_1}" != "Click Updated" ]; then
+    echo "ERROR REPLICA IDENTITY FULL omni UPDATE: shard_0='${OMNI_LABEL_0}' shard_1='${OMNI_LABEL_1}' (expected 'Click Updated')"
     exit 1
 fi
 echo "OK REPLICA IDENTITY FULL omni UPDATE: label='Click Updated' on both shards"
@@ -297,11 +305,24 @@ echo "OK REPLICA IDENTITY FULL omni UPDATE: label='Click Updated' on both shards
 # source and left the destination label unchanged.
 NULL_LABEL_0=$(query_one "${DST2_DB1}" "${SQL_NULL_DESC_LABEL}")
 NULL_LABEL_1=$(query_one "${DST2_DB2}" "${SQL_NULL_DESC_LABEL}")
-if [ "${NULL_LABEL_0}" != "NullDescUpdated" ] || [ "${NULL_LABEL_1}" != "NullDescUpdated" ]; then
-    echo "ERROR IS NOT DISTINCT FROM: shard_0='${NULL_LABEL_0}' shard_1='${NULL_LABEL_1}' (expected 'NullDescUpdated')"
+if [ "${NULL_LABEL_0}" != "Null Desc Updated" ] || [ "${NULL_LABEL_1}" != "Null Desc Updated" ]; then
+    echo "ERROR IS NOT DISTINCT FROM: shard_0='${NULL_LABEL_0}' shard_1='${NULL_LABEL_1}' (expected 'Null Desc Updated')"
     exit 1
 fi
 echo "OK IS NOT DISTINCT FROM: null_desc label='Null Desc Updated' on both shards"
+# REPLICA IDENTITY FULL + TOAST slow-path: full_identity_events.body must be preserved.
+# The seq 1..50 label UPDATE leaves body unchanged; PG emits 'u' for body in the WAL.
+# OLD carries all 4 columns inline (toast_flatten_tuple); NEW carries 3 present + 1 'u'.
+# If the subscriber bound all 4 from OLD, PG would have rejected with 08P01 and
+# replication would have stalled before the poll completed. If it bound correctly but
+# zeroed body in the SET clause, the byte sum collapses here.
+FULL_EVENTS_BODY_DST=$(sum_shards "${DST2_DB1}" "${DST2_DB2}" "${SQL_FULL_EVENTS_BODY_SUM}")
+if [ "${FULL_EVENTS_BODY_DST}" -ne "${FULL_EVENTS_BODY_SRC}" ]; then
+    echo "ERROR FULL identity TOAST slow-path: source body sum=${FULL_EVENTS_BODY_SRC}, destination2 sum=${FULL_EVENTS_BODY_DST}"
+    echo "  slow-path UPDATE corrupted or dropped the unchanged body column"
+    exit 1
+fi
+echo "OK FULL identity TOAST slow-path: body preserved (${FULL_EVENTS_BODY_DST} bytes)"
 
 psql -f "${SCRIPT_DIR}/init.sql"
 

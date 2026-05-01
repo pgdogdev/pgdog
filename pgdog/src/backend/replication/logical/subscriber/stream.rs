@@ -352,6 +352,11 @@ impl StreamSubscriber {
             }
             UpdateIdentity::Old(_) => {
                 // REPLICA IDENTITY FULL: old row is fully materialised.
+                // If every NEW column is unchanged-TOAST there is nothing to do.
+                if update.new.all_toasted() {
+                    self.mark_table_changed(update.oid);
+                    return Ok(());
+                }
                 self.update_full_identity(update.oid, update).await
             }
             UpdateIdentity::Nothing => {
@@ -516,7 +521,7 @@ impl StreamSubscriber {
     ///
     /// `full_identity` selects the SQL generator on a cache miss:
     /// - `false` → `Table::update_partial` (DEFAULT/INDEX)
-    /// - `true`  → `Table::update_full_identity` (FULL)
+    /// - `true`  → `Table::update_full_identity_partial_set` (FULL)
     ///
     /// Both modes share `update_shapes`; no collision since `full_identity` is table-scoped.
     async fn ensure_update_shape_for(
@@ -535,7 +540,7 @@ impl StreamSubscriber {
         }
 
         let sql = if full_identity {
-            table.update_full_identity(present)
+            table.update_full_identity_partial_set(present)
         } else {
             table.update_partial(present)
         };
@@ -601,23 +606,20 @@ impl StreamSubscriber {
             (update_parse, update.new, old_full.clone())
         } else {
             // Slow path: at least one unchanged-TOAST (`'u'`) column in new.
-            // WAL omits unchanged TOAST values from both old and new tuples, so
-            // stripping `'u'` from each side independently yields the correct
-            // partial WHERE (old) and SET (new) columns — no cross-referencing needed.
             let present = NonIdentityColumnsPresence::from_tuple(&update.new, &table)?;
             if present.no_non_identity_present() {
                 self.mark_table_changed(oid);
                 return Ok(());
             }
-            let partial_old = old_full.without_toasted();
             let partial_new = update.partial_new();
             let stmt = self
                 .ensure_update_shape_for(oid, &table, &present, true)
                 .await?;
-            (stmt.parse().clone(), partial_new, partial_old)
+            (stmt.parse().clone(), partial_new, old_full.clone())
         };
 
-        // WHERE occupies $1..$k (where_tuple), SET occupies $k+1..$n (set_tuple).
+        // Fast path: WHERE $1..$n (where_tuple=old_full), SET $n+1..$2n (set_tuple=update.new).
+        // Slow path: WHERE $1..$n (where_tuple=old_full), SET $n+1..$n+k (set_tuple=partial_new).
         let bind =
             XLogUpdate::full_identity_bind_tuple(&where_tuple, &set_tuple).to_bind(parse.name());
         let result = self.send(&new_shard, &bind).await?;
@@ -789,14 +791,12 @@ impl StreamSubscriber {
 
                 let statements = if table.is_identity_full() {
                     // ── FULL identity path ──────────────────────────────────────────────
-                    let all_present = NonIdentityColumnsPresence::all(&table);
                     let insert = Statement::new(&table.insert())?;
-                    let update = Statement::new(&table.update_full_identity(&all_present))?;
+                    let update = Statement::new(&table.update_full_identity())?;
                     let delete = Statement::new(&table.delete_full_identity())?;
 
                     // Omni FULL: upsert dedup requires a unique constraint on the destination.
                     // Sharded FULL: each row routes to one shard — no upsert needed.
-                    // Omni FULL: upsert dedup requires a unique constraint on the destination.
                     // Validated at connect() time.
                     let upsert = if omni {
                         Statement::new(&table.upsert_full_identity())?
