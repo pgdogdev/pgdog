@@ -265,29 +265,7 @@ pub async fn cutover(source: &str, destination: &str) -> Result<(), Error> {
     Ok(())
 }
 
-/// Database/user pair that identifies a database cluster pool.
-#[derive(Debug, PartialEq, Hash, Eq, Clone, Default)]
-pub struct User {
-    /// User name.
-    pub user: String,
-    /// Database name.
-    pub database: String,
-}
-
-impl From<User> for pgdog_stats::User {
-    fn from(value: User) -> Self {
-        Self {
-            user: value.user,
-            database: value.database,
-        }
-    }
-}
-
-impl std::fmt::Display for User {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}/{}", self.user, self.database)
-    }
-}
+pub use pgdog_stats::User;
 
 /// Convert to a database/user pair.
 pub trait ToUser {
