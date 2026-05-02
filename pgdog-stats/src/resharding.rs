@@ -3,7 +3,7 @@ use std::{sync::Arc, time::SystemTime};
 use pgdog_config::ServerAuth;
 use serde::{Deserialize, Serialize};
 
-use crate::Lsn;
+use crate::{Lsn, User};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TableCopy {
@@ -120,13 +120,4 @@ impl std::fmt::Display for SyncState {
             Self::PostCutover => write!(f, "post_cutover"),
         }
     }
-}
-
-/// Database/user pair that identifies a database cluster pool.
-#[derive(Debug, PartialEq, Hash, Eq, Clone, Default, Serialize, Deserialize)]
-pub struct User {
-    /// User name.
-    pub user: String,
-    /// Database name.
-    pub database: String,
 }
