@@ -37,3 +37,27 @@ async fn test_set_works_cross_shard_disabled() {
     let reply = client.read_until('Z').await.unwrap();
     assert_eq!(reply.len(), 2);
 }
+
+#[tokio::test]
+async fn test_ambiguous_schema_sharded_query_errors_when_cross_shard_disabled() {
+    let table = "schema_shard_ambiguous_test";
+
+    let mut setup = TestClient::new_sharded(Parameters::default()).await;
+    for stmt in [
+        "CREATE SCHEMA IF NOT EXISTS acustomer".to_string(),
+        "CREATE SCHEMA IF NOT EXISTS bcustomer".to_string(),
+        format!("CREATE TABLE IF NOT EXISTS acustomer.{table} (id INT)"),
+        format!("CREATE TABLE IF NOT EXISTS bcustomer.{table} (id INT)"),
+    ] {
+        setup.send_simple(Query::new(&stmt)).await;
+        setup.read_until('Z').await.unwrap();
+    }
+
+    let mut client = TestClient::new_cross_shard_disabled(Parameters::default()).await;
+    client
+        .send_simple(Query::new(&format!("SELECT * FROM {table}")))
+        .await;
+    let err = client.read_until('Z').await.unwrap_err();
+    assert_eq!(err.code, "58000");
+    assert_eq!(err.message, "cross-shard queries are disabled");
+}
