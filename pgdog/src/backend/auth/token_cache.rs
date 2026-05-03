@@ -8,7 +8,7 @@ use tracing::warn;
 use crate::backend::{pool::Address, Error};
 
 /// How early to consider a token expired to avoid edge-cases at the boundary.
-pub(super) const EXPIRY_BUFFER: Duration = Duration::from_secs(45);
+const EXPIRY_BUFFER: Duration = Duration::from_secs(45);
 
 #[derive(Clone)]
 pub(super) struct CachedToken {
