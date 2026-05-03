@@ -13,12 +13,6 @@ impl QueryParser {
             self.recorder_mut(),
         );
 
-        let is_sharded = parser.is_sharded(
-            &context.router_context.schema,
-            context.router_context.cluster.user(),
-            context.router_context.parameter_hints.search_path,
-        );
-
         let shard = parser.shard()?;
 
         if let Some(shard) = shard {
@@ -32,14 +26,34 @@ impl QueryParser {
                 .shards_calculator
                 .push(ShardWithPriority::new_table(shard));
         } else {
-            if let Some(recorder) = self.recorder_mut() {
-                recorder.record_entry(None, "DELETE fell back to broadcast");
-            }
-            if is_sharded {
+            let schema_shard_state = parser.schema_shard_state(
+                &context.router_context.schema,
+                context.router_context.cluster.user(),
+                context.router_context.parameter_hints.search_path,
+            );
+            let is_sharded = parser.is_sharded(
+                &context.router_context.schema,
+                context.router_context.cluster.user(),
+                context.router_context.parameter_hints.search_path,
+            );
+            if let SchemaShardState::Resolved { shard, schema } = schema_shard_state {
+                if let Some(recorder) = self.recorder_mut() {
+                    recorder.record_entry(Some(shard.clone()), "DELETE matched schema");
+                }
+                context
+                    .shards_calculator
+                    .push(ShardWithPriority::new_search_path(shard, &schema));
+            } else if matches!(schema_shard_state, SchemaShardState::Ambiguous) || is_sharded {
+                if let Some(recorder) = self.recorder_mut() {
+                    recorder.record_entry(None, "DELETE fell back to broadcast");
+                }
                 context
                     .shards_calculator
                     .push(ShardWithPriority::new_table(Shard::All));
             } else {
+                if let Some(recorder) = self.recorder_mut() {
+                    recorder.record_entry(None, "DELETE fell back to omnisharded");
+                }
                 context
                     .shards_calculator
                     .push(ShardWithPriority::new_rr_omni(Shard::All));
