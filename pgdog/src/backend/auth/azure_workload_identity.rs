@@ -1,7 +1,10 @@
-use super::token_cache::{self, CacheKey};
-use crate::backend::{pool::Address, Error};
+use std::time::SystemTime;
+
 use azure_core::credentials::TokenCredential;
 use azure_identity::WorkloadIdentityCredential;
+
+use super::token_cache;
+use crate::backend::{pool::Address, Error};
 
 pub async fn token(addr: &Address) -> Result<String, Error> {
     #[cfg(test)]
@@ -9,19 +12,10 @@ pub async fn token(addr: &Address) -> Result<String, Error> {
         return Ok(token);
     }
 
-    let key = CacheKey::from(addr);
-
-    if let Some(cached) = token_cache::get(&key) {
-        return Ok(cached);
-    }
-
-    let (token, expires_at) = fetch_token(addr).await?;
-    token_cache::set(key, token.clone(), expires_at);
-
-    Ok(token)
+    token_cache::get_or_fetch(addr, fetch_token).await
 }
 
-async fn fetch_token(addr: &Address) -> Result<(String, std::time::SystemTime), Error> {
+async fn fetch_token(addr: Address) -> Result<(String, SystemTime), Error> {
     let credential = WorkloadIdentityCredential::new(None).map_err(|error| {
         Error::AzureWorkloadIdentityToken(format!(
             "failed to build workload identity credential for {}@{}:{}: {}",
@@ -42,12 +36,9 @@ async fn fetch_token(addr: &Address) -> Result<(String, std::time::SystemTime), 
             ))
         })?;
 
-    let expires_at = std::time::SystemTime::from(access_token.expires_on);
-
+    let expires_at = SystemTime::from(access_token.expires_on);
     Ok((access_token.token.secret().to_string(), expires_at))
 }
-
-// ── test helpers ─────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 fn test_token_override() -> Option<String> {
@@ -65,14 +56,15 @@ static TEST_TOKEN_OVERRIDE: once_cell::sync::Lazy<parking_lot::Mutex<Option<Stri
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::backend::pool::Address;
-    use crate::config::ServerAuth;
     use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
     use pgdog_config::Role;
     use std::env;
     use std::time::{Duration, SystemTime};
-    use token_cache::{CacheKey, CachedToken, TOKEN_CACHE};
+
+    use super::*;
+    use crate::backend::pool::Address;
+    use crate::config::ServerAuth;
+    use token_cache::{CacheKey, CachedToken};
 
     struct EnvVarGuard {
         key: &'static str,
@@ -89,10 +81,9 @@ mod tests {
 
     impl Drop for EnvVarGuard {
         fn drop(&mut self) {
-            if let Some(previous) = self.previous.take() {
-                env::set_var(self.key, previous);
-            } else {
-                env::remove_var(self.key);
+            match self.previous.take() {
+                Some(v) => env::set_var(self.key, v),
+                None => env::remove_var(self.key),
             }
         }
     }
@@ -127,7 +118,7 @@ mod tests {
         let addr = make_addr();
         let key = CacheKey::from(&addr);
         let sentinel = "cached-sentinel-token".to_string();
-        TOKEN_CACHE.lock().insert(
+        token_cache::insert_test_token(
             key,
             CachedToken::new(
                 sentinel.clone(),
@@ -151,7 +142,6 @@ mod tests {
         let _azure_token_file_path = EnvVarGuard::set("AZURE_FEDERATED_TOKEN_FILE", "/tmp/example");
 
         let b64_token = token(&make_addr()).await.unwrap();
-
         let token = b64_token
             .split('.')
             .nth(1)
