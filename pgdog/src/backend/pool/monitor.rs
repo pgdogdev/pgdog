@@ -226,11 +226,10 @@ impl Monitor {
     /// Replenish pool with one new connection.
     async fn replenish(&self, reason: ConnectReason) -> Result<bool, Error> {
         if let Ok(conn) = Self::create_connection(&self.pool, reason).await {
-            let now = Instant::now();
             let server = Box::new(conn);
             let mut guard = self.pool.lock();
             if guard.online {
-                guard.put(server, now)?;
+                guard.put(server)?
             }
             Ok(true)
         } else {
