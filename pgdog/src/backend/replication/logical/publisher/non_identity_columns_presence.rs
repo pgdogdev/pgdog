@@ -21,6 +21,8 @@ use crate::net::messages::replication::logical::tuple_data::Identifier;
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct NonIdentityColumnsPresence {
     mask: BitVec,
+    /// Cached count of present (non-Toasted) non-identity columns
+    count_present: usize,
 }
 
 impl NonIdentityColumnsPresence {
@@ -37,16 +39,22 @@ impl NonIdentityColumnsPresence {
         let non_id_count = table.columns.iter().filter(|c| !c.identity).count();
         let mut mask = BitVec::from_elem(non_id_count, false);
         let mut idx = 0usize;
+        let mut count_present = 0usize;
         for (tcol, col) in tuple.columns.iter().zip(table.columns.iter()) {
             if col.identity {
+                // identity columns always carry a value — skip
                 continue;
             }
             if tcol.identifier != Identifier::Toasted {
                 mask.set(idx, true);
+                count_present += 1;
             }
             idx += 1;
         }
-        Ok(Self { mask })
+        Ok(Self {
+            mask,
+            count_present,
+        })
     }
 
     /// Whether the `idx`-th non-identity column is present.
@@ -58,19 +66,21 @@ impl NonIdentityColumnsPresence {
     pub fn no_non_identity_present(&self) -> bool {
         self.mask.none()
     }
+
+    /// Count of present (non-Toasted) non-identity columns. O(1) — cached at construction.
+    pub fn count_present(&self) -> usize {
+        self.count_present
+    }
 }
 
 #[cfg(test)]
 impl NonIdentityColumnsPresence {
-    /// Every non-identity column marked present. Test helper.
-    ///
-    /// Uses the same allocation size as [`Self::from_tuple`] (non-identity
-    /// count only) so that two presences with identical logical shapes compare
-    /// equal under `Eq`/`Hash` and can be used as cache keys.
+    /// Every non-identity column marked present.
     pub(crate) fn all(table: &Table) -> Self {
         let non_id_count = table.columns.iter().filter(|c| !c.identity).count();
         Self {
             mask: BitVec::from_elem(non_id_count, true),
+            count_present: non_id_count,
         }
     }
 

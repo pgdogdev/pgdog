@@ -22,7 +22,7 @@ use crate::{
                 insert::Insert as XLogInsert,
                 relation::{Column as RelColumn, Relation},
                 tuple_data::{Column as TupleColumn, Identifier, TupleData},
-                update::Update as XLogUpdate,
+                update::{Update as XLogUpdate, UpdateIdentity},
             },
             XLogData,
         },
@@ -239,6 +239,14 @@ fn toasted_column() -> TupleColumn {
     }
 }
 
+fn null_column() -> TupleColumn {
+    TupleColumn {
+        identifier: Identifier::Null,
+        len: 0,
+        data: Bytes::new(),
+    }
+}
+
 fn x_update(u: XLogUpdate) -> CopyData {
     xlog_copy_data(u.to_bytes().unwrap())
 }
@@ -260,9 +268,9 @@ fn make_subscriber_single_shard() -> StreamSubscriber {
     StreamSubscriber::new(&cluster, &tables)
 }
 
-/// Count rows matching the given id using a separate connection.
-async fn count_row(server: &mut Server, table: &str, id: &str) -> i64 {
-    let query = format!("SELECT COUNT(*) FROM {} WHERE id = {}", table, id);
+/// Count rows matching the given `WHERE` predicate using a separate connection.
+async fn count_where(server: &mut Server, table: &str, predicate: &str) -> i64 {
+    let query = format!("SELECT COUNT(*) FROM {} WHERE {}", table, predicate);
     let rows: Vec<crate::net::DataRow> = server.fetch_all(query).await.unwrap();
     rows.first()
         .and_then(|row: &crate::net::DataRow| row.column(0))
@@ -273,6 +281,22 @@ async fn count_row(server: &mut Server, table: &str, id: &str) -> i64 {
                 .unwrap()
         })
         .unwrap_or(0)
+}
+
+/// Count rows matching the given id using a separate connection.
+async fn count_row(server: &mut Server, table: &str, id: &str) -> i64 {
+    count_where(server, table, &format!("id = {}", id)).await
+}
+
+/// Read `value` for a single row, or `None` if absent. Useful when a count check would
+/// silently pass under SET-clause regressions.
+async fn fetch_value(server: &mut Server, table: &str, id: &str) -> Option<String> {
+    let query = format!("SELECT value FROM {} WHERE id = {}", table, id);
+    let rows: Vec<crate::net::DataRow> = server.fetch_all(query).await.unwrap();
+    rows.first().and_then(|row: &crate::net::DataRow| {
+        row.column(0)
+            .map(|col| std::str::from_utf8(&col[..]).unwrap().to_string())
+    })
 }
 
 async fn ensure_table(server: &mut Server, table: &str) {
@@ -300,6 +324,44 @@ async fn ensure_table(server: &mut Server, table: &str) {
                 .execute(
                     "CREATE TABLE IF NOT EXISTS public.posts (\
                      id BIGINT PRIMARY KEY, title TEXT, body TEXT)",
+                )
+                .await
+                .unwrap();
+        }
+        // Duplicate-row table: no PK, no unique index.
+        // Allows inserting identical rows to test ctid-based single-row targeting.
+        "public.full_dup_rows" => {
+            server
+                .execute(
+                    "CREATE TABLE IF NOT EXISTS public.full_dup_rows \
+                     (id BIGINT, value TEXT)",
+                )
+                .await
+                .unwrap();
+        }
+        // Omni dedup table for ON CONFLICT DO NOTHING coverage.
+        // Requires a unique index so relation() accepts the omni FULL table.
+        "public.full_omni_dedup" => {
+            server
+                .execute(
+                    "CREATE TABLE IF NOT EXISTS public.full_omni_dedup \
+                     (a TEXT NOT NULL, b TEXT NOT NULL)",
+                )
+                .await
+                .unwrap();
+            // Idempotently set NOT NULL: tables_missing_unique_index() requires all key columns to be NOT NULL.
+            // A stale nullable schema from a prior test run would silently fail the omni dedup test.
+            for col in ["a", "b"] {
+                let _ = server
+                    .execute(format!(
+                        "ALTER TABLE public.full_omni_dedup ALTER COLUMN {col} SET NOT NULL"
+                    ))
+                    .await;
+            }
+            server
+                .execute(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS full_omni_dedup_ab_idx \
+                     ON public.full_omni_dedup (a, b)",
                 )
                 .await
                 .unwrap();
@@ -891,8 +953,7 @@ fn posts_update_title_copy_data(oid: Oid, id: &str, new_title: &str) -> CopyData
     xlog_copy_data(
         XLogUpdate {
             oid,
-            key: None,
-            old: None,
+            identity: UpdateIdentity::Nothing,
             new: TupleData {
                 columns: vec![text_column(id), text_column(new_title), toasted_column()],
             },
@@ -1051,8 +1112,7 @@ async fn toast_update_all_toasted_is_noop() {
     sub.handle(xlog_copy_data(
         XLogUpdate {
             oid,
-            key: None,
-            old: None,
+            identity: UpdateIdentity::Nothing,
             new: TupleData {
                 columns: vec![text_column(&id), toasted_column(), toasted_column()],
             },
@@ -1096,10 +1156,9 @@ async fn toast_pk_change_with_u_rejects() {
     let err = sub
         .handle(x_update(XLogUpdate {
             oid,
-            key: Some(TupleData {
+            identity: UpdateIdentity::Key(TupleData {
                 columns: vec![text_column("old")],
             }),
-            old: None,
             new: TupleData {
                 columns: vec![text_column("new"), toasted_column()],
             },
@@ -1128,8 +1187,7 @@ async fn update_rejects_toasted_identity_no_key() {
     let err = sub
         .handle(x_update(XLogUpdate {
             oid,
-            key: None,
-            old: None,
+            identity: UpdateIdentity::Nothing,
             new: TupleData {
                 columns: vec![
                     toasted_column(),
@@ -1161,10 +1219,9 @@ async fn update_rejects_toasted_identity_with_key() {
     let err = sub
         .handle(x_update(XLogUpdate {
             oid,
-            key: Some(TupleData {
+            identity: UpdateIdentity::Key(TupleData {
                 columns: vec![text_column("42")],
             }),
-            old: None,
             new: TupleData {
                 columns: vec![
                     toasted_column(),
@@ -1181,5 +1238,927 @@ async fn update_rejects_toasted_identity_with_key() {
             crate::backend::replication::logical::Error::ToastedIdentityColumn { .. }
         ),
         "got: {err:?}"
+    );
+}
+
+// ── REPLICA IDENTITY FULL tests ──────────────────────────────────────────────
+
+/// Build a sharded FULL-identity table that maps to `public.sharded`.
+/// All columns have `identity = false` (FULL identity has no designated identity cols).
+fn make_full_identity_sharded_table() -> Table {
+    Table {
+        publication: "test".to_string(),
+        table: PublicationTable {
+            schema: "public".to_string(),
+            name: "sharded".to_string(),
+            attributes: "".to_string(),
+            parent_schema: "".to_string(),
+            parent_name: "".to_string(),
+        },
+        identity: ReplicaIdentity {
+            oid: Oid(3),
+            identity: "f".to_string(),
+            kind: "r".to_string(),
+        },
+        columns: vec![
+            PublicationTableColumn {
+                oid: 3,
+                name: "id".to_string(),
+                type_oid: Oid(20), // bigint
+                identity: false,   // FULL: no designated identity columns
+            },
+            PublicationTableColumn {
+                oid: 3,
+                name: "value".to_string(),
+                type_oid: Oid(25), // text
+                identity: false,
+            },
+        ],
+        lsn: Lsn::default(),
+        query_parser_engine: QueryParserEngine::default(),
+    }
+}
+
+/// Build a NOTHING-identity table — used to verify `relation()` rejects it.
+fn make_replica_identity_nothing_table() -> Table {
+    let mut t = make_full_identity_sharded_table();
+    t.identity.identity = "n".to_string();
+    t
+}
+
+/// Build an omni FULL-identity table that maps to `public.full_events_omni`.
+/// Columns `(a, b)` are not part of the sharding schema → `is_sharded()` returns false.
+fn make_full_identity_omni_table() -> Table {
+    Table {
+        publication: "test".to_string(),
+        table: PublicationTable {
+            schema: "public".to_string(),
+            name: "full_events_omni".to_string(),
+            attributes: "".to_string(),
+            parent_schema: "".to_string(),
+            parent_name: "".to_string(),
+        },
+        identity: ReplicaIdentity {
+            oid: Oid(5),
+            identity: "f".to_string(),
+            kind: "r".to_string(),
+        },
+        columns: vec![
+            PublicationTableColumn {
+                oid: 5,
+                name: "a".to_string(),
+                type_oid: Oid(25),
+                identity: false,
+            },
+            PublicationTableColumn {
+                oid: 5,
+                name: "b".to_string(),
+                type_oid: Oid(25),
+                identity: false,
+            },
+        ],
+        lsn: Lsn::default(),
+        query_parser_engine: QueryParserEngine::default(),
+    }
+}
+
+fn full_identity_relation(oid: Oid) -> Relation {
+    Relation {
+        oid,
+        namespace: "public".to_string(),
+        name: "sharded".to_string(),
+        replica_identity: b'f' as i8,
+        columns: vec![
+            RelColumn {
+                flag: 0,
+                name: "id".to_string(),
+                oid: Oid(20),
+                type_modifier: -1,
+            },
+            RelColumn {
+                flag: 0,
+                name: "value".to_string(),
+                oid: Oid(25),
+                type_modifier: -1,
+            },
+        ],
+    }
+}
+
+fn full_identity_relation_copy_data(oid: Oid) -> CopyData {
+    xlog_copy_data(full_identity_relation(oid).to_bytes().unwrap())
+}
+
+/// Helper: build a FULL-identity UPDATE CopyData.
+/// Both old and new tuples share the same column positions.
+fn full_update_copy_data(
+    oid: Oid,
+    old_id: &str,
+    old_value: &str,
+    new_id: &str,
+    new_value: &str,
+) -> CopyData {
+    x_update(XLogUpdate {
+        oid,
+        identity: UpdateIdentity::Old(TupleData {
+            columns: vec![text_column(old_id), text_column(old_value)],
+        }),
+        new: TupleData {
+            columns: vec![text_column(new_id), text_column(new_value)],
+        },
+    })
+}
+
+/// FULL-identity UPDATE: `value` Toasted in NEW (unchanged), fully present in OLD.
+/// Real WAL shape — PG always materialises OLD inline under REPLICA IDENTITY FULL.
+fn full_update_value_toasted_copy_data(
+    oid: Oid,
+    old_id: &str,
+    old_value: &str,
+    new_id: &str,
+) -> CopyData {
+    x_update(XLogUpdate {
+        oid,
+        identity: UpdateIdentity::Old(TupleData {
+            columns: vec![text_column(old_id), text_column(old_value)],
+        }),
+        new: TupleData {
+            columns: vec![text_column(new_id), toasted_column()],
+        },
+    })
+}
+
+/// Helper: build a FULL-identity UPDATE where ALL columns are Toasted in new.
+fn full_update_all_toasted_copy_data(oid: Oid) -> CopyData {
+    x_update(XLogUpdate {
+        oid,
+        identity: UpdateIdentity::Old(TupleData {
+            columns: vec![toasted_column(), toasted_column()],
+        }),
+        new: TupleData {
+            columns: vec![toasted_column(), toasted_column()],
+        },
+    })
+}
+
+/// Helper: FULL-identity DELETE using the full old-row tuple.
+fn full_delete_copy_data(oid: Oid, id: &str, value: &str) -> CopyData {
+    xlog_copy_data(
+        XLogDelete {
+            oid,
+            key: None,
+            old: Some(TupleData {
+                columns: vec![text_column(id), text_column(value)],
+            }),
+        }
+        .to_bytes()
+        .unwrap(),
+    )
+}
+
+// ── Helpers for duplicate-row and omni-dedup tests ─────────────────────────────────────────────
+
+/// Table without a primary key — allows duplicate rows.
+/// In the test sharding config so `is_sharded()` returns `true`, bypassing the omni unique-index check.
+fn make_full_identity_dup_rows_table() -> Table {
+    let mut t = make_full_identity_sharded_table();
+    t.table.name = "full_dup_rows".to_string();
+    t
+}
+
+fn full_dup_rows_relation(oid: Oid) -> Relation {
+    Relation {
+        oid,
+        namespace: "public".to_string(),
+        name: "full_dup_rows".to_string(),
+        replica_identity: b'f' as i8,
+        columns: vec![
+            RelColumn {
+                flag: 0,
+                name: "id".to_string(),
+                oid: Oid(20),
+                type_modifier: -1,
+            },
+            RelColumn {
+                flag: 0,
+                name: "value".to_string(),
+                oid: Oid(25),
+                type_modifier: -1,
+            },
+        ],
+    }
+}
+
+fn full_dup_rows_relation_copy_data(oid: Oid) -> CopyData {
+    xlog_copy_data(full_dup_rows_relation(oid).to_bytes().unwrap())
+}
+
+/// Omni FULL-identity table with `(a TEXT, b TEXT)` and a unique index on `(a, b)`.
+/// A separate table from `full_events_omni` so the no-unique-index rejection test is unaffected.
+fn make_full_identity_omni_dedup_table() -> Table {
+    let mut t = make_full_identity_omni_table();
+    t.table.name = "full_omni_dedup".to_string();
+    t
+}
+
+fn full_omni_dedup_relation(oid: Oid) -> Relation {
+    Relation {
+        oid,
+        namespace: "public".to_string(),
+        name: "full_omni_dedup".to_string(),
+        replica_identity: b'f' as i8,
+        columns: vec![
+            RelColumn {
+                flag: 0,
+                name: "a".to_string(),
+                oid: Oid(25),
+                type_modifier: -1,
+            },
+            RelColumn {
+                flag: 0,
+                name: "b".to_string(),
+                oid: Oid(25),
+                type_modifier: -1,
+            },
+        ],
+    }
+}
+
+fn full_omni_dedup_relation_copy_data(oid: Oid) -> CopyData {
+    xlog_copy_data(full_omni_dedup_relation(oid).to_bytes().unwrap())
+}
+
+/// Build an INSERT CopyData for the omni dedup table `(a, b)`.
+fn omni_insert_copy_data(oid: Oid, a: &str, b: &str) -> CopyData {
+    xlog_copy_data(
+        XLogInsert {
+            xid: None,
+            oid,
+            tuple_data: TupleData {
+                columns: vec![text_column(a), text_column(b)],
+            },
+        }
+        .to_bytes()
+        .unwrap(),
+    )
+}
+
+// ── NOTHING rejection ───────────────────────────────────────────────────────────────────────────
+
+/// REPLICA IDENTITY NOTHING must be rejected at relation() time.
+#[tokio::test]
+async fn full_identity_nothing_rejected() {
+    let cluster = Cluster::new_test_single_shard(&config());
+    let mut sub = StreamSubscriber::new(&cluster, &[make_replica_identity_nothing_table()]);
+    sub.connect().await.unwrap();
+
+    let oid = Oid(16390);
+    // Use the same schema+name as the nothing table so relation() finds it.
+    let mut rel = full_identity_relation(oid);
+    rel.name = "sharded".to_string();
+    let err = sub
+        .handle(xlog_copy_data(rel.to_bytes().unwrap()))
+        .await
+        .expect_err("REPLICA IDENTITY NOTHING must be rejected");
+    assert!(
+        matches!(
+            err,
+            crate::backend::replication::logical::Error::TableValidation(_)
+        ),
+        "expected TableValidation error, got: {err:?}"
+    );
+    // Match the exact Display rendering so a future copy edit (sort key, tabs, remediation guidance)
+    // is caught — mirrors the assertion style of `data_sync_rejects_no_pk_table_before_slots_created`.
+    assert_eq!(
+        err.to_string(),
+        "Table validation failed:\n\ttable \"public\".\"sharded\": REPLICA IDENTITY NOTHING, UPDATE/DELETE carry no row identity and cannot be replicated; set it to DEFAULT, INDEX, or FULL",
+        "NOTHING rejection message drifted; got: {err}"
+    );
+}
+
+// ── Omni no-unique-index rejection ────────────────────────────────────────────────────
+
+/// FULL identity omni table without a unique index on the destination must be rejected.
+/// `full_events_omni` is absent (or has no qualifying index) — enough for `tables_missing_unique_index()` to return it as missing.
+#[tokio::test]
+async fn full_identity_omni_no_unique_index_rejected() {
+    let cluster = Cluster::new_test_single_shard(&config());
+    let mut sub = StreamSubscriber::new(&cluster, &[make_full_identity_omni_table()]);
+
+    // Enforce precondition: the table must exist but have no qualifying unique index.
+    // A stale unique index from a prior run would make tables_missing_unique_index() return empty,
+    // causing expect_err() to panic. Drop and recreate the table to guarantee a clean state.
+    {
+        let mut setup = test_server().await;
+        let _ = setup
+            .execute("DROP TABLE IF EXISTS public.full_events_omni")
+            .await;
+        setup
+            .execute("CREATE TABLE IF NOT EXISTS public.full_events_omni (a TEXT, b TEXT)")
+            .await
+            .unwrap();
+    }
+
+    let err = sub
+        .connect()
+        .await
+        .expect_err("omni FULL table without unique index must be rejected at connect time");
+    assert!(
+        matches!(
+            err,
+            crate::backend::replication::logical::Error::TableValidation(_)
+        ),
+        "expected TableValidation error, got: {err:?}"
+    );
+    assert!(
+        err.to_string().contains("REPLICA IDENTITY FULL"),
+        "error message must mention FULL identity, got: {err}"
+    );
+}
+
+// ── FULL identity DML tests ───────────────────────────────────────────────────────────
+
+/// FULL identity sharded INSERT lands exactly once on the destination.
+#[tokio::test]
+async fn full_identity_insert_sharded() {
+    let cluster = Cluster::new_test_single_shard(&config());
+    let mut sub = StreamSubscriber::new(&cluster, &[make_full_identity_sharded_table()]);
+    let mut verify = test_server().await;
+    sub.connect().await.unwrap();
+
+    let oid = Oid(16384);
+    let id = random_id();
+    cleanup(&mut verify, "public.sharded", &[&id]).await;
+
+    sub.handle(begin_copy_data(100)).await.unwrap();
+    sub.handle(full_identity_relation_copy_data(oid))
+        .await
+        .unwrap();
+    sub.handle(insert_copy_data(oid, &id, "full_hello"))
+        .await
+        .unwrap();
+    sub.handle(commit_copy_data(200)).await.unwrap();
+
+    assert_eq!(count_row(&mut verify, "public.sharded", &id).await, 1);
+    cleanup(&mut verify, "public.sharded", &[&id]).await;
+}
+
+/// FULL identity fast-path UPDATE: no Toasted columns — UPDATE matches the old row
+/// via IS NOT DISTINCT FROM and applies the new values.
+#[tokio::test]
+async fn full_identity_update_fast_path() {
+    let cluster = Cluster::new_test_single_shard(&config());
+    let mut sub = StreamSubscriber::new(&cluster, &[make_full_identity_sharded_table()]);
+    let mut verify = test_server().await;
+    sub.connect().await.unwrap();
+
+    let oid = Oid(16384);
+    let id = random_id();
+    let id2 = random_id();
+    cleanup(&mut verify, "public.sharded", &[&id, &id2]).await;
+
+    // Insert the initial row.
+    sub.handle(begin_copy_data(100)).await.unwrap();
+    sub.handle(full_identity_relation_copy_data(oid))
+        .await
+        .unwrap();
+    sub.handle(insert_copy_data(oid, &id, "before"))
+        .await
+        .unwrap();
+    sub.handle(commit_copy_data(200)).await.unwrap();
+    assert_eq!(count_row(&mut verify, "public.sharded", &id).await, 1);
+
+    // Update the row: change id from `id` to `id2`, value from "before" to "after".
+    sub.handle(begin_copy_data(300)).await.unwrap();
+    sub.handle(full_update_copy_data(oid, &id, "before", &id2, "after"))
+        .await
+        .unwrap();
+    sub.handle(commit_copy_data(400)).await.unwrap();
+
+    assert_eq!(
+        count_row(&mut verify, "public.sharded", &id).await,
+        0,
+        "old row gone"
+    );
+    assert_eq!(
+        count_row(&mut verify, "public.sharded", &id2).await,
+        1,
+        "new row present"
+    );
+    // Read back `value` so a SET-clause regression (dropped column / wrong $N)
+    // is observable. count_row alone would silently pass.
+    assert_eq!(
+        fetch_value(&mut verify, "public.sharded", &id2)
+            .await
+            .as_deref(),
+        Some("after"),
+        "SET clause must update value column"
+    );
+
+    cleanup(&mut verify, "public.sharded", &[&id, &id2]).await;
+}
+
+/// FULL identity slow-path UPDATE: `value` is Toasted (unchanged), only `id` present.
+/// Verifies the shape cache is populated and the partial UPDATE executes without error.
+#[tokio::test]
+async fn full_identity_update_slow_path() {
+    let cluster = Cluster::new_test_single_shard(&config());
+    let mut sub = StreamSubscriber::new(&cluster, &[make_full_identity_sharded_table()]);
+    let mut verify = test_server().await;
+    sub.connect().await.unwrap();
+
+    let oid = Oid(16384);
+    let id = random_id();
+    let id2 = random_id();
+    cleanup(&mut verify, "public.sharded", &[&id, &id2]).await;
+
+    // Insert initial row.
+    sub.handle(begin_copy_data(100)).await.unwrap();
+    sub.handle(full_identity_relation_copy_data(oid))
+        .await
+        .unwrap();
+    sub.handle(insert_copy_data(oid, &id, "initial"))
+        .await
+        .unwrap();
+    sub.handle(commit_copy_data(200)).await.unwrap();
+
+    // Rename id → id2; value Toasted in NEW (unchanged), inline in OLD.
+    // Using distinct id2 forces a real row rename so assertions are non-trivial.
+    sub.handle(begin_copy_data(300)).await.unwrap();
+    sub.handle(full_update_value_toasted_copy_data(
+        oid, &id, "initial", &id2,
+    ))
+    .await
+    .unwrap();
+    sub.handle(commit_copy_data(400)).await.unwrap();
+
+    // Old row must be gone.
+    assert_eq!(
+        count_row(&mut verify, "public.sharded", &id).await,
+        0,
+        "original id row must be gone after rename"
+    );
+    // New row must exist.
+    assert_eq!(
+        count_row(&mut verify, "public.sharded", &id2).await,
+        1,
+        "renamed id2 row must be present"
+    );
+    // Toasted `value` must survive the rename — a regression that drops or zeroes the
+    // toasted column would produce NULL or an empty string here.
+    assert_eq!(
+        fetch_value(&mut verify, "public.sharded", &id2)
+            .await
+            .as_deref(),
+        Some("initial"),
+        "unchanged-TOAST column must be preserved across slow-path UPDATE"
+    );
+
+    cleanup(&mut verify, "public.sharded", &[&id, &id2]).await;
+}
+
+/// Regression: real PG WAL never has `'u'` markers in OLD under REPLICA IDENTITY FULL
+/// (PG calls `toast_flatten_tuple` on OLD before WAL-logging). Only NEW carries `'u'`.
+/// Exercises the path the prior buggy `old.without_toasted()` failed on (n+k bind vs 2k SQL).
+#[tokio::test]
+async fn full_identity_update_slow_path_realistic_old_tuple() {
+    let cluster = Cluster::new_test_single_shard(&config());
+    let mut sub = StreamSubscriber::new(&cluster, &[make_full_identity_sharded_table()]);
+    let mut verify = test_server().await;
+    sub.connect().await.unwrap();
+
+    let oid = Oid(16384);
+    let id = random_id();
+    cleanup(&mut verify, "public.sharded", &[&id]).await;
+
+    // Seed the row.
+    sub.handle(begin_copy_data(100)).await.unwrap();
+    sub.handle(full_identity_relation_copy_data(oid))
+        .await
+        .unwrap();
+    sub.handle(insert_copy_data(oid, &id, "initial"))
+        .await
+        .unwrap();
+    sub.handle(commit_copy_data(200)).await.unwrap();
+
+    // Realistic UPDATE shape produced by PG: OLD has every column inline,
+    // NEW marks the unchanged `value` column as 'u'.
+    let realistic = x_update(XLogUpdate {
+        oid,
+        identity: UpdateIdentity::Old(TupleData {
+            columns: vec![text_column(&id), text_column("initial")],
+        }),
+        new: TupleData {
+            columns: vec![text_column(&id), toasted_column()],
+        },
+    });
+
+    sub.handle(begin_copy_data(300)).await.unwrap();
+    let result = sub.handle(realistic).await;
+    // Drain the commit so the connection state is clean even on failure.
+    let _ = sub.handle(commit_copy_data(400)).await;
+
+    result.unwrap();
+
+    assert_eq!(
+        count_row(&mut verify, "public.sharded", &id).await,
+        1,
+        "row must still exist after slow-path UPDATE"
+    );
+    assert_eq!(
+        fetch_value(&mut verify, "public.sharded", &id)
+            .await
+            .as_deref(),
+        Some("initial"),
+        "unchanged-TOAST `value` must be preserved across slow-path UPDATE"
+    );
+
+    cleanup(&mut verify, "public.sharded", &[&id]).await;
+}
+
+/// FULL identity UPDATE where every column is Toasted: nothing to do, skip silently.
+#[tokio::test]
+async fn full_identity_update_all_toasted_is_noop() {
+    let cluster = Cluster::new_test_single_shard(&config());
+    let mut sub = StreamSubscriber::new(&cluster, &[make_full_identity_sharded_table()]);
+    let mut verify = test_server().await;
+    sub.connect().await.unwrap();
+
+    let oid = Oid(16384);
+    let id = random_id();
+    cleanup(&mut verify, "public.sharded", &[&id]).await;
+
+    // Insert initial row.
+    sub.handle(begin_copy_data(100)).await.unwrap();
+    sub.handle(full_identity_relation_copy_data(oid))
+        .await
+        .unwrap();
+    sub.handle(insert_copy_data(oid, &id, "stable"))
+        .await
+        .unwrap();
+    sub.handle(commit_copy_data(200)).await.unwrap();
+
+    // All columns Toasted: no-op, must not error, row must be untouched.
+    sub.handle(begin_copy_data(300)).await.unwrap();
+    sub.handle(full_update_all_toasted_copy_data(oid))
+        .await
+        .unwrap();
+    sub.handle(commit_copy_data(400)).await.unwrap();
+
+    assert_eq!(count_row(&mut verify, "public.sharded", &id).await, 1);
+    // Value column must be untouched — a no-op that silently zeros a column would
+    // still satisfy the count check but would fail here.
+    assert_eq!(
+        fetch_value(&mut verify, "public.sharded", &id)
+            .await
+            .as_deref(),
+        Some("stable"),
+        "all-toasted no-op must leave value column untouched"
+    );
+    cleanup(&mut verify, "public.sharded", &[&id]).await;
+}
+
+/// FULL identity DELETE: matches old-row tuple via IS NOT DISTINCT FROM on all columns.
+#[tokio::test]
+async fn full_identity_delete() {
+    let cluster = Cluster::new_test_single_shard(&config());
+    let mut sub = StreamSubscriber::new(&cluster, &[make_full_identity_sharded_table()]);
+    let mut verify = test_server().await;
+    sub.connect().await.unwrap();
+
+    let oid = Oid(16384);
+    let id = random_id();
+    cleanup(&mut verify, "public.sharded", &[&id]).await;
+
+    // Insert row.
+    sub.handle(begin_copy_data(100)).await.unwrap();
+    sub.handle(full_identity_relation_copy_data(oid))
+        .await
+        .unwrap();
+    sub.handle(insert_copy_data(oid, &id, "to_delete"))
+        .await
+        .unwrap();
+    sub.handle(commit_copy_data(200)).await.unwrap();
+    assert_eq!(count_row(&mut verify, "public.sharded", &id).await, 1);
+
+    // Delete via full old-row match.
+    sub.handle(begin_copy_data(300)).await.unwrap();
+    sub.handle(full_delete_copy_data(oid, &id, "to_delete"))
+        .await
+        .unwrap();
+    sub.handle(commit_copy_data(400)).await.unwrap();
+
+    assert_eq!(count_row(&mut verify, "public.sharded", &id).await, 0);
+
+    cleanup(&mut verify, "public.sharded", &[&id]).await;
+}
+
+// ── Omni dedup test ────────────────────────────────────────────────────────────────────────
+
+/// FULL identity omni INSERT: verifies `ON CONFLICT DO NOTHING` deduplication during
+/// the COPY-to-replication overlap window — same row inserted twice must land once.
+#[tokio::test]
+async fn full_identity_insert_omni_dedup() {
+    let cluster = Cluster::new_test_single_shard(&config());
+    let mut sub = StreamSubscriber::new(&cluster, &[make_full_identity_omni_dedup_table()]);
+    let mut verify = test_server().await;
+
+    // Ensure destination table exists with unique index before relation() runs.
+    ensure_table(&mut verify, "public.full_omni_dedup").await;
+    verify
+        .execute("DELETE FROM public.full_omni_dedup")
+        .await
+        .unwrap();
+
+    sub.connect().await.unwrap();
+
+    let oid = Oid(16400);
+    // Send relation — tables_missing_unique_index() must return empty or relation() rejects.
+    sub.handle(begin_copy_data(100)).await.unwrap();
+    sub.handle(full_omni_dedup_relation_copy_data(oid))
+        .await
+        .unwrap();
+    sub.handle(commit_copy_data(200)).await.unwrap();
+
+    // First INSERT: row lands.
+    sub.handle(begin_copy_data(300)).await.unwrap();
+    sub.handle(omni_insert_copy_data(oid, "hello", "world"))
+        .await
+        .unwrap();
+    sub.handle(commit_copy_data(400)).await.unwrap();
+
+    let predicate = "a = 'hello' AND b = 'world'";
+    let count = count_where(&mut verify, "public.full_omni_dedup", predicate).await;
+    assert_eq!(count, 1, "first INSERT must land");
+
+    // Second INSERT: same values — ON CONFLICT DO NOTHING, count stays at 1.
+    sub.handle(begin_copy_data(500)).await.unwrap();
+    sub.handle(omni_insert_copy_data(oid, "hello", "world"))
+        .await
+        .unwrap();
+    sub.handle(commit_copy_data(600)).await.unwrap();
+
+    let count = count_where(&mut verify, "public.full_omni_dedup", predicate).await;
+    assert_eq!(
+        count, 1,
+        "second INSERT must be silently skipped by ON CONFLICT DO NOTHING"
+    );
+
+    verify
+        .execute("DELETE FROM public.full_omni_dedup")
+        .await
+        .unwrap();
+}
+
+// ── Duplicate-row handling tests ──────────────────────────────────────────────────────────────────────────────────
+
+/// FULL identity UPDATE on a table with two identical rows must succeed and affect exactly one row.
+/// With REPLICA IDENTITY FULL, Postgres materialises all TOAST values into the WAL record, so the
+/// old tuple is always complete. Two rows matching the old tuple are byte-for-byte identical;
+/// the ctid-based WHERE targets one of them, which is semantically correct.
+#[tokio::test]
+async fn full_identity_update_duplicate_rows() {
+    let cluster = Cluster::new_test_single_shard(&config());
+    let mut sub = StreamSubscriber::new(&cluster, &[make_full_identity_dup_rows_table()]);
+    let mut verify = test_server().await;
+
+    ensure_table(&mut verify, "public.full_dup_rows").await;
+
+    let id = random_id();
+    // Clean slate.
+    verify
+        .execute(format!("DELETE FROM public.full_dup_rows WHERE id = {id}"))
+        .await
+        .unwrap();
+
+    sub.connect().await.unwrap();
+
+    let oid = Oid(16401);
+
+    sub.handle(begin_copy_data(100)).await.unwrap();
+    sub.handle(full_dup_rows_relation_copy_data(oid))
+        .await
+        .unwrap();
+    sub.handle(commit_copy_data(200)).await.unwrap();
+
+    // Seed two identical rows directly.
+    verify
+        .execute(format!(
+            "INSERT INTO public.full_dup_rows VALUES ({id}, 'dup')"
+        ))
+        .await
+        .unwrap();
+    verify
+        .execute(format!(
+            "INSERT INTO public.full_dup_rows VALUES ({id}, 'dup')"
+        ))
+        .await
+        .unwrap();
+
+    // FULL UPDATE WAL event: old = (id, 'dup'), new = (id2, 'changed').
+    // The ctid subquery must target exactly one of the two identical rows.
+    let id2 = random_id();
+    sub.handle(begin_copy_data(300)).await.unwrap();
+    sub.handle(full_update_copy_data(oid, &id, "dup", &id2, "changed"))
+        .await
+        .unwrap();
+    sub.handle(commit_copy_data(400)).await.unwrap();
+
+    // Exactly one row was updated: the old (id, 'dup') row remains, the other became (id2, 'changed').
+    assert_eq!(
+        count_row(&mut verify, "public.full_dup_rows", &id).await,
+        1,
+        "exactly one of the two duplicate rows must have been updated"
+    );
+
+    // Cleanup.
+    verify
+        .execute(format!(
+            "DELETE FROM public.full_dup_rows WHERE id IN ({id}, {id2})"
+        ))
+        .await
+        .unwrap();
+}
+
+/// FULL identity DELETE on a table with two identical rows must succeed and remove exactly one row.
+/// Same rationale as the UPDATE variant: ctid targets one byte-for-byte identical row.
+#[tokio::test]
+async fn full_identity_delete_duplicate_rows() {
+    let cluster = Cluster::new_test_single_shard(&config());
+    let mut sub = StreamSubscriber::new(&cluster, &[make_full_identity_dup_rows_table()]);
+    let mut verify = test_server().await;
+
+    ensure_table(&mut verify, "public.full_dup_rows").await;
+
+    let id = random_id();
+    verify
+        .execute(format!("DELETE FROM public.full_dup_rows WHERE id = {id}"))
+        .await
+        .unwrap();
+
+    sub.connect().await.unwrap();
+
+    let oid = Oid(16402);
+
+    sub.handle(begin_copy_data(100)).await.unwrap();
+    sub.handle(full_dup_rows_relation_copy_data(oid))
+        .await
+        .unwrap();
+    sub.handle(commit_copy_data(200)).await.unwrap();
+
+    // Seed two identical rows.
+    verify
+        .execute(format!(
+            "INSERT INTO public.full_dup_rows VALUES ({id}, 'dup')"
+        ))
+        .await
+        .unwrap();
+    verify
+        .execute(format!(
+            "INSERT INTO public.full_dup_rows VALUES ({id}, 'dup')"
+        ))
+        .await
+        .unwrap();
+
+    // FULL DELETE: old = (id, 'dup') — ctid must remove exactly one of the two identical rows.
+    sub.handle(begin_copy_data(300)).await.unwrap();
+    sub.handle(full_delete_copy_data(oid, &id, "dup"))
+        .await
+        .unwrap();
+    sub.handle(commit_copy_data(400)).await.unwrap();
+
+    // Exactly one row deleted: one (id, 'dup') row must remain.
+    assert_eq!(
+        count_row(&mut verify, "public.full_dup_rows", &id).await,
+        1,
+        "exactly one of the two duplicate rows must have been deleted"
+    );
+
+    // Cleanup.
+    verify
+        .execute(format!("DELETE FROM public.full_dup_rows WHERE id = {id}"))
+        .await
+        .unwrap();
+}
+
+// ── NULL-column FULL identity matching ─────────────────────────────────────────────────────────
+
+/// FULL identity UPDATE/DELETE matches a row whose `value` column is NULL.
+///
+/// `IS NOT DISTINCT FROM` is required for this case — plain `=` on NULL evaluates to NULL
+/// (not TRUE), so the WHERE clause would never match a NULL-valued row. A regression that
+/// swapped the operator back to `=` would miss every NULL-keyed row and silently drop the
+/// event. count_row alone in other FULL tests would not catch this.
+#[tokio::test]
+async fn full_identity_update_matches_null_column() {
+    let cluster = Cluster::new_test_single_shard(&config());
+    let mut sub = StreamSubscriber::new(&cluster, &[make_full_identity_dup_rows_table()]);
+    let mut verify = test_server().await;
+
+    // full_dup_rows has no NOT NULL on value — we can seed a NULL row.
+    ensure_table(&mut verify, "public.full_dup_rows").await;
+
+    let id = random_id();
+    verify
+        .execute(format!("DELETE FROM public.full_dup_rows WHERE id = {id}"))
+        .await
+        .unwrap();
+    verify
+        .execute(format!(
+            "INSERT INTO public.full_dup_rows VALUES ({id}, NULL)"
+        ))
+        .await
+        .unwrap();
+
+    sub.connect().await.unwrap();
+    let oid = Oid(16410);
+
+    sub.handle(begin_copy_data(100)).await.unwrap();
+    sub.handle(full_dup_rows_relation_copy_data(oid))
+        .await
+        .unwrap();
+    sub.handle(commit_copy_data(200)).await.unwrap();
+
+    // FULL UPDATE: old = (id, NULL), new = (id, "filled"). The WHERE clause must use
+    // IS NOT DISTINCT FROM so NULL participates in the match.
+    sub.handle(begin_copy_data(300)).await.unwrap();
+    sub.handle(x_update(XLogUpdate {
+        oid,
+        identity: UpdateIdentity::Old(TupleData {
+            columns: vec![text_column(&id), null_column()],
+        }),
+        new: TupleData {
+            columns: vec![text_column(&id), text_column("filled")],
+        },
+    }))
+    .await
+    .unwrap();
+    sub.handle(commit_copy_data(400)).await.unwrap();
+
+    assert_eq!(
+        fetch_value(&mut verify, "public.full_dup_rows", &id)
+            .await
+            .as_deref(),
+        Some("filled"),
+        "FULL identity UPDATE must match NULL via IS NOT DISTINCT FROM"
+    );
+
+    verify
+        .execute(format!("DELETE FROM public.full_dup_rows WHERE id = {id}"))
+        .await
+        .unwrap();
+}
+
+/// FULL identity DELETE removes a row whose value column is NULL.
+#[tokio::test]
+async fn full_identity_delete_matches_null_column() {
+    let cluster = Cluster::new_test_single_shard(&config());
+    let mut sub = StreamSubscriber::new(&cluster, &[make_full_identity_dup_rows_table()]);
+    let mut verify = test_server().await;
+
+    ensure_table(&mut verify, "public.full_dup_rows").await;
+
+    let id = random_id();
+    verify
+        .execute(format!("DELETE FROM public.full_dup_rows WHERE id = {id}"))
+        .await
+        .unwrap();
+    verify
+        .execute(format!(
+            "INSERT INTO public.full_dup_rows VALUES ({id}, NULL)"
+        ))
+        .await
+        .unwrap();
+
+    sub.connect().await.unwrap();
+    let oid = Oid(16411);
+
+    sub.handle(begin_copy_data(100)).await.unwrap();
+    sub.handle(full_dup_rows_relation_copy_data(oid))
+        .await
+        .unwrap();
+    sub.handle(commit_copy_data(200)).await.unwrap();
+
+    // DELETE with old = (id, NULL).
+    sub.handle(begin_copy_data(300)).await.unwrap();
+    sub.handle(xlog_copy_data(
+        XLogDelete {
+            oid,
+            key: None,
+            old: Some(TupleData {
+                columns: vec![text_column(&id), null_column()],
+            }),
+        }
+        .to_bytes()
+        .unwrap(),
+    ))
+    .await
+    .unwrap();
+    sub.handle(commit_copy_data(400)).await.unwrap();
+
+    assert_eq!(
+        count_row(&mut verify, "public.full_dup_rows", &id).await,
+        0,
+        "FULL identity DELETE must match NULL via IS NOT DISTINCT FROM"
     );
 }

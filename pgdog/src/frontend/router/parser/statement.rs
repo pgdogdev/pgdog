@@ -1110,22 +1110,22 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
 
             Some(NodeEnum::AExpr(ref expr)) => {
                 let kind = expr.kind();
-                let mut supported = false;
-
-                if matches!(
-                    kind,
-                    AExprKind::AexprOp | AExprKind::AexprIn | AExprKind::AexprOpAny
-                ) {
-                    supported = expr
-                        .name
-                        .first()
-                        .map(|node| match node.node {
-                            Some(NodeEnum::String(ref string)) => string.sval.as_str(),
-                            _ => "",
-                        })
-                        .unwrap_or_default()
-                        == "=";
-                }
+                let supported = match kind {
+                    // Kind carries the full semantic; no operator name to check.
+                    AExprKind::AexprNotDistinct => true,
+                    // Operator-based kinds: accept equality only.
+                    AExprKind::AexprOp | AExprKind::AexprIn | AExprKind::AexprOpAny => {
+                        expr.name
+                            .first()
+                            .map(|node| match node.node {
+                                Some(NodeEnum::String(ref string)) => string.sval.as_str(),
+                                _ => "",
+                            })
+                            .unwrap_or_default()
+                            == "="
+                    }
+                    _ => false,
+                };
 
                 if !supported {
                     return Ok(SearchResult::None);
