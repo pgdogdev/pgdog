@@ -1,7 +1,19 @@
+use std::time::{Duration, SystemTime};
+
 use aws_config::{BehaviorVersion, Region};
 use aws_sdk_rds::auth_token::{AuthTokenGenerator, Config as AuthTokenConfig};
 
+use super::token_cache;
 use crate::backend::{pool::Address, Error};
+
+pub async fn token(addr: &Address) -> Result<String, Error> {
+    #[cfg(test)]
+    if let Some(token) = test_token_override() {
+        return Ok(token);
+    }
+
+    token_cache::get_or_fetch(addr, fetch_token).await
+}
 
 fn infer_region_from_rds_host(host: &str) -> Option<String> {
     let host = host.to_ascii_lowercase();
@@ -43,13 +55,8 @@ fn resolve_region(addr: &Address) -> Result<String, Error> {
     })
 }
 
-pub async fn token(addr: &Address) -> Result<String, Error> {
-    #[cfg(test)]
-    if let Some(token) = test_token_override() {
-        return Ok(token);
-    }
-
-    let region = resolve_region(addr)?;
+async fn fetch_token(addr: Address) -> Result<(String, SystemTime), Error> {
+    let region = resolve_region(&addr)?;
     let sdk_config = aws_config::load_defaults(BehaviorVersion::latest()).await;
 
     let config = AuthTokenConfig::builder()
@@ -65,7 +72,7 @@ pub async fn token(addr: &Address) -> Result<String, Error> {
             ))
         })?;
 
-    AuthTokenGenerator::new(config)
+    let token = AuthTokenGenerator::new(config)
         .auth_token(&sdk_config)
         .await
         .map(|token| token.to_string())
@@ -74,7 +81,11 @@ pub async fn token(addr: &Address) -> Result<String, Error> {
                 "failed to generate RDS IAM token for {}@{}:{} in region {}: {}",
                 addr.user, addr.host, addr.port, region, error
             ))
-        })
+        })?;
+
+    // RDS IAM tokens are valid for 15 minutes
+    let expires_at = SystemTime::now() + Duration::from_secs(900);
+    Ok((token, expires_at))
 }
 
 #[cfg(test)]
@@ -93,14 +104,14 @@ static TEST_TOKEN_OVERRIDE: once_cell::sync::Lazy<parking_lot::Mutex<Option<Stri
 
 #[cfg(test)]
 mod tests {
-    use std::env;
-
     use pgdog_config::Role;
-
-    use crate::backend::pool::Address;
-    use crate::config::ServerAuth;
+    use std::env;
+    use std::time::{Duration, SystemTime};
 
     use super::*;
+    use crate::backend::pool::Address;
+    use crate::config::ServerAuth;
+    use token_cache::{CacheKey, CachedToken};
 
     struct EnvVarGuard {
         key: &'static str,
@@ -117,11 +128,24 @@ mod tests {
 
     impl Drop for EnvVarGuard {
         fn drop(&mut self) {
-            if let Some(previous) = self.previous.take() {
-                env::set_var(self.key, previous);
-            } else {
-                env::remove_var(self.key);
+            match self.previous.take() {
+                Some(v) => env::set_var(self.key, v),
+                None => env::remove_var(self.key),
             }
+        }
+    }
+
+    fn make_addr() -> Address {
+        Address {
+            host: "db.cluster-abc123.us-east-1.rds.amazonaws.com".into(),
+            port: 5432,
+            database_name: "postgres".into(),
+            user: "db_user".into(),
+            passwords: vec![String::new()],
+            database_number: 0,
+            server_auth: ServerAuth::RdsIam,
+            server_iam_region: Some("us-east-1".into()),
+            configured_role: Role::Auto,
         }
     }
 
@@ -142,6 +166,38 @@ mod tests {
     fn test_infer_region_fails_for_custom_hostname() {
         let region = infer_region_from_rds_host("postgres.internal.example.com");
         assert!(region.is_none());
+    }
+
+    #[test]
+    fn token_override_bypasses_cache() {
+        set_test_token_override(Some("override-token".into()));
+        let result = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(token(&make_addr()))
+            .unwrap();
+        assert_eq!(result, "override-token");
+        set_test_token_override(None);
+    }
+
+    #[test]
+    fn cache_returns_same_token_on_second_call() {
+        let addr = make_addr();
+        let key = CacheKey::from(&addr);
+        let sentinel = "cached-sentinel-token".to_string();
+        token_cache::insert_test_token(
+            key,
+            CachedToken::new(
+                sentinel.clone(),
+                SystemTime::now() + Duration::from_secs(3600),
+            ),
+        );
+
+        let result = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(token(&addr))
+            .unwrap();
+
+        assert_eq!(result, sentinel);
     }
 
     #[tokio::test]

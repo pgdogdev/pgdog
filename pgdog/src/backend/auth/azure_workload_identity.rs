@@ -1,6 +1,10 @@
-use crate::backend::{pool::Address, Error};
+use std::time::SystemTime;
+
 use azure_core::credentials::TokenCredential;
 use azure_identity::WorkloadIdentityCredential;
+
+use super::token_cache;
+use crate::backend::{pool::Address, Error};
 
 pub async fn token(addr: &Address) -> Result<String, Error> {
     #[cfg(test)]
@@ -8,6 +12,10 @@ pub async fn token(addr: &Address) -> Result<String, Error> {
         return Ok(token);
     }
 
+    token_cache::get_or_fetch(addr, fetch_token).await
+}
+
+async fn fetch_token(addr: Address) -> Result<(String, SystemTime), Error> {
     let credential = WorkloadIdentityCredential::new(None).map_err(|error| {
         Error::AzureWorkloadIdentityToken(format!(
             "failed to build workload identity credential for {}@{}:{}: {}",
@@ -15,19 +23,21 @@ pub async fn token(addr: &Address) -> Result<String, Error> {
         ))
     })?;
 
-    credential
+    let access_token = credential
         .get_token(
             &["https://ossrdbms-aad.database.windows.net/.default"],
             None,
         )
         .await
-        .map(|token| token.token.secret().to_string())
         .map_err(|error| {
             Error::AzureWorkloadIdentityToken(format!(
                 "failed to get Azure AD token for {}@{}:{}: {}",
                 addr.user, addr.host, addr.port, error
             ))
-        })
+        })?;
+
+    let expires_at = SystemTime::from(access_token.expires_on);
+    Ok((access_token.token.secret().to_string(), expires_at))
 }
 
 #[cfg(test)]
@@ -46,13 +56,15 @@ static TEST_TOKEN_OVERRIDE: once_cell::sync::Lazy<parking_lot::Mutex<Option<Stri
 
 #[cfg(test)]
 mod tests {
-    use crate::backend::pool::Address;
-    use crate::config::ServerAuth;
     use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
     use pgdog_config::Role;
     use std::env;
+    use std::time::{Duration, SystemTime};
 
     use super::*;
+    use crate::backend::pool::Address;
+    use crate::config::ServerAuth;
+    use token_cache::{CacheKey, CachedToken};
 
     struct EnvVarGuard {
         key: &'static str,
@@ -69,22 +81,15 @@ mod tests {
 
     impl Drop for EnvVarGuard {
         fn drop(&mut self) {
-            if let Some(previous) = self.previous.take() {
-                env::set_var(self.key, previous);
-            } else {
-                env::remove_var(self.key);
+            match self.previous.take() {
+                Some(v) => env::set_var(self.key, v),
+                None => env::remove_var(self.key),
             }
         }
     }
 
-    #[tokio::test]
-    #[ignore = "requires AKS environment with Workload Identity injection"]
-    async fn test_token_contains_expected_query_fields() {
-        let _azure_client_id = EnvVarGuard::set("AZURE_CLIENT_ID", "EXAMPLE");
-        let _azure_tenant_id = EnvVarGuard::set("AZURE_TENANT_ID", "EXAMPLE");
-        let _azure_token_file_path = EnvVarGuard::set("AZURE_FEDERATED_TOKEN_FILE", "/tmp/example");
-
-        let addr = Address {
+    fn make_addr() -> Address {
+        Address {
             host: "my-awesome-db.postgres.database.azure.com".into(),
             port: 5432,
             database_name: "postgres".into(),
@@ -94,17 +99,55 @@ mod tests {
             server_auth: ServerAuth::AzureWorkloadIdentity,
             server_iam_region: None,
             configured_role: Role::Auto,
-        };
+        }
+    }
 
-        let b64_token = token(&addr).await.unwrap();
+    #[test]
+    fn token_override_bypasses_cache() {
+        set_test_token_override(Some("override-token".into()));
+        let result = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(token(&make_addr()))
+            .unwrap();
+        assert_eq!(result, "override-token");
+        set_test_token_override(None);
+    }
 
-        // Use functional chaining to extract and decode
+    #[test]
+    fn cache_returns_same_token_on_second_call() {
+        let addr = make_addr();
+        let key = CacheKey::from(&addr);
+        let sentinel = "cached-sentinel-token".to_string();
+        token_cache::insert_test_token(
+            key,
+            CachedToken::new(
+                sentinel.clone(),
+                SystemTime::now() + Duration::from_secs(3600),
+            ),
+        );
+
+        let result = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(token(&addr))
+            .unwrap();
+
+        assert_eq!(result, sentinel);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires AKS environment with Workload Identity injection"]
+    async fn test_token_contains_expected_query_fields() {
+        let _azure_client_id = EnvVarGuard::set("AZURE_CLIENT_ID", "EXAMPLE");
+        let _azure_tenant_id = EnvVarGuard::set("AZURE_TENANT_ID", "EXAMPLE");
+        let _azure_token_file_path = EnvVarGuard::set("AZURE_FEDERATED_TOKEN_FILE", "/tmp/example");
+
+        let b64_token = token(&make_addr()).await.unwrap();
         let token = b64_token
             .split('.')
             .nth(1)
             .map(|payload| URL_SAFE_NO_PAD.decode(payload))
             .transpose()
-            .expect("Invalid JWT format") // Converts Option<Result<T, E>> to Result<Option<T>, E>
+            .expect("Invalid JWT format")
             .and_then(|bytes| String::from_utf8(bytes).ok())
             .expect("Failed to parse JWT payload as valid UTF-8 JSON");
 
