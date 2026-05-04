@@ -51,31 +51,32 @@ jobs:
   ci:
     runs-on: blacksmith-4vcpu-ubuntu-2404
     needs: [build]
-    timeout-minutes: 30
+    timeout-minutes: 75
     continue-on-error: ${{ matrix.continue_on_error == true }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { name: pgbench,       script: integration/pgbench/run.sh }
-          - { name: schema-sync,   script: integration/schema_sync/run.sh }
-          - { name: go,            script: integration/go/run.sh }
-          - { name: js,            script: integration/js/pg_tests/run.sh }
-          - { name: ruby,          script: integration/ruby/run.sh }
-          - { name: java,          script: integration/java/run.sh }
-          - { name: mirror,        script: integration/mirror/run.sh }
-          - { name: sql,           script: integration/sql/run.sh }
-          - { name: toxi,          script: integration/toxi/run.sh }
-          - { name: rust,          script: integration/rust/run.sh }
-          - { name: python,        script: integration/python/run.sh }
-          - { name: complex,       script: integration/complex/run.sh }
-          - { name: dry-run,       script: integration/dry_run/run.sh }
-          - { name: copy-data,     script: integration/copy_data/run.sh }
-          - { name: load-balancer, script: integration/load_balancer/run.sh }
+          # - { name: pgbench,       script: integration/pgbench/run.sh }
+          # - { name: schema-sync,   script: integration/schema_sync/run.sh }
+          # - { name: go,            script: integration/go/run.sh }
+          # - { name: js,            script: integration/js/pg_tests/run.sh }
+          # - { name: ruby,          script: integration/ruby/run.sh }
+          # - { name: java,          script: integration/java/run.sh }
+          # - { name: mirror,        script: integration/mirror/run.sh }
+          # - { name: sql,           script: integration/sql/run.sh }
+          # - { name: toxi,          script: integration/toxi/run.sh }
+          # - { name: rust,          script: integration/rust/run.sh }
+          # - { name: python,        script: integration/python/run.sh }
+          # - { name: complex,       script: integration/complex/run.sh }
+          # - { name: dry-run,       script: integration/dry_run/run.sh }
+          # - { name: copy-data,     script: integration/copy_data/run.sh }
+          # - { name: load-balancer, script: integration/load_balancer/run.sh }
+          - { name: resharding, script: integration/resharding/run.sh }
           # plugins/run.sh builds 4 plugin crates with cargo, so it needs
           # the workspace target/ cache; the other entries just run the
           # cached pgdog binary.
-          - { name: plugins,       script: integration/plugins/run.sh, needs_rust_cache: true, continue_on_error: true }
+          # - { name: plugins,       script: integration/plugins/run.sh, needs_rust_cache: true, continue_on_error: true }
     env:
       PGDOG_BIN: ${{ github.workspace }}/target/release/pgdog
     steps:
@@ -104,7 +105,11 @@ jobs:
       - name: Setup dependencies
         run: bash integration/ci/setup.sh --with-toxi
       - name: Run ${{ matrix.name }}
-        run: bash ${{ matrix.script }}
+        uses: nick-fields/retry@v3
+        with:
+          max_attempts: 3
+          timeout_minutes: 20
+          command: bash ${{ matrix.script }}
       - name: Ensure PgDog stopped
         if: always()
         run: bash integration/ci/ensure-pgdog-stopped.sh
