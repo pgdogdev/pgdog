@@ -1,4 +1,8 @@
 import java.sql.*;
+import org.postgresql.PGConnection;
+import org.postgresql.largeobject.LargeObject;
+import org.postgresql.largeobject.LargeObjectManager;
+
 
 abstract class TestCase {
 
@@ -1613,6 +1617,50 @@ class ManualRoutingSetShardingKey extends TestCase {
     }
 }
 
+// Verify that JDBC's LargeObjectManager works through PgDog.
+class FastpathLargeObject extends TestCase {
+
+    FastpathLargeObject(String database) throws Exception {
+        // Short timeout so the test fails fast if PgDog hangs on the F message.
+        super("pgdog", database, "&socketTimeout=3");
+    }
+
+    void run() throws Exception {
+        // Large object operations require an explicit transaction.
+        this.connection.setAutoCommit(false);
+
+        // Create a large object.
+        Statement st = this.connection.createStatement();
+        ResultSet rs = st.executeQuery("SELECT lo_creat(-1)");
+        rs.next();
+        int oid = (int) rs.getLong(1);
+        rs.close();
+        st.close();
+
+        // open() sends a Fastpath (F) wire message.
+        PGConnection pgconn = this.connection.unwrap(PGConnection.class);
+        LargeObjectManager lom = pgconn.getLargeObjectAPI();
+
+        try {
+            LargeObject lo = lom.open(oid, LargeObjectManager.READ);
+            lo.close();
+            this.connection.rollback();
+        } catch (SQLException e) {
+            // A socket timeout means PgDog hung on the F message.
+            String state = e.getSQLState() != null ? e.getSQLState() : "";
+            if (state.startsWith("08")) {
+                try { this.connection.setAutoCommit(true); } catch (Exception ignored) {}
+                throw new Exception(
+                    "PgDog hung on Fastpath 'F' message (socket timeout, " +
+                    "SQLState=" + state + "): " + e.getMessage()
+                );
+            }
+            try { this.connection.rollback(); } catch (Exception ignored) {}
+        }
+        this.connection.setAutoCommit(true);
+    }
+}
+
 class Pgdog {
 
     public static Connection connect() throws Exception {
@@ -1641,5 +1689,6 @@ class Pgdog {
         new ManualRoutingShardingKeyPrepared().execute();
         new ManualRoutingShardingKeyManualCommit().execute();
         new ManualRoutingSetShardingKey().execute();
+        new FastpathLargeObject("pgdog").execute();
     }
 }
