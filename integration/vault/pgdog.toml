@@ -28,6 +28,7 @@ role = "primary"
 [vault]
 address = "http://127.0.0.1:18200"
 auth_method = "app_role"
+tls_verify = "disable"
 # Run integration/vault/setup-vault.sh and paste the output here.
 role_id = "<YOUR_ROLE_ID>"
 secret_id = "<YOUR_SECRET_ID>"
