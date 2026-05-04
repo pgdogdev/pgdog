@@ -28,5 +28,6 @@ role = "primary"
 [vault]
 address = "http://127.0.0.1:18200"
 auth_method = "app_role"
-role_id = "9d9a096a-35ba-6e01-980e-582fb6fa9ae5"
-secret_id = "35cb60a5-78b5-a6b5-e88d-c8051882b341"
+# Run integration/vault/setup-vault.sh and paste the output here.
+role_id = "<YOUR_ROLE_ID>"
+secret_id = "<YOUR_SECRET_ID>"
