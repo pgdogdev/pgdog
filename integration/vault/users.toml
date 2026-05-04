@@ -1,0 +1,17 @@
+#:schema ./.schema/users.schema.json
+#
+# Basic users configuration.
+#
+[[users]]
+name = "dml_role"
+password = "pgdog"
+database = "pgdog"
+server_auth = "vault"
+vault_path = "database/creds/dml-role"
+
+[[users]]
+name = "ddl_role"
+password = "pgdog"
+database = "pgdog"
+server_auth = "vault"
+vault_path = "database/creds/ddl-role"

@@ -91,7 +91,8 @@ impl Address {
 
     pub async fn auth_secrets(&self) -> Result<Vec<String>, Error> {
         match self.server_auth {
-            ServerAuth::Password => Ok(self.passwords.clone()),
+            // Vault: vault::init() already wrote server_password into Address.passwords at startup
+            ServerAuth::Password | ServerAuth::Vault => Ok(self.passwords.clone()),
             ServerAuth::RdsIam => Ok(vec![crate::backend::auth::rds_iam::token(self).await?]),
             ServerAuth::AzureWorkloadIdentity => Ok(vec![
                 crate::backend::auth::azure_workload_identity::token(self).await?,
@@ -205,6 +206,54 @@ mod test {
         assert_eq!(address.database_name, "not_pgdog");
         assert_eq!(address.user, "alice");
         assert_eq!(address.passwords.first().unwrap(), "hunter3");
+    }
+
+    #[test]
+    fn test_vault_uses_server_password() {
+        // vault::init() writes server_user + server_password; no database-level password set.
+        let database = Database {
+            name: "myapp".into(),
+            host: "127.0.0.1".into(),
+            port: 5432,
+            ..Default::default()
+        };
+        let user = User {
+            name: "dml_role".into(),
+            password: Some("client-pass".into()),
+            server_user: Some("v-approle-dml-XyZ".into()),
+            server_password: Some("vault-pass".into()),
+            server_auth: ServerAuth::Vault,
+            vault_path: Some("database/creds/dml-role".into()),
+            database: "myapp".into(),
+            ..Default::default()
+        };
+
+        let address = Address::new(&database, &user, 0);
+        assert_eq!(address.user, "v-approle-dml-XyZ", "must use vault-generated username");
+        assert_eq!(address.passwords, vec!["vault-pass"], "must use vault-generated password");
+        assert_eq!(address.server_auth, ServerAuth::Vault);
+    }
+
+    #[test]
+    fn test_vault_empty_before_init() {
+        // vault::init() not yet run: server_user/server_password None, no client password set.
+        let database = Database {
+            name: "myapp".into(),
+            host: "127.0.0.1".into(),
+            port: 5432,
+            ..Default::default()
+        };
+        let user = User {
+            name: "dml_role".into(),
+            server_auth: ServerAuth::Vault,
+            vault_path: Some("database/creds/dml-role".into()),
+            database: "myapp".into(),
+            ..Default::default()
+        };
+
+        let address = Address::new(&database, &user, 0);
+        assert_eq!(address.user, "dml_role");
+        assert!(address.passwords.is_empty());
     }
 
     #[test]

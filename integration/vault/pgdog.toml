@@ -1,0 +1,34 @@
+#:schema ./.schema/pgdog.schema.json
+#
+# PgDog configuration.
+[general]
+host = "0.0.0.0"
+port = 6432
+workers = 2
+default_pool_size = 10
+min_pool_size = 1
+pooler_mode = "transaction"
+tls_verify = "disabled"
+shutdown_timeout = 60_000
+shutdown_termination_timeout = 60_000
+openmetrics_port = 9090
+openmetrics_namespace = "pgdog_"
+log_format = "json"
+log_level = "info"
+passthrough_auth = "disabled"
+connect_attempt_delay = 1_000
+auth_type = "scram"
+
+[[databases]]
+name = "pgdog"
+host = "127.0.0.1"
+port = 15432
+role = "primary"
+
+[vault]
+address = "http://127.0.0.1:18200"
+auth_method = "app_role"
+tls_verify = "disable"
+# Run integration/vault/setup-vault.sh and paste the output here.
+role_id = "<YOUR_ROLE_ID>"
+secret_id = "<YOUR_SECRET_ID>"
