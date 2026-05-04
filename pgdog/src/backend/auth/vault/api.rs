@@ -1,5 +1,6 @@
 //! Vault HTTP API client built on `reqwest`.
 
+use once_cell::sync::Lazy;
 use serde::Deserialize;
 
 use super::Error;
@@ -49,10 +50,14 @@ struct CredentialData {
 
 // ── public API ────────────────────────────────────────────────────────────────
 
-fn client() -> Result<reqwest::Client, Error> {
+static CLIENT: Lazy<reqwest::Client> = Lazy::new(|| {
     reqwest::Client::builder()
         .build()
-        .map_err(|e| Error::Http(e.to_string()))
+        .expect("failed to build Vault HTTP client")
+});
+
+fn client() -> &'static reqwest::Client {
+    &CLIENT
 }
 
 /// Authenticate to Vault via AppRole and return a client token.
@@ -99,7 +104,7 @@ pub async fn kubernetes_login(
 }
 
 async fn post_login(url: &str, body: &serde_json::Value) -> Result<VaultToken, Error> {
-    let response = client()?
+    let response = client()
         .post(url)
         .json(body)
         .send()
@@ -137,7 +142,7 @@ pub async fn fetch_credential(
         path.trim_start_matches('/')
     );
 
-    let response = client()?
+    let response = client()
         .get(&url)
         .header("X-Vault-Token", token)
         .send()
