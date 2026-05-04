@@ -35,6 +35,94 @@ pub use error::Error;
 
 use pgdog_config::{User, VaultAuthMethod, VaultConfig};
 
+// ── Vault HTTP client ─────────────────────────────────────────────────────────
+
+/// Holds the `reqwest` client and config for a single Vault connection.
+/// Built once — at startup via [`init`] and once inside the renewal task —
+/// so TLS handshakes and connection pool state are reused across all API calls.
+struct VaultClient {
+    client: reqwest::Client,
+    cfg: VaultConfig,
+}
+
+impl VaultClient {
+    fn new(cfg: VaultConfig) -> Result<Self, Error> {
+        let client = api::build_client(&cfg)?;
+        Ok(Self { client, cfg })
+    }
+
+    /// Authenticate to Vault and return a short-lived token.
+    async fn login(&self) -> Result<VaultToken, Error> {
+        match self.cfg.auth_method {
+            VaultAuthMethod::AppRole => {
+                let role_id = self.cfg.role_id.as_deref().ok_or_else(|| {
+                    Error::SecretId("vault: role_id is required for AppRole auth".into())
+                })?;
+                let secret_id = self
+                    .cfg
+                    .secret_id()
+                    .map_err(|e| Error::SecretId(e.to_string()))?;
+                api::approle_login(&self.client, &self.cfg.address, role_id, &secret_id).await
+            }
+            VaultAuthMethod::Kubernetes => {
+                let role = self.cfg.kubernetes_role.as_deref().ok_or_else(|| {
+                    Error::SecretId(
+                        "vault: kubernetes_role is required for Kubernetes auth".into(),
+                    )
+                })?;
+                let jwt = tokio::fs::read_to_string(self.cfg.jwt_path())
+                    .await
+                    .map(|s| s.trim().to_string())
+                    .map_err(|e| {
+                        Error::SecretId(format!(
+                            "vault: failed to read JWT from {}: {e}",
+                            self.cfg.jwt_path()
+                        ))
+                    })?;
+                api::kubernetes_login(
+                    &self.client,
+                    &self.cfg.address,
+                    &self.cfg.kubernetes_mount_path,
+                    role,
+                    &jwt,
+                )
+                .await
+            }
+        }
+    }
+
+    /// Authenticate once, fetch credentials for every pool, call `on_credential` for
+    /// each. Returns the minimum lease duration seen across all pools.
+    async fn fetch_credentials(
+        &self,
+        pools: &[(String, String)],
+        mut on_credential: impl FnMut(&str, &VaultCredential) -> Result<(), Error>,
+    ) -> Result<u64, Error> {
+        let token = self.login().await?;
+        let mut min_lease = u64::MAX;
+
+        for (pool_name, vault_path) in pools {
+            let cred = api::fetch_credential(
+                &self.client,
+                &self.cfg.address,
+                &token.client_token,
+                vault_path,
+            )
+            .await?;
+            if cred.lease_duration == 0 {
+                tracing::warn!(
+                    pool = %pool_name,
+                    "vault: lease_duration is 0 — credentials may not be renewable; check Vault backend config"
+                );
+            }
+            on_credential(pool_name, &cred)?;
+            min_lease = min_lease.min(cred.lease_duration);
+        }
+
+        Ok(if min_lease == u64::MAX { 0 } else { min_lease })
+    }
+}
+
 // ── startup init ──────────────────────────────────────────────────────────────
 
 /// Fetch Vault credentials for all users with `vault_path` and write them into
@@ -50,7 +138,15 @@ pub async fn init(vault_config: &VaultConfig, users: &[User]) -> Duration {
         return Duration::ZERO;
     }
 
-    match fetch_and_update_config(vault_config, &pools).await {
+    let client = match VaultClient::new(vault_config.clone()) {
+        Ok(c) => c,
+        Err(err) => {
+            error!("vault: failed to build HTTP client: {err}");
+            return Duration::ZERO;
+        }
+    };
+
+    match client.fetch_credentials(&pools, update_config).await {
         Ok(min_lease) => {
             info!(pools = pools.len(), "vault: initial credentials fetched");
             rotation_interval(min_lease, vault_config.pre_rotation_pct)
@@ -90,7 +186,14 @@ impl VaultManager {
 
         let cfg = vault_config.clone();
         let handle = tokio::spawn(async move {
-            renewal_task(cfg, pools, initial_delay).await;
+            let client = match VaultClient::new(cfg) {
+                Ok(c) => c,
+                Err(err) => {
+                    error!("vault: failed to build HTTP client: {err}");
+                    return;
+                }
+            };
+            renewal_task(client, pools, initial_delay).await;
         });
 
         Some(Self { handle })
@@ -108,7 +211,11 @@ impl Drop for VaultManager {
 /// A single task that sleeps for `initial_delay`, then repeatedly authenticates
 /// to Vault, rotates credentials for all configured pools, and sleeps until the
 /// next rotation is due.
-async fn renewal_task(cfg: VaultConfig, pools: Vec<(String, String)>, initial_delay: Duration) {
+async fn renewal_task(
+    client: VaultClient,
+    pools: Vec<(String, String)>,
+    initial_delay: Duration,
+) {
     // Skip initial sleep when init() failed (initial_delay == ZERO) to retry promptly.
     if !initial_delay.is_zero() {
         tokio::time::sleep(initial_delay).await;
@@ -118,10 +225,10 @@ async fn renewal_task(cfg: VaultConfig, pools: Vec<(String, String)>, initial_de
     const MAX_BACKOFF: Duration = Duration::from_secs(60);
 
     loop {
-        match rotation_cycle(&cfg, &pools).await {
+        match client.fetch_credentials(&pools, apply_credential).await {
             Ok(min_lease) => {
                 backoff = Duration::from_secs(1);
-                let next = rotation_interval(min_lease, cfg.pre_rotation_pct);
+                let next = rotation_interval(min_lease, client.cfg.pre_rotation_pct);
                 info!(
                     pools = pools.len(),
                     min_lease_secs = min_lease,
@@ -138,74 +245,6 @@ async fn renewal_task(cfg: VaultConfig, pools: Vec<(String, String)>, initial_de
                 tokio::time::sleep(backoff).await;
                 backoff = (backoff * 2).min(MAX_BACKOFF);
             }
-        }
-    }
-}
-
-/// Authenticate once, fetch credentials for every pool, call `on_credential` for
-/// each. Returns minimum lease duration across all pools.
-async fn fetch_credentials(
-    cfg: &VaultConfig,
-    pools: &[(String, String)],
-    mut on_credential: impl FnMut(&str, &VaultCredential) -> Result<(), Error>,
-) -> Result<u64, Error> {
-    let token = vault_login(cfg).await?;
-    let mut min_lease = u64::MAX;
-
-    for (pool_name, vault_path) in pools {
-        let cred = api::fetch_credential(&cfg.address, &token.client_token, vault_path).await?;
-        if cred.lease_duration == 0 {
-            tracing::warn!(
-                pool = %pool_name,
-                "vault: lease_duration is 0 — credentials may not be renewable; check Vault backend config"
-            );
-        }
-        on_credential(pool_name, &cred)?;
-        min_lease = min_lease.min(cred.lease_duration);
-    }
-
-    Ok(if min_lease == u64::MAX { 0 } else { min_lease })
-}
-
-/// Fetch + apply credentials (with pool reload). Used by renewal task.
-async fn rotation_cycle(cfg: &VaultConfig, pools: &[(String, String)]) -> Result<u64, Error> {
-    fetch_credentials(cfg, pools, apply_credential).await
-}
-
-/// Fetch + write credentials to config without pool reload. Used by [`init`].
-async fn fetch_and_update_config(
-    cfg: &VaultConfig,
-    pools: &[(String, String)],
-) -> Result<u64, Error> {
-    fetch_credentials(cfg, pools, update_config).await
-}
-
-/// Authenticate to Vault using whichever method is configured.
-async fn vault_login(cfg: &VaultConfig) -> Result<VaultToken, Error> {
-    match cfg.auth_method {
-        VaultAuthMethod::AppRole => {
-            let role_id = cfg.role_id.as_deref().ok_or_else(|| {
-                Error::SecretId("vault: role_id is required for AppRole auth".into())
-            })?;
-            let secret_id = cfg
-                .secret_id()
-                .map_err(|e| Error::SecretId(e.to_string()))?;
-            api::approle_login(&cfg.address, role_id, &secret_id).await
-        }
-        VaultAuthMethod::Kubernetes => {
-            let role = cfg.kubernetes_role.as_deref().ok_or_else(|| {
-                Error::SecretId("vault: kubernetes_role is required for Kubernetes auth".into())
-            })?;
-            let jwt = tokio::fs::read_to_string(cfg.jwt_path())
-                .await
-                .map(|s| s.trim().to_string())
-                .map_err(|e| {
-                    Error::SecretId(format!(
-                        "vault: failed to read JWT from {}: {e}",
-                        cfg.jwt_path()
-                    ))
-                })?;
-            api::kubernetes_login(&cfg.address, &cfg.kubernetes_mount_path, role, &jwt).await
         }
     }
 }
@@ -280,11 +319,14 @@ mod tests {
     use super::api::test_support;
     use super::*;
     use crate::config::{load_test, set};
+    use once_cell::sync::Lazy;
     use pgdog_config::VaultConfig;
 
-    /// Set up a minimal config with a "pgdog" user but do NOT call databases::init().
-    /// Use this in tests that exercise the config-update path but never call
-    /// reload_from_existing() (e.g. error paths, init()-only paths).
+    // reqwest with rustls-tls needs a process-level CryptoProvider.
+    static RING: Lazy<()> = Lazy::new(|| {
+        let _ = tokio_rustls::rustls::crypto::aws_lc_rs::default_provider().install_default();
+    });
+
     fn set_config_only() {
         let mut cfg = pgdog_config::ConfigAndUsers::default();
         cfg.config.databases = vec![pgdog_config::Database {
@@ -303,6 +345,7 @@ mod tests {
     }
 
     fn vault_cfg() -> VaultConfig {
+        let _ = *RING;
         VaultConfig {
             address: "http://127.0.0.1:8200".into(),
             auth_method: pgdog_config::VaultAuthMethod::AppRole,
@@ -313,6 +356,8 @@ mod tests {
             kubernetes_role: None,
             kubernetes_jwt_path: VaultConfig::default_kubernetes_jwt_path(),
             kubernetes_mount_path: VaultConfig::default_kubernetes_mount_path(),
+            tls_verify: pgdog_config::VaultTlsVerify::VerifyFull,
+            tls_server_ca_certificate: None,
         }
     }
 
@@ -327,7 +372,17 @@ mod tests {
             kubernetes_role: Some("pgdog".into()),
             kubernetes_jwt_path: VaultConfig::default_kubernetes_jwt_path(),
             kubernetes_mount_path: VaultConfig::default_kubernetes_mount_path(),
+            tls_verify: pgdog_config::VaultTlsVerify::VerifyFull,
+            tls_server_ca_certificate: None,
         }
+    }
+
+    fn vault_client() -> VaultClient {
+        VaultClient::new(vault_cfg()).expect("failed to build VaultClient in test")
+    }
+
+    fn k8s_client() -> VaultClient {
+        VaultClient::new(k8s_cfg()).expect("failed to build VaultClient in test")
     }
 
     fn test_cred(username: &str) -> VaultCredential {
@@ -356,27 +411,23 @@ mod tests {
 
     #[test]
     fn test_rotation_interval_clamps_100_to_99() {
-        // 100 clamped → 99%; should equal explicit 99%
         assert_eq!(rotation_interval(100, 100), rotation_interval(100, 99));
         assert_eq!(rotation_interval(100, 99), Duration::from_secs(99));
     }
 
     #[test]
     fn test_rotation_interval_clamps_0_to_1() {
-        // 0 clamped → 1%; 1% of 1000s = 10s, which equals MIN_ROTATION_INTERVAL
         assert_eq!(rotation_interval(1000, 0), Duration::from_secs(10));
     }
 
     #[test]
     fn test_rotation_interval_zero_lease_uses_minimum() {
-        // Vault returning lease_duration=0 must not cause a busy-loop.
         assert_eq!(rotation_interval(0, 75), MIN_ROTATION_INTERVAL);
         assert_eq!(rotation_interval(0, 0), MIN_ROTATION_INTERVAL);
     }
 
     #[test]
     fn test_rotation_interval_short_lease_uses_minimum() {
-        // 1s lease at 75% = 0.75s, below minimum — should clamp to 10s.
         assert_eq!(rotation_interval(1, 75), MIN_ROTATION_INTERVAL);
     }
 
@@ -384,8 +435,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_apply_credential_errors_on_unknown_pool() {
-        // update_config returns PoolNotFound before reload_from_existing is called,
-        // so no pool init needed.
         set_config_only();
         let cred = test_cred("v-approle-dml-AbCdEf");
         let err = apply_credential("nonexistent_vault_pool", &cred).unwrap_err();
@@ -396,20 +445,14 @@ mod tests {
     async fn test_apply_credential_updates_known_pool() {
         load_test();
         let cred = test_cred("v-approle-pgdog-AbCdEf");
-        // "pgdog" is the user set up by load_test()
-        let result = apply_credential("pgdog", &cred);
-        assert!(
-            result.is_ok(),
-            "apply_credential should succeed for a known pool"
-        );
+        assert!(apply_credential("pgdog", &cred).is_ok());
     }
 
-    // ── rotation_cycle (mocked) ───────────────────────────────────────────────
+    // ── fetch_credentials (mocked) ───────────────────────────────────────────
 
     #[tokio::test]
-    async fn test_rotation_cycle_uses_api_overrides() {
+    async fn test_fetch_credentials_apply_rotation() {
         load_test();
-
         test_support::set_login(Some(Ok(VaultToken {
             client_token: "tok".into(),
             lease_duration: 3600,
@@ -417,31 +460,30 @@ mod tests {
         })));
         test_support::set_credential(Some(Ok(test_cred("v-approle-dml-mock"))));
 
-        let cfg = vault_cfg();
         let pools = vec![("pgdog".into(), "database/creds/dml-role".into())];
-        let lease = rotation_cycle(&cfg, &pools)
+        let lease = vault_client()
+            .fetch_credentials(&pools, apply_credential)
             .await
-            .expect("rotation_cycle should succeed with mocked API");
-
+            .expect("fetch_credentials should succeed with mocked API");
         assert_eq!(lease, 3600);
     }
 
     #[tokio::test]
-    async fn test_rotation_cycle_propagates_login_error() {
-        // Login fails before apply_credential is called, so no pool init needed.
+    async fn test_fetch_credentials_propagates_login_error() {
         test_support::set_login(Some(Err(Error::VaultStatus {
             status: 403,
             body: "".into(),
         })));
-
         let pools = vec![("pool".into(), "database/creds/role".into())];
-        let err = rotation_cycle(&vault_cfg(), &pools).await.unwrap_err();
+        let err = vault_client()
+            .fetch_credentials(&pools, apply_credential)
+            .await
+            .unwrap_err();
         assert!(matches!(err, Error::VaultStatus { status: 403, .. }));
     }
 
     #[tokio::test]
-    async fn test_rotation_cycle_propagates_credential_error() {
-        // Credential fetch fails before apply_credential is called, so no pool init needed.
+    async fn test_fetch_credentials_propagates_credential_error() {
         test_support::set_login(Some(Ok(VaultToken {
             client_token: "tok".into(),
             lease_duration: 3600,
@@ -451,9 +493,11 @@ mod tests {
             status: 500,
             body: "".into(),
         })));
-
         let pools = vec![("pool".into(), "database/creds/role".into())];
-        let err = rotation_cycle(&vault_cfg(), &pools).await.unwrap_err();
+        let err = vault_client()
+            .fetch_credentials(&pools, apply_credential)
+            .await
+            .unwrap_err();
         assert!(matches!(err, Error::VaultStatus { status: 500, .. }));
     }
 
@@ -466,8 +510,7 @@ mod tests {
             vault_path: None,
             ..Default::default()
         }];
-        let result = VaultManager::start(&vault_cfg(), &users, Duration::ZERO);
-        assert!(result.is_none());
+        assert!(VaultManager::start(&vault_cfg(), &users, Duration::ZERO).is_none());
     }
 
     #[tokio::test]
@@ -489,20 +532,17 @@ mod tests {
                 ..Default::default()
             },
         ];
-        // Large initial_delay so the spawned renewal_task never actually fires during
-        // the test — we're only checking that a manager is created, not that it runs.
-        let manager = VaultManager::start(&vault_cfg(), &users, Duration::from_secs(3600));
-        // Two vault_path users → one task managing both pools
-        assert!(manager.is_some());
+        // Large initial_delay so the renewal_task never fires during the test.
+        assert!(
+            VaultManager::start(&vault_cfg(), &users, Duration::from_secs(3600)).is_some()
+        );
     }
 
     // ── init ─────────────────────────────────────────────────────────────────
 
     #[tokio::test]
     async fn test_init_populates_config_and_returns_rotation_interval() {
-        // init() calls update_config() only — no reload_from_existing, no pool init needed.
         set_config_only();
-
         test_support::set_login(Some(Ok(VaultToken {
             client_token: "tok".into(),
             lease_duration: 3600,
@@ -517,8 +557,7 @@ mod tests {
         }];
 
         let delay = init(&vault_cfg(), &users).await;
-        // 75% of 3600s = 2700s
-        assert_eq!(delay, Duration::from_secs(2700));
+        assert_eq!(delay, Duration::from_secs(2700)); // 75% of 3600s
 
         let cfg = config();
         let user = cfg.users.users.iter().find(|u| u.name == "pgdog").unwrap();
@@ -532,55 +571,47 @@ mod tests {
             status: 403,
             body: "permission denied".into(),
         })));
-
         let users = vec![pgdog_config::User {
             name: "dml_role".into(),
             vault_path: Some("database/creds/dml-role".into()),
             ..Default::default()
         }];
-
-        let delay = init(&vault_cfg(), &users).await;
-        assert_eq!(
-            delay,
-            Duration::ZERO,
-            "failed init must return ZERO so background task retries immediately"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_init_returns_zero_when_no_vault_users() {
-        let users: Vec<pgdog_config::User> = vec![];
         let delay = init(&vault_cfg(), &users).await;
         assert_eq!(delay, Duration::ZERO);
     }
 
-    // ── AppRole vault_login ───────────────────────────────────────────────────
+    #[tokio::test]
+    async fn test_init_returns_zero_when_no_vault_users() {
+        let delay = init(&vault_cfg(), &[]).await;
+        assert_eq!(delay, Duration::ZERO);
+    }
+
+    // ── VaultClient::login ────────────────────────────────────────────────────
 
     #[tokio::test]
-    async fn test_vault_login_approle() {
+    async fn test_login_approle() {
         test_support::set_login(Some(Ok(VaultToken {
             client_token: "approle-tok".into(),
             lease_duration: 3600,
             renewable: true,
         })));
-        let tok = vault_login(&vault_cfg()).await.unwrap();
+        let tok = vault_client().login().await.unwrap();
         assert_eq!(tok.client_token, "approle-tok");
     }
 
     #[tokio::test]
-    async fn test_vault_login_approle_missing_role_id_errors() {
-        let cfg = VaultConfig {
+    async fn test_login_approle_missing_role_id_errors() {
+        let client = VaultClient::new(VaultConfig {
             role_id: None,
             ..vault_cfg()
-        };
-        let err = vault_login(&cfg).await.unwrap_err();
+        })
+        .unwrap();
+        let err = client.login().await.unwrap_err();
         assert!(matches!(err, Error::SecretId(_)));
     }
 
-    // ── Kubernetes vault_login ────────────────────────────────────────────────
-
     #[tokio::test]
-    async fn test_vault_login_kubernetes() {
+    async fn test_login_kubernetes() {
         use std::io::Write;
         let mut f = tempfile::NamedTempFile::new().unwrap();
         writeln!(f, "eyJhbGciOiJSUzI1NiJ9.stub").unwrap();
@@ -591,36 +622,39 @@ mod tests {
             renewable: true,
         })));
 
-        let cfg = VaultConfig {
+        let client = VaultClient::new(VaultConfig {
             kubernetes_jwt_path: f.path().to_str().unwrap().into(),
             ..k8s_cfg()
-        };
-        let tok = vault_login(&cfg).await.unwrap();
+        })
+        .unwrap();
+        let tok = client.login().await.unwrap();
         assert_eq!(tok.client_token, "k8s-tok");
     }
 
     #[tokio::test]
-    async fn test_vault_login_kubernetes_missing_role_errors() {
-        let cfg = VaultConfig {
+    async fn test_login_kubernetes_missing_role_errors() {
+        let client = VaultClient::new(VaultConfig {
             kubernetes_role: None,
             ..k8s_cfg()
-        };
-        let err = vault_login(&cfg).await.unwrap_err();
+        })
+        .unwrap();
+        let err = client.login().await.unwrap_err();
         assert!(matches!(err, Error::SecretId(_)));
     }
 
     #[tokio::test]
-    async fn test_vault_login_kubernetes_missing_jwt_file_errors() {
-        let cfg = VaultConfig {
+    async fn test_login_kubernetes_missing_jwt_file_errors() {
+        let client = VaultClient::new(VaultConfig {
             kubernetes_jwt_path: "/nonexistent/token".into(),
             ..k8s_cfg()
-        };
-        let err = vault_login(&cfg).await.unwrap_err();
+        })
+        .unwrap();
+        let err = client.login().await.unwrap_err();
         assert!(matches!(err, Error::SecretId(_)));
     }
 
     #[tokio::test]
-    async fn test_rotation_cycle_kubernetes() {
+    async fn test_fetch_credentials_kubernetes() {
         use std::io::Write;
         load_test();
 
@@ -634,12 +668,16 @@ mod tests {
         })));
         test_support::set_credential(Some(Ok(test_cred_with_lease("v-k8s-dml-AbCdEf", 7200))));
 
-        let cfg = VaultConfig {
+        let client = VaultClient::new(VaultConfig {
             kubernetes_jwt_path: f.path().to_str().unwrap().into(),
             ..k8s_cfg()
-        };
+        })
+        .unwrap();
         let pools = vec![("pgdog".into(), "database/creds/dml-role".into())];
-        let lease = rotation_cycle(&cfg, &pools).await.unwrap();
+        let lease = client
+            .fetch_credentials(&pools, apply_credential)
+            .await
+            .unwrap();
         assert_eq!(lease, 7200);
     }
 }

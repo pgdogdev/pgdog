@@ -1,6 +1,21 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+/// How pgdog verifies the Vault server's TLS certificate.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum VaultTlsVerify {
+    /// Skip all TLS verification. Accepts any certificate or hostname.
+    /// Use only in development; never in production.
+    Disable,
+    /// Verify the server certificate is signed by a trusted CA, but do not
+    /// check that the hostname matches the certificate's CN / SANs.
+    VerifyCa,
+    /// Full TLS verification: trusted CA **and** hostname match (default).
+    #[default]
+    VerifyFull,
+}
+
 /// Vault authentication method used by pgdog to obtain a Vault token.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -75,6 +90,18 @@ pub struct VaultConfig {
     /// Vault mount path for the Kubernetes auth method. Default: `kubernetes`.
     #[serde(default = "VaultConfig::default_kubernetes_mount_path")]
     pub kubernetes_mount_path: String,
+
+    // ── TLS fields ────────────────────────────────────────────────────────────
+
+    /// TLS verification mode for connections to the Vault server.
+    /// Default: `verify-full`.
+    #[serde(default)]
+    pub tls_verify: VaultTlsVerify,
+
+    /// Path to a PEM-encoded CA certificate bundle used to verify the Vault
+    /// server's TLS certificate. When provided, the bundle is added on top of
+    /// the system-wide certificate store. When omitted, only system certs are used.
+    pub tls_server_ca_certificate: Option<String>,
 }
 
 impl VaultConfig {
@@ -127,6 +154,8 @@ mod tests {
             kubernetes_role: None,
             kubernetes_jwt_path: VaultConfig::default_kubernetes_jwt_path(),
             kubernetes_mount_path: VaultConfig::default_kubernetes_mount_path(),
+            tls_verify: VaultTlsVerify::VerifyFull,
+            tls_server_ca_certificate: None,
         }
     }
 
@@ -141,6 +170,8 @@ mod tests {
             kubernetes_role: Some("pgdog".into()),
             kubernetes_jwt_path: VaultConfig::default_kubernetes_jwt_path(),
             kubernetes_mount_path: VaultConfig::default_kubernetes_mount_path(),
+            tls_verify: VaultTlsVerify::VerifyFull,
+            tls_server_ca_certificate: None,
         }
     }
 

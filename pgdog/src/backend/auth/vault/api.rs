@@ -1,7 +1,8 @@
 //! Vault HTTP API client built on `reqwest`.
 
-use once_cell::sync::Lazy;
 use serde::Deserialize;
+
+use pgdog_config::{VaultConfig, VaultTlsVerify};
 
 use super::Error;
 
@@ -48,20 +49,42 @@ struct CredentialData {
     password: String,
 }
 
-// ── public API ────────────────────────────────────────────────────────────────
+// ── client construction ───────────────────────────────────────────────────────
 
-static CLIENT: Lazy<reqwest::Client> = Lazy::new(|| {
-    reqwest::Client::builder()
+/// Build a `reqwest::Client` configured with the TLS settings from `cfg`.
+/// Call once per vault config (at startup and in the renewal task) and reuse
+/// the resulting client for all API calls within that lifecycle.
+pub fn build_client(cfg: &VaultConfig) -> Result<reqwest::Client, Error> {
+    let mut builder = reqwest::Client::builder();
+
+    builder = match cfg.tls_verify {
+        VaultTlsVerify::Disable => builder.danger_accept_invalid_certs(true),
+        VaultTlsVerify::VerifyCa => builder.danger_accept_invalid_hostnames(true),
+        VaultTlsVerify::VerifyFull => builder,
+    };
+
+    if let Some(ref ca_path) = cfg.tls_server_ca_certificate {
+        let pem = std::fs::read(ca_path).map_err(|e| {
+            Error::Http(format!(
+                "vault: failed to read tls_server_ca_certificate {ca_path}: {e}"
+            ))
+        })?;
+        let cert = reqwest::Certificate::from_pem(&pem).map_err(|e| {
+            Error::Http(format!("vault: invalid tls_server_ca_certificate: {e}"))
+        })?;
+        builder = builder.add_root_certificate(cert);
+    }
+
+    builder
         .build()
-        .expect("failed to build Vault HTTP client")
-});
-
-fn client() -> &'static reqwest::Client {
-    &CLIENT
+        .map_err(|e| Error::Http(format!("vault: failed to build HTTP client: {e}")))
 }
+
+// ── public API ────────────────────────────────────────────────────────────────
 
 /// Authenticate to Vault via AppRole and return a client token.
 pub async fn approle_login(
+    client: &reqwest::Client,
     addr: &str,
     role_id: &str,
     secret_id: &str,
@@ -74,7 +97,7 @@ pub async fn approle_login(
     let url = format!("{}/v1/auth/approle/login", addr.trim_end_matches('/'));
     let body = serde_json::json!({ "role_id": role_id, "secret_id": secret_id });
 
-    post_login(&url, &body).await
+    post_login(client, &url, &body).await
 }
 
 /// Authenticate to Vault via Kubernetes service account JWT and return a client token.
@@ -83,6 +106,7 @@ pub async fn approle_login(
 /// `role` is the Vault role name configured for this cluster.
 /// `jwt` is the contents of the pod's service account token file.
 pub async fn kubernetes_login(
+    client: &reqwest::Client,
     addr: &str,
     mount_path: &str,
     role: &str,
@@ -100,11 +124,15 @@ pub async fn kubernetes_login(
     );
     let body = serde_json::json!({ "role": role, "jwt": jwt });
 
-    post_login(&url, &body).await
+    post_login(client, &url, &body).await
 }
 
-async fn post_login(url: &str, body: &serde_json::Value) -> Result<VaultToken, Error> {
-    let response = client()
+async fn post_login(
+    client: &reqwest::Client,
+    url: &str,
+    body: &serde_json::Value,
+) -> Result<VaultToken, Error> {
+    let response = client
         .post(url)
         .json(body)
         .send()
@@ -127,6 +155,7 @@ async fn post_login(url: &str, body: &serde_json::Value) -> Result<VaultToken, E
 
 /// Fetch dynamic PostgreSQL credentials from `path` (e.g. `database/creds/dml-role`).
 pub async fn fetch_credential(
+    client: &reqwest::Client,
     addr: &str,
     token: &str,
     path: &str,
@@ -142,7 +171,7 @@ pub async fn fetch_credential(
         path.trim_start_matches('/')
     );
 
-    let response = client()
+    let response = client
         .get(&url)
         .header("X-Vault-Token", token)
         .send()
@@ -176,6 +205,10 @@ async fn check_status(response: reqwest::Response) -> Result<reqwest::Response, 
 }
 
 // ── test support (override hooks) ─────────────────────────────────────────────
+//
+// Thread-local storage so parallel `#[tokio::test]` runs don't interfere.
+// Each test gets a current-thread Tokio runtime on its own thread, so
+// thread_local! gives perfect isolation without any locking.
 
 #[cfg(test)]
 pub mod test_support {
@@ -209,6 +242,17 @@ pub mod test_support {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use once_cell::sync::Lazy;
+
+    // reqwest with rustls-tls needs a process-level CryptoProvider.
+    static RING: Lazy<()> = Lazy::new(|| {
+        let _ = tokio_rustls::rustls::crypto::aws_lc_rs::default_provider().install_default();
+    });
+
+    fn test_client() -> reqwest::Client {
+        let _ = *RING;
+        reqwest::Client::new()
+    }
 
     #[test]
     fn test_parse_login_response() {
@@ -235,6 +279,7 @@ mod tests {
             renewable: true,
         })));
         let token = kubernetes_login(
+            &test_client(),
             "http://irrelevant",
             "kubernetes",
             "pgdog",
@@ -248,11 +293,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_kubernetes_login_propagates_error() {
-        test_support::set_login(Some(Err(Error::VaultStatus {
-            status: 403,
-            body: "".into(),
-        })));
-        let err = kubernetes_login("http://irrelevant", "kubernetes", "pgdog", "jwt")
+        test_support::set_login(Some(Err(Error::VaultStatus { status: 403, body: "".into() })));
+        let err = kubernetes_login(&test_client(), "http://irrelevant", "kubernetes", "pgdog", "jwt")
             .await
             .unwrap_err();
         assert!(matches!(err, Error::VaultStatus { status: 403, .. }));
@@ -282,7 +324,7 @@ mod tests {
             lease_duration: 3600,
             renewable: true,
         })));
-        let token = approle_login("http://irrelevant", "role", "secret")
+        let token = approle_login(&test_client(), "http://irrelevant", "role", "secret")
             .await
             .unwrap();
         assert_eq!(token.client_token, "test-token");
@@ -296,22 +338,62 @@ mod tests {
             password: "pw".into(),
             lease_duration: 86400,
         })));
-        let cred = fetch_credential("http://irrelevant", "tok", "database/creds/dml-role")
-            .await
-            .unwrap();
+        let cred = fetch_credential(
+            &test_client(),
+            "http://irrelevant",
+            "tok",
+            "database/creds/dml-role",
+        )
+        .await
+        .unwrap();
         assert_eq!(cred.username, "v-approle-dml-XyZ");
         assert_eq!(cred.lease_duration, 86400);
     }
 
     #[tokio::test]
     async fn test_approle_login_propagates_error_override() {
-        test_support::set_login(Some(Err(Error::VaultStatus {
-            status: 403,
-            body: "".into(),
-        })));
-        let err = approle_login("http://irrelevant", "role", "bad")
+        test_support::set_login(Some(Err(Error::VaultStatus { status: 403, body: "".into() })));
+        let err = approle_login(&test_client(), "http://irrelevant", "role", "bad")
             .await
             .unwrap_err();
         assert!(matches!(err, Error::VaultStatus { status: 403, .. }));
+    }
+
+    // ── build_client TLS ─────────────────────────────────────────────────────
+
+    fn tls_cfg(tls_verify: VaultTlsVerify, ca: Option<&str>) -> VaultConfig {
+        VaultConfig {
+            address: "https://vault.example.com".into(),
+            auth_method: pgdog_config::VaultAuthMethod::AppRole,
+            pre_rotation_pct: 75,
+            role_id: None,
+            secret_id: None,
+            secret_id_file: None,
+            kubernetes_role: None,
+            kubernetes_jwt_path: VaultConfig::default_kubernetes_jwt_path(),
+            kubernetes_mount_path: VaultConfig::default_kubernetes_mount_path(),
+            tls_verify,
+            tls_server_ca_certificate: ca.map(String::from),
+        }
+    }
+
+    #[test]
+    fn test_build_client_verify_full_default() {
+        assert!(build_client(&tls_cfg(VaultTlsVerify::VerifyFull, None)).is_ok());
+    }
+
+    #[test]
+    fn test_build_client_disable() {
+        assert!(build_client(&tls_cfg(VaultTlsVerify::Disable, None)).is_ok());
+    }
+
+    #[test]
+    fn test_build_client_verify_ca() {
+        assert!(build_client(&tls_cfg(VaultTlsVerify::VerifyCa, None)).is_ok());
+    }
+
+    #[test]
+    fn test_build_client_invalid_ca_path_errors() {
+        assert!(build_client(&tls_cfg(VaultTlsVerify::VerifyFull, Some("/nonexistent/ca.pem"))).is_err());
     }
 }

@@ -37,7 +37,7 @@ pub use rewrite::{Rewrite, RewriteMode};
 pub use sharding::*;
 pub use system_catalogs::system_catalogs;
 pub use users::{Admin, Plugin, ServerAuth, User, Users};
-pub use vault::{VaultAuthMethod, VaultConfig};
+pub use vault::{VaultAuthMethod, VaultConfig, VaultTlsVerify};
 
 use std::time::Duration;
 
