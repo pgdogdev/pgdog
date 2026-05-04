@@ -10,7 +10,7 @@ use tokio::time::Instant;
 use tokio::{select, spawn, time::interval};
 use tracing::{debug, info, warn};
 
-use super::super::{publisher::Table, Error, TableValidationError, TableValidationErrors};
+use super::super::{ensure_validation, publisher::Table, Error};
 use super::ReplicationSlot;
 
 use crate::backend::replication::logical::subscriber::stream::StreamSubscriber;
@@ -320,22 +320,14 @@ impl Publisher {
         // Validate all tables support replication before committing to
         // what can be a multi-hour copy.  A table with no primary key or
         // unique replica-identity index cannot be replicated correctly.
-        let mut validation_errors: Vec<_> = self
+        let validation_errors: Vec<_> = self
             .tables
             .values()
             .flat_map(|t| t.iter())
             .filter_map(|t| t.valid().err())
             .collect();
 
-        if !validation_errors.is_empty() {
-            validation_errors.sort_by_key(|e| match e {
-                TableValidationError::NoIdentityColumns(table) => table.name.clone(),
-            });
-
-            return Err(Error::TableValidation(TableValidationErrors(
-                validation_errors,
-            )));
-        }
+        ensure_validation!(validation_errors);
 
         // Create replication slots only after validation passes — a slot
         // created before valid() would be orphaned on a NoIdentityColumns error.
@@ -576,9 +568,9 @@ mod test {
         assert_eq!(
             err.to_string(),
             "Table validation failed:\n\
-            \ttable \"pgdog\".\"publication_test_no_pk\" has no replica identity columns\n\
-            \ttable \"pgdog\".\"publication_test_no_pk_2\" has no replica identity columns\n\
-            \ttable \"pgdog\".\"publication_test_no_pk_3\" has no replica identity columns",
+            \ttable \"pgdog\".\"publication_test_no_pk\": has no replica identity columns\n\
+            \ttable \"pgdog\".\"publication_test_no_pk_2\": has no replica identity columns\n\
+            \ttable \"pgdog\".\"publication_test_no_pk_3\": has no replica identity columns",
         );
 
         assert!(
@@ -592,6 +584,54 @@ mod test {
             "DROP TABLE IF EXISTS publication_test_no_pk_3",
             "DROP TABLE IF EXISTS publication_test_no_pk_2",
             "DROP TABLE IF EXISTS publication_test_no_pk",
+        ] {
+            server.execute(*ddl).await.unwrap();
+        }
+    }
+
+    /// `REPLICA IDENTITY NOTHING` must be rejected at `data_sync` time,
+    /// before any replication slot is created. This test executes against
+    /// a real Postgres instance so it validates the full metadata-fetch + valid() path.
+    #[tokio::test]
+    async fn data_sync_rejects_replica_identity_nothing() {
+        crate::logger();
+
+        let mut server = test_replication_server().await;
+        for ddl in &[
+            "CREATE TABLE IF NOT EXISTS pub_test_nothing (data TEXT NOT NULL)",
+            "ALTER TABLE pub_test_nothing REPLICA IDENTITY NOTHING",
+            "DROP PUBLICATION IF EXISTS pub_full_identity_nothing_test",
+            "CREATE PUBLICATION pub_full_identity_nothing_test FOR TABLE pub_test_nothing",
+        ] {
+            server.execute(*ddl).await.unwrap();
+        }
+
+        let source = Cluster::new_test(&config());
+        source.launch();
+        let dest = Cluster::new_test(&config());
+
+        let mut publisher = Publisher::new(
+            "pub_full_identity_nothing_test",
+            QueryParserEngine::default(),
+            "pub_full_identity_nothing_slot".into(),
+        );
+
+        let result = publisher.data_sync(&source, &dest).await;
+
+        let err = result.expect_err("data_sync must fail for REPLICA IDENTITY NOTHING table");
+        assert!(
+            err.to_string().contains("REPLICA IDENTITY NOTHING"),
+            "expected NOTHING in error message, got: {err}"
+        );
+        assert!(
+            publisher.slots.is_empty(),
+            "no replication slot must be created when NOTHING table is present"
+        );
+
+        source.shutdown();
+        for ddl in &[
+            "DROP PUBLICATION IF EXISTS pub_full_identity_nothing_test",
+            "DROP TABLE IF EXISTS pub_test_nothing",
         ] {
             server.execute(*ddl).await.unwrap();
         }

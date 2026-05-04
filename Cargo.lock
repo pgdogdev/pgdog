@@ -1465,6 +1465,7 @@ dependencies = [
  "quote",
  "rustc_version",
  "syn 2.0.117",
+ "unicode-xid",
 ]
 
 [[package]]
@@ -3166,6 +3167,7 @@ dependencies = [
  "csv-core",
  "dashmap",
  "derive_builder",
+ "derive_more",
  "fnv",
  "futures",
  "hickory-resolver",

@@ -14,7 +14,7 @@ pub use logical::relation::Relation;
 pub use logical::stream_start::StreamStart;
 pub use logical::truncate::Truncate;
 pub use logical::tuple_data::TupleData;
-pub use logical::update::Update;
+pub use logical::update::{Update, UpdateIdentity};
 pub use status_update::StatusUpdate;
 pub use xlog_data::XLogData;
 
