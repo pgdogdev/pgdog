@@ -75,7 +75,10 @@ successive `[0.000 MB/sec]` log lines, confirms this deadlock.
 
 ## Solutions
 
-### Solution 1: sequential per-destination apply in `send()`
+### Solution 1: sequential per-destination apply in `send()` ✅ implemented
+
+**What:** collapse the three loops in `send()` into a single loop that completes
+the full write→read cycle for each destination before moving to the next.
 
 Collapse the three loops in `send()` (`stream.rs:238-277`) into one that completes write→read per
 destination before moving on:
@@ -83,10 +86,9 @@ destination before moving on:
 ```rust
 for conn in &mut conns {
     conn.send(&vec![bind.clone().into(), Execute::new().into(), Flush.into()].into()).await?;
-    conn.flush().await?;
     for _ in 0..2 {
         let msg = conn.read().await?;
-        // ... existing response handling ...
+        // ... response handling ...
     }
 }
 ```
@@ -99,6 +101,13 @@ until `Sync` in `commit()`), so two omni rows still produce a cross-row, cross-d
 This is the case in `repro_deadlock.sh`. **Not sufficient alone** for any workload with multi-row
 omni transactions.
 
+**Parallelism cost:** sequential apply trades per-row latency for safety — destination
+round-trips are now additive rather than overlapping. Parallel sends cannot be restored
+without additional mechanisms: they break consistent lock ordering, allowing sub-0 to
+acquire dest-0's lock while sub-1 acquires dest-1's lock before either reads back,
+re-introducing the cycle. The structural fix is destination-partitioned apply (see
+below), which assigns disjoint destination shards to each subscriber so parallel sends
+within a subscriber are safe.
 ---
 
 ### Solution 2: `lock_timeout` on destination connections

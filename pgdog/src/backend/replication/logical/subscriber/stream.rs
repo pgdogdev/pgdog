@@ -223,28 +223,19 @@ impl StreamSubscriber {
 
     // Dispatch a pre-built bind to the matching shard(s).
     async fn send(&mut self, val: &Shard, bind: &Bind) -> Result<(), Error> {
-        let mut conns: Vec<_> = self
-            .connections
-            .iter_mut()
-            .enumerate()
-            .filter(|(shard, _)| match val {
-                Shard::Direct(direct) => *shard == *direct,
-                Shard::Multi(multi) => multi.contains(shard),
+        for (shard, conn) in self.connections.iter_mut().enumerate() {
+            let routes = match val {
+                Shard::Direct(direct) => shard == *direct,
+                Shard::Multi(multi) => multi.contains(&shard),
                 _ => true,
-            })
-            .map(|(_, server)| server)
-            .collect();
+            };
+            if !routes {
+                continue;
+            }
 
-        for conn in &mut conns {
             conn.send(&vec![bind.clone().into(), Execute::new().into(), Flush.into()].into())
                 .await?;
-        }
 
-        for conn in &mut conns {
-            conn.flush().await?;
-        }
-
-        for conn in &mut conns {
             // Keep server connections always synchronized.
             for _ in 0..2 {
                 let msg = conn.read().await?;
