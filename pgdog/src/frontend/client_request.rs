@@ -98,8 +98,8 @@ impl ClientRequest {
     /// send it to the query engine.
     pub fn is_complete(&self) -> bool {
         if let Some(message) = self.messages.last() {
-            // Flush (F) | Sync (F) | Query (F) | CopyDone (F) | CopyFail (F)
-            if matches!(message.code(), 'H' | 'S' | 'Q' | 'c' | 'f') {
+            // Flush (H) | Sync (S) | Query (Q) | CopyDone (c) | CopyFail (f) | Fastpath (F)
+            if matches!(message.code(), 'H' | 'S' | 'Q' | 'c' | 'f' | 'F') {
                 return true;
             }
 

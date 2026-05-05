@@ -257,7 +257,15 @@ impl PreparedStatements {
                 self.state.action('f')?;
             }
 
-            ProtocolMessage::CopyData(_) | ProtocolMessage::Other(_) => (),
+            ProtocolMessage::CopyData(_) => (),
+
+            // Fastpath (F): backend responds with FunctionCallResponse (V) + ReadyForQuery (Z).
+            // V is Untracked and passes through; register Z so the response loop runs.
+            ProtocolMessage::Fastpath(_) => {
+                self.state.add('Z');
+            }
+
+            ProtocolMessage::Other(_) => (),
         }
 
         Ok(HandleResult::Forward)
