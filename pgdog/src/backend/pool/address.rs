@@ -1,11 +1,13 @@
 //! Server address.
 use std::net::{SocketAddr, ToSocketAddrs};
+use std::ops::Deref;
 
 use pgdog_config::users::PasswordKind;
 use pgdog_config::Role;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
+use super::Password;
 use crate::backend::{pool::dns_cache::DnsCache, Error};
 use crate::config::{config, Database, ServerAuth, User};
 
@@ -21,7 +23,7 @@ pub struct Address {
     /// Username.
     pub user: String,
     /// Password.
-    pub passwords: Vec<String>,
+    pub passwords: Vec<Password>,
     /// Server auth mode for backend connections.
     #[serde(default)]
     pub server_auth: ServerAuth,
@@ -41,7 +43,7 @@ impl From<Address> for pgdog_stats::Address {
             port: value.port,
             database_name: value.database_name,
             user: value.user,
-            passwords: value.passwords.clone(),
+            passwords: value.passwords.iter().map(|p| p.deref().clone()).collect(),
             server_auth: value.server_auth,
             server_iam_region: value.server_iam_region,
             database_number: value.database_number,
@@ -72,14 +74,14 @@ impl Address {
             passwords: if server_auth.is_external_identity() {
                 vec![]
             } else if let Some(password) = database.password.clone() {
-                vec![password]
+                vec![password.into()]
             } else if let Some(password) = user.server_password.clone() {
-                vec![password]
+                vec![password.into()]
             } else {
                 user.passwords()
                     .into_iter()
                     .filter(|p| matches!(p, PasswordKind::Plain(_)))
-                    .map(|p| p.to_string())
+                    .map(|p| p.to_string().into())
                     .collect()
             },
             server_auth,
@@ -89,15 +91,22 @@ impl Address {
         }
     }
 
-    pub async fn auth_secrets(&self) -> Result<Vec<String>, Error> {
-        match self.server_auth {
-            // Vault: vault::init() already wrote server_password into Address.passwords at startup
-            ServerAuth::Password | ServerAuth::Vault => Ok(self.passwords.clone()),
-            ServerAuth::RdsIam => Ok(vec![crate::backend::auth::rds_iam::token(self).await?]),
-            ServerAuth::AzureWorkloadIdentity => Ok(vec![
-                crate::backend::auth::azure_workload_identity::token(self).await?,
-            ]),
-        }
+    /// Get address passwords, in valid order.
+    pub async fn auth_secrets(&self) -> Result<Vec<Password>, Error> {
+        let mut secrets = match self.server_auth {
+            ServerAuth::Password => self.passwords.clone(),
+            ServerAuth::RdsIam => vec![crate::backend::auth::rds_iam::token(self).await?.into()],
+            ServerAuth::AzureWorkloadIdentity => {
+                vec![crate::backend::auth::azure_workload_identity::token(self)
+                    .await?
+                    .into()]
+            }
+        };
+
+        // Give the valid password first.
+        secrets.sort_by_cached_key(|p| !p.is_valid());
+
+        Ok(secrets)
     }
 
     pub async fn addr(&self) -> Result<SocketAddr, Error> {
@@ -160,7 +169,7 @@ impl TryFrom<Url> for Address {
         Ok(Self {
             host,
             port,
-            passwords: vec![password],
+            passwords: vec![password.into()],
             user,
             database_name,
             server_auth: ServerAuth::Password,
@@ -351,6 +360,79 @@ mod test {
         crate::backend::auth::rds_iam::set_test_token_override(None);
 
         assert_eq!(secret, "token-from-iam");
+    }
+
+    #[tokio::test]
+    async fn test_auth_secrets_returns_valid_password_first() {
+        let mut addr = Address::new_test();
+        let invalid1: Password = "invalid1".into();
+        let invalid2: Password = "invalid2".into();
+        let valid: Password = "valid".into();
+        invalid1.valid(false);
+        invalid2.valid(false);
+        addr.passwords = vec![invalid1, valid, invalid2];
+
+        let secrets = addr.auth_secrets().await.unwrap();
+        assert_eq!(secrets.len(), 3);
+        assert_eq!(secrets.first().unwrap(), "valid");
+        assert!(secrets.first().unwrap().is_valid());
+
+        // Even if the valid password is last, it should still come first.
+        let mut addr = Address::new_test();
+        let invalid1: Password = "invalid1".into();
+        let invalid2: Password = "invalid2".into();
+        let valid: Password = "valid".into();
+        invalid1.valid(false);
+        invalid2.valid(false);
+        addr.passwords = vec![invalid1, invalid2, valid];
+
+        let secrets = addr.auth_secrets().await.unwrap();
+        assert_eq!(secrets.first().unwrap(), "valid");
+
+        // With multiple valid passwords, a valid one is still first.
+        let mut addr = Address::new_test();
+        let invalid: Password = "invalid".into();
+        invalid.valid(false);
+        addr.passwords = vec![invalid, "valid_a".into(), "valid_b".into()];
+
+        let secrets = addr.auth_secrets().await.unwrap();
+        let head = secrets.first().unwrap();
+        assert!(head.is_valid());
+        assert!(head == "valid_a" || head == "valid_b");
+
+        // Flipping validity at runtime changes which password comes first.
+        let mut addr = Address::new_test();
+        let first: Password = "first".into();
+        let second: Password = "second".into();
+        addr.passwords = vec![first.clone(), second.clone()];
+
+        // Both valid: order is preserved (sort is stable on the !is_valid key).
+        let secrets = addr.auth_secrets().await.unwrap();
+        assert_eq!(secrets.first().unwrap(), "first");
+        assert_eq!(secrets.get(1).unwrap(), "second");
+
+        // Mark "first" invalid — "second" must now win.
+        first.valid(false);
+        let secrets = addr.auth_secrets().await.unwrap();
+        assert_eq!(secrets.first().unwrap(), "second");
+        assert!(secrets.first().unwrap().is_valid());
+        assert_eq!(secrets.get(1).unwrap(), "first");
+        assert!(!secrets.get(1).unwrap().is_valid());
+
+        // Mark "second" invalid too — no valid password, but order stays stable.
+        second.valid(false);
+        let secrets = addr.auth_secrets().await.unwrap();
+        assert_eq!(secrets.first().unwrap(), "first");
+        assert!(!secrets.first().unwrap().is_valid());
+        assert_eq!(secrets.get(1).unwrap(), "second");
+
+        // Restore "first" — it should be returned first again.
+        first.valid(true);
+        let secrets = addr.auth_secrets().await.unwrap();
+        assert_eq!(secrets.first().unwrap(), "first");
+        assert!(secrets.first().unwrap().is_valid());
+        assert_eq!(secrets.get(1).unwrap(), "second");
+        assert!(!secrets.get(1).unwrap().is_valid());
     }
 
     #[tokio::test]

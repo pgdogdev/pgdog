@@ -11,30 +11,47 @@ use crate::{
     net::{replication::TupleData, Bind, Parameters, Parse},
 };
 
+/// Holds the pre-computed `Bind` message and destination `Shard` for a single replication event.
+/// Build with `new`; pass to the subscriber's send path to apply the event to the correct shard.
 #[derive(Debug)]
-pub struct StreamContext<'a> {
-    request: ClientRequest,
-    cluster: &'a Cluster,
+pub struct StreamContext {
     bind: Bind,
-    parse: Parse,
+    shard: Shard,
 }
 
-impl<'a> StreamContext<'a> {
-    /// Construct new stream context.
-    pub fn new(cluster: &'a Cluster, tuple: &TupleData, stmt: &Parse) -> Self {
+impl StreamContext {
+    /// Build a `StreamContext` from a WAL tuple and a prepared-statement parse.
+    ///
+    /// Runs the router to resolve the destination shard. Returns an error if
+    /// routing fails (e.g. unparseable query, wrong command type).
+    pub fn new(cluster: &Cluster, tuple: &TupleData, stmt: &Parse) -> Result<Self, Error> {
         let bind = tuple.to_bind(stmt.name());
-        let parse = stmt.clone();
-        let request = ClientRequest::from(vec![parse.clone().into(), bind.clone().into()]);
-        Self {
-            request,
-            cluster,
-            bind,
-            parse,
-        }
+        let shard = Self::resolve_shard(cluster, &bind, stmt)?;
+        Ok(Self { bind, shard })
     }
 
-    pub fn shard(&'a mut self) -> Result<Shard, Error> {
-        let router_context = self.router_context()?;
+    /// Route `stmt` through the query router and return the destination shard.
+    ///
+    /// Takes the already-built `bind` so the router sees the real parameter values
+    /// (required for sharding-key extraction). Separated from `new` so the routing
+    /// logic can be read, tested, and changed independently of bind construction.
+    fn resolve_shard(cluster: &Cluster, bind: &Bind, stmt: &Parse) -> Result<Shard, Error> {
+        lazy_static! {
+            static ref PARAMS: Parameters = Parameters::default();
+        }
+
+        let parse = stmt.clone();
+        let mut request = ClientRequest::from(vec![parse.clone().into(), bind.clone().into()]);
+
+        let ast_context = AstContext::from_cluster(cluster, &PARAMS);
+        let ast = Cache::get().query(
+            &BufferedQuery::Prepared(parse),
+            &ast_context,
+            &mut PreparedStatements::default(),
+        )?;
+        request.ast = Some(ast);
+
+        let router_context = RouterContext::new(&request, cluster, &PARAMS, None, Sticky::new())?;
         let mut router = Router::new();
         let route = router.query(router_context)?;
 
@@ -45,33 +62,14 @@ impl<'a> StreamContext<'a> {
         }
     }
 
-    /// Get Bind message.
+    /// The `Bind` message to send to the destination.
     pub fn bind(&self) -> &Bind {
         &self.bind
     }
 
-    /// Construct router context.
-    pub fn router_context(&'a mut self) -> Result<RouterContext<'a>, Error> {
-        lazy_static! {
-            static ref PARAMS: Parameters = Parameters::default();
-        }
-
-        let ast_context = AstContext::from_cluster(self.cluster, &PARAMS);
-
-        let ast = Cache::get().query(
-            &BufferedQuery::Prepared(self.parse.clone()),
-            &ast_context,
-            &mut PreparedStatements::default(),
-        )?;
-        self.request.ast = Some(ast);
-
-        Ok(RouterContext::new(
-            &self.request,
-            self.cluster,
-            &PARAMS,
-            None,
-            Sticky::new(),
-        )?)
+    /// The shard(s) the statement should be routed to.
+    pub fn shard(&self) -> &Shard {
+        &self.shard
     }
 }
 
@@ -135,10 +133,8 @@ mod test {
         };
         let parse = Parse::new_anonymous("INSERT INTO sharded (customer_id) VALUES ($1)");
 
-        let shard = StreamContext::new(&cluster, &tuple, &parse)
-            .shard()
-            .unwrap();
-        assert!(matches!(shard, Shard::Direct(_)));
+        let shard = StreamContext::new(&cluster, &tuple, &parse).unwrap();
+        assert!(matches!(shard.shard(), Shard::Direct(_)));
     }
 
     // Verify that $N in the generated SQL matches the bind slot to_bind() places

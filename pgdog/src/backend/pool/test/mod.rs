@@ -10,6 +10,7 @@ use tokio::task::yield_now;
 use tokio::time::{sleep, timeout, Instant};
 use tokio_util::task::TaskTracker;
 
+use crate::backend::ConnectReason;
 use crate::net::ProtocolMessage;
 use crate::net::{Parse, Protocol, Query, Sync};
 use crate::state::State;
@@ -767,6 +768,140 @@ async fn test_move_conns_destination_serves_after_launch() {
     drop(c);
     sleep(Duration::from_millis(50)).await;
     assert_eq!(destination.lock().idle(), 1);
+}
+
+fn auth_pool(passwords: Vec<Password>) -> Pool {
+    let config = Config {
+        inner: pgdog_stats::Config {
+            max: 1,
+            min: 0,
+            connect_attempts: 1,
+            ..Config::default().inner
+        },
+    };
+
+    Pool::new(&PoolConfig {
+        address: Address {
+            host: "127.0.0.1".into(),
+            port: 5432,
+            database_name: "pgdog".into(),
+            user: "pgdog".into(),
+            passwords,
+            ..Default::default()
+        },
+        config,
+    })
+}
+
+#[tokio::test]
+async fn test_auth_attempts_single_good_password() {
+    crate::logger();
+
+    let pool = auth_pool(vec!["pgdog".into()]);
+    assert_eq!(pool.state().stats.counts.auth_attempts, 0);
+
+    let conn = pool.standalone(ConnectReason::Other).await.unwrap();
+    drop(conn);
+
+    // Single valid password — exactly one attempt, which succeeded.
+    assert_eq!(pool.state().stats.counts.auth_attempts, 1);
+    assert!(pool.addr().passwords[0].is_valid());
+}
+
+#[tokio::test]
+async fn test_auth_attempts_good_first_among_bad() {
+    crate::logger();
+
+    let pool = auth_pool(vec!["pgdog".into(), "wrong1".into(), "wrong2".into()]);
+
+    let conn = pool.standalone(ConnectReason::Other).await.unwrap();
+    drop(conn);
+
+    // First password worked on attempt #1; the bad ones were never tried.
+    assert_eq!(pool.state().stats.counts.auth_attempts, 1);
+    assert!(pool.addr().passwords[0].is_valid());
+    assert!(pool.addr().passwords[1].is_valid());
+    assert!(pool.addr().passwords[2].is_valid());
+}
+
+#[tokio::test]
+async fn test_auth_attempts_good_last_among_bad() {
+    crate::logger();
+
+    let pool = auth_pool(vec!["wrong1".into(), "wrong2".into(), "pgdog".into()]);
+
+    let conn = pool.standalone(ConnectReason::Other).await.unwrap();
+    drop(conn);
+
+    // Each bad password was tried before the good one worked on attempt #3.
+    assert_eq!(pool.state().stats.counts.auth_attempts, 3);
+    let pwds = &pool.addr().passwords;
+    assert!(
+        !pwds[0].is_valid(),
+        "first wrong password should be invalid"
+    );
+    assert!(
+        !pwds[1].is_valid(),
+        "second wrong password should be invalid"
+    );
+    assert!(pwds[2].is_valid(), "good password should remain valid");
+
+    // Second connect: auth_secrets() sorts the valid one first, so we
+    // succeed on the very first try — counter only bumps by 1.
+    let conn = pool.standalone(ConnectReason::Other).await.unwrap();
+    drop(conn);
+    assert_eq!(pool.state().stats.counts.auth_attempts, 4);
+}
+
+#[tokio::test]
+async fn test_auth_attempts_all_bad_passwords() {
+    crate::logger();
+
+    let pool = auth_pool(vec!["wrong1".into(), "wrong2".into(), "wrong3".into()]);
+    assert_eq!(pool.state().stats.counts.auth_attempts, 0);
+
+    let err = pool.standalone(ConnectReason::Other).await;
+    assert!(err.is_err(), "all-bad-password connect must fail");
+
+    // Every password was tried and rejected.
+    assert_eq!(pool.state().stats.counts.auth_attempts, 3);
+    for pwd in &pool.addr().passwords {
+        assert!(!pwd.is_valid());
+    }
+
+    // A second attempt should bump the counter by another N — the pool has
+    // no valid password, so it must re-try them all.
+    let err = pool.standalone(ConnectReason::Other).await;
+    assert!(err.is_err());
+    assert_eq!(pool.state().stats.counts.auth_attempts, 6);
+}
+
+#[tokio::test]
+async fn test_auth_attempts_single_bad_password() {
+    crate::logger();
+
+    let pool = auth_pool(vec!["wrong".into()]);
+
+    let err = pool.standalone(ConnectReason::Other).await;
+    assert!(err.is_err());
+    assert_eq!(pool.state().stats.counts.auth_attempts, 1);
+    assert!(!pool.addr().passwords[0].is_valid());
+}
+
+#[tokio::test]
+async fn test_auth_attempts_recovers_after_password_added() {
+    crate::logger();
+
+    // Start with all-bad — first connect fails and marks them all invalid.
+    let pool = auth_pool(vec!["wrong1".into(), "wrong2".into()]);
+
+    assert!(pool.standalone(ConnectReason::Other).await.is_err());
+    assert_eq!(pool.state().stats.counts.auth_attempts, 2);
+
+    // Marking one of them valid (e.g. password rotation discovered) must
+    // not retroactively change the counter.
+    pool.addr().passwords[0].valid(true);
+    assert_eq!(pool.state().stats.counts.auth_attempts, 2);
 }
 
 #[tokio::test]
