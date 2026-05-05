@@ -181,4 +181,12 @@ impl Error {
             _ => false,
         }
     }
+
+    pub fn is_auth(&self) -> bool {
+        match self {
+            Self::Auth(_) => true,
+            Self::ConnectionError(err) => err.code == "28000" || err.is_bad_password(),
+            _ => false,
+        }
+    }
 }

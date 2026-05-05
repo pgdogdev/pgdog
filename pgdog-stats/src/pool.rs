@@ -60,6 +60,8 @@ pub struct Counts {
     pub reads: usize,
     /// Number of write transactions.
     pub writes: usize,
+    /// Password attempts.
+    pub auth_attempts: usize,
 }
 
 impl Sub for Counts {
@@ -91,6 +93,7 @@ impl Sub for Counts {
             connect_count: self.connect_count.saturating_sub(rhs.connect_count),
             reads: self.reads.saturating_sub(rhs.reads),
             writes: self.writes.saturating_sub(rhs.writes),
+            auth_attempts: self.auth_attempts.saturating_sub(rhs.auth_attempts),
         }
     }
 }
@@ -124,6 +127,7 @@ impl Add for Counts {
             connect_time: self.connect_time.saturating_add(rhs.connect_time),
             reads: self.reads.saturating_add(rhs.reads),
             writes: self.writes.saturating_add(rhs.writes),
+            auth_attempts: self.auth_attempts.saturating_add(rhs.auth_attempts),
         }
     }
 }
@@ -161,6 +165,7 @@ impl Div<usize> for Counts {
             connect_count: self.connect_count.checked_div(rhs).unwrap_or(0),
             reads: self.reads.checked_div(rhs).unwrap_or(0),
             writes: self.writes.checked_div(rhs).unwrap_or(0),
+            auth_attempts: self.auth_attempts.checked_div(rhs).unwrap_or(0),
         }
     }
 }

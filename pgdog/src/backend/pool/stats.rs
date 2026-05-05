@@ -179,6 +179,7 @@ mod tests {
             connect_count: 8,
             reads: 25,
             writes: 50,
+            auth_attempts: 30,
         }
         .into();
 
@@ -205,6 +206,7 @@ mod tests {
             connect_count: 4,
             reads: 10,
             writes: 20,
+            auth_attempts: 20,
         }
         .into();
 
@@ -232,6 +234,7 @@ mod tests {
         assert_eq!(result.connect_count, 12);
         assert_eq!(result.reads, 35);
         assert_eq!(result.writes, 70);
+        assert_eq!(result.auth_attempts, 50);
     }
 
     #[test]
@@ -259,6 +262,7 @@ mod tests {
             connect_count: 8,
             reads: 25,
             writes: 50,
+            auth_attempts: 50,
         }
         .into();
 
@@ -285,6 +289,7 @@ mod tests {
             connect_count: 4,
             reads: 10,
             writes: 20,
+            auth_attempts: 30,
         }
         .into();
 
@@ -312,6 +317,7 @@ mod tests {
         assert_eq!(result.connect_count, 4);
         assert_eq!(result.reads, 15);
         assert_eq!(result.writes, 30);
+        assert_eq!(result.auth_attempts, 20);
     }
 
     #[test]
@@ -361,6 +367,7 @@ mod tests {
             connect_count: 4,
             reads: 10,
             writes: 20,
+            auth_attempts: 10,
         }
         .into();
 
@@ -388,6 +395,7 @@ mod tests {
         assert_eq!(result.connect_count, 2);
         assert_eq!(result.reads, 5);
         assert_eq!(result.writes, 10);
+        assert_eq!(result.auth_attempts, 5);
     }
 
     #[test]
@@ -430,6 +438,7 @@ mod tests {
             connect_count: 8,
             reads: 10,
             writes: 25,
+            auth_attempts: 100,
         }
         .into();
 
@@ -477,6 +486,7 @@ mod tests {
         assert_eq!(result.connect_time, Duration::from_secs(1));
         assert_eq!(result.reads, 10);
         assert_eq!(result.writes, 25);
+        assert_eq!(result.auth_attempts, 100);
     }
 
     #[test]
