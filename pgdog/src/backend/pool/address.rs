@@ -94,6 +94,7 @@ impl Address {
     /// Get address passwords, in valid order.
     pub async fn auth_secrets(&self) -> Result<Vec<Password>, Error> {
         let mut secrets = match self.server_auth {
+            ServerAuth::Vault => self.passwords.clone(), // Vault passwords are set on boot. TODO: refresh them on `RELOAD`/`RECONNECT`.
             ServerAuth::Password => self.passwords.clone(),
             ServerAuth::RdsIam => vec![crate::backend::auth::rds_iam::token(self).await?.into()],
             ServerAuth::AzureWorkloadIdentity => {
@@ -238,8 +239,15 @@ mod test {
         };
 
         let address = Address::new(&database, &user, 0);
-        assert_eq!(address.user, "v-approle-dml-XyZ", "must use vault-generated username");
-        assert_eq!(address.passwords, vec!["vault-pass"], "must use vault-generated password");
+        assert_eq!(
+            address.user, "v-approle-dml-XyZ",
+            "must use vault-generated username"
+        );
+        assert_eq!(
+            address.passwords,
+            vec!["vault-pass"],
+            "must use vault-generated password"
+        );
         assert_eq!(address.server_auth, ServerAuth::Vault);
     }
 
