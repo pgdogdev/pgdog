@@ -35,6 +35,11 @@ impl Default for ErrorResponse {
 }
 
 impl ErrorResponse {
+    /// True if this error response signals an invalid password (SQLSTATE 28P01).
+    pub fn is_bad_password(&self) -> bool {
+        self.code == "28P01"
+    }
+
     /// Authentication error.
     pub fn auth(user: &str, database: &str) -> ErrorResponse {
         ErrorResponse {

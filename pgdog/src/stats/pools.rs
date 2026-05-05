@@ -84,6 +84,8 @@ impl Pools {
         let mut total_writes = vec![];
         let mut avg_writes = vec![];
         let mut total_sv_xact_idle = vec![];
+        let mut total_auth_attempts = vec![];
+        let mut avg_auth_attempts = vec![];
 
         let general = &crate::config::config().config.general;
 
@@ -302,6 +304,16 @@ impl Pools {
                     total_sv_xact_idle.push(Measurement {
                         labels: labels.clone(),
                         measurement: backend::stats::idle_in_transaction(&pool).into(),
+                    });
+
+                    total_auth_attempts.push(Measurement {
+                        labels: labels.clone(),
+                        measurement: totals.auth_attempts.into(),
+                    });
+
+                    avg_auth_attempts.push(Measurement {
+                        labels: labels.clone(),
+                        measurement: averages.auth_attempts.into(),
                     });
                 }
             }
@@ -652,6 +664,22 @@ impl Pools {
             name: "sv_idle_xact".into(),
             measurements: total_sv_xact_idle,
             help: "Servers currently idle in transaction.".into(),
+            unit: None,
+            metric_type: None,
+        }));
+
+        metrics.push(Metric::new(PoolMetric {
+            name: "total_auth_attempts".into(),
+            measurements: total_auth_attempts,
+            help: "Total number of server authentication attempts.".into(),
+            unit: None,
+            metric_type: Some("counter".into()),
+        }));
+
+        metrics.push(Metric::new(PoolMetric {
+            name: "avg_auth_attempts".into(),
+            measurements: avg_auth_attempts,
+            help: "Average number of server authentication attempts per statistics period.".into(),
             unit: None,
             metric_type: None,
         }));

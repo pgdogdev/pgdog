@@ -64,6 +64,7 @@ pub struct Server {
     pooler_mode: PoolerMode,
     stream_buffer: MessageBuffer,
     disconnect_reason: Option<DisconnectReason>,
+    password_attempts: usize,
 }
 
 impl MemoryUsage for Server {
@@ -78,6 +79,7 @@ impl MemoryUsage for Server {
             + 7 * std::mem::size_of::<bool>()
             + std::mem::size_of::<PoolerMode>()
             + self.stream_buffer.capacity()
+            + self.password_attempts.memory_usage()
     }
 }
 
@@ -99,9 +101,13 @@ impl Server {
             )
             .await
             {
-                Ok(server) => return Ok(server),
+                Ok(mut server) => {
+                    auth_secret.valid(true);
+                    server.password_attempts = idx + 1;
+                    return Ok(server);
+                }
                 Err(Error::ConnectionError(error)) => {
-                    if error.code == "28P01" {
+                    if error.is_bad_password() {
                         warn!(
                             "{}/{} password is incorrect, {} password candidates remaining [{}]",
                             idx + 1,
@@ -109,6 +115,7 @@ impl Server {
                             total - idx - 1,
                             addr
                         );
+                        auth_secret.valid(false);
                         continue;
                     } else {
                         return Err(Error::ConnectionError(error));
@@ -334,6 +341,7 @@ impl Server {
             pooler_mode: PoolerMode::Transaction,
             stream_buffer: MessageBuffer::new(config.config.memory.message_buffer),
             disconnect_reason: None,
+            password_attempts: 1, // This is going to be changed by parent caller.
         };
 
         server.stats.memory_used(server.memory_stats()); // Stream capacity.
@@ -986,6 +994,12 @@ impl Server {
         &self.id
     }
 
+    /// Number of password attempts it took to authenticate this connection.
+    #[inline]
+    pub fn password_attempts(&self) -> usize {
+        self.password_attempts
+    }
+
     /// How old this connection is.
     #[inline]
     pub fn age(&self, instant: Instant) -> Duration {
@@ -1173,6 +1187,7 @@ pub mod test {
                 disconnect_reason: None,
                 statement_executed: false,
                 sending_request: false,
+                password_attempts: 1,
             }
         }
     }

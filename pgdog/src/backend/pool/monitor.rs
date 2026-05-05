@@ -350,11 +350,16 @@ impl Monitor {
                         let mut guard = pool.lock();
                         guard.stats.counts.connect_count += 1;
                         guard.stats.counts.connect_time += elapsed;
+                        guard.stats.counts.auth_attempts += conn.password_attempts();
                     }
                     return Ok(conn);
                 }
 
                 Ok(Err(err)) => {
+                    // We tried all passwords and they were all wrong.
+                    if err.is_auth() {
+                        pool.lock().stats.counts.auth_attempts += pool.addr().passwords.len();
+                    }
                     error!(
                         "{}error connecting to server: {} [{}]",
                         if attempt > 0 {
