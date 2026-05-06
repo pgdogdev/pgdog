@@ -83,6 +83,8 @@ pub struct Cluster {
     resharding_parallel_copies: usize,
     resharding_copy_retry_max_attempts: usize,
     resharding_copy_retry_min_delay: Duration,
+    resharding_replication_retry_max_attempts: usize,
+    resharding_replication_retry_min_delay: Duration,
     regex_parser: RegexParser,
     mutual_tls: bool,
 }
@@ -167,6 +169,8 @@ pub struct ClusterConfig<'a> {
     pub resharding_parallel_copies: usize,
     pub resharding_copy_retry_max_attempts: usize,
     pub resharding_copy_retry_min_delay: u64,
+    pub resharding_replication_retry_max_attempts: usize,
+    pub resharding_replication_retry_min_delay: u64,
     pub regex_parser_limit: usize,
     pub pub_sub_enabled: bool,
     pub mutual_tls: bool,
@@ -227,6 +231,9 @@ impl<'a> ClusterConfig<'a> {
             resharding_parallel_copies: general.resharding_parallel_copies,
             resharding_copy_retry_max_attempts: general.resharding_copy_retry_max_attempts,
             resharding_copy_retry_min_delay: general.resharding_copy_retry_min_delay,
+            resharding_replication_retry_max_attempts: general
+                .resharding_replication_retry_max_attempts,
+            resharding_replication_retry_min_delay: general.resharding_replication_retry_min_delay,
             regex_parser_limit: general.regex_parser_limit,
             pub_sub_enabled: general.pub_sub_enabled(),
             mutual_tls: config.general.tls_client_validate_cn,
@@ -271,6 +278,8 @@ impl Cluster {
             resharding_parallel_copies,
             resharding_copy_retry_max_attempts,
             resharding_copy_retry_min_delay,
+            resharding_replication_retry_max_attempts,
+            resharding_replication_retry_min_delay,
             regex_parser_limit,
             pub_sub_enabled,
             mutual_tls,
@@ -328,6 +337,10 @@ impl Cluster {
             resharding_parallel_copies,
             resharding_copy_retry_max_attempts,
             resharding_copy_retry_min_delay: Duration::from_millis(resharding_copy_retry_min_delay),
+            resharding_replication_retry_max_attempts,
+            resharding_replication_retry_min_delay: Duration::from_millis(
+                resharding_replication_retry_min_delay,
+            ),
             regex_parser: RegexParser::new(regex_parser_limit, query_parser),
             mutual_tls,
         }
@@ -595,6 +608,17 @@ impl Cluster {
     /// Base delay between table copy retry attempts. Doubles each attempt, capped at 32×.
     pub fn resharding_copy_retry_min_delay(&self) -> &Duration {
         &self.resharding_copy_retry_min_delay
+    }
+
+    /// Maximum consecutive replication-subscriber errors before the error is propagated.
+    /// `0` means retry indefinitely.
+    pub fn resharding_replication_retry_max_attempts(&self) -> usize {
+        self.resharding_replication_retry_max_attempts
+    }
+
+    /// Base delay between replication-subscriber retry attempts.
+    pub fn resharding_replication_retry_min_delay(&self) -> Duration {
+        self.resharding_replication_retry_min_delay
     }
 
     /// Launch the connection pools.
