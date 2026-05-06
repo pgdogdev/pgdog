@@ -826,6 +826,37 @@ mod test {
             cluster
         }
 
+        /// Two shards targeting different databases on the same server.
+        /// Gives separate lock namespaces without needing two Postgres instances.
+        pub fn new_test_two_databases(config: &ConfigAndUsers) -> Cluster {
+            let mut cluster = Self::new_test(config);
+            let shard1 = cluster.shards.last_mut().unwrap();
+            *shard1 = Shard::new(ShardConfig {
+                number: 1,
+                primary: &Some(PoolConfig {
+                    address: Address {
+                        database_name: "pgdog1".into(),
+                        ..Address::new_test()
+                    },
+                    config: Config::default(),
+                }),
+                replicas: &[PoolConfig {
+                    address: Address {
+                        database_name: "pgdog1".into(),
+                        configured_role: Role::Replica,
+                        ..Address::new_test()
+                    },
+                    config: Config::default(),
+                }],
+                lb_strategy: LoadBalancingStrategy::Random,
+                rw_split: ReadWriteSplit::IncludePrimary,
+                identifier: cluster.identifier.clone(),
+                lsn_check_interval: Duration::MAX,
+                pub_sub_enabled: false,
+            });
+            cluster
+        }
+
         pub fn new_test_single_primary(config: &ConfigAndUsers) -> Cluster {
             let identifier = Arc::new(DatabaseUser {
                 user: "pgdog".into(),
