@@ -126,6 +126,15 @@
           "format": "uint64",
           "minimum": 0
         },
+        "lock_timeout": {
+          "description": "Lock timeout.\n\nSets the `lock_timeout` on all server connections at connection creation.\nAborts any statement that waits longer than the specified duration to acquire a lock.\nUnlike `statement_timeout`, this only counts time spent waiting for locks, not execution time.\nRecommended for replication destination connections to prevent cross-shard deadlocks\nfrom hanging indefinitely.\n\n**Note:** Nothing is preventing the user from manually changing this setting at runtime,\ne.g., by running `SET lock_timeout TO 0`;\n\nhttps://docs.pgdog.dev/configuration/users.toml/users/#lock_timeout",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
         "min_pool_size": {
           "description": "Overrides [`min_pool_size`](https://docs.pgdog.dev/configuration/pgdog.toml/general/#min_pool_size) for this user. Opens at least this many connections on pooler startup and keeps them open despite [`idle_timeout`](https://docs.pgdog.dev/configuration/pgdog.toml/general/#idle_timeout).\n\nhttps://docs.pgdog.dev/configuration/users.toml/users/#min_pool_size",
           "type": [

@@ -402,6 +402,15 @@
           "maximum": 255,
           "minimum": 0
         },
+        "lock_timeout": {
+          "description": "This setting configures the `lock_timeout` connection parameter on all connections to Postgres for this database.\nAborts any statement that waits longer than the specified duration to acquire a lock.\nUnlike `statement_timeout`, this only counts time spent waiting for locks, not execution time.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/databases/#lock_timeout",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
         "min_pool_size": {
           "description": "Overrides the `min_pool_size` setting. The connection pool will maintain at minimum this many connections.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/databases/#min_pool_size",
           "type": [

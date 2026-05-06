@@ -119,6 +119,10 @@ impl Config {
                     .statement_timeout
                     .or(database.statement_timeout)
                     .map(Duration::from_millis),
+                lock_timeout: user
+                    .lock_timeout
+                    .or(database.lock_timeout)
+                    .map(Duration::from_millis),
                 replication_mode: user.replication_mode,
                 pooler_mode: user
                     .pooler_mode

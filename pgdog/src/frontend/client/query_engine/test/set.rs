@@ -213,6 +213,12 @@ async fn test_reset_all() {
     expect_message!(test_client.read().await, CommandComplete);
     expect_message!(test_client.read().await, ReadyForQuery);
 
+    test_client
+        .send_simple(Query::new("SET lock_timeout TO 5000"))
+        .await;
+    expect_message!(test_client.read().await, CommandComplete);
+    expect_message!(test_client.read().await, ReadyForQuery);
+
     assert!(test_client
         .client()
         .params
@@ -223,6 +229,7 @@ async fn test_reset_all() {
         .params
         .get("statement_timeout")
         .is_some());
+    assert!(test_client.client().params.get("lock_timeout").is_some());
 
     // Reset all
     test_client.send_simple(Query::new("RESET ALL")).await;
@@ -251,6 +258,10 @@ async fn test_reset_all() {
             .get("statement_timeout")
             .is_none(),
         "statement_timeout should be reset"
+    );
+    assert!(
+        test_client.client().params.get("lock_timeout").is_none(),
+        "lock_timeout should be reset"
     );
 }
 
@@ -360,5 +371,47 @@ async fn test_reset_inside_transaction_rollback() {
         test_client.client().params.get("application_name").unwrap(),
         &ParameterValue::String("before_reset".into()),
         "application_name should be restored after rollback"
+    );
+}
+
+#[tokio::test]
+async fn test_lock_timeout() {
+    let mut test_client = TestClient::new_sharded(Parameters::default()).await;
+
+    test_client
+        .send_simple(Query::new("SET lock_timeout TO 3000"))
+        .await;
+
+    assert_eq!(
+        expect_message!(test_client.read().await, CommandComplete).command(),
+        "SET"
+    );
+    assert_eq!(
+        expect_message!(test_client.read().await, ReadyForQuery).status,
+        'I'
+    );
+
+    assert!(
+        test_client.client().params.get("lock_timeout").is_some(),
+        "lock_timeout should be tracked after SET"
+    );
+
+    // Reset clears it.
+    test_client
+        .send_simple(Query::new("RESET lock_timeout"))
+        .await;
+
+    assert_eq!(
+        expect_message!(test_client.read().await, CommandComplete).command(),
+        "RESET"
+    );
+    assert_eq!(
+        expect_message!(test_client.read().await, ReadyForQuery).status,
+        'I'
+    );
+
+    assert!(
+        test_client.client().params.get("lock_timeout").is_none(),
+        "lock_timeout should be cleared after RESET"
     );
 }
