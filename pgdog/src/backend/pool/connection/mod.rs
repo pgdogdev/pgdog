@@ -192,27 +192,40 @@ impl Connection {
         &mut self,
         request: &Request,
     ) -> Result<Vec<ParameterStatus>, Error> {
-        match &self.binding {
-            Binding::Admin(_) => Ok(ParameterStatus::fake()),
-            _ => {
-                // Get params from the first database that answers.
-                // Parameters are cached on the pool.
-                for shard in self.cluster()?.shards() {
-                    if let Ok(params) = shard.params(request).await {
-                        let mut result = vec![];
+        if matches!(self.binding, Binding::Admin(_)) {
+            return Ok(ParameterStatus::fake());
+        }
 
-                        for param in params.iter() {
-                            if let Some(value) = param.1.as_str() {
-                                result.push(ParameterStatus::from((param.0.as_str(), value)));
-                            }
-                        }
+        match self.try_parameters(request).await {
+            Ok(params) => Ok(params),
+            // Configuration reload may have left the old pools offline before
+            // the new ones were swapped in. Wait for the reload to settle and
+            // retry once against the refreshed cluster.
+            Err(Error::Pool(pool::Error::AllReplicasDown)) => {
+                self.safe_reload().await?;
+                self.try_parameters(request).await
+            }
+            Err(err) => Err(err),
+        }
+    }
 
-                        return Ok(result);
+    async fn try_parameters(&mut self, request: &Request) -> Result<Vec<ParameterStatus>, Error> {
+        // Get params from the first database that answers.
+        // Parameters are cached on the pool.
+        for shard in self.cluster()?.shards() {
+            if let Ok(params) = shard.params(request).await {
+                let mut result = vec![];
+
+                for param in params.iter() {
+                    if let Some(value) = param.1.as_str() {
+                        result.push(ParameterStatus::from((param.0.as_str(), value)));
                     }
                 }
-                Err(Error::Pool(pool::Error::AllReplicasDown))
+
+                return Ok(result);
             }
         }
+        Err(Error::Pool(pool::Error::AllReplicasDown))
     }
 
     /// Read a message from the server connection or a pub/sub channel.
