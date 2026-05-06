@@ -173,6 +173,12 @@ pub struct Database {
     ///
     /// https://docs.pgdog.dev/configuration/pgdog.toml/databases/#statement_timeout
     pub statement_timeout: Option<u64>,
+    /// This setting configures the `lock_timeout` connection parameter on all connections to Postgres for this database.
+    /// Aborts any statement that waits longer than the specified duration to acquire a lock.
+    /// Unlike `statement_timeout`, this only counts time spent waiting for locks, not execution time.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/databases/#lock_timeout
+    pub lock_timeout: Option<u64>,
     /// Overrides the `idle_timeout` setting. Idle server connections exceeding this timeout will be closed automatically.
     ///
     /// https://docs.pgdog.dev/configuration/pgdog.toml/databases/#idle_timeout
