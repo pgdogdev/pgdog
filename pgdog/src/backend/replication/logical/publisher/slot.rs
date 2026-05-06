@@ -361,8 +361,10 @@ impl ReplicationSlot {
             self.server()?.addr()
         );
 
+        let lsn = Lsn::from_i64(status_update.last_flushed);
+        self.lsn = lsn;
         if let Some(tracker) = self.tracker.as_ref() {
-            tracker.update_lsn(&Lsn::from_i64(status_update.last_flushed))
+            tracker.update_lsn(&lsn)
         }
 
         self.server()?
@@ -371,6 +373,14 @@ impl ReplicationSlot {
         self.server()?.flush().await?;
 
         Ok(())
+    }
+
+    /// Drop the source connection and reconnect, restarting replication from the
+    /// last confirmed position (`self.lsn`, kept in sync by `status_update`).
+    pub async fn reconnect(&mut self) -> Result<(), Error> {
+        self.server = None;
+        self.connect().await?;
+        self.start_replication().await
     }
 
     /// Ask remote to close stream.

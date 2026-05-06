@@ -1,3 +1,6 @@
+[general]
+resharding_replication_retry_min_delay = 100
+
 [[databases]]
 name = "source"
 host = "127.0.0.1"
