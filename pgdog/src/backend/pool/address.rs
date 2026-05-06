@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 
 use super::Password;
+use crate::backend::auth::vault::cache_get;
 use crate::backend::{pool::dns_cache::DnsCache, Error};
 use crate::config::{config, Database, ServerAuth, User};
 
@@ -56,6 +57,12 @@ impl Address {
     pub fn new(database: &Database, user: &User, database_number: usize) -> Self {
         let server_auth = user.server_auth;
 
+        let vault_cred = if server_auth == ServerAuth::Vault {
+            cache_get(&format!("{}/{}", user.name, user.database))
+        } else {
+            None
+        };
+
         Address {
             host: database.host.clone(),
             port: database.port,
@@ -66,6 +73,8 @@ impl Address {
             },
             user: if let Some(user) = database.user.clone() {
                 user
+            } else if let Some(ref cred) = vault_cred {
+                cred.username.clone()
             } else if let Some(user) = user.server_user.clone() {
                 user
             } else {
@@ -73,6 +82,11 @@ impl Address {
             },
             passwords: if server_auth.is_external_identity() {
                 vec![]
+            } else if server_auth == ServerAuth::Vault {
+                // On a cache miss (manager not yet run) return empty so connections fail cleanly rather than sending the client-side pgdog password to PostgreSQL.
+                vault_cred
+                    .map(|cred| vec![cred.password.into()])
+                    .unwrap_or_default()
             } else if let Some(password) = database.password.clone() {
                 vec![password.into()]
             } else if let Some(password) = user.server_password.clone() {
@@ -94,8 +108,7 @@ impl Address {
     /// Get address passwords, in valid order.
     pub async fn auth_secrets(&self) -> Result<Vec<Password>, Error> {
         let mut secrets = match self.server_auth {
-            ServerAuth::Vault => self.passwords.clone(),
-            ServerAuth::Password => self.passwords.clone(),
+            ServerAuth::Vault | ServerAuth::Password => self.passwords.clone(),
             ServerAuth::RdsIam => vec![crate::backend::auth::rds_iam::token(self).await?.into()],
             ServerAuth::AzureWorkloadIdentity => {
                 vec![crate::backend::auth::azure_workload_identity::token(self)
@@ -219,8 +232,15 @@ mod test {
     }
 
     #[test]
-    fn test_vault_uses_server_password() {
-        // vault::init() writes server_user + server_password; no database-level password set.
+    fn test_vault_reads_from_cache() {
+        // Simulate vault::init() having run: cache has dynamic credentials.
+        // Key must be composite (name/database) matching Address::new lookup.
+        crate::backend::auth::vault::cache_set(
+            "dml_role_addr_test/myapp",
+            "v-approle-dml-XyZ",
+            "vault-pass",
+        );
+
         let database = Database {
             name: "myapp".into(),
             host: "127.0.0.1".into(),
@@ -228,10 +248,8 @@ mod test {
             ..Default::default()
         };
         let user = User {
-            name: "dml_role".into(),
+            name: "dml_role_addr_test".into(),
             password: Some("client-pass".into()),
-            server_user: Some("v-approle-dml-XyZ".into()),
-            server_password: Some("vault-pass".into()),
             server_auth: ServerAuth::Vault,
             vault_path: Some("database/creds/dml-role".into()),
             database: "myapp".into(),
@@ -241,19 +259,19 @@ mod test {
         let address = Address::new(&database, &user, 0);
         assert_eq!(
             address.user, "v-approle-dml-XyZ",
-            "must use vault-generated username"
+            "must use vault-generated username from cache"
         );
         assert_eq!(
             address.passwords,
             vec!["vault-pass"],
-            "must use vault-generated password"
+            "must use vault-generated password from cache"
         );
         assert_eq!(address.server_auth, ServerAuth::Vault);
     }
 
     #[test]
     fn test_vault_empty_before_init() {
-        // vault::init() not yet run: server_user/server_password None, no client password set.
+        // vault::init() not yet run: cache has no entry for this pool name.
         let database = Database {
             name: "myapp".into(),
             host: "127.0.0.1".into(),
@@ -261,7 +279,7 @@ mod test {
             ..Default::default()
         };
         let user = User {
-            name: "dml_role".into(),
+            name: "dml_role_not_in_cache_xyz".into(),
             server_auth: ServerAuth::Vault,
             vault_path: Some("database/creds/dml-role".into()),
             database: "myapp".into(),
@@ -269,7 +287,7 @@ mod test {
         };
 
         let address = Address::new(&database, &user, 0);
-        assert_eq!(address.user, "dml_role");
+        assert_eq!(address.user, "dml_role_not_in_cache_xyz");
         assert!(address.passwords.is_empty());
     }
 

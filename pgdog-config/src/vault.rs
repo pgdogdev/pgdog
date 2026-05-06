@@ -1,3 +1,7 @@
+use std::fs::read_to_string;
+use std::io::{self, Error, ErrorKind};
+use std::path::{Path, PathBuf};
+
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -38,7 +42,7 @@ pub enum VaultAuthMethod {
 /// ```toml
 /// [vault]
 /// address       = "https://vault.example.com:8200"
-/// auth_method   = "approle"
+/// auth_method   = "app_role"
 /// role_id       = "pgdog-role-id"
 /// secret_id     = "..."
 /// ```
@@ -66,7 +70,6 @@ pub struct VaultConfig {
     pub pre_rotation_pct: u8,
 
     // ── AppRole fields ────────────────────────────────────────────────────────
-
     /// AppRole `role_id`. Required when `auth_method = "approle"`.
     pub role_id: Option<String>,
 
@@ -75,24 +78,22 @@ pub struct VaultConfig {
 
     /// Path to a file containing the AppRole `secret_id` (e.g. a Kubernetes secret
     /// mounted at `/etc/pgdog/vault-secret-id`). Mutually exclusive with `secret_id`.
-    pub secret_id_file: Option<String>,
+    pub secret_id_file: Option<PathBuf>,
 
     // ── Kubernetes fields ─────────────────────────────────────────────────────
-
     /// Vault role name to authenticate as. Required when `auth_method = "kubernetes"`.
     pub kubernetes_role: Option<String>,
 
     /// Path to the Kubernetes service account JWT token file.
     /// Default: `/var/run/secrets/kubernetes.io/serviceaccount/token`.
     #[serde(default = "VaultConfig::default_kubernetes_jwt_path")]
-    pub kubernetes_jwt_path: String,
+    pub kubernetes_jwt_path: PathBuf,
 
     /// Vault mount path for the Kubernetes auth method. Default: `kubernetes`.
     #[serde(default = "VaultConfig::default_kubernetes_mount_path")]
     pub kubernetes_mount_path: String,
 
     // ── TLS fields ────────────────────────────────────────────────────────────
-
     /// TLS verification mode for connections to the Vault server.
     /// Default: `verify-full`.
     #[serde(default)]
@@ -101,7 +102,7 @@ pub struct VaultConfig {
     /// Path to a PEM-encoded CA certificate bundle used to verify the Vault
     /// server's TLS certificate. When provided, the bundle is added on top of
     /// the system-wide certificate store. When omitted, only system certs are used.
-    pub tls_server_ca_certificate: Option<String>,
+    pub tls_server_ca_certificate: Option<PathBuf>,
 }
 
 impl VaultConfig {
@@ -109,8 +110,8 @@ impl VaultConfig {
         75
     }
 
-    pub fn default_kubernetes_jwt_path() -> String {
-        "/var/run/secrets/kubernetes.io/serviceaccount/token".into()
+    pub fn default_kubernetes_jwt_path() -> PathBuf {
+        PathBuf::from("/var/run/secrets/kubernetes.io/serviceaccount/token")
     }
 
     pub fn default_kubernetes_mount_path() -> String {
@@ -119,28 +120,30 @@ impl VaultConfig {
 
     /// Returns the AppRole `secret_id`, reading from `secret_id_file` if necessary.
     /// Trims whitespace so files written with a trailing newline work out of the box.
-    pub fn secret_id(&self) -> std::io::Result<String> {
+    pub fn secret_id(&self) -> io::Result<String> {
         if let Some(ref s) = self.secret_id {
             return Ok(s.clone());
         }
         if let Some(ref path) = self.secret_id_file {
-            return std::fs::read_to_string(path).map(|s| s.trim().to_string());
+            return read_to_string(path).map(|s| s.trim().to_string());
         }
-        Err(std::io::Error::new(
-            std::io::ErrorKind::NotFound,
+        Err(Error::new(
+            ErrorKind::NotFound,
             "vault: neither secret_id nor secret_id_file is configured",
         ))
     }
 
     /// Returns the path to the Kubernetes service account JWT.
     /// Callers should read the file asynchronously via `tokio::fs::read_to_string`.
-    pub fn jwt_path(&self) -> &str {
+    pub fn jwt_path(&self) -> &Path {
         &self.kubernetes_jwt_path
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use super::*;
 
     fn approle_base() -> VaultConfig {
@@ -199,7 +202,7 @@ mod tests {
         writeln!(f, "  file-secret  ").unwrap();
         let cfg = VaultConfig {
             secret_id: None,
-            secret_id_file: Some(f.path().to_str().unwrap().into()),
+            secret_id_file: Some(f.path().into()),
             ..approle_base()
         };
         assert_eq!(cfg.secret_id().unwrap(), "file-secret");
@@ -212,7 +215,7 @@ mod tests {
         writeln!(f, "file-secret").unwrap();
         let cfg = VaultConfig {
             secret_id: Some("inline".into()),
-            secret_id_file: Some(f.path().to_str().unwrap().into()),
+            secret_id_file: Some(f.path().into()),
             ..approle_base()
         };
         assert_eq!(cfg.secret_id().unwrap(), "inline");
@@ -229,7 +232,7 @@ mod tests {
     fn test_kubernetes_jwt_path_default() {
         assert_eq!(
             kubernetes_base().kubernetes_jwt_path,
-            "/var/run/secrets/kubernetes.io/serviceaccount/token"
+            Path::new("/var/run/secrets/kubernetes.io/serviceaccount/token")
         );
     }
 
@@ -239,13 +242,11 @@ mod tests {
         let mut f = tempfile::NamedTempFile::new().unwrap();
         writeln!(f, "  eyJhbGciOiJSUzI1NiJ9.stub  ").unwrap();
         let cfg = VaultConfig {
-            kubernetes_jwt_path: f.path().to_str().unwrap().into(),
+            kubernetes_jwt_path: f.path().into(),
             ..kubernetes_base()
         };
-        // Callers read the file with tokio::fs::read_to_string; test the path is returned.
-        assert_eq!(cfg.jwt_path(), f.path().to_str().unwrap());
-        // Verify the file itself is readable synchronously (tokio::fs would be the same content).
-        let content = std::fs::read_to_string(cfg.jwt_path()).unwrap();
+        assert_eq!(cfg.jwt_path(), f.path());
+        let content = read_to_string(cfg.jwt_path()).unwrap();
         assert_eq!(content.trim(), "eyJhbGciOiJSUzI1NiJ9.stub");
     }
 
@@ -254,7 +255,7 @@ mod tests {
         let cfg = kubernetes_base();
         assert_eq!(
             cfg.jwt_path(),
-            "/var/run/secrets/kubernetes.io/serviceaccount/token"
+            Path::new("/var/run/secrets/kubernetes.io/serviceaccount/token")
         );
     }
 
@@ -283,7 +284,7 @@ mod tests {
         assert_eq!(cfg.kubernetes_role.as_deref(), Some("pgdog"));
         assert_eq!(
             cfg.kubernetes_jwt_path,
-            "/var/run/secrets/kubernetes.io/serviceaccount/token"
+            Path::new("/var/run/secrets/kubernetes.io/serviceaccount/token")
         );
         assert_eq!(cfg.kubernetes_mount_path, "kubernetes");
     }
@@ -299,7 +300,7 @@ mod tests {
         "#;
         let cfg: VaultConfig = toml::from_str(toml).unwrap();
         assert_eq!(cfg.kubernetes_mount_path, "k8s-cluster-a");
-        assert_eq!(cfg.kubernetes_jwt_path, "/custom/token");
+        assert_eq!(cfg.kubernetes_jwt_path, Path::new("/custom/token"));
     }
 
     #[test]

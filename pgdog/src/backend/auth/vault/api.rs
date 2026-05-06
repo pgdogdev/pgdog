@@ -1,6 +1,9 @@
 //! Vault HTTP API client built on `reqwest`.
 
+use std::fs::read;
+
 use serde::Deserialize;
+use serde_json::json;
 
 use pgdog_config::{VaultConfig, VaultTlsVerify};
 
@@ -64,67 +67,113 @@ pub fn build_client(cfg: &VaultConfig) -> Result<reqwest::Client, Error> {
     };
 
     if let Some(ref ca_path) = cfg.tls_server_ca_certificate {
-        let pem = std::fs::read(ca_path).map_err(|e| {
+        let pem = read(ca_path).map_err(|e| {
             Error::Http(format!(
-                "vault: failed to read tls_server_ca_certificate {ca_path}: {e}"
+                "[vault] failed to read tls_server_ca_certificate {}: {e}",
+                ca_path.display()
             ))
         })?;
-        let cert = reqwest::Certificate::from_pem(&pem).map_err(|e| {
-            Error::Http(format!("vault: invalid tls_server_ca_certificate: {e}"))
-        })?;
+        let cert = reqwest::Certificate::from_pem(&pem)
+            .map_err(|e| Error::Http(format!("[vault] invalid tls_server_ca_certificate: {e}")))?;
         builder = builder.add_root_certificate(cert);
     }
 
     builder
         .build()
-        .map_err(|e| Error::Http(format!("vault: failed to build HTTP client: {e}")))
+        .map_err(|e| Error::Http(format!("[vault] failed to build HTTP client: {e}")))
 }
 
 // ── public API ────────────────────────────────────────────────────────────────
 
-/// Authenticate to Vault via AppRole and return a client token.
-pub async fn approle_login(
-    client: &reqwest::Client,
-    addr: &str,
-    role_id: &str,
-    secret_id: &str,
-) -> Result<VaultToken, Error> {
-    #[cfg(test)]
-    if let Some(result) = test_support::login_override() {
-        return result;
-    }
-
-    let url = format!("{}/v1/auth/approle/login", addr.trim_end_matches('/'));
-    let body = serde_json::json!({ "role_id": role_id, "secret_id": secret_id });
-
-    post_login(client, &url, &body).await
+pub struct AppRoleLogin<'a> {
+    pub client: &'a reqwest::Client,
+    pub addr: &'a str,
+    pub role_id: &'a str,
+    pub secret_id: &'a str,
 }
 
-/// Authenticate to Vault via Kubernetes service account JWT and return a client token.
-///
-/// `mount_path` is the Vault auth mount (default: `"kubernetes"`).
-/// `role` is the Vault role name configured for this cluster.
-/// `jwt` is the contents of the pod's service account token file.
-pub async fn kubernetes_login(
-    client: &reqwest::Client,
-    addr: &str,
-    mount_path: &str,
-    role: &str,
-    jwt: &str,
-) -> Result<VaultToken, Error> {
-    #[cfg(test)]
-    if let Some(result) = test_support::login_override() {
-        return result;
+impl AppRoleLogin<'_> {
+    pub async fn call(self) -> Result<VaultToken, Error> {
+        #[cfg(test)]
+        if let Some(result) = test_support::login_override() {
+            return result;
+        }
+
+        let url = format!("{}/v1/auth/approle/login", self.addr.trim_end_matches('/'));
+        let body = json!({ "role_id": self.role_id, "secret_id": self.secret_id });
+        post_login(self.client, &url, &body).await
     }
+}
 
-    let url = format!(
-        "{}/v1/auth/{}/login",
-        addr.trim_end_matches('/'),
-        mount_path.trim_matches('/')
-    );
-    let body = serde_json::json!({ "role": role, "jwt": jwt });
+pub struct KubernetesLogin<'a> {
+    pub client: &'a reqwest::Client,
+    pub addr: &'a str,
+    /// Vault auth mount path (default: `"kubernetes"`).
+    pub mount_path: &'a str,
+    pub role: &'a str,
+    /// Contents of the pod's service account token file.
+    pub jwt: &'a str,
+}
 
-    post_login(client, &url, &body).await
+impl KubernetesLogin<'_> {
+    pub async fn call(self) -> Result<VaultToken, Error> {
+        #[cfg(test)]
+        if let Some(result) = test_support::login_override() {
+            return result;
+        }
+
+        let url = format!(
+            "{}/v1/auth/{}/login",
+            self.addr.trim_end_matches('/'),
+            self.mount_path.trim_matches('/')
+        );
+        let body = json!({ "role": self.role, "jwt": self.jwt });
+        post_login(self.client, &url, &body).await
+    }
+}
+
+pub struct FetchCredential<'a> {
+    pub client: &'a reqwest::Client,
+    pub addr: &'a str,
+    pub token: &'a str,
+    /// Vault path, e.g. `database/creds/dml-role`.
+    pub path: &'a str,
+}
+
+impl FetchCredential<'_> {
+    pub async fn call(self) -> Result<VaultCredential, Error> {
+        #[cfg(test)]
+        if let Some(result) = test_support::credential_override() {
+            return result;
+        }
+
+        let url = format!(
+            "{}/v1/{}",
+            self.addr.trim_end_matches('/'),
+            self.path.trim_start_matches('/')
+        );
+
+        let response = self
+            .client
+            .get(&url)
+            .header("X-Vault-Token", self.token)
+            .send()
+            .await
+            .map_err(|e| Error::Http(e.to_string()))?;
+
+        let response = check_status(response).await?;
+
+        let parsed: CredentialResponse = response
+            .json()
+            .await
+            .map_err(|e| Error::Parse(e.to_string()))?;
+
+        Ok(VaultCredential {
+            username: parsed.data.username,
+            password: parsed.data.password,
+            lease_duration: parsed.lease_duration,
+        })
+    }
 }
 
 async fn post_login(
@@ -153,48 +202,9 @@ async fn post_login(
     })
 }
 
-/// Fetch dynamic PostgreSQL credentials from `path` (e.g. `database/creds/dml-role`).
-pub async fn fetch_credential(
-    client: &reqwest::Client,
-    addr: &str,
-    token: &str,
-    path: &str,
-) -> Result<VaultCredential, Error> {
-    #[cfg(test)]
-    if let Some(result) = test_support::credential_override() {
-        return result;
-    }
-
-    let url = format!(
-        "{}/v1/{}",
-        addr.trim_end_matches('/'),
-        path.trim_start_matches('/')
-    );
-
-    let response = client
-        .get(&url)
-        .header("X-Vault-Token", token)
-        .send()
-        .await
-        .map_err(|e| Error::Http(e.to_string()))?;
-
-    let response = check_status(response).await?;
-
-    let parsed: CredentialResponse = response
-        .json()
-        .await
-        .map_err(|e| Error::Parse(e.to_string()))?;
-
-    Ok(VaultCredential {
-        username: parsed.data.username,
-        password: parsed.data.password,
-        lease_duration: parsed.lease_duration,
-    })
-}
-
 async fn check_status(response: reqwest::Response) -> Result<reqwest::Response, Error> {
     let status = response.status().as_u16();
-    if !(200..300).contains(&(status as usize)) {
+    if !(200u16..300).contains(&status) {
         let body = response
             .text()
             .await
@@ -241,12 +251,18 @@ pub mod test_support {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::path::PathBuf;
+
     use once_cell::sync::Lazy;
+    use tokio_rustls::rustls::crypto::aws_lc_rs;
+
+    use pgdog_config::VaultAuthMethod;
+
+    use super::*;
 
     // reqwest with rustls-tls needs a process-level CryptoProvider.
     static RING: Lazy<()> = Lazy::new(|| {
-        let _ = tokio_rustls::rustls::crypto::aws_lc_rs::default_provider().install_default();
+        let _ = aws_lc_rs::default_provider().install_default();
     });
 
     fn test_client() -> reqwest::Client {
@@ -278,13 +294,14 @@ mod tests {
             lease_duration: 7200,
             renewable: true,
         })));
-        let token = kubernetes_login(
-            &test_client(),
-            "http://irrelevant",
-            "kubernetes",
-            "pgdog",
-            "eyJhbGciOiJSUzI1NiJ9.stub",
-        )
+        let token = KubernetesLogin {
+            client: &test_client(),
+            addr: "http://irrelevant",
+            mount_path: "kubernetes",
+            role: "pgdog",
+            jwt: "eyJhbGciOiJSUzI1NiJ9.stub",
+        }
+        .call()
         .await
         .unwrap();
         assert_eq!(token.client_token, "k8s-token");
@@ -293,10 +310,20 @@ mod tests {
 
     #[tokio::test]
     async fn test_kubernetes_login_propagates_error() {
-        test_support::set_login(Some(Err(Error::VaultStatus { status: 403, body: "".into() })));
-        let err = kubernetes_login(&test_client(), "http://irrelevant", "kubernetes", "pgdog", "jwt")
-            .await
-            .unwrap_err();
+        test_support::set_login(Some(Err(Error::VaultStatus {
+            status: 403,
+            body: "".into(),
+        })));
+        let err = KubernetesLogin {
+            client: &test_client(),
+            addr: "http://irrelevant",
+            mount_path: "kubernetes",
+            role: "pgdog",
+            jwt: "jwt",
+        }
+        .call()
+        .await
+        .unwrap_err();
         assert!(matches!(err, Error::VaultStatus { status: 403, .. }));
     }
 
@@ -324,9 +351,15 @@ mod tests {
             lease_duration: 3600,
             renewable: true,
         })));
-        let token = approle_login(&test_client(), "http://irrelevant", "role", "secret")
-            .await
-            .unwrap();
+        let token = AppRoleLogin {
+            client: &test_client(),
+            addr: "http://irrelevant",
+            role_id: "role",
+            secret_id: "secret",
+        }
+        .call()
+        .await
+        .unwrap();
         assert_eq!(token.client_token, "test-token");
         assert_eq!(token.lease_duration, 3600);
     }
@@ -338,12 +371,13 @@ mod tests {
             password: "pw".into(),
             lease_duration: 86400,
         })));
-        let cred = fetch_credential(
-            &test_client(),
-            "http://irrelevant",
-            "tok",
-            "database/creds/dml-role",
-        )
+        let cred = FetchCredential {
+            client: &test_client(),
+            addr: "http://irrelevant",
+            token: "tok",
+            path: "database/creds/dml-role",
+        }
+        .call()
         .await
         .unwrap();
         assert_eq!(cred.username, "v-approle-dml-XyZ");
@@ -352,10 +386,19 @@ mod tests {
 
     #[tokio::test]
     async fn test_approle_login_propagates_error_override() {
-        test_support::set_login(Some(Err(Error::VaultStatus { status: 403, body: "".into() })));
-        let err = approle_login(&test_client(), "http://irrelevant", "role", "bad")
-            .await
-            .unwrap_err();
+        test_support::set_login(Some(Err(Error::VaultStatus {
+            status: 403,
+            body: "".into(),
+        })));
+        let err = AppRoleLogin {
+            client: &test_client(),
+            addr: "http://irrelevant",
+            role_id: "role",
+            secret_id: "bad",
+        }
+        .call()
+        .await
+        .unwrap_err();
         assert!(matches!(err, Error::VaultStatus { status: 403, .. }));
     }
 
@@ -364,7 +407,7 @@ mod tests {
     fn tls_cfg(tls_verify: VaultTlsVerify, ca: Option<&str>) -> VaultConfig {
         VaultConfig {
             address: "https://vault.example.com".into(),
-            auth_method: pgdog_config::VaultAuthMethod::AppRole,
+            auth_method: VaultAuthMethod::AppRole,
             pre_rotation_pct: 75,
             role_id: None,
             secret_id: None,
@@ -373,7 +416,7 @@ mod tests {
             kubernetes_jwt_path: VaultConfig::default_kubernetes_jwt_path(),
             kubernetes_mount_path: VaultConfig::default_kubernetes_mount_path(),
             tls_verify,
-            tls_server_ca_certificate: ca.map(String::from),
+            tls_server_ca_certificate: ca.map(PathBuf::from),
         }
     }
 
@@ -394,6 +437,10 @@ mod tests {
 
     #[test]
     fn test_build_client_invalid_ca_path_errors() {
-        assert!(build_client(&tls_cfg(VaultTlsVerify::VerifyFull, Some("/nonexistent/ca.pem"))).is_err());
+        assert!(build_client(&tls_cfg(
+            VaultTlsVerify::VerifyFull,
+            Some("/nonexistent/ca.pem")
+        ))
+        .is_err());
     }
 }

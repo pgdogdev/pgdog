@@ -18,6 +18,10 @@ CREATE ROLE readonly_role NOLOGIN;
 GRANT SELECT ON ALL TABLES IN SCHEMA public TO readonly_role;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO readonly_role;
 
+-- Admin role: referenced by the pgdog-admin Vault role in setup-vault.sh
+CREATE ROLE pgdog_admin_role NOLOGIN;
+GRANT pg_read_all_data TO pgdog_admin_role;
+
 -- Create a sample table for testing
 CREATE TABLE IF NOT EXISTS demo_items (
     id SERIAL PRIMARY KEY,
