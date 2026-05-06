@@ -7,7 +7,32 @@ PGDOG_BIN=${PGDOG_BIN:-$DEFAULT_BIN}
 # Run in our own process group so we can kill every child on exit.
 set -m
 cleanup() {
+    local exit_code=$?
     trap - EXIT INT TERM
+    if [ "${exit_code}" -ne 0 ]; then
+        echo ""
+        echo "=== deadlock diagnostics ==="
+        for port in 15434 15435; do
+            echo "--- dest :${port} pg_stat_activity ---"
+            PGPASSWORD=pgdog psql -h 127.0.0.1 -p "${port}" -U pgdog -d postgres -c \
+                "SELECT pid, wait_event_type, wait_event, state, left(query, 100) AS query
+                   FROM pg_stat_activity
+                  WHERE backend_type = 'client backend' AND pid <> pg_backend_pid()
+                  ORDER BY pid;" || true
+            echo "--- dest :${port} pg_locks ---"
+            PGPASSWORD=pgdog psql -h 127.0.0.1 -p "${port}" -U pgdog -d postgres -c \
+                "SELECT locktype, relation::regclass, mode, granted, pid
+                   FROM pg_locks
+                  WHERE relation IS NOT NULL
+                  ORDER BY pid, granted DESC;" || true
+        done
+        echo "==========================="
+        echo ""
+    fi
+
+    kill -TERM "${PGDOG_PID:-}" 2>/dev/null || true
+    docker compose down || true
+
     # Signal every process in this script's process group except ourselves.
     pkill -TERM -P $$ 2> /dev/null || true
     # Give children a moment to exit cleanly, then force-kill anything left.
@@ -51,14 +76,15 @@ psql admin -c 'COPY_DATA source destination pgdog'
 
 sleep 10
 
-kill -TERM ${PGBENCH_PID}
+kill -TERM ${PGBENCH_PID} 2>/dev/null || true
+wait ${PGBENCH_PID} 2>/dev/null || true
+
 
 replace_copy_with_replicate() {
     local table="$1"
     local column="$2"
 
-    # Capture `UPDATE N` from psql so we know how many rows the replication stream
-    # must propagate before wait_for_no_copy_rows can succeed on this table.
+    # Capture `UPDATE N` from psql so we can log how many -copy rows were cleaned up.
     local tag
     tag=$(psql source -c "UPDATE ${table} SET ${column} = regexp_replace(${column}, '-copy\$', '-replicate') WHERE ${column} LIKE '%-copy';" | grep -E '^UPDATE')
     local updated="${tag#UPDATE }"
@@ -72,38 +98,50 @@ replace_copy_with_replicate tasks title
 replace_copy_with_replicate task_comments body
 replace_copy_with_replicate settings name
 
-wait_for_no_copy_rows() {
-    local table="$1"
-    local column="$2"
+# REPLICATION SENTINEL — must be the last DML issued against the source.
+# pgbench uses random(1, 1_000_000_000), so id=0 is reserved for this purpose.
+# WAL is ordered: once the sentinel row has propagated to both destination shards,
+# every preceding change (including the -copy → -replicate updates above) has too.
+# settings is an omni table: pgdog broadcasts the insert to all source shards.
+SENTINEL_ID=0
+psql source -c "INSERT INTO settings (id, name, value) VALUES (${SENTINEL_ID}, 'sentinel_done', 'sentinel_done')"
 
-    # If source still has -copy rows, destination can never reach 0.
-    local src_copy
-    src_copy=$(psql -d source -tAc "SELECT COUNT(*) FROM ${table} WHERE ${column} LIKE '%-copy'")
-    if [ "${src_copy}" -ne 0 ]; then
-        echo "FAIL ${table}.${column}: source still has ${src_copy} -copy rows"
-        exit 1
-    fi
-
-    local count=0
-    local caught_up=0
-    for _ in $(seq 1 180); do
-        count=$(psql -d destination -tAc "SELECT COUNT(*) FROM ${table} WHERE ${column} LIKE '%-copy'")
-        if [ "${count}" -eq 0 ]; then
-            caught_up=1
-            break
-        fi
-        sleep 1
-    done
-
-    if [ "${caught_up}" -ne 1 ]; then
-        echo "FAIL ${table}.${column}: destination still has ${count} rows ending in -copy after 180s"
+echo "Waiting for replication to catch up on both destination shards (sentinel settings.id=${SENTINEL_ID}, timeout 120s)..."
+DEADLINE=$((SECONDS + 120))
+while true; do
+    SENTINEL_0=$(PGPASSWORD=pgdog psql -h 127.0.0.1 -p 15434 -U pgdog -d postgres -tAc \
+        "SELECT COUNT(*) FROM settings WHERE id = ${SENTINEL_ID} AND name = 'sentinel_done'" \
+        2>/dev/null || echo 0)
+    SENTINEL_1=$(PGPASSWORD=pgdog psql -h 127.0.0.1 -p 15435 -U pgdog -d postgres -tAc \
+        "SELECT COUNT(*) FROM settings WHERE id = ${SENTINEL_ID} AND name = 'sentinel_done'" \
+        2>/dev/null || echo 0)
+    [ "${SENTINEL_0}" -eq 1 ] && [ "${SENTINEL_1}" -eq 1 ] && break
+    if [ "${SECONDS}" -ge "${DEADLINE}" ]; then
+        echo "ERROR: replication sentinel did not reach both destinations within 120s"
+        echo "  shard 0 (:15434): ${SENTINEL_0}"
+        echo "  shard 1 (:15435): ${SENTINEL_1}"
         for port in 15432 15433; do
             PGPASSWORD=pgdog psql -h 127.0.0.1 -p ${port} -U pgdog -d postgres -c \
                 "SELECT slot_name, active, confirmed_flush_lsn, pg_current_wal_lsn() - confirmed_flush_lsn AS lag_bytes FROM pg_replication_slots" || true
         done
         exit 1
     fi
-    echo "${table}.${column}: replication caught up"
+    sleep 1
+done
+echo "Replication caught up on both shards"
+
+wait_for_no_copy_rows() {
+    local table="$1"
+    local column="$2"
+
+    # Sentinel poll above guarantees destination has caught up; this is a source sanity check.
+    local src_copy
+    src_copy=$(psql -d source -tAc "SELECT COUNT(*) FROM ${table} WHERE ${column} LIKE '%-copy'")
+    if [ "${src_copy}" -ne 0 ]; then
+        echo "FAIL ${table}.${column}: source still has ${src_copy} -copy rows"
+        exit 1
+    fi
+    echo "${table}.${column}: source clean"
 }
 
 wait_for_no_copy_rows tenants name
@@ -136,5 +174,4 @@ check_row_count_matches tasks
 check_row_count_matches task_comments
 check_row_count_matches settings
 
-kill -TERM ${PGDOG_PID}
-docker compose down
+cleanup
