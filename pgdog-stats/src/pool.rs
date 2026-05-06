@@ -288,6 +288,11 @@ pub struct Config {
     pub connect_attempt_delay: Duration,
     /// How long a connection can be open.
     pub max_age: Duration,
+    /// Maximum random adjustment applied to `max_age` per connection.
+    /// Each connection samples a per-connection offset uniformly from
+    /// `[-max_age_jitter, +max_age_jitter]` once at creation, breaking
+    /// up synchronized retirement of cohorts that connect together.
+    pub max_age_jitter: Duration,
     /// Can this pool be banned from serving traffic?
     pub bannable: bool,
     /// Healtheck timeout.
@@ -349,6 +354,7 @@ impl Default for Config {
             connect_attempts: 1,
             connect_attempt_delay: Duration::from_millis(10),
             max_age: Duration::from_millis(24 * 3600 * 1000),
+            max_age_jitter: Duration::ZERO,
             bannable: true,
             healthcheck_timeout: Duration::from_millis(5_000),
             healthcheck_interval: Duration::from_millis(30_000),

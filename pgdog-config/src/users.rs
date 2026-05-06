@@ -284,6 +284,9 @@ pub struct User {
     pub two_phase_commit_auto: Option<bool>,
     /// Server connections older than this (in milliseconds) will be closed when returned to the pool.
     pub server_lifetime: Option<u64>,
+    /// Maximum random adjustment applied to `server_lifetime` per backend connection (milliseconds).
+    /// Overrides the database-level and general-level `server_lifetime_jitter` setting for this user.
+    pub server_lifetime_jitter: Option<u64>,
 }
 
 impl User {

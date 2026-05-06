@@ -65,6 +65,11 @@ pub struct Server {
     stream_buffer: MessageBuffer,
     disconnect_reason: Option<DisconnectReason>,
     password_attempts: usize,
+    /// Per-connection adjustment to the pool's configured `max_age`,
+    /// in milliseconds. Sampled once at connection creation from
+    /// `[-server_lifetime_jitter, +server_lifetime_jitter]`. Defaults
+    /// to `0` so no jitter is applied unless explicitly configured.
+    max_age_offset_ms: i64,
 }
 
 impl MemoryUsage for Server {
@@ -342,6 +347,7 @@ impl Server {
             stream_buffer: MessageBuffer::new(config.config.memory.message_buffer),
             disconnect_reason: None,
             password_attempts: 1, // This is going to be changed by parent caller.
+            max_age_offset_ms: 0,
         };
 
         server.stats.memory_used(server.memory_stats()); // Stream capacity.
@@ -1006,6 +1012,39 @@ impl Server {
         instant.duration_since(self.stats().created_at())
     }
 
+    /// Set the per-connection max_age jitter offset in milliseconds.
+    /// Called once by the pool after a successful connect to break up
+    /// synchronized retirement of connection cohorts.
+    #[inline]
+    pub fn set_max_age_offset_ms(&mut self, offset_ms: i64) {
+        self.max_age_offset_ms = offset_ms;
+    }
+
+    /// Sample and apply a per-connection `max_age` offset uniformly from
+    /// `[-jitter_ms, +jitter_ms]`. No-op when `jitter_ms` is zero or
+    /// negative. Called once by the pool after a successful connect.
+    #[inline]
+    pub fn apply_lifetime_jitter(&mut self, jitter_ms: i64) {
+        if jitter_ms <= 0 {
+            return;
+        }
+        use rand::Rng;
+        self.max_age_offset_ms = rand::rng().random_range(-jitter_ms..=jitter_ms);
+    }
+
+    /// Effective max_age for this connection, equal to `base` plus the
+    /// per-connection jitter offset. Saturates at zero on negative
+    /// overflow. Returns `base` unchanged when no offset has been set.
+    #[inline]
+    pub fn effective_max_age(&self, base: Duration) -> Duration {
+        let abs = Duration::from_millis(self.max_age_offset_ms.unsigned_abs());
+        if self.max_age_offset_ms >= 0 {
+            base.saturating_add(abs)
+        } else {
+            base.saturating_sub(abs)
+        }
+    }
+
     /// How long this connection has been idle.
     #[inline]
     pub fn idle_for(&self, instant: Instant) -> Duration {
@@ -1188,6 +1227,7 @@ pub mod test {
                 statement_executed: false,
                 sending_request: false,
                 password_attempts: 1,
+                max_age_offset_ms: 0,
             }
         }
     }
@@ -3949,5 +3989,72 @@ pub mod test {
             0,
             "Postgres should have no prepared statements despite many named parses"
         );
+    }
+
+    #[test]
+    fn test_effective_max_age_default_is_base() {
+        let server = Server::default();
+        let base = Duration::from_secs(60);
+        assert_eq!(base, server.effective_max_age(base));
+    }
+
+    #[test]
+    fn test_effective_max_age_positive_offset() {
+        let mut server = Server::default();
+        server.set_max_age_offset_ms(500);
+        let base = Duration::from_secs(1);
+        assert_eq!(Duration::from_millis(1500), server.effective_max_age(base));
+    }
+
+    #[test]
+    fn test_effective_max_age_negative_offset() {
+        let mut server = Server::default();
+        server.set_max_age_offset_ms(-250);
+        let base = Duration::from_secs(1);
+        assert_eq!(Duration::from_millis(750), server.effective_max_age(base));
+    }
+
+    #[test]
+    fn test_effective_max_age_negative_saturates_at_zero() {
+        let mut server = Server::default();
+        server.set_max_age_offset_ms(-10_000);
+        let base = Duration::from_secs(1);
+        assert_eq!(Duration::ZERO, server.effective_max_age(base));
+    }
+
+    #[test]
+    fn test_apply_lifetime_jitter_zero_is_noop() {
+        let mut server = Server::default();
+        server.set_max_age_offset_ms(123);
+        server.apply_lifetime_jitter(0);
+        assert_eq!(123, server.max_age_offset_ms);
+        server.apply_lifetime_jitter(-50);
+        assert_eq!(123, server.max_age_offset_ms);
+    }
+
+    #[test]
+    fn test_apply_lifetime_jitter_stays_within_bounds() {
+        // Many trials so we exercise both signs and the full range.
+        let jitter_ms: i64 = 1_000;
+        let mut saw_negative = false;
+        let mut saw_positive = false;
+        for _ in 0..1_000 {
+            let mut server = Server::default();
+            server.apply_lifetime_jitter(jitter_ms);
+            assert!(
+                server.max_age_offset_ms >= -jitter_ms && server.max_age_offset_ms <= jitter_ms,
+                "offset {} outside [-{jitter_ms}, +{jitter_ms}]",
+                server.max_age_offset_ms,
+            );
+            if server.max_age_offset_ms < 0 {
+                saw_negative = true;
+            }
+            if server.max_age_offset_ms > 0 {
+                saw_positive = true;
+            }
+        }
+        // 1000 samples from a uniform [-1000, +1000] should cover both sides.
+        assert!(saw_negative, "never sampled a negative offset");
+        assert!(saw_positive, "never sampled a positive offset");
     }
 }

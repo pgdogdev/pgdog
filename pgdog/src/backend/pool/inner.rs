@@ -182,12 +182,12 @@ impl Inner {
     /// Close connections that have exceeded the max age.
     #[inline]
     pub(crate) fn close_old(&mut self, now: Instant) -> usize {
-        let max_age = self.config.max_age;
+        let base_max_age = self.config.max_age;
         let mut removed = 0;
 
         self.idle_connections.retain_mut(|c| {
             let age = c.age(now);
-            let keep = age < max_age;
+            let keep = age < c.effective_max_age(base_max_age);
             if !keep {
                 removed += 1;
             }
@@ -354,7 +354,7 @@ impl Inner {
         }
 
         // Close connections exceeding max age.
-        if server.age(now) >= self.config.max_age {
+        if server.age(now) >= server.effective_max_age(self.config.max_age) {
             server.disconnect_reason(DisconnectReason::Old);
             return Ok(result);
         }

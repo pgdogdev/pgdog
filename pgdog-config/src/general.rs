@@ -406,6 +406,18 @@ pub struct General {
     #[serde(default = "General::server_lifetime")]
     pub server_lifetime: u64,
 
+    /// Maximum random adjustment applied to `server_lifetime` per backend
+    /// connection, in milliseconds. Each connection's effective lifetime
+    /// is sampled uniformly from `[server_lifetime - jitter,
+    /// server_lifetime + jitter]` once at creation time, breaking up
+    /// synchronized cohorts that would otherwise expire together.
+    ///
+    /// _Default:_ `0` (no jitter; existing behavior).
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#server_lifetime_jitter
+    #[serde(default = "General::server_lifetime_jitter")]
+    pub server_lifetime_jitter: u64,
+
     /// How many transactions can wait while the mirror database processes previous requests.
     ///
     /// _Default:_ `128`
@@ -787,6 +799,7 @@ impl Default for General {
                 Self::two_phase_commit_wal_checkpoint_interval(),
             expanded_explain: Self::expanded_explain(),
             server_lifetime: Self::server_lifetime(),
+            server_lifetime_jitter: Self::server_lifetime_jitter(),
             stats_period: Self::stats_period(),
             connection_recovery: Self::connection_recovery(),
             client_connection_recovery: Self::client_connection_recovery(),
@@ -1207,6 +1220,10 @@ impl General {
             "PGDOG_SERVER_LIFETIME",
             Duration::from_secs(3600 * 24).as_millis() as u64,
         )
+    }
+
+    pub fn server_lifetime_jitter() -> u64 {
+        Self::env_or_default("PGDOG_SERVER_LIFETIME_JITTER", 0)
     }
 
     pub fn connection_recovery() -> ConnectionRecovery {

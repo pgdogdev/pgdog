@@ -78,6 +78,11 @@ impl From<&Url> for Database {
                         database.server_lifetime = Some(lifetime);
                     }
                 }
+                "server_lifetime_jitter" => {
+                    if let Ok(jitter) = val.parse::<u64>() {
+                        database.server_lifetime_jitter = Some(jitter);
+                    }
+                }
                 _ => {}
             }
         }
@@ -183,7 +188,7 @@ mod test {
 
     #[test]
     fn test_numeric_fields_from_query_params() {
-        let url = Url::parse("postgres://user:password@host:5432/name?pool_size=10&min_pool_size=2&statement_timeout=5000&idle_timeout=300&server_lifetime=3600").unwrap();
+        let url = Url::parse("postgres://user:password@host:5432/name?pool_size=10&min_pool_size=2&statement_timeout=5000&idle_timeout=300&server_lifetime=3600&server_lifetime_jitter=600").unwrap();
         let database = Database::from(&url);
 
         assert_eq!(database.pool_size, Some(10));
@@ -191,6 +196,7 @@ mod test {
         assert_eq!(database.statement_timeout, Some(5000));
         assert_eq!(database.idle_timeout, Some(300));
         assert_eq!(database.server_lifetime, Some(3600));
+        assert_eq!(database.server_lifetime_jitter, Some(600));
     }
 
     #[test]
