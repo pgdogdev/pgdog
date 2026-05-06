@@ -55,6 +55,9 @@ pub enum Error {
     #[error("missing parameter: ${0}")]
     MissingParameter(usize),
 
+    #[error("expected parameter ${0} to be an integer, got \'{1}\' instead")]
+    ParameterNotInteger(usize, String),
+
     #[error("column has no associated table")]
     ColumnNoTable,
 

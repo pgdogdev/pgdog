@@ -75,6 +75,45 @@ fn test_limit_offset_with_params() {
 }
 
 #[test]
+fn test_limit_offset_with_bad_params() {
+    let mut test = QueryParserTest::new();
+
+    let command = test.try_execute(vec![
+        Parse::named("__test_limit", "SELECT * FROM users LIMIT $1 OFFSET $2").into(),
+        Bind::new_params(
+            "__test_limit",
+            &[Parameter::new(b"apples"), Parameter::new(b"25")],
+        )
+        .into(),
+        Execute::new().into(),
+        Sync.into(),
+    ]);
+
+    let err = command.err().expect("limit should fail");
+    assert_eq!(
+        err.to_string(),
+        "expected parameter $1 to be an integer, got 'apples' instead"
+    );
+
+    let command = test.try_execute(vec![
+        Parse::named("__test_limit", "SELECT * FROM users LIMIT $1 OFFSET $2").into(),
+        Bind::new_params(
+            "__test_limit",
+            &[Parameter::new(b"25"), Parameter::new(b"oranges")],
+        )
+        .into(),
+        Execute::new().into(),
+        Sync.into(),
+    ]);
+
+    let err = command.err().expect("offset should fail");
+    assert_eq!(
+        err.to_string(),
+        "expected parameter $2 to be an integer, got 'oranges' instead"
+    );
+}
+
+#[test]
 fn test_distinct_row() {
     let mut test = QueryParserTest::new();
 

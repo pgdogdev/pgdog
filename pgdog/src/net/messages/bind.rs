@@ -71,6 +71,15 @@ impl<'a> ParameterWithFormat<'a> {
         from_utf8(&self.parameter.data).ok()
     }
 
+    /// Get the parameter as a textual value for debugging purposes only.
+    pub fn text_debug(&self) -> String {
+        if let Some(text) = self.text() {
+            text.to_string()
+        } else {
+            hex::encode(self.data())
+        }
+    }
+
     /// Get BIGINT if one is encoded in the field.
     pub fn bigint(&self) -> Option<i64> {
         Self::decode(self)
