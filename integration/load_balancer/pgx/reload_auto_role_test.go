@@ -140,7 +140,7 @@ func TestReloadWithAutoRole(t *testing.T) {
 		reloads.Load(), writeErrors.Load(), readErrors.Load())
 
 	assert.Zero(t, writeErrors.Load(), "expected no write errors from reload with auto role detection")
-	assert.LessOrEqual(t, readErrors.Load(), int64(2), "expected at most a couple read errors from reload with auto role detection")
+	assert.Zero(t, readErrors.Load(), "expected no read errors from reload with auto role detection")
 }
 
 // TestReconnectWithAutoRole validates that RECONNECT doesn't break read/write
