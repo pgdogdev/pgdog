@@ -52,12 +52,13 @@ impl<'a> LimitClause<'a> {
                     if param.is_null() {
                         Ok(None)
                     } else {
-                        Ok(Some(
-                            param
-                                .bigint()
-                                .ok_or(Error::MissingParameter(*number as usize))?
-                                as usize,
-                        ))
+                        match param.bigint() {
+                            Some(param) => Ok(Some(param as usize)),
+                            None => Err(Error::ParameterNotInteger(
+                                *number as usize,
+                                param.text_debug(),
+                            )),
+                        }
                     }
                 } else {
                     Ok(None)
