@@ -337,6 +337,9 @@ impl Monitor {
         let mut error = Error::ServerError;
         let now = Instant::now();
 
+        let max_age = pool.config().max_age;
+        let max_age_jitter = pool.config().max_age_jitter;
+
         for attempt in 0..connect_attempts {
             match timeout(
                 connect_timeout,
@@ -344,7 +347,7 @@ impl Monitor {
             )
             .await
             {
-                Ok(Ok(conn)) => {
+                Ok(Ok(mut conn)) => {
                     let elapsed = now.elapsed();
                     {
                         let mut guard = pool.lock();
@@ -352,6 +355,7 @@ impl Monitor {
                         guard.stats.counts.connect_time += elapsed;
                         guard.stats.counts.auth_attempts += conn.password_attempts();
                     }
+                    conn.apply_lifetime_jitter(max_age, max_age_jitter);
                     return Ok(conn);
                 }
 

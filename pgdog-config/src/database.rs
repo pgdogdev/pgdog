@@ -185,6 +185,10 @@ pub struct Database {
     ///
     /// https://docs.pgdog.dev/configuration/pgdog.toml/databases/#server_lifetime
     pub server_lifetime: Option<u64>,
+    /// Overrides the `server_lifetime_jitter` setting for this database.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/databases/#server_lifetime_jitter
+    pub server_lifetime_jitter: Option<u64>,
     /// Used for resharding only; this database will not serve regular traffic.
     #[serde(default)]
     pub resharding_only: bool,

@@ -226,6 +226,15 @@
           "format": "uint64",
           "minimum": 0
         },
+        "server_lifetime_jitter": {
+          "description": "Maximum random adjustment applied to `server_lifetime` per backend connection (milliseconds).\nOverrides the database-level and general-level `server_lifetime_jitter` setting for this user.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
         "server_password": {
           "description": "Which password to connect with when creating backend connections from PgDog to PostgreSQL. By default, the password configured in `password` is used. This setting allows you to override this configuration and use a different password, decoupling server passwords from user passwords given to clients.\n\n**Note:** Values specified in `pgdog.toml` take priority over this configuration.\n\nhttps://docs.pgdog.dev/configuration/users.toml/users/#server_password",
           "type": [

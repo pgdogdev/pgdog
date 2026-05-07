@@ -109,6 +109,13 @@ impl Config {
                     user.server_lifetime
                         .unwrap_or(database.server_lifetime.unwrap_or(general.server_lifetime)),
                 ),
+                max_age_jitter: Duration::from_millis(
+                    user.server_lifetime_jitter.unwrap_or(
+                        database
+                            .server_lifetime_jitter
+                            .unwrap_or(general.server_lifetime_jitter),
+                    ),
+                ),
                 healthcheck_interval: Duration::from_millis(general.healthcheck_interval),
                 idle_healthcheck_interval: Duration::from_millis(general.idle_healthcheck_interval),
                 idle_healthcheck_delay: Duration::from_millis(general.idle_healthcheck_delay),
@@ -185,6 +192,7 @@ mod test {
             pool_size: Some(5),
             min_pool_size: Some(5),
             server_lifetime: Some(5),
+            server_lifetime_jitter: Some(1),
             statement_timeout: Some(5),
             pooler_mode: Some(PoolerMode::Session),
             idle_timeout: Some(5),
@@ -196,6 +204,7 @@ mod test {
             pool_size: Some(10),
             min_pool_size: Some(10),
             server_lifetime: Some(10),
+            server_lifetime_jitter: Some(2),
             statement_timeout: Some(10),
             pooler_mode: Some(PoolerMode::Transaction),
             idle_timeout: Some(10),
@@ -208,10 +217,46 @@ mod test {
         assert_eq!(5, config.max);
         assert_eq!(5, config.min);
         assert_eq!(Duration::from_millis(5), config.max_age);
+        assert_eq!(Duration::from_millis(1), config.max_age_jitter);
         assert_eq!(Some(Duration::from_millis(5)), config.statement_timeout);
         assert_eq!(PoolerMode::Session, config.pooler_mode);
         assert_eq!(Duration::from_millis(5), config.idle_timeout);
         assert!(config.read_only);
+    }
+
+    #[test]
+    fn test_jitter_falls_through_general_to_database_to_user() {
+        let general = General {
+            server_lifetime_jitter: 100,
+            ..General::default()
+        };
+
+        // Only general set: pool inherits the general value.
+        let cfg = Config::new(&general, &Database::default(), &User::default(), false);
+        assert_eq!(Duration::from_millis(100), cfg.max_age_jitter);
+
+        // Database overrides general.
+        let database = Database {
+            server_lifetime_jitter: Some(200),
+            ..Default::default()
+        };
+        let cfg = Config::new(&general, &database, &User::default(), false);
+        assert_eq!(Duration::from_millis(200), cfg.max_age_jitter);
+
+        // User overrides both.
+        let user = User {
+            server_lifetime_jitter: Some(300),
+            ..Default::default()
+        };
+        let cfg = Config::new(&general, &database, &user, false);
+        assert_eq!(Duration::from_millis(300), cfg.max_age_jitter);
+    }
+
+    #[test]
+    fn test_jitter_default_is_zero() {
+        let general = General::default();
+        let cfg = Config::new(&general, &Database::default(), &User::default(), false);
+        assert_eq!(Duration::ZERO, cfg.max_age_jitter);
     }
 
     #[test]
