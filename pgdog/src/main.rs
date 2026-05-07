@@ -115,10 +115,18 @@ async fn pgdog(command: Option<Commands>) -> Result<(), Box<dyn std::error::Erro
     // are async, so doing this after Tokio launched seems prudent.
     net::tls::load()?;
 
+    let cfg = config::config();
+
+    let _vault_manager = if let Some(vault_cfg) = cfg.config.vault.as_ref() {
+        pgdog::backend::auth::vault::VaultManager::start(vault_cfg, &cfg.users.users).await
+    } else {
+        None
+    };
+
     // Load databases and connect if needed.
     databases::init()?;
 
-    let general = &config::config().config.general;
+    let general = &cfg.config.general;
 
     pgdog::install_log_throttle(general);
 
