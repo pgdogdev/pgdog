@@ -103,6 +103,7 @@
         "stats_period": 15000,
         "system_catalogs": "omnisharded_sticky",
         "tls_certificate": null,
+        "tls_client_ca_certificate": null,
         "tls_client_required": false,
         "tls_private_key": null,
         "tls_server_ca_certificate": null,
@@ -1064,6 +1065,13 @@
         },
         "tls_certificate": {
           "description": "Path to the TLS certificate PgDog will use to setup TLS connections with clients.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#tls_certificate",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tls_client_ca_certificate": {
+          "description": "Path to a certificate bundle used to validate the client certificate on TLS connection creation.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#tls_client_ca_certificate",
           "type": [
             "string",
             "null"
