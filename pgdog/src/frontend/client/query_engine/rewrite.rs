@@ -1,7 +1,4 @@
-use crate::{
-    config::PreparedStatements,
-    frontend::router::parser::{AstContext, Cache},
-};
+use crate::frontend::router::parser::{AstContext, Cache};
 
 use super::*;
 
@@ -14,12 +11,8 @@ impl QueryEngine {
         for message in context.client_request.iter_mut() {
             if message.is_extended() {
                 let level = context.prepared_statements.level;
-                match (level, message.anonymous()) {
-                    (PreparedStatements::ExtendedAnonymous, _)
-                    | (PreparedStatements::Extended, false) => {
-                        context.prepared_statements.maybe_rewrite(message)?
-                    }
-                    _ => (),
+                if level.handles_extended() && (level.rewrite_anonymous() || !message.anonymous()) {
+                    context.prepared_statements.maybe_rewrite(message)?;
                 }
             }
         }
