@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
-# Thin `apt-get install` wrapper that no-ops on non-Linux platforms (macOS
-# developers running these scripts locally already have the deps installed
-# via their own package manager).
+# Thin `apt-get install` wrapper used in CI only.
+# No-ops when CI is not set (local dev) or apt-get is unavailable.
 #
 # Usage: integration/ci/apt.sh <pkg1> <pkg2> ...
 set -euo pipefail
 
-if [[ "$(uname -s)" != "Linux" ]]; then
+if [[ -z "${CI:-}" ]] || ! command -v apt-get &>/dev/null; then
     exit 0
 fi
 
