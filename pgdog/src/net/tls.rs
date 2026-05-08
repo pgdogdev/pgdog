@@ -15,6 +15,7 @@ use tokio_rustls::rustls::{
     self,
     client::danger::{ServerCertVerified, ServerCertVerifier},
     pki_types::pem::PemObject,
+    server::{danger::ClientCertVerifier, WebPkiClientVerifier},
     ClientConfig,
 };
 use tokio_rustls::{TlsAcceptor, TlsConnector};
@@ -106,8 +107,9 @@ pub fn reload() -> Result<(), Error> {
     )?;
 
     let tls_paths = general.tls();
+    let client_ca = general.tls_client_ca_certificate.as_deref();
     let new_acceptor = tls_paths
-        .map(|(cert, key)| build_acceptor(cert, key))
+        .map(|(cert, key)| build_acceptor(cert, key, client_ca))
         .transpose()?;
 
     match (new_acceptor, tls_paths) {
@@ -137,17 +139,69 @@ pub fn reload() -> Result<(), Error> {
     Ok(())
 }
 
-fn build_acceptor(cert: &Path, key: &Path) -> Result<TlsAcceptor, Error> {
+fn build_acceptor(cert: &Path, key: &Path, client_ca: Option<&Path>) -> Result<TlsAcceptor, Error> {
     let pem = CertificateDer::from_pem_file(cert)?;
     let key = PrivateKeyDer::from_pem_file(key)?;
 
-    let config = rustls::ServerConfig::builder()
-        .with_no_client_auth()
-        .with_single_cert(vec![pem], key)?;
+    let builder = rustls::ServerConfig::builder();
+    let config = match client_ca {
+        Some(path) => {
+            let verifier = build_client_cert_verifier(path)?;
+            builder.with_client_cert_verifier(verifier)
+        }
+        None => builder.with_no_client_auth(),
+    }
+    .with_single_cert(vec![pem], key)?;
 
     ACCEPTOR_BUILD_COUNT.fetch_add(1, Ordering::SeqCst);
 
     Ok(TlsAcceptor::from(Arc::new(config)))
+}
+
+fn build_client_cert_verifier(ca_path: &Path) -> Result<Arc<dyn ClientCertVerifier>, Error> {
+    debug!("loading client CA certificate from: {}", ca_path.display());
+
+    let certs = CertificateDer::pem_file_iter(ca_path)
+        .map_err(|e| {
+            Error::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("Failed to read client CA certificate file: {}", e),
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| {
+            Error::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("Failed to parse client CA certificates: {}", e),
+            ))
+        })?;
+
+    if certs.is_empty() {
+        return Err(Error::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "No valid certificates found in client CA file",
+        )));
+    }
+
+    let mut roots = rustls::RootCertStore::empty();
+    let (added, _ignored) = roots.add_parsable_certificates(certs);
+    debug!("added {} client CA certificates from file", added);
+
+    if added == 0 {
+        return Err(Error::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "No valid certificates could be added from client CA file",
+        )));
+    }
+
+    WebPkiClientVerifier::builder(Arc::new(roots))
+        .build()
+        .map_err(|e| {
+            Error::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("Failed to build client certificate verifier: {}", e),
+            ))
+        })
 }
 
 fn build_connector(config_key: &ConnectorConfigKey) -> Result<Arc<ClientConfig>, Error> {
@@ -458,6 +512,43 @@ mod tests {
 
         super::test_reset_acceptor();
 
+        crate::config::set(crate::config::ConfigAndUsers::default()).unwrap();
+    }
+
+    #[test]
+    fn acceptor_with_client_ca_builds() {
+        crate::logger();
+
+        super::test_reset_acceptor();
+
+        let cert = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/tls/cert.pem");
+        let key = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/tls/key.pem");
+        let client_ca = cert.clone();
+
+        let mut cfg = crate::config::ConfigAndUsers::default();
+        cfg.config.general.tls_certificate = Some(cert.clone());
+        cfg.config.general.tls_private_key = Some(key.clone());
+        cfg.config.general.tls_client_ca_certificate = Some(client_ca);
+
+        crate::config::set(cfg.clone()).unwrap();
+        super::reload().expect("acceptor with client CA builds");
+
+        let acceptor = super::acceptor().expect("acceptor installed");
+        assert_eq!(super::test_acceptor_build_count(), 1);
+
+        // Point to a non-existent client CA.
+        cfg.config.general.tls_client_ca_certificate = Some(PathBuf::from("/tmp/test_ca.pem"));
+        crate::config::set(cfg).unwrap();
+
+        assert!(
+            super::reload().is_err(),
+            "reload should fail with bad client CA"
+        );
+
+        // The existing acceptor should remain in place.
+        assert!(Arc::ptr_eq(&acceptor, &super::acceptor().unwrap()));
+
+        super::test_reset_acceptor();
         crate::config::set(crate::config::ConfigAndUsers::default()).unwrap();
     }
 
