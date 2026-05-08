@@ -103,6 +103,18 @@ impl PreparedStatements {
                 self.state.add_ignore('1');
                 Ok(())
             }
+            ProtocolMessage::Sync(_) => {
+                self.state.add_ignore('Z');
+                Ok(())
+            }
+            ProtocolMessage::Close(_) => {
+                self.state.add_ignore('3');
+                Ok(())
+            }
+            ProtocolMessage::Bind(_) => {
+                self.state.add_ignore('2');
+                Ok(())
+            }
             _ => Err(Error::UnsupportedHandleIgnore(request.code())),
         }
     }
