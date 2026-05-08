@@ -9,5 +9,6 @@ bytes = "*"
 thiserror = "*"
 uuid = "*"
 serde = { version = "*", features = ["derive"]}
+schemars.workspace = true
 pgdog-vector = { path = "../pgdog-vector" }
 rust_decimal = { version = "1.36", features = ["db-postgres"] }

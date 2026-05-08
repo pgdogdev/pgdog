@@ -5,10 +5,22 @@ use std::time::{Duration, SystemTime};
 use bytes::Bytes;
 use pgdog_postgres_types::Error;
 use pgdog_postgres_types::{Format, FromDataType, TimestampTz};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 #[derive(
-    Debug, Clone, Default, Copy, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash,
+    Debug,
+    Clone,
+    Default,
+    Copy,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Serialize,
+    Deserialize,
+    Hash,
+    JsonSchema,
 )]
 pub struct Lsn {
     pub high: i64,
@@ -72,7 +84,7 @@ impl Display for Lsn {
 }
 
 /// LSN information.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema)]
 pub struct LsnStats {
     /// pg_is_in_recovery()
     pub replica: bool,
@@ -83,9 +95,18 @@ pub struct LsnStats {
     /// Server timestamp.
     pub timestamp: TimestampTz,
     /// Our timestamp.
+    #[schemars(with = "SystemTimeRepr")]
     pub fetched: SystemTime,
     /// Running on Aurora.
     pub aurora: bool,
+}
+
+/// Schema-only mirror of `std::time::SystemTime`'s default serde representation.
+#[derive(JsonSchema)]
+#[allow(dead_code)]
+struct SystemTimeRepr {
+    secs_since_epoch: u64,
+    nanos_since_epoch: u32,
 }
 
 impl LsnStats {
@@ -108,7 +129,7 @@ impl Default for LsnStats {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, JsonSchema)]
 pub struct ReplicaLag {
     pub duration: Duration,
     pub bytes: i64,
