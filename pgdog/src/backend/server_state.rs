@@ -17,7 +17,7 @@ pub enum State {
     RunningCopy,
     RunningCopyDone,
     RunningCopyFail,
-    RunningFunction,
+    RunningFastpath,
     RunningPrepare,
 }
 
@@ -34,13 +34,12 @@ impl From<&ProtocolMessage> for State {
             ProtocolMessage::Query(_) => State::RunningQuery,
             ProtocolMessage::Other(message) => match message.code() {
                 'H' => State::RunningFlush,
-                'F' => State::RunningFunction,
                 _ => panic!("Unexpected other type {:?}", value.code()),
             },
             ProtocolMessage::CopyData(_) => State::RunningCopy,
             ProtocolMessage::CopyFail(_) => State::RunningCopyFail,
             ProtocolMessage::CopyDone(_) => State::RunningCopyDone,
-            _ => panic!("Unexpected type {:?}", value.code()),
+            ProtocolMessage::Fastpath(_) => State::RunningFastpath,
         }
     }
 }
@@ -112,54 +111,45 @@ impl ServerState {
                 _ => panic!("Received unexpected message {}", message_code),
             },
             State::RunningFlush => (),
-            State::RunningSync => {
-                if message_code == 'Z' {
-                    self.active_state_index += 1;
-                    return;
-                }
-                panic!("Received unexpected message {}", message_code)
-            }
-            State::RunningQuery => {
-                if message_code == 'Z' {
-                    self.active_state_index += 1;
-                    return;
-                }
-                // TODO: panic on unexpected
-            }
-            State::RunningCopy => {
-                if message_code == 'C' {
-                    self.active_state_index += 1;
-                    return;
-                }
-                if message_code == 'E' {
-                    return;
-                }
-            }
+            State::RunningSync => match message_code {
+                'Z' => self.active_state_index += 1,
+                _ => panic!("Received unexpected message {}", message_code),
+            },
+            State::RunningQuery => match message_code {
+                'Z' => self.active_state_index += 1,
+                _ => panic!("Received unexpected message {}", message_code),
+            },
+            State::RunningCopy => match message_code {
+                'C' => self.active_state_index += 1,
+                'E' => _,
+            },
             State::RunningCopyFail => {
                 // Backend will respond with an E,
                 // so nothing to do.
-                return;
             }
             State::RunningCopyDone => {
-                if message_code == 'Z' {
-                    self.active_state_index += 1;
-                    return;
+                match message_code {
+                    'Z' => self.active_state_index += 1,
+                    _ => {
+                        // TODO: panic on unexpected
+                    }
                 }
-                // TODO: panic on unexpected
             }
-            State::RunningFunction => {
-                if message_code == 'Z' {
-                    self.active_state_index += 1;
-                    return;
+            State::RunningFastpath => {
+                match message_code {
+                    'Z' => self.active_state_index += 1,
+                    _ => {
+                        // TODO: panic on unexpected
+                    }
                 }
-                // TODO: panic on unexpected
             }
             State::RunningPrepare => {
-                if message_code == 'Z' {
-                    self.active_state_index += 1;
-                    return;
+                match message_code {
+                    'Z' => self.active_state_index += 1,
+                    _ => {
+                        // TODO: panic on unexpected
+                    }
                 }
-                // TODO: panic on unexpected
             }
         }
     }
