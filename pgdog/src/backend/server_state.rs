@@ -121,7 +121,7 @@ impl ServerState {
             },
             State::RunningCopy => match message_code {
                 'C' => self.active_state_index += 1,
-                'E' => (),
+                _ => (),
             },
             State::RunningCopyFail => {
                 // Backend will respond with an E,
