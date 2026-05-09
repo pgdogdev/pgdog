@@ -18,12 +18,14 @@ pub enum State {
     RunningCopyDone,
     RunningCopyFail,
     RunningFunction,
+    RunningPrepare,
 }
 
 impl From<&ProtocolMessage> for State {
     fn from(value: &ProtocolMessage) -> Self {
         match value {
             ProtocolMessage::Parse(_) => State::RunningParse,
+            ProtocolMessage::Prepare { .. } => State::RunningPrepare,
             ProtocolMessage::Bind(_) => State::RunningBind,
             ProtocolMessage::Describe(_) => State::RunningDescribe,
             ProtocolMessage::Execute(_) => State::RunningExecute,
@@ -146,6 +148,13 @@ impl ServerState {
                 // TODO: panic on unexpected
             }
             State::RunningFunction => {
+                if message_code == 'Z' {
+                    self.active_state_index += 1;
+                    return;
+                }
+                // TODO: panic on unexpected
+            }
+            State::RunningPrepare => {
                 if message_code == 'Z' {
                     self.active_state_index += 1;
                     return;
