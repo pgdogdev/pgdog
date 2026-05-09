@@ -117,7 +117,7 @@ impl ServerState {
             },
             State::RunningQuery => match message_code {
                 'Z' => self.active_state_index += 1,
-                _ => panic!("Received unexpected message {}", message_code),
+                _ => (),
             },
             State::RunningCopy => match message_code {
                 'C' => self.active_state_index += 1,
