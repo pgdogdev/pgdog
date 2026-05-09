@@ -17,6 +17,7 @@ pub enum State {
     RunningCopy,
     RunningCopyDone,
     RunningCopyFail,
+    RunningFunction,
 }
 
 impl From<&ProtocolMessage> for State {
@@ -31,6 +32,7 @@ impl From<&ProtocolMessage> for State {
             ProtocolMessage::Query(_) => State::RunningQuery,
             ProtocolMessage::Other(message) => match message.code() {
                 'H' => State::RunningFlush,
+                'F' => State::RunningFunction,
                 _ => panic!("Unexpected other type {:?}", value.code()),
             },
             ProtocolMessage::CopyData(_) => State::RunningCopy,
@@ -137,6 +139,13 @@ impl ServerState {
                 return;
             }
             State::RunningCopyDone => {
+                if message_code == 'Z' {
+                    self.active_state_index += 1;
+                    return;
+                }
+                // TODO: panic on unexpected
+            }
+            State::RunningFunction => {
                 if message_code == 'Z' {
                     self.active_state_index += 1;
                     return;
