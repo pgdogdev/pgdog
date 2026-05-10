@@ -41,7 +41,7 @@ shard0_count() { shard0_psql -tAc "SELECT COUNT(*) FROM $1"; }
 shard1_count() { shard1_psql -tAc "SELECT COUNT(*) FROM $1"; }
 
 # Pass a psql helper as $1; checks whether the canary row is present on that node.
-has_canary() { local fn=$1; "${fn}" -tAc "SELECT 1 FROM copy_data.settings WHERE setting_name='${CANARY}' LIMIT 1" 2>/dev/null | grep -q 1; }
+has_canary() { local fn=$1 name=${2:-${CANARY}}; "${fn}" -tAc "SELECT 1 FROM copy_data.settings WHERE setting_name='${name}' LIMIT 1" 2>/dev/null | grep -q 1; }
 
 pushd "${COMPOSE_DIR}"
 
@@ -199,6 +199,51 @@ if [ "${CANARY_DELIVERED}" -ne 1 ]; then
 fi
 echo "[retry_test] OK: canary replicated to both shards."
 
+# Assertion 3: replication survives a destination shard outage.
+RETRY_CANARY="repl_retry_$(date +%s)_$$"
+echo "[retry_test] Killing shard_0 to test replication retry..."
+docker compose kill shard_0
+
+echo "[retry_test] Inserting retry canary ${RETRY_CANARY} into source..."
+src_psql -c "INSERT INTO copy_data.settings (setting_name, setting_value) VALUES ('${RETRY_CANARY}', 'repl_retry');"
+
+sleep 2
+
+echo "[retry_test] Starting shard_0..."
+docker compose start shard_0
+
+READY_ATTEMPTS=0
+until pg_isready -h 127.0.0.1 -p 15433 -U pgdog -d pgdog1 -q; do
+    READY_ATTEMPTS=$((READY_ATTEMPTS + 1))
+    if [ "${READY_ATTEMPTS}" -ge 120 ]; then
+        echo "[retry_test] FAIL: shard_0 not ready after $((READY_ATTEMPTS / 2))s"
+        exit 1
+    fi
+    sleep 0.5
+done
+echo "[retry_test] shard_0 is ready."
+
+RETRY_DELIVERED=0
+for _ in $(seq 1 "${REPLICATION_TIMEOUT}"); do
+    if has_canary shard0_psql "${RETRY_CANARY}" && has_canary shard1_psql "${RETRY_CANARY}"; then
+        RETRY_DELIVERED=1
+        break
+    fi
+    if ! kill -0 "${PGDOG_PID}" 2>/dev/null; then
+        echo "[retry_test] FAIL: pgdog server exited while waiting for retry canary"
+        exit 1
+    fi
+    sleep 1
+done
+
+if [ "${RETRY_DELIVERED}" -ne 1 ]; then
+    echo "[retry_test] FAIL: retry canary ${RETRY_CANARY} not replicated within ${REPLICATION_TIMEOUT}s"
+    echo "[retry_test]   replication did not retry and recover after shard_0 outage"
+    admin_psql -c 'SHOW REPLICATION_SLOTS;' || true
+    exit 1
+fi
+echo "[retry_test] OK: retry canary replicated to both shards after shard_0 outage."
+
 # Verify row counts.
 # Sharded tables: sum across both destination shards must equal source.
 SHARDED_TABLES="copy_data.users copy_data.orders copy_data.order_items copy_data.log_actions copy_data.with_identity"
@@ -237,7 +282,7 @@ if [ "${FAILED}" -ne 0 ]; then
     exit 1
 fi
 
-echo "[retry_test] PASS: COPY_DATA survived shard outage + pool reload; replication delivered canary."
+echo "[retry_test] PASS: COPY_DATA survived shard outage + pool reload; replication delivered canary; replication retried after destination shard outage."
 
 # Stop pgdog cleanly before tearing down compose.
 kill "${PGDOG_PID}" 2>/dev/null || true

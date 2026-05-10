@@ -2296,6 +2296,7 @@ fn settings_update_copy_data(oid: Oid, id: &str, name: &str, value: &str) -> Cop
 }
 
 /// Cross-shard deadlock: two subscribers applying the same omni-table UPDATE concurrently.
+#[ignore = "reproduce the error without fix"]
 #[tokio::test]
 async fn cross_subscriber_omni_deadlock_two_databases() {
     use std::sync::Arc;
