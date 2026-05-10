@@ -648,6 +648,25 @@ pub struct General {
     #[serde(default = "General::resharding_copy_retry_min_delay")]
     pub resharding_copy_retry_min_delay: u64,
 
+    /// Maximum number of consecutive replication-subscriber errors tolerated before
+    /// the source error is propagated. Each failure triggers `slot.reconnect()`,
+    /// after which Postgres re-streams every event since the last acked commit.
+    /// `0` retries indefinitely.
+    ///
+    /// _Default:_ `5`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#resharding_replication_retry_max_attempts
+    #[serde(default = "General::resharding_replication_retry_max_attempts")]
+    pub resharding_replication_retry_max_attempts: usize,
+
+    /// Delay in milliseconds between replication subscriber retry attempts.
+    ///
+    /// _Default:_ `1000`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#resharding_replication_retry_min_delay
+    #[serde(default = "General::resharding_replication_retry_min_delay")]
+    pub resharding_replication_retry_min_delay: u64,
+
     /// Automatically reload the schema cache used by PgDog to route queries upon detecting DDL statements.
     ///
     /// **Note:** This setting requires PgDog Enterprise Edition to work as expected. If using the open source edition, it will only work with single-node PgDog deployments, e.g., in local development or CI.
@@ -800,6 +819,9 @@ impl Default for General {
             resharding_parallel_copies: Self::resharding_parallel_copies(),
             resharding_copy_retry_max_attempts: Self::resharding_copy_retry_max_attempts(),
             resharding_copy_retry_min_delay: Self::resharding_copy_retry_min_delay(),
+            resharding_replication_retry_max_attempts:
+                Self::resharding_replication_retry_max_attempts(),
+            resharding_replication_retry_min_delay: Self::resharding_replication_retry_min_delay(),
             reload_schema_on_ddl: Self::reload_schema_on_ddl(),
             load_schema: Self::load_schema(),
             cutover_replication_lag_threshold: Self::cutover_replication_lag_threshold(),
@@ -1043,6 +1065,14 @@ impl General {
 
     fn resharding_copy_retry_min_delay() -> u64 {
         1000
+    }
+
+    fn resharding_replication_retry_max_attempts() -> usize {
+        Self::env_or_default("PGDOG_RESHARDING_REPLICATION_RETRY_MAX_ATTEMPTS", 5)
+    }
+
+    fn resharding_replication_retry_min_delay() -> u64 {
+        Self::env_or_default("PGDOG_RESHARDING_REPLICATION_RETRY_MIN_DELAY", 1000)
     }
 
     fn default_shutdown_termination_timeout() -> Option<u64> {

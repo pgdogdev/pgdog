@@ -427,6 +427,13 @@ impl Pool {
             });
         }
 
+        if let Some(lock_timeout) = config.lock_timeout {
+            params.push(Parameter {
+                name: "lock_timeout".into(),
+                value: lock_timeout.as_millis().to_string().into(),
+            });
+        }
+
         if config.replication_mode {
             params.push(Parameter {
                 name: "replication".into(),

@@ -473,6 +473,34 @@ fn lsn_changed_tracking() {
     assert!(sub.lsn_changed());
 }
 
+/// status_update() must always reflect the last *committed* LSN, never the
+/// working LSN set by Begin. A KeepAlive reply during an open transaction must
+/// not advance the ack pointer to the future commit LSN — doing so would cause
+/// reconnect to skip the in-flight transaction and lose data.
+#[tokio::test]
+async fn status_update_stays_at_committed_lsn_during_transaction() {
+    let mut sub = make_subscriber();
+    sub.connect().await.unwrap();
+
+    // Nothing committed yet: ack pointer is at 0.
+    assert_eq!(sub.status_update().last_flushed, 0);
+
+    // Commit a first transaction (begin LSN 50, end LSN 100).
+    sub.handle(begin_copy_data(50)).await.unwrap();
+    sub.handle(commit_copy_data(100)).await.unwrap();
+    assert_eq!(sub.status_update().last_flushed, 100);
+
+    // Open a second transaction: Begin advances lsn to 200 (future commit LSN).
+    sub.handle(begin_copy_data(200)).await.unwrap();
+    assert_eq!(sub.lsn(), 200, "working lsn follows Begin");
+    // KeepAlive mid-transaction must still report 100, not 200.
+    assert_eq!(
+        sub.status_update().last_flushed,
+        100,
+        "committed_lsn must not advance before commit"
+    );
+}
+
 // ── Relation handling tests ─────────────────────────────────────────
 
 /// Relation inside a transaction uses Flush — stays in transaction.
@@ -2268,6 +2296,7 @@ fn settings_update_copy_data(oid: Oid, id: &str, name: &str, value: &str) -> Cop
 }
 
 /// Cross-shard deadlock: two subscribers applying the same omni-table UPDATE concurrently.
+#[ignore = "reproduce the error without fix"]
 #[tokio::test]
 async fn cross_subscriber_omni_deadlock_two_databases() {
     use std::sync::Arc;

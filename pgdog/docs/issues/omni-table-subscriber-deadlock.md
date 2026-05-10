@@ -322,3 +322,28 @@ is neither.
 
 Ship 1+2 short-term; pursue destination-partitioned apply long-term. Solutions 3 and 4 trade the
 deadlock for worse failure modes and throughput. Solution 5 is orthogonal.
+
+
+---
+
+## Applied solution
+
+**Solution 2 (`lock_timeout`) is in effect.** `lock_timeout` propagates from the pool config
+(`database.lock_timeout` / `user.lock_timeout` in `pgdog-config`) through `Pool::standalone()`
+to all destination shard connections, including replication ones. No separate replication-specific
+knob is needed; configure it on the destination database or user entry.
+
+**Retry and reconnect is in effect.** When a retryable error occurs (including a lock-timeout
+abort), the publisher loop calls `slot.reconnect()` to re-establish the source stream from the
+last committed LSN, then `stream.reconnect()` to close and reopen all destination connections.
+This rolls back any open implicit transaction on the destinations before re-delivery, preventing
+duplicate DML on retry. See `docs/REPLICATION.md` → *Retry and reconnect*.
+
+**Solution 1 (sequential per-destination apply) is not yet applied.** The three-loop `send()`
+in `stream.rs` still fans out write, flush, and read as separate passes. Multi-row omni
+transactions remain susceptible to the deadlock; `lock_timeout` bounds recovery time but does
+not prevent it.
+
+**Status:** lock-timeout + retry gives bounded, recoverable deadlocks for all cases.
+Single-row single-cycle deadlocks are the primary concern in practice; Solution 1 would
+eliminate those structurally. Destination-partitioned apply remains the long-term fix.
