@@ -137,24 +137,7 @@ errors. Combined with Solution 1, it catches the multi-row cases sequential appl
 | Both | ✓ | bounded | ✓ |
 
 Ship `lock_timeout` first — lower-risk, immediate protection against every deadlock shape.
-Sequential apply reduces single-row contention and is a prerequisite for any
-destination-partitioned apply (below).
-
-### Further: destination-partitioned apply (long-term)
-
-Each destination shard is written by exactly one source subscriber for omni-table DML:
-
-```
-owns_omni_destination(source_shard, dest_shard, n_sources) = dest_shard % n_sources == source_shard
-```
-
-Removes cross-subscriber row-lock contention entirely. Requires every source subscriber to see
-every omni-table WAL event. If omni writes can originate from a single source only, partitioning
-silently leaves other destinations stale — routing must first establish source-presence before
-partitioning is safe.
-
----
-
+Sequential apply reduces single-row contention. Both are superseded by Solution 6.
 ### Solution 3: per-table async writer task
 
 One long-lived Tokio task per replicated table. Subscribers buffer the full WAL transaction in
@@ -304,21 +287,54 @@ Treat as a `send()`-loop optimization parallel to Solutions 1+2, not part of the
 
 ---
 
+### Solution 6: modulo-partition subscriber ownership (implemented)
+
+The root cause is that every subscriber writes every omni-table row to every destination.
+The fix assigns each subscriber a disjoint subset of destination shards so no two subscribers
+ever hold locks on the same row at the same time.
+
+The partitioning rule lives in `OmniOwnership::owns()` (`omni_ownership.rs`): subscriber
+`source_shard` owns destination shard `d` when `d % n_sources == source_shard`. With two
+subscribers and two destinations, sub-0 owns even-indexed destinations and sub-1 owns
+odd-indexed ones — they never touch the same row on the same server simultaneously.
+
+Enforcement happens in `send()` (`stream.rs`). The connection filter always passes each
+shard through `partition.owns()`, with one exception: when there are multiple destination
+connections, `Shard::Direct` and `Shard::Multi` carry an explicit shard computed from the
+row's shard key and must land precisely — ownership filtering doesn't apply there.
+
+The edge case that required care: with a single destination shard, the query router
+collapses `Shard::All` to `Shard::Direct(0)` for every table, including omni tables that
+have no shard key. Without a guard, the ownership check would be bypassed and all
+subscribers would write to the one destination — the original bug, just on a smaller
+cluster. The `n_conns == 1` path in the filter catches this, routing single-connection
+dispatches through `partition.owns()` regardless of how the shard was computed.
+
+**Correctness prerequisite:** every subscriber must receive every omni-table WAL event.
+Logical replication publishes each WAL record to all subscribers of the same publication,
+so this holds in any standard deployment.
+
+**Sharded tables are unaffected.** `OmniOwnership` is constructed with `n_sources = 1`
+for sharded-table subscribers, causing `owns()` to return `true` unconditionally — the
+behavior is identical to the pre-fix code.
+
+---
+
 ### Comparison
 
 | | Deadlock fixed | Cross-table/shard atomicity | Throughput impact | Memory risk | Complexity | Recommendation |
 |---|:---:|:---:|:---:|:---:|:---:|---|
-| Solution 1: sequential per-dest apply | single-row only | preserved | minor (serial dest RTTs per row) | none | low | Ship |
-| Solution 2: `lock_timeout` | bounded recovery | preserved | none | none | low | Ship first |
-| **Solutions 1 + 2 combined** | **yes (bounded for multi-row)** | **preserved** | **minor** | **none** | **low** | **Recommended** |
-| Solution 3: per-table writer | yes | broken | severe: N-way → 1-way per omni table | unbounded | high | Not recommended |
-| Solution 4: per-shard writer | silent divergence† | broken | severe: removes all destination parallelism | unbounded | high | **Discard** |
-| Solution 5: buffer + `Sync` | no | preserved | minor (apply lag) | unbounded | low | Optional optimization |
-| Destination-partitioned apply | yes | preserved | none | none | high | Long-term structural fix |
+| Solution 1: sequential per-dest apply | single-row only | preserved | minor | none | low | Superseded |
+| Solution 2: `lock_timeout` | bounded recovery | preserved | none | none | low | Superseded |
+| Solution 3: per-table writer | yes | broken | severe | unbounded | high | Not recommended |
+| Solution 4: per-shard writer | silent divergence† | broken | severe | unbounded | high | Discard |
+| Solution 5: buffer + `Sync` | no | preserved | minor | unbounded | low | Optional optimization |
+| **Modulo-partition subscriber ownership** | **yes (structural)** | **preserved** | **none** | **none** | **low** | **Implemented** |
 
 †Solution 4 produces persistent, undetectable row-level disagreement across shards when two
 subscribers race on the same omni row. The deadlock is observable and recoverable; this divergence
 is neither.
 
-Ship 1+2 short-term; pursue destination-partitioned apply long-term. Solutions 3 and 4 trade the
+Modulo-partition subscriber ownership is the structural fix and is now implemented in
+`send()`. Solutions 1 and 2 remain valid as defence-in-depth. Solutions 3 and 4 trade the
 deadlock for worse failure modes and throughput. Solution 5 is orthogonal.
