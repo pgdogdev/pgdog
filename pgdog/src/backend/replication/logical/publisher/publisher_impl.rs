@@ -292,7 +292,16 @@ impl Publisher {
                                         delay.as_millis()
                                     );
                                     sleep(delay).await;
-                                    try_join!(slot.reconnect(), stream.reconnect())?;
+                                    if let Err(reconnect_err) =
+                                        try_join!(slot.reconnect(), stream.reconnect())
+                                    {
+                                        if !reconnect_err.is_retryable() {
+                                            return Err(reconnect_err);
+                                        }
+                                        warn!(
+                                            "[replication] reconnect error ({attempt}/{max_attempts}): {reconnect_err}, will retry"
+                                        );
+                                    }
                                 }
                                 Err(err) => return Err(err),
                             }
