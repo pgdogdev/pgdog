@@ -151,10 +151,16 @@ wait_for_no_copy_rows tasks title
 wait_for_no_copy_rows task_comments body
 wait_for_no_copy_rows settings name
 
+
+# pg_count PORT TABLE — row count via a direct postgres connection (bypasses pgdog).
+pg_count() { PGPASSWORD=pgdog psql -h 127.0.0.1 -p "$1" -U pgdog -d postgres -tAc "SELECT COUNT(*) FROM $2"; }
+
+# check_row_count_matches TABLE
+# Verifies total row count matches between source (via pgdog) and destination (via pgdog).
+# Suitable for sharded tables where pgdog aggregates across all shards.
 check_row_count_matches() {
     local table="$1"
-    local source_count
-    local destination_count
+    local source_count destination_count
 
     source_count=$(psql -d source -tAc "SELECT COUNT(*) FROM ${table}")
     destination_count=$(psql -d destination -tAc "SELECT COUNT(*) FROM ${table}")
@@ -167,11 +173,31 @@ check_row_count_matches() {
     echo "OK ${table}: ${source_count} rows"
 }
 
+# check_omni_each_shard TABLE
+# For omni (non-sharded) tables: queries each destination shard directly and asserts
+# it holds the full source row count. A query through pgdog hits one shard and cannot
+# detect a shard that is missing rows.
+check_omni_each_shard() {
+    local table="$1"
+    local source_count dest0_count dest1_count
+
+    source_count=$(pg_count 15432 "${table}")
+    dest0_count=$(pg_count  15434 "${table}")
+    dest1_count=$(pg_count  15435 "${table}")
+
+    if [ "${source_count}" -ne "${dest0_count}" ] || [ "${source_count}" -ne "${dest1_count}" ]; then
+        echo "MISMATCH omni ${table}: source=${source_count} dest-0(15434)=${dest0_count} dest-1(15435)=${dest1_count} (expected ${source_count} on each)"
+        exit 1
+    fi
+
+    echo "OK omni ${table}: ${source_count} rows on each shard"
+}
+
 check_row_count_matches tenants
 check_row_count_matches accounts
 check_row_count_matches projects
 check_row_count_matches tasks
 check_row_count_matches task_comments
-check_row_count_matches settings
+check_omni_each_shard settings
 
 cleanup

@@ -230,14 +230,19 @@ impl StreamSubscriber {
     async fn send(&mut self, val: &Shard, bind: &Bind) -> Result<(), Error> {
         // Locals avoid borrowing self inside the iter_mut closure.
         let partition = self.partition;
+        let n_conns = self.connections.len();
         let mut conns: Vec<_> = self
             .connections
             .iter_mut()
             .enumerate()
             .filter(|(shard, _)| match val {
-                Shard::Direct(direct) => *shard == *direct,
-                Shard::Multi(multi) => multi.contains(shard),
-                Shard::All => partition.owns(*shard),
+                // With a single destination shard the router collapses Shard::All
+                // to Direct(0), bypassing the partition ownership check.  Apply
+                // partition.owns() for all variants when there is only one connection
+                // so that omni-table writes are still partitioned across subscribers.
+                Shard::Direct(direct) if n_conns > 1 => *shard == *direct,
+                Shard::Multi(multi) if n_conns > 1 => multi.contains(shard),
+                _ => partition.owns(*shard),
             })
             .map(|(_, server)| server)
             .collect();

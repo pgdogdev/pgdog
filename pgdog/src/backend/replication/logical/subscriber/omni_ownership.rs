@@ -10,6 +10,10 @@ pub struct OmniOwnership {
 
 impl OmniOwnership {
     pub fn new(source_shard: usize, n_sources: usize) -> Self {
+        debug_assert!(
+            n_sources == 0 || source_shard < n_sources,
+            "source_shard ({source_shard}) must be < n_sources ({n_sources})"
+        );
         Self {
             source_shard,
             n_sources,
