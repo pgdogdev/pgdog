@@ -18,6 +18,7 @@ use super::super::publisher::{tables_missing_unique_index, NonIdentityColumnsPre
 use super::super::{
     ensure_validation, publisher::Table, Error, TableValidationError, TableValidationErrorKind,
 };
+use super::omni_ownership::OmniOwnership;
 use super::StreamContext;
 use crate::net::messages::replication::logical::tuple_data::{Identifier, TupleData};
 use crate::net::messages::replication::logical::update::Update as XLogUpdate;
@@ -128,10 +129,13 @@ pub struct StreamSubscriber {
 
     // Missed rows.
     missed_rows: MissedRows,
+
+    // Determines which destination shards this subscriber owns for omni tables.
+    partition: OmniOwnership,
 }
 
 impl StreamSubscriber {
-    pub fn new(cluster: &Cluster, tables: &[Table]) -> Self {
+    pub fn new(cluster: &Cluster, tables: &[Table], partition: OmniOwnership) -> Self {
         let cluster = cluster.logical_stream();
         Self {
             cluster,
@@ -158,6 +162,7 @@ impl StreamSubscriber {
             in_transaction: false,
             missed_rows: MissedRows::default(),
             keys: HashMap::default(),
+            partition,
         }
     }
 
@@ -223,14 +228,21 @@ impl StreamSubscriber {
 
     // Dispatch a pre-built bind to the matching shard(s).
     async fn send(&mut self, val: &Shard, bind: &Bind) -> Result<(), Error> {
+        // Locals avoid borrowing self inside the iter_mut closure.
+        let partition = self.partition;
+        let n_conns = self.connections.len();
         let mut conns: Vec<_> = self
             .connections
             .iter_mut()
             .enumerate()
             .filter(|(shard, _)| match val {
-                Shard::Direct(direct) => *shard == *direct,
-                Shard::Multi(multi) => multi.contains(shard),
-                _ => true,
+                // With a single destination shard the router collapses Shard::All
+                // to Direct(0), bypassing the partition ownership check.  Apply
+                // partition.owns() for all variants when there is only one connection
+                // so that omni-table writes are still partitioned across subscribers.
+                Shard::Direct(direct) if n_conns > 1 => *shard == *direct,
+                Shard::Multi(multi) if n_conns > 1 => multi.contains(shard),
+                _ => partition.owns(*shard),
             })
             .map(|(_, server)| server)
             .collect();
@@ -995,7 +1007,7 @@ mod tests {
 
     fn make_subscriber() -> StreamSubscriber {
         let cluster = Cluster::new_test(&config());
-        StreamSubscriber::new(&cluster, &[])
+        StreamSubscriber::new(&cluster, &[], OmniOwnership::default())
     }
 
     #[test]

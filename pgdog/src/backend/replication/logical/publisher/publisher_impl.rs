@@ -13,6 +13,7 @@ use tracing::{debug, info, warn};
 use super::super::{ensure_validation, publisher::Table, Error};
 use super::ReplicationSlot;
 
+use crate::backend::replication::logical::subscriber::omni_ownership::OmniOwnership;
 use crate::backend::replication::logical::subscriber::stream::StreamSubscriber;
 use crate::backend::replication::publisher::progress::Progress;
 use crate::backend::replication::publisher::Lsn;
@@ -196,6 +197,7 @@ impl Publisher {
             self.create_slots(source).await?;
         }
 
+        let n_sources = source.shards().len();
         for (number, _) in source.shards().iter().enumerate() {
             // Use table offsets from data sync
             // or from loading them above.
@@ -204,7 +206,10 @@ impl Publisher {
                 .get(&number)
                 .ok_or(Error::NoReplicationTables(number))?;
             // Handles the logical replication stream messages.
-            let mut stream = StreamSubscriber::new(dest, tables);
+            // Each subscriber owns a partition of destination shards for omni-table DML
+            // (dest_shard % n_sources == source_shard), preventing cross-subscriber deadlocks.
+            let mut stream =
+                StreamSubscriber::new(dest, tables, OmniOwnership::new(number, n_sources));
 
             // Take ownership of the slot for replication.
             let mut slot = self

@@ -1,5 +1,6 @@
 pub mod context;
 pub mod copy;
+pub mod omni_ownership;
 pub mod parallel_connection;
 pub mod stream;
 
