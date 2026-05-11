@@ -467,7 +467,7 @@ impl Server {
     pub async fn read(&mut self) -> Result<Message, Error> {
         let message = loop {
             if let Some(message) = self.prepared_statements.state_mut().get_simulated() {
-                self.state.process(message.code());
+                self.state.process(message.code())?;
                 return Ok(message.backend(self.id));
             }
             match self.stream_buffer.read(self.stream.as_mut().unwrap()).await {
@@ -536,7 +536,7 @@ impl Server {
                     match self.prepared_statements.forward(&message) {
                         Ok(forward) => {
                             if forward {
-                                self.state.process(code);
+                                self.state.process(code)?;
                                 break message;
                             }
                         }
