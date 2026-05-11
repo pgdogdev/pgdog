@@ -265,6 +265,19 @@ pub struct General {
     #[serde(default)]
     pub query_log: Option<PathBuf>,
 
+    /// Minimum parse duration in milliseconds that triggers a warning log with the query text.
+    /// Queries whose parsing takes longer than this value are logged at WARN level.
+    /// Set to `0` or omit to disable.
+    ///
+    /// _Default:_ `None` (disabled)
+    pub log_min_duration_parse: Option<u64>,
+
+    /// Maximum number of characters of the query text included in log messages.
+    ///
+    /// _Default:_ `100`
+    #[serde(default = "General::log_query_sample_length")]
+    pub log_query_sample_length: usize,
+
     /// The port used for the OpenMetrics HTTP endpoint.
     ///
     /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#openmetrics_port
@@ -764,6 +777,8 @@ impl Default for General {
             broadcast_address: Self::broadcast_address(),
             broadcast_port: Self::broadcast_port(),
             query_log: Self::query_log(),
+            log_min_duration_parse: Self::log_min_duration_parse(),
+            log_query_sample_length: Self::log_query_sample_length(),
             openmetrics_port: Self::openmetrics_port(),
             openmetrics_namespace: Self::openmetrics_namespace(),
             prepared_statements: Self::prepared_statements(),
@@ -1137,6 +1152,14 @@ impl General {
 
     fn query_log() -> Option<PathBuf> {
         Self::env_option_string("PGDOG_QUERY_LOG").map(PathBuf::from)
+    }
+
+    fn log_min_duration_parse() -> Option<u64> {
+        Self::env_option("PGDOG_LOG_MIN_DURATION_PARSE")
+    }
+
+    pub fn log_query_sample_length() -> usize {
+        Self::env_or_default("PGDOG_LOG_QUERY_SAMPLE_LENGTH", 100)
     }
 
     pub fn openmetrics_port() -> Option<u16> {
@@ -1537,6 +1560,8 @@ mod tests {
         env::set_var("PGDOG_MIRROR_EXPOSURE", "0.5");
         env::set_var("PGDOG_DNS_TTL", "60000");
         env::set_var("PGDOG_PUB_SUB_CHANNEL_SIZE", "100");
+        env::set_var("PGDOG_LOG_MIN_DURATION_PARSE", "5");
+        env::set_var("PGDOG_LOG_QUERY_SAMPLE_LENGTH", "200");
 
         assert_eq!(General::broadcast_port(), 7432);
         assert_eq!(General::openmetrics_port(), Some(9090));
@@ -1547,6 +1572,8 @@ mod tests {
         assert_eq!(General::mirror_exposure(), 0.5);
         assert_eq!(General::default_dns_ttl(), Some(60000));
         assert_eq!(General::pub_sub_channel_size(), 100);
+        assert_eq!(General::log_min_duration_parse(), Some(5));
+        assert_eq!(General::log_query_sample_length(), 200);
 
         env::remove_var("PGDOG_BROADCAST_PORT");
         env::remove_var("PGDOG_OPENMETRICS_PORT");
@@ -1557,6 +1584,8 @@ mod tests {
         env::remove_var("PGDOG_MIRROR_EXPOSURE");
         env::remove_var("PGDOG_DNS_TTL");
         env::remove_var("PGDOG_PUB_SUB_CHANNEL_SIZE");
+        env::remove_var("PGDOG_LOG_MIN_DURATION_PARSE");
+        env::remove_var("PGDOG_LOG_QUERY_SAMPLE_LENGTH");
 
         assert_eq!(General::broadcast_port(), General::port() + 1);
         assert_eq!(General::openmetrics_port(), None);
@@ -1567,6 +1596,8 @@ mod tests {
         assert_eq!(General::mirror_exposure(), 1.0);
         assert_eq!(General::default_dns_ttl(), None);
         assert_eq!(General::pub_sub_channel_size(), 0);
+        assert_eq!(General::log_min_duration_parse(), None);
+        assert_eq!(General::log_query_sample_length(), 100);
     }
 
     #[test]

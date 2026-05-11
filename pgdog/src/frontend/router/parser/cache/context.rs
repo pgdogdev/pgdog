@@ -62,4 +62,9 @@ impl<'a> AstQuery<'a> {
             original_query: query,
         }
     }
+
+    /// Return the first `sample_len` characters of the original query, including any comment.
+    pub fn truncated_query(&self, sample_len: usize) -> String {
+        self.original_query.query().chars().take(sample_len).collect()
+    }
 }
