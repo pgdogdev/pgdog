@@ -24,7 +24,7 @@ use super::rewrite::Rewrite;
 use super::sharding::{ManualQuery, OmnishardedTables, ShardedMapping, ShardedTable};
 use super::users::{Admin, Plugin, Users};
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ConfigAndUsers {
     /// pgdog.toml
     pub config: Config,
