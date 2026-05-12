@@ -4,7 +4,7 @@ use std::{sync::Arc, time::Duration};
 use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::{AeadCore, Aes256Gcm, Key, Nonce};
 use parking_lot::RwLock;
-use rand::rngs::OsRng;
+use aes_gcm::aead::OsRng;
 use redis::AsyncCommands;
 use regex::Regex;
 use sha2::{Digest, Sha256};
