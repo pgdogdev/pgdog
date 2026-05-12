@@ -84,6 +84,52 @@ max_entry_bytes = 524288
 key_prefix = "pgdog:result_cache"
 ```
 
+Criptografia do Cache de Resultados (result_cache)
+Para aumentar a segurança e proteger dados sensíveis que possam ser armazenados em cache, o PgDog suporta a criptografia dos valores no cache de resultados do Redis. Isso garante que, mesmo em caso de acesso não autorizado ou configuração incorreta da instância do Redis, os dados do cache permaneçam ilegíveis.
+
+Como Funciona
+Quando uma chave de criptografia é fornecida na configuração, o PgDog utiliza o algoritmo AES-256-GCM para:
+
+Criptografar os resultados da query antes de salvá-los no Redis.
+Descriptografar os resultados ao recuperá-los do cache, antes de enviá-los ao cliente.
+Este processo é totalmente transparente para a aplicação cliente. A chave fornecida na configuração é internamente processada com SHA-256 para derivar uma chave de criptografia segura de 256 bits.
+
+Configuração
+A criptografia é ativada adicionando a opção encryption_key na seção [result_cache] do seu arquivo pgdog.toml.
+
+Exemplo 1: Criptografia Desativada (Comportamento Padrão)
+Por padrão, a criptografia está desativada. Os dados são armazenados em texto plano no Redis. Isso ocorre quando a chave encryption_key está ausente ou comentada.
+
+# pgdog.toml
+
+```toml
+[result_cache]
+enabled = true
+redis_url = "redis://127.0.0.1:6379"
+expire_seconds = 30
+# A linha encryption_key está ausente ou comentada.
+# encryption_key = "..."
+```
+
+Resultado Esperado no Redis: O valor associado a uma chave de cache será o resultado da query em formato binário, legível por qualquer pessoa com acesso ao Redis.
+Exemplo 2: Criptografia Ativada
+Para ativar a criptografia, descomente e defina um valor para encryption_key. Recomenda-se o uso de uma string longa, aleatória e secreta para máxima segurança.
+
+# pgdog.toml
+```toml
+[result_cache]
+enabled = true
+redis_url = "redis://127.0.0.1:6379"
+expire_seconds = 30
+# Ativa a criptografia com a chave secreta fornecida.
+encryption_key = "uma-chave-secreta-muito-longa-e-dificil-de-adivinhar-aqui-321"
+```
+
+Resultado Esperado no Redis: O valor associado a uma chave de cache será um bloco de dados binários criptografados. Tentar ler este valor diretamente no Redis (usando GET no redis-cli, por exemplo) resultará em dados incompreensíveis, protegendo contra vazamentos acidentais.
+Considerações de Segurança e Performance
+Segurança da Chave: A encryption_key é um segredo e deve ser tratada como tal. Evite comitá-la em repositórios públicos. Para ambientes de produção, considere usar um sistema de gerenciamento de segredos e carregar a chave através de uma variável de ambiente (uma melhoria futura planejada).
+Performance: A criptografia AES-256-GCM é extremamente rápida em hardware moderno, especialmente em CPUs com suporte a AES-NI. O impacto na latência para operações de cache (get/set) é geralmente mínimo (na ordem de microssegundos). Para a grande maioria das aplicações, o ganho de segurança supera em muito o pequeno custo de performance.
+
 &#128216; **[Configuration](https://docs.pgdog.dev/configuration/)**
 
 All PgDog features are configurable and can be turned on and off. PgDog requires 2 configuration files to operate:

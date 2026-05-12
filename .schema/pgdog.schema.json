@@ -21,6 +21,17 @@
         "$ref": "#/$defs/Database"
       }
     },
+    "result_cache": {
+      "description": "Redis-backed query result cache (MVP).\n\nCaches results of cacheable SELECT queries (simple protocol only).\nConservative invalidation: any write/DDL bumps a per-db generation,\neffectively invalidating all cached entries for that database.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ResultCache"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "general": {
       "description": "General settings are relevant to the operations of the pooler itself, or apply to all database pools.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/",
       "$ref": "#/$defs/General",
@@ -488,6 +499,39 @@
       "additionalProperties": false,
       "required": [
         "name",
+      "host"
+    ]
+  },
+  "ResultCache": {
+    "description": "Redis-backed query result cache (MVP).",
+    "type": "object",
+    "properties": {
+      "enabled": {
+        "type": "boolean"
+      },
+      "redis_url": {
+        "type": "string"
+      },
+      "expire_seconds": {
+        "type": [ "integer", "null" ], "format": "uint64"
+      },
+      "max_entry_bytes": {
+        "type": [ "integer", "null" ], "format": "uint"
+      },
+      "encryption_key": {
+        "description": "Optional: A secret key for encrypting cached values in Redis. If set, values will be encrypted using AES-256-GCM. The key can be any string; it will be hashed to a 256-bit key. It is recommended to use a long, random string.",
+        "type": [ "string", "null" ]
+      },
+      "key_prefix": {
+        "type": [ "string", "null" ]
+      },
+      "cache_safe_schema_list": { "type": "array", "items": { "type": "string" } },
+      "cache_unsafe_schema_list": { "type": "array", "items": { "type": "string" } },
+      "cache_safe_table_list": { "type": "array", "items": { "type": "string" } },
+      "cache_unsafe_table_list": { "type": "array", "items": { "type": "string" } }
+    },
+    "required": [
+      "enabled",
         "host"
       ]
     },

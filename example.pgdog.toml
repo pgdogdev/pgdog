@@ -276,6 +276,11 @@ redis_url = "redis://127.0.0.1:6379"
 expire_seconds = 30
 # Don't cache very large results.
 max_entry_bytes = 524288
+# Optional: A secret key for encrypting cached values in Redis.
+# If set, values will be encrypted using AES-256-GCM.
+# The key can be any string; it will be hashed to a 256-bit key.
+# It is recommended to use a long, random string.
+# encryption_key = "your-super-secret-and-long-random-key"
 # Redis key prefix.
 key_prefix = "pgdog:result_cache"
 # Optional allow/deny lists (regex) to control what gets cached.

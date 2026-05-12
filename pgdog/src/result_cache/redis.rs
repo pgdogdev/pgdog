@@ -1,8 +1,13 @@
 use std::{sync::Arc, time::Duration};
 
+// Additions for encryption
+use aes_gcm::aead::{Aead, KeyInit};
+use aes_gcm::{Aes256Gcm, Key, Nonce};
 use parking_lot::RwLock;
+use rand::rngs::OsRng;
 use redis::AsyncCommands;
 use regex::Regex;
+use sha2::{Digest, Sha256};
 use tracing::warn;
 
 use crate::{
@@ -20,6 +25,7 @@ pub struct ResultCacheConfig {
     pub redis_url: String,
     pub expire_seconds: Option<u64>,
     pub max_entry_bytes: usize,
+    pub encryption_key: Option<String>,
     pub key_prefix: String,
     pub safe_schema_list: Vec<Regex>,
     pub unsafe_schema_list: Vec<Regex>,
@@ -41,6 +47,7 @@ impl ResultCacheConfig {
             // Apply a default TTL when not provided.
             expire_seconds: rc.expire_seconds.or(Some(30)),
             max_entry_bytes: rc.max_entry_bytes.unwrap_or(512 * 1024),
+            encryption_key: rc.encryption_key,
             key_prefix: rc.key_prefix.unwrap_or_else(|| "pgdog:result_cache".to_string()),
             safe_schema_list: compile_list(&rc.cache_safe_schema_list),
             unsafe_schema_list: compile_list(&rc.cache_unsafe_schema_list),
@@ -197,7 +204,25 @@ impl RedisResultCache {
         shared.manager = Some(conn);
 
         match res {
-            Ok(bytes) if !bytes.is_empty() => Some(bytes),
+            Ok(bytes) if !bytes.is_empty() => {
+                if let Some(enc_key) = &cfg.encryption_key {
+                    // Decrypt the value
+                    match decrypt(enc_key, &bytes) {
+                        Some(plaintext) => Some(plaintext),
+                        None => {
+                            warn!(
+                                "result_cache: failed to decrypt value for key: {}",
+                                key.redis_key
+                            );
+                            // Treat as a cache miss.
+                            None
+                        }
+                    }
+                } else {
+                    // No encryption key, return as is
+                    Some(bytes)
+                }
+            }
             Ok(_) => None,
             Err(err) => {
                 crate::stats::ResultCache::redis_error();
@@ -212,7 +237,27 @@ impl RedisResultCache {
             return;
         };
 
-        if payload.is_empty() || payload.len() > key.max_entry_bytes {
+        if payload.is_empty() {
+            return;
+        }
+
+        // Encrypt payload if key is provided
+        let final_payload = if let Some(enc_key) = &cfg.encryption_key {
+            match encrypt(enc_key, payload) {
+                Some(encrypted) => encrypted,
+                None => {
+                    warn!(
+                        "result_cache: failed to encrypt value for key: {}",
+                        key.redis_key
+                    );
+                    return; // Don't cache if encryption fails
+                }
+            }
+        } else {
+            payload.to_vec()
+        };
+
+        if final_payload.len() > key.max_entry_bytes {
             return;
         }
 
@@ -230,10 +275,10 @@ impl RedisResultCache {
 
         let res: redis::RedisResult<()> = match key.ttl {
             Some(ttl) if ttl > Duration::ZERO => {
-                conn.set_ex(&key.redis_key, payload, ttl.as_secs() as u64)
+                conn.set_ex(&key.redis_key, final_payload.as_slice(), ttl.as_secs() as u64)
                     .await
             }
-            _ => conn.set(&key.redis_key, payload).await,
+            _ => conn.set(&key.redis_key, final_payload.as_slice()).await,
         };
 
         let mut shared = self.shared.write();
@@ -329,6 +374,39 @@ impl RedisResultCache {
     }
 }
 
+fn get_cipher(key_str: &str) -> Aes256Gcm {
+    // Use SHA-256 to derive a 32-byte key from the user-provided string.
+    let mut hasher = Sha256::new();
+    hasher.update(key_str.as_bytes());
+    let key = Key::<Aes256Gcm>::from_slice(&hasher.finalize());
+    Aes256Gcm::new(key)
+}
+
+fn encrypt(key_str: &str, plaintext: &[u8]) -> Option<Vec<u8>> {
+    let cipher = get_cipher(key_str);
+    // 96-bits (12 bytes) is the standard nonce size for AES-GCM.
+    let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
+    match cipher.encrypt(&nonce, plaintext) {
+        Ok(ciphertext) => {
+            let mut result = nonce.to_vec();
+            result.extend_from_slice(&ciphertext);
+            Some(result)
+        }
+        Err(_) => None,
+    }
+}
+
+fn decrypt(key_str: &str, ciphertext_with_nonce: &[u8]) -> Option<Vec<u8>> {
+    const NONCE_SIZE: usize = 12;
+    if ciphertext_with_nonce.len() < NONCE_SIZE {
+        return None; // Not long enough to contain a nonce
+    }
+    let cipher = get_cipher(key_str);
+    let (nonce_bytes, ciphertext) = ciphertext_with_nonce.split_at(NONCE_SIZE);
+    let nonce = Nonce::from_slice(nonce_bytes);
+    cipher.decrypt(nonce, ciphertext).ok()
+}
+
 fn compile_list(patterns: &[String]) -> Vec<Regex> {
     patterns
         .iter()
@@ -339,4 +417,3 @@ fn compile_list(patterns: &[String]) -> Vec<Regex> {
 fn matches_any(patterns: &[Regex], value: &str) -> bool {
     patterns.iter().any(|re| re.is_match(value))
 }
-
