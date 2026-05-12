@@ -16,6 +16,8 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
+    - name: Install mold linker
+      run: sudo apt-get update && sudo apt-get install -y mold
     - name: Build
       run: cargo build --verbose
     - name: Run tests
