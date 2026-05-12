@@ -2,7 +2,7 @@ use std::{sync::Arc, time::Duration};
 
 // Additions for encryption
 use aes_gcm::aead::{Aead, KeyInit};
-use aes_gcm::{Aes256Gcm, Key, Nonce};
+use aes_gcm::{AeadCore, Aes256Gcm, Key, Nonce};
 use parking_lot::RwLock;
 use rand::rngs::OsRng;
 use redis::AsyncCommands;
@@ -12,7 +12,6 @@ use tracing::warn;
 
 use crate::{
     config::config,
-    frontend::router::parser::cache::fingerprint::Fingerprint,
     frontend::router::parser::OwnedTable,
     net::Parameters,
 };
@@ -378,7 +377,8 @@ fn get_cipher(key_str: &str) -> Aes256Gcm {
     // Use SHA-256 to derive a 32-byte key from the user-provided string.
     let mut hasher = Sha256::new();
     hasher.update(key_str.as_bytes());
-    let key = Key::<Aes256Gcm>::from_slice(&hasher.finalize());
+    let binding = hasher.finalize();
+    let key = Key::<Aes256Gcm>::from_slice(&binding);
     Aes256Gcm::new(key)
 }
 
