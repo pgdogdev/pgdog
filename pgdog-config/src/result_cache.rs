@@ -21,6 +21,9 @@ pub struct ResultCache {
     /// Key prefix in Redis.
     pub key_prefix: Option<String>,
 
+    /// Optional secret key for encryption.
+    pub encryption_key: Option<String>,
+
     /// Optional allow-list of schemas whose tables can be cached.
     ///
     /// Each entry is treated as a regular expression.
