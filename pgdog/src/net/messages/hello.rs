@@ -93,6 +93,7 @@ impl Startup {
                         let value = search_path(&value);
                         params.insert(name, value);
                     } else if name == "options" {
+                        let value = value.replace('+', " ");
                         let kvs = value.split("-c");
                         for kv in kvs {
                             let mut nvs = kv.split("=");
@@ -413,6 +414,53 @@ mod test {
             Some("postgres")
         );
         assert_eq!(unrecognized_options, vec!["_pq_.command_tag"]);
+    }
+
+    async fn startup_with_options(options: &str) -> Startup {
+        let (mut write, mut read) = tokio::io::duplex(128);
+        let options = options.to_string();
+        tokio::spawn(async move {
+            let mut payload = BytesMut::new();
+            payload.put_i32(ProtocolVersion::V3_0.as_i32());
+            payload.put_slice(b"user\0postgres\0");
+            payload.put_slice(b"database\0postgres\0");
+            payload.put_slice(b"options\0");
+            payload.put_slice(options.as_bytes());
+            payload.put_u8(0);
+            payload.put_u8(0);
+
+            let mut bytes = BytesMut::new();
+            bytes.put_i32(payload.len() as i32 + 4);
+            bytes.put(payload);
+            write.write_all(&bytes).await.unwrap();
+        });
+        Startup::from_stream(&mut read).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_options_space_encoded() {
+        // options=-c pgdog.role=replica  (space decoded from %20 by libpq)
+        let startup = startup_with_options("-c pgdog.role=replica").await;
+        let Startup::Startup { params, .. } = startup else {
+            panic!("expected startup message");
+        };
+        assert_eq!(
+            params.get("pgdog.role").and_then(|v| v.as_str()),
+            Some("replica")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_options_plus_encoded() {
+        // options=-c+pgdog.role=replica  (+ not decoded to space by libpq)
+        let startup = startup_with_options("-c+pgdog.role=replica").await;
+        let Startup::Startup { params, .. } = startup else {
+            panic!("expected startup message");
+        };
+        assert_eq!(
+            params.get("pgdog.role").and_then(|v| v.as_str()),
+            Some("replica")
+        );
     }
 
     #[tokio::test]
