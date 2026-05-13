@@ -21,7 +21,7 @@ impl std::str::FromStr for CachePolicy {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
-            "no_cache" | "no-cache" => Ok(Self::NoCache),
+            "no_cache" => Ok(Self::NoCache),
             "cache" => Ok(Self::Cache),
             "auto" => Ok(Self::Auto),
             _ => Err(format!("Invalid cache policy: {}", s)),

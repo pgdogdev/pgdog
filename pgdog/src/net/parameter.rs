@@ -33,6 +33,7 @@ static UNTRACKED_PARAMS: Lazy<Vec<String>> = Lazy::new(|| {
         String::from("pgdog.role"),
         String::from("pgdog.shard"),
         String::from("pgdog.sharding_key"),
+        String::from("pgdog.cache"),
     ])
 });
 

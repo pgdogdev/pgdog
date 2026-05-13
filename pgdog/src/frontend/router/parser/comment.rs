@@ -6,6 +6,7 @@ use regex::Regex;
 
 use crate::backend::ShardingSchema;
 use crate::config::database::Role;
+use crate::frontend::cache::policy::CacheDirective;
 use crate::frontend::router::sharding::ContextBuilder;
 
 use super::super::parser::Shard;
@@ -16,6 +17,9 @@ static SHARDING_KEY: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r#"pgdog_sharding_key: *(?:"([^"]*)"|'([^']*)'|([0-9a-zA-Z-]+))"#).unwrap()
 });
 static ROLE: Lazy<Regex> = Lazy::new(|| Regex::new(r#"pgdog_role: *(primary|replica)"#).unwrap());
+static CACHE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r#"pgdog_cache: *(no_cache|cache(?:\s+ttl\s*=\s*([0-9]+))?)?"#).unwrap()
+});
 
 fn get_matched_value<'a>(caps: &'a regex::Captures<'a>) -> Option<&'a str> {
     caps.get(1)
@@ -24,23 +28,24 @@ fn get_matched_value<'a>(caps: &'a regex::Captures<'a>) -> Option<&'a str> {
         .map(|m| m.as_str())
 }
 
-/// Extract shard number from a comment.
+/// Extract shard number, role and cache directive from a comment.
 ///
 /// Comment style uses the C-style comments (not SQL comments!)
 /// as to allow the comment to appear anywhere in the query.
 ///
-/// See [`SHARD`] and [`SHARDING_KEY`] for the style of comment we expect.
+/// See [`SHARD`], [`SHARDING_KEY`], [`ROLE`] and [`CACHE`] for the style of comment we expect.
 ///
 pub fn comment(
     query: &str,
     schema: &ShardingSchema,
-) -> Result<(Option<Shard>, Option<Role>), Error> {
+) -> Result<(Option<Shard>, Option<Role>, Option<CacheDirective>), Error> {
     let tokens = match schema.query_parser_engine {
         QueryParserEngine::PgQueryProtobuf => scan(query),
         QueryParserEngine::PgQueryRaw => scan_raw(query),
     }
     .map_err(Error::PgQuery)?;
     let mut role = None;
+    let mut cache = None;
 
     for token in tokens.tokens.iter() {
         if token.token == Token::CComment as i32 {
@@ -54,15 +59,26 @@ pub fn comment(
                     }
                 }
             }
+            if let Some(cap) = CACHE.captures(comment) {
+                if let Some(action) = cap.get(1) {
+                    let action = action.as_str();
+                    if action == "no_cache" {
+                        cache = Some(CacheDirective::NoCache);
+                    } else {
+                        let ttl = cap.get(2).and_then(|m| m.as_str().parse::<u64>().ok());
+                        cache = Some(CacheDirective::Cache { ttl_seconds: ttl });
+                    }
+                }
+            }
             if let Some(cap) = SHARDING_KEY.captures(comment) {
                 if let Some(sharding_key) = get_matched_value(&cap) {
                     if let Some(schema) = schema.schemas.get(Some(sharding_key.into())) {
-                        return Ok((Some(schema.shard().into()), role));
+                        return Ok((Some(schema.shard().into()), role, cache));
                     }
                     let ctx = ContextBuilder::infer_from_from_and_config(sharding_key, schema)?
                         .shards(schema.shards)
                         .build()?;
-                    return Ok((Some(ctx.apply()?), role));
+                    return Ok((Some(ctx.apply()?), role, cache));
                 }
             }
             if let Some(cap) = SHARD.captures(comment) {
@@ -77,13 +93,14 @@ pub fn comment(
                                 .unwrap_or(Shard::All),
                         ),
                         role,
+                        cache,
                     ));
                 }
             }
         }
     }
 
-    Ok((None, role))
+    Ok((None, role, cache))
 }
 
 #[cfg(test)]
@@ -254,5 +271,95 @@ mod tests {
         let query = "SELECT * FROM users /* pgdog_sharding_key: sales */";
         let result = comment(query, &schema).unwrap();
         assert_eq!(result.0, Some(Shard::Direct(1)));
+    }
+
+    #[test]
+    fn test_cache_hint_no_cache() {
+        use crate::backend::ShardedTables;
+
+        let schema = ShardingSchema {
+            shards: 2,
+            tables: ShardedTables::new(vec![], vec![], false, SystemCatalogsBehavior::default()),
+            ..Default::default()
+        };
+
+        let query = "SELECT * FROM users /* pgdog_cache: no_cache */";
+        let result = comment(query, &schema).unwrap();
+        assert!(matches!(result.2, Some(CacheDirective::NoCache)));
+    }
+
+    #[test]
+    fn test_cache_hint_cache_default_ttl() {
+        use crate::backend::ShardedTables;
+
+        let schema = ShardingSchema {
+            shards: 2,
+            tables: ShardedTables::new(vec![], vec![], false, SystemCatalogsBehavior::default()),
+            ..Default::default()
+        };
+
+        let query = "SELECT * FROM users /* pgdog_cache: cache */";
+        let result = comment(query, &schema).unwrap();
+        assert!(matches!(
+            result.2,
+            Some(CacheDirective::Cache { ttl_seconds: None })
+        ));
+    }
+
+    #[test]
+    fn test_cache_hint_cache_with_ttl() {
+        use crate::backend::ShardedTables;
+
+        let schema = ShardingSchema {
+            shards: 2,
+            tables: ShardedTables::new(vec![], vec![], false, SystemCatalogsBehavior::default()),
+            ..Default::default()
+        };
+
+        let query = "SELECT * FROM users /* pgdog_cache: cache ttl=60 */";
+        let result = comment(query, &schema).unwrap();
+        assert!(matches!(
+            result.2,
+            Some(CacheDirective::Cache {
+                ttl_seconds: Some(60)
+            })
+        ));
+    }
+
+    #[test]
+    fn test_cache_hint_no_directive() {
+        use crate::backend::ShardedTables;
+
+        let schema = ShardingSchema {
+            shards: 2,
+            tables: ShardedTables::new(vec![], vec![], false, SystemCatalogsBehavior::default()),
+            ..Default::default()
+        };
+
+        let query = "SELECT * FROM users";
+        let result = comment(query, &schema).unwrap();
+        assert!(matches!(result.2, None));
+    }
+
+    #[test]
+    fn test_combined_shard_and_cache_hints() {
+        use crate::backend::ShardedTables;
+
+        let schema = ShardingSchema {
+            shards: 2,
+            tables: ShardedTables::new(vec![], vec![], false, SystemCatalogsBehavior::default()),
+            ..Default::default()
+        };
+        
+        let query = "SELECT * FROM users /* pgdog_role: replica pgdog_shard: 1 pgdog_cache: cache ttl=300 */";
+        let result = comment(query, &schema).unwrap();
+        assert_eq!(result.1, Some(Role::Replica));
+        assert_eq!(result.0, Some(Shard::Direct(1)));
+        assert!(matches!(
+            result.2,
+            Some(CacheDirective::Cache {
+                ttl_seconds: Some(300)
+            })
+        ));
     }
 }

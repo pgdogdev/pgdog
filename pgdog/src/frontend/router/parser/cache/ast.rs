@@ -12,6 +12,7 @@ use super::super::{
 };
 use super::{Fingerprint, Stats};
 use crate::backend::schema::Schema;
+use crate::frontend::cache::policy::CacheDirective;
 use crate::frontend::router::parser::rewrite::statement::RewritePlan;
 use crate::frontend::{BufferedQuery, PreparedStatements};
 use crate::net::parameter::ParameterValue;
@@ -37,6 +38,8 @@ pub struct AstInner {
     pub comment_shard: Option<Shard>,
     /// Role.
     pub comment_role: Option<Role>,
+    /// Cache.
+    pub comment_cache: Option<CacheDirective>,
     /// Rewrite plan.
     pub rewrite_plan: RewritePlan,
     /// Fingerprint.
@@ -44,13 +47,13 @@ pub struct AstInner {
 }
 
 impl AstInner {
-    /// Create new AST record, with no rewrite or comment routing.
     pub fn new(ast: ParseResult) -> Self {
         Self {
             ast,
             stats: Mutex::new(Stats::new()),
             comment_role: None,
             comment_shard: None,
+            comment_cache: None,
             rewrite_plan: RewritePlan::default(),
             fingerprint: Fingerprint::default(),
         }
@@ -81,7 +84,7 @@ impl Ast {
             QueryParserEngine::PgQueryRaw => parse_raw(query),
         }
         .map_err(Error::PgQuery)?;
-        let (comment_shard, comment_role) = comment(query, schema)?;
+        let (comment_shard, comment_role, comment_cache) = comment(query, schema)?;
         let fingerprint =
             Fingerprint::new(query, schema.query_parser_engine).map_err(Error::PgQuery)?;
 
@@ -113,6 +116,7 @@ impl Ast {
                 stats: Mutex::new(stats),
                 comment_shard,
                 comment_role,
+                comment_cache,
                 ast,
                 rewrite_plan,
                 fingerprint,

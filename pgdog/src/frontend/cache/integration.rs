@@ -1,14 +1,13 @@
 use std::hash::{Hash, Hasher};
 
 use crate::{
-    config::config,
     frontend::ClientRequest,
     net::{FromBytes, Message, Parameters, Stream, ToBytes},
 };
 
 use tracing::debug;
 
-use super::{Cache, CachePolicyResolver};
+use super::{policy, Cache};
 
 pub enum CacheCheckResult {
     Hit {
@@ -58,23 +57,8 @@ impl Cache {
             hasher.finish()
         };
 
-        let cache_directive = self.policy_dispatcher.extract(query.query(), params);
-        let cache_config = &config().config.general.cache;
-
-        debug!(
-            "cache_check: sql={}, db_config={:?}",
-            query.query(),
-            cache_config
-        );
-
-        let decision = CachePolicyResolver::resolve(
-            cache_directive,
-            cache_config,
-            is_read,
-            cache_key_hash,
-            &self.stats,
-        )
-        .await;
+        let decision =
+            policy::resolve(client_request, params, is_read, cache_key_hash, &self.stats).await;
 
         if !decision.should_cache() {
             return Ok(CacheCheckResult::Passthrough);

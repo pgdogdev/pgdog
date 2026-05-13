@@ -7,10 +7,7 @@ pub mod stats;
 pub use client::CacheClient;
 pub use context::CacheContext;
 pub use integration::CacheCheckResult;
-pub use policy::{
-    CacheDecision, CachePolicyDispatcher, CachePolicyExtractor, CachePolicyResolver,
-    CommentCacheExtractor, ParameterCacheExtractor,
-};
+pub use policy::CacheDecision;
 pub use stats::QueryStatsTracker;
 
 use once_cell::sync::Lazy;
@@ -26,7 +23,6 @@ use crate::{
 pub struct Cache {
     client: CacheClient,
     stats: QueryStatsTracker,
-    policy_dispatcher: CachePolicyDispatcher,
 }
 
 static CACHE: Lazy<Arc<Cache>> = Lazy::new(|| Arc::new(Cache::new()));
@@ -37,14 +33,9 @@ pub fn cache() -> Arc<Cache> {
 
 impl Cache {
     fn new() -> Self {
-        let mut dispatcher = CachePolicyDispatcher::new();
-        dispatcher.add_extractor(Box::new(CommentCacheExtractor));
-        dispatcher.add_extractor(Box::new(ParameterCacheExtractor::new()));
-
         Cache {
             client: CacheClient::new(),
             stats: QueryStatsTracker::default(),
-            policy_dispatcher: dispatcher,
         }
     }
 
