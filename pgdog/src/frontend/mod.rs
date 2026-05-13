@@ -1,6 +1,7 @@
 //! pgDog frontend manages connections to clients.
 
 pub mod buffered_query;
+pub mod cache;
 pub mod client;
 pub mod client_request;
 pub mod comms;

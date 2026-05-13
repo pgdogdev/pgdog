@@ -30,9 +30,9 @@ Added `cache: Cache` field to `General` struct — **cache config is global**, n
 
 Added `pub mod cache;` and `pub use cache::{CachePolicy, Cache};` to public exports.
 
-#### 4. `pgdog/src/frontend/client/query_engine/cache/` (new module)
+#### 4. `pgdog/src/frontend/cache/` (module)
 
-**`mod.rs`** — Module exports and main `Cache` struct:
+**`mod.rs`** — Module exports, global singleton, and main `Cache` struct:
 ```rust
 pub mod client;
 pub mod context;
@@ -41,6 +41,7 @@ pub mod policy;
 pub mod stats;
 
 pub use client::CacheClient;
+pub use context::CacheContext;
 pub use integration::CacheCheckResult;
 pub use policy::{
     CacheDecision, CachePolicyDispatcher, CachePolicyExtractor, CachePolicyResolver,
@@ -49,15 +50,17 @@ pub use policy::{
 pub use stats::QueryStatsTracker;
 ```
 
-`Cache` struct wraps: `CacheClient`, `QueryStatsTracker`, `CacheConfig`, `database`, `policy_dispatcher`.
+`Cache` struct wraps: `CacheClient`, `QueryStatsTracker`, `policy_dispatcher`.
+
+**Global singleton:** Cache is global-scoped, not connection-scoped. Accessed via `cache()` function which returns `Arc<Cache>` from a `Lazy<Arc<Cache>>` static. `Cache::new()` reads config internally — no parameters needed.
 
 Key methods:
-- `new(cache_config, database)` — creates client, stats, dispatcher
-- `try_read_cache(context)` — calls `cache_check()`, handles HIT/MISS/PASS-through
-- `save_response_in_cache(context)` — finalizes by storing the captured response
+- `new()` — creates client (reads config internally), stats, dispatcher
+- `try_read_cache(cache_context, in_transaction, client_request, params, stream)` — calls `cache_check()`, handles HIT/MISS/PASS-through
+- `save_response_in_cache(cache_context)` — finalizes by storing the captured response
 
 **`client.rs`** — Redis client wrapper using `fred` v9:
-- `CacheClient::new(config)` — builds client from `&CacheConfig`, returns disabled stub if no config/URL
+- `CacheClient::new()` — builds client from global `config().config.general.cache`, returns disabled stub if no config/URL
 - `ensure_connected()` — lazy one-time `client.init().await` followed by `client.ping()` verification; sets `redis_connected` flag
 - `get(&self, key)` — returns `Result<Option<Vec<u8>>>`; fetches cached wire-protocol bytes
 - `set(&self, key, value, ttl)` — stores bytes with EX expiration; respects `max_result_size`
@@ -78,7 +81,7 @@ Key methods:
 - `struct ParameterCacheExtractor`: reads `pgdog.cache` connection startup parameter
 - `struct CachePolicyDispatcher`: chains extractors in priority order, returns first non-`None` result
 - Tier 1: Extractor result (`CacheDirective::Cache { ttl }` or `CacheDirective::NoCache` from comments/params)
-- Tier 2: Database config `CachePolicy` (`NoCache` / `Cache` / `Auto`)
+- Tier 2: Global config `CachePolicy` (`NoCache` / `Cache` / `Auto`)
 - Tier 3: `auto_decision()` — caches when `hit_count > miss_count` AND `avg_result_size < 1MB`
 
 **`stats.rs`** — Per-fingerprint query statistics tracker:
@@ -250,6 +253,8 @@ SQL comment  →  pgdog.cache parameter  →  DB policy config  →  Auto-decisi
 
 7. **Setting pgdog.cache via connection url doesn't work**.
 
+8. **Moved all cache-related structs from QueryEngine to Client** — now all cache structs including redis client are creating for whole pgdog's lifetime.
+
 ---
 
 ## What's Left To Do
@@ -266,6 +271,9 @@ SQL comment  →  pgdog.cache parameter  →  DB policy config  →  Auto-decisi
 
 6. **Make statistics collection async** — for auto policy.
 
+7. **Provide config hotswap**.
+
+8. **Review and rewrite CacheClient**.
 
 ### Planned Tests
 

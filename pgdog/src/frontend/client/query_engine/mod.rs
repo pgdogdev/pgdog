@@ -2,11 +2,10 @@ use crate::{
     backend::pool::{Connection, Request},
     config::config,
     frontend::{
-        BufferedQuery, Client, ClientComms, Command, Error, Router, RouterContext, Stats, client::query_engine::{
-            cache::Cache,
-            hooks::QueryEngineHooks,
-            route_query::ClusterCheck,
-        }, router::{Route, parser::Shard}
+        cache::cache,
+        client::query_engine::{hooks::QueryEngineHooks, route_query::ClusterCheck},
+        router::{parser::Shard, Route},
+        BufferedQuery, Client, ClientComms, Command, Error, Router, RouterContext, Stats,
     },
     net::{ErrorResponse, Message, Parameters},
     state::State,
@@ -14,7 +13,6 @@ use crate::{
 
 use tracing::debug;
 
-pub mod cache;
 pub mod connect;
 pub mod context;
 pub mod deallocate;
@@ -58,7 +56,6 @@ pub struct QueryEngine {
     notify_buffer: NotifyBuffer,
     pending_explain: Option<ExplainResponseState>,
     hooks: QueryEngineHooks,
-    cache: Cache,
 }
 
 impl QueryEngine {
@@ -68,7 +65,6 @@ impl QueryEngine {
         let database = params.get_default("database", user);
 
         let backend = Connection::new(user, database, admin)?;
-        let cache_config = &config().config.general.cache;
 
         Ok(Self {
             backend,
@@ -81,7 +77,6 @@ impl QueryEngine {
             pending_explain: None,
             begin_stmt: None,
             router: Router::default(),
-            cache: Cache::new(cache_config, database),
         })
     }
 
@@ -135,7 +130,17 @@ impl QueryEngine {
             return Ok(());
         }
 
-        if self.cache.try_read_cache(context).await? {
+        let in_transaction = context.in_transaction();
+        if cache()
+            .try_read_cache(
+                &mut context.cache_context,
+                in_transaction,
+                context.client_request,
+                context.params,
+                context.stream,
+            )
+            .await?
+        {
             self.update_stats(context);
             return Ok(());
         }
@@ -239,7 +244,7 @@ impl QueryEngine {
             command => self.unknown_command(context, command.clone()).await?,
         }
 
-        self.cache.save_response_in_cache(context).await;
+        cache().save_response_in_cache(&mut context.cache_context).await;
 
         self.hooks.after_execution(context)?;
 

@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tracing::{debug, error, info};
 
-use pgdog_config::Cache as CacheConfig;
+use crate::config::config;
 
 const CACHE_KEY_PREFIX: &str = "pgdog:";
 
@@ -15,7 +15,6 @@ const REDIS_OPERATION_TIMEOUT: Duration = Duration::from_secs(2);
 #[derive(Clone)]
 pub struct CacheClient {
     client: Option<RedisClient>,
-    config: CacheConfig,
     /// Master connection state flag. Set true only after PING succeeds
     /// on init or reconnect. Set false immediately on any error/timeout.
     redis_connected: Arc<AtomicBool>,
@@ -27,7 +26,6 @@ impl std::fmt::Debug for CacheClient {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CacheClient")
             .field("client", &self.client.as_ref().map(|_| "..."))
-            .field("config", &self.config)
             .field(
                 "redis_connected",
                 &self.redis_connected.load(Ordering::Relaxed),
@@ -38,13 +36,12 @@ impl std::fmt::Debug for CacheClient {
 }
 
 impl CacheClient {
-    pub fn new(config: &CacheConfig) -> Self {
-        let cache_config = config.clone();
+    pub fn new() -> Self {
+        let cache_config = &config().config.general.cache;
 
         if !cache_config.is_enabled() || cache_config.redis_url.is_none() {
             return Self {
                 client: None,
-                config: cache_config,
                 redis_connected: Arc::new(AtomicBool::new(false)),
                 reconnecting: Arc::new(AtomicBool::new(false)),
             };
@@ -57,7 +54,6 @@ impl CacheClient {
                 error!("Failed to parse Redis URL: {}", e);
                 return Self {
                     client: None,
-                    config: cache_config,
                     redis_connected: Arc::new(AtomicBool::new(false)),
                     reconnecting: Arc::new(AtomicBool::new(false)),
                 };
@@ -70,7 +66,6 @@ impl CacheClient {
                 error!("Failed to build Redis client: {}", e);
                 return Self {
                     client: None,
-                    config: cache_config,
                     redis_connected: Arc::new(AtomicBool::new(false)),
                     reconnecting: Arc::new(AtomicBool::new(false)),
                 };
@@ -79,7 +74,6 @@ impl CacheClient {
 
         Self {
             client: Some(client),
-            config: cache_config,
             redis_connected: Arc::new(AtomicBool::new(false)),
             reconnecting: Arc::new(AtomicBool::new(false)),
         }
@@ -252,7 +246,9 @@ impl CacheClient {
 
         let full_key = format!("{}{}", CACHE_KEY_PREFIX, key);
 
-        if let Some(max_size) = self.config.max_result_size() {
+        let cache_config = &config().config.general.cache;
+
+        if let Some(max_size) = cache_config.max_result_size() {
             if value.len() > max_size {
                 debug!(
                     "Skipping cache for key {}: size {} exceeds max {}",
@@ -264,7 +260,7 @@ impl CacheClient {
             }
         }
 
-        let ttl_seconds = ttl.unwrap_or_else(|| self.config.ttl()) as i64;
+        let ttl_seconds = ttl.unwrap_or_else(|| cache_config.ttl()) as i64;
 
         match tokio::time::timeout(
             REDIS_OPERATION_TIMEOUT,
@@ -295,12 +291,9 @@ impl CacheClient {
         }
     }
 
-    pub fn config(&self) -> &CacheConfig {
-        &self.config
-    }
-
     pub fn is_enabled(&self) -> bool {
-        self.client.is_some() && self.config.is_enabled()
+        let cache_config = &config().config.general.cache;
+        self.client.is_some() && cache_config.is_enabled()
     }
 }
 
