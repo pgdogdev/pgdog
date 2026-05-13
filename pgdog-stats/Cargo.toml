@@ -9,3 +9,4 @@ pgdog-config = { path = "../pgdog-config" }
 pgdog-postgres-types = { path = "../pgdog-postgres-types" }
 bytes = "*"
 indexmap = { version = "*", features = ["serde"] }
+schemars.workspace = true
