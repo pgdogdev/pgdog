@@ -70,7 +70,6 @@ pgdog-vector = { path = "../pgdog-vector" }
 pgdog-stats = { path = "../pgdog-stats" }
 pgdog-postgres-types = { path = "../pgdog-postgres-types"}
 fred = { version = "9", features = ["enable-rustls"] }
-scc = "3.7"
 xxhash-rust = { version = "0.8", features = ["xxh3"]}
 
 [target.'cfg(not(target_env = "msvc"))'.dependencies]

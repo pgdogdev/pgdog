@@ -4,7 +4,7 @@ use once_cell::sync::Lazy;
 use regex::Regex;
 
 use crate::{
-    frontend::{ClientRequest, cache::CacheDecision},
+    frontend::{cache::CacheDecision, ClientRequest},
     net::{FromBytes, Message, Parameters, Stream, ToBytes},
 };
 
@@ -12,9 +12,8 @@ use tracing::debug;
 
 use super::{policy, Cache};
 
-static FORCE_CACHE_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r#"pgdog_cache:\s*force_cache"#).unwrap()
-});
+static FORCE_CACHE_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r#"pgdog_cache:\s*force_cache"#).unwrap());
 
 pub struct CacheMiss {
     pub cache_key_hash: u64,
@@ -22,9 +21,7 @@ pub struct CacheMiss {
 }
 
 pub enum CacheCheckResult {
-    Hit {
-        cached: Vec<u8>,
-    },
+    Hit { cached: Vec<u8> },
     Miss(CacheMiss),
     Passthrough,
 }
@@ -67,34 +64,22 @@ impl Cache {
             hasher.finish()
         };
 
-        let decision =
-            policy::resolve(client_request, params, is_read, cache_key_hash, &self.stats).await;
+        let decision = policy::resolve(client_request, params, is_read).await;
         match decision {
             CacheDecision::Skip => Ok(CacheCheckResult::Passthrough),
-            CacheDecision::ForceCache(ttl) => {
-                self.stats.record_miss(cache_key_hash).await;
-                Ok(CacheCheckResult::Miss(CacheMiss {
+            CacheDecision::ForceCache(ttl) => Ok(CacheCheckResult::Miss(CacheMiss {
+                cache_key_hash,
+                ttl,
+            })),
+            CacheDecision::Cache(ttl) => match self.client.get(cache_key_hash).await {
+                Ok(Some(cached)) => Ok(CacheCheckResult::Hit { cached }),
+                Ok(None) => Ok(CacheCheckResult::Miss(CacheMiss {
                     cache_key_hash,
-                    ttl,
-                }))
-            },
-            CacheDecision::Cache(ttl) => {
-                match self.client.get(cache_key_hash).await {
-                    Ok(Some(cached)) => {
-                        self.stats.record_hit(cache_key_hash, cached.len()).await;
-                        Ok(CacheCheckResult::Hit { cached })
-                    }
-                    Ok(None) => {
-                        self.stats.record_miss(cache_key_hash).await;
-                        Ok(CacheCheckResult::Miss(CacheMiss {
-                            cache_key_hash,
-                            ttl: ttl,
-                        }))
-                    }
-                    Err(e) => {
-                        debug!("Cache get error: {}", e);
-                        Ok(CacheCheckResult::Passthrough)
-                    }
+                    ttl: ttl,
+                })),
+                Err(e) => {
+                    debug!("Cache get error: {}", e);
+                    Ok(CacheCheckResult::Passthrough)
                 }
             },
         }

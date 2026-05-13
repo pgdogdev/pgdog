@@ -2,13 +2,11 @@ pub mod client;
 pub mod context;
 pub mod integration;
 pub mod policy;
-pub mod stats;
 
 pub use client::CacheClient;
 pub use context::CacheContext;
 pub use integration::CacheCheckResult;
 pub use policy::CacheDecision;
-pub use stats::QueryStatsTracker;
 
 use once_cell::sync::Lazy;
 use std::sync::Arc;
@@ -22,7 +20,6 @@ use crate::{
 #[derive(Debug)]
 pub struct Cache {
     client: CacheClient,
-    stats: QueryStatsTracker,
 }
 
 static CACHE: Lazy<Arc<Cache>> = Lazy::new(|| Arc::new(Cache::new()));
@@ -35,7 +32,6 @@ impl Cache {
     fn new() -> Self {
         Cache {
             client: CacheClient::new(),
-            stats: QueryStatsTracker::default(),
         }
     }
 

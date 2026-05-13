@@ -34,7 +34,7 @@
         "cache": {
           "enabled": false,
           "max_result_size": 0,
-          "policy": "auto",
+          "policy": "no_cache",
           "redis_url": "redis://localhost:6379",
           "ttl": 300
         },
@@ -299,9 +299,9 @@
           "minimum": 0
         },
         "policy": {
-          "description": "Cache policy: no_cache, cache, or auto.\n\n_Default:_ `auto`",
+          "description": "Cache policy: no_cache or cache.\n\n_Default:_ `no_cache`",
           "$ref": "#/$defs/CachePolicy",
-          "default": "auto"
+          "default": "no_cache"
         },
         "redis_url": {
           "description": "Redis connection URL.\n\n_Default:_ `redis://localhost:6379`",
@@ -330,11 +330,6 @@
           "description": "Always cache read queries.",
           "type": "string",
           "const": "cache"
-        },
-        {
-          "description": "Dynamically decide based on Redis memory and query stats.",
-          "type": "string",
-          "const": "auto"
         }
       ]
     },
@@ -643,7 +638,7 @@
           "default": {
             "enabled": false,
             "max_result_size": 0,
-            "policy": "auto",
+            "policy": "no_cache",
             "redis_url": "redis://localhost:6379",
             "ttl": 300
           }

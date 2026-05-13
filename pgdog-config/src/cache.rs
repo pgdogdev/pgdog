@@ -8,12 +8,10 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "snake_case")]
 pub enum CachePolicy {
     /// Never cache queries for this database.
+    #[default]
     NoCache,
     /// Always cache read queries.
     Cache,
-    /// Dynamically decide based on Redis memory and query stats.
-    #[default]
-    Auto,
 }
 
 impl std::str::FromStr for CachePolicy {
@@ -23,7 +21,6 @@ impl std::str::FromStr for CachePolicy {
         match s.to_lowercase().as_str() {
             "no_cache" => Ok(Self::NoCache),
             "cache" => Ok(Self::Cache),
-            "auto" => Ok(Self::Auto),
             _ => Err(format!("Invalid cache policy: {}", s)),
         }
     }
@@ -34,7 +31,6 @@ impl std::fmt::Display for CachePolicy {
         let display = match self {
             Self::NoCache => "no_cache",
             Self::Cache => "cache",
-            Self::Auto => "auto",
         };
         write!(f, "{}", display)
     }
@@ -49,9 +45,9 @@ pub struct Cache {
     /// _Default:_ `false`
     #[serde(default = "Cache::enabled")]
     pub enabled: bool,
-    /// Cache policy: no_cache, cache, or auto.
+    /// Cache policy: no_cache or cache.
     ///
-    /// _Default:_ `auto`
+    /// _Default:_ `no_cache`
     #[serde(default = "Cache::policy")]
     pub policy: CachePolicy,
     /// Default TTL in seconds for cached queries.

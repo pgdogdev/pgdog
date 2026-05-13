@@ -1,4 +1,3 @@
-use super::stats::QueryStatsTracker;
 use crate::config::{config, CachePolicy};
 use crate::frontend::ClientRequest;
 use crate::net::parameter::ParameterValue;
@@ -28,8 +27,6 @@ pub async fn resolve(
     client_request: &ClientRequest,
     params: &Parameters,
     is_read: bool,
-    cache_key_hash: u64,
-    stats: &QueryStatsTracker,
 ) -> CacheDecision {
     let cache_config = &config().config.general.cache;
 
@@ -52,17 +49,6 @@ pub async fn resolve(
     match cache_config.policy {
         CachePolicy::NoCache => CacheDecision::Skip,
         CachePolicy::Cache => CacheDecision::Cache(cache_config.ttl),
-        CachePolicy::Auto => auto_decision(cache_key_hash, stats).await,
-    }
-}
-
-async fn auto_decision(cache_key_hash: u64, stats: &QueryStatsTracker) -> CacheDecision {
-    let cache_config = &config().config.general.cache;
-    let query_stats = stats.get(cache_key_hash).await;
-    if query_stats.hit_count > query_stats.miss_count && query_stats.avg_result_size() < 1_000_000 {
-        CacheDecision::Cache(cache_config.ttl)
-    } else {
-        CacheDecision::Skip
     }
 }
 
