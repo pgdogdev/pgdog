@@ -200,13 +200,13 @@ psql postgresql://postgres:postgres@127.0.0.1:5432/postgres?options=-c%20pgdog.c
 psql postgresql://postgres:postgres@127.0.0.1:5432/postgres?options=-c%20pgdog.cache%3Dcache
 
 # Session-wide: cache all queries with 5-minute TTL
-psql postgresql://postgres:postgres@127.0.0.1:5432/postgres?options=-c%20pgdog.cache%3Dcache%5C%20ttl%3D300
+psql postgresql://postgres:postgres@127.0.0.1:5432/postgres?options=-c%20pgdog.cache%3Dcache%20ttl%3D300
 
 # Session-wide: force cache all queries with default TTL
 psql postgresql://postgres:postgres@127.0.0.1:5432/postgres?options=-c%20pgdog.cache%3Dforce_cache
 
 # Session-wide: force cache all queries with 5-minute TTL
-psql postgresql://postgres:postgres@127.0.0.1:5432/postgres?options=-c%20pgdog.cache%3Dforce_cache%5C%20ttl%3D300
+psql postgresql://postgres:postgres@127.0.0.1:5432/postgres?options=-c%20pgdog.cache%3Dforce_cache%20ttl%3D300
 ```
 
 ### Priority Order
