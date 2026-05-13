@@ -1,8 +1,8 @@
-# Redis Cache for pgdog — State of Implementation
+# Cache for pgdog — State of Implementation
 
 ## Architecture
 
-Cache SELECT queries in Redis, bypass PostgreSQL on cache hit, populate cache on cache miss. Three-tier policy resolution: SQL comment → per-database config → auto-decision engine.
+Cache SELECT queries in Redis, bypass PostgreSQL on cache hit, populate cache on cache miss. Two-tier policy resolution: SQL comment/connection parameter → pgdog's config.
 
 ---
 
@@ -12,7 +12,7 @@ Cache SELECT queries in Redis, bypass PostgreSQL on cache hit, populate cache on
 
 **`cache.rs`** — Cache configuration types:
 
-**CachePolicy enum:** `NoCache`, `Cache`, `Auto` (default). Implements `FromStr`, `Display`, `Serialize`, `Deserialize`, `Copy`, `JsonSchema`.
+**CachePolicy enum:** `NoCache` (default), `Cache`. Implements `FromStr`, `Display`, `Serialize`, `Deserialize`, `Copy`, `JsonSchema`.
 
 **Cache struct:**
 - `enabled: bool` — is caching on?
@@ -33,21 +33,19 @@ pub mod client;
 pub mod context;
 pub mod integration;
 pub mod policy;
-pub mod stats;
 
 pub use client::CacheClient;
 pub use context::CacheContext;
 pub use integration::CacheCheckResult;
 pub use policy::CacheDecision;
-pub use stats::QueryStatsTracker;
 ```
 
-`Cache` struct wraps: `CacheClient`, `QueryStatsTracker`.
+`Cache` struct wraps: `CacheClient`.
 
 **Global singleton:** Cache is global-scoped, not connection-scoped. Accessed via `cache()` function which returns `Arc<Cache>` from a `Lazy<Arc<Cache>>` static. `Cache::new()` reads config internally — no parameters needed.
 
 Key methods:
-- `new()` — creates client (reads config internally) and stats tracker
+- `new()` — creates client (reads config internally)
 - `try_read_cache(cache_context, in_transaction, client_request, params, stream)` — calls `cache_check()`, handles HIT/MISS/PASS-through
 - `save_response_in_cache(cache_context)` — finalizes by storing the captured response
 
@@ -66,23 +64,17 @@ Key methods:
 - `reconnecting: Arc<AtomicBool>` — prevents multiple concurrent reconnect tasks
 - All Redis operations wrapped in `tokio::time::timeout(REDIS_OPERATION_TIMEOUT)` (2s) as safety net
 
-**`policy.rs`** — 3-tier policy resolution via free functions:
-- `CacheDirective` enum: `Cache { ttl_seconds }`, `NoCache` (default)
-- `CacheDecision` enum: `Skip`, `Cache(Option<u64>)`
-- `resolve(client_request, params, is_read, cache_key_hash, stats)` — main resolver function, chains all tiers
+**`policy.rs`** — 2-tier policy resolution:
+- `CacheDirective` enum: `Cache { ttl_seconds }`, `ForceCache { ttl_seconds }`, `NoCache` (default)
+- `CacheDecision` enum: `Skip`, `Cache(u64)`, `ForceCache(u64)`
+- `resolve(client_request, params, is_read)` — main resolver function, chains all tiers
 - `get_cache_directive(client_request, params)` — comment hint (from AST) has priority over connection parameter (`pgdog.cache`)
-- `extract_parameter_directive(params)` — parses `pgdog.cache` parameter: `no_cache`, `cache`, `cache ttl=N`
-- Tier 1: Extractor directive (`CacheDirective::Cache { ttl }` or `CacheDirective::NoCache`)
-- Tier 2: Global config `CachePolicy` (`NoCache` / `Cache` / `Auto`)
-- Tier 3: `auto_decision()` — caches when `hit_count > miss_count` AND `avg_result_size < 1MB`
-
-**`stats.rs`** — Per-fingerprint query statistics tracker:
-- `QueryStats` struct: `hit_count`, `miss_count`, `total_result_size`, `avg_result_size()`
-- `QueryStatsTracker` with `record_hit(fingerprint, size)` / `record_miss(fingerprint)` / `get(fingerprint)`
-- Internally: `Arc<scc::HashMap<u64, QueryStats>>`
+- `extract_parameter_directive(params)` — parses `pgdog.cache` parameter: `no_cache`, `cache`, `cache ttl=N`, `force_cache`, `force_cache ttl=N`
+- Tier 1: Extractor directive (`CacheDirective::Cache { ttl }`, `CacheDirective::ForceCache { ttl }`, or `CacheDirective::NoCache`)
+- Tier 2: Global config `CachePolicy` (`NoCache` / `Cache`)
 
 **`context.rs`** — Cache context held in `QueryEngineContext`:
-- `CacheContext` with `cache_miss: Option<(u64, Option<u64>)>`, `response_buffer: Vec<Message>`, and `had_error: bool`
+- `CacheContext` with `cache_miss: Option<CacheMiss>`, `response_buffer: Vec<Message>`, and `had_error: bool`
 - `capture_response(message)` — stores message in buffer when cache miss is tracked; sets `had_error = true` on `E` messages
 - `reset()` — clears all state for per-query isolation
 
@@ -95,10 +87,9 @@ Key methods:
 ### Query Engine Integration
 
 **`pgdog/src/frontend/client/query_engine/mod.rs`**
-- Declares `pub mod cache;` module
-- `QueryEngine` holds `cache: Cache` field
-- `handle()` flow: after `route_query()` and before `before_execution()`, calls `self.cache.try_read_cache(context)`. If HIT: sends cached response and returns. On MISS: stores state in `context.cache_context`.
-- After `match command`, calls `self.cache.save_response_in_cache(context)` to finalize caching.
+- Imports global `cache()` from `frontend::cache`
+- `handle()` flow: after `route_query()` and before `before_execution()`, calls `cache().try_read_cache(context)`. If HIT: sends cached response and returns. On MISS: stores state in `context.cache_context`.
+- After `match command`, calls `cache().save_response_in_cache(context)` to finalize caching.
 
 **`pgdog/src/frontend/client/query_engine/query.rs`**
 - `process_server_message()` calls `context.cache_context.capture_response(message.clone())`.
@@ -119,7 +110,6 @@ Key methods:
 
 **`pgdog/Cargo.toml`**
 fred = { version = "9", features = ["enable-rustls"] }
-scc = "3.7"
 xxhash-rust = { version = "0.8", features = ["xxh3"]}
 
 ---
@@ -132,10 +122,9 @@ xxhash-rust = { version = "0.8", features = ["xxh3"]}
 | Cache config scope | **Global** (`config.general.cache`) |
 | Redis client | `fred` crate v9 (async-native, tokio integration) |
 | Cacheable queries | Only reads (`route.is_read()`) |
-| Cache policy resolution | 3-tier: SQL comment → pgdog.cache param → DB policy → auto-decision |
+| Cache policy resolution | 2-tier: SQL comment/param → DB policy |
 | Cache HIT flow | Deserialize wire bytes → parse messages → send to client → return `Ok(true)` |
 | Cache MISS flow | Normal execute → capture response via `CacheContext` → store in Redis → respond |
-| Auto-decision engine | `hit_count > miss_count` AND `avg_result_size < 1MB` |
 | Cache key | XXH3 hash of `database_name + raw_query_string` |
 | Wire format | Full PostgreSQL wire messages stored as raw bytes (one concatenated buffer) |
 
@@ -214,8 +203,8 @@ psql postgresql://postgres:postgres@127.0.0.1:5432/postgres?options=-c%20pgdog.c
 Sources are checked in order — first non-None result wins, then falls through to global config:
 
 ```
-SQL comment  →  pgdog.cache parameter  →  DB policy config  →  Auto-decision
-(highest)                                                            (lowest)
+SQL comment  →  pgdog.cache parameter  →  DB policy config
+(highest)                                           (lowest)
 ```
 
 ---
@@ -234,11 +223,11 @@ SQL comment  →  pgdog.cache parameter  →  DB policy config  →  Auto-decisi
 
 6. **Query parser auto-upgrade for caching** — When caching is enabled and parser is `Auto`/`Off`/`SessionControl`, the parser is forced to `On` via `|| self.cache_enabled()` check in `cluster.rs`. A startup warning is emitted in `core.rs` if parser remains incompatible.
 
-7. **Decoupled cache policy extraction** — Cache directives extracted via standalone regex in `cache/policy.rs`, works regardless of parser state. Supports `/* pgdog_cache: ... */` format with optional `ttl=` parameter.
+7. **Decoupled cache policy extraction** — Cache directives extracted via standalone regex in `cache/policy.rs`, works regardless of parser state. Supports `/* pgdog_cache: ... */` format with optional `ttl=` parameter. Unified with sharding hints via `comment()` function in `comment.rs`.
 
 8. **Error handling / Reconnection** — Automatic reconnection with background task, CAS-guarded single reconnect, 2s operation timeout on all Redis calls, PING-based connection verification.
 
-9. **Cache key collision across databases sharing one Redis** — Database name and raw query string are combined via a single XXH3 hash call, producing deterministic, collision-resistant per-database keys even on shared Redis. Different literal values in queries produce different cache keys.
+9. **Cache key collision across databases sharing one Redis** — Database name and raw query string are combined via a single XXH3 hash call, producing deterministic, collision-resistant per-database keys even on shared Redis. Different literal values in queries produce different cache keys. `force_cache` hints normalize the query in the hash to use the same key as regular `cache`.
 
 10. **Wire format serialization/deserialization** — PostgreSQL wire messages stored as raw bytes. Correct byte slice calculation: `offset + 1 + msg_len`.
 
@@ -248,31 +237,27 @@ SQL comment  →  pgdog.cache parameter  →  DB policy config  →  Auto-decisi
 
 13. **Moved all cache-related structs from QueryEngine to Client** — now all cache structs including redis client are creating for whole pgdog's lifetime.
 
-14. **Use built-in query comment hints** — Cache hints (`pgdog_cache:`) are now extracted alongside sharding hints (`pgdog_shard:`, `pgdog_sharding_key:`, `pgdog_role:`) via the unified `comment()` function in `comment.rs`. The `comment_cache` field is stored in `AstInner` and accessed during cache checking via `client_request.ast.comment_cache`. Policy resolution simplified: trait-based extractors (`CachePolicyExtractor`, `CommentCacheExtractor`, `ParameterCacheExtractor`, `CachePolicyDispatcher`, `CachePolicyResolver`) replaced with free functions (`resolve()`, `get_cache_directive()`, `extract_parameter_directive()`). Comment hint (from AST) has priority over connection parameter `pgdog.cache`. `Cache` struct no longer needs `policy_dispatcher` field. `CacheDirective::None` removed in favor of `Option<CacheDirective>` with `NoCache` as default. Parameter format unified to `no_cache` (underscore, not dash).
+14. **Use built-in query comment hints** — Cache hints (`pgdog_cache:`) are now extracted alongside sharding hints (`pgdog_shard:`, `pgdog_sharding_key:`, `pgdog_role:`) via the unified `comment()` function in `comment.rs`. The `comment_cache` field is stored in `AstInner` and accessed during cache checking via `client_request.ast.comment_cache`. Policy resolution simplified: trait-based extractors replaced with free functions (`resolve()`, `get_cache_directive()`, `extract_parameter_directive()`). Comment hint (from AST) has priority over connection parameter `pgdog.cache`. `Cache` struct no longer needs `policy_dispatcher` field. Parameter format unified to `no_cache` (underscore, not dash).
 
 15. **Add cache config to .schema**.
 
-16. **Force-cache hint support**.
+16. **Force-cache hint support** — `/* pgdog_cache: force_cache */` and `/* pgdog_cache: force_cache ttl=N */` directives always attempt to cache (cache key normalized), bypassing normal cache miss flow considerations.
 
 ---
 
 ## What's Left To Do
 
-1. **Auto policy** — Implemented but untested. Relies on stats tracker to decide based on hit/miss ratio and avg result size after enough observations.
+1. **Response capture for prepared statements** — Extended protocol (Parse/Bind/Execute) response capture works through process_server_message() but hasn't been tested with PREPARE/EXECUTE. (Note: pgdog implements prepared statements caching. But unknown what kind of caching this is: just query cache or result cache. And if we implement our cache, will this break this prepared statement cache?)
 
-2. **Response capture for prepared statements** — Extended protocol (Parse/Bind/Execute) response capture works through process_server_message() but hasn't been tested with PREPARE/EXECUTE. (Note: pgdog implements prepared statements caching. But unknown what kind of caching this is: just query cache or result cache. And if we implement our cache, will this break this prepared statement cache?)
+2. **Redis disconnect/reconnect under heavy load** — The reconnection logic works, but the fast-path check (`ensure_connected`) and the reconnect task can have timing edge cases under rapid disconnect/reconnect cycles. Need to stress-test. 
 
-3. **Redis disconnect/reconnect under heavy load** — The reconnection logic works, but the fast-path check (`ensure_connected`) and the reconnect task can have timing edge cases under rapid disconnect/reconnect cycles. Need to stress-test. 
+3. **Integration tests** — Tests live in `integration/rust/tests/integration/`. Redis must be running on 127.0.0.1:6379 before tests. Run with: `cd integration/rust && cargo nextest run --no-fail-fast --test-threads=1`
 
-4. **Integration tests** — Tests live in `integration/rust/tests/integration/`. Redis must be running on 127.0.0.1:6379 before tests. Run with: `cd integration/rust && cargo nextest run --no-fail-fast --test-threads=1`
+4. **Magic numbers in send_cached_response()**.
 
-5. **Magic numbers in send_cached_response()**.
+5. **Provide config hotswap**.
 
-6. **Make statistics collection deferred** — for auto policy.
-
-7. **Provide config hotswap**.
-
-8. **Review and rewrite CacheClient**.
+6. **Review and rewrite CacheClient**.
 
 ### Planned Tests
 
