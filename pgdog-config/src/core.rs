@@ -564,6 +564,11 @@ impl Config {
                 r#""pg_query_raw" parser engine requires a large thread stack, setting it to 32MiB for each Tokio worker"#
             );
         }
+
+        if self.general.cache.is_enabled() 
+            && matches!(self.general.query_parser, QueryParserLevel::Off | QueryParserLevel::SessionControl) {
+            warn!("cache requires enabled query parser but it's disabled or session controlled");
+        }
     }
 
     /// Multi-tenancy is enabled.

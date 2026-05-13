@@ -120,6 +120,8 @@ impl QueryEngine {
         context: &mut QueryEngineContext<'_>,
         mut message: Message,
     ) -> Result<(), Error> {
+        context.cache_context.capture_response(message.clone());
+
         self.streaming = message.streaming();
 
         let code = message.code();

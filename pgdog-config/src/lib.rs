@@ -1,5 +1,6 @@
 // Submodules
 pub mod auth;
+pub mod cache;
 pub mod core;
 pub mod data_types;
 pub mod database;
@@ -18,6 +19,7 @@ pub mod users;
 pub mod util;
 
 pub use auth::{AuthType, PassthroughAuth};
+pub use cache::{CachePolicy, Cache};
 pub use core::{Config, ConfigAndUsers};
 pub use data_types::*;
 pub use database::{

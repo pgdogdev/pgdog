@@ -1,9 +1,7 @@
 use crate::{
     backend::pool::{connection::mirror::Mirror, stats::MemoryStats},
     frontend::{
-        client::{timeouts::Timeouts, Sticky, TransactionType},
-        router::parser::rewrite::statement::plan::RewriteResult,
-        Client, ClientRequest, PreparedStatements,
+        Client, ClientRequest, PreparedStatements, client::{Sticky, TransactionType, query_engine::cache::context::CacheContext, timeouts::Timeouts}, router::parser::rewrite::statement::plan::RewriteResult
     },
     net::{BackendKeyData, Parameters, Stream},
 };
@@ -39,6 +37,8 @@ pub struct QueryEngineContext<'a> {
     pub(super) sticky: Sticky,
     /// Rewrite result.
     pub(super) rewrite_result: Option<RewriteResult>,
+    /// Cache context.
+    pub(super) cache_context: CacheContext
 }
 
 impl<'a> QueryEngineContext<'a> {
@@ -60,6 +60,7 @@ impl<'a> QueryEngineContext<'a> {
             rollback: false,
             sticky: client.sticky,
             rewrite_result: None,
+            cache_context: CacheContext::default(),
         }
     }
 
@@ -86,6 +87,7 @@ impl<'a> QueryEngineContext<'a> {
             rollback: false,
             sticky: Sticky::new(),
             rewrite_result: None,
+            cache_context: CacheContext::default(),
         }
     }
 

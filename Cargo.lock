@@ -663,7 +663,7 @@ dependencies = [
  "bitflags 2.9.1",
  "cexpr",
  "clang-sys",
- "itertools 0.10.5",
+ "itertools 0.13.0",
  "log",
  "prettyplease",
  "proc-macro2",
@@ -974,6 +974,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "cookie-factory"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "396de984970346b0d9e93d1415082923c679e5ae5c3ee3dcbd104f5610af126b"
+
+[[package]]
 name = "core-foundation"
 version = "0.9.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1022,6 +1028,12 @@ name = "crc-catalog"
 version = "2.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "19d374276b40fb8bbdee95aef7c7fa6b5316ec764510eb64b8dd0e2ed0d7e7f5"
+
+[[package]]
+name = "crc16"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "338089f42c427b86394a5ee60ff321da23a5c89c9d89514c829687b26359fcff"
 
 [[package]]
 name = "critical-section"
@@ -1451,6 +1463,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1d674e81391d1e1ab681a28d99df07927c6d4aa5b027d7da16ba32d1d21ecd99"
 
 [[package]]
+name = "float-cmp"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "98de4bbd547a563b716d8dfa9aad1cb19bfab00f4fa09a6a4ed21dbcf44ce9c4"
+dependencies = [
+ "num-traits",
+]
+
+[[package]]
 name = "flume"
 version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1495,6 +1516,47 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e13624c2627564efccf4934284bdd98cbaa14e79b0b5a141218e507b3a823456"
 dependencies = [
  "percent-encoding",
+]
+
+[[package]]
+name = "fred"
+version = "9.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3cdd5378252ea124b712e0ac55147d26ae3af575883b34b8423091a4c719606b"
+dependencies = [
+ "arc-swap",
+ "async-trait",
+ "bytes",
+ "bytes-utils",
+ "crossbeam-queue",
+ "float-cmp",
+ "fred-macros",
+ "futures",
+ "log",
+ "parking_lot",
+ "rand 0.8.5",
+ "redis-protocol",
+ "rustls 0.23.27",
+ "rustls-native-certs 0.7.3",
+ "semver",
+ "socket2",
+ "tokio",
+ "tokio-rustls 0.26.2",
+ "tokio-stream",
+ "tokio-util",
+ "url",
+ "urlencoding",
+]
+
+[[package]]
+name = "fred-macros"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1458c6e22d36d61507034d5afecc64f105c1d39712b7ac6ec3b352c423f715cc"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.101",
 ]
 
 [[package]]
@@ -2871,6 +2933,7 @@ dependencies = [
  "dashmap",
  "derive_builder",
  "fnv",
+ "fred",
  "futures",
  "hickory-resolver",
  "http-body-util",
@@ -2896,6 +2959,7 @@ dependencies = [
  "rust_decimal",
  "rustls-native-certs 0.8.1",
  "rustls-pki-types",
+ "scc 3.7.0",
  "scram",
  "semver",
  "serde",
@@ -3459,6 +3523,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "redis-protocol"
+version = "5.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "65deb7c9501fbb2b6f812a30d59c0253779480853545153a51d8e9e444ddc99f"
+dependencies = [
+ "bytes",
+ "bytes-utils",
+ "cookie-factory",
+ "crc16",
+ "log",
+ "nom",
+]
+
+[[package]]
 name = "redox_syscall"
 version = "0.5.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3828,6 +3906,19 @@ dependencies = [
 
 [[package]]
 name = "rustls-native-certs"
+version = "0.7.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e5bfb394eeed242e909609f56089eecfe5fda225042e8b171791b9c95f5931e5"
+dependencies = [
+ "openssl-probe",
+ "rustls-pemfile 2.2.0",
+ "rustls-pki-types",
+ "schannel",
+ "security-framework 2.11.1",
+]
+
+[[package]]
+name = "rustls-native-certs"
 version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7fcff2dd52b58a8d98a70243663a0d234c4e2b79235637849d15913394a247d3"
@@ -3900,12 +3991,28 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "28d3b2b1366ec20994f1fd18c3c594f05c5dd4bc44d8bb0c1c632c8d6829481f"
 
 [[package]]
+name = "saa"
+version = "5.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bd8d438861332c3b1ac396c77bd9cac620ea1ff347efb63c05a83d8f0a593899"
+
+[[package]]
 name = "scc"
 version = "2.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "22b2d775fb28f245817589471dd49c5edf64237f4a19d10ce9a92ff4651a27f4"
 dependencies = [
- "sdd",
+ "sdd 3.0.8",
+]
+
+[[package]]
+name = "scc"
+version = "3.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "16c154cf1d115a1e901d7f4e3f279eb6eb455f0d670c1cf3c1aa74d50ad37fa9"
+dependencies = [
+ "saa",
+ "sdd 4.8.6",
 ]
 
 [[package]]
@@ -3980,6 +4087,15 @@ name = "sdd"
 version = "3.0.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "584e070911c7017da6cb2eb0788d09f43d789029b5877d3e5ecc8acf86ceee21"
+
+[[package]]
+name = "sdd"
+version = "4.8.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e5f0e40a01b94e35d1dacbcfbe5bfd3d31e37d9590b2e6d86a82b0e87bd4f551"
+dependencies = [
+ "saa",
+]
 
 [[package]]
 name = "seahash"
@@ -4103,7 +4219,7 @@ dependencies = [
  "log",
  "once_cell",
  "parking_lot",
- "scc",
+ "scc 2.3.4",
  "serial_test_derive",
 ]
 

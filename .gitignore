@@ -51,6 +51,7 @@ perf.data.old
 CLAUDE.local.md
 .claude/plans/
 .claude/completed_plans/
+!.claude/skills/debug
 
 # Ignore generated bindings
 pgdog-plugin/src/bindings.rs

@@ -81,6 +81,7 @@ pub struct Cluster {
     reload_schema_on_ddl: bool,
     load_schema: LoadSchema,
     resharding_parallel_copies: usize,
+    cache_enabled: bool,
 }
 
 /// Sharding configuration from the cluster.
@@ -157,6 +158,7 @@ pub struct ClusterConfig<'a> {
     pub reload_schema_on_ddl: bool,
     pub load_schema: LoadSchema,
     pub resharding_parallel_copies: usize,
+    pub cache_enabled: bool
 }
 
 impl<'a> ClusterConfig<'a> {
@@ -210,6 +212,7 @@ impl<'a> ClusterConfig<'a> {
             reload_schema_on_ddl: general.reload_schema_on_ddl,
             load_schema: general.load_schema,
             resharding_parallel_copies: general.resharding_parallel_copies,
+            cache_enabled: general.cache.is_enabled()
         }
     }
 }
@@ -247,6 +250,7 @@ impl Cluster {
             reload_schema_on_ddl,
             load_schema,
             resharding_parallel_copies,
+            cache_enabled
         } = config;
 
         let identifier = Arc::new(DatabaseUser {
@@ -296,6 +300,7 @@ impl Cluster {
             reload_schema_on_ddl,
             load_schema,
             resharding_parallel_copies,
+            cache_enabled,
         }
     }
 
@@ -470,6 +475,7 @@ impl Cluster {
                     || self.dry_run()
                     || self.prepared_statements() == &PreparedStatements::Full
                     || self.pub_sub_enabled()
+                    || self.cache_enabled()
                     || RegexParser::use_parser(request)
             }
         }
@@ -543,6 +549,11 @@ impl Cluster {
     /// run to re-shard this cluster.
     pub fn resharding_parallel_copies(&self) -> usize {
         self.resharding_parallel_copies
+    }
+
+    /// Redis cache enabled.
+    pub fn cache_enabled(&self) -> bool {
+        self.cache_enabled
     }
 
     /// Launch the connection pools.

@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Duration;
 
+use crate::cache::Cache;
 use crate::pooling::ConnectionRecovery;
 use crate::UniqueIdFunction;
 use crate::{
@@ -643,6 +644,10 @@ pub struct General {
     /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#cutover_save_config
     #[serde(default)]
     pub cutover_save_config: bool,
+
+    /// Redis cache configuration for this database.
+    #[serde(default)]
+    pub cache: Cache,
 }
 
 impl Default for General {
@@ -729,6 +734,7 @@ impl Default for General {
             cutover_timeout_action: Self::cutover_timeout_action(),
             cutover_save_config: bool::default(),
             unique_id_function: Self::unique_id_function(),
+            cache: Cache::default(),
         }
     }
 }

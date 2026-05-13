@@ -9,22 +9,18 @@
     flake-utils.lib.eachSystem flake-utils.lib.allSystems (system: 
       let
         pkgs = import nixpkgs { inherit system; };
-        craneLib = crane.mkLib pkgs;
         stdenv' = p: p.stdenvAdapters.withCFlags [ "-O" ] (p.stdenvAdapters.useMoldLinker p.clangStdenv);
         stdenv = stdenv' pkgs;
-
-        devShell = craneLib.devShell.override {
-          mkShell = pkgs.mkShell.override {
-            inherit stdenv;
-          };
-        };
+        craneLib = (crane.mkLib pkgs).overrideScope (final: prev: {
+          stdenvSelector = stdenv';
+        });
 
         env = {
           LIBCLANG_PATH = "${pkgs.libclang.lib}/lib";
           CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER = "${stdenv.cc}/bin/cc";
           CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS = "-C link-arg=--ld-path=${stdenv.cc}/bin/ld";
         };
-        
+
         commonArgs = {
           src = let
             unfilteredSrc = ./.;
@@ -42,7 +38,6 @@
           };
           strictDeps = true;
 
-          stdenv = stdenv';
           nativeBuildInputs = with pkgs; [
             pkg-config
           ];
@@ -55,6 +50,16 @@
 
         cargoArtifacts = craneLib.buildDepsOnly commonArgs;
 
+        devShell = (craneLib.devShell.override {
+          mkShell = pkgs.mkShell.override {
+            inherit stdenv;
+          };
+        }) {
+          checks = self.checks;
+          inputsFrom = [ cargoArtifacts ];
+          inherit env;
+        };
+
         pgDog = craneLib.buildPackage (commonArgs // {
           inherit cargoArtifacts;
           doCheck = false;
@@ -64,11 +69,7 @@
       in {
         packages.default = pgDog;
 
-        devShells.default = devShell {
-          checks = self.checks;
-          inputsFrom = [ cargoArtifacts ];
-          inherit env;
-        };
+        devShells.default = devShell;
 
         checks = {
           inherit pgDog;
