@@ -1,7 +1,10 @@
 use std::hash::{Hash, Hasher};
 
+use once_cell::sync::Lazy;
+use regex::Regex;
+
 use crate::{
-    frontend::ClientRequest,
+    frontend::{ClientRequest, cache::CacheDecision},
     net::{FromBytes, Message, Parameters, Stream, ToBytes},
 };
 
@@ -9,14 +12,20 @@ use tracing::debug;
 
 use super::{policy, Cache};
 
+static FORCE_CACHE_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r#"pgdog_cache:\s*force_cache"#).unwrap()
+});
+
+pub struct CacheMiss {
+    pub cache_key_hash: u64,
+    pub ttl: u64,
+}
+
 pub enum CacheCheckResult {
     Hit {
         cached: Vec<u8>,
     },
-    Miss {
-        cache_key_hash: u64,
-        ttl: Option<u64>,
-    },
+    Miss(CacheMiss),
     Passthrough,
 }
 
@@ -53,33 +62,41 @@ impl Cache {
         let cache_key_hash = {
             let mut hasher = xxhash_rust::xxh3::Xxh3Default::new();
             database.hash(&mut hasher);
-            query.query().hash(&mut hasher);
+            let normalized_query = FORCE_CACHE_RE.replace(query.query(), "pgdog_cache: cache");
+            normalized_query.hash(&mut hasher);
             hasher.finish()
         };
 
         let decision =
             policy::resolve(client_request, params, is_read, cache_key_hash, &self.stats).await;
-
-        if !decision.should_cache() {
-            return Ok(CacheCheckResult::Passthrough);
-        }
-
-        match self.client.get(cache_key_hash).await {
-            Ok(Some(cached)) => {
-                self.stats.record_hit(cache_key_hash, cached.len()).await;
-                Ok(CacheCheckResult::Hit { cached })
-            }
-            Ok(None) => {
+        match decision {
+            CacheDecision::Skip => Ok(CacheCheckResult::Passthrough),
+            CacheDecision::ForceCache(ttl) => {
                 self.stats.record_miss(cache_key_hash).await;
-                Ok(CacheCheckResult::Miss {
+                Ok(CacheCheckResult::Miss(CacheMiss {
                     cache_key_hash,
-                    ttl: decision.ttl(),
-                })
-            }
-            Err(e) => {
-                debug!("Cache get error: {}", e);
-                Ok(CacheCheckResult::Passthrough)
-            }
+                    ttl,
+                }))
+            },
+            CacheDecision::Cache(ttl) => {
+                match self.client.get(cache_key_hash).await {
+                    Ok(Some(cached)) => {
+                        self.stats.record_hit(cache_key_hash, cached.len()).await;
+                        Ok(CacheCheckResult::Hit { cached })
+                    }
+                    Ok(None) => {
+                        self.stats.record_miss(cache_key_hash).await;
+                        Ok(CacheCheckResult::Miss(CacheMiss {
+                            cache_key_hash,
+                            ttl: ttl,
+                        }))
+                    }
+                    Err(e) => {
+                        debug!("Cache get error: {}", e);
+                        Ok(CacheCheckResult::Passthrough)
+                    }
+                }
+            },
         }
     }
 
@@ -123,7 +140,7 @@ impl Cache {
         &self,
         cache_key_hash: u64,
         messages: Vec<Message>,
-        ttl: Option<u64>,
+        ttl: u64,
     ) -> Result<(), ()> {
         if messages.is_empty() || !self.client.is_enabled() {
             return Ok(());

@@ -9,26 +9,17 @@ pub enum CacheDirective {
     Cache {
         ttl_seconds: Option<u64>,
     },
+    ForceCache {
+        ttl_seconds: Option<u64>,
+    },
     #[default]
     NoCache,
 }
 
 pub enum CacheDecision {
     Skip,
-    Cache(Option<u64>),
-}
-
-impl CacheDecision {
-    pub fn should_cache(&self) -> bool {
-        matches!(self, CacheDecision::Cache(_))
-    }
-
-    pub fn ttl(&self) -> Option<u64> {
-        match self {
-            CacheDecision::Cache(ttl) => *ttl,
-            _ => None,
-        }
-    }
+    Cache(u64),
+    ForceCache(u64),
 }
 
 const KEY: &str = "pgdog.cache";
@@ -50,22 +41,26 @@ pub async fn resolve(
     match cache_directive {
         Some(CacheDirective::NoCache) => return CacheDecision::Skip,
         Some(CacheDirective::Cache { ttl_seconds }) => {
-            return CacheDecision::Cache(ttl_seconds.or(Some(cache_config.ttl)))
+            return CacheDecision::Cache(ttl_seconds.unwrap_or(cache_config.ttl))
+        },
+        Some(CacheDirective::ForceCache { ttl_seconds }) => {
+            return CacheDecision::ForceCache(ttl_seconds.unwrap_or(cache_config.ttl))
         }
         _ => (),
     }
 
     match cache_config.policy {
         CachePolicy::NoCache => CacheDecision::Skip,
-        CachePolicy::Cache => CacheDecision::Cache(Some(cache_config.ttl)),
+        CachePolicy::Cache => CacheDecision::Cache(cache_config.ttl),
         CachePolicy::Auto => auto_decision(cache_key_hash, stats).await,
     }
 }
 
 async fn auto_decision(cache_key_hash: u64, stats: &QueryStatsTracker) -> CacheDecision {
+    let cache_config = &config().config.general.cache;
     let query_stats = stats.get(cache_key_hash).await;
     if query_stats.hit_count > query_stats.miss_count && query_stats.avg_result_size() < 1_000_000 {
-        CacheDecision::Cache(None)
+        CacheDecision::Cache(cache_config.ttl)
     } else {
         CacheDecision::Skip
     }
@@ -93,20 +88,25 @@ fn extract_parameter_directive(params: &Parameters) -> Option<CacheDirective> {
 
     match s {
         "no_cache" => return Some(CacheDirective::NoCache),
+        "force_cache" => return Some(CacheDirective::ForceCache { ttl_seconds: None }),
         "cache" => return Some(CacheDirective::Cache { ttl_seconds: None }),
         _ => (),
     }
 
     if let Some(ttl) = s
-        .strip_prefix("cache")
+        .strip_prefix("force_cache")
+        .or_else(|| s.strip_prefix("cache"))
         .map(|s| s.trim_start())
         .map(|s| s.strip_prefix("ttl="))
         .flatten()
         .and_then(|t| t.trim().parse::<u64>().ok())
     {
-        return Some(CacheDirective::Cache {
-            ttl_seconds: Some(ttl),
-        });
+        let ttl_seconds = Some(ttl);
+        if s.starts_with("force_cache") {
+            return Some(CacheDirective::ForceCache { ttl_seconds });
+        } else {
+            return Some(CacheDirective::Cache { ttl_seconds });
+        }
     }
 
     None

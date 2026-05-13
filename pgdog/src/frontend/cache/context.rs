@@ -1,9 +1,9 @@
-use crate::net::{Message, messages::Protocol};
+use crate::{frontend::cache::integration::CacheMiss, net::{Message, messages::Protocol}};
 
 /// Cache context to use in QueryEngineContext.
 #[derive(Default)]
 pub struct CacheContext {
-    pub cache_miss: Option<(u64, Option<u64>)>,
+    pub cache_miss: Option<CacheMiss>,
     pub response_buffer: Vec<Message>,
     pub had_error: bool,
 }

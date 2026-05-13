@@ -15,7 +15,7 @@ use std::sync::Arc;
 use tracing::debug;
 
 use crate::{
-    frontend::ClientRequest,
+    frontend::{ClientRequest, cache::integration::CacheMiss},
     net::{Parameters, Stream},
 };
 
@@ -58,14 +58,11 @@ impl Cache {
                 cache_context.reset();
                 return Ok(true);
             }
-            CacheCheckResult::Miss {
-                cache_key_hash,
-                ttl,
-            } => {
-                cache_context.cache_miss = Some((cache_key_hash, ttl));
+            CacheCheckResult::Miss(cache_miss) => {
+                debug!("Cache miss for key hash: {}", cache_miss.cache_key_hash);
+                cache_context.cache_miss = Some(cache_miss);
                 cache_context.response_buffer.clear();
                 cache_context.had_error = false;
-                debug!("Cache miss for key hash: {}", cache_key_hash);
             }
             CacheCheckResult::Passthrough => {
                 cache_context.reset();
@@ -77,10 +74,10 @@ impl Cache {
 
     /// Finalize caching by storing the response in Redis.
     pub async fn save_response_in_cache(&self, cache_context: &mut CacheContext) {
-        if let Some((cache_key, ttl)) = cache_context.cache_miss.take() {
+        if let Some(CacheMiss { cache_key_hash, ttl } ) = cache_context.cache_miss.take() {
             if !cache_context.had_error && !cache_context.response_buffer.is_empty() {
                 let messages = std::mem::take(&mut cache_context.response_buffer);
-                if let Err(e) = self.cache_response(cache_key, messages, ttl).await {
+                if let Err(e) = self.cache_response(cache_key_hash, messages, ttl).await {
                     debug!("Failed to cache response: {:?}", e);
                 }
             }

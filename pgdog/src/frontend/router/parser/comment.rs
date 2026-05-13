@@ -18,7 +18,7 @@ static SHARDING_KEY: Lazy<Regex> = Lazy::new(|| {
 });
 static ROLE: Lazy<Regex> = Lazy::new(|| Regex::new(r#"pgdog_role: *(primary|replica)"#).unwrap());
 static CACHE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r#"pgdog_cache: *(no_cache|cache(?:\s+ttl\s*=\s*([0-9]+))?)?"#).unwrap()
+    Regex::new(r#"pgdog_cache: *(no_cache|force_cache(?:\s+ttl\s*=\s*([0-9]+))?|cache(?:\s+ttl\s*=\s*([0-9]+))?)?"#).unwrap()
 });
 
 fn get_matched_value<'a>(caps: &'a regex::Captures<'a>) -> Option<&'a str> {
@@ -64,8 +64,11 @@ pub fn comment(
                     let action = action.as_str();
                     if action == "no_cache" {
                         cache = Some(CacheDirective::NoCache);
-                    } else {
+                    } else if action.starts_with("force_cache") {
                         let ttl = cap.get(2).and_then(|m| m.as_str().parse::<u64>().ok());
+                        cache = Some(CacheDirective::ForceCache { ttl_seconds: ttl });
+                    } else {
+                        let ttl = cap.get(3).and_then(|m| m.as_str().parse::<u64>().ok());
                         cache = Some(CacheDirective::Cache { ttl_seconds: ttl });
                     }
                 }
@@ -350,7 +353,7 @@ mod tests {
             tables: ShardedTables::new(vec![], vec![], false, SystemCatalogsBehavior::default()),
             ..Default::default()
         };
-        
+
         let query = "SELECT * FROM users /* pgdog_role: replica pgdog_shard: 1 pgdog_cache: cache ttl=300 */";
         let result = comment(query, &schema).unwrap();
         assert_eq!(result.1, Some(Role::Replica));
@@ -359,6 +362,44 @@ mod tests {
             result.2,
             Some(CacheDirective::Cache {
                 ttl_seconds: Some(300)
+            })
+        ));
+    }
+
+    #[test]
+    fn test_cache_hint_force_cache() {
+        use crate::backend::ShardedTables;
+
+        let schema = ShardingSchema {
+            shards: 2,
+            tables: ShardedTables::new(vec![], vec![], false, SystemCatalogsBehavior::default()),
+            ..Default::default()
+        };
+
+        let query = "SELECT * FROM users /* pgdog_cache: force_cache */";
+        let result = comment(query, &schema).unwrap();
+        assert!(matches!(
+            result.2,
+            Some(CacheDirective::ForceCache { ttl_seconds: None })
+        ));
+    }
+
+    #[test]
+    fn test_cache_hint_force_cache_with_ttl() {
+        use crate::backend::ShardedTables;
+
+        let schema = ShardingSchema {
+            shards: 2,
+            tables: ShardedTables::new(vec![], vec![], false, SystemCatalogsBehavior::default()),
+            ..Default::default()
+        };
+
+        let query = "SELECT * FROM users /* pgdog_cache: force_cache ttl=60 */";
+        let result = comment(query, &schema).unwrap();
+        assert!(matches!(
+            result.2,
+            Some(CacheDirective::ForceCache {
+                ttl_seconds: Some(60)
             })
         ));
     }

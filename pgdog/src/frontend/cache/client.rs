@@ -229,7 +229,7 @@ impl CacheClient {
         }
     }
 
-    pub(crate) async fn set(&self, key: u64, value: &[u8], ttl: Option<u64>) -> Result<(), Error> {
+    pub(crate) async fn set(&self, key: u64, value: &[u8], ttl: u64) -> Result<(), Error> {
         if !self.ensure_connected().await {
             if !self.is_connected() {
                 self.spawn_reconnect();
@@ -258,7 +258,7 @@ impl CacheClient {
             return Ok(());
         }
 
-        let ttl_seconds = ttl.unwrap_or_else(|| cache_config.ttl) as i64;
+        let ttl_seconds = ttl as i64;
 
         match tokio::time::timeout(
             REDIS_OPERATION_TIMEOUT,

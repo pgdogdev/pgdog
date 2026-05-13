@@ -159,6 +159,16 @@ SELECT * FROM products WHERE category = 'electronics';
 -- Cache with custom TTL in seconds
 /* pgdog_cache: cache ttl=300 */
 SELECT * FROM orders;
+
+-- Force cache with database default TTL
+-- Query hash computed as if comment were like "/* pgdog_cache: cache */"
+/* pgdog_cache: force_cache */
+SELECT * FROM products WHERE category = 'electronics';
+
+-- Force cache with custom TTL in seconds
+-- Query hash computed as if comment were like "/* pgdog_cache: cache ttl=300*/"
+/* pgdog_cache: force_cache ttl=300 */
+SELECT * FROM orders;
 ```
 
 ### Connection Parameter
@@ -174,6 +184,12 @@ SET pgdog.cache = 'cache';
 
 -- Session-wide: cache all queries with 5-minute TTL
 SET pgdog.cache = 'cache ttl=300';
+
+-- Session-wide: force cache all queries with default TTL
+SET pgdog.cache = 'force_cache';
+
+-- Session-wide: force cache all queries with 5-minute TTL
+SET pgdog.cache = 'force_cache ttl=300';
 ```
 
 ```sh
@@ -185,6 +201,12 @@ psql postgresql://postgres:postgres@127.0.0.1:5432/postgres?options=-c%20pgdog.c
 
 # Session-wide: cache all queries with 5-minute TTL
 psql postgresql://postgres:postgres@127.0.0.1:5432/postgres?options=-c%20pgdog.cache%3Dcache%5C%20ttl%3D300
+
+# Session-wide: force cache all queries with default TTL
+psql postgresql://postgres:postgres@127.0.0.1:5432/postgres?options=-c%20pgdog.cache%3Dforce_cache
+
+# Session-wide: force cache all queries with 5-minute TTL
+psql postgresql://postgres:postgres@127.0.0.1:5432/postgres?options=-c%20pgdog.cache%3Dforce_cache%5C%20ttl%3D300
 ```
 
 ### Priority Order
@@ -230,6 +252,8 @@ SQL comment  →  pgdog.cache parameter  →  DB policy config  →  Auto-decisi
 
 15. **Add cache config to .schema**.
 
+16. **Force-cache hint support**.
+
 ---
 
 ## What's Left To Do
@@ -244,13 +268,11 @@ SQL comment  →  pgdog.cache parameter  →  DB policy config  →  Auto-decisi
 
 5. **Magic numbers in send_cached_response()**.
 
-6. **Make statistics collection async** — for auto policy.
+6. **Make statistics collection deferred** — for auto policy.
 
 7. **Provide config hotswap**.
 
 8. **Review and rewrite CacheClient**.
-
-9. **Force-cache hint support**.
 
 ### Planned Tests
 
