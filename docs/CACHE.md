@@ -12,15 +12,14 @@ Cache SELECT queries in Redis, bypass PostgreSQL on cache hit, populate cache on
 
 **`cache.rs`** — Cache configuration types:
 
-**CachePolicy enum:** `NoCache` (default), `Cache`, `Auto`. Implements `FromStr`, `Display`, `Serialize`, `Deserialize`, `Copy`, `JsonSchema`.
+**CachePolicy enum:** `NoCache`, `Cache`, `Auto` (default). Implements `FromStr`, `Display`, `Serialize`, `Deserialize`, `Copy`, `JsonSchema`.
 
 **Cache struct:**
-- `enabled: Option<bool>` — is caching on?
-- `policy: Option<CachePolicy>` — which policy?
-- `ttl: Option<u64>` — default TTL seconds (default 300)
-- `redis_url: Option<String>` — Redis connection URL
-- `max_result_size: Option<usize>` — max cached result bytes
-- Helper methods: `is_enabled()`, `policy()`, `ttl()`, `max_result_size()`
+- `enabled: bool` — is caching on?
+- `policy: CachePolicy` — which policy?
+- `ttl: u64` — default TTL seconds (default 300)
+- `redis_url: String` — Redis connection URL
+- `max_result_size: usize` — max cached result bytes
 
 **`general.rs`** — `General` struct holds `cache: Cache` field. **Cache config is global.**
 
@@ -229,6 +228,8 @@ SQL comment  →  pgdog.cache parameter  →  DB policy config  →  Auto-decisi
 
 14. **Use built-in query comment hints** — Cache hints (`pgdog_cache:`) are now extracted alongside sharding hints (`pgdog_shard:`, `pgdog_sharding_key:`, `pgdog_role:`) via the unified `comment()` function in `comment.rs`. The `comment_cache` field is stored in `AstInner` and accessed during cache checking via `client_request.ast.comment_cache`. Policy resolution simplified: trait-based extractors (`CachePolicyExtractor`, `CommentCacheExtractor`, `ParameterCacheExtractor`, `CachePolicyDispatcher`, `CachePolicyResolver`) replaced with free functions (`resolve()`, `get_cache_directive()`, `extract_parameter_directive()`). Comment hint (from AST) has priority over connection parameter `pgdog.cache`. `Cache` struct no longer needs `policy_dispatcher` field. `CacheDirective::None` removed in favor of `Option<CacheDirective>` with `NoCache` as default. Parameter format unified to `no_cache` (underscore, not dash).
 
+15. **Add cache config to .schema**.
+
 ---
 
 ## What's Left To Do
@@ -250,8 +251,6 @@ SQL comment  →  pgdog.cache parameter  →  DB policy config  →  Auto-decisi
 8. **Review and rewrite CacheClient**.
 
 9. **Force-cache hint support**.
-
-10. **Add cache config to .schema**.
 
 ### Planned Tests
 

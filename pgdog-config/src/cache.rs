@@ -8,11 +8,11 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "snake_case")]
 pub enum CachePolicy {
     /// Never cache queries for this database.
-    #[default]
     NoCache,
     /// Always cache read queries.
     Cache,
     /// Dynamically decide based on Redis memory and query stats.
+    #[default]
     Auto,
 }
 
@@ -41,37 +41,66 @@ impl std::fmt::Display for CachePolicy {
 }
 
 /// Redis cache configuration for a database.
-#[derive(
-    Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord, JsonSchema,
-)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, PartialOrd, Ord, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Cache {
     /// Whether to enable caching for this database.
-    pub enabled: Option<bool>,
+    /// 
+    /// _Default:_ `false`
+    #[serde(default = "Cache::enabled")]
+    pub enabled: bool,
     /// Cache policy: no_cache, cache, or auto.
-    pub policy: Option<CachePolicy>,
+    ///
+    /// _Default:_ `auto`
+    #[serde(default = "Cache::policy")]
+    pub policy: CachePolicy,
     /// Default TTL in seconds for cached queries.
-    pub ttl: Option<u64>,
-    /// Redis connection URL (e.g., redis://localhost:6379).
-    pub redis_url: Option<String>,
+    ///
+    /// _Default:_ `300`
+    #[serde(default = "Cache::ttl")]
+    pub ttl: u64,
+    /// Redis connection URL.
+    ///
+    /// _Default:_ `redis://localhost:6379`
+    #[serde(default = "Cache::redis_url")]
+    pub redis_url: String,
     /// Maximum result size in bytes to cache (0 = unlimited).
-    pub max_result_size: Option<usize>,
+    ///
+    /// _Default:_ `0`
+    #[serde(default = "Cache::max_result_size")]
+    pub max_result_size: usize,
+}
+
+impl Default for Cache {
+    fn default() -> Self {
+        Self {
+            enabled: Self::enabled(),
+            policy: Self::policy(),
+            ttl: Self::ttl(),
+            redis_url: Self::redis_url(),
+            max_result_size: Self::max_result_size(),
+        }
+    }
 }
 
 impl Cache {
-    pub fn is_enabled(&self) -> bool {
-        self.enabled.unwrap_or(false)
+    fn enabled() -> bool {
+        false
     }
 
-    pub fn policy(&self) -> CachePolicy {
-        self.policy.unwrap_or_default()
+    fn policy() -> CachePolicy {
+        Default::default()
     }
 
-    pub fn ttl(&self) -> u64 {
-        self.ttl.unwrap_or(300)
+    fn ttl() -> u64 {
+        300
     }
 
-    pub fn max_result_size(&self) -> Option<usize> {
-        self.max_result_size
+    fn redis_url() -> String {
+        "redis://localhost:6379".to_string()
+    }
+
+    fn max_result_size() -> usize {
+        0
     }
 }

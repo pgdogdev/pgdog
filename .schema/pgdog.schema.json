@@ -31,6 +31,13 @@
         "ban_timeout": 300000,
         "broadcast_address": null,
         "broadcast_port": 6433,
+        "cache": {
+          "enabled": false,
+          "max_result_size": 0,
+          "policy": "auto",
+          "redis_url": "redis://localhost:6379",
+          "ttl": 300
+        },
         "checkout_timeout": 5000,
         "client_connection_recovery": "drop",
         "client_idle_in_transaction_timeout": 9223372036854775807,
@@ -272,6 +279,62 @@
           "description": "Plaintext password.",
           "type": "string",
           "const": "plain"
+        }
+      ]
+    },
+    "Cache": {
+      "description": "Redis cache configuration for a database.",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "description": "Whether to enable caching for this database.\n\n_Default:_ `false`",
+          "type": "boolean",
+          "default": false
+        },
+        "max_result_size": {
+          "description": "Maximum result size in bytes to cache (0 = unlimited).\n\n_Default:_ `0`",
+          "type": "integer",
+          "format": "uint",
+          "default": 0,
+          "minimum": 0
+        },
+        "policy": {
+          "description": "Cache policy: no_cache, cache, or auto.\n\n_Default:_ `auto`",
+          "$ref": "#/$defs/CachePolicy",
+          "default": "auto"
+        },
+        "redis_url": {
+          "description": "Redis connection URL.\n\n_Default:_ `redis://localhost:6379`",
+          "type": "string",
+          "default": "redis://localhost:6379"
+        },
+        "ttl": {
+          "description": "Default TTL in seconds for cached queries.\n\n_Default:_ `300`",
+          "type": "integer",
+          "format": "uint64",
+          "default": 300,
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "CachePolicy": {
+      "description": "Cache policy.",
+      "oneOf": [
+        {
+          "description": "Never cache queries for this database.",
+          "type": "string",
+          "const": "no_cache"
+        },
+        {
+          "description": "Always cache read queries.",
+          "type": "string",
+          "const": "cache"
+        },
+        {
+          "description": "Dynamically decide based on Redis memory and query stats.",
+          "type": "string",
+          "const": "auto"
         }
       ]
     },
@@ -573,6 +636,17 @@
           "default": 6433,
           "maximum": 65535,
           "minimum": 0
+        },
+        "cache": {
+          "description": "Redis cache configuration for this database.",
+          "$ref": "#/$defs/Cache",
+          "default": {
+            "enabled": false,
+            "max_result_size": 0,
+            "policy": "auto",
+            "redis_url": "redis://localhost:6379",
+            "ttl": 300
+          }
         },
         "checkout_timeout": {
           "description": "Maximum amount of time a client is allowed to wait for a connection from the pool.\n\n_Default:_ `5000`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#checkout_timeout",

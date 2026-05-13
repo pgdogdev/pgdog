@@ -212,7 +212,7 @@ impl<'a> ClusterConfig<'a> {
             reload_schema_on_ddl: general.reload_schema_on_ddl,
             load_schema: general.load_schema,
             resharding_parallel_copies: general.resharding_parallel_copies,
-            cache_enabled: general.cache.is_enabled()
+            cache_enabled: general.cache.enabled
         }
     }
 }

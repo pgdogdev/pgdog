@@ -50,14 +50,14 @@ pub async fn resolve(
     match cache_directive {
         Some(CacheDirective::NoCache) => return CacheDecision::Skip,
         Some(CacheDirective::Cache { ttl_seconds }) => {
-            return CacheDecision::Cache(ttl_seconds.or(Some(cache_config.ttl())))
+            return CacheDecision::Cache(ttl_seconds.or(Some(cache_config.ttl)))
         }
         _ => (),
     }
 
-    match cache_config.policy() {
+    match cache_config.policy {
         CachePolicy::NoCache => CacheDecision::Skip,
-        CachePolicy::Cache => CacheDecision::Cache(Some(cache_config.ttl())),
+        CachePolicy::Cache => CacheDecision::Cache(Some(cache_config.ttl)),
         CachePolicy::Auto => auto_decision(cache_key_hash, stats).await,
     }
 }

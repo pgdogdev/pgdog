@@ -39,7 +39,7 @@ impl CacheClient {
     pub fn new() -> Self {
         let cache_config = &config().config.general.cache;
 
-        if !cache_config.is_enabled() || cache_config.redis_url.is_none() {
+        if !cache_config.enabled {
             return Self {
                 client: None,
                 redis_connected: Arc::new(AtomicBool::new(false)),
@@ -47,7 +47,7 @@ impl CacheClient {
             };
         }
 
-        let url = cache_config.redis_url.as_ref().unwrap();
+        let url = cache_config.redis_url.as_str();
         let client_config = match RedisConfig::from_url(url) {
             Ok(c) => c,
             Err(e) => {
@@ -248,19 +248,17 @@ impl CacheClient {
 
         let cache_config = &config().config.general.cache;
 
-        if let Some(max_size) = cache_config.max_result_size() {
-            if value.len() > max_size {
-                debug!(
-                    "Skipping cache for key {}: size {} exceeds max {}",
-                    key,
-                    value.len(),
-                    max_size
-                );
-                return Ok(());
-            }
+        if cache_config.max_result_size != 0 && value.len() > cache_config.max_result_size {
+            debug!(
+                "Skipping cache for key {}: size {} exceeds max {}",
+                key,
+                value.len(),
+                cache_config.max_result_size
+            );
+            return Ok(());
         }
 
-        let ttl_seconds = ttl.unwrap_or_else(|| cache_config.ttl()) as i64;
+        let ttl_seconds = ttl.unwrap_or_else(|| cache_config.ttl) as i64;
 
         match tokio::time::timeout(
             REDIS_OPERATION_TIMEOUT,
@@ -293,7 +291,7 @@ impl CacheClient {
 
     pub fn is_enabled(&self) -> bool {
         let cache_config = &config().config.general.cache;
-        self.client.is_some() && cache_config.is_enabled()
+        self.client.is_some() && cache_config.enabled
     }
 }
 
