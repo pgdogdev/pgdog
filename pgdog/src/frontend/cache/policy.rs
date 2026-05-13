@@ -1,6 +1,6 @@
 use core::fmt;
 
-use pgdog_config::{Cache as CacheConfig, CachePolicy};
+use crate::config::{Cache as CacheConfig, CachePolicy};
 use tracing::debug;
 
 use super::stats::QueryStatsTracker;

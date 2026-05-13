@@ -1,6 +1,7 @@
 //! Configuration.
 
 // Submodules
+pub mod cache;
 pub mod convert;
 pub mod core;
 pub mod database;
@@ -15,6 +16,7 @@ pub mod rewrite;
 pub mod sharding;
 pub mod users;
 
+pub use cache::*;
 pub use core::{Config, ConfigAndUsers};
 pub use database::{Database, Role};
 pub use error::Error;
