@@ -94,7 +94,7 @@ Key methods:
 - `cache_check()` — main entry point, checks route, extracts directive, resolves policy, checks Redis
 - `send_cached_response()` — deserializes wire-format bytes and sends to client
 - `cache_response()` — serializes `Vec<Message>` into wire bytes and stores in Redis
-- Cache key: `pg_query::fingerprint(query).value.wrapping_add(db_hash)`
+- Cache key: XXH3 hash of `database_name + raw_query_string`
 
 ### Files Modified
 
@@ -229,7 +229,7 @@ SQL comment  →  pgdog.cache parameter  →  DB policy config  →  Auto-decisi
 
 3. **Error handling / Reconnection** — Automatic reconnection with background task, CAS-guarded single reconnect, 2s operation timeout on all Redis calls, PING-based connection verification.
 
-4. **Cache key collision across databases sharing one Redis** — Database name is hashed via `DefaultHasher` and combined with `pg_query::fingerprint(query).value` using `wrapping_add` to produce unique per-database keys even on shared Redis.
+4. **Cache key collision across databases sharing one Redis** — Database name and raw query string are combined via a single XXH3 hash call, producing deterministic, collision-resistant per-database keys even on shared Redis. Different literal values in queries produce different cache keys.
 
 5. **Wire format serialization/deserialization** — PostgreSQL wire messages stored as raw bytes. Correct byte slice calculation: `offset + 1 + msg_len`.
 
@@ -247,9 +247,7 @@ SQL comment  →  pgdog.cache parameter  →  DB policy config  →  Auto-decisi
 
 5. **Redis disconnect/reconnect under heavy load** — The reconnection logic works, but the fast-path check (`ensure_connected`) and the reconnect task can have timing edge cases under rapid disconnect/reconnect cycles. Need to stress-test.
 
-6. **Rewrite cache_key_hash computation** — Change from `pg_query::fingerprint(query).value.wrapping_add(db_hash)` to correct combined hashing that doesn't use arithmetic addition, ensuring stronger collision resistance.
-
-7. **Integration tests** — Tests live in `integration/rust/tests/integration/`. Redis must be running on 127.0.0.1:6379 before tests. Run with: `cd integration/rust && cargo nextest run --no-fail-fast --test-threads=1`
+6. **Integration tests** — Tests live in `integration/rust/tests/integration/`. Redis must be running on 127.0.0.1:6379 before tests. Run with: `cd integration/rust && cargo nextest run --no-fail-fast --test-threads=1`
 
 ### Planned Tests
 

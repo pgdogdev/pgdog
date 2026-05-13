@@ -1,4 +1,4 @@
-use std::hash::{DefaultHasher, Hasher};
+use std::hash::{Hash, Hasher};
 
 use crate::{
     frontend::client::query_engine::{cache::Cache, QueryEngineContext},
@@ -42,15 +42,12 @@ impl Cache {
             _ => return CacheCheckResult::Passthrough,
         };
 
-        let db_hash = {
-            let mut hasher = DefaultHasher::new();
-            hasher.write(self.database.as_bytes());
+        let cache_key_hash = {
+            let mut hasher = xxhash_rust::xxh3::Xxh3Default::new();
+            self.database.hash(&mut hasher);
+            query.query().hash(&mut hasher);
             hasher.finish()
         };
-        let cache_key_hash = pg_query::fingerprint(query.query())
-            .expect("We're sure that query is correct if we've reached here.")
-            .value
-            .wrapping_add(db_hash);
 
         let cache_directive = self
             .policy_dispatcher
