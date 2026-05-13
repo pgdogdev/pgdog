@@ -25,6 +25,10 @@ impl Cache {
         &self,
         context: &mut QueryEngineContext<'_>,
     ) -> CacheCheckResult {
+        if context.in_transaction() {
+            return CacheCheckResult::Passthrough;
+        }
+
         let route = match context.client_request.route.as_ref() {
             Some(r) => r,
             None => return CacheCheckResult::Passthrough,

@@ -86,9 +86,10 @@ Key methods:
 - `QueryStatsTracker` with `record_hit(fingerprint, size)` / `record_miss(fingerprint)` / `get(fingerprint)`
 - Internally: `Arc<scc::HashMap<u64, QueryStats>>`
 
-**`context.rs`** — Cache context held in `QueryEngineContext`:
-- `CacheContext` with `cache_miss: Option<(u64, Option<u64>)>` and `response_buffer: Vec<Message>`
-- `capture_response(message)` — stores message in buffer when cache miss is tracked
+ **`context.rs`** — Cache context held in `QueryEngineContext`:
+ - `CacheContext` with `cache_miss: Option<(u64, Option<u64>)>`, `response_buffer: Vec<Message>`, and `had_error: bool`
+ - `capture_response(message)` — stores message in buffer when cache miss is tracked; sets `had_error = true` on `E` messages
+ - `reset()` — clears all state for per-query isolation
 
 **`integration.rs`** — Integration methods on `impl Cache`:
 - `cache_check()` — main entry point, checks route, extracts directive, resolves policy, checks Redis
@@ -232,6 +233,8 @@ SQL comment  →  pgdog.cache parameter  →  DB policy config  →  Auto-decisi
 4. **Cache key collision across databases sharing one Redis** — Database name and raw query string are combined via a single XXH3 hash call, producing deterministic, collision-resistant per-database keys even on shared Redis. Different literal values in queries produce different cache keys.
 
 5. **Wire format serialization/deserialization** — PostgreSQL wire messages stored as raw bytes. Correct byte slice calculation: `offset + 1 + msg_len`.
+
+6. **Do not cache error responses**.
 
 ---
 

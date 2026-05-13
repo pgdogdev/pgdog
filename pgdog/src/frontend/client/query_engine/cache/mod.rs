@@ -50,6 +50,7 @@ impl Cache {
             CacheCheckResult::Hit { cached } => {
                 debug!("Cache hit, serving from cache");
                 self.send_cached_response(context, cached).await?;
+                context.cache_context.reset();
                 return Ok(true);
             }
             CacheCheckResult::Miss {
@@ -58,20 +59,22 @@ impl Cache {
             } => {
                 context.cache_context.cache_miss = Some((cache_key_hash, ttl));
                 context.cache_context.response_buffer.clear();
+                context.cache_context.had_error = false;
                 debug!("Cache miss for key hash: {}", cache_key_hash);
             }
             CacheCheckResult::Passthrough => {
-                context.cache_context.cache_miss = None;
+                context.cache_context.reset();
             }
         }
 
-        return Ok(false);
+        Ok(false)
     }
 
     /// Finalize caching by storing the response in Redis.
-    pub async fn save_response_in_cache(&self, context: &mut QueryEngineContext<'_>,) {
+    pub async fn save_response_in_cache(&self, context: &mut QueryEngineContext<'_>) {
         if let Some((cache_key, ttl)) = context.cache_context.cache_miss.take() {
-            if !context.cache_context.response_buffer.is_empty() {
+            if !context.cache_context.had_error && !context.cache_context.response_buffer.is_empty()
+            {
                 let messages = std::mem::take(&mut context.cache_context.response_buffer);
                 if let Err(e) = self.cache_response(cache_key, messages, ttl).await {
                     debug!("Failed to cache response: {:?}", e);
