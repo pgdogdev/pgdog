@@ -47,6 +47,7 @@ pub struct AstInner {
 }
 
 impl AstInner {
+    /// Create new AST record, with no rewrite or comment routing.
     pub fn new(ast: ParseResult) -> Self {
         Self {
             ast,
