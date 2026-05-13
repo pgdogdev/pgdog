@@ -58,9 +58,10 @@ impl Startup {
                         let value = search_path(&value);
                         params.insert(name, value);
                     } else if name == "options" {
+                        let value = options_unescape(&value);
                         let kvs = value.split("-c");
                         for kv in kvs {
-                            let mut nvs = kv.split("=");
+                            let mut nvs = kv.splitn(2, "=");
                             let name = nvs.next();
                             let value = nvs.next();
 
@@ -249,6 +250,26 @@ fn search_path(value: &str) -> ParameterValue {
     ParameterValue::Tuple(value)
 }
 
+fn options_unescape(input: &str) -> String {
+    let mut result = String::with_capacity(input.len());
+    let mut chars = input.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            if let Some(&next) = chars.peek() {
+                chars.next();
+                result.push(next);
+            } else {
+                result.push(c);
+            }
+        } else {
+            result.push(c);
+        }
+    }
+
+    result
+}
+
 #[cfg(test)]
 mod test {
     use crate::net::messages::ToBytes;
@@ -308,5 +329,18 @@ mod test {
 
         let startup = Startup::from_stream(&mut read).await.unwrap();
         assert!(matches!(startup, Startup::GssEnc));
+    }
+
+    #[test]
+    fn test_options_unescape() {
+        assert_eq!(options_unescape("cache\\ ttl=5"), "cache ttl=5");
+        assert_eq!(options_unescape("cache\\\\ttl=5"), "cache\\ttl=5");
+        assert_eq!(options_unescape("simple"), "simple");
+        assert_eq!(options_unescape("a\\=b"), "a=b");
+        assert_eq!(options_unescape("trail\\"), "trail\\");
+        assert_eq!(
+            options_unescape("cache\\ ttl\\=5"),
+            "cache ttl=5"
+        );
     }
 }

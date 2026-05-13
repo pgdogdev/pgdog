@@ -211,6 +211,18 @@ SET pgdog.cache = 'cache';
 SET pgdog.cache = 'cache ttl=300';
 ```
 
+```sh
+# Session-wide: all queries in this connection bypass cache
+# Attention: this only supports `no_cache` with underscore
+psql postgresql://postgres:postgres@127.0.0.1:5432/postgres?options=-c%20pgdog.cache%3Dno_cache
+
+# Session-wide: cache all queries with default TTL
+psql postgresql://postgres:postgres@127.0.0.1:5432/postgres?options=-c%20pgdog.cache%3Dcache
+
+# Session-wide: cache all queries with 5-minute TTL
+psql postgresql://postgres:postgres@127.0.0.1:5432/postgres?options=-c%20pgdog.cache%3Dcache%5C%20ttl%3D300
+```
+
 ### Priority Order
 
 Extractors are checked in order — first non-`None` result wins, then falls through to database config:
@@ -236,21 +248,24 @@ SQL comment  →  pgdog.cache parameter  →  DB policy config  →  Auto-decisi
 
 6. **Do not cache error responses**.
 
+7. **Setting pgdog.cache via connection url doesn't work**.
+
 ---
 
 ## What's Left To Do
 
 1. **Auto policy** — Implemented but untested. Relies on stats tracker to decide based on hit/miss ratio and avg result size after enough observations.
 
-2. **Multi-step execution caching** — InsertSplit and ShardingKeyUpdate rewrite paths use process_server_message() which captures responses, but the finalize_cache() call happens after match command block. Need to verify caching works correctly for multi-step rewrites.
+2. **Response capture for prepared statements** — Extended protocol (Parse/Bind/Execute) response capture works through process_server_message() but hasn't been tested with PREPARE/EXECUTE. (Note: pgdog implements prepared statements caching. But unknown what kind of caching this is: just query cache or result cache. And if we implement our cache, will this break this prepared statement cache?)
 
-3. **Response capture for prepared statements** — Extended protocol (Parse/Bind/Execute) response capture works through process_server_message() but hasn't been tested with PREPARE/EXECUTE. (Note: pgdog implements prepared statements caching. But unknown what kind of caching this is: just query cache or result cache. And if we implement our cache, will this break this prepared statement cache?)
+3. **Redis disconnect/reconnect under heavy load** — The reconnection logic works, but the fast-path check (`ensure_connected`) and the reconnect task can have timing edge cases under rapid disconnect/reconnect cycles. Need to stress-test. 
 
-4. **max_result_size config** — Implemented but not exposed in the initial pgdog.toml. Worth documenting in the config.
+4. **Integration tests** — Tests live in `integration/rust/tests/integration/`. Redis must be running on 127.0.0.1:6379 before tests. Run with: `cd integration/rust && cargo nextest run --no-fail-fast --test-threads=1`
 
-5. **Redis disconnect/reconnect under heavy load** — The reconnection logic works, but the fast-path check (`ensure_connected`) and the reconnect task can have timing edge cases under rapid disconnect/reconnect cycles. Need to stress-test.
+5. **Magic numbers in send_cached_response()**.
 
-6. **Integration tests** — Tests live in `integration/rust/tests/integration/`. Redis must be running on 127.0.0.1:6379 before tests. Run with: `cd integration/rust && cargo nextest run --no-fail-fast --test-threads=1`
+6. **Make statistics collection async** — for auto policy.
+
 
 ### Planned Tests
 
