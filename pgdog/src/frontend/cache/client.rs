@@ -182,19 +182,19 @@ impl CacheClient {
         self.redis_connected.load(Ordering::Relaxed)
     }
 
-    pub(crate) async fn get(&self, key: u64) -> Result<Option<Vec<u8>>, Error> {
+    pub(crate) async fn get(&self, key: u64) -> Result<Vec<u8>, Error> {
         if !self.ensure_connected().await {
             if !self.is_connected() {
                 self.spawn_reconnect();
                 return Err(Error::ConnectionFailed(
-                    "Redis disconnected, reconnecting in background".to_string(),
+                    "Redis disconnected, reconnecting in background",
                 ));
             }
-            return Err(Error::ConnectionFailed("Redis not connected".to_string()));
+            return Err(Error::ConnectionFailed("Redis not connected"));
         }
 
         let Some(ref client) = self.client else {
-            return Ok(None);
+            return Err(Error::ConnectionFailed("Redis not configured"));
         };
 
         let full_key = format!("{}{}", CACHE_KEY_PREFIX, key);
@@ -205,27 +205,25 @@ impl CacheClient {
         .await
         {
             Ok(Ok(v)) => v,
-            Ok(Err(e)) => {
-                debug!("Redis GET error for key {}: {}", key, e);
+            Ok(Err(err)) => {
                 self.mark_disconnected();
-                return Err(Error::RedisError(e.to_string()));
+                return Err(Error::RedisError {
+                    cmd: "GET",
+                    key,
+                    err,
+                });
             }
             Err(_) => {
-                error!("Redis GET timed out for key {}", key);
                 self.mark_disconnected();
-                return Err(Error::ConnectionFailed("Redis GET timed out".to_string()));
+                return Err(Error::ConnectionFailed("Redis GET timed out"));
             }
         };
 
-        if val.is_null() {
-            debug!("Cache miss for key {}", key);
-            Ok(None)
-        } else if let Some(bytes) = val.into_bytes() {
+        if let Some(bytes) = val.into_bytes() {
             debug!("Cache hit for key {}", key);
-            Ok(Some(bytes.to_vec()))
+            Ok(bytes.to_vec())
         } else {
-            debug!("Redis GET value not bytes for key {}", key);
-            Ok(None)
+            Err(Error::CacheMiss(key))
         }
     }
 
@@ -234,14 +232,14 @@ impl CacheClient {
             if !self.is_connected() {
                 self.spawn_reconnect();
                 return Err(Error::ConnectionFailed(
-                    "Redis disconnected, reconnecting in background".to_string(),
+                    "Redis disconnected, reconnecting in background",
                 ));
             }
-            return Err(Error::ConnectionFailed("Redis not connected".to_string()));
+            return Err(Error::ConnectionFailed("Redis not connected"));
         }
 
         let Some(ref client) = self.client else {
-            return Ok(());
+            return Err(Error::ConnectionFailed("Redis not configured"));
         };
 
         let full_key = format!("{}{}", CACHE_KEY_PREFIX, key);
@@ -276,15 +274,17 @@ impl CacheClient {
                 debug!("Cached key {} with TTL {}s", key, ttl_seconds);
                 Ok(())
             }
-            Ok(Err(e)) => {
-                debug!("Redis SET error for key {}: {}", key, e);
+            Ok(Err(err)) => {
                 self.mark_disconnected();
-                Err(Error::RedisError(e.to_string()))
+                Err(Error::RedisError {
+                    cmd: "SET",
+                    key,
+                    err,
+                })
             }
             Err(_) => {
-                error!("Redis SET timed out for key {}", key);
                 self.mark_disconnected();
-                Err(Error::ConnectionFailed("Redis SET timed out".to_string()))
+                Err(Error::ConnectionFailed("Redis SET timed out"))
             }
         }
     }
@@ -297,8 +297,14 @@ impl CacheClient {
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("Redis error: {0}")]
-    RedisError(String),
+    #[error("Redis {cmd} error for key {key}: {err}")]
+    RedisError {
+        cmd: &'static str,
+        key: u64,
+        err: RedisError,
+    },
     #[error("Connection failed: {0}")]
-    ConnectionFailed(String),
+    ConnectionFailed(&'static str),
+    #[error("Cache miss for key {0}")]
+    CacheMiss(u64),
 }

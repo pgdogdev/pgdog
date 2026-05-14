@@ -46,20 +46,23 @@ pub use policy::CacheDecision;
 
 Key methods:
 - `new()` — creates client (reads config internally)
-- `try_read_cache(cache_context, in_transaction, client_request, params, stream)` — calls `cache_check()`, handles HIT/MISS/PASS-through
+- `try_read_cache(cache_context, in_transaction, client_request, params)` — calls `cache_check()`, returns `Ok(Some(Vec<Message>))` on HIT (caller replays through pipeline), `Ok(None)` on MISS/PASSTHROUGH
 - `save_response_in_cache(cache_context)` — finalizes by storing the captured response
 
 **`client.rs`** — Redis client wrapper using `fred` v9:
 - `CacheClient::new()` — builds client from global `config().config.general.cache`, returns disabled stub if no config/URL
 - `ensure_connected()` — lazy one-time `client.init().await` followed by `client.ping()` verification; sets `redis_connected` flag
-- `get(&self, key)` — returns `Result<Option<Vec<u8>>>`; fetches cached wire-protocol bytes
+- `get(&self, key)` — returns `Result<Vec<u8>, Error>`; fetches cached wire-protocol bytes. Returns `Err(Error::CacheMiss)` on a key miss (distinct from connection errors)
 - `set(&self, key, value, ttl)` — stores bytes with EX expiration; respects `max_result_size`
 - `spawn_reconnect()` — background task that retries `init()` every 500ms, verifies with `ping()`, sets `redis_connected = true`
 - `mark_disconnected()` — sets `redis_connected = false`, spawns reconnect if not already running (CAS-guarded)
 - `is_connected()` — reads our atomic flag (not fred's potentially stale `ClientState`)
 - `is_enabled()` — returns true if both client exists and config enabled
 - Keys are prefixed with `"pgdog:"`
-- Error types: `RedisError(String)`, `ConnectionFailed(String)`
+- Error types:
+  - `RedisError { cmd: &'static str, key: u64, err: RedisError }` — Redis command failed (includes command name and key for context)
+  - `ConnectionFailed(&'static str)` — not connected or not configured
+  - `CacheMiss(u64)` — key not present in Redis (not an error condition, used for control flow)
 - `redis_connected: Arc<AtomicBool>` — authoritative connection gate, only true after PING succeeds
 - `reconnecting: Arc<AtomicBool>` — prevents multiple concurrent reconnect tasks
 - All Redis operations wrapped in `tokio::time::timeout(REDIS_OPERATION_TIMEOUT)` (2s) as safety net
@@ -80,7 +83,7 @@ Key methods:
 
 **`integration.rs`** — Integration methods on `impl Cache`:
 - `cache_check()` — main entry point, checks route, calls `policy::resolve()`, checks Redis
-- `send_cached_response()` — deserializes wire-format bytes and sends to client
+- `deserialize_cached(Vec<u8>) -> Vec<Message>` — parses a flat blob of concatenated PostgreSQL wire messages into individual `Message` values. Wire format: `[1B code][4B length (incl. itself)][payload]`. Named constants `HEADER_CODE_LEN`, `HEADER_LEN_SIZE`, `HEADER_TOTAL` replace the former magic numbers. Not Redis-specific — usable with any cache backend that stores raw bytes.
 - `cache_response()` — serializes `Vec<Message>` into wire bytes and stores in Redis
 - Cache key: XXH3 hash of `database_name + raw_query_string`
 
@@ -88,7 +91,7 @@ Key methods:
 
 **`pgdog/src/frontend/client/query_engine/mod.rs`**
 - Imports global `cache()` from `frontend::cache`
-- `handle()` flow: after `route_query()` and before `before_execution()`, calls `cache().try_read_cache(context)`. If HIT: sends cached response and returns. On MISS: stores state in `context.cache_context`.
+- `handle()` flow: after `route_query()` and before `before_execution()`, calls `cache().try_read_cache(context)`. If HIT: replays each cached `Message` through `process_server_message()` (same pipeline as live backend responses — stats, transaction state, hooks all fire correctly), then returns. On MISS: stores state in `context.cache_context`.
 - After `match command`, calls `cache().save_response_in_cache(context)` to finalize caching.
 
 **`pgdog/src/frontend/client/query_engine/query.rs`**
@@ -123,7 +126,7 @@ xxhash-rust = { version = "0.8", features = ["xxh3"]}
 | Redis client | `fred` crate v9 (async-native, tokio integration) |
 | Cacheable queries | Only reads (`route.is_read()`) |
 | Cache policy resolution | 2-tier: SQL comment/param → DB policy |
-| Cache HIT flow | Deserialize wire bytes → parse messages → send to client → return `Ok(true)` |
+| Cache HIT flow | Deserialize wire bytes → `Vec<Message>` → replay each through `process_server_message()` |
 | Cache MISS flow | Normal execute → capture response via `CacheContext` → store in Redis → respond |
 | Cache key | XXH3 hash of `database_name + raw_query_string` |
 | Wire format | Full PostgreSQL wire messages stored as raw bytes (one concatenated buffer) |
@@ -213,9 +216,9 @@ SQL comment  →  pgdog.cache parameter  →  DB policy config
 
 1. **Redis client never connects** - Problem: CacheClient::new() built the client but never called init(). Fred requires explicit connection initialization. Fix: Added lazy `ensure_connected()` using `client.init().await`, guarded by `AtomicBool` so it runs exactly once on first get()/set(). Changed CacheClient from `#[derive(Debug)]` to manual Debug impl (contains `Arc<AtomicBool>`).
 
-2. **Redis GET fails on NULL / cache miss** - Problem: `client.get::<bytes::Bytes>()` throws `Parse Error: Cannot parse into bytes` when the key doesn't exist. Fix: Use `client.get::<RedisValue, _>()` and check `val.is_null()` before extracting bytes.
+2. **Redis GET fails on NULL / cache miss** - Problem: `client.get::<bytes::Bytes>()` throws `Parse Error: Cannot parse into bytes` when the key doesn't exist. Fix: Use `client.get::<RedisValue, _>()` and check `val.is_null()` before extracting bytes. Later refined: `get()` now returns `Result<Vec<u8>, Error>` instead of `Result<Option<Vec<u8>>>` — a missing key yields `Err(Error::CacheMiss)`, which is matched explicitly in `cache_check()` and converted to `CacheCheckResult::Miss`. Other errors propagate as `Passthrough`.
 
-3. **Wire format deserialization wrong in send_cached_response** - Problem: PostgreSQL wire message structure is `[1B code][4B length]` where length includes the 4B itself. I calculated `offset + 5 + msg_len` (treating length as payload-only), causing incorrect byte slicing. Fix: Corrected to `offset + 1 + msg_len`.
+3. **Wire format deserialization wrong in send_cached_response** - Problem: PostgreSQL wire message structure is `[1B code][4B length]` where length includes the 4B itself. I calculated `offset + 5 + msg_len` (treating length as payload-only), causing incorrect byte slicing. Fix: Corrected to `offset + 1 + msg_len`, then replaced magic numbers with named constants `HEADER_CODE_LEN`, `HEADER_LEN_SIZE`, `HEADER_TOTAL`.
 
 4. **Route incorrectly reports read-only as write when parser is disabled** - Problem: `query_parser_bypass()` conservatively returns `Route::write()` for all SQL when the query parser is disabled. Since pgdog doesn't enable the parser by default for simple queries, `route.is_read()` was false for `SELECT 1`. Fix: When any database has `cache.enabled = true`, the query parser level is auto-upgraded to `On` in the cluster config. The `|| self.cache_enabled()` check in `cluster.rs:475` forces the parser on. Cache also emits a startup warning if parser is `Off` or `SessionControl`. The old `is_likely_read()` string-prefix heuristic has been removed entirely.
 
@@ -229,7 +232,7 @@ SQL comment  →  pgdog.cache parameter  →  DB policy config
 
 9. **Cache key collision across databases sharing one Redis** — Database name and raw query string are combined via a single XXH3 hash call, producing deterministic, collision-resistant per-database keys even on shared Redis. Different literal values in queries produce different cache keys. `force_cache` hints normalize the query in the hash to use the same key as regular `cache`.
 
-10. **Wire format serialization/deserialization** — PostgreSQL wire messages stored as raw bytes. Correct byte slice calculation: `offset + 1 + msg_len`.
+10. **Wire format serialization/deserialization** — PostgreSQL wire messages stored as raw bytes. Correct byte slice calculation expressed via named constants (`HEADER_CODE_LEN = 1`, `HEADER_LEN_SIZE = 4`, `HEADER_TOTAL = 5`). Deserialization extracted into `deserialize_cached()` with inline comments explaining each boundary check.
 
 11. **Do not cache error responses**.
 
@@ -243,21 +246,25 @@ SQL comment  →  pgdog.cache parameter  →  DB policy config
 
 16. **Force-cache hint support** — `/* pgdog_cache: force_cache */` and `/* pgdog_cache: force_cache ttl=N */` directives always attempt to cache (cache key normalized), bypassing normal cache miss flow considerations.
 
+17. **Cache HIT replays through the server-message pipeline** — Previously, cache hits sent responses directly to the stream, bypassing `process_server_message()`. Now `try_read_cache()` returns `Option<Vec<Message>>` and the caller (`handle()`) feeds each message through `process_server_message()` — giving correct stats accounting, transaction state updates from `ReadyForQuery`, and hook invocations on every cache hit.
+
+18. **CacheClient error types refined** — `get()` now returns `Result<Vec<u8>, Error>` (no more `Option`). `Error::CacheMiss(u64)` is a dedicated variant for key-not-found; `Error::RedisError` is now a struct variant carrying `cmd: &'static str`, `key: u64`, and the underlying error for richer diagnostics. `Error::ConnectionFailed` uses `&'static str` instead of `String` to avoid heap allocation on the hot path.
+
 ---
 
 ## What's Left To Do
 
 1. **Response capture for prepared statements** — Extended protocol (Parse/Bind/Execute) response capture works through process_server_message() but hasn't been tested with PREPARE/EXECUTE. (Note: pgdog implements prepared statements caching. But unknown what kind of caching this is: just query cache or result cache. And if we implement our cache, will this break this prepared statement cache?)
 
-2. **Redis disconnect/reconnect under heavy load** — The reconnection logic works, but the fast-path check (`ensure_connected`) and the reconnect task can have timing edge cases under rapid disconnect/reconnect cycles. Need to stress-test. 
+2. **Redis disconnect/reconnect under heavy load** — The reconnection logic works, but the fast-path check (`ensure_connected`) and the reconnect task can have timing edge cases under rapid disconnect/reconnect cycles. Need to stress-test.
 
 3. **Integration tests** — Tests live in `integration/rust/tests/integration/`. Redis must be running on 127.0.0.1:6379 before tests. Run with: `cd integration/rust && cargo nextest run --no-fail-fast --test-threads=1`
 
-4. **Magic numbers in send_cached_response()**.
+4. **Provide config hotswap**.
 
-5. **Provide config hotswap**.
+5. **Review and rewrite CacheClient**.
 
-6. **Review and rewrite CacheClient**.
+6. **Abstract storage backend** — `CacheClient` is Redis-specific. A `CacheStorage` trait (`get`, `set`, `is_enabled`) would allow plugging in other backends (e.g. memcached) via config. `deserialize_cached()` is already backend-agnostic (pure wire-protocol parsing) and would be shared across all backends.
 
 ### Planned Tests
 

@@ -14,7 +14,7 @@ use tracing::debug;
 
 use crate::{
     frontend::{ClientRequest, cache::integration::CacheMiss},
-    net::{Parameters, Stream},
+    net::{Message, Parameters},
 };
 
 #[derive(Debug)]
@@ -35,14 +35,21 @@ impl Cache {
         }
     }
 
+    /// Check the cache for a query response.
+    ///
+    /// On HIT returns `Ok(Some(messages))` — the caller is responsible for
+    /// replaying these messages through the normal server-message pipeline.
+    ///
+    /// On MISS or PASSTHROUGH returns `Ok(None)` and updates `cache_context`
+    /// so that the response can later be captured and stored via
+    /// `save_response_in_cache`.
     pub async fn try_read_cache(
         &self,
         cache_context: &mut CacheContext,
         in_transaction: bool,
         client_request: &ClientRequest,
         params: &Parameters,
-        stream: &mut Stream,
-    ) -> Result<bool, crate::frontend::Error> {
+    ) -> Result<Option<Vec<Message>>, crate::frontend::Error> {
         let cache_result = self
             .cache_check(in_transaction, client_request, params)
             .await?;
@@ -50,22 +57,22 @@ impl Cache {
         match cache_result {
             CacheCheckResult::Hit { cached } => {
                 debug!("Cache hit, serving from cache");
-                self.send_cached_response(stream, cached).await?;
+                let messages = Self::deserialize_cached(cached);
                 cache_context.reset();
-                return Ok(true);
+                Ok(Some(messages))
             }
             CacheCheckResult::Miss(cache_miss) => {
                 debug!("Cache miss for key hash: {}", cache_miss.cache_key_hash);
                 cache_context.cache_miss = Some(cache_miss);
                 cache_context.response_buffer.clear();
                 cache_context.had_error = false;
+                Ok(None)
             }
             CacheCheckResult::Passthrough => {
                 cache_context.reset();
+                Ok(None)
             }
         }
-
-        Ok(false)
     }
 
     /// Finalize caching by storing the response in Redis.
@@ -73,9 +80,7 @@ impl Cache {
         if let Some(CacheMiss { cache_key_hash, ttl } ) = cache_context.cache_miss.take() {
             if !cache_context.had_error && !cache_context.response_buffer.is_empty() {
                 let messages = std::mem::take(&mut cache_context.response_buffer);
-                if let Err(e) = self.cache_response(cache_key_hash, messages, ttl).await {
-                    debug!("Failed to cache response: {:?}", e);
-                }
+                self.cache_response(cache_key_hash, messages, ttl).await;
             }
         }
     }

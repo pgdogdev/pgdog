@@ -131,16 +131,18 @@ impl QueryEngine {
         }
 
         let in_transaction = context.in_transaction();
-        if cache()
+        if let Some(cached_messages) = cache()
             .try_read_cache(
                 &mut context.cache_context,
                 in_transaction,
                 context.client_request,
                 context.params,
-                context.stream,
             )
             .await?
         {
+            for msg in cached_messages {
+                self.process_server_message(context, msg).await?;
+            }
             self.update_stats(context);
             return Ok(());
         }

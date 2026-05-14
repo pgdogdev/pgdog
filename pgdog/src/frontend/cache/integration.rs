@@ -4,11 +4,14 @@ use once_cell::sync::Lazy;
 use regex::Regex;
 
 use crate::{
-    frontend::{cache::CacheDecision, ClientRequest},
-    net::{FromBytes, Message, Parameters, Stream, ToBytes},
+    frontend::{
+        cache::{client::Error as CacheClientError, CacheDecision},
+        ClientRequest,
+    },
+    net::{FromBytes, Message, Parameters, ToBytes},
 };
 
-use tracing::debug;
+use tracing::{debug, warn};
 
 use super::{policy, Cache};
 
@@ -25,6 +28,10 @@ pub enum CacheCheckResult {
     Miss(CacheMiss),
     Passthrough,
 }
+
+const HEADER_CODE_LEN: usize = 1;
+const HEADER_LEN_SIZE: usize = 4;
+const HEADER_TOTAL: usize = HEADER_CODE_LEN + HEADER_LEN_SIZE;
 
 impl Cache {
     pub(super) async fn cache_check(
@@ -72,33 +79,58 @@ impl Cache {
                 ttl,
             })),
             CacheDecision::Cache(ttl) => match self.client.get(cache_key_hash).await {
-                Ok(Some(cached)) => Ok(CacheCheckResult::Hit { cached }),
-                Ok(None) => Ok(CacheCheckResult::Miss(CacheMiss {
+                Ok(cached) => Ok(CacheCheckResult::Hit { cached }),
+                Err(CacheClientError::CacheMiss(_)) => Ok(CacheCheckResult::Miss(CacheMiss {
                     cache_key_hash,
                     ttl: ttl,
                 })),
                 Err(e) => {
-                    debug!("Cache get error: {}", e);
+                    warn!("{}", e);
                     Ok(CacheCheckResult::Passthrough)
                 }
             },
         }
     }
 
-    pub(super) async fn send_cached_response(
-        &self,
-        stream: &mut Stream,
-        cached: Vec<u8>,
-    ) -> Result<(), crate::frontend::Error> {
+    /// Deserializes a flat byte blob (N concatenated PostgreSQL wire messages) into `Vec<Message>`.
+    ///
+    /// Redis stores cache responses as raw wire-format bytes concatenated together without framing.
+    /// We walk through the blob reading each message boundary, then slice out the individual message.
+    ///
+    /// ### PostgreSQL wire protocol message layout:
+    ///
+    /// [Source](https://www.postgresql.org/docs/current/protocol-overview.html)
+    ///
+    /// ```text
+    /// +----------+--------------------------+-------------------+
+    /// | 1 byte   | 4 bytes (big-endian)     | N bytes (payload) |
+    /// | code     | length (incl. 4B itself) | data              |
+    /// +----------+--------------------------+-------------------+
+    /// ```
+    ///
+    /// Constants for parsing:
+    /// - `HEADER_CODE_LEN` = 1 byte (message type code, e.g. 'T' = RowDescription)
+    /// - `HEADER_LEN_SIZE` = 4 bytes (message length, includes itself but NOT the code byte)
+    /// - `HEADER_TOTAL`   = 5 bytes (minimum bytes needed to read the length field)
+    pub(super) fn deserialize_cached(cached: Vec<u8>) -> Vec<Message> {
+        let mut messages = Vec::new();
         let mut offset = 0;
         let len = cached.len();
 
         while offset < len {
-            if offset + 5 > len {
+            // Need at least a full header (code + length) to proceed.
+            if offset + HEADER_TOTAL > len {
+                debug!(
+                    "deserializing cached response: not enough bytes for message header (offset={}, len={})",
+                    offset, len
+                );
                 break;
             }
 
             let _code = cached[offset] as char;
+
+            // Read the message length field (4 bytes, big-endian).
+            // This length includes the 4-byte length field itself but NOT the code byte.
             let msg_len = u32::from_be_bytes([
                 cached[offset + 1],
                 cached[offset + 2],
@@ -106,19 +138,28 @@ impl Cache {
                 cached[offset + 4],
             ]) as usize;
 
-            if msg_len < 4 || offset + 1 + msg_len > len {
+            // Sanity checks:
+            // 1. Length must be at least 4 (the length field itself): if < 4 the data is corrupt.
+            // 2. Must not read past the end of the blob.
+            if msg_len < 4 || offset + HEADER_CODE_LEN + msg_len > len {
+                debug!(
+                    "deserializing cached response: invalid msg length {} (offset={}, len={})",
+                    msg_len, offset, len
+                );
                 break;
             }
 
-            let end = offset + 1 + msg_len;
-            let msg_bytes: bytes::Bytes = cached[offset..end].to_vec().into();
-            let msg = Message::from_bytes(msg_bytes)?;
-            offset = end;
+            // Full message spans: 1 byte (code) + msg_len (length field + payload)
+            let end = offset + HEADER_CODE_LEN + msg_len;
 
-            stream.send_flush(&msg).await?;
+            let msg_bytes: bytes::Bytes = cached[offset..end].to_vec().into();
+            if let Ok(msg) = Message::from_bytes(msg_bytes) {
+                messages.push(msg);
+            }
+            offset = end;
         }
 
-        Ok(())
+        messages
     }
 
     pub(super) async fn cache_response(
@@ -126,9 +167,9 @@ impl Cache {
         cache_key_hash: u64,
         messages: Vec<Message>,
         ttl: u64,
-    ) -> Result<(), ()> {
+    ) {
         if messages.is_empty() || !self.client.is_enabled() {
-            return Ok(());
+            return;
         }
 
         let mut buffer = Vec::new();
@@ -137,19 +178,17 @@ impl Cache {
                 Ok(bytes) => buffer.extend_from_slice(&bytes),
                 Err(e) => {
                     debug!("Failed to serialize message for caching: {}", e);
-                    return Ok(());
+                    return;
                 }
             }
         }
 
         if buffer.is_empty() {
-            return Ok(());
+            return;
         }
 
         if let Err(e) = self.client.set(cache_key_hash, &buffer, ttl).await {
-            debug!("Failed to cache response: {}", e);
+            debug!("Failed to cache response: {:?}", e);
         }
-
-        Ok(())
     }
 }
