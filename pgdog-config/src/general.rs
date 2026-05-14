@@ -1159,8 +1159,9 @@ impl General {
     }
 
     pub fn log_query_sample_length() -> usize {
-        Self::env_or_default("PGDOG_LOG_QUERY_SAMPLE_LENGTH", 100)
+        Self::env_or_default("PGDOG_LOG_QUERY_SAMPLE_LENGTH", 1000)
     }
+
 
     pub fn openmetrics_port() -> Option<u16> {
         Self::env_option("PGDOG_OPENMETRICS_PORT")
@@ -1597,7 +1598,7 @@ mod tests {
         assert_eq!(General::default_dns_ttl(), None);
         assert_eq!(General::pub_sub_channel_size(), 0);
         assert_eq!(General::log_min_duration_parse(), None);
-        assert_eq!(General::log_query_sample_length(), 100);
+        assert_eq!(General::log_query_sample_length(), 1000);
     }
 
     #[test]

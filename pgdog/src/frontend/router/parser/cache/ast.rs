@@ -12,7 +12,6 @@ use tracing::warn;
 use super::super::{Error, Route, Shard, StatementRewrite, StatementRewriteContext, Table};
 use super::{Cache, Fingerprint, Stats};
 use crate::backend::schema::Schema;
-use crate::config::config;
 use crate::frontend::router::parser::cache::AstQuery;
 use crate::frontend::router::parser::rewrite::statement::RewritePlan;
 use crate::frontend::PreparedStatements;
@@ -107,14 +106,12 @@ impl Ast {
         let mut stats = Stats::new();
         stats.parse_time += elapsed;
 
-        let cfg = config();
-        if let Some(threshold_ms) = cfg.config.general.log_min_duration_parse {
+        if let Some(threshold_ms) = schema.log_min_duration_parse {
             if threshold_ms > 0 && elapsed.as_millis() as u64 >= threshold_ms {
-                let sample_len = cfg.config.general.log_query_sample_length;
                 warn!(
                     "[slow_query_parse] parse_time_in_ms={}ms truncated_query=\"{}\"",
                     elapsed.as_millis(),
-                    query.truncated_query(sample_len),
+                    query.truncated_query(schema.log_query_sample_length),
                 );
             }
         }
