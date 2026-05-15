@@ -106,8 +106,8 @@ impl Ast {
         let mut stats = Stats::new();
         stats.parse_time += elapsed;
 
-        if let Some(threshold_ms) = schema.log_min_duration_parse {
-            if threshold_ms > 0 && elapsed.as_millis() as u64 >= threshold_ms {
+        if let Some(threshold) = schema.log_min_duration_parse {
+            if elapsed >= threshold {
                 warn!(
                     "[slow_query_parse] parse_time_in_ms={}ms truncated_query=\"{}\"",
                     elapsed.as_millis(),

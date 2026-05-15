@@ -354,6 +354,15 @@ fn test_truncated_query_includes_leading_comment() {
 }
 
 #[test]
+fn test_truncated_query_non_ascii_char_boundary() {
+    // '€' is 3 bytes in UTF-8 — truncating at a byte boundary mid-character
+    // must not panic and must return whole characters only
+    let buffered = BufferedQuery::Query(Query::new("SELECT '€'"));
+    let ast_query = AstQuery::from_query(&buffered);
+    assert_eq!(ast_query.truncated_query(9), "SELECT '€");
+}
+
+#[test]
 fn test_normalize() {
     let q = "SELECT * FROM users WHERE id = 1";
     let normalized = normalize(q).unwrap();

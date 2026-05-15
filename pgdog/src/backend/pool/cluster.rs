@@ -76,7 +76,7 @@ pub struct Cluster {
     connection_recovery: ConnectionRecovery,
     client_connection_recovery: ConnectionRecovery,
     query_parser_engine: QueryParserEngine,
-    log_min_duration_parse: Option<u64>,
+    log_min_duration_parse: Option<Duration>,
     log_query_sample_length: usize,
     reload_schema_on_ddl: bool,
     load_schema: LoadSchema,
@@ -99,7 +99,7 @@ pub struct ShardingSchema {
     pub rewrite: Rewrite,
     /// Query parser engine.
     pub query_parser_engine: QueryParserEngine,
-    pub log_min_duration_parse: Option<u64>,
+    pub log_min_duration_parse: Option<Duration>,
     pub log_query_sample_length: usize,
 }
 
@@ -156,7 +156,7 @@ pub struct ClusterConfig<'a> {
     pub pub_sub_channel_size: usize,
     pub query_parser: QueryParserLevel,
     pub query_parser_engine: QueryParserEngine,
-    pub log_min_duration_parse: Option<u64>,
+    pub log_min_duration_parse: Option<Duration>,
     pub log_query_sample_length: usize,
     pub connection_recovery: ConnectionRecovery,
     pub client_connection_recovery: ConnectionRecovery,
@@ -215,7 +215,7 @@ impl<'a> ClusterConfig<'a> {
             pub_sub_channel_size: general.pub_sub_channel_size,
             query_parser: general.query_parser,
             query_parser_engine: general.query_parser_engine,
-            log_min_duration_parse: general.log_min_duration_parse,
+            log_min_duration_parse: general.log_min_duration_parse(),
             log_query_sample_length: general.log_query_sample_length,
             connection_recovery: general.connection_recovery,
             client_connection_recovery: general.client_connection_recovery,

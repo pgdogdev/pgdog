@@ -274,7 +274,7 @@ pub struct General {
 
     /// Maximum number of characters of the query text included in log messages.
     ///
-    /// _Default:_ `100`
+    /// _Default:_ `1000`
     #[serde(default = "General::log_query_sample_length")]
     pub log_query_sample_length: usize,
 
@@ -777,7 +777,7 @@ impl Default for General {
             broadcast_address: Self::broadcast_address(),
             broadcast_port: Self::broadcast_port(),
             query_log: Self::query_log(),
-            log_min_duration_parse: Self::log_min_duration_parse(),
+            log_min_duration_parse: Self::default_log_min_duration_parse(),
             log_query_sample_length: Self::log_query_sample_length(),
             openmetrics_port: Self::openmetrics_port(),
             openmetrics_namespace: Self::openmetrics_namespace(),
@@ -1154,8 +1154,12 @@ impl General {
         Self::env_option_string("PGDOG_QUERY_LOG").map(PathBuf::from)
     }
 
-    fn log_min_duration_parse() -> Option<u64> {
+    fn default_log_min_duration_parse() -> Option<u64> {
         Self::env_option("PGDOG_LOG_MIN_DURATION_PARSE")
+    }
+
+    pub fn log_min_duration_parse(&self) -> Option<Duration> {
+        self.log_min_duration_parse.map(Duration::from_millis)
     }
 
     pub fn log_query_sample_length() -> usize {
@@ -1573,7 +1577,7 @@ mod tests {
         assert_eq!(General::mirror_exposure(), 0.5);
         assert_eq!(General::default_dns_ttl(), Some(60000));
         assert_eq!(General::pub_sub_channel_size(), 100);
-        assert_eq!(General::log_min_duration_parse(), Some(5));
+        assert_eq!(General::default_log_min_duration_parse(), Some(5));
         assert_eq!(General::log_query_sample_length(), 200);
 
         env::remove_var("PGDOG_BROADCAST_PORT");
@@ -1597,7 +1601,7 @@ mod tests {
         assert_eq!(General::mirror_exposure(), 1.0);
         assert_eq!(General::default_dns_ttl(), None);
         assert_eq!(General::pub_sub_channel_size(), 0);
-        assert_eq!(General::log_min_duration_parse(), None);
+        assert_eq!(General::default_log_min_duration_parse(), None);
         assert_eq!(General::log_query_sample_length(), 1000);
     }
 
