@@ -66,6 +66,8 @@
         "log_disconnections": true,
         "log_format": "text",
         "log_level": "info",
+        "log_min_duration_parse": null,
+        "log_query_sample_length": 1000,
         "lsn_check_delay": 9223372036854775807,
         "lsn_check_interval": 5000,
         "lsn_check_timeout": 5000,
@@ -827,6 +829,22 @@
           "description": "Log filter directives using the same syntax as the `RUST_LOG` environment variable.\n\n_Default:_ `info`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#log_level",
           "type": "string",
           "default": "info"
+        },
+        "log_min_duration_parse": {
+          "description": "Minimum parse duration in milliseconds that triggers a warning log with the query text.\nQueries whose parsing takes longer than this value are logged at WARN level.\nSet to `0` or omit to disable.\n\n_Default:_ `None` (disabled)",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "log_query_sample_length": {
+          "description": "Maximum number of characters of the query text included in log messages.\n\n_Default:_ `1000`",
+          "type": "integer",
+          "format": "uint",
+          "default": 1000,
+          "minimum": 0
         },
         "lsn_check_delay": {
           "description": "For how long to delay checking for replication delay.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#lsn_check_delay",

@@ -1166,7 +1166,6 @@ impl General {
         Self::env_or_default("PGDOG_LOG_QUERY_SAMPLE_LENGTH", 1000)
     }
 
-
     pub fn openmetrics_port() -> Option<u16> {
         Self::env_option("PGDOG_OPENMETRICS_PORT")
     }
