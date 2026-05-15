@@ -129,6 +129,15 @@ impl ProtocolState {
         self.simulated.push_back(message);
     }
 
+    /// Clear the state queue. Can be used for when a
+    /// statement fails and we have to retry it:
+    /// 1. Clear the state queue
+    /// 2. Fix up the statement (eg deallocate + reprepare)
+    /// 3. Run the statement again, building up the state again
+    pub(crate) fn clear(&mut self) {
+        self.queue.clear();
+    }
+
     /// Get a simulated message from the execution queue.
     ///
     /// Returns a message only if it should be returned at the current state

@@ -15,6 +15,7 @@ pub mod replication;
 pub mod schema;
 pub mod server;
 pub mod server_options;
+pub mod server_state;
 pub mod stats;
 
 pub use connect_reason::ConnectReason;
