@@ -14,58 +14,78 @@ Cache SELECT queries in Redis, bypass PostgreSQL on cache hit, populate cache on
 
 **CachePolicy enum:** `NoCache` (default), `Cache`. Implements `FromStr`, `Display`, `Serialize`, `Deserialize`, `Copy`, `JsonSchema`.
 
-**Cache struct:**
-- `enabled: bool` — is caching on?
-- `policy: CachePolicy` — which policy?
-- `ttl: u64` — default TTL seconds (default 300)
-- `redis_url: String` — Redis connection URL
-- `max_result_size: usize` — max cached result bytes
+**CacheBackend enum:** `Redis` (default). Discriminator for selecting the storage backend and for hotswap detection when the backend type changes in config.
+
+**RedisConfig struct** (`[general.cache.redis]`):
+- `url: String` — Redis connection URL (default `redis://localhost:6379`)
+- `cache_key_prefix: String` — prefix prepended to every Redis key (default `pgdog:`)
+
+**Cache struct** (`[general.cache]`):
+- `enabled: bool` — is caching on? (default `false`)
+- `policy: CachePolicy` — which policy? (default `no_cache`)
+- `ttl: u64` — default TTL seconds (default `300`)
+- `backend: CacheBackend` — which storage backend (default `redis`)
+- `redis: RedisConfig` — Redis-specific settings
+- `max_result_size: usize` — max cached result bytes (default `0` = unlimited)
+
+Example TOML:
+```toml
+[general.cache]
+enabled = true
+policy  = "cache"
+ttl     = 300
+
+[general.cache.redis]
+url              = "redis://localhost:6379"
+cache_key_prefix = "pgdog:"
+```
 
 **`general.rs`** — `General` struct holds `cache: Cache` field. **Cache config is global.**
 
-**`lib.rs`** — Exports `pub mod cache;` and `pub use cache::{CachePolicy, Cache};`.
+**`lib.rs`** — Exports `pub use cache::{CacheBackend, CachePolicy, Cache, RedisConfig as CacheRedisConfig};`.
 
 ### Cache Module (`pgdog/src/frontend/cache/`)
 
 **`mod.rs`** — Module exports, global singleton, and main `Cache` struct:
 ```rust
-pub mod client;
 pub mod context;
 pub mod integration;
 pub mod policy;
+pub mod storage;
 
-pub use client::CacheClient;
 pub use context::CacheContext;
 pub use integration::CacheCheckResult;
 pub use policy::CacheDecision;
+pub use storage::{CacheStorage, RedisCacheStorage};
 ```
 
-`Cache` struct wraps: `CacheClient`.
+`Cache` struct wraps `RwLock<Option<Box<dyn CacheStorage>>>` (tokio `RwLock`).
 
 **Global singleton:** Cache is global-scoped, not connection-scoped. Accessed via `cache()` function which returns `Arc<Cache>` from a `Lazy<Arc<Cache>>` static. `Cache::new()` reads config internally — no parameters needed.
 
-Key methods:
-- `new()` — creates client (reads config internally)
-- `try_read_cache(cache_context, in_transaction, client_request, params)` — calls `cache_check()`, returns `Ok(Some(Vec<Message>))` on HIT (caller replays through pipeline), `Ok(None)` on MISS/PASSTHROUGH
-- `save_response_in_cache(cache_context)` — finalizes by storing the captured response
+**Config hotswap:** `hotswap_if_needed()` is called at the top of `try_read_cache` and `save_response_in_cache`. It fast-paths with a read-lock; acquires write-lock only if the URL or backend type has changed, then rebuilds the storage.
 
-**`client.rs`** — Redis client wrapper using `fred` v9:
-- `CacheClient::new()` — builds client from global `config().config.general.cache`, returns disabled stub if no config/URL
-- `ensure_connected()` — lazy one-time `client.init().await` followed by `client.ping()` verification; sets `redis_connected` flag
-- `get(&self, key)` — returns `Result<Vec<u8>, Error>`; fetches cached wire-protocol bytes. Returns `Err(Error::CacheMiss)` on a key miss (distinct from connection errors)
-- `set(&self, key, value, ttl)` — stores bytes with EX expiration; respects `max_result_size`
-- `spawn_reconnect()` — background task that retries `init()` every 500ms, verifies with `ping()`, sets `redis_connected = true`
-- `mark_disconnected()` — sets `redis_connected = false`, spawns reconnect if not already running (CAS-guarded)
-- `is_connected()` — reads our atomic flag (not fred's potentially stale `ClientState`)
-- `is_enabled()` — returns true if both client exists and config enabled
-- Keys are prefixed with `"pgdog:"`
-- Error types:
-  - `RedisError { cmd: &'static str, key: u64, err: RedisError }` — Redis command failed (includes command name and key for context)
-  - `ConnectionFailed(&'static str)` — not connected or not configured
-  - `CacheMiss(u64)` — key not present in Redis (not an error condition, used for control flow)
-- `redis_connected: Arc<AtomicBool>` — authoritative connection gate, only true after PING succeeds
+Key methods:
+- `new()` — creates storage from current config (or `None` if disabled)
+- `hotswap_if_needed()` — compares live config against the active storage's one with `has_config_changed()`; swaps if `true` returned
+- `try_read_cache(cache_context, in_transaction, client_request, params)` — hotswaps, calls `cache_check()`, returns `Ok(Some(Vec<Message>))` on HIT (caller replays through pipeline), `Ok(None)` on MISS/PASSTHROUGH
+- `save_response_in_cache(cache_context)` — hotswaps, finalizes by storing the captured response
+
+**`storage/mod.rs`** — Abstract storage trait and error type:
+- `CacheStorage` trait: `get`, `set`, `is_enabled`, `has_config_changed` — implemented by all cache backends
+- `Error` enum shared across all backends: `RedisError`, `ConnectionFailed`, `CacheMiss`
+
+**`storage/redis.rs`** — Redis storage backend (`RedisCacheStorage`) implementing `CacheStorage`:
+- `RedisCacheStorage::new(config)` — builds client from given URL; immediately spawns a background connection task; returns `None` if URL is invalid
+- Background connect task: retries `init()` in a loop (5ms to 5s exponential backoff); sets `reconnecting = false` on success; CAS-guarded so only one task runs at a time
+- `get(&self, key)` — returns `Result<Vec<u8>, Error>`; returns `Err(Error::ConnectionFailed)` immediately (triggering cache miss) if not yet connected; marks `reconnecting` and spawns reconnect on Redis errors
+- `set(&self, key, value, ttl)` — stores bytes with EX expiration; returns immediately on disconnect; respects `max_result_size` from live config
+- `reconnect()` — spawns reconnect if not already running (CAS-guarded)
+- `has_config_changed()` — returns `true` if cache config has changed (used for hotswap detection)
+- `is_enabled()` — reads live `config().config.general.cache.enabled`
+- Key prefix comes from `config().config.general.cache.redis.cache_key_prefix`
 - `reconnecting: Arc<AtomicBool>` — prevents multiple concurrent reconnect tasks
-- All Redis operations wrapped in `tokio::time::timeout(REDIS_OPERATION_TIMEOUT)` (2s) as safety net
+- All Redis operations wrapped in `tokio::time::timeout(REDIS_OPERATION_TIMEOUT)` (2s)
 
 **`policy.rs`** — 2-tier policy resolution:
 - `CacheDirective` enum: `Cache { ttl_seconds }`, `ForceCache { ttl_seconds }`, `NoCache` (default)
@@ -250,27 +270,20 @@ SQL comment  →  pgdog.cache parameter  →  DB policy config
 
 18. **CacheClient error types refined** — `get()` now returns `Result<Vec<u8>, Error>` (no more `Option`). `Error::CacheMiss(u64)` is a dedicated variant for key-not-found; `Error::RedisError` is now a struct variant carrying `cmd: &'static str`, `key: u64`, and the underlying error for richer diagnostics. `Error::ConnectionFailed` uses `&'static str` instead of `String` to avoid heap allocation on the hot path.
 
+19. **Config hotswap** — `Cache` singleton holds `Arc<tokio::sync::RwLock<Option<Box<dyn CacheStorage>>>>`. `hotswap_if_needed()` runs at the start of every `try_read_cache` and `save_response_in_cache` call: read-locks to compare the active backend's URL against `config().config.general.cache.redis.url`; if they differ (or the backend type changes) it write-locks and rebuilds the storage. Fast path is a read-lock-only check with no allocation.
+
+20. **CacheClient rewritten as `RedisCacheStorage`** — Replaced `CacheClient` with `RedisCacheStorage` implementing the `CacheStorage` trait. Key improvements: background connect task is spawned immediately in `new()` so the first query never blocks on init; `get`/`set` check only one atomic flag (`reconnecting`) and return immediately if `true` returned instead of running `ensure_connected`; the `Option<RedisClient>` field and the three-condition guard at the top of every operation are gone; `reconnect` is the single place that sets the flag and CAS-guards the reconnect spawn.
+
+21. **Abstract storage backend** — `storage/mod.rs` defines the `CacheStorage` trait (`get`, `set`, `is_enabled`, `has_config_changed`) and the shared `Error` enum. `storage/redis.rs` is the Redis implementation. `Cache` holds `Box<dyn CacheStorage>` behind a tokio `RwLock` so any backend (e.g. Memcached) can be plugged in by adding a sub-module under `storage/` and a variant to `CacheBackend`. `deserialize_cached()` remains backend-agnostic in `integration.rs`.
+
+22. **Nested backend config** — Backend-specific settings live in their own TOML subtable (`[general.cache.redis]`) rather than flat fields on `[general.cache]`. `RedisConfig` holds `url` and `cache_key_prefix`. When a new backend is added, it gets its own subtable (e.g. `[general.cache.memcached]`) without polluting the top-level cache section. `client.rs` renamed to `storage/redis.rs`.
+
 ---
 
 ## What's Left To Do
 
 1. **Response capture for prepared statements** — Extended protocol (Parse/Bind/Execute) response capture works through process_server_message() but hasn't been tested with PREPARE/EXECUTE. (Note: pgdog implements prepared statements caching. But unknown what kind of caching this is: just query cache or result cache. And if we implement our cache, will this break this prepared statement cache?)
 
-2. **Redis disconnect/reconnect under heavy load** — The reconnection logic works, but the fast-path check (`ensure_connected`) and the reconnect task can have timing edge cases under rapid disconnect/reconnect cycles. Need to stress-test.
+2. **Redis disconnect/reconnect under heavy load** — The reconnection logic works, but timing edge cases under rapid disconnect/reconnect cycles still need stress-testing.
 
-3. **Integration tests** — Tests live in `integration/rust/tests/integration/`. Redis must be running on 127.0.0.1:6379 before tests. Run with: `cd integration/rust && cargo nextest run --no-fail-fast --test-threads=1`
-
-4. **Provide config hotswap**.
-
-5. **Review and rewrite CacheClient**.
-
-6. **Abstract storage backend** — `CacheClient` is Redis-specific. A `CacheStorage` trait (`get`, `set`, `is_enabled`) would allow plugging in other backends (e.g. memcached) via config. `deserialize_cached()` is already backend-agnostic (pure wire-protocol parsing) and would be shared across all backends.
-
-### Planned Tests
-
-1. **Database key namespace collision** — Two databases sharing one Redis, both running same query but with different underlying PG data. Verify correct isolation.
-2. **Basic cache hit/miss** — Run a SELECT once (expect miss), run again (expect hit), verify metrics.
-3. **TTL expiration** — Cache a query with short TTL, wait for expiry, verify miss on third call.
-4. **Write bypasses cache** — Execute INSERT/UPDATE/DELETE, verify these do not populate or consume the cache.
-5. **Redis unavailable** — Stop Redis mid-flight, verify queries pass through to PG without blocking.
-6. **Redis reconnection** — Restart Redis after disconnect, verify cache recovers automatically.
+3. **Integration tests**.

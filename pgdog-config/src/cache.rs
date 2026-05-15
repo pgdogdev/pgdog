@@ -36,30 +36,89 @@ impl std::fmt::Display for CachePolicy {
     }
 }
 
-/// Redis cache configuration for a database.
+/// Cache storage backend discriminator.
+#[derive(
+    Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Copy, JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum CacheBackend {
+    /// Redis backend (default).
+    #[default]
+    Redis,
+}
+
+/// Redis-specific cache backend configuration.
+///
+/// Corresponds to the `[general.cache.redis]` TOML section.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, PartialOrd, Ord, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RedisConfig {
+    /// Redis connection URL.
+    ///
+    /// _Default:_ `redis://localhost:6379`
+    #[serde(default = "RedisConfig::url")]
+    pub url: String,
+
+    /// Key prefix prepended to every cache key stored in Redis.
+    ///
+    /// _Default:_ `pgdog:`
+    #[serde(default = "RedisConfig::cache_key_prefix")]
+    pub cache_key_prefix: String,
+}
+
+impl Default for RedisConfig {
+    fn default() -> Self {
+        Self {
+            url: Self::url(),
+            cache_key_prefix: Self::cache_key_prefix(),
+        }
+    }
+}
+
+impl RedisConfig {
+    fn url() -> String {
+        "redis://localhost:6379".to_string()
+    }
+
+    fn cache_key_prefix() -> String {
+        "pgdog:".to_string()
+    }
+}
+
+/// Cache configuration.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, PartialOrd, Ord, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Cache {
-    /// Whether to enable caching for this database.
-    /// 
+    /// Whether to enable caching.
+    ///
     /// _Default:_ `false`
     #[serde(default = "Cache::enabled")]
     pub enabled: bool,
-    /// Cache policy: no_cache or cache.
+
+    /// Cache policy: `no_cache` or `cache`.
     ///
     /// _Default:_ `no_cache`
     #[serde(default = "Cache::policy")]
     pub policy: CachePolicy,
+
     /// Default TTL in seconds for cached queries.
     ///
     /// _Default:_ `300`
     #[serde(default = "Cache::ttl")]
     pub ttl: u64,
-    /// Redis connection URL.
+
+    /// Which storage backend to use.
     ///
-    /// _Default:_ `redis://localhost:6379`
-    #[serde(default = "Cache::redis_url")]
-    pub redis_url: String,
+    /// _Default:_ `redis`
+    #[serde(default = "Cache::backend")]
+    pub backend: CacheBackend,
+
+    /// Redis backend configuration.
+    ///
+    /// Only read when `backend = "redis"`.
+    #[serde(default)]
+    pub redis: RedisConfig,
+
     /// Maximum result size in bytes to cache (0 = unlimited).
     ///
     /// _Default:_ `0`
@@ -73,7 +132,8 @@ impl Default for Cache {
             enabled: Self::enabled(),
             policy: Self::policy(),
             ttl: Self::ttl(),
-            redis_url: Self::redis_url(),
+            backend: Self::backend(),
+            redis: RedisConfig::default(),
             max_result_size: Self::max_result_size(),
         }
     }
@@ -85,15 +145,15 @@ impl Cache {
     }
 
     fn policy() -> CachePolicy {
-        Default::default()
+        CachePolicy::default()
     }
 
     fn ttl() -> u64 {
         300
     }
 
-    fn redis_url() -> String {
-        "redis://localhost:6379".to_string()
+    fn backend() -> CacheBackend {
+        CacheBackend::default()
     }
 
     fn max_result_size() -> usize {

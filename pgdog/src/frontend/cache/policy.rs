@@ -60,8 +60,7 @@ fn get_cache_directive(
     client_request
         .ast
         .as_ref()
-        .map(|ast| ast.comment_cache)
-        .flatten()
+        .and_then(|ast| ast.comment_cache)
         .or_else(|| extract_parameter_directive(params))
 }
 
@@ -83,8 +82,7 @@ fn extract_parameter_directive(params: &Parameters) -> Option<CacheDirective> {
         .strip_prefix("force_cache")
         .or_else(|| s.strip_prefix("cache"))
         .map(|s| s.trim_start())
-        .map(|s| s.strip_prefix("ttl="))
-        .flatten()
+        .and_then(|s| s.strip_prefix("ttl="))
         .and_then(|t| t.trim().parse::<u64>().ok())
     {
         let ttl_seconds = Some(ttl);

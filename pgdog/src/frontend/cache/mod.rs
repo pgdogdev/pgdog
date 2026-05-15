@@ -1,25 +1,37 @@
-pub mod client;
 pub mod context;
 pub mod integration;
 pub mod policy;
+pub mod storage;
 
-pub use client::CacheClient;
 pub use context::CacheContext;
 pub use integration::CacheCheckResult;
 pub use policy::CacheDecision;
+pub use storage::{CacheStorage, RedisCacheStorage};
 
 use once_cell::sync::Lazy;
 use std::sync::Arc;
+use tokio::sync::RwLock;
 use tracing::debug;
 
 use crate::{
-    frontend::{ClientRequest, cache::integration::CacheMiss},
+    config::config,
+    frontend::{
+        cache::{integration::CacheMiss, storage::build_storage},
+        ClientRequest,
+    },
     net::{Message, Parameters},
 };
 
-#[derive(Debug)]
+/// Wraps the active storage backend behind a tokio `RwLock` so it can be
+/// hotswapped without restarting pgdog.
 pub struct Cache {
-    client: CacheClient,
+    storage: RwLock<Option<Box<dyn CacheStorage>>>,
+}
+
+impl std::fmt::Debug for Cache {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Cache").field("storage", &"...").finish()
+    }
 }
 
 static CACHE: Lazy<Arc<Cache>> = Lazy::new(|| Arc::new(Cache::new()));
@@ -30,10 +42,46 @@ pub fn cache() -> Arc<Cache> {
 
 impl Cache {
     fn new() -> Self {
+        let storage = build_storage();
         Cache {
-            client: CacheClient::new(),
+            storage: RwLock::new(storage),
         }
     }
+
+    /// Replace the storage backend if the config has changed (URL or backend type).
+    ///
+    /// Acquires the write lock only when a change is detected; otherwise the
+    /// read-lock path is zero-allocation and very fast.
+    async fn hotswap_if_needed(&self) {
+        let cfg = &config().config.general.cache;
+
+        // Fast path: read-lock to check whether anything has changed.
+        {
+            let guard = self.storage.read().await;
+            let needs_swap = match guard.as_ref() {
+                Some(s) => s.has_config_changed(cfg),
+                None => cfg.enabled,
+            };
+            if !needs_swap {
+                return;
+            }
+        }
+
+        // Slow path: write-lock and rebuild.
+        let mut guard = self.storage.write().await;
+        // Re-check under the write lock (another task may have already swapped).
+        let needs_swap = match guard.as_ref() {
+            Some(s) => s.has_config_changed(cfg),
+            None => cfg.enabled,
+        };
+
+        if needs_swap {
+            debug!("Cache storage config changed — rebuilding backend");
+            *guard = build_storage();
+        }
+    }
+
+    // ── public API ───────────────────────────────────────────────────────────
 
     /// Check the cache for a query response.
     ///
@@ -50,6 +98,8 @@ impl Cache {
         client_request: &ClientRequest,
         params: &Parameters,
     ) -> Result<Option<Vec<Message>>, crate::frontend::Error> {
+        self.hotswap_if_needed().await;
+
         let cache_result = self
             .cache_check(in_transaction, client_request, params)
             .await?;
@@ -75,9 +125,15 @@ impl Cache {
         }
     }
 
-    /// Finalize caching by storing the response in Redis.
+    /// Finalize caching by storing the response in the active backend.
     pub async fn save_response_in_cache(&self, cache_context: &mut CacheContext) {
-        if let Some(CacheMiss { cache_key_hash, ttl } ) = cache_context.cache_miss.take() {
+        self.hotswap_if_needed().await;
+
+        if let Some(CacheMiss {
+            cache_key_hash,
+            ttl,
+        }) = cache_context.cache_miss.take()
+        {
             if !cache_context.had_error && !cache_context.response_buffer.is_empty() {
                 let messages = std::mem::take(&mut cache_context.response_buffer);
                 self.cache_response(cache_key_hash, messages, ttl).await;

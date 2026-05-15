@@ -32,10 +32,14 @@
         "broadcast_address": null,
         "broadcast_port": 6433,
         "cache": {
+          "backend": "redis",
           "enabled": false,
           "max_result_size": 0,
           "policy": "no_cache",
-          "redis_url": "redis://localhost:6379",
+          "redis": {
+            "cache_key_prefix": "pgdog:",
+            "url": "redis://localhost:6379"
+          },
           "ttl": 300
         },
         "checkout_timeout": 5000,
@@ -283,11 +287,16 @@
       ]
     },
     "Cache": {
-      "description": "Redis cache configuration for a database.",
+      "description": "Cache configuration.",
       "type": "object",
       "properties": {
+        "backend": {
+          "description": "Which storage backend to use.\n\n_Default:_ `redis`",
+          "$ref": "#/$defs/CacheBackend",
+          "default": "redis"
+        },
         "enabled": {
-          "description": "Whether to enable caching for this database.\n\n_Default:_ `false`",
+          "description": "Whether to enable caching.\n\n_Default:_ `false`",
           "type": "boolean",
           "default": false
         },
@@ -299,14 +308,17 @@
           "minimum": 0
         },
         "policy": {
-          "description": "Cache policy: no_cache or cache.\n\n_Default:_ `no_cache`",
+          "description": "Cache policy: `no_cache` or `cache`.\n\n_Default:_ `no_cache`",
           "$ref": "#/$defs/CachePolicy",
           "default": "no_cache"
         },
-        "redis_url": {
-          "description": "Redis connection URL.\n\n_Default:_ `redis://localhost:6379`",
-          "type": "string",
-          "default": "redis://localhost:6379"
+        "redis": {
+          "description": "Redis backend configuration.\n\nOnly read when `backend = \"redis\"`.",
+          "$ref": "#/$defs/RedisConfig",
+          "default": {
+            "cache_key_prefix": "pgdog:",
+            "url": "redis://localhost:6379"
+          }
         },
         "ttl": {
           "description": "Default TTL in seconds for cached queries.\n\n_Default:_ `300`",
@@ -317,6 +329,16 @@
         }
       },
       "additionalProperties": false
+    },
+    "CacheBackend": {
+      "description": "Cache storage backend discriminator.",
+      "oneOf": [
+        {
+          "description": "Redis backend (default).",
+          "type": "string",
+          "const": "redis"
+        }
+      ]
     },
     "CachePolicy": {
       "description": "Cache policy.",
@@ -636,10 +658,14 @@
           "description": "Redis cache configuration for this database.",
           "$ref": "#/$defs/Cache",
           "default": {
+            "backend": "redis",
             "enabled": false,
             "max_result_size": 0,
             "policy": "no_cache",
-            "redis_url": "redis://localhost:6379",
+            "redis": {
+              "cache_key_prefix": "pgdog:",
+              "url": "redis://localhost:6379"
+            },
             "ttl": 300
           }
         },
@@ -1509,6 +1535,23 @@
           "const": "aggressive"
         }
       ]
+    },
+    "RedisConfig": {
+      "description": "Redis-specific cache backend configuration.\n\nCorresponds to the `[general.cache.redis]` TOML section.",
+      "type": "object",
+      "properties": {
+        "cache_key_prefix": {
+          "description": "Key prefix prepended to every cache key stored in Redis.\n\n_Default:_ `pgdog:`",
+          "type": "string",
+          "default": "pgdog:"
+        },
+        "url": {
+          "description": "Redis connection URL.\n\n_Default:_ `redis://localhost:6379`",
+          "type": "string",
+          "default": "redis://localhost:6379"
+        }
+      },
+      "additionalProperties": false
     },
     "ReplicaLag": {
       "description": "Replica lag banning configuration. When a replica's replication lag exceeds the threshold, it is banned from serving read queries.",

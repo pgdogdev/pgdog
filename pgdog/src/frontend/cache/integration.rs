@@ -5,7 +5,7 @@ use regex::Regex;
 
 use crate::{
     frontend::{
-        cache::{client::Error as CacheClientError, CacheDecision},
+        cache::{storage::Error as CacheStorageError, CacheDecision},
         ClientRequest,
     },
     net::{FromBytes, Message, Parameters, ToBytes},
@@ -78,17 +78,22 @@ impl Cache {
                 cache_key_hash,
                 ttl,
             })),
-            CacheDecision::Cache(ttl) => match self.client.get(cache_key_hash).await {
-                Ok(cached) => Ok(CacheCheckResult::Hit { cached }),
-                Err(CacheClientError::CacheMiss(_)) => Ok(CacheCheckResult::Miss(CacheMiss {
-                    cache_key_hash,
-                    ttl: ttl,
-                })),
-                Err(e) => {
-                    warn!("{}", e);
-                    Ok(CacheCheckResult::Passthrough)
+            CacheDecision::Cache(ttl) => {
+                let guard = self.storage.read().await;
+                match guard.as_ref() {
+                    None => Ok(CacheCheckResult::Passthrough),
+                    Some(storage) => match storage.get(cache_key_hash).await {
+                        Ok(cached) => Ok(CacheCheckResult::Hit { cached }),
+                        Err(CacheStorageError::CacheMiss(_)) => {
+                            Ok(CacheCheckResult::Miss(CacheMiss { cache_key_hash, ttl }))
+                        }
+                        Err(e) => {
+                            warn!("{}", e);
+                            Ok(CacheCheckResult::Passthrough)
+                        }
+                    },
                 }
-            },
+            }
         }
     }
 
@@ -168,7 +173,13 @@ impl Cache {
         messages: Vec<Message>,
         ttl: u64,
     ) {
-        if messages.is_empty() || !self.client.is_enabled() {
+        let guard = self.storage.read().await;
+        let storage = match guard.as_ref() {
+            Some(s) if s.is_enabled() => s,
+            _ => return,
+        };
+
+        if messages.is_empty() {
             return;
         }
 
@@ -177,7 +188,7 @@ impl Cache {
             match msg.to_bytes() {
                 Ok(bytes) => buffer.extend_from_slice(&bytes),
                 Err(e) => {
-                    debug!("Failed to serialize message for caching: {}", e);
+                    warn!("Failed to serialize message for caching: {}", e);
                     return;
                 }
             }
@@ -187,8 +198,8 @@ impl Cache {
             return;
         }
 
-        if let Err(e) = self.client.set(cache_key_hash, &buffer, ttl).await {
-            debug!("Failed to cache response: {:?}", e);
+        if let Err(e) = storage.set(cache_key_hash, &buffer, ttl).await {
+            warn!("{}", e);
         }
     }
 }

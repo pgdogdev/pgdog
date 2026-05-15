@@ -19,7 +19,7 @@ pub mod users;
 pub mod util;
 
 pub use auth::{AuthType, PassthroughAuth};
-pub use cache::{CachePolicy, Cache};
+pub use cache::{CacheBackend, CachePolicy, Cache, RedisConfig as CacheRedisConfig};
 pub use core::{Config, ConfigAndUsers};
 pub use data_types::*;
 pub use database::{
