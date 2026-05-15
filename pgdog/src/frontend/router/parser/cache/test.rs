@@ -333,6 +333,36 @@ fn test_cache_key_shared_across_different_comments() {
 }
 
 #[test]
+fn test_truncated_query_shorter_than_limit() {
+    let buffered = BufferedQuery::Query(Query::new("SELECT 1"));
+    let ast_query = AstQuery::from_query(&buffered);
+    assert_eq!(ast_query.truncated_query(100), "SELECT 1");
+}
+
+#[test]
+fn test_truncated_query_longer_than_limit() {
+    let buffered = BufferedQuery::Query(Query::new("SELECT * FROM users WHERE id = 1"));
+    let ast_query = AstQuery::from_query(&buffered);
+    assert_eq!(ast_query.truncated_query(6), "SELECT");
+}
+
+#[test]
+fn test_truncated_query_includes_leading_comment() {
+    let buffered = BufferedQuery::Query(Query::new("/* shard=0 */ SELECT 1"));
+    let ast_query = AstQuery::from_query(&buffered);
+    assert!(ast_query.truncated_query(100).starts_with("/* shard=0 */"));
+}
+
+#[test]
+fn test_truncated_query_non_ascii_char_boundary() {
+    // '€' is 3 bytes in UTF-8 — truncating at a byte boundary mid-character
+    // must not panic and must return whole characters only
+    let buffered = BufferedQuery::Query(Query::new("SELECT '€'"));
+    let ast_query = AstQuery::from_query(&buffered);
+    assert_eq!(ast_query.truncated_query(9), "SELECT '€");
+}
+
+#[test]
 fn test_normalize() {
     let q = "SELECT * FROM users WHERE id = 1";
     let normalized = normalize(q).unwrap();

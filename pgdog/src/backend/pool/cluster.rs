@@ -76,6 +76,8 @@ pub struct Cluster {
     connection_recovery: ConnectionRecovery,
     client_connection_recovery: ConnectionRecovery,
     query_parser_engine: QueryParserEngine,
+    log_min_duration_parse: Option<Duration>,
+    log_query_sample_length: usize,
     reload_schema_on_ddl: bool,
     load_schema: LoadSchema,
     resharding_parallel_copies: usize,
@@ -97,6 +99,8 @@ pub struct ShardingSchema {
     pub rewrite: Rewrite,
     /// Query parser engine.
     pub query_parser_engine: QueryParserEngine,
+    pub log_min_duration_parse: Option<Duration>,
+    pub log_query_sample_length: usize,
 }
 
 impl ShardingSchema {
@@ -152,6 +156,8 @@ pub struct ClusterConfig<'a> {
     pub pub_sub_channel_size: usize,
     pub query_parser: QueryParserLevel,
     pub query_parser_engine: QueryParserEngine,
+    pub log_min_duration_parse: Option<Duration>,
+    pub log_query_sample_length: usize,
     pub connection_recovery: ConnectionRecovery,
     pub client_connection_recovery: ConnectionRecovery,
     pub lsn_check_interval: Duration,
@@ -209,6 +215,8 @@ impl<'a> ClusterConfig<'a> {
             pub_sub_channel_size: general.pub_sub_channel_size,
             query_parser: general.query_parser,
             query_parser_engine: general.query_parser_engine,
+            log_min_duration_parse: general.log_min_duration_parse(),
+            log_query_sample_length: general.log_query_sample_length,
             connection_recovery: general.connection_recovery,
             client_connection_recovery: general.client_connection_recovery,
             lsn_check_interval: Duration::from_millis(general.lsn_check_interval),
@@ -253,6 +261,8 @@ impl Cluster {
             client_connection_recovery,
             lsn_check_interval,
             query_parser_engine,
+            log_min_duration_parse,
+            log_query_sample_length,
             reload_schema_on_ddl,
             load_schema,
             resharding_parallel_copies,
@@ -307,6 +317,8 @@ impl Cluster {
             connection_recovery,
             client_connection_recovery,
             query_parser_engine,
+            log_min_duration_parse,
+            log_query_sample_length,
             reload_schema_on_ddl,
             load_schema,
             resharding_parallel_copies,
@@ -514,6 +526,8 @@ impl Cluster {
             schemas: self.sharded_schemas.clone(),
             rewrite: self.rewrite.clone(),
             query_parser_engine: self.query_parser_engine,
+            log_min_duration_parse: self.log_min_duration_parse,
+            log_query_sample_length: self.log_query_sample_length,
         }
     }
 

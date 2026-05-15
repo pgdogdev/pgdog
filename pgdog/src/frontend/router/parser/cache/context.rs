@@ -62,4 +62,14 @@ impl<'a> AstQuery<'a> {
             original_query: query,
         }
     }
+
+    /// Return the first `sample_len` characters of the original query, including any comment.
+    pub fn truncated_query(&self, sample_len: usize) -> &str {
+        let query = self.original_query.query();
+        let end = query
+            .char_indices()
+            .nth(sample_len)
+            .map_or(query.len(), |(i, _)| i);
+        &query[..end]
+    }
 }
