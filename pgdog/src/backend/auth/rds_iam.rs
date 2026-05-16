@@ -1,3 +1,5 @@
+use std::time::{Duration, SystemTime};
+
 use aws_config::{BehaviorVersion, Region};
 use aws_sdk_rds::auth_token::{AuthTokenGenerator, Config as AuthTokenConfig};
 
@@ -43,13 +45,13 @@ fn resolve_region(addr: &Address) -> Result<String, Error> {
     })
 }
 
-pub async fn token(addr: &Address) -> Result<String, Error> {
-    #[cfg(test)]
-    if let Some(token) = test_token_override() {
-        return Ok(token);
-    }
-
-    let region = resolve_region(addr)?;
+/// Fetch a fresh RDS IAM token for `addr`.
+///
+/// This is the raw fetcher passed to [`TokenCache::get_or_fetch`] and
+/// called by the monitor's refresh loop. Callers should never invoke it
+/// directly — go through [`TokenCache::global`] instead.
+pub(crate) async fn token(addr: Address) -> Result<(String, SystemTime), Error> {
+    let region = resolve_region(&addr)?;
     let sdk_config = aws_config::load_defaults(BehaviorVersion::latest()).await;
 
     let config = AuthTokenConfig::builder()
@@ -65,7 +67,7 @@ pub async fn token(addr: &Address) -> Result<String, Error> {
             ))
         })?;
 
-    AuthTokenGenerator::new(config)
+    let token = AuthTokenGenerator::new(config)
         .auth_token(&sdk_config)
         .await
         .map(|token| token.to_string())
@@ -74,33 +76,20 @@ pub async fn token(addr: &Address) -> Result<String, Error> {
                 "failed to generate RDS IAM token for {}@{}:{} in region {}: {}",
                 addr.user, addr.host, addr.port, region, error
             ))
-        })
-}
+        })?;
 
-#[cfg(test)]
-fn test_token_override() -> Option<String> {
-    TEST_TOKEN_OVERRIDE.lock().clone()
+    // RDS IAM tokens are valid for 15 minutes.
+    let expires_at = SystemTime::now() + Duration::from_secs(900);
+    Ok((token, expires_at))
 }
-
-#[cfg(test)]
-pub(crate) fn set_test_token_override(token: Option<String>) {
-    *TEST_TOKEN_OVERRIDE.lock() = token;
-}
-
-#[cfg(test)]
-static TEST_TOKEN_OVERRIDE: once_cell::sync::Lazy<parking_lot::Mutex<Option<String>>> =
-    once_cell::sync::Lazy::new(|| parking_lot::Mutex::new(None));
 
 #[cfg(test)]
 mod tests {
+    use pgdog_config::Role;
     use std::env;
 
-    use pgdog_config::Role;
-
-    use crate::backend::pool::Address;
-    use crate::config::ServerAuth;
-
     use super::*;
+    use crate::config::ServerAuth;
 
     struct EnvVarGuard {
         key: &'static str,
@@ -117,13 +106,28 @@ mod tests {
 
     impl Drop for EnvVarGuard {
         fn drop(&mut self) {
-            if let Some(previous) = self.previous.take() {
-                env::set_var(self.key, previous);
-            } else {
-                env::remove_var(self.key);
+            match self.previous.take() {
+                Some(v) => env::set_var(self.key, v),
+                None => env::remove_var(self.key),
             }
         }
     }
+
+    fn make_addr() -> Address {
+        Address {
+            host: "db.cluster-abc123.us-east-1.rds.amazonaws.com".into(),
+            port: 5432,
+            database_name: "postgres".into(),
+            user: "db_user".into(),
+            passwords: vec![],
+            database_number: 0,
+            server_auth: ServerAuth::RdsIam,
+            server_iam_region: Some("us-east-1".into()),
+            configured_role: Role::Auto,
+        }
+    }
+
+    // ── infer_region_from_rds_host ───────────────────────────────────────────
 
     #[test]
     fn test_infer_region_commercial_endpoint() {
@@ -144,25 +148,65 @@ mod tests {
         assert!(region.is_none());
     }
 
+    #[test]
+    fn test_infer_region_fails_when_rds_is_first_label() {
+        let region = infer_region_from_rds_host("rds.amazonaws.com");
+        assert!(region.is_none());
+    }
+
+    #[test]
+    fn test_infer_region_fails_for_unknown_tld() {
+        let region = infer_region_from_rds_host("db.us-east-1.rds.example.com");
+        assert!(region.is_none());
+    }
+
+    // ── resolve_region ───────────────────────────────────────────────────────
+
+    #[test]
+    fn resolve_region_prefers_explicit_override() {
+        let mut addr = make_addr();
+        addr.server_iam_region = Some("eu-west-1".into());
+        // Host implies us-east-1, but the explicit override must win.
+        assert_eq!(resolve_region(&addr).unwrap(), "eu-west-1");
+    }
+
+    #[test]
+    fn resolve_region_falls_back_to_host_inference() {
+        let mut addr = make_addr();
+        addr.server_iam_region = None;
+        assert_eq!(resolve_region(&addr).unwrap(), "us-east-1");
+    }
+
+    #[test]
+    fn resolve_region_treats_empty_override_as_absent() {
+        let mut addr = make_addr();
+        addr.server_iam_region = Some("".into());
+        // Empty string must fall through to host inference.
+        assert_eq!(resolve_region(&addr).unwrap(), "us-east-1");
+    }
+
+    #[test]
+    fn resolve_region_errors_when_neither_override_nor_inference() {
+        let addr = Address {
+            host: "postgres.internal.example.com".into(),
+            port: 5432,
+            user: "u".into(),
+            server_iam_region: None,
+            ..Default::default()
+        };
+        assert!(resolve_region(&addr).is_err());
+    }
+
     #[tokio::test]
     async fn test_token_contains_expected_query_fields() {
         let _access_key = EnvVarGuard::set("AWS_ACCESS_KEY_ID", "AKIDEXAMPLE");
         let _secret_key = EnvVarGuard::set("AWS_SECRET_ACCESS_KEY", "SECRETEXAMPLE");
         let _session = EnvVarGuard::set("AWS_SESSION_TOKEN", "SESSIONEXAMPLE");
 
-        let addr = Address {
-            host: "db.cluster-abc123.us-east-1.rds.amazonaws.com".into(),
-            port: 5432,
-            database_name: "postgres".into(),
-            user: "db_user".into(),
-            passwords: vec![String::new().into()],
-            database_number: 0,
-            server_auth: ServerAuth::RdsIam,
-            server_iam_region: Some("us-east-1".into()),
-            configured_role: Role::Auto,
-        };
+        let addr = make_addr();
+        let (token, expires_at) = token(addr).await.unwrap();
 
-        let token = token(&addr).await.unwrap();
+        assert!(expires_at > SystemTime::now());
         assert!(token.starts_with(
             "db.cluster-abc123.us-east-1.rds.amazonaws.com:5432/?Action=connect&DBUser=db_user"
         ));
