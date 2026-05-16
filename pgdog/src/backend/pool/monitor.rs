@@ -2,12 +2,14 @@
 //!
 //! # Summary
 //!
-//! The monitor has three (3) loops running in different Tokio tasks:
+//! The monitor has four (4) loops running in different Tokio tasks:
 //!
 //! * the maintenance loop which runs ~3 times per second,
-//! * the healthcheck loop which runs every `idle_healthcheck_interval`
+//! * the healthcheck loop which runs every `idle_healthcheck_interval`,
 //! * the new connection loop which runs every time a client asks
-//!   for a new connection to be created
+//!   for a new connection to be created,
+//! * the token refresh loop which runs for pools backed by an external
+//!   identity provider (RDS IAM, Azure Workload Identity).
 //!
 //! ## Maintenance loop
 //!
@@ -31,18 +33,28 @@
 //! a connection to the server can take ~100ms even inside datacenters, other clients may have returned
 //! connections back to the idle pool in that amount of time, and new connections are no longer needed even
 //! if clients requested ones to be created ~100ms ago.
+//!
+//! ## Token refresh loop
+//!
+//! Spawned once per pool for addresses that use an external identity provider.
+//! Sleeps until just before the cached token expires, fetches a new one, and
+//! repeats. On failure it evicts the stale cache entry so the next connection
+//! attempt blocks on a fresh fetch rather than presenting an expired token.
+//! The loop exits when the pool shuts down (e.g. on config reload), preventing
+//! refresh tasks from leaking across reloads.
 
 use std::time::Duration;
 
 use super::{Error, Guard, Healtcheck, Oids, Pool, Request};
+use crate::backend::auth::{azure_workload_identity, rds_iam};
 use crate::backend::pool::inner::ShouldCreate;
+use crate::backend::pool::token_cache::TokenCache;
 use crate::backend::{ConnectReason, DisconnectReason, Server};
+use crate::config::ServerAuth;
 
 use tokio::time::{interval, sleep, timeout, Instant};
 use tokio::{select, task::spawn};
-use tracing::info;
-
-use tracing::{debug, error};
+use tracing::{debug, error, info, warn};
 
 static MAINTENANCE: Duration = Duration::from_millis(333);
 
@@ -90,6 +102,13 @@ impl Monitor {
                 sleep(delay).await;
                 Self::healthchecks(pool).await
             });
+        }
+
+        // Token refresh loop — one task per pool, tied to pool lifetime.
+        // Only spawned for pools that use an external identity provider.
+        if self.pool.addr().server_auth.is_external_identity() {
+            let pool = self.pool.clone();
+            spawn(async move { Self::token_refresh(pool).await });
         }
 
         loop {
@@ -143,6 +162,58 @@ impl Monitor {
         }
 
         debug!("maintenance loop is shut down [{}]", self.pool.addr());
+    }
+
+    /// Keeps the token cache warm for this pool's address.
+    ///
+    /// Sleeps until just before the cached token expires, fetches a fresh
+    /// one, and repeats. On failure the stale entry is evicted so the next
+    /// [`TokenCache::get_or_fetch`] call blocks on a real fetch rather than
+    /// handing out an expired token indefinitely.
+    ///
+    /// Exits when the pool shuts down, so no refresh tasks outlive their
+    /// pool across config reloads.
+    async fn token_refresh(pool: Pool) {
+        let addr = pool.addr().clone();
+        let comms = pool.comms();
+
+        debug!("token refresh loop started [{}]", addr);
+
+        loop {
+            // Sleep until just before the cached token expires.
+            // If nothing is cached yet (cold start) or the entry was evicted
+            // after a failed refresh, fire immediately to prime the cache.
+            let sleep_duration = TokenCache::global().refresh_in(&addr);
+
+            select! {
+                _ = sleep(sleep_duration) => {
+                    let result = match addr.server_auth {
+                        ServerAuth::RdsIam => rds_iam::token(addr.clone()).await,
+                        ServerAuth::AzureWorkloadIdentity => {
+                            azure_workload_identity::token(addr.clone()).await
+                        }
+                        // Guard in spawn() ensures we only reach here for
+                        // external identity pools.
+                        _ => break,
+                    };
+
+                    match result {
+                        Ok((token, expires_at)) => {
+                            debug!("token refreshed [{}]", addr);
+                            TokenCache::global().set(&addr, token, expires_at);
+                        }
+                        Err(err) => {
+                            warn!("token refresh failed, evicting cache entry: {err} [{}]", addr);
+                            TokenCache::global().evict(&addr);
+                        }
+                    }
+                }
+
+                _ = comms.shutdown.notified() => break,
+            }
+        }
+
+        debug!("token refresh loop stopped [{}]", addr);
     }
 
     /// The health check loop.

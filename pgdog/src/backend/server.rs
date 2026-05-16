@@ -1175,13 +1175,18 @@ impl Drop for Server {
 // Used for testing.
 #[cfg(test)]
 pub mod test {
+    use std::time::SystemTime;
+
     use bytes::{BufMut, BytesMut};
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
         net::TcpListener,
     };
 
-    use crate::{config::Memory, frontend::PreparedStatements, net::*};
+    use crate::{
+        backend::pool::token_cache::TokenCache, config::Memory, frontend::PreparedStatements,
+        net::*,
+    };
 
     use super::{Error, *};
 
@@ -1313,9 +1318,13 @@ pub mod test {
         addr.server_iam_region = Some("us-east-1".into());
         addr.passwords = vec!["wrong-password".into()];
 
-        crate::backend::auth::rds_iam::set_test_token_override(Some(expected_secret));
+        TokenCache::global().set(
+            &addr,
+            expected_secret,
+            SystemTime::now() + Duration::from_secs(3600),
+        );
         let result = Server::connect(&addr, ServerOptions::default(), ConnectReason::Other).await;
-        crate::backend::auth::rds_iam::set_test_token_override(None);
+        TokenCache::global().evict(&addr);
 
         let server = result.unwrap();
         drop(server);
@@ -1369,11 +1378,13 @@ pub mod test {
         addr.server_auth = crate::config::ServerAuth::AzureWorkloadIdentity;
         addr.passwords = vec!["wrong-password".into()];
 
-        crate::backend::auth::azure_workload_identity::set_test_token_override(Some(
+        TokenCache::global().set(
+            &addr,
             expected_secret,
-        ));
+            SystemTime::now() + Duration::from_secs(3600),
+        );
         let result = Server::connect(&addr, ServerOptions::default(), ConnectReason::Other).await;
-        crate::backend::auth::azure_workload_identity::set_test_token_override(None);
+        TokenCache::global().evict(&addr);
 
         let server = result.unwrap();
         drop(server);
