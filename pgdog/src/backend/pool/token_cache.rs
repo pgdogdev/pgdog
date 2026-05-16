@@ -153,7 +153,6 @@ impl TokenCache {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -341,9 +340,9 @@ mod tests {
         let a = addr(9908);
         cache().evict(&a);
 
-        rt.block_on(cache().get_or_fetch(&a, |_| async {
-            Ok(("primed".into(), future_expiry(3600)))
-        }))
+        rt.block_on(
+            cache().get_or_fetch(&a, |_| async { Ok(("primed".into(), future_expiry(3600))) }),
+        )
         .unwrap();
 
         let token = rt.block_on(cache().get_or_fetch(&a, |_| async {
@@ -362,9 +361,9 @@ mod tests {
         let a = addr(9909);
         cache().evict(&a);
 
-        rt.block_on(cache().get_or_fetch(&a, |_| async {
-            Ok(("first".into(), future_expiry(3600)))
-        }))
+        rt.block_on(
+            cache().get_or_fetch(&a, |_| async { Ok(("first".into(), future_expiry(3600))) }),
+        )
         .unwrap();
 
         cache().evict(&a);
@@ -416,7 +415,11 @@ mod tests {
         }))
         .unwrap();
 
-        assert_eq!(calls.load(Ordering::SeqCst), 1, "a2 must fetch independently");
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "a2 must fetch independently"
+        );
         cache().evict(&a1);
         cache().evict(&a2);
     }
