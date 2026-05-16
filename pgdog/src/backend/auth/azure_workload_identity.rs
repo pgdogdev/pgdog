@@ -94,7 +94,7 @@ mod tests {
             port: 5432,
             database_name: "postgres".into(),
             user: "db_user".into(),
-            passwords: vec![String::new().into()],
+            passwords: vec!["".into()],
             database_number: 0,
             server_auth: ServerAuth::AzureWorkloadIdentity,
             server_iam_region: None,
