@@ -77,6 +77,16 @@ impl Array {
         }
     }
 
+    /// Borrow the decoded element list. `None` entries are SQL NULLs.
+    pub fn elements(&self) -> &[Option<Datum>] {
+        &self.elements
+    }
+
+    /// OID of the array's element type.
+    pub fn element_oid(&self) -> i32 {
+        self.element_oid
+    }
+
     /// Encode the array to the specified wire format.
     ///
     /// Cross-format encoding works because elements are stored as typed

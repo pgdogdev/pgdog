@@ -211,6 +211,30 @@ impl AggregatesRewrite {
         }
     }
 
+    fn build_array_agg_distinct_func(original: &FuncCall) -> Option<FuncCall> {
+        // COUNT(*) has no argument we can wrap in array_agg.
+        if original.agg_star || original.args.is_empty() {
+            return None;
+        }
+        Some(FuncCall {
+            funcname: vec![Node {
+                node: Some(NodeEnum::String(PgString {
+                    sval: "array_agg".into(),
+                })),
+            }],
+            args: original.args.clone(),
+            agg_order: original.agg_order.clone(),
+            agg_filter: original.agg_filter.clone(),
+            over: original.over.clone(),
+            agg_within_group: original.agg_within_group,
+            agg_star: false,
+            agg_distinct: true,
+            func_variadic: original.func_variadic,
+            funcformat: original.funcformat,
+            location: original.location,
+        })
+    }
+
     fn build_sum_of_squares_func(original: &FuncCall, distinct: bool) -> Option<FuncCall> {
         let arg = original.args.first()?.clone();
 
@@ -292,6 +316,16 @@ impl AggregatesRewrite {
                 }
 
                 helpers
+            }
+            AggregateFunction::Count if distinct => {
+                if let Some(func) = Self::build_array_agg_distinct_func(func_call) {
+                    vec![HelperSpec {
+                        func,
+                        kind: HelperKind::Distinct,
+                    }]
+                } else {
+                    vec![]
+                }
             }
             _ => vec![],
         }
@@ -416,6 +450,49 @@ mod tests {
                 .count(),
             2
         );
+    }
+
+    #[test]
+    fn rewrite_engine_count_distinct_emits_array_agg_helper() {
+        let (ast, output) = rewrite("SELECT COUNT(DISTINCT phrase) FROM hits");
+        assert_eq!(output.plan.drop_columns(), &[1]);
+        assert_eq!(output.plan.helpers().len(), 1);
+
+        let helper = &output.plan.helpers()[0];
+        assert_eq!(helper.target_column, 0);
+        assert_eq!(helper.helper_column, 1);
+        assert!(helper.distinct);
+        assert!(matches!(helper.kind, HelperKind::Distinct));
+
+        let target_list = &select(&ast).target_list;
+        assert_eq!(target_list.len(), 2);
+        let helper_func = match target_list[1].node.as_ref() {
+            Some(NodeEnum::ResTarget(res)) => match res.val.as_deref().and_then(|v| v.node.as_ref())
+            {
+                Some(NodeEnum::FuncCall(func)) => func.clone(),
+                other => panic!("expected FuncCall in helper target, got {other:?}"),
+            },
+            other => panic!("expected ResTarget, got {other:?}"),
+        };
+        let func_name = helper_func
+            .funcname
+            .first()
+            .and_then(|n| n.node.as_ref())
+            .and_then(|n| match n {
+                NodeEnum::String(s) => Some(s.sval.as_str()),
+                _ => None,
+            });
+        assert_eq!(func_name, Some("array_agg"));
+        assert!(helper_func.agg_distinct);
+    }
+
+    #[test]
+    fn rewrite_engine_count_star_distinct_skipped() {
+        // COUNT(*) cannot be DISTINCT in standard SQL, but be defensive: if a
+        // user somehow gets a star-flagged DISTINCT count past the parser,
+        // we should not emit a malformed array_agg(*).
+        let (_, output) = rewrite("SELECT COUNT(*) FROM hits");
+        assert!(output.plan.is_noop());
     }
 
     #[test]
