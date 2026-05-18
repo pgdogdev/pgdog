@@ -743,6 +743,13 @@ pub struct General {
     /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#cutover_save_config
     #[serde(default)]
     pub cutover_save_config: bool,
+
+    /// Append the client host address and port to the application_name set on connection start.
+    /// This helps identify the source of queries in pg_stat_activity.
+    ///
+    /// _Default:_ `false`
+    #[serde(default)]
+    pub application_name_add_host: bool,
 }
 
 impl Default for General {
@@ -842,6 +849,7 @@ impl Default for General {
             cutover_timeout: Self::cutover_timeout(),
             cutover_timeout_action: Self::cutover_timeout_action(),
             cutover_save_config: bool::default(),
+            application_name_add_host: bool::default(),
             unique_id_function: Self::unique_id_function(),
         }
     }

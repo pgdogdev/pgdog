@@ -44,6 +44,24 @@ impl QueryEngine {
                 let begin_stmt = self.begin_stmt.take();
 
                 // We may need to sync params with the server and that reads from the socket.
+                // If application_name_add_host is enabled, append client address to application_name.
+                // This matches PgBouncer behavior: only applied at connection start, not on SET.
+                if crate::config::config()
+                    .config
+                    .general
+                    .application_name_add_host
+                {
+                    if let Some(addr) = *context.stream.peer_addr() {
+                        let base = context
+                            .params
+                            .get_default("application_name", "PgDog")
+                            .to_owned();
+                        let with_host = format!("{} ({})", base, addr);
+                        context
+                            .params
+                            .insert("application_name", with_host.as_str());
+                    }
+                }
                 timeout(
                     query_timeout,
                     self.backend.link_client(
