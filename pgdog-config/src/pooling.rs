@@ -31,6 +31,15 @@ impl PreparedStatements {
     pub fn rewrite_anonymous(&self) -> bool {
         matches!(self, PreparedStatements::ExtendedAnonymous)
     }
+
+    pub fn handles_extended(&self) -> bool {
+        matches!(
+            self,
+            PreparedStatements::Extended
+                | PreparedStatements::ExtendedAnonymous
+                | PreparedStatements::Full
+        )
+    }
 }
 
 impl FromStr for PreparedStatements {
