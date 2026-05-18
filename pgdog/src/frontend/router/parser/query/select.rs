@@ -57,7 +57,7 @@ impl QueryParser {
 
         let mut shards = HashSet::new();
 
-        let (shard, is_sharded, tables, advisory_locks) = {
+        let (shard, schema_shard_state, is_sharded, tables, advisory_locks) = {
             let mut statement_parser = StatementParser::from_select(
                 stmt,
                 context.router_context.bind,
@@ -72,10 +72,16 @@ impl QueryParser {
             let advisory_locks = statement_parser.extract_advisory_locks();
 
             if shard.is_some() {
-                (shard, true, vec![], advisory_locks)
+                (shard, SchemaShardState::None, true, vec![], advisory_locks)
             } else {
+                let schema_shard_state = statement_parser.schema_shard_state(
+                    &context.router_context.schema,
+                    context.router_context.cluster.user(),
+                    context.router_context.parameter_hints.search_path,
+                );
                 (
                     None,
+                    schema_shard_state,
                     statement_parser.is_sharded(
                         &context.router_context.schema,
                         context.router_context.cluster.user(),
@@ -148,6 +154,18 @@ impl QueryParser {
             context
                 .shards_calculator
                 .push(ShardWithPriority::new_table(shard));
+        } else if let SchemaShardState::Resolved { shard, schema } = schema_shard_state {
+            debug!("resolved schema-sharded query via search_path/default schema");
+
+            context
+                .shards_calculator
+                .push(ShardWithPriority::new_search_path(shard, &schema));
+        } else if matches!(schema_shard_state, SchemaShardState::Ambiguous) {
+            debug!("schema-sharded query is ambiguous, routing as cross-shard");
+
+            context
+                .shards_calculator
+                .push(ShardWithPriority::new_table(Shard::All));
         } else if is_sharded {
             debug!("table is sharded, but no sharding key detected");
 

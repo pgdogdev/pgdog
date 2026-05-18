@@ -407,6 +407,13 @@ enum Statement<'a> {
     Insert(&'a InsertStmt),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum SchemaShardState {
+    None,
+    Resolved { shard: Shard, schema: String },
+    Ambiguous,
+}
+
 /// Context for looking up table columns from the database schema.
 /// Used for INSERT statements without explicit column lists.
 pub struct SchemaLookupContext<'a> {
@@ -602,6 +609,52 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
         }
 
         Ok(None)
+    }
+
+    pub(crate) fn schema_shard_state(
+        &mut self,
+        db_schema: &Schema,
+        user: &str,
+        search_path: Option<&ParameterValue>,
+    ) -> SchemaShardState {
+        if self.schema.schemas.is_empty() {
+            return SchemaShardState::None;
+        }
+
+        let tables = self.tables().to_vec();
+        let mut schema_sharder = SchemaSharder::default();
+        let default_schema_mapping = self.schema.schemas.get(None).is_some();
+        let mut ambiguous = false;
+
+        for table in tables {
+            if let Some(schema) = table.schema {
+                schema_sharder.resolve(Some(schema.into()), &self.schema.schemas);
+                continue;
+            }
+
+            if let Some(relation) = db_schema.table(table, user, search_path) {
+                schema_sharder.resolve(Some(relation.schema().into()), &self.schema.schemas);
+                continue;
+            }
+
+            ambiguous |= default_schema_mapping
+                || self
+                    .schema
+                    .schemas
+                    .keys()
+                    .any(|schema| db_schema.get(schema, table.name).is_some());
+        }
+
+        if ambiguous {
+            SchemaShardState::Ambiguous
+        } else if let Some((shard, schema)) = schema_sharder.get() {
+            SchemaShardState::Resolved {
+                shard,
+                schema: schema.to_owned(),
+            }
+        } else {
+            SchemaShardState::None
+        }
     }
 
     /// Check that the query references a table that contains a sharded
@@ -2547,6 +2600,86 @@ mod test {
         let result2 = run_test_with_schemas("SELECT * FROM inventory.items", None).unwrap();
         assert_eq!(result1, Some(Shard::Direct(1)));
         assert_eq!(result2, Some(Shard::Direct(2)));
+    }
+
+    fn make_test_schema_with_sharded_relations() -> crate::backend::Schema {
+        let relations = HashMap::from([
+            (
+                ("sales".into(), "products".into()),
+                Relation::test_table("sales", "products", IndexMap::new()),
+            ),
+            (
+                ("inventory".into(), "products".into()),
+                Relation::test_table("inventory", "products", IndexMap::new()),
+            ),
+            (
+                ("public".into(), "unsharded_table".into()),
+                Relation::test_table("public", "unsharded_table", IndexMap::new()),
+            ),
+        ]);
+        crate::backend::Schema::from_parts(vec!["$user".into(), "public".into()], relations)
+    }
+
+    fn run_schema_shard_state_test(
+        stmt: &str,
+        search_path: Option<ParameterValue>,
+    ) -> Result<SchemaShardState, Error> {
+        let schema = ShardingSchema {
+            shards: 3,
+            schemas: ShardedSchemas::new(vec![
+                ShardedSchema {
+                    database: "test".to_string(),
+                    name: Some("sales".to_string()),
+                    shard: 1,
+                    all: false,
+                },
+                ShardedSchema {
+                    database: "test".to_string(),
+                    name: Some("inventory".to_string()),
+                    shard: 2,
+                    all: false,
+                },
+            ]),
+            ..Default::default()
+        };
+        let db_schema = make_test_schema_with_sharded_relations();
+        let raw = pg_query::parse(stmt)
+            .unwrap()
+            .protobuf
+            .stmts
+            .first()
+            .cloned()
+            .unwrap();
+        let mut parser = StatementParser::from_raw(&raw, None, &schema, None)?;
+        Ok(parser.schema_shard_state(&db_schema, "pgdog", search_path.as_ref()))
+    }
+
+    #[test]
+    fn test_schema_shard_state_ambiguous_without_search_path() {
+        let result = run_schema_shard_state_test("SELECT * FROM products", None).unwrap();
+        assert_eq!(result, SchemaShardState::Ambiguous);
+    }
+
+    #[test]
+    fn test_schema_shard_state_resolved_from_search_path() {
+        let result = run_schema_shard_state_test(
+            "SELECT * FROM products",
+            Some(ParameterValue::Tuple(vec!["sales".into(), "public".into()])),
+        )
+        .unwrap();
+        assert_eq!(
+            result,
+            SchemaShardState::Resolved {
+                shard: Shard::Direct(1),
+                schema: "sales".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn test_schema_shard_state_none_for_unsharded_table() {
+        let result = run_schema_shard_state_test("SELECT * FROM unsharded_table", None).unwrap();
+        assert_eq!(result, SchemaShardState::None);
     }
 
     // Column-only sharded table detection tests (using loaded schema)
