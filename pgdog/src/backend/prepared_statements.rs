@@ -311,9 +311,7 @@ impl PreparedStatements {
             }
 
             // Backend told us the copy is done.
-            'c' => {
-                self.state.action(code)?;
-            }
+            'c' => {}
 
             _ => (),
         }
