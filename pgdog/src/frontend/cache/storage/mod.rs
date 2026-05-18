@@ -52,7 +52,7 @@ pub fn build_storage() -> Option<Box<dyn CacheStorage>> {
     }
     match cfg.backend {
         CacheBackend::Redis => {
-            RedisCacheStorage::new(&cfg).map(|s| Box::new(s) as Box<dyn CacheStorage>)
+            RedisCacheStorage::new(cfg).map(|s| Box::new(s) as Box<dyn CacheStorage>)
         }
     }
 }

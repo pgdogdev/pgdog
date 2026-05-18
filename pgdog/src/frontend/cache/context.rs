@@ -1,4 +1,7 @@
-use crate::{frontend::cache::integration::CacheMiss, net::{Message, messages::Protocol}};
+use crate::{
+    frontend::cache::integration::CacheMiss,
+    net::{messages::Protocol, Message},
+};
 
 /// Cache context to use in QueryEngineContext.
 #[derive(Default)]

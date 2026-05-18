@@ -72,7 +72,7 @@ impl Cache {
                 for param in bind.params_raw() {
                     param.len.hash(&mut hasher);
                     param.data.hash(&mut hasher);
-                } 
+                }
             };
             Ok::<u64, crate::frontend::Error>(hasher.finish())
         };

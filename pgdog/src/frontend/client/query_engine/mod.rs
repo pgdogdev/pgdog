@@ -246,7 +246,9 @@ impl QueryEngine {
             command => self.unknown_command(context, command.clone()).await?,
         }
 
-        cache().save_response_in_cache(&mut context.cache_context).await;
+        cache()
+            .save_response_in_cache(&mut context.cache_context)
+            .await;
 
         self.hooks.after_execution(context)?;
 

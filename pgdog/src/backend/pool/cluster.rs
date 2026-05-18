@@ -158,7 +158,7 @@ pub struct ClusterConfig<'a> {
     pub reload_schema_on_ddl: bool,
     pub load_schema: LoadSchema,
     pub resharding_parallel_copies: usize,
-    pub cache_enabled: bool
+    pub cache_enabled: bool,
 }
 
 impl<'a> ClusterConfig<'a> {
@@ -212,7 +212,7 @@ impl<'a> ClusterConfig<'a> {
             reload_schema_on_ddl: general.reload_schema_on_ddl,
             load_schema: general.load_schema,
             resharding_parallel_copies: general.resharding_parallel_copies,
-            cache_enabled: general.cache.enabled
+            cache_enabled: general.cache.enabled,
         }
     }
 }
@@ -250,7 +250,7 @@ impl Cluster {
             reload_schema_on_ddl,
             load_schema,
             resharding_parallel_copies,
-            cache_enabled
+            cache_enabled,
         } = config;
 
         let identifier = Arc::new(DatabaseUser {

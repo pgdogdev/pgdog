@@ -39,7 +39,7 @@ pub async fn resolve(
         Some(CacheDirective::NoCache) => return CacheDecision::Skip,
         Some(CacheDirective::Cache { ttl_seconds }) => {
             return CacheDecision::Cache(ttl_seconds.unwrap_or(cache_config.ttl))
-        },
+        }
         Some(CacheDirective::ForceCache { ttl_seconds }) => {
             return CacheDecision::ForceCache(ttl_seconds.unwrap_or(cache_config.ttl))
         }
