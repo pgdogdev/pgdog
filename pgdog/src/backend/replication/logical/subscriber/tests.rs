@@ -9,7 +9,7 @@ use crate::{
         replication::logical::publisher::{
             Lsn, PublicationTable, PublicationTableColumn, ReplicaIdentity, Table,
         },
-        server::test::test_server,
+        server::test::{test_server, test_server_pgdog1_db},
         Server,
     },
     config::config,
@@ -262,6 +262,11 @@ fn make_subscriber_with_tables(tables: Vec<Table>) -> StreamSubscriber {
     StreamSubscriber::new(&cluster, &tables)
 }
 
+fn make_subscriber_with_tables_two_databases(tables: Vec<Table>) -> StreamSubscriber {
+    let cluster = Cluster::new_test_two_databases(&config());
+    StreamSubscriber::new(&cluster, &tables)
+}
+
 fn make_subscriber_single_shard() -> StreamSubscriber {
     let cluster = Cluster::new_test_single_shard(&config());
     let tables = vec![make_sharded_table(), make_sharded_test_b_table()];
@@ -362,6 +367,15 @@ async fn ensure_table(server: &mut Server, table: &str) {
                 .execute(
                     "CREATE UNIQUE INDEX IF NOT EXISTS full_omni_dedup_ab_idx \
                      ON public.full_omni_dedup (a, b)",
+                )
+                .await
+                .unwrap();
+        }
+        "public.settings" => {
+            server
+                .execute(
+                    "CREATE TABLE IF NOT EXISTS public.settings (\
+                     id BIGINT PRIMARY KEY, name TEXT, value TEXT)",
                 )
                 .await
                 .unwrap();
@@ -2161,4 +2175,216 @@ async fn full_identity_delete_matches_null_column() {
         0,
         "FULL identity DELETE must match NULL via IS NOT DISTINCT FROM"
     );
+}
+
+// ── Omni-table fan-out tests ─────────────────────────────────────────────────
+
+fn make_settings_table() -> Table {
+    Table {
+        publication: "test".to_string(),
+        table: PublicationTable {
+            schema: "public".to_string(),
+            name: "settings".to_string(),
+            attributes: "".to_string(),
+            parent_schema: "".to_string(),
+            parent_name: "".to_string(),
+        },
+        identity: ReplicaIdentity {
+            oid: Oid(4),
+            identity: "".to_string(),
+            kind: "".to_string(),
+        },
+        columns: vec![
+            PublicationTableColumn {
+                oid: 4,
+                name: "id".to_string(),
+                type_oid: Oid(20), // bigint
+                identity: true,
+            },
+            PublicationTableColumn {
+                oid: 4,
+                name: "name".to_string(),
+                type_oid: Oid(25), // text
+                identity: false,
+            },
+            PublicationTableColumn {
+                oid: 4,
+                name: "value".to_string(),
+                type_oid: Oid(25), // text
+                identity: false,
+            },
+        ],
+        lsn: Lsn::default(),
+        query_parser_engine: pgdog_config::QueryParserEngine::default(),
+    }
+}
+
+fn settings_relation(oid: Oid) -> Relation {
+    Relation {
+        oid,
+        namespace: "public".to_string(),
+        name: "settings".to_string(),
+        replica_identity: 100,
+        columns: vec![
+            RelColumn {
+                flag: 1,
+                name: "id".to_string(),
+                oid: Oid(20),
+                type_modifier: -1,
+            },
+            RelColumn {
+                flag: 0,
+                name: "name".to_string(),
+                oid: Oid(25),
+                type_modifier: -1,
+            },
+            RelColumn {
+                flag: 0,
+                name: "value".to_string(),
+                oid: Oid(25),
+                type_modifier: -1,
+            },
+        ],
+    }
+}
+
+fn settings_relation_copy_data(oid: Oid) -> CopyData {
+    xlog_copy_data(settings_relation(oid).to_bytes().unwrap())
+}
+
+/// WAL UPDATE for settings(id, name, value) — full new tuple, no toasted columns.
+fn settings_update_copy_data(oid: Oid, id: &str, name: &str, value: &str) -> CopyData {
+    xlog_copy_data(
+        XLogUpdate {
+            oid,
+            identity: UpdateIdentity::Nothing,
+            new: TupleData {
+                columns: vec![text_column(id), text_column(name), text_column(value)],
+            },
+        }
+        .to_bytes()
+        .unwrap(),
+    )
+}
+
+/// Cross-shard deadlock: two subscribers applying the same omni-table UPDATE concurrently.
+#[tokio::test]
+async fn cross_subscriber_omni_deadlock_two_databases() {
+    use std::sync::Arc;
+    use std::time::Duration;
+    use tokio::sync::Barrier;
+    use tokio::time::{sleep, timeout};
+
+    let oid = Oid(16393);
+    let id1 = random_id();
+    let n_rounds: usize = 20;
+
+    // Seed the single contested row on both destinations.
+    let mut pg0 = test_server().await;
+    let mut pg1 = test_server_pgdog1_db().await;
+    for db in [&mut pg0, &mut pg1] {
+        cleanup(db, "public.settings", &[&id1]).await;
+        db.execute(format!(
+            "INSERT INTO public.settings (id, name, value) VALUES ({}, 'seed', 'v')",
+            id1
+        ))
+        .await
+        .unwrap();
+    }
+    drop(pg0);
+    drop(pg1);
+
+    // Barrier drives both subscribers into send() simultaneously on every round,
+    // guaranteeing the race window that causes the single-row deadlock.
+    let round_barrier = Arc::new(Barrier::new(2));
+
+    let spawn_sub = |sub_idx: usize| {
+        let id1 = id1.clone();
+        let round_barrier = Arc::clone(&round_barrier);
+        tokio::spawn(async move {
+            let mut sub = make_subscriber_with_tables_two_databases(vec![make_settings_table()]);
+            sub.connect().await.unwrap();
+
+            // Distinct LSN ranges so neither subscriber's LSN gating skips the other's events.
+            let mut lsn = 100_000i64 + (sub_idx as i64) * 1_000_000;
+            for round in 1..=n_rounds {
+                sub.handle(begin_copy_data(lsn)).await.unwrap();
+                sub.handle(settings_relation_copy_data(oid)).await.unwrap();
+                // Barrier: both subscribers reach send() at the same time.
+                round_barrier.wait().await;
+                sub.handle(settings_update_copy_data(
+                    oid,
+                    &id1,
+                    &format!("round-{}-{}", round, id1),
+                    "val",
+                ))
+                .await
+                .expect("update must not error");
+                // Hold the implicit transaction open so both subscribers have row
+                // locks concurrently — this is the window where deadlock occurs
+                // in the unsequenced send() implementation.
+                sleep(Duration::from_millis(50)).await;
+                sub.handle(commit_copy_data(lsn + 100))
+                    .await
+                    .expect("commit must not error");
+                lsn += 200;
+            }
+        })
+    };
+
+    let h0 = spawn_sub(0);
+    let h1 = spawn_sub(1);
+    let abort0 = h0.abort_handle();
+    let abort1 = h1.abort_handle();
+
+    // 20 rounds × ~50ms = ~1s happy path. 10s ceiling catches a deadlock fast.
+    let result = timeout(Duration::from_secs(10), async {
+        let (r0, r1) = tokio::join!(h0, h1);
+        (r0, r1)
+    })
+    .await;
+
+    // Always abort to release any PostgreSQL row locks before reading back data.
+    abort0.abort();
+    abort1.abort();
+    sleep(Duration::from_millis(200)).await;
+
+    let mut pg0 = test_server().await;
+    let mut pg1 = test_server_pgdog1_db().await;
+
+    match result {
+        Err(_elapsed) => {
+            cleanup(&mut pg0, "public.settings", &[&id1]).await;
+            cleanup(&mut pg1, "public.settings", &[&id1]).await;
+            panic!(
+                "cross-subscriber single-row omni deadlock: both subscribers hung — \
+                 sequential send() is not preventing the cycle"
+            );
+        }
+        Ok((r0, r1)) => {
+            // If handle() returned Err a task panics; surface it explicitly.
+            r0.expect("sub-0 failed unexpectedly");
+            r1.expect("sub-1 failed unexpectedly");
+
+            // Both destinations must have the row at the final round's name.
+            // Both subscribers write the same name value so the result is
+            // deterministic regardless of which subscriber commits last.
+            let expected = format!("round-{}-{}", n_rounds, id1);
+            for db in [&mut pg0, &mut pg1] {
+                let count = count_where(
+                    db,
+                    "public.settings",
+                    &format!("id = {} AND name = '{}'", id1, expected),
+                )
+                .await;
+                assert_eq!(
+                    count, 1,
+                    "row did not land on destination with expected name"
+                );
+            }
+
+            cleanup(&mut pg0, "public.settings", &[&id1]).await;
+            cleanup(&mut pg1, "public.settings", &[&id1]).await;
+        }
+    }
 }
