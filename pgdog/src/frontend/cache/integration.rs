@@ -61,31 +61,41 @@ impl Cache {
             _ => return Ok(CacheCheckResult::Passthrough),
         };
 
-        let user = params.get_required("user")?;
-        let database = params.get_default("database", user);
-        let cache_key_hash = {
+        let compute_cache_key_hash = || {
+            let user = params.get_required("user")?;
+            let database = params.get_default("database", user);
             let mut hasher = xxhash_rust::xxh3::Xxh3Default::new();
             database.hash(&mut hasher);
             let normalized_query = FORCE_CACHE_RE.replace(query.query(), "pgdog_cache: cache");
             normalized_query.hash(&mut hasher);
-            hasher.finish()
+            if let Some(bind) = client_request.parameters()? {
+                for param in bind.params_raw() {
+                    param.len.hash(&mut hasher);
+                    param.data.hash(&mut hasher);
+                } 
+            };
+            Ok::<u64, crate::frontend::Error>(hasher.finish())
         };
 
         let decision = policy::resolve(client_request, params, is_read).await;
         match decision {
             CacheDecision::Skip => Ok(CacheCheckResult::Passthrough),
             CacheDecision::ForceCache(ttl) => Ok(CacheCheckResult::Miss(CacheMiss {
-                cache_key_hash,
+                cache_key_hash: compute_cache_key_hash()?,
                 ttl,
             })),
             CacheDecision::Cache(ttl) => {
+                let cache_key_hash = compute_cache_key_hash()?;
                 let guard = self.storage.read().await;
                 match guard.as_ref() {
                     None => Ok(CacheCheckResult::Passthrough),
                     Some(storage) => match storage.get(cache_key_hash).await {
                         Ok(cached) => Ok(CacheCheckResult::Hit { cached }),
                         Err(CacheStorageError::CacheMiss(_)) => {
-                            Ok(CacheCheckResult::Miss(CacheMiss { cache_key_hash, ttl }))
+                            Ok(CacheCheckResult::Miss(CacheMiss {
+                                cache_key_hash,
+                                ttl,
+                            }))
                         }
                         Err(e) => {
                             warn!("{}", e);
