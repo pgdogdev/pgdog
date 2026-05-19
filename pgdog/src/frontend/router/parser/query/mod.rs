@@ -108,24 +108,28 @@ impl QueryParser {
             Command::default()
         };
 
-        if let Command::Query(route) = &mut command {
-            if route.is_cross_shard() && context.shards == 1 {
-                context
-                    .shards_calculator
-                    .push(ShardWithPriority::new_override_only_one_shard(
-                        Shard::Direct(0),
-                    ));
-                route.set_shard_mut(context.shards_calculator.shard());
-            }
+        match &mut command {
+            Command::Query(route) | Command::Set { route, .. } => {
+                if route.is_cross_shard() && context.shards == 1 {
+                    context
+                        .shards_calculator
+                        .push(ShardWithPriority::new_override_only_one_shard(
+                            Shard::Direct(0),
+                        ));
+                    route.set_shard_mut(context.shards_calculator.shard());
+                }
 
-            route.set_search_path_driven_mut(context.shards_calculator.is_search_path());
+                route.set_search_path_driven_mut(context.shards_calculator.is_search_path());
 
-            if let Some(role) = context.router_context.sticky.role {
-                match role {
-                    Role::Primary => route.set_read(false),
-                    _ => route.set_read(true),
+                if let Some(role) = context.router_context.sticky.role {
+                    match role {
+                        Role::Primary => route.set_read(false),
+                        _ => route.set_read(true),
+                    }
                 }
             }
+
+            _ => (),
         }
 
         debug!("query router decision: {:#?}", command);

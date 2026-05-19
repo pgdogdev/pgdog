@@ -7,8 +7,17 @@ export NODE_ID=pgdog-dev-1
 COMMON_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 function wait_for_pgdog() {
     echo "Waiting for PgDog"
+    local pid_file="${COMMON_DIR}/pgdog.pid"
+    local pid=""
+    if [ -f "${pid_file}" ]; then
+        pid=$(cat "${pid_file}")
+    fi
     while ! pg_isready -h 127.0.0.1 -p 6432 -U pgdog -d pgdog > /dev/null; do
-        echo "waiting for PgDog" > /dev/null
+        if [ -n "${pid}" ] && ! kill -0 "${pid}" 2> /dev/null; then
+            echo "PgDog process (pid ${pid}) exited before becoming ready"
+            exit 1
+        fi
+        sleep 0.1
     done
     echo "PgDog is ready"
 }

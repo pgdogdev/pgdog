@@ -107,6 +107,7 @@
         "tls_certificate": null,
         "tls_client_ca_certificate": null,
         "tls_client_required": false,
+        "tls_client_validate_cn": false,
         "tls_private_key": null,
         "tls_server_ca_certificate": null,
         "tls_verify": "prefer",
@@ -1097,6 +1098,11 @@
         },
         "tls_client_required": {
           "description": "Reject clients that connect without TLS.\n\n_Default:_ `false`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#tls_client_required",
+          "type": "boolean",
+          "default": false
+        },
+        "tls_client_validate_cn": {
+          "description": "Validate that the CN of the certificate matches the user's name.\nThis is part of our mTLS implementation. The certificate authority can\nissue certificates that PgDog will validate for both authenticity and authentication.",
           "type": "boolean",
           "default": false
         },

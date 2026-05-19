@@ -84,6 +84,7 @@ pub struct Cluster {
     resharding_copy_retry_max_attempts: usize,
     resharding_copy_retry_min_delay: Duration,
     regex_parser: RegexParser,
+    mutual_tls: bool,
 }
 
 /// Sharding configuration from the cluster.
@@ -168,6 +169,7 @@ pub struct ClusterConfig<'a> {
     pub resharding_copy_retry_min_delay: u64,
     pub regex_parser_limit: usize,
     pub pub_sub_enabled: bool,
+    pub mutual_tls: bool,
 }
 
 impl<'a> ClusterConfig<'a> {
@@ -227,6 +229,7 @@ impl<'a> ClusterConfig<'a> {
             resharding_copy_retry_min_delay: general.resharding_copy_retry_min_delay,
             regex_parser_limit: general.regex_parser_limit,
             pub_sub_enabled: general.pub_sub_enabled(),
+            mutual_tls: config.general.tls_client_validate_cn,
         }
     }
 }
@@ -270,6 +273,7 @@ impl Cluster {
             resharding_copy_retry_min_delay,
             regex_parser_limit,
             pub_sub_enabled,
+            mutual_tls,
         } = config;
 
         let identifier = Arc::new(DatabaseUser {
@@ -325,6 +329,7 @@ impl Cluster {
             resharding_copy_retry_max_attempts,
             resharding_copy_retry_min_delay: Duration::from_millis(resharding_copy_retry_min_delay),
             regex_parser: RegexParser::new(regex_parser_limit, query_parser),
+            mutual_tls,
         }
     }
 
@@ -509,6 +514,10 @@ impl Cluster {
     /// Multi-tenant config.
     pub fn multi_tenant(&self) -> &Option<MultiTenant> {
         &self.multi_tenant
+    }
+
+    pub fn mutual_tls(&self) -> bool {
+        self.mutual_tls
     }
 
     /// Get replication configuration for this cluster.

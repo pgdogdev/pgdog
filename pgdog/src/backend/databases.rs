@@ -451,7 +451,7 @@ impl Databases {
 
         // Launch all clusters
         for cluster in self.all().values() {
-            if cluster.passwords().is_empty() {
+            if cluster.passwords().is_empty() && !cluster.mutual_tls() {
                 warn!(
                     r#"disabling pool for user "{}" and database "{}", password not set"#,
                     cluster.user(),
