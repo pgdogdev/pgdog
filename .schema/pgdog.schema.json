@@ -1255,6 +1255,11 @@
           "description": "Structured JSON logs suitable for ECS/Datadog ingestion.",
           "type": "string",
           "const": "json"
+        },
+        {
+          "description": "Structured JSON logs with event fields flattened into the root object.",
+          "type": "string",
+          "const": "json_flattened"
         }
       ]
     },

@@ -28,6 +28,8 @@ pub enum LogFormat {
     Text,
     /// Structured JSON logs suitable for ECS/Datadog ingestion.
     Json,
+    /// Structured JSON logs with event fields flattened into the root object.
+    JsonFlattened,
 }
 
 impl fmt::Display for LogFormat {
@@ -35,6 +37,7 @@ impl fmt::Display for LogFormat {
         match self {
             Self::Text => f.write_str("text"),
             Self::Json => f.write_str("json"),
+            Self::JsonFlattened => f.write_str("json_flattened"),
         }
     }
 }
@@ -46,6 +49,7 @@ impl FromStr for LogFormat {
         match s.to_ascii_lowercase().as_str() {
             "text" => Ok(Self::Text),
             "json" => Ok(Self::Json),
+            "json_flattened" => Ok(Self::JsonFlattened),
             _ => Err(()),
         }
     }
@@ -1634,6 +1638,9 @@ mod tests {
 
         assert_eq!(General::log_format(), LogFormat::Json);
         assert_eq!(General::log_level(), "pgdog=debug,info");
+
+        env::set_var("PGDOG_LOG_FORMAT", "json_flattened");
+        assert_eq!(General::log_format(), LogFormat::JsonFlattened);
 
         env::remove_var("PGDOG_LOG_FORMAT");
         env::remove_var("RUST_LOG");
