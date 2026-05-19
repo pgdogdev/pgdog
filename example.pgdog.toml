@@ -138,6 +138,7 @@ openmetrics_namespace = "pgdog_"
 # Available options:
 # - text
 # - json
+# - json_flattened
 log_format = "text"
 # Log filter directives using the same syntax as RUST_LOG.
 #

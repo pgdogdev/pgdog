@@ -173,10 +173,11 @@ fn init_logger(general: Option<&General>) {
 
     let throttle = throttle_handle().clone();
 
-    match general
+    let log_format = general
         .map(|general| general.log_format)
-        .unwrap_or_default()
-    {
+        .unwrap_or_default();
+
+    match log_format {
         LogFormat::Text => {
             let format = fmt::layer()
                 .with_ansi(std::io::stderr().is_terminal())
@@ -191,7 +192,7 @@ fn init_logger(general: Option<&General>) {
                 .with(filter)
                 .try_init();
         }
-        LogFormat::Json => {
+        LogFormat::Json | LogFormat::JsonFlattened => {
             let format = fmt::layer()
                 .json()
                 .with_ansi(false)
@@ -199,6 +200,10 @@ fn init_logger(general: Option<&General>) {
                 .with_file(false)
                 .with_current_span(false)
                 .with_span_list(false);
+            let format = match log_format {
+                LogFormat::JsonFlattened => format.flatten_event(true),
+                _ => format,
+            };
             #[cfg(not(debug_assertions))]
             let format = format.with_target(false);
             let format = format.with_filter(throttle);
