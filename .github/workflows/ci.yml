@@ -62,8 +62,6 @@ jobs:
           - { name: go,            script: integration/go/run.sh }
           - { name: js,            script: integration/js/pg_tests/run.sh }
           - { name: ruby,          script: integration/ruby/run.sh }
-          - { name: prepared-statements-disabled, script: integration/prepared_statements_disabled/run.sh }
-          - { name: prepared-statements-full,     script: integration/prepared_statements_full/run.sh }
           - { name: java,          script: integration/java/run.sh }
           - { name: mirror,        script: integration/mirror/run.sh }
           - { name: sql,           script: integration/sql/run.sh }

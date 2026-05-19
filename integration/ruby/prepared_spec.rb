@@ -49,14 +49,14 @@ describe 'prepared_statements = extended' do
 
   # extended mode renames each frontend's Parse to an internal name
   # (__pgdog_N, unique per frontend) and replays it on any backend before
-  # the Bind. 5 threads × 20 iterations with a pool of 10 forces genuine
-  # crossings; the replay ensures all succeed.
+  # the Bind. 15 threads × 20 iterations with a default pool of 10 guarantees
+  # genuine crossings via the pigeonhole principle; the replay ensures all succeed.
   # Result values are verified to guard against silent data corruption.
   it 'executes named extended-protocol statements in transaction pool mode' do
     errors = []
     mutex  = Mutex.new
 
-    threads = 5.times.map do
+    threads = 15.times.map do
       Thread.new do
         conn = connect
         begin
@@ -79,15 +79,15 @@ describe 'prepared_statements = extended' do
   end
 
   # extended mode does NOT intercept SQL PREPARE / EXECUTE — those are
-  # forwarded as-is. With 5 threads and a pool of 10, at least some threads
-  # will prepare 'sql_stmt' on a backend that already holds it ('already
-  # exists') or execute on a backend that has never seen the PREPARE ('does
-  # not exist'). Either way, errors accumulate.
+  # forwarded as-is. With 15 threads and a default pool of 10, the pigeonhole
+  # principle guarantees crossings: at least 5 threads hit a backend that
+  # already holds 'sql_stmt' ('already exists') or one that never saw the
+  # PREPARE ('does not exist'). Either way, errors accumulate.
   it 'fails SQL PREPARE/EXECUTE in transaction pool mode' do
     errors = []
     mutex  = Mutex.new
 
-    threads = 5.times.map do
+    threads = 15.times.map do
       Thread.new do
         conn = connect
         begin

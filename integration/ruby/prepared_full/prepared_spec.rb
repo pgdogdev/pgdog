@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-require_relative 'rspec_helper'
+require_relative '../rspec_helper'
 
 describe 'prepared_statements = full' do
   after { ensure_done }
@@ -8,7 +8,7 @@ describe 'prepared_statements = full' do
   # Mirror of disabled suite: anonymous statements carry no per-backend state,
   # so they work identically regardless of the prepared_statements setting.
   it 'executes anonymous parameterized queries' do
-    conn = connect_pgdog
+    conn = connect
     10.times do |i|
       res = conn.exec_params('SELECT $1::bigint * 2 AS val', [i])
       expect(res[0]['val'].to_i).to eq(i * 2)
@@ -20,7 +20,7 @@ describe 'prepared_statements = full' do
   # the connection lifetime, so named statements always reach the backend that
   # holds them regardless of the prepared_statements setting.
   it 'passes named statements in session mode' do
-    conn = connect_pgdog(user: 'pgdog_session')
+    conn = connect('pgdog', 'pgdog_session')
     conn.prepare('session_stmt', 'SELECT $1::bigint AS val')
     10.times do |i|
       res = conn.exec_prepared('session_stmt', [i])
@@ -40,7 +40,7 @@ describe 'prepared_statements = full' do
 
     threads = 5.times.map do
       Thread.new do
-        conn = connect_pgdog
+        conn = connect
         begin
           conn.exec('PREPARE sql_stmt AS SELECT $1::bigint * 2')
           20.times { |i| conn.exec("EXECUTE sql_stmt(#{i})") }
@@ -60,8 +60,8 @@ describe 'prepared_statements = full' do
   # connections are guaranteed to land on different backends. Without a global
   # cache the execute on conn2 reaches a backend that never saw the prepare.
   it 'does not share statements across connections' do
-    conn1 = connect_pgdog(user: 'pgdog_session')
-    conn2 = connect_pgdog(user: 'pgdog_session')
+    conn1 = connect('pgdog', 'pgdog_session')
+    conn2 = connect('pgdog', 'pgdog_session')
     conn1.prepare('cross_stmt', 'SELECT $1::bigint AS val')
     expect do
       conn2.exec_prepared('cross_stmt', [7])
@@ -82,7 +82,7 @@ describe 'prepared_statements = full' do
 
     threads = 5.times.map do
       Thread.new do
-        conn = connect_pgdog
+        conn = connect
         begin
           conn.prepare('ext_stmt', 'SELECT $1::bigint AS val')
           20.times do |i|
