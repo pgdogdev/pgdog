@@ -1,6 +1,7 @@
 use std::str::from_utf8;
 
 use bytes::BytesMut;
+use tracing::warn;
 
 use crate::net::bind::Parameter;
 use crate::net::Bind;
@@ -96,18 +97,22 @@ impl TupleData {
     /// Used by [`Table`](crate::backend::replication::logical::publisher::Table) DML methods
     /// — the `$N` they emit must agree with the column ordering of the tuple passed here.
     pub fn to_bind(&self, name: &str) -> Bind {
-        let params = self
+        let (params, codes): (Vec<_>, Vec<_>) = self
             .columns
             .iter()
-            .map(|c| {
-                if c.identifier == Identifier::Null {
-                    Parameter::new_null()
-                } else {
-                    Parameter::new(&c.data)
+            .map(|c| match &c.identifier {
+                Identifier::Null => (Parameter::new_null(), Format::Text),
+                Identifier::Toasted => {
+                    warn!(
+                        "to_bind: toasted column reached Bind construction; \
+                         caller should strip or fill toasted columns first — sending NULL"
+                    );
+                    (Parameter::new_null(), Format::Text)
                 }
+                Identifier::Format(fmt) => (Parameter::new(&c.data), *fmt),
             })
-            .collect::<Vec<_>>();
-        Bind::new_params(name, &params)
+            .unzip();
+        Bind::new_params_codes(name, &params, &codes)
     }
 
     /// Does this tuple contain any unchanged-TOAST (`'u'`) column?
@@ -266,6 +271,15 @@ pub(crate) fn toasted_col() -> Column {
 }
 
 #[cfg(test)]
+pub(crate) fn binary_col(data: &[u8]) -> Column {
+    Column {
+        identifier: Identifier::Format(Format::Binary),
+        len: data.len() as i32,
+        data: bytes::Bytes::copy_from_slice(data),
+    }
+}
+
+#[cfg(test)]
 mod test {
     use super::*;
 
@@ -392,5 +406,66 @@ mod test {
             new.fill_toasted_from(&old).is_err(),
             "column count mismatch must return Err, not panic"
         );
+    }
+
+    #[test]
+    fn to_bind_all_text_columns_produce_text_format_codes() {
+        let tuple = TupleData {
+            columns: vec![text_col("hello"), text_col("world")],
+        };
+        let bind = tuple.to_bind("__pgdog_1");
+        assert_eq!(bind.parameter_format(0).unwrap(), Format::Text);
+        assert_eq!(bind.parameter_format(1).unwrap(), Format::Text);
+    }
+
+    #[test]
+    fn to_bind_binary_columns_produce_binary_format_codes() {
+        // Simulate a bigint (8 bytes, big-endian) arriving as a binary column.
+        let val: i64 = 42;
+        let tuple = TupleData {
+            columns: vec![binary_col(&val.to_be_bytes())],
+        };
+        let bind = tuple.to_bind("__pgdog_1");
+        assert_eq!(bind.parameter_format(0).unwrap(), Format::Binary);
+        // Data must be forwarded verbatim — the destination decodes it as binary.
+        assert_eq!(
+            bind.parameter(0).unwrap().unwrap().data(),
+            &val.to_be_bytes()
+        );
+    }
+
+    #[test]
+    fn to_bind_null_and_toasted_use_text_format_code() {
+        let tuple = TupleData {
+            columns: vec![
+                Column {
+                    identifier: Identifier::Null,
+                    len: -1,
+                    data: Bytes::new(),
+                },
+                toasted_col(),
+            ],
+        };
+        let bind = tuple.to_bind("__pgdog_1");
+        // Format code is irrelevant for absent values, but must not be Binary
+        // to avoid confusing the destination server.
+        assert_eq!(bind.parameter_format(0).unwrap(), Format::Text);
+        assert_eq!(bind.parameter_format(1).unwrap(), Format::Text);
+    }
+
+    #[test]
+    fn to_bind_mixed_columns_produce_per_column_format_codes() {
+        let val: i32 = 99;
+        let tuple = TupleData {
+            columns: vec![
+                text_col("label"),
+                binary_col(&val.to_be_bytes()),
+                text_col("suffix"),
+            ],
+        };
+        let bind = tuple.to_bind("__pgdog_1");
+        assert_eq!(bind.parameter_format(0).unwrap(), Format::Text);
+        assert_eq!(bind.parameter_format(1).unwrap(), Format::Binary);
+        assert_eq!(bind.parameter_format(2).unwrap(), Format::Text);
     }
 }
