@@ -140,7 +140,29 @@ pub fn reload() -> Result<(), Error> {
 }
 
 fn build_acceptor(cert: &Path, key: &Path, client_ca: Option<&Path>) -> Result<TlsAcceptor, Error> {
-    let pem = CertificateDer::from_pem_file(cert)?;
+    // Read the whole PEM file so intermediate certificates in a chain are kept.
+    let certs = CertificateDer::pem_file_iter(cert)
+        .map_err(|e| {
+            Error::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("Failed to read TLS certificate file: {}", e),
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| {
+            Error::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("Failed to parse TLS certificates: {}", e),
+            ))
+        })?;
+
+    if certs.is_empty() {
+        return Err(Error::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "No valid certificates found in TLS certificate file",
+        )));
+    }
+
     let key = PrivateKeyDer::from_pem_file(key)?;
 
     let builder = rustls::ServerConfig::builder();
@@ -151,7 +173,7 @@ fn build_acceptor(cert: &Path, key: &Path, client_ca: Option<&Path>) -> Result<T
         }
         None => builder.with_no_client_auth(),
     }
-    .with_single_cert(vec![pem], key)?;
+    .with_single_cert(certs, key)?;
 
     ACCEPTOR_BUILD_COUNT.fetch_add(1, Ordering::SeqCst);
 
@@ -547,6 +569,29 @@ mod tests {
 
         // The existing acceptor should remain in place.
         assert!(Arc::ptr_eq(&acceptor, &super::acceptor().unwrap()));
+
+        super::test_reset_acceptor();
+        crate::config::set(crate::config::ConfigAndUsers::default()).unwrap();
+    }
+
+    #[test]
+    fn acceptor_loads_certificate_chain() {
+        crate::logger();
+
+        super::test_reset_acceptor();
+
+        let cert = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/tls/chain_cert.pem");
+        let key = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/tls/chain_key.pem");
+
+        let mut cfg = crate::config::ConfigAndUsers::default();
+        cfg.config.general.tls_certificate = Some(cert);
+        cfg.config.general.tls_private_key = Some(key);
+
+        crate::config::set(cfg).unwrap();
+        super::reload().expect("acceptor builds from a certificate chain");
+
+        super::acceptor().expect("acceptor installed");
+        assert_eq!(super::test_acceptor_build_count(), 1);
 
         super::test_reset_acceptor();
         crate::config::set(crate::config::ConfigAndUsers::default()).unwrap();
