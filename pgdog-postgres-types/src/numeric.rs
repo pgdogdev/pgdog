@@ -2,11 +2,6 @@ use std::{cmp::Ordering, fmt::Display, hash::Hash, ops::Add, str::FromStr};
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use rust_decimal::Decimal;
-use serde::Deserialize;
-use serde::{
-    Serialize,
-    de::{self, Visitor},
-};
 
 use crate::Data;
 
@@ -540,88 +535,6 @@ impl Numeric {
                 n.to_f64()
             }
             NumericValue::NaN => Some(f64::NAN),
-        }
-    }
-}
-
-struct NumericVisitor;
-
-impl<'de> Visitor<'de> for NumericVisitor {
-    type Value = Numeric;
-
-    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-        formatter.write_str("a numeric value (integer, float, or decimal string)")
-    }
-
-    fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
-    where
-        E: de::Error,
-    {
-        if v.eq_ignore_ascii_case("nan") {
-            Ok(Numeric::nan())
-        } else {
-            match Decimal::from_str(v) {
-                Ok(decimal) => Ok(Numeric {
-                    value: NumericValue::Number(decimal),
-                }),
-                Err(_) => Err(de::Error::custom("failed to parse decimal")),
-            }
-        }
-    }
-
-    fn visit_f64<E>(self, v: f64) -> Result<Self::Value, E>
-    where
-        E: de::Error,
-    {
-        if v.is_nan() {
-            Ok(Numeric::nan())
-        } else {
-            match Decimal::from_f64_retain(v) {
-                Some(decimal) => Ok(Numeric {
-                    value: NumericValue::Number(decimal),
-                }),
-                None => Err(de::Error::custom("failed to convert f64 to decimal")),
-            }
-        }
-    }
-
-    fn visit_i64<E>(self, v: i64) -> Result<Self::Value, E>
-    where
-        E: de::Error,
-    {
-        Ok(Numeric {
-            value: NumericValue::Number(Decimal::from(v)),
-        })
-    }
-
-    fn visit_u64<E>(self, v: u64) -> Result<Self::Value, E>
-    where
-        E: de::Error,
-    {
-        Ok(Numeric {
-            value: NumericValue::Number(Decimal::from(v)),
-        })
-    }
-}
-
-impl<'de> Deserialize<'de> for Numeric {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: de::Deserializer<'de>,
-    {
-        deserializer.deserialize_any(NumericVisitor)
-    }
-}
-
-impl Serialize for Numeric {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        // Serialize as string to preserve precision
-        match self.value {
-            NumericValue::Number(n) => serializer.serialize_str(&n.to_string()),
-            NumericValue::NaN => serializer.serialize_str("NaN"),
         }
     }
 }
