@@ -8,8 +8,8 @@ use crate::backend::databases::{databases, reload, shutdown};
 use crate::config::config;
 use crate::frontend::client::query_engine::two_pc::Manager;
 use crate::net::messages::{hello::SslReply, NegotiateProtocolVersion, Startup};
-use crate::net::{self, tls::acceptor};
-use crate::net::{tweak, Stream};
+use crate::net::tls::{acceptor, peer_cn};
+use crate::net::{self, tweak, Stream};
 use crate::sighup::Sighup;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::signal::ctrl_c;
@@ -189,9 +189,11 @@ impl Listener {
                         stream.send_flush(&SslReply::Yes).await?;
                         let plain = stream.take()?;
                         let cipher = tls.accept(plain).await?;
+                        let tls_cn = peer_cn(cipher.get_ref().1);
                         stream = Stream::tls(
                             tokio_rustls::TlsStream::Server(cipher),
                             config.config.memory.net_buffer,
+                            tls_cn,
                         );
                     } else {
                         stream.send_flush(&SslReply::No).await?;

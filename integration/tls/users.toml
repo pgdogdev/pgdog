@@ -1,4 +1,12 @@
 [[users]]
 name = "pgdog"
-password = "pgdog"
 database = "pgdog"
+server_password = "pgdog"
+# password = "test"
+
+[[users]]
+name = "pgdog2"
+database = "pgdog"
+server_user = "pgdog"
+server_password = "pgdog"
+# password = "test"

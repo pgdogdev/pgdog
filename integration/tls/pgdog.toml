@@ -1,11 +1,8 @@
 [general]
-tls_certificate = "cert.pem"
-tls_private_key = "key.pem"
-
-[rewrite]
-enabled = false
-shard_key = "ignore"
-split_inserts = "error"
+tls_certificate = "server.crt"
+tls_private_key = "server.key"
+tls_client_ca_certificate = "ca.crt"
+tls_client_validate_cn = true
 
 [[databases]]
 name = "pgdog"

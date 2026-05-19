@@ -153,6 +153,7 @@ impl Client {
         let admin_password = &config.config.admin.password;
         let auth_type = &config.config.general.auth_type;
         let passthrough = config.config.general.passthrough_auth();
+        let validate_cn = config.config.general.tls_client_validate_cn;
         let id = BackendKeyData::new_client(protocol_version);
         let comms = ClientComms::new(&id);
 
@@ -179,6 +180,14 @@ impl Client {
             } else {
                 false
             }
+        } else if validate_cn {
+            // This checks that the certificate CN (common name)
+            // matches the user name exactly. If the client is not connecting with TLS,
+            // this will fail.
+            //
+            // This is part of our mTLS implementation.
+            //
+            stream.tls_cn() == Some(user)
         } else {
             let passwords = if admin {
                 Some(vec![PasswordKind::Plain(admin_password.clone())])
