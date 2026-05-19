@@ -368,6 +368,16 @@ name = "sharded_list_uuid"
 column = "id_uuid"
 data_type = "uuid"
 
+# ------------------------------------------------------------------------------
+# ----- Hash Sharded :: ClickBench hits ----------------------------------------
+
+[[sharded_tables]]
+database = "pgdog_sharded"
+name = "hits"
+column = "userid"
+data_type = "bigint"
+primary = true
+
 [[sharded_mappings]]
 database = "pgdog_sharded"
 table = "sharded_list_uuid"
