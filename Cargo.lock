@@ -3286,6 +3286,7 @@ dependencies = [
  "bytes",
  "chrono",
  "pgdog-vector",
+ "postgres-types",
  "rust_decimal",
  "schemars",
  "serde",
