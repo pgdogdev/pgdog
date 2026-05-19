@@ -28,6 +28,7 @@ unique_id_function = "standard"
 auth_type = "scram"
 # log_dedup_window = 30_000
 # log_dedup_threshold = 1
+cross_shard_disabled = true
 
 [memory]
 net_buffer = 8096

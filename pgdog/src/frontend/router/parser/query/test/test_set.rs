@@ -183,3 +183,14 @@ fn test_set_single_primary() {
         _ => panic!("expected Query, got {:?}", command),
     };
 }
+
+#[test]
+fn test_single_shard_set() {
+    let mut test = QueryParserTest::new_single_shard(&config());
+    let command = test.execute(vec![Query::new("SET lock_timeout TO '1s'").into()].into());
+
+    match command {
+        Command::Set { route, .. } => assert!(!route.is_cross_shard()),
+        _ => panic!("not a set"),
+    }
+}
