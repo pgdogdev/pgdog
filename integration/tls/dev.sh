@@ -6,12 +6,16 @@ HOST=127.0.0.1
 PORT=6432
 DB=pgdog
 
-PASS=0
-FAIL=0
-
 run_psql() {
     psql "host=$HOST port=$PORT dbname=$DB user=$1 sslmode=require sslcert=$DIR/$2.crt sslkey=$DIR/$2.key" -c "SELECT 1" > /dev/null 2>&1
 }
+
+if [ "${1:-}" = "--source-only" ]; then
+    return 0 2>/dev/null || exit 0
+fi
+
+PASS=0
+FAIL=0
 
 echo "=== TLS client certificate tests ==="
 

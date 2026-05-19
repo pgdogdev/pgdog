@@ -188,7 +188,15 @@ impl Listener {
                     if let Some(tls) = tls.as_ref() {
                         stream.send_flush(&SslReply::Yes).await?;
                         let plain = stream.take()?;
-                        let cipher = tls.accept(plain).await?;
+                        let cipher = match tls.accept(plain).await {
+                            Ok(cipher) => cipher,
+                            Err(err) => {
+                                // TLS failure should close the connection
+                                // without telling the client what happened (security).
+                                warn!("TLS handshake failed: {err} [{addr}]");
+                                return Ok(());
+                            }
+                        };
                         let tls_cn = peer_cn(cipher.get_ref().1);
                         stream = Stream::tls(
                             tokio_rustls::TlsStream::Server(cipher),
