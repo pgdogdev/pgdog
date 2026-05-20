@@ -105,7 +105,7 @@ Key methods:
 - `cache_check()` — main entry point, checks route, calls `policy::resolve()`, checks Redis
 - `deserialize_cached(Vec<u8>) -> Vec<Message>` — parses a flat blob of concatenated PostgreSQL wire messages into individual `Message` values. Wire format: `[1B code][4B length (incl. itself)][payload]`. Named constants `HEADER_CODE_LEN`, `HEADER_LEN_SIZE`, `HEADER_TOTAL` replace the former magic numbers. Not Redis-specific — usable with any cache backend that stores raw bytes.
 - `cache_response()` — serializes `Vec<Message>` into wire bytes and stores in Redis
-- Cache key: XXH3 hash of `database_name + raw_query_string`
+- Cache key: XXH3 hash of `database_name + raw_query_string + bind params`
 
 ### Query Engine Integration
 
@@ -148,7 +148,7 @@ xxhash-rust = { version = "0.8", features = ["xxh3"]}
 | Cache policy resolution | 2-tier: SQL comment/param → DB policy |
 | Cache HIT flow | Deserialize wire bytes → `Vec<Message>` → replay each through `process_server_message()` |
 | Cache MISS flow | Normal execute → capture response via `CacheContext` → store in Redis → respond |
-| Cache key | XXH3 hash of `database_name + raw_query_string` |
+| Cache key | XXH3 hash of `database_name + raw_query_string + bind params` |
 | Wire format | Full PostgreSQL wire messages stored as raw bytes (one concatenated buffer) |
 
 ---
@@ -287,3 +287,7 @@ SQL comment  →  pgdog.cache parameter  →  DB policy config
 1. **Redis disconnect/reconnect under heavy load** — The reconnection logic works, but timing edge cases under rapid disconnect/reconnect cycles still need stress-testing.
 
 2. **Integration tests**.
+
+3. **Set redis query timeout from config**
+
+4. **Completely remove comments when computing hash for query**

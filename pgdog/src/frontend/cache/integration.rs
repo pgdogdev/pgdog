@@ -142,8 +142,6 @@ impl Cache {
                 break;
             }
 
-            let _code = cached[offset] as char;
-
             // Read the message length field (4 bytes, big-endian).
             // This length includes the 4-byte length field itself but NOT the code byte.
             let msg_len = u32::from_be_bytes([
@@ -210,6 +208,128 @@ impl Cache {
 
         if let Err(e) = storage.set(cache_key_hash, &buffer, ttl).await {
             warn!("{}", e);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::net::messages::{CommandComplete, Protocol, ReadyForQuery, ToBytes};
+
+    /// Build a raw wire-format blob from a list of typed protocol messages.
+    fn wire_bytes(msgs: &[&dyn ToBytes]) -> Vec<u8> {
+        let mut buf = Vec::new();
+        for msg in msgs {
+            buf.extend_from_slice(&msg.to_bytes().unwrap());
+        }
+        buf
+    }
+
+    #[test]
+    fn deserialize_empty_input() {
+        let messages = Cache::deserialize_cached(vec![]);
+        assert!(messages.is_empty());
+    }
+
+    #[test]
+    fn deserialize_single_message() {
+        let rfq = ReadyForQuery::idle();
+        let blob = wire_bytes(&[&rfq]);
+        let messages = Cache::deserialize_cached(blob);
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].code(), 'Z');
+    }
+
+    #[test]
+    fn deserialize_multiple_messages_roundtrip() {
+        let cc = CommandComplete::new("SELECT 1");
+        let rfq = ReadyForQuery::idle();
+        let blob = wire_bytes(&[&cc, &rfq]);
+
+        let messages = Cache::deserialize_cached(blob);
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].code(), 'C');
+        assert_eq!(messages[1].code(), 'Z');
+    }
+
+    #[test]
+    fn deserialize_roundtrip_payload_matches() {
+        let cc = CommandComplete::new("SELECT 42");
+        let rfq = ReadyForQuery::idle();
+        let original: Vec<Message> = vec![
+            Message::new(cc.to_bytes().unwrap()),
+            Message::new(rfq.to_bytes().unwrap()),
+        ];
+
+        // Serialize to flat blob exactly as cache_response does.
+        let mut blob = Vec::new();
+        for msg in &original {
+            blob.extend_from_slice(&msg.to_bytes().unwrap());
+        }
+
+        let deserialized = Cache::deserialize_cached(blob);
+        assert_eq!(deserialized.len(), original.len());
+        for (d, o) in deserialized.iter().zip(original.iter()) {
+            assert_eq!(d.payload(), o.payload());
+        }
+    }
+
+    #[test]
+    fn deserialize_truncated_header_no_panic() {
+        // Only 3 bytes — not enough for a full 5-byte header.
+        let truncated = vec![b'Z', 0x00, 0x00];
+        let messages = Cache::deserialize_cached(truncated);
+        assert!(messages.is_empty());
+    }
+
+    #[test]
+    fn deserialize_truncated_payload_no_panic() {
+        // Valid header claiming length 8 (4-byte len field + 4-byte payload),
+        // but we only provide the header and 2 payload bytes instead of 4.
+        let mut blob = Vec::new();
+        blob.push(b'C'); // code byte
+        blob.extend_from_slice(&8u32.to_be_bytes()); // length = 8 (includes itself)
+        blob.extend_from_slice(&[0u8, 0]); // only 2 of the expected 4 payload bytes
+        let messages = Cache::deserialize_cached(blob);
+        assert!(messages.is_empty());
+    }
+
+    #[test]
+    fn deserialize_corrupt_length_no_panic() {
+        // Length field set to 0 — invalid (must be >= 4).
+        let mut blob = Vec::new();
+        blob.push(b'Z');
+        blob.extend_from_slice(&0u32.to_be_bytes());
+        let messages = Cache::deserialize_cached(blob);
+        assert!(messages.is_empty());
+    }
+
+    #[test]
+    fn deserialize_length_of_three_no_panic() {
+        // Length field = 3 — below minimum of 4, should be rejected.
+        let mut blob = Vec::new();
+        blob.push(b'Z');
+        blob.extend_from_slice(&3u32.to_be_bytes());
+        blob.extend_from_slice(&[0u8; 3]);
+        let messages = Cache::deserialize_cached(blob);
+        assert!(messages.is_empty());
+    }
+
+    #[test]
+    fn deserialize_many_messages() {
+        // Round-trip 10 CommandComplete messages.
+        let n = 10usize;
+        let mut blob = Vec::new();
+        for i in 0..n {
+            let cc = CommandComplete::new(format!("SELECT {}", i));
+            blob.extend_from_slice(&cc.to_bytes().unwrap());
+        }
+
+        let messages = Cache::deserialize_cached(blob);
+        assert_eq!(messages.len(), n);
+        for msg in &messages {
+            assert_eq!(msg.code(), 'C');
         }
     }
 }
