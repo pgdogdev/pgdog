@@ -612,8 +612,8 @@ fn multiply_for_average(value: &Datum, count: &Datum) -> Option<Datum> {
             Some(Datum::Float(Float((float.0 as f64 * multiplier) as f32)))
         }
         Datum::Numeric(numeric) => {
-            let decimal = numeric.as_decimal()?.to_owned();
-            let product = decimal * Decimal::from_i128_with_scale(multiplier_i128, 0);
+            let decimal = numeric.as_decimal()?;
+            let product = decimal * Decimal::from_i128(multiplier_i128)?;
             Some(Datum::Numeric(Numeric::from(product)))
         }
         _ => None,
@@ -636,12 +636,14 @@ fn divide_for_average(sum: &Datum, count: &Datum) -> Option<Datum> {
             (float.0 as f64 / divisor_i128 as f64) as f32,
         ))),
         Datum::Numeric(numeric) => {
-            let decimal = numeric.as_decimal()?.to_owned();
-            let divisor = Decimal::from_i128_with_scale(divisor_i128, 0);
+            let decimal = numeric.as_decimal()?;
+            let divisor = Decimal::from_i128(divisor_i128)?;
             if divisor == Decimal::ZERO {
                 Some(Datum::Null)
             } else {
-                Some(Datum::Numeric(Numeric::from(decimal / divisor)))
+                let mut result = decimal / divisor;
+                result.rescale(decimal.scale());
+                Some(Datum::Numeric(Numeric::new(result)))
             }
         }
         _ => None,
