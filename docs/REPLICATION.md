@@ -361,3 +361,85 @@ Postgres re-emits after reconnect.
 (e.g. `FullIdentityMissingOld` on a missing OLD tuple) *after* a successful `CommandComplete`.
 FATAL disconnect is the only signal that rolls back regardless. Connections come from
 `Pool::standalone`, so dropping them closes the socket instead of returning to a pool.
+
+---
+
+## Retry and reconnect
+
+The publisher loop retries transient errors without restarting the whole resharding pipeline.
+
+### Configuration
+
+| Parameter | Env var | Default | Meaning |
+|---|---|---|---|
+|`resharding_replication_retry_max_attempts` | `PGDOG_RESHARDING_REPLICATION_RETRY_MAX_ATTEMPTS` | `5` | Maximum retry attempts; `0` = retry indefinitely |
+|`resharding_replication_retry_min_delay` | `PGDOG_RESHARDING_REPLICATION_RETRY_MIN_DELAY` | `1000` ms | Fixed sleep between attempts |
+
+### What is retried
+
+An error is retried if `err.is_retryable()` returns `true`. The full classification lives in the
+source:
+
+- [`pgdog/src/backend/replication/logical/error.rs`](../pgdog/src/backend/replication/logical/error.rs) — top-level replication error
+- [`pgdog/src/backend/pool/error.rs`](../pgdog/src/backend/pool/error.rs) — pool layer
+- [`pgdog/src/net/error.rs`](../pgdog/src/net/error.rs) — network/IO layer
+- [`pgdog/src/net/messages/error_response.rs`](../pgdog/src/net/messages/error_response.rs) — Postgres error codes
+
+### Two-step reconnect
+
+A single retry runs two reconnects **in parallel** (`try_join!`):
+
+- **`slot.reconnect()`** — drops and re-establishes the source replication connection.
+  `slot.lsn` is preserved; Postgres re-streams from that position via
+  `START_REPLICATION SLOT … LOGICAL <slot.lsn>`.
+
+- **`stream.reconnect()`** — tears down every destination `Server` handle.
+  Dropping each handle sends `Terminate`; Postgres rolls back any open implicit transaction
+  on that shard. Clears `in_transaction`, `changed_tables`, and the per-session caches
+  (`relations`, `statements`, `keys`). Then calls `connect()` to open fresh connections and
+  re-prepare named statements.
+
+The destination reconnect is essential when a failure occurs mid-transaction. Without it, destination shards hold
+an open implicit transaction containing partial DML. Postgres re-delivers the same `Begin` +
+DML + `Commit` sequence on the new source connection, and those rows would be appended to the
+already-dirty destination transaction — producing duplicates or constraint errors.
+
+**If `reconnect()` itself fails**: a retryable reconnect error produces a warning log and falls
+back into the retry loop; a non-retryable reconnect error aborts the replication task immediately.
+
+### LSN tracking
+
+`StreamSubscriber` keeps two positions. `lsn` advances on `Begin` (to the future commit LSN) and is used for in-flight deduplication. `committed_lsn` advances only after `commit()` confirms all destination shards — this is what `status_update()` reports to Postgres.
+
+The split matters for KeepAlive: if the reply used `lsn`, Postgres would record a future commit LSN as `confirmed_flush_lsn` while the transaction is still open. On reconnect that would skip the open transaction entirely. `committed_lsn` ensures re-delivery always starts from the last safely committed position.
+
+### Full retry flow
+
+```mermaid
+sequenceDiagram
+    participant PG as Source Postgres
+    participant PUB as Publisher
+    participant SS as StreamSubscriber
+    participant DS as Destination shards
+
+    PG->>PUB: Begin (final_lsn=200)
+    PUB->>SS: handle(Begin)
+    SS->>DS: Bind/Execute row DML (implicit txn open)
+    Note over PUB: transient error
+
+    Note over PUB: retry: sleep(delay)
+    PUB->>PG: slot.reconnect() → START_REPLICATION from committed_lsn=100
+    PUB->>SS: stream.reconnect()
+    SS->>DS: Terminate (implicit txn rolled back)
+    SS->>DS: connect() — fresh connections, named stmts re-prepared
+
+    PG->>PUB: Begin (final_lsn=200)  [re-delivered]
+    PUB->>SS: handle(Begin)
+    SS->>DS: Bind/Execute row DML
+    PG->>PUB: Commit (end_lsn=200)
+    PUB->>SS: handle(Commit)
+    SS->>DS: Sync
+    DS-->>SS: ReadyForQuery
+    SS->>PUB: StatusUpdate(committed_lsn=200)
+    PUB->>PG: StandbyStatusUpdate(last_flushed=200)
+```

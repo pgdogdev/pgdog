@@ -316,6 +316,8 @@ pub struct Config {
     pub rollback_timeout: Duration,
     /// Statement timeout
     pub statement_timeout: Option<Duration>,
+    /// Lock timeout
+    pub lock_timeout: Option<Duration>,
     /// Replication mode.
     pub replication_mode: bool,
     /// Pooler mode.
@@ -367,6 +369,7 @@ impl Default for Config {
             ban_timeout: Duration::from_secs(300),
             rollback_timeout: Duration::from_secs(5),
             statement_timeout: None,
+            lock_timeout: None,
             replication_mode: false,
             pooler_mode: PoolerMode::default(),
             read_only: false,

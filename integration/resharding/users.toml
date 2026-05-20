@@ -9,3 +9,4 @@ database = "destination"
 name = "pgdog"
 password = "pgdog"
 schema_admin = true
+lock_timeout = 100

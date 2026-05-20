@@ -255,12 +255,12 @@ fn x_update(u: XLogUpdate) -> CopyData {
 fn make_subscriber() -> StreamSubscriber {
     let cluster = Cluster::new_test(&config());
     let tables = vec![make_sharded_table(), make_sharded_test_b_table()];
-    StreamSubscriber::new(&cluster, &tables, OmniOwnership::default())
+    StreamSubscriber::new(&cluster, &tables, OmniOwnership::test())
 }
 
 fn make_subscriber_with_tables(tables: Vec<Table>) -> StreamSubscriber {
     let cluster = Cluster::new_test(&config());
-    StreamSubscriber::new(&cluster, &tables, OmniOwnership::default())
+    StreamSubscriber::new(&cluster, &tables, OmniOwnership::test())
 }
 
 fn make_subscriber_with_tables_two_databases(
@@ -274,7 +274,7 @@ fn make_subscriber_with_tables_two_databases(
 fn make_subscriber_single_shard() -> StreamSubscriber {
     let cluster = Cluster::new_test_single_shard(&config());
     let tables = vec![make_sharded_table(), make_sharded_test_b_table()];
-    StreamSubscriber::new(&cluster, &tables, OmniOwnership::default())
+    StreamSubscriber::new(&cluster, &tables, OmniOwnership::test())
 }
 
 /// Count rows matching the given `WHERE` predicate using a separate connection.
@@ -477,6 +477,34 @@ fn lsn_changed_tracking() {
     assert!(sub.lsn_changed());
 }
 
+/// status_update() must always reflect the last *committed* LSN, never the
+/// working LSN set by Begin. A KeepAlive reply during an open transaction must
+/// not advance the ack pointer to the future commit LSN — doing so would cause
+/// reconnect to skip the in-flight transaction and lose data.
+#[tokio::test]
+async fn status_update_stays_at_committed_lsn_during_transaction() {
+    let mut sub = make_subscriber();
+    sub.connect().await.unwrap();
+
+    // Nothing committed yet: ack pointer is at 0.
+    assert_eq!(sub.status_update().last_flushed, 0);
+
+    // Commit a first transaction (begin LSN 50, end LSN 100).
+    sub.handle(begin_copy_data(50)).await.unwrap();
+    sub.handle(commit_copy_data(100)).await.unwrap();
+    assert_eq!(sub.status_update().last_flushed, 100);
+
+    // Open a second transaction: Begin advances lsn to 200 (future commit LSN).
+    sub.handle(begin_copy_data(200)).await.unwrap();
+    assert_eq!(sub.lsn(), 200, "working lsn follows Begin");
+    // KeepAlive mid-transaction must still report 100, not 200.
+    assert_eq!(
+        sub.status_update().last_flushed,
+        100,
+        "committed_lsn must not advance before commit"
+    );
+}
+
 // ── Relation handling tests ─────────────────────────────────────────
 
 /// Relation inside a transaction uses Flush — stays in transaction.
@@ -586,7 +614,7 @@ async fn partition_leaves_share_destination() {
     leaf_b.table.parent_name = "sharded".to_string();
 
     let cluster = Cluster::new_test_single_shard(&config());
-    let mut sub = StreamSubscriber::new(&cluster, &[leaf_a, leaf_b], OmniOwnership::default());
+    let mut sub = StreamSubscriber::new(&cluster, &[leaf_a, leaf_b], OmniOwnership::test());
     let mut verify = test_server().await;
     sub.connect().await.unwrap();
 
@@ -1530,7 +1558,7 @@ async fn full_identity_nothing_rejected() {
     let mut sub = StreamSubscriber::new(
         &cluster,
         &[make_replica_identity_nothing_table()],
-        OmniOwnership::default(),
+        OmniOwnership::test(),
     );
     sub.connect().await.unwrap();
 
@@ -1568,7 +1596,7 @@ async fn full_identity_omni_no_unique_index_rejected() {
     let mut sub = StreamSubscriber::new(
         &cluster,
         &[make_full_identity_omni_table()],
-        OmniOwnership::default(),
+        OmniOwnership::test(),
     );
 
     // Enforce precondition: the table must exist but have no qualifying unique index.
@@ -1611,7 +1639,7 @@ async fn full_identity_insert_sharded() {
     let mut sub = StreamSubscriber::new(
         &cluster,
         &[make_full_identity_sharded_table()],
-        OmniOwnership::default(),
+        OmniOwnership::test(),
     );
     let mut verify = test_server().await;
     sub.connect().await.unwrap();
@@ -1641,7 +1669,7 @@ async fn full_identity_update_fast_path() {
     let mut sub = StreamSubscriber::new(
         &cluster,
         &[make_full_identity_sharded_table()],
-        OmniOwnership::default(),
+        OmniOwnership::test(),
     );
     let mut verify = test_server().await;
     sub.connect().await.unwrap();
@@ -1700,7 +1728,7 @@ async fn full_identity_update_slow_path() {
     let mut sub = StreamSubscriber::new(
         &cluster,
         &[make_full_identity_sharded_table()],
-        OmniOwnership::default(),
+        OmniOwnership::test(),
     );
     let mut verify = test_server().await;
     sub.connect().await.unwrap();
@@ -1764,7 +1792,7 @@ async fn full_identity_update_slow_path_realistic_old_tuple() {
     let mut sub = StreamSubscriber::new(
         &cluster,
         &[make_full_identity_sharded_table()],
-        OmniOwnership::default(),
+        OmniOwnership::test(),
     );
     let mut verify = test_server().await;
     sub.connect().await.unwrap();
@@ -1825,7 +1853,7 @@ async fn full_identity_update_all_toasted_is_noop() {
     let mut sub = StreamSubscriber::new(
         &cluster,
         &[make_full_identity_sharded_table()],
-        OmniOwnership::default(),
+        OmniOwnership::test(),
     );
     let mut verify = test_server().await;
     sub.connect().await.unwrap();
@@ -1871,7 +1899,7 @@ async fn full_identity_delete() {
     let mut sub = StreamSubscriber::new(
         &cluster,
         &[make_full_identity_sharded_table()],
-        OmniOwnership::default(),
+        OmniOwnership::test(),
     );
     let mut verify = test_server().await;
     sub.connect().await.unwrap();
@@ -1913,7 +1941,7 @@ async fn full_identity_insert_omni_dedup() {
     let mut sub = StreamSubscriber::new(
         &cluster,
         &[make_full_identity_omni_dedup_table()],
-        OmniOwnership::default(),
+        OmniOwnership::test(),
     );
     let mut verify = test_server().await;
 
@@ -1976,7 +2004,7 @@ async fn full_identity_update_duplicate_rows() {
     let mut sub = StreamSubscriber::new(
         &cluster,
         &[make_full_identity_dup_rows_table()],
-        OmniOwnership::default(),
+        OmniOwnership::test(),
     );
     let mut verify = test_server().await;
 
@@ -2046,7 +2074,7 @@ async fn full_identity_delete_duplicate_rows() {
     let mut sub = StreamSubscriber::new(
         &cluster,
         &[make_full_identity_dup_rows_table()],
-        OmniOwnership::default(),
+        OmniOwnership::test(),
     );
     let mut verify = test_server().await;
 
@@ -2117,7 +2145,7 @@ async fn full_identity_update_matches_null_column() {
     let mut sub = StreamSubscriber::new(
         &cluster,
         &[make_full_identity_dup_rows_table()],
-        OmniOwnership::default(),
+        OmniOwnership::test(),
     );
     let mut verify = test_server().await;
 
@@ -2182,7 +2210,7 @@ async fn full_identity_delete_matches_null_column() {
     let mut sub = StreamSubscriber::new(
         &cluster,
         &[make_full_identity_dup_rows_table()],
-        OmniOwnership::default(),
+        OmniOwnership::test(),
     );
     let mut verify = test_server().await;
 

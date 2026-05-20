@@ -29,8 +29,9 @@ impl OmniOwnership {
     }
 }
 
-impl Default for OmniOwnership {
-    fn default() -> Self {
+#[cfg(test)]
+impl OmniOwnership {
+    pub fn test() -> Self {
         Self::new(0, 1)
     }
 }

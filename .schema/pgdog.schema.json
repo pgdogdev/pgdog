@@ -97,6 +97,8 @@
         "resharding_copy_retry_max_attempts": 5,
         "resharding_copy_retry_min_delay": 1000,
         "resharding_parallel_copies": 1,
+        "resharding_replication_retry_max_attempts": 5,
+        "resharding_replication_retry_min_delay": 1000,
         "rollback_timeout": 5000,
         "server_lifetime": 86400000,
         "server_lifetime_jitter": 0,
@@ -405,6 +407,15 @@
           "format": "uint8",
           "default": 255,
           "maximum": 255,
+          "minimum": 0
+        },
+        "lock_timeout": {
+          "description": "This setting configures the `lock_timeout` connection parameter on all connections to Postgres for this database.\nAborts any statement that waits longer than the specified duration to acquire a lock.\nUnlike `statement_timeout`, this only counts time spent waiting for locks, not execution time.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/databases/#lock_timeout",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
           "minimum": 0
         },
         "min_pool_size": {
@@ -1030,6 +1041,20 @@
           "type": "integer",
           "format": "uint",
           "default": 1,
+          "minimum": 0
+        },
+        "resharding_replication_retry_max_attempts": {
+          "description": "Maximum number of consecutive replication-subscriber errors tolerated before\nthe source error is propagated. Each failure triggers `slot.reconnect()`,\nafter which Postgres re-streams every event since the last acked commit.\n`0` retries indefinitely.\n\n_Default:_ `5`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#resharding_replication_retry_max_attempts",
+          "type": "integer",
+          "format": "uint",
+          "default": 5,
+          "minimum": 0
+        },
+        "resharding_replication_retry_min_delay": {
+          "description": "Delay in milliseconds between replication subscriber retry attempts.\n\n_Default:_ `1000`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#resharding_replication_retry_min_delay",
+          "type": "integer",
+          "format": "uint64",
+          "default": 1000,
           "minimum": 0
         },
         "rollback_timeout": {

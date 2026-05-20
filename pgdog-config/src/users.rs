@@ -254,6 +254,19 @@ pub struct User {
     ///
     /// https://docs.pgdog.dev/configuration/users.toml/users/#statement_timeout
     pub statement_timeout: Option<u64>,
+    /// Lock timeout.
+    ///
+    /// Sets the `lock_timeout` on all server connections at connection creation.
+    /// Aborts any statement that waits longer than the specified duration to acquire a lock.
+    /// Unlike `statement_timeout`, this only counts time spent waiting for locks, not execution time.
+    /// Recommended for replication destination connections to prevent cross-shard deadlocks
+    /// from hanging indefinitely.
+    ///
+    /// **Note:** Nothing is preventing the user from manually changing this setting at runtime,
+    /// e.g., by running `SET lock_timeout TO 0`;
+    ///
+    /// https://docs.pgdog.dev/configuration/users.toml/users/#lock_timeout
+    pub lock_timeout: Option<u64>,
     /// Sets the `replication=database` parameter on user connections to Postgres. Allows this user to use replication commands.
     ///
     /// _Default:_ `false`

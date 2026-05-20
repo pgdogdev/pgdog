@@ -6,7 +6,8 @@ use parking_lot::Mutex;
 use pgdog_config::QueryParserEngine;
 use tokio::sync::Notify;
 use tokio::task::JoinHandle;
-use tokio::time::Instant;
+use tokio::time::{sleep, Instant};
+use tokio::try_join;
 use tokio::{select, spawn, time::interval};
 use tracing::{debug, info, warn};
 
@@ -230,7 +231,9 @@ impl Publisher {
             let handle = spawn(async move {
                 slot.start_replication().await?;
                 let progress = Progress::new_stream();
-
+                let max_attempts = dest.resharding_replication_retry_max_attempts();
+                let delay = dest.resharding_replication_retry_min_delay();
+                let mut attempt = 0usize;
                 loop {
                     select! {
                         _ = stop.notified() => {
@@ -239,36 +242,69 @@ impl Publisher {
 
                         // This is cancellation-safe.
                         replication_data = slot.replicate(Duration::MAX) => {
-                            let replication_data = replication_data?;
-
-                            match replication_data {
-                                Some(ReplicationData::CopyData(data)) => {
-                                    let lsn = if let Some(ReplicationMeta::KeepAlive(ka)) =
-                                        data.replication_meta()
-                                    {
-                                        if ka.reply() {
-                                            slot.status_update(stream.status_update()).await?;
-                                        }
-                                        debug!(
-                                            "origin at lsn {} [{}]",
-                                            Lsn::from_i64(ka.wal_end),
-                                            slot.server()?.addr()
-                                        );
-                                        ka.wal_end
-                                    } else {
-                                        if let Some(status_update) = stream.handle(data).await? {
-                                            slot.status_update(status_update).await?;
-                                            *last_transaction.lock() = Some(Instant::now());
-                                        }
-                                        stream.lsn()
-                                    };
-                                    progress.update(stream.bytes_sharded(), lsn);
-                                }
-                                Some(ReplicationData::CopyDone) => (),
-                                None => {
+                            // Returns Ok(true) when the slot is drained and the loop
+                            // should break; Ok(false) to continue. All errors bubble up
+                            // to the single retry/abort site below.
+                            let done: Result<bool, Error> = async {
+                                let Some(replication_data) = replication_data? else {
                                     slot.drop_slot().await?;
-                                    break;
+                                    return Ok(true);
+                                };
+                                match replication_data {
+                                    ReplicationData::CopyData(data) => {
+                                        if let Some(ReplicationMeta::KeepAlive(ka)) =
+                                            data.replication_meta()
+                                        {
+                                            if ka.reply() {
+                                                slot.status_update(stream.status_update()).await?;
+                                            }
+                                            debug!(
+                                                "origin at lsn {} [{}]",
+                                                Lsn::from_i64(ka.wal_end),
+                                                slot.server()?.addr()
+                                            );
+                                            progress.update(stream.bytes_sharded(), ka.wal_end);
+                                        } else {
+                                            if let Some(su) = stream.handle(data).await? {
+                                                slot.status_update(su).await?;
+                                                *last_transaction.lock() = Some(Instant::now());
+                                            }
+                                            attempt = 0;
+                                            progress.update(stream.bytes_sharded(), stream.lsn());
+                                        }
+                                        Ok(false)
+                                    }
+                                    ReplicationData::CopyDone => Ok(false),
                                 }
+                            }
+                            .await;
+
+                            match done {
+                                Ok(true) => break,
+                                Ok(false) => {}
+                                Err(err)
+                                    if err.is_retryable()
+                                        && (max_attempts == 0 || attempt < max_attempts) =>
+                                {
+                                    attempt += 1;
+                                    warn!(
+                                        "[replication] error ({attempt}/{max_attempts}): {err}, reconnecting in {}ms",
+                                        delay.as_millis()
+                                    );
+                                    sleep(delay).await;
+                                    if let Err(reconnect_err) =
+                                        try_join!(slot.reconnect(), stream.reconnect())
+                                    {
+                                        if !reconnect_err.is_retryable() {
+                                            return Err(reconnect_err);
+                                        }
+                                        stream.reset_connections();
+                                        warn!(
+                                            "[replication] reconnect error ({attempt}/{max_attempts}): {reconnect_err}, will retry"
+                                        );
+                                    }
+                                }
+                                Err(err) => return Err(err),
                             }
                         }
 
@@ -640,5 +676,90 @@ mod test {
         ] {
             server.execute(*ddl).await.unwrap();
         }
+    }
+
+    // ── Helpers ─────────────────────────────────────────────────────────────
+
+    use crate::net::{
+        replication::{
+            logical::{begin::Begin, commit::Commit},
+            XLogData,
+        },
+        CopyData, ToBytes,
+    };
+    /// Wrap a Begin payload in an XLogData CopyData message.
+    fn begin_copy_data(lsn: i64) -> CopyData {
+        let xlog = XLogData {
+            starting_point: lsn,
+            current_end: lsn,
+            system_clock: 0,
+            bytes: Begin {
+                final_transaction_lsn: lsn,
+                commit_timestamp: 0,
+                xid: 1,
+            }
+            .to_bytes()
+            .unwrap(),
+        };
+        CopyData::bytes(xlog.to_bytes().unwrap())
+    }
+    fn commit_copy_data(lsn: i64) -> CopyData {
+        let xlog = XLogData {
+            starting_point: lsn,
+            current_end: lsn,
+            system_clock: 0,
+            bytes: Commit {
+                flags: 0,
+                commit_lsn: 0,
+                end_lsn: lsn,
+                commit_timestamp: 0,
+            }
+            .to_bytes()
+            .unwrap(),
+        };
+        CopyData::bytes(xlog.to_bytes().unwrap())
+    }
+
+    // -- handle ---------------------------------------------------------------
+
+    /// A Begin event produces `Ok(None)` — no status update to forward to the origin.
+    #[tokio::test]
+    async fn apply_begin_no_status_update() {
+        let cfg = config();
+        let cluster = Cluster::new_test(&cfg);
+        cluster.launch();
+        let mut stream = StreamSubscriber::new(&cluster, &[], OmniOwnership::test());
+        stream.connect().await.unwrap();
+
+        let result = stream.handle(begin_copy_data(1)).await;
+
+        assert!(
+            result.unwrap().is_none(),
+            "Begin event must not emit a status update"
+        );
+        cluster.shutdown();
+    }
+
+    /// A Commit event returns `Ok(Some(su))` — the caller must forward the
+    /// status update to the replication origin. Distinct from a Begin, which
+    /// returns `Ok(None)` and produces no status update.
+    #[tokio::test]
+    async fn apply_commit_emits_status_update() {
+        let cfg = config();
+        let cluster = Cluster::new_test(&cfg);
+        cluster.launch();
+        let mut stream = StreamSubscriber::new(&cluster, &[], OmniOwnership::test());
+        stream.connect().await.unwrap();
+
+        let result = stream.handle(commit_copy_data(1)).await;
+
+        // Commit must succeed and produce a status update for the caller to
+        // send to the origin via slot.status_update().
+        assert!(result.is_ok());
+        assert!(
+            result.unwrap().is_some(),
+            "commit should produce a status update"
+        );
+        cluster.shutdown();
     }
 }
