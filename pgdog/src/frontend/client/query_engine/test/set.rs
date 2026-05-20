@@ -391,9 +391,10 @@ async fn test_lock_timeout() {
         'I'
     );
 
-    assert!(
-        test_client.client().params.get("lock_timeout").is_some(),
-        "lock_timeout should be tracked after SET"
+    assert_eq!(
+        test_client.client().params.get("lock_timeout"),
+        Some(&ParameterValue::String("3000".into())),
+        "lock_timeout should be tracked with the correct value after SET"
     );
 
     // Reset clears it.

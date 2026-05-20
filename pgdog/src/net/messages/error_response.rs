@@ -218,7 +218,7 @@ impl ErrorResponse {
     /// Whether this Postgres error is transient and the operation can be retried.
     /// Covers connection exceptions (class 08, excluding protocol violation 08P01),
     /// operator-intervention shutdowns (57P01/57P02/57P03), and resource pressure
-    /// (53300 too_many_connections).
+    /// (53300 too_many_connections), and lock timeout (55P03 lock_not_available).
     pub fn is_retryable(&self) -> bool {
         matches!(
             self.code.as_str(),

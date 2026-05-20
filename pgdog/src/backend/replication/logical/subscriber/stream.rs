@@ -840,6 +840,13 @@ impl StreamSubscriber {
         self.connect().await
     }
 
+    /// Clear destination connections so the next `handle` call forces a fresh
+    /// `connect()`. Use after a failed reconnect to avoid reusing connections
+    /// that may have buffered stale handshake responses.
+    pub fn reset_connections(&mut self) {
+        self.connections.clear();
+    }
+
     /// `docs/REPLICATION.md` → "Error rollback".
     pub async fn handle(&mut self, data: CopyData) -> Result<Option<StatusUpdate>, Error> {
         match self.handle_inner(data).await {

@@ -298,6 +298,7 @@ impl Publisher {
                                         if !reconnect_err.is_retryable() {
                                             return Err(reconnect_err);
                                         }
+                                        stream.reset_connections();
                                         warn!(
                                             "[replication] reconnect error ({attempt}/{max_attempts}): {reconnect_err}, will retry"
                                         );
@@ -732,7 +733,10 @@ mod test {
 
         let result = stream.handle(begin_copy_data(1)).await;
 
-        assert!(result.is_ok());
+        assert!(
+            result.unwrap().is_none(),
+            "Begin event must not emit a status update"
+        );
         cluster.shutdown();
     }
 
