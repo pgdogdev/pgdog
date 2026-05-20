@@ -727,7 +727,7 @@ mod test {
         let cfg = config();
         let cluster = Cluster::new_test(&cfg);
         cluster.launch();
-        let mut stream = StreamSubscriber::new(&cluster, &[]);
+        let mut stream = StreamSubscriber::new(&cluster, &[], OmniOwnership::test());
         stream.connect().await.unwrap();
 
         let result = stream.handle(begin_copy_data(1)).await;
@@ -744,7 +744,7 @@ mod test {
         let cfg = config();
         let cluster = Cluster::new_test(&cfg);
         cluster.launch();
-        let mut stream = StreamSubscriber::new(&cluster, &[]);
+        let mut stream = StreamSubscriber::new(&cluster, &[], OmniOwnership::test());
         stream.connect().await.unwrap();
 
         let result = stream.handle(commit_copy_data(1)).await;

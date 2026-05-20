@@ -92,7 +92,7 @@ impl Statement {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct StreamSubscriber {
     /// Destination cluster.
     cluster: Cluster,
@@ -1023,7 +1023,7 @@ mod tests {
 
     fn make_subscriber() -> StreamSubscriber {
         let cluster = Cluster::new_test(&config());
-        StreamSubscriber::new(&cluster, &[], OmniOwnership::default())
+        StreamSubscriber::new(&cluster, &[], OmniOwnership::test())
     }
 
     #[test]
