@@ -182,12 +182,12 @@ impl Client {
             }
         } else if validate_cn {
             // This checks that the certificate CN (common name)
-            // matches the user name exactly. If the client is not connecting with TLS,
+            // matches the user identity exactly. If the client is not connecting with TLS,
             // this will fail.
             //
             // This is part of our mTLS implementation.
             //
-            stream.tls_cn() == Some(user)
+            stream.tls_cn() == databases::databases().identity((user, database))
         } else {
             let passwords = if admin {
                 Some(vec![PasswordKind::Plain(admin_password.clone())])

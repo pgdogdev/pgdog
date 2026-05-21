@@ -87,6 +87,7 @@ pub struct Cluster {
     resharding_replication_retry_min_delay: Duration,
     regex_parser: RegexParser,
     mutual_tls: bool,
+    identity: Option<String>,
 }
 
 /// Sharding configuration from the cluster.
@@ -174,6 +175,7 @@ pub struct ClusterConfig<'a> {
     pub regex_parser_limit: usize,
     pub pub_sub_enabled: bool,
     pub mutual_tls: bool,
+    pub identity: &'a Option<String>,
 }
 
 impl<'a> ClusterConfig<'a> {
@@ -237,6 +239,7 @@ impl<'a> ClusterConfig<'a> {
             regex_parser_limit: general.regex_parser_limit,
             pub_sub_enabled: general.pub_sub_enabled(),
             mutual_tls: config.general.tls_client_validate_cn,
+            identity: &user.identity,
         }
     }
 }
@@ -283,6 +286,7 @@ impl Cluster {
             regex_parser_limit,
             pub_sub_enabled,
             mutual_tls,
+            identity,
         } = config;
 
         let identifier = Arc::new(DatabaseUser {
@@ -343,6 +347,7 @@ impl Cluster {
             ),
             regex_parser: RegexParser::new(regex_parser_limit, query_parser),
             mutual_tls,
+            identity: identity.clone(),
         }
     }
 
@@ -403,6 +408,12 @@ impl Cluster {
 
     pub fn passwords(&self) -> &[PasswordKind] {
         &self.passwords
+    }
+
+    /// Get user identity which should match the TLS certificate it provided
+    /// when connecting.
+    pub fn identity(&self) -> Option<&str> {
+        self.identity.as_deref()
     }
 
     /// User name.

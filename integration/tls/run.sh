@@ -17,7 +17,7 @@ PID=""
 if [ -f "${PID_FILE}" ]; then
     PID=$(cat "${PID_FILE}")
 fi
-while ! run_psql pgdog client; do
+while ! run_psql tls_user_a client; do
     if [ -n "${PID}" ] && ! kill -0 "${PID}" 2> /dev/null; then
         echo "PgDog process (pid ${PID}) exited before becoming ready"
         exit 1
