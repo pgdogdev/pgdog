@@ -413,7 +413,7 @@ impl Cluster {
     /// Get user identity which should match the TLS certificate it provided
     /// when connecting.
     pub fn identity(&self) -> Option<&str> {
-        self.identity.as_ref().map(|s| s.as_str())
+        self.identity.as_deref()
     }
 
     /// User name.
