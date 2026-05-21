@@ -105,7 +105,7 @@ Key methods:
 - `cache_check()` — main entry point, checks route, calls `policy::resolve()`, checks Redis
 - `deserialize_cached(Vec<u8>) -> Vec<Message>` — parses a flat blob of concatenated PostgreSQL wire messages into individual `Message` values. Wire format: `[1B code][4B length (incl. itself)][payload]`. Named constants `HEADER_CODE_LEN`, `HEADER_LEN_SIZE`, `HEADER_TOTAL` replace the former magic numbers. Not Redis-specific — usable with any cache backend that stores raw bytes.
 - `cache_response()` — serializes `Vec<Message>` into wire bytes and stores in Redis
-- Cache key: XXH3 hash of `database_name + raw_query_string + bind params`
+- Cache key: XXH3 hash of `database_name + comment-stripped query string + bind params`
 
 ### Query Engine Integration
 
@@ -148,7 +148,7 @@ xxhash-rust = { version = "0.8", features = ["xxh3"]}
 | Cache policy resolution | 2-tier: SQL comment/param → DB policy |
 | Cache HIT flow | Deserialize wire bytes → `Vec<Message>` → replay each through `process_server_message()` |
 | Cache MISS flow | Normal execute → capture response via `CacheContext` → store in Redis → respond |
-| Cache key | XXH3 hash of `database_name + raw_query_string + bind params` |
+| Cache key | XXH3 hash of `database_name + comment-stripped query string + bind params` |
 | Wire format | Full PostgreSQL wire messages stored as raw bytes (one concatenated buffer) |
 
 ---
@@ -173,15 +173,20 @@ SELECT * FROM products WHERE category = 'electronics';
 SELECT * FROM orders;
 
 -- Force cache with database default TTL
--- Query hash computed as if comment were like "/* pgdog_cache: cache */"
 /* pgdog_cache: force_cache */
 SELECT * FROM products WHERE category = 'electronics';
 
 -- Force cache with custom TTL in seconds
--- Query hash computed as if comment were like "/* pgdog_cache: cache ttl=300*/"
 /* pgdog_cache: force_cache ttl=300 */
 SELECT * FROM orders;
 ```
+
+> **Hash independence from comments:** All SQL comments (block `/* */` and line `--`) are stripped
+> before computing the cache key hash. This means a query sent with a `/* pgdog_cache: cache */`
+> comment produces **exactly the same cache key** as the same query sent without any comment but
+> with the directive supplied via a connection parameter (`SET pgdog.cache = 'cache'`). There is
+> no longer a need for special normalization of `force_cache` vs `cache` hints — both result in
+> the same hash because comments are removed entirely.
 
 ### Connection Parameter
 
@@ -250,7 +255,7 @@ SQL comment  →  pgdog.cache parameter  →  DB policy config
 
 8. **Error handling / Reconnection** — Automatic reconnection with background task, CAS-guarded single reconnect, 2s operation timeout on all Redis calls, PING-based connection verification.
 
-9. **Cache key collision across databases sharing one Redis** — Database name and raw query string are combined via a single XXH3 hash call, producing deterministic, collision-resistant per-database keys even on shared Redis. Different literal values in queries produce different cache keys. `force_cache` hints normalize the query in the hash to use the same key as regular `cache`.
+9. **Cache key collision across databases sharing one Redis** — Database name and query string (with all SQL comments stripped) are combined via a single XXH3 hash call, producing deterministic, collision-resistant per-database keys even on shared Redis. Different literal values in queries produce different cache keys. Because all comments are stripped before hashing, the cache key is identical whether the cache directive arrives via a SQL comment or a connection parameter.
 
 10. **Wire format serialization/deserialization** — PostgreSQL wire messages stored as raw bytes. Correct byte slice calculation expressed via named constants (`HEADER_CODE_LEN = 1`, `HEADER_LEN_SIZE = 4`, `HEADER_TOTAL = 5`). Deserialization extracted into `deserialize_cached()` with inline comments explaining each boundary check.
 
@@ -264,7 +269,7 @@ SQL comment  →  pgdog.cache parameter  →  DB policy config
 
 15. **Add cache config to .schema**.
 
-16. **Force-cache hint support** — `/* pgdog_cache: force_cache */` and `/* pgdog_cache: force_cache ttl=N */` directives always attempt to cache (cache key normalized), bypassing normal cache miss flow considerations.
+16. **Force-cache hint support** — `/* pgdog_cache: force_cache */` and `/* pgdog_cache: force_cache ttl=N */` directives always attempt to cache. Because all comments are stripped before hashing, `force_cache` and `cache` directives produce the same cache key as the bare query with no comment at all.
 
 17. **Cache HIT replays through the server-message pipeline** — Previously, cache hits sent responses directly to the stream, bypassing `process_server_message()`. Now `try_read_cache()` returns `Option<Vec<Message>>` and the caller (`handle()`) feeds each message through `process_server_message()` — giving correct stats accounting, transaction state updates from `ReadyForQuery`, and hook invocations on every cache hit.
 
@@ -280,6 +285,8 @@ SQL comment  →  pgdog.cache parameter  →  DB policy config
 
 23. **Cache key must include Bind parameters for extended protocol** — For simple `Query` messages, parameter values are embedded in the SQL string, so the XXH3 hash of `database + query_text` is naturally unique per value. For extended protocol (Parse/Bind/Execute), the SQL contains `$1`/`$2` placeholders and the actual values arrive in the `Bind` message separately. The current hash ignores them, so `SELECT * FROM users WHERE id = $1` with `id = 1` and `id = 2` produce the same cache key — wrong rows are returned on the second call. Fix: hash `param.len` (the `i32` field, not the `len()` method which returns wire size) and `param.data` for each entry in `bind.params_raw()` into the hasher in `cache_check()` in `integration.rs`. This affects all production drivers that use extended protocol by default: psycopg3, asyncpg, JDBC, npgsql. Note: pgdog's built-in prepared statement cache (`PreparedStatements` / `GlobalCache`) is a proxy-level plan cache only — it deduplicates backend `Parse` round-trips. It does not cache result rows and is orthogonal to the Redis result cache.
 
+24. **Comments stripped from query before hashing** — All SQL block comments (`/* … */`, including nested) and line comments (`-- …`) are removed from the query string before computing the XXH3 cache key. This makes the cache key independent of whether the cache directive was supplied via a SQL comment or a connection parameter. `compute_cache_key_hash` is a standalone public function in `integration.rs` so it can be unit-tested directly. `strip_sql_comments` returns `Cow<'_, str>`: when no comment markers are present the original string slice is returned without any allocation; only queries that actually contain `/*` or `--` incur a heap allocation. The `FORCE_CACHE_RE` regex normalization that previously converted `force_cache` to `cache` in the hash input has been removed — stripping all comments achieves the same result in a more general way.
+
 ---
 
 ## What's Left To Do
@@ -290,4 +297,4 @@ SQL comment  →  pgdog.cache parameter  →  DB policy config
 
 3. **Set redis query timeout from config**
 
-4. **Completely remove comments when computing hash for query**
+4. **Add hint for query hash key**

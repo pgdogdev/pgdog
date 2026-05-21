@@ -1,22 +1,17 @@
+use std::borrow::Cow;
 use std::hash::{Hash, Hasher};
-
-use once_cell::sync::Lazy;
-use regex::Regex;
 
 use crate::{
     frontend::{
         cache::{storage::Error as CacheStorageError, CacheDecision},
         ClientRequest,
     },
-    net::{FromBytes, Message, Parameters, ToBytes},
+    net::{bind::Bind, FromBytes, Message, Parameters, ToBytes},
 };
 
 use tracing::{debug, warn};
 
 use super::{policy, Cache};
-
-static FORCE_CACHE_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r#"pgdog_cache:\s*force_cache"#).unwrap());
 
 pub struct CacheMiss {
     pub cache_key_hash: u64,
@@ -27,6 +22,98 @@ pub enum CacheCheckResult {
     Hit { cached: Vec<u8> },
     Miss(CacheMiss),
     Passthrough,
+}
+
+/// Strip SQL block comments (`/* ... */`, including nested) and line comments (`-- ...`)
+/// from `query`, preserving string literals (`'...'`).
+///
+/// Returns `Cow::Borrowed(query)` without any allocation when no comment markers
+/// are found.  Only allocates and builds a new `String` when a `/*` or `--`
+/// sequence is actually present in the input.
+pub fn strip_sql_comments(query: &str) -> Cow<'_, str> {
+    // Fast path: scan bytes for comment markers before doing any allocation.
+    let bytes = query.as_bytes();
+    let has_comment = bytes.windows(2).any(|w| w == b"/*" || w == b"--");
+    if !has_comment {
+        return Cow::Borrowed(query);
+    }
+
+    let mut result = String::with_capacity(query.len());
+    let mut chars = query.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        match c {
+            // Block comment — supports PostgreSQL nested `/* */`.
+            '/' if chars.peek() == Some(&'*') => {
+                chars.next(); // consume '*'
+                let mut depth = 1u32;
+                while depth > 0 {
+                    match chars.next() {
+                        Some('/') if chars.peek() == Some(&'*') => {
+                            chars.next();
+                            depth += 1;
+                        }
+                        Some('*') if chars.peek() == Some(&'/') => {
+                            chars.next();
+                            depth -= 1;
+                        }
+                        None => break, // malformed input
+                        _ => {}
+                    }
+                }
+                // Replace the entire comment with a single space to avoid
+                // accidentally merging adjacent tokens (e.g. `SELECT/*c*/1`).
+                result.push(' ');
+            }
+            // Line comment.
+            '-' if chars.peek() == Some(&'-') => {
+                for ch in chars.by_ref() {
+                    if ch == '\n' {
+                        result.push('\n');
+                        break;
+                    }
+                }
+            }
+            // String literal — pass through unchanged so we don't mistake `--`
+            // or `/*` inside a string for a comment.
+            '\'' => {
+                result.push(c);
+                while let Some(ch) = chars.next() {
+                    result.push(ch);
+                    if ch == '\'' {
+                        // Standard SQL escaped quote: two consecutive single-quotes.
+                        if chars.peek() == Some(&'\'') {
+                            result.push(chars.next().unwrap());
+                        } else {
+                            break;
+                        }
+                    }
+                }
+            }
+            _ => result.push(c),
+        }
+    }
+
+    Cow::Owned(result)
+}
+
+/// Compute the XXH3 cache key hash for a query.
+///
+/// All SQL comments are stripped from `query` before hashing so the hash is identical
+/// regardless of whether the cache directive was supplied via a comment or a connection
+/// parameter.
+pub fn compute_cache_key_hash(database: &str, query: &str, bind: Option<&Bind>) -> u64 {
+    let mut hasher = xxhash_rust::xxh3::Xxh3Default::new();
+    database.hash(&mut hasher);
+    let stripped = strip_sql_comments(query);
+    stripped.trim().hash(&mut hasher);
+    if let Some(bind) = bind {
+        for param in bind.params_raw() {
+            param.len.hash(&mut hasher);
+            param.data.hash(&mut hasher);
+        }
+    }
+    hasher.finish()
 }
 
 const HEADER_CODE_LEN: usize = 1;
@@ -40,7 +127,7 @@ impl Cache {
         client_request: &ClientRequest,
         params: &Parameters,
     ) -> Result<CacheCheckResult, crate::frontend::Error> {
-        if in_transaction {
+        if in_transaction || !client_request.is_executable() {
             return Ok(CacheCheckResult::Passthrough);
         }
 
@@ -61,31 +148,19 @@ impl Cache {
             _ => return Ok(CacheCheckResult::Passthrough),
         };
 
-        let compute_cache_key_hash = || {
-            let user = params.get_required("user")?;
-            let database = params.get_default("database", user);
-            let mut hasher = xxhash_rust::xxh3::Xxh3Default::new();
-            database.hash(&mut hasher);
-            let normalized_query = FORCE_CACHE_RE.replace(query.query(), "pgdog_cache: cache");
-            normalized_query.hash(&mut hasher);
-            if let Some(bind) = client_request.parameters()? {
-                for param in bind.params_raw() {
-                    param.len.hash(&mut hasher);
-                    param.data.hash(&mut hasher);
-                }
-            };
-            Ok::<u64, crate::frontend::Error>(hasher.finish())
-        };
+        let user = params.get_required("user")?;
+        let database = params.get_default("database", user);
+        let bind = client_request.parameters()?;
 
         let decision = policy::resolve(client_request, params, is_read).await;
         match decision {
             CacheDecision::Skip => Ok(CacheCheckResult::Passthrough),
             CacheDecision::ForceCache(ttl) => Ok(CacheCheckResult::Miss(CacheMiss {
-                cache_key_hash: compute_cache_key_hash()?,
+                cache_key_hash: compute_cache_key_hash(database, query.query(), bind),
                 ttl,
             })),
             CacheDecision::Cache(ttl) => {
-                let cache_key_hash = compute_cache_key_hash()?;
+                let cache_key_hash = compute_cache_key_hash(database, query.query(), bind);
                 let guard = self.storage.read().await;
                 match guard.as_ref() {
                     None => Ok(CacheCheckResult::Passthrough),
@@ -331,5 +406,161 @@ mod tests {
         for msg in &messages {
             assert_eq!(msg.code(), 'C');
         }
+    }
+
+    // -------------------------------------------------------------------------
+    // strip_sql_comments tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn strip_no_comments() {
+        let q = "SELECT 1";
+        assert_eq!(strip_sql_comments(q), "SELECT 1");
+    }
+
+    #[test]
+    fn strip_no_comments_returns_borrowed() {
+        // When there are no comment markers the original slice must be returned
+        // without any allocation (Cow::Borrowed).
+        let q = "SELECT 1 FROM t WHERE id = 42";
+        assert!(matches!(
+            strip_sql_comments(q),
+            std::borrow::Cow::Borrowed(_)
+        ));
+    }
+
+    #[test]
+    fn strip_with_comment_returns_owned() {
+        let q = "/* hint */ SELECT 1";
+        assert!(matches!(strip_sql_comments(q), std::borrow::Cow::Owned(_)));
+    }
+
+    #[test]
+    fn strip_block_comment() {
+        let q = "/* pgdog_cache: cache */ SELECT 1";
+        let stripped = strip_sql_comments(q);
+        assert!(!stripped.contains("pgdog_cache"));
+        assert!(stripped.contains("SELECT 1"));
+    }
+
+    #[test]
+    fn strip_line_comment() {
+        let q = "-- pgdog_cache: cache\nSELECT 1";
+        let stripped = strip_sql_comments(q);
+        assert!(!stripped.contains("pgdog_cache"));
+        assert!(stripped.contains("SELECT 1"));
+    }
+
+    #[test]
+    fn strip_nested_block_comments() {
+        let q = "/* outer /* inner */ still outer */ SELECT 2";
+        let stripped = strip_sql_comments(q);
+        assert!(!stripped.contains("outer"));
+        assert!(!stripped.contains("inner"));
+        assert!(stripped.contains("SELECT 2"));
+    }
+
+    #[test]
+    fn strip_does_not_remove_string_literal_contents() {
+        let q = "SELECT '/* not a comment */' FROM t";
+        let stripped = strip_sql_comments(q);
+        // The string literal must be preserved verbatim.
+        assert!(stripped.contains("'/* not a comment */'"));
+    }
+
+    #[test]
+    fn strip_preserves_escaped_quotes_in_literal() {
+        let q = "SELECT 'it''s fine' FROM t";
+        let stripped = strip_sql_comments(q);
+        assert_eq!(stripped, "SELECT 'it''s fine' FROM t");
+    }
+
+    #[test]
+    fn strip_multiple_block_comments() {
+        let q = "/* a */ SELECT /* b */ 1";
+        let stripped = strip_sql_comments(q);
+        assert!(!stripped.contains("/* a */"));
+        assert!(!stripped.contains("/* b */"));
+        assert!(stripped.contains("SELECT"));
+        assert!(stripped.contains("1"));
+    }
+
+    // -------------------------------------------------------------------------
+    // compute_cache_key_hash tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn hash_is_stable() {
+        let h1 = compute_cache_key_hash("mydb", "SELECT 1", None);
+        let h2 = compute_cache_key_hash("mydb", "SELECT 1", None);
+        assert_eq!(h1, h2);
+    }
+
+    #[test]
+    fn hash_differs_by_database() {
+        let h1 = compute_cache_key_hash("db1", "SELECT 1", None);
+        let h2 = compute_cache_key_hash("db2", "SELECT 1", None);
+        assert_ne!(h1, h2);
+    }
+
+    #[test]
+    fn hash_differs_by_query() {
+        let h1 = compute_cache_key_hash("db", "SELECT 1", None);
+        let h2 = compute_cache_key_hash("db", "SELECT 2", None);
+        assert_ne!(h1, h2);
+    }
+
+    #[test]
+    fn hash_same_with_and_without_cache_comment() {
+        // A block comment containing the cache directive must be stripped so
+        // the hash is the same whether the directive was in a comment or a
+        // connection parameter.
+        let h_with_comment =
+            compute_cache_key_hash("db", "/* pgdog_cache: cache */ SELECT 1", None);
+        let h_without_comment = compute_cache_key_hash("db", "SELECT 1", None);
+        assert_eq!(h_with_comment, h_without_comment);
+    }
+
+    #[test]
+    fn hash_same_for_force_cache_and_regular_comment() {
+        // force_cache and cache hints should produce the same hash (both are
+        // stripped before hashing, so the underlying query is identical).
+        let h_force = compute_cache_key_hash("db", "/* pgdog_cache: force_cache */ SELECT 1", None);
+        let h_cache = compute_cache_key_hash("db", "/* pgdog_cache: cache */ SELECT 1", None);
+        let h_plain = compute_cache_key_hash("db", "SELECT 1", None);
+        assert_eq!(h_force, h_cache);
+        assert_eq!(h_force, h_plain);
+    }
+
+    #[test]
+    fn hash_same_for_line_comment_cache_directive() {
+        let h_with_line = compute_cache_key_hash("db", "-- pgdog_cache: cache\nSELECT 1", None);
+        let h_plain = compute_cache_key_hash("db", "SELECT 1", None);
+        assert_eq!(h_with_line, h_plain);
+    }
+
+    #[test]
+    fn hash_differs_by_bind_params() {
+        use crate::net::messages::bind::{Bind, Parameter};
+        use bytes::Bytes;
+        use pgdog_postgres_types::Format;
+
+        let make_bind = |val: &'static [u8]| {
+            let mut b = Bind::default();
+            b.push_param(
+                Parameter {
+                    len: val.len() as i32,
+                    data: Bytes::from_static(val),
+                },
+                Format::Text,
+            );
+            b
+        };
+
+        let b1 = make_bind(b"1");
+        let b2 = make_bind(b"2");
+        let h1 = compute_cache_key_hash("db", "SELECT $1", Some(&b1));
+        let h2 = compute_cache_key_hash("db", "SELECT $1", Some(&b2));
+        assert_ne!(h1, h2);
     }
 }
