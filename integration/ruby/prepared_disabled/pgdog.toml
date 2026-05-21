@@ -1,0 +1,10 @@
+[general]
+prepared_statements = "disabled"
+default_pool_size = 2
+
+[[databases]]
+name = "pgdog"
+host = "127.0.0.1"
+
+[admin]
+password = "pgdog"

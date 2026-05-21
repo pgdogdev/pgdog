@@ -1,5 +1,6 @@
 [general]
 prepared_statements = "full"
+default_pool_size = 2
 
 [[databases]]
 name = "pgdog"
