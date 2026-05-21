@@ -1,4 +1,5 @@
 use std::{
+    fmt::Display,
     hash::Hash,
     ops::Deref,
     sync::{
@@ -10,26 +11,38 @@ use std::{
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum PasswordSource {
+    Config,
+    RdsIam,
+    AzureIdentity,
+}
+
+impl Display for PasswordSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Config => write!(f, "config"),
+            Self::RdsIam => write!(f, "rds iam"),
+            Self::AzureIdentity => write!(f, "azure workload identity"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Password {
     pub(crate) password: String,
     pub(crate) valid: Arc<AtomicBool>,
+    pub(crate) source: PasswordSource,
 }
 
 impl From<String> for Password {
     fn from(password: String) -> Self {
-        Self {
-            password,
-            valid: Arc::new(AtomicBool::new(true)),
-        }
+        Self::new(&password, PasswordSource::Config)
     }
 }
 
 impl From<&str> for Password {
     fn from(password: &str) -> Self {
-        Self {
-            password: password.to_string(),
-            valid: Arc::new(AtomicBool::new(true)),
-        }
+        Self::new(password, PasswordSource::Config)
     }
 }
 
@@ -75,5 +88,13 @@ impl Password {
 
     pub(crate) fn valid(&self, valid: bool) {
         self.valid.store(valid, Ordering::Relaxed)
+    }
+
+    pub(crate) fn new(password: &str, source: PasswordSource) -> Self {
+        Self {
+            password: password.to_owned(),
+            source,
+            valid: Arc::new(AtomicBool::new(true)),
+        }
     }
 }
