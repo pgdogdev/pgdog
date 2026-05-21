@@ -117,6 +117,13 @@
             "type": "string"
           }
         },
+        "identity": {
+          "description": "User identity used for mTLS.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "idle_timeout": {
           "description": "Overrides [`idle_timeout`](https://docs.pgdog.dev/configuration/pgdog.toml/general/#idle_timeout) for this user. Server connections that have been idle for this long, without affecting [`min_pool_size`](https://docs.pgdog.dev/configuration/pgdog.toml/general/#min_pool_size), will be closed.\n\nhttps://docs.pgdog.dev/configuration/users.toml/users/#idle_timeout",
           "type": [
