@@ -187,10 +187,7 @@ impl Client {
             //
             // This is part of our mTLS implementation.
             //
-            let identity = databases::databases()
-                .identity((user, database))
-                .map(|s| s.to_string());
-            stream.tls_cn() == identity.as_ref().map(|s| s.as_str())
+            stream.tls_cn() == databases::databases().identity((user, database))
         } else {
             let passwords = if admin {
                 Some(vec![PasswordKind::Plain(admin_password.clone())])
