@@ -7,7 +7,7 @@ use pgdog_config::Role;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-use super::Password;
+use super::{password::PasswordSource, Password};
 use crate::backend::auth::{azure_workload_identity, rds_iam};
 use crate::backend::pool::dns_cache::DnsCache;
 use crate::backend::pool::token_cache::TokenCache;
@@ -108,14 +108,14 @@ impl Address {
                 let token = TokenCache::global()
                     .get_or_fetch(self, rds_iam::token)
                     .await?;
-                vec![token.into()]
+                vec![Password::new(&token, PasswordSource::RdsIam)]
             }
 
             ServerAuth::AzureWorkloadIdentity => {
                 let token = TokenCache::global()
                     .get_or_fetch(self, azure_workload_identity::token)
                     .await?;
-                vec![token.into()]
+                vec![Password::new(&token, PasswordSource::AzureIdentity)]
             }
         };
 
