@@ -314,6 +314,15 @@ impl Databases {
         }
     }
 
+    /// Get the user TLS identity.
+    pub fn identity(&self, user: impl ToUser) -> Option<&str> {
+        if let Some(cluster) = self.databases.get(&user.to_user()) {
+            cluster.identity()
+        } else {
+            None
+        }
+    }
+
     /// Get a cluster for the user/database pair if it's configured.
     pub fn cluster(&self, user: impl ToUser) -> Result<Cluster, Error> {
         let user = user.to_user();
