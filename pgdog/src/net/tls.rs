@@ -179,93 +179,84 @@ fn build_acceptor(cert: &Path, key: &Path, client_ca: Option<&Path>) -> Result<T
 }
 
 fn build_client_cert_verifier(ca_path: &Path) -> Result<Arc<dyn ClientCertVerifier>, Error> {
-    debug!("loading client CA certificate from: {}", ca_path.display());
+    let roots = load_ca_bundle(ca_path, "client CA")?;
 
-    let certs = CertificateDer::pem_file_iter(ca_path)
+    WebPkiClientVerifier::builder(Arc::new(roots))
+        .build()
+        .map_err(|e| invalid_data(format!("failed to build client certificate verifier: {e}")))
+}
+
+/// Load a PEM bundle from `path` and turn it into a `RootCertStore`. Every PEM block
+/// in the file is added as a trust anchor, so a single file can carry a root CA
+/// together with one or more intermediate CAs that signed leaf client certificates.
+fn load_ca_bundle(path: &Path, label: &str) -> Result<rustls::RootCertStore, Error> {
+    debug!("loading {label} bundle from {}", path.display());
+
+    let certs = CertificateDer::pem_file_iter(path)
         .map_err(|e| {
-            Error::Io(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!("Failed to read client CA certificate file: {}", e),
+            invalid_data(format!(
+                "failed to read {label} file {}: {e}",
+                path.display()
             ))
         })?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| {
-            Error::Io(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!("Failed to parse client CA certificates: {}", e),
+            invalid_data(format!(
+                "failed to parse {label} from {}: {e}",
+                path.display()
             ))
         })?;
 
     if certs.is_empty() {
-        return Err(Error::Io(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "No valid certificates found in client CA file",
+        return Err(invalid_data(format!(
+            "no PEM certificates found in {label} file {}",
+            path.display()
         )));
     }
 
+    let total = certs.len();
     let mut roots = rustls::RootCertStore::empty();
-    let (added, _ignored) = roots.add_parsable_certificates(certs);
-    debug!("added {} client CA certificates from file", added);
+    let (added, ignored) = roots.add_parsable_certificates(certs);
+
+    if ignored > 0 {
+        return Err(invalid_data(format!(
+            "{ignored} of {total} certificates in {label} bundle {} could not be loaded as trust anchors",
+            path.display()
+        )));
+    }
 
     if added == 0 {
-        return Err(Error::Io(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "No valid certificates could be added from client CA file",
+        return Err(invalid_data(format!(
+            "no valid trust anchors in {label} bundle {}",
+            path.display()
         )));
     }
 
-    WebPkiClientVerifier::builder(Arc::new(roots))
-        .build()
-        .map_err(|e| {
-            Error::Io(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!("Failed to build client certificate verifier: {}", e),
-            ))
-        })
+    info!(
+        path = %path.display(),
+        certs = added,
+        "🔐 loaded {label} bundle"
+    );
+
+    Ok(roots)
+}
+
+fn invalid_data(msg: impl Into<String>) -> Error {
+    Error::Io(std::io::Error::new(
+        std::io::ErrorKind::InvalidData,
+        msg.into(),
+    ))
 }
 
 fn build_connector(config_key: &ConnectorConfigKey) -> Result<Arc<ClientConfig>, Error> {
-    let mut roots = rustls::RootCertStore::empty();
-
-    if let Some(ca_path) = config_key.ca_path.as_ref() {
-        debug!("loading CA certificate from: {}", ca_path.display());
-
-        let certs = CertificateDer::pem_file_iter(ca_path)
-            .map_err(|e| {
-                Error::Io(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    format!("Failed to read CA certificate file: {}", e),
-                ))
-            })?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| {
-                Error::Io(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    format!("Failed to parse CA certificates: {}", e),
-                ))
-            })?;
-
-        if certs.is_empty() {
-            return Err(Error::Io(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "No valid certificates found in CA file",
-            )));
-        }
-
-        let (added, _ignored) = roots.add_parsable_certificates(certs);
-        debug!("added {} CA certificates from file", added);
-
-        if added == 0 {
-            return Err(Error::Io(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "No valid certificates could be added from CA file",
-            )));
-        }
+    let roots = if let Some(ca_path) = config_key.ca_path.as_ref() {
+        load_ca_bundle(ca_path, "server CA")?
     } else if matches!(
         config_key.mode,
         TlsVerifyMode::VerifyCa | TlsVerifyMode::VerifyFull
     ) {
         debug!("no custom CA certificate provided, loading system certificates");
+        let mut roots = rustls::RootCertStore::empty();
         let result = rustls_native_certs::load_native_certs();
         for cert in result.certs {
             roots.add(cert)?;
@@ -277,7 +268,10 @@ fn build_connector(config_key: &ConnectorConfigKey) -> Result<Arc<ClientConfig>,
             );
         }
         debug!("loaded {} system CA certificates", roots.len());
-    }
+        roots
+    } else {
+        rustls::RootCertStore::empty()
+    };
 
     let config = match config_key.mode {
         TlsVerifyMode::Disabled => ClientConfig::builder()
@@ -713,5 +707,80 @@ mod tests {
     #[test]
     fn cn_from_empty_certs() {
         assert_eq!(cn_from_certs(&[]), None);
+    }
+
+    #[test]
+    fn load_ca_bundle_loads_full_chain() {
+        crate::logger();
+
+        let chain = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/tls/ca_chain.pem");
+        let roots = super::load_ca_bundle(&chain, "client CA")
+            .expect("ca_chain.pem bundles root + intermediate");
+
+        assert_eq!(roots.len(), 2, "every PEM block becomes a trust anchor");
+    }
+
+    #[test]
+    fn load_ca_bundle_errors_on_missing_file() {
+        crate::logger();
+        let missing = PathBuf::from("/tmp/pgdog_nonexistent_ca.pem");
+        assert!(super::load_ca_bundle(&missing, "client CA").is_err());
+    }
+
+    #[test]
+    fn client_cert_verifier_accepts_intermediate_signed_cert() {
+        crate::logger();
+
+        let chain = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/tls/ca_chain.pem");
+        let verifier =
+            super::build_client_cert_verifier(&chain).expect("verifier builds from chain bundle");
+
+        let client_pem = include_str!("../../tests/tls/client_signed_by_intermediate.pem");
+        let leaf: CertificateDer<'static> =
+            rustls_pki_types::CertificateDer::pem_slice_iter(client_pem.as_bytes())
+                .next()
+                .expect("client cert PEM has one block")
+                .expect("client cert parses");
+
+        // Use the cert's notBefore as "now" so the test does not drift if the fixture
+        // gets regenerated with a non-current validity window.
+        use x509_parser::certificate::X509Certificate;
+        let (_, parsed) = X509Certificate::from_der(&leaf).expect("parse leaf cert");
+        let now = rustls::pki_types::UnixTime::since_unix_epoch(std::time::Duration::from_secs(
+            parsed.validity().not_before.timestamp() as u64 + 60,
+        ));
+
+        verifier
+            .verify_client_cert(&leaf, &[], now)
+            .expect("intermediate trust anchor accepts leaf signed by it");
+    }
+
+    #[test]
+    fn client_cert_verifier_rejects_unknown_signer_when_only_root_loaded() {
+        crate::logger();
+
+        // Trust store contains only the root; client presents only the leaf
+        // (no intermediate in the handshake), so webpki cannot build the chain.
+        let root_only = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/tls/ca_root.pem");
+        let verifier = super::build_client_cert_verifier(&root_only)
+            .expect("verifier builds from root-only bundle");
+
+        let client_pem = include_str!("../../tests/tls/client_signed_by_intermediate.pem");
+        let leaf: CertificateDer<'static> =
+            rustls_pki_types::CertificateDer::pem_slice_iter(client_pem.as_bytes())
+                .next()
+                .expect("client cert PEM has one block")
+                .expect("client cert parses");
+
+        use x509_parser::certificate::X509Certificate;
+        let (_, parsed) = X509Certificate::from_der(&leaf).expect("parse leaf cert");
+        let now = rustls::pki_types::UnixTime::since_unix_epoch(std::time::Duration::from_secs(
+            parsed.validity().not_before.timestamp() as u64 + 60,
+        ));
+
+        assert!(
+            verifier.verify_client_cert(&leaf, &[], now).is_err(),
+            "leaf signed by missing intermediate must be rejected"
+        );
     }
 }
