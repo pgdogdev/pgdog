@@ -3,6 +3,15 @@ set -e
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 source ${SCRIPT_DIR}/../common.sh
 
+# Force backend Postgres to require TLS in GitHub CI so we exercise the
+# client<->PgDog<->Postgres path end to end. Skipped locally because dev
+# clusters aren't guaranteed to have server certs configured.
+if [ "${GITHUB_ACTIONS:-}" = "true" ]; then
+    psql -c "ALTER SYSTEM SET ssl TO on"
+    PSQL_VERSION=$(psql -tAc "SELECT current_setting('server_version_num')::int / 10000")
+    sudo pg_ctlcluster "${PSQL_VERSION}" main restart
+fi
+
 run_pgdog integration/tls
 
 # psql requires private keys to be 0600 (git doesn't preserve this).
