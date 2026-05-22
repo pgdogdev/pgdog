@@ -1,6 +1,6 @@
 //! PostgreSQL server connection.
 
-use std::time::Duration;
+use std::{ops::Deref, time::Duration};
 
 use bytes::{BufMut, BytesMut};
 use rustls_pki_types::ServerName;
@@ -143,7 +143,7 @@ impl Server {
         addr: &Address,
         options: ServerOptions,
         connect_reason: ConnectReason,
-        auth_secret: &str,
+        auth_secret: &super::pool::Password,
     ) -> Result<Self, Error> {
         debug!("=> {}", addr);
         let stream = TcpStream::connect(addr.addr().await?).await?;
@@ -191,7 +191,7 @@ impl Server {
                     Ok(tls_stream) => {
                         debug!("TLS handshake successful with {}", addr.host);
                         let cipher = tokio_rustls::TlsStream::Client(tls_stream);
-                        stream = Stream::tls(cipher, config.config.memory.net_buffer);
+                        stream = Stream::tls(cipher, config.config.memory.net_buffer, None);
                     }
                     Err(e) => {
                         error!("TLS handshake failed with {:?} [{}]", e, addr);
@@ -243,7 +243,7 @@ impl Server {
                     match auth {
                         Authentication::Ok => break,
                         Authentication::ClearTextPassword => {
-                            let password = Password::new_password(auth_secret);
+                            let password = Password::new_password(auth_secret.deref());
                             stream.send_flush(&password).await?;
                         }
                         Authentication::Sasl(_) => {
@@ -319,10 +319,11 @@ impl Server {
         let params: Parameters = params.into();
 
         info!(
-            "new server connection [{}, auth: {}, reason: {}] {}",
-            addr,
+            "new server connection: auth={}, source={}, reason={} [{}] {}",
             auth_type,
+            auth_secret.source,
             connect_reason,
+            addr,
             if stream.is_tls() { "🔒" } else { "" },
         );
 
@@ -1223,10 +1224,10 @@ impl Drop for Server {
         self.stats().disconnect();
         if let Some(mut stream) = self.stream.take() {
             info!(
-                "closing server connection [{}, state: {}, reason: {}]",
-                self.addr,
+                "closing server connection: state={}, reason={} [{}]",
                 self.stats.get_state(),
                 self.disconnect_reason.take().unwrap_or_default(),
+                self.addr,
             );
 
             spawn(async move {
@@ -1241,6 +1242,8 @@ impl Drop for Server {
 // Used for testing.
 #[cfg(test)]
 pub mod test {
+    use std::time::SystemTime;
+
     use bytes::{BufMut, BytesMut};
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
@@ -1248,7 +1251,10 @@ pub mod test {
     };
 
     use crate::frontend::PreparedStatements as FrontendPreparedStatements;
-    use crate::{config::Memory, frontend::PreparedStatements, net::*};
+    use crate::{
+        backend::pool::token_cache::TokenCache, config::Memory, frontend::PreparedStatements,
+        net::*,
+    };
 
     use super::{Error, *};
 
@@ -1330,6 +1336,22 @@ pub mod test {
         rewritten_name
     }
 
+    /// Connect to the `pgdog1` database on the test server.
+    /// Used by tests that need a second, distinct database so that
+    /// row locks on the two databases do not share a lock namespace.
+    pub async fn test_server_pgdog1_db() -> Server {
+        Server::connect(
+            &Address {
+                database_name: "pgdog1".into(),
+                ..Address::new_test()
+            },
+            ServerOptions::default(),
+            ConnectReason::Other,
+        )
+        .await
+        .unwrap()
+    }
+
     pub async fn test_replication_server() -> Server {
         Server::connect(
             &Address::new_test(),
@@ -1388,9 +1410,13 @@ pub mod test {
         addr.server_iam_region = Some("us-east-1".into());
         addr.passwords = vec!["wrong-password".into()];
 
-        crate::backend::auth::rds_iam::set_test_token_override(Some(expected_secret));
+        TokenCache::global().set(
+            &addr,
+            expected_secret,
+            SystemTime::now() + Duration::from_secs(3600),
+        );
         let result = Server::connect(&addr, ServerOptions::default(), ConnectReason::Other).await;
-        crate::backend::auth::rds_iam::set_test_token_override(None);
+        TokenCache::global().evict(&addr);
 
         let server = result.unwrap();
         drop(server);
@@ -1444,11 +1470,13 @@ pub mod test {
         addr.server_auth = crate::config::ServerAuth::AzureWorkloadIdentity;
         addr.passwords = vec!["wrong-password".into()];
 
-        crate::backend::auth::azure_workload_identity::set_test_token_override(Some(
+        TokenCache::global().set(
+            &addr,
             expected_secret,
-        ));
+            SystemTime::now() + Duration::from_secs(3600),
+        );
         let result = Server::connect(&addr, ServerOptions::default(), ConnectReason::Other).await;
-        crate::backend::auth::azure_workload_identity::set_test_token_override(None);
+        TokenCache::global().evict(&addr);
 
         let server = result.unwrap();
         drop(server);

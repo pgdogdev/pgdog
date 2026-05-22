@@ -76,12 +76,18 @@ pub struct Cluster {
     connection_recovery: ConnectionRecovery,
     client_connection_recovery: ConnectionRecovery,
     query_parser_engine: QueryParserEngine,
+    log_min_duration_parse: Option<Duration>,
+    log_query_sample_length: usize,
     reload_schema_on_ddl: bool,
     load_schema: LoadSchema,
     resharding_parallel_copies: usize,
     resharding_copy_retry_max_attempts: usize,
     resharding_copy_retry_min_delay: Duration,
+    resharding_replication_retry_max_attempts: usize,
+    resharding_replication_retry_min_delay: Duration,
     regex_parser: RegexParser,
+    mutual_tls: bool,
+    identity: Option<String>,
 }
 
 /// Sharding configuration from the cluster.
@@ -97,6 +103,8 @@ pub struct ShardingSchema {
     pub rewrite: Rewrite,
     /// Query parser engine.
     pub query_parser_engine: QueryParserEngine,
+    pub log_min_duration_parse: Option<Duration>,
+    pub log_query_sample_length: usize,
 }
 
 impl ShardingSchema {
@@ -152,6 +160,8 @@ pub struct ClusterConfig<'a> {
     pub pub_sub_channel_size: usize,
     pub query_parser: QueryParserLevel,
     pub query_parser_engine: QueryParserEngine,
+    pub log_min_duration_parse: Option<Duration>,
+    pub log_query_sample_length: usize,
     pub connection_recovery: ConnectionRecovery,
     pub client_connection_recovery: ConnectionRecovery,
     pub lsn_check_interval: Duration,
@@ -160,8 +170,12 @@ pub struct ClusterConfig<'a> {
     pub resharding_parallel_copies: usize,
     pub resharding_copy_retry_max_attempts: usize,
     pub resharding_copy_retry_min_delay: u64,
+    pub resharding_replication_retry_max_attempts: usize,
+    pub resharding_replication_retry_min_delay: u64,
     pub regex_parser_limit: usize,
     pub pub_sub_enabled: bool,
+    pub mutual_tls: bool,
+    pub identity: &'a Option<String>,
 }
 
 impl<'a> ClusterConfig<'a> {
@@ -209,6 +223,8 @@ impl<'a> ClusterConfig<'a> {
             pub_sub_channel_size: general.pub_sub_channel_size,
             query_parser: general.query_parser,
             query_parser_engine: general.query_parser_engine,
+            log_min_duration_parse: general.log_min_duration_parse(),
+            log_query_sample_length: general.log_query_sample_length,
             connection_recovery: general.connection_recovery,
             client_connection_recovery: general.client_connection_recovery,
             lsn_check_interval: Duration::from_millis(general.lsn_check_interval),
@@ -217,8 +233,13 @@ impl<'a> ClusterConfig<'a> {
             resharding_parallel_copies: general.resharding_parallel_copies,
             resharding_copy_retry_max_attempts: general.resharding_copy_retry_max_attempts,
             resharding_copy_retry_min_delay: general.resharding_copy_retry_min_delay,
+            resharding_replication_retry_max_attempts: general
+                .resharding_replication_retry_max_attempts,
+            resharding_replication_retry_min_delay: general.resharding_replication_retry_min_delay,
             regex_parser_limit: general.regex_parser_limit,
             pub_sub_enabled: general.pub_sub_enabled(),
+            mutual_tls: config.general.tls_client_validate_cn,
+            identity: &user.identity,
         }
     }
 }
@@ -253,13 +274,19 @@ impl Cluster {
             client_connection_recovery,
             lsn_check_interval,
             query_parser_engine,
+            log_min_duration_parse,
+            log_query_sample_length,
             reload_schema_on_ddl,
             load_schema,
             resharding_parallel_copies,
             resharding_copy_retry_max_attempts,
             resharding_copy_retry_min_delay,
+            resharding_replication_retry_max_attempts,
+            resharding_replication_retry_min_delay,
             regex_parser_limit,
             pub_sub_enabled,
+            mutual_tls,
+            identity,
         } = config;
 
         let identifier = Arc::new(DatabaseUser {
@@ -307,12 +334,20 @@ impl Cluster {
             connection_recovery,
             client_connection_recovery,
             query_parser_engine,
+            log_min_duration_parse,
+            log_query_sample_length,
             reload_schema_on_ddl,
             load_schema,
             resharding_parallel_copies,
             resharding_copy_retry_max_attempts,
             resharding_copy_retry_min_delay: Duration::from_millis(resharding_copy_retry_min_delay),
+            resharding_replication_retry_max_attempts,
+            resharding_replication_retry_min_delay: Duration::from_millis(
+                resharding_replication_retry_min_delay,
+            ),
             regex_parser: RegexParser::new(regex_parser_limit, query_parser),
+            mutual_tls,
+            identity: identity.clone(),
         }
     }
 
@@ -373,6 +408,12 @@ impl Cluster {
 
     pub fn passwords(&self) -> &[PasswordKind] {
         &self.passwords
+    }
+
+    /// Get user identity which should match the TLS certificate it provided
+    /// when connecting.
+    pub fn identity(&self) -> Option<&str> {
+        self.identity.as_deref()
     }
 
     /// User name.
@@ -499,6 +540,10 @@ impl Cluster {
         &self.multi_tenant
     }
 
+    pub fn mutual_tls(&self) -> bool {
+        self.mutual_tls
+    }
+
     /// Get replication configuration for this cluster.
     pub fn replication_sharding_config(&self) -> Option<ReplicationConfig> {
         self.replication_sharding
@@ -514,6 +559,8 @@ impl Cluster {
             schemas: self.sharded_schemas.clone(),
             rewrite: self.rewrite.clone(),
             query_parser_engine: self.query_parser_engine,
+            log_min_duration_parse: self.log_min_duration_parse,
+            log_query_sample_length: self.log_query_sample_length,
         }
     }
 
@@ -572,6 +619,17 @@ impl Cluster {
     /// Base delay between table copy retry attempts. Doubles each attempt, capped at 32×.
     pub fn resharding_copy_retry_min_delay(&self) -> &Duration {
         &self.resharding_copy_retry_min_delay
+    }
+
+    /// Maximum consecutive replication-subscriber errors before the error is propagated.
+    /// `0` means retry indefinitely.
+    pub fn resharding_replication_retry_max_attempts(&self) -> usize {
+        self.resharding_replication_retry_max_attempts
+    }
+
+    /// Base delay between replication-subscriber retry attempts.
+    pub fn resharding_replication_retry_min_delay(&self) -> Duration {
+        self.resharding_replication_retry_min_delay
     }
 
     /// Launch the connection pools.
@@ -823,6 +881,37 @@ mod test {
             let mut cluster = Self::new_test(config);
             cluster.shards.pop();
 
+            cluster
+        }
+
+        /// Two shards targeting different databases on the same server.
+        /// Gives separate lock namespaces without needing two Postgres instances.
+        pub fn new_test_two_databases(config: &ConfigAndUsers) -> Cluster {
+            let mut cluster = Self::new_test(config);
+            let shard1 = cluster.shards.last_mut().unwrap();
+            *shard1 = Shard::new(ShardConfig {
+                number: 1,
+                primary: &Some(PoolConfig {
+                    address: Address {
+                        database_name: "pgdog1".into(),
+                        ..Address::new_test()
+                    },
+                    config: Config::default(),
+                }),
+                replicas: &[PoolConfig {
+                    address: Address {
+                        database_name: "pgdog1".into(),
+                        configured_role: Role::Replica,
+                        ..Address::new_test()
+                    },
+                    config: Config::default(),
+                }],
+                lb_strategy: LoadBalancingStrategy::Random,
+                rw_split: ReadWriteSplit::IncludePrimary,
+                identifier: cluster.identifier.clone(),
+                lsn_check_interval: Duration::MAX,
+                pub_sub_enabled: false,
+            });
             cluster
         }
 

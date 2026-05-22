@@ -4,6 +4,7 @@ use std::{
 };
 
 use pgdog_config::{PoolerMode, PreparedStatements, pooling::ConnectionRecovery};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::{LsnStats, ReplicaLag};
@@ -12,7 +13,7 @@ use crate::{LsnStats, ReplicaLag};
 ///
 /// These are updated after each connection check-in.
 ///
-#[derive(Debug, Clone, Default, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Copy, Serialize, Deserialize, JsonSchema)]
 pub struct Counts {
     /// Number of committed transactions.
     pub xact_count: usize,
@@ -170,7 +171,7 @@ impl Div<usize> for Counts {
     }
 }
 
-#[derive(Debug, Clone, Default, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Copy, Serialize, Deserialize, JsonSchema)]
 pub struct Stats {
     // Total counts.
     pub counts: Counts,
@@ -228,7 +229,7 @@ impl Stats {
 
 /// Real-time state of each connection pool.
 /// Pool state.
-#[derive(Debug, Serialize, Deserialize, Clone, Copy)]
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, JsonSchema)]
 pub struct State {
     /// Number of connections checked out.
     pub checked_out: usize,
@@ -315,6 +316,8 @@ pub struct Config {
     pub rollback_timeout: Duration,
     /// Statement timeout
     pub statement_timeout: Option<Duration>,
+    /// Lock timeout
+    pub lock_timeout: Option<Duration>,
     /// Replication mode.
     pub replication_mode: bool,
     /// Pooler mode.
@@ -366,6 +369,7 @@ impl Default for Config {
             ban_timeout: Duration::from_secs(300),
             rollback_timeout: Duration::from_secs(5),
             statement_timeout: None,
+            lock_timeout: None,
             replication_mode: false,
             pooler_mode: PoolerMode::default(),
             read_only: false,

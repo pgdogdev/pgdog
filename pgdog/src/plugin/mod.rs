@@ -108,7 +108,10 @@ pub fn load(config: &Config) -> Result<(), libloading::Error> {
 
             let pd_config = PdConfig {
                 log_level: PdStr::from(config.general.log_level.as_str()),
-                log_json: if config.general.log_format == LogFormat::Json {
+                log_json: if matches!(
+                    config.general.log_format,
+                    LogFormat::Json | LogFormat::JsonFlattened
+                ) {
                     1
                 } else {
                     0

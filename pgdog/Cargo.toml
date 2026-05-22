@@ -1,6 +1,6 @@
 [package]
 name = "pgdog"
-version = "0.1.39"
+version = "0.1.41"
 edition = "2021"
 description = "Modern PostgreSQL proxy, pooler and load balancer."
 authors = ["PgDog <hi@pgdog.dev>"]
@@ -79,6 +79,7 @@ crc32c = "0.6.8"
 bit-vec = "0.8"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-webpki-roots-no-provider"] }
 hex = "0.4"
+x509-parser = "0.18"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

@@ -4,12 +4,14 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
+use pgdog_config::ServerAuth;
 use rand::Rng;
 use tokio::spawn;
 use tokio::task::yield_now;
 use tokio::time::{sleep, timeout, Instant};
 use tokio_util::task::TaskTracker;
 
+use crate::backend::pool::token_cache::TokenCache;
 use crate::backend::ConnectReason;
 use crate::net::ProtocolMessage;
 use crate::net::{Parse, Protocol, Query, Sync};
@@ -951,4 +953,215 @@ async fn test_lsn_monitor() {
     );
 
     pool.shutdown();
+}
+
+#[tokio::test]
+async fn test_token_refresh_loop_primes_cache_on_cold_start() {
+    crate::logger();
+
+    let config = Config {
+        inner: pgdog_stats::Config {
+            max: 1,
+            min: 0,
+            ..Config::default().inner
+        },
+    };
+
+    let addr = Address {
+        host: "token-refresh-test.internal".into(),
+        port: 15500,
+        user: "refresh_user".into(),
+        server_auth: ServerAuth::RdsIam,
+        server_iam_region: Some("us-east-1".into()),
+        ..Default::default()
+    };
+
+    // Pre-populate the cache so the loop doesn't hit real AWS.
+    let expiry = SystemTime::now() + Duration::from_millis(200);
+    TokenCache::global().set(&addr, "initial-token".into(), expiry);
+
+    let pool = Pool::new(&PoolConfig {
+        address: addr.clone(),
+        config,
+    });
+    pool.launch();
+
+    // Cache must be populated immediately.
+    assert!(TokenCache::global().expires_at(&addr).is_some());
+
+    pool.shutdown();
+    TokenCache::global().evict(&addr);
+}
+
+#[tokio::test]
+async fn test_token_refresh_loop_refreshes_before_expiry() {
+    crate::logger();
+
+    let config = Config {
+        inner: pgdog_stats::Config {
+            max: 1,
+            min: 0,
+            ..Config::default().inner
+        },
+    };
+
+    let addr = Address {
+        host: "token-refresh-expiry.internal".into(),
+        port: 15501,
+        user: "refresh_user".into(),
+        server_auth: ServerAuth::RdsIam,
+        server_iam_region: Some("us-east-1".into()),
+        ..Default::default()
+    };
+
+    // Set a token that expires well in the future — refresh loop
+    // should sleep and not touch the cache during the test window.
+    let expiry = SystemTime::now() + Duration::from_secs(3600);
+    TokenCache::global().set(&addr, "long-lived-token".into(), expiry);
+
+    let pool = Pool::new(&PoolConfig {
+        address: addr.clone(),
+        config,
+    });
+    pool.launch();
+
+    sleep(Duration::from_millis(100)).await;
+
+    // Token must be unchanged — refresh window hasn't arrived.
+    assert_eq!(
+        TokenCache::global().expires_at(&addr).unwrap(),
+        expiry,
+        "token should not have been refreshed yet"
+    );
+
+    pool.shutdown();
+    TokenCache::global().evict(&addr);
+}
+
+#[tokio::test]
+async fn test_token_refresh_loop_evicts_on_failed_refresh() {
+    crate::logger();
+
+    let config = Config {
+        inner: pgdog_stats::Config {
+            max: 1,
+            min: 0,
+            ..Config::default().inner
+        },
+    };
+
+    let addr = Address {
+        host: "token-refresh-fail.internal".into(),
+        port: 15502,
+        user: "refresh_user".into(),
+        server_auth: ServerAuth::RdsIam,
+        server_iam_region: None, // no region — fetch_token will fail
+        ..Default::default()
+    };
+
+    // Set a token that is already within the expiry buffer so the
+    // loop fires immediately and tries to refresh.
+    let expiry = SystemTime::now() + Duration::from_secs(10);
+    TokenCache::global().set(&addr, "stale-token".into(), expiry);
+
+    let pool = Pool::new(&PoolConfig {
+        address: addr.clone(),
+        config,
+    });
+    pool.launch();
+
+    // Give the refresh loop time to fire and fail.
+    sleep(Duration::from_millis(200)).await;
+
+    // Fetch failed (no region → resolve_region errors) so entry must be evicted.
+    assert!(
+        TokenCache::global().expires_at(&addr).is_none(),
+        "cache entry must be evicted after a failed refresh"
+    );
+
+    pool.shutdown();
+    TokenCache::global().evict(&addr);
+}
+
+#[tokio::test]
+async fn test_token_refresh_loop_not_spawned_for_password_auth() {
+    crate::logger();
+
+    let config = Config {
+        inner: pgdog_stats::Config {
+            max: 1,
+            min: 0,
+            ..Config::default().inner
+        },
+    };
+
+    let addr = Address {
+        host: "token-refresh-password.internal".into(),
+        port: 15503,
+        user: "refresh_user".into(),
+        server_auth: ServerAuth::Password,
+        ..Default::default()
+    };
+
+    // Poison the cache to detect any unexpected writes.
+    TokenCache::global().evict(&addr);
+
+    let pool = Pool::new(&PoolConfig {
+        address: addr.clone(),
+        config,
+    });
+    pool.launch();
+
+    sleep(Duration::from_millis(100)).await;
+
+    // No token refresh loop was spawned — cache must remain empty.
+    assert!(
+        TokenCache::global().expires_at(&addr).is_none(),
+        "password auth pools must not write to the token cache"
+    );
+
+    pool.shutdown();
+}
+
+#[tokio::test]
+async fn test_token_refresh_loop_stops_on_shutdown() {
+    crate::logger();
+
+    let config = Config {
+        inner: pgdog_stats::Config {
+            max: 1,
+            min: 0,
+            ..Config::default().inner
+        },
+    };
+
+    let addr = Address {
+        host: "token-refresh-shutdown.internal".into(),
+        port: 15504,
+        user: "refresh_user".into(),
+        server_auth: ServerAuth::AzureWorkloadIdentity,
+        ..Default::default()
+    };
+
+    let expiry = SystemTime::now() + Duration::from_secs(3600);
+    TokenCache::global().set(&addr, "token".into(), expiry);
+
+    let pool = Pool::new(&PoolConfig {
+        address: addr.clone(),
+        config,
+    });
+    pool.launch();
+
+    sleep(Duration::from_millis(50)).await;
+    pool.shutdown();
+    sleep(Duration::from_millis(50)).await;
+
+    // Manually evict and verify the loop no longer writes back.
+    TokenCache::global().evict(&addr);
+    sleep(Duration::from_millis(100)).await;
+
+    assert!(
+        TokenCache::global().expires_at(&addr).is_none(),
+        "refresh loop must not write to cache after pool shutdown"
+    );
 }

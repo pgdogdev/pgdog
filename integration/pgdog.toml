@@ -23,11 +23,11 @@ tls_private_key = "integration/tls/key.pem"
 query_parser_engine = "pg_query_raw"
 system_catalogs = "omnisharded_sticky"
 reload_schema_on_ddl = false
-idle_healthcheck_delay = 50000000
+# idle_healthcheck_delay = 50000000
 unique_id_function = "standard"
 auth_type = "scram"
 # log_dedup_window = 30_000
-# log_dedup_threshold = 1
+# log_dedup_threshold =
 
 [memory]
 net_buffer = 8096
@@ -367,6 +367,13 @@ database = "pgdog_sharded"
 name = "sharded_list_uuid"
 column = "id_uuid"
 data_type = "uuid"
+
+[[sharded_tables]]
+database = "pgdog_sharded"
+name = "hits"
+column = "userid"
+data_type = "bigint"
+primary = true
 
 [[sharded_mappings]]
 database = "pgdog_sharded"

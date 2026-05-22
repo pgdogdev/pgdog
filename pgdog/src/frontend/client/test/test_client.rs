@@ -154,6 +154,17 @@ impl TestClient {
         Self::new(params).await
     }
 
+    pub(crate) async fn new_cross_shard_disabled_replicas(params: Parameters) -> Self {
+        load_test_replicas();
+
+        let mut config = config().deref().clone();
+        config.config.general.cross_shard_disabled = true;
+        set(config).unwrap();
+        reload_from_existing().unwrap();
+
+        Self::new(params).await
+    }
+
     /// New client with cross-shard-queries disabled.
     pub(crate) async fn new_cross_shard_disabled(params: Parameters) -> Self {
         load_test_sharded();

@@ -7,8 +7,11 @@ use pgdog_config::Role;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-use super::Password;
-use crate::backend::{pool::dns_cache::DnsCache, Error};
+use super::{password::PasswordSource, Password};
+use crate::backend::auth::{azure_workload_identity, rds_iam};
+use crate::backend::pool::dns_cache::DnsCache;
+use crate::backend::pool::token_cache::TokenCache;
+use crate::backend::Error;
 use crate::config::{config, Database, ServerAuth, User};
 
 /// Server address.
@@ -92,14 +95,27 @@ impl Address {
     }
 
     /// Get address passwords, in valid order.
+    ///
+    /// For external identity providers the token is served from the global
+    /// [`TokenCache`], which is kept warm by the pool monitor. This call
+    /// only blocks on the very first connection before the monitor has had
+    /// a chance to prime the cache.
     pub async fn auth_secrets(&self) -> Result<Vec<Password>, Error> {
         let mut secrets = match self.server_auth {
             ServerAuth::Password => self.passwords.clone(),
-            ServerAuth::RdsIam => vec![crate::backend::auth::rds_iam::token(self).await?.into()],
+
+            ServerAuth::RdsIam => {
+                let token = TokenCache::global()
+                    .get_or_fetch(self, rds_iam::token)
+                    .await?;
+                vec![Password::new(&token, PasswordSource::RdsIam)]
+            }
+
             ServerAuth::AzureWorkloadIdentity => {
-                vec![crate::backend::auth::azure_workload_identity::token(self)
-                    .await?
-                    .into()]
+                let token = TokenCache::global()
+                    .get_or_fetch(self, azure_workload_identity::token)
+                    .await?;
+                vec![Password::new(&token, PasswordSource::AzureIdentity)]
             }
         };
 
@@ -180,7 +196,11 @@ impl TryFrom<Url> for Address {
 
 #[cfg(test)]
 mod test {
+    use std::time::{Duration, SystemTime};
+
     use super::*;
+
+    // ── Address::new ─────────────────────────────────────────────────────────
 
     #[test]
     fn test_defaults() {
@@ -269,10 +289,12 @@ mod test {
         let address = Address::new(&database, &user, 0);
         assert!(
             address.passwords.is_empty(),
-            "RDS IAM addresses must not carry static passwords"
+            "Azure Workload Identity addresses must not carry static passwords"
         );
         assert_eq!(address.server_auth, ServerAuth::AzureWorkloadIdentity);
     }
+
+    // ── TryFrom<Url> ─────────────────────────────────────────────────────────
 
     #[test]
     fn test_addr_from_url() {
@@ -288,30 +310,12 @@ mod test {
         assert!(addr.server_iam_region.is_none());
     }
 
+    // ── auth_secrets: password mode ──────────────────────────────────────────
+
     #[tokio::test]
     async fn test_auth_secret_password_mode() {
         let addr = Address::new_test();
         assert_eq!(addr.auth_secrets().await.unwrap().first().unwrap(), "pgdog");
-    }
-
-    #[tokio::test]
-    async fn test_auth_secret_rds_iam_mode_uses_generator() {
-        let mut addr = Address::new_test();
-        addr.server_auth = ServerAuth::RdsIam;
-        addr.server_iam_region = Some("us-east-1".into());
-        addr.passwords = vec!["wrong".into()];
-
-        crate::backend::auth::rds_iam::set_test_token_override(Some("token-from-iam".into()));
-        let secret = addr
-            .auth_secrets()
-            .await
-            .unwrap()
-            .first()
-            .unwrap()
-            .to_string();
-        crate::backend::auth::rds_iam::set_test_token_override(None);
-
-        assert_eq!(secret, "token-from-iam");
     }
 
     #[tokio::test]
@@ -387,15 +391,26 @@ mod test {
         assert!(!secrets.get(1).unwrap().is_valid());
     }
 
-    #[tokio::test]
-    async fn test_auth_secret_azure_workload_identity_mode_uses_generator() {
-        let mut addr = Address::new_test();
-        addr.server_auth = ServerAuth::AzureWorkloadIdentity;
-        addr.passwords = vec!["wrong".into()];
+    // ── auth_secrets: external identity ──────────────────────────────────────
+    //
+    // These tests pre-populate the global token cache rather than hitting real
+    // cloud endpoints. Each uses a unique (host, port, user) combination and
+    // evicts after the test to avoid cross-test interference.
 
-        crate::backend::auth::azure_workload_identity::set_test_token_override(Some(
-            "token-from-iam".into(),
-        ));
+    #[tokio::test]
+    async fn test_auth_secret_rds_iam_serves_token_from_cache() {
+        let addr = Address {
+            host: "auth-secrets-rds.internal".into(),
+            port: 15432,
+            user: "rds_user".into(),
+            server_auth: ServerAuth::RdsIam,
+            server_iam_region: Some("us-east-1".into()),
+            ..Default::default()
+        };
+
+        let expiry = SystemTime::now() + Duration::from_secs(3600);
+        TokenCache::global().set(&addr, "rds-token".into(), expiry);
+
         let secret = addr
             .auth_secrets()
             .await
@@ -403,8 +418,65 @@ mod test {
             .first()
             .unwrap()
             .to_string();
-        crate::backend::auth::azure_workload_identity::set_test_token_override(None);
 
-        assert_eq!(secret, "token-from-iam");
+        TokenCache::global().evict(&addr);
+
+        assert_eq!(secret, "rds-token");
+    }
+
+    #[tokio::test]
+    async fn test_auth_secret_azure_workload_identity_serves_token_from_cache() {
+        let addr = Address {
+            host: "auth-secrets-azure.internal".into(),
+            port: 15433,
+            user: "azure_user".into(),
+            server_auth: ServerAuth::AzureWorkloadIdentity,
+            ..Default::default()
+        };
+
+        let expiry = SystemTime::now() + Duration::from_secs(3600);
+        TokenCache::global().set(&addr, "azure-token".into(), expiry);
+
+        let secret = addr
+            .auth_secrets()
+            .await
+            .unwrap()
+            .first()
+            .unwrap()
+            .to_string();
+
+        TokenCache::global().evict(&addr);
+
+        assert_eq!(secret, "azure-token");
+    }
+
+    #[tokio::test]
+    async fn test_auth_secret_stale_token_still_returned() {
+        // A stale token (past its expiry) is still handed to the server.
+        // The monitor is responsible for refreshing it; auth_secrets never
+        // blocks on a refresh.
+        let addr = Address {
+            host: "auth-secrets-stale.internal".into(),
+            port: 15434,
+            user: "stale_user".into(),
+            server_auth: ServerAuth::RdsIam,
+            server_iam_region: Some("eu-west-1".into()),
+            ..Default::default()
+        };
+
+        let stale_expiry = SystemTime::now() - Duration::from_secs(60);
+        TokenCache::global().set(&addr, "stale-token".into(), stale_expiry);
+
+        let secret = addr
+            .auth_secrets()
+            .await
+            .unwrap()
+            .first()
+            .unwrap()
+            .to_string();
+
+        TokenCache::global().evict(&addr);
+
+        assert_eq!(secret, "stale-token");
     }
 }

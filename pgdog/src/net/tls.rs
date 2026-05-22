@@ -15,11 +15,12 @@ use tokio_rustls::rustls::{
     self,
     client::danger::{ServerCertVerified, ServerCertVerifier},
     pki_types::pem::PemObject,
-    server::{danger::ClientCertVerifier, WebPkiClientVerifier},
+    server::{danger::ClientCertVerifier, ServerConnection, WebPkiClientVerifier},
     ClientConfig,
 };
 use tokio_rustls::{TlsAcceptor, TlsConnector};
 use tracing::{debug, info, warn};
+use x509_parser::prelude::FromDer;
 
 use crate::config::config;
 
@@ -74,6 +75,25 @@ fn increment_connector_build_count() {}
 /// Get the current TLS acceptor snapshot, if TLS is enabled.
 pub fn acceptor() -> Option<Arc<TlsAcceptor>> {
     ACCEPTOR.load_full()
+}
+
+/// Extract the Common Name (CN) from the peer's TLS certificate, if present.
+pub fn peer_cn(conn: &ServerConnection) -> Option<String> {
+    cn_from_certs(conn.peer_certificates()?)
+}
+
+/// Extract the Common Name (CN) from the first certificate in the chain.
+pub(crate) fn cn_from_certs(certs: &[CertificateDer<'_>]) -> Option<String> {
+    use x509_parser::certificate::X509Certificate;
+    let cert_der = certs.first()?;
+    let (_, cert) = X509Certificate::from_der(cert_der).ok()?;
+    let cn = cert
+        .subject()
+        .iter_common_name()
+        .next()
+        .and_then(|cn| cn.as_str().ok())
+        .map(String::from);
+    cn
 }
 
 /// Create new TLS connector using the current configuration.
@@ -676,5 +696,22 @@ mod tests {
         let result = connector_with_verify_mode(TlsVerifyMode::VerifyFull, Some(&good_ca_path));
 
         assert!(result.is_ok(), "Should succeed with valid cert file");
+    }
+
+    #[test]
+    fn cn_from_test_cert() {
+        let pem = include_str!("../../tests/tls/cert.pem");
+        let certs: Vec<CertificateDer<'static>> =
+            rustls_pki_types::CertificateDer::pem_slice_iter(pem.as_bytes())
+                .collect::<Result<Vec<_>, _>>()
+                .expect("parse PEM");
+
+        let cn = cn_from_certs(&certs);
+        assert_eq!(cn.as_deref(), Some("CommonNameOrHostname"));
+    }
+
+    #[test]
+    fn cn_from_empty_certs() {
+        assert_eq!(cn_from_certs(&[]), None);
     }
 }

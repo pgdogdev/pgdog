@@ -49,9 +49,9 @@ impl Users {
     pub fn check(&mut self, config: &Config) {
         for user in &mut self.users {
             if user.passwords().is_empty() {
-                if !config.general.passthrough_auth() {
+                if !config.general.passthrough_auth() && user.identity.is_none() {
                     warn!(
-                        r#"user "{}" (database "{}") doesn't have a password and passthrough auth is disabled"#,
+                        r#"user "{}" (database "{}") doesn't have a password, passthrough auth and mTLS are disabled"#,
                         user.name, user.database,
                     );
                 }
@@ -64,7 +64,10 @@ impl Users {
                     };
 
                     for database in databases {
-                        if min_pool_size > 0 {
+                        if min_pool_size > 0
+                            && user.server_password.is_none()
+                            && user.server_auth == ServerAuth::Password
+                        {
                             warn!(
                                 r#"user "{}" (database "{}") does not have a password configured, PgDog cannot connect to the server to maintain "min_pool_size" of {}, setting it to 0"#,
                                 user.name, database, min_pool_size
@@ -192,6 +195,8 @@ impl Display for PasswordKind {
 )]
 #[serde(deny_unknown_fields)]
 pub struct User {
+    /// User identity used for mTLS.
+    pub identity: Option<String>,
     /// Name of the user. Clients that connect to PgDog will need to use this username.
     ///
     /// https://docs.pgdog.dev/configuration/users.toml/users/#name
@@ -254,6 +259,19 @@ pub struct User {
     ///
     /// https://docs.pgdog.dev/configuration/users.toml/users/#statement_timeout
     pub statement_timeout: Option<u64>,
+    /// Lock timeout.
+    ///
+    /// Sets the `lock_timeout` on all server connections at connection creation.
+    /// Aborts any statement that waits longer than the specified duration to acquire a lock.
+    /// Unlike `statement_timeout`, this only counts time spent waiting for locks, not execution time.
+    /// Recommended for replication destination connections to prevent cross-shard deadlocks
+    /// from hanging indefinitely.
+    ///
+    /// **Note:** Nothing is preventing the user from manually changing this setting at runtime,
+    /// e.g., by running `SET lock_timeout TO 0`;
+    ///
+    /// https://docs.pgdog.dev/configuration/users.toml/users/#lock_timeout
+    pub lock_timeout: Option<u64>,
     /// Sets the `replication=database` parameter on user connections to Postgres. Allows this user to use replication commands.
     ///
     /// _Default:_ `false`

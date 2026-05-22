@@ -32,6 +32,11 @@ impl Waiting {
             if !guard.online {
                 return Err(Error::Offline);
             }
+            if request.read {
+                guard.stats.counts.reads += 1;
+            } else {
+                guard.stats.counts.writes += 1;
+            }
             guard.waiting.push_back(Waiter { request, tx });
             guard.full()
         };

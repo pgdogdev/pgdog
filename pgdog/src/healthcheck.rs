@@ -10,7 +10,7 @@ use hyper_util::rt::TokioIo;
 use tokio::net::TcpListener;
 use tracing::info;
 
-use crate::backend::databases::databases;
+use crate::backend::databases::{databases, Databases};
 
 pub async fn server(port: u16) -> std::io::Result<()> {
     info!("healthcheck endpoint http://0.0.0.0:{}", port);
@@ -36,17 +36,7 @@ async fn healthcheck(
     _: Request<hyper::body::Incoming>,
 ) -> Result<Response<Full<Bytes>>, Infallible> {
     let databases = databases();
-    let broken = databases.all().iter().all(|(_, cluster)| {
-        let pools = cluster
-            .shards()
-            .iter()
-            .map(|shard| shard.pools())
-            .collect::<Vec<_>>()
-            .into_iter()
-            .flatten()
-            .collect::<Vec<_>>();
-        pools.iter().all(|p| !p.healthy())
-    });
+    let broken = broken(&databases);
 
     let response = if broken { "down" } else { "up" };
     let status = if broken { 502 } else { 200 };
@@ -58,4 +48,25 @@ async fn healthcheck(
         .unwrap_or_else(|_| Response::new(Full::new(Bytes::from("Healthcheck unavailable"))));
 
     Ok(response)
+}
+
+fn broken(databases: &Databases) -> bool {
+    let mut pools = databases
+        .all()
+        .values()
+        .flat_map(|cluster| cluster.shards())
+        .flat_map(|shard| shard.pools())
+        .peekable();
+
+    pools.peek().is_some() && pools.all(|pool| !pool.healthy())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn no_pools_is_healthy() {
+        assert!(!broken(&Databases::default()));
+    }
 }

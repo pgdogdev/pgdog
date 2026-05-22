@@ -247,6 +247,8 @@ impl Error {
             Self::NotConnected | Self::NoPrimary => true,
             // Replication stalled; temporary slot is gone, next attempt starts fresh.
             Self::ReplicationTimeout => true,
+            // Postgres sent a transient error (e.g. admin_shutdown, cannot_connect_now).
+            Self::PgError(inner) => inner.is_retryable(),
             // TODO: escape-hatch when using ParallelConnection wrapper
             // the underlying error could be anything and to handler it properly
             // either the ParallelConnection wrapper should be removed or
@@ -274,6 +276,36 @@ mod tests {
         assert!(Error::NotConnected.is_retryable());
         assert!(Error::NoPrimary.is_retryable());
         assert!(Error::ReplicationTimeout.is_retryable());
+    }
+
+    #[test]
+    fn pg_error_retryable() {
+        use crate::net::messages::ErrorResponse;
+        let retryable_codes = [
+            "08000", "08001", "08003", "08004", "08006", "08007", "57P01", "57P02", "57P03",
+            "53300", "55P03",
+        ];
+        for code in retryable_codes {
+            let err = Error::PgError(Box::new(ErrorResponse {
+                code: code.into(),
+                ..Default::default()
+            }));
+            assert!(err.is_retryable(), "expected {code} to be retryable");
+        }
+    }
+
+    #[test]
+    fn pg_error_not_retryable() {
+        use crate::net::messages::ErrorResponse;
+        // 08P01 protocol_violation \ constraint/schema errors \ data errors.
+        let not_retryable = ["08P01", "23505", "42P01", "42501", ""];
+        for code in not_retryable {
+            let err = Error::PgError(Box::new(ErrorResponse {
+                code: code.into(),
+                ..Default::default()
+            }));
+            assert!(!err.is_retryable(), "expected {code} to NOT be retryable");
+        }
     }
 
     #[test]

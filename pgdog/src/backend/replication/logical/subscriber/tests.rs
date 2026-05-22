@@ -9,7 +9,7 @@ use crate::{
         replication::logical::publisher::{
             Lsn, PublicationTable, PublicationTableColumn, ReplicaIdentity, Table,
         },
-        server::test::test_server,
+        server::test::{test_server, test_server_pgdog1_db},
         Server,
     },
     config::config,
@@ -30,6 +30,7 @@ use crate::{
     },
 };
 
+use super::omni_ownership::OmniOwnership;
 use super::stream::StreamSubscriber;
 
 fn random_id() -> String {
@@ -254,18 +255,26 @@ fn x_update(u: XLogUpdate) -> CopyData {
 fn make_subscriber() -> StreamSubscriber {
     let cluster = Cluster::new_test(&config());
     let tables = vec![make_sharded_table(), make_sharded_test_b_table()];
-    StreamSubscriber::new(&cluster, &tables)
+    StreamSubscriber::new(&cluster, &tables, OmniOwnership::test())
 }
 
 fn make_subscriber_with_tables(tables: Vec<Table>) -> StreamSubscriber {
     let cluster = Cluster::new_test(&config());
-    StreamSubscriber::new(&cluster, &tables)
+    StreamSubscriber::new(&cluster, &tables, OmniOwnership::test())
+}
+
+fn make_subscriber_with_tables_two_databases(
+    tables: Vec<Table>,
+    partition: OmniOwnership,
+) -> StreamSubscriber {
+    let cluster = Cluster::new_test_two_databases(&config());
+    StreamSubscriber::new(&cluster, &tables, partition)
 }
 
 fn make_subscriber_single_shard() -> StreamSubscriber {
     let cluster = Cluster::new_test_single_shard(&config());
     let tables = vec![make_sharded_table(), make_sharded_test_b_table()];
-    StreamSubscriber::new(&cluster, &tables)
+    StreamSubscriber::new(&cluster, &tables, OmniOwnership::test())
 }
 
 /// Count rows matching the given `WHERE` predicate using a separate connection.
@@ -366,6 +375,15 @@ async fn ensure_table(server: &mut Server, table: &str) {
                 .await
                 .unwrap();
         }
+        "public.settings" => {
+            server
+                .execute(
+                    "CREATE TABLE IF NOT EXISTS public.settings (\
+                     id BIGINT PRIMARY KEY, name TEXT, value TEXT)",
+                )
+                .await
+                .unwrap();
+        }
         _ => (),
     }
 }
@@ -457,6 +475,34 @@ fn lsn_changed_tracking() {
 
     assert!(sub.set_current_lsn(200));
     assert!(sub.lsn_changed());
+}
+
+/// status_update() must always reflect the last *committed* LSN, never the
+/// working LSN set by Begin. A KeepAlive reply during an open transaction must
+/// not advance the ack pointer to the future commit LSN — doing so would cause
+/// reconnect to skip the in-flight transaction and lose data.
+#[tokio::test]
+async fn status_update_stays_at_committed_lsn_during_transaction() {
+    let mut sub = make_subscriber();
+    sub.connect().await.unwrap();
+
+    // Nothing committed yet: ack pointer is at 0.
+    assert_eq!(sub.status_update().last_flushed, 0);
+
+    // Commit a first transaction (begin LSN 50, end LSN 100).
+    sub.handle(begin_copy_data(50)).await.unwrap();
+    sub.handle(commit_copy_data(100)).await.unwrap();
+    assert_eq!(sub.status_update().last_flushed, 100);
+
+    // Open a second transaction: Begin advances lsn to 200 (future commit LSN).
+    sub.handle(begin_copy_data(200)).await.unwrap();
+    assert_eq!(sub.lsn(), 200, "working lsn follows Begin");
+    // KeepAlive mid-transaction must still report 100, not 200.
+    assert_eq!(
+        sub.status_update().last_flushed,
+        100,
+        "committed_lsn must not advance before commit"
+    );
 }
 
 // ── Relation handling tests ─────────────────────────────────────────
@@ -568,7 +614,7 @@ async fn partition_leaves_share_destination() {
     leaf_b.table.parent_name = "sharded".to_string();
 
     let cluster = Cluster::new_test_single_shard(&config());
-    let mut sub = StreamSubscriber::new(&cluster, &[leaf_a, leaf_b]);
+    let mut sub = StreamSubscriber::new(&cluster, &[leaf_a, leaf_b], OmniOwnership::test());
     let mut verify = test_server().await;
     sub.connect().await.unwrap();
 
@@ -1509,7 +1555,11 @@ fn omni_insert_copy_data(oid: Oid, a: &str, b: &str) -> CopyData {
 #[tokio::test]
 async fn full_identity_nothing_rejected() {
     let cluster = Cluster::new_test_single_shard(&config());
-    let mut sub = StreamSubscriber::new(&cluster, &[make_replica_identity_nothing_table()]);
+    let mut sub = StreamSubscriber::new(
+        &cluster,
+        &[make_replica_identity_nothing_table()],
+        OmniOwnership::test(),
+    );
     sub.connect().await.unwrap();
 
     let oid = Oid(16390);
@@ -1543,7 +1593,11 @@ async fn full_identity_nothing_rejected() {
 #[tokio::test]
 async fn full_identity_omni_no_unique_index_rejected() {
     let cluster = Cluster::new_test_single_shard(&config());
-    let mut sub = StreamSubscriber::new(&cluster, &[make_full_identity_omni_table()]);
+    let mut sub = StreamSubscriber::new(
+        &cluster,
+        &[make_full_identity_omni_table()],
+        OmniOwnership::test(),
+    );
 
     // Enforce precondition: the table must exist but have no qualifying unique index.
     // A stale unique index from a prior run would make tables_missing_unique_index() return empty,
@@ -1582,7 +1636,11 @@ async fn full_identity_omni_no_unique_index_rejected() {
 #[tokio::test]
 async fn full_identity_insert_sharded() {
     let cluster = Cluster::new_test_single_shard(&config());
-    let mut sub = StreamSubscriber::new(&cluster, &[make_full_identity_sharded_table()]);
+    let mut sub = StreamSubscriber::new(
+        &cluster,
+        &[make_full_identity_sharded_table()],
+        OmniOwnership::test(),
+    );
     let mut verify = test_server().await;
     sub.connect().await.unwrap();
 
@@ -1608,7 +1666,11 @@ async fn full_identity_insert_sharded() {
 #[tokio::test]
 async fn full_identity_update_fast_path() {
     let cluster = Cluster::new_test_single_shard(&config());
-    let mut sub = StreamSubscriber::new(&cluster, &[make_full_identity_sharded_table()]);
+    let mut sub = StreamSubscriber::new(
+        &cluster,
+        &[make_full_identity_sharded_table()],
+        OmniOwnership::test(),
+    );
     let mut verify = test_server().await;
     sub.connect().await.unwrap();
 
@@ -1663,7 +1725,11 @@ async fn full_identity_update_fast_path() {
 #[tokio::test]
 async fn full_identity_update_slow_path() {
     let cluster = Cluster::new_test_single_shard(&config());
-    let mut sub = StreamSubscriber::new(&cluster, &[make_full_identity_sharded_table()]);
+    let mut sub = StreamSubscriber::new(
+        &cluster,
+        &[make_full_identity_sharded_table()],
+        OmniOwnership::test(),
+    );
     let mut verify = test_server().await;
     sub.connect().await.unwrap();
 
@@ -1723,7 +1789,11 @@ async fn full_identity_update_slow_path() {
 #[tokio::test]
 async fn full_identity_update_slow_path_realistic_old_tuple() {
     let cluster = Cluster::new_test_single_shard(&config());
-    let mut sub = StreamSubscriber::new(&cluster, &[make_full_identity_sharded_table()]);
+    let mut sub = StreamSubscriber::new(
+        &cluster,
+        &[make_full_identity_sharded_table()],
+        OmniOwnership::test(),
+    );
     let mut verify = test_server().await;
     sub.connect().await.unwrap();
 
@@ -1780,7 +1850,11 @@ async fn full_identity_update_slow_path_realistic_old_tuple() {
 #[tokio::test]
 async fn full_identity_update_all_toasted_is_noop() {
     let cluster = Cluster::new_test_single_shard(&config());
-    let mut sub = StreamSubscriber::new(&cluster, &[make_full_identity_sharded_table()]);
+    let mut sub = StreamSubscriber::new(
+        &cluster,
+        &[make_full_identity_sharded_table()],
+        OmniOwnership::test(),
+    );
     let mut verify = test_server().await;
     sub.connect().await.unwrap();
 
@@ -1822,7 +1896,11 @@ async fn full_identity_update_all_toasted_is_noop() {
 #[tokio::test]
 async fn full_identity_delete() {
     let cluster = Cluster::new_test_single_shard(&config());
-    let mut sub = StreamSubscriber::new(&cluster, &[make_full_identity_sharded_table()]);
+    let mut sub = StreamSubscriber::new(
+        &cluster,
+        &[make_full_identity_sharded_table()],
+        OmniOwnership::test(),
+    );
     let mut verify = test_server().await;
     sub.connect().await.unwrap();
 
@@ -1860,7 +1938,11 @@ async fn full_identity_delete() {
 #[tokio::test]
 async fn full_identity_insert_omni_dedup() {
     let cluster = Cluster::new_test_single_shard(&config());
-    let mut sub = StreamSubscriber::new(&cluster, &[make_full_identity_omni_dedup_table()]);
+    let mut sub = StreamSubscriber::new(
+        &cluster,
+        &[make_full_identity_omni_dedup_table()],
+        OmniOwnership::test(),
+    );
     let mut verify = test_server().await;
 
     // Ensure destination table exists with unique index before relation() runs.
@@ -1919,7 +2001,11 @@ async fn full_identity_insert_omni_dedup() {
 #[tokio::test]
 async fn full_identity_update_duplicate_rows() {
     let cluster = Cluster::new_test_single_shard(&config());
-    let mut sub = StreamSubscriber::new(&cluster, &[make_full_identity_dup_rows_table()]);
+    let mut sub = StreamSubscriber::new(
+        &cluster,
+        &[make_full_identity_dup_rows_table()],
+        OmniOwnership::test(),
+    );
     let mut verify = test_server().await;
 
     ensure_table(&mut verify, "public.full_dup_rows").await;
@@ -1985,7 +2071,11 @@ async fn full_identity_update_duplicate_rows() {
 #[tokio::test]
 async fn full_identity_delete_duplicate_rows() {
     let cluster = Cluster::new_test_single_shard(&config());
-    let mut sub = StreamSubscriber::new(&cluster, &[make_full_identity_dup_rows_table()]);
+    let mut sub = StreamSubscriber::new(
+        &cluster,
+        &[make_full_identity_dup_rows_table()],
+        OmniOwnership::test(),
+    );
     let mut verify = test_server().await;
 
     ensure_table(&mut verify, "public.full_dup_rows").await;
@@ -2052,7 +2142,11 @@ async fn full_identity_delete_duplicate_rows() {
 #[tokio::test]
 async fn full_identity_update_matches_null_column() {
     let cluster = Cluster::new_test_single_shard(&config());
-    let mut sub = StreamSubscriber::new(&cluster, &[make_full_identity_dup_rows_table()]);
+    let mut sub = StreamSubscriber::new(
+        &cluster,
+        &[make_full_identity_dup_rows_table()],
+        OmniOwnership::test(),
+    );
     let mut verify = test_server().await;
 
     // full_dup_rows has no NOT NULL on value — we can seed a NULL row.
@@ -2113,7 +2207,11 @@ async fn full_identity_update_matches_null_column() {
 #[tokio::test]
 async fn full_identity_delete_matches_null_column() {
     let cluster = Cluster::new_test_single_shard(&config());
-    let mut sub = StreamSubscriber::new(&cluster, &[make_full_identity_dup_rows_table()]);
+    let mut sub = StreamSubscriber::new(
+        &cluster,
+        &[make_full_identity_dup_rows_table()],
+        OmniOwnership::test(),
+    );
     let mut verify = test_server().await;
 
     ensure_table(&mut verify, "public.full_dup_rows").await;
@@ -2161,4 +2259,206 @@ async fn full_identity_delete_matches_null_column() {
         0,
         "FULL identity DELETE must match NULL via IS NOT DISTINCT FROM"
     );
+}
+
+// ── Omni-table fan-out tests ─────────────────────────────────────────────────
+
+fn make_settings_table() -> Table {
+    Table {
+        publication: "test".to_string(),
+        table: PublicationTable {
+            schema: "public".to_string(),
+            name: "settings".to_string(),
+            attributes: "".to_string(),
+            parent_schema: "".to_string(),
+            parent_name: "".to_string(),
+        },
+        identity: ReplicaIdentity {
+            oid: Oid(4),
+            identity: "".to_string(),
+            kind: "".to_string(),
+        },
+        columns: vec![
+            PublicationTableColumn {
+                oid: 4,
+                name: "id".to_string(),
+                type_oid: Oid(20), // bigint
+                identity: true,
+            },
+            PublicationTableColumn {
+                oid: 4,
+                name: "name".to_string(),
+                type_oid: Oid(25), // text
+                identity: false,
+            },
+            PublicationTableColumn {
+                oid: 4,
+                name: "value".to_string(),
+                type_oid: Oid(25), // text
+                identity: false,
+            },
+        ],
+        lsn: Lsn::default(),
+        query_parser_engine: pgdog_config::QueryParserEngine::default(),
+    }
+}
+
+fn settings_relation(oid: Oid) -> Relation {
+    Relation {
+        oid,
+        namespace: "public".to_string(),
+        name: "settings".to_string(),
+        replica_identity: 100,
+        columns: vec![
+            RelColumn {
+                flag: 1,
+                name: "id".to_string(),
+                oid: Oid(20),
+                type_modifier: -1,
+            },
+            RelColumn {
+                flag: 0,
+                name: "name".to_string(),
+                oid: Oid(25),
+                type_modifier: -1,
+            },
+            RelColumn {
+                flag: 0,
+                name: "value".to_string(),
+                oid: Oid(25),
+                type_modifier: -1,
+            },
+        ],
+    }
+}
+
+fn settings_relation_copy_data(oid: Oid) -> CopyData {
+    xlog_copy_data(settings_relation(oid).to_bytes().unwrap())
+}
+
+/// WAL UPDATE for settings(id, name, value) — full new tuple, no toasted columns.
+fn settings_update_copy_data(oid: Oid, id: &str, name: &str, value: &str) -> CopyData {
+    xlog_copy_data(
+        XLogUpdate {
+            oid,
+            identity: UpdateIdentity::Nothing,
+            new: TupleData {
+                columns: vec![text_column(id), text_column(name), text_column(value)],
+            },
+        }
+        .to_bytes()
+        .unwrap(),
+    )
+}
+
+/// Two subscribers race on the same omni-table rows, reproducing the cross-destination deadlock.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cross_subscriber_omni_deadlock_two_databases() {
+    use std::sync::Arc;
+    use std::time::Duration;
+    use tokio::sync::Barrier;
+    use tokio::time::{sleep, timeout};
+
+    let oid = Oid(16393);
+    let id1 = random_id();
+    let id2 = random_id();
+
+    let mut pg0 = test_server().await;
+    let mut pg1 = test_server_pgdog1_db().await;
+    for db in [&mut pg0, &mut pg1] {
+        cleanup(db, "public.settings", &[&id1, &id2]).await;
+        for (id, name) in [(&id1, "seed1"), (&id2, "seed2")] {
+            db.execute(format!(
+                "INSERT INTO public.settings (id, name, value) VALUES ({}, '{}', 'v')",
+                id, name,
+            ))
+            .await
+            .unwrap();
+        }
+    }
+    drop(pg0);
+    drop(pg1);
+
+    let barrier = Arc::new(Barrier::new(2));
+
+    let spawn_sub = |sub_idx: usize| {
+        let (id1, id2) = (id1.clone(), id2.clone());
+        let barrier = Arc::clone(&barrier);
+        tokio::spawn(async move {
+            // Each subscriber owns a disjoint subset of destination shards:
+            // sub-0 → dest-0, sub-1 → dest-1 (dest_shard % 2 == sub_idx).
+            // This is the destination-partitioned apply fix for the cross-subscriber deadlock.
+            let mut sub = make_subscriber_with_tables_two_databases(
+                vec![make_settings_table()],
+                OmniOwnership::new(sub_idx, 2),
+            );
+            sub.connect().await.unwrap();
+            // Distinct LSN ranges so neither subscriber's LSN gating skips the other's events.
+            let mut lsn = 100_000i64 + (sub_idx as i64) * 1_000_000;
+            for round in 1..=20usize {
+                sub.handle(begin_copy_data(lsn)).await.unwrap();
+                sub.handle(settings_relation_copy_data(oid)).await.unwrap();
+                barrier.wait().await;
+                sub.handle(settings_update_copy_data(
+                    oid,
+                    &id1,
+                    &format!("r{round}-{id1}"),
+                    "v",
+                ))
+                .await
+                .expect("update id1");
+                sub.handle(settings_update_copy_data(
+                    oid,
+                    &id2,
+                    &format!("r{round}-{id2}"),
+                    "v",
+                ))
+                .await
+                .expect("update id2");
+                sub.handle(commit_copy_data(lsn + 100))
+                    .await
+                    .expect("commit");
+                lsn += 200;
+            }
+        })
+    };
+
+    let h0 = spawn_sub(0);
+    let h1 = spawn_sub(1);
+    let abort0 = h0.abort_handle();
+    let abort1 = h1.abort_handle();
+
+    let result = timeout(Duration::from_secs(10), async { tokio::join!(h0, h1) }).await;
+
+    abort0.abort();
+    abort1.abort();
+    sleep(Duration::from_millis(200)).await;
+
+    let mut pg0 = test_server().await;
+    let mut pg1 = test_server_pgdog1_db().await;
+
+    match result {
+        Err(_elapsed) => {
+            cleanup(&mut pg0, "public.settings", &[&id1, &id2]).await;
+            cleanup(&mut pg1, "public.settings", &[&id1, &id2]).await;
+            panic!("cross-subscriber omni deadlock: both subscribers hung");
+        }
+        Ok((r0, r1)) => {
+            r0.expect("sub-0 failed");
+            r1.expect("sub-1 failed");
+            for db in [&mut pg0, &mut pg1] {
+                for id in [&id1, &id2] {
+                    let count = count_where(
+                        db,
+                        "public.settings",
+                        &format!("id = {id} AND name = 'r20-{id}'"),
+                    )
+                    .await;
+                    assert_eq!(count, 1, "row {id} missing on destination");
+                }
+            }
+            cleanup(&mut pg0, "public.settings", &[&id1, &id2]).await;
+            cleanup(&mut pg1, "public.settings", &[&id1, &id2]).await;
+        }
+    }
 }

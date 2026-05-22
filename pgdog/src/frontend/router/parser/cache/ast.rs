@@ -7,6 +7,7 @@ use std::{collections::HashSet, ops::Deref};
 
 use parking_lot::Mutex;
 use std::sync::Arc;
+use tracing::warn;
 
 use super::super::{Error, Route, Shard, StatementRewrite, StatementRewriteContext, Table};
 use super::{Cache, Fingerprint, Stats};
@@ -104,6 +105,16 @@ impl Ast {
         let elapsed = now.elapsed();
         let mut stats = Stats::new();
         stats.parse_time += elapsed;
+
+        if let Some(threshold) = schema.log_min_duration_parse {
+            if elapsed >= threshold {
+                warn!(
+                    "[slow_query_parse] parse_time_in_ms={}ms truncated_query=\"{}\"",
+                    elapsed.as_millis(),
+                    query.truncated_query(schema.log_query_sample_length),
+                );
+            }
+        }
 
         Ok(Self {
             cached: true,

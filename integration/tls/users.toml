@@ -1,4 +1,13 @@
 [[users]]
-name = "pgdog"
-password = "pgdog"
+name = "tls_user_a"
 database = "pgdog"
+identity = "pgdog"
+server_user = "pgdog"
+server_password = "pgdog"
+
+[[users]]
+name = "tls_user_b"
+database = "pgdog"
+identity = "pgdog2"
+server_user = "pgdog"
+server_password = "pgdog"

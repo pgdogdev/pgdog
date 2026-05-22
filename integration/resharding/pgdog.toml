@@ -1,3 +1,6 @@
+[general]
+resharding_replication_retry_min_delay = 100
+
 [[databases]]
 name = "source"
 host = "127.0.0.1"
@@ -51,6 +54,3 @@ data_type = "bigint"
 [admin]
 password = "pgdog"
 user = "pgdog"
-
-[replication]
-pg_dump_path = "/usr/lib/postgresql/18/bin/pg_dump"

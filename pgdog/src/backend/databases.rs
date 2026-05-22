@@ -314,6 +314,13 @@ impl Databases {
         }
     }
 
+    /// Get the user TLS identity.
+    pub fn identity(&self, user: impl ToUser) -> Option<&str> {
+        self.databases
+            .get(&user.to_user())
+            .and_then(|cluster| cluster.identity())
+    }
+
     /// Get a cluster for the user/database pair if it's configured.
     pub fn cluster(&self, user: impl ToUser) -> Result<Cluster, Error> {
         let user = user.to_user();
@@ -451,7 +458,7 @@ impl Databases {
 
         // Launch all clusters
         for cluster in self.all().values() {
-            if cluster.passwords().is_empty() {
+            if cluster.passwords().is_empty() && !cluster.mutual_tls() {
                 warn!(
                     r#"disabling pool for user "{}" and database "{}", password not set"#,
                     cluster.user(),

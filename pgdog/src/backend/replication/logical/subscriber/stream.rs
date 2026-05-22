@@ -18,6 +18,7 @@ use super::super::publisher::{tables_missing_unique_index, NonIdentityColumnsPre
 use super::super::{
     ensure_validation, publisher::Table, Error, TableValidationError, TableValidationErrorKind,
 };
+use super::omni_ownership::OmniOwnership;
 use super::StreamContext;
 use crate::net::messages::replication::logical::tuple_data::{Identifier, TupleData};
 use crate::net::messages::replication::logical::update::Update as XLogUpdate;
@@ -91,7 +92,7 @@ impl Statement {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct StreamSubscriber {
     /// Destination cluster.
     cluster: Cluster,
@@ -118,7 +119,10 @@ pub struct StreamSubscriber {
     // Connections to shards.
     connections: Vec<Server>,
 
-    // Position in the WAL we have flushed successfully.
+    // Last commit LSN acked to Postgres. Reported in status updates; never
+    // advances mid-transaction so KeepAlive replies can't skip an open transaction.
+    committed_lsn: i64,
+    // Working position in the stream (advances on Begin for deduplication).
     lsn: i64,
     lsn_changed: bool,
     in_transaction: bool,
@@ -128,10 +132,13 @@ pub struct StreamSubscriber {
 
     // Missed rows.
     missed_rows: MissedRows,
+
+    // Determines which destination shards this subscriber owns for omni tables.
+    partition: OmniOwnership,
 }
 
 impl StreamSubscriber {
-    pub fn new(cluster: &Cluster, tables: &[Table]) -> Self {
+    pub fn new(cluster: &Cluster, tables: &[Table], partition: OmniOwnership) -> Self {
         let cluster = cluster.logical_stream();
         Self {
             cluster,
@@ -152,12 +159,14 @@ impl StreamSubscriber {
                 })
                 .collect(),
             connections: vec![],
+            committed_lsn: 0,
             lsn: 0, // Unknown,
             bytes_sharded: 0,
             lsn_changed: true,
             in_transaction: false,
             missed_rows: MissedRows::default(),
             keys: HashMap::default(),
+            partition,
         }
     }
 
@@ -223,14 +232,21 @@ impl StreamSubscriber {
 
     // Dispatch a pre-built bind to the matching shard(s).
     async fn send(&mut self, val: &Shard, bind: &Bind) -> Result<(), Error> {
+        // Locals avoid borrowing self inside the iter_mut closure.
+        let partition = self.partition;
+        let n_conns = self.connections.len();
         let mut conns: Vec<_> = self
             .connections
             .iter_mut()
             .enumerate()
             .filter(|(shard, _)| match val {
-                Shard::Direct(direct) => *shard == *direct,
-                Shard::Multi(multi) => multi.contains(shard),
-                _ => true,
+                // With a single destination shard the router collapses Shard::All
+                // to Direct(0), bypassing the partition ownership check.  Apply
+                // partition.owns() for all variants when there is only one connection
+                // so that omni-table writes are still partitioned across subscribers.
+                Shard::Direct(direct) if n_conns > 1 => *shard == *direct,
+                Shard::Multi(multi) if n_conns > 1 => multi.contains(shard),
+                _ => partition.owns(*shard),
             })
             .map(|(_, server)| server)
             .collect();
@@ -812,10 +828,25 @@ impl StreamSubscriber {
         Ok(())
     }
 
-    /// Handle one replication stream message.
-    ///
-    /// On error, drops shard connections to roll back the implicit transaction left
-    /// by Bind/Execute/Flush, and clears per-session state. See
+    /// Reset destination connections and state, rolling back any open implicit
+    /// transaction on each shard. Caches are repopulated from Relation messages on re-delivery.
+    pub async fn reconnect(&mut self) -> Result<(), Error> {
+        self.connections.clear();
+        self.relations.clear();
+        self.statements.clear();
+        self.keys.clear();
+        self.changed_tables.clear();
+        self.in_transaction = false;
+        self.connect().await
+    }
+
+    /// Clear destination connections so the next `handle` call forces a fresh
+    /// `connect()`. Use after a failed reconnect to avoid reusing connections
+    /// that may have buffered stale handshake responses.
+    pub fn reset_connections(&mut self) {
+        self.connections.clear();
+    }
+
     /// `docs/REPLICATION.md` → "Error rollback".
     pub async fn handle(&mut self, data: CopyData) -> Result<Option<StatusUpdate>, Error> {
         match self.handle_inner(data).await {
@@ -857,7 +888,7 @@ impl StreamSubscriber {
                     XLogPayload::Relation(relation) => self.relation(relation).await?,
                     XLogPayload::Begin(begin) => {
                         self.changed_tables.clear();
-                        self.set_current_lsn(begin.final_transaction_lsn);
+                        self.set_working_lsn(begin.final_transaction_lsn);
                         self.in_transaction = true;
                     }
                     _ => (),
@@ -869,12 +900,12 @@ impl StreamSubscriber {
         Ok(status_update)
     }
 
-    /// Get latest LSN we flushed to replicas.
+    /// LSN of the last transaction committed to all destination shards.
     pub fn status_update(&self) -> StatusUpdate {
         StatusUpdate {
-            last_applied: self.lsn,
-            last_flushed: self.lsn, // We use transactions which are flushed.
-            last_written: self.lsn,
+            last_applied: self.committed_lsn,
+            last_flushed: self.committed_lsn,
+            last_written: self.committed_lsn,
             system_clock: postgres_now(),
             reply: 0,
         }
@@ -885,14 +916,18 @@ impl StreamSubscriber {
         self.bytes_sharded
     }
 
-    /// Set stream start at this LSN.
-    ///
-    /// Return true if LSN has been updated to a new value,
-    /// i.e., the stream is moving forward.
+    /// Advance both LSN fields. Call after commit and on publisher init.
     pub fn set_current_lsn(&mut self, lsn: i64) -> bool {
         self.lsn_changed = lsn != self.lsn;
         self.lsn = lsn;
+        self.committed_lsn = lsn;
         self.lsn_changed
+    }
+
+    /// Advance working LSN only. Used on Begin; does not move the ack pointer.
+    fn set_working_lsn(&mut self, lsn: i64) {
+        self.lsn_changed = lsn != self.lsn;
+        self.lsn = lsn;
     }
 
     /// Get current LSN.
@@ -995,7 +1030,7 @@ mod tests {
 
     fn make_subscriber() -> StreamSubscriber {
         let cluster = Cluster::new_test(&config());
-        StreamSubscriber::new(&cluster, &[])
+        StreamSubscriber::new(&cluster, &[], OmniOwnership::test())
     }
 
     #[test]

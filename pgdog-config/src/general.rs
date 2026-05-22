@@ -28,6 +28,8 @@ pub enum LogFormat {
     Text,
     /// Structured JSON logs suitable for ECS/Datadog ingestion.
     Json,
+    /// Structured JSON logs with event fields flattened into the root object.
+    JsonFlattened,
 }
 
 impl fmt::Display for LogFormat {
@@ -35,6 +37,7 @@ impl fmt::Display for LogFormat {
         match self {
             Self::Text => f.write_str("text"),
             Self::Json => f.write_str("json"),
+            Self::JsonFlattened => f.write_str("json_flattened"),
         }
     }
 }
@@ -46,6 +49,7 @@ impl FromStr for LogFormat {
         match s.to_ascii_lowercase().as_str() {
             "text" => Ok(Self::Text),
             "json" => Ok(Self::Json),
+            "json_flattened" => Ok(Self::JsonFlattened),
             _ => Err(()),
         }
     }
@@ -238,6 +242,12 @@ pub struct General {
     /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#tls_client_ca_certificate
     pub tls_client_ca_certificate: Option<PathBuf>,
 
+    /// Validate that the CN of the certificate matches the user's name.
+    /// This is part of our mTLS implementation. The certificate authority can
+    /// issue certificates that PgDog will validate for both authenticity and authentication.
+    #[serde(default)]
+    pub tls_client_validate_cn: bool,
+
     /// How long to wait for active clients to finish transactions when shutting down.
     ///
     /// _Default:_ `60000`
@@ -264,6 +274,19 @@ pub struct General {
     /// Path to a file where all queries are logged. Logging every query is slow; do not use in production.
     #[serde(default)]
     pub query_log: Option<PathBuf>,
+
+    /// Minimum parse duration in milliseconds that triggers a warning log with the query text.
+    /// Queries whose parsing takes longer than this value are logged at WARN level.
+    /// Set to `0` or omit to disable.
+    ///
+    /// _Default:_ `None` (disabled)
+    pub log_min_duration_parse: Option<u64>,
+
+    /// Maximum number of characters of the query text included in log messages.
+    ///
+    /// _Default:_ `1000`
+    #[serde(default = "General::log_query_sample_length")]
+    pub log_query_sample_length: usize,
 
     /// The port used for the OpenMetrics HTTP endpoint.
     ///
@@ -665,6 +688,25 @@ pub struct General {
     #[serde(default = "General::resharding_copy_retry_min_delay")]
     pub resharding_copy_retry_min_delay: u64,
 
+    /// Maximum number of consecutive replication-subscriber errors tolerated before
+    /// the source error is propagated. Each failure triggers `slot.reconnect()`,
+    /// after which Postgres re-streams every event since the last acked commit.
+    /// `0` retries indefinitely.
+    ///
+    /// _Default:_ `5`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#resharding_replication_retry_max_attempts
+    #[serde(default = "General::resharding_replication_retry_max_attempts")]
+    pub resharding_replication_retry_max_attempts: usize,
+
+    /// Delay in milliseconds between replication subscriber retry attempts.
+    ///
+    /// _Default:_ `1000`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#resharding_replication_retry_min_delay
+    #[serde(default = "General::resharding_replication_retry_min_delay")]
+    pub resharding_replication_retry_min_delay: u64,
+
     /// Automatically reload the schema cache used by PgDog to route queries upon detecting DDL statements.
     ///
     /// **Note:** This setting requires PgDog Enterprise Edition to work as expected. If using the open source edition, it will only work with single-node PgDog deployments, e.g., in local development or CI.
@@ -759,11 +801,14 @@ impl Default for General {
             tls_verify: Self::default_tls_verify(),
             tls_server_ca_certificate: Self::tls_server_ca_certificate(),
             tls_client_ca_certificate: Self::tls_client_ca_certificate(),
+            tls_client_validate_cn: bool::default(),
             shutdown_timeout: Self::default_shutdown_timeout(),
             shutdown_termination_timeout: Self::default_shutdown_termination_timeout(),
             broadcast_address: Self::broadcast_address(),
             broadcast_port: Self::broadcast_port(),
             query_log: Self::query_log(),
+            log_min_duration_parse: Self::default_log_min_duration_parse(),
+            log_query_sample_length: Self::log_query_sample_length(),
             openmetrics_port: Self::openmetrics_port(),
             openmetrics_namespace: Self::openmetrics_namespace(),
             prepared_statements: Self::prepared_statements(),
@@ -819,6 +864,9 @@ impl Default for General {
             resharding_parallel_copies: Self::resharding_parallel_copies(),
             resharding_copy_retry_max_attempts: Self::resharding_copy_retry_max_attempts(),
             resharding_copy_retry_min_delay: Self::resharding_copy_retry_min_delay(),
+            resharding_replication_retry_max_attempts:
+                Self::resharding_replication_retry_max_attempts(),
+            resharding_replication_retry_min_delay: Self::resharding_replication_retry_min_delay(),
             reload_schema_on_ddl: Self::reload_schema_on_ddl(),
             load_schema: Self::load_schema(),
             cutover_replication_lag_threshold: Self::cutover_replication_lag_threshold(),
@@ -1064,6 +1112,14 @@ impl General {
         1000
     }
 
+    fn resharding_replication_retry_max_attempts() -> usize {
+        Self::env_or_default("PGDOG_RESHARDING_REPLICATION_RETRY_MAX_ATTEMPTS", 5)
+    }
+
+    fn resharding_replication_retry_min_delay() -> u64 {
+        Self::env_or_default("PGDOG_RESHARDING_REPLICATION_RETRY_MIN_DELAY", 1000)
+    }
+
     fn default_shutdown_termination_timeout() -> Option<u64> {
         Self::env_option("PGDOG_SHUTDOWN_TERMINATION_TIMEOUT")
     }
@@ -1137,6 +1193,18 @@ impl General {
 
     fn query_log() -> Option<PathBuf> {
         Self::env_option_string("PGDOG_QUERY_LOG").map(PathBuf::from)
+    }
+
+    fn default_log_min_duration_parse() -> Option<u64> {
+        Self::env_option("PGDOG_LOG_MIN_DURATION_PARSE")
+    }
+
+    pub fn log_min_duration_parse(&self) -> Option<Duration> {
+        self.log_min_duration_parse.map(Duration::from_millis)
+    }
+
+    pub fn log_query_sample_length() -> usize {
+        Self::env_or_default("PGDOG_LOG_QUERY_SAMPLE_LENGTH", 1000)
     }
 
     pub fn openmetrics_port() -> Option<u16> {
@@ -1537,6 +1605,8 @@ mod tests {
         env::set_var("PGDOG_MIRROR_EXPOSURE", "0.5");
         env::set_var("PGDOG_DNS_TTL", "60000");
         env::set_var("PGDOG_PUB_SUB_CHANNEL_SIZE", "100");
+        env::set_var("PGDOG_LOG_MIN_DURATION_PARSE", "5");
+        env::set_var("PGDOG_LOG_QUERY_SAMPLE_LENGTH", "200");
 
         assert_eq!(General::broadcast_port(), 7432);
         assert_eq!(General::openmetrics_port(), Some(9090));
@@ -1547,6 +1617,8 @@ mod tests {
         assert_eq!(General::mirror_exposure(), 0.5);
         assert_eq!(General::default_dns_ttl(), Some(60000));
         assert_eq!(General::pub_sub_channel_size(), 100);
+        assert_eq!(General::default_log_min_duration_parse(), Some(5));
+        assert_eq!(General::log_query_sample_length(), 200);
 
         env::remove_var("PGDOG_BROADCAST_PORT");
         env::remove_var("PGDOG_OPENMETRICS_PORT");
@@ -1557,6 +1629,8 @@ mod tests {
         env::remove_var("PGDOG_MIRROR_EXPOSURE");
         env::remove_var("PGDOG_DNS_TTL");
         env::remove_var("PGDOG_PUB_SUB_CHANNEL_SIZE");
+        env::remove_var("PGDOG_LOG_MIN_DURATION_PARSE");
+        env::remove_var("PGDOG_LOG_QUERY_SAMPLE_LENGTH");
 
         assert_eq!(General::broadcast_port(), General::port() + 1);
         assert_eq!(General::openmetrics_port(), None);
@@ -1567,6 +1641,8 @@ mod tests {
         assert_eq!(General::mirror_exposure(), 1.0);
         assert_eq!(General::default_dns_ttl(), None);
         assert_eq!(General::pub_sub_channel_size(), 0);
+        assert_eq!(General::default_log_min_duration_parse(), None);
+        assert_eq!(General::log_query_sample_length(), 1000);
     }
 
     #[test]
@@ -1599,6 +1675,9 @@ mod tests {
 
         assert_eq!(General::log_format(), LogFormat::Json);
         assert_eq!(General::log_level(), "pgdog=debug,info");
+
+        env::set_var("PGDOG_LOG_FORMAT", "json_flattened");
+        assert_eq!(General::log_format(), LogFormat::JsonFlattened);
 
         env::remove_var("PGDOG_LOG_FORMAT");
         env::remove_var("RUST_LOG");
