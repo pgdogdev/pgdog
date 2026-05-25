@@ -1,0 +1,31 @@
+[general]
+query_timeout = 2_000
+checkout_timeout = 2_000
+connect_timeout = 2_000
+
+[general.cache]
+enabled = true
+policy = "cache"
+ttl = 5
+
+[general.cache.redis]
+url = "redis://127.0.0.1:6379"
+
+# ------------------------------------------------------------------------------
+# ----- Admin ------------------------------------------------------------------
+
+[admin]
+password = "pgdog"
+
+# ------------------------------------------------------------------------------
+# ----- Database :: pgdog ------------------------------------------------------
+
+[[databases]]
+name = "pgdog"
+host = "127.0.0.1"
+
+[[databases]]
+name = "pgdog"
+host = "127.0.0.1"
+role = "replica"
+read_only = true

@@ -1,0 +1,12 @@
+[package]
+name = "cache"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+test = true
+
+[dependencies]
+sqlx = { version = "*", features = ["postgres", "runtime-tokio"]}
+tokio = { version = "1", features = ["full"]}
+serial_test = "3"

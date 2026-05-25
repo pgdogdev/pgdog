@@ -298,3 +298,27 @@ SQL comment  →  pgdog.cache parameter  →  DB policy config
 3. **Set redis query timeout from config**
 
 4. **Add hint for query hash key**
+
+5. **Add flag for required cache storage available** — query will fall with error if redis (or another cache storage) unavaliable. And subtask: first query inits cache client, but connection is established later, which is why the cache storage is unavailable for the first query — so need to wait for established connection.
+
+6. **Hash query without comments on the fly instead of normalizing it first** — with this no `String` will be allocated. But must deal somehow with getting same hash for "SELECT 1;" and "/* pgdog_cache: cache */ SELECT 1;" because the second one transforms to " SELECT 1;" (with space at the start).
+
+# Tests
+
+## Running the tests
+
+Unit tests (no PostgreSQL or Redis needed)
+```sh
+cargo nextest run -p pgdog frontend::cache
+```
+
+## Integration tests (PostgreSQL + Redis + pgdog required)
+
+```sh
+bash integration/cache/run.sh
+```
+
+Or if you already have pgdog running on port 6432 with that config:
+```sh
+bash integration/cache/dev.sh
+```
