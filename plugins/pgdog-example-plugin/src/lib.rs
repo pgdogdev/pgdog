@@ -8,7 +8,7 @@
 
 pub mod plugin;
 
-use pgdog_plugin::{Context, Route, macros};
+use pgdog_plugin::{Context, PdCopyRow, Route, macros};
 
 // This identifies this library is a PgDog plugin and adds some
 // required methods automatically.
@@ -29,6 +29,16 @@ fn init() {}
 #[macros::route]
 fn route(context: Context) -> Route {
     crate::plugin::route_query(context).unwrap_or(Route::unknown())
+}
+
+/// If defined, this function is called for every row during a sharded COPY.
+///
+/// It receives the raw row data along with metadata parsed from the COPY statement
+/// (columns, format, delimiter, etc.) and returns a routing decision.
+///
+#[macros::route_copy_row]
+fn route_copy_row(row: PdCopyRow) -> Route {
+    crate::plugin::route_copy(row).unwrap_or(Route::unknown())
 }
 
 /// Run any code before PgDog is shut down.

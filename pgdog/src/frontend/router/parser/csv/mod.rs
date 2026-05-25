@@ -6,7 +6,7 @@ pub mod record;
 pub use iterator::Iter;
 pub use record::Record;
 
-use super::CopyFormat;
+use pgdog_plugin::copy::CopyFormat;
 
 static RECORD_BUFFER: usize = 4096;
 static ENDS_BUFFER: usize = 2048; // Max of 2048 columns in a CSV.
