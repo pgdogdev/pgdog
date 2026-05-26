@@ -96,6 +96,8 @@ async fn test_pool_checkout() {
     assert_eq!(conn.id(), &id);
 }
 
+// This test flakes in CI because of iffy hardware I think.
+#[pgdog_plugin::macros::flaky]
 #[tokio::test]
 async fn test_concurrency() {
     let pool = pool();

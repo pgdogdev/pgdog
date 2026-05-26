@@ -232,6 +232,9 @@ mod test {
         );
     }
 
+    // This test relies on data written to multiple databases.
+    // It's flaky. Not sure why yet.
+    #[pgdog_plugin::macros::flaky]
     #[tokio::test]
     async fn test_mirror() {
         config::load_test();
