@@ -15,24 +15,24 @@ impl StatementRewrite<'_> {
             return Ok(());
         }
 
-        let Some(raw_stmt) = self.stmt.stmts.first() else {
+        let Some(raw_stmt) = self.stmt.stmts.first_mut() else {
             return Ok(());
         };
 
-        let Some(stmt) = raw_stmt.stmt.as_ref() else {
+        let Some(stmt) = raw_stmt.stmt.as_mut() else {
             return Ok(());
         };
 
-        let Some(NodeEnum::SelectStmt(select)) = stmt.node.as_ref() else {
+        let Some(NodeEnum::SelectStmt(select)) = stmt.node.as_mut() else {
             return Ok(());
         };
 
-        let aggregate = Aggregate::parse(select);
+        let aggregate = Aggregate::parse(&select);
         if aggregate.is_empty() {
             return Ok(());
         }
 
-        let output = AggregatesRewrite.rewrite_select(self.stmt, &aggregate);
+        let output = AggregatesRewrite.rewrite_select(select, &aggregate);
         if output.plan.is_noop() {
             return Ok(());
         }
