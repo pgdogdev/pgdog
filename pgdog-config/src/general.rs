@@ -242,12 +242,6 @@ pub struct General {
     /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#tls_client_ca_certificate
     pub tls_client_ca_certificate: Option<PathBuf>,
 
-    /// Validate that the CN of the certificate matches the user's name.
-    /// This is part of our mTLS implementation. The certificate authority can
-    /// issue certificates that PgDog will validate for both authenticity and authentication.
-    #[serde(default)]
-    pub tls_client_validate_cn: bool,
-
     /// How long to wait for active clients to finish transactions when shutting down.
     ///
     /// _Default:_ `60000`
@@ -801,7 +795,6 @@ impl Default for General {
             tls_verify: Self::default_tls_verify(),
             tls_server_ca_certificate: Self::tls_server_ca_certificate(),
             tls_client_ca_certificate: Self::tls_client_ca_certificate(),
-            tls_client_validate_cn: bool::default(),
             shutdown_timeout: Self::default_shutdown_timeout(),
             shutdown_termination_timeout: Self::default_shutdown_termination_timeout(),
             broadcast_address: Self::broadcast_address(),

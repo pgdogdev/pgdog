@@ -134,6 +134,61 @@ impl Client {
         }
     }
 
+    /// Authenticate a client against the configured password(s) using the
+    /// requested authentication method.
+    ///
+    /// Returns `false` if no passwords are configured or the credentials the
+    /// client provided don't match.
+    async fn check_password(
+        stream: &mut Stream,
+        user: &str,
+        auth_type: &AuthType,
+        passwords: &[PasswordKind],
+    ) -> Result<bool, Error> {
+        if passwords.is_empty() {
+            return Ok(false);
+        }
+
+        let ok = match auth_type {
+            AuthType::Md5 => {
+                let md5 = md5::Client::new(
+                    user,
+                    &passwords.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+                );
+                stream.send_flush(&md5.challenge()).await?;
+                let password = Password::from_bytes(stream.read().await?.to_bytes()?)?;
+                if let Password::PasswordMessage { response } = password {
+                    md5.check(&response)
+                } else {
+                    false
+                }
+            }
+
+            AuthType::Scram => {
+                stream.send_flush(&Authentication::scram()).await?;
+
+                let scram = Server::new(passwords);
+                let res = scram.handle(stream).await;
+                matches!(res, Ok(true))
+            }
+
+            AuthType::Plain => {
+                stream
+                    .send_flush(&Authentication::ClearTextPassword)
+                    .await?;
+                let response = stream.read().await?;
+                let response = Password::from_bytes(response.to_bytes()?)?;
+                passwords
+                    .iter()
+                    .any(|p| Some(p.as_str()) == response.password())
+            }
+
+            AuthType::Trust => true,
+        };
+
+        Ok(ok)
+    }
+
     /// Create new frontend client from the given TCP stream.
     async fn login(
         mut stream: Stream,
@@ -153,7 +208,6 @@ impl Client {
         let admin_password = &config.config.admin.password;
         let auth_type = &config.config.general.auth_type;
         let passthrough = config.config.general.passthrough_auth();
-        let validate_cn = config.config.general.tls_client_validate_cn;
         let id = BackendKeyData::new_client(protocol_version);
         let comms = ClientComms::new(&id);
 
@@ -180,62 +234,26 @@ impl Client {
             } else {
                 false
             }
-        } else if validate_cn {
-            // This checks that the certificate CN (common name)
-            // matches the user identity exactly. If the client is not connecting with TLS,
-            // this will fail.
-            //
-            // This is part of our mTLS implementation.
-            //
-            stream.tls_cn() == databases::databases().identity((user, database))
+        } else if admin {
+            // The admin database is virtual and never present in the cluster
+            // map, so authenticate directly against the configured admin password.
+            let passwords = [PasswordKind::Plain(admin_password.clone())];
+            Self::check_password(&mut stream, user, auth_type, &passwords).await?
         } else {
-            let passwords = if admin {
-                Some(vec![PasswordKind::Plain(admin_password.clone())])
-            } else {
-                databases::databases()
-                    .passwords((user, database))
-                    .map(|p| p.to_vec())
-            };
-
-            if let Some(passwords) = passwords {
-                match auth_type {
-                    AuthType::Md5 => {
-                        let md5 = md5::Client::new(
-                            user,
-                            &passwords.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
-                        );
-                        stream.send_flush(&md5.challenge()).await?;
-                        let password = Password::from_bytes(stream.read().await?.to_bytes()?)?;
-                        if let Password::PasswordMessage { response } = password {
-                            md5.check(&response)
-                        } else {
-                            false
-                        }
+            match databases::databases().cluster((user, database)) {
+                Ok(cluster) => {
+                    if let Some(identity) = cluster.identity() {
+                        // mTLS authentication: the client certificate identity
+                        // must match the configured user identity.
+                        stream.tls_identity() == Some(identity)
+                    } else {
+                        // Password authentication.
+                        Self::check_password(&mut stream, user, auth_type, cluster.passwords())
+                            .await?
                     }
-
-                    AuthType::Scram => {
-                        stream.send_flush(&Authentication::scram()).await?;
-
-                        let scram = Server::new(&passwords);
-                        let res = scram.handle(&mut stream).await;
-                        matches!(res, Ok(true))
-                    }
-
-                    AuthType::Plain => {
-                        stream
-                            .send_flush(&Authentication::ClearTextPassword)
-                            .await?;
-                        let response = stream.read().await?;
-                        let response = Password::from_bytes(response.to_bytes()?)?;
-                        passwords
-                            .iter()
-                            .any(|p| Some(p.as_str()) == response.password())
-                    }
-
-                    AuthType::Trust => true,
                 }
-            } else {
-                false
+
+                Err(_) => false,
             }
         };
 

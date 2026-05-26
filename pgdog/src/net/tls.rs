@@ -77,16 +77,33 @@ pub fn acceptor() -> Option<Arc<TlsAcceptor>> {
     ACCEPTOR.load_full()
 }
 
-/// Extract the Common Name (CN) from the peer's TLS certificate, if present.
-pub fn peer_cn(conn: &ServerConnection) -> Option<String> {
-    cn_from_certs(conn.peer_certificates()?)
+/// Extract the hostname identity from the peer's TLS certificate, if present.
+pub fn peer_identity(conn: &ServerConnection) -> Option<String> {
+    identity_from_certs(conn.peer_certificates()?)
 }
 
-/// Extract the Common Name (CN) from the first certificate in the chain.
-pub(crate) fn cn_from_certs(certs: &[CertificateDer<'_>]) -> Option<String> {
+/// Extract a hostname identity from the first certificate in the chain.
+///
+/// Prefers the first `dNSName` in the Subject Alternative Name extension and
+/// falls back to the Subject CN. RFC 6125 deprecated CN for hostname identity,
+/// and modern certificates often publish identity only via SAN.
+pub(crate) fn identity_from_certs(certs: &[CertificateDer<'_>]) -> Option<String> {
     use x509_parser::certificate::X509Certificate;
+    use x509_parser::extensions::GeneralName;
+
     let cert_der = certs.first()?;
     let (_, cert) = X509Certificate::from_der(cert_der).ok()?;
+
+    if let Ok(Some(san)) = cert.subject_alternative_name() {
+        let dns_name = san.value.general_names.iter().find_map(|gn| match gn {
+            GeneralName::DNSName(name) => Some((*name).to_string()),
+            _ => None,
+        });
+        if dns_name.is_some() {
+            return dns_name;
+        }
+    }
+
     let cn = cert
         .subject()
         .iter_common_name()
@@ -693,20 +710,49 @@ mod tests {
     }
 
     #[test]
-    fn cn_from_test_cert() {
+    fn identity_from_test_cert() {
         let pem = include_str!("../../tests/tls/cert.pem");
         let certs: Vec<CertificateDer<'static>> =
             rustls_pki_types::CertificateDer::pem_slice_iter(pem.as_bytes())
                 .collect::<Result<Vec<_>, _>>()
                 .expect("parse PEM");
 
-        let cn = cn_from_certs(&certs);
-        assert_eq!(cn.as_deref(), Some("CommonNameOrHostname"));
+        let identity = identity_from_certs(&certs);
+        assert_eq!(identity.as_deref(), Some("CommonNameOrHostname"));
     }
 
     #[test]
-    fn cn_from_empty_certs() {
-        assert_eq!(cn_from_certs(&[]), None);
+    fn identity_from_empty_certs() {
+        assert_eq!(identity_from_certs(&[]), None);
+    }
+
+    #[test]
+    fn san_dns_preferred_over_cn() {
+        let pem = include_str!("../../tests/tls/cert_with_san.pem");
+        let certs: Vec<CertificateDer<'static>> =
+            rustls_pki_types::CertificateDer::pem_slice_iter(pem.as_bytes())
+                .collect::<Result<Vec<_>, _>>()
+                .expect("parse PEM");
+
+        // Subject CN is "fallback-cn.example" but SAN dNSName comes first.
+        assert_eq!(
+            identity_from_certs(&certs).as_deref(),
+            Some("primary.san.example")
+        );
+    }
+
+    #[test]
+    fn san_dns_used_when_no_cn() {
+        let pem = include_str!("../../tests/tls/cert_san_only.pem");
+        let certs: Vec<CertificateDer<'static>> =
+            rustls_pki_types::CertificateDer::pem_slice_iter(pem.as_bytes())
+                .collect::<Result<Vec<_>, _>>()
+                .expect("parse PEM");
+
+        assert_eq!(
+            identity_from_certs(&certs).as_deref(),
+            Some("only-via-san.example")
+        );
     }
 
     #[test]
