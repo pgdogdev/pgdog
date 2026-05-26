@@ -62,6 +62,23 @@ impl Binding {
         }
     }
 
+    /// Number of PostgreSQL servers we are connected to.
+    ///
+    /// For direct-to-shard queries, that'll be 1. For cross-shard queries,
+    /// that should be how many shards are configured, since we connect to all
+    /// shards (no lazy shard loading yet).
+    ///
+    /// If we're not connected, e.g. [`Self::connected`] is false, then this returns 0.
+    ///
+    pub fn connected_servers(&self) -> usize {
+        match self {
+            Binding::Direct(Some(_)) => 1,
+            Binding::MultiShard(ref servers, _) => servers.len(),
+            Binding::Admin(_) => 1,
+            _ => 0,
+        }
+    }
+
     pub(super) async fn read(&mut self) -> Result<Message, Error> {
         match self {
             Binding::Direct(guard) => {
