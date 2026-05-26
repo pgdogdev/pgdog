@@ -335,6 +335,11 @@ impl QueryEngine {
         &mut self,
         context: &mut QueryEngineContext<'_>,
     ) -> Result<bool, Error> {
+        // Admin database queries are not checked.
+        if context.admin {
+            return Ok(true);
+        }
+
         // Check for cross-shard queries.
         if context.cross_shard_disabled.is_none() {
             context.cross_shard_disabled = Some(
@@ -347,13 +352,29 @@ impl QueryEngine {
 
         let cross_shard_disabled = context.cross_shard_disabled.unwrap_or_default();
 
-        debug!("cross-shard queries disabled: {}", cross_shard_disabled,);
+        debug!("cross-shard queries disabled: {}", cross_shard_disabled);
 
-        if cross_shard_disabled
-            && context.client_request.route().is_cross_shard()
-            && !context.admin
-            && context.client_request.is_executable()
-        {
+        // This check is disabled.
+        if !cross_shard_disabled {
+            return Ok(true);
+        }
+
+        let query_is_cross_shard = context.client_request.route().is_cross_shard();
+
+        // The query is direct-to-shard, we're good.
+        if !query_is_cross_shard {
+            return Ok(true);
+        }
+
+        let connected_shards = self.backend.connected_servers();
+
+        // Only run check if we are not connected yet or we are actually connected
+        // to more than one shard.
+        //
+        // The second check is only relevant for session mode - we stay connected
+        // until client disconnects. We don't want this check to trigger on queries that we think
+        // should be cross-shard (e.g. BEGIN, COMMIT).
+        if connected_shards == 0 || connected_shards > 1 {
             let query = context.client_request.query()?;
             let error = ErrorResponse::cross_shard_disabled(query.as_ref().map(|q| q.query()));
 
@@ -363,10 +384,10 @@ impl QueryEngine {
                 self.backend.disconnect();
             }
 
-            Ok(false)
-        } else {
-            Ok(true)
+            return Ok(false);
         }
+
+        Ok(true)
     }
 
     fn two_pc_check(&mut self, context: &mut QueryEngineContext<'_>) {
