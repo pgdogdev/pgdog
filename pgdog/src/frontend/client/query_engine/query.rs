@@ -367,13 +367,21 @@ impl QueryEngine {
         }
 
         let connected_shards = self.backend.connected_servers();
+        let is_executable = context.client_request.is_executable();
+
+        // This is a Parse-only request, so it's safe
+        // to route it to any shard - it won't do any damage
+        // and we need a real response from a server.
+        if !is_executable {
+            return Ok(true);
+        }
 
         // Only run check if we are not connected yet or we are actually connected
         // to more than one shard.
         //
-        // The second check is only relevant for session mode - we stay connected
+        // The connected_shards > 1 check is only relevant for session mode - we stay connected
         // until client disconnects. We don't want this check to trigger on queries that we think
-        // should be cross-shard (e.g. BEGIN, COMMIT).
+        // should be cross-shard (e.g. BEGIN, COMMIT) but aren't really.
         if connected_shards == 0 || connected_shards > 1 {
             let query = context.client_request.query()?;
             let error = ErrorResponse::cross_shard_disabled(query.as_ref().map(|q| q.query()));
