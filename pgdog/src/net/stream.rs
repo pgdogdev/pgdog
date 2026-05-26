@@ -32,7 +32,7 @@ pub struct Stream {
     inner: StreamInner,
     io_in_progress: bool,
     capacity: usize,
-    tls_cn: Option<String>,
+    tls_identity: Option<String>,
 }
 
 impl AsyncRead for Stream {
@@ -101,7 +101,7 @@ impl Stream {
             inner: StreamInner::Plain(BufStream::with_capacity(capacity, capacity, stream)),
             io_in_progress: false,
             capacity,
-            tls_cn: None,
+            tls_identity: None,
         }
     }
 
@@ -109,13 +109,13 @@ impl Stream {
     pub fn tls(
         stream: tokio_rustls::TlsStream<TcpStream>,
         capacity: usize,
-        tls_cn: Option<String>,
+        tls_identity: Option<String>,
     ) -> Self {
         Self {
             inner: StreamInner::Tls(BufStream::with_capacity(capacity, capacity, stream)),
             io_in_progress: false,
             capacity,
-            tls_cn,
+            tls_identity,
         }
     }
 
@@ -125,13 +125,14 @@ impl Stream {
             inner: StreamInner::DevNull,
             io_in_progress: false,
             capacity: 0,
-            tls_cn: None,
+            tls_identity: None,
         }
     }
 
-    /// Get the Common Name (CN) from the client's TLS certificate, if any.
-    pub fn tls_cn(&self) -> Option<&str> {
-        self.tls_cn.as_deref()
+    /// Get the hostname identity (SAN dNSName, falling back to Subject CN)
+    /// from the client's TLS certificate, if any.
+    pub fn tls_identity(&self) -> Option<&str> {
+        self.tls_identity.as_deref()
     }
 
     /// This is a TLS stream.
