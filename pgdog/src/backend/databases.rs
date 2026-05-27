@@ -12,6 +12,7 @@ use parking_lot::{Mutex, RawMutex};
 use pgdog_config::users::PasswordKind;
 use tracing::{debug, error, info, warn};
 
+use crate::auth::AuthResult;
 use crate::backend::replication::ShardedSchemas;
 use crate::config::PoolerMode;
 use crate::frontend::client::query_engine::two_pc::Manager;
@@ -154,7 +155,7 @@ pub fn reload() -> Result<(), Error> {
 ///
 /// Return true if user can login, false otherwise.
 ///
-pub(crate) fn add(user: ConfigUser) -> Result<bool, Error> {
+pub(crate) fn add(user: ConfigUser) -> Result<AuthResult, Error> {
     fn add_user(user: ConfigUser) -> Result<(), Error> {
         debug!(
             r#"adding user "{}" to database "{}" via passthrough auth"#,
@@ -179,23 +180,23 @@ pub(crate) fn add(user: ConfigUser) -> Result<bool, Error> {
             existing.password = user.password.clone();
             add_user(existing)?;
             reload_from_existing()?;
-            Ok(true)
+            Ok(AuthResult::Ok)
         } else if existing.password == user.password {
             // Passwords match.
-            Ok(true)
+            Ok(AuthResult::Ok)
         } else if config.config.general.passthrough_auth.allows_change() {
             // Passwords don't match but we can change it.
             existing.password = user.password.clone();
             add_user(user)?;
             reload_from_existing()?;
-            Ok(true)
+            Ok(AuthResult::Ok)
         } else {
-            Ok(false)
+            Ok(AuthResult::NoPassthroughPasswordChange)
         }
     } else {
         add_user(user)?;
         reload_from_existing()?;
-        Ok(true)
+        Ok(AuthResult::Ok)
     }
 }
 
@@ -773,7 +774,7 @@ mod tests {
 
         let result = add(make_user("new_user", Some("secret")));
         assert!(result.is_ok());
-        assert!(result.unwrap());
+        assert!(result.unwrap().is_ok());
 
         let config = crate::config::config();
         let found = config.users.find(&make_user("new_user", None));
@@ -790,7 +791,7 @@ mod tests {
 
         let result = add(make_user("alice", Some("pass123")));
         assert!(result.is_ok());
-        assert!(result.unwrap());
+        assert!(result.unwrap().is_ok());
     }
 
     #[tokio::test]
@@ -802,7 +803,7 @@ mod tests {
 
         let result = add(make_user("bob", Some("new_pass")));
         assert!(result.is_ok());
-        assert!(result.unwrap());
+        assert!(result.unwrap().is_ok());
 
         let config = crate::config::config();
         let found = config.users.find(&make_user("bob", None));
@@ -818,7 +819,7 @@ mod tests {
 
         let result = add(make_user("charlie", Some("wrong_pass")));
         assert!(result.is_ok());
-        assert!(!result.unwrap());
+        assert!(!result.unwrap().is_ok());
     }
 
     #[tokio::test]
@@ -830,7 +831,7 @@ mod tests {
 
         let result = add(make_user("dave", Some("new_pass")));
         assert!(result.is_ok());
-        assert!(result.unwrap());
+        assert!(result.unwrap().is_ok());
 
         let config = crate::config::config();
         let found = config.users.find(&make_user("dave", None));
