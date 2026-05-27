@@ -193,19 +193,6 @@ impl MemoryUsage for Parameters {
     }
 }
 
-impl From<BTreeMap<String, ParameterValue>> for Parameters {
-    fn from(value: BTreeMap<String, ParameterValue>) -> Self {
-        let hash = Self::compute_hash(&value);
-        Self {
-            params: value,
-            hash,
-            transaction_params: BTreeMap::new(),
-            transaction_local_params: BTreeMap::new(),
-            reset_params: BTreeMap::new(),
-        }
-    }
-}
-
 impl Parameters {
     /// Lowercase all param names.
     pub fn insert(
@@ -345,12 +332,20 @@ impl Parameters {
     }
 
     pub fn tracked(&self) -> Parameters {
-        self.params
+        let params = self
+            .params
             .iter()
             .filter(|(k, _)| !UNTRACKED_PARAMS.contains(k))
             .map(|(k, v)| (k.clone(), v.clone()))
-            .collect::<BTreeMap<_, _>>()
-            .into()
+            .collect::<BTreeMap<_, _>>();
+
+        let hash = Self::compute_hash(&params);
+
+        Self {
+            params,
+            hash,
+            ..Default::default()
+        }
     }
 
     /// Merge params from self into other, generating the queries

@@ -312,7 +312,7 @@ impl ReplicationWaiter {
                 );
 
                 // Pause traffic.
-                maintenance_mode::start();
+                maintenance_mode::start(None);
 
                 // Cancel any running queries.
                 cancel_all(&self.orchestrator.source.identifier().database).await?;
@@ -408,7 +408,7 @@ impl ReplicationWaiter {
             match cutover_reason {
                 CutoverAction::Go(CutoverReason::Timeout) => {
                     if cutover_timeout_action == CutoverTimeoutAction::Abort {
-                        maintenance_mode::stop();
+                        maintenance_mode::stop(None);
                         warn!("[cutover] abort timeout reached, resuming traffic");
                         return Err(Error::AbortTimeout);
                     } else {
@@ -474,7 +474,7 @@ impl ReplicationWaiter {
         info!("[cutover] complete, resuming traffic");
 
         // Point traffic to the other database and resume.
-        maintenance_mode::stop();
+        maintenance_mode::stop(None);
 
         cutover_state(CutoverState::Complete);
 
@@ -487,7 +487,7 @@ macro_rules! ok_or_abort {
         match $expr {
             Ok(res) => res,
             Err(err) => {
-                maintenance_mode::stop();
+                maintenance_mode::stop(None);
                 cutover_state(CutoverState::Abort {
                     error: err.to_string(),
                 });
@@ -534,8 +534,8 @@ mod tests {
     #[tokio::test]
     async fn test_wait_for_replication_exits_when_lag_below_threshold() {
         // Ensure maintenance mode is off at start
-        maintenance_mode::stop();
-        assert!(!maintenance_mode::is_on());
+        maintenance_mode::stop(None);
+        assert!(!maintenance_mode::is_on("")); // Will return true because all databases are paused.
 
         let mut config = ConfigAndUsers::default();
         config.config.general.cutover_traffic_stop_threshold = 1000;
@@ -557,11 +557,11 @@ mod tests {
         assert!(result.is_ok());
 
         // Maintenance mode should be on after wait_for_replication
-        assert!(maintenance_mode::is_on());
+        assert!(maintenance_mode::is_on(""));
 
         // Clean up maintenance mode
-        maintenance_mode::stop();
-        assert!(!maintenance_mode::is_on());
+        maintenance_mode::stop(None);
+        assert!(!maintenance_mode::is_on(""));
     }
 
     #[tokio::test]
