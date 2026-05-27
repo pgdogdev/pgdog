@@ -239,8 +239,8 @@ impl Inner {
     pub(super) fn take(&mut self, request: &Request) -> Result<Option<Box<Server>>, Error> {
         if let Some(conn) = self.idle_connections.pop() {
             self.taken.take(&Mapping {
-                client: request.id,
-                server: *(conn.id()),
+                client: request.id.clone(),
+                server: conn.id().clone(),
             })?;
 
             Ok(Some(conn))
@@ -254,13 +254,13 @@ impl Inner {
     #[inline]
     pub(super) fn put(&mut self, mut conn: Box<Server>, now: Instant) -> Result<(), Error> {
         // Try to give it to a client that's been waiting, if any.
-        let id = *conn.id();
+        let id = conn.id().clone();
         while let Some(waiter) = self.waiting.pop_front() {
             if let Err(conn_ret) = waiter.tx.send(Ok(conn)) {
                 conn = conn_ret.unwrap(); // SAFETY: We sent Ok(conn), we'll get back Ok(conn) if channel is closed.
             } else {
                 self.taken.take(&Mapping {
-                    server: id,
+                    server: id.clone(),
                     client: waiter.request.id,
                 })?;
                 self.stats.counts.server_assignment_count += 1;
@@ -496,7 +496,7 @@ mod test {
         let mut inner = Inner::default();
 
         let server = Box::new(Server::default());
-        let server_id = *server.id();
+        let server_id = server.id().clone();
         inner
             .taken
             .take(&Mapping {
@@ -523,7 +523,7 @@ mod test {
         };
 
         let server = Box::new(Server::default());
-        let server_id = *server.id();
+        let server_id = server.id().clone();
         inner
             .taken
             .take(&Mapping {
@@ -548,7 +548,7 @@ mod test {
         };
 
         let server = Box::new(Server::default());
-        let server_id = *server.id();
+        let server_id = server.id().clone();
         inner
             .taken
             .take(&Mapping {
@@ -574,7 +574,7 @@ mod test {
         };
 
         let server = Box::new(Server::new_error());
-        let server_id = *server.id();
+        let server_id = server.id().clone();
 
         // Simulate server being checked out
         inner
@@ -714,7 +714,7 @@ mod test {
 
         // Add a connection
         let server = Box::new(Server::default());
-        let server_id = *server.id();
+        let server_id = server.id().clone();
         inner
             .taken
             .take(&Mapping {
@@ -763,7 +763,7 @@ mod test {
         inner.config.max_age = Duration::from_millis(60_000);
 
         let server = Box::new(Server::default());
-        let server_id = *server.id();
+        let server_id = server.id().clone();
         inner
             .taken
             .take(&Mapping {
@@ -795,8 +795,8 @@ mod test {
         inner
             .taken
             .take(&Mapping {
-                client: client_id,
-                server: server_id,
+                client: client_id.clone(),
+                server: server_id.clone(),
             })
             .unwrap();
 
@@ -815,8 +815,8 @@ mod test {
         // Add mapping
         taken
             .take(&Mapping {
-                client: client_id,
-                server: server_id,
+                client: client_id.clone(),
+                server: server_id.clone(),
             })
             .unwrap();
 
@@ -915,7 +915,7 @@ mod test {
         let req1 = Request::default();
         let req2 = Request::default();
         let req3 = Request::default();
-        let target_id = req2.id;
+        let target_id = req2.id.clone();
 
         inner.waiting.push_back(Waiter {
             request: req1,
@@ -1125,9 +1125,9 @@ mod test {
 
         // Add two idle connections to the pool
         let server1 = Box::new(Server::default());
-        let server1_id = *server1.id();
+        let server1_id = server1.id().clone();
         let server2 = Box::new(Server::default());
-        let server2_id = *server2.id();
+        let server2_id = server2.id().clone();
         inner.idle_connections.push(server1);
         inner.idle_connections.push(server2);
 
@@ -1177,7 +1177,7 @@ mod test {
         assert_eq!(inner.total(), 2);
 
         // Verify the specific servers are back in the idle pool
-        let idle_ids: Vec<_> = inner.idle_conns().iter().map(|s| *s.id()).collect();
+        let idle_ids: Vec<_> = inner.idle_conns().iter().map(|s| s.id().clone()).collect();
         assert!(idle_ids.contains(&server1_id));
         assert!(idle_ids.contains(&server2_id));
     }

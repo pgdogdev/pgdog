@@ -26,7 +26,7 @@ pub fn stats() -> HashMap<BackendKeyData, ConnectedServer> {
     STATS
         .read()
         .iter()
-        .map(|(k, v)| (*k, v.lock().clone()))
+        .map(|(k, v)| (k.clone(), v.lock().clone()))
         .collect()
 }
 
@@ -43,7 +43,7 @@ pub fn idle_in_transaction(pool: &Pool) -> usize {
 }
 
 /// Core server statistics (shared between local and global).
-#[derive(Clone, Debug, Copy)]
+#[derive(Clone, Debug)]
 pub struct ServerStats {
     pub inner: pgdog_stats::server::Stats,
     pub id: BackendKeyData,
@@ -122,10 +122,10 @@ impl Stats {
         options: &ServerOptions,
         config: &Memory,
     ) -> Self {
-        let local = ServerStats::new(id, options, config);
+        let local = ServerStats::new(id.clone(), options, config);
 
         let server = ConnectedServer {
-            stats: local,
+            stats: local.clone(),
             addr: addr.clone(),
             application_name: params.get_default("application_name", "PgDog").to_owned(),
             client: None,
@@ -140,7 +140,7 @@ impl Stats {
     /// Sync local stats to shared (called on I/O operations).
     #[inline]
     fn sync_to_shared(&self) {
-        self.shared.lock().stats = self.local;
+        self.shared.lock().stats = self.local.clone();
     }
 
     fn transaction_state(&mut self, now: Instant, state: State) {
@@ -157,10 +157,10 @@ impl Stats {
     }
 
     pub fn link_client(&mut self, client_name: &str, server_name: &str, id: &BackendKeyData) {
-        self.local.client_id = Some(*id);
+        self.local.client_id = Some(id.clone());
         if client_name != server_name {
             let mut guard = self.shared.lock();
-            guard.stats.client_id = self.local.client_id;
+            guard.stats.client_id = self.local.client_id.clone();
             guard.application_name.clear();
             guard.application_name.push_str(client_name);
         }

@@ -24,7 +24,7 @@ impl ConnectedClient {
     /// New connected client.
     pub fn new(id: &BackendKeyData, addr: SocketAddr, params: &Parameters) -> Self {
         Self {
-            id: *id,
+            id: id.clone(),
             stats: Stats::new(),
             addr,
             connected_at: Local::now(),

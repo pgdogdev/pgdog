@@ -21,9 +21,11 @@ pub(super) struct Taken {
 impl Taken {
     #[inline]
     pub(super) fn take(&mut self, mapping: &Mapping) -> Result<(), Error> {
-        self.taken.insert(self.counter, *mapping);
-        self.server_client.insert(mapping.server, self.counter);
-        self.client_server.insert(mapping.client, mapping.server);
+        self.taken.insert(self.counter, mapping.clone());
+        self.server_client
+            .insert(mapping.server.clone(), self.counter);
+        self.client_server
+            .insert(mapping.client.clone(), mapping.server.clone());
         self.counter = self.counter.wrapping_add(1);
         Ok(())
     }
@@ -33,7 +35,7 @@ impl Taken {
         let counter = self
             .server_client
             .remove(server)
-            .ok_or(Error::UntrackedConnCheckin(*server))?;
+            .ok_or(Error::UntrackedConnCheckin(server.pid))?;
         let mapping = self
             .taken
             .remove(&counter)
@@ -55,11 +57,11 @@ impl Taken {
 
     #[inline]
     pub(super) fn server(&self, client: &BackendKeyData) -> Option<BackendKeyData> {
-        self.client_server.get(client).copied()
+        self.client_server.get(client).cloned()
     }
 
     pub(super) fn servers(&self) -> Vec<BackendKeyData> {
-        self.client_server.values().copied().collect()
+        self.client_server.values().cloned().collect()
     }
 
     #[cfg(test)]

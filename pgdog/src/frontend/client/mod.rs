@@ -312,7 +312,7 @@ impl Client {
 
         // Get connection parameters. These will be most likely cached,
         // unless the pool was just created.
-        let server_params = match conn.parameters(&Request::unrouted(id)).await {
+        let server_params = match conn.parameters(&Request::unrouted(id.clone())).await {
             Ok(params) => params,
             Err(err) => {
                 if err.no_server() {
@@ -392,7 +392,7 @@ impl Client {
         Self {
             stream,
             addr: SocketAddr::from(([127, 0, 0, 1], 1234)),
-            id,
+            id: id.clone(),
             comms: ClientComms::new(&id),
             streaming: false,
             prepared_statements,
@@ -409,7 +409,7 @@ impl Client {
 
     /// Get client's identifier.
     pub fn id(&self) -> BackendKeyData {
-        self.id
+        self.id.clone()
     }
 
     /// Run the client and log disconnect.

@@ -102,7 +102,7 @@ fn test_rd_before_dr() {
         let result = multi_shard.message();
         let id = BackendKeyData::default();
         assert_eq!(
-            result.map(|m| m.backend(id)),
+            result.map(|m| m.backend(id.clone())),
             Some(dr.message().unwrap().backend(id))
         );
     }
@@ -236,10 +236,10 @@ fn test_omni_data_rows_only_from_first_server() {
     // Setup: send RowDescription from both shards
     let rd = RowDescription::new(&[Field::bigint("id")]);
     multi_shard
-        .forward(rd.message().unwrap().backend(backend1))
+        .forward(rd.message().unwrap().backend(backend1.clone()))
         .unwrap();
     let rd_result = multi_shard
-        .forward(rd.message().unwrap().backend(backend2))
+        .forward(rd.message().unwrap().backend(backend2.clone()))
         .unwrap();
     assert!(rd_result.is_some()); // RowDescription forwarded after all shards
 
@@ -247,7 +247,7 @@ fn test_omni_data_rows_only_from_first_server() {
     let mut dr1 = DataRow::new();
     dr1.add(100_i64);
     let result = multi_shard
-        .forward(dr1.message().unwrap().backend(backend1))
+        .forward(dr1.message().unwrap().backend(backend1.clone()))
         .unwrap();
     assert!(result.is_some()); // Should be forwarded
 

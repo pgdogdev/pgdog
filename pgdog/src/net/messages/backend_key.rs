@@ -22,10 +22,17 @@ fn next_counter() -> i32 {
 }
 
 /// Variable-length cancel secret.
-#[derive(Copy, Clone, Debug, Hash, PartialEq, Eq)]
-pub struct SecretKey {
-    len: u16,
-    bytes: [u8; MAX_SECRET_LEN],
+///
+/// The legacy 3.0 secret is a 4-byte integer stored inline, while the 3.2
+/// protocol allows a variable-length secret kept on the heap. Keeping the
+/// extended secret in a `Vec` rather than a fixed buffer keeps this type small
+/// (the legacy case, which dominates, never allocates).
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+pub enum SecretKey {
+    /// 3.0-compatible 4-byte secret.
+    Legacy([u8; LEGACY_SECRET_LEN]),
+    /// 3.2 variable-length secret.
+    Extended(Vec<u8>),
 }
 
 impl Default for SecretKey {
@@ -37,12 +44,7 @@ impl Default for SecretKey {
 impl SecretKey {
     /// Create a 3.0-compatible secret key from a 4-byte integer.
     pub fn legacy(secret: i32) -> Self {
-        let mut bytes = [0; MAX_SECRET_LEN];
-        bytes[..LEGACY_SECRET_LEN].copy_from_slice(&secret.to_be_bytes());
-        Self {
-            len: LEGACY_SECRET_LEN as u16,
-            bytes,
-        }
+        Self::Legacy(secret.to_be_bytes())
     }
 
     /// Create a random secret key of the requested length.
@@ -52,11 +54,14 @@ impl SecretKey {
             "cancel secret must be between 1 and {MAX_SECRET_LEN} bytes"
         );
 
-        let mut bytes = [0; MAX_SECRET_LEN];
-        rand::rng().fill(&mut bytes[..len]);
-        Self {
-            len: len as u16,
-            bytes,
+        if len == LEGACY_SECRET_LEN {
+            let mut bytes = [0; LEGACY_SECRET_LEN];
+            rand::rng().fill(&mut bytes[..]);
+            Self::Legacy(bytes)
+        } else {
+            let mut bytes = vec![0; len];
+            rand::rng().fill(&mut bytes[..]);
+            Self::Extended(bytes)
         }
     }
 
@@ -66,41 +71,45 @@ impl SecretKey {
             return Err(crate::net::Error::UnexpectedPayload);
         }
 
-        let mut bytes = [0; MAX_SECRET_LEN];
-        bytes[..secret.len()].copy_from_slice(secret);
-        Ok(Self {
-            len: secret.len() as u16,
-            bytes,
+        Ok(if secret.len() == LEGACY_SECRET_LEN {
+            let mut bytes = [0; LEGACY_SECRET_LEN];
+            bytes.copy_from_slice(secret);
+            Self::Legacy(bytes)
+        } else {
+            Self::Extended(secret.to_vec())
         })
     }
 
     /// Secret bytes as they appear on the wire.
     pub fn as_slice(&self) -> &[u8] {
-        &self.bytes[..self.len()]
+        match self {
+            Self::Legacy(bytes) => bytes,
+            Self::Extended(bytes) => bytes,
+        }
     }
 
     /// Secret length in bytes.
     pub fn len(&self) -> usize {
-        self.len as usize
+        self.as_slice().len()
     }
 }
 
 impl Display for SecretKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if self.len() == LEGACY_SECRET_LEN {
-            let legacy = i32::from_be_bytes(self.as_slice().try_into().expect("4-byte secret"));
-            write!(f, "{legacy}")
-        } else {
-            for byte in self.as_slice() {
-                write!(f, "{byte:02x}")?;
+        match self {
+            Self::Legacy(bytes) => write!(f, "{}", i32::from_be_bytes(*bytes)),
+            Self::Extended(bytes) => {
+                for byte in bytes {
+                    write!(f, "{byte:02x}")?;
+                }
+                Ok(())
             }
-            Ok(())
         }
     }
 }
 
 /// BackendKeyData (B)
-#[derive(Copy, Clone, Debug, Hash, PartialEq, Eq, Default)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq, Default)]
 pub struct BackendKeyData {
     /// Process ID.
     pub pid: i32,

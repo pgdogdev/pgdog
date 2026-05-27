@@ -101,7 +101,11 @@ impl Command for ShowServers {
                 .add("remote_pid", server.stats.id.pid as i64)
                 .add(
                     "client_id",
-                    server.stats.client_id.map(|client| client.pid as i64),
+                    server
+                        .stats
+                        .client_id
+                        .as_ref()
+                        .map(|client| client.pid as i64),
                 )
                 .add("transactions", server.stats.total.transactions)
                 .add("queries", server.stats.total.queries)

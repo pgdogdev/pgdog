@@ -314,7 +314,7 @@ impl Server {
         // so they don't send BackendKeyData.
         // Generating a random one is fine, it just won't work when we try to
         // cancel a query with this secret.
-        let id = key_data.unwrap_or(BackendKeyData::new());
+        let id = key_data.unwrap_or_default();
         let params: Parameters = params.into();
 
         info!(
@@ -329,7 +329,7 @@ impl Server {
         let mut server = Server {
             addr: addr.clone(),
             stream: Some(stream),
-            id,
+            id: id.clone(),
             stats: Stats::connect(id, addr, &params, &options, &config.config.memory),
             replication_mode: options.replication_mode(),
             params,
@@ -360,7 +360,7 @@ impl Server {
     pub async fn cancel(addr: &Address, id: &BackendKeyData) -> Result<(), Error> {
         let mut stream = TcpStream::connect(addr.addr().await?).await?;
         stream
-            .write_all(&Startup::Cancel { id: *id }.to_bytes()?)
+            .write_all(&Startup::Cancel { id: id.clone() }.to_bytes()?)
             .await?;
         stream.flush().await?;
 
@@ -464,11 +464,11 @@ impl Server {
     pub async fn read(&mut self) -> Result<Message, Error> {
         let message = loop {
             if let Some(message) = self.prepared_statements.state_mut().get_simulated() {
-                return Ok(message.backend(self.id));
+                return Ok(message.backend(self.id.clone()));
             }
             match self.stream_buffer.read(self.stream.as_mut().unwrap()).await {
                 Ok(message) => {
-                    let message = message.stream(self.streaming).backend(self.id);
+                    let message = message.stream(self.streaming).backend(self.id.clone());
                     match self.prepared_statements.forward(&message) {
                         Ok(forward) => {
                             if forward {
@@ -1211,7 +1211,7 @@ pub mod test {
             let addr = Address::default();
             Self {
                 stream: None,
-                id,
+                id: id.clone(),
                 params: Parameters::default(),
                 changed_params: Parameters::default(),
                 client_params: Parameters::default(),

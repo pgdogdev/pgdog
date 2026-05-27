@@ -91,7 +91,7 @@ impl Comms {
         self.global
             .clients
             .lock()
-            .insert(*id, ConnectedClient::new(id, addr, params));
+            .insert(id.clone(), ConnectedClient::new(id, addr, params));
     }
 
     /// Update client parameters.
@@ -158,7 +158,7 @@ impl ClientComms {
 
     pub fn new(id: &BackendKeyData) -> Self {
         Self {
-            id: *id,
+            id: id.clone(),
             comms: comms(),
         }
     }

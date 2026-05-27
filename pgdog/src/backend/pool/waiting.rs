@@ -24,7 +24,7 @@ impl Waiting {
     /// N.B. You must call and await `Waiting::wait`, otherwise you'll leak waiters.
     ///
     pub(super) fn new(pool: Pool, request: &Request) -> Result<Self, Error> {
-        let request = *request;
+        let request = request.clone();
         let (tx, rx) = channel();
 
         let full = {
@@ -37,7 +37,10 @@ impl Waiting {
             } else {
                 guard.stats.counts.writes += 1;
             }
-            guard.waiting.push_back(Waiter { request, tx });
+            guard.waiting.push_back(Waiter {
+                request: request.clone(),
+                tx,
+            });
             guard.full()
         };
 

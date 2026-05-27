@@ -74,7 +74,7 @@ async fn test_pool_checkout() {
 
     let pool = pool();
     let conn = pool.get(&Request::default()).await.unwrap();
-    let id = *(conn.id());
+    let id = conn.id().clone();
 
     assert!(conn.done());
     assert!(conn.done());
@@ -255,6 +255,7 @@ async fn test_benchmark_pool() {
 
     for _ in 0..workers {
         let pool = pool.clone();
+        let request = request.clone();
         let handle = tokio::spawn(async move {
             for _ in 0..counts {
                 let conn = pool.get(&request).await.unwrap();
@@ -279,7 +280,7 @@ async fn test_incomplete_request_recovery() {
 
     for query in ["SELECT 1", "BEGIN"] {
         let mut conn = pool.get(&Request::default()).await.unwrap();
-        let conn_id = *(conn.id());
+        let conn_id = conn.id().clone();
 
         conn.send(&vec![ProtocolMessage::from(Query::new(query))].into())
             .await

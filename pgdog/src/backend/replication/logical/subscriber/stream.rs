@@ -310,7 +310,7 @@ impl StreamSubscriber {
             } else {
                 statements.insert.parse()
             };
-            let ctx = StreamContext::new(&self.cluster, &insert.tuple_data, &parse)?;
+            let ctx = StreamContext::new(&self.cluster, &insert.tuple_data, parse)?;
             self.send(ctx.shard(), ctx.bind()).await?;
         }
 
@@ -573,9 +573,9 @@ impl StreamSubscriber {
         // FULL identity guarantees old_full is fully materialised; 'u' columns in
         // update.new carry the same value as the corresponding column in old_full.
         // Routing from a raw 'u' column yields empty bytes → wrong shard.
-        let complete_new = update.new.fill_toasted_from(&old_full)?;
+        let complete_new = update.new.fill_toasted_from(old_full)?;
         let new_shard = self.shard_for(&complete_new, &update_parse)?;
-        let old_shard = self.shard_for(&old_full, &update_parse)?;
+        let old_shard = self.shard_for(old_full, &update_parse)?;
 
         if new_shard != old_shard {
             // Shard key changed: DELETE on old shard, INSERT on new shard.

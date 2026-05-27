@@ -107,7 +107,7 @@ pub trait Protocol: ToBytes + FromBytes + std::fmt::Debug {
     }
 }
 
-#[derive(Clone, PartialEq, Default, Copy, Debug)]
+#[derive(Clone, PartialEq, Default, Debug)]
 pub enum Source {
     Backend(BackendKeyData),
     #[default]
@@ -117,7 +117,7 @@ pub enum Source {
 impl Source {
     pub fn backend_id(&self) -> Option<BackendKeyData> {
         if let Self::Backend(id) = self {
-            Some(*id)
+            Some(id.clone())
         } else {
             None
         }
@@ -255,7 +255,7 @@ impl Message {
 
     /// Where is this message coming from?
     pub fn source(&self) -> Source {
-        self.source
+        self.source.clone()
     }
 
     pub fn in_transaction(&self) -> bool {
