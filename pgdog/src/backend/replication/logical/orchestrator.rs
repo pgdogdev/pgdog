@@ -301,7 +301,7 @@ impl ReplicationWaiter {
             let lag = self.orchestrator.replication_lag().await;
             cutover_state(CutoverState::WaitingForReplication { lag });
 
-            info!("[cutover] replication lag: {}", format_bytes(lag as u64));
+            info!("[cutover] replication lag: {}", format_bytes(lag));
 
             // Time to go.
             if lag <= traffic_stop {
