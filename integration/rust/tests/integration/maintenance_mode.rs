@@ -120,7 +120,7 @@ async fn test_maintenance_mode_parsing() {
     let result = admin.simple_query("MAINTENANCE INVALID").await;
     assert!(result.is_err());
 
-    let result = admin.simple_query("MAINTENANCE ON EXTRA").await;
+    let result = admin.simple_query("MAINTENANCE ON DB_NAME EXTRA").await;
     assert!(result.is_err());
 }
 

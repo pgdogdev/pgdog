@@ -1,28 +1,29 @@
 //! Pause access to all/specific databases while we change the world.
 //!
-//! Maintenance mode is special: it's completely independent from the config
-//! and will hold true during config changes, e.g. when some databases disappear
-//! and new ones are added.
+//! Maintenance mode is special: it's independent from the config
+//! and will hold true during config changes, e.g. when some databases disappear, e.g.,
+//! replicas or shards.
 //!
 //! This is useful when changing the sharding config online, for example.
 //!
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     future::{Future, IntoFuture},
     pin::Pin,
-    sync::atomic::{AtomicBool, AtomicUsize, Ordering},
+    sync::Arc,
 };
 
+use arc_swap::ArcSwap;
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 use tokio::sync::broadcast;
 use tracing::warn;
 
+use crate::config::config;
+
 static MAINTENANCE_MODE: Lazy<MaintenanceMode> = Lazy::new(|| MaintenanceMode {
-    all_channel: Mutex::new(None),
-    databases: Mutex::new(HashMap::new()),
-    all: AtomicBool::new(false),
-    active: AtomicUsize::new(0),
+    state: ArcSwap::from_pointee(MaintenanceState::default()),
+    write_lock: Mutex::new(()),
 });
 
 pub(crate) fn waiter(database: &str) -> Option<Waiter> {
@@ -82,32 +83,24 @@ pub fn is_on(database: &str) -> bool {
 
 #[derive(Debug)]
 struct MaintenanceMode {
-    /// Channel for `all`-maintenance. Present (`Some`) while it's on; dropping
-    /// it closes the channel and wakes every waiter.
-    all_channel: Mutex<Option<broadcast::Sender<()>>>,
+    state: ArcSwap<MaintenanceState>,
+    write_lock: Mutex<()>,
+}
+
+#[derive(Clone, Debug, Default)]
+struct MaintenanceState {
     /// One channel per individually-paused database. Removing a database drops
     /// its sender, closing the channel and waking its waiters.
-    databases: Mutex<HashMap<String, broadcast::Sender<()>>>,
-    all: AtomicBool,
-    active: AtomicUsize,
+    databases: HashMap<String, broadcast::Sender<()>>,
 }
 
 impl MaintenanceMode {
-    /// Check whether the given database is currently in maintenance mode. This is very fast for the common case (off),
-    /// and pretty fast for not so common one when one of the databases is in maintenance mode.
-    ///
-    /// # Arguments
-    ///
-    /// * `database`: name of the database to check.
-    ///
-    /// # Return
-    ///
-    /// True if the database is in maintenance mode, false otherwise.
+    /// Check whether the given database is currently in maintenance mode.
+    #[cfg(test)]
     #[inline]
     fn paused(&self, database: &str) -> bool {
-        self.all.load(Ordering::Relaxed)
-            || (self.active.load(Ordering::Relaxed) != 0
-                && self.databases.lock().contains_key(database))
+        let state = self.state.load();
+        state.databases.contains_key(database)
     }
 
     /// Get a [`Waiter`] that resolves once the database leaves maintenance
@@ -118,21 +111,10 @@ impl MaintenanceMode {
     /// * `database`: name of the database to wait for.
     ///
     fn get_waiter(&self, database: &str) -> Option<Waiter> {
-        // Fast path: no subscription unless this database is actually paused.
-        if !self.paused(database) {
-            return None;
-        }
-
-        let receiver = match self.databases.lock().get(database) {
-            Some(sender) => Some(sender.subscribe()),
-            None => self
-                .all_channel
-                .lock()
-                .as_ref()
-                .map(|sender| sender.subscribe()),
-        };
-
-        receiver.map(|receiver| Waiter { receiver })
+        let state = self.state.load();
+        state.databases.get(database).map(|sender| Waiter {
+            receiver: sender.subscribe(),
+        })
     }
 
     /// Put a single database into maintenance mode.
@@ -142,13 +124,17 @@ impl MaintenanceMode {
     /// * `database`: name of the database to pause.
     ///
     fn add(&self, database: &str) {
-        let mut databases = self.databases.lock();
+        let _guard = self.write_lock.lock();
+        let state = self.state.load();
+        let mut next = MaintenanceState::clone(&state);
+
         // Keep the existing channel if already paused, so current waiters
         // stay valid.
-        databases
+        next.databases
             .entry(database.to_string())
             .or_insert_with(|| broadcast::channel(1).0);
-        self.active.store(databases.len(), Ordering::Relaxed);
+
+        self.state.store(Arc::new(next));
     }
 
     /// Take a single database out of maintenance mode and wake its waiters by
@@ -159,27 +145,46 @@ impl MaintenanceMode {
     /// * `database`: name of the database to resume.
     ///
     fn remove(&self, database: &str) {
-        let mut databases = self.databases.lock();
-        databases.remove(database);
-        self.active.store(databases.len(), Ordering::Relaxed);
+        let _guard = self.write_lock.lock();
+        let state = self.state.load();
+        let mut next = MaintenanceState::clone(&state);
+
+        next.databases.remove(database);
+
+        self.state.store(Arc::new(next));
     }
 
     /// Put every database into maintenance mode, including ones that aren't
     /// connected yet.
     fn add_all(&self) {
-        let mut all_channel = self.all_channel.lock();
-        if all_channel.is_none() {
-            *all_channel = Some(broadcast::channel(1).0);
+        let _guard = self.write_lock.lock();
+        let state = self.state.load();
+        let mut next = MaintenanceState::clone(&state);
+        let databases = config()
+            .config
+            .databases
+            .iter()
+            .map(|database| database.name.clone())
+            .collect::<HashSet<_>>();
+
+        for database in databases {
+            next.databases
+                .entry(database)
+                .or_insert_with(|| broadcast::channel(1).0);
         }
-        self.all.store(true, Ordering::Relaxed);
+
+        self.state.store(Arc::new(next));
     }
 
-    /// Take every database out of `all`-maintenance and wake its waiters by
-    /// dropping (closing) the channel. Databases paused individually stay
-    /// paused.
+    /// Take every database out of maintenance mode, including ones paused
+    /// individually, and wake their waiters by dropping (closing) the channels.
     fn remove_all(&self) {
-        self.all.store(false, Ordering::Relaxed);
-        self.all_channel.lock().take();
+        let _guard = self.write_lock.lock();
+        let state = self.state.load();
+
+        let mut next = MaintenanceState::clone(&state);
+        next.databases.clear();
+        self.state.store(Arc::new(next));
     }
 }
 
@@ -192,10 +197,8 @@ mod test {
     /// Fresh, isolated instance so tests don't share the global singleton.
     fn maintenance() -> MaintenanceMode {
         MaintenanceMode {
-            all_channel: Mutex::new(None),
-            databases: Mutex::new(HashMap::new()),
-            all: AtomicBool::new(false),
-            active: AtomicUsize::new(0),
+            state: ArcSwap::from_pointee(MaintenanceState::default()),
+            write_lock: Mutex::new(()),
         }
     }
 
@@ -213,7 +216,7 @@ mod test {
 
         assert!(m.paused("one"));
         assert!(!m.paused("two"));
-        assert_eq!(m.active.load(Ordering::Relaxed), 1);
+        assert_eq!(m.state.load().databases.len(), 1);
 
         // Only the paused database gets a waiter.
         assert!(m.get_waiter("one").is_some());
@@ -221,7 +224,7 @@ mod test {
 
         m.remove("one");
         assert!(!m.paused("one"));
-        assert_eq!(m.active.load(Ordering::Relaxed), 0);
+        assert_eq!(m.state.load().databases.len(), 0);
     }
 
     #[test]
@@ -229,42 +232,44 @@ mod test {
         let m = maintenance();
         m.add("one");
         m.add("one");
-        assert_eq!(m.active.load(Ordering::Relaxed), 1);
+        assert_eq!(m.state.load().databases.len(), 1);
 
         m.remove("one");
-        assert_eq!(m.active.load(Ordering::Relaxed), 0);
+        assert_eq!(m.state.load().databases.len(), 0);
         // Removing again is a no-op.
         m.remove("one");
-        assert_eq!(m.active.load(Ordering::Relaxed), 0);
+        assert_eq!(m.state.load().databases.len(), 0);
     }
 
-    #[test]
-    fn pause_all_databases() {
+    #[tokio::test]
+    async fn pause_all_databases() {
+        // `add_all` pauses every database in the loaded config ("pgdog").
+        crate::config::load_test();
         let m = maintenance();
         m.add_all();
 
-        assert!(m.paused("one"));
-        assert!(m.paused("two"));
-        assert!(m.get_waiter("anything").is_some());
+        assert!(m.paused("pgdog"));
+        assert!(m.get_waiter("pgdog").is_some());
 
         m.remove_all();
-        assert!(!m.paused("one"));
-        assert!(!m.paused("two"));
+        assert!(!m.paused("pgdog"));
     }
 
-    #[test]
-    fn remove_all_keeps_individual_pauses() {
+    #[tokio::test]
+    async fn remove_all_clears_everything() {
+        // `remove_all` clears the whole set, including databases paused
+        // individually.
+        crate::config::load_test();
         let m = maintenance();
-        m.add("one");
-        m.add_all();
+        m.add("other");
+        m.add_all(); // pauses the configured "pgdog"
 
-        assert!(m.paused("one"));
-        assert!(m.paused("two"));
+        assert!(m.paused("pgdog"));
+        assert!(m.paused("other"));
 
-        // Lifting `all` leaves individually-paused databases paused.
         m.remove_all();
-        assert!(m.paused("one"));
-        assert!(!m.paused("two"));
+        assert!(!m.paused("pgdog"));
+        assert!(!m.paused("other"));
     }
 
     #[tokio::test]
@@ -293,9 +298,12 @@ mod test {
 
     #[tokio::test]
     async fn waiter_resolves_on_remove_all() {
+        crate::config::load_test();
         let m = maintenance();
         m.add_all();
-        let waiter = m.get_waiter("one").expect("all databases are paused");
+        let waiter = m
+            .get_waiter("pgdog")
+            .expect("configured database is paused");
 
         m.remove_all();
 
