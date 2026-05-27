@@ -112,6 +112,10 @@ impl MaintenanceMode {
     ///
     fn get_waiter(&self, database: &str) -> Option<Waiter> {
         let state = self.state.load();
+        // Just my paranoia.
+        if state.databases.is_empty() {
+            return None;
+        }
         state.databases.get(database).map(|sender| Waiter {
             receiver: sender.subscribe(),
         })
@@ -154,8 +158,7 @@ impl MaintenanceMode {
         self.state.store(Arc::new(next));
     }
 
-    /// Put every database into maintenance mode, including ones that aren't
-    /// connected yet.
+    /// Put every configured database into maintenance mode.
     fn add_all(&self) {
         let _guard = self.write_lock.lock();
         let state = self.state.load();
