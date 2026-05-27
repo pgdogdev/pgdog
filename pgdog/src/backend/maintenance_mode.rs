@@ -2,12 +2,12 @@
 //!
 //! Maintenance mode is special: it's independent from the config
 //! and will hold true during config changes, e.g. when some databases disappear, e.g.,
-//! replicas or shards.
+//! replicas or shards are added/removed.
 //!
 //! This is useful when changing the sharding config online, for example.
 //!
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     future::{Future, IntoFuture},
     pin::Pin,
     sync::Arc,
@@ -18,8 +18,6 @@ use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 use tokio::sync::broadcast;
 use tracing::warn;
-
-use crate::config::config;
 
 static MAINTENANCE_MODE: Lazy<MaintenanceMode> = Lazy::new(|| MaintenanceMode {
     state: ArcSwap::from_pointee(MaintenanceState::default()),
@@ -89,9 +87,10 @@ struct MaintenanceMode {
 
 #[derive(Clone, Debug, Default)]
 struct MaintenanceState {
-    /// One channel per individually-paused database. Removing a database drops
-    /// its sender, closing the channel and waking its waiters.
+    // Per-database maintenance mode.
     databases: HashMap<String, broadcast::Sender<()>>,
+    // Global maintenance mode (all databases, current and future ones).
+    all: Option<broadcast::Sender<()>>,
 }
 
 impl MaintenanceMode {
@@ -99,8 +98,7 @@ impl MaintenanceMode {
     #[cfg(test)]
     #[inline]
     fn paused(&self, database: &str) -> bool {
-        let state = self.state.load();
-        state.databases.contains_key(database)
+        self.get_waiter(database).is_some()
     }
 
     /// Get a [`Waiter`] that resolves once the database leaves maintenance
@@ -112,13 +110,19 @@ impl MaintenanceMode {
     ///
     fn get_waiter(&self, database: &str) -> Option<Waiter> {
         let state = self.state.load();
-        // Just my paranoia.
-        if state.databases.is_empty() {
+
+        if state.databases.is_empty() && state.all.is_none() {
             return None;
         }
-        state.databases.get(database).map(|sender| Waiter {
-            receiver: sender.subscribe(),
-        })
+
+        match state.databases.get(database) {
+            Some(sender) => Some(Waiter {
+                receiver: sender.subscribe(),
+            }),
+            None => state.all.as_ref().map(|sender| Waiter {
+                receiver: sender.subscribe(),
+            }),
+        }
     }
 
     /// Put a single database into maintenance mode.
@@ -162,18 +166,11 @@ impl MaintenanceMode {
     fn add_all(&self) {
         let _guard = self.write_lock.lock();
         let state = self.state.load();
-        let mut next = MaintenanceState::clone(&state);
-        let databases = config()
-            .config
-            .databases
-            .iter()
-            .map(|database| database.name.clone())
-            .collect::<HashSet<_>>();
 
-        for database in databases {
-            next.databases
-                .entry(database)
-                .or_insert_with(|| broadcast::channel(1).0);
+        let mut next = MaintenanceState::clone(&state);
+
+        if next.all.is_none() {
+            next.all = Some(broadcast::channel(1).0);
         }
 
         self.state.store(Arc::new(next));
@@ -186,7 +183,10 @@ impl MaintenanceMode {
         let state = self.state.load();
 
         let mut next = MaintenanceState::clone(&state);
+
+        next.all = None;
         next.databases.clear();
+
         self.state.store(Arc::new(next));
     }
 }
