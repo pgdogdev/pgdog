@@ -7,9 +7,10 @@ use std::time::{Duration, Instant};
 use pgdog_config::users::PasswordKind;
 use timeouts::Timeouts;
 use tokio::{select, spawn, time::timeout};
-use tracing::{debug, enabled, error, info, trace, Level as LogLevel};
+use tracing::{debug, enabled, error, info, trace, warn, Level as LogLevel};
 
 use super::{ClientRequest, Error, PreparedStatements};
+use crate::auth::AuthResult;
 use crate::auth::{md5, scram::Server};
 use crate::backend::maintenance_mode;
 use crate::backend::pool::stats::MemoryStats;
@@ -144,12 +145,12 @@ impl Client {
         user: &str,
         auth_type: &AuthType,
         passwords: &[PasswordKind],
-    ) -> Result<bool, Error> {
+    ) -> Result<AuthResult, Error> {
         if passwords.is_empty() {
-            return Ok(false);
+            return Ok(AuthResult::NoPasswordConfig);
         }
 
-        let ok = match auth_type {
+        let result = match auth_type {
             AuthType::Md5 => {
                 let md5 = md5::Client::new(
                     user,
@@ -158,9 +159,13 @@ impl Client {
                 stream.send_flush(&md5.challenge()).await?;
                 let password = Password::from_bytes(stream.read().await?.to_bytes()?)?;
                 if let Password::PasswordMessage { response } = password {
-                    md5.check(&response)
+                    if md5.check(&response) {
+                        AuthResult::Ok
+                    } else {
+                        AuthResult::NoPasswordMatch
+                    }
                 } else {
-                    false
+                    AuthResult::NoPasswordMessage
                 }
             }
 
@@ -169,7 +174,11 @@ impl Client {
 
                 let scram = Server::new(passwords);
                 let res = scram.handle(stream).await;
-                matches!(res, Ok(true))
+                if matches!(res, Ok(true)) {
+                    AuthResult::Ok
+                } else {
+                    AuthResult::NoPasswordMatch
+                }
             }
 
             AuthType::Plain => {
@@ -178,15 +187,21 @@ impl Client {
                     .await?;
                 let response = stream.read().await?;
                 let response = Password::from_bytes(response.to_bytes()?)?;
-                passwords
+                let is_match = passwords
                     .iter()
-                    .any(|p| Some(p.as_str()) == response.password())
+                    .any(|p| Some(p.as_str()) == response.password());
+
+                if is_match {
+                    AuthResult::Ok
+                } else {
+                    AuthResult::NoPasswordMatch
+                }
             }
 
-            AuthType::Trust => true,
+            AuthType::Trust => AuthResult::Ok,
         };
 
-        Ok(ok)
+        Ok(result)
     }
 
     /// Create new frontend client from the given TCP stream.
@@ -210,13 +225,14 @@ impl Client {
         let passthrough = config.config.general.passthrough_auth();
         let id = BackendKeyData::new_client(protocol_version);
         let comms = ClientComms::new(&id);
+        let log_connections = config.config.general.log_connections;
 
         // Check if we need to ask the client for its password in plaintext
         // because we don't actually have it configured.
         //
         // This is likely because passthrough authentication is enabled.
         //
-        let auth_ok = if passthrough {
+        let auth_result = if passthrough {
             // Get the password. We always need it because we need to check if
             // it's current and hasn't been changed.
             stream
@@ -232,7 +248,7 @@ impl Client {
             if let Some(user) = user {
                 databases::add(user)?
             } else {
-                false
+                AuthResult::NoPassthroughNoUser
             }
         } else if admin {
             // The admin database is virtual and never present in the cluster
@@ -245,7 +261,11 @@ impl Client {
                     if let Some(identity) = cluster.identity() {
                         // mTLS authentication: the client certificate identity
                         // must match the configured user identity.
-                        stream.tls_identity() == Some(identity)
+                        if stream.tls_identity() == Some(identity) {
+                            AuthResult::Ok
+                        } else {
+                            AuthResult::NoIdentity
+                        }
                     } else {
                         // Password authentication.
                         Self::check_password(&mut stream, user, auth_type, cluster.passwords())
@@ -253,11 +273,17 @@ impl Client {
                     }
                 }
 
-                Err(_) => false,
+                Err(_) => AuthResult::NoUserOrDatabase,
             }
         };
 
-        if !auth_ok {
+        if !auth_result.is_ok() {
+            if log_connections {
+                warn!(
+                    r#"user "{}" and database "{}" auth error: {}"#,
+                    user, database, auth_result
+                );
+            }
             stream.fatal(ErrorResponse::auth(user, database)).await?;
             return Ok(None);
         } else {
