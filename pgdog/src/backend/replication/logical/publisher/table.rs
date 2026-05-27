@@ -129,7 +129,7 @@ where
     }
 
     /// `"col" IS NOT DISTINCT FROM $pos` predicates joined by ` AND `.
-    fn is_not_distinct_from_predicates(self) -> String {
+    fn not_distinct_from_predicates(self) -> String {
         self.inner
             .map(|(i, c)| {
                 format!(
@@ -399,7 +399,7 @@ impl Table {
             "(SELECT tableoid, ctid FROM \"{}\".\"{}\" WHERE {} LIMIT 1)",
             escape_identifier(self.table.destination_schema()),
             escape_identifier(self.table.destination_name()),
-            self.all_columns().is_not_distinct_from_predicates(),
+            self.all_columns().not_distinct_from_predicates(),
         )
     }
 
