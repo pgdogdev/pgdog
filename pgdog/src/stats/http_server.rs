@@ -8,7 +8,7 @@ use hyper::service::service_fn;
 use hyper::{Request, Response};
 use hyper_util::rt::TokioIo;
 use tokio::net::TcpListener;
-use tracing::info;
+use tracing::{info, warn};
 
 use super::{Clients, MirrorStatsMetrics, Pools, QueryCache, TwoPc};
 
@@ -61,7 +61,13 @@ pub async fn server(port: u16) -> std::io::Result<()> {
                 .serve_connection(io, service_fn(metrics))
                 .await
             {
-                eprintln!("OpenMetrics endpoint error: {:?}", err);
+                // Clients (TCP health probes, scrapers that disconnect
+                // mid-request, keep-alive teardown) routinely close the socket
+                // before sending a complete request. That surfaces as
+                // IncompleteMessage and is benign.
+                if !err.is_incomplete_message() {
+                    warn!("OpenMetrics endpoint error: {:?}", err);
+                }
             }
         });
     }
