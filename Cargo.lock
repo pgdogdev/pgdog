@@ -3330,9 +3330,11 @@ dependencies = [
 name = "pgdog-macros"
 version = "0.1.1"
 dependencies = [
+ "futures",
  "proc-macro2",
  "quote",
  "syn 2.0.117",
+ "tokio",
 ]
 
 [[package]]

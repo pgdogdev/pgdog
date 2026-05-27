@@ -51,10 +51,12 @@ impl InsertSplit {
     /// Build a ClientRequest from this split and the original request.
     pub fn build_request(&self, request: &ClientRequest) -> ClientRequest {
         let mut new_request = ClientRequest::default();
+        let mut has_parse = false;
 
         for message in &request.messages {
             let new_message = match message {
                 ProtocolMessage::Parse(parse) => {
+                    has_parse = true;
                     let mut new_parse = parse.clone();
                     new_parse.set_query(&self.stmt);
 
@@ -77,6 +79,24 @@ impl InsertSplit {
             };
             new_request.messages.push(new_message);
             new_request.ast = Some(self.ast.clone());
+        }
+
+        // When the driver prepared the statement in a separate round-trip
+        // (lib/pq: Parse/Describe/Sync, then Bind/Execute/Sync), the execute
+        // batch carries no Parse of its own and relies on `last_parse` being
+        // injected before the Bind. Rewrite that saved Parse to this split's
+        // single-tuple statement so the backend prepares the right one;
+        // otherwise it would still hold the original multi-tuple statement and
+        // reject the Bind's parameter count.
+        if !has_parse {
+            if let Some(parse) = &request.last_parse {
+                let mut split_parse = parse.clone();
+                split_parse.set_query(&self.stmt);
+                if let Some(name) = self.statement_name() {
+                    split_parse.rename_fast(name);
+                }
+                new_request.last_parse = Some(split_parse);
+            }
         }
 
         new_request

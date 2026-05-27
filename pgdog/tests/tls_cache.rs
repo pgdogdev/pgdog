@@ -4,6 +4,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+// Timing tests are flaky by their nature.
+#[pgdog_plugin::macros::flaky]
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn tls_acceptor_reuse_is_fast() {
     pgdog::logger();

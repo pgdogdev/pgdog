@@ -144,9 +144,6 @@ func TestAdvisoryLockWithTransaction(t *testing.T) {
 	assert.Nil(t, err)
 	defer adminConn.Close()
 
-	_, err = adminConn.Exec("SET prepared_statements TO 'extended_anonymous'")
-	assert.Nil(t, err)
-
 	_, err = adminConn.Exec("SET query_parser TO 'on'")
 	assert.Nil(t, err)
 
