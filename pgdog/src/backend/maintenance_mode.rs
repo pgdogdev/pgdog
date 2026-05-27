@@ -34,6 +34,7 @@ pub(crate) fn waiter(database: &str) -> Option<Waiter> {
 /// when the maintenance channel is closed (the sender is dropped by `stop`).
 pub(crate) struct Waiter {
     receiver: broadcast::Receiver<()>,
+    database: String,
 }
 
 impl IntoFuture for Waiter {
@@ -44,6 +45,11 @@ impl IntoFuture for Waiter {
         Box::pin(async move {
             // Resolves when the channel is closed (sender dropped).
             let _ = self.receiver.recv().await;
+
+            // Re-check to avoid race between MAINTENANCE ON <db> and MAINTENANCE ON.
+            if let Some(waiter) = MAINTENANCE_MODE.get_waiter(&self.database) {
+                let _ = waiter.await;
+            }
         })
     }
 }
@@ -118,9 +124,11 @@ impl MaintenanceMode {
         match state.databases.get(database) {
             Some(sender) => Some(Waiter {
                 receiver: sender.subscribe(),
+                database: database.to_string(),
             }),
             None => state.all.as_ref().map(|sender| Waiter {
                 receiver: sender.subscribe(),
+                database: database.to_string(),
             }),
         }
     }
@@ -135,6 +143,11 @@ impl MaintenanceMode {
         let _guard = self.write_lock.lock();
         let state = self.state.load();
         let mut next = MaintenanceState::clone(&state);
+
+        // Global maintenance covers individual databases.
+        if next.all.is_some() {
+            return;
+        }
 
         // Keep the existing channel if already paused, so current waiters
         // stay valid.
@@ -195,7 +208,7 @@ impl MaintenanceMode {
 mod test {
     use super::*;
     use std::time::Duration;
-    use tokio::time::timeout;
+    use tokio::time::{sleep, timeout};
 
     /// Fresh, isolated instance so tests don't share the global singleton.
     fn maintenance() -> MaintenanceMode {
@@ -316,6 +329,27 @@ mod test {
     }
 
     #[tokio::test]
+    async fn individual_maintenance_is_ignored_while_all_is_on() {
+        let m = maintenance();
+        m.add_all();
+        m.add("db"); // no-op: `all` already covers "db"
+
+        // "db" is paused, but only through the global `all` channel.
+        assert!(m.state.load().databases.is_empty());
+        let waiter = m
+            .get_waiter("db")
+            .expect("db is paused under all-maintenance");
+
+        // Resuming "db" individually must NOT release it while `all` is on.
+        m.remove("db");
+        let pending = timeout(Duration::from_millis(100), waiter.into_future()).await;
+        assert!(
+            pending.is_err(),
+            "db waiter must stay blocked while all-maintenance is on"
+        );
+    }
+
+    #[tokio::test]
     async fn waiter_survives_re_pause() {
         // Re-pausing an already-paused database must keep the existing channel,
         // so a waiter created before the second `add` still resolves on remove.
@@ -329,5 +363,39 @@ mod test {
         timeout(Duration::from_secs(1), waiter.into_future())
             .await
             .expect("waiter should resolve even after a re-pause");
+    }
+
+    #[tokio::test]
+    async fn individual_resume_does_not_release_under_global() {
+        // Reverse ordering: a database is paused individually first, then global
+        // maintenance is turned on. Resuming the database individually must not
+        // release its waiter while global maintenance is still on — the waiter
+        // re-checks and re-parks on the global channel.
+        //
+        // Drives the global instance because the waiter's re-check consults it.
+        MAINTENANCE_MODE.remove_all(); // clean slate
+
+        MAINTENANCE_MODE.add("db");
+        let waiter = MAINTENANCE_MODE
+            .get_waiter("db")
+            .expect("db is paused individually");
+        MAINTENANCE_MODE.add_all();
+
+        let handle = tokio::spawn(async move { waiter.await });
+
+        // Individual resume must not wake it while global maintenance is on.
+        MAINTENANCE_MODE.remove("db");
+        sleep(Duration::from_millis(50)).await;
+        assert!(
+            !handle.is_finished(),
+            "waiter must stay blocked while global maintenance is on"
+        );
+
+        // Lifting global maintenance finally releases it.
+        MAINTENANCE_MODE.remove_all();
+        timeout(Duration::from_secs(1), handle)
+            .await
+            .expect("waiter should resolve once global maintenance is lifted")
+            .unwrap();
     }
 }
