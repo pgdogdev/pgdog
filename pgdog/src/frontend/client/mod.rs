@@ -278,15 +278,15 @@ impl Client {
         };
 
         if !auth_result.is_ok() {
-            stream.fatal(ErrorResponse::auth(user, database)).await?;
-            return Ok(None);
-        } else {
             if log_connections {
                 warn!(
                     r#"user "{}" and database "{}" auth error: {}"#,
                     user, database, auth_result
                 );
             }
+            stream.fatal(ErrorResponse::auth(user, database)).await?;
+            return Ok(None);
+        } else {
             stream.send(&Authentication::Ok).await?;
         }
 
