@@ -403,7 +403,7 @@ fn rewrite_params(parse_result: &mut ParseResult) -> Result<Vec<u16>, Error> {
     })?;
 
     let mut params: Vec<(i32, i32)> = params.into_iter().collect();
-    params.sort_by(|a, b| a.1.cmp(&b.1));
+    params.sort_by_key(|a| a.1);
 
     Ok(params
         .into_iter()
