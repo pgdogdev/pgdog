@@ -314,7 +314,7 @@ impl Server {
         // so they don't send BackendKeyData.
         // Generating a random one is fine, it just won't work when we try to
         // cancel a query with this secret.
-        let id = key_data.unwrap_or_default();
+        let id = key_data.unwrap_or(BackendKeyData::new());
         let params: Parameters = params.into();
 
         info!(
