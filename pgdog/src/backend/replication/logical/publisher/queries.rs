@@ -197,6 +197,7 @@ impl From<DataRow> for PublicationTableColumn {
 ///   unique constraint) or every indexed attribute has `attnotnull = true` (NULLs impossible).
 ///   A plain nullable unique index allows two NULL-keyed rows to coexist during the copy–stream
 ///   overlap window, leaving the destination with more rows than the source.
+///
 /// Requires PostgreSQL 15+ when an `indnullsnotdistinct` index is present; the column does
 /// not exist on older servers and the query will return an error rather than silently accept.
 ///

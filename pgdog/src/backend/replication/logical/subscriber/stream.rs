@@ -553,7 +553,7 @@ impl StreamSubscriber {
             UpdateIdentity::Old(old) => old,
             _ => {
                 return Err(Error::FullIdentityMissingOld {
-                    table: table.table,
+                    table: Box::new(table.table),
                     oid,
                     op: "UPDATE",
                 });
@@ -637,7 +637,7 @@ impl StreamSubscriber {
             let Some(old) = delete.old else {
                 let table = self.get_table(oid)?;
                 return Err(Error::FullIdentityMissingOld {
-                    table: table.table.clone(),
+                    table: Box::new(table.table.clone()),
                     oid,
                     op: "DELETE",
                 });

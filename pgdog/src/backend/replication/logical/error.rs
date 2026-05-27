@@ -212,7 +212,7 @@ pub enum Error {
         "FULL identity {op} on {table} (oid {oid}): missing OLD pre-image; source replica identity changed mid-stream"
     )]
     FullIdentityMissingOld {
-        table: PublicationTable,
+        table: Box<PublicationTable>,
         oid: pgdog_postgres_types::Oid,
         op: &'static str,
     },
@@ -352,7 +352,7 @@ mod tests {
         })
         .is_retryable());
         assert!(!Error::FullIdentityMissingOld {
-            table: PublicationTable::default(),
+            table: Box::new(PublicationTable::default()),
             oid: pgdog_postgres_types::Oid::from(1234u32),
             op: "UPDATE",
         }
