@@ -22,6 +22,7 @@ impl Command for ShowTasks {
     async fn execute(&self) -> Result<Vec<Message>, Error> {
         let rd = RowDescription::new(&[
             Field::bigint("id"),
+            // Field::bigint("parent_id"),
             Field::text("type"),
             Field::text("started_at"),
             Field::text("elapsed"),

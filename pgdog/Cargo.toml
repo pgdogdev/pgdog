@@ -22,7 +22,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "std"]
 tracing-throttle = "0.4"
 parking_lot = "0.12"
 thiserror = "2"
-derive_more = { version = "2", features = ["display", "error"] }
+derive_more = { version = "2", features = ["display", "error", "from"] }
 bytes = "1"
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
@@ -97,6 +97,7 @@ tempfile = "3.23.0"
 stats_alloc = "0.1.10"
 brunch = "0.5"
 wiremock = "0.6"
+tokio = { version = "1", features = ["full", "test-util"] }
 
 [[bench]]
 name = "comment_parser"

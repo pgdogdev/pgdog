@@ -2,7 +2,11 @@
 #![allow(clippy::result_unit_err)]
 #![deny(clippy::print_stdout)]
 
+#[macro_use]
+extern crate derive_more;
+
 pub mod admin;
+pub mod api;
 pub mod auth;
 pub mod backend;
 pub mod cli;
