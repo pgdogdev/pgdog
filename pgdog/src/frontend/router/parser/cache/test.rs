@@ -278,7 +278,7 @@ fn test_cache_key_strips_leading_comment() {
     // The LRU map key must also be the stripped query.
     let queries = Cache::queries();
     assert!(
-        queries.contains_key(&"SELECT 1 FROM cache_key_leading".to_string()),
+        queries.contains_key(&String::from("SELECT 1 FROM cache_key_leading")),
         "cache map key must be the comment-stripped query"
     );
 }

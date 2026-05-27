@@ -431,79 +431,160 @@ mod tests {
 
     // ── Text decode ──────────────────────────────────────────────────
 
+    struct TextDecodeCase {
+        name: &'static str,
+        input: &'static str,
+        oid: i32,
+        expected_elements: Vec<Option<&'static str>>,
+        expected_lb: i32,
+    }
+
     #[test]
     fn test_text_decode_table() {
-        let cases: Vec<(&str, &str, i32, Vec<Option<&str>>, i32)> = vec![
-            ("empty", "{}", 23, vec![], 1),
-            ("single int", "{1}", 23, vec![Some("1")], 1),
-            (
-                "three ints",
-                "{1,2,3}",
-                23,
-                vec![Some("1"), Some("2"), Some("3")],
-                1,
-            ),
-            ("negative int", "{-1}", 23, vec![Some("-1")], 1),
-            ("single NULL", "{NULL}", 23, vec![None], 1),
-            ("NULL mixed case", "{null}", 23, vec![None], 1),
-            (
-                "NULL start",
-                "{NULL,1,2}",
-                23,
-                vec![None, Some("1"), Some("2")],
-                1,
-            ),
-            ("all NULLs", "{NULL,NULL}", 23, vec![None, None], 1),
-            (
-                "text elements",
-                "{hello,world}",
-                25,
-                vec![Some("hello"), Some("world")],
-                1,
-            ),
-            ("quoted comma", r#"{"a,b"}"#, 25, vec![Some("a,b")], 1),
-            ("quoted quote", r#"{"a\"b"}"#, 25, vec![Some("a\"b")], 1),
-            ("quoted backslash", r#"{"a\\b"}"#, 25, vec![Some("a\\b")], 1),
-            ("empty string", r#"{""}"#, 25, vec![Some("")], 1),
-            (
-                "quoted NULL literal",
-                r#"{"NULL"}"#,
-                25,
-                vec![Some("NULL")],
-                1,
-            ),
-            (
-                "whitespace around",
-                "{ 1 , 2 }",
-                23,
-                vec![Some("1"), Some("2")],
-                1,
-            ),
-            ("escaped comma", r#"{a\,b}"#, 25, vec![Some("a,b")], 1),
-            (
-                "escaped trailing space",
-                r#"{a\ }"#,
-                25,
-                vec![Some("a ")],
-                1,
-            ),
-            (
-                "escaped null literal",
-                r#"{\N\U\L\L}"#,
-                25,
-                vec![Some("NULL")],
-                1,
-            ),
-            (
-                "custom lower bound",
-                "[0:2]={1,2,3}",
-                23,
-                vec![Some("1"), Some("2"), Some("3")],
-                0,
-            ),
+        let cases = vec![
+            TextDecodeCase {
+                name: "empty",
+                input: "{}",
+                oid: 23,
+                expected_elements: vec![],
+                expected_lb: 1,
+            },
+            TextDecodeCase {
+                name: "single int",
+                input: "{1}",
+                oid: 23,
+                expected_elements: vec![Some("1")],
+                expected_lb: 1,
+            },
+            TextDecodeCase {
+                name: "three ints",
+                input: "{1,2,3}",
+                oid: 23,
+                expected_elements: vec![Some("1"), Some("2"), Some("3")],
+                expected_lb: 1,
+            },
+            TextDecodeCase {
+                name: "negative int",
+                input: "{-1}",
+                oid: 23,
+                expected_elements: vec![Some("-1")],
+                expected_lb: 1,
+            },
+            TextDecodeCase {
+                name: "single NULL",
+                input: "{NULL}",
+                oid: 23,
+                expected_elements: vec![None],
+                expected_lb: 1,
+            },
+            TextDecodeCase {
+                name: "NULL mixed case",
+                input: "{null}",
+                oid: 23,
+                expected_elements: vec![None],
+                expected_lb: 1,
+            },
+            TextDecodeCase {
+                name: "NULL start",
+                input: "{NULL,1,2}",
+                oid: 23,
+                expected_elements: vec![None, Some("1"), Some("2")],
+                expected_lb: 1,
+            },
+            TextDecodeCase {
+                name: "all NULLs",
+                input: "{NULL,NULL}",
+                oid: 23,
+                expected_elements: vec![None, None],
+                expected_lb: 1,
+            },
+            TextDecodeCase {
+                name: "text elements",
+                input: "{hello,world}",
+                oid: 25,
+                expected_elements: vec![Some("hello"), Some("world")],
+                expected_lb: 1,
+            },
+            TextDecodeCase {
+                name: "quoted comma",
+                input: r#"{"a,b"}"#,
+                oid: 25,
+                expected_elements: vec![Some("a,b")],
+                expected_lb: 1,
+            },
+            TextDecodeCase {
+                name: "quoted quote",
+                input: r#"{"a\"b"}"#,
+                oid: 25,
+                expected_elements: vec![Some("a\"b")],
+                expected_lb: 1,
+            },
+            TextDecodeCase {
+                name: "quoted backslash",
+                input: r#"{"a\\b"}"#,
+                oid: 25,
+                expected_elements: vec![Some("a\\b")],
+                expected_lb: 1,
+            },
+            TextDecodeCase {
+                name: "empty string",
+                input: r#"{""}"#,
+                oid: 25,
+                expected_elements: vec![Some("")],
+                expected_lb: 1,
+            },
+            TextDecodeCase {
+                name: "quoted NULL literal",
+                input: r#"{"NULL"}"#,
+                oid: 25,
+                expected_elements: vec![Some("NULL")],
+                expected_lb: 1,
+            },
+            TextDecodeCase {
+                name: "whitespace around",
+                input: "{ 1 , 2 }",
+                oid: 23,
+                expected_elements: vec![Some("1"), Some("2")],
+                expected_lb: 1,
+            },
+            TextDecodeCase {
+                name: "escaped comma",
+                input: r#"{a\,b}"#,
+                oid: 25,
+                expected_elements: vec![Some("a,b")],
+                expected_lb: 1,
+            },
+            TextDecodeCase {
+                name: "escaped trailing space",
+                input: r#"{a\ }"#,
+                oid: 25,
+                expected_elements: vec![Some("a ")],
+                expected_lb: 1,
+            },
+            TextDecodeCase {
+                name: "escaped null literal",
+                input: r#"{\N\U\L\L}"#,
+                oid: 25,
+                expected_elements: vec![Some("NULL")],
+                expected_lb: 1,
+            },
+            TextDecodeCase {
+                name: "custom lower bound",
+                input: "[0:2]={1,2,3}",
+                oid: 23,
+                expected_elements: vec![Some("1"), Some("2"), Some("3")],
+                expected_lb: 0,
+            },
         ];
 
-        for (name, input, oid, expected_elements, expected_lb) in cases {
+        for TextDecodeCase {
+            name,
+            input,
+            oid,
+            expected_elements,
+            expected_lb,
+        } in cases
+        {
             let array = Array::decode_typed(input.as_bytes(), Format::Text, oid).expect(name);
             assert_eq!(array.dim.lower_bound, expected_lb, "lower_bound: {name}");
             assert_eq!(
