@@ -89,6 +89,8 @@ pub struct Client {
     sticky: Sticky,
     /// Client database.
     database: String,
+    /// Log queries to stdout.
+    query_log_stdout: bool,
 }
 
 impl Client {
@@ -379,6 +381,7 @@ impl Client {
             stream_buffer: MessageBuffer::new(config.config.memory.message_buffer),
             sticky: Sticky::from_params(&params),
             database: database.to_string(),
+            query_log_stdout: false,
         }))
     }
 
@@ -410,6 +413,7 @@ impl Client {
             sticky: Sticky::from_params(&connect_params),
             params: connect_params,
             database: "pgdog".to_string(),
+            query_log_stdout: false,
         }
     }
 
@@ -580,6 +584,7 @@ impl Client {
         // Configure prepared statements cache.
         self.prepared_statements.level = config.prepared_statements();
         self.timeouts = Timeouts::from_config(&config.config.general);
+        self.query_log_stdout = config.config.general.query_log_stdout;
 
         while !self.client_request.is_complete() {
             let idle_timeout = self

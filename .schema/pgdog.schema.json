@@ -85,6 +85,7 @@
         "pub_sub_channel_size": 0,
         "query_cache_limit": 1000,
         "query_log": null,
+        "query_log_stdout": false,
         "query_parser": "auto",
         "query_parser_enabled": false,
         "query_parser_engine": "pg_query_protobuf",
@@ -971,6 +972,11 @@
             "null"
           ],
           "default": null
+        },
+        "query_log_stdout": {
+          "description": "Log queries to stdout. Format: `query [database: db, user: user]`",
+          "type": "boolean",
+          "default": false
         },
         "query_parser": {
           "description": "Toggle the query parser to enable/disable query parsing and all of its benefits. By default, the query parser is turned on automatically, so only disable it if you know what you're doing.\n\n_Default:_ `auto`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#query_parser",

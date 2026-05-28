@@ -26,6 +26,7 @@ pub mod multi_step;
 pub mod notify_buffer;
 pub mod pub_sub;
 pub mod query;
+mod query_log_stdout;
 pub mod rewrite;
 pub mod route_query;
 pub mod set;
@@ -39,6 +40,7 @@ pub mod two_pc;
 pub mod unknown_command;
 
 use self::query::ExplainResponseState;
+use self::query_log_stdout::log_query_stdout;
 pub(crate) use advisory_lock::AdvisoryLocks;
 pub use context::QueryEngineContext;
 use notify_buffer::NotifyBuffer;
@@ -107,6 +109,8 @@ impl QueryEngine {
         self.stats
             .received(context.client_request.total_message_len());
         self.set_state(State::Active); // Client is active.
+
+        log_query_stdout(context);
 
         // Rewrite prepared statements.
         self.rewrite_extended(context)?;
