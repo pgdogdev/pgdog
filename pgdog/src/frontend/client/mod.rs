@@ -165,7 +165,7 @@ impl Client {
                     &passwords.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
                 );
                 stream.send_flush(&md5.challenge()).await?;
-                let password = Password::from_bytes(stream.read().await?.to_bytes()?)?;
+                let password = Password::from_bytes(stream.read().await?.to_bytes())?;
                 if let Password::PasswordMessage { response } = password {
                     if md5.check(&response) {
                         AuthResult::Ok
@@ -194,7 +194,7 @@ impl Client {
                     .send_flush(&Authentication::ClearTextPassword)
                     .await?;
                 let response = stream.read().await?;
-                let response = Password::from_bytes(response.to_bytes()?)?;
+                let response = Password::from_bytes(response.to_bytes())?;
                 let is_match = passwords
                     .iter()
                     .any(|p| Some(p.as_str()) == response.password());
@@ -247,7 +247,7 @@ impl Client {
                 .send_flush(&Authentication::ClearTextPassword)
                 .await?;
             let password = stream.read().await?;
-            let password = Password::from_bytes(password.to_bytes()?)?;
+            let password = Password::from_bytes(password.to_bytes())?;
             // Passthrough authentication assumes the client password is good
             // and lets Postgres perform the authentication instead. If Postgres
             // returns an error, the connection pool will be banned and the client
@@ -612,7 +612,7 @@ impl Client {
             if message.code() == 'X' {
                 return Ok(BufferEvent::DisconnectGraceful);
             } else {
-                let message = ProtocolMessage::from_bytes(message.to_bytes()?)?;
+                let message = ProtocolMessage::from_bytes(message.to_bytes())?;
                 self.client_request.push(message);
             }
         }

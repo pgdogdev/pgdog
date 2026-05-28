@@ -140,7 +140,7 @@ impl MultiShard {
             // Once all shards finished executing the command,
             // we can start aggregating and sorting.
             'C' => {
-                let cc = CommandComplete::from_bytes(message.to_bytes()?)?;
+                let cc = CommandComplete::from_bytes(message.to_bytes())?;
                 let has_rows = if let Some(rows) = cc.rows()? {
                     if self.route.is_omni() {
                         // Only use the first shard's row count for consistency with DataRow.
@@ -192,7 +192,7 @@ impl MultiShard {
 
             'T' => {
                 self.counters.row_description += 1;
-                let rd = RowDescription::from_bytes(message.to_bytes()?)?;
+                let rd = RowDescription::from_bytes(message.to_bytes())?;
 
                 // Validate row description consistency
                 let is_first = self.validator.validate_row_description(&rd)?;
@@ -230,7 +230,7 @@ impl MultiShard {
             'D' => {
                 if self.shards > 1 {
                     // Validate data row consistency.
-                    let data_row = DataRow::from_bytes(message.to_bytes()?)?;
+                    let data_row = DataRow::from_bytes(message.to_bytes())?;
                     self.validator.validate_data_row(&data_row)?;
                 }
 

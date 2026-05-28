@@ -305,7 +305,7 @@ impl FromBytes for RowDescription {
 }
 
 impl ToBytes for RowDescription {
-    fn to_bytes(&self) -> Result<Bytes, Error> {
+    fn to_bytes(&self) -> Bytes {
         let mut payload = Payload::named(self.code());
         payload.put_i16(self.fields.len() as i16);
 
@@ -319,7 +319,7 @@ impl ToBytes for RowDescription {
             payload.put_i16(field.format);
         }
 
-        Ok(payload.freeze())
+        payload.freeze()
     }
 }
 

@@ -29,7 +29,7 @@ pub(super) struct Buffer {
 impl Buffer {
     /// Add message to buffer.
     pub(super) fn add(&mut self, message: Message) -> Result<(), super::Error> {
-        let dr = DataRow::from_bytes(message.to_bytes()?)?;
+        let dr = DataRow::from_bytes(message.to_bytes())?;
 
         self.buffer.push_back(dr);
 
@@ -264,7 +264,7 @@ mod test {
 
         let mut i = 1;
         while let Some(message) = buf.take() {
-            let dr = DataRow::from_bytes(message.to_bytes().unwrap()).unwrap();
+            let dr = DataRow::from_bytes(message.to_bytes()).unwrap();
             let one = dr.get::<i64>(0, Format::Text).unwrap();
             let two = dr.get::<String>(1, Format::Text).unwrap();
             assert_eq!(one, i);
@@ -293,7 +293,7 @@ mod test {
 
         assert_eq!(buf.len(), 1);
         let row = buf.take().unwrap();
-        let dr = DataRow::from_bytes(row.to_bytes().unwrap()).unwrap();
+        let dr = DataRow::from_bytes(row.to_bytes()).unwrap();
         let count = dr.get::<i64>(0, Format::Text).unwrap();
         assert_eq!(count, 15 * 6);
     }
@@ -321,7 +321,7 @@ mod test {
         assert_eq!(buf.len(), 2);
         for _ in &emails {
             let row = buf.take().unwrap();
-            let dr = DataRow::from_bytes(row.to_bytes().unwrap()).unwrap();
+            let dr = DataRow::from_bytes(row.to_bytes()).unwrap();
             let count = dr.get::<i64>(0, Format::Text).unwrap();
             assert_eq!(count, 15 * 6);
         }
@@ -364,7 +364,7 @@ mod test {
 
         for expected in expected_order {
             let message = buf.take().expect("Should have message");
-            let dr = DataRow::from_bytes(message.to_bytes().unwrap()).unwrap();
+            let dr = DataRow::from_bytes(message.to_bytes()).unwrap();
             let ts = dr.get::<String>(0, Format::Text).unwrap();
             assert_eq!(ts, expected);
         }
@@ -400,7 +400,7 @@ mod test {
 
         for expected in expected_order {
             let message = buf.take().expect("Should have message");
-            let dr = DataRow::from_bytes(message.to_bytes().unwrap()).unwrap();
+            let dr = DataRow::from_bytes(message.to_bytes()).unwrap();
             let price = dr.get::<String>(0, Format::Text).unwrap();
             assert_eq!(price, expected);
         }
@@ -454,7 +454,7 @@ mod test {
 
         for expected in expected_order {
             let message = buf.take().expect("Should have message");
-            let dr = DataRow::from_bytes(message.to_bytes().unwrap()).unwrap();
+            let dr = DataRow::from_bytes(message.to_bytes()).unwrap();
             // Get the numeric value and convert to string for comparison
             let column = dr.get_column(0, &decoder).unwrap().unwrap();
             if let Datum::Numeric(numeric) = column.value {
@@ -506,7 +506,7 @@ mod test {
 
         for expected in expected_order {
             let message = buf.take().expect("Should have message");
-            let dr = DataRow::from_bytes(message.to_bytes().unwrap()).unwrap();
+            let dr = DataRow::from_bytes(message.to_bytes()).unwrap();
             let value = dr.get::<String>(0, Format::Text).unwrap();
             assert_eq!(value, expected);
         }
@@ -547,7 +547,7 @@ mod test {
         b.full();
         assert_eq!(b.len(), 4);
         for expected in 2..6_i64 {
-            let dr = DataRow::from_bytes(b.take().unwrap().to_bytes().unwrap()).unwrap();
+            let dr = DataRow::from_bytes(b.take().unwrap().to_bytes()).unwrap();
             assert_eq!(dr.get::<i64>(0, Format::Text).unwrap(), expected);
         }
 

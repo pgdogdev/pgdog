@@ -42,12 +42,8 @@ impl FromBytes for Describe {
 }
 
 impl ToBytes for Describe {
-    fn to_bytes(&self) -> Result<Bytes, Error> {
-        if let Some(ref original) = self.original {
-            return Ok(original.clone());
-        }
-
-        Ok(self.payload.clone())
+    fn to_bytes(&self) -> Bytes {
+        self.original.as_ref().unwrap_or(&self.payload).clone()
     }
 }
 
@@ -136,10 +132,10 @@ mod test {
             .await
             .unwrap();
         let res = conn.read().await.unwrap();
-        let err = ErrorResponse::from_bytes(res.to_bytes().unwrap()).unwrap();
+        let err = ErrorResponse::from_bytes(res.to_bytes()).unwrap();
         assert_eq!(err.code, "34000");
 
         let describe = Describe::new_statement("test");
-        assert_eq!(describe.len(), describe.to_bytes().unwrap().len());
+        assert_eq!(describe.len(), describe.to_bytes().len());
     }
 }

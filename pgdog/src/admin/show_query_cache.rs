@@ -94,7 +94,7 @@ mod test {
         for message in show {
             if message.code() == 'D' {
                 total += 1;
-                let data_row = DataRow::from_bytes(message.to_bytes().unwrap()).unwrap();
+                let data_row = DataRow::from_bytes(message.to_bytes()).unwrap();
                 let hits = data_row.get_int(1, true).unwrap();
                 assert_eq!(hits, 1);
             }

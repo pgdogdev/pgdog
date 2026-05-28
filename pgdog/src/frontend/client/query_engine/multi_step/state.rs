@@ -36,7 +36,7 @@ impl MultiServerState {
         Ok(match code {
             'T' | '1' | '2' | '3' | 't' => *count == 1,
             'C' => {
-                let command_complete = CommandComplete::from_bytes(message.to_bytes()?)?;
+                let command_complete = CommandComplete::from_bytes(message.to_bytes())?;
                 self.rows += command_complete.rows()?.unwrap_or(0);
                 false
             }

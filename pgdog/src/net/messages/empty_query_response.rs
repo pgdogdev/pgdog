@@ -13,8 +13,8 @@ impl FromBytes for EmptyQueryResponse {
 }
 
 impl ToBytes for EmptyQueryResponse {
-    fn to_bytes(&self) -> Result<Bytes, Error> {
-        Ok(Payload::named(self.code()).freeze())
+    fn to_bytes(&self) -> Bytes {
+        Payload::named(self.code()).freeze()
     }
 }
 

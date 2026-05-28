@@ -205,7 +205,7 @@ impl StreamSubscriber {
                     '1' | 'C' | 'Z' => (),
                     'E' => {
                         return Err(Error::PgError(Box::new(ErrorResponse::from_bytes(
-                            msg.to_bytes()?,
+                            msg.to_bytes(),
                         )?)))
                     }
                     c => return Err(Error::OutOfSync(c)),
@@ -284,7 +284,7 @@ impl StreamSubscriber {
                     '2' => (),
                     'E' => {
                         return Err(Error::PgError(Box::new(ErrorResponse::from_bytes(
-                            msg.to_bytes()?,
+                            msg.to_bytes(),
                         )?)))
                     }
                     c => return Err(Error::SendOutOfSync(c)),
@@ -481,7 +481,7 @@ impl StreamSubscriber {
                 match msg.code() {
                     'E' => {
                         return Err(Error::PgError(Box::new(ErrorResponse::from_bytes(
-                            msg.to_bytes()?,
+                            msg.to_bytes(),
                         )?)))
                     }
                     'Z' => break,
@@ -697,7 +697,7 @@ impl StreamSubscriber {
             match msg.code() {
                 'E' => {
                     return Err(Error::PgError(Box::new(ErrorResponse::from_bytes(
-                        msg.to_bytes()?,
+                        msg.to_bytes(),
                     )?)))
                 }
                 'Z' => (),

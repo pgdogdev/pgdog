@@ -26,7 +26,7 @@ impl NegotiateProtocolVersion {
 }
 
 impl ToBytes for NegotiateProtocolVersion {
-    fn to_bytes(&self) -> Result<bytes::Bytes, Error> {
+    fn to_bytes(&self) -> bytes::Bytes {
         let mut payload = Payload::named(self.code());
         payload.put_i32(self.version.as_i32());
         payload.put_i32(self.unrecognized_options.len() as i32);
@@ -34,7 +34,7 @@ impl ToBytes for NegotiateProtocolVersion {
             payload.put_string(option);
         }
 
-        Ok(payload.freeze())
+        payload.freeze()
     }
 }
 
@@ -79,7 +79,7 @@ mod tests {
             vec!["_pq_.command_tag".into(), "_pq_.other".into()],
         );
 
-        let roundtrip = NegotiateProtocolVersion::from_bytes(message.to_bytes().unwrap()).unwrap();
+        let roundtrip = NegotiateProtocolVersion::from_bytes(message.to_bytes()).unwrap();
         assert_eq!(roundtrip, message);
     }
 }

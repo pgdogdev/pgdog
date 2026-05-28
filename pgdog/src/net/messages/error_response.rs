@@ -296,7 +296,7 @@ impl FromBytes for ErrorResponse {
 }
 
 impl ToBytes for ErrorResponse {
-    fn to_bytes(&self) -> Result<Bytes, Error> {
+    fn to_bytes(&self) -> Bytes {
         let mut payload = Payload::named(self.code());
 
         payload.put_u8(b'S');
@@ -333,7 +333,7 @@ impl ToBytes for ErrorResponse {
 
         payload.put_u8(0);
 
-        Ok(payload.freeze())
+        payload.freeze()
     }
 }
 

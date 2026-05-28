@@ -18,7 +18,7 @@ impl FromBytes for CloseComplete {
 }
 
 impl ToBytes for CloseComplete {
-    fn to_bytes(&self) -> Result<Bytes, Error> {
-        Ok(Payload::named('3').freeze())
+    fn to_bytes(&self) -> Bytes {
+        Payload::named('3').freeze()
     }
 }

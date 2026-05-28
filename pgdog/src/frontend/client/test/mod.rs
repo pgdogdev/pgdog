@@ -102,7 +102,7 @@ macro_rules! new_client {
 pub fn buffer(messages: &[impl ToBytes]) -> BytesMut {
     let mut buf = BytesMut::new();
     for message in messages {
-        buf.put(message.to_bytes().unwrap());
+        buf.put(message.to_bytes());
     }
     buf
 }
@@ -138,7 +138,7 @@ pub async fn read_messages(stream: &mut (impl AsyncRead + Unpin), codes: &[char]
         if error {
             panic!(
                 "{:#}",
-                ErrorResponse::from_bytes(message.to_bytes().unwrap()).unwrap()
+                ErrorResponse::from_bytes(message.to_bytes()).unwrap()
             );
         } else {
             result.push(message);
@@ -153,7 +153,7 @@ macro_rules! buffer {
         let mut buf = BytesMut::new();
 
         $(
-           buf.put($msg.to_bytes().unwrap());
+           buf.put($msg.to_bytes());
         )*
 
         buf
@@ -198,7 +198,7 @@ async fn test_multiple_async() {
     let mut buf = vec![];
     for i in 0..50 {
         let q = Query::new(format!("SELECT {}::bigint AS one", i));
-        buf.extend(&q.to_bytes().unwrap())
+        buf.extend(&q.to_bytes())
     }
 
     conn.write_all(&buf).await.unwrap();
@@ -250,9 +250,7 @@ async fn test_multiple_async() {
         assert_eq!(codes, ['T', 'D', 'C', 'Z']);
     }
 
-    conn.write_all(&Terminate.to_bytes().unwrap())
-        .await
-        .unwrap();
+    conn.write_all(&Terminate.to_bytes()).await.unwrap();
     handle.await.unwrap();
 
     let dbs = databases();
@@ -313,27 +311,25 @@ async fn test_parse_describe_flush_bind_execute_close_sync() {
 
     let mut buf = BytesMut::new();
 
-    buf.put(Parse::new_anonymous("SELECT 1").to_bytes().unwrap());
-    buf.put(Describe::new_statement("").to_bytes().unwrap());
-    buf.put(Flush.to_bytes().unwrap());
+    buf.put(Parse::new_anonymous("SELECT 1").to_bytes());
+    buf.put(Describe::new_statement("").to_bytes());
+    buf.put(Flush.to_bytes());
 
     conn.write_all(&buf).await.unwrap();
 
     let _ = read!(conn, ['1', 't', 'T']);
 
     let mut buf = BytesMut::new();
-    buf.put(Bind::new_statement("").to_bytes().unwrap());
-    buf.put(Execute::new().to_bytes().unwrap());
-    buf.put(Close::named("").to_bytes().unwrap());
-    buf.put(Sync.to_bytes().unwrap());
+    buf.put(Bind::new_statement("").to_bytes());
+    buf.put(Execute::new().to_bytes());
+    buf.put(Close::named("").to_bytes());
+    buf.put(Sync.to_bytes());
 
     conn.write_all(&buf).await.unwrap();
 
     let _ = read!(conn, ['2', 'D', 'C', '3', 'Z']);
 
-    conn.write_all(&Terminate.to_bytes().unwrap())
-        .await
-        .unwrap();
+    conn.write_all(&Terminate.to_bytes()).await.unwrap();
 
     handle.await.unwrap();
 }

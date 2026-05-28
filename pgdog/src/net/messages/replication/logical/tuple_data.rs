@@ -224,7 +224,7 @@ impl FromBytes for TupleData {
 }
 
 impl ToBytes for TupleData {
-    fn to_bytes(&self) -> Result<Bytes, Error> {
+    fn to_bytes(&self) -> Bytes {
         let mut buf = BytesMut::new();
         buf.put_i16(self.columns.len() as i16);
         for col in &self.columns {
@@ -243,7 +243,7 @@ impl ToBytes for TupleData {
                 }
             }
         }
-        Ok(buf.freeze())
+        buf.freeze()
     }
 }
 

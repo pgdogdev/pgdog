@@ -55,7 +55,7 @@ impl Column {
 }
 
 impl ToBytes for Relation {
-    fn to_bytes(&self) -> Result<Bytes, Error> {
+    fn to_bytes(&self) -> Bytes {
         let mut payload = Payload::wrapped('R');
         payload.put_u32(self.oid.0);
         payload.put_string(&self.namespace);
@@ -70,7 +70,7 @@ impl ToBytes for Relation {
             payload.put_i32(column.type_modifier);
         }
 
-        Ok(payload.freeze())
+        payload.freeze()
     }
 }
 

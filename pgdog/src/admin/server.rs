@@ -46,7 +46,7 @@ impl AdminServer {
             return Err(Error::SimpleOnly);
         }
 
-        let query = Query::from_bytes(message.to_bytes()?)?;
+        let query = Query::from_bytes(message.to_bytes())?;
 
         let messages = match Parser::parse(&query.query().to_lowercase()) {
             Ok(command) => {

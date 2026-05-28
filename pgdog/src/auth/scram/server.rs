@@ -144,9 +144,9 @@ impl Server {
     async fn read_password(stream: &mut Stream) -> Result<Option<Password>, Error> {
         let message = stream.read().await?;
         match message.code() {
-            'p' => Ok(Some(Password::from_bytes(message.to_bytes()?)?)),
+            'p' => Ok(Some(Password::from_bytes(message.to_bytes())?)),
             'E' => {
-                let err = ErrorResponse::from_bytes(message.to_bytes()?)?;
+                let err = ErrorResponse::from_bytes(message.to_bytes())?;
                 error!("{}", err);
                 Ok(None)
             }

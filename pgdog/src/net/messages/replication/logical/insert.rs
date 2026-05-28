@@ -23,13 +23,13 @@ impl Insert {
 }
 
 impl ToBytes for Insert {
-    fn to_bytes(&self) -> Result<Bytes, Error> {
+    fn to_bytes(&self) -> Bytes {
         let mut buf = BytesMut::new();
         buf.put_u8(b'I');
         buf.put_u32(self.oid.0);
         buf.put_u8(b'N');
-        buf.put(self.tuple_data.to_bytes()?);
-        Ok(buf.freeze())
+        buf.put(self.tuple_data.to_bytes());
+        buf.freeze()
     }
 }
 

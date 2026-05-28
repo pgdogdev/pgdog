@@ -62,7 +62,7 @@ pub async fn read_message(conn: &mut TcpStream) -> Message {
 
 /// Send a protocol message to a TCP stream.
 pub async fn send_message(conn: &mut TcpStream, message: impl Protocol) {
-    let message = message.to_bytes().expect("message to convert to bytes");
+    let message = message.to_bytes();
     conn.write_all(&message).await.expect("write_all");
     conn.flush().await.expect("flush");
 }

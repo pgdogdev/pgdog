@@ -176,7 +176,7 @@ impl Stream {
     pub async fn send(&mut self, message: &impl Protocol) -> Result<usize, crate::net::Error> {
         self.io_in_progress = true;
         let result = async {
-            let bytes = message.to_bytes()?;
+            let bytes = message.to_bytes();
 
             match &mut self.inner {
                 StreamInner::Plain(ref mut stream) => eof(stream.write_all(&bytes).await)?,

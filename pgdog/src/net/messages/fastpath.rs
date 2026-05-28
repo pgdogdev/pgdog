@@ -25,11 +25,11 @@ impl FromBytes for Fastpath {
 }
 
 impl ToBytes for Fastpath {
-    fn to_bytes(&self) -> Result<Bytes, Error> {
+    fn to_bytes(&self) -> Bytes {
         let mut payload = Payload::named(self.code());
         payload.put(self.body.clone());
 
-        Ok(payload.freeze())
+        payload.freeze()
     }
 }
 
@@ -58,7 +58,7 @@ mod test {
         assert_eq!(fp.code(), 'F');
 
         // to_bytes must reproduce the exact wire frame.
-        let serialized = fp.to_bytes().unwrap();
+        let serialized = fp.to_bytes();
         assert_eq!(serialized, original);
     }
 }

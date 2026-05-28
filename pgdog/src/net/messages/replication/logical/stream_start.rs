@@ -19,12 +19,12 @@ impl FromBytes for StreamStart {
 }
 
 impl ToBytes for StreamStart {
-    fn to_bytes(&self) -> Result<Bytes, crate::net::Error> {
+    fn to_bytes(&self) -> Bytes {
         let mut payload = BytesMut::new();
         payload.put_u8(b'S');
         payload.put_i32(self.xid);
         payload.put_i8(self.first);
 
-        Ok(payload.freeze())
+        payload.freeze()
     }
 }

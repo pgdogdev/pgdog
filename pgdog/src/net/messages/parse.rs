@@ -185,10 +185,10 @@ impl FromBytes for Parse {
 }
 
 impl ToBytes for Parse {
-    fn to_bytes(&self) -> Result<Bytes, Error> {
+    fn to_bytes(&self) -> Bytes {
         // Fast path when the contents haven't been changed.
         if let Some(ref original) = self.original {
-            return Ok(original.clone());
+            return original.clone();
         }
 
         let mut payload = Payload::named(self.code());
@@ -198,7 +198,7 @@ impl ToBytes for Parse {
         payload.put(self.query.clone());
         payload.put(self.data_types.clone());
 
-        Ok(payload.freeze())
+        payload.freeze()
     }
 }
 
@@ -217,7 +217,7 @@ mod test {
     #[test]
     fn test_parse() {
         let parse = Parse::named("test", "SELECT $1");
-        let b = parse.to_bytes().unwrap();
+        let b = parse.to_bytes();
         assert_eq!(parse.len(), b.len());
     }
 
@@ -241,7 +241,7 @@ mod test {
         assert_eq!(parse.query(), "SELECT * FROM users");
         assert_eq!(&parse.query[..], b"SELECT * FROM users\0");
         assert_eq!(&parse.name[..], b"__pgdog_1\0");
-        assert_eq!(parse.to_bytes().unwrap().len(), parse.len());
+        assert_eq!(parse.to_bytes().len(), parse.len());
 
         let mut b = BytesMut::new();
         b.put_u8(b'P');

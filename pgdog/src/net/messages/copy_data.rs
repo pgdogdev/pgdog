@@ -76,11 +76,11 @@ impl FromBytes for CopyData {
 }
 
 impl ToBytes for CopyData {
-    fn to_bytes(&self) -> Result<Bytes, Error> {
+    fn to_bytes(&self) -> Bytes {
         let mut payload = Payload::named(self.code());
         payload.put(self.data.clone());
 
-        Ok(payload.freeze())
+        payload.freeze()
     }
 }
 

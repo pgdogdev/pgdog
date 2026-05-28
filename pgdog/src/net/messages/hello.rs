@@ -180,7 +180,7 @@ impl Startup {
 }
 
 impl super::ToBytes for Startup {
-    fn to_bytes(&self) -> Result<bytes::Bytes, Error> {
+    fn to_bytes(&self) -> bytes::Bytes {
         match self {
             Startup::Ssl => {
                 let mut buf = BytesMut::new();
@@ -188,7 +188,7 @@ impl super::ToBytes for Startup {
                 buf.put_i32(8);
                 buf.put_i32(80877103);
 
-                Ok(buf.freeze())
+                buf.freeze()
             }
 
             Startup::GssEnc => {
@@ -197,7 +197,7 @@ impl super::ToBytes for Startup {
                 buf.put_i32(8);
                 buf.put_i32(80877104);
 
-                Ok(buf.freeze())
+                buf.freeze()
             }
 
             Startup::Cancel { id } => {
@@ -207,7 +207,7 @@ impl super::ToBytes for Startup {
                 payload.put_i32(id.pid);
                 payload.put_slice(id.secret.as_slice());
 
-                Ok(payload.freeze())
+                payload.freeze()
             }
 
             Startup::Startup {
@@ -233,7 +233,7 @@ impl super::ToBytes for Startup {
                 payload.put(params_buf);
                 payload.put_u8(0); // Terminating null character.
 
-                Ok(payload.freeze())
+                payload.freeze()
             }
         }
     }
@@ -247,11 +247,11 @@ pub enum SslReply {
 }
 
 impl ToBytes for SslReply {
-    fn to_bytes(&self) -> Result<bytes::Bytes, Error> {
-        Ok(match self {
+    fn to_bytes(&self) -> bytes::Bytes {
+        match self {
             SslReply::Yes => Bytes::from("S"),
             SslReply::No => Bytes::from("N"),
-        })
+        }
     }
 }
 
@@ -307,7 +307,7 @@ mod test {
     #[test]
     fn test_ssl() {
         let ssl = Startup::Ssl;
-        let mut bytes = ssl.to_bytes().unwrap();
+        let mut bytes = ssl.to_bytes();
 
         assert_eq!(bytes.get_i32(), 8); // len
         assert_eq!(bytes.get_i32(), 80877103); // request code
@@ -316,7 +316,7 @@ mod test {
     #[test]
     fn test_gssenc() {
         let gss = Startup::gss_enc();
-        let mut bytes = gss.to_bytes().unwrap();
+        let mut bytes = gss.to_bytes();
 
         assert_eq!(bytes.get_i32(), 8); // len
         assert_eq!(bytes.get_i32(), 80877104); // request code
@@ -340,7 +340,7 @@ mod test {
             unrecognized_options: vec![],
         };
 
-        let bytes = startup.to_bytes().unwrap();
+        let bytes = startup.to_bytes();
 
         assert_eq!(bytes.clone().get_i32(), 41);
     }
@@ -369,7 +369,7 @@ mod test {
                 "postgres",
                 vec![],
             );
-            write.write_all(&startup.to_bytes().unwrap()).await.unwrap();
+            write.write_all(&startup.to_bytes()).await.unwrap();
         });
 
         let startup = Startup::from_stream(&mut read).await.unwrap();
@@ -468,7 +468,7 @@ mod test {
         let cancel = Startup::Cancel {
             id: BackendKeyData::new_client(ProtocolVersion::V3_2),
         };
-        let bytes = cancel.to_bytes().unwrap();
+        let bytes = cancel.to_bytes();
 
         let (mut write, mut read) = tokio::io::duplex(512);
         tokio::spawn(async move {

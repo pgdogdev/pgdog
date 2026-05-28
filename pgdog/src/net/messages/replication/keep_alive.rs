@@ -15,7 +15,7 @@ pub struct KeepAlive {
 
 impl KeepAlive {
     pub fn wrapped(self) -> Result<CopyData, Error> {
-        Ok(CopyData::new(&ReplicationMeta::KeepAlive(self).to_bytes()?))
+        Ok(CopyData::new(&ReplicationMeta::KeepAlive(self).to_bytes()))
     }
 
     /// Origin expects reply.
@@ -36,14 +36,14 @@ impl FromBytes for KeepAlive {
 }
 
 impl ToBytes for KeepAlive {
-    fn to_bytes(&self) -> Result<Bytes, Error> {
+    fn to_bytes(&self) -> Bytes {
         let mut payload = BytesMut::new();
         payload.put_u8(b'k');
         payload.put_i64(self.wal_end);
         payload.put_i64(self.system_clock);
         payload.put_u8(self.reply);
 
-        Ok(payload.freeze())
+        payload.freeze()
     }
 }
 
@@ -61,7 +61,7 @@ mod tests {
 
         assert!(ka.reply());
 
-        let bytes = ka.to_bytes().expect("serialize keepalive");
+        let bytes = ka.to_bytes();
         let decoded = KeepAlive::from_bytes(bytes).expect("decode keepalive");
 
         assert_eq!(decoded.wal_end, 9876);

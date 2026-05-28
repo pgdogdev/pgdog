@@ -32,8 +32,7 @@ mod insert {
         stream
             .write_all(
                 &Query::new(format!("INSERT INTO sharded (id, value) VALUES {}", values))
-                    .to_bytes()
-                    .unwrap(),
+                    .to_bytes(),
             )
             .await
             .unwrap();
@@ -42,8 +41,7 @@ mod insert {
         let messages = read_messages(&mut stream, &['C', 'Z']).await;
         assert_eq!(messages.len(), 2);
 
-        let command_complete =
-            CommandComplete::from_bytes(messages[0].to_bytes().unwrap()).unwrap();
+        let command_complete = CommandComplete::from_bytes(messages[0].to_bytes()).unwrap();
         assert_eq!(command_complete.rows().unwrap().unwrap(), 5);
 
         truncate_table("sharded", &mut stream).await;

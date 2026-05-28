@@ -82,7 +82,7 @@ pub trait ToBytes {
     /// Create the protocol message as an array of bytes.
     /// The message must conform to the spec. No additional manipulation
     /// of the data will take place.
-    fn to_bytes(&self) -> Result<Bytes, Error>;
+    fn to_bytes(&self) -> Bytes;
 }
 
 /// Convert a PostgreSQL wire protocol message to a Rust struct.
@@ -98,7 +98,7 @@ pub trait Protocol: ToBytes + FromBytes + std::fmt::Debug {
 
     /// Convert to message.
     fn message(&self) -> Result<Message, Error> {
-        Ok(Message::new(self.to_bytes()?))
+        Ok(Message::new(self.to_bytes()))
     }
 
     /// Message is part of a stream and should not be buffered.
@@ -185,8 +185,8 @@ impl std::fmt::Debug for Message {
 }
 
 impl ToBytes for Message {
-    fn to_bytes(&self) -> Result<Bytes, Error> {
-        Ok(self.payload.clone())
+    fn to_bytes(&self) -> Bytes {
+        self.payload.clone()
     }
 }
 
@@ -287,7 +287,7 @@ macro_rules! from_message {
             type Error = crate::net::Error;
 
             fn try_from(message: Message) -> Result<$ty, Self::Error> {
-                <$ty as FromBytes>::from_bytes(message.to_bytes()?)
+                <$ty as FromBytes>::from_bytes(message.to_bytes())
             }
         }
     };

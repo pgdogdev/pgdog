@@ -303,7 +303,7 @@ impl ReplicationSlot {
         let copy_both = self.server()?.read().await?;
 
         match copy_both.code() {
-            'E' => return Err(ErrorResponse::from_bytes(copy_both.to_bytes()?)?.into()),
+            'E' => return Err(ErrorResponse::from_bytes(copy_both.to_bytes())?.into()),
             'W' => (),
             c => return Err(Error::OutOfSync(c)),
         }
@@ -329,7 +329,7 @@ impl ReplicationSlot {
 
             match message.code() {
                 'd' => {
-                    let copy_data = CopyData::from_bytes(message.to_bytes()?)?;
+                    let copy_data = CopyData::from_bytes(message.to_bytes())?;
                     trace!("{:?} [{}]", copy_data, self.address);
 
                     return Ok(Some(ReplicationData::CopyData(copy_data)));
@@ -341,7 +341,7 @@ impl ReplicationSlot {
                     return Ok(None);
                 }
                 'E' => {
-                    let error = ErrorResponse::from_bytes(message.to_bytes()?)?;
+                    let error = ErrorResponse::from_bytes(message.to_bytes())?;
                     if let Some(ref tracker) = self.tracker {
                         tracker.error(&error);
                     }

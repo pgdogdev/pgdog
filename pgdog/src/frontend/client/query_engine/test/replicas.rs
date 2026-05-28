@@ -17,7 +17,7 @@ async fn test_round_robin_with_replicas() {
 
     // Write goes to primary.
     let query = Query::new("CREATE TABLE IF NOT EXISTS test_round_robin_replicas (id BIGINT)");
-    len_sent += query.to_bytes().unwrap().len();
+    len_sent += query.to_bytes().len();
     client.send_simple(query).await;
     for msg in client.read_until('Z').await.unwrap() {
         len_recv += msg.len();
@@ -29,10 +29,10 @@ async fn test_round_robin_with_replicas() {
         let bind = Bind::new_statement("test");
         let execute = Execute::new();
         let sync = Sync;
-        len_sent += parse.to_bytes().unwrap().len();
-        len_sent += bind.to_bytes().unwrap().len();
-        len_sent += execute.to_bytes().unwrap().len();
-        len_sent += sync.to_bytes().unwrap().len();
+        len_sent += parse.to_bytes().len();
+        len_sent += bind.to_bytes().len();
+        len_sent += execute.to_bytes().len();
+        len_sent += sync.to_bytes().len();
 
         client.send(parse).await;
         client.send(bind).await;

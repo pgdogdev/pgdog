@@ -143,7 +143,7 @@ fn test_ready_for_query_error_preservation() {
     // Should return the error message, not the normal one
     assert!(result.is_some());
     let returned_message = result.unwrap();
-    let returned_rfq = ReadyForQuery::from_bytes(returned_message.to_bytes().unwrap()).unwrap();
+    let returned_rfq = ReadyForQuery::from_bytes(returned_message.to_bytes()).unwrap();
     assert!(returned_rfq.is_transaction_aborted());
 }
 
@@ -184,7 +184,7 @@ fn test_omni_command_complete_not_summed() {
         .unwrap();
 
     let result = multi_shard.message();
-    let cc = CommandComplete::from_bytes(result.unwrap().to_bytes().unwrap()).unwrap();
+    let cc = CommandComplete::from_bytes(result.unwrap().to_bytes()).unwrap();
     // Should be 5 (from one shard), not 15 (sum of all shards)
     assert_eq!(cc.rows().unwrap(), Some(5));
 }
@@ -219,7 +219,7 @@ fn test_omni_command_complete_uses_first_shard_row_count() {
         .unwrap();
 
     let result = multi_shard.message();
-    let cc = CommandComplete::from_bytes(result.unwrap().to_bytes().unwrap()).unwrap();
+    let cc = CommandComplete::from_bytes(result.unwrap().to_bytes()).unwrap();
     // Should be 7 (from FIRST shard), not 9 (from last)
     assert_eq!(cc.rows().unwrap(), Some(7));
 }

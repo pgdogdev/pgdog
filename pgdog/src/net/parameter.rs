@@ -68,7 +68,7 @@ pub enum ParameterValue {
 }
 
 impl ToBytes for ParameterValue {
-    fn to_bytes(&self) -> Result<Bytes, Error> {
+    fn to_bytes(&self) -> Bytes {
         let mut bytes = BytesMut::new();
         match self {
             Self::String(string) => bytes.put_slice(string.as_bytes()),
@@ -84,7 +84,7 @@ impl ToBytes for ParameterValue {
         }
         bytes.put_u8(0);
 
-        Ok(bytes.freeze())
+        bytes.freeze()
     }
 }
 
@@ -649,7 +649,7 @@ mod test {
     #[test]
     fn test_parameter_value_to_bytes_string() {
         let value = ParameterValue::String("test".into());
-        let bytes = value.to_bytes().unwrap();
+        let bytes = value.to_bytes();
 
         assert_eq!(&bytes[..], b"test\0");
     }
@@ -657,7 +657,7 @@ mod test {
     #[test]
     fn test_parameter_value_to_bytes_tuple() {
         let value = ParameterValue::Tuple(vec!["a".into(), "b".into()]);
-        let bytes = value.to_bytes().unwrap();
+        let bytes = value.to_bytes();
 
         assert_eq!(&bytes[..], b"a, b\0");
     }

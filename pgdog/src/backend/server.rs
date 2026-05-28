@@ -167,7 +167,7 @@ impl Server {
             );
 
             // Request TLS.
-            stream.write_all(&Startup::tls().to_bytes()?).await?;
+            stream.write_all(&Startup::tls().to_bytes()).await?;
             stream.flush().await?;
 
             let mut ssl = BytesMut::new();
@@ -219,8 +219,7 @@ impl Server {
 
         stream
             .write_all(
-                &Startup::new(&addr.user, &addr.database_name, options.params.clone())
-                    .to_bytes()?,
+                &Startup::new(&addr.user, &addr.database_name, options.params.clone()).to_bytes(),
             )
             .await?;
         stream.flush().await?;
@@ -297,7 +296,7 @@ impl Server {
                 // ErrorResponse (B)
                 'E' => {
                     return Err(Error::ConnectionError(Box::new(ErrorResponse::from_bytes(
-                        message.to_bytes()?,
+                        message.to_bytes(),
                     )?)));
                 }
                 // NoticeResponse (B)
@@ -360,7 +359,7 @@ impl Server {
     pub async fn cancel(addr: &Address, id: &BackendKeyData) -> Result<(), Error> {
         let mut stream = TcpStream::connect(addr.addr().await?).await?;
         stream
-            .write_all(&Startup::Cancel { id: *id }.to_bytes()?)
+            .write_all(&Startup::Cancel { id: *id }.to_bytes())
             .await?;
         stream.flush().await?;
 
@@ -529,7 +528,7 @@ impl Server {
                 self.statement_executed = false;
             }
             'E' => {
-                let error = ErrorResponse::from_bytes(message.to_bytes()?)?;
+                let error = ErrorResponse::from_bytes(message.to_bytes())?;
                 self.schema_changed = error.code == "0A000";
                 self.stats.error();
 
@@ -548,11 +547,11 @@ impl Server {
                 self.streaming = true;
             }
             'S' => {
-                let ps = ParameterStatus::from_bytes(message.to_bytes()?)?;
+                let ps = ParameterStatus::from_bytes(message.to_bytes())?;
                 self.changed_params.insert(ps.name, ps.value);
             }
             'C' => {
-                let cmd = CommandComplete::from_bytes(message.to_bytes()?)?;
+                let cmd = CommandComplete::from_bytes(message.to_bytes())?;
                 match cmd.command() {
                     "PREPARE" | "DEALLOCATE" => self.sync_prepared = true,
                     "DEALLOCATE ALL" => self.prepared_statements.clear(),
@@ -791,7 +790,7 @@ impl Server {
             }
 
             if message.code() == 'E' {
-                err = Some(ErrorResponse::from_bytes(message.to_bytes()?)?);
+                err = Some(ErrorResponse::from_bytes(message.to_bytes())?);
             }
             messages.push(message);
         }
@@ -818,13 +817,13 @@ impl Server {
         let notices = messages.iter().filter(|m| m.code() == 'N');
 
         for notice in notices {
-            let notice = NoticeResponse::from_bytes(notice.to_bytes()?)?;
+            let notice = NoticeResponse::from_bytes(notice.to_bytes())?;
             warn!("{} [{}]", notice.message.message, self.addr());
         }
 
         let error = messages.iter().find(|m| m.code() == 'E');
         if let Some(error) = error {
-            let error = ErrorResponse::from_bytes(error.to_bytes()?)?;
+            let error = ErrorResponse::from_bytes(error.to_bytes())?;
             Err(Error::ExecutionError(Box::new(error)))
         } else {
             Ok(messages)
@@ -840,7 +839,7 @@ impl Server {
         Ok(messages
             .into_iter()
             .filter(|message| message.code() == 'D')
-            .map(|message| message.to_bytes().unwrap())
+            .map(|message| message.to_bytes())
             .map(DataRow::from_bytes)
             .collect::<Result<Vec<DataRow>, crate::net::Error>>()?
             .into_iter()
@@ -949,7 +948,7 @@ impl Server {
                 '3' => self.prepared_statements.remove(close.name()),
                 'E' => {
                     return Err(Error::PreparedStatementError(Box::new(
-                        ErrorResponse::from_bytes(response.to_bytes()?)?,
+                        ErrorResponse::from_bytes(response.to_bytes())?,
                     )));
                 }
                 c => {
@@ -1165,7 +1164,7 @@ impl Drop for Server {
             );
 
             spawn(async move {
-                stream.write_all(&Terminate.to_bytes()?).await?;
+                stream.write_all(&Terminate.to_bytes()).await?;
                 stream.flush().await?;
                 Ok::<(), Error>(())
             });
@@ -1307,7 +1306,7 @@ pub mod test {
                 assert!(matches!(startup, Startup::Startup { .. }));
 
                 socket
-                    .write_all(&Authentication::ClearTextPassword.to_bytes().unwrap())
+                    .write_all(&Authentication::ClearTextPassword.to_bytes())
                     .await
                     .unwrap();
 
@@ -1315,15 +1314,15 @@ pub mod test {
                 assert_eq!(password.password(), Some(expected_secret.as_str()));
 
                 socket
-                    .write_all(&Authentication::Ok.to_bytes().unwrap())
+                    .write_all(&Authentication::Ok.to_bytes())
                     .await
                     .unwrap();
                 socket
-                    .write_all(&BackendKeyData::new().to_bytes().unwrap())
+                    .write_all(&BackendKeyData::new().to_bytes())
                     .await
                     .unwrap();
                 socket
-                    .write_all(&ReadyForQuery::idle().to_bytes().unwrap())
+                    .write_all(&ReadyForQuery::idle().to_bytes())
                     .await
                     .unwrap();
             }
@@ -1368,7 +1367,7 @@ pub mod test {
                 assert!(matches!(startup, Startup::Startup { .. }));
 
                 socket
-                    .write_all(&Authentication::ClearTextPassword.to_bytes().unwrap())
+                    .write_all(&Authentication::ClearTextPassword.to_bytes())
                     .await
                     .unwrap();
 
@@ -1376,15 +1375,15 @@ pub mod test {
                 assert_eq!(password.password(), Some(expected_secret.as_str()));
 
                 socket
-                    .write_all(&Authentication::Ok.to_bytes().unwrap())
+                    .write_all(&Authentication::Ok.to_bytes())
                     .await
                     .unwrap();
                 socket
-                    .write_all(&BackendKeyData::new().to_bytes().unwrap())
+                    .write_all(&BackendKeyData::new().to_bytes())
                     .await
                     .unwrap();
                 socket
-                    .write_all(&ReadyForQuery::idle().to_bytes().unwrap())
+                    .write_all(&ReadyForQuery::idle().to_bytes())
                     .await
                     .unwrap();
             }
@@ -2134,7 +2133,7 @@ pub mod test {
             let msg = server.read().await.unwrap();
             assert_eq!(c, msg.code());
             if c == 'D' {
-                let data_row = DataRow::from_bytes(msg.to_bytes().unwrap()).unwrap();
+                let data_row = DataRow::from_bytes(msg.to_bytes()).unwrap();
                 let result: i64 = data_row.get(0, Format::Text).unwrap();
                 assert_eq!(result, 1); // We prepared SELECT 1, SELECT 2 is ignored.
             }
@@ -3327,7 +3326,7 @@ pub mod test {
             .iter()
             .find(|m| m.code() == 'D')
             .expect("expected DataRow");
-        let data_row = DataRow::from_bytes(data_row.to_bytes().unwrap()).unwrap();
+        let data_row = DataRow::from_bytes(data_row.to_bytes()).unwrap();
         let value: i32 = data_row.get(0, Format::Text).unwrap();
         assert_eq!(value, expected);
         assert!(server.done());
