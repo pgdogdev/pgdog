@@ -60,9 +60,18 @@ impl Schema {
             .map(|p| p.trim().replace("\"", ""))
             .collect();
 
+        let aggregate_functions = server
+            .fetch_all::<String>(
+                "SELECT DISTINCT proname FROM pg_proc INNER JOIN pg_aggregate ON oid = aggfnoid",
+            )
+            .await?
+            .into_iter()
+            .collect();
+
         let inner = SchemaInner {
             search_path,
             relations,
+            aggregate_functions,
         };
 
         Ok(Self {
@@ -80,6 +89,15 @@ impl Schema {
         search_path: Vec<String>,
         relations: HashMap<(String, String), Relation>,
     ) -> Self {
+        Self::from_parts_with_agg(search_path, relations, Vec::new())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_parts_with_agg(
+        search_path: Vec<String>,
+        relations: HashMap<(String, String), Relation>,
+        aggregate_functions: Vec<String>,
+    ) -> Self {
         let mut nested: StatsRelations = HashMap::new();
         for ((schema, name), relation) in relations {
             nested
@@ -91,6 +109,7 @@ impl Schema {
             inner: StatsSchema::new(SchemaInner {
                 search_path,
                 relations: nested,
+                aggregate_functions: aggregate_functions.into_iter().collect(),
             }),
         }
     }
@@ -554,5 +573,25 @@ mod test {
                 default.first(),
             );
         }
+    }
+
+    #[tokio::test]
+    async fn test_loading_aggregate_functions() {
+        let mut server = test_server().await;
+        server.execute_checked("BEGIN").await.unwrap();
+
+        let schema = Schema::load(&mut server).await.unwrap();
+        assert!(!schema
+            .aggregate_functions
+            .contains(&String::from("pgdog_sum")));
+
+        server
+            .execute_checked("CREATE AGGREGATE pgdog_sum (int4) (sfunc = int4_sum, stype = bigint)")
+            .await
+            .unwrap();
+        let schema = Schema::load(&mut server).await.unwrap();
+        assert!(schema
+            .aggregate_functions
+            .contains(&String::from("pgdog_sum")));
     }
 }

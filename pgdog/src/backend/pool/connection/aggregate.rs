@@ -176,6 +176,7 @@ impl<'a> Accumulator<'a> {
                     }
                 }
             }
+            AggregateFunction::Unrecognized(..) => return Ok(false),
         }
 
         Ok(true)
@@ -512,6 +513,13 @@ impl<'a> Aggregates<'a> {
                             false
                         })
                 }
+                AggregateFunction::Unrecognized(fname) => {
+                    unsupported.get_or_insert(UnsupportedAggregate {
+                        function: fname.clone(),
+                        reason: format!("{fname} is not yet supported"),
+                    });
+                    false
+                }
                 _ => true,
             }
         });
@@ -803,7 +811,7 @@ mod test {
     }
 
     fn parse(stmt: &str) -> Aggregate {
-        Aggregate::parse(&select(stmt))
+        Aggregate::parse(&select(stmt), &Default::default())
     }
 
     #[test]

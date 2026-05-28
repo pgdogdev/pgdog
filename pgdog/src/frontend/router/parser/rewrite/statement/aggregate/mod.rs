@@ -2,6 +2,7 @@ pub mod engine;
 pub mod plan;
 
 use super::{Error, RewritePlan, StatementRewrite};
+use crate::backend::schema::Schema;
 use crate::frontend::router::parser::aggregate::Aggregate;
 use pg_query::NodeEnum;
 
@@ -10,7 +11,11 @@ pub use plan::{AggregateRewritePlan, HelperKind, HelperMapping, RewriteOutput};
 
 impl StatementRewrite<'_> {
     /// Add missing COUNT(*) and other helps when using aggregates.
-    pub(super) fn rewrite_aggregates(&mut self, plan: &mut RewritePlan) -> Result<(), Error> {
+    pub(super) fn rewrite_aggregates(
+        &mut self,
+        plan: &mut RewritePlan,
+        schema: &Schema,
+    ) -> Result<(), Error> {
         if self.schema.shards == 1 {
             return Ok(());
         }
@@ -27,7 +32,7 @@ impl StatementRewrite<'_> {
             return Ok(());
         };
 
-        let aggregate = Aggregate::parse(select);
+        let aggregate = Aggregate::parse(select, schema);
         if aggregate.is_empty() {
             return Ok(());
         }

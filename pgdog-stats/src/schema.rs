@@ -1,6 +1,11 @@
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, hash::Hash, ops::Deref, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    hash::Hash,
+    ops::Deref,
+    sync::Arc,
+};
 
 /// Schema name -> Table name -> Relation
 pub type Relations = HashMap<String, HashMap<String, Relation>>;
@@ -134,6 +139,7 @@ impl Relation {
 pub struct SchemaInner {
     pub search_path: Vec<String>,
     pub relations: Relations,
+    pub aggregate_functions: HashSet<String>,
 }
 
 impl Hash for SchemaInner {
