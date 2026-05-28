@@ -269,6 +269,10 @@ pub struct General {
     #[serde(default)]
     pub query_log: Option<PathBuf>,
 
+    /// Log queries to stdout (pgcat-style). Format: `[pool: db][user: user] query`
+    #[serde(default = "General::query_log_stdout")]
+    pub query_log_stdout: bool,
+
     /// Minimum parse duration in milliseconds that triggers a warning log with the query text.
     /// Queries whose parsing takes longer than this value are logged at WARN level.
     /// Set to `0` or omit to disable.
@@ -800,6 +804,7 @@ impl Default for General {
             broadcast_address: Self::broadcast_address(),
             broadcast_port: Self::broadcast_port(),
             query_log: Self::query_log(),
+            query_log_stdout: Self::query_log_stdout(),
             log_min_duration_parse: Self::default_log_min_duration_parse(),
             log_query_sample_length: Self::log_query_sample_length(),
             openmetrics_port: Self::openmetrics_port(),
@@ -1186,6 +1191,10 @@ impl General {
 
     fn query_log() -> Option<PathBuf> {
         Self::env_option_string("PGDOG_QUERY_LOG").map(PathBuf::from)
+    }
+
+    fn query_log_stdout() -> bool {
+        Self::env_bool_or_default("PGDOG_QUERY_LOG_STDOUT", false)
     }
 
     fn default_log_min_duration_parse() -> Option<u64> {
@@ -1585,6 +1594,15 @@ mod tests {
         assert_eq!(General::tls_server_ca_certificate(), None);
         assert_eq!(General::tls_client_ca_certificate(), None);
         assert_eq!(General::query_log(), None);
+    }
+
+    #[test]
+    fn test_query_log_stdout_env() {
+        env::set_var("PGDOG_QUERY_LOG_STDOUT", "true");
+        assert!(General::query_log_stdout());
+
+        env::remove_var("PGDOG_QUERY_LOG_STDOUT");
+        assert!(!General::query_log_stdout());
     }
 
     #[test]

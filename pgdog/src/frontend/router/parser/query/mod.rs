@@ -3,7 +3,7 @@ use std::{collections::HashSet, ops::Deref};
 
 use crate::{
     backend::{databases::databases, ShardingSchema},
-    config::Role,
+    config::{config, Role},
     frontend::router::{
         context::RouterContext,
         parser::{OrderBy, Shard},
@@ -40,7 +40,7 @@ use pgdog_plugin::pg_query::{
 };
 use plugins::PluginOutput;
 
-use tracing::{debug, trace};
+use tracing::{debug, info, trace};
 
 /// Query parser.
 ///
@@ -98,6 +98,15 @@ impl QueryParser {
 
     /// Parse a query and return a command.
     pub fn parse(&mut self, context: RouterContext) -> Result<Command, Error> {
+        if config().config.general.query_log_stdout {
+            if let Some(ref q) = context.query {
+                let db = context.cluster.name();
+                let user = context.cluster.user();
+                let query_one_line = q.query().replace(['\r', '\n'], " ");
+                info!("[pool: {}][user: {}] {}", db, user, query_one_line.trim());
+            }
+        }
+
         let mut context = QueryParserContext::new(context)?;
 
         let mut command = if context.query().is_ok() {
