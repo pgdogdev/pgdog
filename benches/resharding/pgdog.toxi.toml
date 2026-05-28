@@ -1,0 +1,73 @@
+# pgdog configuration for resharding benchmarks with toxiproxy.
+#
+# All source shards connect through resharding_source  (port 15400).
+# All destination shards connect through resharding_destination (port 15401).
+# Set up the proxies first:
+#
+#   bash benches/resharding/toxi/setup.sh
+#
+[general]
+resharding_copy_format = "binary"
+resharding_parallel_copies = 5
+
+[[databases]]
+name = "source"
+host = "127.0.0.1"
+port = 15400
+database_name = "pgdog1"
+shard = 0
+
+[[databases]]
+name = "source"
+host = "127.0.0.1"
+port = 15400
+database_name = "pgdog2"
+shard = 1
+
+[[databases]]
+name = "source"
+host = "127.0.0.1"
+port = 15400
+database_name = "pgdog3"
+shard = 2
+
+[[sharded_tables]]
+database = "source"
+column = "tenant_id"
+data_type = "bigint"
+
+[[databases]]
+name = "destination"
+host = "127.0.0.1"
+port = 15401
+database_name = "shard_0"
+shard = 0
+
+[[databases]]
+name = "destination"
+host = "127.0.0.1"
+port = 15401
+database_name = "shard_1"
+shard = 1
+
+[[databases]]
+name = "destination"
+host = "127.0.0.1"
+port = 15401
+database_name = "shard_2"
+shard = 2
+
+[[databases]]
+name = "destination"
+host = "127.0.0.1"
+port = 15401
+database_name = "shard_3"
+shard = 3
+
+[[sharded_tables]]
+database = "destination"
+column = "tenant_id"
+data_type = "bigint"
+
+[admin]
+password = "pgdog"
