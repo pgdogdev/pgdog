@@ -120,7 +120,7 @@ async fn test_maintenance_mode_parsing() {
     let result = admin.simple_query("MAINTENANCE INVALID").await;
     assert!(result.is_err());
 
-    let result = admin.simple_query("MAINTENANCE ON EXTRA").await;
+    let result = admin.simple_query("MAINTENANCE ON DB_NAME EXTRA").await;
     assert!(result.is_err());
 }
 
@@ -154,6 +154,67 @@ async fn test_maintenance_mode_concurrent_operations() {
 
     // Wait for both tasks to complete
     tokio::try_join!(admin_task, client_task).unwrap();
+}
+
+#[tokio::test]
+#[serial]
+async fn test_maintenance_mode_single_database() {
+    let admin = admin_tokio().await;
+    let failover = connection_failover().await;
+    let mut pools = connections_sqlx().await;
+    let pgdog = pools.remove(0); // "pgdog" database
+
+    // Clean slate.
+    admin.simple_query("MAINTENANCE OFF").await.unwrap();
+    admin
+        .simple_query("MAINTENANCE OFF failover")
+        .await
+        .unwrap();
+
+    // Both databases work normally.
+    pgdog.execute("SELECT 1").await.unwrap();
+    failover.execute("SELECT 1").await.unwrap();
+
+    // Put only the `failover` database into maintenance mode.
+    admin.simple_query("MAINTENANCE ON failover").await.unwrap();
+
+    // Queries to `pgdog` must keep working, unaffected by `failover`.
+    tokio::time::timeout(Duration::from_secs(1), pgdog.execute("SELECT 2"))
+        .await
+        .expect("pgdog query should not block while only failover is in maintenance")
+        .unwrap();
+
+    // Meanwhile, a query to `failover` should block until maintenance is lifted.
+    let failover_blocked = failover.clone();
+    let blocked = tokio::spawn(async move {
+        failover_blocked.execute("SELECT 2").await.unwrap();
+    });
+
+    sleep(Duration::from_millis(100)).await;
+    assert!(
+        !blocked.is_finished(),
+        "failover query should be blocked during maintenance"
+    );
+
+    // `pgdog` still works while the `failover` query is blocked.
+    tokio::time::timeout(Duration::from_secs(1), pgdog.execute("SELECT 3"))
+        .await
+        .expect("pgdog query should not block")
+        .unwrap();
+
+    // Lift maintenance on `failover`; the blocked query should now complete.
+    admin
+        .simple_query("MAINTENANCE OFF failover")
+        .await
+        .unwrap();
+
+    tokio::time::timeout(Duration::from_secs(5), blocked)
+        .await
+        .expect("failover query should complete after maintenance is lifted")
+        .unwrap();
+
+    pgdog.close().await;
+    failover.close().await;
 }
 
 #[tokio::test]

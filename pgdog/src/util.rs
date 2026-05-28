@@ -192,6 +192,17 @@ pub fn format_bytes(bytes: u64) -> String {
 }
 
 /// Get user and database parameters.
+///
+/// These parameters are standard and defined by the Postgres protocol.
+///
+/// # Arguments
+///
+/// - `params`: Client parameters extracted from the [`crate::net::Startup`] message.
+///
+/// # Return
+///
+/// Tuple of (user, database).
+///
 pub fn user_database_from_params(params: &Parameters) -> (&str, &str) {
     let user = params.get_default("user", "postgres");
     let database = params.get_default("database", user);

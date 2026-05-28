@@ -1,4 +1,7 @@
-//! Frontend client.
+//! PostgreSQL client.
+//!
+//! Entrypoint for client/server interactions.
+//!
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -34,71 +37,74 @@ use crate::util::user_database_from_params;
 pub mod query_engine;
 pub mod sticky;
 pub mod timeouts;
+pub mod transaction_type;
 
 pub(crate) use sticky::Sticky;
+pub use transaction_type::TransactionType;
 
-/// Frontend client.
+/// PostgreSQL client.
+///
+/// It thinks it's talking to a real Postgres server, but actually it's talking to PgDog :-).
+///
 #[derive(Debug)]
 pub struct Client {
+    // Client IP.
     addr: SocketAddr,
+    // Client socket.
     stream: Stream,
+    // Client unique identifier. Randomly generated
+    // for each client.
     id: BackendKeyData,
-    #[allow(dead_code)]
-    connect_params: Parameters,
+    // Client startup parameters. Keeps track of any parameters
+    // the client changes at runtime with `SET` as well.
     params: Parameters,
+    // Process-global communication primitives used for clients
+    // to talk to each other, e.g. to track their own state.
     comms: ClientComms,
+    // Client is connected to the admin database.
     admin: bool,
+    // Client is streaming data via replication, and not running
+    // regular queries. We skip all the fancy stuff here, i.e.,
+    // no query parsing, routing, etc.
+    //
+    // Don't expect sharding to work if this is what the client is doing.
     streaming: bool,
+    // Client prepared statements cache.
     prepared_statements: PreparedStatements,
+    // Client transaction state.
     transaction: Option<TransactionType>,
+    // Current timeouts to use for client/server communication.
+    // These change based on client state, e.g. if client is running query,
+    // the `query_timeout` is active, and if the client is idle, the `client_idle_timeout` is.
     timeouts: Timeouts,
+    // Stateful buffer containing the current whole client request.
+    // This can be a query or just a `Parse` and `Flush`, but in either case, the client
+    // will expect a response immediately and we need to handle it.
     client_request: ClientRequest,
+    // Raw buffer of messages the client sent. We keep them here to avoid memory allocations
+    // down the line (using [`bytes::Bytes`]).
     stream_buffer: MessageBuffer,
+    // Settings that override query routing behavior, e.g., client wants to talk
+    // to replicas only.
     sticky: Sticky,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum TransactionType {
-    ReadOnly,
-    #[default]
-    ReadWrite,
-    ErrorReadWrite,
-    ErrorReadOnly,
-}
-
-impl TransactionType {
-    pub fn read_only(&self) -> bool {
-        matches!(self, Self::ReadOnly)
-    }
-
-    pub fn write(&self) -> bool {
-        !self.read_only()
-    }
-
-    pub fn error(&self) -> bool {
-        matches!(self, Self::ErrorReadWrite | Self::ErrorReadOnly)
-    }
-}
-
-impl MemoryUsage for Client {
-    #[inline]
-    fn memory_usage(&self) -> usize {
-        std::mem::size_of::<SocketAddr>()
-            + std::mem::size_of::<Stream>()
-            + std::mem::size_of::<BackendKeyData>()
-            + self.connect_params.memory_usage()
-            + self.params.memory_usage()
-            + std::mem::size_of::<ClientComms>()
-            + std::mem::size_of::<bool>() * 5
-            + self.prepared_statements.memory_used()
-            + std::mem::size_of::<Timeouts>()
-            + self.stream_buffer.capacity()
-            + self.client_request.memory_usage()
-    }
+    /// Client database.
+    database: String,
 }
 
 impl Client {
-    /// Create new frontend client from the given TCP stream.
+    /// Create new frontend client from the a TCP socket.
+    ///
+    /// The client already sent a valid Startup message and negotiated TLS.
+    ///
+    /// # Parameters
+    ///
+    /// - `stream`: TCP stream.
+    /// - `params`: Client parameters extracted from the [`crate::net::Startup`] message.
+    /// - `addr`: TCP IP.
+    /// - `config`: Currently loaded `pgdog.toml` and `users.toml`.
+    /// - `protocol_version`: The version of the PostgreSQL protocol used by the client. This is typically 3.0, but can be 3.2
+    ///                       for more modern clients.
+    ///
     pub async fn spawn(
         stream: Stream,
         params: Parameters,
@@ -372,7 +378,7 @@ impl Client {
             client_request: ClientRequest::default(),
             stream_buffer: MessageBuffer::new(config.config.memory.message_buffer),
             sticky: Sticky::from_params(&params),
-            connect_params: params,
+            database: database.to_string(),
         }))
     }
 
@@ -396,7 +402,6 @@ impl Client {
             comms: ClientComms::new(&id),
             streaming: false,
             prepared_statements,
-            connect_params: connect_params.clone(),
             admin: false,
             transaction: None,
             timeouts: Timeouts::from_config(&config().config.general),
@@ -404,6 +409,7 @@ impl Client {
             stream_buffer: MessageBuffer::new(4096),
             sticky: Sticky::from_params(&connect_params),
             params: connect_params,
+            database: "pgdog".to_string(),
         }
     }
 
@@ -512,7 +518,7 @@ impl Client {
     async fn client_messages(&mut self, query_engine: &mut QueryEngine) -> Result<(), Error> {
         // Check maintenance mode.
         if !self.in_transaction() && !self.admin {
-            if let Some(waiter) = maintenance_mode::waiter() {
+            if let Some(waiter) = maintenance_mode::waiter(&self.database) {
                 let state = query_engine.get_state();
                 query_engine.set_state(State::Waiting);
                 waiter.await;
@@ -654,6 +660,22 @@ impl Drop for Client {
 impl Client {
     pub async fn spawn_test(mut self) {
         self.spawn_internal().await;
+    }
+}
+
+impl MemoryUsage for Client {
+    #[inline]
+    fn memory_usage(&self) -> usize {
+        std::mem::size_of::<SocketAddr>()
+            + std::mem::size_of::<Stream>()
+            + std::mem::size_of::<BackendKeyData>()
+            + self.params.memory_usage()
+            + std::mem::size_of::<ClientComms>()
+            + std::mem::size_of::<bool>() * 5
+            + self.prepared_statements.memory_used()
+            + std::mem::size_of::<Timeouts>()
+            + self.stream_buffer.capacity()
+            + self.client_request.memory_usage()
     }
 }
 
