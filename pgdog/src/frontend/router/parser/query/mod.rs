@@ -103,7 +103,12 @@ impl QueryParser {
                 let db = context.cluster.name();
                 let user = context.cluster.user();
                 let query_one_line = q.query().replace(['\r', '\n'], " ");
-                info!("[pool: {}][user: {}] {}", db, user, query_one_line.trim());
+                info!(
+                    "{} [database: {}, user: {}]",
+                    query_one_line.trim(),
+                    db,
+                    user
+                );
             }
         }
 

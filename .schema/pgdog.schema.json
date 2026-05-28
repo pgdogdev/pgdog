@@ -974,7 +974,7 @@
           "default": null
         },
         "query_log_stdout": {
-          "description": "Log queries to stdout (pgcat-style). Format: `[pool: db][user: user] query`",
+          "description": "Log queries to stdout. Format: `query [database: db, user: user]`",
           "type": "boolean",
           "default": false
         },

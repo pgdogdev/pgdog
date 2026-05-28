@@ -269,7 +269,7 @@ pub struct General {
     #[serde(default)]
     pub query_log: Option<PathBuf>,
 
-    /// Log queries to stdout (pgcat-style). Format: `[pool: db][user: user] query`
+    /// Log queries to stdout. Format: `query [database: db, user: user]`
     #[serde(default = "General::query_log_stdout")]
     pub query_log_stdout: bool,
 
