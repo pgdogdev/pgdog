@@ -39,6 +39,8 @@ pub struct QueryEngineContext<'a> {
     pub(super) sticky: Sticky,
     /// Rewrite result.
     pub(super) rewrite_result: Option<RewriteResult>,
+    /// Log queries to stdout.
+    pub(super) query_log_stdout: bool,
 }
 
 impl<'a> QueryEngineContext<'a> {
@@ -60,6 +62,7 @@ impl<'a> QueryEngineContext<'a> {
             rollback: false,
             sticky: client.sticky,
             rewrite_result: None,
+            query_log_stdout: client.query_log_stdout,
         }
     }
 
@@ -86,6 +89,7 @@ impl<'a> QueryEngineContext<'a> {
             rollback: false,
             sticky: Sticky::new(),
             rewrite_result: None,
+            query_log_stdout: false,
         }
     }
 
