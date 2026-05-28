@@ -842,10 +842,8 @@ impl Server {
             .filter(|message| message.code() == 'D')
             .map(|message| message.to_bytes().unwrap())
             .map(DataRow::from_bytes)
-            .collect::<Result<Vec<DataRow>, crate::net::Error>>()?
-            .into_iter()
-            .map(|row| T::from(row))
-            .collect())
+            .map(|maybe_row| maybe_row.map(T::from))
+            .collect::<Result<Vec<T>, _>>()?)
     }
 
     /// Perform a healthcheck on this connection using the provided query.
