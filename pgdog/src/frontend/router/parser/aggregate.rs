@@ -244,415 +244,215 @@ impl Aggregate {
 mod test {
     use super::*;
 
-    #[test]
-    fn test_parse_aggregate() {
-        let query = pg_query::parse("SELECT COUNT(*)::bigint FROM users")
+    fn select(stmt: &str) -> SelectStmt {
+        let stmt = pg_query::parse(stmt)
             .unwrap()
             .protobuf
             .stmts
-            .first()
-            .cloned()
+            .remove(0)
+            .stmt
             .unwrap();
-        match query.stmt.unwrap().node.unwrap() {
-            NodeEnum::SelectStmt(stmt) => {
-                let aggr = Aggregate::parse(&stmt);
-                assert_eq!(
-                    aggr.targets().first().unwrap().function,
-                    AggregateFunction::Count
-                );
-            }
-
+        match stmt.node.unwrap() {
+            NodeEnum::SelectStmt(stmt) => *stmt,
             _ => panic!("not a select"),
         }
+    }
+
+    fn parse(stmt: &str) -> Aggregate {
+        Aggregate::parse(&select(stmt))
+    }
+
+    #[test]
+    fn test_parse_aggregate() {
+        let aggr = parse("SELECT COUNT(*)::bigint FROM users");
+        assert_eq!(
+            aggr.targets().first().unwrap().function,
+            AggregateFunction::Count
+        );
     }
 
     #[test]
     fn test_parse_avg_count_expr_id_matches() {
-        let query = pg_query::parse("SELECT COUNT(price), AVG(price) FROM menu")
-            .unwrap()
-            .protobuf
-            .stmts
-            .first()
-            .cloned()
-            .unwrap();
-        match query.stmt.unwrap().node.unwrap() {
-            NodeEnum::SelectStmt(stmt) => {
-                let aggr = Aggregate::parse(&stmt);
-                assert_eq!(aggr.targets().len(), 2);
-                let count = &aggr.targets()[0];
-                let avg = &aggr.targets()[1];
-                assert!(matches!(count.function(), AggregateFunction::Count));
-                assert!(matches!(avg.function(), AggregateFunction::Avg));
-                assert_eq!(count.expr_id(), avg.expr_id());
-                assert!(!count.is_distinct());
-                assert!(!avg.is_distinct());
-            }
-            _ => panic!("not a select"),
-        }
+        let aggr = parse("SELECT COUNT(price), AVG(price) FROM menu");
+        assert_eq!(aggr.targets().len(), 2);
+        let count = &aggr.targets()[0];
+        let avg = &aggr.targets()[1];
+        assert!(matches!(count.function(), AggregateFunction::Count));
+        assert!(matches!(avg.function(), AggregateFunction::Avg));
+        assert_eq!(count.expr_id(), avg.expr_id());
+        assert!(!count.is_distinct());
+        assert!(!avg.is_distinct());
     }
 
     #[test]
     fn test_parse_avg_count_expr_id_differs() {
-        let query = pg_query::parse("SELECT COUNT(price), AVG(cost) FROM menu")
-            .unwrap()
-            .protobuf
-            .stmts
-            .first()
-            .cloned()
-            .unwrap();
-        match query.stmt.unwrap().node.unwrap() {
-            NodeEnum::SelectStmt(stmt) => {
-                let aggr = Aggregate::parse(&stmt);
-                assert_eq!(aggr.targets().len(), 2);
-                let count = &aggr.targets()[0];
-                let avg = &aggr.targets()[1];
-                assert!(matches!(count.function(), AggregateFunction::Count));
-                assert!(matches!(avg.function(), AggregateFunction::Avg));
-                assert_ne!(count.expr_id(), avg.expr_id());
-                assert!(!count.is_distinct());
-                assert!(!avg.is_distinct());
-            }
-            _ => panic!("not a select"),
-        }
+        let aggr = parse("SELECT COUNT(price), AVG(cost) FROM menu");
+        assert_eq!(aggr.targets().len(), 2);
+        let count = &aggr.targets()[0];
+        let avg = &aggr.targets()[1];
+        assert!(matches!(count.function(), AggregateFunction::Count));
+        assert!(matches!(avg.function(), AggregateFunction::Avg));
+        assert_ne!(count.expr_id(), avg.expr_id());
+        assert!(!count.is_distinct());
+        assert!(!avg.is_distinct());
     }
 
     #[test]
     fn test_parse_distinct_count_not_matching_avg() {
-        let query = pg_query::parse("SELECT COUNT(DISTINCT price), AVG(price) FROM menu")
-            .unwrap()
-            .protobuf
-            .stmts
-            .first()
-            .cloned()
-            .unwrap();
-        match query.stmt.unwrap().node.unwrap() {
-            NodeEnum::SelectStmt(stmt) => {
-                let aggr = Aggregate::parse(&stmt);
-                assert_eq!(aggr.targets().len(), 2);
-                let count = &aggr.targets()[0];
-                let avg = &aggr.targets()[1];
-                assert!(matches!(count.function(), AggregateFunction::Count));
-                assert!(matches!(avg.function(), AggregateFunction::Avg));
-                assert!(count.is_distinct());
-                assert!(!avg.is_distinct());
-                assert_eq!(count.expr_id(), avg.expr_id());
-            }
-            _ => panic!("not a select"),
-        }
+        let aggr = parse("SELECT COUNT(DISTINCT price), AVG(price) FROM menu");
+        assert_eq!(aggr.targets().len(), 2);
+        let count = &aggr.targets()[0];
+        let avg = &aggr.targets()[1];
+        assert!(matches!(count.function(), AggregateFunction::Count));
+        assert!(matches!(avg.function(), AggregateFunction::Avg));
+        assert!(count.is_distinct());
+        assert!(!avg.is_distinct());
+        assert_eq!(count.expr_id(), avg.expr_id());
     }
 
     #[test]
     fn test_parse_stddev_variants() {
-        let query = pg_query::parse(
-            "SELECT STDDEV(price), STDDEV_SAMP(price), STDDEV_POP(price) FROM menu",
-        )
-        .unwrap()
-        .protobuf
-        .stmts
-        .first()
-        .cloned()
-        .unwrap();
-        match query.stmt.unwrap().node.unwrap() {
-            NodeEnum::SelectStmt(stmt) => {
-                let aggr = Aggregate::parse(&stmt);
-                assert_eq!(aggr.targets().len(), 3);
-                assert!(matches!(
-                    aggr.targets()[0].function(),
-                    AggregateFunction::StddevSamp
-                ));
-                assert!(matches!(
-                    aggr.targets()[1].function(),
-                    AggregateFunction::StddevSamp
-                ));
-                assert!(matches!(
-                    aggr.targets()[2].function(),
-                    AggregateFunction::StddevPop
-                ));
-            }
-            _ => panic!("not a select"),
-        }
+        let aggr = parse("SELECT STDDEV(price), STDDEV_SAMP(price), STDDEV_POP(price) FROM menu");
+        assert_eq!(aggr.targets().len(), 3);
+        assert!(matches!(
+            aggr.targets()[0].function(),
+            AggregateFunction::StddevSamp
+        ));
+        assert!(matches!(
+            aggr.targets()[1].function(),
+            AggregateFunction::StddevSamp
+        ));
+        assert!(matches!(
+            aggr.targets()[2].function(),
+            AggregateFunction::StddevPop
+        ));
     }
 
     #[test]
     fn test_parse_variance_variants() {
-        let query =
-            pg_query::parse("SELECT VARIANCE(price), VAR_SAMP(price), VAR_POP(price) FROM menu")
-                .unwrap()
-                .protobuf
-                .stmts
-                .first()
-                .cloned()
-                .unwrap();
-        match query.stmt.unwrap().node.unwrap() {
-            NodeEnum::SelectStmt(stmt) => {
-                let aggr = Aggregate::parse(&stmt);
-                assert_eq!(aggr.targets().len(), 3);
-                assert!(matches!(
-                    aggr.targets()[0].function(),
-                    AggregateFunction::VarSamp
-                ));
-                assert!(matches!(
-                    aggr.targets()[1].function(),
-                    AggregateFunction::VarSamp
-                ));
-                assert!(matches!(
-                    aggr.targets()[2].function(),
-                    AggregateFunction::VarPop
-                ));
-            }
-            _ => panic!("not a select"),
-        }
+        let aggr = parse("SELECT VARIANCE(price), VAR_SAMP(price), VAR_POP(price) FROM menu");
+        assert_eq!(aggr.targets().len(), 3);
+        assert!(matches!(
+            aggr.targets()[0].function(),
+            AggregateFunction::VarSamp
+        ));
+        assert!(matches!(
+            aggr.targets()[1].function(),
+            AggregateFunction::VarSamp
+        ));
+        assert!(matches!(
+            aggr.targets()[2].function(),
+            AggregateFunction::VarPop
+        ));
     }
 
     #[test]
     fn test_parse_group_by_ordinals() {
-        let query =
-            pg_query::parse("SELECT price, category_id, SUM(quantity) FROM menu GROUP BY 1, 2")
-                .unwrap()
-                .protobuf
-                .stmts
-                .first()
-                .cloned()
-                .unwrap();
-        match query.stmt.unwrap().node.unwrap() {
-            NodeEnum::SelectStmt(stmt) => {
-                let aggr = Aggregate::parse(&stmt);
-                assert_eq!(aggr.group_by(), &[0, 1]);
-                assert_eq!(aggr.targets().len(), 1);
-                let target = &aggr.targets()[0];
-                assert!(matches!(target.function(), AggregateFunction::Sum));
-                assert_eq!(target.column(), 2);
-            }
-            _ => panic!("not a select"),
-        }
+        let aggr = parse("SELECT price, category_id, SUM(quantity) FROM menu GROUP BY 1, 2");
+        assert_eq!(aggr.group_by(), &[0, 1]);
+        assert_eq!(aggr.targets().len(), 1);
+        let target = &aggr.targets()[0];
+        assert!(matches!(target.function(), AggregateFunction::Sum));
+        assert_eq!(target.column(), 2);
     }
 
     #[test]
     fn test_parse_sum_distinct_sets_flag() {
-        let query = pg_query::parse("SELECT SUM(DISTINCT price) FROM menu")
-            .unwrap()
-            .protobuf
-            .stmts
-            .first()
-            .cloned()
-            .unwrap();
-        match query.stmt.unwrap().node.unwrap() {
-            NodeEnum::SelectStmt(stmt) => {
-                let aggr = Aggregate::parse(&stmt);
-                assert_eq!(aggr.targets().len(), 1);
-                let target = &aggr.targets()[0];
-                assert!(matches!(target.function(), AggregateFunction::Sum));
-                assert!(target.is_distinct());
-            }
-            _ => panic!("not a select"),
-        }
+        let aggr = parse("SELECT SUM(DISTINCT price) FROM menu");
+        assert_eq!(aggr.targets().len(), 1);
+        let target = &aggr.targets()[0];
+        assert!(matches!(target.function(), AggregateFunction::Sum));
+        assert!(target.is_distinct());
     }
 
     #[test]
     fn test_parse_group_by_column_name_single() {
-        let query = pg_query::parse("SELECT user_id, COUNT(1) FROM example GROUP BY user_id")
-            .unwrap()
-            .protobuf
-            .stmts
-            .first()
-            .cloned()
-            .unwrap();
-        match query.stmt.unwrap().node.unwrap() {
-            NodeEnum::SelectStmt(stmt) => {
-                let aggr = Aggregate::parse(&stmt);
-                assert_eq!(aggr.group_by(), &[0]);
-                assert_eq!(aggr.targets().len(), 1);
-                let target = &aggr.targets()[0];
-                assert!(matches!(target.function(), AggregateFunction::Count));
-                assert_eq!(target.column(), 1);
-            }
-            _ => panic!("not a select"),
-        }
+        let aggr = parse("SELECT user_id, COUNT(1) FROM example GROUP BY user_id");
+        assert_eq!(aggr.group_by(), &[0]);
+        assert_eq!(aggr.targets().len(), 1);
+        let target = &aggr.targets()[0];
+        assert!(matches!(target.function(), AggregateFunction::Count));
+        assert_eq!(target.column(), 1);
     }
 
     #[test]
     fn test_parse_group_by_column_name_multiple() {
-        let query = pg_query::parse(
+        let aggr = parse(
             "SELECT COUNT(*), user_id, category_id FROM example GROUP BY user_id, category_id",
-        )
-        .unwrap()
-        .protobuf
-        .stmts
-        .first()
-        .cloned()
-        .unwrap();
-        match query.stmt.unwrap().node.unwrap() {
-            NodeEnum::SelectStmt(stmt) => {
-                let aggr = Aggregate::parse(&stmt);
-                assert_eq!(aggr.group_by(), &[1, 2]);
-                assert_eq!(aggr.targets().len(), 1);
-                let target = &aggr.targets()[0];
-                assert!(matches!(target.function(), AggregateFunction::Count));
-                assert_eq!(target.column(), 0);
-            }
-            _ => panic!("not a select"),
-        }
+        );
+        assert_eq!(aggr.group_by(), &[1, 2]);
+        assert_eq!(aggr.targets().len(), 1);
+        let target = &aggr.targets()[0];
+        assert!(matches!(target.function(), AggregateFunction::Count));
+        assert_eq!(target.column(), 0);
     }
 
     #[test]
     fn test_parse_group_by_qualified_column_name() {
-        let query = pg_query::parse(
-            "SELECT COUNT(1), example.user_id FROM example GROUP BY example.user_id",
-        )
-        .unwrap()
-        .protobuf
-        .stmts
-        .first()
-        .cloned()
-        .unwrap();
-        match query.stmt.unwrap().node.unwrap() {
-            NodeEnum::SelectStmt(stmt) => {
-                let aggr = Aggregate::parse(&stmt);
-                assert_eq!(aggr.group_by(), &[1]);
-                assert_eq!(aggr.targets().len(), 1);
-                let target = &aggr.targets()[0];
-                assert!(matches!(target.function(), AggregateFunction::Count));
-                assert_eq!(target.column(), 0);
-            }
-            _ => panic!("not a select"),
-        }
+        let aggr = parse("SELECT COUNT(1), example.user_id FROM example GROUP BY example.user_id");
+        assert_eq!(aggr.group_by(), &[1]);
+        assert_eq!(aggr.targets().len(), 1);
+        let target = &aggr.targets()[0];
+        assert!(matches!(target.function(), AggregateFunction::Count));
+        assert_eq!(target.column(), 0);
     }
 
     #[test]
     fn test_parse_group_by_mixed_ordinal_and_column_name() {
-        let query = pg_query::parse(
-            "SELECT user_id, category_id, SUM(quantity) FROM example GROUP BY user_id, 2",
-        )
-        .unwrap()
-        .protobuf
-        .stmts
-        .first()
-        .cloned()
-        .unwrap();
-        match query.stmt.unwrap().node.unwrap() {
-            NodeEnum::SelectStmt(stmt) => {
-                let aggr = Aggregate::parse(&stmt);
-                assert_eq!(aggr.group_by(), &[0, 1]);
-                assert_eq!(aggr.targets().len(), 1);
-                let target = &aggr.targets()[0];
-                assert!(matches!(target.function(), AggregateFunction::Sum));
-                assert_eq!(target.column(), 2);
-            }
-            _ => panic!("not a select"),
-        }
+        let aggr =
+            parse("SELECT user_id, category_id, SUM(quantity) FROM example GROUP BY user_id, 2");
+        assert_eq!(aggr.group_by(), &[0, 1]);
+        assert_eq!(aggr.targets().len(), 1);
+        let target = &aggr.targets()[0];
+        assert!(matches!(target.function(), AggregateFunction::Sum));
+        assert_eq!(target.column(), 2);
     }
 
     #[test]
     fn test_parse_group_by_column_not_in_select() {
-        let query = pg_query::parse("SELECT COUNT(*) FROM example GROUP BY user_id")
-            .unwrap()
-            .protobuf
-            .stmts
-            .first()
-            .cloned()
-            .unwrap();
-        match query.stmt.unwrap().node.unwrap() {
-            NodeEnum::SelectStmt(stmt) => {
-                let aggr = Aggregate::parse(&stmt);
-                let empty: Vec<usize> = vec![];
-                assert_eq!(aggr.group_by(), empty.as_slice());
-                assert_eq!(aggr.targets().len(), 1);
-            }
-            _ => panic!("not a select"),
-        }
+        let aggr = parse("SELECT COUNT(*) FROM example GROUP BY user_id");
+        assert!(aggr.group_by().is_empty());
+        assert_eq!(aggr.targets().len(), 1);
     }
 
     #[test]
     fn test_parse_group_by_with_multiple_aggregates() {
-        let query = pg_query::parse(
-            "SELECT COUNT(*), SUM(price), user_id, AVG(price) FROM example GROUP BY user_id",
-        )
-        .unwrap()
-        .protobuf
-        .stmts
-        .first()
-        .cloned()
-        .unwrap();
-        match query.stmt.unwrap().node.unwrap() {
-            NodeEnum::SelectStmt(stmt) => {
-                let aggr = Aggregate::parse(&stmt);
-                assert_eq!(aggr.group_by(), &[2]);
-                assert_eq!(aggr.targets().len(), 3);
-                assert!(matches!(
-                    aggr.targets()[0].function(),
-                    AggregateFunction::Count
-                ));
-                assert!(matches!(
-                    aggr.targets()[1].function(),
-                    AggregateFunction::Sum
-                ));
-                assert!(matches!(
-                    aggr.targets()[2].function(),
-                    AggregateFunction::Avg
-                ));
-            }
-            _ => panic!("not a select"),
-        }
+        let aggr =
+            parse("SELECT COUNT(*), SUM(price), user_id, AVG(price) FROM example GROUP BY user_id");
+        assert_eq!(aggr.group_by(), &[2]);
+        assert_eq!(aggr.targets().len(), 3);
+        assert!(matches!(
+            aggr.targets()[0].function(),
+            AggregateFunction::Count
+        ));
+        assert!(matches!(
+            aggr.targets()[1].function(),
+            AggregateFunction::Sum
+        ));
+        assert!(matches!(
+            aggr.targets()[2].function(),
+            AggregateFunction::Avg
+        ));
     }
 
     #[test]
     fn test_parse_group_by_qualified_matches_select_unqualified() {
-        let query =
-            pg_query::parse("SELECT user_id, COUNT(1) FROM example GROUP BY example.user_id")
-                .unwrap()
-                .protobuf
-                .stmts
-                .first()
-                .cloned()
-                .unwrap();
-        match query.stmt.unwrap().node.unwrap() {
-            NodeEnum::SelectStmt(stmt) => {
-                let aggr = Aggregate::parse(&stmt);
-                assert_eq!(aggr.group_by(), &[0]);
-                assert_eq!(aggr.targets().len(), 1);
-            }
-            _ => panic!("not a select"),
-        }
+        let aggr = parse("SELECT user_id, COUNT(1) FROM example GROUP BY example.user_id");
+        assert_eq!(aggr.group_by(), &[0]);
+        assert_eq!(aggr.targets().len(), 1);
     }
 
     #[test]
     fn test_parse_group_by_unqualified_matches_select_qualified() {
-        let query =
-            pg_query::parse("SELECT example.user_id, COUNT(1) FROM example GROUP BY user_id")
-                .unwrap()
-                .protobuf
-                .stmts
-                .first()
-                .cloned()
-                .unwrap();
-        match query.stmt.unwrap().node.unwrap() {
-            NodeEnum::SelectStmt(stmt) => {
-                let aggr = Aggregate::parse(&stmt);
-                assert_eq!(aggr.group_by(), &[0]);
-                assert_eq!(aggr.targets().len(), 1);
-            }
-            _ => panic!("not a select"),
-        }
+        let aggr = parse("SELECT example.user_id, COUNT(1) FROM example GROUP BY user_id");
+        assert_eq!(aggr.group_by(), &[0]);
+        assert_eq!(aggr.targets().len(), 1);
     }
 
     #[test]
     fn test_parse_group_by_both_qualified_order_matters() {
-        let query = pg_query::parse(
-            "SELECT example.user_id, COUNT(1) FROM example GROUP BY example.user_id",
-        )
-        .unwrap()
-        .protobuf
-        .stmts
-        .first()
-        .cloned()
-        .unwrap();
-        match query.stmt.unwrap().node.unwrap() {
-            NodeEnum::SelectStmt(stmt) => {
-                let aggr = Aggregate::parse(&stmt);
-                assert_eq!(aggr.group_by(), &[0]);
-                assert_eq!(aggr.targets().len(), 1);
-            }
-            _ => panic!("not a select"),
-        }
+        let aggr = parse("SELECT example.user_id, COUNT(1) FROM example GROUP BY example.user_id");
+        assert_eq!(aggr.group_by(), &[0]);
+        assert_eq!(aggr.targets().len(), 1);
     }
 }
