@@ -121,7 +121,7 @@ impl CopySubscriber {
                 'G' => (),
                 'E' => {
                     return Err(Error::PgError(Box::new(ErrorResponse::from_bytes(
-                        msg.to_bytes()?,
+                        msg.to_bytes(),
                     )?)))
                 }
                 c => return Err(Error::OutOfSync(c)),
@@ -142,7 +142,7 @@ impl CopySubscriber {
             let command_complete = server.read().await?;
             match command_complete.code() {
                 'E' => {
-                    let error = ErrorResponse::from_bytes(command_complete.to_bytes()?)?;
+                    let error = ErrorResponse::from_bytes(command_complete.to_bytes())?;
                     if error.code == "08P01" && error.message == "insufficient data left in message"
                     {
                         return Err(Error::BinaryFormatMismatch(Box::new(error)));
@@ -254,7 +254,7 @@ mod test {
                 .unwrap();
         subscriber.start_copy().await.unwrap();
 
-        let header = CopyData::new(&Header::new().to_bytes().unwrap());
+        let header = CopyData::new(&Header::new().to_bytes());
         subscriber.copy_data(header).await.unwrap();
 
         for i in 0..25_i64 {
@@ -262,13 +262,13 @@ mod test {
             let email = Data::Column(Bytes::copy_from_slice("test@test.com".as_bytes()));
             let tuple = Tuple::new(&[id, email]);
             subscriber
-                .copy_data(CopyData::new(&tuple.to_bytes().unwrap()))
+                .copy_data(CopyData::new(&tuple.to_bytes()))
                 .await
                 .unwrap();
         }
 
         subscriber
-            .copy_data(CopyData::new(&Tuple::new_end().to_bytes().unwrap()))
+            .copy_data(CopyData::new(&Tuple::new_end().to_bytes()))
             .await
             .unwrap();
 

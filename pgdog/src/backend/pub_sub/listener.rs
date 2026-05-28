@@ -192,7 +192,7 @@ impl PubSubListener {
 
                     // NotificationResponse (B)
                     if message.code() == 'A' {
-                        let notification = NotificationResponse::from_bytes(message.to_bytes()?)?;
+                        let notification = NotificationResponse::from_bytes(message.to_bytes())?;
                         let mut unsub = None;
                         if let Some(channel) = channels.lock().get(notification.channel()) {
                             match channel.send(notification) {

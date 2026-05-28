@@ -114,7 +114,7 @@ impl FromBytes for ProtocolMessage {
 }
 
 impl ToBytes for ProtocolMessage {
-    fn to_bytes(&self) -> Result<bytes::Bytes, crate::net::Error> {
+    fn to_bytes(&self) -> bytes::Bytes {
         match self {
             Self::Bind(bind) => bind.to_bytes(),
             Self::Parse(parse) => parse.to_bytes(),

@@ -698,10 +698,9 @@ mod test {
                 commit_timestamp: 0,
                 xid: 1,
             }
-            .to_bytes()
-            .unwrap(),
+            .to_bytes(),
         };
-        CopyData::bytes(xlog.to_bytes().unwrap())
+        CopyData::bytes(xlog.to_bytes())
     }
     fn commit_copy_data(lsn: i64) -> CopyData {
         let xlog = XLogData {
@@ -714,10 +713,9 @@ mod test {
                 end_lsn: lsn,
                 commit_timestamp: 0,
             }
-            .to_bytes()
-            .unwrap(),
+            .to_bytes(),
         };
-        CopyData::bytes(xlog.to_bytes().unwrap())
+        CopyData::bytes(xlog.to_bytes())
     }
 
     // -- handle ---------------------------------------------------------------

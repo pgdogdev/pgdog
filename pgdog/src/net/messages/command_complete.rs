@@ -85,8 +85,8 @@ impl CommandComplete {
 }
 
 impl ToBytes for CommandComplete {
-    fn to_bytes(&self) -> Result<Bytes, Error> {
-        Ok(self.payload.clone())
+    fn to_bytes(&self) -> Bytes {
+        self.payload.clone()
     }
 }
 

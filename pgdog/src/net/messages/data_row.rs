@@ -214,7 +214,7 @@ impl FromBytes for DataRow {
 }
 
 impl ToBytes for DataRow {
-    fn to_bytes(&self) -> Result<Bytes, Error> {
+    fn to_bytes(&self) -> Bytes {
         let mut payload = Payload::named(self.code());
         payload.put_i16(self.columns.len() as i16);
 
@@ -227,7 +227,7 @@ impl ToBytes for DataRow {
             }
         }
 
-        Ok(payload.freeze())
+        payload.freeze()
     }
 }
 
@@ -267,7 +267,7 @@ mod test {
         dr.add(Data::null());
         dr.add("world");
 
-        let serialized = dr.to_bytes().unwrap();
+        let serialized = dr.to_bytes();
         let deserialized = DataRow::from_bytes(serialized).unwrap();
 
         assert_eq!(deserialized.len(), 5);

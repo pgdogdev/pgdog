@@ -14,9 +14,9 @@ impl FromBytes for BindComplete {
 }
 
 impl ToBytes for BindComplete {
-    fn to_bytes(&self) -> Result<Bytes, Error> {
+    fn to_bytes(&self) -> Bytes {
         let payload = Payload::named(self.code());
-        Ok(payload.freeze())
+        payload.freeze()
     }
 }
 

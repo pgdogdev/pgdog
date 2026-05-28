@@ -73,13 +73,13 @@ impl ParameterStatus {
 }
 
 impl ToBytes for ParameterStatus {
-    fn to_bytes(&self) -> Result<bytes::Bytes, crate::net::Error> {
+    fn to_bytes(&self) -> bytes::Bytes {
         let mut payload = Payload::named(self.code());
 
         payload.put_string(&self.name);
-        payload.put(self.value.to_bytes()?);
+        payload.put(self.value.to_bytes());
 
-        Ok(payload.freeze())
+        payload.freeze()
     }
 }
 
@@ -168,7 +168,7 @@ mod test {
             value: ParameterValue::String("UTF8".into()),
         };
 
-        let bytes = original.to_bytes().unwrap();
+        let bytes = original.to_bytes();
         let parsed = ParameterStatus::from_bytes(bytes).unwrap();
 
         assert_eq!(parsed.name, original.name);

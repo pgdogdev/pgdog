@@ -80,26 +80,26 @@ impl Protocol for Authentication {
 }
 
 impl ToBytes for Authentication {
-    fn to_bytes(&self) -> Result<Bytes, Error> {
+    fn to_bytes(&self) -> Bytes {
         let mut payload = Payload::named(self.code());
 
         match self {
             Authentication::Ok => {
                 payload.put_i32(0);
 
-                Ok(payload.freeze())
+                payload.freeze()
             }
 
             Authentication::ClearTextPassword => {
                 payload.put_i32(3);
-                Ok(payload.freeze())
+                payload.freeze()
             }
 
             Authentication::Md5(salt) => {
                 payload.put_i32(5);
                 payload.put(salt.clone());
 
-                Ok(payload.freeze())
+                payload.freeze()
             }
 
             Authentication::Sasl(mechanism) => {
@@ -107,21 +107,21 @@ impl ToBytes for Authentication {
                 payload.put_string(mechanism);
                 payload.put_u8(0);
 
-                Ok(payload.freeze())
+                payload.freeze()
             }
 
             Authentication::SaslContinue(data) => {
                 payload.put_i32(11);
                 payload.put(Bytes::copy_from_slice(data.as_bytes()));
 
-                Ok(payload.freeze())
+                payload.freeze()
             }
 
             Authentication::SaslFinal(data) => {
                 payload.put_i32(12);
                 payload.put(Bytes::copy_from_slice(data.as_bytes()));
 
-                Ok(payload.freeze())
+                payload.freeze()
             }
         }
     }

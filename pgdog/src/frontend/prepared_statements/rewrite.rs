@@ -79,7 +79,7 @@ mod test {
         let parse = Parse::named("__sqlx_1", "SELECT * FROM users");
         let mut parse = ProtocolMessage::from(parse);
         rewrite.rewrite(&mut parse).unwrap();
-        let parse = Parse::from_bytes(parse.to_bytes().unwrap()).unwrap();
+        let parse = Parse::from_bytes(parse.to_bytes()).unwrap();
 
         assert!(!parse.anonymous());
         assert_eq!(parse.name(), "__pgdog_1");
@@ -88,13 +88,13 @@ mod test {
         let bind = Bind::new_statement("__sqlx_1");
         let mut bind_msg = ProtocolMessage::from(bind);
         rewrite.rewrite(&mut bind_msg).unwrap();
-        let bind = Bind::from_bytes(bind_msg.to_bytes().unwrap()).unwrap();
+        let bind = Bind::from_bytes(bind_msg.to_bytes()).unwrap();
         assert_eq!(bind.statement(), "__pgdog_1");
 
         let describe = Describe::new_statement("__sqlx_1");
         let mut describe = ProtocolMessage::from(describe);
         rewrite.rewrite(&mut describe).unwrap();
-        let describe = Describe::from_bytes(describe.to_bytes().unwrap()).unwrap();
+        let describe = Describe::from_bytes(describe.to_bytes()).unwrap();
         assert_eq!(describe.statement(), "__pgdog_1");
         assert_eq!(describe.kind(), 'S');
 
@@ -110,7 +110,7 @@ mod test {
         let parse = Parse::new_anonymous("SELECT * FROM users");
         let mut parse = ProtocolMessage::from(parse);
         rewrite.rewrite(&mut parse).unwrap();
-        let parse = Parse::from_bytes(parse.to_bytes().unwrap()).unwrap();
+        let parse = Parse::from_bytes(parse.to_bytes()).unwrap();
 
         assert!(!parse.anonymous());
         assert_eq!(parse.query(), "SELECT * FROM users");

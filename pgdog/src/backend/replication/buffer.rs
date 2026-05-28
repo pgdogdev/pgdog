@@ -57,7 +57,7 @@ impl Buffer {
     /// like Insert/Update/Delete that don't belong to the shard.
     pub fn handle(&mut self, message: Message) -> Result<(), Error> {
         let data = match message.code() {
-            'd' => CopyData::from_bytes(message.to_bytes()?)?,
+            'd' => CopyData::from_bytes(message.to_bytes())?,
             _ => {
                 self.buffer.push_back(message);
                 return Ok(());

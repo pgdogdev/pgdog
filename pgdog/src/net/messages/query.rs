@@ -63,8 +63,8 @@ impl FromBytes for Query {
 }
 
 impl ToBytes for Query {
-    fn to_bytes(&self) -> Result<Bytes, Error> {
-        Ok(self.payload.clone())
+    fn to_bytes(&self) -> Bytes {
+        self.payload.clone()
     }
 }
 
@@ -87,7 +87,7 @@ mod test {
     #[test]
     fn test_query() {
         let query = Query::new("SELECT 1, 2, 3");
-        let query = Query::from_bytes(query.to_bytes().unwrap()).unwrap();
+        let query = Query::from_bytes(query.to_bytes()).unwrap();
         assert_eq!(query.query(), "SELECT 1, 2, 3");
     }
 }

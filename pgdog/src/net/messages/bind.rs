@@ -407,10 +407,10 @@ impl FromBytes for Bind {
 }
 
 impl ToBytes for Bind {
-    fn to_bytes(&self) -> Result<Bytes, Error> {
+    fn to_bytes(&self) -> Bytes {
         // Fast path.
         if let Some(ref original) = self.original {
-            return Ok(original.clone());
+            return original.clone();
         }
 
         let mut payload = Payload::named(self.code());
@@ -432,7 +432,7 @@ impl ToBytes for Bind {
         }
         payload.put_i16((self.results.len() / 2) as i16);
         payload.put(self.results.clone());
-        Ok(payload.freeze())
+        payload.freeze()
     }
 }
 
@@ -478,7 +478,7 @@ mod test {
                 buf.freeze()
             },
         };
-        let bytes = bind.to_bytes().unwrap();
+        let bytes = bind.to_bytes();
         let mut original = Bind::from_bytes(bytes.clone()).unwrap();
         original.original = None;
         assert_eq!(original, bind);
@@ -493,7 +493,7 @@ mod test {
             .await
             .unwrap();
         let res = conn.read().await.unwrap();
-        let err = ErrorResponse::from_bytes(res.to_bytes().unwrap()).unwrap();
+        let err = ErrorResponse::from_bytes(res.to_bytes()).unwrap();
         assert_eq!(err.code, "26000");
 
         let anon = Bind::default();
@@ -533,12 +533,12 @@ mod test {
         for c in ['1', '2', 'D', 'C', 'Z'] {
             let msg = server.read().await.unwrap();
             if msg.code() == 'E' {
-                let err = ErrorResponse::from_bytes(msg.to_bytes().unwrap()).unwrap();
+                let err = ErrorResponse::from_bytes(msg.to_bytes()).unwrap();
                 panic!("{:?}", err);
             }
 
             if msg.code() == 'D' {
-                let dr = DataRow::from_bytes(msg.to_bytes().unwrap()).unwrap();
+                let dr = DataRow::from_bytes(msg.to_bytes()).unwrap();
                 let r = dr.get::<String>(0, Format::Binary).unwrap();
                 assert_eq!(r, json);
             }
@@ -566,7 +566,7 @@ mod test {
         let params: Vec<Parameter> = (0..count).map(|_| Parameter::new_null()).collect();
         let bind = Bind::new_params("__pgdog_large", &params);
 
-        let bytes = bind.to_bytes().unwrap();
+        let bytes = bind.to_bytes();
         let decoded = Bind::from_bytes(bytes.clone()).unwrap();
 
         assert_eq!(decoded.params_raw().len(), count);

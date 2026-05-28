@@ -51,13 +51,13 @@ impl XLogData {
             starting_point: 0,
             current_end: 0,
             system_clock: system_clock - 1, // simulates this to be an older message
-            bytes: relation.to_bytes()?,
+            bytes: relation.to_bytes(),
         })
     }
 
     /// Convert to message.
     pub fn to_message(&self) -> Result<Message, Error> {
-        Ok(Message::new(CopyData::bytes(self.to_bytes()?).to_bytes()?))
+        Ok(Message::new(CopyData::bytes(self.to_bytes()).to_bytes()))
     }
 
     /// Extract payload.
@@ -129,14 +129,14 @@ impl FromBytes for XLogData {
 }
 
 impl ToBytes for XLogData {
-    fn to_bytes(&self) -> Result<Bytes, Error> {
+    fn to_bytes(&self) -> Bytes {
         let mut payload = BytesMut::new();
         payload.put_u8(self.code() as u8);
         payload.put_i64(self.starting_point);
         payload.put_i64(self.current_end);
         payload.put_i64(self.system_clock);
         payload.put(self.bytes.clone());
-        Ok(payload.freeze())
+        payload.freeze()
     }
 }
 

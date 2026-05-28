@@ -162,7 +162,7 @@ mod test {
             let mut rng = StdRng::from_os_rng();
 
             for i in 0..5000 {
-                let msg = Sync.to_bytes().unwrap();
+                let msg = Sync.to_bytes();
                 conn.write_all(&msg).await.unwrap();
 
                 let query_len = rng.random_range(10..=1000);
@@ -170,9 +170,7 @@ mod test {
                     .map(|_| rng.sample(rand::distr::Alphanumeric) as char)
                     .collect();
 
-                let msg = Parse::named(format!("test_{}", i), &query)
-                    .to_bytes()
-                    .unwrap();
+                let msg = Parse::named(format!("test_{}", i), &query).to_bytes();
                 conn.write_all(&msg).await.unwrap();
                 conn.flush().await.unwrap();
             }
@@ -202,7 +200,7 @@ mod test {
                 assert_eq!(msg.code(), 'S');
             } else {
                 assert_eq!(msg.code(), 'P');
-                let parse = Parse::from_bytes(msg.to_bytes().unwrap()).unwrap();
+                let parse = Parse::from_bytes(msg.to_bytes()).unwrap();
                 assert_eq!(parse.name(), format!("test_{}", counter / 2));
             }
 
@@ -252,11 +250,11 @@ mod test {
 
         // Create a large message (10KB query)
         let large_query = "SELECT * FROM ".to_string() + &"x".repeat(10_000);
-        let large_msg = Parse::named("large", &large_query).to_bytes().unwrap();
+        let large_msg = Parse::named("large", &large_query).to_bytes();
         stream_data.extend_from_slice(&large_msg);
 
         // Create a small message
-        let small_msg = Sync.to_bytes().unwrap();
+        let small_msg = Sync.to_bytes();
         stream_data.extend_from_slice(&small_msg);
 
         let mut cursor = Cursor::new(stream_data);
@@ -316,9 +314,7 @@ mod test {
         // Create several small messages that won't exceed BUFFER_SIZE
         for i in 0..10 {
             let query = format!("SELECT {}", i);
-            let msg = Parse::named(format!("stmt_{}", i), &query)
-                .to_bytes()
-                .unwrap();
+            let msg = Parse::named(format!("stmt_{}", i), &query).to_bytes();
             stream_data.extend_from_slice(&msg);
         }
 

@@ -170,7 +170,7 @@ impl Tuple {
 }
 
 impl ToBytes for Tuple {
-    fn to_bytes(&self) -> Result<Bytes, crate::net::Error> {
+    fn to_bytes(&self) -> Bytes {
         let mut result = BytesMut::new();
         if self.end {
             result.put_i16(-1);
@@ -187,7 +187,7 @@ impl ToBytes for Tuple {
             }
         }
 
-        Ok(result.freeze())
+        result.freeze()
     }
 }
 

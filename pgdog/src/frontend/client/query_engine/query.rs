@@ -163,7 +163,7 @@ impl QueryEngine {
             self.stats.query();
 
             let mut two_pc_auto = false;
-            let state = ReadyForQuery::from_bytes(message.to_bytes()?)?.state()?;
+            let state = ReadyForQuery::from_bytes(message.to_bytes())?.state()?;
 
             match state {
                 TransactionState::Error => {

@@ -46,7 +46,7 @@ fn xlog_copy_data(payload: Bytes) -> CopyData {
         system_clock: 0,
         bytes: payload,
     };
-    CopyData::bytes(xlog.to_bytes().unwrap())
+    CopyData::bytes(xlog.to_bytes())
 }
 
 fn make_sharded_table() -> Table {
@@ -178,8 +178,7 @@ fn begin_copy_data(lsn: i64) -> CopyData {
             commit_timestamp: 0,
             xid: 1,
         }
-        .to_bytes()
-        .unwrap(),
+        .to_bytes(),
     )
 }
 
@@ -191,17 +190,16 @@ fn commit_copy_data(end_lsn: i64) -> CopyData {
             end_lsn,
             commit_timestamp: 0,
         }
-        .to_bytes()
-        .unwrap(),
+        .to_bytes(),
     )
 }
 
 fn relation_copy_data(oid: Oid) -> CopyData {
-    xlog_copy_data(sharded_relation(oid).to_bytes().unwrap())
+    xlog_copy_data(sharded_relation(oid).to_bytes())
 }
 
 fn sharded_test_b_relation_copy_data(oid: Oid) -> CopyData {
-    xlog_copy_data(sharded_test_b_relation(oid).to_bytes().unwrap())
+    xlog_copy_data(sharded_test_b_relation(oid).to_bytes())
 }
 
 fn insert_copy_data(oid: Oid, id: &str, value: &str) -> CopyData {
@@ -213,8 +211,7 @@ fn insert_copy_data(oid: Oid, id: &str, value: &str) -> CopyData {
                 columns: vec![text_column(id), text_column(value)],
             },
         }
-        .to_bytes()
-        .unwrap(),
+        .to_bytes(),
     )
 }
 
@@ -227,8 +224,7 @@ fn delete_copy_data(oid: Oid, id: &str) -> CopyData {
             }),
             old: None,
         }
-        .to_bytes()
-        .unwrap(),
+        .to_bytes(),
     )
 }
 
@@ -249,7 +245,7 @@ fn null_column() -> TupleColumn {
 }
 
 fn x_update(u: XLogUpdate) -> CopyData {
-    xlog_copy_data(u.to_bytes().unwrap())
+    xlog_copy_data(u.to_bytes())
 }
 
 fn make_subscriber() -> StreamSubscriber {
@@ -633,10 +629,10 @@ async fn partition_leaves_share_destination() {
     relation_b.name = "sharded_p2".to_string();
 
     sub.handle(begin_copy_data(100)).await.unwrap();
-    sub.handle(xlog_copy_data(relation_a.to_bytes().unwrap()))
+    sub.handle(xlog_copy_data(relation_a.to_bytes()))
         .await
         .unwrap();
-    sub.handle(xlog_copy_data(relation_b.to_bytes().unwrap()))
+    sub.handle(xlog_copy_data(relation_b.to_bytes()))
         .await
         .unwrap();
 
@@ -975,7 +971,7 @@ fn posts_relation(oid: Oid) -> Relation {
 }
 
 fn posts_relation_copy_data(oid: Oid) -> CopyData {
-    xlog_copy_data(posts_relation(oid).to_bytes().unwrap())
+    xlog_copy_data(posts_relation(oid).to_bytes())
 }
 
 fn posts_insert_copy_data(oid: Oid, id: &str, title: &str, body: &str) -> CopyData {
@@ -987,8 +983,7 @@ fn posts_insert_copy_data(oid: Oid, id: &str, title: &str, body: &str) -> CopyDa
                 columns: vec![text_column(id), text_column(title), text_column(body)],
             },
         }
-        .to_bytes()
-        .unwrap(),
+        .to_bytes(),
     )
 }
 
@@ -1004,8 +999,7 @@ fn posts_update_title_copy_data(oid: Oid, id: &str, new_title: &str) -> CopyData
                 columns: vec![text_column(id), text_column(new_title), toasted_column()],
             },
         }
-        .to_bytes()
-        .unwrap(),
+        .to_bytes(),
     )
 }
 
@@ -1163,8 +1157,7 @@ async fn toast_update_all_toasted_is_noop() {
                 columns: vec![text_column(&id), toasted_column(), toasted_column()],
             },
         }
-        .to_bytes()
-        .unwrap(),
+        .to_bytes(),
     ))
     .await
     .unwrap();
@@ -1392,7 +1385,7 @@ fn full_identity_relation(oid: Oid) -> Relation {
 }
 
 fn full_identity_relation_copy_data(oid: Oid) -> CopyData {
-    xlog_copy_data(full_identity_relation(oid).to_bytes().unwrap())
+    xlog_copy_data(full_identity_relation(oid).to_bytes())
 }
 
 /// Helper: build a FULL-identity UPDATE CopyData.
@@ -1457,8 +1450,7 @@ fn full_delete_copy_data(oid: Oid, id: &str, value: &str) -> CopyData {
                 columns: vec![text_column(id), text_column(value)],
             }),
         }
-        .to_bytes()
-        .unwrap(),
+        .to_bytes(),
     )
 }
 
@@ -1496,7 +1488,7 @@ fn full_dup_rows_relation(oid: Oid) -> Relation {
 }
 
 fn full_dup_rows_relation_copy_data(oid: Oid) -> CopyData {
-    xlog_copy_data(full_dup_rows_relation(oid).to_bytes().unwrap())
+    xlog_copy_data(full_dup_rows_relation(oid).to_bytes())
 }
 
 /// Omni FULL-identity table with `(a TEXT, b TEXT)` and a unique index on `(a, b)`.
@@ -1531,7 +1523,7 @@ fn full_omni_dedup_relation(oid: Oid) -> Relation {
 }
 
 fn full_omni_dedup_relation_copy_data(oid: Oid) -> CopyData {
-    xlog_copy_data(full_omni_dedup_relation(oid).to_bytes().unwrap())
+    xlog_copy_data(full_omni_dedup_relation(oid).to_bytes())
 }
 
 /// Build an INSERT CopyData for the omni dedup table `(a, b)`.
@@ -1544,8 +1536,7 @@ fn omni_insert_copy_data(oid: Oid, a: &str, b: &str) -> CopyData {
                 columns: vec![text_column(a), text_column(b)],
             },
         }
-        .to_bytes()
-        .unwrap(),
+        .to_bytes(),
     )
 }
 
@@ -1567,7 +1558,7 @@ async fn full_identity_nothing_rejected() {
     let mut rel = full_identity_relation(oid);
     rel.name = "sharded".to_string();
     let err = sub
-        .handle(xlog_copy_data(rel.to_bytes().unwrap()))
+        .handle(xlog_copy_data(rel.to_bytes()))
         .await
         .expect_err("REPLICA IDENTITY NOTHING must be rejected");
     assert!(
@@ -2247,8 +2238,7 @@ async fn full_identity_delete_matches_null_column() {
                 columns: vec![text_column(&id), null_column()],
             }),
         }
-        .to_bytes()
-        .unwrap(),
+        .to_bytes(),
     ))
     .await
     .unwrap();
@@ -2333,7 +2323,7 @@ fn settings_relation(oid: Oid) -> Relation {
 }
 
 fn settings_relation_copy_data(oid: Oid) -> CopyData {
-    xlog_copy_data(settings_relation(oid).to_bytes().unwrap())
+    xlog_copy_data(settings_relation(oid).to_bytes())
 }
 
 /// WAL UPDATE for settings(id, name, value) — full new tuple, no toasted columns.
@@ -2346,8 +2336,7 @@ fn settings_update_copy_data(oid: Oid, id: &str, name: &str, value: &str) -> Cop
                 columns: vec![text_column(id), text_column(name), text_column(value)],
             },
         }
-        .to_bytes()
-        .unwrap(),
+        .to_bytes(),
     )
 }
 

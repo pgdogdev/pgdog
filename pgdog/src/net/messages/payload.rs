@@ -51,7 +51,7 @@ impl Payload {
     /// Finish assembly and return final bytes array.
     pub fn freeze(self) -> Bytes {
         use super::ToBytes;
-        self.to_bytes().unwrap()
+        self.to_bytes()
     }
 
     /// Add a C-style string to the payload. It will be NULL-terminated
@@ -78,7 +78,7 @@ impl DerefMut for Payload {
 }
 
 impl super::ToBytes for Payload {
-    fn to_bytes(&self) -> Result<bytes::Bytes, crate::net::Error> {
+    fn to_bytes(&self) -> bytes::Bytes {
         let len = if self.with_len {
             Some(self.bytes.len() as i32 + 4) // self
         } else {
@@ -99,6 +99,6 @@ impl super::ToBytes for Payload {
         }
         buf.put_slice(&self.bytes);
 
-        Ok(buf.freeze())
+        buf.freeze()
     }
 }

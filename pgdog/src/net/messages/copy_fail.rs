@@ -24,10 +24,10 @@ impl FromBytes for CopyFail {
 }
 
 impl ToBytes for CopyFail {
-    fn to_bytes(&self) -> Result<Bytes, Error> {
+    fn to_bytes(&self) -> Bytes {
         let mut payload = Payload::named(self.code());
         payload.put(self.error.clone());
-        Ok(payload.freeze())
+        payload.freeze()
     }
 }
 

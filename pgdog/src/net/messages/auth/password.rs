@@ -63,7 +63,7 @@ impl FromBytes for Password {
 }
 
 impl ToBytes for Password {
-    fn to_bytes(&self) -> Result<Bytes, Error> {
+    fn to_bytes(&self) -> Bytes {
         let mut payload = Payload::named(self.code());
         match self {
             Password::SASLInitialResponse { name, response } => {
@@ -77,7 +77,7 @@ impl ToBytes for Password {
             }
         }
 
-        Ok(payload.freeze())
+        payload.freeze()
     }
 }
 

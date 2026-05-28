@@ -262,7 +262,7 @@ impl CopyParser {
                     if self.headers {
                         if let Some(header) = stream.header()? {
                             rows.push(CopyRow::new(
-                                &header.to_bytes()?,
+                                &header.to_bytes(),
                                 self.schema_shard.clone().unwrap_or(Shard::All),
                             ));
                             self.headers = false;
@@ -299,7 +299,7 @@ impl CopyParser {
                             Shard::All
                         };
 
-                        rows.push(CopyRow::new(&tuple.to_bytes()?, shard));
+                        rows.push(CopyRow::new(&tuple.to_bytes(), shard));
                     }
                 }
             }

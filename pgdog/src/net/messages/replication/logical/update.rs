@@ -80,7 +80,7 @@ impl FromBytes for Update {
 }
 
 impl ToBytes for Update {
-    fn to_bytes(&self) -> Result<Bytes, Error> {
+    fn to_bytes(&self) -> Bytes {
         use bytes::BufMut;
         let mut buf = bytes::BytesMut::new();
         buf.put_u8(b'U');
@@ -88,17 +88,17 @@ impl ToBytes for Update {
         match &self.identity {
             UpdateIdentity::Key(key) => {
                 buf.put_u8(b'K');
-                buf.put(key.to_bytes()?);
+                buf.put(key.to_bytes());
             }
             UpdateIdentity::Old(old) => {
                 buf.put_u8(b'O');
-                buf.put(old.to_bytes()?);
+                buf.put(old.to_bytes());
             }
             UpdateIdentity::Nothing => {}
         }
         buf.put_u8(b'N');
-        buf.put(self.new.to_bytes()?);
-        Ok(buf.freeze())
+        buf.put(self.new.to_bytes());
+        buf.freeze()
     }
 }
 
@@ -228,7 +228,7 @@ mod test {
     }
 
     fn assert_round_trip(u: &Update) {
-        let bytes = u.to_bytes().unwrap();
+        let bytes = u.to_bytes();
         let parsed = Update::from_bytes(bytes).unwrap();
         assert_eq!(parsed.oid, u.oid);
         assert_columns_match(&parsed.new, &u.new, "new.columns");

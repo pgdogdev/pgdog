@@ -85,7 +85,7 @@ mod tests {
         );
 
         // Parse the RowDescription to check column names
-        let row_desc = RowDescription::from_bytes(messages[0].to_bytes().unwrap()).unwrap();
+        let row_desc = RowDescription::from_bytes(messages[0].to_bytes()).unwrap();
         let fields = &row_desc.fields;
 
         // Should have 7 columns for per-cluster stats
@@ -119,7 +119,7 @@ mod tests {
         // If we have data rows, validate their format
         if !data_rows.is_empty() {
             // Parse the first data row to ensure it has valid format
-            let data_row = DataRow::from_bytes(data_rows[0].to_bytes().unwrap()).unwrap();
+            let data_row = DataRow::from_bytes(data_rows[0].to_bytes()).unwrap();
 
             // Skip validating database and user strings for now since DataRow doesn't have get_string
             // Just validate the counter values are integers (>= 0)

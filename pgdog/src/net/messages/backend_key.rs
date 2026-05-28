@@ -151,13 +151,13 @@ impl BackendKeyData {
 }
 
 impl ToBytes for BackendKeyData {
-    fn to_bytes(&self) -> Result<bytes::Bytes, crate::net::Error> {
+    fn to_bytes(&self) -> bytes::Bytes {
         let mut payload = Payload::named(self.code());
 
         payload.put_i32(self.pid);
         payload.put_slice(self.secret.as_slice());
 
-        Ok(payload.freeze())
+        payload.freeze()
     }
 }
 
@@ -197,7 +197,7 @@ mod tests {
     #[test]
     fn test_backend_key_roundtrip_legacy() {
         let key = BackendKeyData::legacy(42, 1234);
-        let roundtrip = BackendKeyData::from_bytes(key.to_bytes().unwrap()).unwrap();
+        let roundtrip = BackendKeyData::from_bytes(key.to_bytes()).unwrap();
         assert_eq!(roundtrip, key);
         assert_eq!(roundtrip.secret.len(), 4);
     }
@@ -208,7 +208,7 @@ mod tests {
             pid: 7,
             secret: SecretKey::random(32),
         };
-        let roundtrip = BackendKeyData::from_bytes(key.to_bytes().unwrap()).unwrap();
+        let roundtrip = BackendKeyData::from_bytes(key.to_bytes()).unwrap();
         assert_eq!(roundtrip, key);
         assert_eq!(roundtrip.secret.len(), 32);
     }

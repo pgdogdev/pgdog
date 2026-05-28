@@ -16,11 +16,11 @@ impl FromBytes for NoticeResponse {
 }
 
 impl ToBytes for NoticeResponse {
-    fn to_bytes(&self) -> Result<Bytes, Error> {
-        let mut message = BytesMut::from(self.message.to_bytes()?);
+    fn to_bytes(&self) -> Bytes {
+        let mut message = BytesMut::from(self.message.to_bytes());
         message[0] = self.code() as u8;
 
-        Ok(message.freeze())
+        message.freeze()
     }
 }
 

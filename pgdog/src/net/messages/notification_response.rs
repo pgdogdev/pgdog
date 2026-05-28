@@ -57,8 +57,8 @@ impl FromBytes for NotificationResponse {
 }
 
 impl ToBytes for NotificationResponse {
-    fn to_bytes(&self) -> Result<Bytes, Error> {
-        Ok(self.payload.clone())
+    fn to_bytes(&self) -> Bytes {
+        self.payload.clone()
     }
 }
 

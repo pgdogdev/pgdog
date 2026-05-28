@@ -290,7 +290,7 @@ impl PreparedStatements {
                 if let Some(describe) = self.describes.pop_front() {
                     self.add_row_description(
                         &describe,
-                        &RowDescription::from_bytes(message.to_bytes()?)?,
+                        &RowDescription::from_bytes(message.to_bytes())?,
                     );
                 };
             }
@@ -709,7 +709,7 @@ mod test {
         // Simulate a ReadyForQuery message.
         // First we need to add a 'Z' to the state so we can action it.
         ps.state.add('Z');
-        let rfq = Message::new(ReadyForQuery::idle().to_bytes().unwrap());
+        let rfq = Message::new(ReadyForQuery::idle().to_bytes());
         ps.forward(&rfq).unwrap();
 
         // In extended_anonymous mode, cache should be cleared after done.
@@ -724,7 +724,7 @@ mod test {
         assert_eq!(ps.len(), 2);
 
         ps.state.add('Z');
-        let rfq = Message::new(ReadyForQuery::idle().to_bytes().unwrap());
+        let rfq = Message::new(ReadyForQuery::idle().to_bytes());
         ps.forward(&rfq).unwrap();
 
         // In extended mode, cache should be preserved.

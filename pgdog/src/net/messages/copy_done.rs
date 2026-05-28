@@ -13,8 +13,8 @@ impl FromBytes for CopyDone {
 }
 
 impl ToBytes for CopyDone {
-    fn to_bytes(&self) -> Result<Bytes, Error> {
-        Ok(Payload::named(self.code()).freeze())
+    fn to_bytes(&self) -> Bytes {
+        Payload::named(self.code()).freeze()
     }
 }
 

@@ -78,8 +78,8 @@ impl FromBytes for Close {
 }
 
 impl ToBytes for Close {
-    fn to_bytes(&self) -> Result<Bytes, Error> {
-        Ok(self.payload.clone())
+    fn to_bytes(&self) -> Bytes {
+        self.payload.clone()
     }
 }
 
@@ -96,6 +96,6 @@ mod test {
     #[test]
     fn test_close() {
         let close = Close::named("test");
-        assert_eq!(close.len(), close.to_bytes().unwrap().len());
+        assert_eq!(close.len(), close.to_bytes().len());
     }
 }
