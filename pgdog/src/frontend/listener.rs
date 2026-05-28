@@ -133,7 +133,7 @@ impl Listener {
             {
                 // Shutdown timeout elapsed; cancel any still-running queries before tearing pools down.
                 let cancel_futures = comms.clients().into_keys().map(|id| async move {
-                    if let Err(err) = databases().cancel(&id).await {
+                    if let Err(err) = databases().cancel(id).await {
                         error!(?id, "cancel request failed during shutdown: {err}");
                     }
                 });
@@ -239,7 +239,9 @@ impl Listener {
                 }
 
                 Startup::Cancel { id } => {
-                    let _ = databases().cancel(&id).await;
+                    if comms().verify_cancel(&id) {
+                        let _ = databases().cancel(id.pid).await;
+                    }
                     break;
                 }
             }

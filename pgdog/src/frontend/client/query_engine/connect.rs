@@ -30,7 +30,7 @@ impl QueryEngine {
 
         let connect_route = connect_route.unwrap_or(context.client_request.route());
 
-        let request = Request::new(*context.id, connect_route.is_read());
+        let request = Request::new(context.id, connect_route.is_read());
 
         self.stats.waiting(request.created_at);
         self.comms.update_stats(self.stats);

@@ -18,7 +18,7 @@ use crate::{
     backend::{self, pool::Error, ConnectReason, DisconnectReason, Pool},
     config::config,
     net::{
-        BackendKeyData, FromBytes, NotificationResponse, Parameter, Parameters, Protocol,
+        BackendPid, FromBytes, NotificationResponse, Parameter, Parameters, Protocol,
         ProtocolMessage, Query, ToBytes,
     },
 };
@@ -164,7 +164,7 @@ impl PubSubListener {
 
         server
             .link_client(
-                &BackendKeyData::new(),
+                BackendPid::random(),
                 &Parameters::from(vec![Parameter {
                     name: "application_name".into(),
                     value: "PgDog Pub/Sub Listener".into(),

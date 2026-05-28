@@ -1,10 +1,10 @@
-use crate::net::messages::BackendKeyData;
+use crate::net::messages::BackendPid;
 
 /// Mapping between a client and a server.
-#[derive(Debug, Copy, Clone, PartialEq, Default)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 pub(super) struct Mapping {
     /// Client ID.
-    pub(super) client: BackendKeyData,
+    pub(super) client: BackendPid,
     /// Server ID.
-    pub(super) server: BackendKeyData,
+    pub(super) server: BackendPid,
 }

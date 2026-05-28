@@ -2,7 +2,7 @@
 
 use crate::net::{
     c_string,
-    messages::{BackendKeyData, ProtocolVersion},
+    messages::{BackendKeyData, BackendPid, ProtocolVersion},
     parameter::{ParameterValue, Parameters},
     Error,
 };
@@ -49,7 +49,7 @@ impl Startup {
             80877104 => Ok(Startup::GssEnc),
             // CancelRequest (F)
             80877102 => {
-                let pid = stream.read_i32().await?;
+                let pid = BackendPid::from(stream.read_i32().await?);
                 // CancelRequest secrets became variable-length in protocol 3.2.
                 let secret_len = usize::try_from(len)
                     .ok()
@@ -204,7 +204,7 @@ impl super::ToBytes for Startup {
                 let mut payload = Payload::new();
 
                 payload.put_i32(80877102);
-                payload.put_i32(id.pid);
+                payload.put_i32(i32::from(id.pid));
                 payload.put_slice(id.secret.as_slice());
 
                 payload.freeze()

@@ -12,22 +12,26 @@ use tokio::time::Instant;
 use crate::{
     backend::{pool::stats::MemoryStats, Pool, ServerOptions},
     config::Memory,
-    net::{messages::BackendKeyData, Parameters},
+    net::{messages::BackendPid, Parameters},
     state::State,
 };
 
 use super::pool::Address;
 
-static STATS: Lazy<RwLock<HashMap<BackendKeyData, Arc<Mutex<ConnectedServer>>>>> =
+/// Per-connection key for the global stats map.
+///
+/// Keyed by `(Address, BackendPid)` rather than `BackendPid` alone: Postgres
+/// pids are only unique within a single backend instance, so a pgdog proxying
+/// multiple backends (different hosts/dbs/users) can otherwise see two live
+/// connections with the same pid collide and silently evict each other.
+type ServerKey = (Address, BackendPid);
+
+static STATS: Lazy<RwLock<HashMap<ServerKey, Arc<Mutex<ConnectedServer>>>>> =
     Lazy::new(|| RwLock::new(HashMap::default()));
 
-/// Get a copy of latest stats.
-pub fn stats() -> HashMap<BackendKeyData, ConnectedServer> {
-    STATS
-        .read()
-        .iter()
-        .map(|(k, v)| (*k, v.lock().clone()))
-        .collect()
+/// Get a snapshot of all connected-server stats.
+pub fn stats() -> Vec<ConnectedServer> {
+    STATS.read().values().map(|v| v.lock().clone()).collect()
 }
 
 /// Get idle-in-transaction server connections for connection pool.
@@ -46,18 +50,18 @@ pub fn idle_in_transaction(pool: &Pool) -> usize {
 #[derive(Clone, Debug, Copy)]
 pub struct ServerStats {
     pub inner: pgdog_stats::server::Stats,
-    pub id: BackendKeyData,
+    pub id: BackendPid,
     pub last_used: Instant,
     pub last_healthcheck: Option<Instant>,
     pub created_at: Instant,
-    pub client_id: Option<BackendKeyData>,
+    pub client_id: Option<BackendPid>,
     query_timer: Option<Instant>,
     transaction_timer: Option<Instant>,
     idle_in_transaction_timer: Option<Instant>,
 }
 
 impl ServerStats {
-    fn new(id: BackendKeyData, options: &ServerOptions, config: &Memory) -> Self {
+    fn new(id: BackendPid, options: &ServerOptions, config: &Memory) -> Self {
         let now = Instant::now();
         let inner = pgdog_stats::server::Stats {
             memory: *MemoryStats::new(config),
@@ -99,7 +103,7 @@ pub struct ConnectedServer {
     pub stats: ServerStats,
     pub addr: Address,
     pub application_name: String,
-    pub client: Option<BackendKeyData>,
+    pub client: Option<BackendPid>,
 }
 
 /// Server statistics handle.
@@ -111,12 +115,13 @@ pub struct ConnectedServer {
 pub struct Stats {
     local: ServerStats,
     shared: Arc<Mutex<ConnectedServer>>,
+    key: ServerKey,
 }
 
 impl Stats {
     /// Register new server with statistics.
     pub fn connect(
-        id: BackendKeyData,
+        id: BackendPid,
         addr: &Address,
         params: &Parameters,
         options: &ServerOptions,
@@ -132,9 +137,10 @@ impl Stats {
         };
 
         let shared = Arc::new(Mutex::new(server));
-        STATS.write().insert(id, Arc::clone(&shared));
+        let key: ServerKey = (addr.clone(), id);
+        STATS.write().insert(key.clone(), Arc::clone(&shared));
 
-        Stats { local, shared }
+        Stats { local, shared, key }
     }
 
     /// Sync local stats to shared (called on I/O operations).
@@ -156,8 +162,8 @@ impl Stats {
         self.sync_to_shared();
     }
 
-    pub fn link_client(&mut self, client_name: &str, server_name: &str, id: &BackendKeyData) {
-        self.local.client_id = Some(*id);
+    pub fn link_client(&mut self, client_name: &str, server_name: &str, id: BackendPid) {
+        self.local.client_id = Some(id);
         if client_name != server_name {
             let mut guard = self.shared.lock();
             guard.stats.client_id = self.local.client_id;
@@ -307,7 +313,7 @@ impl Stats {
 
     /// Server is closing.
     pub(super) fn disconnect(&self) {
-        STATS.write().remove(&self.local.id);
+        STATS.write().remove(&self.key);
     }
 
     /// Reset last_checkout counts.

@@ -2,7 +2,7 @@
 
 use crate::{
     frontend::{client::query_engine::TwoPcPhase, ClientRequest},
-    net::{parameter::Parameters, BackendKeyData, ProtocolMessage, Query},
+    net::{parameter::Parameters, BackendPid, ProtocolMessage, Query},
     state::State,
 };
 
@@ -420,7 +420,7 @@ impl Binding {
     /// Link client to server.
     pub async fn link_client(
         &mut self,
-        id: &BackendKeyData,
+        id: BackendPid,
         params: &Parameters,
         transaction_start_stmt: Option<&str>,
     ) -> Result<usize, Error> {

@@ -1,17 +1,17 @@
 use tokio::time::Instant;
 
-use crate::net::messages::BackendKeyData;
+use crate::net::messages::BackendPid;
 
 /// Connection request.
 #[derive(Clone, Debug, Copy)]
 pub struct Request {
-    pub id: BackendKeyData,
+    pub id: BackendPid,
     pub created_at: Instant,
     pub read: bool,
 }
 
 impl Request {
-    pub fn new(id: BackendKeyData, read: bool) -> Self {
+    pub fn new(id: BackendPid, read: bool) -> Self {
         Self {
             id,
             created_at: Instant::now(),
@@ -19,7 +19,7 @@ impl Request {
         }
     }
 
-    pub fn unrouted(id: BackendKeyData) -> Self {
+    pub fn unrouted(id: BackendPid) -> Self {
         Self {
             id,
             created_at: Instant::now(),
@@ -30,6 +30,6 @@ impl Request {
 
 impl Default for Request {
     fn default() -> Self {
-        Self::unrouted(BackendKeyData::new())
+        Self::unrouted(BackendPid::random())
     }
 }

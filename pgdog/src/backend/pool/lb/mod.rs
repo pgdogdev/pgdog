@@ -12,7 +12,7 @@ use rand::seq::SliceRandom;
 use tokio::{sync::Notify, time::timeout};
 use tracing::warn;
 
-use crate::net::messages::BackendKeyData;
+use crate::net::messages::BackendPid;
 use crate::{
     config::{LoadBalancingStrategy, ReadWriteSplit, Role},
     net::Parameters,
@@ -261,7 +261,7 @@ impl LoadBalancer {
     }
 
     /// Cancel a query if one is running.
-    pub async fn cancel(&self, id: &BackendKeyData) -> Result<(), super::super::Error> {
+    pub async fn cancel(&self, id: BackendPid) -> Result<(), super::super::Error> {
         for target in &self.targets {
             target.pool.cancel(id).await?;
         }

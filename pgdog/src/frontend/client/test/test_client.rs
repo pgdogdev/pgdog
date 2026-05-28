@@ -16,7 +16,7 @@ use crate::{
         router::{parser::Shard, sharding::ContextBuilder},
         Client,
     },
-    net::{BackendKeyData, ErrorResponse, Message, Parameters, Protocol, Stream},
+    net::{ErrorResponse, Message, Parameters, Protocol, Stream},
 };
 
 /// Try to convert a Message to the specified type.
@@ -57,7 +57,7 @@ pub async fn read_message(conn: &mut TcpStream) -> Message {
     payload.put_i32(len);
     payload.put(Bytes::from(rest));
 
-    Message::new(payload.freeze()).backend(BackendKeyData::default())
+    Message::new(payload.freeze())
 }
 
 /// Send a protocol message to a TCP stream.

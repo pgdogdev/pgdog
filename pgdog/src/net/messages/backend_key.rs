@@ -1,37 +1,25 @@
 //! BackendKeyData (B) message.
 
 use std::fmt::Display;
-use std::sync::atomic::AtomicI32;
-use std::sync::atomic::Ordering;
 
 use crate::net::messages::code;
 use crate::net::messages::prelude::*;
 use crate::net::messages::protocol_version::ProtocolVersion;
 use bytes::Buf;
-use once_cell::sync::Lazy;
+
+use super::backend_pid::BackendPid;
+
 use rand::Rng;
 
-static COUNTER: Lazy<AtomicI32> = Lazy::new(|| AtomicI32::new(0));
 const LEGACY_SECRET_LEN: usize = std::mem::size_of::<i32>();
 const EXTENDED_SECRET_LEN: usize = 32;
-pub const MAX_SECRET_LEN: usize = 256;
-
-// This wraps around.
-fn next_counter() -> i32 {
-    COUNTER.fetch_add(1, Ordering::SeqCst)
-}
+const MAX_SECRET_LEN: usize = 256;
 
 /// Variable-length cancel secret.
-#[derive(Copy, Clone, Debug, Hash, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct SecretKey {
     len: u16,
     bytes: [u8; MAX_SECRET_LEN],
-}
-
-impl Default for SecretKey {
-    fn default() -> Self {
-        Self::legacy(0)
-    }
 }
 
 impl SecretKey {
@@ -100,10 +88,13 @@ impl Display for SecretKey {
 }
 
 /// BackendKeyData (B)
-#[derive(Copy, Clone, Debug, Hash, PartialEq, Eq, Default)]
+///
+/// Holds the full cancel secret alongside the pid.  Use `BackendPid` instead
+/// when only the process identity is needed (HashMap keys, routing, stats).
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BackendKeyData {
     /// Process ID.
-    pub pid: i32,
+    pub pid: BackendPid,
     /// Process secret.
     pub secret: SecretKey,
 }
@@ -115,10 +106,15 @@ impl Display for BackendKeyData {
 }
 
 impl BackendKeyData {
+    /// Return the `BackendPid` for this key (pid only, no secret).
+    pub fn pid(&self) -> BackendPid {
+        self.pid
+    }
+
     /// Create new random BackendKeyData (B) message.
-    pub fn new() -> Self {
+    pub fn random_legacy() -> Self {
         Self {
-            pid: rand::rng().random(),
+            pid: BackendPid::random(),
             secret: SecretKey::random(LEGACY_SECRET_LEN),
         }
     }
@@ -136,13 +132,13 @@ impl BackendKeyData {
         };
 
         Self {
-            pid: next_counter(),
+            pid: BackendPid::next(),
             secret: SecretKey::random(secret_len),
         }
     }
 
     /// Create legacy 3.0-compatible backend key data.
-    pub fn legacy(pid: i32, secret: i32) -> Self {
+    pub fn legacy(pid: BackendPid, secret: i32) -> Self {
         Self {
             pid,
             secret: SecretKey::legacy(secret),
@@ -154,7 +150,7 @@ impl ToBytes for BackendKeyData {
     fn to_bytes(&self) -> bytes::Bytes {
         let mut payload = Payload::named(self.code());
 
-        payload.put_i32(self.pid);
+        payload.put_i32(i32::from(self.pid));
         payload.put_slice(self.secret.as_slice());
 
         payload.freeze()
@@ -176,7 +172,7 @@ impl FromBytes for BackendKeyData {
             return Err(Error::UnexpectedPayload);
         }
 
-        let pid = bytes.get_i32();
+        let pid = BackendPid::from(bytes.get_i32());
         let secret = SecretKey::from_slice(&bytes.copy_to_bytes(secret_len))?;
 
         Ok(Self { pid, secret })
@@ -191,12 +187,12 @@ impl Protocol for BackendKeyData {
 
 #[cfg(test)]
 mod tests {
-    use super::{BackendKeyData, ProtocolVersion, SecretKey};
+    use super::{BackendKeyData, BackendPid, ProtocolVersion, SecretKey};
     use crate::net::messages::{FromBytes, ToBytes};
 
     #[test]
     fn test_backend_key_roundtrip_legacy() {
-        let key = BackendKeyData::legacy(42, 1234);
+        let key = BackendKeyData::legacy(BackendPid::from(42), 1234);
         let roundtrip = BackendKeyData::from_bytes(key.to_bytes()).unwrap();
         assert_eq!(roundtrip, key);
         assert_eq!(roundtrip.secret.len(), 4);
@@ -205,12 +201,23 @@ mod tests {
     #[test]
     fn test_backend_key_roundtrip_extended() {
         let key = BackendKeyData {
-            pid: 7,
+            pid: BackendPid::from(7),
             secret: SecretKey::random(32),
         };
         let roundtrip = BackendKeyData::from_bytes(key.to_bytes()).unwrap();
         assert_eq!(roundtrip, key);
         assert_eq!(roundtrip.secret.len(), 32);
+    }
+
+    #[test]
+    fn test_backend_key_roundtrip_max_secret_len() {
+        let key = BackendKeyData {
+            pid: BackendPid::from(9),
+            secret: SecretKey::random(256),
+        };
+        let roundtrip = BackendKeyData::from_bytes(key.to_bytes()).unwrap();
+        assert_eq!(roundtrip, key);
+        assert_eq!(roundtrip.secret.len(), 256);
     }
 
     #[test]

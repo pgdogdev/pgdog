@@ -71,11 +71,11 @@ fn test_rd_before_dr() {
     dr.add(1i64);
     for _ in 0..2 {
         let result = multi_shard
-            .forward(rd.message().unwrap().backend(BackendKeyData::default()))
+            .forward(rd.message().unwrap().backend(BackendPid::from(1)))
             .unwrap();
         assert!(result.is_none()); // dropped
         let result = multi_shard
-            .forward(dr.message().unwrap().backend(BackendKeyData::default()))
+            .forward(dr.message().unwrap().backend(BackendPid::from(1)))
             .unwrap();
         assert!(result.is_none()); // buffered.
     }
@@ -92,7 +92,7 @@ fn test_rd_before_dr() {
                 CommandComplete::from_str("SELECT 1")
                     .message()
                     .unwrap()
-                    .backend(BackendKeyData::default()),
+                    .backend(BackendPid::from(1)),
             )
             .unwrap();
         assert!(result.is_none());
@@ -100,7 +100,7 @@ fn test_rd_before_dr() {
 
     for _ in 0..2 {
         let result = multi_shard.message();
-        let id = BackendKeyData::default();
+        let id = BackendPid::from(1);
         assert_eq!(
             result.map(|m| m.backend(id)),
             Some(dr.message().unwrap().backend(id))
@@ -109,14 +109,14 @@ fn test_rd_before_dr() {
 
     let result = multi_shard
         .message()
-        .map(|m| m.backend(BackendKeyData::default()));
+        .map(|m| m.backend(BackendPid::from(1)));
     assert_eq!(
         result,
         Some(
             CommandComplete::from_str("SELECT 3")
                 .message()
                 .unwrap()
-                .backend(BackendKeyData::default())
+                .backend(BackendPid::from(1))
         )
     );
 
@@ -153,9 +153,9 @@ fn test_omni_command_complete_not_summed() {
     let route = Route::write(ShardWithPriority::new_table_omni(Shard::All));
     let mut multi_shard = MultiShard::new(vec![0, 1, 2], &route);
 
-    let backend1 = BackendKeyData::legacy(1, 1);
-    let backend2 = BackendKeyData::legacy(2, 2);
-    let backend3 = BackendKeyData::legacy(3, 3);
+    let backend1 = BackendPid::from(1);
+    let backend2 = BackendPid::from(2);
+    let backend3 = BackendPid::from(3);
 
     // All shards report UPDATE 5
     multi_shard
@@ -195,8 +195,8 @@ fn test_omni_command_complete_uses_first_shard_row_count() {
     let route = Route::write(ShardWithPriority::new_table_omni(Shard::All));
     let mut multi_shard = MultiShard::new(vec![0, 1], &route);
 
-    let backend1 = BackendKeyData::legacy(1, 1);
-    let backend2 = BackendKeyData::legacy(2, 2);
+    let backend1 = BackendPid::from(1);
+    let backend2 = BackendPid::from(2);
 
     // First shard reports 7 rows
     multi_shard
@@ -230,8 +230,8 @@ fn test_omni_data_rows_only_from_first_server() {
     let route = Route::write(ShardWithPriority::new_table_omni(Shard::All));
     let mut multi_shard = MultiShard::new(vec![0, 1], &route);
 
-    let backend1 = BackendKeyData::legacy(1, 1);
-    let backend2 = BackendKeyData::legacy(2, 2);
+    let backend1 = BackendPid::from(1);
+    let backend2 = BackendPid::from(2);
 
     // Setup: send RowDescription from both shards
     let rd = RowDescription::new(&[Field::bigint("id")]);

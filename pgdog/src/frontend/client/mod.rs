@@ -232,7 +232,7 @@ impl Client {
         let auth_type = &config.config.general.auth_type;
         let passthrough = config.config.general.passthrough_auth();
         let id = BackendKeyData::new_client(protocol_version);
-        let comms = ClientComms::new(&id);
+        let comms = ClientComms::new(id.pid());
         let log_connections = config.config.general.log_connections;
 
         // Check if we need to ask the client for its password in plaintext
@@ -320,7 +320,7 @@ impl Client {
 
         // Get connection parameters. These will be most likely cached,
         // unless the pool was just created.
-        let server_params = match conn.parameters(&Request::unrouted(id)).await {
+        let server_params = match conn.parameters(&Request::unrouted(id.pid())).await {
             Ok(params) => params,
             Err(err) => {
                 if err.no_server() {
@@ -344,7 +344,7 @@ impl Client {
 
         stream.send(&id).await?;
         stream.send_flush(&ReadyForQuery::idle()).await?;
-        comms.connect(addr, &params);
+        comms.connect(id.clone(), addr, &params);
 
         if config.config.general.log_connections {
             info!(
@@ -394,7 +394,8 @@ impl Client {
         connect_params.insert("database", "pgdog");
         connect_params.merge(params);
 
-        let id = BackendKeyData::new();
+        let id = BackendKeyData::random_legacy();
+        let pid = id.pid();
         let mut prepared_statements = PreparedStatements::new();
         prepared_statements.level = config().config.general.prepared_statements;
 
@@ -402,7 +403,7 @@ impl Client {
             stream,
             addr: SocketAddr::from(([127, 0, 0, 1], 1234)),
             id,
-            comms: ClientComms::new(&id),
+            comms: ClientComms::new(pid),
             streaming: false,
             prepared_statements,
             admin: false,
@@ -415,11 +416,6 @@ impl Client {
             database: "pgdog".to_string(),
             query_log_stdout: false,
         }
-    }
-
-    /// Get client's identifier.
-    pub fn id(&self) -> BackendKeyData {
-        self.id
     }
 
     /// Run the client and log disconnect.

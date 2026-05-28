@@ -15,7 +15,7 @@ use crate::frontend::client::query_engine::{QueryEngine, QueryEngineContext};
 use crate::frontend::client::timeouts::Timeouts;
 use crate::frontend::client::TransactionType;
 use crate::frontend::{ClientComms, PreparedStatements};
-use crate::net::{BackendKeyData, Parameter, Parameters, Stream};
+use crate::net::{BackendPid, Parameter, Parameters, Stream};
 
 use super::Error;
 
@@ -32,7 +32,7 @@ pub use request::*;
 #[derive(Debug)]
 pub struct Mirror {
     /// Random identifier for this mirror connection.
-    pub id: BackendKeyData,
+    pub id: BackendPid,
     /// Mirror's prepared statements. Should be similar
     /// to client's statements, if exposure is high.
     pub prepared_statements: PreparedStatements,
@@ -54,7 +54,7 @@ impl Mirror {
         prepared_statements.set_level(config.prepared_statements());
 
         Self {
-            id: BackendKeyData::new(),
+            id: BackendPid::random(),
             prepared_statements,
             params: params.clone(),
             timeouts: Timeouts::from_config(&config.config.general),
@@ -95,7 +95,7 @@ impl Mirror {
 
         // Same query engine as the client, except with a potentially different database config.
         let mut query_engine =
-            QueryEngine::new(&params, &ClientComms::new(&BackendKeyData::new()), false)?;
+            QueryEngine::new(&params, &ClientComms::new(BackendPid::random()), false)?;
 
         // Mirror traffic handler.
         let mut mirror = Self::new(&params, &config);

@@ -9,7 +9,7 @@ use crate::{
             command_complete::CommandComplete, DataRow, FromBytes, Message, Protocol,
             RowDescription, ToBytes,
         },
-        BackendKeyData, Decoder, ReadyForQuery,
+        BackendPid, Decoder, ReadyForQuery,
     },
 };
 
@@ -42,7 +42,7 @@ struct Counters {
     copy_done: usize,
     copy_out: usize,
     copy_data: usize,
-    first_backend_data: Option<BackendKeyData>,
+    first_backend_data: Option<BackendPid>,
 }
 
 /// Multi-shard state.

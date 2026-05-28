@@ -6,7 +6,7 @@ use std::fmt::Display;
 
 use crate::backend::{stats::Counts as BackendCounts, Server};
 use crate::backend::{ConnectReason, DisconnectReason};
-use crate::net::messages::BackendKeyData;
+use crate::net::messages::{BackendKeyData, BackendPid};
 
 use tokio::time::Instant;
 
@@ -116,15 +116,15 @@ impl Inner {
         self.taken.len()
     }
 
-    /// Get backend IDs for all currently checked out servers.
-    pub(super) fn checked_out_server_ids(&self) -> Vec<BackendKeyData> {
-        self.taken.servers()
+    /// Cancel key for the server currently assigned to this client.
+    #[inline]
+    pub(super) fn cancel_key(&self, client: BackendPid) -> Option<&BackendKeyData> {
+        self.taken.cancel_key(client)
     }
 
-    /// Find the server currently linked to this client, if any.
-    #[inline]
-    pub(super) fn peer(&self, client_id: &BackendKeyData) -> Option<BackendKeyData> {
-        self.taken.server(client_id)
+    /// All cancel keys for currently checked-out server connections.
+    pub(super) fn cancel_keys(&self) -> impl Iterator<Item = &BackendKeyData> {
+        self.taken.cancel_keys()
     }
 
     /// How many connections can be removed from the pool
@@ -238,10 +238,14 @@ impl Inner {
     #[inline(always)]
     pub(super) fn take(&mut self, request: &Request) -> Result<Option<Box<Server>>, Error> {
         if let Some(conn) = self.idle_connections.pop() {
-            self.taken.take(&Mapping {
-                client: request.id,
-                server: *(conn.id()),
-            })?;
+            let cancel_key = conn.key().clone();
+            self.taken.take(
+                &Mapping {
+                    client: request.id,
+                    server: conn.id(),
+                },
+                cancel_key,
+            )?;
 
             Ok(Some(conn))
         } else {
@@ -254,15 +258,19 @@ impl Inner {
     #[inline]
     pub(super) fn put(&mut self, mut conn: Box<Server>, now: Instant) -> Result<(), Error> {
         // Try to give it to a client that's been waiting, if any.
-        let id = *conn.id();
+        let id = conn.id();
+        let cancel_key = conn.key().clone();
         while let Some(waiter) = self.waiting.pop_front() {
             if let Err(conn_ret) = waiter.tx.send(Ok(conn)) {
                 conn = conn_ret.unwrap(); // SAFETY: We sent Ok(conn), we'll get back Ok(conn) if channel is closed.
             } else {
-                self.taken.take(&Mapping {
-                    server: id,
-                    client: waiter.request.id,
-                })?;
+                self.taken.take(
+                    &Mapping {
+                        server: id,
+                        client: waiter.request.id,
+                    },
+                    cancel_key.clone(),
+                )?;
                 self.stats.counts.server_assignment_count += 1;
                 self.stats.counts.wait_time += now.duration_since(waiter.request.created_at);
                 return Ok(());
@@ -396,16 +404,16 @@ impl Inner {
     /// This happens if the waiter timed out, e.g. checkout timeout,
     /// or the caller got cancelled.
     #[inline]
-    pub(super) fn remove_waiter(&mut self, id: &BackendKeyData) {
+    pub(super) fn remove_waiter(&mut self, id: BackendPid) {
         if let Some(waiter) = self.waiting.pop_front() {
-            if waiter.request.id != *id {
+            if waiter.request.id != id {
                 // Put me back.
                 self.waiting.push_front(waiter);
 
                 // Slow search, but we should be somewhere towards the front
                 // if the runtime is doing scheduling correctly.
                 for (i, waiter) in self.waiting.iter().enumerate() {
-                    if waiter.request.id == *id {
+                    if waiter.request.id == id {
                         self.waiting.remove(i);
                         break;
                     }
@@ -476,7 +484,7 @@ mod test {
 
     use tokio::sync::oneshot::channel;
 
-    use crate::net::messages::BackendKeyData;
+    use crate::net::messages::{BackendKeyData, BackendPid};
 
     use super::*;
 
@@ -496,13 +504,16 @@ mod test {
         let mut inner = Inner::default();
 
         let server = Box::new(Server::default());
-        let server_id = *server.id();
+        let server_id = server.id();
         inner
             .taken
-            .take(&Mapping {
-                client: BackendKeyData::new(),
-                server: server_id,
-            })
+            .take(
+                &Mapping {
+                    client: BackendPid::random(),
+                    server: server_id,
+                },
+                BackendKeyData::random_legacy(),
+            )
             .unwrap();
 
         let result = inner
@@ -523,13 +534,16 @@ mod test {
         };
 
         let server = Box::new(Server::default());
-        let server_id = *server.id();
+        let server_id = server.id();
         inner
             .taken
-            .take(&Mapping {
-                client: BackendKeyData::new(),
-                server: server_id,
-            })
+            .take(
+                &Mapping {
+                    client: BackendPid::random(),
+                    server: server_id,
+                },
+                BackendKeyData::random_legacy(),
+            )
             .unwrap();
 
         inner
@@ -548,13 +562,16 @@ mod test {
         };
 
         let server = Box::new(Server::default());
-        let server_id = *server.id();
+        let server_id = server.id();
         inner
             .taken
-            .take(&Mapping {
-                client: BackendKeyData::new(),
-                server: server_id,
-            })
+            .take(
+                &Mapping {
+                    client: BackendPid::random(),
+                    server: server_id,
+                },
+                BackendKeyData::random_legacy(),
+            )
             .unwrap();
 
         let result = inner
@@ -574,15 +591,18 @@ mod test {
         };
 
         let server = Box::new(Server::new_error());
-        let server_id = *server.id();
+        let server_id = server.id();
 
         // Simulate server being checked out
         inner
             .taken
-            .take(&Mapping {
-                client: BackendKeyData::new(),
-                server: server_id,
-            })
+            .take(
+                &Mapping {
+                    client: BackendPid::random(),
+                    server: server_id,
+                },
+                BackendKeyData::random_legacy(),
+            )
             .unwrap();
         assert_eq!(inner.checked_out(), 1);
 
@@ -591,7 +611,7 @@ mod test {
             .unwrap();
         assert!(result.server_error);
 
-        assert!(inner.taken.is_empty()); // Error server removed from taken
+        assert_eq!(inner.checked_out(), 0); // Error server removed from taken
         assert_eq!(inner.idle(), 0); // Error server not added to idle
     }
 
@@ -662,10 +682,13 @@ mod test {
         inner.idle_connections.push(Box::new(Server::default()));
         inner
             .taken
-            .take(&Mapping {
-                client: BackendKeyData::new(),
-                server: BackendKeyData::new(),
-            })
+            .take(
+                &Mapping {
+                    client: BackendPid::random(),
+                    server: BackendPid::random(),
+                },
+                BackendKeyData::random_legacy(),
+            )
             .unwrap();
 
         assert_eq!(inner.idle(), 2);
@@ -714,13 +737,16 @@ mod test {
 
         // Add a connection
         let server = Box::new(Server::default());
-        let server_id = *server.id();
+        let server_id = server.id();
         inner
             .taken
-            .take(&Mapping {
-                client: BackendKeyData::new(),
-                server: server_id,
-            })
+            .take(
+                &Mapping {
+                    client: BackendPid::random(),
+                    server: server_id,
+                },
+                BackendKeyData::random_legacy(),
+            )
             .unwrap();
 
         inner
@@ -744,7 +770,16 @@ mod test {
         assert_eq!(inner.total(), 0);
 
         // Simulate taking a connection
-        inner.taken.take(&Mapping::default()).unwrap();
+        inner
+            .taken
+            .take(
+                &Mapping {
+                    client: BackendPid::random(),
+                    server: BackendPid::random(),
+                },
+                BackendKeyData::random_legacy(),
+            )
+            .unwrap();
         assert_eq!(inner.total(), 1);
         assert_eq!(inner.checked_out(), 1);
 
@@ -763,13 +798,16 @@ mod test {
         inner.config.max_age = Duration::from_millis(60_000);
 
         let server = Box::new(Server::default());
-        let server_id = *server.id();
+        let server_id = server.id();
         inner
             .taken
-            .take(&Mapping {
-                client: BackendKeyData::new(),
-                server: server_id,
-            })
+            .take(
+                &Mapping {
+                    client: BackendPid::random(),
+                    server: server_id,
+                },
+                BackendKeyData::random_legacy(),
+            )
             .unwrap();
 
         inner
@@ -787,45 +825,55 @@ mod test {
     #[test]
     fn test_peer_lookup() {
         let mut inner = Inner::default();
-        let client_id = BackendKeyData::new();
-        let server_id = BackendKeyData::new();
+        let client_id = BackendPid::random();
+        let server_id = BackendPid::random();
+        let cancel_key = BackendKeyData::legacy(server_id, 0);
 
-        assert_eq!(inner.peer(&client_id), None);
+        assert_eq!(inner.cancel_key(client_id), None);
 
         inner
             .taken
-            .take(&Mapping {
-                client: client_id,
-                server: server_id,
-            })
+            .take(
+                &Mapping {
+                    client: client_id,
+                    server: server_id,
+                },
+                cancel_key.clone(),
+            )
             .unwrap();
 
-        assert_eq!(inner.peer(&client_id), Some(server_id));
+        assert_eq!(inner.cancel_key(client_id), Some(&cancel_key));
     }
 
     #[test]
     fn test_taken_server_returns_server_when_mapped() {
         let mut taken = Taken::default();
-        let client_id = BackendKeyData::new();
-        let server_id = BackendKeyData::new();
+        let client_id = BackendPid::random();
+        let server_id = BackendPid::random();
+        let cancel_key = BackendKeyData::legacy(server_id, 0);
 
         // No mapping yet
-        assert_eq!(taken.server(&client_id), None);
+        assert_eq!(taken.cancel_key(client_id), None);
 
         // Add mapping
         taken
-            .take(&Mapping {
-                client: client_id,
-                server: server_id,
-            })
+            .take(
+                &Mapping {
+                    client: client_id,
+                    server: server_id,
+                },
+                cancel_key.clone(),
+            )
             .unwrap();
 
-        // Server should be returned for mapped client
-        assert_eq!(taken.server(&client_id), Some(server_id));
+        // Cancel key should be returned for mapped client, pid matches server_id
+        let stored = taken.cancel_key(client_id).unwrap();
+        assert_eq!(stored.pid(), server_id);
+        assert_eq!(stored, &cancel_key);
 
         // Different client should return None
-        let other_client = BackendKeyData::new();
-        assert_eq!(taken.server(&other_client), None);
+        let other_client = BackendPid::random();
+        assert_eq!(taken.cancel_key(other_client), None);
     }
 
     #[test]
@@ -931,7 +979,7 @@ mod test {
         });
 
         assert_eq!(inner.waiting.len(), 3);
-        inner.remove_waiter(&target_id);
+        inner.remove_waiter(target_id);
         assert_eq!(inner.waiting.len(), 2);
     }
 
@@ -971,17 +1019,23 @@ mod test {
         // Add connections above minimum but all are checked out (no idle)
         inner
             .taken
-            .take(&Mapping {
-                client: BackendKeyData::new(),
-                server: BackendKeyData::new(),
-            })
+            .take(
+                &Mapping {
+                    client: BackendPid::random(),
+                    server: BackendPid::random(),
+                },
+                BackendKeyData::random_legacy(),
+            )
             .unwrap();
         inner
             .taken
-            .take(&Mapping {
-                client: BackendKeyData::new(),
-                server: BackendKeyData::new(),
-            })
+            .take(
+                &Mapping {
+                    client: BackendPid::random(),
+                    server: BackendPid::random(),
+                },
+                BackendKeyData::random_legacy(),
+            )
             .unwrap();
 
         // Add a waiting client
@@ -1023,14 +1077,16 @@ mod test {
     fn test_set_taken() {
         let mut inner = Inner::default();
         let mapping = Mapping {
-            client: BackendKeyData::new(),
-            server: BackendKeyData::new(),
+            client: BackendPid::random(),
+            server: BackendPid::random(),
         };
 
         assert_eq!(inner.checked_out(), 0);
 
         let mut taken = Taken::default();
-        taken.take(&mapping).unwrap();
+        taken
+            .take(&mapping, BackendKeyData::random_legacy())
+            .unwrap();
 
         inner.set_taken(taken);
         assert_eq!(inner.checked_out(), 1);
@@ -1125,9 +1181,9 @@ mod test {
 
         // Add two idle connections to the pool
         let server1 = Box::new(Server::default());
-        let server1_id = *server1.id();
+        let server1_id = server1.id();
         let server2 = Box::new(Server::default());
-        let server2_id = *server2.id();
+        let server2_id = server2.id();
         inner.idle_connections.push(server1);
         inner.idle_connections.push(server2);
 
@@ -1136,7 +1192,7 @@ mod test {
         assert_eq!(inner.total(), 2);
 
         // Same client ID for both requests
-        let client_id = BackendKeyData::new();
+        let client_id = BackendPid::random();
         let request = Request::unrouted(client_id);
 
         // Check out first connection
@@ -1177,7 +1233,7 @@ mod test {
         assert_eq!(inner.total(), 2);
 
         // Verify the specific servers are back in the idle pool
-        let idle_ids: Vec<_> = inner.idle_conns().iter().map(|s| *s.id()).collect();
+        let idle_ids: Vec<_> = inner.idle_conns().iter().map(|s| s.id()).collect();
         assert!(idle_ids.contains(&server1_id));
         assert!(idle_ids.contains(&server2_id));
     }

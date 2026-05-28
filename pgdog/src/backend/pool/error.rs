@@ -1,7 +1,7 @@
 //! Connection pool errors.
 use thiserror::Error;
 
-use crate::net::BackendKeyData;
+use crate::net::BackendPid;
 
 #[derive(Debug, Error, PartialEq, Clone, Copy)]
 pub enum Error {
@@ -69,7 +69,7 @@ pub enum Error {
     PoolUnhealthy,
 
     #[error("checked in untracked connection: {0}")]
-    UntrackedConnCheckin(BackendKeyData),
+    UntrackedConnCheckin(BackendPid),
 
     #[error("mapping missing: {0}")]
     MappingMissing(usize),

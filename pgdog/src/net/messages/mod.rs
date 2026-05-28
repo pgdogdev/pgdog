@@ -1,6 +1,7 @@
 //! PostgreSQL wire protocol messages.
 pub mod auth;
 pub mod backend_key;
+pub mod backend_pid;
 pub mod bind;
 pub mod bind_complete;
 pub mod buffer;
@@ -39,6 +40,7 @@ pub mod terminate;
 
 pub use auth::{Authentication, Password};
 pub use backend_key::BackendKeyData;
+pub use backend_pid::BackendPid;
 pub use bind::{Bind, Format, Parameter, ParameterWithFormat};
 pub use bind_complete::BindComplete;
 pub use buffer::MessageBuffer;
@@ -109,13 +111,18 @@ pub trait Protocol: ToBytes + FromBytes + std::fmt::Debug {
 
 #[derive(Clone, PartialEq, Default, Copy, Debug)]
 pub enum Source {
-    Backend(BackendKeyData),
+    /// Message synthesised by pgdog itself (not from any real connection).
+    /// This is the default: any message constructed without an explicit source is internal.
     #[default]
+    Internal,
+    /// Message received from a PostgreSQL backend connection.
+    Backend(BackendPid),
+    /// Message received from the client (frontend).
     Frontend,
 }
 
 impl Source {
-    pub fn backend_id(&self) -> Option<BackendKeyData> {
+    pub fn backend_id(&self) -> Option<BackendPid> {
         if let Self::Backend(id) = self {
             Some(*id)
         } else {
@@ -144,27 +151,35 @@ impl std::fmt::Debug for Message {
         match self.code() {
             'Q' => Query::from_bytes(self.payload()).unwrap().fmt(f),
             'D' => match self.source {
-                Source::Backend(_) => DataRow::from_bytes(self.payload()).unwrap().fmt(f),
                 Source::Frontend => Describe::from_bytes(self.payload()).unwrap().fmt(f),
+                Source::Backend(_) | Source::Internal => {
+                    DataRow::from_bytes(self.payload()).unwrap().fmt(f)
+                }
             },
             'P' => Parse::from_bytes(self.payload()).unwrap().fmt(f),
             'B' => Bind::from_bytes(self.payload()).unwrap().fmt(f),
             'S' => match self.source {
                 Source::Frontend => f.debug_struct("Sync").finish(),
-                Source::Backend(_) => ParameterStatus::from_bytes(self.payload()).unwrap().fmt(f),
+                Source::Backend(_) | Source::Internal => {
+                    ParameterStatus::from_bytes(self.payload()).unwrap().fmt(f)
+                }
             },
             '1' => ParseComplete::from_bytes(self.payload()).unwrap().fmt(f),
             '2' => BindComplete::from_bytes(self.payload()).unwrap().fmt(f),
             '3' => f.debug_struct("CloseComplete").finish(),
             'E' => match self.source {
                 Source::Frontend => f.debug_struct("Execute").finish(),
-                Source::Backend(_) => ErrorResponse::from_bytes(self.payload()).unwrap().fmt(f),
+                Source::Backend(_) | Source::Internal => {
+                    ErrorResponse::from_bytes(self.payload()).unwrap().fmt(f)
+                }
             },
             'T' => RowDescription::from_bytes(self.payload()).unwrap().fmt(f),
             'Z' => ReadyForQuery::from_bytes(self.payload()).unwrap().fmt(f),
             'C' => match self.source {
-                Source::Backend(_) => CommandComplete::from_bytes(self.payload()).unwrap().fmt(f),
                 Source::Frontend => Close::from_bytes(self.payload()).unwrap().fmt(f),
+                Source::Backend(_) | Source::Internal => {
+                    CommandComplete::from_bytes(self.payload()).unwrap().fmt(f)
+                }
             },
             'd' => CopyData::from_bytes(self.payload()).unwrap().fmt(f),
             'v' => NegotiateProtocolVersion::from_bytes(self.payload())
@@ -242,7 +257,7 @@ impl Message {
     }
 
     /// This message is coming from the backend.
-    pub fn backend(mut self, id: BackendKeyData) -> Self {
+    pub fn backend(mut self, id: BackendPid) -> Self {
         self.source = Source::Backend(id);
         self
     }
@@ -250,6 +265,12 @@ impl Message {
     /// This message is coming from the frontend.
     pub fn frontend(mut self) -> Self {
         self.source = Source::Frontend;
+        self
+    }
+
+    /// This message was synthesised by pgdog (not from any real connection).
+    pub fn internal(mut self) -> Self {
+        self.source = Source::Internal;
         self
     }
 

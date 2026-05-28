@@ -23,8 +23,9 @@ use crate::{
     frontend::ClientRequest,
     net::{
         messages::{
-            hello::SslReply, Authentication, BackendKeyData, ErrorResponse, FromBytes, Message,
-            ParameterStatus, Password, Protocol, Query, ReadyForQuery, Startup, Terminate, ToBytes,
+            hello::SslReply, Authentication, BackendKeyData, BackendPid, ErrorResponse, FromBytes,
+            Message, ParameterStatus, Password, Protocol, Query, ReadyForQuery, Startup, Terminate,
+            ToBytes,
         },
         Close, MessageBuffer, Parameter, ProtocolMessage, Sync,
     },
@@ -46,7 +47,7 @@ use crate::{net::tweak, state::State};
 pub struct Server {
     addr: Address,
     stream: Option<Stream>,
-    id: BackendKeyData,
+    key: BackendKeyData,
     params: Parameters,
     changed_params: Parameters,
     client_params: Parameters,
@@ -313,7 +314,7 @@ impl Server {
         // so they don't send BackendKeyData.
         // Generating a random one is fine, it just won't work when we try to
         // cancel a query with this secret.
-        let id = key_data.unwrap_or(BackendKeyData::new());
+        let key = key_data.unwrap_or_else(BackendKeyData::random_legacy);
         let params: Parameters = params.into();
 
         info!(
@@ -325,11 +326,12 @@ impl Server {
             if stream.is_tls() { "🔒" } else { "" },
         );
 
+        let pid = key.pid();
         let mut server = Server {
             addr: addr.clone(),
             stream: Some(stream),
-            id,
-            stats: Stats::connect(id, addr, &params, &options, &config.config.memory),
+            key,
+            stats: Stats::connect(pid, addr, &params, &options, &config.config.memory),
             replication_mode: options.replication_mode(),
             params,
             changed_params: Parameters::default(),
@@ -356,11 +358,9 @@ impl Server {
     }
 
     /// Request query cancellation for the given backend server identifier.
-    pub async fn cancel(addr: &Address, id: &BackendKeyData) -> Result<(), Error> {
+    pub async fn cancel(addr: &Address, id: BackendKeyData) -> Result<(), Error> {
         let mut stream = TcpStream::connect(addr.addr().await?).await?;
-        stream
-            .write_all(&Startup::Cancel { id: *id }.to_bytes())
-            .await?;
+        stream.write_all(&Startup::Cancel { id }.to_bytes()).await?;
         stream.flush().await?;
 
         Ok(())
@@ -463,11 +463,11 @@ impl Server {
     pub async fn read(&mut self) -> Result<Message, Error> {
         let message = loop {
             if let Some(message) = self.prepared_statements.state_mut().get_simulated() {
-                return Ok(message.backend(self.id));
+                return Ok(message.backend(self.key.pid()));
             }
             match self.stream_buffer.read(self.stream.as_mut().unwrap()).await {
                 Ok(message) => {
-                    let message = message.stream(self.streaming).backend(self.id);
+                    let message = message.stream(self.streaming).backend(self.key.pid());
                     match self.prepared_statements.forward(&message) {
                         Ok(forward) => {
                             if forward {
@@ -579,7 +579,7 @@ impl Server {
     /// Synchronize parameters between client and server.
     pub async fn link_client(
         &mut self,
-        id: &BackendKeyData,
+        id: BackendPid,
         params: &Parameters,
         start_transaction: Option<&str>,
     ) -> Result<usize, Error> {
@@ -994,8 +994,14 @@ impl Server {
 
     /// Server connection unique identifier.
     #[inline]
-    pub fn id(&self) -> &BackendKeyData {
-        &self.id
+    pub fn id(&self) -> BackendPid {
+        self.key.pid()
+    }
+
+    /// Backend key data for query cancellation.
+    #[inline]
+    pub fn key(&self) -> &BackendKeyData {
+        &self.key
     }
 
     /// Number of password attempts it took to authenticate this connection.
@@ -1204,16 +1210,17 @@ pub mod test {
 
     impl Default for Server {
         fn default() -> Self {
-            let id = BackendKeyData::new();
+            let cancel_key = BackendKeyData::random_legacy();
+            let pid = cancel_key.pid();
             let addr = Address::default();
             Self {
                 stream: None,
-                id,
+                key: cancel_key,
                 params: Parameters::default(),
                 changed_params: Parameters::default(),
                 client_params: Parameters::default(),
                 stats: Stats::connect(
-                    id,
+                    pid,
                     &addr,
                     &Parameters::default(),
                     &ServerOptions::default(),
@@ -1316,7 +1323,7 @@ pub mod test {
                     .await
                     .unwrap();
                 socket
-                    .write_all(&BackendKeyData::new().to_bytes())
+                    .write_all(&BackendKeyData::random_legacy().to_bytes())
                     .await
                     .unwrap();
                 socket
@@ -1377,7 +1384,7 @@ pub mod test {
                     .await
                     .unwrap();
                 socket
-                    .write_all(&BackendKeyData::new().to_bytes())
+                    .write_all(&BackendKeyData::random_legacy().to_bytes())
                     .await
                     .unwrap();
                 socket
@@ -2159,7 +2166,7 @@ pub mod test {
         params.insert("application_name", "test_sync_params");
         params.insert("is_superuser", opposite);
         let changed = server
-            .link_client(&BackendKeyData::new(), &params, None)
+            .link_client(BackendPid::random(), &params, None)
             .await
             .unwrap();
         assert_eq!(changed, 1);
@@ -2181,7 +2188,7 @@ pub mod test {
         );
 
         let changed = server
-            .link_client(&BackendKeyData::new(), &params, None)
+            .link_client(BackendPid::random(), &params, None)
             .await
             .unwrap();
         assert_eq!(changed, 0);
@@ -2270,12 +2277,12 @@ pub mod test {
         let mut server = test_server().await;
 
         let changed = server
-            .link_client(&BackendKeyData::new(), &params, None)
+            .link_client(BackendPid::random(), &params, None)
             .await?;
         assert_eq!(changed, 1);
 
         let changed = server
-            .link_client(&BackendKeyData::new(), &params, None)
+            .link_client(BackendPid::random(), &params, None)
             .await?;
         assert_eq!(changed, 0);
 
@@ -2284,12 +2291,12 @@ pub mod test {
             params.insert("application_name", value);
 
             let changed = server
-                .link_client(&BackendKeyData::new(), &params, None)
+                .link_client(BackendPid::random(), &params, None)
                 .await?;
             assert_eq!(changed, 2); // RESET, SET.
 
             let changed = server
-                .link_client(&BackendKeyData::new(), &params, None)
+                .link_client(BackendPid::random(), &params, None)
                 .await?;
             assert_eq!(changed, 0);
         }
@@ -2867,14 +2874,14 @@ pub mod test {
 
         // Sync params to server
         let changed = server
-            .link_client(&BackendKeyData::new(), &params, None)
+            .link_client(BackendPid::random(), &params, None)
             .await
             .unwrap();
         assert_eq!(changed, 1);
 
         // Same params should not need re-sync
         let changed = server
-            .link_client(&BackendKeyData::new(), &params, None)
+            .link_client(BackendPid::random(), &params, None)
             .await
             .unwrap();
         assert_eq!(changed, 0);
@@ -2884,7 +2891,7 @@ pub mod test {
 
         // Now link_client should need to re-sync because client_params was cleared
         let changed = server
-            .link_client(&BackendKeyData::new(), &params, None)
+            .link_client(BackendPid::random(), &params, None)
             .await
             .unwrap();
         assert!(

@@ -14,7 +14,7 @@ use tracing::{debug, error};
 use crate::backend::pool::LsnStats;
 use crate::backend::{ConnectReason, DisconnectReason, Server, ServerOptions};
 use crate::config::PoolerMode;
-use crate::net::messages::BackendKeyData;
+use crate::net::messages::BackendPid;
 use crate::net::{Parameter, Parameters};
 
 use super::inner::CheckInResult;
@@ -267,17 +267,13 @@ impl Pool {
         Ok(())
     }
 
-    /// Server connection used by the client.
-    pub fn peer(&self, id: &BackendKeyData) -> Option<BackendKeyData> {
-        self.lock().peer(id)
-    }
-
     /// Send a cancellation request if the client is connected to a server.
-    pub async fn cancel(&self, id: &BackendKeyData) -> Result<(), super::super::Error> {
-        if let Some(server) = self.peer(id) {
-            Server::cancel(self.addr(), &server).await?;
+    pub async fn cancel(&self, id: BackendPid) -> Result<(), super::super::Error> {
+        // Must NOT hold the lock while doing async I/O.
+        let key = self.lock().cancel_key(id).cloned();
+        if let Some(key) = key {
+            Server::cancel(self.addr(), key).await?;
         }
-
         Ok(())
     }
 
@@ -334,13 +330,15 @@ impl Pool {
 
     /// Send a cancellation request for all running queries.
     pub async fn cancel_all(&self) -> Result<(), Error> {
-        let taken = self.lock().checked_out_server_ids();
         let addr = self.addr().clone();
-
-        try_join_all(taken.iter().map(|id| Server::cancel(&addr, id)))
+        let futures: Vec<_> = self
+            .lock()
+            .cancel_keys()
+            .map(|key| Server::cancel(&addr, key.clone()))
+            .collect();
+        try_join_all(futures)
             .await
             .map_err(|_| Error::FastShutdown)?;
-
         Ok(())
     }
 

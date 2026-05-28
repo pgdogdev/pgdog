@@ -48,19 +48,10 @@ impl ToDataRowColumn for i64 {
     }
 }
 
-impl ToDataRowColumn for Option<i64> {
+impl<T: ToDataRowColumn> ToDataRowColumn for Option<T> {
     fn to_data_row_column(&self) -> Data {
         match self {
-            Some(value) => ToDataRowColumn::to_data_row_column(value),
-            None => Data::null(),
-        }
-    }
-}
-
-impl ToDataRowColumn for Option<String> {
-    fn to_data_row_column(&self) -> Data {
-        match self {
-            Some(value) => ToDataRowColumn::to_data_row_column(value),
+            Some(value) => value.to_data_row_column(),
             None => Data::null(),
         }
     }

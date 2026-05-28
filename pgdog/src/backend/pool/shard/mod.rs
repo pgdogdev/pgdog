@@ -13,7 +13,7 @@ use crate::backend::pool::lb::ban::Ban;
 use crate::backend::PubSubListener;
 use crate::backend::Schema;
 use crate::config::{LoadBalancingStrategy, ReadWriteSplit, Role};
-use crate::net::messages::BackendKeyData;
+use crate::net::messages::BackendPid;
 use crate::net::{NotificationResponse, Parameters};
 
 use super::{Error, Guard, LoadBalancer, Pool, PoolConfig, Request};
@@ -195,7 +195,7 @@ impl Shard {
     ///
     /// If these connection pools aren't running the query sent by this client, this is a no-op.
     ///
-    pub async fn cancel(&self, id: &BackendKeyData) -> Result<(), super::super::Error> {
+    pub async fn cancel(&self, id: BackendPid) -> Result<(), super::super::Error> {
         self.lb.cancel(id).await?;
 
         Ok(())
