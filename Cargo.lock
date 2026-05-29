@@ -3270,6 +3270,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha1",
+ "smallvec",
  "socket2 0.5.10",
  "stats_alloc",
  "tempfile",

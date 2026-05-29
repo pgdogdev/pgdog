@@ -6,11 +6,11 @@ use crate::net::messages::code;
 use crate::net::messages::prelude::*;
 use crate::net::messages::protocol_version::ProtocolVersion;
 use bytes::Buf;
+use smallvec::SmallVec;
 
 use super::backend_pid::BackendPid;
 
 use rand::Rng;
-
 const LEGACY_SECRET_LEN: usize = std::mem::size_of::<i32>();
 const EXTENDED_SECRET_LEN: usize = 32;
 const MAX_SECRET_LEN: usize = 256;
@@ -18,18 +18,14 @@ const MAX_SECRET_LEN: usize = 256;
 /// Variable-length cancel secret.
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct SecretKey {
-    len: u16,
-    bytes: [u8; MAX_SECRET_LEN],
+    bytes: SmallVec<[u8; EXTENDED_SECRET_LEN]>,
 }
 
 impl SecretKey {
     /// Create a 3.0-compatible secret key from a 4-byte integer.
     pub fn legacy(secret: i32) -> Self {
-        let mut bytes = [0; MAX_SECRET_LEN];
-        bytes[..LEGACY_SECRET_LEN].copy_from_slice(&secret.to_be_bytes());
         Self {
-            len: LEGACY_SECRET_LEN as u16,
-            bytes,
+            bytes: SmallVec::from_slice(&secret.to_be_bytes()),
         }
     }
 
@@ -40,12 +36,10 @@ impl SecretKey {
             "cancel secret must be between 1 and {MAX_SECRET_LEN} bytes"
         );
 
-        let mut bytes = [0; MAX_SECRET_LEN];
-        rand::rng().fill(&mut bytes[..len]);
-        Self {
-            len: len as u16,
-            bytes,
-        }
+        let mut bytes = SmallVec::with_capacity(len);
+        bytes.resize(len, 0);
+        rand::rng().fill(bytes.as_mut_slice());
+        Self { bytes }
     }
 
     /// Create a secret key from raw wire bytes.
@@ -54,22 +48,19 @@ impl SecretKey {
             return Err(crate::net::Error::UnexpectedPayload);
         }
 
-        let mut bytes = [0; MAX_SECRET_LEN];
-        bytes[..secret.len()].copy_from_slice(secret);
         Ok(Self {
-            len: secret.len() as u16,
-            bytes,
+            bytes: SmallVec::from_slice(secret),
         })
     }
 
     /// Secret bytes as they appear on the wire.
     pub fn as_slice(&self) -> &[u8] {
-        &self.bytes[..self.len()]
+        self.bytes.as_slice()
     }
 
     /// Secret length in bytes.
     pub fn len(&self) -> usize {
-        self.len as usize
+        self.bytes.len()
     }
 }
 
@@ -125,7 +116,7 @@ impl BackendKeyData {
     pub fn new_client(protocol_version: ProtocolVersion) -> Self {
         // The client must echo this secret back in CancelRequest, so its shape
         // has to match the negotiated frontend protocol version.
-        let secret_len = if protocol_version == ProtocolVersion::V3_2 {
+        let secret_len = if protocol_version.supports_extended_cancel_key() {
             EXTENDED_SECRET_LEN
         } else {
             LEGACY_SECRET_LEN

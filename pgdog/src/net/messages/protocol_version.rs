@@ -49,6 +49,12 @@ impl ProtocolVersion {
         matches!(self, Self::V3_0 | Self::V3_2)
     }
 
+    /// Whether this protocol version uses the extended (variable-length)
+    /// `BackendKeyData` cancel secret introduced in 3.2.
+    pub fn supports_extended_cancel_key(self) -> bool {
+        self >= Self::V3_2
+    }
+
     /// Highest supported protocol version that can satisfy this request.
     ///
     /// PostgreSQL minor-version negotiation is a downgrade mechanism, so a
@@ -100,5 +106,14 @@ mod tests {
             Some(ProtocolVersion::V3_2)
         );
         assert_eq!(ProtocolVersion::new(4, 0).negotiated(), None);
+    }
+
+    #[test]
+    fn test_supports_extended_cancel_key() {
+        assert!(!ProtocolVersion::V3_0.supports_extended_cancel_key());
+        assert!(!ProtocolVersion::new(3, 1).supports_extended_cancel_key());
+        assert!(ProtocolVersion::V3_2.supports_extended_cancel_key());
+        assert!(ProtocolVersion::new(3, 3).supports_extended_cancel_key());
+        assert!(ProtocolVersion::new(4, 0).supports_extended_cancel_key());
     }
 }

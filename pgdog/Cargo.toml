@@ -77,6 +77,7 @@ azure_identity = "0.34.0"
 azure_core = "0.34.0"
 crc32c = "0.6.8"
 bit-vec = "0.8"
+smallvec = "1"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-webpki-roots-no-provider"] }
 hex = "0.4"
 x509-parser = "0.18"
