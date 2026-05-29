@@ -1,11 +1,8 @@
 mod directive;
-mod query;
 mod strip;
 
 #[cfg(test)]
 mod tests;
-
-pub use query::QueryWithoutComment;
 
 use crate::backend::ShardingSchema;
 use crate::config::database::Role;
@@ -16,7 +13,7 @@ use strip::{leading_block_comment, trailing_block_comment};
 
 #[derive(Default, Debug, Clone)]
 pub struct QueryAndComment<'a> {
-    pub query: QueryWithoutComment<'a>,
+    pub query: &'a str,
     #[cfg(test)]
     pub comment: String,
     pub role: Option<Role>,
@@ -46,7 +43,7 @@ pub fn parse_edge_comment<'a>(
 
     if leading.is_none() && trailing.is_none() {
         return Ok(QueryAndComment {
-            query: QueryWithoutComment::Original(query),
+            query,
             #[cfg(test)]
             comment: String::new(),
             ..Default::default()
@@ -70,7 +67,7 @@ pub fn parse_edge_comment<'a>(
     }
 
     Ok(QueryAndComment {
-        query: QueryWithoutComment::Stripped(stripped.to_string()),
+        query: stripped,
         #[cfg(test)]
         comment: match (leading, trailing) {
             (Some(l), Some(t)) => format!("{} {}", l, t),
