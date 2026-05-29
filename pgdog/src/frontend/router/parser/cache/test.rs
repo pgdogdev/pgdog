@@ -270,15 +270,14 @@ fn test_cache_key_strips_leading_comment() {
 
     let ast = run_prepared("/* trace_id=abc */ SELECT 1 FROM cache_key_leading");
     assert_eq!(
-        ast.query_without_comment.as_str(),
-        "SELECT 1 FROM cache_key_leading",
+        &*ast.query_without_comment, "SELECT 1 FROM cache_key_leading",
         "cache key must be the query without the leading comment"
     );
 
     // The LRU map key must also be the stripped query.
     let queries = Cache::queries();
     assert!(
-        queries.contains_key(&"SELECT 1 FROM cache_key_leading".to_string()),
+        queries.contains_key("SELECT 1 FROM cache_key_leading"),
         "cache map key must be the comment-stripped query"
     );
 }
@@ -290,8 +289,7 @@ fn test_cache_key_strips_trailing_comment() {
 
     let ast = run_prepared("SELECT 1 FROM cache_key_trailing /* trace_id=xyz */");
     assert_eq!(
-        ast.query_without_comment.as_str(),
-        "SELECT 1 FROM cache_key_trailing",
+        &*ast.query_without_comment, "SELECT 1 FROM cache_key_trailing",
         "cache key must be the query without the trailing comment"
     );
 }
@@ -304,8 +302,7 @@ fn test_cache_key_no_comment_unchanged() {
     let q = "SELECT 1 FROM cache_key_plain";
     let ast = run_prepared(q);
     assert_eq!(
-        ast.query_without_comment.as_str(),
-        q,
+        &*ast.query_without_comment, q,
         "cache key must equal the original query when there is no comment"
     );
 }
@@ -329,7 +326,7 @@ fn test_cache_key_shared_across_different_comments() {
         1,
         "all three queries must share a single cache entry"
     );
-    assert_eq!(matching[0].as_str(), "SELECT 1 FROM cache_key_shared");
+    assert_eq!(&**matching[0], "SELECT 1 FROM cache_key_shared");
 }
 
 #[test]

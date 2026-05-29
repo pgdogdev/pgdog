@@ -63,7 +63,7 @@ fn test_shard_comment_with_rewrite_not_cached() {
     ]);
 
     let cached = Cache::queries();
-    let poisoned = cached.keys().any(|k| k.as_str() == stripped);
+    let poisoned = cached.keys().any(|k| **k == *stripped);
     assert!(
         !poisoned,
         "shard-commented query with a non-empty rewrite plan must not be \
@@ -93,7 +93,7 @@ fn test_shard_comment_without_rewrite_is_cached() {
 
     let cached = Cache::queries();
     assert!(
-        cached.keys().any(|k| k.as_str() == stripped),
+        cached.keys().any(|k| **k == *stripped),
         "shard-commented query with an empty rewrite plan must still be \
          cached under the stripped key"
     );
