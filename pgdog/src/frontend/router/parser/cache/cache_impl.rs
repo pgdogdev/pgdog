@@ -5,7 +5,6 @@ use pg_query::normalize;
 use pgdog_config::QueryParserEngine;
 use std::borrow::Borrow;
 use std::collections::HashMap;
-use std::ops::Deref;
 use std::time::Duration;
 
 use parking_lot::{Mutex, RawMutex};
@@ -45,8 +44,7 @@ impl Stats {
     }
 }
 
-/// Newtype wrapper around `Arc<String>` that lets us look up cache entries
-/// with any `&str` (e.g. a `QueryWithoutComment`, which derefs to `str`).
+/// Newtype wrapper around `Arc<String>` that lets us look up cache entries with any `&str`.
 /// Stdlib only provides `Arc<T>: Borrow<T>`, not `Arc<String>: Borrow<str>`.
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub(super) struct CacheKey(pub(super) Arc<String>);
@@ -130,17 +128,13 @@ impl Cache {
     ) -> Result<Ast, Error> {
         // Separate query from comment, if one is present.
         let query_and_comment = parse_edge_comment(query.query(), &ctx.sharding_schema)?;
-        let cache_key = &query_and_comment.query;
 
         {
             let mut guard = self.inner.lock();
-            let ast = guard
-                .queries
-                .get_mut(cache_key.deref()) // Use the query without comment as the cache key.
-                .map(|entry| {
-                    entry.stats.lock().hits += 1; // No contention on this.
-                    entry.clone()
-                });
+            let ast = guard.queries.get_mut(query_and_comment.query).map(|entry| {
+                entry.stats.lock().hits += 1; // No contention on this.
+                entry.clone()
+            });
             if let Some(mut ast) = ast {
                 guard.stats.hits += 1;
                 ast.comment_role = query_and_comment.role;
@@ -154,7 +148,7 @@ impl Cache {
         let mut entry = Ast::with_context(
             &AstQuery {
                 original_query: query,
-                query_without_comment: &query_and_comment.query,
+                query_without_comment: query_and_comment.query,
             },
             ctx,
             prepared_statements,
@@ -194,7 +188,7 @@ impl Cache {
         let mut entry = Ast::with_context(
             &AstQuery {
                 original_query: query,
-                query_without_comment: &query_and_comment.query,
+                query_without_comment: query_and_comment.query,
             },
             ctx,
             prepared_statements,
