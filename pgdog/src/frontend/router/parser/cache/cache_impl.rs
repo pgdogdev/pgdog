@@ -3,7 +3,6 @@ use once_cell::sync::Lazy;
 use parking_lot::lock_api::MutexGuard;
 use pg_query::normalize;
 use pgdog_config::QueryParserEngine;
-use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::time::Duration;
 
@@ -44,22 +43,11 @@ impl Stats {
     }
 }
 
-/// Newtype wrapper around `Arc<String>` that lets us look up cache entries with any `&str`.
-/// Stdlib only provides `Arc<T>: Borrow<T>`, not `Arc<String>: Borrow<str>`.
-#[derive(Clone, Debug, Hash, PartialEq, Eq)]
-pub(super) struct CacheKey(pub(super) Arc<String>);
-
-impl Borrow<str> for CacheKey {
-    fn borrow(&self) -> &str {
-        self.0.as_str()
-    }
-}
-
 /// Mutex-protected query cache.
 #[derive(Debug)]
 pub(super) struct Inner {
     /// Least-recently-used cache.
-    queries: LruCache<CacheKey, Ast>,
+    queries: LruCache<Arc<str>, Ast>,
     /// Cache global stats.
     pub(super) stats: Stats,
 }
@@ -167,7 +155,7 @@ impl Cache {
         if cacheable {
             guard
                 .queries
-                .put(CacheKey(entry.query_without_comment.clone()), entry.clone());
+                .put(entry.query_without_comment.clone(), entry.clone());
         }
         guard.stats.misses += 1;
         guard.stats.parse_time += parse_time;
@@ -231,7 +219,7 @@ impl Cache {
         entry.update_stats(route);
 
         let mut guard = self.inner.lock();
-        guard.queries.put(CacheKey(Arc::new(normalized)), entry);
+        guard.queries.put(normalized.into(), entry);
         guard.stats.misses += 1;
 
         Ok(())
@@ -265,13 +253,13 @@ impl Cache {
     }
 
     /// Get a copy of all queries stored in the cache.
-    pub fn queries() -> HashMap<Arc<String>, Ast> {
+    pub fn queries() -> HashMap<Arc<str>, Ast> {
         Self::get()
             .inner
             .lock()
             .queries
             .iter()
-            .map(|i| (i.0 .0.clone(), i.1.clone()))
+            .map(|i| (i.0.clone(), i.1.clone()))
             .collect()
     }
 
