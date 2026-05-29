@@ -45,7 +45,7 @@ pub struct AstInner {
     /// Fingerprint.
     pub fingerprint: OnceCell<Fingerprint>,
     /// Original query.
-    pub query_without_comment: Arc<String>,
+    pub query_without_comment: Arc<str>,
 }
 
 impl AstInner {
@@ -56,7 +56,7 @@ impl AstInner {
             stats: Mutex::new(Stats::new()),
             rewrite_plan: RewritePlan::default(),
             fingerprint: OnceCell::new(),
-            query_without_comment: Arc::new(String::new()),
+            query_without_comment: "".into(),
         }
     }
 }
@@ -126,7 +126,7 @@ impl Ast {
                 ast,
                 rewrite_plan,
                 fingerprint: OnceCell::new(),
-                query_without_comment: Arc::new(query.query_without_comment.to_string()),
+                query_without_comment: query.query_without_comment.into(),
             }),
         })
     }
