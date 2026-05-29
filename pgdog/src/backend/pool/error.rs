@@ -71,9 +71,6 @@ pub enum Error {
     #[error("checked in untracked connection: {0}")]
     UntrackedConnCheckin(BackendPid),
 
-    #[error("mapping missing: {0}")]
-    MappingMissing(usize),
-
     #[error("fast shutdown failed")]
     FastShutdown,
 
@@ -95,7 +92,6 @@ impl Error {
                 | Self::NoDatabases
                 | Self::PubSubDisabled
                 | Self::PoolNoHealthTarget(_)
-                | Self::MappingMissing(_)
                 // Admin decisions — respect them.
                 | Self::ManualBan
                 // Programming errors.
@@ -137,6 +133,5 @@ mod tests {
         assert!(!Error::PubSubDisabled.is_retryable());
         assert!(!Error::FastShutdown.is_retryable());
         assert!(!Error::NoShard(0).is_retryable());
-        assert!(!Error::MappingMissing(0).is_retryable());
     }
 }

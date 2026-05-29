@@ -10,9 +10,7 @@ use crate::net::messages::{BackendKeyData, BackendPid};
 
 use tokio::time::Instant;
 
-use super::{
-    lsn_monitor::ReplicaLag, Config, Error, Mapping, Oids, Pool, Request, Stats, Taken, Waiter,
-};
+use super::{lsn_monitor::ReplicaLag, Config, Error, Oids, Pool, Request, Stats, Taken, Waiter};
 
 /// Pool internals protected by a mutex.
 #[derive(Default)]
@@ -239,13 +237,7 @@ impl Inner {
     pub(super) fn take(&mut self, request: &Request) -> Result<Option<Box<Server>>, Error> {
         if let Some(conn) = self.idle_connections.pop() {
             let cancel_key = conn.key().clone();
-            self.taken.take(
-                &Mapping {
-                    client: request.id,
-                    server: conn.id(),
-                },
-                cancel_key,
-            )?;
+            self.taken.take(request.id, cancel_key);
 
             Ok(Some(conn))
         } else {
@@ -258,19 +250,12 @@ impl Inner {
     #[inline]
     pub(super) fn put(&mut self, mut conn: Box<Server>, now: Instant) -> Result<(), Error> {
         // Try to give it to a client that's been waiting, if any.
-        let id = conn.id();
         let cancel_key = conn.key().clone();
         while let Some(waiter) = self.waiting.pop_front() {
             if let Err(conn_ret) = waiter.tx.send(Ok(conn)) {
                 conn = conn_ret.unwrap(); // SAFETY: We sent Ok(conn), we'll get back Ok(conn) if channel is closed.
             } else {
-                self.taken.take(
-                    &Mapping {
-                        server: id,
-                        client: waiter.request.id,
-                    },
-                    cancel_key.clone(),
-                )?;
+                self.taken.take(waiter.request.id, cancel_key);
                 self.stats.counts.server_assignment_count += 1;
                 self.stats.counts.wait_time += now.duration_since(waiter.request.created_at);
                 return Ok(());
@@ -504,17 +489,8 @@ mod test {
         let mut inner = Inner::default();
 
         let server = Box::new(Server::default());
-        let server_id = server.id();
-        inner
-            .taken
-            .take(
-                &Mapping {
-                    client: BackendPid::random(),
-                    server: server_id,
-                },
-                BackendKeyData::random_legacy(),
-            )
-            .unwrap();
+
+        inner.taken.take(BackendPid::random(), server.key().clone());
 
         let result = inner
             .maybe_check_in(server, Instant::now(), BackendCounts::default(), false)
@@ -534,17 +510,8 @@ mod test {
         };
 
         let server = Box::new(Server::default());
-        let server_id = server.id();
-        inner
-            .taken
-            .take(
-                &Mapping {
-                    client: BackendPid::random(),
-                    server: server_id,
-                },
-                BackendKeyData::random_legacy(),
-            )
-            .unwrap();
+
+        inner.taken.take(BackendPid::random(), server.key().clone());
 
         inner
             .maybe_check_in(server, Instant::now(), BackendCounts::default(), false)
@@ -562,17 +529,8 @@ mod test {
         };
 
         let server = Box::new(Server::default());
-        let server_id = server.id();
-        inner
-            .taken
-            .take(
-                &Mapping {
-                    client: BackendPid::random(),
-                    server: server_id,
-                },
-                BackendKeyData::random_legacy(),
-            )
-            .unwrap();
+
+        inner.taken.take(BackendPid::random(), server.key().clone());
 
         let result = inner
             .maybe_check_in(server, Instant::now(), BackendCounts::default(), false)
@@ -591,19 +549,9 @@ mod test {
         };
 
         let server = Box::new(Server::new_error());
-        let server_id = server.id();
 
         // Simulate server being checked out
-        inner
-            .taken
-            .take(
-                &Mapping {
-                    client: BackendPid::random(),
-                    server: server_id,
-                },
-                BackendKeyData::random_legacy(),
-            )
-            .unwrap();
+        inner.taken.take(BackendPid::random(), server.key().clone());
         assert_eq!(inner.checked_out(), 1);
 
         let result = inner
@@ -682,14 +630,7 @@ mod test {
         inner.idle_connections.push(Box::new(Server::default()));
         inner
             .taken
-            .take(
-                &Mapping {
-                    client: BackendPid::random(),
-                    server: BackendPid::random(),
-                },
-                BackendKeyData::random_legacy(),
-            )
-            .unwrap();
+            .take(BackendPid::random(), BackendKeyData::random_legacy());
 
         assert_eq!(inner.idle(), 2);
         assert_eq!(inner.checked_out(), 1);
@@ -737,17 +678,8 @@ mod test {
 
         // Add a connection
         let server = Box::new(Server::default());
-        let server_id = server.id();
-        inner
-            .taken
-            .take(
-                &Mapping {
-                    client: BackendPid::random(),
-                    server: server_id,
-                },
-                BackendKeyData::random_legacy(),
-            )
-            .unwrap();
+
+        inner.taken.take(BackendPid::random(), server.key().clone());
 
         inner
             .maybe_check_in(server, Instant::now(), BackendCounts::default(), false)
@@ -772,14 +704,7 @@ mod test {
         // Simulate taking a connection
         inner
             .taken
-            .take(
-                &Mapping {
-                    client: BackendPid::random(),
-                    server: BackendPid::random(),
-                },
-                BackendKeyData::random_legacy(),
-            )
-            .unwrap();
+            .take(BackendPid::random(), BackendKeyData::random_legacy());
         assert_eq!(inner.total(), 1);
         assert_eq!(inner.checked_out(), 1);
 
@@ -798,17 +723,8 @@ mod test {
         inner.config.max_age = Duration::from_millis(60_000);
 
         let server = Box::new(Server::default());
-        let server_id = server.id();
-        inner
-            .taken
-            .take(
-                &Mapping {
-                    client: BackendPid::random(),
-                    server: server_id,
-                },
-                BackendKeyData::random_legacy(),
-            )
-            .unwrap();
+
+        inner.taken.take(BackendPid::random(), server.key().clone());
 
         inner
             .maybe_check_in(
@@ -831,16 +747,7 @@ mod test {
 
         assert_eq!(inner.cancel_key(client_id), None);
 
-        inner
-            .taken
-            .take(
-                &Mapping {
-                    client: client_id,
-                    server: server_id,
-                },
-                cancel_key.clone(),
-            )
-            .unwrap();
+        inner.taken.take(client_id, cancel_key.clone());
 
         assert_eq!(inner.cancel_key(client_id), Some(&cancel_key));
     }
@@ -856,15 +763,7 @@ mod test {
         assert_eq!(taken.cancel_key(client_id), None);
 
         // Add mapping
-        taken
-            .take(
-                &Mapping {
-                    client: client_id,
-                    server: server_id,
-                },
-                cancel_key.clone(),
-            )
-            .unwrap();
+        taken.take(client_id, cancel_key.clone());
 
         // Cancel key should be returned for mapped client, pid matches server_id
         let stored = taken.cancel_key(client_id).unwrap();
@@ -1019,24 +918,10 @@ mod test {
         // Add connections above minimum but all are checked out (no idle)
         inner
             .taken
-            .take(
-                &Mapping {
-                    client: BackendPid::random(),
-                    server: BackendPid::random(),
-                },
-                BackendKeyData::random_legacy(),
-            )
-            .unwrap();
+            .take(BackendPid::random(), BackendKeyData::random_legacy());
         inner
             .taken
-            .take(
-                &Mapping {
-                    client: BackendPid::random(),
-                    server: BackendPid::random(),
-                },
-                BackendKeyData::random_legacy(),
-            )
-            .unwrap();
+            .take(BackendPid::random(), BackendKeyData::random_legacy());
 
         // Add a waiting client
         inner.waiting.push_back(Waiter {
@@ -1076,17 +961,12 @@ mod test {
     #[test]
     fn test_set_taken() {
         let mut inner = Inner::default();
-        let mapping = Mapping {
-            client: BackendPid::random(),
-            server: BackendPid::random(),
-        };
+        let client = BackendPid::random();
 
         assert_eq!(inner.checked_out(), 0);
 
         let mut taken = Taken::default();
-        taken
-            .take(&mapping, BackendKeyData::random_legacy())
-            .unwrap();
+        taken.take(client, BackendKeyData::random_legacy());
 
         inner.set_taken(taken);
         assert_eq!(inner.checked_out(), 1);
