@@ -216,9 +216,6 @@ impl ErrorResponse {
     }
 
     /// Whether this Postgres error is transient and the operation can be retried.
-    /// Covers connection exceptions (class 08, excluding protocol violation 08P01),
-    /// operator-intervention shutdowns (57P01/57P02/57P03), and resource pressure
-    /// (53300 too_many_connections), and lock timeout (55P03 lock_not_available).
     pub fn is_retryable(&self) -> bool {
         matches!(
             self.code.as_str(),
@@ -226,6 +223,8 @@ impl ErrorResponse {
             // 08P01 (protocol_violation) is intentionally excluded: that signals a
             // client-side bug and retrying would just repeat the same violation.
             "08000" | "08001" | "08003" | "08004" | "08006" | "08007"
+            // Serialization conflict / deadlock — Postgres aborts one txn; retry succeeds.
+            | "40001" | "40P01"
             // Operator-intervention: admin shutdown, crash, or startup not ready.
             | "57P01" | "57P02" | "57P03"
             // Too many connections — transient resource limit.
