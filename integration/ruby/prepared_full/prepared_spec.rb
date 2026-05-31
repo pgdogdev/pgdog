@@ -71,35 +71,29 @@ describe 'prepared_statements = full' do
   end
 
   # Mirror of disabled/'fails named extended-protocol statements in
-  # transaction pool mode'. full mode renames each frontend's Parse to an
-  # internal name (__pgdog_N, unique per frontend) and replays it on any
-  # backend before the Bind. 5 threads × 20 iterations with pool_size = 2
-  # forces genuine crossings \ the replay ensures all succeed.
-  # Result values are also verified to guard against silent data corruption.
+  # transaction pool mode' — identical structure, opposite expectation.
+  # pgdog intercepts bare BEGIN without a pool checkout, so SELECT 1 forces
+  # the actual checkout keeping backend A pinned. exec_prepared lands on
+  # backend B; full mode replays the Parse from the global cache — succeeds.
   it 'executes named extended-protocol statements in transaction pool mode' do
-    errors = []
-    mutex  = Mutex.new
-
-    threads = 5.times.map do
-      Thread.new do
-        conn = connect
-        begin
-          conn.prepare('ext_stmt', 'SELECT $1::bigint AS val')
-          20.times do |i|
-            res = conn.exec_prepared('ext_stmt', [i])
-            val = res[0]['val'].to_i
-            raise "expected #{i}, got #{val}" unless val == i
-          end
-        rescue => e
-          mutex.synchronize { errors << e.message }
-        ensure
-          conn.close rescue nil
+    conn = connect
+    begin
+      conn.prepare('ext_stmt', 'SELECT $1::bigint AS val')
+      pin = connect
+      begin
+        pin.exec('BEGIN')
+        pin.exec('SELECT 1') # force actual pool checkout; pin now holds backend A
+        10.times do |i|
+          res = conn.exec_prepared('ext_stmt', [i])
+          expect(res[0]['val'].to_i).to eq(i)
         end
+      ensure
+        pin.exec('ROLLBACK') rescue nil
+        pin.close rescue nil
       end
+    ensure
+      conn.close rescue nil
     end
-
-    threads.each(&:join)
-    expect(errors).to be_empty
   end
 
 end

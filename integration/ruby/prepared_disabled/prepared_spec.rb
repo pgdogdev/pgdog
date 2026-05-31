@@ -44,41 +44,32 @@ describe 'prepared_statements = disabled' do
     conn2.close
   end
 
-  # In transaction pool mode each query can land on a different backend.
-  # disabled mode forwards Parse and Bind as-is with no global cache, so a
-  # Bind that arrives on a backend that never saw the Parse fails.
-  #
-  # Sequential tests cannot force a crossing: a single connection always
-  # returns the backend to the LIFO top between queries, so the next query
-  # gets the same backend. Concurrent threads make the pool hand out both
-  # backends simultaneously. With 5 threads and pool_size = 2, the pigeonhole
-  # principle guarantees that at least 3 threads will attempt PREPARE on a
-  # backend that already holds the statement, producing 'already exists'
-  # errors — regardless of timing.
+  # Prepare on backend A. pgdog intercepts bare BEGIN without checking out a
+  # backend (deferred until the first real query), so a SELECT 1 is needed to
+  # force the actual checkout and keep backend A pinned in the open transaction.
+  # exec_prepared then lands on backend B which never saw the Parse.
+  # In disabled mode pgdog forwards Bind as-is — 'prepared statement does not exist'.
   #
   # Mirror: full/'executes named extended-protocol statements in
-  # transaction pool mode' — same structure, opposite expectation.
+  # transaction pool mode' — identical structure, opposite expectation.
   it 'fails named extended-protocol statements in transaction pool mode' do
-    errors = []
-    mutex  = Mutex.new
-
-    threads = 5.times.map do
-      Thread.new do
-        conn = connect
-        begin
-          conn.prepare('ext_stmt', 'SELECT $1::bigint AS val')
-          20.times { conn.exec_prepared('ext_stmt', [42]) }
-        rescue PG::Error => e
-          mutex.synchronize { errors << e.message }
-        ensure
-          conn.close rescue nil
-        end
+    conn = connect
+    begin
+      conn.prepare('ext_stmt', 'SELECT $1::bigint AS val')
+      pin = connect
+      begin
+        pin.exec('BEGIN')
+        pin.exec('SELECT 1') # force actual pool checkout; pin now holds backend A
+        expect { conn.exec_prepared('ext_stmt', [42]) }.to raise_error(PG::Error)
+      ensure
+        pin.exec('ROLLBACK') rescue nil
+        pin.close rescue nil
       end
+    ensure
+      conn.close rescue nil
     end
-
-    threads.each(&:join)
-    expect(errors).not_to be_empty
   end
+
 
   # Same mechanism as the extended-protocol test above, but for the
   # simple-protocol PREPARE/EXECUTE path. disabled mode forwards the SQL
