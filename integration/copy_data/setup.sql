@@ -93,18 +93,18 @@ SELECT
                     END,
         'notifications', (random() > 0.5)
     ) AS settings
-FROM generate_series(1, 10000) AS gs(id);
+FROM generate_series(1, 100000) AS gs(id);
 
 
 WITH u AS (
-  -- Pull the 10k users we inserted earlier
+  -- Pull the 100k users we inserted earlier
   SELECT id AS user_id, tenant_id
   FROM copy_data.users
-  WHERE id BETWEEN 1 AND 10000
+  WHERE id BETWEEN 1 AND 100000
   ORDER BY id
 ),
 orders_base AS (
-  -- One order per user (10k orders), deterministic order_id = user_id
+  -- One order per user (100k orders), deterministic order_id = user_id
   SELECT
       u.user_id AS order_id,
       u.user_id,
@@ -154,7 +154,7 @@ order_totals AS (
 ins_orders AS (
   INSERT INTO copy_data.orders (id, user_id, tenant_id, amount, created_at, refunded_at)
   SELECT
-      ot.order_id,        -- id = user_id = 1..10000
+      ot.order_id,        -- id = user_id = 1..100000
       ot.user_id,
       ot.tenant_id,
       ot.order_amount,
@@ -179,11 +179,11 @@ SELECT
     (ARRAY['login', 'logout', 'click', 'purchase', 'view', 'error'])[
         floor(random() * 6 + 1)::int
     ] AS action
-FROM generate_series(1, 10000);
+FROM generate_series(1, 100000);
 
 
 INSERT INTO copy_data.with_identity (tenant_id)
-SELECT floor(random() * 10000)::bigint FROM generate_series(1, 10000);
+SELECT floor(random() * 10000)::bigint FROM generate_series(1, 100000);
 
 INSERT INTO copy_data.countries (code, name) VALUES
     ('US', 'United States'), ('GB', 'United Kingdom'), ('DE', 'Germany'),

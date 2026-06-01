@@ -14,8 +14,10 @@ USERS_CONFIG="${SCRIPT_DIR}/users.toml"
 PGDOG_PORT=${PGDOG_PORT:-6440}
 export PGPASSWORD=pgdog
 
-# Worst case: remaining retry backoff (≤16s) + copy of ~60k rows (~5s) + replication startup (~1s).
-REPLICATION_TIMEOUT=60
+# Replication retry is fixed 500ms x 8 attempts (resharding_replication_retry_* in pgdog.toml),
+# a ~4s budget per failure; a CI shard restart completes well within it. 120s covers the COPY of
+# ~100k rows + replication catch-up with headroom on slow CI.
+REPLICATION_TIMEOUT=120
 
 PGDOG_PID=""
 
@@ -42,6 +44,14 @@ shard1_count() { shard1_psql -tAc "SELECT COUNT(*) FROM $1"; }
 
 # Pass a psql helper as $1; checks whether the canary row is present on that node.
 has_canary() { local fn=$1 name=${2:-${CANARY}}; "${fn}" -tAc "SELECT 1 FROM copy_data.settings WHERE setting_name='${name}' LIMIT 1" 2>/dev/null | grep -q 1; }
+
+# Dump pgdog admin state. Call on any failure path that needs context.
+dump_state() {
+    echo "[retry_test] --- SHOW TASKS ---"
+    admin_psql -c 'SHOW TASKS' || true
+    echo "[retry_test] --- SHOW REPLICATION_SLOTS ---"
+    admin_psql -c 'SHOW REPLICATION_SLOTS' || true
+}
 
 pushd "${COMPOSE_DIR}"
 
@@ -104,6 +114,7 @@ WAIT_ATTEMPTS=0
 until src_psql -tAc "SELECT 1 FROM pg_replication_slots WHERE temporary = true LIMIT 1" 2>/dev/null | grep -q 1; do
     WAIT_ATTEMPTS=$((WAIT_ATTEMPTS + 1))
     if [ "${WAIT_ATTEMPTS}" -ge 200 ]; then
+        dump_state
         echo "[retry_test] FAIL: COPY_DATA never created a replication slot after $((WAIT_ATTEMPTS / 20))s"
         exit 1
     fi
@@ -164,10 +175,7 @@ done
 if [ "${REPLICATION_TASK_SEEN}" -ne 1 ]; then
     echo "[retry_test] FAIL: no Replication task within ${REPLICATION_TIMEOUT}s after shard_1 was restored"
     echo "[retry_test]   replication did not start after the copy completed"
-    echo "[retry_test] --- SHOW TASKS ---"
-    admin_psql -c 'SHOW TASKS' || true
-    echo "[retry_test] --- SHOW REPLICATION_SLOTS ---"
-    admin_psql -c 'SHOW REPLICATION_SLOTS' || true
+    dump_state
     exit 1
 fi
 echo "[retry_test] OK: Replication task is live."
@@ -194,7 +202,7 @@ done
 if [ "${CANARY_DELIVERED}" -ne 1 ]; then
     echo "[retry_test] FAIL: canary ${CANARY} not replicated within ${REPLICATION_TIMEOUT}s"
     echo "[retry_test]   Replication task was running but the stream did not deliver"
-    admin_psql -c 'SHOW REPLICATION_SLOTS' || true
+    dump_state
     exit 1
 fi
 echo "[retry_test] OK: canary replicated to both shards."
@@ -223,6 +231,18 @@ until pg_isready -h 127.0.0.1 -p 15433 -U pgdog -d pgdog1 -q; do
 done
 echo "[retry_test] shard_0 is ready."
 
+# Replication task must still be alive after the outage. If it exited (e.g. retry budget
+# exhausted, non-retryable error) waiting for the canary would just time out after the full
+# REPLICATION_TIMEOUT (${REPLICATION_TIMEOUT}s) with no useful signal. Check this BEFORE waiting
+# for canary delivery to localise the failure.
+if ! admin_psql -tAc 'SHOW TASKS' 2>/dev/null | grep -q '|replication|'; then
+    echo "[retry_test] FAIL: replication task is no longer present after shard_0 restart"
+    echo "[retry_test]   the apply task likely errored and exited; not a delivery-latency issue"
+    dump_state
+    exit 1
+fi
+echo "[retry_test] OK: replication task is still present after shard_0 restart."
+
 RETRY_DELIVERED=0
 for _ in $(seq 1 "${REPLICATION_TIMEOUT}"); do
     if has_canary shard0_psql "${RETRY_CANARY}" && has_canary shard1_psql "${RETRY_CANARY}"; then
@@ -239,7 +259,7 @@ done
 if [ "${RETRY_DELIVERED}" -ne 1 ]; then
     echo "[retry_test] FAIL: retry canary ${RETRY_CANARY} not replicated within ${REPLICATION_TIMEOUT}s"
     echo "[retry_test]   replication did not retry and recover after shard_0 outage"
-    admin_psql -c 'SHOW REPLICATION_SLOTS;' || true
+    dump_state
     exit 1
 fi
 echo "[retry_test] OK: retry canary replicated to both shards after shard_0 outage."
