@@ -805,15 +805,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cache"
-version = "0.1.0"
-dependencies = [
- "serial_test",
- "sqlx",
- "tokio",
-]
-
-[[package]]
 name = "castaway"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"

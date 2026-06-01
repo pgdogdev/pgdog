@@ -3,7 +3,6 @@ resolver = "2"
 members = [
   "examples/demo",
   "integration/rust",
-  "integration/cache",
   "pgdog",
   "pgdog-config",
   "pgdog-macros",
