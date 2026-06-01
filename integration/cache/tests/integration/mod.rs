@@ -264,16 +264,18 @@ async fn test_force_cache() {
         .unwrap();
 
     // Warm cache
-    let r1: Vec<(i64, String)> =
-        sqlx::query_as("/* pgdog_cache: cache ttl=2 */ SELECT id, val FROM cache_test_force WHERE id = 1")
-            .fetch_all(&pool)
-            .await
-            .unwrap();
+    let r1: Vec<(i64, String)> = sqlx::query_as(
+        "/* pgdog_cache: cache ttl=2 */ SELECT id, val FROM cache_test_force WHERE id = 1",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
     assert_eq!(r1.len(), 1);
     assert_eq!(r1[0].1, "not_forced");
 
     let direct = connection_direct().await;
-    direct.execute("UPDATE cache_test_force SET val = 'forced' WHERE id = 1")
+    direct
+        .execute("UPDATE cache_test_force SET val = 'forced' WHERE id = 1")
         .await
         .unwrap();
     direct.close().await;

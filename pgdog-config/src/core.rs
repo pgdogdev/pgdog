@@ -566,7 +566,11 @@ impl Config {
         }
 
         if self.general.cache.enabled
-            && matches!(self.general.query_parser, QueryParserLevel::Off | QueryParserLevel::SessionControl) {
+            && matches!(
+                self.general.query_parser,
+                QueryParserLevel::Off | QueryParserLevel::SessionControl
+            )
+        {
             warn!("cache requires enabled query parser but it's disabled or session controlled");
         }
     }

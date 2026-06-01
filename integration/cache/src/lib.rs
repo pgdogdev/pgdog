@@ -1,6 +1,5 @@
 use sqlx::{Postgres, pool::Pool, postgres::PgPoolOptions};
 
-
 pub async fn connection() -> Pool<Postgres> {
     PgPoolOptions::new()
         .max_connections(1)
