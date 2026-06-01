@@ -44,60 +44,44 @@ describe 'prepared_statements = disabled' do
     conn2.close
   end
 
-  # Prepare on backend A. pgdog intercepts bare BEGIN without checking out a
-  # backend (deferred until the first real query), so a SELECT 1 is needed to
-  # force the actual checkout and keep backend A pinned in the open transaction.
-  # exec_prepared then lands on backend B which never saw the Parse.
-  # In disabled mode pgdog forwards Bind as-is — 'prepared statement does not exist'.
-  #
-  # Mirror: full/'executes named extended-protocol statements in
-  # transaction pool mode' — identical structure, opposite expectation.
+  # Test that the prepared statement that is created inside the connection
+  # could not be reliably executed with prepared_statements=false since it
+  # could land on another backend connection that doesn't have this
+  # statement prepared.
   it 'fails named extended-protocol statements in transaction pool mode' do
     conn = connect
-    begin
-      conn.prepare('ext_stmt', 'SELECT $1::bigint AS val')
-      pin = connect
-      begin
-        pin.exec('BEGIN')
-        pin.exec('SELECT 1') # force actual pool checkout; pin now holds backend A
-        expect { conn.exec_prepared('ext_stmt', [42]) }.to raise_error(PG::Error)
-      ensure
-        pin.exec('ROLLBACK') rescue nil
-        pin.close rescue nil
-      end
-    ensure
-      conn.close rescue nil
-    end
-  end
+    conn.prepare('ext_stmt', 'SELECT $1::bigint AS val')
 
-
-  # Same mechanism as the extended-protocol test above, but for the
-  # simple-protocol PREPARE/EXECUTE path. disabled mode forwards the SQL
-  # statement text as-is, so EXECUTE on a backend that never saw the
-  # PREPARE fails with 'prepared statement does not exist' or, if two
-  # threads hit the same backend, 'already exists'.
-  #
-  # Mirror: full/'rewrites simple-protocol PREPARE / EXECUTE in
-  # transaction pool mode' — same structure, opposite expectation.
-  it 'fails SQL PREPARE/EXECUTE in transaction pool mode' do
-    errors = []
-    mutex  = Mutex.new
-
-    threads = 5.times.map do
-      Thread.new do
-        conn = connect
-        begin
-          conn.exec('PREPARE sql_stmt AS SELECT $1::bigint * 2')
-          20.times { |i| conn.exec("EXECUTE sql_stmt(#{i})") }
-        rescue PG::Error => e
-          mutex.synchronize { errors << e.message }
-        ensure
-          conn.close rescue nil
+    with_pinned_backend do # hold the backend conn prepared on
+      with_load do
+        20.times do
+          expect { conn.exec_prepared('ext_stmt', [1]) }.to raise_error(PG::Error)
         end
       end
     end
+  ensure
+    conn.close rescue nil
+  end
 
-    threads.each(&:join)
-    expect(errors).not_to be_empty
+  # Test that a statement created with SQL PREPARE inside the connection
+  # could not be reliably executed with prepared_statements=false since the
+  # EXECUTE could land on another backend connection that doesn't have this
+  # statement prepared.
+  it 'fails SQL PREPARE/EXECUTE in transaction pool mode' do
+    conn = connect
+    # PREPARE and EXECUTE both route to the primary pool (pgdog treats them as
+    # writes), the same pool the pin holds a backend in. disabled mode never
+    # replays them, so every EXECUTE forced onto another backend fails.
+    conn.exec('PREPARE sql_stmt AS SELECT $1::bigint * 2 AS val')
+
+    with_pinned_backend do # hold the backend conn prepared on
+      with_load do
+        20.times do
+          expect { conn.exec('EXECUTE sql_stmt(1)') }.to raise_error(PG::Error)
+        end
+      end
+    end
+  ensure
+    conn.close rescue nil
   end
 end

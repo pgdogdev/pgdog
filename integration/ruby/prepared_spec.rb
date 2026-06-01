@@ -47,56 +47,45 @@ describe 'prepared_statements = extended' do
     conn2.close
   end
 
-  # Mirror of disabled/'fails named extended-protocol statements in
-  # transaction pool mode' — identical structure, opposite expectation.
-  # pgdog intercepts bare BEGIN without a pool checkout, so SELECT 1 forces
-  # the actual checkout keeping backend A pinned. exec_prepared lands on
-  # backend B; extended mode replays the Parse from the global cache — succeeds.
+  # Test that the prepared statement that is created inside the connection
+  # can be reliably executed with prepared_statements=extended even when it
+  # lands on another backend connection, because pgdog replays the prepare
+  # onto it.
   it 'executes named extended-protocol statements in transaction pool mode' do
     conn = connect
-    begin
-      conn.prepare('ext_stmt', 'SELECT $1::bigint AS val')
-      pin = connect
-      begin
-        pin.exec('BEGIN')
-        pin.exec('SELECT 1') # force actual pool checkout; pin now holds backend A
-        10.times do |i|
+    conn.prepare('ext_stmt', 'SELECT $1::bigint AS val')
+
+    with_pinned_backend do
+      with_load do
+        20.times do |i|
           res = conn.exec_prepared('ext_stmt', [i])
           expect(res[0]['val'].to_i).to eq(i)
         end
-      ensure
-        pin.exec('ROLLBACK') rescue nil
-        pin.close rescue nil
       end
-    ensure
-      conn.close rescue nil
     end
+  ensure
+    conn.close rescue nil
   end
 
-  # extended mode does NOT intercept SQL PREPARE / EXECUTE — those are
-  # forwarded as-is. With 15 threads and a default pool of 10, the pigeonhole
-  # principle guarantees crossings: at least 5 threads hit a backend that
-  # already holds 'sql_stmt' ('already exists') or one that never saw the
-  # PREPARE ('does not exist'). Either way, errors accumulate.
+  # Test that a statement created with SQL PREPARE inside the connection
+  # could not be reliably executed with prepared_statements=extended, which
+  # does not intercept SQL PREPARE/EXECUTE, so the EXECUTE could land on
+  # another backend connection that doesn't have this statement prepared.
   it 'fails SQL PREPARE/EXECUTE in transaction pool mode' do
-    errors = []
-    mutex  = Mutex.new
+    conn = connect
+    # PREPARE and EXECUTE both route to the primary pool (pgdog treats them as
+    # writes), the same pool the pin holds a backend in. extended mode does not
+    # intercept SQL PREPARE/EXECUTE, so every EXECUTE forced onto another backend fails.
+    conn.exec('PREPARE sql_stmt AS SELECT $1::bigint * 2 AS val')
 
-    threads = 15.times.map do
-      Thread.new do
-        conn = connect
-        begin
-          conn.exec('PREPARE sql_stmt AS SELECT $1::bigint * 2')
-          20.times { |i| conn.exec("EXECUTE sql_stmt(#{i})") }
-        rescue PG::Error => e
-          mutex.synchronize { errors << e.message }
-        ensure
-          conn.close rescue nil
+    with_pinned_backend do # hold the backend conn prepared on
+      with_load do
+        20.times do
+          expect { conn.exec('EXECUTE sql_stmt(1)') }.to raise_error(PG::Error)
         end
       end
     end
-
-    threads.each(&:join)
-    expect(errors).not_to be_empty
+  ensure
+    conn.close rescue nil
   end
 end

@@ -6,6 +6,7 @@ require 'pg'
 require 'toxiproxy'
 require 'datadog'
 require 'securerandom'
+require 'concurrent'
 
 # Configure Datadog APM so ActiveRecord auto-injects sqlcommenter-style
 # trailing comments (traceparent, tracestate, dddbs, dde, ddps, ddpv, ddh,
@@ -52,6 +53,55 @@ end
 
 def connect(db = 'pgdog', user = 'pgdog')
   PG.connect(dbname: db, user: user, password: 'pgdog', port: 6432, host: '127.0.0.1')
+end
+
+# "Pin" a backend server by holding it inside an open transaction so the pool
+# cannot hand it to any other connection. Relies on pgdog's LIFO idle-connection
+# reuse: call this immediately after the query whose backend you want to hold
+# (e.g. a PREPARE), before any other query, so the checkout reclaims that exact
+# backend. Lets a test verify how that backend's state affects other connections.
+def with_pinned_backend
+  pin = connect
+  pin.exec('BEGIN')
+  # CREATE TEMP TABLE is a write, so pgdog routes this open transaction to the
+  # primary pool and holds one of its backends. Simple-protocol PREPARE/EXECUTE
+  # also route to the primary (pgdog treats them as writes), so the pin sits in
+  # the same pool the EXECUTE checks out from - that is what lets it force the
+  # EXECUTE onto a different backend.
+  pin.exec('CREATE TEMP TABLE pin_block (x int)')
+  yield
+ensure
+  pin.exec('ROLLBACK') rescue nil
+  pin.close rescue nil
+end
+
+# Runs 3 background connections doing short transactions for the block's
+# duration to keep backends busy; stopped and joined when the block ends.
+# The churn breaks pgdog's LIFO reuse, so a connection's repeated requests for
+# the same statement land on different backends instead of always the same one.
+def with_load
+  running = Concurrent::AtomicBoolean.new(true)
+  threads = 3.times.map do
+    Thread.new do
+      c = nil
+      begin
+        c = connect
+        while running.true?
+          c.exec('BEGIN')
+          c.exec('SELECT 1')
+          c.exec('COMMIT')
+        end
+      rescue PG::Error
+        nil
+      ensure
+        c.close rescue nil
+      end
+    end
+  end
+  yield
+ensure
+  running.make_false
+  threads.each(&:join)
 end
 
 def ensure_done
