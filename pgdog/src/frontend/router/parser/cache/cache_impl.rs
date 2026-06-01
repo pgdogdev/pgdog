@@ -10,8 +10,8 @@ use parking_lot::{Mutex, RawMutex};
 use std::sync::Arc;
 use tracing::debug;
 
-use super::super::{Error, Route};
-use super::{super::parse_edge_comment, Ast, AstContext, AstQuery};
+use super::super::{Error, Route, ShardOptionExt};
+use super::{super::parse_edge_comment, key_pair::KeyPair, Ast, AstContext, AstQuery};
 use crate::frontend::{BufferedQuery, PreparedStatements};
 
 static CACHE: Lazy<Cache> = Lazy::new(Cache::new);
@@ -47,7 +47,7 @@ impl Stats {
 #[derive(Debug)]
 pub(super) struct Inner {
     /// Least-recently-used cache.
-    queries: LruCache<Arc<str>, Ast>,
+    queries: LruCache<(Arc<str>, bool), Ast>,
     /// Cache global stats.
     pub(super) stats: Stats,
 }
@@ -119,10 +119,16 @@ impl Cache {
 
         {
             let mut guard = self.inner.lock();
-            let ast = guard.queries.get_mut(query_and_comment.query).map(|entry| {
-                entry.stats.lock().hits += 1; // No contention on this.
-                entry.clone()
-            });
+            let ast = guard
+                .queries
+                .get_mut(
+                    &(query_and_comment.query, query_and_comment.shard.is_direct())
+                        as &dyn KeyPair<str, bool>,
+                )
+                .map(|entry| {
+                    entry.stats.lock().hits += 1; // No contention on this.
+                    entry.clone()
+                });
             if let Some(mut ast) = ast {
                 guard.stats.hits += 1;
                 ast.comment_role = query_and_comment.role;
@@ -153,9 +159,13 @@ impl Cache {
         // (direct-shard) variant.
         let cacheable = entry.comment_shard.is_none() || entry.rewrite_plan.is_empty();
         if cacheable {
-            guard
-                .queries
-                .put(entry.query_without_comment.clone(), entry.clone());
+            guard.queries.put(
+                (
+                    entry.query_without_comment.clone(),
+                    entry.comment_shard.is_direct(),
+                ),
+                entry.clone(),
+            );
         }
         guard.stats.misses += 1;
         guard.stats.parse_time += parse_time;
@@ -208,7 +218,10 @@ impl Cache {
 
         {
             let mut guard = self.inner.lock();
-            if let Some(entry) = guard.queries.get(normalized.as_str()) {
+            if let Some(entry) = guard
+                .queries
+                .get(&(normalized.as_str(), false) as &dyn KeyPair<str, bool>)
+            {
                 entry.update_stats(route);
                 guard.stats.hits += 1;
                 return Ok(());
@@ -219,7 +232,7 @@ impl Cache {
         entry.update_stats(route);
 
         let mut guard = self.inner.lock();
-        guard.queries.put(normalized.into(), entry);
+        guard.queries.put((normalized.into(), false), entry);
         guard.stats.misses += 1;
 
         Ok(())
@@ -259,7 +272,7 @@ impl Cache {
             .lock()
             .queries
             .iter()
-            .map(|i| (i.0.clone(), i.1.clone()))
+            .map(|i| (i.0 .0.clone(), i.1.clone()))
             .collect()
     }
 

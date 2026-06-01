@@ -55,6 +55,7 @@ pub use query::QueryParser;
 pub use rewrite::{
     Assignment, AssignmentValue, ShardKeyRewritePlan, StatementRewrite, StatementRewriteContext,
 };
+pub(crate) use route::ShardOptionExt;
 pub use route::{Route, Shard, ShardWithPriority, ShardsWithPriority};
 pub use schema::Schema;
 pub use sequence::{OwnedSequence, Sequence};

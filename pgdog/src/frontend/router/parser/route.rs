@@ -50,6 +50,16 @@ impl Shard {
     }
 }
 
+pub(crate) trait ShardOptionExt {
+    fn is_direct(&self) -> bool;
+}
+
+impl ShardOptionExt for Option<Shard> {
+    fn is_direct(&self) -> bool {
+        self.as_ref().map(Shard::is_direct).unwrap_or(false)
+    }
+}
+
 impl From<Option<usize>> for Shard {
     fn from(value: Option<usize>) -> Self {
         if let Some(value) = value {
