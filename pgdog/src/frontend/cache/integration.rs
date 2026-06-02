@@ -153,31 +153,32 @@ impl Cache {
         let bind = client_request.parameters()?;
 
         let decision = policy::resolve(client_request, params, is_read).await;
-        match decision {
-            CacheDecision::Skip => Ok(CacheCheckResult::Passthrough),
-            CacheDecision::ForceCache(ttl) => Ok(CacheCheckResult::Miss(CacheMiss {
-                cache_key_hash: compute_cache_key_hash(database, query.query(), bind),
+        let ttl = match decision {
+            CacheDecision::Skip => return Ok(CacheCheckResult::Passthrough),
+            CacheDecision::ForceCache(ttl) => {
+                return Ok(CacheCheckResult::Miss(CacheMiss {
+                    cache_key_hash: compute_cache_key_hash(database, query.query(), bind),
+                    ttl,
+                }))
+            }
+            CacheDecision::Cache(ttl) => ttl,
+        };
+
+        let cache_key_hash = compute_cache_key_hash(database, query.query(), bind);
+        let guard = self.storage.read().await;
+        let storage = match guard.as_ref() {
+            Some(storage) => storage,
+            None => return Ok(CacheCheckResult::Passthrough),
+        };
+        match storage.get(cache_key_hash).await {
+            Ok(cached) => Ok(CacheCheckResult::Hit { cached }),
+            Err(CacheStorageError::CacheMiss(_)) => Ok(CacheCheckResult::Miss(CacheMiss {
+                cache_key_hash,
                 ttl,
             })),
-            CacheDecision::Cache(ttl) => {
-                let cache_key_hash = compute_cache_key_hash(database, query.query(), bind);
-                let guard = self.storage.read().await;
-                match guard.as_ref() {
-                    None => Ok(CacheCheckResult::Passthrough),
-                    Some(storage) => match storage.get(cache_key_hash).await {
-                        Ok(cached) => Ok(CacheCheckResult::Hit { cached }),
-                        Err(CacheStorageError::CacheMiss(_)) => {
-                            Ok(CacheCheckResult::Miss(CacheMiss {
-                                cache_key_hash,
-                                ttl,
-                            }))
-                        }
-                        Err(e) => {
-                            warn!("{}", e);
-                            Ok(CacheCheckResult::Passthrough)
-                        }
-                    },
-                }
+            Err(e) => {
+                warn!("{}", e);
+                Ok(CacheCheckResult::Passthrough)
             }
         }
     }

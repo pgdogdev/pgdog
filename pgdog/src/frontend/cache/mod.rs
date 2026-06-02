@@ -53,13 +53,12 @@ impl Cache {
     /// Acquires the write lock only when a change is detected; otherwise the
     /// read-lock path is zero-allocation and very fast.
     async fn hotswap_if_needed(&self) {
-        let cfg = &config().config.general.cache;
-
         // Fast path: read-lock to check whether anything has changed.
         {
             let guard = self.storage.read().await;
+            let cfg = &config().config.general.cache;
             let needs_swap = match guard.as_ref() {
-                Some(s) => s.has_config_changed(cfg),
+                Some(s) => s.has_config_changed(),
                 None => cfg.enabled,
             };
             if !needs_swap {
@@ -67,11 +66,11 @@ impl Cache {
             }
         }
 
-        // Slow path: write-lock and rebuild.
+        // Slow path: write-lock, re-check and rebuild.
         let mut guard = self.storage.write().await;
-        // Re-check under the write lock (another task may have already swapped).
+        let cfg = &config().config.general.cache;
         let needs_swap = match guard.as_ref() {
-            Some(s) => s.has_config_changed(cfg),
+            Some(s) => s.has_config_changed(),
             None => cfg.enabled,
         };
 

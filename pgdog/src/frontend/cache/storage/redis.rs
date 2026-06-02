@@ -228,9 +228,10 @@ impl CacheStorage for RedisCacheStorage {
         config().config.general.cache.enabled
     }
 
-    fn has_config_changed(&self, new_config: &CacheConfig) -> bool {
+    fn has_config_changed(&self) -> bool {
+        let new_config = &config().config.general.cache;
         new_config.backend != CacheBackend::Redis
-            || self.config.redis.cmp(&new_config.redis).is_ne()
+            || self.config.redis.url != new_config.redis.url
     }
 }
 

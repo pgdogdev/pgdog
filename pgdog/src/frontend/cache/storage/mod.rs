@@ -5,7 +5,7 @@ pub use redis::RedisCacheStorage;
 use async_trait::async_trait;
 
 use crate::config::{
-    cache::{Cache as CacheConfig, CacheBackend},
+    cache::CacheBackend,
     config,
 };
 
@@ -41,7 +41,10 @@ pub trait CacheStorage: Send + Sync {
     fn is_enabled(&self) -> bool;
 
     /// Returns `true` if cache config has changed (used for hotswap detection).
-    fn has_config_changed(&self, new_config: &CacheConfig) -> bool;
+    /// 
+    /// This method should check only those parameters that require a storage rebuild and
+    /// that are specific to the storage, e.g. `Config::backend` and storage's own settings.
+    fn has_config_changed(&self) -> bool;
 }
 
 /// Construct the appropriate storage backend from the current config.
