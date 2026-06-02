@@ -1,17 +1,17 @@
 use tokio::time::Instant;
 
-use crate::net::messages::BackendPid;
+use crate::net::messages::FrontendPid;
 
 /// Connection request.
 #[derive(Clone, Debug, Copy)]
 pub struct Request {
-    pub id: BackendPid,
+    pub id: FrontendPid,
     pub created_at: Instant,
     pub read: bool,
 }
 
 impl Request {
-    pub fn new(id: BackendPid, read: bool) -> Self {
+    pub fn new(id: FrontendPid, read: bool) -> Self {
         Self {
             id,
             created_at: Instant::now(),
@@ -19,7 +19,7 @@ impl Request {
         }
     }
 
-    pub fn unrouted(id: BackendPid) -> Self {
+    pub fn unrouted(id: FrontendPid) -> Self {
         Self {
             id,
             created_at: Instant::now(),
@@ -30,6 +30,6 @@ impl Request {
 
 impl Default for Request {
     fn default() -> Self {
-        Self::unrouted(BackendPid::random())
+        Self::unrouted(FrontendPid::new())
     }
 }

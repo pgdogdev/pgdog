@@ -28,7 +28,7 @@ use crate::{
         ShardedTable, User,
     },
     frontend::{ClientRequest, RegexParser},
-    net::{messages::BackendPid, Query},
+    net::{messages::FrontendPid, Query},
 };
 
 use super::{Address, Config, Error, Guard, MirrorStats, Request, Shard, ShardConfig};
@@ -388,7 +388,7 @@ impl Cluster {
     }
 
     /// Cancel a query executed by one of the shards.
-    pub async fn cancel(&self, id: BackendPid) -> Result<(), super::super::Error> {
+    pub async fn cancel(&self, id: FrontendPid) -> Result<(), super::super::Error> {
         for shard in &self.shards {
             shard.cancel(id).await?;
         }

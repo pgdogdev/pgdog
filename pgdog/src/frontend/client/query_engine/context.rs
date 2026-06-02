@@ -5,14 +5,14 @@ use crate::{
         router::parser::rewrite::statement::plan::RewriteResult,
         Client, ClientRequest, PreparedStatements,
     },
-    net::{BackendPid, Parameters, Stream},
+    net::{FrontendPid, Parameters, Stream},
 };
 
 #[allow(dead_code)]
 /// Context passed to the query engine to execute a query.
 pub struct QueryEngineContext<'a> {
     /// Client ID running the query.
-    pub(super) id: BackendPid,
+    pub(super) id: FrontendPid,
     /// Prepared statements cache.
     pub(super) prepared_statements: &'a mut PreparedStatements,
     /// Client session parameters.
@@ -48,7 +48,7 @@ impl<'a> QueryEngineContext<'a> {
         let memory_stats = client.memory_stats();
 
         Self {
-            id: client.id.pid(),
+            id: FrontendPid::from(&client.key),
             prepared_statements: &mut client.prepared_statements,
             params: &mut client.params,
             client_request: &mut client.client_request,

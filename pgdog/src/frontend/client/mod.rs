@@ -26,8 +26,8 @@ use crate::config::{self, config, AuthType, ConfigAndUsers};
 use crate::frontend::client::query_engine::{QueryEngine, QueryEngineContext};
 use crate::frontend::ClientComms;
 use crate::net::messages::{
-    Authentication, BackendKeyData, ErrorResponse, FromBytes, Message, Password, Protocol,
-    ProtocolVersion, ReadyForQuery, ToBytes,
+    Authentication, BackendKeyData, ErrorResponse, FromBytes, FrontendPid, Message, Password,
+    Protocol, ProtocolVersion, ReadyForQuery, ToBytes,
 };
 use crate::net::{parameter::Parameters, MessageBuffer, ProtocolMessage, Stream};
 use crate::state::State;
@@ -52,9 +52,9 @@ pub struct Client {
     addr: SocketAddr,
     // Client socket.
     stream: Stream,
-    // Client unique identifier. Randomly generated
+    // Client unique key. Randomly generated
     // for each client.
-    id: BackendKeyData,
+    key: BackendKeyData,
     // Client startup parameters. Keeps track of any parameters
     // the client changes at runtime with `SET` as well.
     params: Parameters,
@@ -231,8 +231,9 @@ impl Client {
         let admin_password = &config.config.admin.password;
         let auth_type = &config.config.general.auth_type;
         let passthrough = config.config.general.passthrough_auth();
-        let id = BackendKeyData::new_client(protocol_version);
-        let comms = ClientComms::new(id.pid());
+        let id = FrontendPid::new();
+        let key = BackendKeyData::new_frontend(protocol_version, id);
+        let comms = ClientComms::new(id);
         let log_connections = config.config.general.log_connections;
 
         // Check if we need to ask the client for its password in plaintext
@@ -320,7 +321,7 @@ impl Client {
 
         // Get connection parameters. These will be most likely cached,
         // unless the pool was just created.
-        let server_params = match conn.parameters(&Request::unrouted(id.pid())).await {
+        let server_params = match conn.parameters(&Request::unrouted(id)).await {
             Ok(params) => params,
             Err(err) => {
                 if err.no_server() {
@@ -342,9 +343,9 @@ impl Client {
             stream.send(&param).await?;
         }
 
-        stream.send(&id).await?;
+        stream.send(&key).await?;
         stream.send_flush(&ReadyForQuery::idle()).await?;
-        comms.connect(id.clone(), addr, &params);
+        comms.connect(key.clone(), addr, &params);
 
         if config.config.general.log_connections {
             info!(
@@ -369,7 +370,7 @@ impl Client {
         Ok(Some(Self {
             addr,
             stream,
-            id,
+            key,
             comms,
             admin,
             streaming: false,
@@ -394,16 +395,16 @@ impl Client {
         connect_params.insert("database", "pgdog");
         connect_params.merge(params);
 
-        let id = BackendKeyData::random_legacy();
-        let pid = id.pid();
+        let id = FrontendPid::new();
+        let key = BackendKeyData::new_frontend(ProtocolVersion::V3_0, id);
         let mut prepared_statements = PreparedStatements::new();
         prepared_statements.level = config().config.general.prepared_statements;
 
         Self {
             stream,
             addr: SocketAddr::from(([127, 0, 0, 1], 1234)),
-            id,
-            comms: ClientComms::new(pid),
+            key,
+            comms: ClientComms::new(id),
             streaming: false,
             prepared_statements,
             admin: false,

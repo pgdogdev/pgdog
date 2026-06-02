@@ -24,8 +24,8 @@ use crate::{
     net::{
         messages::{
             hello::SslReply, Authentication, BackendKeyData, BackendPid, ErrorResponse, FromBytes,
-            Message, ParameterStatus, Password, Protocol, Query, ReadyForQuery, Startup, Terminate,
-            ToBytes,
+            FrontendPid, Message, ParameterStatus, Password, Protocol, Query, ReadyForQuery,
+            Startup, Terminate, ToBytes,
         },
         Close, MessageBuffer, Parameter, ProtocolMessage, Sync,
     },
@@ -48,6 +48,7 @@ pub struct Server {
     addr: Address,
     stream: Option<Stream>,
     key: BackendKeyData,
+    id: BackendPid,
     params: Parameters,
     changed_params: Parameters,
     client_params: Parameters,
@@ -326,12 +327,13 @@ impl Server {
             if stream.is_tls() { "🔒" } else { "" },
         );
 
-        let pid = key.pid();
+        let id = BackendPid::from(&key);
         let mut server = Server {
             addr: addr.clone(),
             stream: Some(stream),
             key,
-            stats: Stats::connect(pid, addr, &params, &options, &config.config.memory),
+            id,
+            stats: Stats::connect(id, addr, &params, &options, &config.config.memory),
             replication_mode: options.replication_mode(),
             params,
             changed_params: Parameters::default(),
@@ -463,11 +465,15 @@ impl Server {
     pub async fn read(&mut self) -> Result<Message, Error> {
         let message = loop {
             if let Some(message) = self.prepared_statements.state_mut().get_simulated() {
-                return Ok(message.backend(self.key.pid()));
+                // INVARIANT: omni dedup in multi_shard relies on this being process-unique;
+                // never substitute a non-unique value here.
+                return Ok(message.backend(self.id));
             }
             match self.stream_buffer.read(self.stream.as_mut().unwrap()).await {
                 Ok(message) => {
-                    let message = message.stream(self.streaming).backend(self.key.pid());
+                    // INVARIANT: omni dedup in multi_shard relies on this being process-unique;
+                    // never substitute a non-unique value here.
+                    let message = message.stream(self.streaming).backend(self.id);
                     match self.prepared_statements.forward(&message) {
                         Ok(forward) => {
                             if forward {
@@ -579,7 +585,7 @@ impl Server {
     /// Synchronize parameters between client and server.
     pub async fn link_client(
         &mut self,
-        id: BackendPid,
+        id: FrontendPid,
         params: &Parameters,
         start_transaction: Option<&str>,
     ) -> Result<usize, Error> {
@@ -995,7 +1001,7 @@ impl Server {
     /// Server connection unique identifier.
     #[inline]
     pub fn id(&self) -> BackendPid {
-        self.key.pid()
+        self.id
     }
 
     /// Backend key data for query cancellation.
@@ -1210,17 +1216,18 @@ pub mod test {
 
     impl Default for Server {
         fn default() -> Self {
-            let cancel_key = BackendKeyData::random_legacy();
-            let pid = cancel_key.pid();
+            let key = BackendKeyData::random_legacy();
+            let id = BackendPid::from(&key);
             let addr = Address::default();
             Self {
                 stream: None,
-                key: cancel_key,
+                key,
+                id,
                 params: Parameters::default(),
                 changed_params: Parameters::default(),
                 client_params: Parameters::default(),
                 stats: Stats::connect(
-                    pid,
+                    id,
                     &addr,
                     &Parameters::default(),
                     &ServerOptions::default(),
@@ -2166,7 +2173,7 @@ pub mod test {
         params.insert("application_name", "test_sync_params");
         params.insert("is_superuser", opposite);
         let changed = server
-            .link_client(BackendPid::random(), &params, None)
+            .link_client(FrontendPid::new(), &params, None)
             .await
             .unwrap();
         assert_eq!(changed, 1);
@@ -2188,7 +2195,7 @@ pub mod test {
         );
 
         let changed = server
-            .link_client(BackendPid::random(), &params, None)
+            .link_client(FrontendPid::new(), &params, None)
             .await
             .unwrap();
         assert_eq!(changed, 0);
@@ -2277,12 +2284,12 @@ pub mod test {
         let mut server = test_server().await;
 
         let changed = server
-            .link_client(BackendPid::random(), &params, None)
+            .link_client(FrontendPid::new(), &params, None)
             .await?;
         assert_eq!(changed, 1);
 
         let changed = server
-            .link_client(BackendPid::random(), &params, None)
+            .link_client(FrontendPid::new(), &params, None)
             .await?;
         assert_eq!(changed, 0);
 
@@ -2291,12 +2298,12 @@ pub mod test {
             params.insert("application_name", value);
 
             let changed = server
-                .link_client(BackendPid::random(), &params, None)
+                .link_client(FrontendPid::new(), &params, None)
                 .await?;
             assert_eq!(changed, 2); // RESET, SET.
 
             let changed = server
-                .link_client(BackendPid::random(), &params, None)
+                .link_client(FrontendPid::new(), &params, None)
                 .await?;
             assert_eq!(changed, 0);
         }
@@ -2874,14 +2881,14 @@ pub mod test {
 
         // Sync params to server
         let changed = server
-            .link_client(BackendPid::random(), &params, None)
+            .link_client(FrontendPid::new(), &params, None)
             .await
             .unwrap();
         assert_eq!(changed, 1);
 
         // Same params should not need re-sync
         let changed = server
-            .link_client(BackendPid::random(), &params, None)
+            .link_client(FrontendPid::new(), &params, None)
             .await
             .unwrap();
         assert_eq!(changed, 0);
@@ -2891,7 +2898,7 @@ pub mod test {
 
         // Now link_client should need to re-sync because client_params was cleared
         let changed = server
-            .link_client(BackendPid::random(), &params, None)
+            .link_client(FrontendPid::new(), &params, None)
             .await
             .unwrap();
         assert!(

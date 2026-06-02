@@ -7,7 +7,7 @@ use std::sync::Arc;
 use crate::backend::databases::{databases, reload, shutdown};
 use crate::config::config;
 use crate::frontend::client::query_engine::two_pc::Manager;
-use crate::net::messages::{hello::SslReply, NegotiateProtocolVersion, Startup};
+use crate::net::messages::{hello::SslReply, FrontendPid, NegotiateProtocolVersion, Startup};
 use crate::net::tls::{acceptor, peer_identity};
 use crate::net::{self, tweak, Stream};
 use crate::sighup::Sighup;
@@ -238,9 +238,9 @@ impl Listener {
                     break;
                 }
 
-                Startup::Cancel { id } => {
-                    if comms().verify_cancel(&id) {
-                        let _ = databases().cancel(id.pid).await;
+                Startup::Cancel { ref id } => {
+                    if comms().verify_cancel(id) {
+                        let _ = databases().cancel(FrontendPid::from(id)).await;
                     }
                     break;
                 }

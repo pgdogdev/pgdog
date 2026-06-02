@@ -63,8 +63,6 @@ impl AdminServer {
         self.messages.extend(messages);
         self.messages.push_back(ReadyForQuery::idle().message()?);
 
-        self.messages = std::mem::take(&mut self.messages).into_iter().collect();
-
         Ok(())
     }
 

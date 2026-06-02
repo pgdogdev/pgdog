@@ -2,9 +2,16 @@ use std::collections::hash_map::Entry;
 
 use fnv::FnvHashMap as HashMap;
 
-use crate::net::{BackendKeyData, BackendPid};
+use crate::net::{BackendKeyData, BackendPid, FrontendPid};
 
 use super::Error;
+
+/// Bundles the backend's identity with the cancel key it carries.
+#[derive(Clone, Debug)]
+struct Checkout {
+    backend: BackendPid,
+    key: BackendKeyData,
+}
 
 /// Track the link between a frontend connection and the backend connection it
 /// currently holds, so cancel requests can be routed.
@@ -14,20 +21,21 @@ use super::Error;
 /// struct stores that mapping for the pool's checked-out connections.
 #[derive(Default, Clone, Debug)]
 pub(super) struct Taken {
-    /// Frontend pid -> cancel key of the backend connection currently
+    /// Frontend pid -> checkout info for the backend connection currently
     /// assigned to that frontend. Cancel routing reads this directly.
-    frontend_to_cancel: HashMap<BackendPid, BackendKeyData>,
+    frontend_to_cancel: HashMap<FrontendPid, Checkout>,
     /// Reverse index from backend pid to the frontend pid that holds it. On
     /// check-in the pool only knows the backend pid, so we use this to find
     /// which `frontend_to_cancel` entry to drop.
-    backend_to_frontend: HashMap<BackendPid, BackendPid>,
+    backend_to_frontend: HashMap<BackendPid, FrontendPid>,
 }
 
 impl Taken {
     #[inline]
-    pub(super) fn take(&mut self, frontend: BackendPid, cancel_key: BackendKeyData) {
-        self.backend_to_frontend.insert(cancel_key.pid(), frontend);
-        self.frontend_to_cancel.insert(frontend, cancel_key);
+    pub(super) fn take(&mut self, frontend: FrontendPid, backend: BackendPid, key: BackendKeyData) {
+        self.backend_to_frontend.insert(backend, frontend);
+        self.frontend_to_cancel
+            .insert(frontend, Checkout { backend, key });
     }
 
     #[inline]
@@ -41,7 +49,7 @@ impl Taken {
         // after the frontend has already taken a newer backend; in that case
         // the entry belongs to the newer backend and must not be touched.
         if let Entry::Occupied(entry) = self.frontend_to_cancel.entry(frontend) {
-            if entry.get().pid() == backend {
+            if entry.get().backend == backend {
                 entry.remove();
             }
         }
@@ -61,15 +69,15 @@ impl Taken {
 
     /// Backend cancel key for this frontend's current checkout.
     #[inline]
-    pub(super) fn cancel_key(&self, frontend: BackendPid) -> Option<&BackendKeyData> {
-        self.frontend_to_cancel.get(&frontend)
+    pub(super) fn cancel_key(&self, frontend: FrontendPid) -> Option<&BackendKeyData> {
+        self.frontend_to_cancel.get(&frontend).map(|c| &c.key)
     }
 
     /// All cancel keys for currently checked-out backend connections. For
     /// frontends with multiple concurrent checkouts, only the latest is
     /// returned (matches prior behavior).
     pub(super) fn cancel_keys(&self) -> impl Iterator<Item = &BackendKeyData> {
-        self.frontend_to_cancel.values()
+        self.frontend_to_cancel.values().map(|c| &c.key)
     }
 
     #[cfg(test)]
@@ -82,7 +90,7 @@ impl Taken {
 mod tests {
     use super::*;
 
-    fn key(pid: BackendPid) -> BackendKeyData {
+    fn key(pid: i32) -> BackendKeyData {
         BackendKeyData::legacy(pid, 0)
     }
 
@@ -91,18 +99,18 @@ mod tests {
         let taken = Taken::default();
         assert_eq!(taken.len(), 0);
         assert!(taken.is_empty());
-        assert_eq!(taken.cancel_key(BackendPid::random()), None);
+        assert_eq!(taken.cancel_key(FrontendPid::new()), None);
         assert_eq!(taken.cancel_keys().count(), 0);
     }
 
     #[test]
     fn take_then_check_in_round_trip() {
         let mut taken = Taken::default();
-        let frontend = BackendPid::random();
-        let backend = BackendPid::random();
-        let cancel_key = key(backend);
+        let frontend = FrontendPid::new();
+        let backend = BackendPid::for_test(1);
+        let cancel_key = key(backend.pid());
 
-        taken.take(frontend, cancel_key.clone());
+        taken.take(frontend, backend, cancel_key.clone());
         assert_eq!(taken.len(), 1);
         assert_eq!(taken.cancel_key(frontend), Some(&cancel_key));
         assert_eq!(taken.cancel_keys().count(), 1);
@@ -115,7 +123,7 @@ mod tests {
     #[test]
     fn check_in_unknown_backend_errors() {
         let mut taken = Taken::default();
-        let unknown = BackendPid::random();
+        let unknown = BackendPid::for_test(99);
         assert_eq!(
             taken.check_in(unknown).unwrap_err(),
             Error::UntrackedConnCheckin(unknown),
@@ -126,27 +134,30 @@ mod tests {
     fn cancel_key_recovers_server_pid() {
         // The map relies on cancel_key.pid() == backend pid as an invariant.
         let mut taken = Taken::default();
-        let frontend = BackendPid::random();
-        let backend = BackendPid::random();
+        let frontend = FrontendPid::new();
+        let backend = BackendPid::for_test(2);
 
-        taken.take(frontend, key(backend));
-        assert_eq!(taken.cancel_key(frontend).map(|k| k.pid()), Some(backend));
+        taken.take(frontend, backend, key(backend.pid()));
+        assert_eq!(
+            taken.cancel_key(frontend).map(|k| k.pid()),
+            Some(backend.pid())
+        );
     }
 
     #[test]
     fn distinct_frontends_are_independent() {
         let mut taken = Taken::default();
-        let (fa, ba) = (BackendPid::random(), BackendPid::random());
-        let (fb, bb) = (BackendPid::random(), BackendPid::random());
+        let (fa, ba) = (FrontendPid::new(), BackendPid::for_test(3));
+        let (fb, bb) = (FrontendPid::new(), BackendPid::for_test(4));
 
-        taken.take(fa, key(ba));
-        taken.take(fb, key(bb));
+        taken.take(fa, ba, key(ba.pid()));
+        taken.take(fb, bb, key(bb.pid()));
         assert_eq!(taken.len(), 2);
 
         taken.check_in(ba).unwrap();
         assert_eq!(taken.len(), 1);
         assert_eq!(taken.cancel_key(fa), None);
-        assert_eq!(taken.cancel_key(fb).map(|k| k.pid()), Some(bb));
+        assert_eq!(taken.cancel_key(fb).map(|k| k.pid()), Some(bb.pid()));
 
         taken.check_in(bb).unwrap();
         assert!(taken.is_empty());
@@ -165,18 +176,18 @@ mod tests {
     #[test]
     fn deferred_check_in_after_same_frontend_retake() {
         let mut taken = Taken::default();
-        let frontend = BackendPid::random();
-        let backend_a = BackendPid::random();
-        let backend_b = BackendPid::random();
-        let key_a = key(backend_a);
-        let key_b = key(backend_b);
+        let frontend = FrontendPid::new();
+        let backend_a = BackendPid::for_test(5);
+        let backend_b = BackendPid::for_test(6);
+        let key_a = key(backend_a.pid());
+        let key_b = key(backend_b.pid());
 
         // Step 1: take A.
-        taken.take(frontend, key_a.clone());
+        taken.take(frontend, backend_a, key_a.clone());
         assert_eq!(taken.cancel_key(frontend), Some(&key_a));
 
         // Step 3: F retakes with B before A's deferred check-in fires.
-        taken.take(frontend, key_b.clone());
+        taken.take(frontend, backend_b, key_b.clone());
         assert_eq!(taken.len(), 2, "both backends still tracked");
         assert_eq!(taken.cancel_key(frontend), Some(&key_b), "latest wins");
 
@@ -201,16 +212,19 @@ mod tests {
     #[test]
     fn deferred_check_in_before_same_frontend_retake() {
         let mut taken = Taken::default();
-        let frontend = BackendPid::random();
-        let backend_a = BackendPid::random();
-        let backend_b = BackendPid::random();
+        let frontend = FrontendPid::new();
+        let backend_a = BackendPid::for_test(7);
+        let backend_b = BackendPid::for_test(8);
 
-        taken.take(frontend, key(backend_a));
+        taken.take(frontend, backend_a, key(backend_a.pid()));
         taken.check_in(backend_a).unwrap();
         assert!(taken.is_empty());
 
-        taken.take(frontend, key(backend_b));
-        assert_eq!(taken.cancel_key(frontend).map(|k| k.pid()), Some(backend_b));
+        taken.take(frontend, backend_b, key(backend_b.pid()));
+        assert_eq!(
+            taken.cancel_key(frontend).map(|k| k.pid()),
+            Some(backend_b.pid())
+        );
         taken.check_in(backend_b).unwrap();
         assert!(taken.is_empty());
     }
@@ -218,10 +232,10 @@ mod tests {
     #[test]
     fn double_check_in_second_errors() {
         let mut taken = Taken::default();
-        let frontend = BackendPid::random();
-        let backend = BackendPid::random();
+        let frontend = FrontendPid::new();
+        let backend = BackendPid::for_test(9);
 
-        taken.take(frontend, key(backend));
+        taken.take(frontend, backend, key(backend.pid()));
         taken.check_in(backend).unwrap();
         assert_eq!(
             taken.check_in(backend).unwrap_err(),

@@ -1,6 +1,8 @@
 //! BackendKeyData (B) message.
-
-use std::fmt::Display;
+//!
+//! Direction-agnostic wire bundle: `pid` is a `FrontendPid` value in the client
+//! direction and a real Postgres backend pid in the server direction. Never used
+//! as a map key — all keying uses `FrontendPid` or `BackendPid` directly.
 
 use crate::net::messages::code;
 use crate::net::messages::prelude::*;
@@ -8,7 +10,7 @@ use crate::net::messages::protocol_version::ProtocolVersion;
 use bytes::Buf;
 use smallvec::SmallVec;
 
-use super::backend_pid::BackendPid;
+use super::frontend_pid::FrontendPid;
 
 use rand::Rng;
 const LEGACY_SECRET_LEN: usize = std::mem::size_of::<i32>();
@@ -16,20 +18,19 @@ const EXTENDED_SECRET_LEN: usize = 32;
 const MAX_SECRET_LEN: usize = 256;
 
 /// Variable-length cancel secret.
-#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SecretKey {
     bytes: SmallVec<[u8; EXTENDED_SECRET_LEN]>,
 }
 
 impl SecretKey {
-    /// Create a 3.0-compatible secret key from a 4-byte integer.
+    /// 3.0-compatible secret from a 4-byte integer.
     pub fn legacy(secret: i32) -> Self {
         Self {
             bytes: SmallVec::from_slice(&secret.to_be_bytes()),
         }
     }
 
-    /// Create a random secret key of the requested length.
     pub fn random(len: usize) -> Self {
         assert!(
             (1..=MAX_SECRET_LEN).contains(&len),
@@ -42,7 +43,6 @@ impl SecretKey {
         Self { bytes }
     }
 
-    /// Create a secret key from raw wire bytes.
     pub fn from_slice(secret: &[u8]) -> Result<Self, crate::net::Error> {
         if secret.is_empty() || secret.len() > MAX_SECRET_LEN {
             return Err(crate::net::Error::UnexpectedPayload);
@@ -53,69 +53,42 @@ impl SecretKey {
         })
     }
 
-    /// Secret bytes as they appear on the wire.
     pub fn as_slice(&self) -> &[u8] {
         self.bytes.as_slice()
     }
 
-    /// Secret length in bytes.
+    /// Compare two secrets in constant time.
+    ///
+    /// Cancel authentication compares an attacker-supplied secret against the
+    /// stored one. A short-circuiting `==` would leak, via timing, how many
+    /// leading bytes matched, letting an attacker recover the secret byte by
+    /// byte. Length is not secret, so an early length mismatch returning `false`
+    /// is fine.
+    pub fn constant_time_eq(&self, other: &SecretKey) -> bool {
+        aws_lc_rs::constant_time::verify_slices_are_equal(self.as_slice(), other.as_slice()).is_ok()
+    }
+
     pub fn len(&self) -> usize {
         self.bytes.len()
     }
 }
 
-impl Display for SecretKey {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if self.len() == LEGACY_SECRET_LEN {
-            let legacy = i32::from_be_bytes(self.as_slice().try_into().expect("4-byte secret"));
-            write!(f, "{legacy}")
-        } else {
-            for byte in self.as_slice() {
-                write!(f, "{byte:02x}")?;
-            }
-            Ok(())
-        }
-    }
-}
-
-/// BackendKeyData (B)
-///
-/// Holds the full cancel secret alongside the pid.  Use `BackendPid` instead
-/// when only the process identity is needed (HashMap keys, routing, stats).
+/// BackendKeyData (B) — pid + cancel secret on the wire.
+/// `pid` is a raw `i32`; `from_bytes` must not mint a seq to keep round-trip pure.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BackendKeyData {
-    /// Process ID.
-    pub pid: BackendPid,
-    /// Process secret.
+    pub pid: i32,
     pub secret: SecretKey,
 }
 
-impl Display for BackendKeyData {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "pid={}, secret={}", self.pid, self.secret)
-    }
-}
-
 impl BackendKeyData {
-    /// Return the `BackendPid` for this key (pid only, no secret).
-    pub fn pid(&self) -> BackendPid {
+    /// Wire pid.
+    pub fn pid(&self) -> i32 {
         self.pid
     }
 
-    /// Create new random BackendKeyData (B) message.
-    pub fn random_legacy() -> Self {
-        Self {
-            pid: BackendPid::random(),
-            secret: SecretKey::random(LEGACY_SECRET_LEN),
-        }
-    }
-
-    /// Create new BackendKeyData for a connected client.
-    ///
-    /// This counts client IDs incrementally.
-    pub fn new_client(protocol_version: ProtocolVersion) -> Self {
-        // The client must echo this secret back in CancelRequest, so its shape
-        // has to match the negotiated frontend protocol version.
+    /// Mint a key for a new client connection.
+    pub fn new_frontend(protocol_version: ProtocolVersion, frontend_key: FrontendPid) -> Self {
         let secret_len = if protocol_version.supports_extended_cancel_key() {
             EXTENDED_SECRET_LEN
         } else {
@@ -123,13 +96,21 @@ impl BackendKeyData {
         };
 
         Self {
-            pid: BackendPid::next(),
+            pid: frontend_key.pid(),
             secret: SecretKey::random(secret_len),
         }
     }
 
-    /// Create legacy 3.0-compatible backend key data.
-    pub fn legacy(pid: BackendPid, secret: i32) -> Self {
+    /// Fallback for servers that don't send a `K` message (RDS-proxy etc.).
+    /// `pid = 0` sentinel; cancel is a no-op for these connections.
+    pub fn random_legacy() -> Self {
+        Self {
+            pid: 0,
+            secret: SecretKey::random(LEGACY_SECRET_LEN),
+        }
+    }
+
+    pub fn legacy(pid: i32, secret: i32) -> Self {
         Self {
             pid,
             secret: SecretKey::legacy(secret),
@@ -141,7 +122,7 @@ impl ToBytes for BackendKeyData {
     fn to_bytes(&self) -> bytes::Bytes {
         let mut payload = Payload::named(self.code());
 
-        payload.put_i32(i32::from(self.pid));
+        payload.put_i32(self.pid);
         payload.put_slice(self.secret.as_slice());
 
         payload.freeze()
@@ -153,8 +134,8 @@ impl FromBytes for BackendKeyData {
         code!(bytes, 'K');
 
         let len = bytes.get_i32();
-        // Protocol 3.2 extends BackendKeyData with a variable-length secret,
-        // while 3.0 keeps the legacy 4-byte payload.
+        // Protocol 3.2 extended BackendKeyData with a variable-length secret;
+        // 3.0 keeps the legacy 4-byte payload.
         let secret_len = usize::try_from(len)
             .ok()
             .and_then(|len| len.checked_sub(8))
@@ -163,7 +144,7 @@ impl FromBytes for BackendKeyData {
             return Err(Error::UnexpectedPayload);
         }
 
-        let pid = BackendPid::from(bytes.get_i32());
+        let pid = bytes.get_i32();
         let secret = SecretKey::from_slice(&bytes.copy_to_bytes(secret_len))?;
 
         Ok(Self { pid, secret })
@@ -178,12 +159,13 @@ impl Protocol for BackendKeyData {
 
 #[cfg(test)]
 mod tests {
-    use super::{BackendKeyData, BackendPid, ProtocolVersion, SecretKey};
+    use super::{BackendKeyData, ProtocolVersion, SecretKey};
     use crate::net::messages::{FromBytes, ToBytes};
+    use crate::net::FrontendPid;
 
     #[test]
     fn test_backend_key_roundtrip_legacy() {
-        let key = BackendKeyData::legacy(BackendPid::from(42), 1234);
+        let key = BackendKeyData::legacy(42, 1234);
         let roundtrip = BackendKeyData::from_bytes(key.to_bytes()).unwrap();
         assert_eq!(roundtrip, key);
         assert_eq!(roundtrip.secret.len(), 4);
@@ -192,7 +174,7 @@ mod tests {
     #[test]
     fn test_backend_key_roundtrip_extended() {
         let key = BackendKeyData {
-            pid: BackendPid::from(7),
+            pid: 7,
             secret: SecretKey::random(32),
         };
         let roundtrip = BackendKeyData::from_bytes(key.to_bytes()).unwrap();
@@ -203,7 +185,7 @@ mod tests {
     #[test]
     fn test_backend_key_roundtrip_max_secret_len() {
         let key = BackendKeyData {
-            pid: BackendPid::from(9),
+            pid: 9,
             secret: SecretKey::random(256),
         };
         let roundtrip = BackendKeyData::from_bytes(key.to_bytes()).unwrap();
@@ -214,13 +196,13 @@ mod tests {
     #[test]
     fn test_new_client_uses_protocol_specific_secret_length() {
         assert_eq!(
-            BackendKeyData::new_client(ProtocolVersion::V3_0)
+            BackendKeyData::new_frontend(ProtocolVersion::V3_0, FrontendPid::new())
                 .secret
                 .len(),
             4
         );
         assert_eq!(
-            BackendKeyData::new_client(ProtocolVersion::V3_2)
+            BackendKeyData::new_frontend(ProtocolVersion::V3_2, FrontendPid::new())
                 .secret
                 .len(),
             32

@@ -12,21 +12,16 @@ use tokio::time::Instant;
 use crate::{
     backend::{pool::stats::MemoryStats, Pool, ServerOptions},
     config::Memory,
-    net::{messages::BackendPid, Parameters},
+    net::{
+        messages::{BackendPid, FrontendPid},
+        Parameters,
+    },
     state::State,
 };
 
 use super::pool::Address;
 
-/// Per-connection key for the global stats map.
-///
-/// Keyed by `(Address, BackendPid)` rather than `BackendPid` alone: Postgres
-/// pids are only unique within a single backend instance, so a pgdog proxying
-/// multiple backends (different hosts/dbs/users) can otherwise see two live
-/// connections with the same pid collide and silently evict each other.
-type ServerKey = (Address, BackendPid);
-
-static STATS: Lazy<RwLock<HashMap<ServerKey, Arc<Mutex<ConnectedServer>>>>> =
+static STATS: Lazy<RwLock<HashMap<BackendPid, Arc<Mutex<ConnectedServer>>>>> =
     Lazy::new(|| RwLock::new(HashMap::default()));
 
 /// Get a snapshot of all connected-server stats.
@@ -54,7 +49,7 @@ pub struct ServerStats {
     pub last_used: Instant,
     pub last_healthcheck: Option<Instant>,
     pub created_at: Instant,
-    pub client_id: Option<BackendPid>,
+    pub client_id: Option<FrontendPid>,
     query_timer: Option<Instant>,
     transaction_timer: Option<Instant>,
     idle_in_transaction_timer: Option<Instant>,
@@ -103,7 +98,6 @@ pub struct ConnectedServer {
     pub stats: ServerStats,
     pub addr: Address,
     pub application_name: String,
-    pub client: Option<BackendPid>,
 }
 
 /// Server statistics handle.
@@ -115,7 +109,6 @@ pub struct ConnectedServer {
 pub struct Stats {
     local: ServerStats,
     shared: Arc<Mutex<ConnectedServer>>,
-    key: ServerKey,
 }
 
 impl Stats {
@@ -133,14 +126,12 @@ impl Stats {
             stats: local,
             addr: addr.clone(),
             application_name: params.get_default("application_name", "PgDog").to_owned(),
-            client: None,
         };
 
         let shared = Arc::new(Mutex::new(server));
-        let key: ServerKey = (addr.clone(), id);
-        STATS.write().insert(key.clone(), Arc::clone(&shared));
+        STATS.write().insert(id, Arc::clone(&shared));
 
-        Stats { local, shared, key }
+        Stats { local, shared }
     }
 
     /// Sync local stats to shared (called on I/O operations).
@@ -162,7 +153,7 @@ impl Stats {
         self.sync_to_shared();
     }
 
-    pub fn link_client(&mut self, client_name: &str, server_name: &str, id: BackendPid) {
+    pub fn link_client(&mut self, client_name: &str, server_name: &str, id: FrontendPid) {
         self.local.client_id = Some(id);
         if client_name != server_name {
             let mut guard = self.shared.lock();
@@ -313,7 +304,7 @@ impl Stats {
 
     /// Server is closing.
     pub(super) fn disconnect(&self) {
-        STATS.write().remove(&self.key);
+        STATS.write().remove(&self.local.id);
     }
 
     /// Reset last_checkout counts.

@@ -14,7 +14,7 @@ use tracing::{debug, error};
 use crate::backend::pool::LsnStats;
 use crate::backend::{ConnectReason, DisconnectReason, Server, ServerOptions};
 use crate::config::PoolerMode;
-use crate::net::messages::BackendPid;
+use crate::net::messages::FrontendPid;
 use crate::net::{Parameter, Parameters};
 
 use super::inner::CheckInResult;
@@ -268,7 +268,7 @@ impl Pool {
     }
 
     /// Send a cancellation request if the client is connected to a server.
-    pub async fn cancel(&self, id: BackendPid) -> Result<(), super::super::Error> {
+    pub async fn cancel(&self, id: FrontendPid) -> Result<(), super::super::Error> {
         // Must NOT hold the lock while doing async I/O.
         let key = self.lock().cancel_key(id).cloned();
         if let Some(key) = key {
@@ -331,6 +331,7 @@ impl Pool {
     /// Send a cancellation request for all running queries.
     pub async fn cancel_all(&self) -> Result<(), Error> {
         let addr = self.addr().clone();
+        // Collect into a Vec to drop the pool lock before awaiting
         let futures: Vec<_> = self
             .lock()
             .cancel_keys()

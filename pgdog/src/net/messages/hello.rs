@@ -2,7 +2,7 @@
 
 use crate::net::{
     c_string,
-    messages::{BackendKeyData, BackendPid, ProtocolVersion},
+    messages::{BackendKeyData, ProtocolVersion},
     parameter::{ParameterValue, Parameters},
     Error,
 };
@@ -49,7 +49,7 @@ impl Startup {
             80877104 => Ok(Startup::GssEnc),
             // CancelRequest (F)
             80877102 => {
-                let pid = BackendPid::from(stream.read_i32().await?);
+                let pid = stream.read_i32().await?;
                 // CancelRequest secrets became variable-length in protocol 3.2.
                 let secret_len = usize::try_from(len)
                     .ok()
@@ -204,7 +204,7 @@ impl super::ToBytes for Startup {
                 let mut payload = Payload::new();
 
                 payload.put_i32(80877102);
-                payload.put_i32(i32::from(id.pid));
+                payload.put_i32(id.pid);
                 payload.put_slice(id.secret.as_slice());
 
                 payload.freeze()
@@ -299,6 +299,7 @@ fn search_path(value: &str) -> ParameterValue {
 #[cfg(test)]
 mod test {
     use crate::net::messages::{BackendKeyData, ProtocolVersion, ToBytes};
+    use crate::net::FrontendPid;
 
     use super::*;
     use bytes::{Buf, BufMut, BytesMut};
@@ -466,7 +467,7 @@ mod test {
     #[tokio::test]
     async fn test_cancel_roundtrip_extended_secret() {
         let cancel = Startup::Cancel {
-            id: BackendKeyData::new_client(ProtocolVersion::V3_2),
+            id: BackendKeyData::new_frontend(ProtocolVersion::V3_2, FrontendPid::new()),
         };
         let bytes = cancel.to_bytes();
 
