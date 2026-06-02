@@ -286,6 +286,7 @@ PLATFORMS
   x86_64-linux-musl
 
 DEPENDENCIES
+  concurrent-ruby
   datadog (~> 2.0)
   pg
   rails
