@@ -19,6 +19,7 @@ Cache SELECT queries in Redis, bypass PostgreSQL on cache hit, populate cache on
 **RedisConfig struct** (`[general.cache.redis]`):
 - `url: String` — Redis connection URL (default `redis://localhost:6379`)
 - `cache_key_prefix: String` — prefix prepended to every Redis key (default `pgdog:`)
+- `operation_timeout: NonZeroU64` — timeout in seconds for individual Redis operations (GET/SET/ping) (default `2`)
 
 **Cache struct** (`[general.cache]`):
 - `enabled: bool` — is caching on? (default `false`)
@@ -36,8 +37,9 @@ policy  = "cache"
 ttl     = 300
 
 [general.cache.redis]
-url              = "redis://localhost:6379"
-cache_key_prefix = "pgdog:"
+url               = "redis://localhost:6379"
+cache_key_prefix  = "pgdog:"
+operation_timeout = 2
 ```
 
 **`general.rs`** — `General` struct holds `cache: Cache` field. **Cache config is global.**
@@ -78,15 +80,16 @@ Key methods:
 
 **`storage/redis.rs`** — Redis storage backend (`RedisCacheStorage`) implementing `CacheStorage`:
 - `RedisCacheStorage::new(config)` — builds client from given URL; immediately spawns a background connection task; returns `None` if URL is invalid
-- Background connect task: retries `init()` in a loop (5ms to 5s exponential backoff); sets `reconnecting = false` on success; CAS-guarded so only one task runs at a time
-- `get(&self, key)` — returns `Result<Vec<u8>, Error>`; returns `Err(Error::ConnectionFailed)` immediately (triggering cache miss) if not yet connected; marks `reconnecting` and spawns reconnect on Redis errors
-- `set(&self, key, value, ttl)` — stores bytes with EX expiration; returns immediately on disconnect; respects `max_result_size` from live config
+- Background connect task: retries `init()` in a loop (5ms to 5s exponential backoff); sets `reconnecting = false` on success; CAS-guarded so only one task runs at a time; timeout for `init()` read from live config (`config.redis.operation_timeout`)
+- `get(&self, key)` — returns `Result<Vec<u8>, Error>`; returns `Err(Error::ConnectionFailed)` immediately (triggering cache miss) if not yet connected; marks `reconnecting` and spawns reconnect on Redis errors; operation timeout read from live config
+- `set(&self, key, value, ttl)` — stores bytes with EX expiration; returns immediately on disconnect; respects `max_result_size` from live config; operation timeout read from live config
 - `reconnect()` — spawns reconnect if not already running (CAS-guarded)
-- `has_config_changed()` — returns `true` if `backend != Redis` or `self.config.redis.url != live config url`; only URL triggers a rebuild (other redis settings like `cache_key_prefix` are read from live config on every call)
+- `has_config_changed()` — returns `true` if `backend != Redis` or `self.url != live config url`; only URL triggers a rebuild (all other redis settings including `cache_key_prefix`, `operation_timeout` are read from live config on every call)
 - `is_enabled()` — reads live `config().config.general.cache.enabled`
 - Key prefix comes from `config().config.general.cache.redis.cache_key_prefix`
 - `reconnecting: Arc<AtomicBool>` — prevents multiple concurrent reconnect tasks
-- All Redis operations wrapped in `tokio::time::timeout(REDIS_OPERATION_TIMEOUT)` (2s)
+- All Redis operations wrapped in `tokio::time::timeout(Duration::from_secs(operation_timeout))` where `operation_timeout` is read from live config on every call (no compile-time constant)
+- `RedisCacheStorage` stores only `url: String` (not the full `CacheConfig`) — all other settings are read from live config; this means `cache_key_prefix` and `operation_timeout` changes take effect immediately without a storage rebuild
 
 **`policy.rs`** — 2-tier policy resolution:
 - `CacheDirective` enum: `Cache { ttl_seconds }`, `ForceCache { ttl_seconds }`, `NoCache` (default)
@@ -167,6 +170,7 @@ xxhash-rust = { version = "0.8", features = ["xxh3"]}
 | Query normalization | On-the-fly in hasher: comments stripped, whitespace collapsed (except inside string literals), no `String` allocated |
 | Wire format | Full PostgreSQL wire messages stored as raw bytes (one concatenated buffer) |
 | Config hotswap | `has_config_changed()` reads live config internally; only URL/backend type triggers rebuild |
+| Redis operation timeout | Configurable via `redis.operation_timeout` (seconds, default `2`); read from live config on every call — no rebuild needed to change it |
 
 ---
 
@@ -306,17 +310,17 @@ SQL comment  →  pgdog.cache parameter  →  DB policy config
 
 26. **`has_config_changed` reads live config internally** — The method signature changed from `has_config_changed(&self, new_config: &CacheConfig) -> bool` to `has_config_changed(&self) -> bool`. Each implementation reads `config()` directly. For Redis, only `redis.url` is compared (not the full `RedisConfig`): `cache_key_prefix` and other runtime settings are read from live config on every call and do not require a storage rebuild.
 
+27. **Set redis query timeout from config** — `RedisConfig` gains `operation_timeout: NonZeroU64` (default `2` seconds). The `REDIS_OPERATION_TIMEOUT` compile-time constant is removed. All `tokio::time::timeout` calls in `storage/redis.rs` (init, GET, SET) read `config().config.general.cache.redis.operation_timeout` from live config on every invocation. `RedisCacheStorage` no longer stores the full `CacheConfig`; it stores only `url: String` for change-detection — all other settings (`cache_key_prefix`, `operation_timeout`) are fetched from live config on each call, so they take effect immediately without a storage rebuild. Schema updated with the new field.
+
 ---
 
 ## What's Left To Do
 
 1. **Redis disconnect/reconnect under heavy load** — The reconnection logic works, but timing edge cases under rapid disconnect/reconnect cycles still need stress-testing.
 
-2. **Set redis query timeout from config**
+2. **Add hint for query hash key**
 
-3. **Add hint for query hash key**
-
-4. **Add config flag for mandatory availability of cache storage** — query will fail with error if Redis (or another cache storage) is unavailable. And subtask: first query inits cache client, but connection is established later, which is why the cache storage is unavailable for the first query — so need to wait for established connection.
+3. **Add config flag for mandatory availability of cache storage** — query will fail with error if Redis (or another cache storage) is unavailable. And subtask: first query inits cache client, but connection is established later, which is why the cache storage is unavailable for the first query — so need to wait for established connection.
 
 # Tests
 

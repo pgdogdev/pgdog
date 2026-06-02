@@ -1,3 +1,5 @@
+use std::num::NonZeroU64;
+
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -64,6 +66,12 @@ pub struct RedisConfig {
     /// _Default:_ `pgdog:`
     #[serde(default = "RedisConfig::cache_key_prefix")]
     pub cache_key_prefix: String,
+
+    /// Timeout for individual Redis operations (GET/SET/ping).
+    /// 
+    /// _Default:_ `2`
+    #[serde(default = "RedisConfig::operation_timeout")]
+    pub operation_timeout: NonZeroU64,
 }
 
 impl Default for RedisConfig {
@@ -71,6 +79,7 @@ impl Default for RedisConfig {
         Self {
             url: Self::url(),
             cache_key_prefix: Self::cache_key_prefix(),
+            operation_timeout: Self::operation_timeout(),
         }
     }
 }
@@ -82,6 +91,10 @@ impl RedisConfig {
 
     fn cache_key_prefix() -> String {
         "pgdog:".to_string()
+    }
+
+    fn operation_timeout() -> NonZeroU64 {
+        NonZeroU64::new(2).expect("2 is non-zero")
     }
 }
 

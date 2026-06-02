@@ -11,8 +11,6 @@ use crate::config::{cache::Cache as CacheConfig, config};
 
 use super::{CacheStorage, Error};
 
-/// Timeout for individual Redis operations (GET/SET/ping).
-const REDIS_OPERATION_TIMEOUT: Duration = Duration::from_secs(2);
 /// Max time between reconnection attempts
 const MAX_REDIS_RECONNECTION_PERIOD: Duration = Duration::from_secs(5);
 
@@ -25,8 +23,8 @@ const MAX_REDIS_RECONNECTION_PERIOD: Duration = Duration::from_secs(5);
 /// At most one reconnect task runs at any time, enforced by a CAS on `reconnecting`.
 pub struct RedisCacheStorage {
     client: RedisClient,
-    /// Cache config.
-    config: CacheConfig,
+    /// Redis url (only for update tracking).
+    url: String,
     /// Guards against spawning multiple concurrent reconnect tasks.
     reconnecting: Arc<AtomicBool>,
 }
@@ -34,7 +32,7 @@ pub struct RedisCacheStorage {
 impl std::fmt::Debug for RedisCacheStorage {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RedisCacheStorage")
-            .field("config", &self.config)
+            .field("url", &self.url)
             .field("reconnecting", &self.reconnecting.load(Ordering::Relaxed))
             .finish()
     }
@@ -64,7 +62,7 @@ impl RedisCacheStorage {
 
         let storage = Self {
             client,
-            config: config.clone(),
+            url: config.redis.url.clone(),
             reconnecting,
         };
 
@@ -90,18 +88,23 @@ impl RedisCacheStorage {
                 attempt += 1;
                 debug!("Redis connect attempt #{}", attempt);
 
-                let init_ok =
-                    match tokio::time::timeout(REDIS_OPERATION_TIMEOUT, client.init()).await {
-                        Ok(Ok(_)) => true,
-                        Ok(Err(e)) => {
-                            debug!("Redis init error: {}", e);
-                            false
-                        }
-                        Err(_) => {
-                            debug!("Redis init timed out");
-                            false
-                        }
-                    };
+                let operation_timeout = config().config.general.cache.redis.operation_timeout.get();
+                let init_ok = match tokio::time::timeout(
+                    Duration::from_secs(operation_timeout),
+                    client.init(),
+                )
+                .await
+                {
+                    Ok(Ok(_)) => true,
+                    Ok(Err(e)) => {
+                        debug!("Redis init error: {}", e);
+                        false
+                    }
+                    Err(_) => {
+                        debug!("Redis init timed out");
+                        false
+                    }
+                };
 
                 if init_ok {
                     reconnecting.store(false, Ordering::Release);
@@ -142,10 +145,13 @@ impl CacheStorage for RedisCacheStorage {
             return Err(Error::ConnectionFailed("Redis not connected"));
         }
 
-        let full_key = format!("{}{}", self.config.redis.cache_key_prefix, key);
+        let config = &config().config.general.cache;
 
+        let full_key = format!("{}{}", config.redis.cache_key_prefix, key);
+
+        let operation_timeout = config.redis.operation_timeout.get();
         let redis_result = tokio::time::timeout(
-            REDIS_OPERATION_TIMEOUT,
+            Duration::from_secs(operation_timeout),
             self.client.get::<RedisValue, _>(full_key),
         )
         .await;
@@ -179,7 +185,9 @@ impl CacheStorage for RedisCacheStorage {
             return Err(Error::ConnectionFailed("Redis not connected"));
         }
 
-        let max_result_size = config().config.general.cache.max_result_size;
+        let config = &config().config.general.cache;
+
+        let max_result_size = config.max_result_size;
         if max_result_size != 0 && value.len() > max_result_size {
             debug!(
                 "Skipping cache for key {}: size {} exceeds max {}",
@@ -190,11 +198,12 @@ impl CacheStorage for RedisCacheStorage {
             return Ok(());
         }
 
-        let full_key = format!("{}{}", self.config.redis.cache_key_prefix, key);
+        let full_key = format!("{}{}", config.redis.cache_key_prefix, key);
         let ttl_seconds = ttl as i64;
 
+        let operation_timeout = config.redis.operation_timeout.get();
         match tokio::time::timeout(
-            REDIS_OPERATION_TIMEOUT,
+            Duration::from_secs(operation_timeout),
             self.client.set::<(), _, _>(
                 full_key,
                 value,
@@ -230,8 +239,7 @@ impl CacheStorage for RedisCacheStorage {
 
     fn has_config_changed(&self) -> bool {
         let new_config = &config().config.general.cache;
-        new_config.backend != CacheBackend::Redis
-            || self.config.redis.url != new_config.redis.url
+        new_config.backend != CacheBackend::Redis || self.url != new_config.redis.url
     }
 }
 
@@ -240,7 +248,7 @@ impl Clone for RedisCacheStorage {
     fn clone(&self) -> Self {
         Self {
             client: self.client.clone_new(),
-            config: self.config.clone(),
+            url: self.url.clone(),
             reconnecting: Arc::new(AtomicBool::new(false)),
         }
     }
