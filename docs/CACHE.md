@@ -63,16 +63,17 @@ pub use storage::{CacheStorage, RedisCacheStorage};
 
 **Global singleton:** Cache is global-scoped, not connection-scoped. Accessed via `cache()` function which returns `Arc<Cache>` from a `Lazy<Arc<Cache>>` static. `Cache::new()` reads config internally — no parameters needed.
 
-**Config hotswap:** `hotswap_if_needed()` is called at the top of `try_read_cache` and `save_response_in_cache`. It fast-paths with a read-lock; acquires write-lock only if the URL or backend type has changed, then rebuilds the storage.
+**Config hotswap:** `hotswap_if_needed()` is called at the top of `try_read_cache` and `save_response_in_cache`. It fast-paths with a read-lock; acquires write-lock only if `has_config_changed()` returns true, then rebuilds the storage. The write-lock path re-checks to guard against concurrent swaps. `has_config_changed()` is a no-argument method on `CacheStorage` that reads current config internally — callers do not pass a config snapshot.
 
 Key methods:
 - `new()` — creates storage from current config (or `None` if disabled)
-- `hotswap_if_needed()` — compares live config against the active storage's one with `has_config_changed()`; swaps if `true` returned
+- `hotswap_if_needed()` — compares live config against the active storage via `has_config_changed()`; swaps if `true`
 - `try_read_cache(cache_context, in_transaction, client_request, params)` — hotswaps, calls `cache_check()`, returns `Ok(Some(Vec<Message>))` on HIT (caller replays through pipeline), `Ok(None)` on MISS/PASSTHROUGH
 - `save_response_in_cache(cache_context)` — hotswaps, finalizes by storing the captured response
 
 **`storage/mod.rs`** — Abstract storage trait and error type:
 - `CacheStorage` trait: `get`, `set`, `is_enabled`, `has_config_changed` — implemented by all cache backends
+- `has_config_changed(&self) -> bool` — takes no arguments; reads live config internally; should only check parameters that require a storage rebuild (e.g. `backend` type and storage-specific settings like `redis.url`); TTL and other runtime settings do not require a rebuild and are read from live config on every call
 - `Error` enum shared across all backends: `RedisError`, `ConnectionFailed`, `CacheMiss`
 
 **`storage/redis.rs`** — Redis storage backend (`RedisCacheStorage`) implementing `CacheStorage`:
@@ -81,7 +82,7 @@ Key methods:
 - `get(&self, key)` — returns `Result<Vec<u8>, Error>`; returns `Err(Error::ConnectionFailed)` immediately (triggering cache miss) if not yet connected; marks `reconnecting` and spawns reconnect on Redis errors
 - `set(&self, key, value, ttl)` — stores bytes with EX expiration; returns immediately on disconnect; respects `max_result_size` from live config
 - `reconnect()` — spawns reconnect if not already running (CAS-guarded)
-- `has_config_changed()` — returns `true` if cache config has changed (used for hotswap detection)
+- `has_config_changed()` — returns `true` if `backend != Redis` or `self.config.redis.url != live config url`; only URL triggers a rebuild (other redis settings like `cache_key_prefix` are read from live config on every call)
 - `is_enabled()` — reads live `config().config.general.cache.enabled`
 - Key prefix comes from `config().config.general.cache.redis.cache_key_prefix`
 - `reconnecting: Arc<AtomicBool>` — prevents multiple concurrent reconnect tasks
@@ -102,10 +103,24 @@ Key methods:
 - `reset()` — clears all state for per-query isolation
 
 **`integration.rs`** — Integration methods on `impl Cache`:
-- `cache_check()` — main entry point, checks route, calls `policy::resolve()`, checks Redis
-- `deserialize_cached(Vec<u8>) -> Vec<Message>` — parses a flat blob of concatenated PostgreSQL wire messages into individual `Message` values. Wire format: `[1B code][4B length (incl. itself)][payload]`. Named constants `HEADER_CODE_LEN`, `HEADER_LEN_SIZE`, `HEADER_TOTAL` replace the former magic numbers. Not Redis-specific — usable with any cache backend that stores raw bytes.
+- `cache_check()` — main entry point: checks route, calls `policy::resolve()`, dispatches on `CacheDecision`:
+  - `Skip` → `Passthrough`
+  - `ForceCache(ttl)` → returns `Miss` immediately (bypasses Redis lookup, always repopulates)
+  - `Cache(ttl)` → computes hash, acquires read-lock on storage, calls `storage.get()`; `CacheMiss` → `Miss`; other errors → `Passthrough`
+- `deserialize_cached(Vec<u8>) -> Vec<Message>` — parses a flat blob of concatenated PostgreSQL wire messages into individual `Message` values. Wire format: `[1B code][4B length (incl. itself)][payload]`. Named constants `HEADER_CODE_LEN`, `HEADER_LEN_SIZE`, `HEADER_TOTAL` replace magic numbers. Not Redis-specific — usable with any cache backend that stores raw bytes.
 - `cache_response()` — serializes `Vec<Message>` into wire bytes and stores in Redis
-- Cache key: XXH3 hash of `database_name + comment-stripped query string + bind params`
+- Cache key: XXH3 hash of `database_name + normalized query + bind params` — computed by `compute_cache_key_hash`
+
+**Cache key hashing (`compute_cache_key_hash` / `hash_query_without_comments`):**
+
+`hash_query_without_comments` feeds the query directly into the XXH3 hasher without allocating a `String`. It implements a state machine over the character stream:
+- **Block comments** (`/* … */`, including PostgreSQL nested variants) — skipped entirely; treated as a token separator (sets `pending_space`)
+- **Line comments** (`-- … \n`) — skipped entirely; treated as a token separator
+- **Whitespace** outside string literals — collapsed: any run of whitespace sets `pending_space = true` but is not hashed directly; leading and trailing whitespace is suppressed naturally
+- **String literals** (`'…'` with `''` escapes) — passed through verbatim; spaces inside strings are never collapsed or removed
+- **Regular characters** — if `pending_space` is set and at least one character has already been emitted, a single space is hashed first, then the character; this ensures `SELECT/*c*/1` and `SELECT 1` produce the same hash without merging tokens into `SELECT1`
+
+This means `"/* pgdog_cache: cache */ SELECT 1"` and `"SELECT 1"` hash identically: the comment is dropped and the leading whitespace it would have left is suppressed because `emitted = false` at that point.
 
 ### Query Engine Integration
 
@@ -148,8 +163,10 @@ xxhash-rust = { version = "0.8", features = ["xxh3"]}
 | Cache policy resolution | 2-tier: SQL comment/param → DB policy |
 | Cache HIT flow | Deserialize wire bytes → `Vec<Message>` → replay each through `process_server_message()` |
 | Cache MISS flow | Normal execute → capture response via `CacheContext` → store in Redis → respond |
-| Cache key | XXH3 hash of `database_name + comment-stripped query string + bind params` |
+| Cache key | XXH3 hash of `database_name + normalized query + bind params` |
+| Query normalization | On-the-fly in hasher: comments stripped, whitespace collapsed (except inside string literals), no `String` allocated |
 | Wire format | Full PostgreSQL wire messages stored as raw bytes (one concatenated buffer) |
+| Config hotswap | `has_config_changed()` reads live config internally; only URL/backend type triggers rebuild |
 
 ---
 
@@ -181,12 +198,10 @@ SELECT * FROM products WHERE category = 'electronics';
 SELECT * FROM orders;
 ```
 
-> **Hash independence from comments:** All SQL comments (block `/* */` and line `--`) are stripped
-> before computing the cache key hash. This means a query sent with a `/* pgdog_cache: cache */`
-> comment produces **exactly the same cache key** as the same query sent without any comment but
-> with the directive supplied via a connection parameter (`SET pgdog.cache = 'cache'`). There is
-> no longer a need for special normalization of `force_cache` vs `cache` hints — both result in
-> the same hash because comments are removed entirely.
+> **Hash independence from comments:** SQL comments are skipped on-the-fly while hashing, with no
+> intermediate `String` allocation. Surrounding whitespace left by a stripped comment is also
+> collapsed, so `"/* pgdog_cache: cache */ SELECT 1"` and `"SELECT 1"` produce exactly the same
+> cache key. Spaces inside string literals (`WHERE name = 'hello world'`) are never affected.
 
 ### Connection Parameter
 
@@ -275,7 +290,7 @@ SQL comment  →  pgdog.cache parameter  →  DB policy config
 
 18. **CacheClient error types refined** — `get()` now returns `Result<Vec<u8>, Error>` (no more `Option`). `Error::CacheMiss(u64)` is a dedicated variant for key-not-found; `Error::RedisError` is now a struct variant carrying `cmd: &'static str`, `key: u64`, and the underlying error for richer diagnostics. `Error::ConnectionFailed` uses `&'static str` instead of `String` to avoid heap allocation on the hot path.
 
-19. **Config hotswap** — `Cache` singleton holds `Arc<tokio::sync::RwLock<Option<Box<dyn CacheStorage>>>>`. `hotswap_if_needed()` runs at the start of every `try_read_cache` and `save_response_in_cache` call: read-locks to compare the active backend's URL against `config().config.general.cache.redis.url`; if they differ (or the backend type changes) it write-locks and rebuilds the storage. Fast path is a read-lock-only check with no allocation.
+19. **Config hotswap** — `Cache` singleton holds `Arc<tokio::sync::RwLock<Option<Box<dyn CacheStorage>>>>`. `hotswap_if_needed()` runs at the start of every `try_read_cache` and `save_response_in_cache` call: read-locks and calls `has_config_changed()` on the active backend; if true, write-locks, re-checks (to guard against concurrent swaps), and rebuilds the storage. `has_config_changed()` is a no-argument method — each implementation reads the live config internally so callers never pass a config snapshot.
 
 20. **CacheClient rewritten as `RedisCacheStorage`** — Replaced `CacheClient` with `RedisCacheStorage` implementing the `CacheStorage` trait. Key improvements: background connect task is spawned immediately in `new()` so the first query never blocks on init; `get`/`set` check only one atomic flag (`reconnecting`) and return immediately if `true` returned instead of running `ensure_connected`; the `Option<RedisClient>` field and the three-condition guard at the top of every operation are gone; `reconnect` is the single place that sets the flag and CAS-guards the reconnect spawn.
 
@@ -285,7 +300,11 @@ SQL comment  →  pgdog.cache parameter  →  DB policy config
 
 23. **Cache key must include Bind parameters for extended protocol** — For simple `Query` messages, parameter values are embedded in the SQL string, so the XXH3 hash of `database + query_text` is naturally unique per value. For extended protocol (Parse/Bind/Execute), the SQL contains `$1`/`$2` placeholders and the actual values arrive in the `Bind` message separately. The current hash ignores them, so `SELECT * FROM users WHERE id = $1` with `id = 1` and `id = 2` produce the same cache key — wrong rows are returned on the second call. Fix: hash `param.len` (the `i32` field, not the `len()` method which returns wire size) and `param.data` for each entry in `bind.params_raw()` into the hasher in `cache_check()` in `integration.rs`. This affects all production drivers that use extended protocol by default: psycopg3, asyncpg, JDBC, npgsql. Note: pgdog's built-in prepared statement cache (`PreparedStatements` / `GlobalCache`) is a proxy-level plan cache only — it deduplicates backend `Parse` round-trips. It does not cache result rows and is orthogonal to the Redis result cache.
 
-24. **Comments stripped from query before hashing** — All SQL block comments (`/* … */`, including nested) and line comments (`-- …`) are removed from the query string before computing the XXH3 cache key. This makes the cache key independent of whether the cache directive was supplied via a SQL comment or a connection parameter. `compute_cache_key_hash` is a standalone public function in `integration.rs` so it can be unit-tested directly. `strip_sql_comments` returns `Cow<'_, str>`: when no comment markers are present the original string slice is returned without any allocation; only queries that actually contain `/*` or `--` incur a heap allocation. The `FORCE_CACHE_RE` regex normalization that previously converted `force_cache` to `cache` in the hash input has been removed — stripping all comments achieves the same result in a more general way.
+24. **Comments stripped from query before hashing** — All SQL block comments (`/* … */`, including nested) and line comments (`-- …`) are removed from the query string before computing the XXH3 cache key. This makes the cache key independent of whether the cache directive was supplied via a SQL comment or a connection parameter.
+
+25. **Zero-allocation query hashing** — `hash_query_without_comments` feeds the query directly into the XXH3 hasher without allocating a `String`. A `pending_space` / `emitted` state machine collapses whitespace runs and suppresses leading/trailing whitespace on-the-fly. Spaces inside SQL string literals (`'…'`) are never collapsed or removed. `strip_sql_comments` (which returned a `Cow<str>`) has been removed; the old string-comparison unit tests have been rewritten as hash-equality assertions.
+
+26. **`has_config_changed` reads live config internally** — The method signature changed from `has_config_changed(&self, new_config: &CacheConfig) -> bool` to `has_config_changed(&self) -> bool`. Each implementation reads `config()` directly. For Redis, only `redis.url` is compared (not the full `RedisConfig`): `cache_key_prefix` and other runtime settings are read from live config on every call and do not require a storage rebuild.
 
 ---
 
@@ -293,15 +312,11 @@ SQL comment  →  pgdog.cache parameter  →  DB policy config
 
 1. **Redis disconnect/reconnect under heavy load** — The reconnection logic works, but timing edge cases under rapid disconnect/reconnect cycles still need stress-testing.
 
-2. **Integration tests**.
+2. **Set redis query timeout from config**
 
-3. **Set redis query timeout from config**
+3. **Add hint for query hash key**
 
-4. **Add hint for query hash key**
-
-5. **Add config flag for mandatory availability of cache storage** — query will fall with error if Redis (or another cache storage) is unavailable. And subtask: first query inits cache client, but connection is established later, which is why the cache storage is unavailable for the first query — so need to wait for established connection.
-
-6. **Hash query without comments on the fly instead of normalizing it first** — with this no `String` will be allocated. But must deal somehow with getting same hash for "SELECT 1;" and "/* pgdog_cache: cache */ SELECT 1;" because the second one transforms to " SELECT 1;" (with space at the start).
+4. **Add config flag for mandatory availability of cache storage** — query will fail with error if Redis (or another cache storage) is unavailable. And subtask: first query inits cache client, but connection is established later, which is why the cache storage is unavailable for the first query — so need to wait for established connection.
 
 # Tests
 

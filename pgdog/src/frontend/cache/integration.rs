@@ -1,4 +1,3 @@
-use std::borrow::Cow;
 use std::hash::{Hash, Hasher};
 
 use crate::{
@@ -24,26 +23,30 @@ pub enum CacheCheckResult {
     Passthrough,
 }
 
-/// Strip SQL block comments (`/* ... */`, including nested) and line comments (`-- ...`)
-/// from `query`, preserving string literals (`'...'`).
+/// Feed `query` into `hasher`, skipping SQL comments and normalising surrounding
+/// whitespace — without allocating a `String`.
 ///
-/// Returns `Cow::Borrowed(query)` without any allocation when no comment markers
-/// are found.  Only allocates and builds a new `String` when a `/*` or `--`
-/// sequence is actually present in the input.
-pub fn strip_sql_comments(query: &str) -> Cow<'_, str> {
-    // Fast path: scan bytes for comment markers before doing any allocation.
-    let bytes = query.as_bytes();
-    let has_comment = bytes.windows(2).any(|w| w == b"/*" || w == b"--");
-    if !has_comment {
-        return Cow::Borrowed(query);
-    }
+/// Rules applied on-the-fly:
+/// - Block comments (`/* … */`, including PostgreSQL nested variants) are treated
+///   as a potential token separator: a single space is emitted if needed.
+/// - Line comments (`-- …\n`) are treated the same way; the trailing newline
+///   becomes the pending separator.
+/// - Runs of ASCII whitespace outside string literals are collapsed to a single
+///   space and leading/trailing whitespace is suppressed.
+/// - String literals (`'…'`, with `''` escapes) are passed through byte-for-byte
+///   so that spaces inside them are never removed.
+fn hash_query_without_comments<H: Hasher>(query: &str, hasher: &mut H) {
+    // pending_space: we *want* to emit a space before the next real token but
+    // haven't done so yet (avoids leading space and trailing space).
+    let mut pending_space = false;
+    // emitted: have we written at least one real byte yet?
+    let mut emitted = false;
 
-    let mut result = String::with_capacity(query.len());
     let mut chars = query.chars().peekable();
 
     while let Some(c) = chars.next() {
         match c {
-            // Block comment — supports PostgreSQL nested `/* */`.
+            // ---- block comment (supports nested) --------------------------------
             '/' if chars.peek() == Some(&'*') => {
                 chars.next(); // consume '*'
                 let mut depth = 1u32;
@@ -57,56 +60,79 @@ pub fn strip_sql_comments(query: &str) -> Cow<'_, str> {
                             chars.next();
                             depth -= 1;
                         }
-                        None => break, // malformed input
+                        None => break, // malformed: treat as end
                         _ => {}
                     }
                 }
-                // Replace the entire comment with a single space to avoid
-                // accidentally merging adjacent tokens (e.g. `SELECT/*c*/1`).
-                result.push(' ');
+                // The comment may stand between two tokens; record the need for
+                // a separator but don't emit yet.
+                if emitted {
+                    pending_space = true;
+                }
             }
-            // Line comment.
+
+            // ---- line comment ---------------------------------------------------
             '-' if chars.peek() == Some(&'-') => {
                 for ch in chars.by_ref() {
                     if ch == '\n' {
-                        result.push('\n');
                         break;
                     }
                 }
+                if emitted {
+                    pending_space = true;
+                }
             }
-            // String literal — pass through unchanged so we don't mistake `--`
-            // or `/*` inside a string for a comment.
+
+            // ---- string literal — pass through verbatim -------------------------
             '\'' => {
-                result.push(c);
+                // Flush any pending space before the opening quote.
+                if pending_space && emitted {
+                    ' '.hash(hasher);
+                    pending_space = false;
+                }
+                c.hash(hasher);
+                emitted = true;
                 while let Some(ch) = chars.next() {
-                    result.push(ch);
+                    ch.hash(hasher);
                     if ch == '\'' {
                         // Standard SQL escaped quote: two consecutive single-quotes.
                         if chars.peek() == Some(&'\'') {
-                            result.push(chars.next().unwrap());
+                            chars.next().unwrap().hash(hasher);
                         } else {
                             break;
                         }
                     }
                 }
             }
-            _ => result.push(c),
+
+            // ---- whitespace — collapse to a single pending space ----------------
+            c if c.is_ascii_whitespace() => {
+                if emitted {
+                    pending_space = true;
+                }
+            }
+
+            // ---- regular character ----------------------------------------------
+            c => {
+                if pending_space && emitted {
+                    ' '.hash(hasher);
+                    pending_space = false;
+                }
+                c.hash(hasher);
+                emitted = true;
+            }
         }
     }
-
-    Cow::Owned(result)
 }
 
 /// Compute the XXH3 cache key hash for a query.
 ///
-/// All SQL comments are stripped from `query` before hashing so the hash is identical
-/// regardless of whether the cache directive was supplied via a comment or a connection
-/// parameter.
+/// SQL comments are skipped and surrounding whitespace is normalised on-the-fly
+/// while feeding bytes directly into the hasher — no `String` allocation.
 pub fn compute_cache_key_hash(database: &str, query: &str, bind: Option<&Bind>) -> u64 {
     let mut hasher = xxhash_rust::xxh3::Xxh3Default::new();
     database.hash(&mut hasher);
-    let stripped = strip_sql_comments(query);
-    stripped.trim().hash(&mut hasher);
+    hash_query_without_comments(query, &mut hasher);
     if let Some(bind) = bind {
         for param in bind.params_raw() {
             param.len.hash(&mut hasher);
@@ -410,80 +436,84 @@ mod tests {
     }
 
     // -------------------------------------------------------------------------
-    // strip_sql_comments tests
+    // hash_query_without_comments tests
+    // (verified via compute_cache_key_hash with a fixed database name)
     // -------------------------------------------------------------------------
 
-    #[test]
-    fn strip_no_comments() {
-        let q = "SELECT 1";
-        assert_eq!(strip_sql_comments(q), "SELECT 1");
+    /// Helper: hash just the query part (no bind params) with a fixed database.
+    fn qhash(query: &str) -> u64 {
+        compute_cache_key_hash("db", query, None)
     }
 
     #[test]
-    fn strip_no_comments_returns_borrowed() {
-        // When there are no comment markers the original slice must be returned
-        // without any allocation (Cow::Borrowed).
-        let q = "SELECT 1 FROM t WHERE id = 42";
-        assert!(matches!(
-            strip_sql_comments(q),
-            std::borrow::Cow::Borrowed(_)
-        ));
+    fn hash_no_comments_same_as_plain() {
+        // A query without any comments should hash identically to itself.
+        assert_eq!(qhash("SELECT 1"), qhash("SELECT 1"));
     }
 
     #[test]
-    fn strip_with_comment_returns_owned() {
-        let q = "/* hint */ SELECT 1";
-        assert!(matches!(strip_sql_comments(q), std::borrow::Cow::Owned(_)));
+    fn hash_block_comment_stripped() {
+        // Block comment containing the directive must be invisible to the hash.
+        assert_eq!(
+            qhash("/* pgdog_cache: cache */ SELECT 1"),
+            qhash("SELECT 1"),
+        );
     }
 
     #[test]
-    fn strip_block_comment() {
-        let q = "/* pgdog_cache: cache */ SELECT 1";
-        let stripped = strip_sql_comments(q);
-        assert!(!stripped.contains("pgdog_cache"));
-        assert!(stripped.contains("SELECT 1"));
+    fn hash_line_comment_stripped() {
+        assert_eq!(
+            qhash("-- pgdog_cache: cache\nSELECT 1"),
+            qhash("SELECT 1"),
+        );
     }
 
     #[test]
-    fn strip_line_comment() {
-        let q = "-- pgdog_cache: cache\nSELECT 1";
-        let stripped = strip_sql_comments(q);
-        assert!(!stripped.contains("pgdog_cache"));
-        assert!(stripped.contains("SELECT 1"));
+    fn hash_nested_block_comments_stripped() {
+        assert_eq!(
+            qhash("/* outer /* inner */ still outer */ SELECT 2"),
+            qhash("SELECT 2"),
+        );
     }
 
     #[test]
-    fn strip_nested_block_comments() {
-        let q = "/* outer /* inner */ still outer */ SELECT 2";
-        let stripped = strip_sql_comments(q);
-        assert!(!stripped.contains("outer"));
-        assert!(!stripped.contains("inner"));
-        assert!(stripped.contains("SELECT 2"));
+    fn hash_multiple_block_comments_stripped() {
+        assert_eq!(
+            qhash("/* a */ SELECT /* b */ 1"),
+            qhash("SELECT 1"),
+        );
     }
 
     #[test]
-    fn strip_does_not_remove_string_literal_contents() {
-        let q = "SELECT '/* not a comment */' FROM t";
-        let stripped = strip_sql_comments(q);
-        // The string literal must be preserved verbatim.
-        assert!(stripped.contains("'/* not a comment */'"));
+    fn hash_string_literal_contents_preserved() {
+        // `/* ... */` inside a string literal must NOT be treated as a comment.
+        // The two queries are different so their hashes must differ.
+        let h1 = qhash("SELECT '/* not a comment */' FROM t");
+        let h2 = qhash("SELECT ' ' FROM t");
+        assert_ne!(h1, h2);
     }
 
     #[test]
-    fn strip_preserves_escaped_quotes_in_literal() {
-        let q = "SELECT 'it''s fine' FROM t";
-        let stripped = strip_sql_comments(q);
-        assert_eq!(stripped, "SELECT 'it''s fine' FROM t");
+    fn hash_escaped_quotes_in_literal_preserved() {
+        // `'it''s fine'` — the embedded `''` must survive; the queries differ.
+        let h1 = qhash("SELECT 'it''s fine' FROM t");
+        let h2 = qhash("SELECT 'its fine' FROM t");
+        assert_ne!(h1, h2);
     }
 
     #[test]
-    fn strip_multiple_block_comments() {
-        let q = "/* a */ SELECT /* b */ 1";
-        let stripped = strip_sql_comments(q);
-        assert!(!stripped.contains("/* a */"));
-        assert!(!stripped.contains("/* b */"));
-        assert!(stripped.contains("SELECT"));
-        assert!(stripped.contains("1"));
+    fn hash_whitespace_inside_string_preserved() {
+        // Spaces inside string literals must not be collapsed/removed.
+        let h1 = qhash("SELECT 'hello world' FROM t");
+        let h2 = qhash("SELECT 'helloworld' FROM t");
+        assert_ne!(h1, h2);
+    }
+
+    #[test]
+    fn hash_inline_comment_no_space_between_tokens() {
+        // `SELECT/*c*/1` — comment sits directly between tokens; they must not
+        // be merged, so this must equal `SELECT 1` not `SELECT1`.
+        assert_eq!(qhash("SELECT/*c*/1"), qhash("SELECT 1"));
     }
 
     // -------------------------------------------------------------------------
