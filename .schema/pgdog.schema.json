@@ -785,7 +785,7 @@
           "minimum": 0
         },
         "idle_healthcheck_interval": {
-          "description": "Frequency of healthchecks performed by PgDog on idle connections.\n\n_Default:_ `30000`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#idle_healthcheck_interval",
+          "description": "Frequency of healthchecks performed by PgDog on idle connections.\nSet to `0` to disable idle healthchecks.\n\n_Default:_ `30000`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#idle_healthcheck_interval",
           "type": "integer",
           "format": "uint64",
           "default": 30000,
