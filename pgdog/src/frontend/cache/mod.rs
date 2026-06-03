@@ -59,7 +59,7 @@ impl Cache {
             let guard = self.storage.read().await;
             let cfg = &config().config.general.cache;
             let needs_swap = match guard.as_ref() {
-                Some(s) => s.has_config_changed(),
+                Some(s) => s.is_actual(),
                 None => cfg.enabled,
             };
             if !needs_swap {
@@ -71,7 +71,7 @@ impl Cache {
         let mut guard = self.storage.write().await;
         let cfg = &config().config.general.cache;
         let needs_swap = match guard.as_ref() {
-            Some(s) => s.has_config_changed(),
+            Some(s) => s.is_actual(),
             None => cfg.enabled,
         };
 

@@ -41,7 +41,7 @@ pub trait CacheStorage: Send + Sync {
     ///
     /// This method should check only those parameters that require a storage rebuild and
     /// that are specific to the storage, e.g. `Config::backend` and storage's own settings.
-    fn has_config_changed(&self) -> bool;
+    fn is_actual(&self) -> bool;
 }
 
 /// Construct the appropriate storage backend from the current config.

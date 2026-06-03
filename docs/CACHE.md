@@ -65,17 +65,17 @@ pub use storage::{CacheStorage, RedisCacheStorage};
 
 **Global singleton:** Cache is global-scoped, not connection-scoped. Accessed via async `cache()` function which returns `Arc<Cache>` from a `tokio::sync::OnceCell` static. `Cache::new()` is async and reads config internally — no parameters needed.
 
-**Config hotswap:** `hotswap_if_needed()` is called at the top of `try_read_cache` and `save_response_in_cache`. It fast-paths with a read-lock; acquires write-lock only if `has_config_changed()` returns true, then rebuilds the storage. The write-lock path re-checks to guard against concurrent swaps. `has_config_changed()` is a no-argument method on `CacheStorage` that reads current config internally — callers do not pass a config snapshot.
+**Config hotswap:** `hotswap_if_needed()` is called at the top of `try_read_cache` and `save_response_in_cache`. It fast-paths with a read-lock; acquires write-lock only if `is_actual()` returns true, then rebuilds the storage. The write-lock path re-checks to guard against concurrent swaps. `is_actual()` is a no-argument method on `CacheStorage` that reads current config internally — callers do not pass a config snapshot.
 
 Key methods:
 - `new()` — async; creates storage from current config (or `None` if disabled); waits up to `operation_timeout` for initial Redis connection
-- `hotswap_if_needed()` — compares live config against the active storage via `has_config_changed()`; swaps if `true`
+- `hotswap_if_needed()` — compares live config against the active storage via `is_actual()`; swaps if `true`
 - `try_read_cache(cache_context, in_transaction, client_request, params)` — hotswaps, calls `cache_check()`, returns `Ok(Some(Vec<Message>))` on HIT (caller replays through pipeline), `Ok(None)` on MISS/PASSTHROUGH
 - `save_response_in_cache(cache_context)` — hotswaps, finalizes by storing the captured response
 
 **`storage/mod.rs`** — Abstract storage trait and error type:
-- `CacheStorage` trait: `get`, `set`, `is_enabled`, `has_config_changed` — implemented by all cache backends
-- `has_config_changed(&self) -> bool` — takes no arguments; reads live config internally; should only check parameters that require a storage rebuild (e.g. `backend` type and storage-specific settings like `redis.url`); TTL and other runtime settings do not require a rebuild and are read from live config on every call
+- `CacheStorage` trait: `get`, `set`, `is_enabled`, `is_actual` — implemented by all cache backends
+- `is_actual(&self) -> bool` — takes no arguments; reads live config internally; should only check parameters that require a storage rebuild (e.g. `backend` type and storage-specific settings like `redis.url`); TTL and other runtime settings do not require a rebuild and are read from live config on every call
 - `Error` enum shared across all backends: `RedisError`, `ConnectionFailed`, `CacheMiss`
 
 **`storage/redis.rs`** — Redis storage backend (`RedisCacheStorage`) implementing `CacheStorage`:
@@ -84,7 +84,7 @@ Key methods:
 - `get(&self, key)` — returns `Result<Vec<u8>, Error>`; returns `Err(Error::ConnectionFailed)` immediately (triggering cache miss) if not yet connected; marks `reconnecting` and spawns reconnect on Redis errors; operation timeout read from live config
 - `set(&self, key, value, ttl)` — stores bytes with EX expiration; returns immediately on disconnect; respects `max_result_size` from live config; operation timeout read from live config
 - `reconnect()` — spawns reconnect task fire-and-forget (no waiting) if not already running (CAS-guarded)
-- `has_config_changed()` — returns `true` if `backend != Redis` or `self.url != live config url`; only URL triggers a rebuild (all other redis settings including `cache_key_prefix`, `operation_timeout` are read from live config on every call)
+- `is_actual()` — returns `true` if `backend != Redis` or `self.url != live config url`; only URL triggers a rebuild (all other redis settings including `cache_key_prefix`, `operation_timeout` are read from live config on every call)
 - `is_enabled()` — reads live `config().config.general.cache.enabled`
 - Key prefix comes from `config().config.general.cache.redis.cache_key_prefix`
 - `reconnecting: Arc<AtomicBool>` — prevents multiple concurrent reconnect tasks
@@ -169,7 +169,7 @@ xxhash-rust = { version = "0.8", features = ["xxh3"]}
 | Cache key | XXH3 hash of `database_name + normalized query + bind params` |
 | Query normalization | On-the-fly in hasher: comments stripped, whitespace collapsed (except inside string literals), no `String` allocated |
 | Wire format | Full PostgreSQL wire messages stored as raw bytes (one concatenated buffer) |
-| Config hotswap | `has_config_changed()` reads live config internally; only URL/backend type triggers rebuild |
+| Config hotswap | `is_actual()` reads live config internally; only those config parameters, that require rebuild, triggers it |
 | Redis operation timeout | Configurable via `redis.operation_timeout` (seconds, default `2`); read from live config on every call — no rebuild needed to change it |
 
 ---
@@ -313,6 +313,8 @@ SQL comment  →  pgdog.cache parameter  →  DB policy config
 27. **Set redis query timeout from config** — `RedisConfig` gains `operation_timeout: NonZeroU64` (default `2` seconds). The `REDIS_OPERATION_TIMEOUT` compile-time constant is removed. All `tokio::time::timeout` calls in `storage/redis.rs` (init, GET, SET) read `config().config.general.cache.redis.operation_timeout` from live config on every invocation. `RedisCacheStorage` no longer stores the full `CacheConfig`; it stores only `url: String` for change-detection — all other settings (`cache_key_prefix`, `operation_timeout`) are fetched from live config on each call, so they take effect immediately without a storage rebuild. Schema updated with the new field.
 
 28. **Wait for initial Redis connection** — `Cache::new()` and `RedisCacheStorage::new()` are now async. `RedisCacheStorage::new()` spawns the connection task and waits up to `operation_timeout` ms for it to complete. If the timeout expires, the task continues in background without cancellation. This prevents the first query from immediately failing with `ConnectionFailed`. The wait applies to both initial startup (via `tokio::sync::OnceCell`) and config hotswap rebuilds. `cache()` function is now async; `reconnect()` remains fire-and-forget (no waiting).
+
+29. **Changed `has_config_changed` to `is_actual`** — config can be changed, but that doesn't mean, that cache storage should be rebuilt. And the function doesn't actually say if config has changed. It says if some specific parameters have changed. So `is_actual` is more correct.
 
 ---
 

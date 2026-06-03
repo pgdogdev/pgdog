@@ -242,7 +242,7 @@ impl CacheStorage for RedisCacheStorage {
         config().config.general.cache.enabled
     }
 
-    fn has_config_changed(&self) -> bool {
+    fn is_actual(&self) -> bool {
         let new_config = &config().config.general.cache;
         new_config.backend != CacheBackend::Redis || self.url != new_config.redis.url
     }
