@@ -128,7 +128,7 @@ mod test {
         let pool = pool();
         let mut conn = pool.get(&Request::default()).await.unwrap();
         let describe = Describe::new_portal("");
-        conn.send(&vec![ProtocolMessage::from(describe.message().unwrap())].into())
+        conn.send(&vec![ProtocolMessage::from(describe)].into())
             .await
             .unwrap();
         let res = conn.read().await.unwrap();

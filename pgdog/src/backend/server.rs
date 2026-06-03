@@ -18,7 +18,7 @@ use super::{
 };
 use crate::{
     auth::{md5, scram::Client},
-    backend::pool::stats::MemoryStats,
+    backend::{pool::stats::MemoryStats, server_state::ServerState},
     config::AuthType,
     frontend::ClientRequest,
     net::{
@@ -26,7 +26,7 @@ use crate::{
             hello::SslReply, Authentication, BackendKeyData, ErrorResponse, FromBytes, Message,
             ParameterStatus, Password, Protocol, Query, ReadyForQuery, Startup, Terminate, ToBytes,
         },
-        Close, MessageBuffer, Parameter, ProtocolMessage, Sync,
+        Close, Flush, MessageBuffer, Parameter, ProtocolMessage, Sync,
     },
     stats::memory::MemoryUsage,
 };
@@ -70,6 +70,7 @@ pub struct Server {
     /// "use the pool's configured `max_age`" (no jitter applied).
     /// Sampled once at creation by [`Server::apply_lifetime_jitter`].
     max_age: Option<Duration>,
+    state: ServerState,
 }
 
 impl MemoryUsage for Server {
@@ -348,6 +349,7 @@ impl Server {
             disconnect_reason: None,
             password_attempts: 1, // This is going to be changed by parent caller.
             max_age: None,
+            state: ServerState::new(),
         };
 
         server.stats.memory_used(server.memory_stats()); // Stream capacity.
@@ -373,6 +375,8 @@ impl Server {
         self.sending_request = true;
 
         self.stats.state(State::Active);
+
+        self.state.set_state(&client_request.messages);
 
         for message in client_request.messages.iter() {
             self.send_one(message).await?;
@@ -463,14 +467,76 @@ impl Server {
     pub async fn read(&mut self) -> Result<Message, Error> {
         let message = loop {
             if let Some(message) = self.prepared_statements.state_mut().get_simulated() {
+                self.state.process(message.code())?;
                 return Ok(message.backend(self.id));
             }
             match self.stream_buffer.read(self.stream.as_mut().unwrap()).await {
                 Ok(message) => {
                     let message = message.stream(self.streaming).backend(self.id);
+                    let code = message.code();
+
+                    if code == 'E' {
+                        // In the case of an "cached plan must not change result type" error,
+                        // we want to re-prepare (deallocate, parse) and then retry this request
+                        // while keeping the internal state.
+                        let error = ErrorResponse::from_bytes(message.to_bytes()?)?;
+                        if error.code == "0A000"
+                            && error.message == "cached plan must not change result type"
+                        {
+                            let current_request_messages = self.state.get_current_query().to_vec();
+
+                            let binds: Vec<&ProtocolMessage> = current_request_messages
+                                .iter()
+                                .filter(|msg| matches!(msg, ProtocolMessage::Bind(_)))
+                                .collect();
+
+                            let executes: usize = current_request_messages
+                                .iter()
+                                .filter(|msg| matches!(msg, ProtocolMessage::Execute(_)))
+                                .count();
+
+                            if binds.len() == 1 && executes == 1 {
+                                let ProtocolMessage::Bind(bind) = binds[0] else {
+                                    unreachable!()
+                                };
+
+                                let was_in_cache =
+                                    self.prepared_statements.remove(bind.statement());
+
+                                let renamed = self.prepared_statements.parse(bind.statement());
+
+                                match (was_in_cache, renamed) {
+                                    (true, Some(renamed)) => {
+                                        self.prepared_statements.state_mut().clear();
+
+                                        self.send_ignore(&ProtocolMessage::Sync(Sync)).await?;
+                                        self.send_ignore(&ProtocolMessage::Close(Close::named(
+                                            renamed.name(),
+                                        )))
+                                        .await?;
+
+                                        for message in current_request_messages
+                                            [self.state.get_successfully_processed()..]
+                                            .iter()
+                                        {
+                                            self.send_one(&message).await?;
+                                        }
+                                        self.send_one(&Flush.into()).await?;
+                                        self.flush().await?;
+                                        continue;
+                                    }
+                                    _ => {
+                                        warn!("Tried to reprepare statement, but it was not available in cache");
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     match self.prepared_statements.forward(&message) {
                         Ok(forward) => {
                             if forward {
+                                self.state.process(code)?;
                                 break message;
                             }
                         }
@@ -1181,6 +1247,7 @@ pub mod test {
         net::TcpListener,
     };
 
+    use crate::frontend::PreparedStatements as FrontendPreparedStatements;
     use crate::{
         backend::pool::token_cache::TokenCache, config::Memory, frontend::PreparedStatements,
         net::*,
@@ -1235,6 +1302,7 @@ pub mod test {
                 sending_request: false,
                 password_attempts: 1,
                 max_age: None,
+                state: ServerState::new(),
             }
         }
     }
@@ -1256,6 +1324,13 @@ pub mod test {
         )
         .await
         .unwrap()
+    }
+
+    /// Insert a prepared statement into the global cache so check_prepared can find it.
+    fn insert_global(name: &str, query: &str) -> String {
+        let parse = Parse::named(name, query);
+        let (_, rewritten_name) = FrontendPreparedStatements::global().write().insert(&parse);
+        rewritten_name
     }
 
     /// Connect to the `pgdog1` database on the test server.
@@ -2789,6 +2864,247 @@ pub mod test {
             server.stats().total().idle_in_transaction_time,
             final_idle_time,
         );
+    }
+
+    #[tokio::test]
+    async fn test_retry_prepared() {
+        let mut server = test_server().await;
+
+        server
+            .execute(
+                "DROP TABLE IF EXISTS retry_prepared_1; CREATE TABLE IF NOT EXISTS retry_prepared_1 (
+                    id INTEGER,
+                    value1 INTEGER
+                );",
+            )
+            .await
+            .unwrap();
+
+        let name = "test".to_string();
+        let parse = Parse::named(&name, "SELECT * FROM retry_prepared_1");
+
+        let name = insert_global("test", "SELECT * FROM retry_prepared_1");
+
+        server
+            .send(
+                &vec![
+                    ProtocolMessage::from(parse.clone()),
+                    ProtocolMessage::from(Describe::new_statement(&name)),
+                    Bind::new_statement("test").into(),
+                    Execute::new().into(),
+                    Sync.into(),
+                ]
+                .into(),
+            )
+            .await
+            .unwrap();
+
+        for c in ['1', 't', 'T', '2', 'C', 'Z'] {
+            let msg = server.read().await.unwrap();
+            assert_eq!(msg.code(), c);
+        }
+
+        assert!(server.done());
+
+        server
+            .send(
+                &vec![ProtocolMessage::from(Query::new(
+                    "ALTER TABLE retry_prepared_1 ADD new_col_1 INTEGER",
+                ))]
+                .into(),
+            )
+            .await
+            .unwrap();
+
+        for c in ['C', 'Z'] {
+            let msg = server.read().await.unwrap();
+            assert_eq!(c, msg.code());
+        }
+
+        server
+            .send(&vec![Bind::new_statement(&name).into(), Execute::new().into()].into())
+            .await
+            .unwrap();
+
+        for c in ['2', 'C'] {
+            let msg = server.read().await.unwrap();
+            assert_eq!(msg.code(), c);
+        }
+
+        server.send(&vec![Sync.into()].into()).await.unwrap();
+
+        for c in ['Z'] {
+            let msg = server.read().await.unwrap();
+            assert_eq!(msg.code(), c);
+        }
+
+        assert!(server.done());
+    }
+
+    #[tokio::test]
+    async fn test_retry_prepared_with_parse() {
+        let mut server = test_server().await;
+
+        server
+            .execute(
+                "DROP TABLE IF EXISTS retry_prepared_1; CREATE TABLE IF NOT EXISTS retry_prepared_1 (
+                    id INTEGER,
+                    value1 INTEGER
+                );",
+            )
+            .await
+            .unwrap();
+
+        let name = insert_global("test", "SELECT * FROM retry_prepared_1");
+
+        let parse = Parse::named(&name, "SELECT * FROM retry_prepared_1");
+
+        server
+            .send(
+                &vec![
+                    ProtocolMessage::from(parse.clone()),
+                    ProtocolMessage::from(Describe::new_statement(&name)),
+                    Bind::new_statement(&name).into(),
+                    Execute::new().into(),
+                    Sync.into(),
+                ]
+                .into(),
+            )
+            .await
+            .unwrap();
+
+        for c in ['1', 't', 'T', '2', 'C', 'Z'] {
+            let msg = server.read().await.unwrap();
+            assert_eq!(msg.code(), c);
+        }
+
+        assert!(server.done());
+
+        server
+            .send(
+                &vec![ProtocolMessage::from(Query::new(
+                    "ALTER TABLE retry_prepared_1 ADD new_col_1 INTEGER",
+                ))]
+                .into(),
+            )
+            .await
+            .unwrap();
+
+        for c in ['C', 'Z'] {
+            let msg = server.read().await.unwrap();
+            assert_eq!(c, msg.code());
+        }
+
+        assert!(server.done());
+
+        server
+            .send(
+                &vec![
+                    ProtocolMessage::from(parse.clone()),
+                    Bind::new_statement(&name).into(),
+                    Execute::new().into(),
+                ]
+                .into(),
+            )
+            .await
+            .unwrap();
+
+        for c in ['1', '2', 'C'] {
+            let msg = server.read().await.unwrap();
+            assert_eq!(msg.code(), c);
+        }
+
+        server.send(&vec![Sync.into()].into()).await.unwrap();
+
+        for c in ['Z'] {
+            let msg = server.read().await.unwrap();
+            assert_eq!(msg.code(), c);
+        }
+
+        assert!(server.done());
+    }
+
+    #[tokio::test]
+    async fn test_retry_prepared_with_parse_describe() {
+        let mut server = test_server().await;
+
+        server
+            .execute(
+                "DROP TABLE IF EXISTS retry_prepared_1; CREATE TABLE IF NOT EXISTS retry_prepared_1 (
+                    id INTEGER,
+                    value1 INTEGER
+                );",
+            )
+            .await
+            .unwrap();
+
+        let name = insert_global("test", "SELECT * FROM retry_prepared_1");
+
+        let parse = Parse::named(&name, "SELECT * FROM retry_prepared_1");
+
+        server
+            .send(
+                &vec![
+                    ProtocolMessage::from(parse.clone()),
+                    ProtocolMessage::from(Describe::new_statement(&name)),
+                    Bind::new_statement(&name).into(),
+                    Execute::new().into(),
+                    Sync.into(),
+                ]
+                .into(),
+            )
+            .await
+            .unwrap();
+
+        for c in ['1', 't', 'T', '2', 'C', 'Z'] {
+            let msg = server.read().await.unwrap();
+            assert_eq!(msg.code(), c);
+        }
+
+        assert!(server.done());
+
+        server
+            .send(
+                &vec![ProtocolMessage::from(Query::new(
+                    "ALTER TABLE retry_prepared_1 ADD new_col_1 INTEGER",
+                ))]
+                .into(),
+            )
+            .await
+            .unwrap();
+
+        for c in ['C', 'Z'] {
+            let msg = server.read().await.unwrap();
+            assert_eq!(c, msg.code());
+        }
+
+        assert!(server.done());
+
+        server
+            .send(
+                &vec![
+                    ProtocolMessage::from(Describe::new_statement(&name)),
+                    Bind::new_statement(&name).into(),
+                    Execute::new().into(),
+                ]
+                .into(),
+            )
+            .await
+            .unwrap();
+
+        for c in ['t', 't', 'T', '2', 'C'] {
+            let msg = server.read().await.unwrap();
+            assert_eq!(msg.code(), c);
+        }
+
+        server.send(&vec![Sync.into()].into()).await.unwrap();
+
+        for c in ['Z'] {
+            let msg = server.read().await.unwrap();
+            assert_eq!(msg.code(), c);
+        }
+
+        assert!(server.done());
     }
 
     #[tokio::test]
