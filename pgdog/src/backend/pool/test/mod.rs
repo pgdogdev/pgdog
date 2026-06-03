@@ -531,6 +531,44 @@ async fn test_idle_healthcheck_loop() {
 }
 
 #[tokio::test]
+async fn test_idle_healthcheck_loop_disabled_with_zero_interval() {
+    crate::logger();
+
+    let config = Config {
+        inner: pgdog_stats::Config {
+            max: 1,
+            min: 0,
+            idle_healthcheck_interval: Duration::ZERO,
+            idle_healthcheck_delay: Duration::from_millis(10),
+            healthcheck_timeout: Duration::from_millis(10),
+            ..Config::default().inner
+        },
+    };
+
+    let pool = Pool::new(&PoolConfig {
+        address: Address {
+            host: "127.0.0.1".into(),
+            port: 1,
+            database_name: "pgdog".into(),
+            user: "pgdog".into(),
+            passwords: vec!["pgdog".into()],
+            ..Default::default()
+        },
+        config,
+    });
+    pool.launch();
+
+    let initial_healthchecks = pool.state().stats.counts.healthchecks;
+
+    sleep(Duration::from_millis(350)).await;
+
+    let after_healthchecks = pool.state().stats.counts.healthchecks;
+
+    assert_eq!(after_healthchecks, initial_healthchecks);
+    assert!(pool.healthy());
+}
+
+#[tokio::test]
 async fn test_checkout_timeout() {
     crate::logger();
 

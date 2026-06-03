@@ -126,6 +126,7 @@ pub struct General {
     pub healthcheck_interval: u64,
 
     /// Frequency of healthchecks performed by PgDog on idle connections.
+    /// Set to `0` to disable idle healthchecks.
     ///
     /// _Default:_ `30000`
     ///

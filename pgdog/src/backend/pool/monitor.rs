@@ -91,13 +91,17 @@ impl Monitor {
         // Delay starting health checks to give
         // time for the pool to spin up.
         let pool = self.pool.clone();
-        let (delay, replication_mode) = {
+        let (delay, interval, replication_mode) = {
             let lock = pool.lock();
             let config = lock.config();
-            (config.idle_healthcheck_delay(), config.replication_mode)
+            (
+                config.idle_healthcheck_delay(),
+                config.idle_healthcheck_interval(),
+                config.replication_mode,
+            )
         };
 
-        if !replication_mode {
+        if !replication_mode && interval > Duration::ZERO {
             spawn(async move {
                 sleep(delay).await;
                 Self::healthchecks(pool).await
