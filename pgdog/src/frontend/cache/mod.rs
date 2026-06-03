@@ -8,9 +8,8 @@ pub use integration::CacheCheckResult;
 pub use policy::CacheDecision;
 pub use storage::{CacheStorage, RedisCacheStorage};
 
-use once_cell::sync::Lazy;
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::{OnceCell, RwLock};
 use tracing::debug;
 
 use crate::{
@@ -34,15 +33,18 @@ impl std::fmt::Debug for Cache {
     }
 }
 
-static CACHE: Lazy<Arc<Cache>> = Lazy::new(|| Arc::new(Cache::new()));
+static CACHE: OnceCell<Arc<Cache>> = OnceCell::const_new();
 
-pub fn cache() -> Arc<Cache> {
-    CACHE.clone()
+pub async fn cache() -> Arc<Cache> {
+    CACHE
+        .get_or_init(async || Arc::new(Cache::new().await))
+        .await
+        .clone()
 }
 
 impl Cache {
-    fn new() -> Self {
-        let storage = build_storage();
+    async fn new() -> Self {
+        let storage = build_storage().await;
         Cache {
             storage: RwLock::new(storage),
         }
@@ -50,8 +52,7 @@ impl Cache {
 
     /// Replace the storage backend if the config has changed (URL or backend type).
     ///
-    /// Acquires the write lock only when a change is detected; otherwise the
-    /// read-lock path is zero-allocation and very fast.
+    /// Acquires the write lock only when a change is detected.
     async fn hotswap_if_needed(&self) {
         // Fast path: read-lock to check whether anything has changed.
         {
@@ -76,7 +77,7 @@ impl Cache {
 
         if needs_swap {
             debug!("Cache storage config changed — rebuilding backend");
-            *guard = build_storage();
+            *guard = build_storage().await;
         }
     }
 

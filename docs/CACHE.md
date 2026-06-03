@@ -63,12 +63,12 @@ pub use storage::{CacheStorage, RedisCacheStorage};
 
 `Cache` struct wraps `RwLock<Option<Box<dyn CacheStorage>>>` (tokio `RwLock`).
 
-**Global singleton:** Cache is global-scoped, not connection-scoped. Accessed via `cache()` function which returns `Arc<Cache>` from a `Lazy<Arc<Cache>>` static. `Cache::new()` reads config internally — no parameters needed.
+**Global singleton:** Cache is global-scoped, not connection-scoped. Accessed via async `cache()` function which returns `Arc<Cache>` from a `tokio::sync::OnceCell` static. `Cache::new()` is async and reads config internally — no parameters needed.
 
 **Config hotswap:** `hotswap_if_needed()` is called at the top of `try_read_cache` and `save_response_in_cache`. It fast-paths with a read-lock; acquires write-lock only if `has_config_changed()` returns true, then rebuilds the storage. The write-lock path re-checks to guard against concurrent swaps. `has_config_changed()` is a no-argument method on `CacheStorage` that reads current config internally — callers do not pass a config snapshot.
 
 Key methods:
-- `new()` — creates storage from current config (or `None` if disabled)
+- `new()` — async; creates storage from current config (or `None` if disabled); waits up to `operation_timeout` for initial Redis connection
 - `hotswap_if_needed()` — compares live config against the active storage via `has_config_changed()`; swaps if `true`
 - `try_read_cache(cache_context, in_transaction, client_request, params)` — hotswaps, calls `cache_check()`, returns `Ok(Some(Vec<Message>))` on HIT (caller replays through pipeline), `Ok(None)` on MISS/PASSTHROUGH
 - `save_response_in_cache(cache_context)` — hotswaps, finalizes by storing the captured response
@@ -79,16 +79,16 @@ Key methods:
 - `Error` enum shared across all backends: `RedisError`, `ConnectionFailed`, `CacheMiss`
 
 **`storage/redis.rs`** — Redis storage backend (`RedisCacheStorage`) implementing `CacheStorage`:
-- `RedisCacheStorage::new(config)` — builds client from given URL; immediately spawns a background connection task; returns `None` if URL is invalid
+- `RedisCacheStorage::new(config)` — async; builds client from given URL; spawns background connection task and waits up to `operation_timeout` ms for it to complete; if timeout expires, task continues in background; returns `None` if URL is invalid
 - Background connect task: retries `init()` in a loop (5ms to 5s exponential backoff); sets `reconnecting = false` on success; CAS-guarded so only one task runs at a time; timeout for `init()` read from live config (`config.redis.operation_timeout`)
 - `get(&self, key)` — returns `Result<Vec<u8>, Error>`; returns `Err(Error::ConnectionFailed)` immediately (triggering cache miss) if not yet connected; marks `reconnecting` and spawns reconnect on Redis errors; operation timeout read from live config
 - `set(&self, key, value, ttl)` — stores bytes with EX expiration; returns immediately on disconnect; respects `max_result_size` from live config; operation timeout read from live config
-- `reconnect()` — spawns reconnect if not already running (CAS-guarded)
+- `reconnect()` — spawns reconnect task fire-and-forget (no waiting) if not already running (CAS-guarded)
 - `has_config_changed()` — returns `true` if `backend != Redis` or `self.url != live config url`; only URL triggers a rebuild (all other redis settings including `cache_key_prefix`, `operation_timeout` are read from live config on every call)
 - `is_enabled()` — reads live `config().config.general.cache.enabled`
 - Key prefix comes from `config().config.general.cache.redis.cache_key_prefix`
 - `reconnecting: Arc<AtomicBool>` — prevents multiple concurrent reconnect tasks
-- All Redis operations wrapped in `tokio::time::timeout(Duration::from_secs(operation_timeout))` where `operation_timeout` is read from live config on every call (no compile-time constant)
+- All Redis operations wrapped in `tokio::time::timeout(Duration::from_millis(operation_timeout))` where `operation_timeout` is read from live config on every call (no compile-time constant)
 - `RedisCacheStorage` stores only `url: String` (not the full `CacheConfig`) — all other settings are read from live config; this means `cache_key_prefix` and `operation_timeout` changes take effect immediately without a storage rebuild
 
 **`policy.rs`** — 2-tier policy resolution:
@@ -128,9 +128,9 @@ This means `"/* pgdog_cache: cache */ SELECT 1"` and `"SELECT 1"` hash identical
 ### Query Engine Integration
 
 **`pgdog/src/frontend/client/query_engine/mod.rs`**
-- Imports global `cache()` from `frontend::cache`
-- `handle()` flow: after `route_query()` and before `before_execution()`, calls `cache().try_read_cache(context)`. If HIT: replays each cached `Message` through `process_server_message()` (same pipeline as live backend responses — stats, transaction state, hooks all fire correctly), then returns. On MISS: stores state in `context.cache_context`.
-- After `match command`, calls `cache().save_response_in_cache(context)` to finalize caching.
+- Imports global async `cache()` from `frontend::cache`
+- `handle()` flow: after `route_query()` and before `before_execution()`, calls `cache().await.try_read_cache(context)`. If HIT: replays each cached `Message` through `process_server_message()` (same pipeline as live backend responses — stats, transaction state, hooks all fire correctly), then returns. On MISS: stores state in `context.cache_context`.
+- After `match command`, calls `cache().await.save_response_in_cache(context)` to finalize caching.
 
 **`pgdog/src/frontend/client/query_engine/query.rs`**
 - `process_server_message()` calls `context.cache_context.capture_response(message.clone())`.
@@ -296,7 +296,7 @@ SQL comment  →  pgdog.cache parameter  →  DB policy config
 
 19. **Config hotswap** — `Cache` singleton holds `Arc<tokio::sync::RwLock<Option<Box<dyn CacheStorage>>>>`. `hotswap_if_needed()` runs at the start of every `try_read_cache` and `save_response_in_cache` call: read-locks and calls `has_config_changed()` on the active backend; if true, write-locks, re-checks (to guard against concurrent swaps), and rebuilds the storage. `has_config_changed()` is a no-argument method — each implementation reads the live config internally so callers never pass a config snapshot.
 
-20. **CacheClient rewritten as `RedisCacheStorage`** — Replaced `CacheClient` with `RedisCacheStorage` implementing the `CacheStorage` trait. Key improvements: background connect task is spawned immediately in `new()` so the first query never blocks on init; `get`/`set` check only one atomic flag (`reconnecting`) and return immediately if `true` returned instead of running `ensure_connected`; the `Option<RedisClient>` field and the three-condition guard at the top of every operation are gone; `reconnect` is the single place that sets the flag and CAS-guards the reconnect spawn.
+20. **CacheClient rewritten as `RedisCacheStorage`** — Replaced `CacheClient` with `RedisCacheStorage` implementing the `CacheStorage` trait. Key improvements: background connect task is spawned in `new()` and `new()` waits up to `operation_timeout` ms for the connection to establish (if timeout expires, task continues in background); `get`/`set` check only one atomic flag (`reconnecting`) and return immediately if `true` instead of running `ensure_connected`; the `Option<RedisClient>` field and the three-condition guard at the top of every operation are gone; `reconnect` is the single place that sets the flag and CAS-guards the reconnect spawn; reconnect spawns fire-and-forget without waiting.
 
 21. **Abstract storage backend** — `storage/mod.rs` defines the `CacheStorage` trait (`get`, `set`, `is_enabled`, `has_config_changed`) and the shared `Error` enum. `storage/redis.rs` is the Redis implementation. `Cache` holds `Box<dyn CacheStorage>` behind a tokio `RwLock` so any backend (e.g. Memcached) can be plugged in by adding a sub-module under `storage/` and a variant to `CacheBackend`. `deserialize_cached()` remains backend-agnostic in `integration.rs`.
 
@@ -312,6 +312,8 @@ SQL comment  →  pgdog.cache parameter  →  DB policy config
 
 27. **Set redis query timeout from config** — `RedisConfig` gains `operation_timeout: NonZeroU64` (default `2` seconds). The `REDIS_OPERATION_TIMEOUT` compile-time constant is removed. All `tokio::time::timeout` calls in `storage/redis.rs` (init, GET, SET) read `config().config.general.cache.redis.operation_timeout` from live config on every invocation. `RedisCacheStorage` no longer stores the full `CacheConfig`; it stores only `url: String` for change-detection — all other settings (`cache_key_prefix`, `operation_timeout`) are fetched from live config on each call, so they take effect immediately without a storage rebuild. Schema updated with the new field.
 
+28. **Wait for initial Redis connection** — `Cache::new()` and `RedisCacheStorage::new()` are now async. `RedisCacheStorage::new()` spawns the connection task and waits up to `operation_timeout` ms for it to complete. If the timeout expires, the task continues in background without cancellation. This prevents the first query from immediately failing with `ConnectionFailed`. The wait applies to both initial startup (via `tokio::sync::OnceCell`) and config hotswap rebuilds. `cache()` function is now async; `reconnect()` remains fire-and-forget (no waiting).
+
 ---
 
 ## What's Left To Do
@@ -320,7 +322,7 @@ SQL comment  →  pgdog.cache parameter  →  DB policy config
 
 2. **Add hint for query hash key**
 
-3. **Add config flag for mandatory availability of cache storage** — query will fail with error if Redis (or another cache storage) is unavailable. And subtask: first query inits cache client, but connection is established later, which is why the cache storage is unavailable for the first query — so need to wait for established connection.
+3. **Add config flag for mandatory availability of cache storage** — query will fail with error if Redis (or another cache storage) is unavailable.
 
 # Tests
 

@@ -4,10 +4,7 @@ pub use redis::RedisCacheStorage;
 
 use async_trait::async_trait;
 
-use crate::config::{
-    cache::CacheBackend,
-    config,
-};
+use crate::config::{cache::CacheBackend, config};
 
 /// Errors returned by cache storage backends.
 #[derive(Debug, thiserror::Error)]
@@ -41,21 +38,21 @@ pub trait CacheStorage: Send + Sync {
     fn is_enabled(&self) -> bool;
 
     /// Returns `true` if cache config has changed (used for hotswap detection).
-    /// 
+    ///
     /// This method should check only those parameters that require a storage rebuild and
     /// that are specific to the storage, e.g. `Config::backend` and storage's own settings.
     fn has_config_changed(&self) -> bool;
 }
 
 /// Construct the appropriate storage backend from the current config.
-pub fn build_storage() -> Option<Box<dyn CacheStorage>> {
+pub async fn build_storage() -> Option<Box<dyn CacheStorage>> {
     let cfg = &config().config.general.cache;
     if !cfg.enabled {
         return None;
     }
     match cfg.backend {
-        CacheBackend::Redis => {
-            RedisCacheStorage::new(cfg).map(|s| Box::new(s) as Box<dyn CacheStorage>)
-        }
+        CacheBackend::Redis => RedisCacheStorage::new(cfg)
+            .await
+            .map(|s| Box::new(s) as Box<dyn CacheStorage>),
     }
 }

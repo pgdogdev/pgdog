@@ -132,6 +132,7 @@ impl QueryEngine {
 
         let in_transaction = context.in_transaction();
         if let Some(cached_messages) = cache()
+            .await
             .try_read_cache(
                 &mut context.cache_context,
                 in_transaction,
@@ -247,6 +248,7 @@ impl QueryEngine {
         }
 
         cache()
+            .await
             .save_response_in_cache(&mut context.cache_context)
             .await;
 

@@ -41,7 +41,7 @@ impl std::fmt::Debug for RedisCacheStorage {
 impl RedisCacheStorage {
     /// Build a new storage instance for `url` and immediately start a background
     /// connection task.  Returns `None` when the URL cannot be parsed.
-    pub fn new(config: &CacheConfig) -> Option<Self> {
+    pub async fn new(config: &CacheConfig) -> Option<Self> {
         let client_config = match RedisConfig::from_url(&config.redis.url) {
             Ok(c) => c,
             Err(e) => {
@@ -66,8 +66,13 @@ impl RedisCacheStorage {
             reconnecting,
         };
 
-        // Fire-and-forget initial connection.
-        storage.spawn_connect_task();
+        // Try to wait up to operation_timeout for connection establishment. If it times out, let it complete in background.
+        let operation_timeout = config.redis.operation_timeout.get();
+        let _ = tokio::time::timeout(
+            Duration::from_millis(operation_timeout),
+            storage.spawn_connect_task(),
+        )
+        .await;
 
         Some(storage)
     }
@@ -76,7 +81,7 @@ impl RedisCacheStorage {
 
     /// Spawn the (re)connect background loop. Uses a CAS to ensure only one
     /// task is ever running at a time.
-    fn spawn_connect_task(&self) {
+    fn spawn_connect_task(&self) -> tokio::task::JoinHandle<()> {
         let client = self.client.clone();
         let reconnecting = self.reconnecting.clone();
 
@@ -120,7 +125,7 @@ impl RedisCacheStorage {
                 )
                 .await;
             }
-        });
+        })
     }
 
     /// Mark the reconnecting as true and spawn a reconnect task if one is not
