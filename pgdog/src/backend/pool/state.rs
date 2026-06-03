@@ -50,6 +50,7 @@ impl State {
                 maxwait: guard
                     .waiting
                     .iter()
+                    // The first waiter is the oldest, so their metric is basically the max wait time
                     .next()
                     .map(|req| now.duration_since(req.request.created_at))
                     .unwrap_or(Duration::ZERO),
