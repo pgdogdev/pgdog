@@ -38,7 +38,7 @@
           "policy": "no_cache",
           "redis": {
             "cache_key_prefix": "pgdog:",
-            "operation_timeout": 2,
+            "operation_timeout": 2000,
             "url": "redis://localhost:6379"
           },
           "ttl": 300
@@ -318,7 +318,7 @@
           "$ref": "#/$defs/RedisConfig",
           "default": {
             "cache_key_prefix": "pgdog:",
-            "operation_timeout": 2,
+            "operation_timeout": 2000,
             "url": "redis://localhost:6379"
           }
         },
@@ -666,7 +666,7 @@
             "policy": "no_cache",
             "redis": {
               "cache_key_prefix": "pgdog:",
-              "operation_timeout": 2,
+              "operation_timeout": 2000,
               "url": "redis://localhost:6379"
             },
             "ttl": 300
@@ -1549,10 +1549,10 @@
           "default": "pgdog:"
         },
         "operation_timeout": {
-          "description": "Timeout for individual Redis operations (GET/SET/ping).\n\n_Default:_ `2`",
+          "description": "Timeout in milliseconds for individual Redis operations (GET/SET/ping).\n\n_Default:_ `2000`",
           "type": "integer",
           "format": "uint64",
-          "default": 2,
+          "default": 2000,
           "minimum": 1
         },
         "url": {

@@ -90,7 +90,7 @@ impl RedisCacheStorage {
 
                 let operation_timeout = config().config.general.cache.redis.operation_timeout.get();
                 let init_ok = match tokio::time::timeout(
-                    Duration::from_secs(operation_timeout),
+                    Duration::from_millis(operation_timeout),
                     client.init(),
                 )
                 .await
@@ -151,7 +151,7 @@ impl CacheStorage for RedisCacheStorage {
 
         let operation_timeout = config.redis.operation_timeout.get();
         let redis_result = tokio::time::timeout(
-            Duration::from_secs(operation_timeout),
+            Duration::from_millis(operation_timeout),
             self.client.get::<RedisValue, _>(full_key),
         )
         .await;
@@ -203,7 +203,7 @@ impl CacheStorage for RedisCacheStorage {
 
         let operation_timeout = config.redis.operation_timeout.get();
         match tokio::time::timeout(
-            Duration::from_secs(operation_timeout),
+            Duration::from_millis(operation_timeout),
             self.client.set::<(), _, _>(
                 full_key,
                 value,

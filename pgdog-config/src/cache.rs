@@ -67,9 +67,9 @@ pub struct RedisConfig {
     #[serde(default = "RedisConfig::cache_key_prefix")]
     pub cache_key_prefix: String,
 
-    /// Timeout for individual Redis operations (GET/SET/ping).
+    /// Timeout in milliseconds for individual Redis operations (GET/SET/ping).
     /// 
-    /// _Default:_ `2`
+    /// _Default:_ `2000`
     #[serde(default = "RedisConfig::operation_timeout")]
     pub operation_timeout: NonZeroU64,
 }
@@ -94,7 +94,7 @@ impl RedisConfig {
     }
 
     fn operation_timeout() -> NonZeroU64 {
-        NonZeroU64::new(2).expect("2 is non-zero")
+        NonZeroU64::new(2000).expect("2000 is non-zero")
     }
 }
 
