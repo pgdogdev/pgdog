@@ -49,6 +49,7 @@ pooler_mode = "transaction"
 healthcheck_interval = 30_000
 # How often to check databases with a health check. This happens independently from clients
 # and runs on a separate loop. This is helpful if databases aren't frequently used.
+# Set to 0 to disable idle health checks.
 #
 # Default: 30 seconds
 idle_healthcheck_interval = 30_000
