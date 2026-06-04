@@ -1,3 +1,10 @@
+//! DNS cache for backend server hostnames.
+//!
+//! PgDog uses this cache when `general.dns_ttl` is configured. Cached hostname
+//! entries are reused until the configured TTL expires; a TTL of zero disables
+//! hostname cache hits so callers resolve DNS on every request. IP literals are
+//! returned directly and are not stored in the cache.
+
 use hickory_resolver::{name_server::TokioConnectionProvider, Resolver};
 use once_cell::sync::Lazy;
 use parking_lot::RwLock;
@@ -13,6 +20,7 @@ use crate::config::config;
 
 static DNS_CACHE: Lazy<Arc<DnsCache>> = Lazy::new(|| Arc::new(DnsCache::new()));
 
+/// Cached DNS lookup result with the time it was stored.
 #[derive(Debug, Clone, Copy)]
 pub struct CacheEntry {
     time: Instant,
@@ -27,6 +35,7 @@ impl Deref for CacheEntry {
     }
 }
 
+/// Shared hostname-to-IP cache backed by the system DNS resolver.
 pub struct DnsCache {
     resolver: Arc<Resolver<TokioConnectionProvider>>,
     cache: Arc<RwLock<HashMap<String, CacheEntry>>>,
@@ -69,12 +78,8 @@ impl DnsCache {
 }
 
 impl DnsCache {
-    /// Get the DNS refresh interval (short in tests, config-based otherwise).
+    /// Get the DNS refresh interval.
     fn ttl() -> Duration {
-        if cfg!(test) {
-            return Duration::from_millis(50);
-        }
-
         config()
             .config
             .general
@@ -82,14 +87,23 @@ impl DnsCache {
             .unwrap_or(Duration::from_secs(60)) // INVARIANT: We don't call [`DnsCache::resolve`] unless the DNS ttl is set.
     }
 
-    /// Get IP address from cache only. Returns None if not cached or expired.
+    /// Get IP address from cache only.
+    ///
+    /// Returns `None` when the hostname is not cached, the entry has expired, or the TTL is
+    /// configured as zero. A zero TTL means hostname cache entries are never reused and callers
+    /// resolve DNS on every request. IP literals are returned directly regardless of TTL because
+    /// they do not require DNS resolution.
     fn get_cached_ip(&self, hostname: &str) -> Option<IpAddr> {
+        self.get_cached_ip_with_ttl(hostname, Self::ttl())
+    }
+
+    fn get_cached_ip_with_ttl(&self, hostname: &str, ttl: Duration) -> Option<IpAddr> {
         if let Ok(ip) = hostname.parse::<IpAddr>() {
             return Some(ip);
         }
 
         if let Some(entry) = self.cache.read().get(hostname) {
-            if entry.time.elapsed() > Self::ttl() {
+            if ttl.is_zero() || entry.time.elapsed() > ttl {
                 return None;
             } else {
                 return Some(entry.ip);
@@ -180,7 +194,7 @@ mod tests {
             hostname.to_string(),
             CacheEntry {
                 ip,
-                time: Instant::now() - DnsCache::ttl() - Duration::from_millis(1),
+                time: Instant::now() - Duration::from_secs(3600),
             },
         );
 
@@ -227,7 +241,7 @@ mod tests {
             hostname.to_string(),
             CacheEntry {
                 ip: cached_ip,
-                time: Instant::now() - DnsCache::ttl() - Duration::from_millis(1),
+                time: Instant::now() - Duration::from_secs(3600),
             },
         );
 
@@ -240,7 +254,15 @@ mod tests {
             "expired cache entry should force DNS resolution"
         );
     }
-}
 
-// -------------------------------------------------------------------------------------------------
-// -------------------------------------------------------------------------------------------------
+    #[test]
+    fn get_cached_ip_ignores_entry_when_dns_ttl_is_zero() {
+        let cache = DnsCache::new();
+        let hostname = "zero-ttl.example";
+        let ip = IpAddr::V4(Ipv4Addr::new(192, 0, 2, 1));
+
+        cache.cache_ip(hostname, ip);
+
+        assert_eq!(cache.get_cached_ip_with_ttl(hostname, Duration::ZERO), None);
+    }
+}
