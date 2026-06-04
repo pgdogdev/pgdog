@@ -12,7 +12,7 @@ use super::super::{
 };
 use super::{Fingerprint, Stats};
 use crate::backend::schema::Schema;
-use crate::frontend::cache::policy::CacheDirective;
+use crate::frontend::cache::directive::CacheDirective;
 use crate::frontend::router::parser::rewrite::statement::RewritePlan;
 use crate::frontend::{BufferedQuery, PreparedStatements};
 use crate::net::parameter::ParameterValue;

@@ -1,11 +1,11 @@
 pub mod context;
 pub mod integration;
-pub mod policy;
+pub mod directive;
 pub mod storage;
 
 pub use context::CacheContext;
 pub use integration::CacheCheckResult;
-pub use policy::CacheDecision;
+pub use directive::CacheDirective;
 pub use storage::{CacheStorage, RedisCacheStorage};
 
 use std::sync::Arc;

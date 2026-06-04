@@ -52,12 +52,12 @@ operation_timeout = 2
 ```rust
 pub mod context;
 pub mod integration;
-pub mod policy;
+pub mod directive;
 pub mod storage;
 
 pub use context::CacheContext;
 pub use integration::CacheCheckResult;
-pub use policy::CacheDecision;
+pub use directive::CacheDirective;
 pub use storage::{CacheStorage, RedisCacheStorage};
 ```
 
@@ -91,14 +91,14 @@ Key methods:
 - All Redis operations wrapped in `tokio::time::timeout(Duration::from_millis(operation_timeout))` where `operation_timeout` is read from live config on every call (no compile-time constant)
 - `RedisCacheStorage` stores only `url: String` (not the full `CacheConfig`) — all other settings are read from live config; this means `cache_key_prefix` and `operation_timeout` changes take effect immediately without a storage rebuild
 
-**`policy.rs`** — 2-tier policy resolution:
-- `CacheDirective` enum: `Cache { ttl_seconds }`, `ForceCache { ttl_seconds }`, `NoCache` (default)
-- `CacheDecision` enum: `Skip`, `Cache(u64)`, `ForceCache(u64)`
-- `resolve(client_request, params, is_read)` — main resolver function, chains all tiers
-- `get_cache_directive(client_request, params)` — comment hint (from AST) has priority over connection parameter (`pgdog.cache`)
-- `extract_parameter_directive(params)` — parses `pgdog.cache` parameter: `no_cache`, `cache`, `cache ttl=N`, `force_cache`, `force_cache ttl=N`
-- Tier 1: Extractor directive (`CacheDirective::Cache { ttl }`, `CacheDirective::ForceCache { ttl }`, or `CacheDirective::NoCache`)
-- Tier 2: Global config `CachePolicy` (`NoCache` / `Cache`)
+**`directive.rs`** — Position-agnostic cache directive parsing and resolution:
+- `CacheMode` enum: `Cache`, `ForceCache`, `NoCache` (default)
+- `CacheDirective` struct: `{ mode: Option<CacheMode>, ttl_seconds: Option<u64> }` — flat structure where each field is independently optional
+- `CacheDirective::parse(s: &str)` — parses space-separated tokens in any order: `cache`, `force_cache`, `no_cache`, `ttl=N`, and ignores unknown tokens
+- `CacheDirective::or(fallback)` — merges two directives field-by-field: if a field is `Some`, it wins; otherwise fall back to the other directive's value
+- `resolve(client_request, params)` — extracts directive from SQL comment (via AST `comment_cache` field) and connection parameter (`pgdog.cache`), merges them (comment wins per-field), returns the merged `CacheDirective`
+- Arguments can appear in any order: `ttl=17 force_cache` and `force_cache ttl=17` are equivalent
+- Missing fields cascade through resolution tiers: comment → parameter → global config
 
 **`context.rs`** — Cache context held in `QueryEngineContext`:
 - `CacheContext` with `cache_miss: Option<CacheMiss>`, `response_buffer: Vec<Message>`, and `had_error: bool`
@@ -106,10 +106,12 @@ Key methods:
 - `reset()` — clears all state for per-query isolation
 
 **`integration.rs`** — Integration methods on `impl Cache`:
-- `cache_check()` — main entry point: checks route, calls `policy::resolve()`, dispatches on `CacheDecision`:
-  - `Skip` → `Passthrough`
-  - `ForceCache(ttl)` → returns `Miss` immediately (bypasses Redis lookup, always repopulates)
-  - `Cache(ttl)` → computes hash, acquires read-lock on storage, calls `storage.get()`; `CacheMiss` → `Miss`; other errors → `Passthrough`
+- `cache_check()` — main entry point: checks route, calls `directive::resolve()`, resolves final mode and TTL:
+  - Mode resolution: directive mode → global `CachePolicy` (converted to `CacheMode`)
+  - TTL resolution: directive TTL → global `cache.ttl`
+  - `NoCache` → `Passthrough`
+  - `ForceCache` → returns `Miss` immediately (bypasses Redis lookup, always repopulates)
+  - `Cache` → computes hash, acquires read-lock on storage, calls `storage.get()`; `CacheMiss` → `Miss`; other errors → `Passthrough`
 - `deserialize_cached(Vec<u8>) -> Vec<Message>` — parses a flat blob of concatenated PostgreSQL wire messages into individual `Message` values. Wire format: `[1B code][4B length (incl. itself)][payload]`. Named constants `HEADER_CODE_LEN`, `HEADER_LEN_SIZE`, `HEADER_TOTAL` replace magic numbers. Not Redis-specific — usable with any cache backend that stores raw bytes.
 - `cache_response()` — serializes `Vec<Message>` into wire bytes and stores in Redis
 - Cache key: XXH3 hash of `database_name + normalized query + bind params` — computed by `compute_cache_key_hash`
@@ -163,7 +165,7 @@ xxhash-rust = { version = "0.8", features = ["xxh3"]}
 | Cache config scope | **Global** (`config.general.cache`) |
 | Redis client | `fred` crate v9 (async-native, tokio integration) |
 | Cacheable queries | Only reads (`route.is_read()`) |
-| Cache policy resolution | 2-tier: SQL comment/param → DB policy |
+| Cache policy resolution | Field-by-field merge: SQL comment → connection param → global config |
 | Cache HIT flow | Deserialize wire bytes → `Vec<Message>` → replay each through `process_server_message()` |
 | Cache MISS flow | Normal execute → capture response via `CacheContext` → store in Redis → respond |
 | Cache key | XXH3 hash of `database_name + normalized query + bind params` |
@@ -178,7 +180,7 @@ xxhash-rust = { version = "0.8", features = ["xxh3"]}
 
 ### SQL Comments
 
-Add a C-style comment before your query. The first matching directive wins:
+Add a C-style comment before your query. Arguments can appear in any order:
 
 ```sql
 -- Force bypass cache for this query
@@ -193,6 +195,10 @@ SELECT * FROM products WHERE category = 'electronics';
 /* pgdog_cache: cache ttl=300 */
 SELECT * FROM orders;
 
+-- TTL before mode (same as above)
+/* pgdog_cache: ttl=300 cache */
+SELECT * FROM orders;
+
 -- Force cache with database default TTL
 /* pgdog_cache: force_cache */
 SELECT * FROM products WHERE category = 'electronics';
@@ -200,8 +206,24 @@ SELECT * FROM products WHERE category = 'electronics';
 -- Force cache with custom TTL in seconds
 /* pgdog_cache: force_cache ttl=300 */
 SELECT * FROM orders;
+
+-- Only specify TTL, inherit mode from connection parameter or global config
+/* pgdog_cache: ttl=60 */
+SELECT * FROM sessions;
+
+-- Multiple directives in one comment (cache directive does not consume other directives)
+/* pgdog_cache: force_cache ttl=10 pgdog_role: replica */
+SELECT * FROM analytics;
 ```
 
+> **Position-agnostic parsing:** Arguments like `cache`, `force_cache`, `no_cache`, and `ttl=N` 
+> can appear in any order. Unknown tokens are silently ignored for forward compatibility.
+>
+> **Field-by-field fallback:** If you specify only `ttl=60` in a comment without a mode, the mode 
+> will be taken from the `pgdog.cache` connection parameter. If the parameter also lacks a mode, 
+> the global config's `policy` is used. Each field cascades independently through the resolution 
+> tiers: comment → parameter → global config.
+>
 > **Hash independence from comments:** SQL comments are skipped on-the-fly while hashing, with no
 > intermediate `String` allocation. Surrounding whitespace left by a stripped comment is also
 > collapsed, so `"/* pgdog_cache: cache */ SELECT 1"` and `"SELECT 1"` produce exactly the same
@@ -209,7 +231,7 @@ SELECT * FROM orders;
 
 ### Connection Parameter
 
-Set `pgdog.cache` at connection time (via DSN options) or with `SET` after connecting:
+Set `pgdog.cache` at connection time (via DSN options) or with `SET` after connecting. Arguments can appear in any order:
 
 ```sql
 -- Session-wide: all queries in this connection bypass cache
@@ -221,11 +243,17 @@ SET pgdog.cache = 'cache';
 -- Session-wide: cache all queries with 5-minute TTL
 SET pgdog.cache = 'cache ttl=300';
 
+-- TTL before mode (same as above)
+SET pgdog.cache = 'ttl=300 cache';
+
 -- Session-wide: force cache all queries with default TTL
 SET pgdog.cache = 'force_cache';
 
 -- Session-wide: force cache all queries with 5-minute TTL
 SET pgdog.cache = 'force_cache ttl=300';
+
+-- Only specify TTL, inherit mode from global config
+SET pgdog.cache = 'ttl=120';
 ```
 
 ```sh
@@ -243,16 +271,31 @@ psql postgresql://postgres:postgres@127.0.0.1:5432/postgres?options=-c%20pgdog.c
 
 # Session-wide: force cache all queries with 5-minute TTL
 psql postgresql://postgres:postgres@127.0.0.1:5432/postgres?options=-c%20pgdog.cache%3Dforce_cache%20ttl%3D300
+
+# Only specify TTL, inherit mode from global config
+psql postgresql://postgres:postgres@127.0.0.1:5432/postgres?options=-c%20pgdog.cache%3Dttl%3D120
 ```
 
 ### Priority Order
 
-Sources are checked in order — first non-None result wins, then falls through to global config:
+Cache directives are resolved field-by-field. For each field (`mode` and `ttl_seconds`), the first non-`None` value wins:
 
 ```
-SQL comment  →  pgdog.cache parameter  →  DB policy config
-(highest)                                           (lowest)
+SQL comment  →  pgdog.cache parameter  →  global config
+(highest)                                      (lowest)
 ```
+
+**Example 1:** Comment specifies `ttl=60` but no mode; parameter specifies `cache` but no TTL.
+- Final mode: `cache` (from parameter)
+- Final TTL: `60` (from comment)
+
+**Example 2:** Comment specifies `force_cache ttl=10`; parameter specifies `cache ttl=300`.
+- Final mode: `force_cache` (comment wins)
+- Final TTL: `10` (comment wins)
+
+**Example 3:** Comment specifies `ttl=120`; parameter is not set; global config has `policy = "cache"` and `ttl = 300`.
+- Final mode: `cache` (from global config)
+- Final TTL: `120` (comment wins)
 
 ---
 
@@ -316,6 +359,8 @@ SQL comment  →  pgdog.cache parameter  →  DB policy config
 
 29. **Changed `has_config_changed` to `is_actual`** — config can be changed, but that doesn't mean, that cache storage should be rebuilt. And the function doesn't actually say if config has changed. It says if some specific parameters have changed. So `is_actual` is more correct.
 
+30. **Position-agnostic cache directive parsing** — `CacheDirective` refactored from an enum (`Cache { ttl }`, `ForceCache { ttl }`, `NoCache`) to a flat struct `{ mode: Option<CacheMode>, ttl_seconds: Option<u64> }` where `CacheMode` is a sub-enum (`Cache`, `ForceCache`, `NoCache`). `CacheDirective::parse()` tokenizes space-separated arguments in any order: `cache`, `force_cache`, `no_cache`, `ttl=N`. Unknown tokens are silently ignored for forward compatibility (e.g., future `hash_key=foo` argument). Field-by-field resolution: comment directive `.or()` merges with parameter directive, then global config. This means `/* pgdog_cache: ttl=60 */` (mode absent) can combine with `SET pgdog.cache = 'cache'` (TTL absent) to produce `mode=Cache, ttl=60`. Module renamed from `policy.rs` to `directive.rs`. `CacheDecision` enum removed; resolution happens inline in `integration.rs` `cache_check()`. Regex in `comment.rs` simplified to capture the raw body after `pgdog_cache:` up to the next `pgdog_\w+:` directive or end-of-comment, then delegates parsing to `CacheDirective::parse()`.
+
 ---
 
 ## What's Left To Do
@@ -325,6 +370,8 @@ SQL comment  →  pgdog.cache parameter  →  DB policy config
 2. **Add hint for query hash key**
 
 3. **Add config flag for mandatory availability of cache storage** — query will fail with error if Redis (or another cache storage) is unavailable.
+
+4. **Split `integration.rs` into several modules** — it is too big.
 
 # Tests
 

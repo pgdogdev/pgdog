@@ -1,16 +1,19 @@
 use std::hash::{Hash, Hasher};
 
 use crate::{
+    config::{cache::CachePolicy, config},
     frontend::{
-        cache::{storage::Error as CacheStorageError, CacheDecision},
+        cache::{
+            directive::{self, CacheMode},
+            storage::Error as CacheStorageError,
+            Cache,
+        },
         ClientRequest,
     },
     net::{bind::Bind, FromBytes, Message, Parameters, ToBytes},
 };
 
 use tracing::{debug, warn};
-
-use super::{policy, Cache};
 
 pub struct CacheMiss {
     pub cache_key_hash: u64,
@@ -174,23 +177,34 @@ impl Cache {
             _ => return Ok(CacheCheckResult::Passthrough),
         };
 
+        let directive = directive::resolve(client_request, params);
+        let cache_config = &config().config.general.cache;
+
+        let ttl = directive.ttl_seconds.unwrap_or(cache_config.ttl);
+        let mode = match directive.mode {
+            Some(mode) => mode,
+            None => match cache_config.policy {
+                CachePolicy::NoCache => CacheMode::NoCache,
+                CachePolicy::Cache => CacheMode::Cache,
+            },
+        };
+
+        if mode == CacheMode::NoCache {
+            return Ok(CacheCheckResult::Passthrough);
+        }
+
         let user = params.get_required("user")?;
         let database = params.get_default("database", user);
         let bind = client_request.parameters()?;
-
-        let decision = policy::resolve(client_request, params, is_read).await;
-        let ttl = match decision {
-            CacheDecision::Skip => return Ok(CacheCheckResult::Passthrough),
-            CacheDecision::ForceCache(ttl) => {
-                return Ok(CacheCheckResult::Miss(CacheMiss {
-                    cache_key_hash: compute_cache_key_hash(database, query.query(), bind),
-                    ttl,
-                }))
-            }
-            CacheDecision::Cache(ttl) => ttl,
-        };
-
         let cache_key_hash = compute_cache_key_hash(database, query.query(), bind);
+
+        if mode == CacheMode::ForceCache {
+            return Ok(CacheCheckResult::Miss(CacheMiss {
+                cache_key_hash,
+                ttl,
+            }));
+        }
+
         let guard = self.storage.read().await;
         let storage = match guard.as_ref() {
             Some(storage) => storage,
@@ -462,10 +476,7 @@ mod tests {
 
     #[test]
     fn hash_line_comment_stripped() {
-        assert_eq!(
-            qhash("-- pgdog_cache: cache\nSELECT 1"),
-            qhash("SELECT 1"),
-        );
+        assert_eq!(qhash("-- pgdog_cache: cache\nSELECT 1"), qhash("SELECT 1"),);
     }
 
     #[test]
@@ -478,10 +489,7 @@ mod tests {
 
     #[test]
     fn hash_multiple_block_comments_stripped() {
-        assert_eq!(
-            qhash("/* a */ SELECT /* b */ 1"),
-            qhash("SELECT 1"),
-        );
+        assert_eq!(qhash("/* a */ SELECT /* b */ 1"), qhash("SELECT 1"),);
     }
 
     #[test]

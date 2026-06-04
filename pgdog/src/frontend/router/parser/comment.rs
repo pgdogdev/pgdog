@@ -6,7 +6,7 @@ use regex::Regex;
 
 use crate::backend::ShardingSchema;
 use crate::config::database::Role;
-use crate::frontend::cache::policy::CacheDirective;
+use crate::frontend::cache::directive::CacheDirective;
 use crate::frontend::router::sharding::ContextBuilder;
 
 use super::super::parser::Shard;
@@ -17,9 +17,8 @@ static SHARDING_KEY: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r#"pgdog_sharding_key: *(?:"([^"]*)"|'([^']*)'|([0-9a-zA-Z-]+))"#).unwrap()
 });
 static ROLE: Lazy<Regex> = Lazy::new(|| Regex::new(r#"pgdog_role: *(primary|replica)"#).unwrap());
-static CACHE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r#"pgdog_cache: *(no_cache|force_cache(?:\s+ttl\s*=\s*([0-9]+))?|cache(?:\s+ttl\s*=\s*([0-9]+))?)?"#).unwrap()
-});
+static CACHE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r#"pgdog_cache: *(.*?)(?:\s*pgdog_\w+:|$|\s*\*/)"#).unwrap());
 
 fn get_matched_value<'a>(caps: &'a regex::Captures<'a>) -> Option<&'a str> {
     caps.get(1)
@@ -60,17 +59,8 @@ pub fn comment(
                 }
             }
             if let Some(cap) = CACHE.captures(comment) {
-                if let Some(action) = cap.get(1) {
-                    let action = action.as_str();
-                    if action == "no_cache" {
-                        cache = Some(CacheDirective::NoCache);
-                    } else if action.starts_with("force_cache") {
-                        let ttl = cap.get(2).and_then(|m| m.as_str().parse::<u64>().ok());
-                        cache = Some(CacheDirective::ForceCache { ttl_seconds: ttl });
-                    } else {
-                        let ttl = cap.get(3).and_then(|m| m.as_str().parse::<u64>().ok());
-                        cache = Some(CacheDirective::Cache { ttl_seconds: ttl });
-                    }
+                if let Some(body) = cap.get(1) {
+                    cache = Some(CacheDirective::parse(body.as_str()));
                 }
             }
             if let Some(cap) = SHARDING_KEY.captures(comment) {
@@ -279,6 +269,7 @@ mod tests {
     #[test]
     fn test_cache_hint_no_cache() {
         use crate::backend::ShardedTables;
+        use crate::frontend::cache::directive::CacheMode;
 
         let schema = ShardingSchema {
             shards: 2,
@@ -288,12 +279,19 @@ mod tests {
 
         let query = "SELECT * FROM users /* pgdog_cache: no_cache */";
         let result = comment(query, &schema).unwrap();
-        assert!(matches!(result.2, Some(CacheDirective::NoCache)));
+        assert_eq!(
+            result.2,
+            Some(CacheDirective {
+                mode: Some(CacheMode::NoCache),
+                ttl_seconds: None
+            })
+        );
     }
 
     #[test]
     fn test_cache_hint_cache_default_ttl() {
         use crate::backend::ShardedTables;
+        use crate::frontend::cache::directive::CacheMode;
 
         let schema = ShardingSchema {
             shards: 2,
@@ -303,15 +301,19 @@ mod tests {
 
         let query = "SELECT * FROM users /* pgdog_cache: cache */";
         let result = comment(query, &schema).unwrap();
-        assert!(matches!(
+        assert_eq!(
             result.2,
-            Some(CacheDirective::Cache { ttl_seconds: None })
-        ));
+            Some(CacheDirective {
+                mode: Some(CacheMode::Cache),
+                ..Default::default()
+            })
+        );
     }
 
     #[test]
     fn test_cache_hint_cache_with_ttl() {
         use crate::backend::ShardedTables;
+        use crate::frontend::cache::directive::CacheMode;
 
         let schema = ShardingSchema {
             shards: 2,
@@ -321,12 +323,13 @@ mod tests {
 
         let query = "SELECT * FROM users /* pgdog_cache: cache ttl=60 */";
         let result = comment(query, &schema).unwrap();
-        assert!(matches!(
+        assert_eq!(
             result.2,
-            Some(CacheDirective::Cache {
+            Some(CacheDirective {
+                mode: Some(CacheMode::Cache),
                 ttl_seconds: Some(60)
             })
-        ));
+        );
     }
 
     #[test]
@@ -347,6 +350,7 @@ mod tests {
     #[test]
     fn test_combined_shard_and_cache_hints() {
         use crate::backend::ShardedTables;
+        use crate::frontend::cache::directive::CacheMode;
 
         let schema = ShardingSchema {
             shards: 2,
@@ -358,17 +362,19 @@ mod tests {
         let result = comment(query, &schema).unwrap();
         assert_eq!(result.1, Some(Role::Replica));
         assert_eq!(result.0, Some(Shard::Direct(1)));
-        assert!(matches!(
+        assert_eq!(
             result.2,
-            Some(CacheDirective::Cache {
+            Some(CacheDirective {
+                mode: Some(CacheMode::Cache),
                 ttl_seconds: Some(300)
             })
-        ));
+        );
     }
 
     #[test]
     fn test_cache_hint_force_cache() {
         use crate::backend::ShardedTables;
+        use crate::frontend::cache::directive::CacheMode;
 
         let schema = ShardingSchema {
             shards: 2,
@@ -378,15 +384,19 @@ mod tests {
 
         let query = "SELECT * FROM users /* pgdog_cache: force_cache */";
         let result = comment(query, &schema).unwrap();
-        assert!(matches!(
+        assert_eq!(
             result.2,
-            Some(CacheDirective::ForceCache { ttl_seconds: None })
-        ));
+            Some(CacheDirective {
+                mode: Some(CacheMode::ForceCache),
+                ..Default::default()
+            })
+        );
     }
 
     #[test]
     fn test_cache_hint_force_cache_with_ttl() {
         use crate::backend::ShardedTables;
+        use crate::frontend::cache::directive::CacheMode;
 
         let schema = ShardingSchema {
             shards: 2,
@@ -396,11 +406,80 @@ mod tests {
 
         let query = "SELECT * FROM users /* pgdog_cache: force_cache ttl=60 */";
         let result = comment(query, &schema).unwrap();
-        assert!(matches!(
+        assert_eq!(
             result.2,
-            Some(CacheDirective::ForceCache {
+            Some(CacheDirective {
+                mode: Some(CacheMode::ForceCache),
                 ttl_seconds: Some(60)
             })
-        ));
+        );
+    }
+
+    #[test]
+    fn test_cache_hint_ttl_before_mode() {
+        use crate::backend::ShardedTables;
+        use crate::frontend::cache::directive::CacheMode;
+
+        let schema = ShardingSchema {
+            shards: 2,
+            tables: ShardedTables::new(vec![], vec![], false, SystemCatalogsBehavior::default()),
+            ..Default::default()
+        };
+
+        let query = "SELECT * FROM users /* pgdog_cache: ttl=17 force_cache */";
+        let result = comment(query, &schema).unwrap();
+        assert_eq!(
+            result.2,
+            Some(CacheDirective {
+                mode: Some(CacheMode::ForceCache),
+                ttl_seconds: Some(17)
+            })
+        );
+    }
+
+    #[test]
+    fn test_cache_hint_ttl_only() {
+        use crate::backend::ShardedTables;
+
+        let schema = ShardingSchema {
+            shards: 2,
+            tables: ShardedTables::new(vec![], vec![], false, SystemCatalogsBehavior::default()),
+            ..Default::default()
+        };
+
+        // ttl only, no mode — mode falls back to param/config
+        let query = "SELECT * FROM users /* pgdog_cache: ttl=42 */";
+        let result = comment(query, &schema).unwrap();
+        assert_eq!(
+            result.2,
+            Some(CacheDirective {
+                ttl_seconds: Some(42),
+                ..Default::default()
+            })
+        );
+    }
+
+    #[test]
+    fn test_cache_followed_by_role_directive() {
+        use crate::backend::ShardedTables;
+        use crate::frontend::cache::directive::CacheMode;
+
+        let schema = ShardingSchema {
+            shards: 2,
+            tables: ShardedTables::new(vec![], vec![], false, SystemCatalogsBehavior::default()),
+            ..Default::default()
+        };
+
+        // pgdog_role: comes after pgdog_cache: — cache body must not swallow it
+        let query = "SELECT * FROM users /* pgdog_cache: force_cache ttl=10 pgdog_role: replica */";
+        let result = comment(query, &schema).unwrap();
+        assert_eq!(result.1, Some(Role::Replica));
+        assert_eq!(
+            result.2,
+            Some(CacheDirective {
+                mode: Some(CacheMode::ForceCache),
+                ttl_seconds: Some(10),
+            })
+        );
     }
 }
