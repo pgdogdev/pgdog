@@ -138,11 +138,6 @@ async fn pgdog(command: Option<Commands>) -> Result<(), Box<dyn std::error::Erro
         tokio::spawn(async move { healthcheck::server(healthcheck_port).await });
     }
 
-    let dns_cache_override_enabled = general.dns_ttl().is_some();
-    if dns_cache_override_enabled {
-        DnsCache::global().start_refresh_loop();
-    }
-
     let stats_logger = stats::StatsLogger::new();
     prepared_statements::start_maintenance();
 
