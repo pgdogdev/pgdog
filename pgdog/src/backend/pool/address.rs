@@ -198,6 +198,8 @@ impl TryFrom<Url> for Address {
 mod test {
     use std::time::{Duration, SystemTime};
 
+    use crate::config;
+
     use super::*;
 
     // ── Address::new ─────────────────────────────────────────────────────────
@@ -478,5 +480,30 @@ mod test {
         TokenCache::global().evict(&addr);
 
         assert_eq!(secret, "stale-token");
+    }
+
+    #[tokio::test]
+    async fn test_addr_uses_dns_cache_when_dns_ttl_is_configured() {
+        let cache = DnsCache::global();
+        let hostname = "localhost";
+
+        let mut test_config = (*config::config()).clone();
+        test_config.config.general.dns_ttl = Some(60_000);
+        config::set(test_config).expect("set dns_ttl");
+        cache.clear_cache_for_testing();
+
+        let addr = Address {
+            host: hostname.into(),
+            port: 15432,
+            ..Address::new_test()
+        };
+
+        let socket_addr = addr.addr().await.expect("resolve address");
+
+        assert_eq!(socket_addr.port(), addr.port);
+        assert_eq!(
+            cache.cached_ip_for_testing(hostname),
+            Some(socket_addr.ip())
+        );
     }
 }
