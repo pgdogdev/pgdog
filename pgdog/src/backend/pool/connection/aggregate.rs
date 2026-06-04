@@ -23,6 +23,8 @@ use rust_decimal::prelude::{FromPrimitive, ToPrimitive};
 use super::Error;
 
 mod avg;
+mod cmp;
+mod count;
 
 /// GROUP BY <columns>
 #[derive(Hash, PartialEq, Eq, Debug)]
@@ -52,8 +54,8 @@ impl Grouping {
 struct Accumulator<'a> {
     target: &'a AggregateTarget,
     datum: Datum,
-    avg: Option<avg::Avg>,
     variance: Option<VarianceState>,
+    state: State,
 }
 
 impl<'a> Accumulator<'a> {
@@ -73,22 +75,9 @@ impl<'a> Accumulator<'a> {
                 let mut accumulator = Accumulator {
                     target,
                     datum: Datum::Null,
-                    avg: None,
                     variance: None,
+                    state: State::new(target, helper)?,
                 };
-
-                if matches!(target.function(), AggregateFunction::Avg) {
-                    let Some(count_helper) = helper.count else {
-                        // FIXME(sage): This should be statically enforced
-                        return Err(Error::UnsupportedAggregation {
-                            function: String::from("avg"),
-                            reason: String::from(
-                                "internal count helper was missing (this is a bug in pgdog)",
-                            ),
-                        });
-                    };
-                    accumulator.avg = Some(avg::Avg::new(target.column(), count_helper));
-                }
 
                 if matches!(
                     target.function(),
@@ -112,46 +101,17 @@ impl<'a> Accumulator<'a> {
     /// Transform COUNT(*), MIN, MAX, etc., from multiple shards into a single value.
     fn accumulate(&mut self, row: &DataRow, decoder: &Decoder) -> Result<bool, Error> {
         let column = row.get_column_checked(self.target.column(), decoder)?;
+        self.state.accumulate(row, decoder)?;
         match self.target.function() {
-            AggregateFunction::Count => {
-                if !self.datum.is_null() {
-                    checked_add_assign(&mut self.datum, column.value)?;
-                } else {
-                    self.datum = column.value;
-                }
-            }
-            AggregateFunction::Max => {
-                if !self.datum.is_null() {
-                    if self.datum < column.value {
-                        self.datum = column.value;
-                    }
-                } else {
-                    self.datum = column.value;
-                }
-            }
-            AggregateFunction::Min => {
-                if !self.datum.is_null() {
-                    if self.datum > column.value {
-                        self.datum = column.value;
-                    }
-                } else {
-                    self.datum = column.value;
-                }
-            }
+            AggregateFunction::Avg
+            | AggregateFunction::Count
+            | AggregateFunction::Max
+            | AggregateFunction::Min => {}
             AggregateFunction::Sum => {
                 if !self.datum.is_null() {
                     checked_add_assign(&mut self.datum, column.value)?;
                 } else {
                     self.datum = column.value;
-                }
-            }
-            AggregateFunction::Avg => {
-                if let Some(state) = self.avg.as_mut() {
-                    let count = row
-                        .get_column_checked(state.count_helper, decoder)?
-                        .value
-                        .as_i64()?;
-                    state.accumulate(column.value, count);
                 }
             }
             AggregateFunction::StddevPop
@@ -175,8 +135,9 @@ impl<'a> Accumulator<'a> {
     }
 
     fn finalize(&mut self) -> Result<bool, Error> {
-        if let Some(state) = self.avg.take() {
-            self.datum = state.finalize()?;
+        match self.state.take().finalize()? {
+            Datum::Null => {}
+            d => self.datum = d,
         }
 
         if let Some(state) = self.variance.as_mut() {
@@ -190,6 +151,85 @@ impl<'a> Accumulator<'a> {
         }
 
         Ok(true)
+    }
+}
+
+#[derive(Debug)]
+enum State {
+    Avg(avg::Avg),
+    Cmp(cmp::Cmp),
+    Count(count::Count),
+    // FIXME(sage): Temporary variant while refactor is in progress
+    Dummy,
+}
+
+impl State {
+    /// Construct a new aggregate state based on the function provided
+    /// Errors if the function is not one we support.
+    fn new(target: &AggregateTarget, helper: HelperColumns) -> Result<Self, Error> {
+        match (target.function(), target.is_distinct()) {
+            (AggregateFunction::Avg, false) => Ok(Self::Avg(avg::Avg::new(
+                target.column(),
+                helper.count.ok_or_else(|| Error::UnsupportedAggregation {
+                    function: String::from("avg"),
+                    reason: String::from(
+                        "internal count helper was missing (this is a bug in pgdog)",
+                    ),
+                })?,
+            ))),
+            (AggregateFunction::Avg, true) => Err(Error::UnsupportedAggregation {
+                function: String::from("avg"),
+                reason: String::from("avg(DISTINCT ...) is not yet supported"),
+            }),
+            (AggregateFunction::Count, false) => {
+                Ok(Self::Count(count::Count::new(target.column())))
+            }
+            (AggregateFunction::Count, true) => Err(Error::UnsupportedAggregation {
+                function: String::from("count"),
+                reason: String::from("count(DISTINCT ...) is not yet supported"),
+            }),
+            (AggregateFunction::Max, _) => Ok(Self::Cmp(cmp::Cmp::max(target.column()))),
+            (AggregateFunction::Min, _) => Ok(Self::Cmp(cmp::Cmp::min(target.column()))),
+            // FIXME: Unsupported, need to error
+            _ => Ok(Self::Dummy),
+        }
+    }
+
+    /// Merge the result from a single shard into the accumulated state.
+    fn accumulate(&mut self, row: &DataRow, decoder: &Decoder) -> Result<(), Error> {
+        match self {
+            State::Avg(state) => {
+                let value = row.get_column_checked(state.column, decoder)?.value;
+                let weight = row
+                    .get_column_checked(state.count_helper, decoder)?
+                    .value
+                    .as_i64()?;
+                state.accumulate(value, weight);
+                Ok(())
+            }
+            State::Cmp(state) => state
+                .accumulate(row.get_column_checked(state.column, decoder)?.value)
+                .map_err(Into::into),
+            State::Count(state) => {
+                state.accumulate(row.get_column_checked(state.column, decoder)?.value)
+            }
+            State::Dummy => Ok(()),
+        }
+    }
+
+    /// Perform any final work needed and compute the result of the function
+    fn finalize(self) -> Result<Datum, Error> {
+        match self {
+            State::Avg(state) => Ok(state.finalize()?),
+            State::Cmp(state) => Ok(state.finalize()),
+            State::Count(state) => Ok(state.finalize()),
+            State::Dummy => Ok(Datum::Null),
+        }
+    }
+
+    // FIXME(sage): Get rid of this when Dummy is gone
+    fn take(&mut self) -> Self {
+        std::mem::replace(self, State::Dummy)
     }
 }
 
