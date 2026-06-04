@@ -18,7 +18,7 @@ use crate::{
     backend::{self, pool::Error, ConnectReason, DisconnectReason, Pool},
     config::config,
     net::{
-        BackendKeyData, FromBytes, NotificationResponse, Parameter, Parameters, Protocol,
+        FromBytes, FrontendPid, NotificationResponse, Parameter, Parameters, Protocol,
         ProtocolMessage, Query, ToBytes,
     },
 };
@@ -55,6 +55,7 @@ struct Comms {
 /// Notification listener.
 #[derive(Debug, Clone)]
 pub struct PubSubListener {
+    id: FrontendPid,
     pool: Pool,
     tx: mpsc::Sender<Request>,
     channels: Channels,
@@ -70,6 +71,7 @@ impl PubSubListener {
         let channels = CHANNELS.clone();
 
         let listener = Self {
+            id: FrontendPid::new(),
             pool: pool.clone(),
             tx,
             channels,
@@ -79,10 +81,10 @@ impl PubSubListener {
             }),
         };
 
+        let id = listener.id;
         let channels = listener.channels.clone();
         let pool = listener.pool.clone();
         let comms = listener.comms.clone();
-
         spawn(async move {
             loop {
                 comms.start.notified().await;
@@ -92,7 +94,7 @@ impl PubSubListener {
                         rx.close(); // Drain remaining messages.
                     }
 
-                    result = Self::run(&pool, &mut rx, channels.clone()) => {
+                    result = Self::run(id, &pool, &mut rx, channels.clone()) => {
                         if let Err(err) = result {
                             error!("pub/sub error: {} [{}]", err, pool.addr());
                             // Don't reconnect for another connect attempt delay
@@ -154,6 +156,7 @@ impl PubSubListener {
 
     // Run the listener task.
     async fn run(
+        id: FrontendPid,
         pool: &Pool,
         rx: &mut mpsc::Receiver<Request>,
         channels: Channels,
@@ -164,7 +167,7 @@ impl PubSubListener {
 
         server
             .link_client(
-                &BackendKeyData::new(),
+                id,
                 &Parameters::from(vec![Parameter {
                     name: "application_name".into(),
                     value: "PgDog Pub/Sub Listener".into(),

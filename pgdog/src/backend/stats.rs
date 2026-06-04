@@ -12,22 +12,21 @@ use tokio::time::Instant;
 use crate::{
     backend::{pool::stats::MemoryStats, Pool, ServerOptions},
     config::Memory,
-    net::{messages::BackendKeyData, Parameters},
+    net::{
+        messages::{BackendPid, FrontendPid},
+        Parameters,
+    },
     state::State,
 };
 
 use super::pool::Address;
 
-static STATS: Lazy<RwLock<HashMap<BackendKeyData, Arc<Mutex<ConnectedServer>>>>> =
+static STATS: Lazy<RwLock<HashMap<BackendPid, Arc<Mutex<ConnectedServer>>>>> =
     Lazy::new(|| RwLock::new(HashMap::default()));
 
-/// Get a copy of latest stats.
-pub fn stats() -> HashMap<BackendKeyData, ConnectedServer> {
-    STATS
-        .read()
-        .iter()
-        .map(|(k, v)| (*k, v.lock().clone()))
-        .collect()
+/// Get a snapshot of all connected-server stats.
+pub fn stats() -> Vec<ConnectedServer> {
+    STATS.read().values().map(|v| v.lock().clone()).collect()
 }
 
 /// Get idle-in-transaction server connections for connection pool.
@@ -46,18 +45,18 @@ pub fn idle_in_transaction(pool: &Pool) -> usize {
 #[derive(Clone, Debug, Copy)]
 pub struct ServerStats {
     pub inner: pgdog_stats::server::Stats,
-    pub id: BackendKeyData,
+    pub id: BackendPid,
     pub last_used: Instant,
     pub last_healthcheck: Option<Instant>,
     pub created_at: Instant,
-    pub client_id: Option<BackendKeyData>,
+    pub client_id: Option<FrontendPid>,
     query_timer: Option<Instant>,
     transaction_timer: Option<Instant>,
     idle_in_transaction_timer: Option<Instant>,
 }
 
 impl ServerStats {
-    fn new(id: BackendKeyData, options: &ServerOptions, config: &Memory) -> Self {
+    fn new(id: BackendPid, options: &ServerOptions, config: &Memory) -> Self {
         let now = Instant::now();
         let inner = pgdog_stats::server::Stats {
             memory: *MemoryStats::new(config),
@@ -99,7 +98,6 @@ pub struct ConnectedServer {
     pub stats: ServerStats,
     pub addr: Address,
     pub application_name: String,
-    pub client: Option<BackendKeyData>,
 }
 
 /// Server statistics handle.
@@ -116,7 +114,7 @@ pub struct Stats {
 impl Stats {
     /// Register new server with statistics.
     pub fn connect(
-        id: BackendKeyData,
+        id: BackendPid,
         addr: &Address,
         params: &Parameters,
         options: &ServerOptions,
@@ -128,7 +126,6 @@ impl Stats {
             stats: local,
             addr: addr.clone(),
             application_name: params.get_default("application_name", "PgDog").to_owned(),
-            client: None,
         };
 
         let shared = Arc::new(Mutex::new(server));
@@ -156,8 +153,8 @@ impl Stats {
         self.sync_to_shared();
     }
 
-    pub fn link_client(&mut self, client_name: &str, server_name: &str, id: &BackendKeyData) {
-        self.local.client_id = Some(*id);
+    pub fn link_client(&mut self, client_name: &str, server_name: &str, id: FrontendPid) {
+        self.local.client_id = Some(id);
         if client_name != server_name {
             let mut guard = self.shared.lock();
             guard.stats.client_id = self.local.client_id;

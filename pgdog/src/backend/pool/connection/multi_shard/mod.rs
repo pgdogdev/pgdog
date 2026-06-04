@@ -9,7 +9,7 @@ use crate::{
             command_complete::CommandComplete, DataRow, FromBytes, Message, Protocol,
             RowDescription, ToBytes,
         },
-        BackendKeyData, Decoder, ReadyForQuery,
+        BackendPid, Decoder, ReadyForQuery,
     },
 };
 
@@ -42,7 +42,7 @@ struct Counters {
     copy_done: usize,
     copy_out: usize,
     copy_data: usize,
-    first_backend_data: Option<BackendKeyData>,
+    first_backend_data: Option<BackendPid>,
 }
 
 /// Multi-shard state.
@@ -234,6 +234,9 @@ impl MultiShard {
                     self.validator.validate_data_row(&data_row)?;
                 }
 
+                // INVARIANT: omni dedup relies on Source::Backend carrying a
+                // process-unique BackendPid (see BackendPid::seq). Never tag messages
+                // with a non-unique value; doing so silently corrupts row deduplication.
                 if self.counters.first_backend_data.is_none() {
                     self.counters.first_backend_data = message.source().backend_id();
                 }

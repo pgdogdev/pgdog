@@ -14,7 +14,6 @@ pub mod healthcheck;
 pub mod inner;
 pub mod lb;
 pub mod lsn_monitor;
-pub mod mapping;
 pub mod mirror_stats;
 pub mod monitor;
 pub mod oids;
@@ -49,7 +48,6 @@ pub use stats::Stats;
 
 use comms::Comms;
 use inner::Inner;
-use mapping::Mapping;
 use shard::ShardConfig;
 use taken::Taken;
 use waiting::{Waiter, Waiting};

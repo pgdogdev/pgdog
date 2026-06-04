@@ -7,7 +7,7 @@ use std::sync::Arc;
 use crate::backend::databases::{databases, reload, shutdown};
 use crate::config::config;
 use crate::frontend::client::query_engine::two_pc::Manager;
-use crate::net::messages::{hello::SslReply, NegotiateProtocolVersion, Startup};
+use crate::net::messages::{hello::SslReply, FrontendPid, NegotiateProtocolVersion, Startup};
 use crate::net::tls::{acceptor, peer_identity};
 use crate::net::{self, tweak, Stream};
 use crate::sighup::Sighup;
@@ -133,7 +133,7 @@ impl Listener {
             {
                 // Shutdown timeout elapsed; cancel any still-running queries before tearing pools down.
                 let cancel_futures = comms.clients().into_keys().map(|id| async move {
-                    if let Err(err) = databases().cancel(&id).await {
+                    if let Err(err) = databases().cancel(id).await {
                         error!(?id, "cancel request failed during shutdown: {err}");
                     }
                 });
@@ -238,8 +238,10 @@ impl Listener {
                     break;
                 }
 
-                Startup::Cancel { id } => {
-                    let _ = databases().cancel(&id).await;
+                Startup::Cancel { ref id } => {
+                    if comms().verify_cancel(id) {
+                        let _ = databases().cancel(FrontendPid::from(id)).await;
+                    }
                     break;
                 }
             }

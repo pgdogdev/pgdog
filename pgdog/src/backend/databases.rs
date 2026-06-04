@@ -23,7 +23,7 @@ use crate::frontend::PreparedStatements;
 use crate::{
     backend::pool::PoolConfig,
     config::{config, load, set, ConfigAndUsers, ManualQuery, Role, User as ConfigUser},
-    net::{messages::BackendKeyData, tls},
+    net::{messages::FrontendPid, tls},
 };
 
 use super::{
@@ -399,7 +399,7 @@ impl Databases {
     }
 
     /// Cancel a query running on one of the databases proxied by the pooler.
-    pub async fn cancel(&self, id: &BackendKeyData) -> Result<(), Error> {
+    pub async fn cancel(&self, id: FrontendPid) -> Result<(), Error> {
         for cluster in self.databases.values() {
             cluster.cancel(id).await?;
         }

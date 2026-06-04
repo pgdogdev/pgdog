@@ -48,19 +48,22 @@ impl ToDataRowColumn for i64 {
     }
 }
 
-impl ToDataRowColumn for Option<i64> {
+impl ToDataRowColumn for i32 {
     fn to_data_row_column(&self) -> Data {
-        match self {
-            Some(value) => ToDataRowColumn::to_data_row_column(value),
-            None => Data::null(),
-        }
+        Bytes::copy_from_slice(self.to_string().as_bytes()).into()
     }
 }
 
-impl ToDataRowColumn for Option<String> {
+impl ToDataRowColumn for u32 {
+    fn to_data_row_column(&self) -> Data {
+        Bytes::copy_from_slice(self.to_string().as_bytes()).into()
+    }
+}
+
+impl<T: ToDataRowColumn> ToDataRowColumn for Option<T> {
     fn to_data_row_column(&self) -> Data {
         match self {
-            Some(value) => ToDataRowColumn::to_data_row_column(value),
+            Some(value) => value.to_data_row_column(),
             None => Data::null(),
         }
     }

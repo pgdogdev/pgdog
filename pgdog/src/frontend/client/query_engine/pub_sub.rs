@@ -1,4 +1,4 @@
-use crate::net::{BackendKeyData, CommandComplete, Protocol, ReadyForQuery};
+use crate::net::{CommandComplete, Protocol, ReadyForQuery};
 
 use super::*;
 
@@ -61,9 +61,7 @@ impl QueryEngine {
         let bytes_sent = context
             .stream
             .send_many(&[
-                CommandComplete::new(command)
-                    .message()?
-                    .backend(BackendKeyData::default()),
+                CommandComplete::new(command).message()?,
                 ReadyForQuery::in_transaction(context.in_transaction()).message()?,
             ])
             .await?;

@@ -74,7 +74,7 @@ async fn test_pool_checkout() {
 
     let pool = pool();
     let conn = pool.get(&Request::default()).await.unwrap();
-    let id = *(conn.id());
+    let id = conn.id();
 
     assert!(conn.done());
     assert!(conn.done());
@@ -93,7 +93,7 @@ async fn test_pool_checkout() {
 
     drop(conn); // Return conn to the pool.
     let conn = pool.get(&Request::default()).await.unwrap();
-    assert_eq!(conn.id(), &id);
+    assert_eq!(conn.id(), id);
 }
 
 // This test flakes in CI because of iffy hardware I think.
@@ -279,7 +279,7 @@ async fn test_incomplete_request_recovery() {
 
     for query in ["SELECT 1", "BEGIN"] {
         let mut conn = pool.get(&Request::default()).await.unwrap();
-        let conn_id = *(conn.id());
+        let conn_id = conn.id();
 
         conn.send(&vec![ProtocolMessage::from(Query::new(query))].into())
             .await
@@ -299,7 +299,7 @@ async fn test_incomplete_request_recovery() {
 
         // Verify the same connection is reused
         let conn = pool.get(&Request::default()).await.unwrap();
-        assert_eq!(conn.id(), &conn_id);
+        assert_eq!(conn.id(), conn_id);
     }
 }
 

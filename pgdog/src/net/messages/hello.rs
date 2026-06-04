@@ -299,6 +299,7 @@ fn search_path(value: &str) -> ParameterValue {
 #[cfg(test)]
 mod test {
     use crate::net::messages::{BackendKeyData, ProtocolVersion, ToBytes};
+    use crate::net::FrontendPid;
 
     use super::*;
     use bytes::{Buf, BufMut, BytesMut};
@@ -466,7 +467,7 @@ mod test {
     #[tokio::test]
     async fn test_cancel_roundtrip_extended_secret() {
         let cancel = Startup::Cancel {
-            id: BackendKeyData::new_client(ProtocolVersion::V3_2),
+            id: BackendKeyData::new_frontend(ProtocolVersion::V3_2, FrontendPid::new()),
         };
         let bytes = cancel.to_bytes();
 

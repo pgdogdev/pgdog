@@ -13,7 +13,7 @@ pub(super) struct Waiting {
 impl Drop for Waiting {
     fn drop(&mut self) {
         if self.waiting {
-            self.pool.lock().remove_waiter(&self.request.id);
+            self.pool.lock().remove_waiter(self.request.id);
         }
     }
 }
@@ -91,7 +91,7 @@ pub(super) struct Waiter {
 mod tests {
     use super::*;
     use crate::backend::pool::Pool;
-    use crate::net::messages::BackendKeyData;
+    use crate::net::messages::FrontendPid;
     use tokio::time::{sleep, timeout, Duration};
 
     #[tokio::test]
@@ -104,7 +104,7 @@ mod tests {
 
         for i in 0..num_tasks {
             let pool_clone = pool.clone();
-            let request = Request::unrouted(BackendKeyData::new());
+            let request = Request::unrouted(FrontendPid::new());
             let mut waiting = Waiting::new(pool_clone, &request).unwrap();
 
             let wait_task = tokio::spawn(async move { waiting.wait().await });
@@ -167,7 +167,7 @@ mod tests {
 
         let _conn = pool.get(&Request::default()).await.unwrap();
 
-        let request = Request::unrouted(BackendKeyData::new());
+        let request = Request::unrouted(FrontendPid::new());
         let waiter_pool = pool.clone();
         let get_conn = async move {
             let mut waiting = Waiting::new(waiter_pool.clone(), &request).unwrap();
