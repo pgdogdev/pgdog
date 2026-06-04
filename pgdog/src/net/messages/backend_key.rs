@@ -65,7 +65,7 @@ impl SecretKey {
     /// byte. Length is not secret, so an early length mismatch returning `false`
     /// is fine.
     pub fn constant_time_eq(&self, other: &SecretKey) -> bool {
-        aws_lc_rs::constant_time::verify_slices_are_equal(self.as_slice(), other.as_slice()).is_ok()
+        crate::util::constant_time_eq(self.as_slice(), other.as_slice())
     }
 
     pub fn len(&self) -> usize {
