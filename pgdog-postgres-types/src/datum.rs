@@ -9,7 +9,7 @@ use crate::{
     TimestampTz, ToDataRowColumn,
 };
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Datum {
     /// BIGINT.
     Bigint(i64),
@@ -45,102 +45,6 @@ pub enum Datum {
     Null,
     /// Boolean
     Boolean(bool),
-}
-
-impl Eq for Datum {}
-
-impl std::hash::Hash for Datum {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        use Datum::*;
-        std::mem::discriminant(self).hash(state);
-        match self {
-            Bigint(v) => v.hash(state),
-            Integer(v) => v.hash(state),
-            SmallInt(v) => v.hash(state),
-            Interval(v) => v.hash(state),
-            Text(v) => v.hash(state),
-            Timestamp(v) => v.hash(state),
-            TimestampTz(v) => v.hash(state),
-            Uuid(v) => v.hash(state),
-            Numeric(v) => v.hash(state),
-            Float(v) => {
-                if v.0.is_nan() {
-                    0u32.hash(state);
-                } else {
-                    v.0.to_bits().hash(state);
-                }
-            }
-            Double(v) => {
-                if v.0.is_nan() {
-                    0u64.hash(state);
-                } else {
-                    v.0.to_bits().hash(state);
-                }
-            }
-            Vector(v) => v.hash(state),
-            Oid(v) => v.hash(state),
-            Array(v) => v.hash(state),
-            Unknown(v) => v.hash(state),
-            Null => {}
-            Boolean(v) => v.hash(state),
-        }
-    }
-}
-
-impl PartialOrd for Datum {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for Datum {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        use Datum::*;
-        match (self, other) {
-            (Bigint(a), Bigint(b)) => a.cmp(b),
-            (Integer(a), Integer(b)) => a.cmp(b),
-            (SmallInt(a), SmallInt(b)) => a.cmp(b),
-            (Interval(a), Interval(b)) => a.cmp(b),
-            (Text(a), Text(b)) => a.cmp(b),
-            (Timestamp(a), Timestamp(b)) => a.cmp(b),
-            (TimestampTz(a), TimestampTz(b)) => a.cmp(b),
-            (Uuid(a), Uuid(b)) => a.cmp(b),
-            (Numeric(a), Numeric(b)) => a.cmp(b),
-            (Float(a), Float(b)) => a.cmp(b),
-            (Double(a), Double(b)) => a.cmp(b),
-            (Vector(a), Vector(b)) => a.cmp(b),
-            (Oid(a), Oid(b)) => a.cmp(b),
-            (Array(a), Array(b)) => a.cmp(b),
-            (Unknown(a), Unknown(b)) => a.cmp(b),
-            (Boolean(a), Boolean(b)) => a.cmp(b),
-            (Null, Null) => std::cmp::Ordering::Equal,
-            // For different variants, compare by their variant index
-            _ => {
-                fn variant_index(datum: &Datum) -> u8 {
-                    match datum {
-                        Datum::Bigint(_) => 0,
-                        Datum::Integer(_) => 1,
-                        Datum::SmallInt(_) => 2,
-                        Datum::Interval(_) => 3,
-                        Datum::Text(_) => 4,
-                        Datum::Timestamp(_) => 5,
-                        Datum::TimestampTz(_) => 6,
-                        Datum::Uuid(_) => 7,
-                        Datum::Numeric(_) => 8,
-                        Datum::Float(_) => 9,
-                        Datum::Double(_) => 10,
-                        Datum::Vector(_) => 11,
-                        Datum::Oid(_) => 12,
-                        Datum::Array(_) => 13,
-                        Datum::Unknown(_) => 14,
-                        Datum::Null => 15,
-                        Datum::Boolean(_) => 16,
-                    }
-                }
-                variant_index(self).cmp(&variant_index(other))
-            }
-        }
-    }
 }
 
 impl ToDataRowColumn for Datum {

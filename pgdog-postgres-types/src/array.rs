@@ -1,48 +1,13 @@
-use std::cmp::Ordering;
-
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 
 use super::{Error, Format};
 use crate::{DataType, Datum};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialOrd, Ord, PartialEq, Eq, Hash)]
 pub struct Array {
     elements: Vec<Option<Datum>>,
     element_oid: i32,
     dim: Dimension,
-}
-
-impl PartialEq for Array {
-    fn eq(&self, other: &Self) -> bool {
-        self.elements == other.elements
-            && self.element_oid == other.element_oid
-            && self.dim == other.dim
-    }
-}
-
-impl Eq for Array {}
-
-impl PartialOrd for Array {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for Array {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.elements
-            .cmp(&other.elements)
-            .then(self.element_oid.cmp(&other.element_oid))
-            .then(self.dim.cmp(&other.dim))
-    }
-}
-
-impl std::hash::Hash for Array {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.elements.hash(state);
-        self.element_oid.hash(state);
-        self.dim.hash(state);
-    }
 }
 
 #[derive(Debug, Clone, Hash, Ord, PartialOrd, PartialEq, Eq)]
