@@ -162,13 +162,11 @@ impl Buffer {
     }
 
     fn drop_helper_columns(rows: &mut VecDeque<DataRow>, plan: &AggregateRewritePlan) {
-        if plan.drop_columns().is_empty() {
+        if plan.is_noop() {
             return;
         }
 
-        let mut drop = plan.drop_columns().to_vec();
-        drop.sort_unstable();
-        drop.dedup();
+        let drop = plan.drop_columns().collect();
 
         for row in rows.iter_mut() {
             row.drop_columns(&drop);

@@ -25,15 +25,6 @@ impl AggregatesRewrite {
         let base_len = select.target_list.len();
 
         for target in aggregate.targets() {
-            if aggregate.targets().iter().any(|other| {
-                matches!(other.function(), AggregateFunction::Count)
-                    && other.expr_id() == target.expr_id()
-                    && other.is_distinct() == target.is_distinct()
-            }) && matches!(target.function(), AggregateFunction::Avg)
-            {
-                continue;
-            }
-
             let Some(node) = select.target_list.get(target.column()) else {
                 continue;
             };
@@ -75,20 +66,6 @@ impl AggregatesRewrite {
                     target.column()
                 );
 
-                let alias_exists = select.target_list.iter().any(|existing| {
-                    if let Some(NodeEnum::ResTarget(res)) = existing.node.as_ref() {
-                        res.name == helper_alias
-                    } else {
-                        false
-                    }
-                }) || planned_aliases
-                    .iter()
-                    .any(|existing| existing == &helper_alias);
-
-                if alias_exists {
-                    continue;
-                }
-
                 let helper_column = base_len + helper_nodes.len();
 
                 let helper_res = ResTarget {
@@ -105,7 +82,6 @@ impl AggregatesRewrite {
                 });
                 planned_aliases.push(helper_alias.clone());
 
-                plan.add_drop_column(helper_column);
                 plan.add_helper(HelperMapping {
                     target_column: target.column(),
                     helper_column,
@@ -317,7 +293,7 @@ mod tests {
     fn rewrite_engine_adds_helper() {
         let (mut ast, output) = rewrite("SELECT AVG(price) FROM menu");
         assert!(!output.plan.is_noop());
-        assert_eq!(output.plan.drop_columns(), &[1]);
+        assert_eq!(output.plan.drop_columns().collect::<Vec<_>>(), &[1]);
         assert_eq!(output.plan.helpers().len(), 1);
         let helper = &output.plan.helpers()[0];
         assert_eq!(helper.target_column, 0);
@@ -345,7 +321,7 @@ mod tests {
     #[test]
     fn rewrite_engine_handles_mismatched_pair() {
         let (mut ast, output) = rewrite("SELECT COUNT(price::numeric), AVG(price) FROM menu");
-        assert_eq!(output.plan.drop_columns(), &[2]);
+        assert_eq!(output.plan.drop_columns().collect::<Vec<_>>(), &[2]);
         assert_eq!(output.plan.helpers().len(), 1);
         let helper = &output.plan.helpers()[0];
         assert_eq!(helper.target_column, 1);
@@ -368,7 +344,7 @@ mod tests {
     #[test]
     fn rewrite_engine_multiple_avg_helpers() {
         let (mut ast, output) = rewrite("SELECT AVG(price), AVG(discount) FROM menu");
-        assert_eq!(output.plan.drop_columns(), &[2, 3]);
+        assert_eq!(output.plan.drop_columns().collect::<Vec<_>>(), &[2, 3]);
         assert_eq!(output.plan.helpers().len(), 2);
 
         let helper_price = &output.plan.helpers()[0];
@@ -397,7 +373,7 @@ mod tests {
     fn rewrite_engine_stddev_helpers() {
         let (mut ast, output) = rewrite("SELECT STDDEV(price) FROM menu");
         assert!(!output.plan.is_noop());
-        assert_eq!(output.plan.drop_columns(), &[1, 2, 3]);
+        assert_eq!(output.plan.drop_columns().collect::<Vec<_>>(), &[1, 2, 3]);
         assert_eq!(output.plan.helpers().len(), 3);
 
         let kinds: Vec<HelperKind> = output

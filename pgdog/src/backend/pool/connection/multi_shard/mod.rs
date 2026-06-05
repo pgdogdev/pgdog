@@ -207,7 +207,7 @@ impl MultiShard {
                     // Only send it to the client once all shards sent it,
                     // so we don't get early requests from clients.
                     let plan = self.route.aggregate_rewrite_plan();
-                    if plan.drop_columns().is_empty() {
+                    if plan.is_noop() {
                         forward = Some(message);
                     } else {
                         let client_rd = rd.drop_columns(plan.drop_columns());
