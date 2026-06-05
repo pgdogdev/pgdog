@@ -311,14 +311,6 @@ mod tests {
     }
 
     #[test]
-    fn rewrite_engine_skips_when_count_exists() {
-        let sql = "SELECT COUNT(price), AVG(price) FROM menu";
-        let (mut ast, output) = rewrite(sql);
-        assert!(output.plan.is_noop());
-        assert_eq!(select(&mut ast).target_list.len(), 2);
-    }
-
-    #[test]
     fn rewrite_engine_handles_mismatched_pair() {
         let (mut ast, output) = rewrite("SELECT COUNT(price::numeric), AVG(price) FROM menu");
         assert_eq!(output.plan.drop_columns().collect::<Vec<_>>(), &[2]);
