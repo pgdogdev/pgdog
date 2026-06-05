@@ -277,7 +277,7 @@ mod tests {
     fn rewrite(sql: &str) -> (ParseResult, RewriteOutput) {
         let mut parsed = pg_query::parse(sql).unwrap().protobuf;
         let stmt = select(&mut parsed);
-        let aggregate = Aggregate::parse(stmt);
+        let aggregate = Aggregate::parse(stmt, &Default::default());
         let output = AggregatesRewrite.rewrite_select(stmt, &aggregate);
         (parsed, output)
     }
@@ -302,7 +302,7 @@ mod tests {
         assert!(!helper.distinct);
         assert!(matches!(helper.kind, HelperKind::Count));
 
-        let aggregate = Aggregate::parse(select(&mut ast));
+        let aggregate = Aggregate::parse(select(&mut ast), &Default::default());
         assert_eq!(aggregate.targets().len(), 2);
         assert!(aggregate
             .targets()
@@ -321,7 +321,7 @@ mod tests {
         assert!(!helper.distinct);
         assert!(matches!(helper.kind, HelperKind::Count));
 
-        let aggregate = Aggregate::parse(select(&mut ast));
+        let aggregate = Aggregate::parse(select(&mut ast), &Default::default());
         assert_eq!(aggregate.targets().len(), 3);
         assert!(
             aggregate
@@ -349,7 +349,7 @@ mod tests {
         assert_eq!(helper_discount.helper_column, 3);
         assert!(matches!(helper_discount.kind, HelperKind::Count));
 
-        let aggregate = Aggregate::parse(select(&mut ast));
+        let aggregate = Aggregate::parse(select(&mut ast), &Default::default());
         assert_eq!(aggregate.targets().len(), 4);
         assert_eq!(
             aggregate

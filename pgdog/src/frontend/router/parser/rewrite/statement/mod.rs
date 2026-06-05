@@ -140,7 +140,7 @@ impl<'a> StatementRewrite<'a> {
             }
         })?;
 
-        self.rewrite_aggregates(&mut plan)?;
+        self.rewrite_aggregates(&mut plan, self.db_schema)?;
         self.limit_offset(&mut plan)?;
 
         if self.rewritten {

@@ -13,6 +13,7 @@ REPO_ROOT="$( cd "${SCRIPT_DIR}/../.." && pwd )"
 cd "$REPO_ROOT"
 
 files=(
+    rust-toolchain.toml
     Cargo.lock
     Cargo.toml
     .cargo/config.toml

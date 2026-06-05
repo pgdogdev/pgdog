@@ -2,7 +2,8 @@ use pg_query::protobuf::Integer;
 use pg_query::protobuf::{a_const::Val, Node, SelectStmt, String as PgQueryString};
 use pg_query::NodeEnum;
 
-use crate::frontend::router::parser::{ExpressionRegistry, Function};
+use super::{ExpressionRegistry, Function};
+use crate::backend::schema::Schema;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct AggregateTarget {
@@ -41,10 +42,11 @@ pub enum AggregateFunction {
     StddevSamp,
     VarPop,
     VarSamp,
+    Unrecognized(String),
 }
 
 impl AggregateFunction {
-    pub fn as_str(&self) -> &'static str {
+    pub fn as_str(&self) -> &str {
         match self {
             AggregateFunction::Count => "count",
             AggregateFunction::Max => "max",
@@ -55,6 +57,7 @@ impl AggregateFunction {
             AggregateFunction::StddevSamp => "stddev_samp",
             AggregateFunction::VarPop => "var_pop",
             AggregateFunction::VarSamp => "var_samp",
+            AggregateFunction::Unrecognized(s) => &*s,
         }
     }
 }
@@ -121,7 +124,7 @@ fn columns_match(group_by_names: &[&String], select_names: &[&String]) -> bool {
 
 impl Aggregate {
     /// Figure out what aggregates are present and which ones PgDog supports.
-    pub fn parse(stmt: &SelectStmt) -> Self {
+    pub fn parse(stmt: &SelectStmt, schema: &Schema) -> Self {
         let mut targets = vec![];
         let mut registry = ExpressionRegistry::new();
         let group_by = stmt
@@ -168,7 +171,13 @@ impl Aggregate {
                             "stddev_pop" => Some(AggregateFunction::StddevPop),
                             "variance" | "var_samp" => Some(AggregateFunction::VarSamp),
                             "var_pop" => Some(AggregateFunction::VarPop),
-                            _ => None,
+                            fname => {
+                                if schema.aggregate_functions.contains(fname) {
+                                    Some(AggregateFunction::Unrecognized(fname.to_owned()))
+                                } else {
+                                    None
+                                }
+                            }
                         };
 
                         if let Some(function) = function {
@@ -259,7 +268,7 @@ mod test {
     }
 
     fn parse(stmt: &str) -> Aggregate {
-        Aggregate::parse(&select(stmt))
+        Aggregate::parse(&select(stmt), &Default::default())
     }
 
     #[test]
@@ -454,5 +463,35 @@ mod test {
         let aggr = parse("SELECT example.user_id, COUNT(1) FROM example GROUP BY example.user_id");
         assert_eq!(aggr.group_by(), &[0]);
         assert_eq!(aggr.targets().len(), 1);
+    }
+
+    #[test]
+    fn test_unrecognized_aggregate_function_errors() {
+        let schema_with_agg = Schema::from_parts_with_agg(
+            Vec::new(),
+            Default::default(),
+            vec![String::from("mysum")],
+        );
+        let schema_without_agg = Default::default();
+        let query = select("SELECT mysum(lol) FROM example");
+
+        // A random function that isn't listed as aggregate in the schema
+        // doesn't require special support on our end, so we should be fine.
+        let aggregate = Aggregate::parse(&query, &schema_without_agg);
+        assert_eq!(aggregate.targets, Vec::new());
+
+        // If we see an aggregate function we don't recognize, we can't
+        // process the query correctly, since we need to combine the
+        // results from each shard.
+        let aggregate = Aggregate::parse(&query, &schema_with_agg);
+        let funcs = aggregate
+            .targets
+            .into_iter()
+            .map(|t| t.function)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            funcs,
+            vec![AggregateFunction::Unrecognized("mysum".to_owned())]
+        );
     }
 }

@@ -36,3 +36,4 @@ pub mod timestamp_sorting;
 pub mod tls_enforced;
 pub mod tls_reload;
 pub mod transaction_state;
+pub mod unrecognized_aggregate;
