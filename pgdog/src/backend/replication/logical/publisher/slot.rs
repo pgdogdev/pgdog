@@ -1,5 +1,6 @@
 use super::super::status::ReplicationSlot as ReplicationSlotTracker;
 use super::super::Error;
+use crate::config::config;
 use crate::{
     backend::{self, pool::Address, ConnectReason, Server, ServerOptions},
     frontend::client::query_engine::two_pc::TwoPcTransactions,
@@ -9,6 +10,8 @@ use crate::{
     },
     util::random_string,
 };
+
+use pgdog_config::CopyFormat;
 use std::{fmt::Display, str::FromStr, time::Duration};
 use tokio::time::timeout;
 use tracing::{debug, info, trace, warn};
@@ -293,10 +296,11 @@ impl ReplicationSlot {
 
     /// Start replication.
     pub async fn start_replication(&mut self) -> Result<(), Error> {
+        let is_binary = config().config.general.resharding_copy_format == CopyFormat::Binary;
         // TODO: This is definitely Postgres version-specific.
         let query = Query::new(format!(
-            r#"START_REPLICATION SLOT "{}" LOGICAL {} ("proto_version" '4', origin 'any', "publication_names" '"{}"')"#,
-            self.name, self.lsn, self.publication
+            r#"START_REPLICATION SLOT "{}" LOGICAL {} ("proto_version" '4', origin 'any', "publication_names" '"{}"', "binary" '{}')"#,
+            self.name, self.lsn, self.publication, is_binary
         ));
         self.server()?.send(&vec![query.into()].into()).await?;
 
@@ -528,7 +532,9 @@ mod test {
                         assert_eq!(relation.name, "test_slot_replication")
                     }
                     XLogPayload::Insert(insert) => {
-                        assert_eq!(insert.column(0).unwrap().as_str().unwrap(), "1")
+                        let col = insert.column(0).unwrap();
+                        let id = i64::from_be_bytes(col.data[..].try_into().unwrap());
+                        assert_eq!(id, 1);
                     }
                     XLogPayload::Begin(_) => (),
                     XLogPayload::Commit(_) => got_row = true,

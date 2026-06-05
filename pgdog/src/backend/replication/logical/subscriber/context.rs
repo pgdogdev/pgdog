@@ -137,6 +137,30 @@ mod test {
         assert!(matches!(shard.shard(), Shard::Direct(_)));
     }
 
+    #[test]
+    fn test_stream_context_binary_shard_key() {
+        // Binary-format shard key must flow through to_bind() and reach the router
+        // with Format::Binary preserved so sharding hashes the binary bigint correctly.
+        let cluster = Cluster::new_test(&config());
+        let id: i64 = 1;
+        let tuple = TupleData {
+            columns: vec![Column {
+                identifier: Identifier::Format(Format::Binary),
+                len: 8,
+                data: Bytes::copy_from_slice(&id.to_be_bytes()),
+            }],
+        };
+        let parse = Parse::new_anonymous("INSERT INTO sharded (id) VALUES ($1)");
+
+        let ctx = StreamContext::new(&cluster, &tuple, &parse).unwrap();
+        assert_eq!(ctx.bind().parameter_format(0).unwrap(), Format::Binary);
+        assert_eq!(
+            ctx.bind().parameter(0).unwrap().unwrap().data(),
+            &id.to_be_bytes()
+        );
+        assert!(matches!(ctx.shard(), Shard::Direct(_)));
+    }
+
     // Verify that $N in the generated SQL matches the bind slot to_bind() places
     // the corresponding value into, for each DML operation and tuple shape.
 
