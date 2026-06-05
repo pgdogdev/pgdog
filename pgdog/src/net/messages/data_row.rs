@@ -137,6 +137,18 @@ impl DataRow {
         Ok(None)
     }
 
+    /// Get the column at index given row description. Error if not present.
+    /// This should only be used when the absence of a column represents a bug
+    /// in pgdog.
+    pub fn get_column_checked<'a>(
+        &self,
+        idx: usize,
+        decoder: &'a Decoder,
+    ) -> Result<Column<'a>, Error> {
+        self.get_column(idx, decoder)?
+            .ok_or(Error::RequiredColumnMissing(idx))
+    }
+
     /// Render the data row.
     pub fn into_row<'a>(&self, rd: &'a RowDescription) -> Result<Vec<Column<'a>>, Error> {
         let mut row = vec![];
@@ -230,6 +242,7 @@ impl From<DataRow> for Lsn {
 mod test {
     use super::*;
     use crate::net::{Decoder, Field};
+    use std::assert_matches;
 
     #[test]
     fn test_insert() {
@@ -298,9 +311,23 @@ mod test {
         let row = DataRow::from_columns(vec![Bytes::from_static(b"{1,2,3}")]);
         let column = row.get_column(0, &decoder).unwrap().unwrap();
 
-        assert!(
-            !matches!(column.value, Datum::Unknown(_)),
+        assert_matches!(
+            column.value,
+            Datum::Array(_),
             "array columns should participate in typed decoding"
         );
+    }
+
+    #[test]
+    fn get_column_checked_returns_err_on_missing_field() {
+        let rd = RowDescription::new(&[Field::bigint("stuff")]);
+        let decoder = Decoder::from(&rd);
+        let row = DataRow::from_columns(vec![Bytes::from_static(b"1")]);
+
+        let column = row.get_column_checked(0, &decoder);
+        assert_matches!(column, Ok(_));
+
+        let column = row.get_column_checked(1, &decoder);
+        assert_matches!(column, Err(Error::RequiredColumnMissing(1)));
     }
 }
