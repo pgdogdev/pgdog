@@ -356,3 +356,14 @@ async def test_no_search_path_session_mode():
 
         async with conn.transaction():
             await conn.execute("SELECT * FROM shard_0.py_test_no_search_path_session_mode LIMIT 1")
+
+@pytest.mark.asyncio
+async def test_unrecognized_aggregate_function_works_on_schema_based_sharding():
+    conn = await async_session_conn("shard_0")
+    await conn.execute("DROP AGGREGATE IF EXISTS pgdog_sum_python(int4)")
+    await conn.execute("CREATE AGGREGATE pgdog_sum_python (int4) (sfunc = int4_sum, stype = bigint)")
+    await conn.execute("DROP TABLE IF EXISTS unrecognized_agg_test_python")
+    await conn.execute("CREATE TABLE unrecognized_agg_test_python (lol int4)")
+
+    async with conn.transaction():
+        await conn.execute("SELECT pgdog_sum_python(lol) FROM unrecognized_agg_test_python")
