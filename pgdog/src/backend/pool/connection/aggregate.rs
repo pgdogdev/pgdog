@@ -98,9 +98,7 @@ impl<'a> Accumulator<'a> {
 
     /// Transform COUNT(*), MIN, MAX, etc., from multiple shards into a single value.
     fn accumulate(&mut self, row: &DataRow, decoder: &Decoder) -> Result<bool, Error> {
-        let column = row
-            .get_column(self.target.column(), decoder)?
-            .ok_or(Error::DecoderRowError)?;
+        let column = row.get_column_checked(self.target.column(), decoder)?;
         match self.target.function() {
             AggregateFunction::Count => {
                 if !self.datum.is_null() {
@@ -145,9 +143,7 @@ impl<'a> Accumulator<'a> {
                         return Ok(false);
                     };
 
-                    let count = row
-                        .get_column(count_column, decoder)?
-                        .ok_or(Error::DecoderRowError)?;
+                    let count = row.get_column_checked(count_column, decoder)?;
 
                     if column.value.is_null() || count.value.is_null() {
                         return Ok(true);
@@ -289,9 +285,7 @@ impl VarianceState {
             return Ok(false);
         };
 
-        let count = row
-            .get_column(count_column, decoder)?
-            .ok_or(Error::DecoderRowError)?;
+        let count = row.get_column_checked(count_column, decoder)?;
 
         if count.value.is_null() {
             return Ok(true);
@@ -312,9 +306,7 @@ impl VarianceState {
             self.supported = false;
             return Ok(false);
         };
-        let sum = row
-            .get_column(sum_column, decoder)?
-            .ok_or(Error::DecoderRowError)?;
+        let sum = row.get_column_checked(sum_column, decoder)?;
         if sum.value.is_null() {
             self.supported = false;
             return Ok(false);
@@ -325,9 +317,7 @@ impl VarianceState {
             self.supported = false;
             return Ok(false);
         };
-        let sumsq = row
-            .get_column(sumsq_column, decoder)?
-            .ok_or(Error::DecoderRowError)?;
+        let sumsq = row.get_column_checked(sumsq_column, decoder)?;
         if sumsq.value.is_null() {
             self.supported = false;
             return Ok(false);
