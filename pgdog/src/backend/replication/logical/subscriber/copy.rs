@@ -9,7 +9,10 @@ use crate::{
     backend::{replication::subscriber::ParallelConnection, Cluster, ConnectReason},
     config::Role,
     frontend::router::parser::{CopyParser, Shard},
-    net::{CopyData, CopyDone, ErrorResponse, FromBytes, Protocol, Query, ToBytes},
+    net::{
+        CopyData, CopyDone, ErrorResponse, FromBytes, Message, Protocol, ProtocolMessage, Query,
+        ToBytes,
+    },
 };
 
 use super::super::{CopyStatement, Error};
@@ -102,6 +105,64 @@ impl CopySubscriber {
         Ok(())
     }
 
+    /// Send a single protocol message on a shard connection and confirm the backend replied
+    /// with `CommandComplete` followed by `ReadyForQuery`. On an `ErrorResponse` the connection
+    /// is drained through the trailing `ReadyForQuery` and the error is surfaced as
+    /// `Error::PgError`.
+    async fn send_and_confirm(
+        server: &mut ParallelConnection,
+        message: ProtocolMessage,
+    ) -> Result<(), Error> {
+        server.send_one(&message).await?;
+        server.flush().await?;
+
+        let command_complete = Self::read_skipping_async(server).await?;
+        match command_complete.code() {
+            'C' => (),
+            'E' => {
+                let error = ErrorResponse::from_bytes(command_complete.to_bytes())?;
+                // Drain through the trailing ReadyForQuery so the connection isn't left
+                // mid-protocol.
+                Self::drain_to_ready(server).await;
+                return Err(error.into());
+            }
+            c => return Err(Error::OutOfSync(c)),
+        }
+
+        let rfq = Self::read_skipping_async(server).await?;
+        if rfq.code() != 'Z' {
+            return Err(Error::OutOfSync(rfq.code()));
+        }
+
+        Ok(())
+    }
+
+    /// Read the next message from the server, skipping asynchronous protocol messages that
+    /// Postgres may interleave at any time: `NoticeResponse` (`'N'`), `ParameterStatus`
+    /// (`'S'`), and `NotificationResponse` (`'A'`). The underlying `Server::read` surfaces these
+    /// unfiltered, so without skipping them a trigger-emitted `NOTICE` (e.g. fired during
+    /// `CopyDone` finalisation or at `COMMIT`) would be misread as an out-of-sync reply and turn
+    /// a successful copy into a spurious failure.
+    async fn read_skipping_async(server: &mut ParallelConnection) -> Result<Message, Error> {
+        loop {
+            let message = server.read().await?;
+            if !matches!(message.code(), 'N' | 'S' | 'A') {
+                return Ok(message);
+            }
+        }
+    }
+
+    /// Drain messages until the trailing `ReadyForQuery`, leaving the connection at a clean
+    /// protocol boundary after an `ErrorResponse`. Best-effort: stops on the first read error
+    /// (e.g. the backend closed the connection), so it cannot block indefinitely.
+    async fn drain_to_ready(server: &mut ParallelConnection) {
+        while let Ok(message) = server.read().await {
+            if message.code() == 'Z' {
+                break;
+            }
+        }
+    }
+
     /// Start COPY on all shards.
     pub async fn start_copy(&mut self) -> Result<(), Error> {
         let stmt = Query::new(self.stmt.copy_in());
@@ -111,8 +172,13 @@ impl CopySubscriber {
         }
 
         for server in &mut self.connections {
-            debug!("{} [{}]", stmt.query(), server.addr());
+            // Open an explicit transaction so the COPY is not autocommit: the commit is
+            // deferred to copy_done(), so a CopyDone failure on any shard rolls back every
+            // shard (none commit). The commit pass itself is per-shard, not atomic across shards.
+            // TODO: implement complete 2pc to copy data to minimize chances of partial commits even more
+            Self::send_and_confirm(server, Query::new("BEGIN").into()).await?;
 
+            debug!("{} [{}]", stmt.query(), server.addr());
             server.send_one(&stmt.clone().into()).await?;
             server.flush().await?;
 
@@ -135,28 +201,45 @@ impl CopySubscriber {
     pub async fn copy_done(&mut self) -> Result<(), Error> {
         self.flush().await?;
 
+        // Stage pass: send CopyDone to every shard and read CommandComplete + ReadyForQuery.
+        // Because each shard is inside an explicit transaction, CopyDone only finalises the
+        // COPY (writes pages, builds indexes, checks constraints) — it does NOT commit.
+        // The ReadyForQuery status byte is 'T' (in-transaction).
+        // A failure here leaves every shard in an open transaction that rolls back when its
+        // connection closes → no partial commit.
         for server in &mut self.connections {
-            server.send_one(&CopyDone.into()).await?;
-            server.flush().await?;
-
-            let command_complete = server.read().await?;
-            match command_complete.code() {
-                'E' => {
-                    let error = ErrorResponse::from_bytes(command_complete.to_bytes())?;
-                    if error.code == "08P01" && error.message == "insufficient data left in message"
+            // A binary COPY width mismatch (e.g. an int column copied into a bigint) surfaces as
+            // protocol_violation "insufficient data left in message"; reclassify it so the
+            // operator gets actionable guidance instead of a generic protocol error.
+            Self::send_and_confirm(server, CopyDone.into())
+                .await
+                .map_err(|error| match error {
+                    Error::PgError(pg)
+                        if pg.code == "08P01"
+                            && pg.message == "insufficient data left in message" =>
                     {
-                        return Err(Error::BinaryFormatMismatch(Box::new(error)));
-                    } else {
-                        return Err(Error::PgError(Box::new(error)));
+                        Error::BinaryFormatMismatch(pg)
                     }
-                }
-                'C' => (),
-                c => return Err(Error::OutOfSync(c)),
-            }
+                    other => other,
+                })?;
+        }
 
-            let rfq = server.read().await?;
-            if rfq.code() != 'Z' {
-                return Err(Error::OutOfSync(rfq.code()));
+        // Commit pass: every shard has staged its rows and is sitting in an open transaction.
+        // Commit them. The data is already written, so COMMIT is cheap and very likely to
+        // succeed. Sequential and NOT atomic across shards: if a COMMIT fails after one or more
+        // earlier shards have already committed, those shards stay committed — the only residual
+        // partial-commit window (full cross-shard atomicity via 2PC is intentionally out of
+        // scope). Shards not yet committed roll back on connection close. The
+        // destination_has_rows() guard in parallel_sync.rs prevents a doomed retry if this
+        // window is ever hit.
+        for (shard, server) in self.connections.iter_mut().enumerate() {
+            if let Err(error) = Self::send_and_confirm(server, Query::new("COMMIT").into()).await {
+                tracing::error!(
+                    "COMMIT failed on destination shard {shard} during copy_done: {error}; \
+                     shards committed before it stay committed, the rest roll back on \
+                     connection close"
+                );
+                return Err(error);
             }
         }
 
@@ -214,7 +297,9 @@ mod test {
     use bytes::Bytes;
 
     use crate::{
-        backend::{pool::Request, replication::publisher::PublicationTable},
+        backend::{
+            pool::Request, replication::publisher::PublicationTable, server::test::test_server,
+        },
         config::config,
         frontend::router::parser::binary::{header::Header, Data, Tuple},
     };
@@ -288,5 +373,51 @@ mod test {
             .unwrap();
 
         cluster.shutdown();
+    }
+
+    #[tokio::test]
+    async fn send_and_confirm_skips_async_messages() {
+        crate::logger();
+
+        let server = test_server().await;
+        let mut conn = ParallelConnection::new(server).unwrap();
+
+        // RAISE WARNING emits a NoticeResponse ('N') before the statement's
+        // CommandComplete. Without async-message skipping this was misread as
+        // OutOfSync('N'); it must now be transparently skipped.
+        CopySubscriber::send_and_confirm(
+            &mut conn,
+            Query::new("DO $$ BEGIN RAISE WARNING 'noise'; END $$").into(),
+        )
+        .await
+        .unwrap();
+
+        // The connection is left at a clean ReadyForQuery boundary, so it can be
+        // handed back to the pool.
+        let server = conn.reattach().await.unwrap();
+        assert!(server.in_sync());
+    }
+
+    #[tokio::test]
+    async fn send_and_confirm_drains_to_ready_after_error_with_notice() {
+        crate::logger();
+
+        let server = test_server().await;
+        let mut conn = ParallelConnection::new(server).unwrap();
+
+        // A NoticeResponse precedes the ErrorResponse. The notice is skipped, the
+        // error is surfaced, and drain_to_ready consumes the trailing ReadyForQuery
+        // so the connection is not left mid-protocol.
+        let result = CopySubscriber::send_and_confirm(
+            &mut conn,
+            Query::new("DO $$ BEGIN RAISE WARNING 'noise'; RAISE EXCEPTION 'boom'; END $$").into(),
+        )
+        .await;
+
+        assert!(matches!(result, Err(Error::PgError(_))));
+
+        // drain_to_ready left the connection at a ReadyForQuery boundary.
+        let server = conn.reattach().await.unwrap();
+        assert!(server.in_sync());
     }
 }

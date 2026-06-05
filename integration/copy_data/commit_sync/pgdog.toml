@@ -1,0 +1,51 @@
+# Single source -> three destination shards.
+#
+#   shard 0 -> 127.0.0.1:15500 -> 127.0.0.1:5432  (db shard_0)
+#   shard 1 -> 127.0.0.1:15501 -> 127.0.0.1:5432  (db shard_1)
+#   shard 2 -> 127.0.0.1:15502 -> 127.0.0.1:5432  (db shard_2, fault-injected)
+
+[general]
+resharding_copy_format = "binary"
+resharding_parallel_copies = 1
+resharding_copy_retry_max_attempts = 100
+resharding_copy_retry_min_delay = 10
+
+[[databases]]
+name = "source"
+host = "127.0.0.1"
+port = 5432
+database_name = "pgdog"
+
+[[sharded_tables]]
+database = "source"
+column = "tenant_id"
+data_type = "bigint"
+
+[[databases]]
+name = "destination"
+host = "127.0.0.1"
+port = 15500
+database_name = "shard_0"
+shard = 0
+
+[[databases]]
+name = "destination"
+host = "127.0.0.1"
+port = 15501
+database_name = "shard_1"
+shard = 1
+
+[[databases]]
+name = "destination"
+host = "127.0.0.1"
+port = 15502
+database_name = "shard_2"
+shard = 2
+
+[[sharded_tables]]
+database = "destination"
+column = "tenant_id"
+data_type = "bigint"
+
+[admin]
+password = "pgdog"

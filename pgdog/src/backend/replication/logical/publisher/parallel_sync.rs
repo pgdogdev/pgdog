@@ -19,10 +19,12 @@ use tracing::{info, warn};
 use super::super::Error;
 use super::AbortSignal;
 use crate::backend::{
-    pool::Address,
+    pool::{Address, Request},
     replication::{publisher::Table, status::TableCopy},
     Cluster, Pool,
 };
+use crate::net::messages::Protocol;
+use crate::util::escape_identifier;
 
 struct ParallelSync {
     table: Table,
@@ -79,24 +81,8 @@ impl ParallelSync {
                 }
                 Err(err) if !err.is_retryable() || attempt >= max_retries => {
                     tracker.error(&err);
-                    // COPY is usually atomic, but rows may remain if the connection dropped
-                    // after COMMIT. Warn so the user can truncate manually before retrying.
-                    match self.table.destination_has_rows(&self.dest).await {
-                        Ok(true) => warn!(
-                            "data sync for \"{}\".\"{}\" failed with rows remaining in destination; \
-                             truncate manually before retrying: TRUNCATE \"{}\".\"{}\";",
-                            self.table.table.schema,
-                            self.table.table.name,
-                            self.table.table.destination_schema(),
-                            self.table.table.destination_name(),
-                        ),
-                        Ok(false) => {} // destination is clean; next run starts fresh
-                        Err(check_err) => warn!(
-                            "could not check destination row count for \"{}\".\"{}\" after failure: {check_err}",
-                            self.table.table.schema,
-                            self.table.table.name,
-                        ),
-                    }
+                    // Terminal failure: warn if rows remain so the operator can truncate.
+                    let _ = self.destination_has_rows().await;
                     return Err(err);
                 }
                 Err(err) => {
@@ -116,11 +102,65 @@ impl ParallelSync {
                     tracker.reset();
 
                     sleep(backoff).await;
+
+                    // Not idempotent (no truncate): if a prior attempt left rows on a
+                    // reachable shard, the re-copy can only collide, so stop instead of
+                    // retrying. A shard we cannot probe is logged (not blocked on), since we
+                    // cannot prove it dirty. Checked after the backoff so a RELOAD-churned
+                    // pool can recover first.
                     // FUTURE: truncate before retry to handle the COPY-committed-but-dropped
                     // race (rows remain → PK violations). Safe once source-guard checks exist.
+                    if self.destination_has_rows().await {
+                        return Err(err);
+                    }
                 }
             }
         }
+    }
+
+    /// Returns `true` if any reachable destination shard holds rows from a prior COPY
+    /// attempt. Every shard is probed; a shard whose probe errors (e.g. its pool was
+    /// shut down by a RELOAD) is logged at WARN and not counted, since we cannot prove
+    /// it dirty. Emits a single WARN listing the shards that do hold rows.
+    async fn destination_has_rows(&self) -> bool {
+        let schema = self.table.table.destination_schema();
+        let name = self.table.table.destination_name();
+        let sql = format!(
+            "SELECT 1 FROM \"{}\".\"{}\" LIMIT 1",
+            escape_identifier(schema),
+            escape_identifier(name),
+        );
+
+        let mut shards_with_rows = vec![];
+        for (shard, _) in self.dest.shards().iter().enumerate() {
+            let result: Result<bool, Error> = async {
+                let mut server = self.dest.primary(shard, &Request::default()).await?;
+                Ok(server
+                    .execute_checked(sql.as_str())
+                    .await?
+                    .iter()
+                    .any(|m| m.code() == 'D'))
+            }
+            .await;
+
+            match result {
+                Ok(true) => shards_with_rows.push(shard),
+                Ok(false) => {}
+                Err(err) => warn!(
+                    "could not verify destination rows on shard {shard}: {err}; \
+                     proceeding as if empty"
+                ),
+            }
+        }
+
+        if !shards_with_rows.is_empty() {
+            warn!(
+                "destination \"{schema}\".\"{name}\" holds rows from a prior COPY attempt on shard(s) {shards_with_rows:?}; \
+                 truncate before re-running the copy: TRUNCATE \"{schema}\".\"{name}\";",
+            );
+        }
+
+        !shards_with_rows.is_empty()
     }
 }
 

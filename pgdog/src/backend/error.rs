@@ -170,6 +170,12 @@ impl Error {
             Self::Io(_) => true,
             Self::Net(inner) => inner.is_retryable(),
             Self::Pool(inner) => inner.is_retryable(),
+            // Postgres ErrorResponse wrapped at the backend boundary, e.g. a destination shard
+            // returning FATAL 57P01 mid-replication-apply, or a transient connect-time error.
+            // Delegates to the single SQLSTATE retry list in ErrorResponse::is_retryable.
+            Self::ExecutionError(resp)
+            | Self::ConnectionError(resp)
+            | Self::PreparedStatementError(resp) => resp.is_retryable(),
             // Connection dropped between operations.
             Self::NotConnected
             | Self::DirectToShardNotConnected

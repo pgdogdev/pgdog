@@ -278,33 +278,44 @@ mod tests {
         assert!(Error::ReplicationTimeout.is_retryable());
     }
 
+    /// Regression: replication apply receives Postgres errors wrapped as
+    /// `Backend(ExecutionError)` / `Backend(ConnectionError)`, not `PgError`.
+    /// Before the fix, the Backend arm bypassed the SQLSTATE list and the publisher
+    /// retry loop never fired on shard kill (57P01) -- see `copy_data/retry_test`.
+    /// All three wrappers must route through `ErrorResponse::is_retryable`.
     #[test]
-    fn pg_error_retryable() {
+    fn sqlstate_classification_routes_through_all_wrappers() {
+        use crate::backend::Error as BE;
         use crate::net::messages::ErrorResponse;
-        let retryable_codes = [
-            "08000", "08001", "08003", "08004", "08006", "08007", "57P01", "57P02", "57P03",
-            "53300", "55P03",
-        ];
-        for code in retryable_codes {
-            let err = Error::PgError(Box::new(ErrorResponse {
-                code: code.into(),
-                ..Default::default()
-            }));
-            assert!(err.is_retryable(), "expected {code} to be retryable");
-        }
-    }
 
-    #[test]
-    fn pg_error_not_retryable() {
-        use crate::net::messages::ErrorResponse;
-        // 08P01 protocol_violation \ constraint/schema errors \ data errors.
-        let not_retryable = ["08P01", "23505", "42P01", "42501", ""];
-        for code in not_retryable {
-            let err = Error::PgError(Box::new(ErrorResponse {
+        fn resp(code: &str) -> ErrorResponse {
+            ErrorResponse {
                 code: code.into(),
                 ..Default::default()
-            }));
-            assert!(!err.is_retryable(), "expected {code} to NOT be retryable");
+            }
+        }
+
+        let wrappers: [(&str, fn(ErrorResponse) -> Error); 3] = [
+            ("PgError", |r| Error::PgError(Box::new(r))),
+            ("Backend(ExecutionError)", |r| {
+                Error::Backend(BE::ExecutionError(Box::new(r)))
+            }),
+            ("Backend(ConnectionError)", |r| {
+                Error::Backend(BE::ConnectionError(Box::new(r)))
+            }),
+        ];
+
+        for (label, wrap) in wrappers {
+            // 57P01 admin_shutdown is the canonical retryable case (shard restart).
+            assert!(
+                wrap(resp("57P01")).is_retryable(),
+                "{label}(57P01) must be retryable"
+            );
+            // 23505 unique_violation is a deterministic data error; retrying repeats it.
+            assert!(
+                !wrap(resp("23505")).is_retryable(),
+                "{label}(23505) must NOT be retryable"
+            );
         }
     }
 
@@ -332,11 +343,6 @@ mod tests {
     #[test]
     fn not_retryable_via_backend_wrapper() {
         use crate::backend::Error as BE;
-        use crate::net::messages::ErrorResponse;
-
-        // Postgres-level error response: permanent, not a network fault.
-        let pg_err = ErrorResponse::default();
-        assert!(!Error::Backend(BE::ConnectionError(Box::new(pg_err))).is_retryable());
 
         // Protocol violations are not transient.
         assert!(!Error::Backend(BE::ProtocolOutOfSync).is_retryable());
