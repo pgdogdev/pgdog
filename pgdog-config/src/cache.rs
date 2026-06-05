@@ -68,7 +68,7 @@ pub struct RedisConfig {
     pub cache_key_prefix: String,
 
     /// Timeout in milliseconds for individual Redis operations (GET/SET/ping).
-    /// 
+    ///
     /// _Default:_ `2000`
     #[serde(default = "RedisConfig::operation_timeout")]
     pub operation_timeout: NonZeroU64,

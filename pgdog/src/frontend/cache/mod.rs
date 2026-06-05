@@ -1,7 +1,9 @@
 pub mod context;
 pub mod directive;
+pub mod hashing;
 pub mod integration;
 pub mod storage;
+pub mod wire;
 
 pub use context::CacheContext;
 pub use directive::CacheDirective;
@@ -15,7 +17,7 @@ use tracing::debug;
 use crate::{
     config::config,
     frontend::{
-        cache::{integration::CacheMiss, storage::build_storage},
+        cache::{integration::CacheMiss, storage::build_storage, wire::deserialize_cached},
         ClientRequest,
     },
     net::{Message, Parameters},
@@ -107,7 +109,7 @@ impl Cache {
         match cache_result {
             CacheCheckResult::Hit { cached } => {
                 debug!("Cache hit, serving from cache");
-                let messages = Self::deserialize_cached(cached);
+                let messages = deserialize_cached(cached);
                 cache_context.reset();
                 Ok(Some(messages))
             }

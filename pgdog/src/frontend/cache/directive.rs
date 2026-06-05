@@ -58,7 +58,7 @@ impl CacheDirective {
     fn from_params(params: &Parameters) -> Self {
         match params.get(KEY) {
             Some(ParameterValue::String(v)) => CacheDirective::parse(v.as_str().trim()),
-            _ => return CacheDirective::default(),
+            _ => CacheDirective::default(),
         }
     }
 

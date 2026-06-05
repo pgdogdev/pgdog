@@ -51,13 +51,15 @@ operation_timeout = 2
 **`mod.rs`** — Module exports, global singleton, and main `Cache` struct:
 ```rust
 pub mod context;
-pub mod integration;
 pub mod directive;
+pub mod hashing;
+pub mod integration;
 pub mod storage;
+pub mod wire;
 
 pub use context::CacheContext;
-pub use integration::CacheCheckResult;
 pub use directive::CacheDirective;
+pub use integration::CacheCheckResult;
 pub use storage::{CacheStorage, RedisCacheStorage};
 ```
 
@@ -106,28 +108,31 @@ Key methods:
 - `capture_response(message)` — stores message in buffer when cache miss is tracked; sets `had_error = true` on `E` messages
 - `reset()` — clears all state for per-query isolation
 
-**`integration.rs`** — Integration methods on `impl Cache`:
+**`integration.rs`** — Public types and integration methods on `impl Cache`:
+- `CacheMiss` struct: `{ key: u64, ttl: u64 }` — carries the resolved cache key and TTL on a cache miss
+- `CacheCheckResult` enum: `Hit { cached: Vec<u8> }`, `Miss(CacheMiss)`, `Passthrough`
 - `cache_check()` — main entry point: checks route, calls `directive::resolve()`, resolves final mode and TTL:
   - Mode resolution: directive mode → global `CachePolicy` (converted to `CacheMode`)
   - TTL resolution: directive TTL → global `cache.ttl`
-  - Key resolution: if `directive.key` is `Some(name)`, the cache key is XXH3 of that name alone; otherwise `compute_cache_key_hash(database, query, bind)` is used
+  - Key resolution: if `directive.key` is `Some(name)`, the cache key is XXH3 of that name alone; otherwise `compute_cache_key_hash(database, query, bind)` from `hashing.rs` is used
   - `NoCache` → `Passthrough`
   - `ForceCache` → returns `Miss` immediately (bypasses Redis lookup, always repopulates)
   - `Cache` → computes key hash, acquires read-lock on storage, calls `storage.get()`; `CacheMiss` → `Miss`; other errors → `Passthrough`
-- `deserialize_cached(Vec<u8>) -> Vec<Message>` — parses a flat blob of concatenated PostgreSQL wire messages into individual `Message` values. Wire format: `[1B code][4B length (incl. itself)][payload]`. Named constants `HEADER_CODE_LEN`, `HEADER_LEN_SIZE`, `HEADER_TOTAL` replace magic numbers. Not Redis-specific — usable with any cache backend that stores raw bytes.
 - `cache_response()` — serializes `Vec<Message>` into wire bytes and stores in Redis
-- Cache key: XXH3 hash of `database_name + normalized query + bind params` — computed by `compute_cache_key_hash`
 
-**Cache key hashing (`compute_cache_key_hash` / `hash_query_without_comments`):**
-
-`hash_query_without_comments` feeds the query directly into the XXH3 hasher without allocating a `String`. It implements a state machine over the character stream:
-- **Block comments** (`/* … */`, including PostgreSQL nested variants) — skipped entirely; treated as a token separator (sets `pending_space`)
-- **Line comments** (`-- … \n`) — skipped entirely; treated as a token separator
-- **Whitespace** outside string literals — collapsed: any run of whitespace sets `pending_space = true` but is not hashed directly; leading and trailing whitespace is suppressed naturally
-- **String literals** (`'…'` with `''` escapes) — passed through verbatim; spaces inside strings are never collapsed or removed
-- **Regular characters** — if `pending_space` is set and at least one character has already been emitted, a single space is hashed first, then the character; this ensures `SELECT/*c*/1` and `SELECT 1` produce the same hash without merging tokens into `SELECT1`
+**`hashing.rs`** — Cache key computation:
+- `compute_cache_key_hash(database, query, bind) -> u64` — public entry point; feeds `database`, the normalized query, and any bind parameters into an XXH3 hasher
+- `hash_query_without_comments(query, hasher)` — private; feeds the query directly into the hasher without allocating a `String`. Implements a state machine over the character stream:
+  - **Block comments** (`/* … */`, including PostgreSQL nested variants) — skipped entirely; treated as a token separator (sets `pending_space`)
+  - **Line comments** (`-- … \n`) — skipped entirely; treated as a token separator
+  - **Whitespace** outside string literals — collapsed: any run of whitespace sets `pending_space = true` but is not hashed directly; leading and trailing whitespace is suppressed naturally
+  - **String literals** (`'…'` with `''` escapes) — passed through verbatim; spaces inside strings are never collapsed or removed
+  - **Regular characters** — if `pending_space` is set and at least one character has already been emitted, a single space is hashed first, then the character; this ensures `SELECT/*c*/1` and `SELECT 1` produce the same hash without merging tokens into `SELECT1`
 
 This means `"/* pgdog_cache: cache */ SELECT 1"` and `"SELECT 1"` hash identically: the comment is dropped and the leading whitespace it would have left is suppressed because `emitted = false` at that point.
+
+**`wire.rs`** — PostgreSQL wire message deserialization:
+- `Cache::deserialize_cached(Vec<u8>) -> Vec<Message>` — parses a flat blob of concatenated PostgreSQL wire messages into individual `Message` values. Wire format: `[1B code][4B length (incl. itself)][payload]`. Named constants `HEADER_CODE_LEN`, `HEADER_LEN_SIZE`, `HEADER_TOTAL` replace magic numbers. Not Redis-specific — usable with any cache backend that stores raw bytes.
 
 ### Query Engine Integration
 
@@ -379,6 +384,8 @@ SQL comment  →  pgdog.cache parameter  →  global config
 
 31. **Add hint for query hash key (`key=NAME`)** — `CacheDirective` gains an optional `key: Option<String>` field. When `key=NAME` is present in a SQL comment or connection parameter, the automatic cache key computation (`database + normalized query + bind params`) is bypassed: the key is XXH3 of just the literal name string. An empty `key=` value is treated as absent. The `CacheMiss` struct field is renamed from `cache_key_hash` to `key` for clarity. Integration test `test_custom_key` verifies that a query with `key=separate_cache` populates an independent cache slot from the same query without the directive.
 
+32. **Split `integration.rs` into several modules** — `integration.rs` split into three focused files: `hashing.rs` (cache key computation), `wire.rs` (PostgreSQL wire message deserialization), and a slimmed-down `integration.rs` (public types `CacheMiss`/`CacheCheckResult` and `Cache::cache_check`/`cache_response`). Tests co-located in each file.
+
 ---
 
 ## What's Left To Do
@@ -386,8 +393,6 @@ SQL comment  →  pgdog.cache parameter  →  global config
 1. **Redis disconnect/reconnect under heavy load** — The reconnection logic works, but timing edge cases under rapid disconnect/reconnect cycles still need stress-testing.
 
 2. **Add config flag for mandatory availability of cache storage** — query will fail with error if Redis (or another cache storage) is unavailable.
-
-3. **Split `integration.rs` into several modules** — it is too big.
 
 # Tests
 
