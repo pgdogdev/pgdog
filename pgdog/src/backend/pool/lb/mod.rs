@@ -310,7 +310,7 @@ impl LoadBalancer {
         match timeout(self.checkout_timeout, self.get_primary_internal(request)).await {
             Ok(Ok(guard)) => Ok(guard),
             Err(_) => Err(Error::CheckoutTimeout),
-            Ok(Err(err)) => Err(err.into()),
+            Ok(Err(err)) => Err(err),
         }
     }
 

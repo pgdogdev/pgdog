@@ -243,12 +243,12 @@ pub fn raise_nofile_limit() -> u64 {
                     "failed to raise NOFILE soft limit from {} to {}",
                     prev, rlim.rlim_max
                 );
-                return prev as u64;
+                return prev;
             }
         }
     }
 
-    rlim.rlim_cur as u64
+    rlim.rlim_cur
 }
 
 #[cfg(not(unix))]

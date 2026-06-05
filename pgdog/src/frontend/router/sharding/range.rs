@@ -37,15 +37,11 @@ impl<'a> Ranges<'a> {
                 let mut matches = 0;
                 for value in &bound {
                     match value {
-                        Some(FlexibleType::String(s)) => {
-                            if range.varchar(s) {
-                                matches += 1;
-                            }
+                        Some(FlexibleType::String(s)) if range.varchar(s) => {
+                            matches += 1;
                         }
-                        Some(FlexibleType::Integer(i)) => {
-                            if range.integer(i) {
-                                matches += 1;
-                            }
+                        Some(FlexibleType::Integer(i)) if range.integer(i) => {
+                            matches += 1;
                         }
                         _ => (),
                     }

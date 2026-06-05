@@ -201,13 +201,11 @@ impl Ast {
                     }
                 }
 
-                NodeRef::DropStmt(stmt) => {
-                    if stmt.remove_type() == ObjectType::ObjectTable {
-                        for object in &stmt.objects {
-                            if let Some(NodeEnum::List(ref list)) = object.node {
-                                if let Ok(table) = Table::try_from(list) {
-                                    tables.insert(table);
-                                }
+                NodeRef::DropStmt(stmt) if stmt.remove_type() == ObjectType::ObjectTable => {
+                    for object in &stmt.objects {
+                        if let Some(NodeEnum::List(ref list)) = object.node {
+                            if let Ok(table) = Table::try_from(list) {
+                                tables.insert(table);
                             }
                         }
                     }

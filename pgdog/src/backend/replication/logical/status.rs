@@ -243,7 +243,7 @@ impl SchemaStatement {
         let stmt = match stmt {
             Statement::Index { table, sql, .. } => pgdog_stats::SchemaStatement {
                 id,
-                user: user.into(),
+                user,
                 shard,
                 sql: sql.clone(),
                 kind: StatementKind::Index,
@@ -254,7 +254,7 @@ impl SchemaStatement {
             },
             Statement::Table { table, sql } => pgdog_stats::SchemaStatement {
                 id,
-                user: user.into(),
+                user,
                 shard,
                 sql: sql.clone(),
                 kind: StatementKind::Table,
@@ -265,7 +265,7 @@ impl SchemaStatement {
             },
             Statement::Other { sql, .. } => pgdog_stats::SchemaStatement {
                 id,
-                user: user.into(),
+                user,
                 shard,
                 sql: sql.clone(),
                 kind: StatementKind::Statement,
@@ -276,7 +276,7 @@ impl SchemaStatement {
             },
             Statement::SequenceOwner { sql, .. } => pgdog_stats::SchemaStatement {
                 id,
-                user: user.into(),
+                user,
                 shard,
                 sql: sql.to_string(),
                 kind: StatementKind::Statement,
@@ -287,7 +287,7 @@ impl SchemaStatement {
             },
             Statement::SequenceSetMax { sql, .. } => pgdog_stats::SchemaStatement {
                 id,
-                user: user.into(),
+                user,
                 shard,
                 sql: sql.clone(),
                 kind: StatementKind::Statement,

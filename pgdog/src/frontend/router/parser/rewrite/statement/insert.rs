@@ -267,10 +267,8 @@ impl StatementRewrite<'_> {
     fn collect_params(node: &Node, params: &mut Vec<u16>) {
         if let Some(node_enum) = &node.node {
             match node_enum {
-                NodeEnum::ParamRef(param) => {
-                    if param.number > 0 {
-                        params.push((param.number - 1) as u16);
-                    }
+                NodeEnum::ParamRef(param) if param.number > 0 => {
+                    params.push((param.number - 1) as u16);
                 }
                 NodeEnum::List(list) => {
                     for item in &list.items {
@@ -291,12 +289,10 @@ impl StatementRewrite<'_> {
     fn renumber_params(node: &mut Node, params: &[u16]) {
         if let Some(node_enum) = &mut node.node {
             match node_enum {
-                NodeEnum::ParamRef(param) => {
-                    if param.number > 0 {
-                        let old_pos = (param.number - 1) as u16;
-                        if let Some(new_pos) = params.iter().position(|&p| p == old_pos) {
-                            param.number = (new_pos + 1) as i32;
-                        }
+                NodeEnum::ParamRef(param) if param.number > 0 => {
+                    let old_pos = (param.number - 1) as u16;
+                    if let Some(new_pos) = params.iter().position(|&p| p == old_pos) {
+                        param.number = (new_pos + 1) as i32;
                     }
                 }
                 NodeEnum::List(list) => {
