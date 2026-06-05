@@ -15,6 +15,7 @@ pub enum CacheMode {
 pub struct CacheDirective {
     pub mode: Option<CacheMode>,
     pub ttl_seconds: Option<u64>,
+    pub key: Option<String>,
 }
 
 const KEY: &str = "pgdog.cache";
@@ -29,6 +30,9 @@ impl CacheDirective {
                 match key {
                     "ttl" => {
                         directive.ttl_seconds = val.parse::<u64>().ok();
+                    }
+                    "key" => {
+                        directive.key = Some(val.to_string()).filter(|v| !v.is_empty());
                     }
                     _ => {}
                 }
@@ -59,10 +63,15 @@ impl CacheDirective {
     }
 
     pub fn or(self, fallback: Self) -> Self {
-        let Self { mode, ttl_seconds } = self;
+        let Self {
+            mode,
+            ttl_seconds,
+            key,
+        } = self;
         Self {
             mode: mode.or(fallback.mode),
             ttl_seconds: ttl_seconds.or(fallback.ttl_seconds),
+            key: key.or(fallback.key),
         }
     }
 }
@@ -90,6 +99,7 @@ mod tests {
         CacheDirective {
             mode: Some(mode),
             ttl_seconds: ttl,
+            key: None,
         }
     }
 
@@ -158,6 +168,41 @@ mod tests {
     }
 
     #[test]
+    fn key_directive() {
+        assert_eq!(
+            parse("cache key=big_query"),
+            CacheDirective {
+                mode: Some(CacheMode::Cache),
+                key: Some("big_query".to_string()),
+                ..Default::default()
+            }
+        )
+    }
+
+    #[test]
+    fn key_only() {
+        assert_eq!(
+            parse("key=big_query2"),
+            CacheDirective {
+                key: Some("big_query2".to_string()),
+                ..Default::default()
+            }
+        )
+    }
+
+    #[test]
+    fn empty_key() {
+        assert_eq!(
+            parse("key= force_cache"),
+            CacheDirective {
+                mode: Some(CacheMode::ForceCache),
+                key: None,
+                ..Default::default()
+            }
+        )
+    }
+
+    #[test]
     fn missing_key_returns_all_none() {
         let params = Parameters::default();
         assert_eq!(
@@ -176,8 +221,6 @@ mod tests {
         );
     }
 
-    // --- position-agnostic parsing ---
-
     #[test]
     fn ttl_before_mode() {
         assert_eq!(
@@ -191,8 +234,8 @@ mod tests {
         assert_eq!(
             parse("ttl=42"),
             CacheDirective {
-                mode: None,
-                ttl_seconds: Some(42)
+                ttl_seconds: Some(42),
+                ..Default::default()
             }
         );
     }
@@ -200,8 +243,12 @@ mod tests {
     #[test]
     fn mode_ttl_extra_unknown_token() {
         assert_eq!(
-            parse("cache ttl=5 foo=bar"),
-            directive(CacheMode::Cache, Some(5))
+            parse("cache key=super ttl=5 foo=bar"),
+            CacheDirective {
+                mode: Some(CacheMode::Cache),
+                ttl_seconds: Some(5),
+                key: Some("super".to_string())
+            }
         );
     }
 }

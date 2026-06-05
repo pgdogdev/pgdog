@@ -283,7 +283,7 @@ mod tests {
             result.2,
             Some(CacheDirective {
                 mode: Some(CacheMode::NoCache),
-                ttl_seconds: None
+                ..Default::default()
             })
         );
     }
@@ -327,7 +327,8 @@ mod tests {
             result.2,
             Some(CacheDirective {
                 mode: Some(CacheMode::Cache),
-                ttl_seconds: Some(60)
+                ttl_seconds: Some(60),
+                ..Default::default()
             })
         );
     }
@@ -366,7 +367,8 @@ mod tests {
             result.2,
             Some(CacheDirective {
                 mode: Some(CacheMode::Cache),
-                ttl_seconds: Some(300)
+                ttl_seconds: Some(300),
+                ..Default::default()
             })
         );
     }
@@ -410,7 +412,8 @@ mod tests {
             result.2,
             Some(CacheDirective {
                 mode: Some(CacheMode::ForceCache),
-                ttl_seconds: Some(60)
+                ttl_seconds: Some(60),
+                ..Default::default()
             })
         );
     }
@@ -432,7 +435,8 @@ mod tests {
             result.2,
             Some(CacheDirective {
                 mode: Some(CacheMode::ForceCache),
-                ttl_seconds: Some(17)
+                ttl_seconds: Some(17),
+                ..Default::default()
             })
         );
     }
@@ -479,6 +483,7 @@ mod tests {
             Some(CacheDirective {
                 mode: Some(CacheMode::ForceCache),
                 ttl_seconds: Some(10),
+                ..Default::default()
             })
         );
     }

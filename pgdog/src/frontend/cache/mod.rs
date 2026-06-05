@@ -1,11 +1,11 @@
 pub mod context;
-pub mod integration;
 pub mod directive;
+pub mod integration;
 pub mod storage;
 
 pub use context::CacheContext;
-pub use integration::CacheCheckResult;
 pub use directive::CacheDirective;
+pub use integration::CacheCheckResult;
 pub use storage::{CacheStorage, RedisCacheStorage};
 
 use std::sync::Arc;
@@ -112,7 +112,7 @@ impl Cache {
                 Ok(Some(messages))
             }
             CacheCheckResult::Miss(cache_miss) => {
-                debug!("Cache miss for key hash: {}", cache_miss.cache_key_hash);
+                debug!("Cache miss for key hash: {}", cache_miss.key);
                 cache_context.cache_miss = Some(cache_miss);
                 cache_context.response_buffer.clear();
                 cache_context.had_error = false;
@@ -129,14 +129,10 @@ impl Cache {
     pub async fn save_response_in_cache(&self, cache_context: &mut CacheContext) {
         self.hotswap_if_needed().await;
 
-        if let Some(CacheMiss {
-            cache_key_hash,
-            ttl,
-        }) = cache_context.cache_miss.take()
-        {
+        if let Some(CacheMiss { key, ttl }) = cache_context.cache_miss.take() {
             if !cache_context.had_error && !cache_context.response_buffer.is_empty() {
                 let messages = std::mem::take(&mut cache_context.response_buffer);
-                self.cache_response(cache_key_hash, messages, ttl).await;
+                self.cache_response(key, messages, ttl).await;
             }
         }
     }

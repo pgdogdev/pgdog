@@ -93,12 +93,13 @@ Key methods:
 
 **`directive.rs`** — Position-agnostic cache directive parsing and resolution:
 - `CacheMode` enum: `Cache`, `ForceCache`, `NoCache` (default)
-- `CacheDirective` struct: `{ mode: Option<CacheMode>, ttl_seconds: Option<u64> }` — flat structure where each field is independently optional
-- `CacheDirective::parse(s: &str)` — parses space-separated tokens in any order: `cache`, `force_cache`, `no_cache`, `ttl=N`, and ignores unknown tokens
+- `CacheDirective` struct: `{ mode: Option<CacheMode>, ttl_seconds: Option<u64>, key: Option<String> }` — flat structure where each field is independently optional
+- `CacheDirective::parse(s: &str)` — parses space-separated tokens in any order: `cache`, `force_cache`, `no_cache`, `ttl=N`, `key=NAME`, and ignores unknown tokens
 - `CacheDirective::or(fallback)` — merges two directives field-by-field: if a field is `Some`, it wins; otherwise fall back to the other directive's value
 - `resolve(client_request, params)` — extracts directive from SQL comment (via AST `comment_cache` field) and connection parameter (`pgdog.cache`), merges them (comment wins per-field), returns the merged `CacheDirective`
 - Arguments can appear in any order: `ttl=17 force_cache` and `force_cache ttl=17` are equivalent
 - Missing fields cascade through resolution tiers: comment → parameter → global config
+- `key=NAME` — when present, overrides the automatic cache key: XXH3 of just the literal name string is used instead of `database + query + bind params`; queries with different SQL but the same `key=` share a cache slot
 
 **`context.rs`** — Cache context held in `QueryEngineContext`:
 - `CacheContext` with `cache_miss: Option<CacheMiss>`, `response_buffer: Vec<Message>`, and `had_error: bool`
@@ -109,9 +110,10 @@ Key methods:
 - `cache_check()` — main entry point: checks route, calls `directive::resolve()`, resolves final mode and TTL:
   - Mode resolution: directive mode → global `CachePolicy` (converted to `CacheMode`)
   - TTL resolution: directive TTL → global `cache.ttl`
+  - Key resolution: if `directive.key` is `Some(name)`, the cache key is XXH3 of that name alone; otherwise `compute_cache_key_hash(database, query, bind)` is used
   - `NoCache` → `Passthrough`
   - `ForceCache` → returns `Miss` immediately (bypasses Redis lookup, always repopulates)
-  - `Cache` → computes hash, acquires read-lock on storage, calls `storage.get()`; `CacheMiss` → `Miss`; other errors → `Passthrough`
+  - `Cache` → computes key hash, acquires read-lock on storage, calls `storage.get()`; `CacheMiss` → `Miss`; other errors → `Passthrough`
 - `deserialize_cached(Vec<u8>) -> Vec<Message>` — parses a flat blob of concatenated PostgreSQL wire messages into individual `Message` values. Wire format: `[1B code][4B length (incl. itself)][payload]`. Named constants `HEADER_CODE_LEN`, `HEADER_LEN_SIZE`, `HEADER_TOTAL` replace magic numbers. Not Redis-specific — usable with any cache backend that stores raw bytes.
 - `cache_response()` — serializes `Vec<Message>` into wire bytes and stores in Redis
 - Cache key: XXH3 hash of `database_name + normalized query + bind params` — computed by `compute_cache_key_hash`
@@ -168,7 +170,7 @@ xxhash-rust = { version = "0.8", features = ["xxh3"]}
 | Cache policy resolution | Field-by-field merge: SQL comment → connection param → global config |
 | Cache HIT flow | Deserialize wire bytes → `Vec<Message>` → replay each through `process_server_message()` |
 | Cache MISS flow | Normal execute → capture response via `CacheContext` → store in Redis → respond |
-| Cache key | XXH3 hash of `database_name + normalized query + bind params` |
+| Cache key | XXH3 hash of `database_name + normalized query + bind params`; or XXH3 of just `key=NAME` when the hint is present |
 | Query normalization | On-the-fly in hasher: comments stripped, whitespace collapsed (except inside string literals), no `String` allocated |
 | Wire format | Full PostgreSQL wire messages stored as raw bytes (one concatenated buffer) |
 | Config hotswap | `is_actual()` reads live config internally; only those config parameters, that require rebuild, triggers it |
@@ -211,12 +213,20 @@ SELECT * FROM orders;
 /* pgdog_cache: ttl=60 */
 SELECT * FROM sessions;
 
+-- Use a custom cache key (bypasses automatic key computation)
+/* pgdog_cache: cache key=my_query */
+SELECT id, val FROM cache_test_custom_key WHERE id = 1;
+
+-- Custom key with custom TTL
+/* pgdog_cache: cache key=my_query ttl=120 */
+SELECT id, val FROM cache_test_custom_key WHERE id = 1;
+
 -- Multiple directives in one comment (cache directive does not consume other directives)
 /* pgdog_cache: force_cache ttl=10 pgdog_role: replica */
 SELECT * FROM analytics;
 ```
 
-> **Position-agnostic parsing:** Arguments like `cache`, `force_cache`, `no_cache`, and `ttl=N` 
+> **Position-agnostic parsing:** Arguments like `cache`, `force_cache`, `no_cache`, `ttl=N`, and `key=NAME` 
 > can appear in any order. Unknown tokens are silently ignored for forward compatibility.
 >
 > **Field-by-field fallback:** If you specify only `ttl=60` in a comment without a mode, the mode 
@@ -228,6 +238,12 @@ SELECT * FROM analytics;
 > intermediate `String` allocation. Surrounding whitespace left by a stripped comment is also
 > collapsed, so `"/* pgdog_cache: cache */ SELECT 1"` and `"SELECT 1"` produce exactly the same
 > cache key. Spaces inside string literals (`WHERE name = 'hello world'`) are never affected.
+>
+> **Custom cache key (`key=NAME`):** When `key=NAME` is specified, the automatic key computation
+> (`database + query + bind params`) is bypassed entirely. Instead, XXH3 of just the literal name
+> is used. This lets you assign the same cache slot to logically-equivalent queries that differ in
+> SQL text, or create an independent slot for a variant of a query that would otherwise collide.
+> If `key=` is empty (`key=`), the argument is ignored and the automatic key is used.
 
 ### Connection Parameter
 
@@ -361,17 +377,17 @@ SQL comment  →  pgdog.cache parameter  →  global config
 
 30. **Position-agnostic cache directive parsing** — `CacheDirective` refactored from an enum (`Cache { ttl }`, `ForceCache { ttl }`, `NoCache`) to a flat struct `{ mode: Option<CacheMode>, ttl_seconds: Option<u64> }` where `CacheMode` is a sub-enum (`Cache`, `ForceCache`, `NoCache`). `CacheDirective::parse()` tokenizes space-separated arguments in any order: `cache`, `force_cache`, `no_cache`, `ttl=N`. Unknown tokens are silently ignored for forward compatibility (e.g., future `hash_key=foo` argument). Field-by-field resolution: comment directive `.or()` merges with parameter directive, then global config. This means `/* pgdog_cache: ttl=60 */` (mode absent) can combine with `SET pgdog.cache = 'cache'` (TTL absent) to produce `mode=Cache, ttl=60`. Module renamed from `policy.rs` to `directive.rs`. `CacheDecision` enum removed; resolution happens inline in `integration.rs` `cache_check()`. Regex in `comment.rs` simplified to capture the raw body after `pgdog_cache:` up to the next `pgdog_\w+:` directive or end-of-comment, then delegates parsing to `CacheDirective::parse()`.
 
+31. **Add hint for query hash key (`key=NAME`)** — `CacheDirective` gains an optional `key: Option<String>` field. When `key=NAME` is present in a SQL comment or connection parameter, the automatic cache key computation (`database + normalized query + bind params`) is bypassed: the key is XXH3 of just the literal name string. An empty `key=` value is treated as absent. The `CacheMiss` struct field is renamed from `cache_key_hash` to `key` for clarity. Integration test `test_custom_key` verifies that a query with `key=separate_cache` populates an independent cache slot from the same query without the directive.
+
 ---
 
 ## What's Left To Do
 
 1. **Redis disconnect/reconnect under heavy load** — The reconnection logic works, but timing edge cases under rapid disconnect/reconnect cycles still need stress-testing.
 
-2. **Add hint for query hash key**
+2. **Add config flag for mandatory availability of cache storage** — query will fail with error if Redis (or another cache storage) is unavailable.
 
-3. **Add config flag for mandatory availability of cache storage** — query will fail with error if Redis (or another cache storage) is unavailable.
-
-4. **Split `integration.rs` into several modules** — it is too big.
+3. **Split `integration.rs` into several modules** — it is too big.
 
 # Tests
 

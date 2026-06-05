@@ -278,3 +278,37 @@ async def test_error_response_not_cached(conn: Connection):
     assert rows[0]["val"] == "live"
 
     await conn.execute("DROP TABLE IF EXISTS cache_test_error")
+
+
+@skip_if_no_redis
+@pytest.mark.asyncio
+async def test_custom_key(conn: Connection, direct: Connection):
+    """Verifies that a custom key= directive creates an independent cache entry,
+    so queries with and without the directive do not share a cache slot."""
+    await conn.execute(
+        "CREATE TABLE IF NOT EXISTS cache_test_custom_key (id BIGINT PRIMARY KEY, val TEXT)"
+    )
+    await conn.execute("TRUNCATE cache_test_custom_key")
+    await conn.execute("INSERT INTO cache_test_custom_key VALUES (1, 'value')")
+
+    r = await conn.fetch("SELECT id, val FROM cache_test_custom_key WHERE id = 1")
+    assert len(r) == 1
+    assert r[0]["val"] == "value"
+
+    await direct.execute(
+        "UPDATE cache_test_custom_key SET val = 'new_value' WHERE id = 1"
+    )
+
+    # Must get new cached value
+    r = await conn.fetch(
+        "/* pgdog_cache: key=separate_cache */ SELECT id, val FROM cache_test_custom_key WHERE id = 1"
+    )
+    assert len(r) == 1
+    assert r[0]["val"] == "new_value"
+
+    # Must get old cached value
+    r = await conn.fetch("SELECT id, val FROM cache_test_custom_key WHERE id = 1")
+    assert len(r) == 1
+    assert r[0]["val"] == "value"
+
+    await conn.execute("DROP TABLE IF EXISTS cache_test_custom_key")

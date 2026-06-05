@@ -16,7 +16,7 @@ use crate::{
 use tracing::{debug, warn};
 
 pub struct CacheMiss {
-    pub cache_key_hash: u64,
+    pub key: u64,
     pub ttl: u64,
 }
 
@@ -193,16 +193,22 @@ impl Cache {
             return Ok(CacheCheckResult::Passthrough);
         }
 
-        let user = params.get_required("user")?;
-        let database = params.get_default("database", user);
-        let bind = client_request.parameters()?;
-        let cache_key_hash = compute_cache_key_hash(database, query.query(), bind);
+        let key = match directive.key {
+            Some(key) => {
+                let mut hasher = xxhash_rust::xxh3::Xxh3Default::new();
+                key.hash(&mut hasher);
+                hasher.finish()
+            }
+            None => {
+                let user = params.get_required("user")?;
+                let database = params.get_default("database", user);
+                let bind = client_request.parameters()?;
+                compute_cache_key_hash(database, query.query(), bind)
+            }
+        };
 
         if mode == CacheMode::ForceCache {
-            return Ok(CacheCheckResult::Miss(CacheMiss {
-                cache_key_hash,
-                ttl,
-            }));
+            return Ok(CacheCheckResult::Miss(CacheMiss { key, ttl }));
         }
 
         let guard = self.storage.read().await;
@@ -210,12 +216,11 @@ impl Cache {
             Some(storage) => storage,
             None => return Ok(CacheCheckResult::Passthrough),
         };
-        match storage.get(cache_key_hash).await {
+        match storage.get(key).await {
             Ok(cached) => Ok(CacheCheckResult::Hit { cached }),
-            Err(CacheStorageError::CacheMiss(_)) => Ok(CacheCheckResult::Miss(CacheMiss {
-                cache_key_hash,
-                ttl,
-            })),
+            Err(CacheStorageError::CacheMiss(_)) => {
+                Ok(CacheCheckResult::Miss(CacheMiss { key, ttl }))
+            }
             Err(e) => {
                 warn!("{}", e);
                 Ok(CacheCheckResult::Passthrough)
@@ -291,12 +296,7 @@ impl Cache {
         messages
     }
 
-    pub(super) async fn cache_response(
-        &self,
-        cache_key_hash: u64,
-        messages: Vec<Message>,
-        ttl: u64,
-    ) {
+    pub(super) async fn cache_response(&self, key: u64, messages: Vec<Message>, ttl: u64) {
         let guard = self.storage.read().await;
         let storage = match guard.as_ref() {
             Some(s) if s.is_enabled() => s,
@@ -322,7 +322,7 @@ impl Cache {
             return;
         }
 
-        if let Err(e) = storage.set(cache_key_hash, &buffer, ttl).await {
+        if let Err(e) = storage.set(key, &buffer, ttl).await {
             warn!("{}", e);
         }
     }
