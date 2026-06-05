@@ -1,11 +1,11 @@
-use std::{num::ParseIntError, ops::Add};
+use std::{num::ParseIntError, ops::Add, ops::AddAssign};
 
 use crate::Data;
 
 use super::*;
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 
-#[derive(Eq, PartialEq, Ord, PartialOrd, Default, Debug, Clone, Hash)]
+#[derive(Eq, PartialEq, Ord, PartialOrd, Default, Debug, Clone, Copy, Hash)]
 pub struct Interval {
     years: i64,
     months: i32,
@@ -30,6 +30,12 @@ impl Add for Interval {
             seconds: self.seconds.saturating_add(rhs.seconds),
             micros: self.micros.saturating_add(rhs.micros),
         }
+    }
+}
+
+impl AddAssign for Interval {
+    fn add_assign(&mut self, rhs: Interval) {
+        *self = *self + rhs
     }
 }
 

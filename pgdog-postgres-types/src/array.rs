@@ -6,7 +6,7 @@ use crate::{DataType, Datum};
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Hash)]
 pub struct Array {
     elements: Vec<Datum>,
-    element_oid: i32,
+    pub(crate) element_oid: i32,
     dim: Dimension,
 }
 
