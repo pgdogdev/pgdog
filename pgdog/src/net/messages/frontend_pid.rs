@@ -15,6 +15,12 @@ static COUNTER: AtomicU32 = AtomicU32::new(0);
 #[derive(Copy, Clone, Debug, Display, Hash, PartialEq, Eq)]
 pub struct FrontendPid(i32);
 
+impl Default for FrontendPid {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl FrontendPid {
     pub fn new() -> Self {
         // Mask off the sign bit so the synthetic pid is always non-negative,

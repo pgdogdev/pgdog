@@ -89,7 +89,7 @@ fn test_limit_offset_with_bad_params() {
         Sync.into(),
     ]);
 
-    let err = command.err().expect("limit should fail");
+    let err = command.expect_err("limit should fail");
     assert_eq!(
         err.to_string(),
         "expected parameter $1 to be an integer, got 'apples' instead"
@@ -106,7 +106,7 @@ fn test_limit_offset_with_bad_params() {
         Sync.into(),
     ]);
 
-    let err = command.err().expect("offset should fail");
+    let err = command.expect_err("offset should fail");
     assert_eq!(
         err.to_string(),
         "expected parameter $2 to be an integer, got 'oranges' instead"

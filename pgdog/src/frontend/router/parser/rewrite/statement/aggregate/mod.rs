@@ -27,7 +27,7 @@ impl StatementRewrite<'_> {
             return Ok(());
         };
 
-        let aggregate = Aggregate::parse(&select);
+        let aggregate = Aggregate::parse(select);
         if aggregate.is_empty() {
             return Ok(());
         }

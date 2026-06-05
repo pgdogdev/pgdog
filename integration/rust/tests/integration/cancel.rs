@@ -79,17 +79,15 @@ async fn assert_cancelled(
 ) {
     let result = timeout(Duration::from_secs(5), handle)
         .await
-        .expect(&format!(
-            "{label}: cancelled query did not unblock within 5 seconds"
-        ))
-        .expect(&format!("{label}: task panicked"));
+        .unwrap_or_else(|_| panic!("{label}: cancelled query did not unblock within 5 seconds"))
+        .unwrap_or_else(|_| panic!("{label}: task panicked"));
 
     let err = result.expect_err(&format!(
         "{label}: query should have been cancelled, but it succeeded"
     ));
-    let db_err = err.as_db_error().expect(&format!(
-        "{label}: expected a PostgreSQL error, not a network error"
-    ));
+    let db_err = err
+        .as_db_error()
+        .unwrap_or_else(|| panic!("{label}: expected a PostgreSQL error, not a network error"));
 
     assert_eq!(
         db_err.code().code(),

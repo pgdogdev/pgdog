@@ -42,10 +42,10 @@ impl QueryParser {
             TransactionStmtKind::TransStmtRollbackTo => rollback_savepoint = true,
             TransactionStmtKind::TransStmtPrepare
             | TransactionStmtKind::TransStmtCommitPrepared
-            | TransactionStmtKind::TransStmtRollbackPrepared => {
-                if context.router_context.two_pc {
-                    return Err(Error::NoTwoPc);
-                }
+            | TransactionStmtKind::TransStmtRollbackPrepared
+                if context.router_context.two_pc =>
+            {
+                return Err(Error::NoTwoPc);
             }
             _ => (),
         }

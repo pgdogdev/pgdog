@@ -1097,7 +1097,7 @@ mod test {
 
         // Trigger schema_not_needed on each shard after a short delay so the
         // waiter wakes up via the per-shard schema_waiter notification.
-        let shards: Vec<_> = cluster.shards.iter().cloned().collect();
+        let shards: Vec<_> = cluster.shards.to_vec();
         tokio::spawn(async move {
             tokio::time::sleep(Duration::from_millis(10)).await;
             for shard in &shards {
