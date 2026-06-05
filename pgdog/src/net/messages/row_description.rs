@@ -1,5 +1,6 @@
 //! RowDescription (B) message.
 
+use std::collections::BTreeSet;
 use std::ops::Deref;
 use std::sync::Arc;
 
@@ -226,21 +227,15 @@ impl RowDescription {
     }
 
     /// Return a new row description without the specified columns (0-based indexes).
-    pub fn drop_columns(&self, drop: &[usize]) -> Self {
-        if drop.is_empty() {
-            return self.clone();
-        }
-
-        let mut indices = drop.to_vec();
-        indices.sort_unstable();
-        indices.dedup();
+    pub fn drop_columns(&self, drop: impl IntoIterator<Item = usize>) -> Self {
+        let indices = drop.into_iter().collect::<BTreeSet<_>>();
 
         let fields = self
             .fields
             .iter()
             .enumerate()
             .filter_map(|(idx, field)| {
-                if indices.binary_search(&idx).is_ok() {
+                if indices.contains(&idx) {
                     None
                 } else {
                     Some(field.clone())

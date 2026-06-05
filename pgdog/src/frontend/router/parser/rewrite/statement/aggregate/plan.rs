@@ -34,8 +34,6 @@ pub struct HelperMapping {
 /// Plan describing how the proxy rewrites a query and its results.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct AggregateRewritePlan {
-    /// Column indexes (0-based) to drop from the row description/results after execution.
-    drop_columns: Vec<usize>,
     helpers: Vec<HelperMapping>,
 }
 
@@ -43,24 +41,17 @@ impl AggregateRewritePlan {
     /// Create new no-op aggregate rewrite plan.
     pub fn new() -> Self {
         Self {
-            drop_columns: Vec::new(),
             helpers: Vec::new(),
         }
     }
 
     /// Is this plan a no-op? Doesn't do anything.
     pub fn is_noop(&self) -> bool {
-        self.drop_columns.is_empty() && self.helpers.is_empty()
+        self.helpers.is_empty()
     }
 
-    pub fn drop_columns(&self) -> &[usize] {
-        &self.drop_columns
-    }
-
-    pub fn add_drop_column(&mut self, column: usize) {
-        if !self.drop_columns.contains(&column) {
-            self.drop_columns.push(column);
-        }
+    pub fn drop_columns(&self) -> impl Iterator<Item = usize> + '_ {
+        self.helpers.iter().map(|h| h.helper_column)
     }
 
     pub fn helpers(&self) -> &[HelperMapping] {
@@ -91,16 +82,8 @@ mod tests {
     fn rewrite_plan_noop() {
         let plan = AggregateRewritePlan::new();
         assert!(plan.is_noop());
-        assert!(plan.drop_columns().is_empty());
+        assert!(plan.drop_columns().count() == 0);
         assert!(plan.helpers().is_empty());
-    }
-
-    #[test]
-    fn rewrite_plan_drop_columns() {
-        let mut plan = AggregateRewritePlan::new();
-        plan.add_drop_column(1);
-        plan.add_drop_column(4);
-        assert_eq!(plan.drop_columns(), &[1, 4]);
     }
 
     #[test]

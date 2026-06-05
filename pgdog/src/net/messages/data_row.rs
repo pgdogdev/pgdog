@@ -1,6 +1,7 @@
 //! DataRow (B) message.
 
 use crate::net::Decoder;
+use std::collections::BTreeSet;
 
 use super::{
     code, prelude::*, Datum, Double, Float, Format, FromDataType, Numeric, RowDescription,
@@ -50,33 +51,14 @@ impl DataRow {
     }
 
     /// Drop columns by 0-based index, ignoring indexes out of bounds.
-    pub fn drop_columns(&mut self, drop: &[usize]) {
-        if drop.is_empty() {
-            return;
-        }
-
-        let mut indices = drop.to_vec();
-        indices.sort_unstable();
-        indices.dedup();
-
-        if indices.is_empty() {
-            return;
-        }
-
-        let mut dropped = indices.into_iter().peekable();
-        let mut retained = Vec::with_capacity(self.columns.len());
-
-        for (idx, column) in self.columns.drain(..).enumerate() {
-            match dropped.peek() {
-                Some(&drop_idx) if drop_idx == idx => {
-                    dropped.next();
-                }
-                _ => retained.push(column),
-            }
-        }
-
-        // Any remaining indexes are beyond the current column count; ignore.
-        self.columns = retained;
+    // FIXME(sage): Fairly certain this is never a disjoint set of indices,
+    // just a number of columns to remove at the end
+    pub fn drop_columns(&mut self, drop: &BTreeSet<usize>) {
+        let mut idx = 0;
+        self.columns.retain(|_| {
+            idx += 1;
+            !drop.contains(&(idx - 1))
+        });
     }
 
     /// Create data row from columns.
@@ -293,7 +275,7 @@ mod test {
         dr.add("b");
         dr.add("c");
 
-        dr.drop_columns(&[1, 5]);
+        dr.drop_columns(&[1, 5].into_iter().collect());
 
         assert_eq!(dr.len(), 2);
         assert_eq!(dr.get::<String>(0, Format::Text).unwrap(), "a");

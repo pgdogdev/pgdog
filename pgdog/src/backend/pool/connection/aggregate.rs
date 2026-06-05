@@ -939,7 +939,6 @@ mod test {
         rows.push_back(shard1);
 
         let mut plan = AggregateRewritePlan::default();
-        plan.add_drop_column(1);
         plan.add_helper(HelperMapping {
             target_column: 0,
             helper_column: 1,
@@ -980,8 +979,6 @@ mod test {
         rows.push_back(shard1);
 
         let mut plan = AggregateRewritePlan::default();
-        plan.add_drop_column(2);
-        plan.add_drop_column(3);
         plan.add_helper(HelperMapping {
             target_column: 0,
             helper_column: 2,
@@ -1041,9 +1038,6 @@ mod test {
         rows.push_back(shard1);
 
         let mut plan = AggregateRewritePlan::default();
-        plan.add_drop_column(1);
-        plan.add_drop_column(2);
-        plan.add_drop_column(3);
         plan.add_helper(HelperMapping {
             target_column: 0,
             helper_column: 1,
@@ -1100,9 +1094,6 @@ mod test {
         rows.push_back(shard1);
 
         let mut plan = AggregateRewritePlan::default();
-        plan.add_drop_column(1);
-        plan.add_drop_column(2);
-        plan.add_drop_column(3);
         plan.add_helper(HelperMapping {
             target_column: 0,
             helper_column: 1,
