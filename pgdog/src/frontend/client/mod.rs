@@ -195,9 +195,11 @@ impl Client {
                     .await?;
                 let response = stream.read().await?;
                 let response = Password::from_bytes(response.to_bytes())?;
-                let is_match = passwords
-                    .iter()
-                    .any(|p| Some(p.as_str()) == response.password());
+                let is_match = response.password().is_some_and(|provided| {
+                    passwords.iter().any(|p| {
+                        crate::util::constant_time_eq(p.as_str().as_bytes(), provided.as_bytes())
+                    })
+                });
 
                 if is_match {
                     AuthResult::Ok

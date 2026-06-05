@@ -181,7 +181,14 @@ pub(crate) fn add(user: ConfigUser) -> Result<AuthResult, Error> {
             add_user(existing)?;
             reload_from_existing()?;
             Ok(AuthResult::Ok)
-        } else if existing.password == user.password {
+        } else if existing
+            .password
+            .as_deref()
+            .zip(user.password.as_deref())
+            .is_some_and(|(stored, provided)| {
+                crate::util::constant_time_eq(stored.as_bytes(), provided.as_bytes())
+            })
+        {
             // Passwords match.
             Ok(AuthResult::Ok)
         } else if config.config.general.passthrough_auth.allows_change() {

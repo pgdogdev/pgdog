@@ -17,6 +17,20 @@ pub fn millis(duration: Duration) -> f64 {
     (duration.as_secs_f64() * 1_000_000.0).round() / 1000.0
 }
 
+/// Compare two byte slices in constant time with respect to their contents.
+///
+/// The running time depends only on the input lengths, never on the byte
+/// values, so it cannot leak (via a timing side channel) how many leading
+/// bytes matched. Use this wherever an attacker-supplied value is compared
+/// against a secret (passwords, cancel keys); a short-circuiting `==`/`memcmp`
+/// there is a covert timing channel that lets an attacker recover the secret
+/// byte by byte (cf. PostgreSQL CVE-2026-6478, the MD5 password comparison).
+///
+/// Length is not treated as secret: a length mismatch returns `false` early.
+pub fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    aws_lc_rs::constant_time::verify_slices_are_equal(a, b).is_ok()
+}
+
 pub fn human_duration_optional(duration: Option<Duration>) -> String {
     if let Some(duration) = duration {
         human_duration(duration)
@@ -410,5 +424,16 @@ mod test {
             set_var("NODE_ID", "pgdog-1");
         }
         assert_eq!(node_id(), Ok(1));
+    }
+
+    #[test]
+    fn test_constant_time_eq() {
+        assert!(constant_time_eq(b"hunter2", b"hunter2"));
+        assert!(!constant_time_eq(b"hunter2", b"hunter3"));
+        // Different lengths must not match.
+        assert!(!constant_time_eq(b"hunter2", b"hunter22"));
+        assert!(!constant_time_eq(b"", b"x"));
+        // Two empty slices are equal.
+        assert!(constant_time_eq(b"", b""));
     }
 }

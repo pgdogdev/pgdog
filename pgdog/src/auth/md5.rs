@@ -67,7 +67,9 @@ impl<'a> Client<'a> {
 
     /// Check encrypted password against any of the configured passwords.
     pub fn check(&self, encrypted: &str) -> bool {
-        self.passwords.iter().any(|p| self.encrypt(p) == encrypted)
+        self.passwords.iter().any(|p| {
+            crate::util::constant_time_eq(self.encrypt(p).as_bytes(), encrypted.as_bytes())
+        })
     }
 }
 
