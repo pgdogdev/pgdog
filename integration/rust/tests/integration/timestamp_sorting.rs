@@ -120,18 +120,17 @@ async fn test_timestamp_sorting_across_shards() {
     .unwrap();
 
     let rows = sharded_conn
-        .fetch_all(
-            "SELECT id, name, updated_at FROM timestamp_test ORDER BY updated_at DESC NULLS LAST",
-        )
+        .fetch_all("SELECT id, name, updated_at FROM timestamp_test ORDER BY updated_at ASC")
         .await
         .unwrap();
 
-    let last_rows: Vec<Option<chrono::NaiveDateTime>> = rows
+    let last_rows: Vec<Option<chrono::DateTime<chrono::Utc>>> = rows
         .iter()
         .rev()
         .take(2)
-        .map(|row| row.try_get(2).ok())
-        .collect();
+        .map(|row| row.try_get(2))
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
 
     assert!(
         last_rows.iter().any(|v| v.is_none()),

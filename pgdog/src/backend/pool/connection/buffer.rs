@@ -16,6 +16,8 @@ use crate::{
     },
 };
 
+use pgdog_postgres_types::Datum;
+
 use super::Aggregates;
 
 /// Sort and aggregate rows received from multiple shards.
@@ -80,48 +82,52 @@ impl Buffer {
 
         // Sort rows.
         let order_by = move |a: &DataRow, b: &DataRow| -> Ordering {
-            for col in cols.iter() {
-                let index = col.index();
-                let asc = col.asc();
-                let index = if let Some(index) = index {
-                    index
-                } else {
-                    continue;
-                };
-                let left = a.get_column(index, decoder);
-                let right = b.get_column(index, decoder);
+            cols.iter()
+                .filter_map(|col| {
+                    let index = col.index();
+                    let asc = col.asc();
+                    let Some(index) = index else {
+                        return None;
+                    };
+                    let left = a.get_column(index, decoder);
+                    let right = b.get_column(index, decoder);
 
-                let ordering = match (left, right) {
-                    (Ok(Some(left)), Ok(Some(right))) => {
-                        // Handle the special vector case.
-                        if let OrderBy::AscVectorL2(_, vector) = col {
-                            let left: Option<Vector> = left.value.try_into().ok();
-                            let right: Option<Vector> = right.value.try_into().ok();
+                    match (left, right) {
+                        (Ok(Some(left)), Ok(Some(right))) => {
+                            // Handle the special vector case.
+                            if let OrderBy::AscVectorL2(_, vector) = col {
+                                let left: Option<Vector> = left.value.try_into().ok();
+                                let right: Option<Vector> = right.value.try_into().ok();
 
-                            if let (Some(left), Some(right)) = (left, right) {
-                                let left = left.distance_l2(vector);
-                                let right = right.distance_l2(vector);
+                                if let (Some(left), Some(right)) = (left, right) {
+                                    let left = left.distance_l2(vector);
+                                    let right = right.distance_l2(vector);
 
-                                left.partial_cmp(&right)
+                                    left.partial_cmp(&right)
+                                } else {
+                                    Some(Ordering::Equal)
+                                }
                             } else {
-                                Some(Ordering::Equal)
+                                // FIXME(sage): We don't handle ASC NULLS FIRST or
+                                // DESC NULLS LAST we should either error or add
+                                // support rather than silently do the wrong sorting
+                                match (&left.value, &right.value, asc) {
+                                    (Datum::Null, Datum::Null, _) => Some(Ordering::Equal),
+                                    (Datum::Null, _, true) => Some(Ordering::Greater),
+                                    (_, Datum::Null, true) => Some(Ordering::Less),
+                                    (Datum::Null, _, false) => Some(Ordering::Less),
+                                    (_, Datum::Null, false) => Some(Ordering::Greater),
+                                    (a, b, true) => a.partial_cmp(b),
+                                    (a, b, false) => b.partial_cmp(a),
+                                }
                             }
-                        } else if asc {
-                            left.value.partial_cmp(&right.value)
-                        } else {
-                            right.value.partial_cmp(&left.value)
                         }
+
+                        _ => Some(Ordering::Equal),
                     }
-
-                    _ => Some(Ordering::Equal),
-                };
-
-                if ordering != Some(Ordering::Equal) {
-                    return ordering.unwrap_or(Ordering::Equal);
-                }
-            }
-
-            Ordering::Equal
+                })
+                .reduce(Ordering::then)
+                .unwrap_or(Ordering::Equal)
         };
 
         self.buffer.make_contiguous().sort_by(order_by);
