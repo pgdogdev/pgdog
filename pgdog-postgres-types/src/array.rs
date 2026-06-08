@@ -3,7 +3,7 @@ use bytes::{Buf, BufMut, Bytes, BytesMut};
 use super::{Error, Format};
 use crate::{DataType, Datum};
 
-#[derive(Debug, Clone, PartialOrd, Ord, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Hash)]
 pub struct Array {
     elements: Vec<Option<Datum>>,
     element_oid: i32,
