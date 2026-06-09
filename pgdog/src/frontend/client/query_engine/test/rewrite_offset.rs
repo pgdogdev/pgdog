@@ -6,6 +6,7 @@ use crate::frontend::router::parser::Limit;
 
 use super::prelude::*;
 use super::{test_client, test_sharded_client};
+use crate::test_utils::*;
 
 async fn run_test(messages: Vec<ProtocolMessage>) -> Option<OffsetPlan> {
     let mut client = test_sharded_client();
@@ -118,9 +119,7 @@ async fn test_offset_limit_no_select() {
 
 #[tokio::test]
 async fn test_offset_with_unique_id_simple() {
-    unsafe {
-        std::env::set_var("NODE_ID", "pgdog-1");
-    }
+    let _guard = set_env_var("NODE_ID", "pgdog-1");
     let sql = "SELECT pgdog.unique_id() FROM test LIMIT 10 OFFSET 5";
     let mut client = test_sharded_client();
     client.client_request = ClientRequest::from(vec![ProtocolMessage::Query(Query::new(sql))]);
@@ -180,9 +179,7 @@ async fn test_offset_with_unique_id_simple() {
 
 #[tokio::test]
 async fn test_offset_with_unique_id_extended() {
-    unsafe {
-        std::env::set_var("NODE_ID", "pgdog-1");
-    }
+    let _guard = set_env_var("NODE_ID", "pgdog-1");
     let sql = "SELECT pgdog.unique_id(), $1 FROM test LIMIT $2 OFFSET $3";
     let mut client = test_sharded_client();
     client.client_request = ClientRequest::from(vec![

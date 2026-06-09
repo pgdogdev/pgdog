@@ -86,32 +86,10 @@ pub(crate) async fn token(addr: Address) -> Result<(String, SystemTime), Error> 
 #[cfg(test)]
 mod tests {
     use pgdog_config::Role;
-    use std::env;
 
     use super::*;
     use crate::config::ServerAuth;
-
-    struct EnvVarGuard {
-        key: &'static str,
-        previous: Option<String>,
-    }
-
-    impl EnvVarGuard {
-        fn set(key: &'static str, value: &str) -> Self {
-            let previous = env::var(key).ok();
-            env::set_var(key, value);
-            Self { key, previous }
-        }
-    }
-
-    impl Drop for EnvVarGuard {
-        fn drop(&mut self) {
-            match self.previous.take() {
-                Some(v) => env::set_var(self.key, v),
-                None => env::remove_var(self.key),
-            }
-        }
-    }
+    use crate::test_utils::set_env_var;
 
     fn make_addr() -> Address {
         Address {
@@ -199,9 +177,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_token_contains_expected_query_fields() {
-        let _access_key = EnvVarGuard::set("AWS_ACCESS_KEY_ID", "AKIDEXAMPLE");
-        let _secret_key = EnvVarGuard::set("AWS_SECRET_ACCESS_KEY", "SECRETEXAMPLE");
-        let _session = EnvVarGuard::set("AWS_SESSION_TOKEN", "SESSIONEXAMPLE");
+        let _access_key = set_env_var("AWS_ACCESS_KEY_ID", "AKIDEXAMPLE");
+        let _secret_key = set_env_var("AWS_SECRET_ACCESS_KEY", "SECRETEXAMPLE");
+        let _session = set_env_var("AWS_SESSION_TOKEN", "SESSIONEXAMPLE");
 
         let addr = make_addr();
         let (token, expires_at) = token(addr).await.unwrap();

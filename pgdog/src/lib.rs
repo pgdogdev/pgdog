@@ -14,6 +14,8 @@ pub mod plugin;
 pub mod sighup;
 pub mod state;
 pub mod stats;
+#[cfg(test)]
+pub mod test_utils;
 #[cfg(feature = "tui")]
 pub mod tui;
 pub mod unique_id;

@@ -1374,26 +1374,26 @@ impl General {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::env;
+    use crate::test_utils::*;
 
     #[test]
     fn test_env_workers() {
-        env::set_var("PGDOG_WORKERS", "8");
+        let _guard = set_env_var("PGDOG_WORKERS", "8");
         assert_eq!(General::workers(), 8);
-        env::remove_var("PGDOG_WORKERS");
+        let _guard = remove_env_var("PGDOG_WORKERS");
         assert_eq!(General::workers(), 2);
     }
 
     #[test]
     fn test_env_pool_sizes() {
-        env::set_var("PGDOG_DEFAULT_POOL_SIZE", "50");
-        env::set_var("PGDOG_MIN_POOL_SIZE", "5");
+        let _guard = set_env_var("PGDOG_DEFAULT_POOL_SIZE", "50");
+        let _guard = set_env_var("PGDOG_MIN_POOL_SIZE", "5");
 
         assert_eq!(General::default_pool_size(), 50);
         assert_eq!(General::min_pool_size(), 5);
 
-        env::remove_var("PGDOG_DEFAULT_POOL_SIZE");
-        env::remove_var("PGDOG_MIN_POOL_SIZE");
+        let _guard = remove_env_var("PGDOG_DEFAULT_POOL_SIZE");
+        let _guard = remove_env_var("PGDOG_MIN_POOL_SIZE");
 
         assert_eq!(General::default_pool_size(), 10);
         assert_eq!(General::min_pool_size(), 1);
@@ -1401,11 +1401,11 @@ mod tests {
 
     #[test]
     fn test_env_timeouts() {
-        env::set_var("PGDOG_HEALTHCHECK_INTERVAL", "60000");
-        env::set_var("PGDOG_HEALTHCHECK_TIMEOUT", "10000");
-        env::set_var("PGDOG_CONNECT_TIMEOUT", "10000");
-        env::set_var("PGDOG_CHECKOUT_TIMEOUT", "15000");
-        env::set_var("PGDOG_IDLE_TIMEOUT", "120000");
+        let _guard = set_env_var("PGDOG_HEALTHCHECK_INTERVAL", "60000");
+        let _guard = set_env_var("PGDOG_HEALTHCHECK_TIMEOUT", "10000");
+        let _guard = set_env_var("PGDOG_CONNECT_TIMEOUT", "10000");
+        let _guard = set_env_var("PGDOG_CHECKOUT_TIMEOUT", "15000");
+        let _guard = set_env_var("PGDOG_IDLE_TIMEOUT", "120000");
 
         assert_eq!(General::healthcheck_interval(), 60000);
         assert_eq!(General::healthcheck_timeout(), 10000);
@@ -1413,11 +1413,11 @@ mod tests {
         assert_eq!(General::checkout_timeout(), 15000);
         assert_eq!(General::idle_timeout(), 120000);
 
-        env::remove_var("PGDOG_HEALTHCHECK_INTERVAL");
-        env::remove_var("PGDOG_HEALTHCHECK_TIMEOUT");
-        env::remove_var("PGDOG_CONNECT_TIMEOUT");
-        env::remove_var("PGDOG_CHECKOUT_TIMEOUT");
-        env::remove_var("PGDOG_IDLE_TIMEOUT");
+        let _guard = remove_env_var("PGDOG_HEALTHCHECK_INTERVAL");
+        let _guard = remove_env_var("PGDOG_HEALTHCHECK_TIMEOUT");
+        let _guard = remove_env_var("PGDOG_CONNECT_TIMEOUT");
+        let _guard = remove_env_var("PGDOG_CHECKOUT_TIMEOUT");
+        let _guard = remove_env_var("PGDOG_IDLE_TIMEOUT");
 
         assert_eq!(General::healthcheck_interval(), 30000);
         assert_eq!(General::healthcheck_timeout(), 5000);
@@ -1428,27 +1428,24 @@ mod tests {
 
     #[test]
     fn test_env_invalid_values() {
-        env::set_var("PGDOG_WORKERS", "invalid");
-        env::set_var("PGDOG_DEFAULT_POOL_SIZE", "not_a_number");
+        let _guard = set_env_var("PGDOG_WORKERS", "invalid");
+        let _guard = set_env_var("PGDOG_DEFAULT_POOL_SIZE", "not_a_number");
 
         assert_eq!(General::workers(), 2);
         assert_eq!(General::default_pool_size(), 10);
-
-        env::remove_var("PGDOG_WORKERS");
-        env::remove_var("PGDOG_DEFAULT_POOL_SIZE");
     }
 
     #[test]
     fn test_env_host_port() {
         // Test existing env var functionality
-        env::set_var("PGDOG_HOST", "192.168.1.1");
-        env::set_var("PGDOG_PORT", "8432");
+        let _guard = set_env_var("PGDOG_HOST", "192.168.1.1");
+        let _guard = set_env_var("PGDOG_PORT", "8432");
 
         assert_eq!(General::host(), "192.168.1.1");
         assert_eq!(General::port(), 8432);
 
-        env::remove_var("PGDOG_HOST");
-        env::remove_var("PGDOG_PORT");
+        let _guard = remove_env_var("PGDOG_HOST");
+        let _guard = remove_env_var("PGDOG_PORT");
 
         assert_eq!(General::host(), "0.0.0.0");
         assert_eq!(General::port(), 6432);
@@ -1457,71 +1454,71 @@ mod tests {
     #[test]
     fn test_env_enum_fields() {
         // Test pooler mode
-        env::set_var("PGDOG_POOLER_MODE", "session");
+        let _guard = set_env_var("PGDOG_POOLER_MODE", "session");
         assert_eq!(General::pooler_mode(), PoolerMode::Session);
-        env::remove_var("PGDOG_POOLER_MODE");
+        let _guard = remove_env_var("PGDOG_POOLER_MODE");
         assert_eq!(General::pooler_mode(), PoolerMode::Transaction);
 
         // Test load balancing strategy
-        env::set_var("PGDOG_LOAD_BALANCING_STRATEGY", "round_robin");
+        let _guard = set_env_var("PGDOG_LOAD_BALANCING_STRATEGY", "round_robin");
         assert_eq!(
             General::load_balancing_strategy(),
             LoadBalancingStrategy::RoundRobin
         );
-        env::remove_var("PGDOG_LOAD_BALANCING_STRATEGY");
+        let _guard = remove_env_var("PGDOG_LOAD_BALANCING_STRATEGY");
         assert_eq!(
             General::load_balancing_strategy(),
             LoadBalancingStrategy::Random
         );
 
         // Test read-write strategy
-        env::set_var("PGDOG_READ_WRITE_STRATEGY", "aggressive");
+        let _guard = set_env_var("PGDOG_READ_WRITE_STRATEGY", "aggressive");
         assert_eq!(
             General::read_write_strategy(),
             ReadWriteStrategy::Aggressive
         );
-        env::remove_var("PGDOG_READ_WRITE_STRATEGY");
+        let _guard = remove_env_var("PGDOG_READ_WRITE_STRATEGY");
         assert_eq!(
             General::read_write_strategy(),
             ReadWriteStrategy::Conservative
         );
 
         // Test read-write split
-        env::set_var("PGDOG_READ_WRITE_SPLIT", "exclude_primary");
+        let _guard = set_env_var("PGDOG_READ_WRITE_SPLIT", "exclude_primary");
         assert_eq!(General::read_write_split(), ReadWriteSplit::ExcludePrimary);
-        env::remove_var("PGDOG_READ_WRITE_SPLIT");
+        let _guard = remove_env_var("PGDOG_READ_WRITE_SPLIT");
         assert_eq!(General::read_write_split(), ReadWriteSplit::IncludePrimary);
 
         // Test TLS verify mode
-        env::set_var("PGDOG_TLS_VERIFY", "verify_full");
+        let _guard = set_env_var("PGDOG_TLS_VERIFY", "verify_full");
         assert_eq!(General::default_tls_verify(), TlsVerifyMode::VerifyFull);
-        env::remove_var("PGDOG_TLS_VERIFY");
+        let _guard = remove_env_var("PGDOG_TLS_VERIFY");
         assert_eq!(General::default_tls_verify(), TlsVerifyMode::Prefer);
 
         // Test prepared statements
-        env::set_var("PGDOG_PREPARED_STATEMENTS", "full");
+        let _guard = set_env_var("PGDOG_PREPARED_STATEMENTS", "full");
         assert_eq!(General::prepared_statements(), PreparedStatements::Full);
-        env::remove_var("PGDOG_PREPARED_STATEMENTS");
+        let _guard = remove_env_var("PGDOG_PREPARED_STATEMENTS");
         assert_eq!(General::prepared_statements(), PreparedStatements::Extended);
 
         // Test auth type
-        env::set_var("PGDOG_AUTH_TYPE", "md5");
+        let _guard = set_env_var("PGDOG_AUTH_TYPE", "md5");
         assert_eq!(General::auth_type(), AuthType::Md5);
-        env::remove_var("PGDOG_AUTH_TYPE");
+        let _guard = remove_env_var("PGDOG_AUTH_TYPE");
         assert_eq!(General::auth_type(), AuthType::Scram);
     }
 
     #[test]
     fn test_env_additional_timeouts() {
-        env::set_var("PGDOG_IDLE_HEALTHCHECK_INTERVAL", "45000");
-        env::set_var("PGDOG_IDLE_HEALTHCHECK_DELAY", "10000");
-        env::set_var("PGDOG_BAN_TIMEOUT", "600000");
-        env::set_var("PGDOG_ROLLBACK_TIMEOUT", "10000");
-        env::set_var("PGDOG_SHUTDOWN_TIMEOUT", "120000");
-        env::set_var("PGDOG_SHUTDOWN_TERMINATION_TIMEOUT", "15000");
-        env::set_var("PGDOG_CONNECT_ATTEMPT_DELAY", "1000");
-        env::set_var("PGDOG_QUERY_TIMEOUT", "30000");
-        env::set_var("PGDOG_CLIENT_IDLE_TIMEOUT", "3600000");
+        let _guard = set_env_var("PGDOG_IDLE_HEALTHCHECK_INTERVAL", "45000");
+        let _guard = set_env_var("PGDOG_IDLE_HEALTHCHECK_DELAY", "10000");
+        let _guard = set_env_var("PGDOG_BAN_TIMEOUT", "600000");
+        let _guard = set_env_var("PGDOG_ROLLBACK_TIMEOUT", "10000");
+        let _guard = set_env_var("PGDOG_SHUTDOWN_TIMEOUT", "120000");
+        let _guard = set_env_var("PGDOG_SHUTDOWN_TERMINATION_TIMEOUT", "15000");
+        let _guard = set_env_var("PGDOG_CONNECT_ATTEMPT_DELAY", "1000");
+        let _guard = set_env_var("PGDOG_QUERY_TIMEOUT", "30000");
+        let _guard = set_env_var("PGDOG_CLIENT_IDLE_TIMEOUT", "3600000");
 
         assert_eq!(General::idle_healthcheck_interval(), 45000);
         assert_eq!(General::idle_healthcheck_delay(), 10000);
@@ -1536,15 +1533,15 @@ mod tests {
         assert_eq!(General::default_query_timeout(), 30000);
         assert_eq!(General::default_client_idle_timeout(), 3600000);
 
-        env::remove_var("PGDOG_IDLE_HEALTHCHECK_INTERVAL");
-        env::remove_var("PGDOG_IDLE_HEALTHCHECK_DELAY");
-        env::remove_var("PGDOG_BAN_TIMEOUT");
-        env::remove_var("PGDOG_ROLLBACK_TIMEOUT");
-        env::remove_var("PGDOG_SHUTDOWN_TIMEOUT");
-        env::remove_var("PGDOG_SHUTDOWN_TERMINATION_TIMEOUT");
-        env::remove_var("PGDOG_CONNECT_ATTEMPT_DELAY");
-        env::remove_var("PGDOG_QUERY_TIMEOUT");
-        env::remove_var("PGDOG_CLIENT_IDLE_TIMEOUT");
+        let _guard = remove_env_var("PGDOG_IDLE_HEALTHCHECK_INTERVAL");
+        let _guard = remove_env_var("PGDOG_IDLE_HEALTHCHECK_DELAY");
+        let _guard = remove_env_var("PGDOG_BAN_TIMEOUT");
+        let _guard = remove_env_var("PGDOG_ROLLBACK_TIMEOUT");
+        let _guard = remove_env_var("PGDOG_SHUTDOWN_TIMEOUT");
+        let _guard = remove_env_var("PGDOG_SHUTDOWN_TERMINATION_TIMEOUT");
+        let _guard = remove_env_var("PGDOG_CONNECT_ATTEMPT_DELAY");
+        let _guard = remove_env_var("PGDOG_QUERY_TIMEOUT");
+        let _guard = remove_env_var("PGDOG_CLIENT_IDLE_TIMEOUT");
 
         assert_eq!(General::idle_healthcheck_interval(), 30000);
         assert_eq!(General::idle_healthcheck_delay(), 5000);
@@ -1557,11 +1554,11 @@ mod tests {
 
     #[test]
     fn test_env_path_fields() {
-        env::set_var("PGDOG_TLS_CERTIFICATE", "/path/to/cert.pem");
-        env::set_var("PGDOG_TLS_PRIVATE_KEY", "/path/to/key.pem");
-        env::set_var("PGDOG_TLS_SERVER_CA_CERTIFICATE", "/path/to/ca.pem");
-        env::set_var("PGDOG_TLS_CLIENT_CA_CERTIFICATE", "/path/to/client-ca.pem");
-        env::set_var("PGDOG_QUERY_LOG", "/var/log/pgdog/queries.log");
+        let _guard = set_env_var("PGDOG_TLS_CERTIFICATE", "/path/to/cert.pem");
+        let _guard = set_env_var("PGDOG_TLS_PRIVATE_KEY", "/path/to/key.pem");
+        let _guard = set_env_var("PGDOG_TLS_SERVER_CA_CERTIFICATE", "/path/to/ca.pem");
+        let _guard = set_env_var("PGDOG_TLS_CLIENT_CA_CERTIFICATE", "/path/to/client-ca.pem");
+        let _guard = set_env_var("PGDOG_QUERY_LOG", "/var/log/pgdog/queries.log");
 
         assert_eq!(
             General::tls_certificate(),
@@ -1584,11 +1581,11 @@ mod tests {
             Some(PathBuf::from("/var/log/pgdog/queries.log"))
         );
 
-        env::remove_var("PGDOG_TLS_CERTIFICATE");
-        env::remove_var("PGDOG_TLS_PRIVATE_KEY");
-        env::remove_var("PGDOG_TLS_SERVER_CA_CERTIFICATE");
-        env::remove_var("PGDOG_TLS_CLIENT_CA_CERTIFICATE");
-        env::remove_var("PGDOG_QUERY_LOG");
+        let _guard = remove_env_var("PGDOG_TLS_CERTIFICATE");
+        let _guard = remove_env_var("PGDOG_TLS_PRIVATE_KEY");
+        let _guard = remove_env_var("PGDOG_TLS_SERVER_CA_CERTIFICATE");
+        let _guard = remove_env_var("PGDOG_TLS_CLIENT_CA_CERTIFICATE");
+        let _guard = remove_env_var("PGDOG_QUERY_LOG");
 
         assert_eq!(General::tls_certificate(), None);
         assert_eq!(General::tls_private_key(), None);
@@ -1599,26 +1596,26 @@ mod tests {
 
     #[test]
     fn test_query_log_stdout_env() {
-        env::set_var("PGDOG_QUERY_LOG_STDOUT", "true");
+        let _guard = set_env_var("PGDOG_QUERY_LOG_STDOUT", "true");
         assert!(General::query_log_stdout());
 
-        env::remove_var("PGDOG_QUERY_LOG_STDOUT");
+        let _guard = remove_env_var("PGDOG_QUERY_LOG_STDOUT");
         assert!(!General::query_log_stdout());
     }
 
     #[test]
     fn test_env_numeric_fields() {
-        env::set_var("PGDOG_BROADCAST_PORT", "7432");
-        env::set_var("PGDOG_OPENMETRICS_PORT", "9090");
-        env::set_var("PGDOG_PREPARED_STATEMENTS_LIMIT", "1000");
-        env::set_var("PGDOG_QUERY_CACHE_LIMIT", "500");
-        env::set_var("PGDOG_CONNECT_ATTEMPTS", "3");
-        env::set_var("PGDOG_MIRROR_QUEUE", "256");
-        env::set_var("PGDOG_MIRROR_EXPOSURE", "0.5");
-        env::set_var("PGDOG_DNS_TTL", "60000");
-        env::set_var("PGDOG_PUB_SUB_CHANNEL_SIZE", "100");
-        env::set_var("PGDOG_LOG_MIN_DURATION_PARSE", "5");
-        env::set_var("PGDOG_LOG_QUERY_SAMPLE_LENGTH", "200");
+        let _guard = set_env_var("PGDOG_BROADCAST_PORT", "7432");
+        let _guard = set_env_var("PGDOG_OPENMETRICS_PORT", "9090");
+        let _guard = set_env_var("PGDOG_PREPARED_STATEMENTS_LIMIT", "1000");
+        let _guard = set_env_var("PGDOG_QUERY_CACHE_LIMIT", "500");
+        let _guard = set_env_var("PGDOG_CONNECT_ATTEMPTS", "3");
+        let _guard = set_env_var("PGDOG_MIRROR_QUEUE", "256");
+        let _guard = set_env_var("PGDOG_MIRROR_EXPOSURE", "0.5");
+        let _guard = set_env_var("PGDOG_DNS_TTL", "60000");
+        let _guard = set_env_var("PGDOG_PUB_SUB_CHANNEL_SIZE", "100");
+        let _guard = set_env_var("PGDOG_LOG_MIN_DURATION_PARSE", "5");
+        let _guard = set_env_var("PGDOG_LOG_QUERY_SAMPLE_LENGTH", "200");
 
         assert_eq!(General::broadcast_port(), 7432);
         assert_eq!(General::openmetrics_port(), Some(9090));
@@ -1632,17 +1629,17 @@ mod tests {
         assert_eq!(General::default_log_min_duration_parse(), Some(5));
         assert_eq!(General::log_query_sample_length(), 200);
 
-        env::remove_var("PGDOG_BROADCAST_PORT");
-        env::remove_var("PGDOG_OPENMETRICS_PORT");
-        env::remove_var("PGDOG_PREPARED_STATEMENTS_LIMIT");
-        env::remove_var("PGDOG_QUERY_CACHE_LIMIT");
-        env::remove_var("PGDOG_CONNECT_ATTEMPTS");
-        env::remove_var("PGDOG_MIRROR_QUEUE");
-        env::remove_var("PGDOG_MIRROR_EXPOSURE");
-        env::remove_var("PGDOG_DNS_TTL");
-        env::remove_var("PGDOG_PUB_SUB_CHANNEL_SIZE");
-        env::remove_var("PGDOG_LOG_MIN_DURATION_PARSE");
-        env::remove_var("PGDOG_LOG_QUERY_SAMPLE_LENGTH");
+        let _guard = remove_env_var("PGDOG_BROADCAST_PORT");
+        let _guard = remove_env_var("PGDOG_OPENMETRICS_PORT");
+        let _guard = remove_env_var("PGDOG_PREPARED_STATEMENTS_LIMIT");
+        let _guard = remove_env_var("PGDOG_QUERY_CACHE_LIMIT");
+        let _guard = remove_env_var("PGDOG_CONNECT_ATTEMPTS");
+        let _guard = remove_env_var("PGDOG_MIRROR_QUEUE");
+        let _guard = remove_env_var("PGDOG_MIRROR_EXPOSURE");
+        let _guard = remove_env_var("PGDOG_DNS_TTL");
+        let _guard = remove_env_var("PGDOG_PUB_SUB_CHANNEL_SIZE");
+        let _guard = remove_env_var("PGDOG_LOG_MIN_DURATION_PARSE");
+        let _guard = remove_env_var("PGDOG_LOG_QUERY_SAMPLE_LENGTH");
 
         assert_eq!(General::broadcast_port(), General::port() + 1);
         assert_eq!(General::openmetrics_port(), None);
@@ -1659,20 +1656,20 @@ mod tests {
 
     #[test]
     fn test_env_boolean_fields() {
-        env::set_var("PGDOG_DRY_RUN", "true");
-        env::set_var("PGDOG_CROSS_SHARD_DISABLED", "yes");
-        env::set_var("PGDOG_LOG_CONNECTIONS", "false");
-        env::set_var("PGDOG_LOG_DISCONNECTIONS", "0");
+        let _guard = set_env_var("PGDOG_DRY_RUN", "true");
+        let _guard = set_env_var("PGDOG_CROSS_SHARD_DISABLED", "yes");
+        let _guard = set_env_var("PGDOG_LOG_CONNECTIONS", "false");
+        let _guard = set_env_var("PGDOG_LOG_DISCONNECTIONS", "0");
 
         assert!(General::dry_run());
         assert!(General::cross_shard_disabled());
         assert!(!General::log_connections());
         assert!(!General::log_disconnections());
 
-        env::remove_var("PGDOG_DRY_RUN");
-        env::remove_var("PGDOG_CROSS_SHARD_DISABLED");
-        env::remove_var("PGDOG_LOG_CONNECTIONS");
-        env::remove_var("PGDOG_LOG_DISCONNECTIONS");
+        let _guard = remove_env_var("PGDOG_DRY_RUN");
+        let _guard = remove_env_var("PGDOG_CROSS_SHARD_DISABLED");
+        let _guard = remove_env_var("PGDOG_LOG_CONNECTIONS");
+        let _guard = remove_env_var("PGDOG_LOG_DISCONNECTIONS");
 
         assert!(!General::dry_run());
         assert!(!General::cross_shard_disabled());
@@ -1682,17 +1679,17 @@ mod tests {
 
     #[test]
     fn test_env_log_settings() {
-        env::set_var("PGDOG_LOG_FORMAT", "json");
-        env::set_var("RUST_LOG", "pgdog=debug,info");
+        let _guard = set_env_var("PGDOG_LOG_FORMAT", "json");
+        let _guard = set_env_var("RUST_LOG", "pgdog=debug,info");
 
         assert_eq!(General::log_format(), LogFormat::Json);
         assert_eq!(General::log_level(), "pgdog=debug,info");
 
-        env::set_var("PGDOG_LOG_FORMAT", "json_flattened");
+        let _guard = set_env_var("PGDOG_LOG_FORMAT", "json_flattened");
         assert_eq!(General::log_format(), LogFormat::JsonFlattened);
 
-        env::remove_var("PGDOG_LOG_FORMAT");
-        env::remove_var("RUST_LOG");
+        let _guard = remove_env_var("PGDOG_LOG_FORMAT");
+        let _guard = remove_env_var("RUST_LOG");
 
         assert_eq!(General::log_format(), LogFormat::Text);
         assert_eq!(General::log_level(), "info");
@@ -1700,8 +1697,8 @@ mod tests {
 
     #[test]
     fn test_env_other_fields() {
-        env::set_var("PGDOG_BROADCAST_ADDRESS", "192.168.1.100");
-        env::set_var("PGDOG_OPENMETRICS_NAMESPACE", "pgdog_metrics");
+        let _guard = set_env_var("PGDOG_BROADCAST_ADDRESS", "192.168.1.100");
+        let _guard = set_env_var("PGDOG_OPENMETRICS_NAMESPACE", "pgdog_metrics");
 
         assert_eq!(
             General::broadcast_address(),
@@ -1712,8 +1709,8 @@ mod tests {
             Some("pgdog_metrics".to_string())
         );
 
-        env::remove_var("PGDOG_BROADCAST_ADDRESS");
-        env::remove_var("PGDOG_OPENMETRICS_NAMESPACE");
+        let _guard = remove_env_var("PGDOG_BROADCAST_ADDRESS");
+        let _guard = remove_env_var("PGDOG_OPENMETRICS_NAMESPACE");
 
         assert_eq!(General::broadcast_address(), None);
         assert_eq!(General::openmetrics_namespace(), None);
@@ -1721,27 +1718,23 @@ mod tests {
 
     #[test]
     fn test_env_invalid_enum_values() {
-        env::set_var("PGDOG_POOLER_MODE", "invalid_mode");
-        env::set_var("PGDOG_AUTH_TYPE", "not_an_auth");
-        env::set_var("PGDOG_TLS_VERIFY", "bad_verify");
+        let _guard = set_env_var("PGDOG_POOLER_MODE", "invalid_mode");
+        let _guard = set_env_var("PGDOG_AUTH_TYPE", "not_an_auth");
+        let _guard = set_env_var("PGDOG_TLS_VERIFY", "bad_verify");
 
         // Should fall back to defaults for invalid values
         assert_eq!(General::pooler_mode(), PoolerMode::Transaction);
         assert_eq!(General::auth_type(), AuthType::Scram);
         assert_eq!(General::default_tls_verify(), TlsVerifyMode::Prefer);
-
-        env::remove_var("PGDOG_POOLER_MODE");
-        env::remove_var("PGDOG_AUTH_TYPE");
-        env::remove_var("PGDOG_TLS_VERIFY");
     }
 
     #[test]
     fn test_general_default_uses_env_vars() {
         // Set some environment variables
-        env::set_var("PGDOG_WORKERS", "8");
-        env::set_var("PGDOG_POOLER_MODE", "session");
-        env::set_var("PGDOG_AUTH_TYPE", "trust");
-        env::set_var("PGDOG_DRY_RUN", "true");
+        let _guard = set_env_var("PGDOG_WORKERS", "8");
+        let _guard = set_env_var("PGDOG_POOLER_MODE", "session");
+        let _guard = set_env_var("PGDOG_AUTH_TYPE", "trust");
+        let _guard = set_env_var("PGDOG_DRY_RUN", "true");
 
         let general = General::default();
 
@@ -1749,10 +1742,5 @@ mod tests {
         assert_eq!(general.pooler_mode, PoolerMode::Session);
         assert_eq!(general.auth_type, AuthType::Trust);
         assert!(general.dry_run);
-
-        env::remove_var("PGDOG_WORKERS");
-        env::remove_var("PGDOG_POOLER_MODE");
-        env::remove_var("PGDOG_AUTH_TYPE");
-        env::remove_var("PGDOG_DRY_RUN");
     }
 }

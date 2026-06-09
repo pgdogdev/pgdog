@@ -230,7 +230,8 @@ impl UniqueId {
 
 #[cfg(test)]
 mod test {
-    use std::{collections::HashSet, env::set_var};
+    use crate::test_utils::set_env_var;
+    use std::collections::HashSet;
 
     use super::*;
 
@@ -259,9 +260,7 @@ mod test {
 
     #[test]
     fn test_unique_ids() {
-        unsafe {
-            set_var("NODE_ID", "pgdog-1");
-        }
+        let _guard = set_env_var("NODE_ID", "pgdog-1");
         let num_ids = 10_000;
 
         let mut ids = HashSet::new();

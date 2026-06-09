@@ -256,6 +256,7 @@ mod tests {
     use crate::backend::{ShardedTables, ShardingSchema};
     use crate::frontend::router::parser::StatementRewriteContext;
     use crate::frontend::PreparedStatements;
+    use crate::test_utils::set_env_var;
 
     fn make_schema_with_bigint_pk() -> Schema {
         let mut columns = IndexMap::new();
@@ -350,9 +351,7 @@ mod tests {
         db_schema: &Schema,
         mode: RewriteMode,
     ) -> Result<(String, RewritePlan), Error> {
-        unsafe {
-            std::env::set_var("NODE_ID", "pgdog-1");
-        }
+        let _guard = set_env_var("NODE_ID", "pgdog-1");
         let mut ast = pg_query::parse(sql).unwrap().protobuf;
         let mut prepared = PreparedStatements::default();
         let schema = sharding_schema_with_mode(mode);
@@ -563,9 +562,7 @@ mod tests {
         db_schema: &Schema,
         schema: &ShardingSchema,
     ) -> Result<(String, RewritePlan), Error> {
-        unsafe {
-            std::env::set_var("NODE_ID", "pgdog-1");
-        }
+        let _guard = set_env_var("NODE_ID", "pgdog-1");
         let mut ast = pg_query::parse(sql).unwrap().protobuf;
         let mut prepared = PreparedStatements::default();
         let mut rewriter = StatementRewrite::new(StatementRewriteContext {

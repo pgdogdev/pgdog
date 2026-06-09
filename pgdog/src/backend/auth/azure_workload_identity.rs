@@ -38,40 +38,18 @@ pub(crate) async fn token(addr: Address) -> Result<(String, SystemTime), Error> 
 #[cfg(test)]
 mod tests {
     use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-    use std::env;
 
     use super::*;
     use crate::config::ServerAuth;
+    use crate::test_utils::set_env_var;
     use pgdog_config::Role;
-
-    struct EnvVarGuard {
-        key: &'static str,
-        previous: Option<String>,
-    }
-
-    impl EnvVarGuard {
-        fn set(key: &'static str, value: &str) -> Self {
-            let previous = env::var(key).ok();
-            env::set_var(key, value);
-            Self { key, previous }
-        }
-    }
-
-    impl Drop for EnvVarGuard {
-        fn drop(&mut self) {
-            match self.previous.take() {
-                Some(v) => env::set_var(self.key, v),
-                None => env::remove_var(self.key),
-            }
-        }
-    }
 
     #[tokio::test]
     #[ignore = "requires AKS environment with Workload Identity injection"]
     async fn test_token_contains_expected_query_fields() {
-        let _azure_client_id = EnvVarGuard::set("AZURE_CLIENT_ID", "EXAMPLE");
-        let _azure_tenant_id = EnvVarGuard::set("AZURE_TENANT_ID", "EXAMPLE");
-        let _azure_token_file_path = EnvVarGuard::set("AZURE_FEDERATED_TOKEN_FILE", "/tmp/example");
+        let _azure_client_id = set_env_var("AZURE_CLIENT_ID", "EXAMPLE");
+        let _azure_tenant_id = set_env_var("AZURE_TENANT_ID", "EXAMPLE");
+        let _azure_token_file_path = set_env_var("AZURE_FEDERATED_TOKEN_FILE", "/tmp/example");
 
         let addr = Address {
             host: "my-awesome-db.postgres.database.azure.com".into(),

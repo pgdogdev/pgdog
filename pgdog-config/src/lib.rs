@@ -14,6 +14,9 @@ pub mod replication;
 pub mod rewrite;
 pub mod sharding;
 pub mod system_catalogs;
+#[cfg(test)]
+#[path = "../../pgdog/src/test_utils.rs"]
+pub(crate) mod test_utils;
 pub mod url;
 pub mod users;
 pub mod util;
