@@ -25,6 +25,7 @@ use super::Error;
 mod avg;
 mod cmp;
 mod count;
+mod sum;
 
 /// GROUP BY <columns>
 #[derive(Hash, PartialEq, Eq, Debug)]
@@ -100,20 +101,13 @@ impl<'a> Accumulator<'a> {
 
     /// Transform COUNT(*), MIN, MAX, etc., from multiple shards into a single value.
     fn accumulate(&mut self, row: &DataRow, decoder: &Decoder) -> Result<bool, Error> {
-        let column = row.get_column_checked(self.target.column(), decoder)?;
         self.state.accumulate(row, decoder)?;
         match self.target.function() {
             AggregateFunction::Avg
             | AggregateFunction::Count
             | AggregateFunction::Max
-            | AggregateFunction::Min => {}
-            AggregateFunction::Sum => {
-                if !self.datum.is_null() {
-                    checked_add_assign(&mut self.datum, column.value)?;
-                } else {
-                    self.datum = column.value;
-                }
-            }
+            | AggregateFunction::Min
+            | AggregateFunction::Sum => {}
             AggregateFunction::StddevPop
             | AggregateFunction::StddevSamp
             | AggregateFunction::VarPop
@@ -161,6 +155,7 @@ enum State {
     Count(count::Count),
     // FIXME(sage): Temporary variant while refactor is in progress
     Dummy,
+    Sum(sum::Sum),
 }
 
 impl State {
@@ -190,6 +185,11 @@ impl State {
             }),
             (AggregateFunction::Max, _) => Ok(Self::Cmp(cmp::Cmp::max(target.column()))),
             (AggregateFunction::Min, _) => Ok(Self::Cmp(cmp::Cmp::min(target.column()))),
+            (AggregateFunction::Sum, false) => Ok(Self::Sum(sum::Sum::new(target.column()))),
+            (AggregateFunction::Sum, true) => Err(Error::UnsupportedAggregation {
+                function: String::from("sum"),
+                reason: String::from("sum(DISTINCT ...) is not yet supported"),
+            }),
             // FIXME: Unsupported, need to error
             _ => Ok(Self::Dummy),
         }
@@ -214,6 +214,9 @@ impl State {
                 state.accumulate(row.get_column_checked(state.column, decoder)?.value)
             }
             State::Dummy => Ok(()),
+            State::Sum(state) => state
+                .accumulate(row.get_column_checked(state.column, decoder)?.value)
+                .map_err(Into::into),
         }
     }
 
@@ -224,6 +227,7 @@ impl State {
             State::Cmp(state) => Ok(state.finalize()),
             State::Count(state) => Ok(state.finalize()),
             State::Dummy => Ok(Datum::Null),
+            State::Sum(state) => Ok(state.finalize()),
         }
     }
 
