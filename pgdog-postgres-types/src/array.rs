@@ -5,7 +5,7 @@ use crate::{DataType, Datum};
 
 #[derive(Debug, Clone, PartialOrd, Ord, PartialEq, Eq, Hash)]
 pub struct Array {
-    elements: Vec<Option<Datum>>,
+    elements: Vec<Datum>,
     element_oid: i32,
     dim: Dimension,
 }
@@ -76,8 +76,8 @@ impl Array {
                 result.push(',');
             }
             match element {
-                None => result.push_str("NULL"),
-                Some(datum) => {
+                Datum::Null => result.push_str("NULL"),
+                datum => {
                     let encoded = datum.encode(Format::Text)?;
                     let text = std::str::from_utf8(&encoded)?;
                     if needs_quoting(text) {
@@ -106,7 +106,7 @@ impl Array {
         // Non-default bounds need ndims=1 + size=0 to preserve the bounds.
         let has_dim = !self.elements.is_empty() || self.dim.lower_bound != 1;
         let dims = if has_dim { 1i32 } else { 0 };
-        let has_nulls = self.elements.iter().any(|e| e.is_none());
+        let has_nulls = self.elements.iter().any(|e| e.is_null());
         buf.put_i32(dims);
         buf.put_i32(if has_nulls { 1 } else { 0 });
         buf.put_i32(self.element_oid);
@@ -116,8 +116,8 @@ impl Array {
         }
         for element in &self.elements {
             match element {
-                None => buf.put_i32(-1),
-                Some(datum) => {
+                Datum::Null => buf.put_i32(-1),
+                datum => {
                     let encoded = datum.encode(Format::Binary)?;
                     buf.put_i32(encoded.len() as i32);
                     buf.extend_from_slice(&encoded);
@@ -230,7 +230,7 @@ fn decode_text(input: &str, element_oid: i32) -> Result<Array, Error> {
                     }
                 }
                 let datum = Datum::new(elem.as_bytes(), element_type, Format::Text, false)?;
-                elements.push(Some(datum));
+                elements.push(datum);
             }
             Some(_) => {
                 let mut elem = String::new();
@@ -260,18 +260,18 @@ fn decode_text(input: &str, element_oid: i32) -> Result<Array, Error> {
                         return Err(Error::UnexpectedPayload);
                     }
                     let datum = Datum::new(elem.as_bytes(), element_type, Format::Text, false)?;
-                    elements.push(Some(datum));
+                    elements.push(datum);
                 } else {
                     let trimmed = elem.trim_end_matches(|c: char| c.is_ascii_whitespace());
                     if trimmed.is_empty() {
                         return Err(Error::UnexpectedPayload);
                     }
                     if trimmed.eq_ignore_ascii_case("NULL") {
-                        elements.push(None);
+                        elements.push(Datum::Null);
                     } else {
                         let datum =
                             Datum::new(trimmed.as_bytes(), element_type, Format::Text, false)?;
-                        elements.push(Some(datum));
+                        elements.push(datum);
                     }
                 }
             }
@@ -365,7 +365,7 @@ fn decode_binary(bytes: &[u8], expected_element_oid: i32) -> Result<Array, Error
         }
         let len = bytes.get_i32();
         if len == -1 {
-            elements.push(None);
+            elements.push(Datum::Null);
         } else if len < 0 {
             return Err(Error::UnexpectedPayload);
         } else {
@@ -374,7 +374,7 @@ fn decode_binary(bytes: &[u8], expected_element_oid: i32) -> Result<Array, Error
             }
             let element_bytes = bytes.split_to(len as usize);
             let datum = Datum::new(&element_bytes, element_type, Format::Binary, false)?;
-            elements.push(Some(datum));
+            elements.push(datum);
         }
     }
 
@@ -483,8 +483,8 @@ mod tests {
                 .enumerate()
             {
                 match (got, want) {
-                    (None, None) => {}
-                    (Some(datum), Some(expected)) => {
+                    (Datum::Null, None) => {}
+                    (datum, Some(expected)) => {
                         let encoded = datum.encode(Format::Text).expect(name);
                         assert_eq!(
                             std::str::from_utf8(&encoded).unwrap(),
