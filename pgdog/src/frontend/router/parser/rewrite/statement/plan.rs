@@ -164,13 +164,12 @@ impl RewritePlan {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_utils::set_env_var;
     use std::collections::HashSet;
 
     #[test]
     fn test_apply_bind_no_unique_ids() {
-        unsafe {
-            std::env::set_var("NODE_ID", "pgdog-1");
-        }
+        let _guard = set_env_var("NODE_ID", "pgdog-1");
         let plan = RewritePlan::default();
         let mut bind = Bind::default();
         plan.apply_bind(&mut bind).unwrap();
@@ -179,9 +178,7 @@ mod tests {
 
     #[test]
     fn test_apply_bind_text_format() {
-        unsafe {
-            std::env::set_var("NODE_ID", "pgdog-1");
-        }
+        let _guard = set_env_var("NODE_ID", "pgdog-1");
         let plan = RewritePlan {
             unique_ids: 1,
             ..Default::default()
@@ -201,9 +198,7 @@ mod tests {
 
     #[test]
     fn test_apply_bind_binary_format_uniform() {
-        unsafe {
-            std::env::set_var("NODE_ID", "pgdog-1");
-        }
+        let _guard = set_env_var("NODE_ID", "pgdog-1");
         let plan = RewritePlan {
             params: 1,
             unique_ids: 1,
@@ -228,9 +223,7 @@ mod tests {
 
     #[test]
     fn test_apply_bind_binary_format_one_to_one() {
-        unsafe {
-            std::env::set_var("NODE_ID", "pgdog-1");
-        }
+        let _guard = set_env_var("NODE_ID", "pgdog-1");
         let plan = RewritePlan {
             params: 2,
             unique_ids: 1,
@@ -257,9 +250,7 @@ mod tests {
 
     #[test]
     fn test_apply_bind_multiple_unique_ids() {
-        unsafe {
-            std::env::set_var("NODE_ID", "pgdog-1");
-        }
+        let _guard = set_env_var("NODE_ID", "pgdog-1");
         let plan = RewritePlan {
             unique_ids: 3,
             ..Default::default()
@@ -279,9 +270,7 @@ mod tests {
 
     #[test]
     fn test_apply_bind_appends_to_existing_params() {
-        unsafe {
-            std::env::set_var("NODE_ID", "pgdog-1");
-        }
+        let _guard = set_env_var("NODE_ID", "pgdog-1");
         let plan = RewritePlan {
             params: 2,
             unique_ids: 2,

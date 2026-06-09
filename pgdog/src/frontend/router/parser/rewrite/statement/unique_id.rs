@@ -120,6 +120,7 @@ mod tests {
     use crate::backend::ShardingSchema;
     use crate::frontend::router::parser::StatementRewriteContext;
     use crate::frontend::PreparedStatements;
+    use crate::test_utils::set_env_var;
 
     fn default_schema() -> ShardingSchema {
         ShardingSchema {
@@ -261,9 +262,7 @@ mod tests {
 
     #[test]
     fn test_rewrite_select_simple() {
-        unsafe {
-            std::env::set_var("NODE_ID", "pgdog-1");
-        }
+        let _guard = set_env_var("NODE_ID", "pgdog-1");
         let mut ast = pg_query::parse("SELECT pgdog.unique_id()")
             .unwrap()
             .protobuf;
@@ -298,9 +297,7 @@ mod tests {
 
     #[test]
     fn test_rewrite_select_simple_multiple_unique_ids() {
-        unsafe {
-            std::env::set_var("NODE_ID", "pgdog-1");
-        }
+        let _guard = set_env_var("NODE_ID", "pgdog-1");
         let mut ast = pg_query::parse("SELECT pgdog.unique_id(), pgdog.unique_id()")
             .unwrap()
             .protobuf;

@@ -104,6 +104,7 @@ impl Otel {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::test_utils::set_env_var;
 
     #[test]
     fn headers_from_toml() {
@@ -163,16 +164,9 @@ mod test {
 
     #[test]
     fn namespace_from_env() {
-        unsafe {
-            env::remove_var("PGDOG_OTEL_NAMESPACE");
-            env::set_var("PGDOG_OTEL_NAMESPACE", "pgdog_");
-        }
+        let _guard = set_env_var("PGDOG_OTEL_NAMESPACE", "pgdog_");
 
         let otel: Otel = toml::from_str("").expect("parse");
         assert_eq!(otel.namespace.as_deref(), Some("pgdog_"));
-
-        unsafe {
-            env::remove_var("PGDOG_OTEL_NAMESPACE");
-        }
     }
 }

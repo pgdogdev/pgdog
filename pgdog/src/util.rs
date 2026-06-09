@@ -273,9 +273,8 @@ pub fn raise_nofile_limit() -> u64 {
 #[cfg(test)]
 mod test {
 
-    use std::env::{remove_var, set_var};
-
     use super::*;
+    use crate::test_utils::*;
 
     #[test]
     fn test_human_duration() {
@@ -311,9 +310,7 @@ mod test {
 
     #[test]
     fn test_instance_id_format() {
-        unsafe {
-            remove_var("NODE_ID");
-        }
+        let _guard = remove_env_var("NODE_ID");
         let id = instance_id();
         assert_eq!(id.len(), 8);
         // All characters should be valid hex digits (0-9, a-f)
@@ -334,9 +331,7 @@ mod test {
 
     #[test]
     fn test_node_id_error() {
-        unsafe {
-            remove_var("NODE_ID");
-        }
+        let _guard = remove_env_var("NODE_ID");
         assert!(node_id().is_err());
     }
 
@@ -417,12 +412,9 @@ mod test {
         );
     }
 
-    // These should run in separate processes (if using nextest).
     #[test]
     fn test_node_id_set() {
-        unsafe {
-            set_var("NODE_ID", "pgdog-1");
-        }
+        let _guard = set_env_var("NODE_ID", "pgdog-1");
         assert_eq!(node_id(), Ok(1));
     }
 
