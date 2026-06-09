@@ -3,24 +3,26 @@ use crate::net::messages::Datum;
 use rust_decimal::prelude::*;
 
 #[derive(Debug)]
-pub(crate) struct Avg {
-    pub(crate) count_helper: usize,
+pub(super) struct Avg {
+    pub(super) column: usize,
+    pub(super) count_helper: usize,
     values_and_weights: Vec<(Datum, i64)>,
 }
 
 impl Avg {
-    pub(crate) fn new(_column: usize, count_helper: usize) -> Self {
+    pub(super) fn new(column: usize, count_helper: usize) -> Self {
         Self {
+            column,
             count_helper,
             values_and_weights: Vec::new(),
         }
     }
 
-    pub(crate) fn accumulate(&mut self, value: Datum, count: i64) {
+    pub(super) fn accumulate(&mut self, value: Datum, count: i64) {
         self.values_and_weights.push((value, count));
     }
 
-    pub(crate) fn finalize(self) -> Result<Datum, Error> {
+    pub(super) fn finalize(self) -> Result<Datum, Error> {
         let total_count: i64 = self.values_and_weights.iter().map(|i| i.1).sum();
         let total_count = Decimal::from(total_count);
 
