@@ -7,12 +7,12 @@ use std::{
 
 use crate::{
     frontend::router::parser::{
-        rewrite::statement::aggregate::AggregateRewritePlan, Aggregate, DistinctBy, DistinctColumn,
-        Limit, OrderBy,
+        Aggregate, DistinctBy, DistinctColumn, Limit, OrderBy,
+        rewrite::statement::aggregate::AggregateRewritePlan,
     },
     net::{
-        messages::{DataRow, FromBytes, Message, Protocol, ToBytes, Vector},
         Decoder,
+        messages::{DataRow, FromBytes, Message, Protocol, ToBytes, Vector},
     },
 };
 
@@ -154,11 +154,7 @@ impl Buffer {
             let aggregates = Aggregates::new(&buffer, decoder, aggregate, plan);
             let result = aggregates.aggregate()?;
 
-            if result.is_empty() {
-                buffer
-            } else {
-                result
-            }
+            if result.is_empty() { buffer } else { result }
         };
 
         Self::drop_helper_columns(&mut rows, plan);
@@ -186,7 +182,7 @@ impl Buffer {
                     self.buffer.retain(|row| self.distinct.insert(row.clone()));
                 }
 
-                DistinctBy::Columns(ref columns) => {
+                DistinctBy::Columns(columns) => {
                     self.buffer.retain(|row| {
                         let mut dr = DataRow::new();
                         for col in columns {

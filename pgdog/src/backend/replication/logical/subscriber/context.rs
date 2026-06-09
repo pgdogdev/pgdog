@@ -4,11 +4,11 @@ use super::super::Error;
 use crate::{
     backend::Cluster,
     frontend::{
+        BufferedQuery, ClientRequest, Command, PreparedStatements, Router, RouterContext,
         client::Sticky,
         router::parser::{AstContext, Cache, Shard},
-        BufferedQuery, ClientRequest, Command, PreparedStatements, Router, RouterContext,
     },
-    net::{replication::TupleData, Bind, Parameters, Parse},
+    net::{Bind, Parameters, Parse, replication::TupleData},
 };
 
 /// Holds the pre-computed `Bind` message and destination `Shard` for a single replication event.
@@ -84,7 +84,7 @@ mod test {
         },
         config::config,
         net::replication::logical::tuple_data::{
-            text_col, toasted_col, Column, Identifier, TupleData,
+            Column, Identifier, TupleData, text_col, toasted_col,
         },
     };
     use pgdog_config::QueryParserEngine;

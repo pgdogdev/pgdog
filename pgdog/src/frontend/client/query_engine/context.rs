@@ -1,9 +1,9 @@
 use crate::{
     backend::pool::{connection::mirror::Mirror, stats::MemoryStats},
     frontend::{
-        client::{timeouts::Timeouts, Sticky, TransactionType},
-        router::parser::rewrite::statement::plan::RewriteResult,
         Client, ClientRequest, PreparedStatements,
+        client::{Sticky, TransactionType, timeouts::Timeouts},
+        router::parser::rewrite::statement::plan::RewriteResult,
     },
     net::{FrontendPid, Parameters, Stream},
 };

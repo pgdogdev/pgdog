@@ -1,18 +1,18 @@
 //! Pool tests.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, SystemTime};
 
 use pgdog_config::ServerAuth;
 use rand::Rng;
 use tokio::spawn;
 use tokio::task::yield_now;
-use tokio::time::{sleep, timeout, Instant};
+use tokio::time::{Instant, sleep, timeout};
 use tokio_util::task::TaskTracker;
 
-use crate::backend::pool::token_cache::TokenCache;
 use crate::backend::ConnectReason;
+use crate::backend::pool::token_cache::TokenCache;
 use crate::net::ProtocolMessage;
 use crate::net::{Parse, Protocol, Query, Sync};
 use crate::state::State;

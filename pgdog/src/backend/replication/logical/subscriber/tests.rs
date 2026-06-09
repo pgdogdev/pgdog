@@ -5,16 +5,18 @@ use rand::Rng;
 
 use crate::{
     backend::{
+        Server,
         pool::cluster::Cluster,
         replication::logical::publisher::{
             Lsn, PublicationTable, PublicationTableColumn, ReplicaIdentity, Table,
         },
         server::test::{test_server, test_server_pgdog1_db},
-        Server,
     },
     config::config,
     net::{
+        CopyData, ToBytes,
         replication::{
+            XLogData,
             logical::{
                 begin::Begin,
                 commit::Commit,
@@ -24,9 +26,7 @@ use crate::{
                 tuple_data::{Column as TupleColumn, Identifier, TupleData},
                 update::{Update as XLogUpdate, UpdateIdentity},
             },
-            XLogData,
         },
-        CopyData, ToBytes,
     },
 };
 

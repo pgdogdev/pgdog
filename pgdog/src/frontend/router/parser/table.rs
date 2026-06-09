@@ -1,8 +1,8 @@
 use std::fmt::Display;
 
 use pg_query::{
-    protobuf::{List, RangeVar},
     Node, NodeEnum,
+    protobuf::{List, RangeVar},
 };
 
 use super::{Error, Schema};

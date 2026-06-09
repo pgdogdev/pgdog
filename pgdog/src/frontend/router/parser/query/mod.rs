@@ -2,7 +2,7 @@
 use std::{collections::HashSet, ops::Deref};
 
 use crate::{
-    backend::{databases::databases, ShardingSchema},
+    backend::{ShardingSchema, databases::databases},
     config::Role,
     frontend::router::{
         context::RouterContext,
@@ -35,8 +35,8 @@ mod update;
 
 use multi_tenant::MultiTenantCheck;
 use pgdog_plugin::pg_query::{
-    protobuf::{a_const::Val, *},
     NodeEnum,
+    protobuf::{a_const::Val, *},
 };
 use plugins::PluginOutput;
 
@@ -343,7 +343,7 @@ impl QueryParser {
             Some(NodeEnum::DiscardStmt { .. }) => {
                 return Ok(Command::Discard {
                     extended: !context.query()?.simple(),
-                })
+                });
             }
 
             _ => self.ddl(&root.node, context),

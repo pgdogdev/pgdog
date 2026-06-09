@@ -20,10 +20,9 @@ fn test_subquery_in_where() {
 fn test_subquery_in_from() {
     let mut test = QueryParserTest::new();
 
-    let command = test.execute(vec![Query::new(
-        "SELECT * FROM (SELECT id, email FROM sharded WHERE id = 1) AS sub",
-    )
-    .into()]);
+    let command = test.execute(vec![
+        Query::new("SELECT * FROM (SELECT id, email FROM sharded WHERE id = 1) AS sub").into(),
+    ]);
 
     assert!(command.route().is_read());
 }
@@ -32,7 +31,8 @@ fn test_subquery_in_from() {
 fn test_correlated_subquery() {
     let mut test = QueryParserTest::new();
 
-    let command = test.execute(vec![Query::new(
+    let command =
+        test.execute(vec![Query::new(
         "SELECT * FROM sharded s1 WHERE EXISTS (SELECT 1 FROM sharded s2 WHERE s2.id = s1.id)",
     )
     .into()]);
@@ -45,10 +45,12 @@ fn test_correlated_subquery() {
 fn test_scalar_subquery() {
     let mut test = QueryParserTest::new();
 
-    let command = test.execute(vec![Query::new(
-        "SELECT *, (SELECT COUNT(*) FROM other_table) AS total FROM sharded WHERE id = 1",
-    )
-    .into()]);
+    let command = test.execute(vec![
+        Query::new(
+            "SELECT *, (SELECT COUNT(*) FROM other_table) AS total FROM sharded WHERE id = 1",
+        )
+        .into(),
+    ]);
 
     assert!(command.route().is_read());
 }
@@ -101,7 +103,8 @@ fn test_cte_with_insert() {
 fn test_cte_with_delete() {
     let mut test = QueryParserTest::new();
 
-    let command = test.execute(vec![Query::new(
+    let command =
+        test.execute(vec![Query::new(
         "WITH deleted AS (DELETE FROM sharded WHERE id = 1 RETURNING *) SELECT * FROM deleted",
     )
     .into()]);

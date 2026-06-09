@@ -1,5 +1,5 @@
 mod insert {
-    use rand::{rng, Rng};
+    use rand::{Rng, rng};
     use tokio::{io::AsyncWriteExt, spawn};
 
     use crate::{

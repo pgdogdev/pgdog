@@ -8,8 +8,8 @@ use std::sync::Arc;
 use tokio::{
     spawn,
     sync::{
-        mpsc::{unbounded_channel, UnboundedSender},
         Semaphore,
+        mpsc::{UnboundedSender, unbounded_channel},
     },
     task::JoinHandle,
     time::sleep,
@@ -19,9 +19,9 @@ use tracing::{info, warn};
 use super::super::Error;
 use super::AbortSignal;
 use crate::backend::{
+    Cluster, Pool,
     pool::{Address, Request},
     replication::{publisher::Table, status::TableCopy},
-    Cluster, Pool,
 };
 use crate::net::messages::Protocol;
 use crate::util::escape_identifier;

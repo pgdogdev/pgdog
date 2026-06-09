@@ -31,7 +31,7 @@ use tracing::subscriber::Interest;
 use tracing::{Event, Metadata, Subscriber};
 use tracing_subscriber::layer::{Context, Filter};
 use tracing_subscriber::registry::LookupSpan;
-use tracing_subscriber::{fmt, prelude::*, EnvFilter};
+use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 use tracing_throttle::{Policy, SuppressionSummary, TracingRateLimitLayer};
 
 #[cfg(test)]

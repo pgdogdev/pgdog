@@ -8,9 +8,9 @@ use tracing::{error, info, warn};
 use crate::sharding::ShardedSchema;
 use crate::util::random_string;
 use crate::{
-    system_catalogs, EnumeratedDatabase, Memory, OmnishardedTable, PassthroughAuth,
-    PreparedStatements, QueryParserEngine, QueryParserLevel, ReadWriteSplit, RewriteMode, Role,
-    SystemCatalogsBehavior,
+    EnumeratedDatabase, Memory, OmnishardedTable, PassthroughAuth, PreparedStatements,
+    QueryParserEngine, QueryParserLevel, ReadWriteSplit, RewriteMode, Role, SystemCatalogsBehavior,
+    system_catalogs,
 };
 
 use super::database::Database;
@@ -821,9 +821,11 @@ exposure = 0.75
         assert_eq!(mirror_config2.exposure, 0.75);
 
         // Non-existent mirror config should return None
-        assert!(config
-            .get_mirroring_config("source_db", "non_existent")
-            .is_none());
+        assert!(
+            config
+                .get_mirroring_config("source_db", "non_existent")
+                .is_none()
+        );
     }
 
     #[test]

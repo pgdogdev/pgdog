@@ -2,9 +2,9 @@
 
 use bytes::{Buf, BufMut};
 
-use crate::net::{c_string_buf, Error};
+use crate::net::{Error, c_string_buf};
 
-use super::{code, protocol_version::ProtocolVersion, FromBytes, Payload, Protocol, ToBytes};
+use super::{FromBytes, Payload, Protocol, ToBytes, code, protocol_version::ProtocolVersion};
 
 /// NegotiateProtocolVersion (B)
 #[derive(Clone, Debug, PartialEq, Eq)]

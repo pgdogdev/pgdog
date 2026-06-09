@@ -1,6 +1,6 @@
 use std::fmt::Display;
 
-use super::{error::Error, Column, OwnedTable, Table};
+use super::{Column, OwnedTable, Table, error::Error};
 use crate::util::escape_identifier;
 
 /// Sequence name in a query.
@@ -82,7 +82,7 @@ impl<'a> From<Table<'a>> for Sequence<'a> {
 
 #[cfg(test)]
 mod test {
-    use pg_query::{parse, NodeEnum};
+    use pg_query::{NodeEnum, parse};
 
     use super::{Column, Sequence, Table};
 

@@ -7,8 +7,8 @@ use tokio::select;
 use tracing::error;
 
 use crate::backend::pool::Address;
-use crate::backend::replication::publisher::progress::Progress;
 use crate::backend::replication::publisher::Lsn;
+use crate::backend::replication::publisher::progress::Progress;
 
 use crate::backend::replication::status::TableCopy;
 use crate::backend::{Cluster, Server, ShardedTables};
@@ -18,7 +18,7 @@ use crate::net::replication::StatusUpdate;
 use crate::util::escape_identifier;
 
 use super::super::{
-    subscriber::CopySubscriber, Error, TableValidationError, TableValidationErrorKind,
+    Error, TableValidationError, TableValidationErrorKind, subscriber::CopySubscriber,
 };
 use super::non_identity_columns_presence::NonIdentityColumnsPresence;
 use super::{
@@ -519,14 +519,14 @@ impl Table {
 mod test {
     use crate::backend::replication::logical::publisher::test::setup_publication;
     use crate::backend::{
+        Server,
         replication::logical::publisher::queries::{PublicationTableColumn, ReplicaIdentity},
         server::test::test_server,
-        Server,
     };
 
     use crate::config::config;
     use crate::net::messages::replication::logical::tuple_data::{
-        text_col, toasted_col, TupleData,
+        TupleData, text_col, toasted_col,
     };
 
     use super::*;
@@ -990,7 +990,9 @@ mod test {
         let table = make_table(vec![("a", false), ("b", false), ("c", false)]);
         let sql = table.delete_full_identity();
         let (q, s, t) = ('"', "public", "test_table");
-        let pred = format!("{q}a{q} IS NOT DISTINCT FROM $1 AND {q}b{q} IS NOT DISTINCT FROM $2 AND {q}c{q} IS NOT DISTINCT FROM $3");
+        let pred = format!(
+            "{q}a{q} IS NOT DISTINCT FROM $1 AND {q}b{q} IS NOT DISTINCT FROM $2 AND {q}c{q} IS NOT DISTINCT FROM $3"
+        );
         let subq = format!("(SELECT tableoid, ctid FROM {q}{s}{q}.{q}{t}{q} WHERE {pred} LIMIT 1)");
         assert_eq!(
             sql,
@@ -1023,7 +1025,9 @@ mod test {
         let table = make_table(vec![("a", false), ("b", false), ("c", false)]);
         let sql = table.update_full_identity();
         let (q, s, t) = ('"', "public", "test_table");
-        let pred = format!("{q}a{q} IS NOT DISTINCT FROM $1 AND {q}b{q} IS NOT DISTINCT FROM $2 AND {q}c{q} IS NOT DISTINCT FROM $3");
+        let pred = format!(
+            "{q}a{q} IS NOT DISTINCT FROM $1 AND {q}b{q} IS NOT DISTINCT FROM $2 AND {q}c{q} IS NOT DISTINCT FROM $3"
+        );
         let subq = format!("(SELECT tableoid, ctid FROM {q}{s}{q}.{q}{t}{q} WHERE {pred} LIMIT 1)");
         let set = format!("{q}a{q} = $4, {q}b{q} = $5, {q}c{q} = $6 ");
         assert_eq!(
@@ -1046,7 +1050,9 @@ mod test {
         let present = NonIdentityColumnsPresence::from_tuple(&tuple, &table).unwrap();
         let sql = table.update_full_identity_partial_set(&present);
         let (q, s, t) = ('"', "public", "test_table");
-        let pred = format!("{q}a{q} IS NOT DISTINCT FROM $1 AND {q}b{q} IS NOT DISTINCT FROM $2 AND {q}c{q} IS NOT DISTINCT FROM $3");
+        let pred = format!(
+            "{q}a{q} IS NOT DISTINCT FROM $1 AND {q}b{q} IS NOT DISTINCT FROM $2 AND {q}c{q} IS NOT DISTINCT FROM $3"
+        );
         let subq = format!("(SELECT tableoid, ctid FROM {q}{s}{q}.{q}{t}{q} WHERE {pred} LIMIT 1)");
         let set = format!("{q}a{q} = $4, {q}c{q} = $5 ");
         assert_eq!(
@@ -1069,7 +1075,9 @@ mod test {
         let present = NonIdentityColumnsPresence::from_tuple(&tuple, &table).unwrap();
         let sql = table.update_full_identity_partial_set(&present);
         let (q, s, t) = ('"', "public", "test_table");
-        let pred = format!("{q}a{q} IS NOT DISTINCT FROM $1 AND {q}b{q} IS NOT DISTINCT FROM $2 AND {q}c{q} IS NOT DISTINCT FROM $3");
+        let pred = format!(
+            "{q}a{q} IS NOT DISTINCT FROM $1 AND {q}b{q} IS NOT DISTINCT FROM $2 AND {q}c{q} IS NOT DISTINCT FROM $3"
+        );
         let subq = format!("(SELECT tableoid, ctid FROM {q}{s}{q}.{q}{t}{q} WHERE {pred} LIMIT 1)");
         let set = format!("{q}b{q} = $4, {q}c{q} = $5 ");
         assert_eq!(
@@ -1092,7 +1100,9 @@ mod test {
         let present = NonIdentityColumnsPresence::from_tuple(&tuple, &table).unwrap();
         let sql = table.update_full_identity_partial_set(&present);
         let (q, s, t) = ('"', "public", "test_table");
-        let pred = format!("{q}a{q} IS NOT DISTINCT FROM $1 AND {q}b{q} IS NOT DISTINCT FROM $2 AND {q}c{q} IS NOT DISTINCT FROM $3");
+        let pred = format!(
+            "{q}a{q} IS NOT DISTINCT FROM $1 AND {q}b{q} IS NOT DISTINCT FROM $2 AND {q}c{q} IS NOT DISTINCT FROM $3"
+        );
         let subq = format!("(SELECT tableoid, ctid FROM {q}{s}{q}.{q}{t}{q} WHERE {pred} LIMIT 1)");
         let set = format!("{q}c{q} = $4 ");
         assert_eq!(

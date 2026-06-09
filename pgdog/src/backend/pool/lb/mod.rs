@@ -2,8 +2,8 @@
 
 use std::{
     sync::{
-        atomic::{AtomicI64, AtomicU8, AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicI64, AtomicU8, AtomicUsize, Ordering},
     },
     time::{Duration, SystemTime},
 };

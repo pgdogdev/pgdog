@@ -1,6 +1,6 @@
 use crate::{
     expect_message,
-    net::{parameter::ParameterValue, CommandComplete, ReadyForQuery},
+    net::{CommandComplete, ReadyForQuery, parameter::ParameterValue},
 };
 
 use super::prelude::*;
@@ -219,16 +219,20 @@ async fn test_reset_all() {
     expect_message!(test_client.read().await, CommandComplete);
     expect_message!(test_client.read().await, ReadyForQuery);
 
-    assert!(test_client
-        .client()
-        .params
-        .get("application_name")
-        .is_some());
-    assert!(test_client
-        .client()
-        .params
-        .get("statement_timeout")
-        .is_some());
+    assert!(
+        test_client
+            .client()
+            .params
+            .get("application_name")
+            .is_some()
+    );
+    assert!(
+        test_client
+            .client()
+            .params
+            .get("statement_timeout")
+            .is_some()
+    );
     assert!(test_client.client().params.get("lock_timeout").is_some());
 
     // Reset all

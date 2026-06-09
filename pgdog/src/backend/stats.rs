@@ -10,11 +10,11 @@ pub use pgdog_stats::server::Counts;
 use tokio::time::Instant;
 
 use crate::{
-    backend::{pool::stats::MemoryStats, Pool, ServerOptions},
+    backend::{Pool, ServerOptions, pool::stats::MemoryStats},
     config::Memory,
     net::{
-        messages::{BackendPid, FrontendPid},
         Parameters,
+        messages::{BackendPid, FrontendPid},
     },
     state::State,
 };

@@ -13,10 +13,10 @@ use std::{
     time::Duration,
 };
 
+use pgdog_stats::MessageBufferStats;
 use pgdog_stats::memory::MemoryStats as StatsMemoryStats;
 use pgdog_stats::pool::Counts as StatsCounts;
 use pgdog_stats::pool::Stats as StatsStats;
-use pgdog_stats::MessageBufferStats;
 
 /// Pool statistics.
 ///

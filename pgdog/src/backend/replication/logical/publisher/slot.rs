@@ -1,12 +1,12 @@
-use super::super::status::ReplicationSlot as ReplicationSlotTracker;
 use super::super::Error;
+use super::super::status::ReplicationSlot as ReplicationSlotTracker;
 use crate::config::config;
 use crate::{
-    backend::{self, pool::Address, ConnectReason, Server, ServerOptions},
+    backend::{self, ConnectReason, Server, ServerOptions, pool::Address},
     frontend::client::query_engine::two_pc::TwoPcTransactions,
     net::{
-        replication::{StatusUpdate, XLogData},
         CopyData, CopyDone, DataRow, ErrorResponse, Format, FromBytes, Protocol, Query, ToBytes,
+        replication::{StatusUpdate, XLogData},
     },
     util::random_string,
 };

@@ -1,8 +1,8 @@
 //! Column name reference.
 
 use pg_query::{
-    protobuf::{self, String as PgQueryString},
     Node, NodeEnum,
+    protobuf::{self, String as PgQueryString},
 };
 use std::fmt::{Display, Formatter, Result as FmtResult};
 
@@ -237,7 +237,7 @@ impl<'a> From<&'a str> for Column<'a> {
 
 #[cfg(test)]
 mod test {
-    use pg_query::{parse, NodeEnum};
+    use pg_query::{NodeEnum, parse};
 
     use super::{Column, Error};
 

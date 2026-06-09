@@ -1,18 +1,18 @@
-use rand::{rng, Rng};
+use rand::{Rng, rng};
 
 use crate::{
     expect_message,
     frontend::{
+        ClientRequest,
         client::{
-            query_engine::{multi_step::UpdateMulti, QueryEngineContext},
+            query_engine::{QueryEngineContext, multi_step::UpdateMulti},
             test::TestClient,
         },
-        ClientRequest,
     },
     net::{
-        bind::Parameter, Bind, CommandComplete, DataRow, Describe, ErrorResponse, Execute, Flush,
-        Format, Parameters, Parse, Protocol, Query, ReadyForQuery, RowDescription, Sync,
-        TransactionState,
+        Bind, CommandComplete, DataRow, Describe, ErrorResponse, Execute, Flush, Format,
+        Parameters, Parse, Protocol, Query, ReadyForQuery, RowDescription, Sync, TransactionState,
+        bind::Parameter,
     },
 };
 
@@ -133,11 +133,13 @@ async fn test_row_same_shard_no_transaction() {
         .await;
     client.read_until('Z').await.unwrap();
 
-    client.client.client_request = ClientRequest::from(vec![Query::new(format!(
-        "UPDATE sharded SET id = {} WHERE value = 'test value' AND id = {}",
-        shard_0_1, shard_0
-    ))
-    .into()]);
+    client.client.client_request = ClientRequest::from(vec![
+        Query::new(format!(
+            "UPDATE sharded SET id = {} WHERE value = 'test value' AND id = {}",
+            shard_0_1, shard_0
+        ))
+        .into(),
+    ]);
 
     let mut context = QueryEngineContext::new(&mut client.client);
 

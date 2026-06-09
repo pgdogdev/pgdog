@@ -3,7 +3,7 @@
 use std::ops::Deref;
 
 use crate::{
-    bindings::PdRouterContext, parameters::Parameters, PdParameters, PdRoute, PdStatement,
+    PdParameters, PdRoute, PdStatement, bindings::PdRouterContext, parameters::Parameters,
 };
 
 /// PostgreSQL statement, parsed by [`pg_query`].

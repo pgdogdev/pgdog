@@ -3,7 +3,7 @@
 use chrono::{DateTime, Local, Utc};
 use once_cell::sync::Lazy;
 use pgdog_plugin::comp;
-use rand::{distr::Alphanumeric, Rng};
+use rand::{Rng, distr::Alphanumeric};
 use std::{env, num::ParseIntError, ops::Deref, time::Duration};
 
 use crate::net::Parameters; // 0.8
@@ -144,11 +144,7 @@ pub fn node_id() -> Result<u64, ParseIntError> {
 static HOSTNAME: Lazy<String> = Lazy::new(|| {
     let hostname = env::var("HOSTNAME").unwrap_or_default();
     let host = env::var("HOST").unwrap_or_default();
-    if hostname.is_empty() {
-        host
-    } else {
-        hostname
-    }
+    if hostname.is_empty() { host } else { hostname }
 });
 
 pub fn hostname() -> &'static str {
@@ -232,7 +228,7 @@ pub fn user_database_from_params(params: &Parameters) -> (&str, &str) {
 /// Raise the NOFILE soft limit to the hard limit and return the new value.
 #[cfg(unix)]
 pub fn raise_nofile_limit() -> u64 {
-    use libc::{getrlimit, rlimit, setrlimit, RLIMIT_NOFILE};
+    use libc::{RLIMIT_NOFILE, getrlimit, rlimit, setrlimit};
     use tracing::warn;
 
     let mut rlim = rlimit {
@@ -316,10 +312,11 @@ mod test {
         // All characters should be valid hex digits (0-9, a-f)
         assert!(id.chars().all(|c| c.is_ascii_hexdigit()));
         // All alphabetic characters should be lowercase
-        assert!(id
-            .chars()
-            .filter(|c| c.is_alphabetic())
-            .all(|c| c.is_lowercase()));
+        assert!(
+            id.chars()
+                .filter(|c| c.is_alphabetic())
+                .all(|c| c.is_lowercase())
+        );
     }
 
     #[test]

@@ -1,4 +1,4 @@
-use crate::net::{row_description::Field, DataRow, RowDescription, ToDataRowColumn};
+use crate::net::{DataRow, RowDescription, ToDataRowColumn, row_description::Field};
 use std::collections::HashSet;
 
 #[derive(Clone, Debug)]

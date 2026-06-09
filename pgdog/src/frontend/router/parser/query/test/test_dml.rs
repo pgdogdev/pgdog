@@ -43,10 +43,9 @@ fn test_select_for_update() {
     let mut test = QueryParserTest::new();
 
     // Without parameters - goes to all shards
-    let command = test.execute(vec![Query::new(
-        "SELECT * FROM sharded WHERE id = $1 FOR UPDATE",
-    )
-    .into()]);
+    let command = test.execute(vec![
+        Query::new("SELECT * FROM sharded WHERE id = $1 FOR UPDATE").into(),
+    ]);
     assert!(command.route().is_write());
     assert!(matches!(command.route().shard(), Shard::All));
 

@@ -1,7 +1,7 @@
 use super::Error;
 use pg_query::{
-    protobuf::{self, a_const::Val, AConst, ColumnRef, Integer, SelectStmt},
     Node, NodeEnum,
+    protobuf::{self, AConst, ColumnRef, Integer, SelectStmt, a_const::Val},
 };
 
 #[derive(Debug, PartialEq, Clone)]

@@ -1,10 +1,10 @@
-use pg_query::protobuf::{a_const::Val, AConst, Integer, ParamRef, ParseResult};
 use pg_query::NodeEnum;
+use pg_query::protobuf::{AConst, Integer, ParamRef, ParseResult, a_const::Val};
 
-use crate::frontend::router::parser::Limit;
 use crate::frontend::ClientRequest;
-use crate::net::messages::bind::{Format, Parameter};
+use crate::frontend::router::parser::Limit;
 use crate::net::ProtocolMessage;
+use crate::net::messages::bind::{Format, Parameter};
 
 use super::*;
 
@@ -226,15 +226,15 @@ impl StatementRewrite<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::backend::schema::Schema;
     use crate::backend::ShardingSchema;
+    use crate::backend::schema::Schema;
+    use crate::frontend::PreparedStatements;
+    use crate::frontend::router::parser::StatementRewriteContext;
     use crate::frontend::router::parser::cache::ast::Ast;
     use crate::frontend::router::parser::route::{Route, Shard, ShardWithPriority};
-    use crate::frontend::router::parser::StatementRewriteContext;
-    use crate::frontend::PreparedStatements;
-    use crate::net::messages::bind::{Bind, Parameter};
-    use crate::net::messages::Query;
     use crate::net::Parse;
+    use crate::net::messages::Query;
+    use crate::net::messages::bind::{Bind, Parameter};
     use pgdog_config::{QueryParserEngine, Rewrite};
 
     fn sharded_schema() -> ShardingSchema {

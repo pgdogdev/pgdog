@@ -3,8 +3,8 @@
 use std::net::SocketAddr;
 use std::ops::Deref;
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
     Arc,
+    atomic::{AtomicBool, Ordering},
 };
 
 use fnv::FnvHashMap as HashMap;
@@ -13,8 +13,8 @@ use parking_lot::Mutex;
 use tokio::sync::Notify;
 use tokio_util::task::TaskTracker;
 
-use crate::net::messages::{BackendKeyData, FrontendPid};
 use crate::net::Parameters;
+use crate::net::messages::{BackendKeyData, FrontendPid};
 
 use super::{ConnectedClient, Stats};
 
@@ -182,8 +182,8 @@ mod tests {
 
     use super::*;
     use crate::net::{
-        messages::{BackendKeyData, ProtocolVersion},
         Parameters,
+        messages::{BackendKeyData, ProtocolVersion},
     };
 
     fn addr() -> SocketAddr {

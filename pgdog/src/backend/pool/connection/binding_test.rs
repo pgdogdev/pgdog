@@ -4,14 +4,14 @@
 mod tests {
     use crate::{
         backend::{
-            pool::{connection::binding::Binding, Pool, PoolConfig},
+            pool::{Pool, PoolConfig, connection::binding::Binding},
             server::test::test_server,
         },
         frontend::{
             client::query_engine::TwoPcPhase,
             router::{
-                parser::{Shard, ShardWithPriority},
                 Route,
+                parser::{Shard, ShardWithPriority},
             },
         },
     };

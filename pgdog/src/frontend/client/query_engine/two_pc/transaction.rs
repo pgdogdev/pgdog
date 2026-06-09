@@ -1,4 +1,4 @@
-use rand::{rng, Rng};
+use rand::{Rng, rng};
 use serde::{Deserialize, Serialize};
 use std::{fmt::Display, str::FromStr};
 

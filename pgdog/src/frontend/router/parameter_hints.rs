@@ -4,10 +4,10 @@ use super::parser::Error;
 use crate::{
     backend::ShardingSchema,
     frontend::router::{
-        parser::{ee::ParserHooks, Schema, Shard, ShardWithPriority, ShardsWithPriority},
+        parser::{Schema, Shard, ShardWithPriority, ShardsWithPriority, ee::ParserHooks},
         sharding::{ContextBuilder, SchemaSharder},
     },
-    net::{parameter::ParameterValue, Parameters},
+    net::{Parameters, parameter::ParameterValue},
 };
 
 #[derive(Debug, Clone)]

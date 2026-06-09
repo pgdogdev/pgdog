@@ -8,20 +8,21 @@ use tracing::debug;
 use crate::{
     admin::server::AdminServer,
     backend::{
+        PubSubClient,
         databases::{self, databases},
-        pool, reload_notify, PubSubClient,
+        pool, reload_notify,
     },
-    config::{config, PoolerMode, User},
+    config::{PoolerMode, User, config},
     frontend::{
-        router::{parser::Shard, CopyRow, Route},
         ClientRequest, Router,
+        router::{CopyRow, Route, parser::Shard},
     },
     net::{Bind, Message, ParameterStatus, Protocol, ProtocolMessage},
     state::State,
 };
 
 use super::{
-    super::{pool::Guard, Error},
+    super::{Error, pool::Guard},
     Address, Cluster, Request,
 };
 

@@ -7,8 +7,8 @@ use std::sync::Arc;
 use crate::net::c_string_buf;
 use crate::stats::memory::MemoryUsage;
 
-use super::{code, DataType};
-use super::{prelude::*, Format};
+use super::{DataType, code};
+use super::{Format, prelude::*};
 
 /// Column field description.
 #[derive(Clone, Debug, PartialEq)]

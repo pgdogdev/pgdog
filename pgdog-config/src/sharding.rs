@@ -1,7 +1,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::collections::{hash_map::DefaultHasher, HashSet};
+use std::collections::{HashSet, hash_map::DefaultHasher};
 use std::fmt::Display;
 use std::hash::{Hash, Hasher as StdHasher};
 use std::path::PathBuf;
@@ -295,11 +295,7 @@ impl ShardedSchema {
     }
 
     pub fn shard(&self) -> Option<usize> {
-        if self.all {
-            None
-        } else {
-            Some(self.shard)
-        }
+        if self.all { None } else { Some(self.shard) }
     }
 }
 

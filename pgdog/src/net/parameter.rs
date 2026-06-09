@@ -3,7 +3,7 @@ use bytes::{BufMut, Bytes, BytesMut};
 use tracing::debug;
 
 use std::{
-    collections::{btree_map, BTreeMap},
+    collections::{BTreeMap, btree_map},
     fmt::Display,
     hash::{DefaultHasher, Hash, Hasher},
     ops::{Deref, DerefMut},
@@ -13,7 +13,7 @@ use once_cell::sync::Lazy;
 
 use crate::{net::ToBytes, stats::memory::MemoryUsage};
 
-use super::{messages::Query, Error};
+use super::{Error, messages::Query};
 
 // Parameters that either cannot be changed
 // or if changed we don't concern ourselves with
@@ -72,7 +72,7 @@ impl ToBytes for ParameterValue {
         let mut bytes = BytesMut::new();
         match self {
             Self::String(string) => bytes.put_slice(string.as_bytes()),
-            Self::Tuple(ref values) => {
+            Self::Tuple(values) => {
                 let values = values
                     .iter()
                     .map(|value| value.as_bytes().to_vec())
@@ -324,11 +324,7 @@ impl Parameters {
             v.hash(&mut hasher);
         }
 
-        if entries > 0 {
-            hasher.finish()
-        } else {
-            0
-        }
+        if entries > 0 { hasher.finish() } else { 0 }
     }
 
     pub fn tracked(&self) -> Parameters {
@@ -487,8 +483,8 @@ impl From<&Parameters> for Vec<Parameter> {
 #[cfg(test)]
 mod test {
     use crate::backend::server::test::test_server;
-    use crate::net::parameter::ParameterValue;
     use crate::net::ToBytes;
+    use crate::net::parameter::ParameterValue;
 
     use super::Parameters;
 
@@ -620,9 +616,11 @@ mod test {
         // Check that we have both SET and SET LOCAL queries
         let query_strings: Vec<String> = queries.iter().map(|q| q.query().to_string()).collect();
 
-        assert!(query_strings
-            .iter()
-            .any(|q| q.contains("SET \"search_path\"") && !q.contains("SET LOCAL")));
+        assert!(
+            query_strings
+                .iter()
+                .any(|q| q.contains("SET \"search_path\"") && !q.contains("SET LOCAL"))
+        );
         assert!(query_strings.iter().any(|q| q.contains("SET LOCAL")));
     }
 

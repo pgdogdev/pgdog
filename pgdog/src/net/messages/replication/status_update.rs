@@ -1,9 +1,9 @@
 use bytes::BytesMut;
 
 use crate::backend::replication::publisher::Lsn;
+use crate::net::CopyData;
 use crate::net::replication::KeepAlive;
 use crate::net::replication::ReplicationMeta;
-use crate::net::CopyData;
 use crate::util::postgres_now;
 
 use super::super::code;

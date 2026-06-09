@@ -2,8 +2,8 @@ use std::collections::HashSet;
 use std::ops::Deref;
 
 use crate::config::config;
-use crate::frontend::router::parser::{Cache, Shard};
 use crate::frontend::Command;
+use crate::frontend::router::parser::{Cache, Shard};
 
 use super::setup::{QueryParserTest, *};
 
@@ -34,10 +34,9 @@ fn test_close_direct_single_shard() {
 fn test_dry_run_simple() {
     let mut test = QueryParserTest::new_single_shard(&config()).with_dry_run();
 
-    let command = test.execute(vec![Query::new(
-        "/* pgdog_sharding_key: 1234 */ SELECT * FROM sharded",
-    )
-    .into()]);
+    let command = test.execute(vec![
+        Query::new("/* pgdog_sharding_key: 1234 */ SELECT * FROM sharded").into(),
+    ]);
 
     let cache = Cache::queries();
     let stmt = cache.values().next().unwrap();

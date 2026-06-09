@@ -10,23 +10,22 @@ use std::{
 use lazy_static::lazy_static;
 use parking_lot::Mutex;
 use pg_query::{
-    protobuf::{AlterTableType, ConstrType, ObjectType, ParseResult, RangeVar, String as PgString},
     Node, NodeEnum,
+    protobuf::{AlterTableType, ConstrType, ObjectType, ParseResult, RangeVar, String as PgString},
 };
 use pgdog_config::QueryParserEngine;
 use regex::Regex;
 use tracing::{info, trace, warn};
 
-use super::{progress::Progress, Error};
+use super::{Error, progress::Progress};
 use crate::{
     backend::{
-        self,
+        self, Cluster,
         pool::Request,
         replication::{publisher::PublicationTable, status::SchemaStatement},
-        Cluster,
     },
     config::config,
-    frontend::router::parser::{sequence::Sequence, Column, Table},
+    frontend::router::parser::{Column, Table, sequence::Sequence},
 };
 
 /// Key for looking up column types during pg_dump parsing.
@@ -1539,9 +1538,11 @@ ALTER TABLE ONLY parent ATTACH PARTITION parent_2024 FOR VALUES FROM ('2024-01-0
         let statements = output.statements(SyncState::PreData).unwrap();
 
         assert_eq!(statements.len(), 1);
-        assert!(statements[0]
-            .deref()
-            .contains("ALTER PUBLICATION my_pub ADD TABLE"));
+        assert!(
+            statements[0]
+                .deref()
+                .contains("ALTER PUBLICATION my_pub ADD TABLE")
+        );
     }
 
     #[test]

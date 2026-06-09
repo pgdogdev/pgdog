@@ -2,9 +2,9 @@ use super::{Error, ParameterHints};
 use crate::{
     backend::{Cluster, Schema},
     frontend::{
+        BufferedQuery, ClientRequest,
         client::{Sticky, TransactionType},
         router::Ast,
-        BufferedQuery, ClientRequest,
     },
     net::{Bind, Parameters},
 };

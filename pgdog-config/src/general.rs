@@ -7,8 +7,8 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Duration;
 
-use crate::pooling::ConnectionRecovery;
 use crate::UniqueIdFunction;
+use crate::pooling::ConnectionRecovery;
 use crate::{
     CopyFormat, CutoverTimeoutAction, LoadSchema, QueryParserEngine, QueryParserLevel,
     SystemCatalogsBehavior,

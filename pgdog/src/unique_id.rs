@@ -28,7 +28,7 @@ const MAX_TIMESTAMP: u64 = (1 << TIMESTAMP_BITS) - 1;
 const PGDOG_EPOCH: u64 = 1764184395000; // Wednesday, November 26, 2025 11:13:15 AM GMT-08:00
 const NODE_SHIFT: u8 = SEQUENCE_BITS as u8; // 12
 const TIMESTAMP_SHIFT: u8 = (SEQUENCE_BITS + NODE_BITS) as u8; // 22
-                                                               // Maximum offset to ensure base_id + offset doesn't overflow i64
+// Maximum offset to ensure base_id + offset doesn't overflow i64
 const MAX_OFFSET: u64 = i64::MAX as u64
     - ((MAX_TIMESTAMP << TIMESTAMP_SHIFT) | (MAX_NODE_ID << NODE_SHIFT) | MAX_SEQUENCE);
 

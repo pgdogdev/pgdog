@@ -133,8 +133,8 @@ impl From<DataRow> for Column {
 
 #[cfg(test)]
 mod test {
-    use crate::backend::pool::test::pool;
     use crate::backend::pool::Request;
+    use crate::backend::pool::test::pool;
     use crate::backend::schema::columns::Column;
 
     #[tokio::test]

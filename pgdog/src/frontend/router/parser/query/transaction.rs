@@ -24,10 +24,10 @@ impl QueryParser {
 
         match stmt.kind() {
             TransactionStmtKind::TransStmtCommit => {
-                return Ok(Command::CommitTransaction { extended })
+                return Ok(Command::CommitTransaction { extended });
             }
             TransactionStmtKind::TransStmtRollback => {
-                return Ok(Command::RollbackTransaction { extended })
+                return Ok(Command::RollbackTransaction { extended });
             }
             TransactionStmtKind::TransStmtBegin | TransactionStmtKind::TransStmtStart => {
                 let transaction_type = Self::transaction_type(&stmt.options).unwrap_or_default();

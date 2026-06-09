@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use once_cell::sync::Lazy;
-use pg_query::{protobuf, Node, NodeEnum};
+use pg_query::{Node, NodeEnum, protobuf};
 
 static WRITE_ONLY: Lazy<HashMap<&'static str, LockingBehavior>> = Lazy::new(|| {
     HashMap::from([

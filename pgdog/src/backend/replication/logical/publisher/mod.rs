@@ -19,7 +19,7 @@ pub use table::*;
 #[cfg(test)]
 pub mod test {
 
-    use crate::backend::{server::test::test_replication_server, Server};
+    use crate::backend::{Server, server::test::test_replication_server};
 
     pub struct PublicationTest {
         pub server: Server,

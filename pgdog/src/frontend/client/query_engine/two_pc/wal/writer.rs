@@ -21,14 +21,14 @@
 
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use bytes::BytesMut;
 use futures::FutureExt;
-use tokio::sync::{mpsc, oneshot, Notify};
-use tokio::time::{sleep_until, Instant};
+use tokio::sync::{Notify, mpsc, oneshot};
+use tokio::time::{Instant, sleep_until};
 use tracing::{error, warn};
 
 use fnv::FnvHashMap as HashMap;
@@ -36,7 +36,7 @@ use fnv::FnvHashMap as HashMap;
 use super::error::Error;
 use super::record::{BeginPayload, CheckpointEntry, CheckpointPayload, Record, TxnPayload};
 use super::recovery;
-use super::segment::{gc_before_lsn, Segment};
+use super::segment::{Segment, gc_before_lsn};
 use crate::config::config;
 use crate::frontend::client::query_engine::two_pc::{Manager, TwoPcTransaction};
 

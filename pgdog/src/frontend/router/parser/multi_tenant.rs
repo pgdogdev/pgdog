@@ -5,8 +5,8 @@ use crate::{
     backend::Schema,
     config::MultiTenant,
     frontend::{
-        router::parser::{where_clause::TablesSource, Table, WhereClause},
         SearchPath,
+        router::parser::{Table, WhereClause, where_clause::TablesSource},
     },
     net::parameter::ParameterValue,
 };
@@ -108,7 +108,7 @@ impl<'a> MultiTenantCheck<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::backend::schema::{columns::StatsColumn as Column, Relation, Schema};
+    use crate::backend::schema::{Relation, Schema, columns::StatsColumn as Column};
     use indexmap::IndexMap;
     use std::collections::HashMap;
 

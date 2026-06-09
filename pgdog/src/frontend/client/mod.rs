@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use pgdog_config::users::PasswordKind;
 use timeouts::Timeouts;
 use tokio::{select, spawn, time::timeout};
-use tracing::{debug, enabled, error, info, trace, warn, Level as LogLevel};
+use tracing::{Level as LogLevel, debug, enabled, error, info, trace, warn};
 
 use super::{ClientRequest, Error, PreparedStatements};
 use crate::auth::AuthResult;
@@ -22,14 +22,14 @@ use crate::backend::{
     pool::{Connection, Request},
 };
 use crate::config::convert::user_from_params;
-use crate::config::{self, config, AuthType, ConfigAndUsers};
-use crate::frontend::client::query_engine::{QueryEngine, QueryEngineContext};
+use crate::config::{self, AuthType, ConfigAndUsers, config};
 use crate::frontend::ClientComms;
+use crate::frontend::client::query_engine::{QueryEngine, QueryEngineContext};
 use crate::net::messages::{
     Authentication, BackendKeyData, ErrorResponse, FromBytes, FrontendPid, Message, Password,
     Protocol, ProtocolVersion, ReadyForQuery, ToBytes,
 };
-use crate::net::{parameter::Parameters, MessageBuffer, ProtocolMessage, Stream};
+use crate::net::{MessageBuffer, ProtocolMessage, Stream, parameter::Parameters};
 use crate::state::State;
 use crate::stats::memory::MemoryUsage;
 use crate::util::user_database_from_params;

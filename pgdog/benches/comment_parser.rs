@@ -1,4 +1,4 @@
-use brunch::{benches, Bench};
+use brunch::{Bench, benches};
 use pg_query::scan_raw;
 use pgdog::backend::ShardingSchema;
 use pgdog::frontend::router::parser::comment::parse_edge_comment;

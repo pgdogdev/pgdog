@@ -5,7 +5,7 @@ use crate::backend::ShardingSchema;
 use crate::config::database::Role;
 
 use super::super::Shard;
-use super::directive::{get_matched_value, SHARDING_KEY};
+use super::directive::{SHARDING_KEY, get_matched_value};
 use super::parse_edge_comment;
 
 fn test_schema() -> ShardingSchema {

@@ -11,10 +11,10 @@ use crate::backend::replication::ee::{
     replication_slot_drop, replication_slot_error, replication_slot_update, schema_sync_task,
 };
 use crate::backend::{
+    Cluster,
     pool::Address,
     replication::logical::Error as LogicalError,
     schema::sync::{Statement, SyncState},
-    Cluster,
 };
 use crate::net::ErrorResponse;
 

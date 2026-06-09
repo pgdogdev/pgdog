@@ -1,4 +1,4 @@
-use crate::frontend::client::query_engine::two_pc::{manager::Manager, TwoPcTransaction};
+use crate::frontend::client::query_engine::two_pc::{TwoPcTransaction, manager::Manager};
 
 #[derive(Debug)]
 pub struct TwoPcGuard {

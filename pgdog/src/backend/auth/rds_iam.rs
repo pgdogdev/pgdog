@@ -3,7 +3,7 @@ use std::time::{Duration, SystemTime};
 use aws_config::{BehaviorVersion, Region};
 use aws_sdk_rds::auth_token::{AuthTokenGenerator, Config as AuthTokenConfig};
 
-use crate::backend::{pool::Address, Error};
+use crate::backend::{Error, pool::Address};
 
 fn infer_region_from_rds_host(host: &str) -> Option<String> {
     let host = host.to_ascii_lowercase();

@@ -5,7 +5,7 @@
 //! hostname cache hits so callers resolve DNS on every request. IP literals are
 //! returned directly and are not stored in the cache.
 
-use hickory_resolver::{name_server::TokioConnectionProvider, Resolver};
+use hickory_resolver::{Resolver, name_server::TokioConnectionProvider};
 use once_cell::sync::Lazy;
 use parking_lot::RwLock;
 use std::collections::HashMap;
@@ -157,8 +157,8 @@ mod tests {
     use super::*;
 
     use std::net::{IpAddr, Ipv4Addr};
-    use tokio::time::timeout;
     use tokio::time::Instant;
+    use tokio::time::timeout;
 
     #[tokio::test]
     async fn resolve_returns_ip_address_directly() {

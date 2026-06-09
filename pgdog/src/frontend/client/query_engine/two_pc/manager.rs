@@ -7,8 +7,8 @@ use std::{
     collections::VecDeque,
     path::PathBuf,
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc,
+        atomic::{AtomicBool, Ordering},
     },
     time::Duration,
 };
@@ -23,12 +23,12 @@ use crate::{
     config::config,
     frontend::{
         client::query_engine::{
-            two_pc::{wal::Wal, TwoPcGuard, TwoPcStats, TwoPcTransaction},
             TwoPcPhase,
+            two_pc::{TwoPcGuard, TwoPcStats, TwoPcTransaction, wal::Wal},
         },
         router::{
-            parser::{Shard, ShardWithPriority},
             Route,
+            parser::{Shard, ShardWithPriority},
         },
     },
 };
@@ -276,17 +276,20 @@ impl Manager {
                     r#"[2pc] cleaning up transaction "{}""#,
                     transaction.to_string()
                 );
-                if let Err(err) = manager.cleanup_phase(&transaction).await {
-                    error!(
-                        r#"[2pc] error cleaning up "{}" transaction: {}"#,
-                        transaction.to_string(),
-                        err
-                    );
+                match manager.cleanup_phase(&transaction).await {
+                    Err(err) => {
+                        error!(
+                            r#"[2pc] error cleaning up "{}" transaction: {}"#,
+                            transaction.to_string(),
+                            err
+                        );
 
-                    // Retry again later.
-                    manager.inner.lock().queue.push_back(transaction);
-                } else {
-                    manager.remove(&transaction).await;
+                        // Retry again later.
+                        manager.inner.lock().queue.push_back(transaction);
+                    }
+                    _ => {
+                        manager.remove(&transaction).await;
+                    }
                 }
 
                 notify.notify.notify_one();
@@ -309,10 +312,11 @@ impl Manager {
 
     /// Reconnect to cluster if available and rollback the two-phase transaction.
     async fn cleanup_phase(&self, transaction: &TwoPcTransaction) -> Result<(), Error> {
-        let state = if let Some(state) = self.inner.lock().transactions.get(transaction).cloned() {
-            state
-        } else {
-            return Ok(());
+        let state = match self.inner.lock().transactions.get(transaction).cloned() {
+            Some(state) => state,
+            _ => {
+                return Ok(());
+            }
         };
 
         let phase = match state.phase {

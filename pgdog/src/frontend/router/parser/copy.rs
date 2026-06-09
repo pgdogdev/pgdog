@@ -1,19 +1,19 @@
 //! Parse COPY statement.
 
-use pg_query::{protobuf::CopyStmt, NodeEnum};
+use pg_query::{NodeEnum, protobuf::CopyStmt};
 
 use crate::{
     backend::{Cluster, ShardingSchema},
     config::ShardedTable,
     frontend::router::{
+        CopyRow,
         parser::Shard,
         sharding::{ContextBuilder, Tables},
-        CopyRow,
     },
     net::messages::{CopyData, ToBytes},
 };
 
-use super::{binary::Data, BinaryStream, Column, CsvStream, Error, Table};
+use super::{BinaryStream, Column, CsvStream, Error, Table, binary::Data};
 
 /// Copy information parsed from a COPY statement.
 #[derive(Debug, Clone)]

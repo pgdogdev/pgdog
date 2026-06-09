@@ -246,14 +246,14 @@ impl QueryParser {
 
 #[cfg(test)]
 mod test {
-    use pg_query::{parse, NodeEnum};
+    use pg_query::{NodeEnum, parse};
     use pgdog_config::ShardedSchema;
 
     use crate::{
-        backend::{replication::ShardedSchemas, ShardingSchema},
+        backend::{ShardingSchema, replication::ShardedSchemas},
         frontend::router::{
-            parser::{Shard, ShardsWithPriority},
             QueryParser,
+            parser::{Shard, ShardsWithPriority},
         },
     };
 

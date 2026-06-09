@@ -3,7 +3,7 @@ use std::time::SystemTime;
 use azure_core::credentials::TokenCredential;
 use azure_identity::WorkloadIdentityCredential;
 
-use crate::backend::{pool::Address, Error};
+use crate::backend::{Error, pool::Address};
 
 /// Fetch a fresh Azure Workload Identity token for `addr`.
 ///
@@ -37,7 +37,7 @@ pub(crate) async fn token(addr: Address) -> Result<(String, SystemTime), Error> 
 
 #[cfg(test)]
 mod tests {
-    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 
     use super::*;
     use crate::config::ServerAuth;

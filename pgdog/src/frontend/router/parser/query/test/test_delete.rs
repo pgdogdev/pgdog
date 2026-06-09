@@ -23,7 +23,7 @@ fn test_delete_without_sharding_key() {
     let mut test = QueryParserTest::new();
 
     let command = test.execute(vec![
-        Query::new("DELETE FROM sharded WHERE email = 'test'").into()
+        Query::new("DELETE FROM sharded WHERE email = 'test'").into(),
     ]);
 
     assert!(command.route().is_write());
@@ -76,10 +76,12 @@ fn test_delete_with_subquery() {
 fn test_delete_using_join() {
     let mut test = QueryParserTest::new();
 
-    let command = test.execute(vec![Query::new(
-        "DELETE FROM sharded USING other_table WHERE sharded.id = other_table.sharded_id",
-    )
-    .into()]);
+    let command = test.execute(vec![
+        Query::new(
+            "DELETE FROM sharded USING other_table WHERE sharded.id = other_table.sharded_id",
+        )
+        .into(),
+    ]);
 
     assert!(command.route().is_write());
     assert_eq!(command.route().shard(), &Shard::All);

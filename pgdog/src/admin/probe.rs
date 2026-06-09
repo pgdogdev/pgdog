@@ -1,8 +1,8 @@
-use tokio::time::{timeout, Duration, Instant};
+use tokio::time::{Duration, Instant, timeout};
 use url::Url;
 
 use crate::{
-    backend::{pool::Address, ConnectReason, Server, ServerOptions},
+    backend::{ConnectReason, Server, ServerOptions, pool::Address},
     config::config,
 };
 

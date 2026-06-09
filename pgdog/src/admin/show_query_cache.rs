@@ -28,13 +28,15 @@ impl Command for ShowQueryCache {
 
     async fn execute(&self) -> Result<Vec<Message>, Error> {
         let mut queries: Vec<_> = Cache::queries().into_iter().collect();
-        let mut messages = vec![RowDescription::new(&[
-            Field::text("query"),
-            Field::numeric("hits"),
-            Field::numeric("direct"),
-            Field::numeric("multi"),
-        ])
-        .message()?];
+        let mut messages = vec![
+            RowDescription::new(&[
+                Field::text("query"),
+                Field::numeric("hits"),
+                Field::numeric("direct"),
+                Field::numeric("multi"),
+            ])
+            .message()?,
+        ];
 
         queries.sort_by_cached_key(|v| v.1.stats.lock().hits);
 
@@ -59,7 +61,7 @@ impl Command for ShowQueryCache {
 #[cfg(test)]
 mod test {
     use crate::{
-        frontend::{router::parser::AstContext, BufferedQuery, PreparedStatements},
+        frontend::{BufferedQuery, PreparedStatements, router::parser::AstContext},
         net::{FromBytes, Parse, ToBytes},
     };
 

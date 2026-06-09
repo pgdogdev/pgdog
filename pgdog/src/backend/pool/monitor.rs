@@ -52,7 +52,7 @@ use crate::backend::pool::token_cache::TokenCache;
 use crate::backend::{ConnectReason, DisconnectReason, Server};
 use crate::config::ServerAuth;
 
-use tokio::time::{interval, sleep, timeout, Instant};
+use tokio::time::{Instant, interval, sleep, timeout};
 use tokio::{select, task::spawn};
 use tracing::{debug, error, info, warn};
 
@@ -300,16 +300,17 @@ impl Monitor {
 
     /// Replenish pool with one new connection.
     async fn replenish(&self, reason: ConnectReason) -> Result<bool, Error> {
-        if let Ok(conn) = Self::create_connection(&self.pool, reason).await {
-            let now = Instant::now();
-            let server = Box::new(conn);
-            let mut guard = self.pool.lock();
-            if guard.online {
-                guard.put(server, now)?;
+        match Self::create_connection(&self.pool, reason).await {
+            Ok(conn) => {
+                let now = Instant::now();
+                let server = Box::new(conn);
+                let mut guard = self.pool.lock();
+                if guard.online {
+                    guard.put(server, now)?;
+                }
+                Ok(true)
             }
-            Ok(true)
-        } else {
-            Ok(false)
+            _ => Ok(false),
         }
     }
 

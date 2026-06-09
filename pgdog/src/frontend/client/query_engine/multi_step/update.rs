@@ -3,9 +3,9 @@ use tracing::debug;
 
 use crate::{
     frontend::{
+        ClientRequest, Command, Router, RouterContext,
         client::query_engine::{QueryEngine, QueryEngineContext},
         router::parser::rewrite::statement::ShardingKeyUpdate,
-        ClientRequest, Command, Router, RouterContext,
     },
     net::{CommandComplete, DataRow, ErrorResponse, Protocol, ReadyForQuery, RowDescription},
 };

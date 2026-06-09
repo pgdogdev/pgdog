@@ -1,7 +1,7 @@
 use chrono::{DateTime, Local};
 use std::net::SocketAddr;
 
-use crate::net::{messages::BackendKeyData, Parameters};
+use crate::net::{Parameters, messages::BackendKeyData};
 
 use super::Stats;
 

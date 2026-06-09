@@ -1,8 +1,8 @@
 use crate::{
     expect_message,
     net::{
-        bind::Parameter, BindComplete, CommandComplete, DataRow, Parameters, ParseComplete,
-        ReadyForQuery,
+        BindComplete, CommandComplete, DataRow, Parameters, ParseComplete, ReadyForQuery,
+        bind::Parameter,
     },
 };
 

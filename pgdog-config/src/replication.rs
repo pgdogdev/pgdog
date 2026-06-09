@@ -69,7 +69,7 @@ impl ReplicaLag {
             _ => {
                 return Err(serde::de::Error::custom(
                     "replica_lag: cannot set check_interval without max_age",
-                ))
+                ));
             }
         })
     }

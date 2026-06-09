@@ -2,9 +2,9 @@ use std::{fmt::Debug, ops::Deref};
 
 use schemars::JsonSchema;
 use serde::{
+    Deserialize, Serialize,
     de::{self, Visitor},
     ser::SerializeSeq,
-    Deserialize, Serialize,
 };
 
 pub mod distance_simd_rust;

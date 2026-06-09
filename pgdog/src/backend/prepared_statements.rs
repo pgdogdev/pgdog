@@ -4,9 +4,9 @@ use std::{collections::VecDeque, sync::Arc};
 use crate::{
     frontend::{self, prepared_statements::GlobalCache},
     net::{
-        messages::{parse::Parse, RowDescription},
         Close, CloseComplete, FromBytes, Message, ParseComplete, Protocol, ProtocolMessage,
         ToBytes,
+        messages::{RowDescription, parse::Parse},
     },
 };
 use parking_lot::RwLock;
@@ -14,7 +14,7 @@ use pgdog_config::PreparedStatements as PreparedStatementsLevel;
 
 use super::Error;
 use super::{
-    protocol::{state::Action, ProtocolState},
+    protocol::{ProtocolState, state::Action},
     state::ExecutionCode,
 };
 
@@ -466,8 +466,8 @@ mod test {
     use super::*;
     use crate::frontend::PreparedStatements as FrontendPreparedStatements;
     use crate::net::{
-        bind::Parameter, messages::ReadyForQuery, Bind, Describe, Execute, Message, Parse,
-        ProtocolMessage, Query, Sync,
+        Bind, Describe, Execute, Message, Parse, ProtocolMessage, Query, Sync, bind::Parameter,
+        messages::ReadyForQuery,
     };
     use pgdog_config::PreparedStatements as PreparedStatementsLevel;
 

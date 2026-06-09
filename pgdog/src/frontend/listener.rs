@@ -7,9 +7,9 @@ use std::sync::Arc;
 use crate::backend::databases::{databases, reload, shutdown};
 use crate::config::config;
 use crate::frontend::client::query_engine::two_pc::Manager;
-use crate::net::messages::{hello::SslReply, FrontendPid, NegotiateProtocolVersion, Startup};
+use crate::net::messages::{FrontendPid, NegotiateProtocolVersion, Startup, hello::SslReply};
 use crate::net::tls::{acceptor, peer_identity};
-use crate::net::{self, tweak, Stream};
+use crate::net::{self, Stream, tweak};
 use crate::sighup::Sighup;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::signal::ctrl_c;
@@ -19,7 +19,7 @@ use tokio::{select, spawn};
 
 use tracing::{error, info, warn};
 
-use super::{comms::comms, Client, Error};
+use super::{Client, Error, comms::comms};
 
 /// Client connections listener and handler.
 #[derive(Debug, Clone)]
@@ -141,7 +141,7 @@ impl Listener {
 
                 if timeout(termination_timeout, cancel_all).await.is_err() {
                     error!(
-                        "forced shutdown: abandoning {} outstanding cancel requests after waiting {:.3}s" ,
+                        "forced shutdown: abandoning {} outstanding cancel requests after waiting {:.3}s",
                         comms.clients().len(),
                         termination_timeout.as_secs_f64()
                     );

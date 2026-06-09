@@ -1,14 +1,14 @@
 //! Connection pool.
 
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use futures::future::try_join_all;
 use once_cell::sync::{Lazy, OnceCell};
 use parking_lot::RwLock;
-use parking_lot::{lock_api::MutexGuard, Mutex, RawMutex};
-use tokio::time::{timeout, Instant};
+use parking_lot::{Mutex, RawMutex, lock_api::MutexGuard};
+use tokio::time::{Instant, timeout};
 use tracing::{debug, error};
 
 use crate::backend::pool::LsnStats;
@@ -19,10 +19,10 @@ use crate::net::{Parameter, Parameters};
 
 use super::inner::CheckInResult;
 use super::{
-    lb::TargetHealth,
-    lsn_monitor::{LsnMonitor, ReplicaLag},
     Address, Comms, Config, Error, Guard, Healtcheck, Inner, Monitor, Oids, PoolConfig, Request,
     State, Waiting,
+    lb::TargetHealth,
+    lsn_monitor::{LsnMonitor, ReplicaLag},
 };
 
 static ID_COUNTER: Lazy<Arc<AtomicU64>> = Lazy::new(|| Arc::new(AtomicU64::new(0)));

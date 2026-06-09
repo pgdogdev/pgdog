@@ -3,13 +3,13 @@
 use futures::future::try_join_all;
 use parking_lot::Mutex;
 use pgdog_config::{
-    users::PasswordKind, LoadSchema, PreparedStatements, QueryParserEngine, QueryParserLevel,
-    Rewrite, RewriteMode,
+    LoadSchema, PreparedStatements, QueryParserEngine, QueryParserLevel, Rewrite, RewriteMode,
+    users::PasswordKind,
 };
 use std::{
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc,
+        atomic::{AtomicBool, Ordering},
     },
     time::Duration,
 };
@@ -18,17 +18,17 @@ use tracing::error;
 
 use crate::{
     backend::{
-        databases::{databases, User as DatabaseUser},
+        Schema, ShardedTables,
+        databases::{User as DatabaseUser, databases},
         pool::ee::schema_changed_hook,
         replication::{ReplicationConfig, ShardedSchemas},
-        Schema, ShardedTables,
     },
     config::{
         ConnectionRecovery, MultiTenant, PoolerMode, ReadWriteSplit, ReadWriteStrategy,
         ShardedTable, User,
     },
     frontend::{ClientRequest, RegexParser},
-    net::{messages::FrontendPid, Query},
+    net::{Query, messages::FrontendPid},
 };
 
 use super::{Address, Config, Error, Guard, MirrorStats, Request, Shard, ShardConfig};
@@ -735,13 +735,13 @@ mod test {
 
     use crate::{
         backend::{
+            Shard, ShardedTables,
             pool::{Address, Config, PoolConfig, ShardConfig},
             replication::ShardedSchemas,
-            Shard, ShardedTables,
         },
         config::{
-            config, DataType, Hasher, LoadBalancingStrategy, MultiTenant, ReadWriteSplit,
-            ReadWriteStrategy, Role, ShardedTable,
+            DataType, Hasher, LoadBalancingStrategy, MultiTenant, ReadWriteSplit,
+            ReadWriteStrategy, Role, ShardedTable, config,
         },
         frontend::ClientRequest,
         net::Query,
@@ -1031,7 +1031,7 @@ mod test {
 
     #[tokio::test]
     async fn test_launch_schema_loading_idempotent() {
-        use tokio::time::{sleep, Duration};
+        use tokio::time::{Duration, sleep};
 
         let config = ConfigAndUsers::default();
         let mut cluster = Cluster::new_test(&config);
@@ -1087,7 +1087,7 @@ mod test {
 
     #[tokio::test]
     async fn test_wait_schema_loaded_waits_for_notification() {
-        use tokio::time::{timeout, Duration};
+        use tokio::time::{Duration, timeout};
 
         let config = ConfigAndUsers::default();
         let mut cluster = Cluster::new_test(&config);

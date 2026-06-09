@@ -7,7 +7,7 @@ use tokio::fs::read_to_string;
 use super::Error;
 use crate::{
     backend::databases::databases,
-    frontend::{client::Sticky, router::QueryParser, Command, RouterContext},
+    frontend::{Command, RouterContext, client::Sticky, router::QueryParser},
     net::{Parameters, ProtocolMessage, Query},
 };
 

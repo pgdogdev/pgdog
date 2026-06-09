@@ -22,28 +22,29 @@ impl QueryEngine {
         context: &mut QueryEngineContext<'_>,
     ) -> Result<ClusterCheck, Error> {
         // Admin doesn't have a cluster.
-        let res = if let Ok(cluster) = self.backend.cluster() {
-            if !context.in_transaction() && !cluster.online() {
-                let identifier = cluster.identifier();
+        let res = match self.backend.cluster() {
+            Ok(cluster) => {
+                if !context.in_transaction() && !cluster.online() {
+                    let identifier = cluster.identifier();
 
-                // Reload cluster config.
-                self.backend.safe_reload().await?;
+                    // Reload cluster config.
+                    self.backend.safe_reload().await?;
 
-                if self.backend.cluster().is_ok() {
-                    Ok(ClusterCheck::Ok)
+                    if self.backend.cluster().is_ok() {
+                        Ok(ClusterCheck::Ok)
+                    } else {
+                        self.error_response(
+                            context,
+                            ErrorResponse::connection(&identifier.user, &identifier.database),
+                        )
+                        .await?;
+                        Ok(ClusterCheck::Offline)
+                    }
                 } else {
-                    self.error_response(
-                        context,
-                        ErrorResponse::connection(&identifier.user, &identifier.database),
-                    )
-                    .await?;
-                    Ok(ClusterCheck::Offline)
+                    Ok(ClusterCheck::Ok)
                 }
-            } else {
-                Ok(ClusterCheck::Ok)
             }
-        } else {
-            Ok(ClusterCheck::Ok)
+            _ => Ok(ClusterCheck::Ok),
         };
 
         if let Ok(ClusterCheck::Ok) = res {
@@ -75,10 +76,11 @@ impl QueryEngine {
             return Ok(false);
         }
 
-        let cluster = if let Ok(cluster) = self.backend.cluster() {
-            cluster
-        } else {
-            return Ok(true);
+        let cluster = match self.backend.cluster() {
+            Ok(cluster) => cluster,
+            _ => {
+                return Ok(true);
+            }
         };
 
         let router_context = RouterContext::new(
@@ -93,12 +95,11 @@ impl QueryEngine {
                 context.client_request.route = Some(command.route().clone());
                 trace!(
                     "routing {:#?} to {:#?}",
-                    context.client_request.messages,
-                    command,
+                    context.client_request.messages, command,
                 );
 
                 // Apply post-parser rewrites, e.g. offset/limit.
-                if let Some(ref rewrite_result) = &context.rewrite_result {
+                if let Some(rewrite_result) = &context.rewrite_result {
                     rewrite_result.apply_after_parser(context.client_request)?;
                 }
             }

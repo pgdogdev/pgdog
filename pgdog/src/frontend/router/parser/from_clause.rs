@@ -30,7 +30,7 @@ impl<'a> FromClause<'a> {
 
     fn resolve(name: &'a str, node: &'a NodeEnum) -> Option<&'a str> {
         match node {
-            NodeEnum::JoinExpr(ref join) => {
+            NodeEnum::JoinExpr(join) => {
                 for arg in [&join.larg, &join.rarg].into_iter().flatten() {
                     if let Some(ref node) = arg.node {
                         if let Some(name) = Self::resolve(name, node) {
@@ -40,7 +40,7 @@ impl<'a> FromClause<'a> {
                 }
             }
 
-            NodeEnum::RangeVar(ref range_var) => {
+            NodeEnum::RangeVar(range_var) => {
                 let table = Table::from(range_var);
                 if table.name_match(name) {
                     return Some(table.name);

@@ -94,10 +94,10 @@ pub async fn run() {
 #[cfg(test)]
 mod test {
     use crate::config::{self, ConfigAndUsers};
+    use crate::stats::Metric;
     use crate::stats::open_metric::{Measurement, MeasurementType};
     use crate::stats::otel;
     use crate::stats::pools::PoolMetric;
-    use crate::stats::Metric;
 
     #[test]
     fn serialized_payload_is_valid_json() {

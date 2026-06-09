@@ -5,20 +5,20 @@ use std::mem;
 
 use crate::{
     frontend::router::parser::{
-        rewrite::statement::aggregate::{AggregateRewritePlan, HelperKind},
         Aggregate, AggregateFunction, AggregateTarget,
+        rewrite::statement::aggregate::{AggregateRewritePlan, HelperKind},
     },
     net::{
-        messages::{
-            data_types::{Double, Float, Numeric},
-            DataRow, Datum,
-        },
         Decoder,
+        messages::{
+            DataRow, Datum,
+            data_types::{Double, Float, Numeric},
+        },
     },
 };
 use pgdog_postgres_types::Error as TypeError;
-use rust_decimal::prelude::{FromPrimitive, ToPrimitive};
 use rust_decimal::Decimal;
+use rust_decimal::prelude::{FromPrimitive, ToPrimitive};
 
 use super::Error;
 
@@ -151,12 +151,15 @@ impl<'a> Accumulator<'a> {
                         return Ok(true);
                     }
 
-                    if let Some(weighted) = multiply_for_average(&column.value, &count.value) {
-                        checked_add_assign(&mut state.weighted_sum, weighted)?;
-                        checked_add_assign(&mut state.total_count, count.value.clone())?;
-                    } else {
-                        state.supported = false;
-                        return Ok(false);
+                    match multiply_for_average(&column.value, &count.value) {
+                        Some(weighted) => {
+                            checked_add_assign(&mut state.weighted_sum, weighted)?;
+                            checked_add_assign(&mut state.total_count, count.value.clone())?;
+                        }
+                        _ => {
+                            state.supported = false;
+                            return Ok(false);
+                        }
                     }
                 }
             }
@@ -746,11 +749,11 @@ mod test {
         HelperKind, HelperMapping,
     };
     use crate::net::{
-        messages::{Field, Format, RowDescription},
         Decoder,
+        messages::{Field, Format, RowDescription},
     };
     use bytes::Bytes;
-    use pg_query::{protobuf::SelectStmt, NodeEnum};
+    use pg_query::{NodeEnum, protobuf::SelectStmt};
     use std::assert_matches;
     use std::collections::VecDeque;
 

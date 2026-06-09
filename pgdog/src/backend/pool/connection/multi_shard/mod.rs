@@ -3,13 +3,13 @@
 use context::Context;
 
 use crate::{
-    frontend::{router::Route, PreparedStatements},
+    frontend::{PreparedStatements, router::Route},
     net::{
-        messages::{
-            command_complete::CommandComplete, DataRow, FromBytes, Message, Protocol,
-            RowDescription, ToBytes,
-        },
         BackendPid, Decoder, ReadyForQuery,
+        messages::{
+            DataRow, FromBytes, Message, Protocol, RowDescription, ToBytes,
+            command_complete::CommandComplete,
+        },
     },
 };
 
@@ -334,10 +334,9 @@ impl MultiShard {
 
     /// Multi-shard state is ready to send messages.
     pub(super) fn message(&mut self) -> Option<Message> {
-        if let Some(data_row) = self.buffer.take() {
-            Some(data_row)
-        } else {
-            self.counters.command_complete.take()
+        match self.buffer.take() {
+            Some(data_row) => Some(data_row),
+            _ => self.counters.command_complete.take(),
         }
     }
 

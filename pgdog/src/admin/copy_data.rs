@@ -3,9 +3,9 @@
 use tokio::spawn;
 use tracing::info;
 
+use crate::backend::replication::AsyncTasks;
 use crate::backend::replication::logical::admin::{Task, TaskType};
 use crate::backend::replication::orchestrator::Orchestrator;
-use crate::backend::replication::AsyncTasks;
 
 use super::prelude::*;
 
@@ -32,7 +32,13 @@ impl Command for CopyData {
                 publication: publication.to_owned(),
                 replication_slot: None,
             }),
-            ["copy_data", from_database, to_database, publication, replication_slot] => Ok(Self {
+            [
+                "copy_data",
+                from_database,
+                to_database,
+                publication,
+                replication_slot,
+            ] => Ok(Self {
                 from_database: from_database.to_owned(),
                 to_database: to_database.to_owned(),
                 publication: publication.to_owned(),

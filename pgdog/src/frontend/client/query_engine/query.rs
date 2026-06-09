@@ -132,10 +132,13 @@ impl QueryEngine {
 
         if let Some(bytes) = payload {
             if let Some(state) = self.pending_explain.as_mut() {
-                if let Ok(row_description) = RowDescription::from_bytes(bytes) {
-                    state.capture_row_description(row_description);
-                } else {
-                    state.annotated = true;
+                match RowDescription::from_bytes(bytes) {
+                    Ok(row_description) => {
+                        state.capture_row_description(row_description);
+                    }
+                    _ => {
+                        state.annotated = true;
+                    }
                 }
             }
         }
@@ -421,10 +424,11 @@ impl QueryEngine {
         &mut self,
         context: &mut QueryEngineContext<'_>,
     ) -> Result<bool, Error> {
-        let shards = if let Ok(shards) = self.backend.shards() {
-            shards
-        } else {
-            return Ok(true);
+        let shards = match self.backend.shards() {
+            Ok(shards) => shards,
+            _ => {
+                return Ok(true);
+            }
         };
         if shards > 1 // This check only matters for cross-shard queries
             && context.in_error()

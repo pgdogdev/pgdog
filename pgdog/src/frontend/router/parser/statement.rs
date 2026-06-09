@@ -1,11 +1,11 @@
 use std::collections::{HashMap, HashSet};
 
 use pg_query::{
-    protobuf::{
-        self, a_const::Val, AConst, AExprKind, BoolExprType, DeleteStmt, FuncCall, InsertStmt,
-        Integer, RangeVar, RawStmt, SelectStmt, UpdateStmt,
-    },
     Node, NodeEnum,
+    protobuf::{
+        self, AConst, AExprKind, BoolExprType, DeleteStmt, FuncCall, InsertStmt, Integer, RangeVar,
+        RawStmt, SelectStmt, UpdateStmt, a_const::Val,
+    },
 };
 
 pub(super) fn advisory_locks_from_func_call(
@@ -188,8 +188,8 @@ fn is_param_ref(node: &Node) -> bool {
 }
 
 use super::{
-    super::sharding::Value as ShardingValue, explain_trace::ExplainRecorder, Column, Error, Table,
-    Value,
+    super::sharding::Value as ShardingValue, Column, Error, Table, Value,
+    explain_trace::ExplainRecorder,
 };
 
 /// Lifetime of an advisory lock.
@@ -255,11 +255,11 @@ use crate::{
     backend::{Schema, ShardingSchema},
     config::ShardedTable,
     frontend::router::{
-        parser::{ee::ParserHooks, Shard},
+        parser::{Shard, ee::ParserHooks},
         round_robin,
         sharding::{ContextBuilder, SchemaSharder, Tables},
     },
-    net::{parameter::ParameterValue, Bind},
+    net::{Bind, parameter::ParameterValue},
 };
 
 /// Context for searching a SELECT statement, tracking table aliases.
@@ -353,7 +353,7 @@ impl<'a, 'b> Iterator for ValueIterator<'a, 'b> {
 
     fn next(&mut self) -> Option<Self::Item> {
         let next = match self.source {
-            SearchResult::Value(ref val) => {
+            SearchResult::Value(val) => {
                 if self.pos == 0 {
                     Some(val)
                 } else {
@@ -924,7 +924,7 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
 
     fn context_from_relation(&self, relation: &'a Option<RangeVar>) -> SearchContext<'a> {
         let mut ctx = SearchContext::default();
-        if let Some(ref range_var) = relation {
+        if let Some(range_var) = relation {
             let table = Table::from(range_var);
             ctx.table = Some(table);
             if let Some(ref alias) = range_var.alias {
@@ -1432,7 +1432,7 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
         }
 
         // No columns specified in INSERT, try to look them up from schema
-        if let (Some(table), Some(ref schema_lookup)) = (ctx.table, &self.schema_lookup) {
+        if let (Some(table), Some(schema_lookup)) = (ctx.table, &self.schema_lookup) {
             if let Some(relation) =
                 schema_lookup
                     .db_schema
@@ -2661,8 +2661,8 @@ mod test {
     }
 
     // INSERT without column list tests
-    use crate::backend::schema::columns::StatsColumn as SchemaColumn;
     use crate::backend::schema::Relation;
+    use crate::backend::schema::columns::StatsColumn as SchemaColumn;
     use indexmap::IndexMap;
 
     fn make_test_schema_with_relation() -> crate::backend::Schema {

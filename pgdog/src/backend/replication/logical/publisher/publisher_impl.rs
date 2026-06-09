@@ -6,22 +6,22 @@ use parking_lot::Mutex;
 use pgdog_config::QueryParserEngine;
 use tokio::sync::Notify;
 use tokio::task::JoinHandle;
-use tokio::time::{sleep, Instant};
+use tokio::time::{Instant, sleep};
 use tokio::try_join;
 use tokio::{select, spawn, time::interval};
 use tracing::{debug, info, warn};
 
-use super::super::{ensure_validation, publisher::Table, Error};
+use super::super::{Error, ensure_validation, publisher::Table};
 use super::ReplicationSlot;
 
 use crate::backend::replication::logical::subscriber::omni_ownership::OmniOwnership;
 use crate::backend::replication::logical::subscriber::stream::StreamSubscriber;
-use crate::backend::replication::publisher::progress::Progress;
 use crate::backend::replication::publisher::Lsn;
+use crate::backend::replication::publisher::progress::Progress;
 use crate::backend::replication::{
     logical::publisher::ReplicationData, publisher::ParallelSyncManager,
 };
-use crate::backend::{pool::Request, Cluster};
+use crate::backend::{Cluster, pool::Request};
 use crate::config::Role;
 use crate::net::replication::ReplicationMeta;
 
@@ -681,11 +681,11 @@ mod test {
     // ── Helpers ─────────────────────────────────────────────────────────────
 
     use crate::net::{
-        replication::{
-            logical::{begin::Begin, commit::Commit},
-            XLogData,
-        },
         CopyData, ToBytes,
+        replication::{
+            XLogData,
+            logical::{begin::Begin, commit::Commit},
+        },
     };
     /// Wrap a Begin payload in an XLogData CopyData message.
     fn begin_copy_data(lsn: i64) -> CopyData {

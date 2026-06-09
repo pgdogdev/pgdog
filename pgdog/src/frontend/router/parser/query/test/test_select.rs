@@ -11,10 +11,9 @@ use super::setup::*;
 fn test_order_by_vector_simple() {
     let mut test = QueryParserTest::new();
 
-    let command = test.execute(vec![Query::new(
-        "SELECT * FROM embeddings ORDER BY embedding <-> '[1,2,3]'",
-    )
-    .into()]);
+    let command = test.execute(vec![
+        Query::new("SELECT * FROM embeddings ORDER BY embedding <-> '[1,2,3]'").into(),
+    ]);
 
     let route = command.route();
     let order_by = route.order_by().first().unwrap();
@@ -46,7 +45,7 @@ fn test_limit_offset_simple() {
     let mut test = QueryParserTest::new();
 
     let command = test.execute(vec![
-        Query::new("SELECT * FROM users LIMIT 25 OFFSET 5").into()
+        Query::new("SELECT * FROM users LIMIT 25 OFFSET 5").into(),
     ]);
 
     let route = command.route();
@@ -128,10 +127,9 @@ fn test_distinct_row() {
 fn test_distinct_on_columns() {
     let mut test = QueryParserTest::new();
 
-    let command = test.execute(vec![Query::new(
-        "SELECT DISTINCT ON(1, email) * FROM users",
-    )
-    .into()]);
+    let command = test.execute(vec![
+        Query::new("SELECT DISTINCT ON(1, email) * FROM users").into(),
+    ]);
 
     let route = command.route();
     let distinct = route.distinct().as_ref().unwrap();
@@ -148,10 +146,9 @@ fn test_distinct_on_columns() {
 fn test_any_literal() {
     let mut test = QueryParserTest::new();
 
-    let command = test.execute(vec![Query::new(
-        "SELECT * FROM sharded WHERE id = ANY('{1, 2, 3}')",
-    )
-    .into()]);
+    let command = test.execute(vec![
+        Query::new("SELECT * FROM sharded WHERE id = ANY('{1, 2, 3}')").into(),
+    ]);
 
     assert_eq!(command.route().shard(), &Shard::All);
 }
@@ -260,10 +257,9 @@ fn test_system_catalog_sharded() {
         "system catalog query with Sharded behavior should go to all shards"
     );
 
-    let command = test.execute(vec![Query::new(
-        "SELECT * FROM pg_type WHERE typname = 'int4'",
-    )
-    .into()]);
+    let command = test.execute(vec![
+        Query::new("SELECT * FROM pg_type WHERE typname = 'int4'").into(),
+    ]);
     assert_eq!(
         command.route().shard(),
         &Shard::All,

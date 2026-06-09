@@ -3,17 +3,17 @@
 use std::time::Duration;
 
 use pgdog_config::MirroringLevel;
-use rand::{rng, Rng};
+use rand::{Rng, rng};
 use tokio::select;
-use tokio::time::{sleep, Instant};
+use tokio::time::{Instant, sleep};
 use tokio::{spawn, sync::mpsc::*};
 use tracing::{debug, error, warn};
 
 use crate::backend::Cluster;
-use crate::config::{config, ConfigAndUsers};
+use crate::config::{ConfigAndUsers, config};
+use crate::frontend::client::TransactionType;
 use crate::frontend::client::query_engine::{QueryEngine, QueryEngineContext};
 use crate::frontend::client::timeouts::Timeouts;
-use crate::frontend::client::TransactionType;
 use crate::frontend::{ClientComms, PreparedStatements};
 use crate::net::{FrontendPid, Parameter, Parameters, Stream};
 

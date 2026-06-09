@@ -1,11 +1,11 @@
 //! AST parsing context.
 
+use crate::backend::ShardingSchema;
 use crate::backend::pool::Cluster;
 use crate::backend::schema::Schema;
-use crate::backend::ShardingSchema;
 use crate::frontend::BufferedQuery;
-use crate::net::parameter::ParameterValue;
 use crate::net::Parameters;
+use crate::net::parameter::ParameterValue;
 
 /// Context for AST parsing and rewriting.
 ///

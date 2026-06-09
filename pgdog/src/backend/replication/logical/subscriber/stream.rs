@@ -14,12 +14,12 @@ use once_cell::sync::Lazy;
 use pgdog_postgres_types::Oid;
 use tracing::{debug, trace, warn};
 
-use super::super::publisher::{tables_missing_unique_index, NonIdentityColumnsPresence};
+use super::super::publisher::{NonIdentityColumnsPresence, tables_missing_unique_index};
 use super::super::{
-    ensure_validation, publisher::Table, Error, TableValidationError, TableValidationErrorKind,
+    Error, TableValidationError, TableValidationErrorKind, ensure_validation, publisher::Table,
 };
-use super::omni_ownership::OmniOwnership;
 use super::StreamContext;
+use super::omni_ownership::OmniOwnership;
 use crate::net::messages::replication::logical::tuple_data::{Identifier, TupleData};
 use crate::net::messages::replication::logical::update::Update as XLogUpdate;
 use crate::{
@@ -27,12 +27,12 @@ use crate::{
     config::Role,
     frontend::router::parser::Shard,
     net::{
-        replication::{
-            xlog_data::XLogPayload, Commit as XLogCommit, Delete as XLogDelete,
-            Insert as XLogInsert, Relation, StatusUpdate, UpdateIdentity,
-        },
         Bind, CommandComplete, CopyData, ErrorResponse, Execute, Flush, FromBytes, Parse, Protocol,
         Sync, ToBytes,
+        replication::{
+            Commit as XLogCommit, Delete as XLogDelete, Insert as XLogInsert, Relation,
+            StatusUpdate, UpdateIdentity, xlog_data::XLogPayload,
+        },
     },
     util::postgres_now,
 };
@@ -206,7 +206,7 @@ impl StreamSubscriber {
                     'E' => {
                         return Err(Error::PgError(Box::new(ErrorResponse::from_bytes(
                             msg.to_bytes(),
-                        )?)))
+                        )?)));
                     }
                     c => return Err(Error::OutOfSync(c)),
                 }
@@ -285,7 +285,7 @@ impl StreamSubscriber {
                     'E' => {
                         return Err(Error::PgError(Box::new(ErrorResponse::from_bytes(
                             msg.to_bytes(),
-                        )?)))
+                        )?)));
                     }
                     c => return Err(Error::SendOutOfSync(c)),
                 }
@@ -482,7 +482,7 @@ impl StreamSubscriber {
                     'E' => {
                         return Err(Error::PgError(Box::new(ErrorResponse::from_bytes(
                             msg.to_bytes(),
-                        )?)))
+                        )?)));
                     }
                     'Z' => break,
                     '1' => continue,
@@ -698,7 +698,7 @@ impl StreamSubscriber {
                 'E' => {
                     return Err(Error::PgError(Box::new(ErrorResponse::from_bytes(
                         msg.to_bytes(),
-                    )?)))
+                    )?)));
                 }
                 'Z' => (),
                 c => return Err(Error::CommitOutOfSync(c)),

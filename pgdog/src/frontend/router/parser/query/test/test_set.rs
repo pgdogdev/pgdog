@@ -1,11 +1,11 @@
 use crate::{
     config::config,
     frontend::{
-        router::parser::{
-            route::{OverrideReason, ShardSource},
-            Shard,
-        },
         Command,
+        router::parser::{
+            Shard,
+            route::{OverrideReason, ShardSource},
+        },
     },
     net::parameter::ParameterValue,
 };
@@ -16,10 +16,9 @@ use super::setup::*;
 fn test_set_comment() {
     let mut test = QueryParserTest::new();
 
-    let command = test.execute(vec![Query::new(
-        "/* pgdog_sharding_key: 1234 */ SET statement_timeout TO 1",
-    )
-    .into()]);
+    let command = test.execute(vec![
+        Query::new("/* pgdog_sharding_key: 1234 */ SET statement_timeout TO 1").into(),
+    ]);
 
     assert!(
         matches!(command.clone(), Command::Set { ref params, ref route } if params.len() == 1 && params[0].name == "statement_timeout" && !params[0].local && params[0].value == ParameterValue::String("1".into()) && route.shard().is_direct()),
@@ -32,10 +31,9 @@ fn test_set_comment() {
 fn test_set_multi_statement() {
     let mut test = QueryParserTest::new();
 
-    let command = test.execute(vec![Query::new(
-        "SET statement_timeout TO 1; SET work_mem TO '64MB'",
-    )
-    .into()]);
+    let command = test.execute(vec![
+        Query::new("SET statement_timeout TO 1; SET work_mem TO '64MB'").into(),
+    ]);
 
     match command {
         Command::Set { ref params, .. } => {
@@ -55,10 +53,9 @@ fn test_set_multi_statement() {
 fn test_set_multi_statement_mixed_local() {
     let mut test = QueryParserTest::new();
 
-    let command = test.execute(vec![Query::new(
-        "SET statement_timeout TO 1; SET LOCAL work_mem TO '64MB'",
-    )
-    .into()]);
+    let command = test.execute(vec![
+        Query::new("SET statement_timeout TO 1; SET LOCAL work_mem TO '64MB'").into(),
+    ]);
 
     match command {
         Command::Set { ref params, .. } => {
@@ -75,7 +72,7 @@ fn test_set_multi_statement_mixed_returns_error() {
     let mut test = QueryParserTest::new();
 
     let result = test.try_execute(vec![
-        Query::new("SET statement_timeout TO 1; SELECT 1").into()
+        Query::new("SET statement_timeout TO 1; SELECT 1").into(),
     ]);
     assert!(result.is_err());
 }
@@ -95,10 +92,12 @@ fn test_multi_statement_no_set_falls_through() {
 fn test_set_multi_statement_with_timezone_interval() {
     let mut test = QueryParserTest::new();
 
-    let command = test.execute(vec![Query::new(
-        "SET client_min_messages TO warning;SET TIME ZONE INTERVAL '+00:00' HOUR TO MINUTE",
-    )
-    .into()]);
+    let command = test.execute(vec![
+        Query::new(
+            "SET client_min_messages TO warning;SET TIME ZONE INTERVAL '+00:00' HOUR TO MINUTE",
+        )
+        .into(),
+    ]);
 
     match command {
         Command::Set { ref params, .. } => {

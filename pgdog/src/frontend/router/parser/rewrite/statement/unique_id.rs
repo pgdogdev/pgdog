@@ -1,4 +1,4 @@
-use pg_query::protobuf::{a_const::Val, AConst, ParamRef, String as PgString, TypeCast, TypeName};
+use pg_query::protobuf::{AConst, ParamRef, String as PgString, TypeCast, TypeName, a_const::Val};
 use pg_query::{Node, NodeEnum};
 
 use super::StatementRewrite;
@@ -116,10 +116,10 @@ mod tests {
     use pgdog_config::Rewrite;
 
     use super::*;
-    use crate::backend::schema::Schema;
     use crate::backend::ShardingSchema;
-    use crate::frontend::router::parser::StatementRewriteContext;
+    use crate::backend::schema::Schema;
     use crate::frontend::PreparedStatements;
+    use crate::frontend::router::parser::StatementRewriteContext;
     use crate::test_utils::set_env_var;
 
     fn default_schema() -> ShardingSchema {

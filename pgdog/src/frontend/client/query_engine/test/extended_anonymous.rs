@@ -3,8 +3,8 @@ use pgdog_config::PreparedStatements as PreparedStatementsLevel;
 use crate::{
     expect_message,
     net::{
-        bind::Parameter, BindComplete, CommandComplete, DataRow, Parameters, ParseComplete,
-        ReadyForQuery, RowDescription,
+        BindComplete, CommandComplete, DataRow, Parameters, ParseComplete, ReadyForQuery,
+        RowDescription, bind::Parameter,
     },
 };
 
@@ -72,7 +72,7 @@ async fn test_extended_anonymous_with_describe() {
 
     expect_message!(client.read().await, ParseComplete); // '1'
     expect_message!(client.read().await, BindComplete); // '2'
-                                                        // Describe returns ParameterDescription + RowDescription
+    // Describe returns ParameterDescription + RowDescription
     client.read().await; // 't'
     expect_message!(client.read().await, RowDescription); // 'T'
     let row = expect_message!(client.read().await, DataRow); // 'D'

@@ -7,14 +7,14 @@ use tokio::time::sleep;
 use tracing::debug;
 
 use crate::frontend::ClientRequest;
-use crate::net::messages::command_complete::CommandComplete;
-use crate::net::messages::{ErrorResponse, FromBytes, Protocol, Query, ReadyForQuery};
 use crate::net::ProtocolMessage;
 use crate::net::ToBytes;
+use crate::net::messages::command_complete::CommandComplete;
+use crate::net::messages::{ErrorResponse, FromBytes, Protocol, Query, ReadyForQuery};
 
+use super::Error;
 use super::parser::Parser;
 use super::prelude::Message;
-use super::Error;
 
 /// Admin backend.
 #[derive(Debug)]
@@ -68,12 +68,11 @@ impl AdminServer {
 
     /// Receive command result.
     pub async fn read(&mut self) -> Result<Message, Error> {
-        if let Some(message) = self.messages.pop_front() {
-            Ok(message)
-        } else {
-            loop {
+        match self.messages.pop_front() {
+            Some(message) => Ok(message),
+            _ => loop {
                 sleep(Duration::MAX).await;
-            }
+            },
         }
     }
 
