@@ -2,7 +2,7 @@ use std::{
     cmp::Ordering,
     fmt::Display,
     hash::Hash,
-    ops::{Add, AddAssign},
+    ops::{Add, AddAssign, Mul},
     str::FromStr,
 };
 
@@ -104,6 +104,17 @@ impl Add for Numeric {
 impl AddAssign for Numeric {
     fn add_assign(&mut self, rhs: Self) {
         *self = *self + rhs;
+    }
+}
+
+impl Mul<Decimal> for Numeric {
+    type Output = Self;
+
+    fn mul(self, rhs: Decimal) -> Self::Output {
+        match self.value {
+            NumericValue::Number(n) => Self::from(n * rhs),
+            NumericValue::NaN => self,
+        }
     }
 }
 
@@ -284,6 +295,14 @@ impl Numeric {
     /// Get the underlying Decimal value if not NaN
     pub fn as_decimal(&self) -> Option<&Decimal> {
         match &self.value {
+            NumericValue::Number(n) => Some(n),
+            NumericValue::NaN => None,
+        }
+    }
+
+    /// Get the underlying Decimal value if not NaN
+    pub fn as_decimal_mut(&mut self) -> Option<&mut Decimal> {
+        match &mut self.value {
             NumericValue::Number(n) => Some(n),
             NumericValue::NaN => None,
         }

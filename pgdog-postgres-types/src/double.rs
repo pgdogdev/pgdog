@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::fmt::Display;
 use std::hash::{Hash, Hasher};
+use std::ops::Mul;
 
 use crate::Data;
 
@@ -42,6 +43,14 @@ impl PartialEq for Double {
 }
 
 impl Eq for Double {}
+
+impl Mul<f64> for Double {
+    type Output = Self;
+
+    fn mul(self, rhs: f64) -> Self::Output {
+        Double(self.0 * rhs)
+    }
+}
 
 impl FromDataType for Double {
     fn decode(bytes: &[u8], encoding: Format) -> Result<Self, Error> {

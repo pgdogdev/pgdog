@@ -1,6 +1,6 @@
 //! Aggregate buffer.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, VecDeque, hash_map::Entry};
 use std::mem;
 
 use crate::{
@@ -21,6 +21,8 @@ use rust_decimal::Decimal;
 use rust_decimal::prelude::{FromPrimitive, ToPrimitive};
 
 use super::Error;
+
+mod avg;
 
 /// GROUP BY <columns>
 #[derive(Hash, PartialEq, Eq, Debug)]
@@ -50,7 +52,7 @@ impl Grouping {
 struct Accumulator<'a> {
     target: &'a AggregateTarget,
     datum: Datum,
-    avg: Option<AvgState>,
+    avg: Option<avg::Avg>,
     variance: Option<VarianceState>,
 }
 
@@ -58,7 +60,7 @@ impl<'a> Accumulator<'a> {
     pub fn from_aggregate(
         aggregate: &'a Aggregate,
         helpers: &HashMap<(usize, bool), HelperColumns>,
-    ) -> Vec<Self> {
+    ) -> Result<Vec<Self>, Error> {
         aggregate
             .targets()
             .iter()
@@ -76,7 +78,16 @@ impl<'a> Accumulator<'a> {
                 };
 
                 if matches!(target.function(), AggregateFunction::Avg) {
-                    accumulator.avg = Some(AvgState::new(helper.count));
+                    let Some(count_helper) = helper.count else {
+                        // FIXME(sage): This should be statically enforced
+                        return Err(Error::UnsupportedAggregation {
+                            function: String::from("avg"),
+                            reason: String::from(
+                                "internal count helper was missing (this is a bug in pgdog)",
+                            ),
+                        });
+                    };
+                    accumulator.avg = Some(avg::Avg::new(target.column(), count_helper));
                 }
 
                 if matches!(
@@ -93,7 +104,7 @@ impl<'a> Accumulator<'a> {
                     ));
                 }
 
-                accumulator
+                Ok(accumulator)
             })
             .collect()
     }
@@ -136,31 +147,11 @@ impl<'a> Accumulator<'a> {
             }
             AggregateFunction::Avg => {
                 if let Some(state) = self.avg.as_mut() {
-                    if !state.supported {
-                        return Ok(false);
-                    }
-
-                    let Some(count_column) = state.count_column else {
-                        state.supported = false;
-                        return Ok(false);
-                    };
-
-                    let count = row.get_column_checked(count_column, decoder)?;
-
-                    if column.value.is_null() || count.value.is_null() {
-                        return Ok(true);
-                    }
-
-                    match multiply_for_average(&column.value, &count.value) {
-                        Some(weighted) => {
-                            checked_add_assign(&mut state.weighted_sum, weighted)?;
-                            checked_add_assign(&mut state.total_count, count.value.clone())?;
-                        }
-                        _ => {
-                            state.supported = false;
-                            return Ok(false);
-                        }
-                    }
+                    let count = row
+                        .get_column_checked(state.count_helper, decoder)?
+                        .value
+                        .as_i64()?;
+                    state.accumulate(column.value, count);
                 }
             }
             AggregateFunction::StddevPop
@@ -184,26 +175,8 @@ impl<'a> Accumulator<'a> {
     }
 
     fn finalize(&mut self) -> Result<bool, Error> {
-        if let Some(state) = self.avg.as_mut() {
-            if !state.supported {
-                return Ok(false);
-            }
-
-            if state.count_column.is_none() {
-                return Ok(false);
-            }
-
-            if state.total_count.is_null() {
-                self.datum = Datum::Null;
-                return Ok(true);
-            }
-
-            if let Some(result) = divide_for_average(&state.weighted_sum, &state.total_count) {
-                self.datum = result;
-                return Ok(true);
-            }
-
-            return Ok(false);
+        if let Some(state) = self.avg.take() {
+            self.datum = state.finalize()?;
         }
 
         if let Some(state) = self.variance.as_mut() {
@@ -217,25 +190,6 @@ impl<'a> Accumulator<'a> {
         }
 
         Ok(true)
-    }
-}
-
-#[derive(Debug)]
-struct AvgState {
-    count_column: Option<usize>,
-    weighted_sum: Datum,
-    total_count: Datum,
-    supported: bool,
-}
-
-impl AvgState {
-    fn new(count_column: Option<usize>) -> Self {
-        Self {
-            count_column,
-            weighted_sum: Datum::Null,
-            total_count: Datum::Null,
-            supported: count_column.is_some(),
-        }
     }
 }
 
@@ -543,9 +497,13 @@ impl<'a> Aggregates<'a> {
 
         for row in self.rows {
             let grouping = Grouping::new(row, self.aggregate.group_by(), self.decoder)?;
-            let entry = self.mappings.entry(grouping).or_insert_with(|| {
-                Accumulator::from_aggregate(self.aggregate, &self.helper_columns)
-            });
+            let entry = match self.mappings.entry(grouping) {
+                Entry::Occupied(o) => o.into_mut(),
+                Entry::Vacant(v) => v.insert(Accumulator::from_aggregate(
+                    self.aggregate,
+                    &self.helper_columns,
+                )?),
+            };
 
             for aggregate in entry {
                 if !aggregate.accumulate(row, self.decoder)? {
@@ -633,58 +591,9 @@ fn checked_add_assign(lhs: &mut Datum, rhs: Datum) -> Result<(), TypeError> {
     Ok(())
 }
 
-fn multiply_for_average(value: &Datum, count: &Datum) -> Option<Datum> {
-    let multiplier_i128 = datum_as_i128(count)?;
-
-    match value {
-        Datum::Double(double) => {
-            let multiplier = multiplier_i128 as f64;
-            Some(Datum::Double(Double(double.0 * multiplier)))
-        }
-        Datum::Float(float) => {
-            let multiplier = multiplier_i128 as f64;
-            Some(Datum::Float(Float((float.0 as f64 * multiplier) as f32)))
-        }
-        Datum::Numeric(numeric) => {
-            let mut decimal = numeric.as_decimal()?.to_owned();
-            if decimal.is_integer() {
-                decimal.normalize_assign();
-            }
-            let product = decimal * Decimal::from_i128(multiplier_i128)?;
-            Some(Datum::Numeric(Numeric::from(product)))
-        }
-        _ => None,
-    }
-}
-
-fn divide_for_average(sum: &Datum, count: &Datum) -> Option<Datum> {
-    if sum.is_null() || count.is_null() {
-        return Some(Datum::Null);
-    }
-
-    let divisor_i128 = datum_as_i128(count)?;
-    if divisor_i128 == 0 {
-        return Some(Datum::Null);
-    }
-
-    match sum {
-        Datum::Double(double) => Some(Datum::Double(Double(double.0 / divisor_i128 as f64))),
-        Datum::Float(float) => Some(Datum::Float(Float(
-            (float.0 as f64 / divisor_i128 as f64) as f32,
-        ))),
-        Datum::Numeric(numeric) => {
-            let decimal = numeric.as_decimal()?;
-            let divisor = Decimal::from_i128(divisor_i128)?;
-            if divisor == Decimal::ZERO {
-                Some(Datum::Null)
-            } else {
-                let mut result = decimal / divisor;
-                result.rescale(decimal.scale());
-                Some(Datum::Numeric(Numeric::new(result)))
-            }
-        }
-        _ => None,
-    }
+fn checked_add(mut lhs: Datum, rhs: Datum) -> Result<Datum, TypeError> {
+    checked_add_assign(&mut lhs, rhs)?;
+    Ok(lhs)
 }
 
 fn datum_as_i128(datum: &Datum) -> Option<i128> {
@@ -756,36 +665,6 @@ mod test {
     use pg_query::{NodeEnum, protobuf::SelectStmt};
     use std::assert_matches;
     use std::collections::VecDeque;
-
-    #[test]
-    fn multiply_for_average_double() {
-        let value = Datum::Double(Double(10.0));
-        let count = Datum::Bigint(3);
-        let result = multiply_for_average(&value, &count).unwrap();
-        match result {
-            Datum::Double(Double(v)) => assert!((v - 30.0).abs() < f64::EPSILON),
-            _ => panic!("unexpected datum variant"),
-        }
-    }
-
-    #[test]
-    fn divide_for_average_double() {
-        let sum = Datum::Double(Double(30.0));
-        let count = Datum::Bigint(3);
-        let result = divide_for_average(&sum, &count).unwrap();
-        match result {
-            Datum::Double(Double(v)) => assert!((v - 10.0).abs() < f64::EPSILON),
-            _ => panic!("unexpected datum variant"),
-        }
-    }
-
-    #[test]
-    fn divide_for_average_zero_count() {
-        let sum = Datum::Double(Double(30.0));
-        let count = Datum::Bigint(0);
-        let result = divide_for_average(&sum, &count).unwrap();
-        assert!(matches!(result, Datum::Null));
-    }
 
     fn integer_field(name: &str) -> Field {
         Field {
