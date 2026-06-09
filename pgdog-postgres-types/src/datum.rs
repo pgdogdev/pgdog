@@ -1,3 +1,4 @@
+use std::cmp::{Ordering, PartialOrd};
 use std::ops::Add;
 
 use bytes::Bytes;
@@ -9,7 +10,10 @@ use crate::{
     TimestampTz, ToDataRowColumn,
 };
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+/// Represents a single piece of data in expression position. Trait
+/// implementations for Rust operators match the semantics of that
+/// operator/opclass in expression position in PG
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Datum {
     /// BIGINT.
     Bigint(i64),
@@ -45,6 +49,48 @@ pub enum Datum {
     Null,
     /// Boolean
     Boolean(bool),
+}
+
+impl PartialOrd for Datum {
+    fn partial_cmp(&self, other: &Datum) -> Option<Ordering> {
+        use Datum::*;
+
+        match (self, other) {
+            (Bigint(a), Bigint(b)) => a.partial_cmp(b),
+            (Bigint(_), _) | (_, Bigint(_)) => None,
+            (Integer(a), Integer(b)) => a.partial_cmp(b),
+            (Integer(_), _) | (_, Integer(_)) => None,
+            (SmallInt(a), SmallInt(b)) => a.partial_cmp(b),
+            (SmallInt(_), _) | (_, SmallInt(_)) => None,
+            (Interval(a), Interval(b)) => a.partial_cmp(b),
+            (Interval(_), _) | (_, Interval(_)) => None,
+            (Text(a), Text(b)) => a.partial_cmp(b),
+            (Text(_), _) | (_, Text(_)) => None,
+            (Timestamp(a), Timestamp(b)) => a.partial_cmp(b),
+            (Timestamp(_), _) | (_, Timestamp(_)) => None,
+            (TimestampTz(a), TimestampTz(b)) => a.partial_cmp(b),
+            (TimestampTz(_), _) | (_, TimestampTz(_)) => None,
+            (Uuid(a), Uuid(b)) => a.partial_cmp(b),
+            (Uuid(_), _) | (_, Uuid(_)) => None,
+            (Numeric(a), Numeric(b)) => a.partial_cmp(b),
+            (Numeric(_), _) | (_, Numeric(_)) => None,
+            (Float(a), Float(b)) => a.partial_cmp(b),
+            (Float(_), _) | (_, Float(_)) => None,
+            (Double(a), Double(b)) => a.partial_cmp(b),
+            (Double(_), _) | (_, Double(_)) => None,
+            (Vector(a), Vector(b)) => a.partial_cmp(b),
+            (Vector(_), _) | (_, Vector(_)) => None,
+            (Oid(a), Oid(b)) => a.partial_cmp(b),
+            (Oid(_), _) | (_, Oid(_)) => None,
+            (Array(a), Array(b)) => a.partial_cmp(b),
+            (Array(_), _) | (_, Array(_)) => None,
+            (Unknown(a), Unknown(b)) => a.partial_cmp(b),
+            (Unknown(_), _) | (_, Unknown(_)) => None,
+            (Boolean(a), Boolean(b)) => a.partial_cmp(b),
+            (Boolean(_), _) | (_, Boolean(_)) => None,
+            (Null, _) => None,
+        }
+    }
 }
 
 impl ToDataRowColumn for Datum {

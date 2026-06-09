@@ -21,7 +21,7 @@ use rust_decimal::Decimal;
 use super::Error;
 
 /// GROUP BY <columns>
-#[derive(Hash, PartialEq, Eq, PartialOrd, Ord, Debug)]
+#[derive(Hash, PartialEq, Eq, Debug)]
 struct Grouping {
     columns: Vec<(usize, Datum)>,
 }
