@@ -1,6 +1,6 @@
 use super::*;
 use crate::{
-    frontend::{client::TransactionType, BufferedQuery},
+    frontend::{BufferedQuery, client::TransactionType},
     net::parameter::ParameterValue,
 };
 use lazy_static::lazy_static;

@@ -17,7 +17,7 @@ use fnv::FnvHashMap as HashMap;
 
 use super::error::Error;
 use super::record::{CheckpointEntry, Record};
-use super::segment::{list_segments, Segment, SegmentReader};
+use super::segment::{Segment, SegmentReader, list_segments};
 use crate::frontend::client::query_engine::two_pc::{Manager, TwoPcPhase, TwoPcTransaction};
 
 /// Working entry held only for the duration of [`recover_transactions`].

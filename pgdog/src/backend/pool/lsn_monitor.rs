@@ -14,8 +14,8 @@ use crate::net::DataRow;
 use super::*;
 use pgdog_postgres_types::Format;
 
-pub use pgdog_stats::replication::ReplicaLag;
 use pgdog_stats::LsnStats as StatsLsnStats;
+pub use pgdog_stats::replication::ReplicaLag;
 
 static AURORA_DETECTION_QUERY: &str = "SELECT aurora_version()";
 

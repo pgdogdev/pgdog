@@ -12,12 +12,13 @@ use bytes::{BufMut, BytesMut};
 use crate::{
     backend::databases::databases,
     config::{
-        config, load_test, load_test_replicas, load_test_sharded, load_test_with_pooler_mode, set,
-        PreparedStatements,
+        PreparedStatements, config, load_test, load_test_replicas, load_test_sharded,
+        load_test_with_pooler_mode, set,
     },
     frontend::{
+        Client,
         client::{BufferEvent, QueryEngine},
-        prepared_statements, Client,
+        prepared_statements,
     },
     net::{
         Bind, Close, CommandComplete, DataRow, Describe, ErrorResponse, Execute, Field, Flush,
@@ -90,7 +91,7 @@ pub async fn parallel_test_client_with_params(params: Parameters) -> (TcpStream,
 }
 
 macro_rules! new_client {
-    ($replicas:expr) => {{
+    ($replicas:expr_2021) => {{
         crate::logger();
         let (conn, client) = test_client($replicas).await;
         let engine = QueryEngine::from_client(&client).unwrap();
@@ -161,7 +162,7 @@ macro_rules! buffer {
 }
 
 macro_rules! read_one {
-    ($conn:expr) => {{
+    ($conn:expr_2021) => {{
         let mut buf = BytesMut::new();
         let code = $conn.read_u8().await.unwrap();
         buf.put_u8(code);
@@ -175,7 +176,7 @@ macro_rules! read_one {
 }
 
 macro_rules! read {
-    ($conn:expr, $codes:expr) => {{
+    ($conn:expr_2021, $codes:expr_2021) => {{
         let mut result = vec![];
         for c in $codes {
             let buf = read_one!($conn);
@@ -293,12 +294,14 @@ async fn test_client_idle_timeout() {
     let err = ErrorResponse::from_bytes(err.freeze()).unwrap();
     assert_eq!(err.code, "57P05");
 
-    assert!(timeout(
-        Duration::from_millis(50),
-        client.buffer(State::IdleInTransaction)
-    )
-    .await
-    .is_err());
+    assert!(
+        timeout(
+            Duration::from_millis(50),
+            client.buffer(State::IdleInTransaction)
+        )
+        .await
+        .is_err()
+    );
 }
 
 #[tokio::test]

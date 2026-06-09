@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::time::{Duration, SystemTime};
 
-use crate::backend::{pool::Address, Error};
+use crate::backend::{Error, pool::Address};
 
 /// How early to wake up before a token expires to fetch a fresh one.
 /// Applied by [`TokenCache::refresh_at`] so callers never need to
@@ -156,8 +156,8 @@ impl TokenCache {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     /// Each test uses a unique port to avoid cross-test interference
     /// in the global cache.

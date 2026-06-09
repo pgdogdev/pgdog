@@ -10,13 +10,13 @@ use regex::Regex;
 use crate::{
     frontend::router::Ast,
     net::{
-        messages::{Bind, CopyData, Protocol},
         Error, Flush, Parse, ProtocolMessage,
+        messages::{Bind, CopyData, Protocol},
     },
     stats::memory::MemoryUsage,
 };
 
-use super::{router::Route, PreparedStatements};
+use super::{PreparedStatements, router::Route};
 
 pub use super::BufferedQuery;
 
@@ -128,10 +128,10 @@ impl ClientRequest {
         for message in &self.messages {
             match message {
                 ProtocolMessage::Query(query) => {
-                    return Ok(Some(BufferedQuery::Query(query.clone())))
+                    return Ok(Some(BufferedQuery::Query(query.clone())));
                 }
                 ProtocolMessage::Parse(parse) => {
-                    return Ok(Some(BufferedQuery::Prepared(parse.clone())))
+                    return Ok(Some(BufferedQuery::Prepared(parse.clone())));
                 }
                 ProtocolMessage::Bind(bind) => {
                     if !bind.anonymous() {
@@ -704,7 +704,7 @@ mod test {
         let mut req = ClientRequest::new();
         req.push(Parse::new_anonymous("SELECT $1").into());
         req.messages.clear(); // simulate consumption without going through clear()
-                              // Re-establish: only the saved last_parse remains.
+        // Re-establish: only the saved last_parse remains.
         assert!(req.last_parse.is_some());
         req.clear();
         assert!(req.last_parse.is_some());

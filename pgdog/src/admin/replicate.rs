@@ -30,7 +30,13 @@ impl Command for Replicate {
                 publication: publication.to_owned(),
                 replication_slot: None,
             }),
-            ["replicate", from_database, to_database, publication, replication_slot] => Ok(Self {
+            [
+                "replicate",
+                from_database,
+                to_database,
+                publication,
+                replication_slot,
+            ] => Ok(Self {
                 from_database: from_database.to_owned(),
                 to_database: to_database.to_owned(),
                 publication: publication.to_owned(),

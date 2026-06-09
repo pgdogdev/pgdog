@@ -5,8 +5,8 @@
 
 use super::*;
 use crate::backend::pool::MirrorStats;
-use crate::frontend::router::parser::cache::StatementType;
 use crate::frontend::ClientRequest;
+use crate::frontend::router::parser::cache::StatementType;
 use parking_lot::Mutex;
 use pgdog_config::MirrorConfig;
 use std::sync::Arc;
@@ -202,7 +202,7 @@ mod tests {
     use crate::backend::pool::MirrorStats;
     use parking_lot::Mutex;
     use std::sync::Arc;
-    use tokio::sync::mpsc::{channel, Receiver};
+    use tokio::sync::mpsc::{Receiver, channel};
 
     fn create_test_handler(
         exposure: f32,

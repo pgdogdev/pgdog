@@ -92,7 +92,7 @@ mod tests {
     use super::*;
     use crate::backend::pool::Pool;
     use crate::net::messages::FrontendPid;
-    use tokio::time::{sleep, timeout, Duration};
+    use tokio::time::{Duration, sleep, timeout};
 
     #[tokio::test]
     async fn test_cancellation_safety() {

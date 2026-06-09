@@ -4,7 +4,7 @@ use crate::net::Decoder;
 use std::collections::BTreeSet;
 
 use super::{
-    code, prelude::*, Datum, Double, Float, Format, FromDataType, Numeric, RowDescription,
+    Datum, Double, Float, Format, FromDataType, Numeric, RowDescription, code, prelude::*,
 };
 pub use pgdog_postgres_types::{Data, ToDataRowColumn};
 use pgdog_stats::Lsn;

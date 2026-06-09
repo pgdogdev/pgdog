@@ -4,7 +4,7 @@ use pgdog_postgres_types::Format;
 use tokio::time::sleep;
 
 use crate::{
-    backend::{server::test::test_server, Server},
+    backend::{Server, server::test::test_server},
     expect_message,
     net::{DataRow, RowDescription},
 };

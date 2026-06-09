@@ -1,6 +1,6 @@
 use crate::frontend::router::parser::{
-    route::{RoundRobinReason, ShardSource},
     Shard,
+    route::{RoundRobinReason, ShardSource},
 };
 
 use super::setup::*;

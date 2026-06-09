@@ -99,7 +99,7 @@ mod test {
     };
     use crate::backend::replication::publisher::Lsn;
     use crate::net::messages::replication::logical::tuple_data::{
-        text_col, toasted_col, TupleData,
+        TupleData, text_col, toasted_col,
     };
     use pgdog_config::QueryParserEngine;
     use pgdog_postgres_types::Oid;

@@ -1,11 +1,11 @@
 use crate::{
     backend::databases,
-    config::{self, config, RewriteMode},
+    config::{self, RewriteMode, config},
     frontend::PreparedStatements,
 };
 
 use super::prelude::*;
-use pg_query::{parse, protobuf::a_const, NodeEnum};
+use pg_query::{NodeEnum, parse, protobuf::a_const};
 use serde::de::DeserializeOwned;
 
 pub struct Set {

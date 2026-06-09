@@ -10,7 +10,7 @@ use hyper_util::rt::TokioIo;
 use tokio::net::TcpListener;
 use tracing::info;
 
-use crate::backend::databases::{databases, Databases};
+use crate::backend::databases::{Databases, databases};
 
 pub async fn server(port: u16) -> std::io::Result<()> {
     info!("healthcheck endpoint http://0.0.0.0:{}", port);

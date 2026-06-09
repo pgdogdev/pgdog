@@ -1,6 +1,6 @@
 use pg_query::{
-    protobuf::{a_const::Val, AConst, Integer, ParamRef, SelectStmt},
     Node, NodeEnum,
+    protobuf::{AConst, Integer, ParamRef, SelectStmt, a_const::Val},
 };
 
 use super::Error;

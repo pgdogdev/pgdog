@@ -1,8 +1,8 @@
 use pg_query::{Node, NodeEnum};
 use pgdog_config::{QueryParserEngine, RewriteMode};
 
-use crate::frontend::router::parser::Cache;
 use crate::frontend::router::Ast;
+use crate::frontend::router::parser::Cache;
 use crate::frontend::{BufferedQuery, ClientRequest};
 use crate::net::messages::bind::{Format, Parameter};
 use crate::net::{Bind, Parse, ProtocolMessage, Query};
@@ -316,10 +316,10 @@ mod tests {
     use pgdog_config::Rewrite;
 
     use super::*;
-    use crate::backend::schema::Schema;
     use crate::backend::ShardingSchema;
-    use crate::frontend::router::parser::StatementRewriteContext;
+    use crate::backend::schema::Schema;
     use crate::frontend::PreparedStatements;
+    use crate::frontend::router::parser::StatementRewriteContext;
 
     fn default_db_schema() -> Schema {
         Schema::default()

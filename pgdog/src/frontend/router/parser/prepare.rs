@@ -30,7 +30,7 @@ impl Prepare {
 
 #[cfg(test)]
 mod test {
-    use pg_query::{parse, NodeEnum};
+    use pg_query::{NodeEnum, parse};
 
     use super::*;
 

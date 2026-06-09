@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::time::SystemTime;
 
 use tokio::net::UdpSocket;
-use tokio::time::{interval, Duration};
+use tokio::time::{Duration, interval};
 use tokio::{select, spawn};
 
 use super::{Error, Message, Payload};

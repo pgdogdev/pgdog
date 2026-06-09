@@ -3,8 +3,8 @@
 use std::{
     path::{Path, PathBuf},
     sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicUsize, Ordering},
     },
 };
 
@@ -12,11 +12,10 @@ use crate::config::TlsVerifyMode;
 use arc_swap::ArcSwapOption;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use tokio_rustls::rustls::{
-    self,
+    self, ClientConfig,
     client::danger::{ServerCertVerified, ServerCertVerifier},
     pki_types::pem::PemObject,
-    server::{danger::ClientCertVerifier, ServerConnection, WebPkiClientVerifier},
-    ClientConfig,
+    server::{ServerConnection, WebPkiClientVerifier, danger::ClientCertVerifier},
 };
 use tokio_rustls::{TlsAcceptor, TlsConnector};
 use tracing::{debug, info, warn};

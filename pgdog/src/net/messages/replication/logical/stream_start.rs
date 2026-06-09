@@ -1,4 +1,4 @@
-use crate::net::{code, FromBytes, ToBytes};
+use crate::net::{FromBytes, ToBytes, code};
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 
 #[derive(Debug, Clone)]

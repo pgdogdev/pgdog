@@ -1,5 +1,5 @@
 use crate::admin::Command;
-use crate::backend::databases::{databases, from_config, replace_databases, Databases};
+use crate::backend::databases::{Databases, databases, from_config, replace_databases};
 use crate::backend::pool::mirror_stats::Counts;
 use crate::config::{self, ConfigAndUsers, Database, Role, User as ConfigUser};
 use crate::net::messages::{DataRow, DataType, FromBytes, Protocol, RowDescription};

@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use rand::{distr::Alphanumeric, RngExt};
+use rand::{RngExt, distr::Alphanumeric};
 
 pub fn human_duration_optional(duration: Option<Duration>) -> String {
     if let Some(duration) = duration {
@@ -56,7 +56,7 @@ pub fn random_string(n: usize) -> String {
 /// Swap field values using tmp pattern: source -> tmp, dest -> source, tmp -> dest.
 #[macro_export]
 macro_rules! swap_field {
-    ($iter:expr, $field:ident, $source:expr, $destination:expr, $tmp:expr) => {
+    ($iter:expr_2021, $field:ident, $source:expr_2021, $destination:expr_2021, $tmp:expr_2021) => {
         $iter.for_each(|item| {
             if item.$field == $source {
                 item.$field = $tmp.clone();

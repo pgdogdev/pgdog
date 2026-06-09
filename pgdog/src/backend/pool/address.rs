@@ -2,17 +2,17 @@
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::ops::Deref;
 
-use pgdog_config::users::PasswordKind;
 use pgdog_config::Role;
+use pgdog_config::users::PasswordKind;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-use super::{password::PasswordSource, Password};
+use super::{Password, password::PasswordSource};
+use crate::backend::Error;
 use crate::backend::auth::{azure_workload_identity, rds_iam};
 use crate::backend::pool::dns_cache::DnsCache;
 use crate::backend::pool::token_cache::TokenCache;
-use crate::backend::Error;
-use crate::config::{config, Database, ServerAuth, User};
+use crate::config::{Database, ServerAuth, User, config};
 
 /// Server address.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default, Eq, Hash)]

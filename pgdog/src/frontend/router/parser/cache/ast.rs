@@ -1,5 +1,5 @@
 use once_cell::sync::OnceCell;
-use pg_query::{parse, parse_raw, protobuf::ObjectType, NodeEnum, NodeRef, ParseResult};
+use pg_query::{NodeEnum, NodeRef, ParseResult, parse, parse_raw, protobuf::ObjectType};
 use pgdog_config::QueryParserEngine;
 use std::fmt::Debug;
 use std::time::Instant;
@@ -12,9 +12,9 @@ use tracing::warn;
 use super::super::{Error, Route, Shard, StatementRewrite, StatementRewriteContext, Table};
 use super::{Cache, Fingerprint, Stats};
 use crate::backend::schema::Schema;
+use crate::frontend::PreparedStatements;
 use crate::frontend::router::parser::cache::AstQuery;
 use crate::frontend::router::parser::rewrite::statement::RewritePlan;
-use crate::frontend::PreparedStatements;
 use crate::net::parameter::ParameterValue;
 use crate::{backend::ShardingSchema, config::Role};
 
@@ -304,8 +304,8 @@ pub enum StatementType {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::backend::schema::Schema;
     use crate::backend::ShardingSchema;
+    use crate::backend::schema::Schema;
     use crate::frontend::BufferedQuery;
     use crate::net::Query;
 

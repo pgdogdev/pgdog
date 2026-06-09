@@ -3,8 +3,8 @@ use std::str::from_utf8;
 use bytes::BytesMut;
 use tracing::warn;
 
-use crate::net::bind::Parameter;
 use crate::net::Bind;
+use crate::net::bind::Parameter;
 
 use super::super::super::bind::Format;
 use super::super::super::prelude::*;

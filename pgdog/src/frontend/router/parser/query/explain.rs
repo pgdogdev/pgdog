@@ -19,10 +19,10 @@ impl QueryParser {
         }
 
         let result = match node {
-            NodeEnum::SelectStmt(ref stmt) => self.select(cached_ast, stmt, context),
-            NodeEnum::InsertStmt(ref stmt) => self.insert(stmt, context),
-            NodeEnum::UpdateStmt(ref stmt) => self.update(stmt, context),
-            NodeEnum::DeleteStmt(ref stmt) => self.delete(stmt, context),
+            NodeEnum::SelectStmt(stmt) => self.select(cached_ast, stmt, context),
+            NodeEnum::InsertStmt(stmt) => self.insert(stmt, context),
+            NodeEnum::UpdateStmt(stmt) => self.update(stmt, context),
+            NodeEnum::DeleteStmt(stmt) => self.delete(stmt, context),
 
             _ => {
                 // For other statement types, route to all shards
@@ -55,8 +55,8 @@ mod tests {
     use crate::frontend::router::parser::{AstContext, Cache};
     use crate::frontend::{BufferedQuery, ClientRequest, PreparedStatements, RouterContext};
     use crate::net::{
-        messages::{Bind, Parameter, Parse, Query},
         Parameters,
+        messages::{Bind, Parameter, Parse, Query},
     };
     use bytes::Bytes;
     use std::sync::Once;
@@ -144,9 +144,11 @@ mod tests {
         assert!(matches!(r.shard(), Shard::Direct(_)));
         assert!(r.is_read());
         let lines = r.explain().unwrap().render_lines();
-        assert!(lines
-            .iter()
-            .any(|line| line.contains("matched sharding key")));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("matched sharding key"))
+        );
 
         let r = route_parameterized("EXPLAIN SELECT * FROM sharded WHERE id = $1", &[b"11"]);
         assert!(matches!(r.shard(), Shard::Direct(_)));
@@ -173,9 +175,11 @@ mod tests {
         assert!(matches!(r.shard(), Shard::Direct(_)));
         assert!(r.is_write());
         let lines = r.explain().unwrap().render_lines();
-        assert!(lines
-            .iter()
-            .any(|line| line.contains("INSERT matched sharding key")));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("INSERT matched sharding key"))
+        );
     }
 
     #[test]
@@ -187,17 +191,21 @@ mod tests {
         assert!(matches!(r.shard(), Shard::Direct(_)));
         assert!(r.is_write());
         let lines = r.explain().unwrap().render_lines();
-        assert!(lines
-            .iter()
-            .any(|line| line.contains("UPDATE matched WHERE clause")));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("UPDATE matched WHERE clause"))
+        );
 
         let r = route("EXPLAIN UPDATE sharded SET active = true");
         assert_eq!(r.shard(), &Shard::All);
         assert!(r.is_write());
         let lines = r.explain().unwrap().render_lines();
-        assert!(lines
-            .iter()
-            .any(|line| line.contains("UPDATE fell back to broadcast")));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("UPDATE fell back to broadcast"))
+        );
     }
 
     #[test]
@@ -206,17 +214,21 @@ mod tests {
         assert!(matches!(r.shard(), Shard::Direct(_)));
         assert!(r.is_write());
         let lines = r.explain().unwrap().render_lines();
-        assert!(lines
-            .iter()
-            .any(|line| line.contains("DELETE matched WHERE clause")));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("DELETE matched WHERE clause"))
+        );
 
         let r = route("EXPLAIN DELETE FROM sharded");
         assert_eq!(r.shard(), &Shard::All);
         assert!(r.is_write());
         let lines = r.explain().unwrap().render_lines();
-        assert!(lines
-            .iter()
-            .any(|line| line.contains("DELETE fell back to broadcast")));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("DELETE fell back to broadcast"))
+        );
     }
 
     #[test]

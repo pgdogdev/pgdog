@@ -5,7 +5,7 @@ use crate::unique_id::UniqueId;
 
 use super::insert::build_split_requests;
 use super::offset::OffsetPlan;
-use super::{aggregate::AggregateRewritePlan, Error, InsertSplit, ShardingKeyUpdate};
+use super::{Error, InsertSplit, ShardingKeyUpdate, aggregate::AggregateRewritePlan};
 
 /// Statement rewrite plan.
 ///
@@ -59,7 +59,7 @@ impl RewriteResult {
     pub(crate) fn apply_after_parser(&self, request: &mut ClientRequest) -> Result<(), Error> {
         match self {
             Self::InPlace {
-                offset: Some(ref offset),
+                offset: Some(offset),
             } => offset.apply_after_parser(request),
             _ => Ok(()),
         }

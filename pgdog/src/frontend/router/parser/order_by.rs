@@ -39,9 +39,9 @@ impl OrderBy {
     /// Get column name.
     pub fn name(&self) -> Option<&str> {
         match self {
-            OrderBy::AscColumn(ref name) => Some(name.as_str()),
-            OrderBy::DescColumn(ref name) => Some(name.as_str()),
-            OrderBy::AscVectorL2Column(ref name, _) => Some(name.as_str()),
+            OrderBy::AscColumn(name) => Some(name.as_str()),
+            OrderBy::DescColumn(name) => Some(name.as_str()),
+            OrderBy::AscVectorL2Column(name, _) => Some(name.as_str()),
             _ => None,
         }
     }

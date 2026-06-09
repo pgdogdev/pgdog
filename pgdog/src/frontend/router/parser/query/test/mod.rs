@@ -3,8 +3,8 @@
 use crate::{
     config::config,
     net::{
-        messages::{parse::Parse, Parameter},
         Close, Format, Parameters, Sync,
+        messages::{Parameter, parse::Parse},
     },
 };
 use bytes::Bytes;
@@ -14,8 +14,8 @@ use crate::backend::Cluster;
 use crate::config::ReadWriteStrategy;
 use crate::frontend::router::parser::{AstContext, Cache};
 use crate::frontend::{
-    client::{Sticky, TransactionType},
     BufferedQuery, ClientRequest, PreparedStatements, RouterContext,
+    client::{Sticky, TransactionType},
 };
 use crate::net::messages::Query;
 
@@ -59,11 +59,9 @@ fn parse_query(query: &str) -> Command {
 }
 
 macro_rules! command {
-    ($query:expr) => {{
-        command!($query, false)
-    }};
+    ($query:expr_2021) => {{ command!($query, false) }};
 
-    ($query:expr, $in_transaction:expr) => {{
+    ($query:expr_2021, $in_transaction:expr_2021) => {{
         let query = $query;
         let mut query_parser = QueryParser::default();
         let cluster = Cluster::new_test(&crate::config::config());
@@ -95,11 +93,9 @@ macro_rules! command {
 }
 
 macro_rules! query {
-    ($query:expr) => {{
-        query!($query, false)
-    }};
+    ($query:expr_2021) => {{ query!($query, false) }};
 
-    ($query:expr, $in_transaction:expr) => {{
+    ($query:expr_2021, $in_transaction:expr_2021) => {{
         let query = $query;
         let (command, _) = command!(query, $in_transaction);
 
@@ -112,7 +108,7 @@ macro_rules! query {
 }
 
 macro_rules! query_parser {
-    ($qp:expr, $query:expr, $in_transaction:expr, $cluster:expr) => {{
+    ($qp:expr_2021, $query:expr_2021, $in_transaction:expr_2021, $cluster:expr_2021) => {{
         let cluster = $cluster;
         let mut client_request: ClientRequest = vec![$query.into()].into();
 
@@ -149,7 +145,7 @@ macro_rules! query_parser {
         $qp.parse(router_context).unwrap()
     }};
 
-    ($qp:expr, $query:expr, $in_transaction:expr) => {
+    ($qp:expr_2021, $query:expr_2021, $in_transaction:expr_2021) => {
         query_parser!(
             $qp,
             $query,
@@ -160,11 +156,11 @@ macro_rules! query_parser {
 }
 
 macro_rules! parse {
-    ($query: expr, $params: expr) => {
+    ($query: expr_2021, $params: expr_2021) => {
         parse!("", $query, $params)
     };
 
-    ($name:expr, $query:expr, $params:expr, $codes:expr) => {{
+    ($name:expr_2021, $query:expr_2021, $params:expr_2021, $codes:expr_2021) => {{
         let parse = Parse::named($name, $query);
         let params = $params
             .into_iter()
@@ -205,7 +201,7 @@ macro_rules! parse {
         }
     }};
 
-    ($name:expr, $query:expr, $params: expr) => {
+    ($name:expr_2021, $query:expr_2021, $params: expr_2021) => {
         parse!($name, $query, $params, &[])
     };
 }
@@ -515,7 +511,9 @@ fn test_transaction() {
 
 #[test]
 fn test_insert_do_update() {
-    let route = query!("INSERT INTO foo (id) VALUES ($1::UUID) ON CONFLICT (id) DO UPDATE SET id = excluded.id RETURNING id");
+    let route = query!(
+        "INSERT INTO foo (id) VALUES ($1::UUID) ON CONFLICT (id) DO UPDATE SET id = excluded.id RETURNING id"
+    );
     assert!(route.is_write())
 }
 
@@ -553,7 +551,9 @@ fn test_cte() {
     let route = query!("WITH s AS (SELECT 1) SELECT 2");
     assert!(route.is_read());
 
-    let route = query!("WITH s AS (SELECT 1), s2 AS (INSERT INTO test VALUES ($1) RETURNING *), s3 AS (SELECT 123) SELECT * FROM s");
+    let route = query!(
+        "WITH s AS (SELECT 1), s2 AS (INSERT INTO test VALUES ($1) RETURNING *), s3 AS (SELECT 123) SELECT * FROM s"
+    );
     assert!(route.is_write());
 }
 

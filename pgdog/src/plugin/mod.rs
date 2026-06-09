@@ -5,8 +5,8 @@ use std::ops::Deref;
 use once_cell::sync::OnceCell;
 use pgdog_config::{Config, LogFormat};
 use pgdog_plugin::libloading::Library;
-use pgdog_plugin::{comp, libloading};
 use pgdog_plugin::{PdConfig, PdStr, Plugin};
+use pgdog_plugin::{comp, libloading};
 use semver::Version;
 use tokio::time::Instant;
 use tracing::{debug, error, info, warn};
@@ -62,7 +62,8 @@ pub fn load(config: &Config) -> Result<(), libloading::Error> {
             // Check Rust compiler version.
             if let Some(plugin_rustc) = plugin_lib.rustc_version() {
                 if rustc_version != plugin_rustc {
-                    warn!("skipping plugin \"{}\" because it was compiled with different compiler version ({})",
+                    warn!(
+                        "skipping plugin \"{}\" because it was compiled with different compiler version ({})",
                         plugin_lib.name(),
                         plugin_rustc.deref()
                     );
@@ -88,7 +89,8 @@ pub fn load(config: &Config) -> Result<(), libloading::Error> {
                 }
             } else {
                 warn!(
-                    "plugin {} doesn't expose its plugin API version, please update version of pgdog-plugin crate in your plugin", plugin_lib.name()
+                    "plugin {} doesn't expose its plugin API version, please update version of pgdog-plugin crate in your plugin",
+                    plugin_lib.name()
                 );
 
                 // TODO: use this after after some time when we want to force version

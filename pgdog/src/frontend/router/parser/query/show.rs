@@ -33,11 +33,11 @@ mod test_show {
     use crate::backend::Cluster;
     use crate::config::config;
     use crate::frontend::client::Sticky;
-    use crate::frontend::router::parser::{AstContext, Cache, Shard};
     use crate::frontend::router::QueryParser;
+    use crate::frontend::router::parser::{AstContext, Cache, Shard};
     use crate::frontend::{BufferedQuery, ClientRequest, PreparedStatements, RouterContext};
-    use crate::net::messages::Query;
     use crate::net::Parameters;
+    use crate::net::messages::Query;
 
     #[test]
     fn show_runs_on_a_direct_shard_round_robin() {

@@ -1,26 +1,26 @@
 use std::{collections::HashMap, ops::Deref, sync::Arc};
 
 use pg_query::{
+    Node, NodeEnum,
     protobuf::{
         AExpr, AExprKind, AStar, ColumnRef, DeleteStmt, InsertStmt, LimitOption, List,
         OverridingKind, ParamRef, ParseResult, RangeVar, RawStmt, ResTarget, SelectStmt,
         SetOperation, String as PgString, UpdateStmt,
     },
-    Node, NodeEnum,
 };
 use pgdog_config::{QueryParserEngine, RewriteMode};
 
 use crate::{
     frontend::{
-        router::{
-            parser::{rewrite::statement::visitor::visit_and_mutate_nodes, Column, Table, Value},
-            Ast,
-        },
         BufferedQuery, ClientRequest,
+        router::{
+            Ast,
+            parser::{Column, Table, Value, rewrite::statement::visitor::visit_and_mutate_nodes},
+        },
     },
     net::{
-        bind::Parameter, Bind, DataRow, Describe, Execute, Flush, Format, FromDataType, Parse,
-        ProtocolMessage, Query, RowDescription, Sync,
+        Bind, DataRow, Describe, Execute, Flush, Format, FromDataType, Parse, ProtocolMessage,
+        Query, RowDescription, Sync, bind::Parameter,
     },
 };
 
@@ -37,7 +37,7 @@ impl Statement {
     /// Create new Bind message for the statement from original Bind.
     pub(crate) fn rewrite_bind(&self, bind: &Bind) -> Result<Bind, Error> {
         let mut new = Bind::new_statement(""); // We use anonymous prepared
-                                               // statements for execution.
+        // statements for execution.
         for param in &self.params {
             let param = bind
                 .parameter(*param as usize - 1)?
@@ -334,13 +334,12 @@ impl<'a> StatementRewrite<'a> {
         Ok(stmt
             .target_list
             .iter()
-            .filter(|column| {
-                if let Ok(mut column) = Column::try_from(&column.node) {
+            .filter(|column| match Column::try_from(&column.node) {
+                Ok(mut column) => {
                     column.qualify(table);
                     self.schema.tables().get_table(column).is_some()
-                } else {
-                    false
                 }
+                _ => false,
             })
             .map(|column| {
                 if let Some(NodeEnum::ResTarget(res)) = &column.node {
@@ -438,7 +437,7 @@ fn res_targets_to_insert_res_targets(
 ) -> Result<HashMap<String, UpdateValue>, Error> {
     let mut result = HashMap::new();
     for target in &stmt.target_list {
-        if let Some(NodeEnum::ResTarget(ref target)) = target.node.as_ref() {
+        if let Some(NodeEnum::ResTarget(target)) = target.node.as_ref() {
             let valid = target
                 .val
                 .as_ref()
@@ -653,7 +652,7 @@ mod test {
     use pgdog_config::{Rewrite, ShardedTable};
 
     use crate::backend::schema::Schema;
-    use crate::backend::{replication::ShardedSchemas, ShardedTables};
+    use crate::backend::{ShardedTables, replication::ShardedSchemas};
     use crate::net::messages::row_description::Field;
 
     use super::*;

@@ -5,7 +5,7 @@ use rand::seq::SliceRandom;
 use crate::{
     backend::server::test::test_server,
     config::{FlexibleType, ShardedMapping, ShardedMappingKind},
-    net::{bind::Parameter, Bind, DataRow, Execute, FromBytes, Parse, Protocol, Query, Sync},
+    net::{Bind, DataRow, Execute, FromBytes, Parse, Protocol, Query, Sync, bind::Parameter},
 };
 
 use super::*;
@@ -29,9 +29,15 @@ async fn test_shard_varchar() {
     let mut queries = vec![
         Query::new("BEGIN"),
         Query::new("CREATE TABLE test_shard_varchar (c VARCHAR) PARTITION BY HASH(c)"),
-        Query::new("CREATE TABLE test_shard_varchar_0 PARTITION OF test_shard_varchar FOR VALUES WITH (modulus 3, remainder 0)"),
-        Query::new("CREATE TABLE test_shard_varchar_1 PARTITION OF test_shard_varchar FOR VALUES WITH (modulus 3, remainder 1)"),
-        Query::new("CREATE TABLE test_shard_varchar_2 PARTITION OF test_shard_varchar FOR VALUES WITH (modulus 3, remainder 2)"),
+        Query::new(
+            "CREATE TABLE test_shard_varchar_0 PARTITION OF test_shard_varchar FOR VALUES WITH (modulus 3, remainder 0)",
+        ),
+        Query::new(
+            "CREATE TABLE test_shard_varchar_1 PARTITION OF test_shard_varchar FOR VALUES WITH (modulus 3, remainder 1)",
+        ),
+        Query::new(
+            "CREATE TABLE test_shard_varchar_2 PARTITION OF test_shard_varchar FOR VALUES WITH (modulus 3, remainder 2)",
+        ),
     ];
     queries.extend(inserts);
 
@@ -162,9 +168,15 @@ async fn test_shard_by_range() {
     let mut queries = vec![
         Query::new("BEGIN"),
         Query::new("CREATE TABLE test_shard_bigint_range (c BIGINT) PARTITION BY RANGE(c)"),
-        Query::new("CREATE TABLE test_shard_bigint_range_0 PARTITION OF test_shard_bigint_range FOR VALUES FROM (0) TO (33)"),
-        Query::new("CREATE TABLE test_shard_bigint_range_1 PARTITION OF test_shard_bigint_range FOR VALUES FROM (33) TO (66)"),
-        Query::new("CREATE TABLE test_shard_bigint_range_2 PARTITION OF test_shard_bigint_range FOR VALUES FROM (66) TO (99)"),
+        Query::new(
+            "CREATE TABLE test_shard_bigint_range_0 PARTITION OF test_shard_bigint_range FOR VALUES FROM (0) TO (33)",
+        ),
+        Query::new(
+            "CREATE TABLE test_shard_bigint_range_1 PARTITION OF test_shard_bigint_range FOR VALUES FROM (33) TO (66)",
+        ),
+        Query::new(
+            "CREATE TABLE test_shard_bigint_range_2 PARTITION OF test_shard_bigint_range FOR VALUES FROM (66) TO (99)",
+        ),
     ];
     queries.extend(inserts);
 
@@ -220,9 +232,15 @@ async fn test_shard_by_list() {
     let mut queries = vec![
         Query::new("BEGIN"),
         Query::new("CREATE TABLE test_shard_bigint_list (c BIGINT) PARTITION BY LIST(c)"),
-        Query::new("CREATE TABLE test_shard_bigint_list_0 PARTITION OF test_shard_bigint_list FOR VALUES IN (0, 1, 2, 3, 4, 5, 6, 7, 8, 9)"),
-        Query::new("CREATE TABLE test_shard_bigint_list_1 PARTITION OF test_shard_bigint_list FOR VALUES IN (10, 11, 12, 13, 14, 15, 16, 17, 18, 19)"),
-        Query::new("CREATE TABLE test_shard_bigint_list_2 PARTITION OF test_shard_bigint_list FOR VALUES IN (20, 21, 22, 23, 24, 25, 26, 27, 28, 29)"),
+        Query::new(
+            "CREATE TABLE test_shard_bigint_list_0 PARTITION OF test_shard_bigint_list FOR VALUES IN (0, 1, 2, 3, 4, 5, 6, 7, 8, 9)",
+        ),
+        Query::new(
+            "CREATE TABLE test_shard_bigint_list_1 PARTITION OF test_shard_bigint_list FOR VALUES IN (10, 11, 12, 13, 14, 15, 16, 17, 18, 19)",
+        ),
+        Query::new(
+            "CREATE TABLE test_shard_bigint_list_2 PARTITION OF test_shard_bigint_list FOR VALUES IN (20, 21, 22, 23, 24, 25, 26, 27, 28, 29)",
+        ),
     ];
     queries.extend(inserts);
 
@@ -302,15 +320,27 @@ async fn test_shard_by_uuid_list() {
         Query::new("CREATE TABLE test_shard_uuid_list (id UUID) PARTITION BY LIST(id)"),
         Query::new(format!(
             "CREATE TABLE test_shard_uuid_list_0 PARTITION OF test_shard_uuid_list FOR VALUES IN ({})",
-            shard_0_uuids.iter().map(|u| format!("'{}'", u)).collect::<Vec<_>>().join(", ")
+            shard_0_uuids
+                .iter()
+                .map(|u| format!("'{}'", u))
+                .collect::<Vec<_>>()
+                .join(", ")
         )),
         Query::new(format!(
             "CREATE TABLE test_shard_uuid_list_1 PARTITION OF test_shard_uuid_list FOR VALUES IN ({})",
-            shard_1_uuids.iter().map(|u| format!("'{}'", u)).collect::<Vec<_>>().join(", ")
+            shard_1_uuids
+                .iter()
+                .map(|u| format!("'{}'", u))
+                .collect::<Vec<_>>()
+                .join(", ")
         )),
         Query::new(format!(
             "CREATE TABLE test_shard_uuid_list_2 PARTITION OF test_shard_uuid_list FOR VALUES IN ({})",
-            shard_2_uuids.iter().map(|u| format!("'{}'", u)).collect::<Vec<_>>().join(", ")
+            shard_2_uuids
+                .iter()
+                .map(|u| format!("'{}'", u))
+                .collect::<Vec<_>>()
+                .join(", ")
         )),
     ];
 
@@ -369,9 +399,15 @@ async fn test_shard_by_list_with_default() {
     let queries = vec![
         Query::new("BEGIN"),
         Query::new("CREATE TABLE test_shard_list_default (c BIGINT) PARTITION BY LIST(c)"),
-        Query::new("CREATE TABLE test_shard_list_default_0 PARTITION OF test_shard_list_default FOR VALUES IN (0, 1, 2)"),
-        Query::new("CREATE TABLE test_shard_list_default_1 PARTITION OF test_shard_list_default FOR VALUES IN (10, 11, 12)"),
-        Query::new("CREATE TABLE test_shard_list_default_2 PARTITION OF test_shard_list_default DEFAULT"),
+        Query::new(
+            "CREATE TABLE test_shard_list_default_0 PARTITION OF test_shard_list_default FOR VALUES IN (0, 1, 2)",
+        ),
+        Query::new(
+            "CREATE TABLE test_shard_list_default_1 PARTITION OF test_shard_list_default FOR VALUES IN (10, 11, 12)",
+        ),
+        Query::new(
+            "CREATE TABLE test_shard_list_default_2 PARTITION OF test_shard_list_default DEFAULT",
+        ),
     ];
     server.execute_batch(&queries).await.unwrap();
 

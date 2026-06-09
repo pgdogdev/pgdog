@@ -1,7 +1,7 @@
 use bytes::BytesMut;
 
-use crate::net::replication::ReplicationMeta;
 use crate::net::CopyData;
+use crate::net::replication::ReplicationMeta;
 
 use super::super::code;
 use super::super::prelude::*;

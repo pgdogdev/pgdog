@@ -35,22 +35,33 @@ impl Command for SchemaSync {
         let parts = sql.split(" ").collect::<Vec<_>>();
 
         match parts[..] {
-            ["schema_sync", phase, from_database, to_database, publication] => Ok(Self {
+            [
+                "schema_sync",
+                phase,
+                from_database,
+                to_database,
+                publication,
+            ] => Ok(Self {
                 from_database: from_database.to_owned(),
                 to_database: to_database.to_owned(),
                 publication: publication.to_owned(),
                 replication_slot: None,
                 phase: parse_phase(phase)?,
             }),
-            ["schema_sync", phase, from_database, to_database, publication, replication_slot] => {
-                Ok(Self {
-                    from_database: from_database.to_owned(),
-                    to_database: to_database.to_owned(),
-                    publication: publication.to_owned(),
-                    replication_slot: Some(replication_slot.to_owned()),
-                    phase: parse_phase(phase)?,
-                })
-            }
+            [
+                "schema_sync",
+                phase,
+                from_database,
+                to_database,
+                publication,
+                replication_slot,
+            ] => Ok(Self {
+                from_database: from_database.to_owned(),
+                to_database: to_database.to_owned(),
+                publication: publication.to_owned(),
+                replication_slot: Some(replication_slot.to_owned()),
+                phase: parse_phase(phase)?,
+            }),
             _ => Err(Error::Syntax),
         }
     }

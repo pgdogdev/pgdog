@@ -3,8 +3,8 @@
 use std::fmt::Display;
 
 use pg_query::{
-    protobuf::{a_const::Val, *},
     NodeEnum,
+    protobuf::{a_const::Val, *},
 };
 
 use crate::net::{messages::Vector, vector::str_to_vector};
@@ -62,10 +62,9 @@ impl<'a> From<&'a AConst> for Value<'a> {
         match value.val.as_ref() {
             Some(Val::Sval(s)) => {
                 if s.sval.starts_with('[') && s.sval.ends_with(']') {
-                    if let Ok(vector) = str_to_vector(s.sval.as_str()) {
-                        Value::Vector(vector)
-                    } else {
-                        Value::String(s.sval.as_str())
+                    match str_to_vector(s.sval.as_str()) {
+                        Ok(vector) => Value::Vector(vector),
+                        _ => Value::String(s.sval.as_str()),
                     }
                 } else {
                     match s.sval.parse::<i64>() {

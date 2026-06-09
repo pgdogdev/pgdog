@@ -1,8 +1,8 @@
 use crate::frontend::router::parser::aggregate::{Aggregate, AggregateFunction};
-use pg_query::protobuf::{
-    a_const::Val, AConst, FuncCall, Integer, Node, ResTarget, SelectStmt, String as PgString,
-};
 use pg_query::NodeEnum;
+use pg_query::protobuf::{
+    AConst, FuncCall, Integer, Node, ResTarget, SelectStmt, String as PgString, a_const::Val,
+};
 
 use super::{AggregateRewritePlan, HelperKind, HelperMapping, RewriteOutput};
 
@@ -304,10 +304,12 @@ mod tests {
 
         let aggregate = Aggregate::parse(select(&mut ast), &Default::default());
         assert_eq!(aggregate.targets().len(), 2);
-        assert!(aggregate
-            .targets()
-            .iter()
-            .any(|target| matches!(target.function(), AggregateFunction::Count)));
+        assert!(
+            aggregate
+                .targets()
+                .iter()
+                .any(|target| matches!(target.function(), AggregateFunction::Count))
+        );
     }
 
     #[test]

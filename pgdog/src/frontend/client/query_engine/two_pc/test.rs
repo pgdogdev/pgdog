@@ -5,8 +5,8 @@ use crate::{
     },
     config,
     frontend::router::{
-        parser::{Shard, ShardWithPriority},
         Route,
+        parser::{Shard, ShardWithPriority},
     },
     logger,
     net::Protocol,
@@ -78,9 +78,11 @@ async fn test_cleanup_transaction_phase_one() {
         .await
         .err()
         .unwrap();
-    assert!(table
-        .to_string()
-        .contains(r#"relation "test_cleanup_transaction_phase_one" does not exist"#));
+    assert!(
+        table
+            .to_string()
+            .contains(r#"relation "test_cleanup_transaction_phase_one" does not exist"#)
+    );
 }
 
 #[tokio::test]

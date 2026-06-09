@@ -29,7 +29,13 @@ impl Command for Reshard {
                 publication: publication.to_owned(),
                 replication_slot: None,
             }),
-            ["reshard", from_database, to_database, publication, replication_slot] => Ok(Self {
+            [
+                "reshard",
+                from_database,
+                to_database,
+                publication,
+                replication_slot,
+            ] => Ok(Self {
                 from_database: from_database.to_owned(),
                 to_database: to_database.to_owned(),
                 publication: publication.to_owned(),

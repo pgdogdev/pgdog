@@ -9,13 +9,13 @@ use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 use tokio::{
     select, spawn,
-    sync::{broadcast, mpsc, Notify},
+    sync::{Notify, broadcast, mpsc},
     time::sleep,
 };
 use tracing::{debug, error, info};
 
 use crate::{
-    backend::{self, pool::Error, ConnectReason, DisconnectReason, Pool},
+    backend::{self, ConnectReason, DisconnectReason, Pool, pool::Error},
     config::config,
     net::{
         FromBytes, FrontendPid, NotificationResponse, Parameter, Parameters, Protocol,

@@ -62,7 +62,7 @@ impl QueryParser {
                         }
                         PdShard::Unknown => self.plugin_output.shard = None,
                         PdShard::Blocked => {
-                            return Err(Error::BlockedByPlugin(plugin.name().to_owned()))
+                            return Err(Error::BlockedByPlugin(plugin.name().to_owned()));
                         }
                     },
                     Err(_) => self.plugin_output.shard = None,

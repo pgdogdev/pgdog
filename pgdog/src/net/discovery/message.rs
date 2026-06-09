@@ -1,4 +1,4 @@
-use rmp_serde::{decode, encode, Deserializer, Serializer};
+use rmp_serde::{Deserializer, Serializer, decode, encode};
 use serde::{Deserialize, Serialize};
 
 use crate::frontend::comms::comms;

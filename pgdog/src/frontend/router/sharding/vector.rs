@@ -2,7 +2,7 @@ pub use pgdog_vector::{Centroids, Distance};
 
 #[cfg(test)]
 mod test {
-    use crate::net::messages::{data_types::Float, Vector};
+    use crate::net::messages::{Vector, data_types::Float};
 
     use super::*;
 

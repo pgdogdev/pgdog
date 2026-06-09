@@ -254,8 +254,8 @@ mod tests {
     use crate::backend::schema::columns::StatsColumn as SchemaColumn;
     use crate::backend::schema::{Relation, Schema};
     use crate::backend::{ShardedTables, ShardingSchema};
-    use crate::frontend::router::parser::StatementRewriteContext;
     use crate::frontend::PreparedStatements;
+    use crate::frontend::router::parser::StatementRewriteContext;
     use crate::test_utils::set_env_var;
 
     fn make_schema_with_bigint_pk() -> Schema {

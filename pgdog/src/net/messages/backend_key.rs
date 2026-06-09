@@ -160,8 +160,8 @@ impl Protocol for BackendKeyData {
 #[cfg(test)]
 mod tests {
     use super::{BackendKeyData, ProtocolVersion, SecretKey};
-    use crate::net::messages::{FromBytes, ToBytes};
     use crate::net::FrontendPid;
+    use crate::net::messages::{FromBytes, ToBytes};
 
     #[test]
     fn test_backend_key_roundtrip_legacy() {

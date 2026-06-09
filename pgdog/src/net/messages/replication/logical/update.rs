@@ -106,7 +106,7 @@ impl ToBytes for Update {
 mod test {
     use super::*;
     use crate::net::messages::replication::logical::tuple_data::{
-        text_col, toasted_col, Identifier, TupleData,
+        Identifier, TupleData, text_col, toasted_col,
     };
     use pgdog_postgres_types::Oid;
 
@@ -133,10 +133,12 @@ mod test {
         // No TOAST columns — every column passes through unchanged.
         let result = make_update(vec![text_col("1"), text_col("x"), text_col("y")]).partial_new();
         assert_eq!(result.columns.len(), 3);
-        assert!(result
-            .columns
-            .iter()
-            .all(|c| c.identifier != Identifier::Toasted));
+        assert!(
+            result
+                .columns
+                .iter()
+                .all(|c| c.identifier != Identifier::Toasted)
+        );
         let bind = result.to_bind("__pgdog");
         assert_eq!(bind.parameter(0).unwrap().unwrap().text(), Some("1"));
         assert_eq!(bind.parameter(1).unwrap().unwrap().text(), Some("x"));

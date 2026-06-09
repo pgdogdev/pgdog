@@ -1,12 +1,12 @@
 //! Shard COPY stream from one source
 //! between N shards.
 
-use pg_query::{parse_raw, NodeEnum};
+use pg_query::{NodeEnum, parse_raw};
 use pgdog_config::QueryParserEngine;
 use tracing::debug;
 
 use crate::{
-    backend::{replication::subscriber::ParallelConnection, Cluster, ConnectReason},
+    backend::{Cluster, ConnectReason, replication::subscriber::ParallelConnection},
     config::Role,
     frontend::router::parser::{CopyParser, Shard},
     net::{
@@ -188,7 +188,7 @@ impl CopySubscriber {
                 'E' => {
                     return Err(Error::PgError(Box::new(ErrorResponse::from_bytes(
                         msg.to_bytes(),
-                    )?)))
+                    )?)));
                 }
                 c => return Err(Error::OutOfSync(c)),
             }
@@ -301,7 +301,7 @@ mod test {
             pool::Request, replication::publisher::PublicationTable, server::test::test_server,
         },
         config::config,
-        frontend::router::parser::binary::{header::Header, Data, Tuple},
+        frontend::router::parser::binary::{Data, Tuple, header::Header},
     };
 
     use super::*;

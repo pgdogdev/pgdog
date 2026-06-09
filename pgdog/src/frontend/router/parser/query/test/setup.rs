@@ -4,16 +4,16 @@ use pgdog_config::ConfigAndUsers;
 
 use crate::{
     backend::Cluster,
-    config::{self, config, ReadWriteStrategy},
+    config::{self, ReadWriteStrategy, config},
     frontend::{
+        ClientRequest, Command, PreparedStatements, RouterContext,
         client::{Sticky, TransactionType},
         router::{
-            parser::{AstContext, Cache, Error},
             QueryParser,
+            parser::{AstContext, Cache, Error},
         },
-        ClientRequest, Command, PreparedStatements, RouterContext,
     },
-    net::{parameter::ParameterValue, Parameters, ProtocolMessage},
+    net::{Parameters, ProtocolMessage, parameter::ParameterValue},
 };
 
 pub(super) use crate::net::*;

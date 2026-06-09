@@ -50,7 +50,7 @@ impl fmt::Display for TableValidationErrors {
 ///
 /// Only valid inside a function that returns `Result<_, Error>`.
 macro_rules! ensure_validation {
-    ($errors:expr) => {{
+    ($errors:expr_2021) => {{
         let mut __errors = $errors;
         if !__errors.is_empty() {
             __errors.sort_by_key(|e| e.table_name.clone());
@@ -352,17 +352,21 @@ mod tests {
     fn not_retryable() {
         assert!(!Error::CopyAborted(PublicationTable::default()).is_retryable());
         assert!(!Error::DataSyncAborted.is_retryable());
-        assert!(!Error::from(TableValidationError {
-            table_name: String::new(),
-            kind: TableValidationErrorKind::NoIdentityColumns,
-        })
-        .is_retryable());
-        assert!(!Error::FullIdentityMissingOld {
-            table: PublicationTable::default(),
-            oid: pgdog_postgres_types::Oid::from(1234u32),
-            op: "UPDATE",
-        }
-        .is_retryable());
+        assert!(
+            !Error::from(TableValidationError {
+                table_name: String::new(),
+                kind: TableValidationErrorKind::NoIdentityColumns,
+            })
+            .is_retryable()
+        );
+        assert!(
+            !Error::FullIdentityMissingOld {
+                table: PublicationTable::default(),
+                oid: pgdog_postgres_types::Oid::from(1234u32),
+                op: "UPDATE",
+            }
+            .is_retryable()
+        );
         assert!(!Error::NoReplicaIdentity("s".into(), "t".into()).is_retryable());
     }
 

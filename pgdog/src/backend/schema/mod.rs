@@ -13,7 +13,7 @@ use tracing::info;
 
 pub use relation::Relation;
 
-use super::{pool::Request, Cluster, Error, Server};
+use super::{Cluster, Error, Server, pool::Request};
 use crate::frontend::router::parser::Table;
 use crate::net::parameter::ParameterValue;
 use sync::ShardConfig;
@@ -149,7 +149,7 @@ impl Schema {
             for column in table.columns().iter().filter(|column| {
                 column.1.is_primary_key // Only primary keys.
                     && matches!(column.1.data_type.as_str(), "bigint" | "int8") // Only BIGINT.
-                                                                                // Only the ones that rely on a sequence.
+                // Only the ones that rely on a sequence.
             }) {
                 info!(
                     "[schema] creating sharded sequence for \"{}\".\"{}\".\"{}\"",
@@ -581,17 +581,21 @@ mod test {
         server.execute_checked("BEGIN").await.unwrap();
 
         let schema = Schema::load(&mut server).await.unwrap();
-        assert!(!schema
-            .aggregate_functions
-            .contains(&String::from("pgdog_sum")));
+        assert!(
+            !schema
+                .aggregate_functions
+                .contains(&String::from("pgdog_sum"))
+        );
 
         server
             .execute_checked("CREATE AGGREGATE pgdog_sum (int4) (sfunc = int4_sum, stype = bigint)")
             .await
             .unwrap();
         let schema = Schema::load(&mut server).await.unwrap();
-        assert!(schema
-            .aggregate_functions
-            .contains(&String::from("pgdog_sum")));
+        assert!(
+            schema
+                .aggregate_functions
+                .contains(&String::from("pgdog_sum"))
+        );
     }
 }

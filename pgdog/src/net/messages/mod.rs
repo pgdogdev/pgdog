@@ -293,7 +293,7 @@ impl Message {
 /// Check that the message we received is what we expected.
 /// Return an error otherwise.
 macro_rules! code {
-    ($code: expr, $expected: expr) => {{
+    ($code: expr_2021, $expected: expr_2021) => {{
         let code = $code.get_u8() as char;
         let expected = $expected as char;
         if code != expected {

@@ -46,22 +46,26 @@ impl CopyData {
 
 impl std::fmt::Debug for CopyData {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if let Some(xlog_data) = self.xlog_data() {
-            f.debug_struct("CopyData")
+        match self.xlog_data() {
+            Some(xlog_data) => f
+                .debug_struct("CopyData")
                 .field("xlog_data", &xlog_data)
-                .finish()
-        } else if let Some(meta) = self.replication_meta() {
-            f.debug_struct("CopyData")
-                .field("replication_meta", &meta)
-                .finish()
-        } else {
-            let mut f = f.debug_struct("CopyData");
-            let f = if let Ok(s) = from_utf8(self.data()) {
-                f.field("data", &s)
-            } else {
-                f.field("data", &self.data())
-            };
-            f.finish()
+                .finish(),
+            _ => {
+                if let Some(meta) = self.replication_meta() {
+                    f.debug_struct("CopyData")
+                        .field("replication_meta", &meta)
+                        .finish()
+                } else {
+                    let mut f = f.debug_struct("CopyData");
+                    let f = if let Ok(s) = from_utf8(self.data()) {
+                        f.field("data", &s)
+                    } else {
+                        f.field("data", &self.data())
+                    };
+                    f.finish()
+                }
+            }
         }
     }
 }

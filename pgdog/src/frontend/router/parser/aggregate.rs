@@ -1,6 +1,6 @@
-use pg_query::protobuf::Integer;
-use pg_query::protobuf::{a_const::Val, Node, SelectStmt, String as PgQueryString};
 use pg_query::NodeEnum;
+use pg_query::protobuf::Integer;
+use pg_query::protobuf::{Node, SelectStmt, String as PgQueryString, a_const::Val};
 
 use super::{ExpressionRegistry, Function};
 use crate::backend::schema::Schema;
@@ -158,7 +158,7 @@ impl Aggregate {
             .collect::<Vec<_>>();
 
         for (idx, node) in stmt.target_list.iter().enumerate() {
-            if let Some(NodeEnum::ResTarget(ref res)) = &node.node {
+            if let Some(NodeEnum::ResTarget(res)) = &node.node {
                 if let Some(node) = &res.val {
                     if let Ok(func) = Function::try_from(node.as_ref()) {
                         let function = match func.name {

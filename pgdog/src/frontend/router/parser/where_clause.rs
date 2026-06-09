@@ -1,12 +1,12 @@
 //! WHERE clause of a UPDATE/SELECT/DELETE query.
 
 use pg_query::{
-    protobuf::{a_const::Val, *},
     NodeEnum,
+    protobuf::{a_const::Val, *},
 };
 use std::string::String;
 
-use crate::frontend::router::parser::{from_clause::FromClause, Table};
+use crate::frontend::router::parser::{Table, from_clause::FromClause};
 
 use super::Key;
 
@@ -95,7 +95,7 @@ impl<'a> WhereClause<'a> {
         source: &'a TablesSource<'a>,
         where_clause: &'a Option<Box<Node>>,
     ) -> Option<WhereClause<'a>> {
-        let Some(ref where_clause) = where_clause else {
+        let Some(where_clause) = where_clause else {
             return None;
         };
 
@@ -143,14 +143,14 @@ impl<'a> WhereClause<'a> {
     fn search_for_keys(output: &Output, table_name: Option<&str>, column_name: &str) -> Vec<Key> {
         let mut keys = vec![];
 
-        if let Output::Filter(ref left, ref right) = output {
+        if let Output::Filter(left, right) = output {
             let left = left.as_slice();
             let right = right.as_slice();
 
             match (&left, &right) {
                 // TODO: Handle something like
                 // id = (SELECT 5) which is stupid but legal SQL.
-                (&[Output::Column(ref column)], output) => {
+                (&[Output::Column(column)], output) => {
                     if Self::column_match(column, table_name, column_name) {
                         for output in output.iter() {
                             if let Some(key) = Self::get_key(output) {
@@ -159,7 +159,7 @@ impl<'a> WhereClause<'a> {
                         }
                     }
                 }
-                (output, &[Output::Column(ref column)]) => {
+                (output, &[Output::Column(column)]) => {
                     if Self::column_match(column, table_name, column_name) {
                         for output in output.iter() {
                             if let Some(key) = Self::get_key(output) {

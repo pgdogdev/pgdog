@@ -1,7 +1,7 @@
 #![allow(clippy::print_stdout)]
 
 use crate::frontend::router::sharding::distance_simd_rust;
-use crate::net::messages::{data_types::Float, Vector};
+use crate::net::messages::{Vector, data_types::Float};
 use std::time::{Duration, Instant};
 
 fn benchmark_implementation(name: &str, p: &[Float], q: &[Float], iterations: usize) -> Duration {

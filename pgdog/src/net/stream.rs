@@ -179,8 +179,8 @@ impl Stream {
             let bytes = message.to_bytes();
 
             match &mut self.inner {
-                StreamInner::Plain(ref mut stream) => eof(stream.write_all(&bytes).await)?,
-                StreamInner::Tls(ref mut stream) => eof(stream.write_all(&bytes).await)?,
+                StreamInner::Plain(stream) => eof(stream.write_all(&bytes).await)?,
+                StreamInner::Tls(stream) => eof(stream.write_all(&bytes).await)?,
                 StreamInner::DevNull => (),
             }
 

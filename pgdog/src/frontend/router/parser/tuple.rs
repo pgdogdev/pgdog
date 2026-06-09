@@ -2,7 +2,7 @@
 
 use std::ops::Deref;
 
-use pg_query::{protobuf::*, NodeEnum};
+use pg_query::{NodeEnum, protobuf::*};
 
 use super::Value;
 

@@ -1,7 +1,7 @@
 use crate::{
     frontend::{
-        router::parser::{cache::Stats, Cache},
         PreparedStatements,
+        router::parser::{Cache, cache::Stats},
     },
     stats::memory::MemoryUsage,
 };

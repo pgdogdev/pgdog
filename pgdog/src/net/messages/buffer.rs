@@ -158,7 +158,7 @@ mod test {
 
         spawn(async move {
             let mut conn = TcpStream::connect(addr).await.unwrap();
-            use rand::{rngs::StdRng, Rng, SeedableRng};
+            use rand::{Rng, SeedableRng, rngs::StdRng};
             let mut rng = StdRng::from_os_rng();
 
             for i in 0..5000 {

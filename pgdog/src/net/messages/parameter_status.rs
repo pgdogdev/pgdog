@@ -1,10 +1,9 @@
 //! ParameterStatus (B) message.
 
 use crate::net::{
-    c_string_buf,
+    Parameter, c_string_buf,
     messages::{code, prelude::*},
     parameter::ParameterValue,
-    Parameter,
 };
 
 /// ParameterStatus (B) message.

@@ -10,8 +10,8 @@ use super::CopyFormat;
 
 static RECORD_BUFFER: usize = 4096;
 static ENDS_BUFFER: usize = 2048; // Max of 2048 columns in a CSV.
-                                  // Postgres supports a max of 1600 columns in a table,
-                                  // so we are well within bounds.
+// Postgres supports a max of 1600 columns in a table,
+// so we are well within bounds.
 
 /// CSV reader that can handle partial inputs.
 #[derive(Clone)]

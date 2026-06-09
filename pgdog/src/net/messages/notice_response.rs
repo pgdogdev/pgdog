@@ -1,6 +1,6 @@
 use bytes::BytesMut;
 
-use super::{prelude::*, ErrorResponse};
+use super::{ErrorResponse, prelude::*};
 
 #[derive(Debug)]
 pub struct NoticeResponse {

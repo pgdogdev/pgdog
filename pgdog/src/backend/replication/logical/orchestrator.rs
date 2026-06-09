@@ -1,9 +1,9 @@
 use crate::{
     backend::{
+        Cluster, Schema,
         databases::{cancel_all, cutover},
         maintenance_mode,
-        schema::sync::{pg_dump::PgDumpOutput, PgDump},
-        Cluster, Schema,
+        schema::sync::{PgDump, pg_dump::PgDumpOutput},
     },
     util::{format_bytes, human_duration, random_string},
 };
@@ -12,7 +12,7 @@ use std::{fmt::Display, sync::Arc, time::Duration};
 use tokio::{
     select,
     sync::Mutex,
-    time::{interval, Instant},
+    time::{Instant, interval},
 };
 use tracing::{info, warn};
 
@@ -483,7 +483,7 @@ impl ReplicationWaiter {
 }
 
 macro_rules! ok_or_abort {
-    ($expr:expr) => {
+    ($expr:expr_2021) => {
         match $expr {
             Ok(res) => res,
             Err(err) => {

@@ -7,8 +7,8 @@ mod insert {
             test::{read_messages, test_client_sharded},
         },
         net::{
-            bind::Parameter, Bind, CommandComplete, DataRow, Describe, Execute, Flush, Format,
-            FromBytes, Parse, Sync, ToBytes,
+            Bind, CommandComplete, DataRow, Describe, Execute, Flush, Format, FromBytes, Parse,
+            Sync, ToBytes, bind::Parameter,
         },
     };
 

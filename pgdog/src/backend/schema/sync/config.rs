@@ -2,11 +2,11 @@
 
 use tracing::info;
 
-use crate::backend::pool::Request;
 use crate::backend::Cluster;
 use crate::backend::Error;
 use crate::backend::Pool;
 use crate::backend::Schema;
+use crate::backend::pool::Request;
 
 pub struct ShardConfig {
     shard: usize,

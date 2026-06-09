@@ -1,10 +1,9 @@
 //! Startup, SSLRequest messages.
 
 use crate::net::{
-    c_string,
+    Error, c_string,
     messages::{BackendKeyData, ProtocolVersion},
     parameter::{ParameterValue, Parameters},
-    Error,
 };
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use tokio::io::{AsyncRead, AsyncReadExt};
@@ -298,8 +297,8 @@ fn search_path(value: &str) -> ParameterValue {
 
 #[cfg(test)]
 mod test {
-    use crate::net::messages::{BackendKeyData, ProtocolVersion, ToBytes};
     use crate::net::FrontendPid;
+    use crate::net::messages::{BackendKeyData, ProtocolVersion, ToBytes};
 
     use super::*;
     use bytes::{Buf, BufMut, BytesMut};

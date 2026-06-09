@@ -2,7 +2,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use once_cell::sync::Lazy;
 use parking_lot::{Mutex, MutexGuard};
-use tokio::sync::{futures::Notified, Notify};
+use tokio::sync::{Notify, futures::Notified};
 
 static RELOAD_NOTIFY: Lazy<ReloadNotify> = Lazy::new(|| ReloadNotify {
     notify: Notify::new(),

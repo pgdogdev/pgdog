@@ -15,22 +15,22 @@ use tracing::{debug, error, info, warn};
 use crate::auth::AuthResult;
 use crate::backend::replication::ShardedSchemas;
 use crate::config::PoolerMode;
+use crate::frontend::PreparedStatements;
 use crate::frontend::client::query_engine::two_pc::Manager;
 use crate::frontend::router::parser::Cache;
-use crate::frontend::router::sharding::mapping::mapping_valid;
 use crate::frontend::router::sharding::Mapping;
-use crate::frontend::PreparedStatements;
+use crate::frontend::router::sharding::mapping::mapping_valid;
 use crate::{
     backend::pool::PoolConfig,
-    config::{config, load, set, ConfigAndUsers, ManualQuery, Role, User as ConfigUser},
+    config::{ConfigAndUsers, ManualQuery, Role, User as ConfigUser, config, load, set},
     net::{messages::FrontendPid, tls},
 };
 
 use super::{
+    Cluster, ClusterShardConfig, Error, ShardedTables,
     pool::{Address, ClusterConfig, Config},
     reload_notify,
     replication::ReplicationConfig,
-    Cluster, ClusterShardConfig, Error, ShardedTables,
 };
 
 static DATABASES: Lazy<ArcSwap<Databases>> =

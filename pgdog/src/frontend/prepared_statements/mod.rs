@@ -8,7 +8,7 @@ use tokio::{spawn, time::sleep};
 use tracing::debug;
 
 use crate::{
-    config::{config, PreparedStatements as PreparedStatementsLevel},
+    config::{PreparedStatements as PreparedStatementsLevel, config},
     net::{Parse, ProtocolMessage},
 };
 

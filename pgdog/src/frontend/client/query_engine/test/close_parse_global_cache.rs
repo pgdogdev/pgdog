@@ -34,9 +34,11 @@ async fn test_close_parse_same_name_global_cache() {
 
     // Verify the client's local cache
     assert_eq!(client.client().prepared_statements.len_local(), 1);
-    assert!(client
-        .client()
-        .prepared_statements
-        .name("test_stmt")
-        .is_some());
+    assert!(
+        client
+            .client()
+            .prepared_statements
+            .name("test_stmt")
+            .is_some()
+    );
 }

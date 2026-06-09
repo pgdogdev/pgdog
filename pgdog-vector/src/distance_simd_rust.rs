@@ -10,8 +10,10 @@ use std::arch::aarch64::*;
 /// SAFETY: Float is a newtype wrapper around f32, so the memory layout is identical
 #[inline(always)]
 unsafe fn float_slice_to_f32(floats: &[Float]) -> &[f32] {
-    // This is safe because Float is a transparent wrapper around f32
-    std::slice::from_raw_parts(floats.as_ptr() as *const f32, floats.len())
+    unsafe {
+        // This is safe because Float is a transparent wrapper around f32
+        std::slice::from_raw_parts(floats.as_ptr() as *const f32, floats.len())
+    }
 }
 
 /// Scalar reference implementation - no allocations

@@ -4,14 +4,14 @@ use arc_swap::ArcSwap;
 use std::ops::Deref;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{broadcast, OnceCell};
+use tokio::sync::{OnceCell, broadcast};
 use tokio::{select, spawn, sync::Notify};
 use tracing::{debug, info};
 
-use crate::backend::databases::User;
-use crate::backend::pool::lb::ban::Ban;
 use crate::backend::PubSubListener;
 use crate::backend::Schema;
+use crate::backend::databases::User;
+use crate::backend::pool::lb::ban::Ban;
 use crate::config::{LoadBalancingStrategy, ReadWriteSplit, Role};
 use crate::net::messages::FrontendPid;
 use crate::net::{NotificationResponse, Parameters};
@@ -80,10 +80,9 @@ impl Shard {
 
     /// Get connection to primary if configured, otherwise replica.
     pub async fn primary_or_replica(&self, request: &Request) -> Result<Guard, Error> {
-        if let Ok(primary) = self.primary(request).await {
-            Ok(primary)
-        } else {
-            self.replica(request).await
+        match self.primary(request).await {
+            Ok(primary) => Ok(primary),
+            _ => self.replica(request).await,
         }
     }
 
@@ -108,19 +107,17 @@ impl Shard {
         &self,
         channel: &str,
     ) -> Result<broadcast::Receiver<NotificationResponse>, Error> {
-        if let Some(listener) = self.pub_sub.load_full().deref() {
-            listener.listen(channel).await
-        } else {
-            Err(Error::PubSubDisabled)
+        match self.pub_sub.load_full().deref() {
+            Some(listener) => listener.listen(channel).await,
+            _ => Err(Error::PubSubDisabled),
         }
     }
 
     /// Notify channel with optional payload (payload can be empty string).
     pub async fn notify(&self, channel: &str, payload: &str) -> Result<(), Error> {
-        if let Some(listener) = self.pub_sub.load_full().deref() {
-            listener.notify(channel, payload).await
-        } else {
-            Err(Error::PubSubDisabled)
+        match self.pub_sub.load_full().deref() {
+            Some(listener) => listener.notify(channel, payload).await,
+            _ => Err(Error::PubSubDisabled),
         }
     }
 

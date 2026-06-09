@@ -2,11 +2,11 @@
 use crate::net::c_string_buf_len;
 use uuid::Uuid;
 
-use super::code;
-use super::prelude::*;
 use super::Error;
 use super::FromDataType;
 use super::Vector;
+use super::code;
+use super::prelude::*;
 use bytes::BytesMut;
 
 use std::fmt::Debug;
@@ -447,10 +447,10 @@ mod test {
     use super::*;
     use crate::{
         backend::{
-            pool::{test::pool, Request},
+            pool::{Request, test::pool},
             server::test::test_server,
         },
-        net::{messages::ErrorResponse, DataRow, Execute, Parse, ProtocolMessage, Sync},
+        net::{DataRow, Execute, Parse, ProtocolMessage, Sync, messages::ErrorResponse},
     };
 
     #[tokio::test]

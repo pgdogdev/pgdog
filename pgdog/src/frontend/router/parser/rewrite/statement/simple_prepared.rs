@@ -121,8 +121,8 @@ fn rewrite_single_prepared(
 mod tests {
     use super::super::{RewritePlan, StatementRewrite, StatementRewriteContext};
     use super::*;
-    use crate::backend::schema::Schema;
     use crate::backend::ShardingSchema;
+    use crate::backend::schema::Schema;
     use crate::config::PreparedStatements as PreparedStatementsLevel;
     use pg_query::parse;
     use pg_query::protobuf::ParseResult;

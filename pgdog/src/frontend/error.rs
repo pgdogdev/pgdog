@@ -91,8 +91,8 @@ impl From<crate::frontend::client::query_engine::multi_step::error::Error> for E
 impl Error {
     /// Checkout timeout.
     pub fn checkout_timeout(&self) -> bool {
-        use crate::backend::pool::Error as PoolError;
         use crate::backend::Error as BackendError;
+        use crate::backend::pool::Error as PoolError;
 
         matches!(
             self,

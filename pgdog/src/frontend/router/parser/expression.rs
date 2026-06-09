@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use pg_query::{protobuf::AExprKind, protobuf::TypeName, Node, NodeEnum};
+use pg_query::{Node, NodeEnum, protobuf::AExprKind, protobuf::TypeName};
 
 #[derive(Debug, Default)]
 pub struct ExpressionRegistry {

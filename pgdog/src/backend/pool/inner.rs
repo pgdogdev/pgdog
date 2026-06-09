@@ -4,13 +4,13 @@ use std::cmp::max;
 use std::collections::VecDeque;
 use std::fmt::Display;
 
-use crate::backend::{stats::Counts as BackendCounts, Server};
 use crate::backend::{ConnectReason, DisconnectReason};
+use crate::backend::{Server, stats::Counts as BackendCounts};
 use crate::net::messages::{BackendKeyData, FrontendPid};
 
 use tokio::time::Instant;
 
-use super::{lsn_monitor::ReplicaLag, Config, Error, Oids, Pool, Request, Stats, Taken, Waiter};
+use super::{Config, Error, Oids, Pool, Request, Stats, Taken, Waiter, lsn_monitor::ReplicaLag};
 
 /// Pool internals protected by a mutex.
 #[derive(Default)]
@@ -235,13 +235,14 @@ impl Inner {
     /// Take connection from the idle pool.
     #[inline(always)]
     pub(super) fn take(&mut self, request: &Request) -> Result<Option<Box<Server>>, Error> {
-        if let Some(conn) = self.idle_connections.pop() {
-            let cancel_key = conn.key().clone();
-            self.taken.take(request.id, conn.id(), cancel_key);
+        match self.idle_connections.pop() {
+            Some(conn) => {
+                let cancel_key = conn.key().clone();
+                self.taken.take(request.id, conn.id(), cancel_key);
 
-            Ok(Some(conn))
-        } else {
-            Ok(None)
+                Ok(Some(conn))
+            }
+            _ => Ok(None),
         }
     }
 
@@ -253,13 +254,16 @@ impl Inner {
         let cancel_key = conn.key().clone();
         let server_id = conn.id();
         while let Some(waiter) = self.waiting.pop_front() {
-            if let Err(conn_ret) = waiter.tx.send(Ok(conn)) {
-                conn = conn_ret.unwrap(); // SAFETY: We sent Ok(conn), we'll get back Ok(conn) if channel is closed.
-            } else {
-                self.taken.take(waiter.request.id, server_id, cancel_key);
-                self.stats.counts.server_assignment_count += 1;
-                self.stats.counts.wait_time += now.duration_since(waiter.request.created_at);
-                return Ok(());
+            match waiter.tx.send(Ok(conn)) {
+                Err(conn_ret) => {
+                    conn = conn_ret.unwrap(); // SAFETY: We sent Ok(conn), we'll get back Ok(conn) if channel is closed.
+                }
+                _ => {
+                    self.taken.take(waiter.request.id, server_id, cancel_key);
+                    self.stats.counts.server_assignment_count += 1;
+                    self.stats.counts.wait_time += now.duration_since(waiter.request.created_at);
+                    return Ok(());
+                }
             }
         }
 

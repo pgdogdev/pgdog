@@ -7,7 +7,7 @@ use std::{
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
-use super::{columns::Column, Error};
+use super::{Error, columns::Column};
 use crate::{
     backend::Server,
     net::messages::{DataRow, Format},
@@ -122,7 +122,7 @@ impl Relation {
 
 #[cfg(test)]
 mod test {
-    use crate::backend::pool::{test::pool, Request};
+    use crate::backend::pool::{Request, test::pool};
 
     use super::*;
 

@@ -10,8 +10,8 @@ use crate::net::messages::FromBytes;
 use crate::net::messages::Protocol;
 use crate::net::messages::ToBytes;
 use crate::net::messages::{
-    replication::{xlog_data::XLogPayload, Relation, XLogData},
     CopyData, Message,
+    replication::{Relation, XLogData, xlog_data::XLogPayload},
 };
 
 use super::{Error, ReplicationConfig};
@@ -64,9 +64,9 @@ impl Buffer {
             }
         };
 
-        if let Some(xlog_data) = data.xlog_data() {
-            if let Some(payload) = xlog_data.payload() {
-                match &payload {
+        match data.xlog_data() {
+            Some(xlog_data) => match xlog_data.payload() {
+                Some(payload) => match &payload {
                     XLogPayload::Begin(_) => {
                         self.begin = Some(xlog_data);
                     }
@@ -120,12 +120,14 @@ impl Buffer {
                         self.message = Some(xlog_data);
                         return self.flush();
                     }
+                },
+                _ => {
+                    self.buffer.push_back(message);
                 }
-            } else {
+            },
+            _ => {
                 self.buffer.push_back(message);
             }
-        } else {
-            self.buffer.push_back(message);
         }
 
         Ok(())

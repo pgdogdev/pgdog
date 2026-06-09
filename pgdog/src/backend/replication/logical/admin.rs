@@ -1,8 +1,8 @@
 use std::{
     fmt,
     sync::{
-        atomic::{AtomicU64, Ordering},
         Arc,
+        atomic::{AtomicU64, Ordering},
     },
     time::SystemTime,
 };
@@ -14,7 +14,7 @@ use dashmap::DashMap;
 use once_cell::sync::Lazy;
 use tokio::{
     select, spawn,
-    sync::{oneshot, Notify},
+    sync::{Notify, oneshot},
     task::JoinHandle,
 };
 use tracing::error;

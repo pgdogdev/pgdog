@@ -6,7 +6,7 @@
 
 use std::path::Path;
 
-use libloading::{library_filename, Library, Symbol};
+use libloading::{Library, Symbol, library_filename};
 
 use crate::{PdConfig, PdRoute, PdRouterContext, PdStr};
 
@@ -118,7 +118,7 @@ impl<'a> Plugin<'a> {
 
     /// Execute plugin's shutdown routine.
     pub fn fini(&self) {
-        if let Some(ref fini) = &self.fini {
+        if let Some(fini) = &self.fini {
             unsafe { fini() }
         }
     }
@@ -144,7 +144,7 @@ impl<'a> Plugin<'a> {
     /// * `context`: Statement context created by PgDog's query router.
     ///
     pub fn route(&self, context: PdRouterContext) -> Option<PdRoute> {
-        if let Some(ref route) = &self.route {
+        if let Some(route) = &self.route {
             let mut output = PdRoute::default();
             unsafe {
                 route(context, &mut output as *mut PdRoute);

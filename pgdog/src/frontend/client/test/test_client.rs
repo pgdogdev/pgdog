@@ -2,7 +2,7 @@ use std::{fmt::Debug, ops::Deref};
 
 use bytes::{BufMut, Bytes, BytesMut};
 use pgdog_config::RewriteMode;
-use rand::{rng, Rng};
+use rand::{Rng, rng};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
@@ -12,9 +12,9 @@ use crate::{
     backend::databases::{reload_from_existing, shutdown},
     config::{config, load_test_replicas, load_test_sharded, load_test_sharded_3, set},
     frontend::{
+        Client,
         client::query_engine::QueryEngine,
         router::{parser::Shard, sharding::ContextBuilder},
-        Client,
     },
     net::{ErrorResponse, Message, Parameters, Protocol, Stream},
 };
@@ -24,7 +24,7 @@ use crate::{
 #[cfg(test)]
 #[macro_export]
 macro_rules! expect_message {
-    ($message:expr, $ty:ty) => {{
+    ($message:expr_2021, $ty:ty) => {{
         use $crate::net::Protocol;
         let message: $crate::net::Message = $message;
         match <$ty as TryFrom<$crate::net::Message>>::try_from(message.clone()) {

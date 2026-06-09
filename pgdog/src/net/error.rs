@@ -110,7 +110,9 @@ pub enum Error {
 
     /// Column that is assumed to exist was not present. This indicates a
     /// bug in PgDog, such as a helper column not being inserted.
-    #[error("missing column at index {0} that was assumed to be present (this indicates a bug in pgdog, please open an issue with details about your query)")]
+    #[error(
+        "missing column at index {0} that was assumed to be present (this indicates a bug in pgdog, please open an issue with details about your query)"
+    )]
     RequiredColumnMissing(usize),
 }
 

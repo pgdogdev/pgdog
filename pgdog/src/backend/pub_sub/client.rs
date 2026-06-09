@@ -3,8 +3,9 @@ use crate::net::NotificationResponse;
 
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::{
+    Notify,
     broadcast::{self, error::RecvError},
-    mpsc, Notify,
+    mpsc,
 };
 use tokio::{select, spawn};
 

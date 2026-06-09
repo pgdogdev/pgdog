@@ -3,8 +3,8 @@
 use super::Error;
 
 use scram::{
-    client::{ClientFinal, ServerFinal, ServerFirst},
     ScramClient,
+    client::{ClientFinal, ServerFinal, ServerFirst},
 };
 
 enum State<'a> {
@@ -71,7 +71,7 @@ impl<'a> Client<'a> {
 mod tests {
     use super::*;
     use scram::{
-        hash_password, AuthenticationProvider, AuthenticationStatus, PasswordInfo, ScramServer,
+        AuthenticationProvider, AuthenticationStatus, PasswordInfo, ScramServer, hash_password,
     };
     use std::num::NonZeroU32;
 

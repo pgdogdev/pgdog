@@ -2,9 +2,9 @@ use crate::{
     backend::pool::{Connection, Request},
     config::config,
     frontend::{
-        client::query_engine::{hooks::QueryEngineHooks, route_query::ClusterCheck},
-        router::{parser::Shard, Route},
         BufferedQuery, Client, ClientComms, Command, Error, Router, RouterContext, Stats,
+        client::query_engine::{hooks::QueryEngineHooks, route_query::ClusterCheck},
+        router::{Route, parser::Shard},
     },
     net::{ErrorResponse, Message, Parameters},
     state::State,
@@ -44,8 +44,8 @@ use self::query_log_stdout::log_query_stdout;
 pub(crate) use advisory_lock::AdvisoryLocks;
 pub use context::QueryEngineContext;
 use notify_buffer::NotifyBuffer;
-pub use two_pc::phase::TwoPcPhase;
 use two_pc::TwoPc;
+pub use two_pc::phase::TwoPcPhase;
 
 #[derive(Debug)]
 pub struct QueryEngine {

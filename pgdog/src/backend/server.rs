@@ -13,8 +13,8 @@ use tokio::{
 use tracing::{debug, error, info, trace, warn};
 
 use super::{
-    pool::Address, prepared_statements::HandleResult, ConnectReason, DisconnectReason, Error,
-    PreparedStatements, ServerOptions, Stats,
+    ConnectReason, DisconnectReason, Error, PreparedStatements, ServerOptions, Stats,
+    pool::Address, prepared_statements::HandleResult,
 };
 use crate::{
     auth::{md5, scram::Client},
@@ -22,22 +22,22 @@ use crate::{
     config::AuthType,
     frontend::ClientRequest,
     net::{
-        messages::{
-            hello::SslReply, Authentication, BackendKeyData, BackendPid, ErrorResponse, FromBytes,
-            FrontendPid, Message, ParameterStatus, Password, Protocol, Query, ReadyForQuery,
-            Startup, Terminate, ToBytes,
-        },
         Close, MessageBuffer, Parameter, ProtocolMessage, Sync,
+        messages::{
+            Authentication, BackendKeyData, BackendPid, ErrorResponse, FromBytes, FrontendPid,
+            Message, ParameterStatus, Password, Protocol, Query, ReadyForQuery, Startup, Terminate,
+            ToBytes, hello::SslReply,
+        },
     },
     stats::memory::MemoryUsage,
 };
 use crate::{
-    config::{config, PoolerMode, TlsVerifyMode},
+    config::{PoolerMode, TlsVerifyMode, config},
     net::{
+        CommandComplete, Stream,
         messages::{DataRow, NoticeResponse},
         parameter::Parameters,
         tls::connector_with_verify_mode,
-        CommandComplete, Stream,
     },
 };
 use crate::{net::tweak, state::State};

@@ -1,8 +1,8 @@
 //! SCRAM-SHA-256 server.
 
 use crate::frontend::Error;
-use crate::net::messages::*;
 use crate::net::Stream;
+use crate::net::messages::*;
 
 use pgdog_config::users::PasswordKind;
 use scram::server::ClientFinal;
@@ -10,7 +10,7 @@ use tracing::error;
 
 use rand::Rng;
 use scram::{
-    hash_password, AuthenticationProvider, AuthenticationStatus, PasswordInfo, ScramServer,
+    AuthenticationProvider, AuthenticationStatus, PasswordInfo, ScramServer, hash_password,
 };
 use std::num::NonZeroU32;
 

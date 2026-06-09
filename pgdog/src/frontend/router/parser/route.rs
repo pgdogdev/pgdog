@@ -3,8 +3,8 @@ use std::{fmt::Display, ops::Deref};
 use lazy_static::lazy_static;
 
 use super::{
-    explain_trace::ExplainTrace, rewrite::statement::aggregate::AggregateRewritePlan,
-    statement::AdvisoryLocks, Aggregate, DistinctBy, FunctionBehavior, Limit, OrderBy,
+    Aggregate, DistinctBy, FunctionBehavior, Limit, OrderBy, explain_trace::ExplainTrace,
+    rewrite::statement::aggregate::AggregateRewritePlan, statement::AdvisoryLocks,
 };
 
 /// The shard destination for a statement.
