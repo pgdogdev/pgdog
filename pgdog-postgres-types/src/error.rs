@@ -54,4 +54,7 @@ pub enum Error {
 
     #[error("invalid operation {op} for {ty}")]
     InvalidOperation { op: &'static str, ty: DataType },
+
+    #[error("cannot cast from {from} to {to}")]
+    InvalidCast { from: DataType, to: DataType },
 }

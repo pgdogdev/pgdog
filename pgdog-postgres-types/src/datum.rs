@@ -3,6 +3,7 @@ use std::fmt;
 
 use bytes::Bytes;
 use pgdog_vector::{Float, Vector};
+use rust_decimal::Decimal;
 use uuid::Uuid;
 
 use crate::{
@@ -122,6 +123,36 @@ impl ToDataRowColumn for Datum {
     }
 }
 
+impl<T> From<Option<T>> for Datum
+where
+    Datum: From<T>,
+{
+    fn from(val: Option<T>) -> Self {
+        match val {
+            Some(v) => v.into(),
+            None => Datum::Null,
+        }
+    }
+}
+
+impl From<i64> for Datum {
+    fn from(i: i64) -> Self {
+        Datum::Bigint(i)
+    }
+}
+
+impl From<f64> for Datum {
+    fn from(f: f64) -> Self {
+        Datum::Double(f.into())
+    }
+}
+
+impl From<Decimal> for Datum {
+    fn from(d: Decimal) -> Self {
+        Datum::Numeric(d.into())
+    }
+}
+
 impl Datum {
     pub fn new(
         bytes: &[u8],
@@ -203,6 +234,20 @@ impl Datum {
             Datum::Array(a) => DataType::Array(a.element_oid),
             Datum::Null => DataType::Other(0),
             Datum::Unknown(..) => DataType::Other(0),
+        }
+    }
+
+    pub fn as_i64(&self) -> Result<i64, Error> {
+        match *self {
+            Datum::Bigint(i) => Ok(i),
+            Datum::Integer(i) => Ok(i.into()),
+            Datum::SmallInt(i) => Ok(i.into()),
+            Datum::Float(f) => Ok(f.0 as i64),
+            Datum::Double(f) => Ok(f.0 as i64),
+            _ => Err(Error::InvalidCast {
+                from: self.data_type(),
+                to: DataType::Bigint,
+            }),
         }
     }
 }
