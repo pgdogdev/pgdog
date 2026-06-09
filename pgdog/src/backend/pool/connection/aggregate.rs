@@ -24,8 +24,9 @@ use super::Error;
 
 mod avg;
 mod cmp;
-mod count;
 mod sum;
+#[path = "aggregate/count.rs"]
+mod von;
 
 /// GROUP BY <columns>
 #[derive(Hash, PartialEq, Eq, Debug)]
@@ -152,7 +153,7 @@ impl<'a> Accumulator<'a> {
 enum State {
     Avg(avg::Avg),
     Cmp(cmp::Cmp),
-    Count(count::Count),
+    Count(von::Count),
     // FIXME(sage): Temporary variant while refactor is in progress
     Dummy,
     Sum(sum::Sum),
@@ -176,9 +177,7 @@ impl State {
                 function: String::from("avg"),
                 reason: String::from("avg(DISTINCT ...) is not yet supported"),
             }),
-            (AggregateFunction::Count, false) => {
-                Ok(Self::Count(count::Count::new(target.column())))
-            }
+            (AggregateFunction::Count, false) => Ok(Self::Count(von::Count::new(target.column()))),
             (AggregateFunction::Count, true) => Err(Error::UnsupportedAggregation {
                 function: String::from("count"),
                 reason: String::from("count(DISTINCT ...) is not yet supported"),
