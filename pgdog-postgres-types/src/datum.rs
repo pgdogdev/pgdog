@@ -10,6 +10,9 @@ use crate::{
     TimestampTz, ToDataRowColumn,
 };
 
+/// Represents a single piece of data in expression position. Trait
+/// implementations for Rust operators match the semantics of that
+/// operator/opclass in expression position in PG
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Datum {
     /// BIGINT.
