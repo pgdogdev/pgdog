@@ -1,5 +1,5 @@
 use std::cmp::{Ordering, PartialOrd};
-use std::ops::Add;
+use std::fmt;
 
 use bytes::Bytes;
 use pgdog_vector::{Float, Vector};
@@ -122,27 +122,6 @@ impl ToDataRowColumn for Datum {
     }
 }
 
-impl Add for Datum {
-    type Output = Datum;
-
-    fn add(self, rhs: Self) -> Self::Output {
-        use Datum::*;
-
-        match (self, rhs) {
-            (Bigint(a), Bigint(b)) => Bigint(a + b),
-            (Integer(a), Integer(b)) => Integer(a + b),
-            (SmallInt(a), SmallInt(b)) => SmallInt(a + b),
-            (Interval(a), Interval(b)) => Interval(a + b),
-            (Numeric(a), Numeric(b)) => Numeric(a + b),
-            (Float(a), Float(b)) => Float(crate::Float(a.0 + b.0)),
-            (Double(a), Double(b)) => Double(crate::Double(a.0 + b.0)),
-            (Datum::Null, b) => b,
-            (a, Datum::Null) => a,
-            _ => Datum::Null, // Might be good to raise an error.
-        }
-    }
-}
-
 impl Datum {
     pub fn new(
         bytes: &[u8],
@@ -202,6 +181,28 @@ impl Datum {
             Datum::Array(a) => a.encode(format),
             Datum::Null => Ok(Bytes::new()),
             Datum::Unknown(bytes) => Ok(bytes.clone()),
+        }
+    }
+
+    pub fn data_type(&self) -> DataType {
+        match self {
+            Datum::Bigint(..) => DataType::Bigint,
+            Datum::Integer(..) => DataType::Integer,
+            Datum::Uuid(..) => DataType::Uuid,
+            Datum::Text(..) => DataType::Text,
+            Datum::Boolean(..) => DataType::Bool,
+            Datum::Float(..) => DataType::Real,
+            Datum::Double(..) => DataType::DoublePrecision,
+            Datum::Numeric(..) => DataType::Numeric,
+            Datum::Timestamp(..) => DataType::Timestamp,
+            Datum::TimestampTz(..) => DataType::TimestampTz,
+            Datum::SmallInt(..) => DataType::SmallInt,
+            Datum::Interval(..) => DataType::Interval,
+            Datum::Vector(..) => DataType::Vector,
+            Datum::Oid(..) => DataType::Oid,
+            Datum::Array(a) => DataType::Array(a.element_oid),
+            Datum::Null => DataType::Other(0),
+            Datum::Unknown(..) => DataType::Other(0),
         }
     }
 }
@@ -267,17 +268,43 @@ impl DataType {
     }
 }
 
+impl fmt::Display for DataType {
+    fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
+        use DataType::*;
+        match self {
+            Bigint => write!(f, "bigint"),
+            Integer => write!(f, "integer"),
+            Text => write!(f, "text"),
+            Interval => write!(f, "interval"),
+            Timestamp => write!(f, "timestamp"),
+            TimestampTz => write!(f, "timestamptz"),
+            Real => write!(f, "real"),
+            DoublePrecision => write!(f, "double precision"),
+            Bool => write!(f, "boolean"),
+            SmallInt => write!(f, "smallint"),
+            TinyInt => write!(f, "tinyint"),
+            Numeric => write!(f, "numeric"),
+            Other(i) => write!(f, "unknown type {i}"),
+            Uuid => write!(f, "uuid"),
+            Oid => write!(f, "oid"),
+            Vector => write!(f, "vector"),
+            Array(i) => write!(f, "{}[]", Self::from_oid(*i)),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use bytes::{BufMut, BytesMut};
+    use std::assert_matches;
 
     #[test]
     fn test_multidimensional_text_array_falls_back_to_unknown() {
         let input = b"{{1,2},{3,4}}";
         let datum = Datum::new(input, DataType::Array(23), Format::Text, false).unwrap();
 
-        assert!(matches!(datum, Datum::Unknown(_)));
+        assert_matches!(datum, Datum::Unknown(_));
         assert_eq!(
             datum.encode(Format::Text).unwrap(),
             Bytes::from_static(input)
@@ -303,7 +330,7 @@ mod tests {
         let input = buf.freeze();
         let datum = Datum::new(&input, DataType::Array(23), Format::Binary, false).unwrap();
 
-        assert!(matches!(datum, Datum::Unknown(_)));
+        assert_matches!(datum, Datum::Unknown(_));
         assert_eq!(datum.encode(Format::Binary).unwrap(), input);
     }
 }

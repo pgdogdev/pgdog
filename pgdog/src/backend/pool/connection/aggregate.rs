@@ -1,6 +1,7 @@
 //! Aggregate buffer.
 
 use std::collections::{HashMap, VecDeque};
+use std::mem;
 
 use crate::{
     frontend::router::parser::{
@@ -15,6 +16,7 @@ use crate::{
         Decoder,
     },
 };
+use pgdog_postgres_types::Error as TypeError;
 use rust_decimal::prelude::{FromPrimitive, ToPrimitive};
 use rust_decimal::Decimal;
 
@@ -102,7 +104,7 @@ impl<'a> Accumulator<'a> {
         match self.target.function() {
             AggregateFunction::Count => {
                 if !self.datum.is_null() {
-                    self.datum = self.datum.clone() + column.value;
+                    checked_add_assign(&mut self.datum, column.value)?;
                 } else {
                     self.datum = column.value;
                 }
@@ -127,7 +129,7 @@ impl<'a> Accumulator<'a> {
             }
             AggregateFunction::Sum => {
                 if !self.datum.is_null() {
-                    self.datum = self.datum.clone() + column.value;
+                    checked_add_assign(&mut self.datum, column.value)?;
                 } else {
                     self.datum = column.value;
                 }
@@ -150,8 +152,8 @@ impl<'a> Accumulator<'a> {
                     }
 
                     if let Some(weighted) = multiply_for_average(&column.value, &count.value) {
-                        state.weighted_sum = state.weighted_sum.clone() + weighted;
-                        state.total_count = state.total_count.clone() + count.value.clone();
+                        checked_add_assign(&mut state.weighted_sum, weighted)?;
+                        checked_add_assign(&mut state.total_count, count.value.clone())?;
                     } else {
                         state.supported = false;
                         return Ok(false);
@@ -300,7 +302,7 @@ impl VarianceState {
             return Ok(true);
         }
 
-        self.total_count = self.total_count.clone() + count.value.clone();
+        checked_add_assign(&mut self.total_count, count.value.clone())?;
 
         let Some(sum_column) = self.sum_column else {
             self.supported = false;
@@ -311,7 +313,7 @@ impl VarianceState {
             self.supported = false;
             return Ok(false);
         }
-        self.total_sum = self.total_sum.clone() + sum.value.clone();
+        checked_add_assign(&mut self.total_sum, sum.value.clone())?;
 
         let Some(sumsq_column) = self.sumsq_column else {
             self.supported = false;
@@ -322,7 +324,7 @@ impl VarianceState {
             self.supported = false;
             return Ok(false);
         }
-        self.total_sumsq = self.total_sumsq.clone() + sumsq.value.clone();
+        checked_add_assign(&mut self.total_sumsq, sumsq.value.clone())?;
 
         Ok(true)
     }
@@ -597,6 +599,37 @@ impl<'a> Aggregates<'a> {
     }
 }
 
+/// Adds rhs to self. Returns an error if self + rhs are not the same type, or
+/// if self is a type that cannot be added.
+///
+/// The behavior of this function diverges from postgres when handling NULL.
+/// When calculating x + NULL, we will return x, while postgres will return NULL
+fn checked_add_assign(lhs: &mut Datum, rhs: Datum) -> Result<(), TypeError> {
+    use Datum::*;
+    match (lhs, rhs) {
+        (Bigint(a), Bigint(b)) => *a += b,
+        (Integer(a), Integer(b)) => *a += b,
+        (SmallInt(a), SmallInt(b)) => *a += b,
+        (Interval(a), Interval(b)) => *a += b,
+        (Numeric(a), Numeric(b)) => *a += b,
+        (Float(a), Float(b)) => a.0 += b.0,
+        (Double(a), Double(b)) => a.0 += b.0,
+        (a @ Datum::Null, b) => *a = b,
+        (_, Datum::Null) => {}
+        (a, b) if mem::discriminant(a) != mem::discriminant(&b) => {
+            return Err(TypeError::IncompatibleTypes(a.data_type(), b.data_type()));
+        }
+        (a, _) => {
+            return Err(TypeError::InvalidOperation {
+                op: "add",
+                ty: a.data_type(),
+            });
+        }
+    }
+
+    Ok(())
+}
+
 fn multiply_for_average(value: &Datum, count: &Datum) -> Option<Datum> {
     let multiplier_i128 = datum_as_i128(count)?;
 
@@ -718,6 +751,7 @@ mod test {
     };
     use bytes::Bytes;
     use pg_query::{protobuf::SelectStmt, NodeEnum};
+    use std::assert_matches;
     use std::collections::VecDeque;
 
     #[test]
@@ -1312,5 +1346,20 @@ mod test {
 
         assert_eq!(intervals, r#"{"1 year 2 mons 1 day 04:05:06.7"}"#);
         assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn test_adding_types_which_cannot_be_added() {
+        let mut datum = Datum::Text("hello".to_owned());
+        // operator does not exist: text + text
+        let result = checked_add_assign(&mut datum, Datum::Text("goodbye".to_owned()));
+        assert_matches!(result, Err(TypeError::InvalidOperation { .. }));
+    }
+
+    #[test]
+    fn test_adding_incompatible_types() {
+        let mut datum = Datum::Integer(1);
+        let result = checked_add_assign(&mut datum, Datum::Text("1".to_owned()));
+        assert_matches!(result, Err(TypeError::IncompatibleTypes(..)));
     }
 }

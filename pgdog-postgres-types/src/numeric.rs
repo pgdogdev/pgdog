@@ -1,4 +1,10 @@
-use std::{cmp::Ordering, fmt::Display, hash::Hash, ops::Add, str::FromStr};
+use std::{
+    cmp::Ordering,
+    fmt::Display,
+    hash::Hash,
+    ops::{Add, AddAssign},
+    str::FromStr,
+};
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use postgres_types::{FromSql, ToSql, Type};
@@ -92,6 +98,12 @@ impl Add for Numeric {
             // Any operation with NaN yields NaN
             _ => Self::nan(),
         }
+    }
+}
+
+impl AddAssign for Numeric {
+    fn add_assign(&mut self, rhs: Self) {
+        *self = *self + rhs;
     }
 }
 
