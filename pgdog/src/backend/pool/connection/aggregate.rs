@@ -10,21 +10,17 @@ use crate::{
     },
     net::{
         Decoder,
-        messages::{
-            DataRow, Datum,
-            data_types::{Double, Float, Numeric},
-        },
+        messages::{DataRow, Datum},
     },
 };
 use pgdog_postgres_types::Error as TypeError;
-use rust_decimal::Decimal;
-use rust_decimal::prelude::{FromPrimitive, ToPrimitive};
 
 use super::Error;
 
 mod avg;
 mod cmp;
 mod sum;
+mod variance;
 #[path = "aggregate/count.rs"]
 mod von;
 
@@ -56,7 +52,6 @@ impl Grouping {
 struct Accumulator<'a> {
     target: &'a AggregateTarget,
     datum: Datum,
-    variance: Option<VarianceState>,
     state: State,
 }
 
@@ -74,26 +69,11 @@ impl<'a> Accumulator<'a> {
                     .copied()
                     .unwrap_or_default();
 
-                let mut accumulator = Accumulator {
+                let accumulator = Accumulator {
                     target,
                     datum: Datum::Null,
-                    variance: None,
                     state: State::new(target, helper)?,
                 };
-
-                if matches!(
-                    target.function(),
-                    AggregateFunction::StddevPop
-                        | AggregateFunction::StddevSamp
-                        | AggregateFunction::VarPop
-                        | AggregateFunction::VarSamp
-                ) {
-                    accumulator.variance = Some(VarianceState::new(
-                        target.function().clone(),
-                        helper,
-                        target.is_distinct(),
-                    ));
-                }
 
                 Ok(accumulator)
             })
@@ -103,29 +83,6 @@ impl<'a> Accumulator<'a> {
     /// Transform COUNT(*), MIN, MAX, etc., from multiple shards into a single value.
     fn accumulate(&mut self, row: &DataRow, decoder: &Decoder) -> Result<bool, Error> {
         self.state.accumulate(row, decoder)?;
-        match self.target.function() {
-            AggregateFunction::Avg
-            | AggregateFunction::Count
-            | AggregateFunction::Max
-            | AggregateFunction::Min
-            | AggregateFunction::Sum => {}
-            AggregateFunction::StddevPop
-            | AggregateFunction::StddevSamp
-            | AggregateFunction::VarPop
-            | AggregateFunction::VarSamp => {
-                if let Some(state) = self.variance.as_mut() {
-                    if !state.supported {
-                        return Ok(false);
-                    }
-
-                    if !state.accumulate(row, decoder)? {
-                        return Ok(false);
-                    }
-                }
-            }
-            AggregateFunction::Unrecognized(..) => return Ok(false),
-        }
-
         Ok(true)
     }
 
@@ -133,16 +90,6 @@ impl<'a> Accumulator<'a> {
         match self.state.take().finalize()? {
             Datum::Null => {}
             d => self.datum = d,
-        }
-
-        if let Some(state) = self.variance.as_mut() {
-            match state.finalize()? {
-                Some(result) => {
-                    self.datum = result;
-                    return Ok(true);
-                }
-                None => return Ok(false),
-            }
         }
 
         Ok(true)
@@ -153,10 +100,12 @@ impl<'a> Accumulator<'a> {
 enum State {
     Avg(avg::Avg),
     Cmp(cmp::Cmp),
+    /// Ah ah aaaaaaah
     Count(von::Count),
     // FIXME(sage): Temporary variant while refactor is in progress
     Dummy,
     Sum(sum::Sum),
+    Variance(variance::Variance),
 }
 
 impl State {
@@ -173,15 +122,7 @@ impl State {
                     ),
                 })?,
             ))),
-            (AggregateFunction::Avg, true) => Err(Error::UnsupportedAggregation {
-                function: String::from("avg"),
-                reason: String::from("avg(DISTINCT ...) is not yet supported"),
-            }),
             (AggregateFunction::Count, false) => Ok(Self::Count(von::Count::new(target.column()))),
-            (AggregateFunction::Count, true) => Err(Error::UnsupportedAggregation {
-                function: String::from("count"),
-                reason: String::from("count(DISTINCT ...) is not yet supported"),
-            }),
             (AggregateFunction::Max, _) => Ok(Self::Cmp(cmp::Cmp::max(target.column()))),
             (AggregateFunction::Min, _) => Ok(Self::Cmp(cmp::Cmp::min(target.column()))),
             (AggregateFunction::Sum, false) => Ok(Self::Sum(sum::Sum::new(target.column()))),
@@ -189,8 +130,59 @@ impl State {
                 function: String::from("sum"),
                 reason: String::from("sum(DISTINCT ...) is not yet supported"),
             }),
-            // FIXME: Unsupported, need to error
-            _ => Ok(Self::Dummy),
+            (
+                f @ (AggregateFunction::VarPop
+                | AggregateFunction::VarSamp
+                | AggregateFunction::StddevPop
+                | AggregateFunction::StddevSamp),
+                false,
+            ) => {
+                let sumsq_col = helper.sumsq.ok_or_else(|| Error::UnsupportedAggregation {
+                    function: f.to_string(),
+                    reason: String::from(
+                        "internal count helper was missing (this is a bug in pgdog)",
+                    ),
+                })?;
+                let sum_col = helper.sum.ok_or_else(|| Error::UnsupportedAggregation {
+                    function: f.to_string(),
+                    reason: String::from(
+                        "internal count helper was missing (this is a bug in pgdog)",
+                    ),
+                })?;
+                let count_col = helper.count.ok_or_else(|| Error::UnsupportedAggregation {
+                    function: f.to_string(),
+                    reason: String::from(
+                        "internal count helper was missing (this is a bug in pgdog)",
+                    ),
+                })?;
+                let sample = matches!(
+                    f,
+                    AggregateFunction::VarSamp | AggregateFunction::StddevSamp
+                );
+                let sqrt = matches!(
+                    f,
+                    AggregateFunction::StddevPop | AggregateFunction::StddevSamp
+                );
+                Ok(Self::Variance(variance::Variance::new(
+                    sumsq_col, sum_col, count_col, sample, sqrt,
+                )))
+            }
+            (
+                f @ (AggregateFunction::Avg
+                | AggregateFunction::Count
+                | AggregateFunction::StddevPop
+                | AggregateFunction::StddevSamp
+                | AggregateFunction::VarPop
+                | AggregateFunction::VarSamp),
+                true,
+            ) => Err(Error::UnsupportedAggregation {
+                function: f.to_string(),
+                reason: format!("{f}(DISTINCT ...) is not yet supported"),
+            }),
+            (AggregateFunction::Unrecognized(f), _) => Err(Error::UnsupportedAggregation {
+                function: f.clone(),
+                reason: format!("{f}() is not yet supported"),
+            }),
         }
     }
 
@@ -209,13 +201,19 @@ impl State {
             State::Cmp(state) => state
                 .accumulate(row.get_column_checked(state.column, decoder)?.value)
                 .map_err(Into::into),
-            State::Count(state) => {
-                state.accumulate(row.get_column_checked(state.column, decoder)?.value)
-            }
+            State::Count(state) => state
+                .accumulate(row.get_column_checked(state.column, decoder)?.value)
+                .map_err(Into::into),
             State::Dummy => Ok(()),
             State::Sum(state) => state
                 .accumulate(row.get_column_checked(state.column, decoder)?.value)
                 .map_err(Into::into),
+            State::Variance(state) => {
+                let sumsq = row.get_column_checked(state.sumsq_col(), decoder)?.value;
+                let sum = row.get_column_checked(state.sum_col(), decoder)?.value;
+                let count = row.get_column_checked(state.count_col(), decoder)?.value;
+                state.accumulate(sumsq, sum, count).map_err(Into::into)
+            }
         }
     }
 
@@ -227,6 +225,7 @@ impl State {
             State::Count(state) => Ok(state.finalize()),
             State::Dummy => Ok(Datum::Null),
             State::Sum(state) => Ok(state.finalize()),
+            State::Variance(state) => Ok(state.finalize()?),
         }
     }
 
@@ -247,176 +246,6 @@ struct HelperColumns {
 struct UnsupportedAggregate {
     function: String,
     reason: String,
-}
-
-#[derive(Debug)]
-struct VarianceState {
-    function: AggregateFunction,
-    count_column: Option<usize>,
-    sum_column: Option<usize>,
-    sumsq_column: Option<usize>,
-    total_count: Datum,
-    total_sum: Datum,
-    total_sumsq: Datum,
-    supported: bool,
-}
-
-impl VarianceState {
-    fn new(function: AggregateFunction, helper: HelperColumns, distinct: bool) -> Self {
-        let supported =
-            !distinct && helper.count.is_some() && helper.sum.is_some() && helper.sumsq.is_some();
-        Self {
-            function,
-            count_column: helper.count,
-            sum_column: helper.sum,
-            sumsq_column: helper.sumsq,
-            total_count: Datum::Null,
-            total_sum: Datum::Null,
-            total_sumsq: Datum::Null,
-            supported,
-        }
-    }
-
-    fn accumulate(&mut self, row: &DataRow, decoder: &Decoder) -> Result<bool, Error> {
-        if !self.supported {
-            return Ok(false);
-        }
-
-        let Some(count_column) = self.count_column else {
-            self.supported = false;
-            return Ok(false);
-        };
-
-        let count = row.get_column_checked(count_column, decoder)?;
-
-        if count.value.is_null() {
-            return Ok(true);
-        }
-
-        let Some(count_i128) = datum_as_i128(&count.value) else {
-            self.supported = false;
-            return Ok(false);
-        };
-
-        if count_i128 == 0 {
-            return Ok(true);
-        }
-
-        checked_add_assign(&mut self.total_count, count.value.clone())?;
-
-        let Some(sum_column) = self.sum_column else {
-            self.supported = false;
-            return Ok(false);
-        };
-        let sum = row.get_column_checked(sum_column, decoder)?;
-        if sum.value.is_null() {
-            self.supported = false;
-            return Ok(false);
-        }
-        checked_add_assign(&mut self.total_sum, sum.value.clone())?;
-
-        let Some(sumsq_column) = self.sumsq_column else {
-            self.supported = false;
-            return Ok(false);
-        };
-        let sumsq = row.get_column_checked(sumsq_column, decoder)?;
-        if sumsq.value.is_null() {
-            self.supported = false;
-            return Ok(false);
-        }
-        checked_add_assign(&mut self.total_sumsq, sumsq.value.clone())?;
-
-        Ok(true)
-    }
-
-    fn finalize(&mut self) -> Result<Option<Datum>, Error> {
-        if !self.supported {
-            return Ok(None);
-        }
-
-        if self.total_sum.is_null() || self.total_sumsq.is_null() {
-            return Ok(Some(Datum::Null));
-        }
-
-        let Some(count) = datum_as_i128(&self.total_count) else {
-            return Ok(None);
-        };
-
-        let sample = matches!(
-            self.function,
-            AggregateFunction::StddevSamp | AggregateFunction::VarSamp
-        );
-
-        if count == 0 {
-            return Ok(Some(Datum::Null));
-        }
-
-        if sample && count <= 1 {
-            return Ok(Some(Datum::Null));
-        }
-
-        let result = match (&self.total_sum, &self.total_sumsq) {
-            (Datum::Double(sum), Datum::Double(sumsq)) => {
-                let Some(variance) = compute_variance_double(sum.0, sumsq.0, count, sample) else {
-                    return Ok(None);
-                };
-                match self.function {
-                    AggregateFunction::StddevPop | AggregateFunction::StddevSamp => {
-                        Some(Datum::Double(Double(variance.max(0.0).sqrt())))
-                    }
-                    AggregateFunction::VarPop | AggregateFunction::VarSamp => {
-                        Some(Datum::Double(Double(variance)))
-                    }
-                    _ => None,
-                }
-            }
-            (Datum::Float(sum), Datum::Float(sumsq)) => {
-                let Some(variance) =
-                    compute_variance_double(sum.0 as f64, sumsq.0 as f64, count, sample)
-                else {
-                    return Ok(None);
-                };
-                match self.function {
-                    AggregateFunction::StddevPop | AggregateFunction::StddevSamp => {
-                        Some(Datum::Float(Float(variance.max(0.0).sqrt() as f32)))
-                    }
-                    AggregateFunction::VarPop | AggregateFunction::VarSamp => {
-                        Some(Datum::Float(Float(variance as f32)))
-                    }
-                    _ => None,
-                }
-            }
-            (Datum::Numeric(sum), Datum::Numeric(sumsq)) => {
-                let Some(sum_dec) = sum.as_decimal() else {
-                    return Ok(None);
-                };
-                let Some(sumsq_dec) = sumsq.as_decimal() else {
-                    return Ok(None);
-                };
-                let sum_dec = sum_dec.to_owned();
-                let sumsq_dec = sumsq_dec.to_owned();
-                let Some(variance) = compute_variance_decimal(sum_dec, sumsq_dec, count, sample)
-                else {
-                    return Ok(None);
-                };
-                match self.function {
-                    AggregateFunction::StddevPop | AggregateFunction::StddevSamp => {
-                        let Some(stddev) = sqrt_decimal(variance) else {
-                            return Ok(None);
-                        };
-                        Some(Datum::Numeric(Numeric::from(stddev)))
-                    }
-                    AggregateFunction::VarPop | AggregateFunction::VarSamp => {
-                        Some(Datum::Numeric(Numeric::from(variance)))
-                    }
-                    _ => None,
-                }
-            }
-            _ => None,
-        };
-
-        Ok(result)
-    }
 }
 
 #[derive(Debug)]
@@ -485,7 +314,7 @@ impl<'a> Aggregates<'a> {
                 | AggregateFunction::VarSamp => {
                     if target.is_distinct() {
                         unsupported.get_or_insert(UnsupportedAggregate {
-                            function: target.function().as_str().to_string(),
+                            function: target.function().to_string(),
                             reason: "DISTINCT is not supported".to_string(),
                         });
                         return false;
@@ -499,7 +328,7 @@ impl<'a> Aggregates<'a> {
                         })
                         .unwrap_or_else(|| {
                             unsupported.get_or_insert(UnsupportedAggregate {
-                                function: target.function().as_str().to_string(),
+                                function: target.function().to_string(),
                                 reason: "missing helper columns".to_string(),
                             });
                             false
@@ -639,61 +468,6 @@ fn checked_add(mut lhs: Datum, rhs: Datum) -> Result<Datum, TypeError> {
     Ok(lhs)
 }
 
-fn datum_as_i128(datum: &Datum) -> Option<i128> {
-    match datum {
-        Datum::Bigint(value) => Some(*value as i128),
-        Datum::Integer(value) => Some(*value as i128),
-        Datum::SmallInt(value) => Some(*value as i128),
-        _ => None,
-    }
-}
-
-fn compute_variance_double(sum: f64, sumsq: f64, count: i128, sample: bool) -> Option<f64> {
-    let n = count as f64;
-    let numerator = sumsq - (sum * sum) / n;
-    let denominator = if sample { (count - 1) as f64 } else { n };
-    if denominator == 0.0 {
-        return None;
-    }
-    let variance = numerator / denominator;
-    Some(if variance < 0.0 { 0.0 } else { variance })
-}
-
-fn compute_variance_decimal(
-    sum: Decimal,
-    sumsq: Decimal,
-    count: i128,
-    sample: bool,
-) -> Option<Decimal> {
-    let n = Decimal::from_i128_with_scale(count, 0);
-    let denominator = if sample {
-        Decimal::from_i128_with_scale(count - 1, 0)
-    } else {
-        n
-    };
-
-    if denominator == Decimal::ZERO {
-        return None;
-    }
-
-    let numerator = sumsq - (sum * sum) / n;
-
-    let variance = numerator / denominator;
-    Some(if variance < Decimal::ZERO {
-        Decimal::ZERO
-    } else {
-        variance
-    })
-}
-
-fn sqrt_decimal(value: Decimal) -> Option<Decimal> {
-    if value < Decimal::ZERO {
-        return None;
-    }
-    let value_f64 = value.to_f64()?;
-    Decimal::from_f64(value_f64.sqrt())
-}
-
 #[cfg(test)]
 mod test {
     use super::*;
@@ -706,6 +480,7 @@ mod test {
     };
     use bytes::Bytes;
     use pg_query::{NodeEnum, protobuf::SelectStmt};
+    use pgdog_postgres_types::Double;
     use std::assert_matches;
     use std::collections::VecDeque;
 
@@ -964,126 +739,6 @@ mod test {
 
         assert!((avg_price - 16.0).abs() < f64::EPSILON);
         assert!((avg_discount - 3.0).abs() < f64::EPSILON);
-    }
-
-    #[test]
-    fn aggregate_stddev_samp_with_helpers() {
-        let aggregate = parse("SELECT STDDEV(price) FROM menu");
-
-        let rd = RowDescription::new(&[
-            Field::double("stddev_price"),
-            Field::bigint("__pgdog_count_expr0_col0"),
-            Field::double("__pgdog_sum_expr0_col0"),
-            Field::double("__pgdog_sumsq_expr0_col0"),
-        ]);
-        let decoder = Decoder::from(&rd);
-
-        let mut rows = VecDeque::new();
-        let mut shard0 = DataRow::new();
-        shard0
-            .add(2.8284271247461903_f64)
-            .add(2_i64)
-            .add(24.0_f64)
-            .add(296.0_f64);
-        rows.push_back(shard0);
-        let mut shard1 = DataRow::new();
-        shard1
-            .add(2.8284271247461903_f64)
-            .add(2_i64)
-            .add(40.0_f64)
-            .add(808.0_f64);
-        rows.push_back(shard1);
-
-        let mut plan = AggregateRewritePlan::default();
-        plan.add_helper(HelperMapping {
-            target_column: 0,
-            helper_column: 1,
-            expr_id: 0,
-            distinct: false,
-            kind: HelperKind::Count,
-            alias: "__pgdog_count_expr0_col0".into(),
-        });
-        plan.add_helper(HelperMapping {
-            target_column: 0,
-            helper_column: 2,
-            expr_id: 0,
-            distinct: false,
-            kind: HelperKind::Sum,
-            alias: "__pgdog_sum_expr0_col0".into(),
-        });
-        plan.add_helper(HelperMapping {
-            target_column: 0,
-            helper_column: 3,
-            expr_id: 0,
-            distinct: false,
-            kind: HelperKind::SumSquares,
-            alias: "__pgdog_sumsq_expr0_col0".into(),
-        });
-
-        let mut result = Aggregates::new(&rows, &decoder, &aggregate, &plan)
-            .aggregate()
-            .unwrap();
-
-        assert_eq!(result.len(), 1);
-        let row = result.pop_front().unwrap();
-        let stddev = row.get::<Double>(0, Format::Text).unwrap().0;
-        assert!((stddev - 5.163977794943222).abs() < 1e-9);
-    }
-
-    #[test]
-    fn aggregate_var_pop_with_helpers() {
-        let aggregate = parse("SELECT VAR_POP(price) FROM menu");
-
-        let rd = RowDescription::new(&[
-            Field::double("var_price"),
-            Field::bigint("__pgdog_count_expr0_col0"),
-            Field::double("__pgdog_sum_expr0_col0"),
-            Field::double("__pgdog_sumsq_expr0_col0"),
-        ]);
-        let decoder = Decoder::from(&rd);
-
-        let mut rows = VecDeque::new();
-        let mut shard0 = DataRow::new();
-        shard0.add(4.0_f64).add(2_i64).add(24.0_f64).add(296.0_f64);
-        rows.push_back(shard0);
-        let mut shard1 = DataRow::new();
-        shard1.add(4.0_f64).add(2_i64).add(40.0_f64).add(808.0_f64);
-        rows.push_back(shard1);
-
-        let mut plan = AggregateRewritePlan::default();
-        plan.add_helper(HelperMapping {
-            target_column: 0,
-            helper_column: 1,
-            expr_id: 0,
-            distinct: false,
-            kind: HelperKind::Count,
-            alias: "__pgdog_count_expr0_col0".into(),
-        });
-        plan.add_helper(HelperMapping {
-            target_column: 0,
-            helper_column: 2,
-            expr_id: 0,
-            distinct: false,
-            kind: HelperKind::Sum,
-            alias: "__pgdog_sum_expr0_col0".into(),
-        });
-        plan.add_helper(HelperMapping {
-            target_column: 0,
-            helper_column: 3,
-            expr_id: 0,
-            distinct: false,
-            kind: HelperKind::SumSquares,
-            alias: "__pgdog_sumsq_expr0_col0".into(),
-        });
-
-        let mut result = Aggregates::new(&rows, &decoder, &aggregate, &plan)
-            .aggregate()
-            .unwrap();
-
-        assert_eq!(result.len(), 1);
-        let row = result.pop_front().unwrap();
-        let variance = row.get::<Double>(0, Format::Text).unwrap().0;
-        assert!((variance - 20.0).abs() < 1e-9);
     }
 
     #[test]

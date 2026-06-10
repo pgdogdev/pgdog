@@ -1,7 +1,8 @@
 use crate::frontend::router::parser::aggregate::{Aggregate, AggregateFunction};
 use pg_query::NodeEnum;
 use pg_query::protobuf::{
-    AConst, FuncCall, Integer, Node, ResTarget, SelectStmt, String as PgString, a_const::Val,
+    AConst, FuncCall, Integer, Node, ResTarget, SelectStmt, String as PgString, TypeCast, TypeName,
+    a_const::Val,
 };
 
 use super::{AggregateRewritePlan, HelperKind, HelperMapping, RewriteOutput};
@@ -127,11 +128,7 @@ impl AggregatesRewrite {
 
     fn build_count_func(original: &FuncCall, distinct: bool) -> FuncCall {
         FuncCall {
-            funcname: vec![Node {
-                node: Some(NodeEnum::String(PgString {
-                    sval: "count".into(),
-                })),
-            }],
+            funcname: vec![pg_string("count")],
             args: original.args.clone(),
             agg_order: original.agg_order.clone(),
             agg_filter: original.agg_filter.clone(),
@@ -147,9 +144,7 @@ impl AggregatesRewrite {
 
     fn build_sum_func(original: &FuncCall, distinct: bool) -> FuncCall {
         FuncCall {
-            funcname: vec![Node {
-                node: Some(NodeEnum::String(PgString { sval: "sum".into() })),
-            }],
+            funcname: vec![pg_string("sum")],
             args: original.args.clone(),
             agg_order: original.agg_order.clone(),
             agg_filter: original.agg_filter.clone(),
@@ -163,8 +158,23 @@ impl AggregatesRewrite {
         }
     }
 
-    fn build_sum_of_squares_func(original: &FuncCall, distinct: bool) -> Option<FuncCall> {
-        let arg = original.args.first()?.clone();
+    fn build_sum_of_squares_func(original: &FuncCall, distinct: bool) -> FuncCall {
+        let arg = original.args.first().cloned();
+        // POWER will return double even when dealing with integer inputs.
+        // For any non float type, functions using this helper return numeric.
+        // We can go from numeric to f64 losslessly, but not the other way,
+        // so we cast here
+        let arg = Node {
+            node: Some(NodeEnum::TypeCast(Box::new(TypeCast {
+                arg: arg.map(Box::new),
+                type_name: Some(TypeName {
+                    names: vec![pg_string("pg_catalog"), pg_string("numeric")],
+                    type_oid: 1700,
+                    ..Default::default()
+                }),
+                location: original.location,
+            }))),
+        };
 
         let two = Node {
             node: Some(NodeEnum::AConst(AConst {
@@ -175,11 +185,7 @@ impl AggregatesRewrite {
         };
 
         let power = FuncCall {
-            funcname: vec![Node {
-                node: Some(NodeEnum::String(PgString {
-                    sval: "power".into(),
-                })),
-            }],
+            funcname: vec![pg_string("power")],
             args: vec![arg, two],
             agg_order: vec![],
             agg_filter: None,
@@ -192,10 +198,8 @@ impl AggregatesRewrite {
             location: original.location,
         };
 
-        Some(FuncCall {
-            funcname: vec![Node {
-                node: Some(NodeEnum::String(PgString { sval: "sum".into() })),
-            }],
+        FuncCall {
+            funcname: vec![pg_string("sum")],
             args: vec![Node {
                 node: Some(NodeEnum::FuncCall(Box::new(power))),
             }],
@@ -208,7 +212,7 @@ impl AggregatesRewrite {
             func_variadic: original.func_variadic,
             funcformat: original.funcformat,
             location: original.location,
-        })
+        }
     }
 
     fn helper_specs(
@@ -225,7 +229,7 @@ impl AggregatesRewrite {
             | AggregateFunction::StddevPop
             | AggregateFunction::VarSamp
             | AggregateFunction::VarPop => {
-                let mut helpers = vec![
+                vec![
                     HelperSpec {
                         func: Self::build_count_func(func_call, distinct),
                         kind: HelperKind::Count,
@@ -234,19 +238,20 @@ impl AggregatesRewrite {
                         func: Self::build_sum_func(func_call, distinct),
                         kind: HelperKind::Sum,
                     },
-                ];
-
-                if let Some(sum_sq) = Self::build_sum_of_squares_func(func_call, distinct) {
-                    helpers.push(HelperSpec {
-                        func: sum_sq,
+                    HelperSpec {
+                        func: Self::build_sum_of_squares_func(func_call, distinct),
                         kind: HelperKind::SumSquares,
-                    });
-                }
-
-                helpers
+                    },
+                ]
             }
             _ => vec![],
         }
+    }
+}
+
+fn pg_string(s: impl Into<String>) -> Node {
+    Node {
+        node: Some(NodeEnum::String(PgString { sval: s.into() })),
     }
 }
 
