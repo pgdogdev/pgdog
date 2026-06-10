@@ -30,6 +30,7 @@ use crate::{
 
 use super::Stream;
 
+pub mod auth;
 pub mod target_session_attrs;
 pub mod test_client;
 pub use test_client::{SpawnedClient, TestClient};

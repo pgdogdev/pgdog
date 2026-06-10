@@ -16,7 +16,7 @@ use crate::{
         client::query_engine::QueryEngine,
         router::{parser::Shard, sharding::ContextBuilder},
     },
-    net::{ErrorResponse, Message, Parameters, Protocol, Stream},
+    net::{ErrorResponse, Message, Parameters, Protocol, ProtocolVersion, Stream},
 };
 
 /// Try to convert a Message to the specified type.
@@ -298,6 +298,31 @@ impl SpawnedClient {
     pub async fn new_default(params: Parameters) -> Self {
         crate::config::load_test();
         Self::new(params).await
+    }
+
+    /// Spawn a client through the full login path, including authentication.
+    ///
+    /// Config needs to be loaded.
+    pub async fn new_with_login(params: Parameters) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        let handle = tokio::spawn(async move {
+            let (stream, addr) = listener.accept().await.unwrap();
+            let stream = Stream::plain(stream, 4096);
+            Client::spawn(stream, params, addr, config(), ProtocolVersion::V3_0)
+                .await
+                .unwrap();
+        });
+
+        let conn = TcpStream::connect(format!("127.0.0.1:{}", port))
+            .await
+            .unwrap();
+
+        Self {
+            conn,
+            handle: Some(handle),
+        }
     }
 
     pub async fn new_sharded(params: Parameters) -> Self {
