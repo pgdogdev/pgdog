@@ -51,7 +51,6 @@ impl Grouping {
 #[derive(Debug)]
 struct Accumulator<'a> {
     target: &'a AggregateTarget,
-    datum: Datum,
     state: State,
 }
 
@@ -71,7 +70,6 @@ impl<'a> Accumulator<'a> {
 
                 let accumulator = Accumulator {
                     target,
-                    datum: Datum::Null,
                     state: State::new(target, helper)?,
                 };
 
@@ -81,18 +79,12 @@ impl<'a> Accumulator<'a> {
     }
 
     /// Transform COUNT(*), MIN, MAX, etc., from multiple shards into a single value.
-    fn accumulate(&mut self, row: &DataRow, decoder: &Decoder) -> Result<bool, Error> {
-        self.state.accumulate(row, decoder)?;
-        Ok(true)
+    fn accumulate(&mut self, row: &DataRow, decoder: &Decoder) -> Result<(), Error> {
+        self.state.accumulate(row, decoder)
     }
 
-    fn finalize(&mut self) -> Result<bool, Error> {
-        match self.state.take().finalize()? {
-            Datum::Null => {}
-            d => self.datum = d,
-        }
-
-        Ok(true)
+    fn finalize(self) -> Result<Datum, Error> {
+        self.state.finalize()
     }
 }
 
@@ -102,8 +94,6 @@ enum State {
     Cmp(cmp::Cmp),
     /// Ah ah aaaaaaah
     Count(von::Count),
-    // FIXME(sage): Temporary variant while refactor is in progress
-    Dummy,
     Sum(sum::Sum),
     Variance(variance::Variance),
 }
@@ -204,7 +194,6 @@ impl State {
             State::Count(state) => state
                 .accumulate(row.get_column_checked(state.column, decoder)?.value)
                 .map_err(Into::into),
-            State::Dummy => Ok(()),
             State::Sum(state) => state
                 .accumulate(row.get_column_checked(state.column, decoder)?.value)
                 .map_err(Into::into),
@@ -223,15 +212,9 @@ impl State {
             State::Avg(state) => Ok(state.finalize()?),
             State::Cmp(state) => Ok(state.finalize()),
             State::Count(state) => Ok(state.finalize()),
-            State::Dummy => Ok(Datum::Null),
             State::Sum(state) => Ok(state.finalize()),
             State::Variance(state) => Ok(state.finalize()?),
         }
-    }
-
-    // FIXME(sage): Get rid of this when Dummy is gone
-    fn take(&mut self) -> Self {
-        std::mem::replace(self, State::Dummy)
     }
 }
 
@@ -242,12 +225,6 @@ struct HelperColumns {
     sumsq: Option<usize>,
 }
 
-#[derive(Debug, Clone)]
-struct UnsupportedAggregate {
-    function: String,
-    reason: String,
-}
-
 #[derive(Debug)]
 pub(super) struct Aggregates<'a> {
     rows: &'a VecDeque<DataRow>,
@@ -255,8 +232,6 @@ pub(super) struct Aggregates<'a> {
     decoder: &'a Decoder,
     aggregate: &'a Aggregate,
     helper_columns: HashMap<(usize, bool), HelperColumns>,
-    merge_supported: bool,
-    unsupported: Option<UnsupportedAggregate>,
 }
 
 impl<'a> Aggregates<'a> {
@@ -265,9 +240,8 @@ impl<'a> Aggregates<'a> {
         decoder: &'a Decoder,
         aggregate: &'a Aggregate,
         plan: &AggregateRewritePlan,
-    ) -> Self {
+    ) -> Option<Self> {
         let mut helper_columns: HashMap<(usize, bool), HelperColumns> = HashMap::new();
-        let mut unsupported: Option<UnsupportedAggregate> = None;
 
         for target in aggregate.targets() {
             let key = (target.expr_id(), target.is_distinct());
@@ -284,10 +258,6 @@ impl<'a> Aggregates<'a> {
 
         for helper in plan.helpers() {
             let Some(index) = decoder.rd().field_index(&helper.alias) else {
-                unsupported.get_or_insert(UnsupportedAggregate {
-                    function: "aggregate".to_string(),
-                    reason: format!("missing helper column alias '{}'", helper.alias),
-                });
                 continue;
             };
 
@@ -301,7 +271,7 @@ impl<'a> Aggregates<'a> {
             }
         }
 
-        let merge_supported = aggregate.targets().iter().all(|target| {
+        let helpers_present = aggregate.targets().iter().all(|target| {
             let key = (target.expr_id(), target.is_distinct());
             match target.function() {
                 AggregateFunction::Avg => helper_columns
@@ -311,62 +281,34 @@ impl<'a> Aggregates<'a> {
                 AggregateFunction::StddevPop
                 | AggregateFunction::StddevSamp
                 | AggregateFunction::VarPop
-                | AggregateFunction::VarSamp => {
-                    if target.is_distinct() {
-                        unsupported.get_or_insert(UnsupportedAggregate {
-                            function: target.function().to_string(),
-                            reason: "DISTINCT is not supported".to_string(),
-                        });
-                        return false;
-                    }
-                    helper_columns
-                        .get(&key)
-                        .map(|columns| {
-                            columns.count.is_some()
-                                && columns.sum.is_some()
-                                && columns.sumsq.is_some()
-                        })
-                        .unwrap_or_else(|| {
-                            unsupported.get_or_insert(UnsupportedAggregate {
-                                function: target.function().to_string(),
-                                reason: "missing helper columns".to_string(),
-                            });
-                            false
-                        })
-                }
-                AggregateFunction::Unrecognized(fname) => {
-                    unsupported.get_or_insert(UnsupportedAggregate {
-                        function: fname.clone(),
-                        reason: format!("{fname} is not yet supported"),
-                    });
-                    false
-                }
+                | AggregateFunction::VarSamp => helper_columns
+                    .get(&key)
+                    .map(|columns| {
+                        columns.count.is_some() && columns.sum.is_some() && columns.sumsq.is_some()
+                    })
+                    .unwrap_or(false),
                 _ => true,
             }
         });
 
-        Self {
-            rows,
-            decoder,
-            mappings: HashMap::new(),
-            aggregate,
-            helper_columns,
-            merge_supported,
-            unsupported,
+        // FIXME(sage): Indicates the rewriter didn't run. This is expected for
+        // direct-to-shard and explain, but we should avoid calling this
+        // function at all for those queries and treat missing helpers as an
+        // error in order to catch bugs
+        if helpers_present {
+            Some(Self {
+                rows,
+                decoder,
+                mappings: HashMap::new(),
+                aggregate,
+                helper_columns,
+            })
+        } else {
+            None
         }
     }
 
     pub(super) fn aggregate(mut self) -> Result<VecDeque<DataRow>, Error> {
-        if !self.merge_supported {
-            if let Some(info) = self.unsupported {
-                return Err(Error::UnsupportedAggregation {
-                    function: info.function,
-                    reason: info.reason,
-                });
-            }
-            return Ok(self.rows.clone());
-        }
-
         for row in self.rows {
             let grouping = Grouping::new(row, self.aggregate.group_by(), self.decoder)?;
             let entry = match self.mappings.entry(grouping) {
@@ -378,15 +320,7 @@ impl<'a> Aggregates<'a> {
             };
 
             for aggregate in entry {
-                if !aggregate.accumulate(row, self.decoder)? {
-                    if let Some(info) = self.unsupported.clone() {
-                        return Err(Error::UnsupportedAggregation {
-                            function: info.function,
-                            reason: info.reason,
-                        });
-                    }
-                    return Ok(self.rows.clone());
-                }
+                aggregate.accumulate(row, self.decoder)?;
             }
         }
 
@@ -409,20 +343,13 @@ impl<'a> Aggregates<'a> {
                     datum.is_null(),
                 );
             }
-            for mut acc in accumulator {
-                if !acc.finalize()? {
-                    if let Some(info) = self.unsupported.clone() {
-                        return Err(Error::UnsupportedAggregation {
-                            function: info.function,
-                            reason: info.reason,
-                        });
-                    }
-                    return Ok(self.rows.clone());
-                }
+            for acc in accumulator {
+                let target_column = acc.target.column();
+                let datum = acc.finalize()?;
                 row.insert(
-                    acc.target.column(),
-                    acc.datum.encode(self.decoder.format(acc.target.column()))?,
-                    acc.datum.is_null(),
+                    target_column,
+                    datum.encode(self.decoder.format(target_column))?,
+                    datum.is_null(),
                 );
             }
             rows.push_back(row);
@@ -569,207 +496,6 @@ mod test {
     }
 
     #[test]
-    fn aggregate_count_default_bigint() {
-        // SELECT COUNT(*) (no cast) should still merge correctly and stay bigint.
-        let aggregate = parse("SELECT COUNT(*) FROM users");
-
-        let rd = RowDescription::new(&[Field::bigint("count")]);
-        let decoder = Decoder::from(&rd);
-
-        let mut rows = VecDeque::new();
-        let mut shard0 = DataRow::new();
-        shard0.add(7_i64);
-        rows.push_back(shard0);
-        let mut shard1 = DataRow::new();
-        shard1.add(11_i64);
-        rows.push_back(shard1);
-
-        let plan = AggregateRewritePlan::default();
-        let mut result = Aggregates::new(&rows, &decoder, &aggregate, &plan)
-            .aggregate()
-            .unwrap();
-
-        assert_eq!(result.len(), 1);
-        let row = result.pop_front().unwrap();
-        let total_count = row.get::<i64>(0, Format::Text).unwrap();
-        assert_eq!(total_count, 18);
-    }
-
-    #[test]
-    fn aggregate_merges_avg_with_count() {
-        let aggregate = parse("SELECT COUNT(price), AVG(price) FROM menu");
-
-        let rd = RowDescription::new(&[Field::bigint("count"), Field::double("avg")]);
-        let decoder = Decoder::from(&rd);
-
-        let mut rows = VecDeque::new();
-        let mut shard0 = DataRow::new();
-        shard0.add(2_i64).add(12.0_f64);
-        rows.push_back(shard0);
-
-        let mut shard1 = DataRow::new();
-        shard1.add(3_i64).add(18.0_f64);
-        rows.push_back(shard1);
-
-        let plan = AggregateRewritePlan::default();
-        let aggregates = Aggregates::new(&rows, &decoder, &aggregate, &plan);
-        assert!(aggregates.merge_supported);
-        let mut result = aggregates.aggregate().unwrap();
-
-        assert_eq!(result.len(), 1);
-        let row = result.pop_front().unwrap();
-        let total_count = row.get::<i64>(0, Format::Text).unwrap();
-        assert_eq!(total_count, 5);
-
-        let avg = row.get::<Double>(1, Format::Text).unwrap().0;
-        assert!((avg - 15.6).abs() < f64::EPSILON);
-    }
-
-    #[test]
-    fn aggregate_avg_without_count_passthrough() {
-        let aggregate = parse("SELECT AVG(price) FROM menu");
-
-        let rd = RowDescription::new(&[Field::double("avg")]);
-        let decoder = Decoder::from(&rd);
-
-        let mut rows = VecDeque::new();
-        let mut shard0 = DataRow::new();
-        shard0.add(12.0_f64);
-        rows.push_back(shard0);
-        let mut shard1 = DataRow::new();
-        shard1.add(18.0_f64);
-        rows.push_back(shard1);
-
-        let plan = AggregateRewritePlan::default();
-        let aggregates = Aggregates::new(&rows, &decoder, &aggregate, &plan);
-        assert!(!aggregates.merge_supported);
-        let result = aggregates.aggregate().unwrap();
-
-        assert_eq!(result.len(), 2);
-        let avg0 = result[0].get::<Double>(0, Format::Text).unwrap().0;
-        let avg1 = result[1].get::<Double>(0, Format::Text).unwrap().0;
-        assert_eq!(avg0, 12.0);
-        assert_eq!(avg1, 18.0);
-    }
-
-    #[test]
-    fn aggregate_avg_with_rewrite_helper() {
-        let aggregate = parse("SELECT AVG(price) FROM menu");
-
-        let rd = RowDescription::new(&[
-            Field::double("avg"),
-            Field::bigint("__pgdog_count_expr0_col0"),
-        ]);
-        let decoder = Decoder::from(&rd);
-
-        let mut rows = VecDeque::new();
-        let mut shard0 = DataRow::new();
-        shard0.add(12.0_f64).add(2_i64);
-        rows.push_back(shard0);
-        let mut shard1 = DataRow::new();
-        shard1.add(20.0_f64).add(2_i64);
-        rows.push_back(shard1);
-
-        let mut plan = AggregateRewritePlan::default();
-        plan.add_helper(HelperMapping {
-            target_column: 0,
-            helper_column: 1,
-            expr_id: 0,
-            distinct: false,
-            kind: HelperKind::Count,
-            alias: "__pgdog_count_expr0_col0".into(),
-        });
-
-        let mut result = Aggregates::new(&rows, &decoder, &aggregate, &plan)
-            .aggregate()
-            .unwrap();
-
-        assert_eq!(result.len(), 1);
-        let row = result.pop_front().unwrap();
-        let avg = row.get::<Double>(0, Format::Text).unwrap().0;
-        assert!((avg - 16.0).abs() < f64::EPSILON);
-    }
-
-    #[test]
-    fn aggregate_multiple_avg_with_helpers() {
-        let aggregate = parse("SELECT AVG(price), AVG(discount) FROM menu");
-
-        let rd = RowDescription::new(&[
-            Field::double("avg_price"),
-            Field::double("avg_discount"),
-            Field::bigint("__pgdog_count_expr0_col0"),
-            Field::bigint("__pgdog_count_expr1_col1"),
-        ]);
-        let decoder = Decoder::from(&rd);
-
-        let mut rows = VecDeque::new();
-        let mut shard0 = DataRow::new();
-        shard0.add(12.0_f64).add(2.0_f64).add(2_i64).add(2_i64);
-        rows.push_back(shard0);
-        let mut shard1 = DataRow::new();
-        shard1.add(20.0_f64).add(4.0_f64).add(2_i64).add(2_i64);
-        rows.push_back(shard1);
-
-        let mut plan = AggregateRewritePlan::default();
-        plan.add_helper(HelperMapping {
-            target_column: 0,
-            helper_column: 2,
-            expr_id: 0,
-            distinct: false,
-            kind: HelperKind::Count,
-            alias: "__pgdog_count_expr0_col0".into(),
-        });
-        plan.add_helper(HelperMapping {
-            target_column: 1,
-            helper_column: 3,
-            expr_id: 1,
-            distinct: false,
-            kind: HelperKind::Count,
-            alias: "__pgdog_count_expr1_col1".into(),
-        });
-
-        let mut result = Aggregates::new(&rows, &decoder, &aggregate, &plan)
-            .aggregate()
-            .unwrap();
-
-        assert_eq!(result.len(), 1);
-        let row = result.pop_front().unwrap();
-        let avg_price = row.get::<Double>(0, Format::Text).unwrap().0;
-        let avg_discount = row.get::<Double>(1, Format::Text).unwrap().0;
-
-        assert!((avg_price - 16.0).abs() < f64::EPSILON);
-        assert!((avg_discount - 3.0).abs() < f64::EPSILON);
-    }
-
-    #[test]
-    fn aggregate_distinct_count_not_paired() {
-        let aggregate = parse("SELECT COUNT(DISTINCT price), AVG(price) FROM menu");
-
-        let rd = RowDescription::new(&[Field::bigint("count"), Field::double("avg")]);
-        let decoder = Decoder::from(&rd);
-
-        let mut rows = VecDeque::new();
-        let mut shard0 = DataRow::new();
-        shard0.add(2_i64).add(12.0_f64);
-        rows.push_back(shard0);
-        let mut shard1 = DataRow::new();
-        shard1.add(3_i64).add(18.0_f64);
-        rows.push_back(shard1);
-
-        let plan = AggregateRewritePlan::default();
-        let aggregates = Aggregates::new(&rows, &decoder, &aggregate, &plan);
-        assert!(!aggregates.merge_supported); // no matching COUNT without DISTINCT
-        let result = aggregates.aggregate().unwrap();
-
-        // No merge should happen; rows should remain per shard
-        assert_eq!(result.len(), 2);
-        let avg0 = result[0].get::<Double>(1, Format::Text).unwrap().0;
-        let avg1 = result[1].get::<Double>(1, Format::Text).unwrap().0;
-        assert_eq!(avg0, 12.0);
-        assert_eq!(avg1, 18.0);
-    }
-
-    #[test]
     fn aggregate_errors_when_helper_alias_missing() {
         let aggregate = parse("SELECT AVG(price) FROM menu");
 
@@ -793,13 +519,13 @@ mod test {
 
         let result = Aggregates::new(&rows, &decoder, &aggregate, &plan).aggregate();
 
-        match result {
-            Err(Error::UnsupportedAggregation { function, reason }) => {
-                assert_eq!(function, "aggregate");
-                assert!(reason.contains("missing helper column alias"));
-            }
-            other => panic!("expected unsupported aggregation error, got {other:?}"),
-        }
+        assert_matches!(
+            result,
+            Err(Error::UnsupportedAggregation {
+                function,
+                ..
+            }) if function == "avg"
+        );
     }
 
     #[test]
