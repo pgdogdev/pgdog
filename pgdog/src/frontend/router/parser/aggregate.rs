@@ -1,6 +1,7 @@
 use pg_query::NodeEnum;
 use pg_query::protobuf::Integer;
 use pg_query::protobuf::{Node, SelectStmt, String as PgQueryString, a_const::Val};
+use std::fmt;
 
 use super::{ExpressionRegistry, Function};
 use crate::backend::schema::Schema;
@@ -45,19 +46,19 @@ pub enum AggregateFunction {
     Unrecognized(String),
 }
 
-impl AggregateFunction {
-    pub fn as_str(&self) -> &str {
+impl fmt::Display for AggregateFunction {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
         match self {
-            AggregateFunction::Count => "count",
-            AggregateFunction::Max => "max",
-            AggregateFunction::Min => "min",
-            AggregateFunction::Avg => "avg",
-            AggregateFunction::Sum => "sum",
-            AggregateFunction::StddevPop => "stddev_pop",
-            AggregateFunction::StddevSamp => "stddev_samp",
-            AggregateFunction::VarPop => "var_pop",
-            AggregateFunction::VarSamp => "var_samp",
-            AggregateFunction::Unrecognized(s) => &*s,
+            AggregateFunction::Count => write!(f, "count"),
+            AggregateFunction::Max => write!(f, "max"),
+            AggregateFunction::Min => write!(f, "min"),
+            AggregateFunction::Avg => write!(f, "avg"),
+            AggregateFunction::Sum => write!(f, "sum"),
+            AggregateFunction::StddevPop => write!(f, "stddev_pop"),
+            AggregateFunction::StddevSamp => write!(f, "stddev_samp"),
+            AggregateFunction::VarPop => write!(f, "var_pop"),
+            AggregateFunction::VarSamp => write!(f, "var_samp"),
+            AggregateFunction::Unrecognized(s) => f.write_str(&*s),
         }
     }
 }

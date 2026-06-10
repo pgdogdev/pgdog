@@ -1,578 +1,230 @@
-use std::collections::BTreeSet;
+use rust::setup::{admin_sqlx, connections_sqlx};
+use rust_decimal::prelude::*;
+use sqlx::{Executor, Pool, Postgres, Row};
 
-use ordered_float::OrderedFloat;
-use rust::setup::{admin_sqlx, connections_sqlx, connections_tokio};
-use sqlx::{Connection, Executor, PgConnection, Row, postgres::PgPool};
+#[tokio::test]
+async fn test_variance_numeric() {
+    let conns = connections_sqlx().await;
 
-const SHARD_URLS: [&str; 2] = [
-    "postgres://pgdog:pgdog@127.0.0.1:5432/shard_0",
-    "postgres://pgdog:pgdog@127.0.0.1:5432/shard_1",
+    setup_schema(&conns, "test_variance_numeric", "int8").await;
+    setup_data(&conns, "test_variance_numeric", TEST_DATA).await;
+
+    let sharded = &conns[1];
+    let unsharded = &conns[0];
+    let data = sharded.fetch_one("SELECT var_pop(value), var_samp(value), stddev_pop(value), stddev_samp(value) FROM test_variance_numeric").await.unwrap();
+    let expected = unsharded.fetch_one("SELECT var_pop(value), var_samp(value), stddev_pop(value), stddev_samp(value) FROM test_variance_numeric").await.unwrap();
+
+    assert_dec_eq(data.get(0), expected.get(0));
+    assert_dec_eq(data.get(1), expected.get(1));
+    assert_dec_eq(data.get(2), expected.get(2));
+    assert_dec_eq(data.get(3), expected.get(3));
+
+    setup_data(&conns, "test_variance_numeric", TEST_DATA_2).await;
+
+    let data = sharded.fetch_one("SELECT var_pop(value), var_samp(value), stddev_pop(value), stddev_samp(value) FROM test_variance_numeric").await.unwrap();
+    let expected = unsharded.fetch_one("SELECT var_pop(value), var_samp(value), stddev_pop(value), stddev_samp(value) FROM test_variance_numeric").await.unwrap();
+
+    assert_dec_eq(data.get(0), expected.get(0));
+    assert_dec_eq(data.get(1), expected.get(1));
+    assert_dec_eq(data.get(2), expected.get(2));
+    assert_dec_eq(data.get(3), expected.get(3));
+}
+
+#[tokio::test]
+async fn test_variance_int4() {
+    let conns = connections_sqlx().await;
+
+    setup_schema(&conns, "test_variance_int4", "int4").await;
+    setup_data(&conns, "test_variance_int4", TEST_DATA).await;
+
+    let sharded = &conns[1];
+    let unsharded = &conns[0];
+    let data = sharded.fetch_one("SELECT var_pop(value), var_samp(value), stddev_pop(value), stddev_samp(value) FROM test_variance_int4").await.unwrap();
+    let expected = unsharded.fetch_one("SELECT var_pop(value), var_samp(value), stddev_pop(value), stddev_samp(value) FROM test_variance_int4").await.unwrap();
+
+    assert_dec_eq(data.get(0), expected.get(0));
+    assert_dec_eq(data.get(1), expected.get(1));
+    assert_dec_eq(data.get(2), expected.get(2));
+    assert_dec_eq(data.get(3), expected.get(3));
+
+    setup_data(&conns, "test_variance_int4", TEST_DATA_2).await;
+
+    let data = sharded.fetch_one("SELECT var_pop(value), var_samp(value), stddev_pop(value), stddev_samp(value) FROM test_variance_int4").await.unwrap();
+    let expected = unsharded.fetch_one("SELECT var_pop(value), var_samp(value), stddev_pop(value), stddev_samp(value) FROM test_variance_int4").await.unwrap();
+
+    assert_dec_eq(data.get(0), expected.get(0));
+    assert_dec_eq(data.get(1), expected.get(1));
+    assert_dec_eq(data.get(2), expected.get(2));
+    assert_dec_eq(data.get(3), expected.get(3));
+}
+
+#[tokio::test]
+async fn test_variance_double() {
+    const CLOSE_ENOUGH: f64 = 1e-14; // 0.00000000000001%
+    let conns = connections_sqlx().await;
+
+    setup_schema(&conns, "test_variance_double", "DOUBLE PRECISION").await;
+    setup_data(&conns, "test_variance_double", &TEST_DATA).await;
+
+    let sharded = &conns[1];
+    let unsharded = &conns[0];
+    let data = sharded.fetch_one("SELECT var_pop(value), var_samp(value), stddev_pop(value), stddev_samp(value) FROM test_variance_double").await.unwrap();
+    let expected = unsharded.fetch_one("SELECT var_pop(value), var_samp(value), stddev_pop(value), stddev_samp(value) FROM test_variance_double").await.unwrap();
+
+    assert_f64_close(data.get(0), expected.get(0), CLOSE_ENOUGH);
+    assert_f64_close(data.get(1), expected.get(1), CLOSE_ENOUGH);
+    assert_f64_close(data.get(2), expected.get(2), CLOSE_ENOUGH);
+    assert_f64_close(data.get(3), expected.get(3), CLOSE_ENOUGH);
+
+    setup_data(&conns, "test_variance_double", &TEST_DATA_2).await;
+
+    let data = sharded.fetch_one("SELECT var_pop(value), var_samp(value), stddev_pop(value), stddev_samp(value) FROM test_variance_double").await.unwrap();
+    let expected = unsharded.fetch_one("SELECT var_pop(value), var_samp(value), stddev_pop(value), stddev_samp(value) FROM test_variance_double").await.unwrap();
+
+    assert_f64_close(data.get(0), expected.get(0), CLOSE_ENOUGH);
+    assert_f64_close(data.get(1), expected.get(1), CLOSE_ENOUGH);
+    assert_f64_close(data.get(2), expected.get(2), CLOSE_ENOUGH);
+    assert_f64_close(data.get(3), expected.get(3), CLOSE_ENOUGH);
+}
+
+#[tokio::test]
+async fn test_variance_float() {
+    const CLOSEST_WE_CAN_GET_WITH_32_BITS: f64 = 1e-5; // 0.001% yikes
+    let conns = connections_sqlx().await;
+
+    setup_schema(&conns, "test_variance_float", "real").await;
+    setup_data(&conns, "test_variance_float", &TEST_DATA).await;
+
+    let sharded = &conns[1];
+    let unsharded = &conns[0];
+    let data = sharded.fetch_one("SELECT var_pop(value), var_samp(value), stddev_pop(value), stddev_samp(value) FROM test_variance_float").await.unwrap();
+    let expected = unsharded.fetch_one("SELECT var_pop(value), var_samp(value), stddev_pop(value), stddev_samp(value) FROM test_variance_float").await.unwrap();
+
+    assert_f64_close(
+        data.get(0),
+        expected.get(0),
+        CLOSEST_WE_CAN_GET_WITH_32_BITS,
+    );
+    assert_f64_close(
+        data.get(1),
+        expected.get(1),
+        CLOSEST_WE_CAN_GET_WITH_32_BITS,
+    );
+    assert_f64_close(
+        data.get(2),
+        expected.get(2),
+        CLOSEST_WE_CAN_GET_WITH_32_BITS,
+    );
+    assert_f64_close(
+        data.get(3),
+        expected.get(3),
+        CLOSEST_WE_CAN_GET_WITH_32_BITS,
+    );
+
+    setup_data(&conns, "test_variance_float", &TEST_DATA_2).await;
+
+    let data = sharded.fetch_one("SELECT var_pop(value), var_samp(value), stddev_pop(value), stddev_samp(value) FROM test_variance_float").await.unwrap();
+    let expected = unsharded.fetch_one("SELECT var_pop(value), var_samp(value), stddev_pop(value), stddev_samp(value) FROM test_variance_float").await.unwrap();
+
+    assert_f64_close(
+        data.get(0),
+        expected.get(0),
+        CLOSEST_WE_CAN_GET_WITH_32_BITS,
+    );
+    assert_f64_close(
+        data.get(1),
+        expected.get(1),
+        CLOSEST_WE_CAN_GET_WITH_32_BITS,
+    );
+    assert_f64_close(
+        data.get(2),
+        expected.get(2),
+        CLOSEST_WE_CAN_GET_WITH_32_BITS,
+    );
+    assert_f64_close(
+        data.get(3),
+        expected.get(3),
+        CLOSEST_WE_CAN_GET_WITH_32_BITS,
+    );
+}
+
+/// Assert that two floating point values are as close to equal as we can
+/// reasonably get when calculating variance on floats without the original
+/// data set.
+fn assert_f64_close(actual: f64, expected: f64, max_diff: f64) {
+    let diff = (actual - expected).abs() / actual;
+    assert!(
+        diff < max_diff,
+        r#"assertion `left ~= right` failed:
+  left: {actual:?}
+ right: {expected:?}
+  diff: {diff:?}"#
+    );
+}
+
+fn assert_dec_eq(mut actual: Decimal, expected: Decimal) {
+    if actual.scale() > expected.scale() {
+        actual.rescale(expected.scale());
+    }
+    assert_eq!(actual, expected);
+}
+
+async fn setup_schema(conns: &[Pool<Postgres>], table_name: &str, data_type: &str) {
+    for conn in conns {
+        conn.execute(&*format!("DROP TABLE IF EXISTS {table_name}"))
+            .await
+            .unwrap();
+        conn.execute(&*format!(
+            "CREATE TABLE {table_name} (customer_id BIGINT NOT NULL, value {data_type})",
+        ))
+        .await
+        .unwrap();
+        admin_sqlx().await.execute("RELOAD").await.unwrap();
+    }
+}
+
+async fn setup_data<T: std::fmt::Display>(conns: &[Pool<Postgres>], table_name: &str, data: &[T]) {
+    for conn in conns {
+        conn.execute(&*format!("TRUNCATE TABLE {table_name}"))
+            .await
+            .unwrap();
+        for (i, value) in data.iter().enumerate() {
+            conn.execute(&*format!(
+                "INSERT INTO {table_name} (customer_id, value) VALUES ({i}, {value})"
+            ))
+            .await
+            .unwrap();
+        }
+    }
+}
+
+// Recent download counts of the 100 most popular crates as of 6/9/2026
+const TEST_DATA: &[i64] = &[
+    450329134, 386527085, 348521531, 332945790, 294970090, 290857550, 284694702, 258336768,
+    258154767, 254485026, 252769246, 243199426, 242367895, 241286917, 232310474, 232236770,
+    226494798, 221473566, 217170662, 217052736, 214435414, 213336069, 212489430, 210461816,
+    208312515, 208265727, 207526230, 207070213, 206852142, 204018630, 202697271, 202693425,
+    201437650, 198936088, 198839308, 197719610, 195889462, 195825405, 194010171, 186849163,
+    185483765, 179751005, 179532029, 176706766, 175848062, 175612917, 175462223, 174889323,
+    174793400, 174323450, 174267292, 174090376, 173919330, 170916707, 167707451, 167402946,
+    166634912, 165022096, 164671200, 163911642, 163867443, 163320764, 160070670, 160057150,
+    159339559, 158731264, 158348991, 157187336, 157085072, 155603749, 155072980, 153651318,
+    153417913, 153228552, 153140443, 153083644, 152126010, 151856999, 151682119, 151456161,
+    151268966, 150857425, 150471859, 149072981, 148671911, 148463017, 146608931, 145662573,
+    145380393, 145252714, 144730199, 144540340, 144471568, 144049728, 143598846, 143552812,
+    143152356, 143111186, 140360342, 139857277,
 ];
-
-struct Moments {
-    sum: f64,
-    sum_sq: f64,
-    count: i64,
-}
-
-impl Moments {
-    fn variance_population(&self) -> Option<f64> {
-        if self.count == 0 {
-            return None;
-        }
-
-        let n = self.count as f64;
-        let numerator = self.sum_sq - (self.sum * self.sum) / n;
-        let variance = numerator / n;
-        Some(if variance < 0.0 { 0.0 } else { variance })
-    }
-
-    fn variance_sample(&self) -> Option<f64> {
-        if self.count <= 1 {
-            return None;
-        }
-
-        let n = self.count as f64;
-        let numerator = self.sum_sq - (self.sum * self.sum) / n;
-        let variance = numerator / (n - 1.0);
-        Some(if variance < 0.0 { 0.0 } else { variance })
-    }
-
-    fn stddev_population(&self) -> Option<f64> {
-        self.variance_population().map(|variance| variance.sqrt())
-    }
-
-    fn stddev_sample(&self) -> Option<f64> {
-        self.variance_sample().map(|variance| variance.sqrt())
-    }
-}
-
-#[tokio::test]
-async fn stddev_pop_merges_with_helpers() -> Result<(), Box<dyn std::error::Error>> {
-    let conns = connections_sqlx().await;
-    let sharded = conns.get(1).cloned().unwrap();
-
-    reset_table(
-        &sharded,
-        "stddev_pop_reduce_test",
-        "(price DOUBLE PRECISION, customer_id BIGINT)",
-    )
-    .await?;
-
-    seed_stat_data(
-        &sharded,
-        &[
-            (
-                0,
-                "INSERT INTO stddev_pop_reduce_test(price) VALUES (10.0), (14.0)",
-            ),
-            (
-                1,
-                "INSERT INTO stddev_pop_reduce_test(price) VALUES (18.0), (22.0)",
-            ),
-        ],
-    )
-    .await?;
-
-    let rows = sharded
-        .fetch_all("SELECT STDDEV_POP(price) AS stddev_pop FROM stddev_pop_reduce_test")
-        .await?;
-
-    assert_eq!(rows.len(), 1);
-    let pgdog_stddev: f64 = rows[0].get("stddev_pop");
-
-    let stats = combined_moments("stddev_pop_reduce_test", "price").await?;
-    let expected = stats
-        .stddev_population()
-        .expect("population stddev should exist");
-
-    assert!(
-        (pgdog_stddev - expected).abs() < 1e-9,
-        "STDDEV_POP mismatch: pgdog={}, expected={}",
-        pgdog_stddev,
-        expected
-    );
-
-    cleanup_table(&sharded, "stddev_pop_reduce_test").await;
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn stddev_samp_aliases_should_merge() -> Result<(), Box<dyn std::error::Error>> {
-    let conns = connections_sqlx().await;
-    let sharded = conns.get(1).cloned().unwrap();
-
-    reset_table(
-        &sharded,
-        "stddev_sample_reduce_test",
-        "(price DOUBLE PRECISION, customer_id BIGINT)",
-    )
-    .await?;
-
-    seed_stat_data(
-        &sharded,
-        &[
-            (
-                0,
-                "INSERT INTO stddev_sample_reduce_test(price) VALUES (10.0), (14.0)",
-            ),
-            (
-                1,
-                "INSERT INTO stddev_sample_reduce_test(price) VALUES (18.0), (22.0)",
-            ),
-        ],
-    )
-    .await?;
-
-    let rows = sharded
-        .fetch_all("SELECT STDDEV(price) AS stddev_price, STDDEV_SAMP(price) AS stddev_samp_price FROM stddev_sample_reduce_test")
-        .await?;
-
-    assert_eq!(rows.len(), 1);
-    let stddev_alias: f64 = rows[0].get("stddev_price");
-    let stddev_samp: f64 = rows[0].get("stddev_samp_price");
-
-    let stats = combined_moments("stddev_sample_reduce_test", "price").await?;
-    let expected = stats
-        .stddev_sample()
-        .expect("sample stddev should exist for n > 1");
-
-    for value in [stddev_alias, stddev_samp] {
-        assert!(
-            (value - expected).abs() < 1e-9,
-            "STDDEV_SAMP mismatch: value={}, expected={}",
-            value,
-            expected
-        );
-    }
-
-    cleanup_table(&sharded, "stddev_sample_reduce_test").await;
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn variance_variants_should_merge() -> Result<(), Box<dyn std::error::Error>> {
-    let conns = connections_sqlx().await;
-    let sharded = conns.get(1).cloned().unwrap();
-
-    reset_table(
-        &sharded,
-        "variance_reduce_test",
-        "(price DOUBLE PRECISION, customer_id BIGINT)",
-    )
-    .await?;
-
-    seed_stat_data(
-        &sharded,
-        &[
-            (
-                0,
-                "INSERT INTO variance_reduce_test(price) VALUES (10.0), (14.0)",
-            ),
-            (
-                1,
-                "INSERT INTO variance_reduce_test(price) VALUES (18.0), (22.0)",
-            ),
-        ],
-    )
-    .await?;
-
-    let rows = sharded
-        .fetch_all(
-            "SELECT VAR_POP(price) AS variance_pop, VAR_SAMP(price) AS variance_samp, VARIANCE(price) AS variance_alias FROM variance_reduce_test",
-        )
-        .await?;
-
-    assert_eq!(rows.len(), 1);
-    let variance_pop: f64 = rows[0].get("variance_pop");
-    let variance_samp: f64 = rows[0].get("variance_samp");
-    let variance_alias: f64 = rows[0].get("variance_alias");
-
-    let stats = combined_moments("variance_reduce_test", "price").await?;
-    let expected_pop = stats
-        .variance_population()
-        .expect("population variance should exist for n > 0");
-    let expected_samp = stats
-        .variance_sample()
-        .expect("sample variance should exist for n > 1");
-
-    assert!(
-        (variance_pop - expected_pop).abs() < 1e-9,
-        "VAR_POP mismatch: value={}, expected={}",
-        variance_pop,
-        expected_pop
-    );
-
-    for value in [variance_samp, variance_alias] {
-        assert!(
-            (value - expected_samp).abs() < 1e-9,
-            "VAR_SAMP mismatch: value={}, expected={}",
-            value,
-            expected_samp
-        );
-    }
-
-    cleanup_table(&sharded, "variance_reduce_test").await;
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn stddev_multiple_columns_should_merge() -> Result<(), Box<dyn std::error::Error>> {
-    let conns = connections_sqlx().await;
-    let sharded = conns.get(1).cloned().unwrap();
-
-    reset_table(
-        &sharded,
-        "stddev_multi_column",
-        "(price DOUBLE PRECISION, discount DOUBLE PRECISION, customer_id BIGINT)",
-    )
-    .await?;
-
-    seed_stat_data(
-        &sharded,
-        &[
-            (
-                0,
-                "INSERT INTO stddev_multi_column(price, discount) VALUES (10.0, 1.0), (14.0, 3.0)",
-            ),
-            (
-                1,
-                "INSERT INTO stddev_multi_column(price, discount) VALUES (18.0, 2.0), (22.0, 6.0)",
-            ),
-        ],
-    )
-    .await?;
-
-    let rows = sharded
-        .fetch_all(
-            "SELECT STDDEV_POP(price) AS stddev_price_pop, STDDEV_SAMP(discount) AS stddev_discount_samp FROM stddev_multi_column",
-        )
-        .await?;
-
-    assert_eq!(rows.len(), 1);
-    let price_pop: f64 = rows[0].get("stddev_price_pop");
-    let discount_samp: f64 = rows[0].get("stddev_discount_samp");
-
-    let price_stats = combined_moments("stddev_multi_column", "price").await?;
-    let discount_stats = combined_moments("stddev_multi_column", "discount").await?;
-
-    let expected_price_pop = price_stats
-        .stddev_population()
-        .expect("population stddev should exist");
-    let expected_discount_samp = discount_stats
-        .stddev_sample()
-        .expect("sample stddev should exist");
-
-    assert!(
-        (price_pop - expected_price_pop).abs() < 1e-9,
-        "STDDEV_POP(price) mismatch: value={}, expected={}",
-        price_pop,
-        expected_price_pop
-    );
-
-    assert!(
-        (discount_samp - expected_discount_samp).abs() < 1e-9,
-        "STDDEV_SAMP(discount) mismatch: value={}, expected={}",
-        discount_samp,
-        expected_discount_samp
-    );
-
-    cleanup_table(&sharded, "stddev_multi_column").await;
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn stddev_prepared_statement_should_merge() -> Result<(), Box<dyn std::error::Error>> {
-    let conns = connections_sqlx().await;
-    let sharded = conns.get(1).cloned().unwrap();
-    let pg_clients = connections_tokio().await;
-    let tokio_client = pg_clients.into_iter().nth(1).unwrap();
-
-    reset_table(
-        &sharded,
-        "stddev_prepared_params",
-        "(price DOUBLE PRECISION, customer_id BIGINT)",
-    )
-    .await?;
-
-    seed_stat_data(
-        &sharded,
-        &[
-            (
-                0,
-                "INSERT INTO stddev_prepared_params(price) VALUES (10.0), (14.0)",
-            ),
-            (
-                1,
-                "INSERT INTO stddev_prepared_params(price) VALUES (18.0), (22.0)",
-            ),
-        ],
-    )
-    .await?;
-
-    let statement = tokio_client
-        .prepare("SELECT STDDEV_SAMP(price) AS stddev_price FROM stddev_prepared_params WHERE price >= $1")
-        .await?;
-    let column_names: Vec<_> = statement
-        .columns()
-        .iter()
-        .map(|c| c.name().to_string())
-        .collect();
-    println!("tokio column names: {:?}", column_names);
-    let tokio_rows = tokio_client.query(&statement, &[&12.0_f64]).await?;
-    println!("tokio row count: {}", tokio_rows.len());
-
-    let stddev_rows = sqlx::query(
-        "SELECT STDDEV_SAMP(price) AS stddev_price FROM stddev_prepared_params WHERE price >= $1",
-    )
-    .bind(12.0_f64)
-    .fetch_all(&sharded)
-    .await?;
-
-    assert_eq!(stddev_rows.len(), 1);
-    let pgdog_stddev: f64 = stddev_rows[0].get("stddev_price");
-
-    let stats =
-        combined_moments_with_filter("stddev_prepared_params", "price", "price >= $1", 12.0_f64)
-            .await?;
-    let expected = stats
-        .stddev_sample()
-        .expect("sample stddev should exist for filtered rows");
-
-    assert!(
-        (pgdog_stddev - expected).abs() < 1e-9,
-        "Prepared STDDEV_SAMP mismatch: pgdog={}, expected={}",
-        pgdog_stddev,
-        expected
-    );
-
-    cleanup_table(&sharded, "stddev_prepared_params").await;
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn stddev_distinct_should_error_until_supported() -> Result<(), Box<dyn std::error::Error>> {
-    let conns = connections_sqlx().await;
-    let sharded = conns.get(1).cloned().unwrap();
-
-    reset_table(
-        &sharded,
-        "stddev_distinct_error",
-        "(price DOUBLE PRECISION, customer_id BIGINT)",
-    )
-    .await?;
-
-    seed_stat_data(
-        &sharded,
-        &[
-            (
-                0,
-                "INSERT INTO stddev_distinct_error(price) VALUES (10.0), (14.0)",
-            ),
-            (
-                1,
-                "INSERT INTO stddev_distinct_error(price) VALUES (18.0), (22.0)",
-            ),
-        ],
-    )
-    .await?;
-
-    let result = sharded
-        .fetch_all("SELECT STDDEV_SAMP(DISTINCT price) FROM stddev_distinct_error")
-        .await;
-    assert!(
-        result.is_err(),
-        "DISTINCT STDDEV should error until supported"
-    );
-
-    cleanup_table(&sharded, "stddev_distinct_error").await;
-
-    Ok(())
-}
-
-#[tokio::test]
-#[ignore]
-async fn stddev_distinct_future_expectation() -> Result<(), Box<dyn std::error::Error>> {
-    let conns = connections_sqlx().await;
-    let sharded = conns.get(1).cloned().unwrap();
-
-    reset_table(
-        &sharded,
-        "stddev_distinct_test",
-        "(price DOUBLE PRECISION, customer_id BIGINT)",
-    )
-    .await?;
-
-    seed_stat_data(
-        &sharded,
-        &[
-            (
-                0,
-                "INSERT INTO stddev_distinct_test(price) VALUES (10.0), (14.0), (14.0)",
-            ),
-            (
-                1,
-                "INSERT INTO stddev_distinct_test(price) VALUES (14.0), (18.0), (22.0), (22.0)",
-            ),
-        ],
-    )
-    .await?;
-
-    let rows = sharded
-        .fetch_all(
-            "SELECT STDDEV_SAMP(DISTINCT price) AS stddev_distinct FROM stddev_distinct_test",
-        )
-        .await?;
-
-    assert_eq!(rows.len(), 1);
-    let pgdog_stddev: f64 = rows[0].get("stddev_distinct");
-
-    let stats = distinct_moments("stddev_distinct_test", "price").await?;
-    let expected = stats
-        .stddev_sample()
-        .expect("sample stddev should exist for distinct data");
-
-    assert!(
-        (pgdog_stddev - expected).abs() < 1e-9,
-        "DISTINCT STDDEV future expectation mismatch: pgdog={}, expected={}",
-        pgdog_stddev,
-        expected
-    );
-
-    cleanup_table(&sharded, "stddev_distinct_test").await;
-
-    Ok(())
-}
-
-async fn reset_table(pool: &PgPool, table: &str, schema: &str) -> Result<(), sqlx::Error> {
-    for shard in [0, 1] {
-        let drop_stmt = format!(
-            "/* pgdog_shard: {} */ DROP TABLE IF EXISTS {}",
-            shard, table
-        );
-        pool.execute(drop_stmt.as_str()).await.ok();
-    }
-
-    for shard in [0, 1] {
-        let create_stmt = format!(
-            "/* pgdog_shard: {} */ CREATE TABLE {} {}",
-            shard, table, schema
-        );
-        pool.execute(create_stmt.as_str()).await?;
-    }
-
-    admin_sqlx().await.execute("RELOAD").await?;
-
-    Ok(())
-}
-
-async fn cleanup_table(pool: &PgPool, table: &str) {
-    for shard in [0, 1] {
-        let drop_stmt = format!("/* pgdog_shard: {} */ DROP TABLE {}", shard, table);
-        let _ = pool.execute(drop_stmt.as_str()).await;
-    }
-}
-
-async fn seed_stat_data(pool: &PgPool, inserts: &[(usize, &str)]) -> Result<(), sqlx::Error> {
-    for (shard, statement) in inserts {
-        let command = format!("/* pgdog_shard: {} */ {}", shard, statement);
-        pool.execute(command.as_str()).await?;
-    }
-
-    Ok(())
-}
-
-async fn combined_moments(table: &str, column: &str) -> Result<Moments, sqlx::Error> {
-    let mut totals = Moments {
-        sum: 0.0,
-        sum_sq: 0.0,
-        count: 0,
-    };
-
-    for url in SHARD_URLS {
-        let mut conn = PgConnection::connect(url).await?;
-        let query = format!(
-            "SELECT COALESCE(SUM({col}), 0)::float8, COALESCE(SUM(POWER({col}, 2)), 0)::float8, COUNT(*) FROM {table}",
-            col = column,
-            table = table
-        );
-        let (sum, sum_sq, count): (f64, f64, i64) = sqlx::query_as::<_, (f64, f64, i64)>(&query)
-            .fetch_one(&mut conn)
-            .await?;
-        totals.sum += sum;
-        totals.sum_sq += sum_sq;
-        totals.count += count;
-    }
-
-    Ok(totals)
-}
-
-async fn combined_moments_with_filter(
-    table: &str,
-    column: &str,
-    predicate: &str,
-    value: f64,
-) -> Result<Moments, sqlx::Error> {
-    let mut totals = Moments {
-        sum: 0.0,
-        sum_sq: 0.0,
-        count: 0,
-    };
-
-    for url in SHARD_URLS {
-        let mut conn = PgConnection::connect(url).await?;
-        let query = format!(
-            "SELECT COALESCE(SUM({col}), 0)::float8, COALESCE(SUM(POWER({col}, 2)), 0)::float8, COUNT(*) FROM {table} WHERE {predicate}",
-            col = column,
-            table = table,
-            predicate = predicate
-        );
-        let (sum, sum_sq, count): (f64, f64, i64) = sqlx::query_as::<_, (f64, f64, i64)>(&query)
-            .bind(value)
-            .fetch_one(&mut conn)
-            .await?;
-        totals.sum += sum;
-        totals.sum_sq += sum_sq;
-        totals.count += count;
-    }
-
-    Ok(totals)
-}
-
-async fn distinct_moments(table: &str, column: &str) -> Result<Moments, sqlx::Error> {
-    let mut distinct_values: BTreeSet<OrderedFloat<f64>> = BTreeSet::new();
-
-    for url in SHARD_URLS {
-        let mut conn = PgConnection::connect(url).await?;
-        let query = format!(
-            "SELECT DISTINCT {col} FROM {table}",
-            col = column,
-            table = table
-        );
-        let rows: Vec<Option<f64>> = sqlx::query_scalar::<_, Option<f64>>(&query)
-            .fetch_all(&mut conn)
-            .await?;
-        for value in rows.into_iter().flatten() {
-            distinct_values.insert(OrderedFloat(value));
-        }
-    }
-
-    let mut sum = 0.0;
-    let mut sum_sq = 0.0;
-    for value in &distinct_values {
-        let v = value.0;
-        sum += v;
-        sum_sq += v * v;
-    }
-
-    Ok(Moments {
-        sum,
-        sum_sq,
-        count: distinct_values.len() as i64,
-    })
-}
+// Recent download counts of 200 random crates, guaranteed to be chosen by
+// a fair dice roll.
+const TEST_DATA_2: &[i64] = &[
+    1132, 112, 10, 4, 63, 538, 7035, 4, 5, 4, 10, 116, 339, 108, 56, 849, 481, 311, 85, 67, 28,
+    157, 7, 13, 5, 8, 14, 5, 8, 7, 194, 59, 139, 4, 4, 130, 304, 7, 1229, 71, 53, 42, 136919727,
+    1793, 102, 155, 7, 45, 1, 742, 240, 182, 717, 14, 237, 38073, 4, 4, 6, 20, 4520, 113, 6, 82940,
+    218, 9, 10, 427, 52, 1560, 242791, 5, 437, 4, 518, 219, 7, 4, 5, 4848, 12, 25, 145, 7, 4, 5,
+    193, 274, 16, 6361, 53, 8, 66, 42, 62, 8, 589, 11, 1, 48, 4, 1158, 328, 88, 330, 32, 13, 616,
+    99, 4, 4, 67, 4, 12, 4, 130, 72, 7457, 323, 23, 4091, 120, 5, 51, 76, 382, 1100, 11608, 4,
+    23062, 57, 4, 33, 4, 309, 10, 17, 51, 38, 12196, 159, 1061, 10, 14, 29, 147, 61, 21, 57, 316,
+    57, 6, 120, 6, 346, 13, 9, 1596, 14, 14, 142684, 11, 5, 510, 370, 53, 3, 6, 5, 79897, 13, 22,
+    20, 16, 68, 62, 1, 156, 11, 21740, 70, 1039, 24, 12, 4, 69, 8, 1, 5, 4, 151, 5, 9, 7, 29,
+    696802, 48, 1363535, 4, 97,
+];

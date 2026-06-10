@@ -1,4 +1,4 @@
-use super::Error;
+use super::TypeError;
 use crate::net::messages::Datum;
 
 #[derive(Debug)]
@@ -15,7 +15,7 @@ impl Count {
         }
     }
 
-    pub(super) fn accumulate(&mut self, value: Datum) -> Result<(), Error> {
+    pub(super) fn accumulate(&mut self, value: Datum) -> Result<(), TypeError> {
         if value.is_null() {
             return Ok(());
         }
@@ -25,7 +25,11 @@ impl Count {
     }
 
     pub(super) fn finalize(self) -> Datum {
-        self.total.into()
+        self.finalize_i64().into()
+    }
+
+    pub(super) fn finalize_i64(self) -> Option<i64> {
+        self.total
     }
 }
 
