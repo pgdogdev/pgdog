@@ -243,7 +243,12 @@ impl Client {
         //
         // This is likely because passthrough authentication is enabled.
         //
-        let auth_result = if passthrough {
+        let auth_result = if admin {
+            // The admin database is virtual and never present in the cluster
+            // map, so authenticate directly against the configured admin password.
+            let passwords = [PasswordKind::Plain(admin_password.clone())];
+            Self::check_password(&mut stream, user, auth_type, &passwords).await?
+        } else if passthrough {
             // Get the password. We always need it because we need to check if
             // it's current and hasn't been changed.
             stream
@@ -261,11 +266,6 @@ impl Client {
             } else {
                 AuthResult::NoPassthroughNoUser
             }
-        } else if admin {
-            // The admin database is virtual and never present in the cluster
-            // map, so authenticate directly against the configured admin password.
-            let passwords = [PasswordKind::Plain(admin_password.clone())];
-            Self::check_password(&mut stream, user, auth_type, &passwords).await?
         } else {
             match databases::databases().cluster((user, database)) {
                 Ok(cluster) => {
