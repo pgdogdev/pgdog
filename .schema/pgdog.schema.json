@@ -251,6 +251,17 @@
         "time": null,
         "user_timeout": null
       }
+    },
+    "vault": {
+      "description": "HashiCorp Vault settings, required for users configured with `server_auth = \"vault\"`.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Vault"
+        },
+        {
+          "type": "null"
+        }
+      ]
     }
   },
   "additionalProperties": false,
@@ -2066,6 +2077,82 @@
           "description": "Compact function using the leftest 53-bit range, making it\nJavaScript-safe, so you can pass it as an integer directly\nto the frontend apps.\n\nThe year is 2026 and JavaScript continues to be a pain in the ass.",
           "type": "string",
           "const": "compact"
+        }
+      ]
+    },
+    "Vault": {
+      "description": "HashiCorp Vault settings, used by pools configured with `server_auth = \"vault\"`.\n\nPgDog logs into Vault using the configured auth method and fetches\ndynamic database credentials from the per-user `vault_path`.",
+      "type": "object",
+      "properties": {
+        "approle_role_id": {
+          "description": "AppRole auth: role ID.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "approle_secret_id_file": {
+          "description": "AppRole auth: path to a file containing the secret ID.\n\n**Note:** If not set, the secret ID is read from the `VAULT_SECRET_ID`\nenvironment variable.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "auth_method": {
+          "description": "Auth method used to log into Vault.",
+          "$ref": "#/$defs/VaultAuthMethod"
+        },
+        "auth_mount": {
+          "description": "Mount path of the auth method.\n\n_Default:_ `kubernetes` for Kubernetes auth, `approle` for AppRole auth.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kubernetes_jwt_path": {
+          "description": "Kubernetes auth: path to the service account JWT.\n\n_Default:_ `/var/run/secrets/kubernetes.io/serviceaccount/token`",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kubernetes_role": {
+          "description": "Kubernetes auth: name of the Vault role to log in as.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "namespace": {
+          "description": "Vault namespace (Vault Enterprise). Sent as the `X-Vault-Namespace` header.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "url": {
+          "description": "Vault server URL, e.g. `https://vault.internal:8200`.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "url",
+        "auth_method"
+      ]
+    },
+    "VaultAuthMethod": {
+      "description": "How PgDog authenticates to Vault.",
+      "oneOf": [
+        {
+          "description": "Kubernetes auth: log in with the pod's service account JWT.",
+          "type": "string",
+          "const": "kubernetes"
+        },
+        {
+          "description": "AppRole auth: log in with a role ID and secret ID.",
+          "type": "string",
+          "const": "approle"
         }
       ]
     },

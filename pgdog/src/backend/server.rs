@@ -97,11 +97,12 @@ impl Server {
         options: ServerOptions,
         connect_reason: ConnectReason,
     ) -> Result<Self, Error> {
-        let auth_secrets = addr.auth_secrets().await?;
+        let (user, auth_secrets) = addr.auth_credentials().await?;
         let total = auth_secrets.len();
         for (idx, auth_secret) in auth_secrets.into_iter().enumerate() {
             match Self::connect_with_auth_secret(
                 addr,
+                &user,
                 options.clone(),
                 connect_reason,
                 &auth_secret,
@@ -142,6 +143,7 @@ impl Server {
     /// Create new PostgreSQL server connection with the given auth secret (e.g. password).
     async fn connect_with_auth_secret(
         addr: &Address,
+        user: &str,
         options: ServerOptions,
         connect_reason: ConnectReason,
         auth_secret: &super::pool::Password,
@@ -220,14 +222,12 @@ impl Server {
         }
 
         stream
-            .write_all(
-                &Startup::new(&addr.user, &addr.database_name, options.params.clone()).to_bytes(),
-            )
+            .write_all(&Startup::new(user, &addr.database_name, options.params.clone()).to_bytes())
             .await?;
         stream.flush().await?;
 
         // Perform authentication.
-        let mut scram = Client::new(&addr.user, auth_secret);
+        let mut scram = Client::new(user, auth_secret);
         let mut auth_type = AuthType::Trust;
         loop {
             let message = stream.read().await?;
@@ -263,11 +263,8 @@ impl Server {
                         }
                         Authentication::Md5(salt) => {
                             auth_type = AuthType::Md5;
-                            let client = md5::Client::new_salt(
-                                &addr.user,
-                                &[auth_secret.to_string()],
-                                &salt,
-                            )?;
+                            let client =
+                                md5::Client::new_salt(user, &[auth_secret.to_string()], &salt)?;
                             stream.send_flush(&client.response()?).await?;
                         }
                     }

@@ -9,7 +9,7 @@ use url::Url;
 
 use super::{Password, password::PasswordSource};
 use crate::backend::Error;
-use crate::backend::auth::{azure_workload_identity, rds_iam};
+use crate::backend::auth::{azure_workload_identity, rds_iam, vault};
 use crate::backend::pool::dns_cache::DnsCache;
 use crate::backend::pool::token_cache::TokenCache;
 use crate::config::{Database, ServerAuth, User, config};
@@ -32,6 +32,12 @@ pub struct Address {
     pub server_auth: ServerAuth,
     /// Optional IAM region override.
     pub server_iam_region: Option<String>,
+    /// Vault path to fetch dynamic credentials from.
+    #[serde(default)]
+    pub vault_path: Option<String>,
+    /// Percentage of the Vault lease after which credentials are refreshed.
+    #[serde(default)]
+    pub vault_refresh_percent: Option<u8>,
     /// Database number (in the config).
     pub database_number: usize,
     /// Role given to the database at configuration time.
@@ -89,6 +95,8 @@ impl Address {
             },
             server_auth,
             server_iam_region: user.server_iam_region.clone(),
+            vault_path: user.vault_path.clone(),
+            vault_refresh_percent: user.vault_refresh_percent,
             database_number,
             configured_role: database.role,
         }
@@ -101,6 +109,17 @@ impl Address {
     /// only blocks on the very first connection before the monitor has had
     /// a chance to prime the cache.
     pub async fn auth_secrets(&self) -> Result<Vec<Password>, Error> {
+        Ok(self.auth_credentials().await?.1)
+    }
+
+    /// Get the username and passwords to log into the server with.
+    ///
+    /// The username is the configured one, except for Vault-backed pools
+    /// where the database secrets engine generates it together with the
+    /// password.
+    pub async fn auth_credentials(&self) -> Result<(String, Vec<Password>), Error> {
+        let mut user = self.user.clone();
+
         let mut secrets = match self.server_auth {
             ServerAuth::Password => self.passwords.clone(),
 
@@ -117,12 +136,22 @@ impl Address {
                     .await?;
                 vec![Password::new(&token, PasswordSource::AzureIdentity)]
             }
+
+            ServerAuth::Vault => {
+                let credentials = TokenCache::global()
+                    .credentials_or_fetch(self, vault::credentials)
+                    .await?;
+                if let Some(username) = credentials.username {
+                    user = username;
+                }
+                vec![Password::new(&credentials.secret, PasswordSource::Vault)]
+            }
         };
 
         // Give the valid password first.
         secrets.sort_by_cached_key(|p| !p.is_valid());
 
-        Ok(secrets)
+        Ok((user, secrets))
     }
 
     pub async fn addr(&self) -> Result<SocketAddr, Error> {
@@ -153,6 +182,8 @@ impl Address {
             database_name: "pgdog".into(),
             server_auth: ServerAuth::Password,
             server_iam_region: None,
+            vault_path: None,
+            vault_refresh_percent: None,
             database_number: 0,
             configured_role: Role::Primary,
         }
@@ -450,6 +481,78 @@ mod test {
         TokenCache::global().evict(&addr);
 
         assert_eq!(secret, "azure-token");
+    }
+
+    #[tokio::test]
+    async fn test_auth_credentials_vault_serves_username_and_password_from_cache() {
+        use crate::backend::pool::token_cache::{Credentials, FetchedCredentials};
+
+        let addr = Address {
+            host: "auth-secrets-vault.internal".into(),
+            port: 15435,
+            user: "configured_user".into(),
+            server_auth: ServerAuth::Vault,
+            vault_path: Some("database/creds/pgdog".into()),
+            ..Default::default()
+        };
+
+        let now = SystemTime::now();
+        TokenCache::global().set_credentials(
+            &addr,
+            FetchedCredentials {
+                credentials: Credentials {
+                    username: Some("v-generated-user".into()),
+                    secret: "v-generated-pass".into(),
+                },
+                expires_at: now + Duration::from_secs(3600),
+                refresh_at: Some(now + Duration::from_secs(2880)),
+            },
+        );
+
+        let (user, secrets) = addr.auth_credentials().await.unwrap();
+
+        TokenCache::global().evict(&addr);
+
+        // Vault generates the username — it must override the configured one.
+        assert_eq!(user, "v-generated-user");
+        assert_eq!(secrets.first().unwrap(), "v-generated-pass");
+    }
+
+    #[tokio::test]
+    async fn test_auth_credentials_password_mode_uses_configured_user() {
+        let addr = Address::new_test();
+        let (user, secrets) = addr.auth_credentials().await.unwrap();
+        assert_eq!(user, "pgdog");
+        assert_eq!(secrets.first().unwrap(), "pgdog");
+    }
+
+    #[test]
+    fn test_vault_fields_from_config() {
+        let database = Database {
+            name: "pgdog".into(),
+            host: "127.0.0.1".into(),
+            port: 6432,
+            ..Default::default()
+        };
+
+        let user = User {
+            name: "pgdog".into(),
+            server_auth: ServerAuth::Vault,
+            vault_path: Some("database/creds/pgdog".into()),
+            vault_refresh_percent: Some(50),
+            password: Some("ignored".into()),
+            database: "pgdog".into(),
+            ..Default::default()
+        };
+
+        let address = Address::new(&database, &user, 0);
+        assert!(
+            address.passwords.is_empty(),
+            "Vault addresses must not carry static passwords"
+        );
+        assert_eq!(address.server_auth, ServerAuth::Vault);
+        assert_eq!(address.vault_path.as_deref(), Some("database/creds/pgdog"));
+        assert_eq!(address.vault_refresh_percent, Some(50));
     }
 
     #[tokio::test]

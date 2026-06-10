@@ -46,7 +46,7 @@
 use std::time::Duration;
 
 use super::{Error, Guard, Healtcheck, Oids, Pool, Request};
-use crate::backend::auth::{azure_workload_identity, rds_iam};
+use crate::backend::auth::{azure_workload_identity, rds_iam, vault};
 use crate::backend::pool::inner::ShouldCreate;
 use crate::backend::pool::token_cache::TokenCache;
 use crate::backend::{ConnectReason, DisconnectReason, Server};
@@ -192,9 +192,22 @@ impl Monitor {
             select! {
                 _ = sleep(sleep_duration) => {
                     let result = match addr.server_auth {
-                        ServerAuth::RdsIam => rds_iam::token(addr.clone()).await,
+                        ServerAuth::RdsIam => rds_iam::token(addr.clone()).await.map(
+                            |(token, expires_at)| {
+                                TokenCache::global().set(&addr, token, expires_at)
+                            },
+                        ),
                         ServerAuth::AzureWorkloadIdentity => {
-                            azure_workload_identity::token(addr.clone()).await
+                            azure_workload_identity::token(addr.clone()).await.map(
+                                |(token, expires_at)| {
+                                    TokenCache::global().set(&addr, token, expires_at)
+                                },
+                            )
+                        }
+                        ServerAuth::Vault => {
+                            vault::credentials(addr.clone()).await.map(|credentials| {
+                                TokenCache::global().set_credentials(&addr, credentials)
+                            })
                         }
                         // Guard in spawn() ensures we only reach here for
                         // external identity pools.
@@ -202,9 +215,8 @@ impl Monitor {
                     };
 
                     match result {
-                        Ok((token, expires_at)) => {
+                        Ok(()) => {
                             debug!("token refreshed [{}]", addr);
-                            TokenCache::global().set(&addr, token, expires_at);
                         }
                         Err(err) => {
                             warn!("token refresh failed, evicting cache entry: {err} [{}]", addr);

@@ -20,6 +20,7 @@ pub(crate) mod test_utils;
 pub mod url;
 pub mod users;
 pub mod util;
+pub mod vault;
 
 pub use auth::{AuthType, PassthroughAuth};
 pub use core::{Config, ConfigAndUsers};
@@ -39,6 +40,7 @@ pub use rewrite::{Rewrite, RewriteMode};
 pub use sharding::*;
 pub use system_catalogs::system_catalogs;
 pub use users::{Admin, Plugin, ServerAuth, User, Users};
+pub use vault::{Vault, VaultAuthMethod};
 
 use std::time::Duration;
 

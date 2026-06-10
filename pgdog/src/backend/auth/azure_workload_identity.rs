@@ -60,6 +60,8 @@ mod tests {
             database_number: 0,
             server_auth: ServerAuth::AzureWorkloadIdentity,
             server_iam_region: None,
+            vault_path: None,
+            vault_refresh_percent: None,
             configured_role: Role::Auto,
         };
 
