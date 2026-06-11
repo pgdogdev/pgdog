@@ -188,6 +188,23 @@ mod test {
     }
 
     #[test]
+    fn test_limit_longer_than_query() {
+        let query = "SET statement_timeout TO 1";
+
+        for limit in [query.len(), query.len() + 1, 10_000, usize::MAX] {
+            let req = ClientRequest::from(vec![ProtocolMessage::from(Query::new(query))]);
+            let parser = RegexParser::new(limit, QueryParserLevel::SessionControl);
+            assert!(parser.use_parser(&req), "limit {} should match", limit);
+        }
+
+        // Multi-byte characters at the end don't trip the boundary scan.
+        let multibyte = "SET application_name TO 'héllo'";
+        let req = ClientRequest::from(vec![ProtocolMessage::from(Query::new(multibyte))]);
+        let parser = RegexParser::new(usize::MAX, QueryParserLevel::SessionControl);
+        assert!(parser.use_parser(&req));
+    }
+
+    #[test]
     fn test_inline_comments() {
         assert!(matches("/* comment */ SET statement_timeout TO 1"));
         assert!(matches("/* comment */SET statement_timeout TO 1"));
