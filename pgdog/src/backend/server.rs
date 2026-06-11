@@ -72,6 +72,10 @@ pub struct Server {
     /// "use the pool's configured `max_age`" (no jitter applied).
     /// Sampled once at creation by [`Server::apply_lifetime_jitter`].
     max_age: Option<Duration>,
+    /// Credentials generation at the time this connection was established.
+    /// Compared against the pool's generation on check-in; a mismatch means
+    /// the Vault lease rotated and this connection must be closed.
+    credentials_generation: u8,
 }
 
 impl MemoryUsage for Server {
@@ -349,6 +353,7 @@ impl Server {
             disconnect_reason: None,
             password_attempts: 1, // This is going to be changed by parent caller.
             max_age: None,
+            credentials_generation: 0,
         };
 
         server.stats.memory_used(server.memory_stats()); // Stream capacity.
@@ -1056,6 +1061,16 @@ impl Server {
         self.max_age.unwrap_or(base)
     }
 
+    #[inline]
+    pub fn credentials_generation(&self) -> u8 {
+        self.credentials_generation
+    }
+
+    #[inline]
+    pub fn set_credentials_generation(&mut self, generation: u8) {
+        self.credentials_generation = generation;
+    }
+
     /// How long this connection has been idle.
     #[inline]
     pub fn idle_for(&self, instant: Instant) -> Duration {
@@ -1246,6 +1261,7 @@ pub mod test {
                 sending_request: false,
                 password_attempts: 1,
                 max_age: None,
+                credentials_generation: 0,
             }
         }
     }

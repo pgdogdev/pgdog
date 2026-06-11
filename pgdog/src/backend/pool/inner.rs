@@ -48,6 +48,9 @@ pub(super) struct Inner {
     id: u64,
     /// Replica lag.
     pub(super) replica_lag: ReplicaLag,
+    /// Bumped each time Vault credentials rotate. Connections stamped with
+    /// an older generation are closed on check-in rather than reused.
+    pub(super) credentials_generation: u8,
 }
 
 impl std::fmt::Debug for Inner {
@@ -81,6 +84,7 @@ impl Inner {
             moved: None,
             id,
             replica_lag: ReplicaLag::default(),
+            credentials_generation: 0,
         }
     }
     /// Total number of connections managed by the pool.
@@ -278,6 +282,19 @@ impl Inner {
         self.taken = taken;
     }
 
+    #[inline]
+    pub(super) fn credentials_generation(&self) -> u8 {
+        self.credentials_generation
+    }
+
+    /// Rotate credentials generation: evict all idle connections and bump the
+    /// counter so checked-out connections are closed on check-in.
+    #[inline]
+    pub(super) fn bump_credentials_generation(&mut self) {
+        self.credentials_generation += 1;
+        self.dump_idle();
+    }
+
     /// Dump all idle connections.
     #[inline]
     pub(super) fn dump_idle(&mut self) {
@@ -361,6 +378,13 @@ impl Inner {
         if server.force_close() {
             self.force_close += 1;
             server.disconnect_reason(DisconnectReason::ForceClose);
+            return Ok(result);
+        }
+
+        // Vault credentials rotated while this connection was checked out.
+        // The old role will be revoked; close rather than reuse.
+        if server.credentials_generation() != self.credentials_generation {
+            server.disconnect_reason(DisconnectReason::CredentialsRefresh);
             return Ok(result);
         }
 

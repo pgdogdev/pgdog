@@ -13,7 +13,7 @@ use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 use serde::Deserialize;
 use serde_json::json;
-use tracing::debug;
+use tracing::{debug, info};
 
 use crate::backend::pool::token_cache::{Credentials, FetchedCredentials};
 use crate::backend::{Error, pool::Address};
@@ -237,10 +237,18 @@ pub(crate) async fn credentials(addr: Address) -> Result<FetchedCredentials, Err
         .map_err(|err| error(format!("invalid Vault credentials response: {}", err)))?;
 
     let lease = Duration::from_secs(secret.lease_duration);
+
+    info!(
+        user = %addr.user,
+        vault_user = %secret.data.username,
+        ttl_secs = secret.lease_duration,
+        "fetched Vault credentials"
+    );
+
     let refresh_percent = addr
         .vault_refresh_percent
         .unwrap_or(DEFAULT_REFRESH_PERCENT)
-        .clamp(1, 100);
+        .clamp(1, 80);
     let now = SystemTime::now();
     let refresh_at = now + lease.mul_f64(refresh_percent as f64 / 100.0);
 

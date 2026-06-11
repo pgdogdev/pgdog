@@ -9,7 +9,7 @@
 //! * the new connection loop which runs every time a client asks
 //!   for a new connection to be created,
 //! * the token refresh loop which runs for pools backed by an external
-//!   identity provider (RDS IAM, Azure Workload Identity).
+//!   identity provider (RDS IAM, Azure Workload Identity, Vault).
 //!
 //! ## Maintenance loop
 //!
@@ -206,7 +206,8 @@ impl Monitor {
                         }
                         ServerAuth::Vault => {
                             vault::credentials(addr.clone()).await.map(|credentials| {
-                                TokenCache::global().set_credentials(&addr, credentials)
+                                TokenCache::global().set_credentials(&addr, credentials);
+                                pool.lock().bump_credentials_generation();
                             })
                         }
                         // Guard in spawn() ensures we only reach here for
@@ -442,6 +443,7 @@ impl Monitor {
                         guard.stats.counts.connect_count += 1;
                         guard.stats.counts.connect_time += elapsed;
                         guard.stats.counts.auth_attempts += conn.password_attempts();
+                        conn.set_credentials_generation(guard.credentials_generation());
                     }
                     conn.apply_lifetime_jitter(max_age, max_age_jitter);
                     return Ok(conn);
