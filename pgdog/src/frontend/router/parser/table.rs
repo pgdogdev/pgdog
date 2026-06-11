@@ -135,14 +135,14 @@ impl<'a> TryFrom<&'a Vec<Node>> for Table<'a> {
                         None
                     }
                 });
-                if let Some(schema) = schema {
-                    if let Some(table) = table {
-                        return Ok(Table {
-                            name: table,
-                            schema: Some(schema),
-                            alias: None,
-                        });
-                    }
+                if let Some(schema) = schema
+                    && let Some(table) = table
+                {
+                    return Ok(Table {
+                        name: table,
+                        schema: Some(schema),
+                        alias: None,
+                    });
                 }
             }
 

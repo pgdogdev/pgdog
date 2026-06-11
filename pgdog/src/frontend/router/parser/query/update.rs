@@ -80,20 +80,20 @@ mod tests {
         let mut found_string = false;
 
         for target in &update.target_list {
-            if let Some(NodeEnum::ResTarget(res)) = &target.node {
-                if let Some(val) = &res.val {
-                    let value = Value::try_from(&val.node).unwrap();
-                    match value {
-                        Value::Float(f) => {
-                            assert_eq!(f, 50.0);
-                            found_decimal = true;
-                        }
-                        Value::String(s) => {
-                            assert_eq!(s, "completed");
-                            found_string = true;
-                        }
-                        _ => {}
+            if let Some(NodeEnum::ResTarget(res)) = &target.node
+                && let Some(val) = &res.val
+            {
+                let value = Value::try_from(&val.node).unwrap();
+                match value {
+                    Value::Float(f) => {
+                        assert_eq!(f, 50.0);
+                        found_decimal = true;
                     }
+                    Value::String(s) => {
+                        assert_eq!(s, "completed");
+                        found_string = true;
+                    }
+                    _ => {}
                 }
             }
         }
@@ -123,13 +123,13 @@ mod tests {
         // Quoted decimals should be treated as strings
         let mut found_string = false;
         for target in &update.target_list {
-            if let Some(NodeEnum::ResTarget(res)) = &target.node {
-                if let Some(val) = &res.val {
-                    let value = Value::try_from(&val.node).unwrap();
-                    if let Value::String(s) = value {
-                        assert_eq!(s, "50.00");
-                        found_string = true;
-                    }
+            if let Some(NodeEnum::ResTarget(res)) = &target.node
+                && let Some(val) = &res.val
+            {
+                let value = Value::try_from(&val.node).unwrap();
+                if let Value::String(s) = value {
+                    assert_eq!(s, "50.00");
+                    found_string = true;
                 }
             }
         }

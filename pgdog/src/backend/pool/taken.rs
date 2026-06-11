@@ -48,10 +48,10 @@ impl Taken {
         // backend. The deferred check-in from a prior `Server::drop` may fire
         // after the frontend has already taken a newer backend; in that case
         // the entry belongs to the newer backend and must not be touched.
-        if let Entry::Occupied(entry) = self.frontend_to_cancel.entry(frontend) {
-            if entry.get().backend == backend {
-                entry.remove();
-            }
+        if let Entry::Occupied(entry) = self.frontend_to_cancel.entry(frontend)
+            && entry.get().backend == backend
+        {
+            entry.remove();
         }
         Ok(())
     }

@@ -47,18 +47,18 @@ impl StatementRewrite<'_> {
         }
 
         for stmt in &mut self.stmt.stmts {
-            if let Some(ref mut node) = stmt.stmt {
-                if let Some(ref mut inner) = node.node {
-                    match rewrite_single_prepared(inner, self.prepared_statements, self.schema)? {
-                        SimplePreparedRewrite::Prepared => {
-                            result.rewritten = true;
-                        }
-                        SimplePreparedRewrite::Executed { name, statement } => {
-                            result.prepares.push((name, statement));
-                            result.rewritten = true;
-                        }
-                        SimplePreparedRewrite::None => {}
+            if let Some(ref mut node) = stmt.stmt
+                && let Some(ref mut inner) = node.node
+            {
+                match rewrite_single_prepared(inner, self.prepared_statements, self.schema)? {
+                    SimplePreparedRewrite::Prepared => {
+                        result.rewritten = true;
                     }
+                    SimplePreparedRewrite::Executed { name, statement } => {
+                        result.prepares.push((name, statement));
+                        result.rewritten = true;
+                    }
+                    SimplePreparedRewrite::None => {}
                 }
             }
         }

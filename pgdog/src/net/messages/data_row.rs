@@ -120,18 +120,18 @@ impl DataRow {
         index: usize,
         decoder: &'a Decoder,
     ) -> Result<Option<Column<'a>>, Error> {
-        if let Some(field) = decoder.rd().field(index) {
-            if let Some(data) = self.columns.get(index) {
-                return Ok(Some(Column {
-                    name: field.name.as_str(),
-                    value: Datum::new(
-                        &data.data,
-                        field.data_type(),
-                        decoder.format(index),
-                        data.is_null,
-                    )?,
-                }));
-            }
+        if let Some(field) = decoder.rd().field(index)
+            && let Some(data) = self.columns.get(index)
+        {
+            return Ok(Some(Column {
+                name: field.name.as_str(),
+                value: Datum::new(
+                    &data.data,
+                    field.data_type(),
+                    decoder.format(index),
+                    data.is_null,
+                )?,
+            }));
         }
 
         Ok(None)

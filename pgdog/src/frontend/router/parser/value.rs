@@ -119,19 +119,16 @@ impl<'a> TryFrom<&'a Option<NodeEnum>> for Value<'a> {
             }
 
             Some(NodeEnum::AExpr(expr)) => {
-                if expr.kind() == AExprKind::AexprOp {
-                    if let Some(Node {
+                if expr.kind() == AExprKind::AexprOp
+                    && let Some(Node {
                         node: Some(NodeEnum::String(pg_query::protobuf::String { sval })),
                     }) = expr.name.first()
-                    {
-                        if sval == "-" {
-                            if let Some(ref node) = expr.rexpr {
-                                let value = Value::try_from(&node.node)?;
-                                if let Value::Float(float) = value {
-                                    return Ok(Value::Float(-float));
-                                }
-                            }
-                        }
+                    && sval == "-"
+                    && let Some(ref node) = expr.rexpr
+                {
+                    let value = Value::try_from(&node.node)?;
+                    if let Value::Float(float) = value {
+                        return Ok(Value::Float(-float));
                     }
                 }
 

@@ -63,10 +63,10 @@ impl Router {
         let command = self.query_parser.parse(context)?;
         self.latest_command = command;
 
-        if let Command::Query(ref route) = self.latest_command {
-            if route.is_schema_changed() {
-                self.schema_changed = true;
-            }
+        if let Command::Query(ref route) = self.latest_command
+            && route.is_schema_changed()
+        {
+            self.schema_changed = true;
         }
 
         Ok(&self.latest_command)

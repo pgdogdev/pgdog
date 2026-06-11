@@ -431,11 +431,11 @@ impl Databases {
         for (user, cluster) in &self.databases {
             let dest = destination.databases.get(user);
 
-            if let Some(dest) = dest {
-                if cluster.can_move_conns_to(dest) {
-                    cluster.move_conns_to(dest)?;
-                    moved += 1;
-                }
+            if let Some(dest) = dest
+                && cluster.can_move_conns_to(dest)
+            {
+                cluster.move_conns_to(dest)?;
+                moved += 1;
             }
         }
 
@@ -538,14 +538,14 @@ fn new_pool(user: &crate::config::User, config: &crate::config::Config) -> Optio
         if let Some(mappings) = mappings {
             sharded_table.mapping = Mapping::new(mappings);
 
-            if let Some(ref mapping) = sharded_table.mapping {
-                if !mapping_valid(mapping) {
-                    warn!(
-                        "sharded table name=\"{}\", column=\"{}\" has overlapping ranges",
-                        sharded_table.name.as_ref().unwrap_or(&String::from("")),
-                        sharded_table.column
-                    );
-                }
+            if let Some(ref mapping) = sharded_table.mapping
+                && !mapping_valid(mapping)
+            {
+                warn!(
+                    "sharded table name=\"{}\", column=\"{}\" has overlapping ranges",
+                    sharded_table.name.as_ref().unwrap_or(&String::from("")),
+                    sharded_table.column
+                );
             }
         }
     }

@@ -55,10 +55,10 @@ impl SchemaSharder {
     }
 
     pub fn get(&self) -> Option<(Shard, &str)> {
-        if let Some(current) = self.current.as_ref() {
-            if let Some(schema) = self.schema.as_ref() {
-                return Some((current.clone(), schema.as_str()));
-            }
+        if let Some(current) = self.current.as_ref()
+            && let Some(schema) = self.schema.as_ref()
+        {
+            return Some((current.clone(), schema.as_str()));
         }
 
         None

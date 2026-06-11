@@ -67,16 +67,16 @@ impl<'a> Ranges<'a> {
             .filter(|m| m.kind == ShardedMappingKind::Range)
         {
             let range = Range::new(mapping);
-            if let Some(integer) = &integer {
-                if range.integer(integer) {
-                    return Ok(Shard::Direct(range.shard));
-                }
+            if let Some(integer) = &integer
+                && range.integer(integer)
+            {
+                return Ok(Shard::Direct(range.shard));
             }
 
-            if let Some(varchar) = &varchar {
-                if range.varchar(varchar) {
-                    return Ok(Shard::Direct(range.shard));
-                }
+            if let Some(varchar) = &varchar
+                && range.varchar(varchar)
+            {
+                return Ok(Shard::Direct(range.shard));
             }
         }
 

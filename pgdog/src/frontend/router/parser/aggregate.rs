@@ -58,7 +58,7 @@ impl fmt::Display for AggregateFunction {
             AggregateFunction::StddevSamp => write!(f, "stddev_samp"),
             AggregateFunction::VarPop => write!(f, "var_pop"),
             AggregateFunction::VarSamp => write!(f, "var_samp"),
-            AggregateFunction::Unrecognized(s) => f.write_str(&*s),
+            AggregateFunction::Unrecognized(s) => f.write_str(s),
         }
     }
 }
@@ -73,33 +73,33 @@ fn target_list_to_index(stmt: &SelectStmt, column_names: Vec<&String>) -> Option
     for (idx, node) in stmt.target_list.iter().enumerate() {
         if let Some(NodeEnum::ResTarget(res_target_box)) = node.node.as_ref() {
             let res_target = res_target_box.as_ref();
-            if let Some(node_box) = res_target.val.as_ref() {
-                if let Some(NodeEnum::ColumnRef(column_ref)) = node_box.node.as_ref() {
-                    let select_names: Vec<&String> = column_ref
-                        .fields
-                        .iter()
-                        .filter_map(|field_node| {
-                            if let Some(node_box) = field_node.node.as_ref() {
-                                match node_box {
-                                    NodeEnum::String(PgQueryString {
-                                        sval: found_column_name,
-                                        ..
-                                    }) => Some(found_column_name),
-                                    _ => None,
-                                }
-                            } else {
-                                None
+            if let Some(node_box) = res_target.val.as_ref()
+                && let Some(NodeEnum::ColumnRef(column_ref)) = node_box.node.as_ref()
+            {
+                let select_names: Vec<&String> = column_ref
+                    .fields
+                    .iter()
+                    .filter_map(|field_node| {
+                        if let Some(node_box) = field_node.node.as_ref() {
+                            match node_box {
+                                NodeEnum::String(PgQueryString {
+                                    sval: found_column_name,
+                                    ..
+                                }) => Some(found_column_name),
+                                _ => None,
                             }
-                        })
-                        .collect();
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
 
-                    if select_names.is_empty() {
-                        continue;
-                    }
+                if select_names.is_empty() {
+                    continue;
+                }
 
-                    if columns_match(&column_names, &select_names) {
-                        return Some(idx);
-                    }
+                if columns_match(&column_names, &select_names) {
+                    return Some(idx);
                 }
             }
         }
@@ -159,49 +159,48 @@ impl Aggregate {
             .collect::<Vec<_>>();
 
         for (idx, node) in stmt.target_list.iter().enumerate() {
-            if let Some(NodeEnum::ResTarget(res)) = &node.node {
-                if let Some(node) = &res.val {
-                    if let Ok(func) = Function::try_from(node.as_ref()) {
-                        let function = match func.name {
-                            "count" => Some(AggregateFunction::Count),
-                            "max" => Some(AggregateFunction::Max),
-                            "min" => Some(AggregateFunction::Min),
-                            "sum" => Some(AggregateFunction::Sum),
-                            "avg" => Some(AggregateFunction::Avg),
-                            "stddev" | "stddev_samp" => Some(AggregateFunction::StddevSamp),
-                            "stddev_pop" => Some(AggregateFunction::StddevPop),
-                            "variance" | "var_samp" => Some(AggregateFunction::VarSamp),
-                            "var_pop" => Some(AggregateFunction::VarPop),
-                            fname => {
-                                if schema.aggregate_functions.contains(fname) {
-                                    Some(AggregateFunction::Unrecognized(fname.to_owned()))
-                                } else {
-                                    None
-                                }
-                            }
-                        };
-
-                        if let Some(function) = function {
-                            let (expr_id, distinct) = match node.node.as_ref() {
-                                Some(NodeEnum::FuncCall(func)) => {
-                                    let arg_id = func
-                                        .args
-                                        .first()
-                                        .map(|arg| registry.intern(arg))
-                                        .unwrap_or_else(|| registry.intern(node.as_ref()));
-                                    (arg_id, func.agg_distinct)
-                                }
-                                _ => (registry.intern(node.as_ref()), false),
-                            };
-
-                            targets.push(AggregateTarget {
-                                column: idx,
-                                function,
-                                expr_id,
-                                distinct,
-                            });
+            if let Some(NodeEnum::ResTarget(res)) = &node.node
+                && let Some(node) = &res.val
+                && let Ok(func) = Function::try_from(node.as_ref())
+            {
+                let function = match func.name {
+                    "count" => Some(AggregateFunction::Count),
+                    "max" => Some(AggregateFunction::Max),
+                    "min" => Some(AggregateFunction::Min),
+                    "sum" => Some(AggregateFunction::Sum),
+                    "avg" => Some(AggregateFunction::Avg),
+                    "stddev" | "stddev_samp" => Some(AggregateFunction::StddevSamp),
+                    "stddev_pop" => Some(AggregateFunction::StddevPop),
+                    "variance" | "var_samp" => Some(AggregateFunction::VarSamp),
+                    "var_pop" => Some(AggregateFunction::VarPop),
+                    fname => {
+                        if schema.aggregate_functions.contains(fname) {
+                            Some(AggregateFunction::Unrecognized(fname.to_owned()))
+                        } else {
+                            None
                         }
                     }
+                };
+
+                if let Some(function) = function {
+                    let (expr_id, distinct) = match node.node.as_ref() {
+                        Some(NodeEnum::FuncCall(func)) => {
+                            let arg_id = func
+                                .args
+                                .first()
+                                .map(|arg| registry.intern(arg))
+                                .unwrap_or_else(|| registry.intern(node.as_ref()));
+                            (arg_id, func.agg_distinct)
+                        }
+                        _ => (registry.intern(node.as_ref()), false),
+                    };
+
+                    targets.push(AggregateTarget {
+                        column: idx,
+                        function,
+                        expr_id,
+                        distinct,
+                    });
                 }
             }
         }

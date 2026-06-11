@@ -42,10 +42,10 @@ impl QueryParser {
                 | ObjectType::ObjectView
                 | ObjectType::ObjectSequence => {
                     let table = Table::try_from(&stmt.objects).ok();
-                    if let Some(table) = table {
-                        if let Some(schema) = schema.schemas.get(table.schema()) {
-                            shard = schema.shard().into();
-                        }
+                    if let Some(table) = table
+                        && let Some(schema) = schema.schemas.get(table.schema())
+                    {
+                        shard = schema.shard().into();
                     }
                     schema_changed = true;
                 }
@@ -54,11 +54,9 @@ impl QueryParser {
                     if let Some(Node {
                         node: Some(NodeEnum::String(string)),
                     }) = stmt.objects.first()
+                        && let Some(schema) = schema.schemas.get(Some(string.sval.as_str().into()))
                     {
-                        if let Some(schema) = schema.schemas.get(Some(string.sval.as_str().into()))
-                        {
-                            shard = schema.shard().into();
-                        }
+                        shard = schema.shard().into();
                     }
                 }
 
@@ -127,15 +125,15 @@ impl QueryParser {
             }
 
             Some(NodeEnum::LockStmt(stmt)) => {
-                if let Some(node) = stmt.relations.first() {
-                    if let Some(NodeEnum::RangeVar(ref table)) = node.node {
-                        let table = Table::from(table);
-                        shard = schema
-                            .schemas
-                            .get(table.schema())
-                            .map(|schema| schema.shard().into())
-                            .unwrap_or(Shard::All);
-                    }
+                if let Some(node) = stmt.relations.first()
+                    && let Some(NodeEnum::RangeVar(ref table)) = node.node
+                {
+                    let table = Table::from(table);
+                    shard = schema
+                        .schemas
+                        .get(table.schema())
+                        .map(|schema| schema.shard().into())
+                        .unwrap_or(Shard::All);
                 }
             }
 
@@ -154,43 +152,36 @@ impl QueryParser {
 
             // DO $$ BEGIN ... END
             Some(NodeEnum::DoStmt(stmt)) => {
-                if let Some(inner) = stmt.args.first() {
-                    if let Some(NodeEnum::DefElem(ref elem)) = inner.node {
-                        if let Some(ref arg) = elem.arg {
-                            if let Some(NodeEnum::String(ref string)) = arg.node {
-                                // Parse each statement individually.
-                                // The first DDL statement to return a direct shard will be used.
-                                // TODO: handle non-DDL statements in here as well,
-                                // need a full recursive call back to QueryParser::query basically, but that requires a refactor.
-                                for stmt in string.sval.lines() {
-                                    if let Ok(stmt) = parse(stmt) {
-                                        if let Some(node) = stmt
-                                            .protobuf
-                                            .stmts
-                                            .first()
-                                            .map(|stmt| &stmt.stmt)
-                                            .cloned()
-                                            .flatten()
-                                        {
-                                            // Use a fresh calculator for each inner statement
-                                            // to avoid pollution from statements that don't match
-                                            // any DDL pattern (like BEGIN, END, etc.)
-                                            let mut inner_calculator =
-                                                ShardsWithPriority::default();
-                                            let command = Self::shard_ddl(
-                                                &node.node,
-                                                schema,
-                                                &mut inner_calculator,
-                                            )?;
-                                            if let Command::Query(query) = command {
-                                                if !query.is_cross_shard() {
-                                                    shard = query.shard().clone();
-                                                    break;
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
+                if let Some(inner) = stmt.args.first()
+                    && let Some(NodeEnum::DefElem(ref elem)) = inner.node
+                    && let Some(ref arg) = elem.arg
+                    && let Some(NodeEnum::String(ref string)) = arg.node
+                {
+                    // Parse each statement individually.
+                    // The first DDL statement to return a direct shard will be used.
+                    // TODO: handle non-DDL statements in here as well,
+                    // need a full recursive call back to QueryParser::query basically, but that requires a refactor.
+                    for stmt in string.sval.lines() {
+                        if let Ok(stmt) = parse(stmt)
+                            && let Some(node) = stmt
+                                .protobuf
+                                .stmts
+                                .first()
+                                .map(|stmt| &stmt.stmt)
+                                .cloned()
+                                .flatten()
+                        {
+                            // Use a fresh calculator for each inner statement
+                            // to avoid pollution from statements that don't match
+                            // any DDL pattern (like BEGIN, END, etc.)
+                            let mut inner_calculator = ShardsWithPriority::default();
+                            let command =
+                                Self::shard_ddl(&node.node, schema, &mut inner_calculator)?;
+                            if let Command::Query(query) = command
+                                && !query.is_cross_shard()
+                            {
+                                shard = query.shard().clone();
+                                break;
                             }
                         }
                     }
@@ -234,10 +225,10 @@ impl QueryParser {
         schema: &ShardingSchema,
     ) -> Result<Option<Shard>, Error> {
         let table = range_var.as_ref().map(Table::from);
-        if let Some(table) = table {
-            if let Some(sharded_schema) = schema.schemas.get(table.schema()) {
-                return Ok(Some(sharded_schema.shard().into()));
-            }
+        if let Some(table) = table
+            && let Some(sharded_schema) = schema.schemas.get(table.schema())
+        {
+            return Ok(Some(sharded_schema.shard().into()));
         }
 
         Ok(None)
@@ -277,7 +268,7 @@ mod test {
     }
 
     fn parse_stmt(query: &str) -> Option<NodeEnum> {
-        let root = parse(query)
+        parse(query)
             .unwrap()
             .protobuf
             .stmts
@@ -286,8 +277,7 @@ mod test {
             .clone()
             .stmt
             .unwrap()
-            .node;
-        root
+            .node
     }
 
     #[test]

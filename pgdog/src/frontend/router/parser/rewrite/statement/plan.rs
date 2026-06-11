@@ -147,12 +147,12 @@ impl RewritePlan {
             return Ok(RewriteResult::InsertSplit(requests));
         }
 
-        if let Some(sharding_key_update) = &self.sharding_key_update {
-            if request.is_executable() {
-                return Ok(RewriteResult::ShardingKeyUpdate(
-                    sharding_key_update.clone(),
-                ));
-            }
+        if let Some(sharding_key_update) = &self.sharding_key_update
+            && request.is_executable()
+        {
+            return Ok(RewriteResult::ShardingKeyUpdate(
+                sharding_key_update.clone(),
+            ));
         }
 
         Ok(RewriteResult::InPlace {

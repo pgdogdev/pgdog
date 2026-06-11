@@ -86,9 +86,7 @@ impl Buffer {
                 .filter_map(|col| {
                     let index = col.index();
                     let asc = col.asc();
-                    let Some(index) = index else {
-                        return None;
-                    };
+                    let index = index?;
                     let left = a.get_column(index, decoder);
                     let right = b.get_column(index, decoder);
 
@@ -194,10 +192,10 @@ impl Buffer {
                                 }
 
                                 DistinctColumn::Name(name) => {
-                                    if let Some(index) = decoder.rd().field_index(name) {
-                                        if let Some(data) = row.column(index) {
-                                            dr.add(data);
-                                        }
+                                    if let Some(index) = decoder.rd().field_index(name)
+                                        && let Some(data) = row.column(index)
+                                    {
+                                        dr.add(data);
                                     }
                                 }
                             }

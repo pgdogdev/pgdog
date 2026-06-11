@@ -344,14 +344,14 @@ impl MultiShard {
         let context = message.into();
         match context {
             Context::Bind(bind) => {
-                if self.decoder.rd().fields.is_empty() && !bind.anonymous() {
-                    if let Some(rd) = PreparedStatements::global()
+                if self.decoder.rd().fields.is_empty()
+                    && !bind.anonymous()
+                    && let Some(rd) = PreparedStatements::global()
                         .read()
                         .row_description(bind.statement())
-                    {
-                        self.decoder.row_description(&rd);
-                        self.validator.set_row_description(&rd);
-                    }
+                {
+                    self.decoder.row_description(&rd);
+                    self.validator.set_row_description(&rd);
                 }
                 self.decoder.bind(bind);
             }

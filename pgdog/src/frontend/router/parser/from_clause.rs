@@ -18,10 +18,10 @@ impl<'a> FromClause<'a> {
     /// If no alias is specified, the table name is returned as-is.
     pub fn resolve_alias(&'a self, name: &'a str) -> Option<&'a str> {
         for node in self.nodes {
-            if let Some(ref node) = node.node {
-                if let Some(name) = Self::resolve(name, node) {
-                    return Some(name);
-                }
+            if let Some(ref node) = node.node
+                && let Some(name) = Self::resolve(name, node)
+            {
+                return Some(name);
             }
         }
 
@@ -32,10 +32,10 @@ impl<'a> FromClause<'a> {
         match node {
             NodeEnum::JoinExpr(join) => {
                 for arg in [&join.larg, &join.rarg].into_iter().flatten() {
-                    if let Some(ref node) = arg.node {
-                        if let Some(name) = Self::resolve(name, node) {
-                            return Some(name);
-                        }
+                    if let Some(ref node) = arg.node
+                        && let Some(name) = Self::resolve(name, node)
+                    {
+                        return Some(name);
                     }
                 }
             }
@@ -55,11 +55,11 @@ impl<'a> FromClause<'a> {
 
     /// Get table name if the FROM clause contains only one table.
     pub fn table_name(&'a self) -> Option<&'a str> {
-        if let Some(node) = self.nodes.first() {
-            if let Some(NodeEnum::RangeVar(ref range_var)) = node.node {
-                let table = Table::from(range_var);
-                return Some(table.name);
-            }
+        if let Some(node) = self.nodes.first()
+            && let Some(NodeEnum::RangeVar(ref range_var)) = node.node
+        {
+            let table = Table::from(range_var);
+            return Some(table.name);
         }
 
         None

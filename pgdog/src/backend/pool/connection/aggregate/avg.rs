@@ -37,12 +37,12 @@ impl Avg {
             })
             .max();
 
-        let mut result =
-            self.values_and_weights
-                .into_iter()
-                .fold(Ok(Datum::Null), |acc, (value, weight)| {
-                    checked_mul_add(value, Decimal::from(weight) / total_count, acc?)
-                });
+        let mut result = self
+            .values_and_weights
+            .into_iter()
+            .try_fold(Datum::Null, |acc, (value, weight)| {
+                checked_mul_add(value, Decimal::from(weight) / total_count, acc)
+            });
         if let Ok(Datum::Numeric(n)) = &mut result
             && let Some(d) = n.as_decimal_mut()
             && let Some(scale) = numeric_scale
@@ -103,16 +103,16 @@ mod tests {
     // crates.io gets per day over the last 90 days, if crates.io were
     // sharded by crate_id
     const TEST_DATA: &[(f64, i64)] = &[
-        (96724.170212765957, 4089),
-        (186386.974947807933, 1916),
-        (33537.298768879299, 7879),
-        (97637.501614987080, 3096),
-        (33534.787317691820, 7885),
-        (104947.738952164009, 4390),
-        (60095.478251906823, 4851),
-        (14353.621700556566, 18147),
-        (11857.550375469337, 28764),
-        (42577.351057747284, 6996),
+        (96_724.170_212_765_95, 4089),
+        (186_386.974_947_807_93, 1916),
+        (33_537.298_768_879_3, 7879),
+        (97_637.501_614_987_08, 3096),
+        (33_534.787_317_691_82, 7885),
+        (104_947.738_952_164_01, 4390),
+        (60_095.478_251_906_823, 4851),
+        (14_353.621_700_556_566, 18147),
+        (11_857.550_375_469_337, 28764),
+        (42_577.351_057_747_284, 6996),
     ];
 
     #[test]
@@ -121,7 +121,7 @@ mod tests {
         for &(avg, count) in TEST_DATA {
             state.accumulate(Decimal::from_f64(avg).unwrap().into(), count);
         }
-        let expected: Datum = Decimal::from_f64(36758.559474168589).unwrap().into();
+        let expected: Datum = Decimal::from_f64(36_758.559_474_168_589).unwrap().into();
         assert_eq!(state.finalize().unwrap(), expected);
     }
 
@@ -131,7 +131,10 @@ mod tests {
         for &(avg, count) in TEST_DATA {
             state.accumulate(avg.into(), count);
         }
-        assert_eq!(state.finalize().unwrap(), Datum::from(36758.559474168589));
+        assert_eq!(
+            state.finalize().unwrap(),
+            Datum::from(36_758.559_474_168_589)
+        );
     }
 
     #[test]
@@ -161,9 +164,12 @@ mod tests {
     #[test]
     fn integer_numerics_have_trailing_zeroes_removed() {
         let mut state = Avg::new(0, 0);
-        state.accumulate(dec!(850.0000000000000000).into(), 6);
-        state.accumulate(dec!(48343436988849539).into(), 9);
-        assert_eq!(state.finalize().unwrap(), dec!(29006062193310063).into())
+        state.accumulate(dec!(85_0.000_000_000_000_000_0).into(), 6);
+        state.accumulate(dec!(48_343_436_988_849_539).into(), 9);
+        assert_eq!(
+            state.finalize().unwrap(),
+            dec!(29_006_062_193_310_063).into()
+        )
     }
 
     #[test]

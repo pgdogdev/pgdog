@@ -91,19 +91,18 @@ impl Column {
         let fk_rows: Vec<ForeignKeyRow> = server.fetch_all(FOREIGN_KEYS).await?;
         for fk_row in fk_rows {
             let key = (fk_row.source_schema.clone(), fk_row.source_table.clone());
-            if let Some(columns) = result.get_mut(&key) {
-                if let Some(column) = columns
+            if let Some(columns) = result.get_mut(&key)
+                && let Some(column) = columns
                     .iter_mut()
                     .find(|c| c.column_name == fk_row.source_column)
-                {
-                    column.foreign_keys.push(ForeignKey {
-                        schema: fk_row.ref_schema,
-                        table: fk_row.ref_table,
-                        column: fk_row.ref_column,
-                        on_delete: fk_row.on_delete,
-                        on_update: fk_row.on_update,
-                    });
-                }
+            {
+                column.foreign_keys.push(ForeignKey {
+                    schema: fk_row.ref_schema,
+                    table: fk_row.ref_table,
+                    column: fk_row.ref_column,
+                    on_delete: fk_row.on_delete,
+                    on_update: fk_row.on_update,
+                });
             }
         }
 

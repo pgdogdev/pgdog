@@ -194,10 +194,10 @@ impl LogicalTransaction {
         }
 
         // if we already touched a different shard, error
-        if let Some(d) = &self.dirty_shard {
-            if *d != shard {
-                return Err(TransactionError::ShardConflict);
-            }
+        if let Some(d) = &self.dirty_shard
+            && *d != shard
+        {
+            return Err(TransactionError::ShardConflict);
         }
 
         self.manual_shard = Some(shard);
@@ -218,17 +218,17 @@ impl LogicalTransaction {
         }
 
         // Already pinned to a manual shard → forbid drift.
-        if let Some(hint) = &self.manual_shard {
-            if *hint != shard {
-                return Err(TransactionError::ShardConflict);
-            }
+        if let Some(hint) = &self.manual_shard
+            && *hint != shard
+        {
+            return Err(TransactionError::ShardConflict);
         }
 
         // Already dirtied another shard → forbid drift.
-        if let Some(dirty) = &self.dirty_shard {
-            if *dirty != shard {
-                return Err(TransactionError::ShardConflict);
-            }
+        if let Some(dirty) = &self.dirty_shard
+            && *dirty != shard
+        {
+            return Err(TransactionError::ShardConflict);
         }
 
         // Nothing in conflict; mark the shard.

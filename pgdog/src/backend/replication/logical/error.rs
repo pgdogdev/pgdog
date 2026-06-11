@@ -295,7 +295,10 @@ mod tests {
             }
         }
 
-        let wrappers: [(&str, fn(ErrorResponse) -> Error); 3] = [
+        type WrapperFn = fn(ErrorResponse) -> Error;
+        type WrapperCase = (&'static str, WrapperFn);
+
+        let wrappers: [WrapperCase; 3] = [
             ("PgError", |r| Error::PgError(Box::new(r))),
             ("Backend(ExecutionError)", |r| {
                 Error::Backend(BE::ExecutionError(Box::new(r)))

@@ -23,16 +23,16 @@ impl<'a> QueryLogger<'a> {
     pub async fn log(&self) -> Result<(), Error> {
         let path = &config().config.general.query_log;
 
-        if let Some(path) = path {
-            if let Some(query) = self.buffer.query()? {
-                let mut file = OpenOptions::new()
-                    .append(true)
-                    .create(true)
-                    .open(path)
-                    .await?;
-                let line = format!("{}\n", query.trim());
-                file.write_all(line.as_bytes()).await?;
-            }
+        if let Some(path) = path
+            && let Some(query) = self.buffer.query()?
+        {
+            let mut file = OpenOptions::new()
+                .append(true)
+                .create(true)
+                .open(path)
+                .await?;
+            let line = format!("{}\n", query.trim());
+            file.write_all(line.as_bytes()).await?;
         }
 
         Ok(())

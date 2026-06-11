@@ -398,7 +398,8 @@ mod tests {
 
     #[test]
     fn test_text_decode_table() {
-        let cases: Vec<(&str, &str, i32, Vec<Option<&str>>, i32)> = vec![
+        type TestCase<'a> = (&'a str, &'a str, i32, Vec<Option<&'a str>>, i32);
+        let cases: Vec<TestCase<'_>> = vec![
             ("empty", "{}", 23, vec![], 1),
             ("single int", "{1}", 23, vec![Some("1")], 1),
             (

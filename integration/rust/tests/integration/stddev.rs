@@ -64,7 +64,7 @@ async fn test_variance_double() {
     let conns = connections_sqlx().await;
 
     setup_schema(&conns, "test_variance_double", "DOUBLE PRECISION").await;
-    setup_data(&conns, "test_variance_double", &TEST_DATA).await;
+    setup_data(&conns, "test_variance_double", TEST_DATA).await;
 
     let sharded = &conns[1];
     let unsharded = &conns[0];
@@ -76,7 +76,7 @@ async fn test_variance_double() {
     assert_f64_close(data.get(2), expected.get(2), CLOSE_ENOUGH);
     assert_f64_close(data.get(3), expected.get(3), CLOSE_ENOUGH);
 
-    setup_data(&conns, "test_variance_double", &TEST_DATA_2).await;
+    setup_data(&conns, "test_variance_double", TEST_DATA_2).await;
 
     let data = sharded.fetch_one("SELECT var_pop(value), var_samp(value), stddev_pop(value), stddev_samp(value) FROM test_variance_double").await.unwrap();
     let expected = unsharded.fetch_one("SELECT var_pop(value), var_samp(value), stddev_pop(value), stddev_samp(value) FROM test_variance_double").await.unwrap();
@@ -93,7 +93,7 @@ async fn test_variance_float() {
     let conns = connections_sqlx().await;
 
     setup_schema(&conns, "test_variance_float", "real").await;
-    setup_data(&conns, "test_variance_float", &TEST_DATA).await;
+    setup_data(&conns, "test_variance_float", TEST_DATA).await;
 
     let sharded = &conns[1];
     let unsharded = &conns[0];
@@ -121,7 +121,7 @@ async fn test_variance_float() {
         CLOSEST_WE_CAN_GET_WITH_32_BITS,
     );
 
-    setup_data(&conns, "test_variance_float", &TEST_DATA_2).await;
+    setup_data(&conns, "test_variance_float", TEST_DATA_2).await;
 
     let data = sharded.fetch_one("SELECT var_pop(value), var_samp(value), stddev_pop(value), stddev_samp(value) FROM test_variance_float").await.unwrap();
     let expected = unsharded.fetch_one("SELECT var_pop(value), var_samp(value), stddev_pop(value), stddev_samp(value) FROM test_variance_float").await.unwrap();

@@ -32,7 +32,10 @@ impl Cmp {
             Ok(())
         } else if !value.is_null() {
             match self.value.partial_cmp(&value) {
-                Some(ord) if ord == self.ordering => Ok(self.value = value),
+                Some(ord) if ord == self.ordering => {
+                    self.value = value;
+                    Ok(())
+                }
                 Some(_) => Ok(()),
                 None => Err(TypeError::IncompatibleTypes(
                     self.value.data_type(),

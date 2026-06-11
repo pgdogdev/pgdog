@@ -395,18 +395,18 @@ impl Inner {
     /// or the caller got cancelled.
     #[inline]
     pub(super) fn remove_waiter(&mut self, id: FrontendPid) {
-        if let Some(waiter) = self.waiting.pop_front() {
-            if waiter.request.id != id {
-                // Put me back.
-                self.waiting.push_front(waiter);
+        if let Some(waiter) = self.waiting.pop_front()
+            && waiter.request.id != id
+        {
+            // Put me back.
+            self.waiting.push_front(waiter);
 
-                // Slow search, but we should be somewhere towards the front
-                // if the runtime is doing scheduling correctly.
-                for (i, waiter) in self.waiting.iter().enumerate() {
-                    if waiter.request.id == id {
-                        self.waiting.remove(i);
-                        break;
-                    }
+            // Slow search, but we should be somewhere towards the front
+            // if the runtime is doing scheduling correctly.
+            for (i, waiter) in self.waiting.iter().enumerate() {
+                if waiter.request.id == id {
+                    self.waiting.remove(i);
+                    break;
                 }
             }
         }

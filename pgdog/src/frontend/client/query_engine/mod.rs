@@ -153,10 +153,9 @@ impl QueryEngine {
             .route // Admin commands don't have a route.
             .as_mut()
             .and_then(|route| route.take_explain())
+            && config().config.general.expanded_explain
         {
-            if config().config.general.expanded_explain {
-                self.pending_explain = Some(ExplainResponseState::new(trace));
-            }
+            self.pending_explain = Some(ExplainResponseState::new(trace));
         }
 
         match command {

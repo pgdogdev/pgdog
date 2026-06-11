@@ -178,11 +178,11 @@ fn percent_decode(s: &str) -> String {
             let lo = chars.next();
             if let (Some(hi), Some(lo)) = (hi, lo) {
                 let hex = [hi, lo];
-                if let Ok(s) = std::str::from_utf8(&hex) {
-                    if let Ok(byte) = u8::from_str_radix(s, 16) {
-                        result.push(byte as char);
-                        continue;
-                    }
+                if let Ok(s) = std::str::from_utf8(&hex)
+                    && let Ok(byte) = u8::from_str_radix(s, 16)
+                {
+                    result.push(byte as char);
+                    continue;
                 }
             }
             // Malformed sequence — pass through as-is.

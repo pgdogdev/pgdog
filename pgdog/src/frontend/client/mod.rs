@@ -105,7 +105,7 @@ impl Client {
     /// - `addr`: TCP IP.
     /// - `config`: Currently loaded `pgdog.toml` and `users.toml`.
     /// - `protocol_version`: The version of the PostgreSQL protocol used by the client. This is typically 3.0, but can be 3.2
-    ///                       for more modern clients.
+    ///   for more modern clients.
     ///
     pub async fn spawn(
         stream: Stream,
@@ -520,13 +520,14 @@ impl Client {
     /// Handle client messages.
     async fn client_messages(&mut self, query_engine: &mut QueryEngine) -> Result<(), Error> {
         // Check maintenance mode.
-        if !self.in_transaction() && !self.admin {
-            if let Some(waiter) = maintenance_mode::waiter(&self.database) {
-                let state = query_engine.get_state();
-                query_engine.set_state(State::Waiting);
-                waiter.await;
-                query_engine.set_state(state);
-            }
+        if !self.in_transaction()
+            && !self.admin
+            && let Some(waiter) = maintenance_mode::waiter(&self.database)
+        {
+            let state = query_engine.get_state();
+            query_engine.set_state(State::Waiting);
+            waiter.await;
+            query_engine.set_state(state);
         }
 
         // If client sent multiple requests, split them up and execute individually.

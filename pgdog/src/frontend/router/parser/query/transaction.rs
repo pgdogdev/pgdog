@@ -64,16 +64,16 @@ impl QueryParser {
     fn transaction_type(options: &[Node]) -> Option<TransactionType> {
         for option_node in options {
             let node_enum = option_node.node.as_ref()?;
-            if let NodeEnum::DefElem(def_elem) = node_enum {
-                if def_elem.defname == "transaction_read_only" {
-                    let arg_node = def_elem.arg.as_ref()?.node.as_ref()?;
-                    if let NodeEnum::AConst(ac) = arg_node {
-                        // 1 => read-only, 0 => read-write
-                        if let Some(a_const::Val::Ival(i)) = ac.val.as_ref() {
-                            if i.ival != 0 {
-                                return Some(TransactionType::ReadOnly);
-                            }
-                        }
+            if let NodeEnum::DefElem(def_elem) = node_enum
+                && def_elem.defname == "transaction_read_only"
+            {
+                let arg_node = def_elem.arg.as_ref()?.node.as_ref()?;
+                if let NodeEnum::AConst(ac) = arg_node {
+                    // 1 => read-only, 0 => read-write
+                    if let Some(a_const::Val::Ival(i)) = ac.val.as_ref()
+                        && i.ival != 0
+                    {
+                        return Some(TransactionType::ReadOnly);
                     }
                 }
             }

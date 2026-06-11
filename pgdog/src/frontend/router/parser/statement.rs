@@ -74,21 +74,20 @@ pub(super) fn advisory_locks_from_func_call(
 
     // Slow path: `SELECT pg_advisory_lock(value) FROM (VALUES (1),(2)) AS t(value)`.
     // The function is called once per row, so we emit one lock per resolved value.
-    if let Some(NodeEnum::ColumnRef(cref)) = arg.node.as_ref() {
-        if let Some(col) = last_column_name(&cref.fields) {
-            if let Some(rows) = values_columns.and_then(|m| m.get(col)) {
-                return rows
-                    .iter()
-                    // Skip unresolvable param refs when there is no Bind.
-                    .filter(|v| bind.is_some() || !is_param_ref(v))
-                    .map(|v| AdvisoryLock {
-                        id: integer_arg(v, bind),
-                        unlock,
-                        scope,
-                    })
-                    .collect();
-            }
-        }
+    if let Some(NodeEnum::ColumnRef(cref)) = arg.node.as_ref()
+        && let Some(col) = last_column_name(&cref.fields)
+        && let Some(rows) = values_columns.and_then(|m| m.get(col))
+    {
+        return rows
+            .iter()
+            // Skip unresolvable param refs when there is no Bind.
+            .filter(|v| bind.is_some() || !is_param_ref(v))
+            .map(|v| AdvisoryLock {
+                id: integer_arg(v, bind),
+                unlock,
+                scope,
+            })
+            .collect();
     }
 
     vec![AdvisoryLock {
@@ -278,10 +277,10 @@ impl<'a> SearchContext<'a> {
         ctx.extract_aliases(nodes);
 
         // Try to get the primary table for simple queries
-        if nodes.len() == 1 {
-            if let Some(table) = nodes.first().and_then(|n| Table::try_from(n).ok()) {
-                ctx.table = Some(table);
-            }
+        if nodes.len() == 1
+            && let Some(table) = nodes.first().and_then(|n| Table::try_from(n).ok())
+        {
+            ctx.table = Some(table);
         }
 
         ctx
@@ -627,27 +626,27 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
         for table in self.tables() {
             // Check named sharded table configs (fast path, no schema lookup needed)
             for config in &named {
-                if let Some(ref name) = config.name {
-                    if table.name == name {
-                        // Also check schema match if specified in config
-                        if let Some(ref config_schema) = config.schema {
-                            if table.schema != Some(config_schema.as_str()) {
-                                continue;
-                            }
-                        }
-                        return true;
+                if let Some(ref name) = config.name
+                    && table.name == name
+                {
+                    // Also check schema match if specified in config
+                    if let Some(ref config_schema) = config.schema
+                        && table.schema != Some(config_schema.as_str())
+                    {
+                        continue;
                     }
+                    return true;
                 }
             }
 
             // Check nameless configs by looking up the table in the db schema
             // to see if it has the sharding column
-            if !nameless.is_empty() {
-                if let Some(relation) = db_schema.table(*table, user, search_path) {
-                    for config in &nameless {
-                        if relation.has_column(&config.column) {
-                            return true;
-                        }
+            if !nameless.is_empty()
+                && let Some(relation) = db_schema.table(*table, user, search_path)
+            {
+                for config in &nameless {
+                    if relation.has_column(&config.column) {
+                        return true;
                     }
                 }
             }
@@ -711,12 +710,11 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
         // WITH clause (CTEs)
         if let Some(ref with_clause) = stmt.with_clause {
             for cte in &with_clause.ctes {
-                if let Some(NodeEnum::CommonTableExpr(ref cte_expr)) = cte.node {
-                    if let Some(ref ctequery) = cte_expr.ctequery {
-                        if let Some(NodeEnum::SelectStmt(ref inner_select)) = ctequery.node {
-                            self.walk_select(inner_select, walk);
-                        }
-                    }
+                if let Some(NodeEnum::CommonTableExpr(ref cte_expr)) = cte.node
+                    && let Some(ref ctequery) = cte_expr.ctequery
+                    && let Some(NodeEnum::SelectStmt(ref inner_select)) = ctequery.node
+                {
+                    self.walk_select(inner_select, walk);
                 }
             }
         }
@@ -738,12 +736,11 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
 
         if let Some(ref with_clause) = stmt.with_clause {
             for cte in &with_clause.ctes {
-                if let Some(NodeEnum::CommonTableExpr(ref cte_expr)) = cte.node {
-                    if let Some(ref ctequery) = cte_expr.ctequery {
-                        if let Some(NodeEnum::SelectStmt(ref inner_select)) = ctequery.node {
-                            self.walk_select(inner_select, walk);
-                        }
-                    }
+                if let Some(NodeEnum::CommonTableExpr(ref cte_expr)) = cte.node
+                    && let Some(ref ctequery) = cte_expr.ctequery
+                    && let Some(NodeEnum::SelectStmt(ref inner_select)) = ctequery.node
+                {
+                    self.walk_select(inner_select, walk);
                 }
             }
         }
@@ -764,12 +761,11 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
 
         if let Some(ref with_clause) = stmt.with_clause {
             for cte in &with_clause.ctes {
-                if let Some(NodeEnum::CommonTableExpr(ref cte_expr)) = cte.node {
-                    if let Some(ref ctequery) = cte_expr.ctequery {
-                        if let Some(NodeEnum::SelectStmt(ref inner_select)) = ctequery.node {
-                            self.walk_select(inner_select, walk);
-                        }
-                    }
+                if let Some(NodeEnum::CommonTableExpr(ref cte_expr)) = cte.node
+                    && let Some(ref ctequery) = cte_expr.ctequery
+                    && let Some(NodeEnum::SelectStmt(ref inner_select)) = ctequery.node
+                {
+                    self.walk_select(inner_select, walk);
                 }
             }
         }
@@ -786,20 +782,19 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
 
         if let Some(ref with_clause) = stmt.with_clause {
             for cte in &with_clause.ctes {
-                if let Some(NodeEnum::CommonTableExpr(ref cte_expr)) = cte.node {
-                    if let Some(ref ctequery) = cte_expr.ctequery {
-                        if let Some(NodeEnum::SelectStmt(ref inner_select)) = ctequery.node {
-                            self.walk_select(inner_select, walk);
-                        }
-                    }
+                if let Some(NodeEnum::CommonTableExpr(ref cte_expr)) = cte.node
+                    && let Some(ref ctequery) = cte_expr.ctequery
+                    && let Some(NodeEnum::SelectStmt(ref inner_select)) = ctequery.node
+                {
+                    self.walk_select(inner_select, walk);
                 }
             }
         }
 
-        if let Some(ref select_stmt) = stmt.select_stmt {
-            if let Some(NodeEnum::SelectStmt(ref inner_select)) = select_stmt.node {
-                self.walk_select(inner_select, walk);
-            }
+        if let Some(ref select_stmt) = stmt.select_stmt
+            && let Some(NodeEnum::SelectStmt(ref inner_select)) = select_stmt.node
+        {
+            self.walk_select(inner_select, walk);
         }
     }
 
@@ -817,17 +812,17 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
                 }
             }
             Some(NodeEnum::RangeSubselect(subselect)) => {
-                if let Some(ref subquery) = subselect.subquery {
-                    if let Some(NodeEnum::SelectStmt(ref inner_select)) = subquery.node {
-                        self.walk_select(inner_select, walk);
-                    }
+                if let Some(ref subquery) = subselect.subquery
+                    && let Some(NodeEnum::SelectStmt(ref inner_select)) = subquery.node
+                {
+                    self.walk_select(inner_select, walk);
                 }
             }
             Some(NodeEnum::SubLink(sublink)) => {
-                if let Some(ref subselect) = sublink.subselect {
-                    if let Some(NodeEnum::SelectStmt(ref inner_select)) = subselect.node {
-                        self.walk_select(inner_select, walk);
-                    }
+                if let Some(ref subselect) = sublink.subselect
+                    && let Some(NodeEnum::SelectStmt(ref inner_select)) = subselect.node
+                {
+                    self.walk_select(inner_select, walk);
                 }
             }
             Some(NodeEnum::SelectStmt(inner_select)) => {
@@ -974,10 +969,10 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
                 table: Some(table_name),
                 schema,
             };
-            if let Some(sharded_table) = self.schema.tables().get_table(column) {
-                if sharded_table.name.is_some() {
-                    return Some(sharded_table);
-                }
+            if let Some(sharded_table) = self.schema.tables().get_table(column)
+                && sharded_table.name.is_some()
+            {
+                return Some(sharded_table);
             }
         }
 
@@ -1099,10 +1094,10 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
                 let mut column = Column::try_from(&node.node)?;
 
                 // If column has no table, qualify with context table
-                if column.table().is_none() {
-                    if let Some(ref table) = ctx.table {
-                        column.qualify(*table);
-                    }
+                if column.table().is_none()
+                    && let Some(ref table) = ctx.table
+                {
+                    column.qualify(*table);
                 }
 
                 Ok(SearchResult::Column(column))
@@ -1432,14 +1427,13 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
         }
 
         // No columns specified in INSERT, try to look them up from schema
-        if let (Some(table), Some(schema_lookup)) = (ctx.table, &self.schema_lookup) {
-            if let Some(relation) =
+        if let (Some(table), Some(schema_lookup)) = (ctx.table, &self.schema_lookup)
+            && let Some(relation) =
                 schema_lookup
                     .db_schema
                     .table(table, schema_lookup.user, schema_lookup.search_path)
-            {
-                return relation.column_names().map(String::from).collect();
-            }
+        {
+            return relation.column_names().map(String::from).collect();
         }
 
         vec![]
@@ -1452,10 +1446,10 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
         ctx: &SearchContext<'a>,
     ) -> Result<SearchResult<'a>, Error> {
         // Schema-based routing takes priority for INSERTs
-        if let Some(table) = ctx.table {
-            if let Some(schema) = self.schema.schemas.get(table.schema()) {
-                return Ok(SearchResult::Match(schema.shard().into()));
-            }
+        if let Some(table) = ctx.table
+            && let Some(schema) = self.schema.schemas.get(table.schema())
+        {
+            return Ok(SearchResult::Match(schema.shard().into()));
         }
 
         // Get the column names from INSERT INTO table (col1, col2, ...) or from schema
@@ -1474,27 +1468,24 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
                     // Try to extract constants from SELECT target list
                     if !select_stmt.target_list.is_empty() {
                         for (pos, target_node) in select_stmt.target_list.iter().enumerate() {
-                            if let Some(NodeEnum::ResTarget(ref target)) = target_node.node {
-                                if let Some(column_name) = columns.get(pos) {
-                                    let table_name = ctx.table.map(|t| t.name);
-                                    let table_schema = ctx.table.and_then(|t| t.schema);
-                                    let sharded_table = self.get_sharded_table_by_name(
-                                        column_name.as_str(),
-                                        table_name,
-                                        table_schema,
-                                    );
+                            if let Some(NodeEnum::ResTarget(ref target)) = target_node.node
+                                && let Some(column_name) = columns.get(pos)
+                            {
+                                let table_name = ctx.table.map(|t| t.name);
+                                let table_schema = ctx.table.and_then(|t| t.schema);
+                                let sharded_table = self.get_sharded_table_by_name(
+                                    column_name.as_str(),
+                                    table_name,
+                                    table_schema,
+                                );
 
-                                    if sharded_table.is_some() {
-                                        if let Some(ref val) = target.val {
-                                            if let Ok(value) = Value::try_from(val.as_ref()) {
-                                                if let Some(shard) = self
-                                                    .compute_shard_for_table(sharded_table, value)?
-                                                {
-                                                    return Ok(SearchResult::Match(shard));
-                                                }
-                                            }
-                                        }
-                                    }
+                                if sharded_table.is_some()
+                                    && let Some(ref val) = target.val
+                                    && let Ok(value) = Value::try_from(val.as_ref())
+                                    && let Some(shard) =
+                                        self.compute_shard_for_table(sharded_table, value)?
+                                {
+                                    return Ok(SearchResult::Match(shard));
                                 }
                             }
                         }
@@ -1520,41 +1511,40 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
         }
 
         // The select_stmt field contains either VALUES or a SELECT subquery
-        if let Some(ref select_node) = stmt.select_stmt {
-            if let Some(NodeEnum::SelectStmt(ref select_stmt)) = select_node.node {
-                // Check if this is VALUES (has values_lists) - need special handling
-                // to match column positions with sharding keys
-                if !select_stmt.values_lists.is_empty() {
-                    for values_list in &select_stmt.values_lists {
-                        if let Some(NodeEnum::List(ref list)) = values_list.node {
-                            for (pos, value_node) in list.items.iter().enumerate() {
-                                // Check if this position corresponds to a sharding key column
-                                if let Some(column_name) = columns.get(pos) {
-                                    let table_name = ctx.table.map(|t| t.name);
-                                    let table_schema = ctx.table.and_then(|t| t.schema);
-                                    let sharded_table = self.get_sharded_table_by_name(
-                                        column_name.as_str(),
-                                        table_name,
-                                        table_schema,
-                                    );
+        if let Some(ref select_node) = stmt.select_stmt
+            && let Some(NodeEnum::SelectStmt(ref select_stmt)) = select_node.node
+        {
+            // Check if this is VALUES (has values_lists) - need special handling
+            // to match column positions with sharding keys
+            if !select_stmt.values_lists.is_empty() {
+                for values_list in &select_stmt.values_lists {
+                    if let Some(NodeEnum::List(ref list)) = values_list.node {
+                        for (pos, value_node) in list.items.iter().enumerate() {
+                            // Check if this position corresponds to a sharding key column
+                            if let Some(column_name) = columns.get(pos) {
+                                let table_name = ctx.table.map(|t| t.name);
+                                let table_schema = ctx.table.and_then(|t| t.schema);
+                                let sharded_table = self.get_sharded_table_by_name(
+                                    column_name.as_str(),
+                                    table_name,
+                                    table_schema,
+                                );
 
-                                    if sharded_table.is_some() {
-                                        // Try to extract the value directly
-                                        if let Ok(value) = Value::try_from(value_node) {
-                                            if let Some(shard) =
-                                                self.compute_shard_for_table(sharded_table, value)?
-                                            {
-                                                return Ok(SearchResult::Match(shard));
-                                            }
-                                        }
+                                if sharded_table.is_some() {
+                                    // Try to extract the value directly
+                                    if let Ok(value) = Value::try_from(value_node)
+                                        && let Some(shard) =
+                                            self.compute_shard_for_table(sharded_table, value)?
+                                    {
+                                        return Ok(SearchResult::Match(shard));
                                     }
                                 }
+                            }
 
-                                // Search subqueries in values recursively
-                                let result = self.select_search(value_node, ctx)?;
-                                if result.is_match() {
-                                    return Ok(result);
-                                }
+                            // Search subqueries in values recursively
+                            let result = self.select_search(value_node, ctx)?;
+                            if result.is_match() {
+                                return Ok(result);
                             }
                         }
                     }

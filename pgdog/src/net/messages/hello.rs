@@ -99,18 +99,18 @@ impl Startup {
                             let name = nvs.next();
                             let value = nvs.next();
 
-                            if let Some(name) = name {
-                                if let Some(value) = value {
-                                    let name = name.trim().to_string();
-                                    let value = value.trim().to_string();
-                                    if !name.is_empty() && !value.is_empty() {
-                                        let value = if name == "search_path" {
-                                            search_path(&value)
-                                        } else {
-                                            ParameterValue::from(value)
-                                        };
-                                        params.insert(name, value);
-                                    }
+                            if let Some(name) = name
+                                && let Some(value) = value
+                            {
+                                let name = name.trim().to_string();
+                                let value = value.trim().to_string();
+                                if !name.is_empty() && !value.is_empty() {
+                                    let value = if name == "search_path" {
+                                        search_path(&value)
+                                    } else {
+                                        ParameterValue::from(value)
+                                    };
+                                    params.insert(name, value);
                                 }
                             }
                         }

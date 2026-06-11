@@ -18,10 +18,10 @@ impl AdvisoryLocks {
                     // pg_advisory_unlock_all() clears every advisory lock.
                     self.locks.clear();
                 }
-            } else if let Some(id) = lock.id {
-                if lock.scope == LockScope::Session {
-                    self.locks.insert(id);
-                }
+            } else if let Some(id) = lock.id
+                && lock.scope == LockScope::Session
+            {
+                self.locks.insert(id);
             }
         }
     }

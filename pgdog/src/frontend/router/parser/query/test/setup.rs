@@ -134,16 +134,16 @@ impl QueryParserTest {
                 self.last_parse = Some(name);
             }
 
-            if let ProtocolMessage::Bind(bind) = message {
-                if let Some(ref name) = self.last_parse {
-                    bind.rename(name);
-                }
+            if let ProtocolMessage::Bind(bind) = message
+                && let Some(ref name) = self.last_parse
+            {
+                bind.rename(name);
             }
 
-            if let ProtocolMessage::Describe(desc) = message {
-                if let Some(ref name) = self.last_parse {
-                    desc.rename(name);
-                }
+            if let ProtocolMessage::Describe(desc) = message
+                && let Some(ref name) = self.last_parse
+            {
+                desc.rename(name);
             }
         }
 
