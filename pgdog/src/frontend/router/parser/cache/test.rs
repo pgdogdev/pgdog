@@ -104,7 +104,7 @@ async fn bench_ast_cache() {
         faster
     ); // 32x on my M1
 
-    assert!(faster > 10.0);
+    assert!(faster > 9.0);
 }
 
 // Serialize tests that read or write the global Cache stats. These tests

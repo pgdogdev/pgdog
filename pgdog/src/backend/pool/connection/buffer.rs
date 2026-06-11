@@ -148,11 +148,10 @@ impl Buffer {
         let buffer: VecDeque<DataRow> = std::mem::take(&mut self.buffer);
         let mut rows = if aggregate.is_empty() {
             buffer
+        } else if let Some(aggregates) = Aggregates::new(&buffer, decoder, aggregate, plan) {
+            aggregates.aggregate()?
         } else {
-            let aggregates = Aggregates::new(&buffer, decoder, aggregate, plan);
-            let result = aggregates.aggregate()?;
-
-            if result.is_empty() { buffer } else { result }
+            buffer
         };
 
         Self::drop_helper_columns(&mut rows, plan);

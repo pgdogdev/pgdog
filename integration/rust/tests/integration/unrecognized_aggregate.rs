@@ -40,5 +40,5 @@ async fn unrecognized_aggregate_function_errors_only_on_cross_shard_queries() {
         .fetch_one("SELECT pgdog_sum(lol) FROM unrecognized_agg_test")
         .await;
     let err = sharded_query.expect_err("unrecognized aggregate executed successfully");
-    assert!(err.to_string().contains("pgdog_sum is not yet supported"));
+    assert!(err.to_string().contains("pgdog_sum() is not yet supported"));
 }
