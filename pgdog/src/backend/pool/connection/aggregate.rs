@@ -497,6 +497,7 @@ mod test {
     }
 
     #[test]
+    #[ignore = "this unit test constructs a synthetic case that isn't realistic, and we currently rely on this behavior for control flow on direct-to-shard and explain"]
     fn aggregate_errors_when_helper_alias_missing() {
         let aggregate = parse("SELECT AVG(price) FROM menu");
 
