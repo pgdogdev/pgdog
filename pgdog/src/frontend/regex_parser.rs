@@ -4,12 +4,11 @@ use regex::RegexSet;
 
 use crate::frontend::ClientRequest;
 
-static CMD_BASE: &[&str] = &[
-    "(?i)^ *(RE)?SET",
-    "(?i)^ *BEGIN",
-    "(?i)^ *COMMIT",
-    "(?i)^ *ROLLBACK",
-];
+/// Whitespace and inline SQL comments (`-- line` and `/* block */`)
+/// allowed before a statement keyword.
+static COMMENT_PREFIX: &str = r"(?i)^\s*(?:(?:--[^\n]*\n|/\*[\s\S]*?\*/)\s*)*";
+
+static CMD_BASE: &[&str] = &["(RE)?SET", "BEGIN", "COMMIT", "ROLLBACK"];
 
 static CMD_ADVISORY: &[&str] = &[
     r"(?i)\bpg_advisory_lock\b",
@@ -25,9 +24,16 @@ static CMD_ADVISORY: &[&str] = &[
     r"(?i)\bpg_try_advisory_xact_lock_shared\b",
 ];
 
-static CMD_RE: Lazy<RegexSet> = Lazy::new(|| RegexSet::new(CMD_BASE).unwrap());
-static CMD_RE_ADVISORY: Lazy<RegexSet> =
-    Lazy::new(|| RegexSet::new(CMD_BASE.iter().chain(CMD_ADVISORY.iter())).unwrap());
+fn cmd_base_patterns() -> impl Iterator<Item = String> {
+    CMD_BASE
+        .iter()
+        .map(|cmd| format!("{}{}", COMMENT_PREFIX, cmd))
+}
+
+static CMD_RE: Lazy<RegexSet> = Lazy::new(|| RegexSet::new(cmd_base_patterns()).unwrap());
+static CMD_RE_ADVISORY: Lazy<RegexSet> = Lazy::new(|| {
+    RegexSet::new(cmd_base_patterns().chain(CMD_ADVISORY.iter().map(|s| s.to_string()))).unwrap()
+});
 
 fn scan_prefix(query: &str, limit: usize) -> &str {
     if query.len() <= limit {
@@ -179,6 +185,23 @@ mod test {
 
         let short = format!("{}pg_advisory_lock(1)", " ".repeat(900));
         assert!(matches_at(&short, l));
+    }
+
+    #[test]
+    fn test_inline_comments() {
+        assert!(matches("/* comment */ SET statement_timeout TO 1"));
+        assert!(matches("/* comment */SET statement_timeout TO 1"));
+        assert!(matches("-- comment\nSET statement_timeout TO 1"));
+        assert!(matches("--comment\n  RESET ALL"));
+        assert!(matches("/* one */ /* two */ BEGIN"));
+        assert!(matches("/* multi\nline\ncomment */ COMMIT"));
+        assert!(matches("-- first\n-- second\nROLLBACK"));
+        assert!(matches("/* block */ -- line\nbegin read only"));
+
+        // Comment-only or commented-out statements don't match.
+        assert!(!matches("-- SET statement_timeout TO 1"));
+        assert!(!matches("/* SET statement_timeout TO 1 */ SELECT 1"));
+        assert!(!matches("/* comment */ SELECT 1"));
     }
 
     #[test]
