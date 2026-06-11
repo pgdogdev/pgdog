@@ -63,7 +63,7 @@ pub(super) fn trailing_block_comment(q: &str) -> Option<(&str, &str)> {
         };
         // If the body contains `*/`, the trailing `*/` pairs with an earlier
         // `/*` we can't see from here — stop.
-        if memmem::find(inner[s + start.len()..].as_bytes(), end.as_bytes()).is_some() {
+        if memmem::find(&inner.as_bytes()[s + start.len()..], end.as_bytes()).is_some() {
             break;
         }
         first_start = Some(s);

@@ -105,7 +105,7 @@ impl Client {
     /// - `addr`: TCP IP.
     /// - `config`: Currently loaded `pgdog.toml` and `users.toml`.
     /// - `protocol_version`: The version of the PostgreSQL protocol used by the client. This is typically 3.0, but can be 3.2
-    ///                       for more modern clients.
+    ///   for more modern clients.
     ///
     pub async fn spawn(
         stream: Stream,

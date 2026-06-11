@@ -268,7 +268,7 @@ mod test {
     }
 
     fn parse_stmt(query: &str) -> Option<NodeEnum> {
-        let root = parse(query)
+        parse(query)
             .unwrap()
             .protobuf
             .stmts
@@ -277,8 +277,7 @@ mod test {
             .clone()
             .stmt
             .unwrap()
-            .node;
-        root
+            .node
     }
 
     #[test]

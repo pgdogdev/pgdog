@@ -502,10 +502,10 @@ mod test {
                 if let Some(message) = message {
                     match message.clone() {
                         ReplicationData::CopyData(copy_data) => {
-                            if let Some(xlog_data) = copy_data.xlog_data() {
-                                if let Some(XLogPayload::Commit(_)) = xlog_data.payload() {
-                                    slot.stop_replication().await?;
-                                }
+                            if let Some(xlog_data) = copy_data.xlog_data()
+                                && let Some(XLogPayload::Commit(_)) = xlog_data.payload()
+                            {
+                                slot.stop_replication().await?;
                             }
                         }
                         ReplicationData::CopyDone => (),
