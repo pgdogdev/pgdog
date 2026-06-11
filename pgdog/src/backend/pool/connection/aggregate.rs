@@ -486,6 +486,7 @@ mod test {
 
         let plan = AggregateRewritePlan::default();
         let mut result = Aggregates::new(&rows, &decoder, &aggregate, &plan)
+            .unwrap()
             .aggregate()
             .unwrap();
 
@@ -517,7 +518,9 @@ mod test {
             alias: "__pgdog_count_expr0_col0".into(),
         });
 
-        let result = Aggregates::new(&rows, &decoder, &aggregate, &plan).aggregate();
+        let result = Aggregates::new(&rows, &decoder, &aggregate, &plan)
+            .unwrap()
+            .aggregate();
 
         assert_matches!(
             result,
@@ -552,6 +555,7 @@ mod test {
             &aggregate,
             &AggregateRewritePlan::default(),
         )
+        .unwrap()
         .aggregate()
         .unwrap();
 
@@ -596,6 +600,7 @@ mod test {
             &aggregate,
             &AggregateRewritePlan::default(),
         )
+        .unwrap()
         .aggregate()
         .unwrap();
 
@@ -642,6 +647,7 @@ mod test {
             &aggregate,
             &AggregateRewritePlan::default(),
         )
+        .unwrap()
         .aggregate()
         .unwrap();
 
