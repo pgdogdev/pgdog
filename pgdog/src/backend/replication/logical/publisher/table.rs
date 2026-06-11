@@ -85,38 +85,6 @@ where
         Columns::new(self.inner.map(|(_, c)| c).enumerate())
     }
 
-    /// Quoted column names joined by `, `: `"col1", "col2"`.
-    fn names(self) -> String {
-        self.inner
-            .map(|(_, c)| format!("\"{}\"", escape_identifier(&c.name)))
-            .collect::<Vec<_>>()
-            .join(", ")
-    }
-
-    /// Positional parameter placeholders joined by `, `: `$1, $2`.
-    fn placeholders(self) -> String {
-        self.inner
-            .map(|(i, _)| format!("${}", i + 1))
-            .collect::<Vec<_>>()
-            .join(", ")
-    }
-
-    /// `"col" = $pos` pairs joined by `, `. Used in SET clauses.
-    fn assignments(self) -> String {
-        self.inner
-            .map(|(i, c)| format!("\"{}\" = ${}", escape_identifier(&c.name), i + 1))
-            .collect::<Vec<_>>()
-            .join(", ")
-    }
-
-    /// `"col" = $pos` pairs joined by ` AND `. Used in WHERE clauses.
-    fn predicates(self) -> String {
-        self.inner
-            .map(|(i, c)| format!("\"{}\" = ${}", escape_identifier(&c.name), i + 1))
-            .collect::<Vec<_>>()
-            .join(" AND ")
-    }
-
     /// Shift every column's parameter index by `offset`.
     /// Use when a preceding clause has already consumed `$1..$offset`.
     fn with_offset(
@@ -126,8 +94,40 @@ where
         Columns::new(self.inner.map(move |(i, c)| (i + offset, c)))
     }
 
+    /// Quoted column names joined by `, `: `"col1", "col2"`.
+    fn into_names(self) -> String {
+        self.inner
+            .map(|(_, c)| format!("\"{}\"", escape_identifier(&c.name)))
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
+    /// Positional parameter placeholders joined by `, `: `$1, $2`.
+    fn into_placeholders(self) -> String {
+        self.inner
+            .map(|(i, _)| format!("${}", i + 1))
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
+    /// `"col" = $pos` pairs joined by `, `. Used in SET clauses.
+    fn into_assignments(self) -> String {
+        self.inner
+            .map(|(i, c)| format!("\"{}\" = ${}", escape_identifier(&c.name), i + 1))
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
+    /// `"col" = $pos` pairs joined by ` AND `. Used in WHERE clauses.
+    fn into_predicates(self) -> String {
+        self.inner
+            .map(|(i, c)| format!("\"{}\" = ${}", escape_identifier(&c.name), i + 1))
+            .collect::<Vec<_>>()
+            .join(" AND ")
+    }
+
     /// `"col" IS NOT DISTINCT FROM $pos` predicates joined by ` AND `.
-    fn is_not_distinct_from_predicates(self) -> String {
+    fn into_is_not_distinct_from_predicates(self) -> String {
         self.inner
             .map(|(i, c)| {
                 format!(
@@ -248,8 +248,8 @@ impl Table {
             "INSERT INTO \"{}\".\"{}\" ({}) VALUES ({})",
             escape_identifier(self.table.destination_schema()),
             escape_identifier(self.table.destination_name()),
-            self.all_columns().names(),
-            self.all_columns().placeholders(),
+            self.all_columns().into_names(),
+            self.all_columns().into_placeholders(),
         )
     }
 
@@ -262,10 +262,10 @@ impl Table {
             "INSERT INTO \"{}\".\"{}\" ({}) VALUES ({}) ON CONFLICT ({}) DO UPDATE SET {}",
             escape_identifier(self.table.destination_schema()),
             escape_identifier(self.table.destination_name()),
-            self.all_columns().names(),
-            self.all_columns().placeholders(),
-            self.identity_columns().names(),
-            self.non_identity_columns().assignments(),
+            self.all_columns().into_names(),
+            self.all_columns().into_placeholders(),
+            self.identity_columns().into_names(),
+            self.non_identity_columns().into_assignments(),
         )
     }
 
@@ -278,8 +278,8 @@ impl Table {
             "UPDATE \"{}\".\"{}\" SET {} WHERE {}",
             escape_identifier(self.table.destination_schema()),
             escape_identifier(self.table.destination_name()),
-            self.non_identity_columns().assignments(),
-            self.identity_columns().predicates(),
+            self.non_identity_columns().into_assignments(),
+            self.identity_columns().into_predicates(),
         )
     }
 
@@ -302,8 +302,10 @@ impl Table {
             escape_identifier(self.table.destination_name()),
             self.present_columns(present)
                 .filter_non_identity()
-                .assignments(),
-            self.present_columns(present).filter_identity().predicates(),
+                .into_assignments(),
+            self.present_columns(present)
+                .filter_identity()
+                .into_predicates(),
         )
     }
 
@@ -316,7 +318,7 @@ impl Table {
             "DELETE FROM \"{}\".\"{}\" WHERE {}",
             escape_identifier(self.table.destination_schema()),
             escape_identifier(self.table.destination_name()),
-            self.identity_columns().reindexed().predicates(),
+            self.identity_columns().reindexed().into_predicates(),
         )
     }
 
@@ -326,8 +328,8 @@ impl Table {
             "INSERT INTO \"{}\".\"{}\" ({}) VALUES ({}) ON CONFLICT DO NOTHING",
             escape_identifier(self.table.destination_schema()),
             escape_identifier(self.table.destination_name()),
-            self.all_columns().names(),
-            self.all_columns().placeholders(),
+            self.all_columns().into_names(),
+            self.all_columns().into_placeholders(),
         )
     }
 
@@ -356,7 +358,7 @@ impl Table {
             "UPDATE \"{}\".\"{}\" SET {} WHERE (tableoid, ctid) = {}",
             escape_identifier(self.table.destination_schema()),
             escape_identifier(self.table.destination_name()),
-            self.all_columns().with_offset(n).assignments(),
+            self.all_columns().with_offset(n).into_assignments(),
             self.ctid_subquery(),
         )
     }
@@ -383,7 +385,7 @@ impl Table {
             self.present_columns(present)
                 .filter_non_identity()
                 .with_offset(n)
-                .assignments(),
+                .into_assignments(),
             self.ctid_subquery(),
         )
     }
@@ -397,7 +399,7 @@ impl Table {
             "(SELECT tableoid, ctid FROM \"{}\".\"{}\" WHERE {} LIMIT 1)",
             escape_identifier(self.table.destination_schema()),
             escape_identifier(self.table.destination_name()),
-            self.all_columns().is_not_distinct_from_predicates(),
+            self.all_columns().into_is_not_distinct_from_predicates(),
         )
     }
 
