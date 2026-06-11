@@ -189,11 +189,11 @@ async fn pgdog(command: Option<Commands>) -> Result<(), Box<dyn std::error::Erro
                 cli::replicate_and_cutover(command.clone()).await?;
             }
 
-            if let Commands::Route { .. } = command {
-                if let Err(err) = cli::route(command.clone()).await {
-                    error!("{}", err);
-                    return Err(err);
-                }
+            if let Commands::Route { .. } = command
+                && let Err(err) = cli::route(command.clone()).await
+            {
+                error!("{}", err);
+                return Err(err);
             }
         }
     }

@@ -137,18 +137,17 @@ impl ShardedTables {
         let table = column.table()?;
 
         for candidate in &self.inner.tables {
-            if let Some(table_name) = candidate.name.as_ref() {
-                if !table.name_match(table_name) {
-                    continue;
-                }
+            if let Some(table_name) = candidate.name.as_ref()
+                && !table.name_match(table_name)
+            {
+                continue;
             }
 
-            if let Some(schema_name) = candidate.schema.as_ref() {
-                if let Some(schema) = table.schema() {
-                    if schema.name != schema_name {
-                        continue;
-                    }
-                }
+            if let Some(schema_name) = candidate.schema.as_ref()
+                && let Some(schema) = table.schema()
+                && schema.name != schema_name
+            {
+                continue;
             }
 
             if column.name == candidate.column {
@@ -181,10 +180,10 @@ impl ShardedTables {
         };
 
         for sharded_table in with_names {
-            if Some(table) == sharded_table.name.as_deref() {
-                if let Some(column) = get_column(sharded_table, columns) {
-                    return Some(column);
-                }
+            if Some(table) == sharded_table.name.as_deref()
+                && let Some(column) = get_column(sharded_table, columns)
+            {
+                return Some(column);
             }
         }
 

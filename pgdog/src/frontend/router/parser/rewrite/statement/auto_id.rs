@@ -125,10 +125,10 @@ impl StatementRewrite<'_> {
             .cols
             .iter()
             .filter_map(|col| {
-                if let Some(NodeEnum::ResTarget(res)) = &col.node {
-                    if !res.name.is_empty() {
-                        return Some(res.name.as_str());
-                    }
+                if let Some(NodeEnum::ResTarget(res)) = &col.node
+                    && !res.name.is_empty()
+                {
+                    return Some(res.name.as_str());
                 }
                 None
             })
@@ -159,11 +159,11 @@ impl StatementRewrite<'_> {
         for values_node in &mut select_stmt.values_lists {
             if let Some(NodeEnum::List(list)) = &mut values_node.node {
                 for &pos in positions {
-                    if pos < list.items.len() {
-                        if let Some(NodeEnum::SetToDefault(_)) = &list.items[pos].node {
-                            list.items[pos] = unique_id_call.clone();
-                            replaced += 1;
-                        }
+                    if pos < list.items.len()
+                        && let Some(NodeEnum::SetToDefault(_)) = &list.items[pos].node
+                    {
+                        list.items[pos] = unique_id_call.clone();
+                        replaced += 1;
                     }
                 }
             }

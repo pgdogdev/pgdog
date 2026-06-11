@@ -874,27 +874,27 @@ impl StreamSubscriber {
 
         let mut status_update = None;
 
-        if let Some(xlog) = data.xlog_data() {
-            if let Some(payload) = xlog.payload() {
-                match payload {
-                    XLogPayload::Insert(insert) => self.insert(insert).await?,
-                    XLogPayload::Update(update) => self.update(update).await?,
-                    XLogPayload::Delete(delete) => self.delete(delete).await?,
-                    XLogPayload::Commit(commit) => {
-                        self.commit(commit).await?;
-                        status_update = Some(self.status_update());
-                        self.in_transaction = false;
-                    }
-                    XLogPayload::Relation(relation) => self.relation(relation).await?,
-                    XLogPayload::Begin(begin) => {
-                        self.changed_tables.clear();
-                        self.set_working_lsn(begin.final_transaction_lsn);
-                        self.in_transaction = true;
-                    }
-                    _ => (),
+        if let Some(xlog) = data.xlog_data()
+            && let Some(payload) = xlog.payload()
+        {
+            match payload {
+                XLogPayload::Insert(insert) => self.insert(insert).await?,
+                XLogPayload::Update(update) => self.update(update).await?,
+                XLogPayload::Delete(delete) => self.delete(delete).await?,
+                XLogPayload::Commit(commit) => {
+                    self.commit(commit).await?;
+                    status_update = Some(self.status_update());
+                    self.in_transaction = false;
                 }
-                self.bytes_sharded += xlog.len();
+                XLogPayload::Relation(relation) => self.relation(relation).await?,
+                XLogPayload::Begin(begin) => {
+                    self.changed_tables.clear();
+                    self.set_working_lsn(begin.final_transaction_lsn);
+                    self.in_transaction = true;
+                }
+                _ => (),
             }
+            self.bytes_sharded += xlog.len();
         }
 
         Ok(status_update)

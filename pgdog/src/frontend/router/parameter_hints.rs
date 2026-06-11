@@ -45,12 +45,12 @@ impl ParameterHints<'_> {
             self.hooks.record_set_shard(&shard);
             shards.push(ShardWithPriority::new_set(shard));
         }
-        if let Some(ParameterValue::String(val)) = self.pgdog_shard {
-            if let Ok(shard) = val.parse() {
-                let shard = Shard::Direct(shard);
-                self.hooks.record_set_shard(&shard);
-                shards.push(ShardWithPriority::new_set(shard));
-            }
+        if let Some(ParameterValue::String(val)) = self.pgdog_shard
+            && let Ok(shard) = val.parse()
+        {
+            let shard = Shard::Direct(shard);
+            self.hooks.record_set_shard(&shard);
+            shards.push(ShardWithPriority::new_set(shard));
         }
         if let Some(ParameterValue::String(val)) = self.pgdog_sharding_key {
             if sharding_schema.schemas.is_empty() {

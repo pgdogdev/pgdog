@@ -101,10 +101,10 @@ impl Error {
     }
 
     pub(crate) fn disconnect(&self) -> bool {
-        if let Error::Net(crate::net::Error::Io(err)) = self {
-            if err.kind() == ErrorKind::UnexpectedEof {
-                return true;
-            }
+        if let Error::Net(crate::net::Error::Io(err)) = self
+            && err.kind() == ErrorKind::UnexpectedEof
+        {
+            return true;
         }
 
         false

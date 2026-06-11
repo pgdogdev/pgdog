@@ -88,15 +88,13 @@ impl InsertSplit {
         // single-tuple statement so the backend prepares the right one;
         // otherwise it would still hold the original multi-tuple statement and
         // reject the Bind's parameter count.
-        if !has_parse {
-            if let Some(parse) = &request.last_parse {
-                let mut split_parse = parse.clone();
-                split_parse.set_query(&self.stmt);
-                if let Some(name) = self.statement_name() {
-                    split_parse.rename_fast(name);
-                }
-                new_request.last_parse = Some(split_parse);
+        if !has_parse && let Some(parse) = &request.last_parse {
+            let mut split_parse = parse.clone();
+            split_parse.set_query(&self.stmt);
+            if let Some(name) = self.statement_name() {
+                split_parse.rename_fast(name);
             }
+            new_request.last_parse = Some(split_parse);
         }
 
         new_request
@@ -220,10 +218,10 @@ impl StatementRewrite<'_> {
 
         if let NodeEnum::InsertStmt(insert) = node.node.as_ref()? {
             let select = insert.select_stmt.as_ref()?;
-            if let NodeEnum::SelectStmt(select_stmt) = select.node.as_ref()? {
-                if !select_stmt.values_lists.is_empty() {
-                    return Some(&select_stmt.values_lists);
-                }
+            if let NodeEnum::SelectStmt(select_stmt) = select.node.as_ref()?
+                && !select_stmt.values_lists.is_empty()
+            {
+                return Some(&select_stmt.values_lists);
             }
         }
         None
@@ -243,16 +241,13 @@ impl StatementRewrite<'_> {
         Self::renumber_params(&mut new_values_list, &params);
 
         // Replace the values_lists with just this one tuple
-        if let Some(stmt) = ast.stmts.first_mut() {
-            if let Some(node) = stmt.stmt.as_mut() {
-                if let Some(NodeEnum::InsertStmt(insert)) = node.node.as_mut() {
-                    if let Some(select) = insert.select_stmt.as_mut() {
-                        if let Some(NodeEnum::SelectStmt(select_stmt)) = select.node.as_mut() {
-                            select_stmt.values_lists = vec![new_values_list];
-                        }
-                    }
-                }
-            }
+        if let Some(stmt) = ast.stmts.first_mut()
+            && let Some(node) = stmt.stmt.as_mut()
+            && let Some(NodeEnum::InsertStmt(insert)) = node.node.as_mut()
+            && let Some(select) = insert.select_stmt.as_mut()
+            && let Some(NodeEnum::SelectStmt(select_stmt)) = select.node.as_mut()
+        {
+            select_stmt.values_lists = vec![new_values_list];
         }
 
         let stmt = match self.schema.query_parser_engine {

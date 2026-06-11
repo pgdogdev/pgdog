@@ -113,10 +113,10 @@ impl<'a> WhereClause<'a> {
     }
 
     fn column_match(column: &Column, table: Option<&str>, name: &str) -> bool {
-        if let (Some(table), Some(other_table)) = (table, &column.table) {
-            if &table != other_table {
-                return false;
-            }
+        if let (Some(table), Some(other_table)) = (table, &column.table)
+            && &table != other_table
+        {
+            return false;
         };
 
         column.name == name
@@ -181,20 +181,21 @@ impl<'a> WhereClause<'a> {
             }
         }
 
-        if let Output::NullCheck(c) = output {
-            if c.name == column_name && c.table == table_name {
-                keys.push(Key::Null);
-            }
+        if let Output::NullCheck(c) = output
+            && c.name == column_name
+            && c.table == table_name
+        {
+            keys.push(Key::Null);
         }
 
         keys
     }
 
     fn string(node: Option<&Node>) -> Option<&str> {
-        if let Some(node) = node {
-            if let Some(NodeEnum::String(ref string)) = node.node {
-                return Some(string.sval.as_str());
-            }
+        if let Some(node) = node
+            && let Some(NodeEnum::String(ref string)) = node.node
+        {
+            return Some(string.sval.as_str());
         }
 
         None
@@ -237,21 +238,19 @@ impl<'a> WhereClause<'a> {
                     AExprKind::AexprOp | AExprKind::AexprIn | AExprKind::AexprOpAny
                 ) {
                     let op = Self::string(expr.name.first());
-                    if let Some(op) = op {
-                        if op != "=" {
+                    if let Some(op) = op
+                        && op != "=" {
                             return keys;
                         }
-                    }
                 }
                 let array = matches!(kind, AExprKind::AexprOpAny);
-                if let Some(ref left) = expr.lexpr {
-                    if let Some(ref right) = expr.rexpr {
+                if let Some(ref left) = expr.lexpr
+                    && let Some(ref right) = expr.rexpr {
                         let left = Self::parse(source, left, array);
                         let right = Self::parse(source, right, array);
 
                         keys.push(Output::Filter(left, right));
                     }
-                }
             }
 
             Some(NodeEnum::AConst(ref value)) => {

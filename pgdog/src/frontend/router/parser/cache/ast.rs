@@ -106,14 +106,14 @@ impl Ast {
         let mut stats = Stats::new();
         stats.parse_time += elapsed;
 
-        if let Some(threshold) = schema.log_min_duration_parse {
-            if elapsed >= threshold {
-                warn!(
-                    "[slow_query_parse] parse_time_in_ms={}ms truncated_query=\"{}\"",
-                    elapsed.as_millis(),
-                    query.truncated_query(schema.log_query_sample_length),
-                );
-            }
+        if let Some(threshold) = schema.log_min_duration_parse
+            && elapsed >= threshold
+        {
+            warn!(
+                "[slow_query_parse] parse_time_in_ms={}ms truncated_query=\"{}\"",
+                elapsed.as_millis(),
+                query.truncated_query(schema.log_query_sample_length),
+            );
         }
 
         Ok(Self {
@@ -203,10 +203,10 @@ impl Ast {
 
                 NodeRef::DropStmt(stmt) if stmt.remove_type() == ObjectType::ObjectTable => {
                     for object in &stmt.objects {
-                        if let Some(NodeEnum::List(ref list)) = object.node {
-                            if let Ok(table) = Table::try_from(list) {
-                                tables.insert(table);
-                            }
+                        if let Some(NodeEnum::List(ref list)) = object.node
+                            && let Ok(table) = Table::try_from(list)
+                        {
+                            tables.insert(table);
                         }
                     }
                 }

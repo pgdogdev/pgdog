@@ -42,10 +42,10 @@ impl Deref for ShardedSchemas {
 
 impl ShardedSchemas {
     pub fn get<'a>(&self, schema: Option<Schema<'a>>) -> Option<&ShardedSchema> {
-        if let Some(schema) = schema {
-            if let Some(schema) = self.inner.schemas.get(schema.name) {
-                return Some(schema);
-            }
+        if let Some(schema) = schema
+            && let Some(schema) = self.inner.schemas.get(schema.name)
+        {
+            return Some(schema);
         }
 
         self.inner.default_mapping.as_ref()

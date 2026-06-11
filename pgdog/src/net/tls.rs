@@ -103,13 +103,11 @@ pub(crate) fn identity_from_certs(certs: &[CertificateDer<'_>]) -> Option<String
         }
     }
 
-    let cn = cert
-        .subject()
+    cert.subject()
         .iter_common_name()
         .next()
         .and_then(|cn| cn.as_str().ok())
-        .map(String::from);
-    cn
+        .map(String::from)
 }
 
 /// Create new TLS connector using the current configuration.
@@ -408,10 +406,10 @@ pub fn connector_with_verify_mode(
 ) -> Result<TlsConnector, Error> {
     let config_key = ConnectorConfigKey::new(mode, ca_cert_path);
 
-    if let Some(entry) = CONNECTOR.load_full() {
-        if entry.key == config_key {
-            return Ok(entry.connector());
-        }
+    if let Some(entry) = CONNECTOR.load_full()
+        && entry.key == config_key
+    {
+        return Ok(entry.connector());
     }
 
     let client_config = build_connector(&config_key)?;

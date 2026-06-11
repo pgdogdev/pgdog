@@ -28,10 +28,10 @@ impl Command for Healthcheck {
         for database in databases().all().values() {
             for shard in database.shards() {
                 for pool in shard.pools() {
-                    if let Some(id) = self.id {
-                        if id != pool.id() {
-                            continue;
-                        }
+                    if let Some(id) = self.id
+                        && id != pool.id()
+                    {
+                        continue;
                     }
 
                     let _ = Monitor::healthcheck(&pool).await;

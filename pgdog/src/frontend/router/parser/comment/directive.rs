@@ -29,40 +29,40 @@ pub(super) fn shard_role_from_comment(
 ) -> Result<(Option<Shard>, Option<Role>), Error> {
     let mut role = None;
 
-    if let Some(cap) = ROLE.captures(comment) {
-        if let Some(r) = cap.get(1) {
-            match r.as_str() {
-                "primary" => role = Some(Role::Primary),
-                "replica" => role = Some(Role::Replica),
-                _ => return Err(Error::RegexError),
-            }
+    if let Some(cap) = ROLE.captures(comment)
+        && let Some(r) = cap.get(1)
+    {
+        match r.as_str() {
+            "primary" => role = Some(Role::Primary),
+            "replica" => role = Some(Role::Replica),
+            _ => return Err(Error::RegexError),
         }
     }
-    if let Some(cap) = SHARDING_KEY.captures(comment) {
-        if let Some(sharding_key) = get_matched_value(&cap) {
-            if let Some(schema) = schema.schemas.get(Some(sharding_key.into())) {
-                return Ok((Some(schema.shard().into()), role));
-            }
-            let ctx = ContextBuilder::infer_from_from_and_config(sharding_key, schema)?
-                .shards(schema.shards)
-                .build()?;
-            return Ok((Some(ctx.apply()?), role));
+    if let Some(cap) = SHARDING_KEY.captures(comment)
+        && let Some(sharding_key) = get_matched_value(&cap)
+    {
+        if let Some(schema) = schema.schemas.get(Some(sharding_key.into())) {
+            return Ok((Some(schema.shard().into()), role));
         }
+        let ctx = ContextBuilder::infer_from_from_and_config(sharding_key, schema)?
+            .shards(schema.shards)
+            .build()?;
+        return Ok((Some(ctx.apply()?), role));
     }
-    if let Some(cap) = SHARD.captures(comment) {
-        if let Some(shard) = cap.get(1) {
-            return Ok((
-                Some(
-                    shard
-                        .as_str()
-                        .parse::<usize>()
-                        .ok()
-                        .map(Shard::Direct)
-                        .unwrap_or(Shard::All),
-                ),
-                role,
-            ));
-        }
+    if let Some(cap) = SHARD.captures(comment)
+        && let Some(shard) = cap.get(1)
+    {
+        return Ok((
+            Some(
+                shard
+                    .as_str()
+                    .parse::<usize>()
+                    .ok()
+                    .map(Shard::Direct)
+                    .unwrap_or(Shard::All),
+            ),
+            role,
+        ));
     }
 
     Ok((None, role))

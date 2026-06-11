@@ -1344,10 +1344,10 @@ impl General {
 
     /// Get TLS config, if any.
     pub fn tls(&self) -> Option<(&PathBuf, &PathBuf)> {
-        if let Some(cert) = &self.tls_certificate {
-            if let Some(key) = &self.tls_private_key {
-                return Some((cert, key));
-            }
+        if let Some(cert) = &self.tls_certificate
+            && let Some(key) = &self.tls_private_key
+        {
+            return Some((cert, key));
         }
 
         None

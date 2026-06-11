@@ -130,15 +130,15 @@ impl QueryEngine {
         };
         let has_more_messages = self.backend.has_more_messages();
 
-        if let Some(bytes) = payload {
-            if let Some(state) = self.pending_explain.as_mut() {
-                match RowDescription::from_bytes(bytes) {
-                    Ok(row_description) => {
-                        state.capture_row_description(row_description);
-                    }
-                    _ => {
-                        state.annotated = true;
-                    }
+        if let Some(bytes) = payload
+            && let Some(state) = self.pending_explain.as_mut()
+        {
+            match RowDescription::from_bytes(bytes) {
+                Ok(row_description) => {
+                    state.capture_row_description(row_description);
+                }
+                _ => {
+                    state.annotated = true;
                 }
             }
         }

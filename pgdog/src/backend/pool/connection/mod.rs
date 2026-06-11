@@ -162,10 +162,10 @@ impl Connection {
             let mut shards = vec![];
             let mut shard_indices = vec![];
             for (i, shard) in self.cluster()?.shards().iter().enumerate() {
-                if let Shard::Multi(numbers) = route.shard() {
-                    if !numbers.contains(&i) {
-                        continue;
-                    }
+                if let Shard::Multi(numbers) = route.shard()
+                    && !numbers.contains(&i)
+                {
+                    continue;
                 };
                 let mut server = if route.is_read() {
                     shard.replica(request).await?
@@ -325,14 +325,14 @@ impl Connection {
             // server. The injection has to follow the same route as the
             // request itself; sending it to extra shards would leave them
             // with a dangling Ignore expectation that hangs the read loop.
-            if let Some(ref parse) = client_request.last_parse {
-                if client_request.needs_parse_injection() {
-                    self.send_ignore(
-                        &ProtocolMessage::Parse(parse.clone()),
-                        client_request.route(),
-                    )
-                    .await?;
-                }
+            if let Some(ref parse) = client_request.last_parse
+                && client_request.needs_parse_injection()
+            {
+                self.send_ignore(
+                    &ProtocolMessage::Parse(parse.clone()),
+                    client_request.route(),
+                )
+                .await?;
             }
 
             // Send query to server.
@@ -366,27 +366,28 @@ impl Connection {
         // only load databases from the config. RELOAD effectively removes all passthrough
         // connection pools until a client needs to query it and we re-create it.
         //
-        if config.config.general.passthrough_auth() && databases().passwords(user).is_none() {
-            if let Some(ref cluster) = self.cluster {
-                let mut user = User {
-                    name: self.user.clone(),
-                    database: self.database.clone(),
-                    ..Default::default()
-                };
-                for pass in cluster.passwords() {
-                    match pass {
-                        PasswordKind::Hashed(hashed) => {
-                            user.password_hash = Some(hashed.clone());
-                        }
+        if config.config.general.passthrough_auth()
+            && databases().passwords(user).is_none()
+            && let Some(ref cluster) = self.cluster
+        {
+            let mut user = User {
+                name: self.user.clone(),
+                database: self.database.clone(),
+                ..Default::default()
+            };
+            for pass in cluster.passwords() {
+                match pass {
+                    PasswordKind::Hashed(hashed) => {
+                        user.password_hash = Some(hashed.clone());
+                    }
 
-                        PasswordKind::Plain(plain) => {
-                            user.passwords.push(plain.clone());
-                        }
+                    PasswordKind::Plain(plain) => {
+                        user.passwords.push(plain.clone());
                     }
                 }
-
-                databases::add(user)?;
             }
+
+            databases::add(user)?;
         }
 
         let databases = databases();

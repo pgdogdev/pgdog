@@ -277,49 +277,43 @@ impl QueryParser {
                     }
 
                     NodeEnum::AExpr(expr) => {
-                        if expr.kind() == AExprKind::AexprOp {
-                            if let Some(node) = expr.name.first() {
-                                if let Some(NodeEnum::String(String { sval })) = &node.node {
-                                    match sval.as_str() {
-                                        "<->" => {
-                                            let mut vector: Option<Vector> = None;
-                                            let mut column: Option<std::string::String> = None;
+                        if expr.kind() == AExprKind::AexprOp
+                            && let Some(node) = expr.name.first()
+                            && let Some(NodeEnum::String(String { sval })) = &node.node
+                        {
+                            match sval.as_str() {
+                                "<->" => {
+                                    let mut vector: Option<Vector> = None;
+                                    let mut column: Option<std::string::String> = None;
 
-                                            for e in
-                                                [&expr.lexpr, &expr.rexpr].iter().copied().flatten()
-                                            {
-                                                if let Ok(vec) = Value::try_from(&e.node) {
-                                                    match vec {
-                                                        Value::Placeholder(p) => {
-                                                            if let Some(bind) = params {
-                                                                if let Ok(Some(param)) =
-                                                                    bind.parameter((p - 1) as usize)
-                                                                {
-                                                                    vector = param.vector();
-                                                                }
-                                                            }
-                                                        }
-                                                        Value::Vector(vec) => vector = Some(vec),
-                                                        _ => (),
+                                    for e in [&expr.lexpr, &expr.rexpr].iter().copied().flatten() {
+                                        if let Ok(vec) = Value::try_from(&e.node) {
+                                            match vec {
+                                                Value::Placeholder(p) => {
+                                                    if let Some(bind) = params
+                                                        && let Ok(Some(param)) =
+                                                            bind.parameter((p - 1) as usize)
+                                                    {
+                                                        vector = param.vector();
                                                     }
                                                 }
-
-                                                if let Ok(col) = Column::try_from(&e.node) {
-                                                    column = Some(col.name.to_owned());
-                                                }
-                                            }
-
-                                            if let Some(vector) = vector {
-                                                if let Some(column) = column {
-                                                    order_by.push(OrderBy::AscVectorL2Column(
-                                                        column, vector,
-                                                    ));
-                                                }
+                                                Value::Vector(vec) => vector = Some(vec),
+                                                _ => (),
                                             }
                                         }
-                                        _ => continue,
+
+                                        if let Ok(col) = Column::try_from(&e.node) {
+                                            column = Some(col.name.to_owned());
+                                        }
+                                    }
+
+                                    if let Some(vector) = vector
+                                        && let Some(column) = column
+                                    {
+                                        order_by.push(OrderBy::AscVectorL2Column(column, vector));
                                     }
                                 }
+                                _ => continue,
                             }
                         }
                     }
@@ -349,14 +343,13 @@ impl QueryParser {
         // nested inside a WITH clause still routes to the primary.
         if let Some(ref with_clause) = stmt.with_clause {
             for cte in &with_clause.ctes {
-                if let Some(NodeEnum::CommonTableExpr(ref expr)) = cte.node {
-                    if let Some(ref query) = expr.ctequery {
-                        if let Some(NodeEnum::SelectStmt(ref inner)) = query.node {
-                            let behavior = Self::functions(inner)?;
-                            if behavior.writes {
-                                return Ok(behavior);
-                            }
-                        }
+                if let Some(NodeEnum::CommonTableExpr(ref expr)) = cte.node
+                    && let Some(ref query) = expr.ctequery
+                    && let Some(NodeEnum::SelectStmt(ref inner)) = query.node
+                {
+                    let behavior = Self::functions(inner)?;
+                    if behavior.writes {
+                        return Ok(behavior);
                     }
                 }
             }
@@ -374,14 +367,12 @@ impl QueryParser {
 
         if let Some(ref with_clause) = stmt.with_clause {
             for cte in &with_clause.ctes {
-                if let Some(NodeEnum::CommonTableExpr(ref expr)) = cte.node {
-                    if let Some(ref query) = expr.ctequery {
-                        if let Some(NodeEnum::SelectStmt(ref inner)) = query.node {
-                            if Self::has_locking_clause(inner) {
-                                return true;
-                            }
-                        }
-                    }
+                if let Some(NodeEnum::CommonTableExpr(ref expr)) = cte.node
+                    && let Some(ref query) = expr.ctequery
+                    && let Some(NodeEnum::SelectStmt(ref inner)) = query.node
+                    && Self::has_locking_clause(inner)
+                {
+                    return true;
                 }
             }
         }
@@ -398,20 +389,19 @@ impl QueryParser {
     fn cte_writes(stmt: &SelectStmt) -> bool {
         if let Some(ref with_clause) = stmt.with_clause {
             for cte in &with_clause.ctes {
-                if let Some(NodeEnum::CommonTableExpr(ref expr)) = cte.node {
-                    if let Some(ref query) = expr.ctequery {
-                        if let Some(ref node) = query.node {
-                            match node {
-                                NodeEnum::SelectStmt(stmt) => {
-                                    if Self::cte_writes(stmt) {
-                                        return true;
-                                    }
-                                }
-
-                                _ => {
-                                    return true;
-                                }
+                if let Some(NodeEnum::CommonTableExpr(ref expr)) = cte.node
+                    && let Some(ref query) = expr.ctequery
+                    && let Some(ref node) = query.node
+                {
+                    match node {
+                        NodeEnum::SelectStmt(stmt) => {
+                            if Self::cte_writes(stmt) {
+                                return true;
                             }
+                        }
+
+                        _ => {
+                            return true;
                         }
                     }
                 }

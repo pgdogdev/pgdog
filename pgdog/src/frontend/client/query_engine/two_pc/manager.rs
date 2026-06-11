@@ -303,10 +303,10 @@ impl Manager {
 
     async fn remove(&self, transaction: &TwoPcTransaction) {
         self.inner.lock().transactions.remove(transaction);
-        if let Some(wal) = self.wal.load_full() {
-            if let Err(err) = wal.append_end(*transaction).await {
-                warn!("[2pc] wal end record failed for {}: {}", transaction, err);
-            }
+        if let Some(wal) = self.wal.load_full()
+            && let Err(err) = wal.append_end(*transaction).await
+        {
+            warn!("[2pc] wal end record failed for {}: {}", transaction, err);
         }
     }
 

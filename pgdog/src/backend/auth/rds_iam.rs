@@ -31,10 +31,10 @@ fn infer_region_from_rds_host(host: &str) -> Option<String> {
 }
 
 fn resolve_region(addr: &Address) -> Result<String, Error> {
-    if let Some(region) = addr.server_iam_region.as_ref() {
-        if !region.is_empty() {
-            return Ok(region.clone());
-        }
+    if let Some(region) = addr.server_iam_region.as_ref()
+        && !region.is_empty()
+    {
+        return Ok(region.clone());
     }
 
     infer_region_from_rds_host(&addr.host).ok_or_else(|| {

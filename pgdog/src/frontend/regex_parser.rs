@@ -67,14 +67,14 @@ impl RegexParser {
         let session_control =
             self.level == QueryParserLevel::SessionControl || self.level == QueryParserLevel::Auto;
 
-        if with_locks || session_control {
-            if let Ok(Some(query)) = request.query() {
-                let prefix = scan_prefix(query.query(), self.limit);
-                if with_locks {
-                    return CMD_RE_ADVISORY.is_match(prefix);
-                } else {
-                    return CMD_RE.is_match(prefix);
-                }
+        if (with_locks || session_control)
+            && let Ok(Some(query)) = request.query()
+        {
+            let prefix = scan_prefix(query.query(), self.limit);
+            if with_locks {
+                return CMD_RE_ADVISORY.is_match(prefix);
+            } else {
+                return CMD_RE.is_match(prefix);
             }
         }
 

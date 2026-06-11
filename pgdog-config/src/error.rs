@@ -53,12 +53,11 @@ impl Error {
         let mut lines = lines.into_iter().peekable();
 
         while let Some(line) = lines.next() {
-            if span.start < line.1 {
-                if let Some(next) = lines.peek() {
-                    if next.1 > span.start {
-                        return Self::MissingField(message.into(), line.0);
-                    }
-                }
+            if span.start < line.1
+                && let Some(next) = lines.peek()
+                && next.1 > span.start
+            {
+                return Self::MissingField(message.into(), line.0);
             }
         }
 

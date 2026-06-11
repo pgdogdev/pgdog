@@ -133,31 +133,30 @@ impl CopyParser {
                 if let Some(NodeEnum::DefElem(ref elem)) = option.node {
                     match elem.defname.to_lowercase().as_str() {
                         "format" => {
-                            if let Some(ref arg) = elem.arg {
-                                if let Some(NodeEnum::String(ref string)) = arg.node {
-                                    match string.sval.to_lowercase().as_str() {
-                                        "binary" => {
-                                            parser.headers = true;
-                                            format = CopyFormat::Binary;
-                                        }
-                                        "csv" => {
-                                            if parser.delimiter.is_none() {
-                                                parser.delimiter = Some(',');
-                                            }
-                                            format = CopyFormat::Csv;
-                                        }
-                                        _ => (),
+                            if let Some(ref arg) = elem.arg
+                                && let Some(NodeEnum::String(ref string)) = arg.node
+                            {
+                                match string.sval.to_lowercase().as_str() {
+                                    "binary" => {
+                                        parser.headers = true;
+                                        format = CopyFormat::Binary;
                                     }
+                                    "csv" => {
+                                        if parser.delimiter.is_none() {
+                                            parser.delimiter = Some(',');
+                                        }
+                                        format = CopyFormat::Csv;
+                                    }
+                                    _ => (),
                                 }
                             }
                         }
 
                         "delimiter" => {
-                            if let Some(ref arg) = elem.arg {
-                                if let Some(NodeEnum::String(ref string)) = arg.node {
-                                    parser.delimiter =
-                                        Some(string.sval.chars().next().unwrap_or(','));
-                                }
+                            if let Some(ref arg) = elem.arg
+                                && let Some(NodeEnum::String(ref string)) = arg.node
+                            {
+                                parser.delimiter = Some(string.sval.chars().next().unwrap_or(','));
                             }
                         }
 
@@ -166,10 +165,10 @@ impl CopyParser {
                         }
 
                         "null" => {
-                            if let Some(ref arg) = elem.arg {
-                                if let Some(NodeEnum::String(ref string)) = arg.node {
-                                    null_string = string.sval.clone();
-                                }
+                            if let Some(ref arg) = elem.arg
+                                && let Some(NodeEnum::String(ref string)) = arg.node
+                            {
+                                null_string = string.sval.clone();
                             }
                         }
 
@@ -259,14 +258,14 @@ impl CopyParser {
                 }
 
                 CopyStream::Binary(stream) => {
-                    if self.headers {
-                        if let Some(header) = stream.header()? {
-                            rows.push(CopyRow::new(
-                                &header.to_bytes(),
-                                self.schema_shard.clone().unwrap_or(Shard::All),
-                            ));
-                            self.headers = false;
-                        }
+                    if self.headers
+                        && let Some(header) = stream.header()?
+                    {
+                        rows.push(CopyRow::new(
+                            &header.to_bytes(),
+                            self.schema_shard.clone().unwrap_or(Shard::All),
+                        ));
+                        self.headers = false;
                     }
 
                     for tuple in stream.tuples() {

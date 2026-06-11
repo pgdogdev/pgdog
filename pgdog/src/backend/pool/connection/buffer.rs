@@ -194,10 +194,10 @@ impl Buffer {
                                 }
 
                                 DistinctColumn::Name(name) => {
-                                    if let Some(index) = decoder.rd().field_index(name) {
-                                        if let Some(data) = row.column(index) {
-                                            dr.add(data);
-                                        }
+                                    if let Some(index) = decoder.rd().field_index(name)
+                                        && let Some(data) = row.column(index)
+                                    {
+                                        dr.add(data);
                                     }
                                 }
                             }

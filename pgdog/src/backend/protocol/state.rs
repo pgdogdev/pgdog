@@ -136,13 +136,12 @@ impl ProtocolState {
     pub fn get_simulated(&mut self) -> Option<Message> {
         let code = self.queue.front();
         let message = self.simulated.front();
-        if let Some(ExecutionItem::Code(code)) = code {
-            if let Some(message) = message {
-                if code == &ExecutionCode::from(message.code()) {
-                    let _ = self.queue.pop_front();
-                    return self.simulated.pop_front();
-                }
-            }
+        if let Some(ExecutionItem::Code(code)) = code
+            && let Some(message) = message
+            && code == &ExecutionCode::from(message.code())
+        {
+            let _ = self.queue.pop_front();
+            return self.simulated.pop_front();
         }
         None
     }

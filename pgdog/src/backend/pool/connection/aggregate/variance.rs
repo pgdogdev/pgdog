@@ -114,7 +114,7 @@ fn compute_variance(sumsq: Decimal, sum: Decimal, count: i64, sample: bool, sqrt
     let count = Decimal::from(count);
     let mut result = (sumsq - sum * sum / count) / count;
     if sample {
-        result = result * (count / (count - dec!(1)));
+        result *= (count / (count - dec!(1)));
     }
     if sqrt {
         result = result.sqrt().unwrap_or(Decimal::ZERO);

@@ -330,10 +330,10 @@ impl ClientRequest {
                 // it if we haven't already. We also don't want to send requests
                 // that contain Flush only since they will get stuck.
                 'H' => {
-                    if let Some(last_message) = current_request.last() {
-                        if last_message.code() != 'H' {
-                            current_request.push(message.clone());
-                        }
+                    if let Some(last_message) = current_request.last()
+                        && last_message.code() != 'H'
+                    {
+                        current_request.push(message.clone());
                     }
                 }
 

@@ -77,12 +77,11 @@ impl QueryParser {
             return;
         }
 
-        if let Some(root) = ast.protobuf.stmts.first() {
-            if let Some(node) = root.stmt.as_ref().and_then(|stmt| stmt.node.as_ref()) {
-                if matches!(node, NodeEnum::ExplainStmt(_)) {
-                    self.explain_recorder = Some(ExplainRecorder::new());
-                }
-            }
+        if let Some(root) = ast.protobuf.stmts.first()
+            && let Some(node) = root.stmt.as_ref().and_then(|stmt| stmt.node.as_ref())
+            && matches!(node, NodeEnum::ExplainStmt(_))
+        {
+            self.explain_recorder = Some(ExplainRecorder::new());
         }
     }
 
@@ -254,10 +253,10 @@ impl QueryParser {
         let stmts = &statement.parse_result().protobuf.stmts;
 
         // Handle multi-statement SET commands (e.g. "SET x TO 1; SET y TO 2").
-        if stmts.len() > 1 {
-            if let Some(command) = self.try_multi_set(stmts, context)? {
-                return Ok(command);
-            }
+        if stmts.len() > 1
+            && let Some(command) = self.try_multi_set(stmts, context)?
+        {
+            return Ok(command);
         }
 
         //
@@ -350,24 +349,24 @@ impl QueryParser {
         }?;
 
         // e.g. Parse, Describe, Flush-style flow.
-        if !context.router_context.executable {
-            if let Command::Query(ref query) = command {
-                if query.is_cross_shard() && statement.rewrite_plan.insert_split.is_empty() {
-                    context
-                        .shards_calculator
-                        .push(ShardWithPriority::new_rr_not_executable(Shard::Direct(
-                            round_robin::next() % context.shards,
-                        )));
+        if !context.router_context.executable
+            && let Command::Query(ref query) = command
+            && query.is_cross_shard()
+            && statement.rewrite_plan.insert_split.is_empty()
+        {
+            context
+                .shards_calculator
+                .push(ShardWithPriority::new_rr_not_executable(Shard::Direct(
+                    round_robin::next() % context.shards,
+                )));
 
-                    // Since this query isn't executable and we decided
-                    // to route it to any shard, we can early return here.
-                    return Ok(Command::Query(
-                        query
-                            .clone()
-                            .with_shard(context.shards_calculator.shard().clone()),
-                    ));
-                }
-            }
+            // Since this query isn't executable and we decided
+            // to route it to any shard, we can early return here.
+            return Ok(Command::Query(
+                query
+                    .clone()
+                    .with_shard(context.shards_calculator.shard().clone()),
+            ));
         }
 
         // Run plugins, if any.
@@ -409,15 +408,16 @@ impl QueryParser {
         // there is no point of doing a multi-shard query with only one shard
         // in the set.
         //
-        if context.shards == 1 && !context.dry_run {
-            if let Command::Query(ref mut route) = command {
-                context
-                    .shards_calculator
-                    .push(ShardWithPriority::new_override_only_one_shard(
-                        Shard::Direct(0),
-                    ));
-                route.set_shard_mut(context.shards_calculator.shard());
-            }
+        if context.shards == 1
+            && !context.dry_run
+            && let Command::Query(ref mut route) = command
+        {
+            context
+                .shards_calculator
+                .push(ShardWithPriority::new_override_only_one_shard(
+                    Shard::Direct(0),
+                ));
+            route.set_shard_mut(context.shards_calculator.shard());
         }
 
         if let Command::Query(ref mut route) = command {
@@ -478,21 +478,21 @@ impl QueryParser {
         // phase of data-sync.
         //
         let table = stmt.relation.as_ref().map(Table::from);
-        if let Some(table) = table {
-            if let Some(schema) = context.sharding_schema.schemas.get(table.schema()) {
-                let shard: Shard = schema.shard().into();
-                context
-                    .shards_calculator
-                    .push(ShardWithPriority::new_table(shard));
-                if !stmt.is_from {
-                    return Ok(Command::Query(Route::read(
-                        context.shards_calculator.shard(),
-                    )));
-                } else {
-                    return Ok(Command::Query(Route::write(
-                        context.shards_calculator.shard(),
-                    )));
-                }
+        if let Some(table) = table
+            && let Some(schema) = context.sharding_schema.schemas.get(table.schema())
+        {
+            let shard: Shard = schema.shard().into();
+            context
+                .shards_calculator
+                .push(ShardWithPriority::new_table(shard));
+            if !stmt.is_from {
+                return Ok(Command::Query(Route::read(
+                    context.shards_calculator.shard(),
+                )));
+            } else {
+                return Ok(Command::Query(Route::write(
+                    context.shards_calculator.shard(),
+                )));
             }
         }
 

@@ -120,14 +120,13 @@ impl QueryParser {
                 },
                 // e.g. SET TIME ZONE INTERVAL '+00:00' HOUR TO MINUTE
                 Some(NodeEnum::TypeCast(tc)) => {
-                    if let Some(ref arg) = tc.arg {
-                        if let Some(NodeEnum::AConst(AConst {
+                    if let Some(ref arg) = tc.arg
+                        && let Some(NodeEnum::AConst(AConst {
                             val: Some(Val::Sval(String { ref sval })),
                             ..
                         })) = arg.node
-                        {
-                            value.push(sval.to_string());
-                        }
+                    {
+                        value.push(sval.to_string());
                     }
                 }
                 _ => (),
