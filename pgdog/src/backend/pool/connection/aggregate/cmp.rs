@@ -33,7 +33,7 @@ impl Cmp {
         } else if !value.is_null() {
             match self.value.partial_cmp(&value) {
                 Some(ord) if ord == self.ordering => {
-                    let _: () = self.value = value;
+                    self.value = value;
                     Ok(())
                 }
                 Some(_) => Ok(()),
