@@ -168,6 +168,9 @@ impl Orchestrator {
     }
 
     /// Perform the entire flow in one swoop.
+    #[deprecated(note = "phase orchestration now lives in the migration tasks (see \
+                `crate::api::resharding::ReshardTask`); drive the individual \
+                steps directly. Remove once the remaining callers migrate.")]
     pub(crate) async fn replicate_and_cutover(&mut self) -> Result<(), Error> {
         // Load the schema from source.
         self.load_schema().await?;

@@ -16,29 +16,50 @@ use tokio_util::sync::CancellationToken;
 
 #[derive(Copy, Clone, Debug, Display, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct AsyncTaskId(u64);
-pub trait TaskInfoStatus: Display + Debug + Send + Sync + 'static {
-    fn task_name() -> &'static str;
+
+impl From<u64> for AsyncTaskId {
+    fn from(id: u64) -> Self {
+        Self(id)
+    }
+}
+
+/// Status type for tasks that report no intermediate progress.
+///
+/// [`Infallible`](std::convert::Infallible) is uninhabited, so a task
+/// with this status type can never call
+/// [`set_status`](AsyncTaskContext::set_status).
+pub type Empty = std::convert::Infallible;
+
+/// A composable background task: a value carrying its own arguments,
+/// driven to completion by [`run`](Task::run). Launch it top-level with
+/// [`AsyncTasksStorage::run`], or nested under a running task with
+/// [`AsyncTaskContext::run`].
+pub trait Task: Display + Debug + Send + Sync + Sized + 'static {
+    /// Progress-status payload reported through
+    /// [`set_status`](AsyncTaskContext::set_status) while the task
+    /// runs; the [`Empty`] type reports no intermediate progress.
+    type Status: Display + Send + Sync + 'static;
+    /// Value the task resolves to on success.
+    type Output: Send + 'static;
+    /// Error the task may fail with.
+    type Error: std::error::Error + Send + 'static;
 
     /// Grace period for cooperative shutdown after cancellation;
     /// once it expires, the task is force-aborted.
     fn cancel_timeout() -> Duration {
         Duration::from_secs(5)
     }
-}
 
-#[derive(Display, Debug)]
-pub struct AnonymousTask;
-
-impl TaskInfoStatus for AnonymousTask {
-    fn task_name() -> &'static str {
-        "anonymous"
-    }
+    fn run(
+        self,
+        ctx: AsyncTaskContext<Self>,
+    ) -> impl Future<Output = Result<Self::Output, Self::Error>> + Send + 'static;
 }
 
 #[derive(Display, Debug, Clone)]
-pub enum TaskStatus<T> {
+pub enum TaskStatus<S = Empty> {
     Started,
-    Pending(T),
+    Pending(S),
     Finished,
     Cancelled,
     Error(String),
@@ -49,7 +70,7 @@ pub enum TaskStatus<T> {
 /// readable through the registry without knowing `T`.
 #[derive(Debug, Clone)]
 pub struct TaskState {
-    pub name: &'static str,
+    pub name: String,
     pub status: TaskStatus<String>,
     pub started_at: SystemTime,
     pub updated_at: SystemTime,
@@ -72,7 +93,7 @@ pub enum TaskError<E> {
     Abandoned,
 }
 
-impl<T> TaskStatus<T> {
+impl<S> TaskStatus<S> {
     /// Terminal states are write-once; late writers
     /// (e.g. ctx clones outliving the task) are ignored.
     fn is_terminal(&self) -> bool {
@@ -85,7 +106,7 @@ impl<T> TaskStatus<T> {
     /// Snapshot for the registry: keep the variant, render `T`.
     fn stringify(&self) -> TaskStatus<String>
     where
-        T: Display,
+        S: Display,
     {
         match self {
             Self::Started => TaskStatus::Started,
@@ -95,16 +116,6 @@ impl<T> TaskStatus<T> {
             Self::Error(err) => TaskStatus::Error(err.clone()),
             Self::Panic(msg) => TaskStatus::Panic(msg.clone()),
         }
-    }
-}
-
-impl TaskState {
-    /// Reached a terminal state more than `ttl` ago?
-    fn expired(&self, now: SystemTime, ttl: Duration) -> bool {
-        self.status.is_terminal()
-            && now
-                .duration_since(self.updated_at)
-                .is_ok_and(|age| age >= ttl)
     }
 }
 
@@ -126,12 +137,12 @@ impl TasksMap {
     }
 }
 
-struct AsyncTaskState<T> {
+struct AsyncTaskState<S = Empty> {
     updated_at: SystemTime,
-    status: TaskStatus<T>,
+    status: TaskStatus<S>,
 }
 
-impl<T> AsyncTaskState<T> {
+impl<S> AsyncTaskState<S> {
     fn new() -> Self {
         Self {
             updated_at: SystemTime::now(),
@@ -140,14 +151,15 @@ impl<T> AsyncTaskState<T> {
     }
 }
 
-struct AsyncTask<T> {
+struct AsyncTask<T: Task> {
     started_at: SystemTime,
+    name: String,
     cancellation_token: CancellationToken,
     /// Set once the task asks for its cancellation token: only
     /// then can it react to cancellation, so only then is the
     /// cooperative-shutdown grace period worth waiting out.
     cooperative: AtomicBool,
-    state: Arc<RwLock<AsyncTaskState<T>>>,
+    state: Arc<RwLock<AsyncTaskState<T::Status>>>,
     subtasks: Arc<TasksMap>,
 }
 
@@ -155,9 +167,12 @@ trait TaskMapEntry: Send + Sync + 'static {
     fn cancel(&self);
     fn state(&self) -> TaskState;
     fn subtasks(&self) -> &TasksMap;
+    /// Cheap expiry check for pruning: terminal and older than `ttl`,
+    /// without building a full [`TaskState`].
+    fn expired(&self, now: SystemTime, ttl: Duration) -> bool;
 }
 
-impl<T: TaskInfoStatus> TaskMapEntry for AsyncTask<T> {
+impl<T: Task> TaskMapEntry for AsyncTask<T> {
     fn cancel(&self) {
         self.cancellation_token.cancel();
     }
@@ -166,7 +181,7 @@ impl<T: TaskInfoStatus> TaskMapEntry for AsyncTask<T> {
         let state = self.state.read();
 
         TaskState {
-            name: T::task_name(),
+            name: self.name.clone(),
             status: state.status.stringify(),
             started_at: self.started_at,
             updated_at: state.updated_at,
@@ -176,13 +191,21 @@ impl<T: TaskInfoStatus> TaskMapEntry for AsyncTask<T> {
     fn subtasks(&self) -> &TasksMap {
         &self.subtasks
     }
+
+    fn expired(&self, now: SystemTime, ttl: Duration) -> bool {
+        let state = self.state.read();
+        state.status.is_terminal()
+            && now
+                .duration_since(state.updated_at)
+                .is_ok_and(|age| age >= ttl)
+    }
 }
 
-pub struct AsyncTaskContext<T = AnonymousTask> {
+pub struct AsyncTaskContext<T: Task> {
     task: Arc<AsyncTask<T>>,
 }
 
-impl<T> Clone for AsyncTaskContext<T> {
+impl<T: Task> Clone for AsyncTaskContext<T> {
     fn clone(&self) -> Self {
         Self {
             task: self.task.clone(),
@@ -273,52 +296,46 @@ impl Default for AsyncTasksStorage {
     }
 }
 
-fn run_task<T, T1, F, R, E>(
-    current_task: Option<&Arc<AsyncTask<T>>>,
-    tasks: &TasksMap,
-    execute: impl FnOnce(AsyncTaskContext<T1>) -> F,
-) -> AsyncTaskWaiter<R, E>
-where
-    T: TaskInfoStatus,
-    T1: TaskInfoStatus,
-    F: Future<Output = Result<R, E>> + Send + 'static,
-    R: Send + 'static,
-    E: std::error::Error + Send + 'static,
-{
+fn run_task<T: Task>(
+    parent_token: Option<&CancellationToken>,
+    register_into: &TasksMap,
+    subtasks: Arc<TasksMap>,
+    task: T,
+) -> AsyncTaskWaiter<T::Output, T::Error> {
     let state = Arc::new(RwLock::new(AsyncTaskState::new()));
 
-    let task = AsyncTask {
+    let entry = AsyncTask {
         started_at: SystemTime::now(),
-        cancellation_token: match current_task {
-            Some(current_task) => current_task.cancellation_token.child_token(),
+        name: task.to_string(),
+        cancellation_token: match parent_token {
+            Some(token) => token.child_token(),
             None => CancellationToken::new(),
         },
         cooperative: AtomicBool::new(false),
-        // Subtasks share the root task's registry: every descendant
+        // Descendants share the root task's registry: every descendant
         // registers as a direct child of the root.
-        subtasks: match current_task {
-            Some(current_task) => current_task.subtasks.clone(),
-            None => Arc::new(TasksMap::default()),
-        },
+        subtasks,
         state: state.clone(),
     };
 
-    let task = Arc::new(task);
+    let entry = Arc::new(entry);
     // Make sure we insert task to map before it's actually started
-    let id = tasks.insert_next(task.clone());
+    let id = register_into.insert_next(entry.clone());
 
-    let ctx = AsyncTaskContext { task: task.clone() };
+    let ctx = AsyncTaskContext {
+        task: entry.clone(),
+    };
 
-    let mut handle = tokio::spawn(execute(ctx.clone()));
+    let mut handle = tokio::spawn(task.run(ctx.clone()));
     let (sender, receiver) = oneshot::channel();
 
-    let cancellation_token = task.cancellation_token.clone();
+    let cancellation_token = entry.cancellation_token.clone();
 
     tokio::spawn(async move {
         let res = select! {
             _ = cancellation_token.cancelled() => {
                 if ctx.task.cooperative.load(Ordering::Relaxed) {
-                    match timeout(T1::cancel_timeout(), &mut handle).await {
+                    match timeout(T::cancel_timeout(), &mut handle).await {
                         Ok(res) => res,
                         Err(_) => {
                             handle.abort();
@@ -365,8 +382,8 @@ where
     }
 }
 
-impl<T: TaskInfoStatus> AsyncTaskContext<T> {
-    fn set_inner_status(&self, status: TaskStatus<T>) {
+impl<T: Task> AsyncTaskContext<T> {
+    fn set_inner_status(&self, status: TaskStatus<T::Status>) {
         let mut state = self.task.state.write();
         if state.status.is_terminal() {
             return;
@@ -375,13 +392,13 @@ impl<T: TaskInfoStatus> AsyncTaskContext<T> {
         state.updated_at = SystemTime::now();
     }
 
-    pub fn set_status(&self, status: T) {
+    pub fn set_status(&self, status: T::Status) {
         self.set_inner_status(TaskStatus::Pending(status));
     }
 
     /// Hand out this task's cancellation token. Taking the token
     /// opts the task into cooperative shutdown: on `cancel_task`
-    /// it gets [`TaskInfoStatus::cancel_timeout`] to wind down
+    /// it gets [`Task::cancel_timeout`] to wind down
     /// before being aborted. Tasks that never take it are aborted
     /// immediately. Take it early.
     pub fn cancellation_token(&self) -> CancellationToken {
@@ -390,17 +407,13 @@ impl<T: TaskInfoStatus> AsyncTaskContext<T> {
         self.task.cancellation_token.clone()
     }
 
-    pub fn run<T1, F, R, E>(
-        &self,
-        execute: impl FnOnce(AsyncTaskContext<T1>) -> F,
-    ) -> AsyncTaskWaiter<R, E>
-    where
-        T1: TaskInfoStatus,
-        F: Future<Output = Result<R, E>> + Send + 'static,
-        R: Send + 'static,
-        E: std::error::Error + Send + 'static,
-    {
-        run_task(Some(&self.task), &self.task.subtasks, execute)
+    pub fn run<T1: Task>(&self, task: T1) -> AsyncTaskWaiter<T1::Output, T1::Error> {
+        run_task(
+            Some(&self.task.cancellation_token),
+            &self.task.subtasks,
+            self.task.subtasks.clone(),
+            task,
+        )
     }
 }
 
@@ -412,19 +425,10 @@ impl AsyncTasksStorage {
         }
     }
 
-    pub fn run<T, F, R, E>(
-        &self,
-        execute: impl FnOnce(AsyncTaskContext<T>) -> F,
-    ) -> AsyncTaskWaiter<R, E>
-    where
-        T: TaskInfoStatus,
-        F: Future<Output = Result<R, E>> + Send + 'static,
-        R: Send + 'static,
-        E: std::error::Error + Send + 'static,
-    {
+    pub fn run<T: Task>(&self, task: T) -> AsyncTaskWaiter<T::Output, T::Error> {
         self.prune();
 
-        run_task(Option::<&Arc<AsyncTask<T>>>::None, &self.tasks, execute)
+        run_task(None, &self.tasks, Arc::new(TasksMap::default()), task)
     }
 
     /// Request cancellation of a task. The task winds down
@@ -449,9 +453,9 @@ impl AsyncTasksStorage {
             entry
                 .subtasks()
                 .map
-                .retain(|_, sub| !sub.state().expired(now, self.retention));
+                .retain(|_, sub| !sub.expired(now, self.retention));
 
-            !entry.state().expired(now, self.retention)
+            !entry.expired(now, self.retention)
         });
     }
 
@@ -491,50 +495,320 @@ mod tests {
     use tokio::time::sleep;
     use tokio::{join, test};
 
+    type State = Arc<Mutex<&'static str>>;
+
     #[derive(Display, Debug)]
-    enum TestTask {
+    enum TestTaskStatus {
+        #[display("StepOne")]
         StepOne,
+        #[display("StepTwo")]
         StepTwo,
     }
 
-    impl TaskInfoStatus for TestTask {
-        fn task_name() -> &'static str {
-            "test_task"
+    /// Sets "started", waits on `notify`, then "finished" and succeeds.
+    #[derive(Display, Debug)]
+    #[display("mock")]
+    struct MockSuccessful {
+        state: State,
+        notify: Arc<Notify>,
+    }
+
+    impl Task for MockSuccessful {
+        type Status = Empty;
+        type Output = ();
+        type Error = Infallible;
+
+        async fn run(self, _ctx: AsyncTaskContext<Self>) -> Result<(), Infallible> {
+            *self.state.lock() = "started";
+            self.notify.notified().await;
+            *self.state.lock() = "finished";
+            Ok(())
+        }
+    }
+
+    /// Sets "started", waits on `notify`, then "failed" and errors.
+    #[derive(Display, Debug)]
+    #[display("mock")]
+    struct MockFailing {
+        state: State,
+        notify: Arc<Notify>,
+    }
+
+    impl Task for MockFailing {
+        type Status = Empty;
+        type Output = ();
+        type Error = std::io::Error;
+
+        async fn run(self, _ctx: AsyncTaskContext<Self>) -> Result<(), std::io::Error> {
+            *self.state.lock() = "started";
+            self.notify.notified().await;
+            *self.state.lock() = "failed";
+            Err(std::io::Error::other("mock task failure"))
         }
     }
 
     macro_rules! mock_successful {
-        ($state_id:ident, $notify:ident) => {{
-            let state = $state_id.clone();
-            let notify = $notify.clone();
-
-            async move |_ctx: AsyncTaskContext| {
-                *state.lock() = "started";
-
-                notify.notified().await;
-
-                *state.lock() = "finished";
-
-                Ok::<_, Infallible>(())
+        ($state:ident, $notify:ident) => {
+            MockSuccessful {
+                state: $state.clone(),
+                notify: $notify.clone(),
             }
-        }};
+        };
     }
 
     macro_rules! mock_failing {
-        ($state_id:ident, $notify:ident) => {{
-            let state = $state_id.clone();
-            let notify = $notify.clone();
-
-            async move |_ctx: AsyncTaskContext| {
-                *state.lock() = "started";
-
-                notify.notified().await;
-
-                *state.lock() = "failed";
-
-                Err::<(), _>(std::io::Error::other("mock task failure"))
+        ($state:ident, $notify:ident) => {
+            MockFailing {
+                state: $state.clone(),
+                notify: $notify.clone(),
             }
-        }};
+        };
+    }
+
+    /// Waits on its gate, then succeeds. Never takes its cancellation
+    /// token, so it is aborted (not wound down) on cancellation.
+    #[derive(Display, Debug)]
+    #[display("anonymous")]
+    struct Gate {
+        gate: Arc<Notify>,
+    }
+
+    impl Task for Gate {
+        type Status = Empty;
+        type Output = ();
+        type Error = Infallible;
+
+        async fn run(self, _ctx: AsyncTaskContext<Self>) -> Result<(), Infallible> {
+            self.gate.notified().await;
+            Ok(())
+        }
+    }
+
+    /// Immediately succeeds.
+    #[derive(Display, Debug)]
+    #[display("noop")]
+    struct Noop;
+
+    impl Task for Noop {
+        type Status = Empty;
+        type Output = ();
+        type Error = Infallible;
+
+        async fn run(self, _ctx: AsyncTaskContext<Self>) -> Result<(), Infallible> {
+            Ok(())
+        }
+    }
+
+    /// Runs two children concurrently and joins them, then finishes.
+    #[derive(Display, Debug)]
+    #[display("inner")]
+    struct InnerJoin {
+        state: State,
+        a: MockSuccessful,
+        b: MockSuccessful,
+    }
+
+    impl Task for InnerJoin {
+        type Status = Empty;
+        type Output = ();
+        type Error = Infallible;
+
+        async fn run(self, ctx: AsyncTaskContext<Self>) -> Result<(), Infallible> {
+            *self.state.lock() = "started";
+
+            let (a, b) = join!(ctx.run(self.a), ctx.run(self.b));
+            a.unwrap();
+            b.unwrap();
+
+            *self.state.lock() = "finished";
+
+            Ok(())
+        }
+    }
+
+    /// Runs two children concurrently, then waits on `notify`.
+    #[derive(Display, Debug)]
+    #[display("inner")]
+    struct InnerCancel {
+        state: State,
+        notify: Arc<Notify>,
+        a: MockSuccessful,
+        b: MockSuccessful,
+    }
+
+    impl Task for InnerCancel {
+        type Status = Empty;
+        type Output = ();
+        type Error = Infallible;
+
+        async fn run(self, ctx: AsyncTaskContext<Self>) -> Result<(), Infallible> {
+            *self.state.lock() = "started";
+
+            let _ = join!(ctx.run(self.a), ctx.run(self.b));
+
+            self.notify.notified().await;
+
+            *self.state.lock() = "finished";
+
+            Ok(())
+        }
+    }
+
+    /// Runs a failing child and asserts it failed.
+    #[derive(Display, Debug)]
+    #[display("inner")]
+    struct InnerError {
+        state: State,
+        a: MockFailing,
+    }
+
+    impl Task for InnerError {
+        type Status = Empty;
+        type Output = ();
+        type Error = Infallible;
+
+        async fn run(self, ctx: AsyncTaskContext<Self>) -> Result<(), Infallible> {
+            *self.state.lock() = "started";
+
+            let res = ctx.run(self.a).await;
+            assert!(matches!(res, Err(TaskError::Failed(_))));
+
+            *self.state.lock() = "inner_failed";
+
+            Ok(())
+        }
+    }
+
+    /// Takes its cancellation token and winds down gracefully within
+    /// the grace window, then succeeds with a value.
+    #[derive(Display, Debug)]
+    #[display("graceful")]
+    struct Graceful {
+        state: State,
+    }
+
+    impl Task for Graceful {
+        type Status = Empty;
+        type Output = i32;
+        type Error = Infallible;
+
+        async fn run(self, ctx: AsyncTaskContext<Self>) -> Result<i32, Infallible> {
+            *self.state.lock() = "started";
+
+            ctx.cancellation_token().cancelled().await;
+
+            // Cooperative wind-down, well within the 5s grace window.
+            sleep(Duration::from_secs(1)).await;
+
+            *self.state.lock() = "graceful";
+
+            Ok(42)
+        }
+    }
+
+    /// Panics after being notified, if still in the "started" state.
+    #[derive(Display, Debug)]
+    #[display("panicker")]
+    struct Panicker {
+        state: State,
+        notify: Arc<Notify>,
+    }
+
+    impl Task for Panicker {
+        type Status = Empty;
+        type Output = ();
+        type Error = Infallible;
+
+        async fn run(self, _ctx: AsyncTaskContext<Self>) -> Result<(), Infallible> {
+            *self.state.lock() = "started";
+
+            self.notify.notified().await;
+
+            if *self.state.lock() == "started" {
+                panic!("panicking task");
+            }
+
+            Ok(())
+        }
+    }
+
+    /// Subtask that spawns a grandchild gate (registered with the root)
+    /// and waits for it.
+    #[derive(Display, Debug)]
+    #[display("anonymous")]
+    struct Sub {
+        sub_gate: Arc<Notify>,
+    }
+
+    impl Task for Sub {
+        type Status = Empty;
+        type Output = ();
+        type Error = Infallible;
+
+        async fn run(self, ctx: AsyncTaskContext<Self>) -> Result<(), Infallible> {
+            ctx.run(Gate {
+                gate: self.sub_gate,
+            })
+            .await
+            .unwrap();
+
+            Ok(())
+        }
+    }
+
+    /// Root task that reports `TestTaskStatus`, runs a subtask, then
+    /// advances its status and waits.
+    #[derive(Display, Debug)]
+    #[display("test_task")]
+    struct TraverseRoot {
+        sub_gate: Arc<Notify>,
+        parent_gate: Arc<Notify>,
+    }
+
+    impl Task for TraverseRoot {
+        type Status = TestTaskStatus;
+        type Output = ();
+        type Error = Infallible;
+
+        async fn run(self, ctx: AsyncTaskContext<Self>) -> Result<(), Infallible> {
+            ctx.set_status(TestTaskStatus::StepOne);
+
+            let sub = ctx.run(Sub {
+                sub_gate: self.sub_gate,
+            });
+
+            sub.await.unwrap();
+
+            ctx.set_status(TestTaskStatus::StepTwo);
+
+            self.parent_gate.notified().await;
+
+            Ok(())
+        }
+    }
+
+    /// Takes its cancellation token (opting into the grace period) but
+    /// ignores it, with an overridden 30s grace period.
+    #[derive(Display, Debug)]
+    #[display("slow_exit")]
+    struct SlowExit {
+        notify: Arc<Notify>,
+    }
+
+    impl Task for SlowExit {
+        type Status = Empty;
+        type Output = ();
+        type Error = Infallible;
+
+        fn cancel_timeout() -> Duration {
+            Duration::from_secs(30)
+        }
+
+        async fn run(self, ctx: AsyncTaskContext<Self>) -> Result<(), Infallible> {
+            let _token = ctx.cancellation_token();
+            self.notify.notified().await;
+            Ok(())
+        }
     }
 
     /// Spawned tasks are only guaranteed to be polled after the
@@ -617,22 +891,10 @@ mod tests {
         let state_a = Arc::new(Mutex::new("initial"));
         let state_b = Arc::new(Mutex::new("initial"));
         let state_c = Arc::new(Mutex::new("initial"));
-        let a = mock_successful!(state_a, notify);
-        let b = mock_successful!(state_b, notify);
-        let c = {
-            let state = state_c.clone();
-
-            async move |ctx: AsyncTaskContext| {
-                *state.lock() = "started";
-
-                let (a, b) = join!(ctx.run(a), ctx.run(b));
-                a.unwrap();
-                b.unwrap();
-
-                *state.lock() = "finished";
-
-                Ok::<_, Infallible>(())
-            }
+        let c = InnerJoin {
+            state: state_c.clone(),
+            a: mock_successful!(state_a, notify),
+            b: mock_successful!(state_b, notify),
         };
 
         let async_storage = AsyncTasksStorage::default();
@@ -680,24 +942,12 @@ mod tests {
         let snapshot = async_storage.task(task_id).unwrap();
         assert!(matches!(snapshot.state.status, TaskStatus::Cancelled));
     }
+
     #[test(start_paused = true)]
     async fn test_graceful_exit_during_cancel_grace() {
         let state = Arc::new(Mutex::new("initial"));
-        let a = {
-            let state = state.clone();
-
-            async move |ctx: AsyncTaskContext| {
-                *state.lock() = "started";
-
-                ctx.cancellation_token().cancelled().await;
-
-                // Cooperative wind-down, well within the 5s grace window.
-                sleep(Duration::from_secs(1)).await;
-
-                *state.lock() = "graceful";
-
-                Ok::<_, Infallible>(42)
-            }
+        let a = Graceful {
+            state: state.clone(),
         };
 
         let async_storage = AsyncTasksStorage::default();
@@ -725,23 +975,11 @@ mod tests {
         let state_a = Arc::new(Mutex::new("initial"));
         let state_b = Arc::new(Mutex::new("initial"));
         let state_c = Arc::new(Mutex::new("initial"));
-        let a = mock_successful!(state_a, notify);
-        let b = mock_successful!(state_b, notify);
-        let c = {
-            let state = state_c.clone();
-            let notify = notify.clone();
-
-            async move |ctx: AsyncTaskContext| {
-                *state.lock() = "started";
-
-                let _ = join!(ctx.run(a), ctx.run(b));
-
-                notify.notified().await;
-
-                *state.lock() = "finished";
-
-                Ok::<_, Infallible>(())
-            }
+        let c = InnerCancel {
+            state: state_c.clone(),
+            notify: notify.clone(),
+            a: mock_successful!(state_a, notify),
+            b: mock_successful!(state_b, notify),
         };
 
         let async_storage = AsyncTasksStorage::default();
@@ -795,20 +1033,9 @@ mod tests {
         let notify = Arc::new(Notify::new());
         let state_a = Arc::new(Mutex::new("initial"));
         let state_c = Arc::new(Mutex::new("initial"));
-        let a = mock_failing!(state_a, notify);
-        let c = {
-            let state = state_c.clone();
-
-            async move |ctx: AsyncTaskContext| {
-                *state.lock() = "started";
-
-                let res = ctx.run(a).await;
-                assert!(matches!(res, Err(TaskError::Failed(_))));
-
-                *state.lock() = "inner_failed";
-
-                Ok::<_, Infallible>(())
-            }
+        let c = InnerError {
+            state: state_c.clone(),
+            a: mock_failing!(state_a, notify),
         };
 
         let async_storage = AsyncTasksStorage::default();
@@ -832,21 +1059,9 @@ mod tests {
     async fn test_panic() {
         let notify = Arc::new(Notify::new());
         let state_a = Arc::new(Mutex::new("initial"));
-        let a = {
-            let state = state_a.clone();
-            let notify = notify.clone();
-
-            async move |_ctx: AsyncTaskContext| {
-                *state.lock() = "started";
-
-                notify.notified().await;
-
-                if *state.lock() == "started" {
-                    panic!("panicking task");
-                }
-
-                Ok::<_, Infallible>(())
-            }
+        let a = Panicker {
+            state: state_a.clone(),
+            notify: notify.clone(),
         };
 
         let async_storage = AsyncTasksStorage::default();
@@ -876,37 +1091,9 @@ mod tests {
 
         let async_storage = AsyncTasksStorage::default();
 
-        let task = async_storage.run({
-            let sub_gate = sub_gate.clone();
-            let parent_gate = parent_gate.clone();
-
-            async move |ctx: AsyncTaskContext<TestTask>| {
-                ctx.set_status(TestTask::StepOne);
-
-                let sub = ctx.run({
-                    let sub_gate = sub_gate.clone();
-
-                    async move |ctx: AsyncTaskContext| {
-                        // Grandchild: registers with the root task.
-                        ctx.run(async move |_ctx: AsyncTaskContext| {
-                            sub_gate.notified().await;
-                            Ok::<_, Infallible>(())
-                        })
-                        .await
-                        .unwrap();
-
-                        Ok::<_, Infallible>(())
-                    }
-                });
-
-                sub.await.unwrap();
-
-                ctx.set_status(TestTask::StepTwo);
-
-                parent_gate.notified().await;
-
-                Ok::<_, Infallible>(())
-            }
+        let task = async_storage.run(TraverseRoot {
+            sub_gate: sub_gate.clone(),
+            parent_gate: parent_gate.clone(),
         });
 
         let id = task.id();
@@ -993,34 +1180,12 @@ mod tests {
 
     #[test(start_paused = true)]
     async fn test_cancel_timeout_override() {
-        #[derive(Display, Debug)]
-        struct SlowExitTask;
-
-        impl TaskInfoStatus for SlowExitTask {
-            fn task_name() -> &'static str {
-                "slow_exit"
-            }
-
-            fn cancel_timeout() -> Duration {
-                Duration::from_secs(30)
-            }
-        }
-
         let notify = Arc::new(Notify::new());
 
         let async_storage = AsyncTasksStorage::default();
 
-        let task = async_storage.run({
-            let notify = notify.clone();
-
-            // Takes its cancellation token (opting into the grace
-            // period) but ignores it: only the forced abort after
-            // the grace period can stop it.
-            async move |ctx: AsyncTaskContext<SlowExitTask>| {
-                let _token = ctx.cancellation_token();
-                notify.notified().await;
-                Ok::<_, Infallible>(())
-            }
+        let task = async_storage.run(SlowExit {
+            notify: notify.clone(),
         });
 
         settle().await;
@@ -1043,14 +1208,9 @@ mod tests {
 
         let async_storage = AsyncTasksStorage::default();
 
-        let task = async_storage.run({
-            let notify = notify.clone();
-
-            // Never takes the cancellation token: no grace period.
-            async move |_ctx: AsyncTaskContext| {
-                notify.notified().await;
-                Ok::<_, Infallible>(())
-            }
+        // `Gate` never takes the cancellation token: no grace period.
+        let task = async_storage.run(Gate {
+            gate: notify.clone(),
         });
 
         settle().await;
@@ -1064,5 +1224,13 @@ mod tests {
 
         // Aborted right away: the paused clock did not advance.
         assert_eq!(started.elapsed(), Duration::ZERO);
+    }
+
+    #[test]
+    async fn global_storage_runs_and_lists() {
+        let waiter = crate::api::storage().run(Noop);
+        let id = waiter.id();
+        waiter.await.unwrap();
+        assert!(crate::api::storage().task(id).is_some());
     }
 }

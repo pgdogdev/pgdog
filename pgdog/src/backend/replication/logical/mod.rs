@@ -1,5 +1,6 @@
 pub mod admin;
 pub mod copy_statement;
+pub mod cutover_signal;
 pub mod ee;
 pub mod error;
 pub mod orchestrator;
