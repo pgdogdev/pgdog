@@ -21,7 +21,7 @@ fn test_set_comment() {
     ]);
 
     assert!(
-        matches!(command.clone(), Command::Set { ref params, ref route, ..} if params.len() == 1 && params[0].name == "statement_timeout" && !params[0].local && params[0].value == ParameterValue::String("1".into()) && route.shard().is_direct()),
+        matches!(command.clone(), Command::Set { ref params, ref route, ..} if params.len() == 1 && params[0].name == "statement_timeout" && !params[0].local && params[0].value == Some(ParameterValue::String("1".into())) && route.shard().is_direct()),
         "expected Command::Set, got {:#?}",
         command,
     );
@@ -39,10 +39,10 @@ fn test_set_multi_statement() {
         Command::Set { ref params, .. } => {
             assert_eq!(params.len(), 2);
             assert_eq!(params[0].name, "statement_timeout");
-            assert_eq!(params[0].value, ParameterValue::String("1".into()));
+            assert_eq!(params[0].value, Some(ParameterValue::String("1".into())));
             assert!(!params[0].local);
             assert_eq!(params[1].name, "work_mem");
-            assert_eq!(params[1].value, ParameterValue::String("64MB".into()));
+            assert_eq!(params[1].value, Some(ParameterValue::String("64MB".into())));
             assert!(!params[1].local);
         }
         _ => panic!("expected Command::Set, got {command:#?}"),
@@ -103,9 +103,15 @@ fn test_set_multi_statement_with_timezone_interval() {
         Command::Set { ref params, .. } => {
             assert_eq!(params.len(), 2);
             assert_eq!(params[0].name, "client_min_messages");
-            assert_eq!(params[0].value, ParameterValue::String("warning".into()));
+            assert_eq!(
+                params[0].value,
+                Some(ParameterValue::String("warning".into()))
+            );
             assert_eq!(params[1].name, "timezone");
-            assert_eq!(params[1].value, ParameterValue::String("+00:00".into()));
+            assert_eq!(
+                params[1].value,
+                Some(ParameterValue::String("+00:00".into()))
+            );
         }
         _ => panic!("expected Command::Set, got {command:#?}"),
     }
@@ -151,7 +157,7 @@ fn test_reset() {
         Command::Set { params, .. } => {
             assert_eq!(params.len(), 1);
             assert_eq!(params[0].name, "statement_timeout");
-            assert!(params[0].reset);
+            assert_eq!(params[0].value, None);
         }
         _ => panic!("expected Command::Set, got {command:#?}"),
     }
