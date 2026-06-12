@@ -383,6 +383,10 @@ impl Monitor {
 
     async fn stats(pool: Pool) {
         let duration = pool.config().stats_period;
+        if duration.is_zero() {
+            return;
+        }
+
         let mut tick = interval(duration);
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         tick.tick().await;
