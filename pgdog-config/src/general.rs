@@ -1,3 +1,4 @@
+use derive_more::FromStr;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::env;
@@ -53,6 +54,19 @@ impl FromStr for LogFormat {
             _ => Err(()),
         }
     }
+}
+
+/// Action to take when a client query message exceeds `query_size_limit`.
+#[derive(
+    Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Eq, Hash, Default, JsonSchema, FromStr,
+)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub enum QuerySizeLimitAction {
+    /// Log a warning with a sample of the query (default).
+    #[default]
+    Warn,
+    /// Reject the message before reading it into memory and disconnect the client.
+    Block,
 }
 
 /// General settings are relevant to the operations of the pooler itself, or apply to all database pools.
@@ -286,6 +300,23 @@ pub struct General {
     /// _Default:_ `1000`
     #[serde(default = "General::log_query_sample_length")]
     pub log_query_sample_length: usize,
+
+    /// Maximum size, in bytes, of a query message (`Query` or `Parse`)
+    /// received from a client, including the 5-byte message header.
+    /// Protects the query parser from very large SQL texts; other
+    /// protocol messages (e.g. `Bind`, `CopyData`) are not affected.
+    /// Depending on the setting `query_size_limit_action` oversized messages are
+    /// either logged or blocked.
+    ///
+    /// _Default:_ `None` (disabled)
+    #[serde(default = "General::default_query_size_limit")]
+    pub query_size_limit: Option<usize>,
+
+    /// Action to take when a client query message exceeds `query_size_limit`.
+    ///
+    /// _Default:_ `warn`
+    #[serde(default = "General::query_size_limit_action")]
+    pub query_size_limit_action: QuerySizeLimitAction,
 
     /// The port used for the OpenMetrics HTTP endpoint.
     ///
@@ -808,6 +839,8 @@ impl Default for General {
             query_log_stdout: Self::query_log_stdout(),
             log_min_duration_parse: Self::default_log_min_duration_parse(),
             log_query_sample_length: Self::log_query_sample_length(),
+            query_size_limit: Self::default_query_size_limit(),
+            query_size_limit_action: Self::query_size_limit_action(),
             openmetrics_port: Self::openmetrics_port(),
             openmetrics_namespace: Self::openmetrics_namespace(),
             prepared_statements: Self::prepared_statements(),
@@ -1210,6 +1243,14 @@ impl General {
         Self::env_or_default("PGDOG_LOG_QUERY_SAMPLE_LENGTH", 1000)
     }
 
+    fn default_query_size_limit() -> Option<usize> {
+        Self::env_option("PGDOG_QUERY_SIZE_LIMIT")
+    }
+
+    fn query_size_limit_action() -> QuerySizeLimitAction {
+        Self::env_enum_or_default("PGDOG_QUERY_SIZE_LIMIT_ACTION")
+    }
+
     pub fn openmetrics_port() -> Option<u16> {
         Self::env_option("PGDOG_OPENMETRICS_PORT")
     }
@@ -1369,12 +1410,80 @@ impl General {
     pub fn pub_sub_enabled(&self) -> bool {
         self.pub_sub_channel_size > 0
     }
+
+    /// The message size limit used to block client messages
+    pub fn frontend_query_size_limit_block(&self) -> Option<usize> {
+        if self.query_size_limit_action == QuerySizeLimitAction::Block {
+            self.query_size_limit
+        } else {
+            None
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::test_utils::*;
+
+    #[test]
+    fn test_frontend_query_size_limit_block() {
+        let mut g = General::default();
+
+        // Disabled: no limit set, action irrelevant.
+        assert_eq!(g.frontend_query_size_limit_block(), None);
+
+        // Limit set but action is warn (default): method returns None.
+        g.query_size_limit = Some(1_000_000);
+        g.query_size_limit_action = QuerySizeLimitAction::Warn;
+        assert_eq!(g.frontend_query_size_limit_block(), None);
+
+        // Limit set and action is block: method returns the limit.
+        g.query_size_limit = Some(1_000_000);
+        g.query_size_limit_action = QuerySizeLimitAction::Block;
+        assert_eq!(g.frontend_query_size_limit_block(), Some(1_000_000));
+
+        // Action is block but no limit: still None.
+        g.query_size_limit = None;
+        g.query_size_limit_action = QuerySizeLimitAction::Block;
+        assert_eq!(g.frontend_query_size_limit_block(), None);
+    }
+
+    #[test]
+    fn test_env_query_size_limit() {
+        let _guard = set_env_var("PGDOG_QUERY_SIZE_LIMIT", "4096");
+        assert_eq!(General::default_query_size_limit(), Some(4096));
+
+        let _guard = remove_env_var("PGDOG_QUERY_SIZE_LIMIT");
+        assert_eq!(General::default_query_size_limit(), None);
+    }
+
+    #[test]
+    fn test_env_query_size_limit_action() {
+        let _guard = set_env_var("PGDOG_QUERY_SIZE_LIMIT_ACTION", "Block");
+        assert_eq!(
+            General::query_size_limit_action(),
+            QuerySizeLimitAction::Block
+        );
+
+        let _guard = set_env_var("PGDOG_QUERY_SIZE_LIMIT_ACTION", "block");
+        assert_eq!(
+            General::query_size_limit_action(),
+            QuerySizeLimitAction::Block
+        );
+
+        let _guard = set_env_var("PGDOG_QUERY_SIZE_LIMIT_ACTION", "BLOCK");
+        assert_eq!(
+            General::query_size_limit_action(),
+            QuerySizeLimitAction::Block
+        );
+
+        let _guard = remove_env_var("PGDOG_QUERY_SIZE_LIMIT_ACTION");
+        assert_eq!(
+            General::query_size_limit_action(),
+            QuerySizeLimitAction::Warn
+        );
+    }
 
     #[test]
     fn test_env_workers() {

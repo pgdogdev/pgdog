@@ -3292,6 +3292,7 @@ dependencies = [
 name = "pgdog-config"
 version = "0.1.0"
 dependencies = [
+ "derive_more",
  "once_cell",
  "pgdog-vector",
  "rand 0.10.1",

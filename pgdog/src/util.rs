@@ -266,6 +266,28 @@ pub fn raise_nofile_limit() -> u64 {
     0
 }
 
+/// Truncate `s` to at most `limit` bytes, walking back to the nearest UTF-8
+/// character boundary so the result is always valid UTF-8.
+pub fn truncate_utf8(s: &str, limit: usize) -> &str {
+    if s.len() <= limit {
+        s
+    } else {
+        let mut end = limit;
+        while !s.is_char_boundary(end) {
+            end -= 1;
+        }
+        &s[..end]
+    }
+}
+
+/// Sanitize a query sample for one-line log output: truncate to at most
+/// `limit` bytes on a UTF-8 character boundary and replace control
+/// characters (including newlines) with spaces so attacker-controlled
+/// bytes can't forge or flood log lines.
+pub fn sanitize_log_sample(s: &str, limit: usize) -> String {
+    truncate_utf8(s, limit).replace(|c: char| c.is_control(), " ")
+}
+
 #[cfg(test)]
 mod test {
 
@@ -424,5 +446,44 @@ mod test {
         assert!(!constant_time_eq(b"", b"x"));
         // Two empty slices are equal.
         assert!(constant_time_eq(b"", b""));
+    }
+
+    #[test]
+    fn test_truncate_utf8_ascii() {
+        assert_eq!(truncate_utf8("SELECT 1", 4096), "SELECT 1"); // under limit
+        assert_eq!(truncate_utf8("SELECT 1", 6), "SELECT"); // truncated
+    }
+
+    #[test]
+    fn test_truncate_utf8_multibyte() {
+        // Mix of 2-byte (é), 3-byte (€), and 4-byte (𝄞) characters.
+        let s = "é€𝄞é€𝄞"; // 2+3+4+2+3+4 = 18 bytes
+
+        // Every possible byte limit produces valid UTF-8.
+        for limit in 0..=s.len() {
+            assert!(std::str::from_utf8(truncate_utf8(s, limit).as_bytes()).is_ok());
+        }
+
+        assert_eq!(truncate_utf8(s, 0), ""); // empty
+        assert_eq!(truncate_utf8(s, 2), "é"); // exact: end of é
+        assert_eq!(truncate_utf8(s, 3), "é"); // 1 byte into € → walk back
+        assert_eq!(truncate_utf8(s, 5), "é€"); // exact: end of €
+        assert_eq!(truncate_utf8(s, 6), "é€"); // 1 byte into 𝄞 → walk back
+        assert_eq!(truncate_utf8(s, 9), "é€𝄞"); // exact: end of 𝄞
+    }
+
+    #[test]
+    fn test_sanitize_log_sample() {
+        // Truncates to the limit on a char boundary.
+        assert_eq!(sanitize_log_sample("SELECT 1", 6), "SELECT");
+
+        // Newlines, carriage returns, tabs, and escape sequences become spaces.
+        assert_eq!(
+            sanitize_log_sample("SELECT\r\n1\t--\x1b[31mforged\x1b[0m", 4096),
+            "SELECT  1 -- [31mforged [0m"
+        );
+
+        // Truncation happens before sanitization: limit applies to input bytes.
+        assert_eq!(sanitize_log_sample("a\nb\nc", 3), "a b");
     }
 }

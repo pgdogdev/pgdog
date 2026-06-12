@@ -15,6 +15,7 @@ rand = "*"
 pgdog-vector = { path = "../pgdog-vector" }
 once_cell = "*"
 schemars.workspace = true
+derive_more = { version = "2", features = ["from_str"] }
 
 [dev-dependencies]
 tempfile = "3.23.0"
