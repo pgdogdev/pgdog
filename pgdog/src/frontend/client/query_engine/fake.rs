@@ -21,7 +21,8 @@ impl QueryEngine {
             .clone()
             .into_iter()
             .flatten()
-            .map(|_| Field::text(""))
+            // FIXME(sage): Don't assume `set_config` is the only consumer
+            .map(|_| Field::text("set_config"))
             .collect::<Vec<_>>();
         let row_description = RowDescription::new(&return_fields);
         let data_row = return_value.map(|return_value| {
