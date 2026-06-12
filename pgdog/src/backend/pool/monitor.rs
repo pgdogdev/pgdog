@@ -383,11 +383,18 @@ impl Monitor {
 
     async fn stats(pool: Pool) {
         let duration = pool.config().stats_period;
+        if duration.is_zero() {
+            return;
+        }
+
+        let mut tick = interval(duration);
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        tick.tick().await;
         let comms = pool.comms();
 
         loop {
             select! {
-                _ = sleep(duration) => {
+                _ = tick.tick() => {
                     {
                         let mut lock = pool.lock();
                         lock.stats.calc_averages(duration);
