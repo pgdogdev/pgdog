@@ -3,6 +3,10 @@ use crate::{
     frontend::{
         ClientRequest, Command, Router, RouterContext,
         client::query_engine::{QueryEngine, QueryEngineContext},
+        router::{
+            Route,
+            parser::route::{Shard, ShardWithPriority},
+        },
     },
     net::Protocol,
 };
@@ -30,6 +34,27 @@ impl<'a> InsertMulti<'a> {
         }
     }
 
+    /// If every split routes to the same `Shard::Direct(n)`, return that shard
+    /// number. Returns `None` when the splits span multiple shards or contain
+    /// any non-direct routing.
+    fn uniform_shard(&self) -> Option<usize> {
+        let first = match self.requests.first()?.route.as_ref()?.shard() {
+            Shard::Direct(n) => *n,
+            _ => return None,
+        };
+
+        self.requests
+            .iter()
+            .skip(1)
+            .all(|req| {
+                matches!(
+                    req.route.as_ref().map(|r| r.shard()),
+                    Some(Shard::Direct(n)) if *n == first
+                )
+            })
+            .then_some(first)
+    }
+
     /// Execute the multi-shard INSERT.
     pub(crate) async fn execute(
         &'a mut self,
@@ -51,6 +76,27 @@ impl<'a> InsertMulti<'a> {
             } else {
                 return Err(Error::NoRoute);
             }
+        }
+
+        // All tuples map to the same shard: send the original multi-row INSERT
+        // as a single statement, skipping the multi-step path entirely.
+        if let Some(shard_n) = self.uniform_shard() {
+            context.client_request.route = Some(Route::write(ShardWithPriority::new_table(
+                Shard::Direct(shard_n),
+            )));
+            self.engine
+                .backend
+                .handle_client_request(
+                    context.client_request,
+                    &mut self.engine.router,
+                    self.engine.streaming,
+                )
+                .await?;
+            while self.engine.backend.has_more_messages() {
+                let message = self.engine.read_server_message().await?;
+                self.engine.process_server_message(context, message).await?;
+            }
+            return Ok(false);
         }
 
         if !self.engine.backend.is_multishard() {
