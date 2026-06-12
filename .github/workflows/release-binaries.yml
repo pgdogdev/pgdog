@@ -3,12 +3,19 @@ on:
   release:
     types: [published]
   workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to attach binaries to (e.g. v0.1.44)
+        required: true
 
 jobs:
   build:
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: write
+    env:
+      # release event supplies the tag; manual runs use the typed input
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
     strategy:
       fail-fast: false
       matrix:
@@ -35,7 +42,7 @@ jobs:
       - name: Package tarball
         run: |
           BIN=pgdog
-          DIR="${BIN}-${{ github.event.release.tag_name }}-${{ matrix.target }}"
+          DIR="${BIN}-${TAG}-${{ matrix.target }}"
           mkdir "$DIR"
           cp "target/${{ matrix.target }}/release/${BIN}" "$DIR/"
           cp README.md LICENSE "$DIR/" 2>/dev/null || true
@@ -62,5 +69,5 @@ jobs:
         # nullglob: the macOS leg produces no .deb, so let those globs vanish
         run: |
           shopt -s nullglob
-          gh release upload "${{ github.event.release.tag_name }}" \
+          gh release upload "$TAG" \
             *.tar.gz *.tar.gz.sha256 *.deb *.deb.sha256 --clobber
