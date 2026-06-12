@@ -307,10 +307,8 @@ impl Connection {
                 .map_err(|e| Error::Router(e.to_string()))?;
             if !rows.is_empty() {
                 self.send_copy(rows).await?;
-                self.send(&client_request.without_copy_data()).await?;
-            } else {
-                self.send(client_request).await?;
             }
+            self.send(&client_request.without_copy_data()).await?;
         } else {
             // We split up the extended protocol exhange as soon as we see
             // a Flush or Sync that doesn't actually execute anything. This

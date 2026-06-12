@@ -6,6 +6,7 @@ pub mod ban;
 pub mod cancel;
 pub mod client_ids;
 pub mod connection_recovery;
+pub mod copy;
 pub mod cross_shard_disabled;
 pub mod distinct;
 pub mod explain;
