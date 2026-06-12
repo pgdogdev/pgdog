@@ -91,6 +91,8 @@ pub struct Client {
     database: String,
     /// Log queries to stdout.
     query_log_stdout: bool,
+    /// Maximum query message size before a warning is logged.
+    query_size_limit: Option<usize>,
 }
 
 impl Client {
@@ -381,10 +383,14 @@ impl Client {
             transaction: None,
             timeouts: Timeouts::from_config(&config.config.general),
             client_request: ClientRequest::default(),
-            stream_buffer: MessageBuffer::new(config.config.memory.message_buffer),
+            stream_buffer: MessageBuffer::new(
+                config.config.memory.message_buffer,
+                config.config.general.frontend_query_size_limit_block(),
+            ),
             sticky: Sticky::from_params(&params),
             database: database.to_string(),
             query_log_stdout: false,
+            query_size_limit: None,
         }))
     }
 
@@ -413,11 +419,15 @@ impl Client {
             transaction: None,
             timeouts: Timeouts::from_config(&config().config.general),
             client_request: ClientRequest::default(),
-            stream_buffer: MessageBuffer::new(4096),
+            stream_buffer: MessageBuffer::new(
+                4096,
+                config().config.general.frontend_query_size_limit_block(),
+            ),
             sticky: Sticky::from_params(&connect_params),
             params: connect_params,
             database: "pgdog".to_string(),
             query_log_stdout: false,
+            query_size_limit: None,
         }
     }
 
@@ -585,6 +595,9 @@ impl Client {
         self.prepared_statements.level = config.prepared_statements();
         self.timeouts = Timeouts::from_config(&config.config.general);
         self.query_log_stdout = config.config.general.query_log_stdout;
+        self.query_size_limit = config.config.general.query_size_limit;
+        self.stream_buffer
+            .set_size_limit_block(config.config.general.frontend_query_size_limit_block());
 
         while !self.client_request.is_complete() {
             let idle_timeout = self
@@ -601,7 +614,12 @@ impl Client {
                     }
 
                     Ok(Ok(message)) => message.stream(self.streaming).frontend(),
-                    Ok(Err(_)) => return Ok(BufferEvent::DisconnectAbrupt),
+                    Ok(Err(err)) => {
+                        if let Some(response) = err.as_fatal_error_response() {
+                            self.stream.fatal(response).await?;
+                        }
+                        return Ok(BufferEvent::DisconnectAbrupt);
+                    }
                 };
 
             if timer.is_none() {

@@ -3,6 +3,7 @@ use pgdog_config::{General, QueryParserLevel};
 use regex::RegexSet;
 
 use crate::frontend::ClientRequest;
+use crate::util::truncate_utf8;
 
 /// Whitespace and inline SQL comments (`-- line` and `/* block */`)
 /// allowed before a statement keyword.
@@ -35,18 +36,6 @@ static CMD_RE_ADVISORY: Lazy<RegexSet> = Lazy::new(|| {
     RegexSet::new(cmd_base_patterns().chain(CMD_ADVISORY.iter().map(|s| s.to_string()))).unwrap()
 });
 
-fn scan_prefix(query: &str, limit: usize) -> &str {
-    if query.len() <= limit {
-        query
-    } else {
-        let mut end = limit;
-        while !query.is_char_boundary(end) {
-            end -= 1;
-        }
-        &query[..end]
-    }
-}
-
 #[derive(Debug, Clone)]
 pub(crate) struct RegexParser {
     limit: usize,
@@ -76,7 +65,7 @@ impl RegexParser {
         if (with_locks || session_control)
             && let Ok(Some(query)) = request.query()
         {
-            let prefix = scan_prefix(query.query(), self.limit);
+            let prefix = truncate_utf8(query.query(), self.limit);
             if with_locks {
                 return CMD_RE_ADVISORY.is_match(prefix);
             } else {

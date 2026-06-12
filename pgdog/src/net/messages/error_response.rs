@@ -255,6 +255,19 @@ impl ErrorResponse {
             ..Default::default()
         }
     }
+
+    pub fn query_too_large(size: usize, limit: usize) -> Self {
+        Self {
+            severity: "FATAL".into(),
+            code: "54000".into(),
+            message: "query size exceeds query_size_limit".into(),
+            detail: Some(format!(
+                "message is {} bytes, query_size_limit is {} bytes",
+                size, limit
+            )),
+            ..Default::default()
+        }
+    }
 }
 
 impl Display for ErrorResponse {

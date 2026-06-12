@@ -89,6 +89,8 @@
         "query_parser": "auto",
         "query_parser_enabled": false,
         "query_parser_engine": "pg_query_protobuf",
+        "query_size_limit": null,
+        "query_size_limit_action": "warn",
         "query_timeout": 9223372036854775807,
         "read_write_split": "include_primary",
         "read_write_strategy": "conservative",
@@ -993,6 +995,21 @@
           "$ref": "#/$defs/QueryParserEngine",
           "default": "pg_query_protobuf"
         },
+        "query_size_limit": {
+          "description": "Maximum size, in bytes, of a query message (`Query` or `Parse`)\nreceived from a client, including the 5-byte message header.\nProtects the query parser from very large SQL texts; other\nprotocol messages (e.g. `Bind`, `CopyData`) are not affected.\nDepending on the setting `query_size_limit_action` oversized messages are\neither logged or blocked.\n\n_Default:_ `None` (disabled)",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "default": null,
+          "minimum": 0
+        },
+        "query_size_limit_action": {
+          "description": "Action to take when a client query message exceeds `query_size_limit`.\n\n_Default:_ `warn`",
+          "$ref": "#/$defs/QuerySizeLimitAction",
+          "default": "warn"
+        },
         "query_timeout": {
           "description": "Maximum amount of time to wait for a Postgres query to finish executing.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#query_timeout",
           "type": "integer",
@@ -1617,6 +1634,21 @@
           "description": "Control & advisory locks.",
           "type": "string",
           "const": "session_control_and_locks"
+        }
+      ]
+    },
+    "QuerySizeLimitAction": {
+      "description": "Action to take when a client query message exceeds `query_size_limit`.",
+      "oneOf": [
+        {
+          "description": "Log a warning with a sample of the query (default).",
+          "type": "string",
+          "const": "warn"
+        },
+        {
+          "description": "Reject the message before reading it into memory and disconnect the client.",
+          "type": "string",
+          "const": "block"
         }
       ]
     },

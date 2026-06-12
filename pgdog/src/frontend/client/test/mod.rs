@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use pgdog_config::PoolerMode;
+use pgdog_config::{PoolerMode, QuerySizeLimitAction};
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
@@ -524,4 +524,74 @@ async fn test_query_timeout() {
     let pools = databases().cluster(("pgdog", "pgdog")).unwrap().shards()[0].pools();
     let state = pools[0].state();
     assert_eq!(state.force_close, 1);
+}
+
+#[tokio::test]
+async fn test_query_size_limit_block() {
+    crate::logger();
+    load_test();
+    let (mut conn, mut client) = parallel_test_client_with_params(Parameters::default()).await;
+
+    let mut c = (*config()).clone();
+    c.config.general.query_size_limit = Some(1024);
+    c.config.general.query_size_limit_action = QuerySizeLimitAction::Block;
+    set(c).unwrap();
+
+    let handle = tokio::spawn(async move { client.run().await.unwrap() });
+
+    // 100 distinct columns — readable in logs, clearly exceeds the 1024-byte limit.
+    let big_query = format!(
+        "SELECT {}",
+        (1..=100)
+            .map(|i| format!("{i} AS col_{i:03}"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    let msg_size = Query::new(&big_query).to_bytes().len();
+    conn.write_all(&Query::new(&big_query).to_bytes())
+        .await
+        .unwrap();
+
+    let err = read_one!(conn);
+    let err = ErrorResponse::from_bytes(err.freeze()).unwrap();
+    assert_eq!(err.severity, "FATAL");
+    assert_eq!(err.code, "54000");
+    assert_eq!(err.message, "query size exceeds query_size_limit");
+    assert_eq!(
+        err.detail,
+        Some(format!(
+            "message is {} bytes, query_size_limit is 1024 bytes",
+            msg_size
+        ))
+    );
+
+    handle.await.unwrap();
+}
+
+#[tokio::test]
+async fn test_query_size_limit_warn() {
+    let (mut conn, mut client, _) = new_client!(false);
+
+    let mut c = (*config()).clone();
+    c.config.general.query_size_limit = Some(1024);
+    c.config.general.query_size_limit_action = QuerySizeLimitAction::Warn;
+    set(c).unwrap();
+
+    let handle = tokio::spawn(async move { client.run().await.unwrap() });
+
+    // 100 distinct columns — readable in logs, exceeds the 1024-byte warn limit.
+    let big_query = format!(
+        "SELECT {}",
+        (1..=100)
+            .map(|i| format!("{i} AS col_{i:03}"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    conn.write_all(&Query::new(&big_query).to_bytes())
+        .await
+        .unwrap();
+    read_messages(&mut conn, &['T', 'D', 'C', 'Z']).await;
+
+    conn.write_all(&Terminate.to_bytes()).await.unwrap();
+    handle.await.unwrap();
 }
