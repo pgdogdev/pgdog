@@ -38,19 +38,21 @@ impl<'a> InsertMulti<'a> {
     /// number. Returns `None` when the splits span multiple shards or contain
     /// any non-direct routing.
     fn uniform_shard(&self) -> Option<usize> {
-        let mut target: Option<usize> = None;
-        for req in &self.requests {
-            let n = match req.route.as_ref()?.shard() {
-                Shard::Direct(n) => *n,
-                _ => return None,
-            };
-            match target {
-                None => target = Some(n),
-                Some(t) if t != n => return None,
-                _ => {}
-            }
-        }
-        target
+        let first = match self.requests.first()?.route.as_ref()?.shard() {
+            Shard::Direct(n) => *n,
+            _ => return None,
+        };
+
+        self.requests
+            .iter()
+            .skip(1)
+            .all(|req| {
+                matches!(
+                    req.route.as_ref().map(|r| r.shard()),
+                    Some(Shard::Direct(n)) if *n == first
+                )
+            })
+            .then_some(first)
     }
 
     /// Execute the multi-shard INSERT.

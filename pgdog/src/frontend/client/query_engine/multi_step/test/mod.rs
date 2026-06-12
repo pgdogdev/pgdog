@@ -5,6 +5,7 @@ use crate::{
     net::{Query, ToBytes},
 };
 
+pub mod insert;
 pub mod prepared;
 pub mod simple;
 pub mod update;
