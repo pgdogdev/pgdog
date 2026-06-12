@@ -31,6 +31,24 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      # Mirrors docker/Dockerfile.base-builder: cmake + clang for aws-lc-sys,
+      # libssl-dev for openssl-sys, mold is the linker pinned in .cargo/config.toml.
+      - name: Install build dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential cmake clang pkg-config libssl-dev mold
+
+      # openssl-sys needs Homebrew OpenSSL; bindgen/clang-sys need libclang from
+      # the (keg-only) llvm formula, found via LIBCLANG_PATH.
+      - name: Install build dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install llvm pkg-config openssl@3
+          echo "OPENSSL_DIR=$(brew --prefix openssl@3)" >> "$GITHUB_ENV"
+          echo "LIBCLANG_PATH=$(brew --prefix llvm)/lib" >> "$GITHUB_ENV"
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
