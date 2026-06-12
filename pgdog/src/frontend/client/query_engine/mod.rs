@@ -228,9 +228,13 @@ impl QueryEngine {
                     .await?
             }
             Command::Unlisten(channel) => self.unlisten(context, &channel.clone()).await?,
-            Command::Set { params, .. } => {
+            Command::Set {
+                params,
+                behave_like_select,
+                ..
+            } => {
                 let params = params.clone();
-                self.set(context, &params).await?;
+                self.set(context, &params, *behave_like_select).await?;
             }
             Command::ResetAll => {
                 self.reset_all(context).await?;

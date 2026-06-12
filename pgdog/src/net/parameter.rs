@@ -11,7 +11,11 @@ use std::{
 
 use once_cell::sync::Lazy;
 
-use crate::{net::ToBytes, stats::memory::MemoryUsage};
+use crate::{
+    net::{ToBytes, ToDataRowColumn},
+    stats::memory::MemoryUsage,
+};
+use pgdog_postgres_types::Data;
 
 use super::{Error, messages::Query};
 
@@ -85,6 +89,22 @@ impl ToBytes for ParameterValue {
         bytes.put_u8(0);
 
         bytes.freeze()
+    }
+}
+
+impl ToDataRowColumn for ParameterValue {
+    fn to_data_row_column(&self) -> Data {
+        match self {
+            Self::String(s) => s.to_data_row_column(),
+            Self::Tuple(_) => self.to_bytes().to_data_row_column(),
+            Self::Integer(i) => i.to_data_row_column(),
+        }
+    }
+}
+
+impl ToDataRowColumn for &'_ ParameterValue {
+    fn to_data_row_column(&self) -> Data {
+        (*self).to_data_row_column()
     }
 }
 

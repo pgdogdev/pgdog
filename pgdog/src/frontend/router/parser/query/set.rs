@@ -21,6 +21,7 @@ impl QueryParser {
             return Ok(Command::Set {
                 params: vec![param],
                 route: Route::write(context.shards_calculator.shard()),
+                behave_like_select: false,
             });
         }
 
@@ -40,17 +41,15 @@ impl QueryParser {
         let value = Self::parse_set_value(stmt)?;
 
         match value {
-            Some(value) => Ok(Some(SetParam {
+            value @ Some(_) => Ok(Some(SetParam {
                 name: stmt.name.to_string(),
                 value,
                 local: stmt.is_local,
-                reset: is_reset,
             })),
             None if is_reset => Ok(Some(SetParam {
                 name: stmt.name.to_string(),
-                value: ParameterValue::String(std::string::String::new()),
+                value: None,
                 local: false,
-                reset: true,
             })),
             None => Ok(None),
         }
@@ -103,6 +102,7 @@ impl QueryParser {
         Ok(Some(Command::Set {
             params,
             route: Route::write(context.shards_calculator.shard()),
+            behave_like_select: false,
         }))
     }
 

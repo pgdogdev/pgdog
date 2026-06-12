@@ -29,6 +29,7 @@ pub mod sequence;
 pub mod statement;
 pub mod table;
 pub mod tuple;
+pub(crate) mod util;
 pub mod value;
 pub mod where_clause;
 

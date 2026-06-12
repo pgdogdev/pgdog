@@ -6,7 +6,10 @@ use crate::{
     config::Role,
     frontend::router::{
         context::RouterContext,
-        parser::{OrderBy, Shard},
+        parser::{
+            OrderBy, Shard,
+            util::{PgStr, pg_str},
+        },
         round_robin,
         sharding::{Centroids, ContextBuilder},
     },
@@ -28,6 +31,7 @@ mod plugins;
 mod schema_sharding;
 mod select;
 mod set;
+mod set_config;
 mod shared;
 mod show;
 mod transaction;
@@ -284,6 +288,14 @@ impl QueryParser {
         let mut command = match root.node {
             // SET statements -> return immediately.
             Some(NodeEnum::VariableSetStmt(ref stmt)) => return self.set(stmt, context),
+
+            // SELECT set_config(...) -> treat as SET and return
+            Some(NodeEnum::SelectStmt(ref stmt))
+                if let Some(set_config) = extract_set_config(stmt) =>
+            {
+                return Ok(self.set_config(set_config, context));
+            }
+
             // SHOW statements -> return immediately.
             Some(NodeEnum::VariableShowStmt(ref stmt)) => return self.show(stmt, context),
             // DEALLOCATE statements -> return immediately.
@@ -563,6 +575,29 @@ impl QueryParser {
         }
 
         Ok(Command::Query(Route::write(shard)))
+    }
+}
+
+fn extract_set_config(stmt: &SelectStmt) -> Option<&FuncCall> {
+    static SET_CONFIG: &[&[PgStr<'static>]] = &[
+        &[pg_str("pg_catalog"), pg_str("set_config")],
+        &[pg_str("set_config")],
+    ];
+    // FIXME(sage): Dear god we need some pattern macros for this
+    if let [
+        Node {
+            node: Some(NodeEnum::ResTarget(r)),
+        },
+    ] = &*stmt.target_list
+        && let ResTarget { val: Some(n), .. } = &**r
+        && let Node {
+            node: Some(NodeEnum::FuncCall(f)),
+        } = &**n
+        && SET_CONFIG.iter().any(|&n| n == f.funcname)
+    {
+        Some(f)
+    } else {
+        None
     }
 }
 

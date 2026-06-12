@@ -21,7 +21,7 @@ fn test_set_comment() {
     ]);
 
     assert!(
-        matches!(command.clone(), Command::Set { ref params, ref route } if params.len() == 1 && params[0].name == "statement_timeout" && !params[0].local && params[0].value == ParameterValue::String("1".into()) && route.shard().is_direct()),
+        matches!(command.clone(), Command::Set { ref params, ref route, ..} if params.len() == 1 && params[0].name == "statement_timeout" && !params[0].local && params[0].value == ParameterValue::String("1".into()) && route.shard().is_direct()),
         "expected Command::Set, got {:#?}",
         command,
     );
