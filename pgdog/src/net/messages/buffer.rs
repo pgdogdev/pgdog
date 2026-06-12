@@ -98,22 +98,27 @@ impl MessageBuffer {
 
     /// Sample of the (partial) oversized message for log output, bounded
     /// to the message's own bytes (the buffer may already hold pipelined
-    /// traffic past it) before the lossy conversion; sanitize_log_sample
-    /// caps it at log_query_sample_length and strips control characters.
+    /// traffic past it); sanitize_log_sample caps it at
+    /// log_query_sample_length and strips control characters.
     fn log_sample(&self, size: usize) -> String {
         let sample_size = config().config.general.log_query_sample_length;
         let sample_end = size
             .min(self.buffer.len())
             .clamp(HEADER_SIZE, HEADER_SIZE.saturating_add(sample_size));
-        sanitize_log_sample(
-            &String::from_utf8_lossy(&self.buffer[HEADER_SIZE..sample_end]),
-            sample_size,
-        )
+        let sample = &self.buffer[HEADER_SIZE..sample_end];
+        let sample = str::from_utf8(sample)
+            .or_else(|e| str::from_utf8(&sample[..e.valid_up_to()]))
+            .unwrap_or("invalid utf-8");
+        sanitize_log_sample(sample, sample_size)
     }
 
     /// Whether the buffered message carries SQL that the query parser
     /// will see: Query ('Q', simple protocol) or Parse ('P', extended).
     /// The size limit protects the parser, so only these are subject to it.
+    ///
+    /// Invariant: only called when `message_size()` returned `Some`, which
+    /// requires at least the 5-byte header in the buffer, so indexing the
+    /// message code byte can't panic.
     fn is_query_message(&self) -> bool {
         matches!(self.buffer[0], b'Q' | b'P')
     }

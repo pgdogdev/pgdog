@@ -266,18 +266,10 @@ pub fn raise_nofile_limit() -> u64 {
     0
 }
 
-/// Truncate `s` to at most `limit` bytes, walking back to the nearest UTF-8
+/// Truncate `s` to at most `limit` bytes, rounding down to the nearest UTF-8
 /// character boundary so the result is always valid UTF-8.
 pub fn truncate_utf8(s: &str, limit: usize) -> &str {
-    if s.len() <= limit {
-        s
-    } else {
-        let mut end = limit;
-        while !s.is_char_boundary(end) {
-            end -= 1;
-        }
-        &s[..end]
-    }
+    &s[..s.floor_char_boundary(limit)]
 }
 
 /// Sanitize a query sample for one-line log output: truncate to at most
