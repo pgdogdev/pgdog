@@ -1,0 +1,91 @@
+name: release-binaries
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to attach binaries to (e.g. v0.1.44)
+        required: true
+
+jobs:
+  build:
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: write
+    env:
+      # release event supplies the tag; manual runs use the typed input
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: blacksmith-4vcpu-ubuntu-2404
+            deb: true
+          - target: aarch64-unknown-linux-gnu
+            runner: blacksmith-4vcpu-ubuntu-2404-arm
+            deb: true
+          - target: aarch64-apple-darwin      # Apple Silicon
+            runner: macos-14
+    steps:
+      - uses: actions/checkout@v6
+
+      # Mirrors docker/Dockerfile.base-builder: cmake + clang for aws-lc-sys,
+      # libssl-dev for openssl-sys, mold is the linker pinned in .cargo/config.toml.
+      - name: Install build dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential cmake clang pkg-config libssl-dev mold
+
+      # openssl-sys needs Homebrew OpenSSL; bindgen/clang-sys need libclang from
+      # the (keg-only) llvm formula, found via LIBCLANG_PATH.
+      - name: Install build dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install llvm pkg-config openssl@3
+          echo "OPENSSL_DIR=$(brew --prefix openssl@3)" >> "$GITHUB_ENV"
+          echo "LIBCLANG_PATH=$(brew --prefix llvm)/lib" >> "$GITHUB_ENV"
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }} -p pgdog
+
+      - name: Package tarball
+        run: |
+          BIN=pgdog
+          DIR="${BIN}-${TAG}-${{ matrix.target }}"
+          mkdir "$DIR"
+          cp "target/${{ matrix.target }}/release/${BIN}" "$DIR/"
+          cp README.md LICENSE "$DIR/" 2>/dev/null || true
+          tar czf "${DIR}.tar.gz" "$DIR"
+          shasum -a 256 "${DIR}.tar.gz" > "${DIR}.tar.gz.sha256"
+
+      - name: Install cargo-deb
+        if: matrix.deb
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deb
+
+      - name: Build .deb
+        if: matrix.deb
+        run: |
+          cargo deb -p pgdog --target ${{ matrix.target }} --no-build --output .
+          for f in *.deb; do
+            shasum -a 256 "$f" > "$f.sha256"
+          done
+
+      - name: Upload to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        # nullglob: the macOS leg produces no .deb, so let those globs vanish
+        run: |
+          shopt -s nullglob
+          gh release upload "$TAG" \
+            *.tar.gz *.tar.gz.sha256 *.deb *.deb.sha256 --clobber
