@@ -20,6 +20,15 @@ impl QueryParser {
         stmt: &SelectStmt,
         context: &mut QueryParserContext,
     ) -> Result<Command, Error> {
+        if cached_ast.parse_result().protobuf.stmts.len() == 1
+            && let Some(param) = Self::parse_set_config(stmt)
+        {
+            return Ok(Command::SetConfig {
+                param,
+                route: Route::write(context.shards_calculator.shard()),
+            });
+        }
+
         let cte_writes = Self::cte_writes(stmt);
         let has_locking = Self::has_locking_clause(stmt);
         let mut overrides = Self::functions(stmt)?;
@@ -229,6 +238,90 @@ impl QueryParser {
                 .with_functions(overrides)
                 .with_advisory_locks(advisory_locks),
         ))
+    }
+
+    fn parse_set_config(stmt: &SelectStmt) -> Option<SetParam> {
+        if !Self::is_plain_function_select(stmt) {
+            return None;
+        }
+
+        let target = stmt.target_list.first()?;
+        let func = match &target.node {
+            Some(NodeEnum::FuncCall(func)) => func,
+            Some(NodeEnum::ResTarget(res)) => {
+                let val = res.val.as_ref()?;
+                match &val.node {
+                    Some(NodeEnum::FuncCall(func)) => func,
+                    _ => return None,
+                }
+            }
+            _ => return None,
+        };
+
+        if !Self::is_set_config_function(&func.funcname) || func.args.len() != 3 {
+            return None;
+        }
+
+        Some(SetParam {
+            name: Self::string_const(&func.args[0])?,
+            value: ParameterValue::String(Self::string_const(&func.args[1])?),
+            local: Self::bool_const(&func.args[2])?,
+            reset: false,
+        })
+    }
+
+    fn is_plain_function_select(stmt: &SelectStmt) -> bool {
+        stmt.target_list.len() == 1
+            && stmt.from_clause.is_empty()
+            && stmt.where_clause.is_none()
+            && stmt.group_clause.is_empty()
+            && stmt.having_clause.is_none()
+            && stmt.sort_clause.is_empty()
+            && stmt.locking_clause.is_empty()
+            && stmt.with_clause.is_none()
+            && stmt.limit_count.is_none()
+            && stmt.limit_offset.is_none()
+            && stmt.values_lists.is_empty()
+            && stmt.window_clause.is_empty()
+            && stmt.distinct_clause.is_empty()
+            && stmt.larg.is_none()
+            && stmt.rarg.is_none()
+            && stmt.op() == SetOperation::SetopNone
+    }
+
+    fn is_set_config_function(funcname: &[Node]) -> bool {
+        let parts: Option<Vec<_>> = funcname
+            .iter()
+            .map(|node| match &node.node {
+                Some(NodeEnum::String(string)) => Some(string.sval.as_str()),
+                _ => None,
+            })
+            .collect();
+
+        matches!(
+            parts.as_deref(),
+            Some(["set_config"] | ["pg_catalog", "set_config"])
+        )
+    }
+
+    fn string_const(node: &Node) -> Option<std::string::String> {
+        match &node.node {
+            Some(NodeEnum::AConst(AConst {
+                val: Some(Val::Sval(String { sval })),
+                ..
+            })) => Some(sval.clone()),
+            _ => None,
+        }
+    }
+
+    fn bool_const(node: &Node) -> Option<bool> {
+        match &node.node {
+            Some(NodeEnum::AConst(AConst {
+                val: Some(Val::Boolval(Boolean { boolval })),
+                ..
+            })) => Some(*boolval),
+            _ => None,
+        }
     }
 
     /// Handle the `ORDER BY` clause of a `SELECT` statement.

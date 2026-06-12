@@ -34,6 +34,10 @@ pub enum Command {
         params: Vec<SetParam>,
         route: Route,
     },
+    SetConfig {
+        param: SetParam,
+        route: Route,
+    },
     ResetAll,
     PreparedStatement(Prepare),
     InternalField {
@@ -67,6 +71,7 @@ impl Command {
         match self {
             Self::Query(route) => route,
             Self::Set { route, .. } => route,
+            Self::SetConfig { route, .. } => route,
             Self::StartTransaction { route, .. } => route,
             _ => &DEFAULT_ROUTE,
         }

@@ -4,7 +4,10 @@ use crate::{
     frontend::{
         BufferedQuery, Client, ClientComms, Command, Error, Router, RouterContext, Stats,
         client::query_engine::{hooks::QueryEngineHooks, route_query::ClusterCheck},
-        router::{Route, parser::Shard},
+        router::{
+            Route,
+            parser::{SetParam, Shard},
+        },
     },
     net::{ErrorResponse, Message, Parameters},
     state::State,
@@ -30,6 +33,7 @@ mod query_log_stdout;
 pub mod rewrite;
 pub mod route_query;
 pub mod set;
+pub mod set_config;
 pub mod shard_key_rewrite;
 pub mod start_transaction;
 #[cfg(test)]
@@ -58,6 +62,7 @@ pub struct QueryEngine {
     two_pc: TwoPc,
     notify_buffer: NotifyBuffer,
     pending_explain: Option<ExplainResponseState>,
+    pending_set_config: Option<SetParam>,
     hooks: QueryEngineHooks,
     advisory_locks: AdvisoryLocks,
 }
@@ -79,6 +84,7 @@ impl QueryEngine {
             two_pc: TwoPc::default(),
             notify_buffer: NotifyBuffer::default(),
             pending_explain: None,
+            pending_set_config: None,
             begin_stmt: None,
             router: Router::default(),
             advisory_locks: AdvisoryLocks::default(),
@@ -210,6 +216,10 @@ impl QueryEngine {
                 context.params.rollback();
             }
             Command::Query(_) => self.execute(context).await?,
+            Command::SetConfig { param, .. } => {
+                let param = param.clone();
+                self.set_config(context, param).await?;
+            }
             Command::Listen { .. } | Command::Notify { .. } | Command::Unlisten(_)
                 if self.backend.session_mode() =>
             {

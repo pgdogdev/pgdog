@@ -108,7 +108,9 @@ impl QueryParser {
         };
 
         match &mut command {
-            Command::Query(route) | Command::Set { route, .. } => {
+            Command::Query(route)
+            | Command::Set { route, .. }
+            | Command::SetConfig { route, .. } => {
                 if route.is_cross_shard() && context.shards == 1 {
                     context
                         .shards_calculator

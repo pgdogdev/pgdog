@@ -145,9 +145,11 @@ impl QueryEngine {
 
         if code == 'C' {
             self.emit_explain_rows(context).await?;
+            self.apply_pending_set_config(context);
         }
 
         if code == 'E' {
+            self.clear_pending_set_config();
             if let Some(state) = self.pending_explain.as_mut() {
                 state.annotated = true;
             }

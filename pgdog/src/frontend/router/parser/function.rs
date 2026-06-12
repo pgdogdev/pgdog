@@ -17,6 +17,7 @@ static WRITE_ONLY: Lazy<HashMap<&'static str, LockingBehavior>> = Lazy::new(|| {
         ("pg_advisory_unlock", LockingBehavior::Unlock), // TODO: we don't track multiple advisory locks.
         ("nextval", LockingBehavior::None),
         ("setval", LockingBehavior::None),
+        ("set_config", LockingBehavior::None),
     ])
 });
 

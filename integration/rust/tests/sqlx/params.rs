@@ -45,6 +45,71 @@ async fn test_params() {
 }
 
 #[tokio::test]
+async fn test_set_config_search_path_replayed() {
+    let mut conn1 = PgConnection::connect("postgres://pgdog:pgdog@127.0.0.1:6432/pgdog")
+        .await
+        .unwrap();
+
+    let mut conn2 = PgConnection::connect("postgres://pgdog:pgdog@127.0.0.1:6432/pgdog")
+        .await
+        .unwrap();
+
+    let row = conn1
+        .fetch_one("SELECT pg_catalog.set_config('search_path', 'pg_catalog', false)")
+        .await
+        .unwrap();
+    assert_eq!(row.get::<String, usize>(0), "pg_catalog");
+
+    for _ in 0..25 {
+        // Conn 2 takes the connection conn1 just used.
+        conn2.execute("BEGIN").await.unwrap();
+
+        // Conn 1 is forced to get a new one, which should now be synchronized
+        // with the search_path recorded from set_config.
+        let row = conn1.fetch_one("SHOW search_path").await.unwrap();
+        assert_eq!(row.get::<String, usize>(0), "pg_catalog");
+
+        conn2.execute("COMMIT").await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn test_set_config_search_path_rollback() {
+    let mut conn1 = PgConnection::connect("postgres://pgdog:pgdog@127.0.0.1:6432/pgdog")
+        .await
+        .unwrap();
+
+    let mut conn2 = PgConnection::connect("postgres://pgdog:pgdog@127.0.0.1:6432/pgdog")
+        .await
+        .unwrap();
+
+    conn1.execute("SET search_path TO 'public'").await.unwrap();
+    conn1.execute("BEGIN").await.unwrap();
+    let row = conn1
+        .fetch_one("SELECT pg_catalog.set_config('search_path', 'pg_catalog', false)")
+        .await
+        .unwrap();
+    assert_eq!(row.get::<String, usize>(0), "pg_catalog");
+
+    let row = conn1.fetch_one("SHOW search_path").await.unwrap();
+    assert_eq!(row.get::<String, usize>(0), "pg_catalog");
+
+    conn1.execute("ROLLBACK").await.unwrap();
+
+    for _ in 0..25 {
+        // Conn 2 takes the connection conn1 just used.
+        conn2.execute("BEGIN").await.unwrap();
+
+        // Conn 1 is forced to get a new one, which should be synchronized
+        // with the pre-transaction search_path after rollback.
+        let row = conn1.fetch_one("SHOW search_path").await.unwrap();
+        assert_eq!(row.get::<String, usize>(0), "public");
+
+        conn2.execute("COMMIT").await.unwrap();
+    }
+}
+
+#[tokio::test]
 async fn test_set_param() {
     let mut conn1 = PgConnection::connect(
         "postgres://pgdog:pgdog@127.0.0.1:6432/pgdog?options=-c%20intervalstyle%3Diso_8601",

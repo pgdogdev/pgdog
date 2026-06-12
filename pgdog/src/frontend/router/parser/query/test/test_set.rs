@@ -143,6 +143,104 @@ fn test_set_transaction_level() {
 }
 
 #[test]
+fn test_set_config_pg_catalog() {
+    let mut test = QueryParserTest::new();
+
+    let command = test.execute(vec![
+        Query::new("SELECT pg_catalog.set_config('search_path', '', false)").into(),
+    ]);
+
+    match command {
+        Command::SetConfig { param, route } => {
+            assert_eq!(param.name, "search_path");
+            assert_eq!(param.value, ParameterValue::String("".into()));
+            assert!(!param.local);
+            assert!(!param.reset);
+            assert!(route.is_write());
+        }
+        _ => panic!("expected Command::SetConfig, got {command:#?}"),
+    }
+}
+
+#[test]
+fn test_set_config_unqualified() {
+    let mut test = QueryParserTest::new();
+
+    let command = test.execute(vec![
+        Query::new("SELECT set_config('search_path', 'public', false)").into(),
+    ]);
+
+    match command {
+        Command::SetConfig { param, route } => {
+            assert_eq!(param.name, "search_path");
+            assert_eq!(param.value, ParameterValue::String("public".into()));
+            assert!(!param.local);
+            assert!(route.is_write());
+        }
+        _ => panic!("expected Command::SetConfig, got {command:#?}"),
+    }
+}
+
+#[test]
+fn test_set_config_local() {
+    let mut test = QueryParserTest::new();
+
+    let command = test.execute(vec![
+        Query::new("SELECT pg_catalog.set_config('search_path', '', true)").into(),
+    ]);
+
+    match command {
+        Command::SetConfig { param, .. } => assert!(param.local),
+        _ => panic!("expected Command::SetConfig, got {command:#?}"),
+    }
+}
+
+#[test]
+fn test_set_config_dynamic_args_remain_query() {
+    let mut test = QueryParserTest::new();
+
+    let command = test.execute(vec![
+        Query::new("SELECT set_config('search_path', current_setting('search_path'), false)")
+            .into(),
+    ]);
+
+    assert!(
+        matches!(command, Command::Query(ref route) if route.is_write()),
+        "expected write Command::Query, got {command:#?}",
+    );
+}
+
+#[test]
+fn test_set_config_complex_select_remains_query() {
+    let mut test = QueryParserTest::new();
+
+    let command = test.execute(vec![
+        Query::new("SELECT set_config('search_path', 'public', false) FROM generate_series(1, 1)")
+            .into(),
+    ]);
+
+    assert!(
+        matches!(command, Command::Query(ref route) if route.is_write()),
+        "expected write Command::Query, got {command:#?}",
+    );
+}
+
+#[test]
+fn test_set_config_multi_statement_remains_query() {
+    let mut test = QueryParserTest::new();
+
+    let command = test.execute(vec![
+        Query::new("SELECT pg_catalog.set_config('search_path', 'pg_catalog', false); SELECT 1")
+            .into(),
+    ]);
+
+    assert!(
+        matches!(command, Command::Query(ref route) if route.is_write()),
+        "expected write Command::Query, got {command:#?}",
+    );
+}
+
+#[test]
 fn test_reset() {
     let mut test = QueryParserTest::new();
 
