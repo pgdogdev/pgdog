@@ -1,8 +1,10 @@
-use crate::frontend::router::parser::aggregate::{Aggregate, AggregateFunction};
+use crate::frontend::router::parser::{
+    aggregate::{Aggregate, AggregateFunction},
+    util::pg_string,
+};
 use pg_query::NodeEnum;
 use pg_query::protobuf::{
-    AConst, FuncCall, Integer, Node, ResTarget, SelectStmt, String as PgString, TypeCast, TypeName,
-    a_const::Val,
+    AConst, FuncCall, Integer, Node, ResTarget, SelectStmt, TypeCast, TypeName, a_const::Val,
 };
 
 use super::{AggregateRewritePlan, HelperKind, HelperMapping, RewriteOutput};
@@ -246,12 +248,6 @@ impl AggregatesRewrite {
             }
             _ => vec![],
         }
-    }
-}
-
-fn pg_string(s: impl Into<String>) -> Node {
-    Node {
-        node: Some(NodeEnum::String(PgString { sval: s.into() })),
     }
 }
 

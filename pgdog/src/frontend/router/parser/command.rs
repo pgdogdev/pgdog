@@ -8,9 +8,8 @@ use lazy_static::lazy_static;
 #[derive(Debug, Clone, PartialEq)]
 pub struct SetParam {
     pub name: String,
-    pub value: ParameterValue,
+    pub value: Option<ParameterValue>,
     pub local: bool,
-    pub reset: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -33,6 +32,7 @@ pub enum Command {
     Set {
         params: Vec<SetParam>,
         route: Route,
+        behave_like_select: bool,
     },
     ResetAll,
     PreparedStatement(Prepare),

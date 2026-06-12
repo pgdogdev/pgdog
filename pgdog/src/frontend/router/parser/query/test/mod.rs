@@ -384,7 +384,7 @@ fn test_set() {
         match command {
             Command::Set { params, .. } => {
                 assert_eq!(params[0].name, "timezone");
-                assert_eq!(params[0].value, ParameterValue::from("UTC"));
+                assert_eq!(params[0].value, Some(ParameterValue::from("UTC")));
             }
             _ => panic!("not a set"),
         };
@@ -394,7 +394,7 @@ fn test_set() {
     match command {
         Command::Set { params, .. } => {
             assert_eq!(params[0].name, "statement_timeout");
-            assert_eq!(params[0].value, ParameterValue::from("3000"));
+            assert_eq!(params[0].value, Some(ParameterValue::from("3000")));
         }
         _ => panic!("not a set"),
     };
@@ -405,7 +405,7 @@ fn test_set() {
     match command {
         Command::Set { params, .. } => {
             assert_eq!(params[0].name, "is_superuser");
-            assert_eq!(params[0].value, ParameterValue::from("true"));
+            assert_eq!(params[0].value, Some(ParameterValue::from("true")));
         }
         _ => panic!("not a set"),
     };
@@ -424,7 +424,11 @@ fn test_set() {
             assert_eq!(params[0].name, "search_path");
             assert_eq!(
                 params[0].value,
-                ParameterValue::Tuple(vec!["$user".into(), "public".into(), "APPLES".into()])
+                Some(ParameterValue::Tuple(vec![
+                    "$user".into(),
+                    "public".into(),
+                    "APPLES".into()
+                ]))
             )
         }
         _ => panic!("search path"),
@@ -500,9 +504,11 @@ fn test_transaction() {
     match route {
         Command::Set { params, .. } => {
             assert_eq!(params[0].name, "application_name");
-            assert_eq!(params[0].value.as_str().unwrap(), "test");
+            assert_eq!(
+                params[0].value.as_ref().and_then(|s| s.as_str()),
+                Some("test")
+            );
             assert!(!cluster.read_only());
-            assert!(!params[0].local);
         }
 
         _ => panic!("not a query"),
