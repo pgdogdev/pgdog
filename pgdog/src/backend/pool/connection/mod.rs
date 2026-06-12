@@ -308,6 +308,14 @@ impl Connection {
             if !rows.is_empty() {
                 self.send_copy(rows).await?;
             }
+            // FIXME(lev): There is an assumption of protocol correctness here
+            // from the client. If the client sends partial CopyData rows
+            // and then sends CopyDone, we will send CopyDone to the shards,
+            // causing the COPY to complete prematurely.
+            //
+            // We should assert here that the client request does not contain
+            // _both_ CopyData and CopyDone messages.
+            //
             self.send(&client_request.without_copy_data()).await?;
         } else {
             // We split up the extended protocol exhange as soon as we see
