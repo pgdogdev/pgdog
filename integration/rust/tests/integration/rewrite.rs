@@ -140,6 +140,73 @@ async fn split_inserts_rewrite_moves_rows_across_shards() {
 }
 
 #[tokio::test]
+async fn split_inserts_same_shard_no_split_needed() {
+    let admin = admin_sqlx().await;
+    let _guard = RewriteConfigGuard::enable(admin.clone()).await;
+
+    admin
+        .execute("SET rewrite_split_inserts TO rewrite")
+        .await
+        .expect("enable split insert rewrite");
+
+    let mut pools = connections_sqlx().await;
+    let pool = pools.swap_remove(1);
+
+    prepare_split_table(&pool).await;
+
+    // IDs 1 and 2: determined experimentally to hash to the same shard with 2
+    // shards and PgDog's PostgreSQL-compatible bigint hasher. The optimizer
+    // should detect this and send the original multi-row INSERT as-is to that
+    // shard instead of splitting it.
+    sqlx::query(&format!(
+        "INSERT INTO {SHARDED_INSERT_TABLE} (id, value) VALUES (1, 'one'), (2, 'two')"
+    ))
+    .execute(&pool)
+    .await
+    .expect("same-shard multi-row insert should succeed");
+
+    let row1: Option<String> = sqlx::query_scalar(&format!(
+        "SELECT value FROM {SHARDED_INSERT_TABLE} WHERE id = 1"
+    ))
+    .fetch_optional(&pool)
+    .await
+    .expect("fetch row with id=1");
+
+    let row2: Option<String> = sqlx::query_scalar(&format!(
+        "SELECT value FROM {SHARDED_INSERT_TABLE} WHERE id = 2"
+    ))
+    .fetch_optional(&pool)
+    .await
+    .expect("fetch row with id=2");
+
+    assert_eq!(row1.as_deref(), Some("one"), "row id=1 should be present");
+    assert_eq!(row2.as_deref(), Some("two"), "row id=2 should be present");
+
+    // Both rows must land on the same shard: the optimizer must have sent
+    // the INSERT as a single statement rather than splitting it.
+    let shard0_count: i64 = sqlx::query_scalar(&format!(
+        "/* pgdog_shard: 0 */ SELECT COUNT(*)::bigint FROM {SHARDED_INSERT_TABLE} WHERE id IN (1, 2)"
+    ))
+    .fetch_one(&pool)
+    .await
+    .expect("count on shard 0");
+
+    let shard1_count: i64 = sqlx::query_scalar(&format!(
+        "/* pgdog_shard: 1 */ SELECT COUNT(*)::bigint FROM {SHARDED_INSERT_TABLE} WHERE id IN (1, 2)"
+    ))
+    .fetch_one(&pool)
+    .await
+    .expect("count on shard 1");
+
+    assert!(
+        shard0_count == 2 || shard1_count == 2,
+        "both rows should be on the same shard (shard0: {shard0_count}, shard1: {shard1_count})"
+    );
+
+    cleanup_split_table(&pool).await;
+}
+
+#[tokio::test]
 async fn update_moves_row_between_shards() {
     let admin = admin_sqlx().await;
     let _guard = RewriteConfigGuard::enable(admin.clone()).await;
