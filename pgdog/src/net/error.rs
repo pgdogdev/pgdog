@@ -114,9 +114,24 @@ pub enum Error {
         "missing column at index {0} that was assumed to be present (this indicates a bug in pgdog, please open an issue with details about your query)"
     )]
     RequiredColumnMissing(usize),
+
+    #[error("message size {size} bytes exceeds query_size_limit of {limit} bytes")]
+    MessageTooLarge { size: usize, limit: usize },
 }
 
 impl Error {
+    /// If this error corresponds to a fatal client-facing condition, return the
+    /// `ErrorResponse` to send before disconnecting. Returns `None` for errors
+    /// that are not surfaced to the client.
+    pub fn as_fatal_error_response(&self) -> Option<super::messages::ErrorResponse> {
+        match self {
+            Self::MessageTooLarge { size, limit } => Some(
+                super::messages::ErrorResponse::query_too_large(*size, *limit),
+            ),
+            _ => None,
+        }
+    }
+
     /// Transient network fault worth retrying.
     pub fn is_retryable(&self) -> bool {
         matches!(

@@ -41,6 +41,8 @@ pub struct QueryEngineContext<'a> {
     pub(super) rewrite_result: Option<RewriteResult>,
     /// Log queries to stdout.
     pub(super) query_log_stdout: bool,
+    /// Maximum query message size before a warning is logged.
+    pub(super) query_size_limit: Option<usize>,
 }
 
 impl<'a> QueryEngineContext<'a> {
@@ -63,6 +65,7 @@ impl<'a> QueryEngineContext<'a> {
             sticky: client.sticky,
             rewrite_result: None,
             query_log_stdout: client.query_log_stdout,
+            query_size_limit: client.query_size_limit,
         }
     }
 
@@ -90,6 +93,7 @@ impl<'a> QueryEngineContext<'a> {
             sticky: Sticky::new(),
             rewrite_result: None,
             query_log_stdout: false,
+            query_size_limit: None,
         }
     }
 
