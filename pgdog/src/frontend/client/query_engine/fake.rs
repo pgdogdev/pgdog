@@ -47,9 +47,10 @@ impl QueryEngine {
                             .send(&ReadyForQuery::in_transaction(context.in_transaction()))
                             .await?
                 }
-                // FIXME(lev): It's a little sus that the client sends a Close for a prepared
-                // statement here, but this particular fix is for elixir which IIRC closes
-                // prepared statements nonstop. We need to add it back to our CI to make sure.
+                // TODO(lev): Elixir closes the statement it just asked us to prepare.
+                // That's very memory-conscious of it, and we appreciate it.
+                //
+                // Add Elixir back to our CI.
                 ProtocolMessage::Close(_) => context.stream.send(&CloseComplete).await?,
 
                 _ => 0,
