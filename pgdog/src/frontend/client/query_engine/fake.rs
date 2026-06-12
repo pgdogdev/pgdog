@@ -1,8 +1,8 @@
 use tokio::io::AsyncWriteExt;
 
 use crate::net::{
-    BindComplete, CommandComplete, NoData, ParameterDescription, ParseComplete, ProtocolMessage,
-    ReadyForQuery, RowDescription,
+    BindComplete, CloseComplete, CommandComplete, NoData, ParameterDescription, ParseComplete,
+    ProtocolMessage, ReadyForQuery, RowDescription,
 };
 
 use super::*;
@@ -47,6 +47,11 @@ impl QueryEngine {
                             .send(&ReadyForQuery::in_transaction(context.in_transaction()))
                             .await?
                 }
+                // TODO(lev): Elixir closes the statement it just asked us to prepare.
+                // That's very memory-conscious of it, and we appreciate it.
+                //
+                // Add Elixir back to our CI.
+                ProtocolMessage::Close(_) => context.stream.send(&CloseComplete).await?,
 
                 _ => 0,
             }
