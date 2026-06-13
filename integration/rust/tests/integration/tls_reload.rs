@@ -1,3 +1,5 @@
+// Test cases in this file are run only on unix because of missing sighup
+// support on Windows.
 #![cfg(unix)]
 
 use std::{
