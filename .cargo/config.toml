@@ -2,7 +2,7 @@
 linker = "/usr/bin/clang"
 rustflags = ["-C", "link-arg=--ld-path=/usr/bin/mold"]
 
-# Bump reserved stack size size to 2 MB (fraom default 1 MB) on
+# Bump reserved stack size size to 2 MB (from default 1 MB) on
 # Windows to buid pg_query. This setting applies to all binaries,
 # not just build scripts but should be harmless because the bumped
 # stack size is the reserved memory not committed memory.
