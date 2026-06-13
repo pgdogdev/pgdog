@@ -36,6 +36,7 @@ fn rotated_key_path() -> PathBuf {
 
 #[tokio::test]
 #[serial]
+#[cfg(unix)]
 async fn tls_acceptor_swaps_after_sighup() {
     let mut guard = ConfigGuard::new().expect("config guard");
 
@@ -136,7 +137,8 @@ async fn fetch_server_cert_der()
 struct ConfigGuard {
     path: PathBuf,
     original: String,
-    pid: libc::pid_t,
+    #[cfg(unix)]
+    pid: i32,
 }
 
 impl ConfigGuard {
@@ -144,18 +146,23 @@ impl ConfigGuard {
         let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let config_path = manifest_dir.join("../pgdog.toml").canonicalize()?;
         let original = fs::read_to_string(&config_path)?;
-        let pid_path = manifest_dir.join("../pgdog.pid").canonicalize()?;
-        let pid_contents = fs::read_to_string(pid_path)?;
-        let pid: libc::pid_t = pid_contents.trim().parse().map_err(|err| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!("invalid pid: {err}"),
-            )
-        })?;
+        #[cfg(unix)]
+        let pid = {
+            let pid_path = manifest_dir.join("../pgdog.pid").canonicalize()?;
+            let pid_contents = fs::read_to_string(pid_path)?;
+            let pid: i32 = pid_contents.trim().parse().map_err(|err| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("invalid pid: {err}"),
+                )
+            })?;
+            pid
+        };
 
         Ok(Self {
             path: config_path,
             original,
+            #[cfg(unix)]
             pid,
         })
     }
@@ -170,6 +177,7 @@ impl ConfigGuard {
         fs::write(&self.path, updated)
     }
 
+    #[cfg(unix)]
     fn signal_sighup(&self) -> Result<(), std::io::Error> {
         let res = unsafe { libc::kill(self.pid, libc::SIGHUP) };
         if res != 0 {
@@ -182,8 +190,11 @@ impl ConfigGuard {
 impl Drop for ConfigGuard {
     fn drop(&mut self) {
         let _ = fs::write(&self.path, &self.original);
-        let _ = unsafe { libc::kill(self.pid, libc::SIGHUP) };
-        std::thread::sleep(Duration::from_millis(500));
+        #[cfg(unix)]
+        {
+            let _ = unsafe { libc::kill(self.pid, libc::SIGHUP) };
+            std::thread::sleep(Duration::from_millis(500));
+        }
     }
 }
 
