@@ -15,6 +15,7 @@ pub enum PasswordSource {
     Config,
     RdsIam,
     AzureIdentity,
+    Vault,
 }
 
 impl Display for PasswordSource {
@@ -23,6 +24,7 @@ impl Display for PasswordSource {
             Self::Config => write!(f, "config"),
             Self::RdsIam => write!(f, "rds iam"),
             Self::AzureIdentity => write!(f, "azure workload identity"),
+            Self::Vault => write!(f, "vault"),
         }
     }
 }

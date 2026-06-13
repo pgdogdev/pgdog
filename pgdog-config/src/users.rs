@@ -88,6 +88,32 @@ impl Users {
                 );
             }
 
+            if user.server_auth == ServerAuth::Vault {
+                if user.vault_path.is_none() {
+                    warn!(
+                        r#"user "{}" (database "{}") uses Vault server auth but "vault_path" is not set"#,
+                        user.name, user.database
+                    );
+                }
+
+                if config.vault.is_none() {
+                    warn!(
+                        r#"user "{}" (database "{}") uses Vault server auth but the [vault] section is missing from pgdog.toml"#,
+                        user.name, user.database
+                    );
+                }
+
+                if let Some(percent) = user.vault_refresh_percent
+                    && (percent == 0 || percent > 100)
+                {
+                    warn!(
+                        r#"user "{}" (database "{}") has "vault_refresh_percent" of {}, expected 1-100, using default"#,
+                        user.name, user.database, percent
+                    );
+                    user.vault_refresh_percent = None;
+                }
+            }
+
             if !user.database.is_empty() && !user.databases.is_empty() {
                 warn!(
                     r#"user "{}" is configured for both "{}" and "{:?}", defaulting to "{}""#,
@@ -153,11 +179,16 @@ pub enum ServerAuth {
     RdsIam,
     /// Generate an Azure Workload Identity auth token per connection attempt.
     AzureWorkloadIdentity,
+    /// Fetch dynamic credentials from HashiCorp Vault.
+    Vault,
 }
 
 impl ServerAuth {
     pub fn is_external_identity(&self) -> bool {
-        matches!(self, Self::RdsIam | Self::AzureWorkloadIdentity)
+        matches!(
+            self,
+            Self::RdsIam | Self::AzureWorkloadIdentity | Self::Vault
+        )
     }
 }
 
@@ -251,6 +282,13 @@ pub struct User {
     pub server_auth: ServerAuth,
     /// Optional region override for RDS IAM token generation.
     pub server_iam_region: Option<String>,
+    /// Vault path to fetch dynamic database credentials from, e.g. `database/creds/my-role`.
+    /// Required when `server_auth` is set to `vault`.
+    pub vault_path: Option<String>,
+    /// Percentage of the Vault credential lease after which credentials are refreshed.
+    ///
+    /// _Default:_ `80`
+    pub vault_refresh_percent: Option<u8>,
     /// Statement timeout.
     ///
     /// Sets the `statement_timeout` on all server connections at connection creation. This allows you to set a reasonable default for each user without modifying `postgresql.conf` or using `ALTER USER`.
@@ -630,5 +668,42 @@ server_auth = "azure_workload_identity"
         let users: Users = toml::from_str(source).unwrap();
         let user = users.users.first().unwrap();
         assert_eq!(user.server_auth, ServerAuth::AzureWorkloadIdentity);
+    }
+
+    #[test]
+    fn test_user_server_auth_vault() {
+        let source = r#"
+[[users]]
+name = "alice"
+database = "db"
+server_auth = "vault"
+vault_path = "database/creds/pgdog"
+vault_refresh_percent = 75
+"#;
+
+        let users: Users = toml::from_str(source).unwrap();
+        let user = users.users.first().unwrap();
+        assert_eq!(user.server_auth, ServerAuth::Vault);
+        assert!(user.server_auth.is_external_identity());
+        assert_eq!(user.vault_path.as_deref(), Some("database/creds/pgdog"));
+        assert_eq!(user.vault_refresh_percent, Some(75));
+    }
+
+    #[test]
+    fn test_vault_refresh_percent_out_of_range_resets_to_default() {
+        let mut users = Users {
+            users: vec![User {
+                name: "alice".into(),
+                database: "db".into(),
+                server_auth: ServerAuth::Vault,
+                vault_path: Some("database/creds/pgdog".into()),
+                vault_refresh_percent: Some(150),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        users.check(&crate::Config::default());
+        assert!(users.users.first().unwrap().vault_refresh_percent.is_none());
     }
 }
