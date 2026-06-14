@@ -1,3 +1,22 @@
 [target.x86_64-unknown-linux-gnu]
 linker = "/usr/bin/clang"
 rustflags = ["-C", "link-arg=--ld-path=/usr/bin/mold"]
+
+# Bump reserved stack size size to 2 MB (from default 1 MB) on
+# Windows to buid pg_query. This setting applies to all binaries,
+# not just build scripts but should be harmless because the bumped
+# stack size is the reserved memory not committed memory.
+#
+# /STACK docs: https://learn.microsoft.com/en-us/cpp/build/reference/stack-stack-allocations?view=msvc-170
+# 
+# Without this the build fails on Windows with an error similar to the following:
+#
+# error: failed to run custom build command for `pg_query v6.1.1 (https://github.com/pgdogdev/pg_query.rs.git?rev=97019d0c13ad0b888fe91ee5bed5448b5f409cdd#97019d0c)`
+# 
+# Caused by:
+#  process didn't exit successfully: `d:\src\rust\pgdog\target\debug\build\pg_query-63c4edfb7d8ae57a\build-script-build` (exit code: 0xc00000fd, STATUS_STACK_OVERFLOW)
+#  --- stderr
+# 
+#  thread 'main' (12096) has overflowed its stack
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "link-arg=/STACK:2097152"]

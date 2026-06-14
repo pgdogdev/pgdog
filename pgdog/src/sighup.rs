@@ -15,7 +15,7 @@ impl Sighup {
 
     #[cfg(not(target_family = "unix"))]
     pub(crate) fn new() -> std::io::Result<Self> {
-        Self {}
+        Ok(Self {})
     }
 
     pub(crate) async fn listen(&mut self) {
