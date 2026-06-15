@@ -524,7 +524,6 @@ impl Cluster {
                     || self.router_needed()
                     || self.dry_run()
                     || self.prepared_statements() == &PreparedStatements::Full
-                    || self.pub_sub_enabled()
                     || self.regex_parser.use_parser(request)
             }
         }

@@ -8,7 +8,9 @@ use crate::frontend::ClientRequest;
 /// allowed before a statement keyword.
 static COMMENT_PREFIX: &str = r"(?i)^\s*(?:(?:--[^\n]*\n|/\*[\s\S]*?\*/)\s*)*";
 
-static CMD_BASE: &[&str] = &["(RE)?SET", "BEGIN", "COMMIT", "ROLLBACK"];
+static CMD_BASE: &[&str] = &[
+    "(RE)?SET", "BEGIN", "COMMIT", "ROLLBACK", "LISTEN", "UNLISTEN", "NOTIFY",
+];
 
 static CMD_ADVISORY: &[&str] = &[
     r"(?i)\bpg_advisory_lock\b",
@@ -149,6 +151,36 @@ mod test {
         assert!(matches("ROLLBACK"));
         assert!(matches("rollback"));
         assert!(matches("   ROLLBACK"));
+    }
+
+    #[test]
+    fn test_listen() {
+        assert!(matches("LISTEN test_channel"));
+        assert!(matches("listen test_channel"));
+        assert!(matches("   LISTEN test_channel"));
+        assert!(matches("LISTEN \"test-channel\""));
+        assert!(matches("/* comment */ LISTEN test_channel"));
+        assert!(matches("-- comment\nLISTEN test_channel"));
+    }
+
+    #[test]
+    fn test_unlisten() {
+        assert!(matches("UNLISTEN test_channel"));
+        assert!(matches("unlisten test_channel"));
+        assert!(matches("   UNLISTEN test_channel"));
+        assert!(matches("UNLISTEN *"));
+        assert!(matches("/* comment */ UNLISTEN test_channel"));
+        assert!(matches("-- comment\nUNLISTEN *"));
+    }
+
+    #[test]
+    fn test_notify() {
+        assert!(matches("NOTIFY test_channel"));
+        assert!(matches("notify test_channel"));
+        assert!(matches("   NOTIFY test_channel"));
+        assert!(matches("NOTIFY test_channel, 'payload'"));
+        assert!(matches("/* comment */ NOTIFY test_channel"));
+        assert!(matches("-- comment\nNOTIFY test_channel, 'payload'"));
     }
 
     #[test]
