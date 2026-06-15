@@ -1,9 +1,10 @@
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use parking_lot::Mutex;
 use rust::setup::admin_sqlx;
-use sqlx::{Connection, Executor, PgConnection, Row, postgres::PgListener};
+use rust_decimal::prelude::ToPrimitive;
+use sqlx::{Connection, Executor, PgConnection, Pool, Postgres, Row, postgres::PgListener};
 use tokio::{
     select, spawn,
     sync::Barrier,
@@ -15,46 +16,47 @@ async fn test_notify() {
     let messages = Arc::new(Mutex::new(vec![]));
     let mut tasks = vec![];
     let mut listeners = vec![];
-    let barrier = Arc::new(Barrier::new(5));
+    let test_id = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let channels = (0..5)
+        .map(|i| format!("test_notify_{test_id}_{i}"))
+        .collect::<Vec<_>>();
+    let received_barrier = Arc::new(Barrier::new(channels.len() + 1));
+    let release_barrier = Arc::new(Barrier::new(channels.len() + 1));
 
-    for i in 0..5 {
+    for channel in channels.iter().cloned() {
         let task_msgs = messages.clone();
 
         let mut listener = PgListener::connect("postgres://pgdog:pgdog@127.0.0.1:6432/pgdog")
             .await
             .unwrap();
 
-        listener
-            .listen(format!("test_notify_{}", i).as_str())
-            .await
-            .unwrap();
+        listener.listen(&channel).await.unwrap();
 
-        let barrier = barrier.clone();
+        let received_barrier = received_barrier.clone();
+        let release_barrier = release_barrier.clone();
         listeners.push(spawn(async move {
             let mut received = 0;
-            loop {
-                select! {
-                    msg = listener.recv() => {
-                        let msg = msg.unwrap();
-                        received += 1;
-                        task_msgs.lock().push(msg);
-                        if received == 10 {
-                            break;
-                        }
-                    }
-
-                }
+            while received < 10 {
+                let msg = listener.recv().await.unwrap();
+                received += 1;
+                task_msgs.lock().push(msg);
             }
-            barrier.wait().await;
+
+            received_barrier.wait().await;
+            release_barrier.wait().await;
         }));
     }
 
     for i in 0..50 {
+        let channel = channels[i % channels.len()].clone();
         let handle = spawn(async move {
             let mut conn = PgConnection::connect("postgres://pgdog:pgdog@127.0.0.1:6432/pgdog")
                 .await
                 .unwrap();
-            conn.execute(format!("NOTIFY test_notify_{}, 'test_notify_{}'", i % 5, i % 5).as_str())
+            conn.execute(format!("NOTIFY {channel}, '{channel}'").as_str())
                 .await
                 .unwrap();
         });
@@ -66,65 +68,85 @@ async fn test_notify() {
         task.await.unwrap();
     }
 
+    received_barrier.wait().await;
+
+    {
+        let messages = messages.lock();
+        assert_eq!(messages.len(), 50);
+        for message in messages.iter() {
+            assert_eq!(message.channel(), message.payload());
+        }
+    }
+
+    assert_listener_stats(&channels, 10).await;
+
+    release_barrier.wait().await;
     for listener in listeners {
         listener.await.unwrap();
     }
+}
 
-    assert_eq!(messages.lock().len(), 50);
-    let messages = messages.lock();
-    for message in messages.iter() {
-        assert_eq!(message.channel(), message.payload());
+#[derive(Debug)]
+struct ListenerStats {
+    listeners: i64,
+    received: i64,
+    dropped: i64,
+}
+
+async fn assert_listener_stats(channels: &[String], expected_received: i64) {
+    let admin = admin_sqlx().await;
+    let stats = wait_for_listener_stats(&admin, channels, expected_received).await;
+
+    for (channel, stats) in channels.iter().zip(stats) {
+        assert_eq!(stats.listeners, 1, "{channel} listener count");
+        assert_eq!(
+            stats.received, expected_received,
+            "{channel} received count"
+        );
+        assert_eq!(stats.dropped, 0, "{channel} dropped count");
     }
 }
 
-#[tokio::test]
-async fn test_listener_stats_from_admin_db() {
-    let channel = "test_listener_stats";
-    let mut listener = PgListener::connect("postgres://pgdog:pgdog@127.0.0.1:6432/pgdog")
-        .await
-        .unwrap();
-    listener.listen(channel).await.unwrap();
-
-    let mut conn = PgConnection::connect("postgres://pgdog:pgdog@127.0.0.1:6432/pgdog")
-        .await
-        .unwrap();
-    conn.execute(format!("NOTIFY {channel}, 'stats'").as_str())
-        .await
-        .unwrap();
-
-    let notification = timeout(Duration::from_secs(5), listener.recv())
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(notification.channel(), channel);
-    assert_eq!(notification.payload(), "stats");
-
-    let admin = admin_sqlx().await;
-    let (listeners, received, dropped) = timeout(Duration::from_secs(5), async {
+async fn wait_for_listener_stats(
+    admin: &Pool<Postgres>,
+    channels: &[String],
+    expected_received: i64,
+) -> Vec<ListenerStats> {
+    timeout(Duration::from_secs(5), async {
         loop {
             let rows = admin.fetch_all("SHOW LISTENERS").await.unwrap();
-            if let Some(row) = rows
+            let stats = channels
                 .iter()
-                .find(|row| row.get::<String, _>("channel") == channel)
-            {
-                let listeners = row.get::<i64, _>("listeners");
-                let received = row.get::<i64, _>("received");
-                let dropped = row.get::<i64, _>("dropped");
+                .filter_map(|channel| {
+                    rows.iter()
+                        .find(|row| row.get::<String, _>("channel") == *channel)
+                        .map(|row| ListenerStats {
+                            listeners: numeric_column(row, "listeners"),
+                            received: numeric_column(row, "received"),
+                            dropped: numeric_column(row, "dropped"),
+                        })
+                })
+                .collect::<Vec<_>>();
 
-                if listeners >= 1 && received >= 1 {
-                    return (listeners, received, dropped);
-                }
+            if stats.len() == channels.len()
+                && stats
+                    .iter()
+                    .all(|stats| stats.listeners >= 1 && stats.received >= expected_received)
+            {
+                return stats;
             }
 
             sleep(Duration::from_millis(10)).await;
         }
     })
     .await
-    .unwrap();
+    .unwrap()
+}
 
-    assert_eq!(listeners, 1);
-    assert_eq!(received, 1);
-    assert_eq!(dropped, 0);
+fn numeric_column(row: &sqlx::postgres::PgRow, column: &str) -> i64 {
+    row.get::<rust_decimal::Decimal, _>(column)
+        .to_i64()
+        .unwrap()
 }
 
 #[tokio::test]
