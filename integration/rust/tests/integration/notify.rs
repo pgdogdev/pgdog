@@ -2,8 +2,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use parking_lot::Mutex;
-use sqlx::{Connection, Executor, PgConnection, postgres::PgListener};
-use tokio::{select, spawn, sync::Barrier, time::timeout};
+use rust::setup::admin_sqlx;
+use sqlx::{Connection, Executor, PgConnection, Row, postgres::PgListener};
+use tokio::{
+    select, spawn,
+    sync::Barrier,
+    time::{sleep, timeout},
+};
 
 #[tokio::test]
 async fn test_notify() {
@@ -70,6 +75,56 @@ async fn test_notify() {
     for message in messages.iter() {
         assert_eq!(message.channel(), message.payload());
     }
+}
+
+#[tokio::test]
+async fn test_listener_stats_from_admin_db() {
+    let channel = "test_listener_stats";
+    let mut listener = PgListener::connect("postgres://pgdog:pgdog@127.0.0.1:6432/pgdog")
+        .await
+        .unwrap();
+    listener.listen(channel).await.unwrap();
+
+    let mut conn = PgConnection::connect("postgres://pgdog:pgdog@127.0.0.1:6432/pgdog")
+        .await
+        .unwrap();
+    conn.execute(format!("NOTIFY {channel}, 'stats'").as_str())
+        .await
+        .unwrap();
+
+    let notification = timeout(Duration::from_secs(5), listener.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(notification.channel(), channel);
+    assert_eq!(notification.payload(), "stats");
+
+    let admin = admin_sqlx().await;
+    let (listeners, received, dropped) = timeout(Duration::from_secs(5), async {
+        loop {
+            let rows = admin.fetch_all("SHOW LISTENERS").await.unwrap();
+            if let Some(row) = rows
+                .iter()
+                .find(|row| row.get::<String, _>("channel") == channel)
+            {
+                let listeners = row.get::<i64, _>("listeners");
+                let received = row.get::<i64, _>("received");
+                let dropped = row.get::<i64, _>("dropped");
+
+                if listeners >= 1 && received >= 1 {
+                    return (listeners, received, dropped);
+                }
+            }
+
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+
+    assert_eq!(listeners, 1);
+    assert_eq!(received, 1);
+    assert_eq!(dropped, 0);
 }
 
 #[tokio::test]
