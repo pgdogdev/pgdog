@@ -3,7 +3,12 @@
 //! Handles notifications from Postgres and sends them out
 //! to a broadcast channel.
 //!
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    ops::{Deref, DerefMut},
+    sync::Arc,
+    time::Duration,
+};
 
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
@@ -14,6 +19,7 @@ use tokio::{
 };
 use tracing::{debug, error, info};
 
+use super::{Stats, StatsSnapshot};
 use crate::{
     backend::{self, ConnectReason, DisconnectReason, Pool, pool::Error},
     config::config,
@@ -42,9 +48,65 @@ impl From<Request> for ProtocolMessage {
     }
 }
 
-type Channels = Arc<Mutex<HashMap<String, broadcast::Sender<NotificationResponse>>>>;
+type Channels = Arc<Mutex<HashMap<String, Channel>>>;
 
 static CHANNELS: Lazy<Channels> = Lazy::new(|| Arc::new(Mutex::new(HashMap::new())));
+
+/// Get stats for all channels.
+pub fn stats() -> HashMap<String, StatsSnapshot> {
+    CHANNELS
+        .lock()
+        .iter()
+        .map(|(name, channel)| (name.to_string(), channel.stats.get()))
+        .collect()
+}
+
+#[derive(Debug)]
+struct Channel {
+    tx: broadcast::Sender<NotificationResponse>,
+    stats: Arc<Stats>,
+}
+
+#[derive(Debug)]
+pub struct Listener {
+    rx: broadcast::Receiver<NotificationResponse>,
+    stats: Arc<Stats>,
+}
+
+impl Listener {
+    fn new(channel: &Channel) -> Self {
+        channel.stats.incr_listeners();
+
+        Self {
+            rx: channel.tx.subscribe(),
+            stats: channel.stats.clone(),
+        }
+    }
+
+    pub(crate) fn stats(&self) -> &Stats {
+        &self.stats
+    }
+}
+
+impl Drop for Listener {
+    fn drop(&mut self) {
+        self.stats.decr_listeners();
+    }
+}
+
+impl Deref for Listener {
+    type Target = broadcast::Receiver<NotificationResponse>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.rx
+    }
+}
+
+impl DerefMut for Listener {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.rx
+    }
+}
 
 #[derive(Debug)]
 struct Comms {
@@ -124,23 +186,34 @@ impl PubSubListener {
     }
 
     /// Listen on a channel.
-    pub async fn listen(
-        &self,
-        channel: &str,
-    ) -> Result<broadcast::Receiver<NotificationResponse>, Error> {
-        if let Some(channel) = self.channels.lock().get(channel) {
-            return Ok(channel.subscribe());
-        }
+    pub async fn listen(&self, channel_name: &str) -> Result<Listener, Error> {
+        let listener = {
+            let mut guard = self.channels.lock();
 
-        let (tx, rx) = broadcast::channel(config().config.general.pub_sub_channel_size);
+            if let Some(channel) = guard.get(channel_name) {
+                return Ok(Listener::new(channel));
+            }
 
-        self.channels.lock().insert(channel.to_string(), tx);
+            let (tx, _) = broadcast::channel(config().config.general.pub_sub_channel_size);
+            let stats = Arc::new(Stats::default());
+
+            let channel = Channel {
+                tx,
+                stats: stats.clone(),
+            };
+            let listener = Listener::new(&channel);
+
+            guard.insert(channel_name.to_string(), channel);
+
+            listener
+        };
+
         self.tx
-            .send(Request::Subscribe(channel.to_string()))
+            .send(Request::Subscribe(channel_name.to_string()))
             .await
             .map_err(|_| Error::Offline)?;
 
-        Ok(rx)
+        Ok(listener)
     }
 
     /// Notify a channel with payload.
@@ -198,7 +271,7 @@ impl PubSubListener {
                         let notification = NotificationResponse::from_bytes(message.to_bytes())?;
                         let mut unsub = None;
                         if let Some(channel) = channels.lock().get(notification.channel()) {
-                            match channel.send(notification) {
+                            match channel.tx.send(notification) {
                                 Ok(_) => (),
                                 Err(err) => unsub = Some(err.0.channel().to_string()),
                             }

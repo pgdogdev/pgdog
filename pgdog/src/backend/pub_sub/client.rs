@@ -1,12 +1,8 @@
-use crate::config::config;
 use crate::net::NotificationResponse;
+use crate::{backend::pub_sub::listener::Listener, config::config};
 
 use std::{collections::HashMap, sync::Arc};
-use tokio::sync::{
-    Notify,
-    broadcast::{self, error::RecvError},
-    mpsc,
-};
+use tokio::sync::{Notify, broadcast::error::RecvError, mpsc};
 use tokio::{select, spawn};
 
 #[derive(Debug)]
@@ -37,7 +33,7 @@ impl PubSubClient {
     }
 
     /// Listen on a channel.
-    pub fn listen(&mut self, channel: &str, mut rx: broadcast::Receiver<NotificationResponse>) {
+    pub fn listen(&mut self, channel: &str, mut rx: Listener) {
         let shutdown = self.shutdown.clone();
         let tx = self.tx.clone();
 
@@ -61,8 +57,9 @@ impl PubSubClient {
                                 if tx.send(message).await.is_err() {
                                     return;
                                 }
+                                rx.stats().incr_recv();
                             },
-                            Err(RecvError::Lagged(_)) => (),
+                            Err(RecvError::Lagged(_)) => rx.stats().incr_dropped(),
                             Err(RecvError::Closed) => return,
                         }
                     }
