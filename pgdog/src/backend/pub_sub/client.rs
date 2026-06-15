@@ -1,5 +1,7 @@
-use crate::net::NotificationResponse;
-use crate::{backend::pub_sub::listener::Listener, config::config};
+use crate::{
+    backend::pub_sub::{channel_size, listener::Listener},
+    net::NotificationResponse,
+};
 
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::{Notify, broadcast::error::RecvError, mpsc};
@@ -21,8 +23,7 @@ impl Default for PubSubClient {
 
 impl PubSubClient {
     pub fn new() -> Self {
-        let size = config().config.general.pub_sub_channel_size;
-        let (tx, rx) = mpsc::channel(std::cmp::max(1, size));
+        let (tx, rx) = mpsc::channel(channel_size());
 
         Self {
             shutdown: Arc::new(Notify::new()),
@@ -83,10 +84,93 @@ impl PubSubClient {
 
 #[cfg(test)]
 mod test {
+    use std::time::Duration;
+
+    use bytes::BufMut;
+    use tokio::{task::yield_now, time::timeout};
+
+    use crate::{
+        backend::pub_sub::{StatsSnapshot, listener::test_support::TestChannel},
+        net::{FromBytes, Payload},
+    };
+
     use super::*;
 
+    fn notification(channel: &str, payload: &str) -> NotificationResponse {
+        let mut bytes = Payload::named('A');
+        bytes.put_i32(1234);
+        bytes.put_string(channel);
+        bytes.put_string(payload);
+
+        NotificationResponse::from_bytes(bytes.freeze()).expect("notification")
+    }
+
+    fn assert_snapshot(snapshot: StatsSnapshot, recv: u64, dropped: u64, listeners: u64) {
+        assert_eq!(snapshot.recv, recv);
+        assert_eq!(snapshot.dropped, dropped);
+        assert_eq!(snapshot.listeners, listeners);
+    }
+
+    async fn recv_notification(client: &mut PubSubClient) -> NotificationResponse {
+        timeout(Duration::from_secs(1), client.recv())
+            .await
+            .expect("timed out waiting for notification")
+            .expect("notification")
+    }
+
+    async fn wait_for_listener_count(channel: &TestChannel, listeners: u64) {
+        for _ in 0..10 {
+            if channel.stats().listeners == listeners {
+                return;
+            }
+
+            yield_now().await;
+        }
+
+        assert_eq!(channel.stats().listeners, listeners);
+    }
+
     #[test]
-    fn test_empty_pub_sub_client() {
-        let _client = PubSubClient::new();
+    fn default_constructs_empty_client() {
+        let client = PubSubClient::default();
+        assert!(client.unlisten.is_empty());
+    }
+
+    #[tokio::test]
+    async fn listen_forwards_notifications_to_client() {
+        let channel = TestChannel::new();
+        let mut client = PubSubClient::new();
+
+        client.listen("events", channel.listener());
+        channel
+            .send(notification("events", "payload"))
+            .expect("send notification");
+
+        let message = recv_notification(&mut client).await;
+        assert_eq!(message.channel(), "events");
+        assert_eq!(message.payload(), "payload");
+        assert_snapshot(channel.stats(), 1, 0, 1);
+        assert_eq!(client.unlisten.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn unlisten_stops_forwarding_notifications() {
+        let channel = TestChannel::new();
+        let mut client = PubSubClient::new();
+
+        client.listen("events", channel.listener());
+        assert_eq!(client.unlisten.len(), 1);
+
+        client.unlisten("events");
+        assert!(client.unlisten.is_empty());
+        wait_for_listener_count(&channel, 0).await;
+
+        assert!(channel.send(notification("events", "payload")).is_err());
+        assert!(
+            timeout(Duration::from_millis(50), client.recv())
+                .await
+                .is_err()
+        );
+        assert_snapshot(channel.stats(), 0, 0, 0);
     }
 }

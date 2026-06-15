@@ -19,7 +19,7 @@ use tokio::{
 };
 use tracing::{debug, error, info};
 
-use super::{Stats, StatsSnapshot};
+use super::{Stats, StatsSnapshot, channel_size};
 use crate::{
     backend::{self, ConnectReason, DisconnectReason, Pool, pool::Error},
     config::config,
@@ -108,6 +108,45 @@ impl DerefMut for Listener {
     }
 }
 
+#[cfg(test)]
+pub(crate) mod test_support {
+    use super::*;
+
+    pub(crate) struct TestChannel {
+        tx: broadcast::Sender<NotificationResponse>,
+        stats: Arc<Stats>,
+    }
+
+    impl TestChannel {
+        pub(crate) fn new() -> Self {
+            let (tx, _) = broadcast::channel(4);
+
+            Self {
+                tx,
+                stats: Arc::new(Stats::default()),
+            }
+        }
+
+        pub(crate) fn listener(&self) -> Listener {
+            Listener::new(&Channel {
+                tx: self.tx.clone(),
+                stats: self.stats.clone(),
+            })
+        }
+
+        pub(crate) fn send(
+            &self,
+            notification: NotificationResponse,
+        ) -> Result<usize, broadcast::error::SendError<NotificationResponse>> {
+            self.tx.send(notification)
+        }
+
+        pub(crate) fn stats(&self) -> StatsSnapshot {
+            self.stats.get()
+        }
+    }
+}
+
 #[derive(Debug)]
 struct Comms {
     start: Notify,
@@ -127,7 +166,7 @@ pub struct PubSubListener {
 impl PubSubListener {
     /// Create new listener on the server connection.
     pub fn new(pool: &Pool) -> Self {
-        let (tx, mut rx) = mpsc::channel(config().config.general.pub_sub_channel_size);
+        let (tx, mut rx) = mpsc::channel(channel_size());
 
         let pool = pool.clone();
         let channels = CHANNELS.clone();
@@ -194,7 +233,7 @@ impl PubSubListener {
                 return Ok(Listener::new(channel));
             }
 
-            let (tx, _) = broadcast::channel(config().config.general.pub_sub_channel_size);
+            let (tx, _) = broadcast::channel(channel_size());
             let stats = Arc::new(Stats::default());
 
             let channel = Channel {
@@ -302,5 +341,146 @@ impl PubSubListener {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use std::{collections::HashMap, sync::Arc};
+
+    use parking_lot::Mutex;
+    use tokio::sync::{Notify, mpsc};
+
+    use super::{test_support::TestChannel, *};
+
+    fn test_pub_sub_listener() -> (PubSubListener, mpsc::Receiver<Request>) {
+        let (tx, rx) = mpsc::channel(4);
+
+        (
+            PubSubListener {
+                id: FrontendPid::new(),
+                pool: Pool::new_test(),
+                tx,
+                channels: Arc::new(Mutex::new(HashMap::new())),
+                comms: Arc::new(Comms {
+                    start: Notify::new(),
+                    shutdown: Notify::new(),
+                }),
+            },
+            rx,
+        )
+    }
+
+    fn assert_snapshot(snapshot: StatsSnapshot, recv: u64, dropped: u64, listeners: u64) {
+        assert_eq!(snapshot.recv, recv);
+        assert_eq!(snapshot.dropped, dropped);
+        assert_eq!(snapshot.listeners, listeners);
+    }
+
+    fn assert_request_query(request: Request, expected: &str) {
+        let ProtocolMessage::Query(query) = ProtocolMessage::from(request) else {
+            panic!("request should convert to a query message");
+        };
+
+        assert_eq!(query.query(), expected);
+    }
+
+    async fn expect_subscribe(rx: &mut mpsc::Receiver<Request>, expected: &str) {
+        let request = rx.recv().await.expect("request");
+
+        match request {
+            Request::Subscribe(channel) => assert_eq!(channel, expected),
+            request => panic!("expected subscribe request, got {request:?}"),
+        }
+    }
+
+    async fn expect_notify(
+        rx: &mut mpsc::Receiver<Request>,
+        expected_channel: &str,
+        expected_payload: &str,
+    ) {
+        let request = rx.recv().await.expect("request");
+
+        match request {
+            Request::Notify { channel, payload } => {
+                assert_eq!(channel, expected_channel);
+                assert_eq!(payload, expected_payload);
+            }
+            request => panic!("expected notify request, got {request:?}"),
+        }
+    }
+
+    #[test]
+    fn requests_convert_to_expected_sql_queries() {
+        assert_request_query(Request::Subscribe("events".into()), "LISTEN \"events\"");
+        assert_request_query(Request::Unsubscribe("events".into()), "UNLISTEN \"events\"");
+        assert_request_query(
+            Request::Notify {
+                channel: "events".into(),
+                payload: "payload".into(),
+            },
+            "NOTIFY \"events\", 'payload'",
+        );
+    }
+
+    #[test]
+    fn listener_drop_updates_listener_count() {
+        let channel = TestChannel::new();
+        assert_snapshot(channel.stats(), 0, 0, 0);
+
+        let first = channel.listener();
+        assert_snapshot(channel.stats(), 0, 0, 1);
+
+        {
+            let _second = channel.listener();
+            assert_snapshot(channel.stats(), 0, 0, 2);
+        }
+
+        assert_snapshot(channel.stats(), 0, 0, 1);
+        drop(first);
+        assert_snapshot(channel.stats(), 0, 0, 0);
+    }
+
+    #[tokio::test]
+    async fn listen_creates_channel_once_and_reuses_it() {
+        let (pub_sub, mut rx) = test_pub_sub_listener();
+
+        let first = pub_sub.listen("events").await.expect("first listen");
+        expect_subscribe(&mut rx, "events").await;
+        assert_eq!(pub_sub.channels.lock().len(), 1);
+        assert_snapshot(first.stats().get(), 0, 0, 1);
+
+        let second = pub_sub.listen("events").await.expect("second listen");
+        assert!(matches!(
+            rx.try_recv(),
+            Err(mpsc::error::TryRecvError::Empty)
+        ));
+        assert_eq!(pub_sub.channels.lock().len(), 1);
+        assert_snapshot(second.stats().get(), 0, 0, 2);
+
+        drop(first);
+        assert_snapshot(second.stats().get(), 0, 0, 1);
+
+        drop(second);
+        let stats = pub_sub
+            .channels
+            .lock()
+            .get("events")
+            .expect("events channel")
+            .stats
+            .get();
+        assert_snapshot(stats, 0, 0, 0);
+    }
+
+    #[tokio::test]
+    async fn notify_queues_notify_request() {
+        let (pub_sub, mut rx) = test_pub_sub_listener();
+
+        pub_sub
+            .notify("events", "payload")
+            .await
+            .expect("notify request");
+
+        expect_notify(&mut rx, "events", "payload").await;
     }
 }

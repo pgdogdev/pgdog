@@ -39,3 +39,28 @@ impl Stats {
         }
     }
 }
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    fn assert_snapshot(snapshot: StatsSnapshot, recv: u64, dropped: u64, listeners: u64) {
+        assert_eq!(snapshot.recv, recv);
+        assert_eq!(snapshot.dropped, dropped);
+        assert_eq!(snapshot.listeners, listeners);
+    }
+
+    #[test]
+    fn snapshot_reflects_counter_changes() {
+        let stats = Stats::default();
+        assert_snapshot(stats.get(), 0, 0, 0);
+
+        stats.incr_recv();
+        stats.incr_dropped();
+        stats.incr_listeners();
+        stats.incr_listeners();
+        stats.decr_listeners();
+
+        assert_snapshot(stats.get(), 1, 1, 1);
+    }
+}
