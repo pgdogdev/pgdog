@@ -22,7 +22,10 @@ use crate::frontend::router::sharding::Mapping;
 use crate::frontend::router::sharding::mapping::mapping_valid;
 use crate::{
     backend::pool::PoolConfig,
-    config::{ConfigAndUsers, ManualQuery, Role, User as ConfigUser, config, load, set},
+    config::{
+        ConfigAndUsers, ManualQuery, Role, ShardedMapping, ShardedTable, User as ConfigUser,
+        config, load, set,
+    },
     net::{messages::FrontendPid, tls},
 };
 
@@ -487,6 +490,41 @@ impl Databases {
     }
 }
 
+fn resolve_table_mappings(
+    tables: &mut [ShardedTable],
+    mappings: &HashMap<(String, String, Option<String>), Vec<ShardedMapping>>,
+) {
+    for table in tables {
+        let found = mappings
+            .get(&(
+                table.database.clone(),
+                table.column.clone(),
+                table.name.clone(),
+            ))
+            .or_else(|| {
+                table.name.as_ref().and_then(|_| {
+                    // if the table is specified for `sharded_tables`, try to apply the default
+                    // mapping that is not tied to specific table
+                    mappings.get(&(table.database.clone(), table.column.clone(), None))
+                })
+            });
+
+        if let Some(found) = found {
+            table.mapping = Mapping::new(found);
+
+            if let Some(ref mapping) = table.mapping
+                && !mapping_valid(mapping)
+            {
+                warn!(
+                    "sharded table name=\"{}\", column=\"{}\" has overlapping ranges",
+                    table.name.as_deref().unwrap_or_default(),
+                    table.column
+                );
+            }
+        }
+    }
+}
+
 fn new_pool(user: &crate::config::User, config: &crate::config::Config) -> Option<(User, Cluster)> {
     let sharded_tables = config.sharded_tables();
     let omnisharded_tables = config.omnisharded_tables();
@@ -528,27 +566,7 @@ fn new_pool(user: &crate::config::User, config: &crate::config::Config) -> Optio
         .cloned()
         .unwrap_or_default();
 
-    for sharded_table in &mut sharded_tables {
-        let mappings = sharded_mappings.get(&(
-            sharded_table.database.clone(),
-            sharded_table.column.clone(),
-            sharded_table.name.clone(),
-        ));
-
-        if let Some(mappings) = mappings {
-            sharded_table.mapping = Mapping::new(mappings);
-
-            if let Some(ref mapping) = sharded_table.mapping
-                && !mapping_valid(mapping)
-            {
-                warn!(
-                    "sharded table name=\"{}\", column=\"{}\" has overlapping ranges",
-                    sharded_table.name.as_ref().unwrap_or(&String::from("")),
-                    sharded_table.column
-                );
-            }
-        }
-    }
+    resolve_table_mappings(&mut sharded_tables, &sharded_mappings);
 
     let omnisharded_tables = omnisharded_tables
         .get(&user.database)
