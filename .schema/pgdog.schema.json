@@ -996,7 +996,7 @@
           "default": "pg_query_protobuf"
         },
         "query_size_limit": {
-          "description": "Maximum size, in bytes, of a query message (`Query` or `Parse`)\nreceived from a client, including the 5-byte message header.\nProtects the query parser from very large SQL texts; other\nprotocol messages (e.g. `Bind`, `CopyData`) are not affected.\nDepending on the setting `query_size_limit_action` oversized messages are\neither logged or blocked.\n\n_Default:_ `None` (disabled)",
+          "description": "Maximum size, in bytes, of a query message (`Query` or `Parse`)\nreceived from a client, including the 5-byte message header.\nProtects the query parser from very large SQL texts; other\nprotocol messages (e.g. `Bind`, `CopyData`) are not affected.\nDepending on the setting `query_size_limit_action` oversized messages are\neither logged or blocked.\n\n_Default:_ `None` (disabled)\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#query_size_limit",
           "type": [
             "integer",
             "null"
@@ -1006,7 +1006,7 @@
           "minimum": 0
         },
         "query_size_limit_action": {
-          "description": "Action to take when a client query message exceeds `query_size_limit`.\n\n_Default:_ `warn`",
+          "description": "Action to take when a client query message exceeds `query_size_limit`.\n\n_Default:_ `warn`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#query_size_limit_action",
           "$ref": "#/$defs/QuerySizeLimitAction",
           "default": "warn"
         },

@@ -309,12 +309,16 @@ pub struct General {
     /// either logged or blocked.
     ///
     /// _Default:_ `None` (disabled)
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#query_size_limit
     #[serde(default = "General::default_query_size_limit")]
     pub query_size_limit: Option<usize>,
 
     /// Action to take when a client query message exceeds `query_size_limit`.
     ///
     /// _Default:_ `warn`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#query_size_limit_action
     #[serde(default = "General::query_size_limit_action")]
     pub query_size_limit_action: QuerySizeLimitAction,
 
