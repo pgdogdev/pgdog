@@ -1,3 +1,4 @@
+use indexmap::IndexMap;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -9,8 +10,8 @@ use crate::sharding::ShardedSchema;
 use crate::util::random_string;
 use crate::{
     EnumeratedDatabase, Memory, OmnishardedTable, PassthroughAuth, PreparedStatements,
-    QueryParserEngine, QueryParserLevel, ReadWriteSplit, RewriteMode, Role, SystemCatalogsBehavior,
-    system_catalogs,
+    QueryParserEngine, QueryParserLevel, ReadWriteSplit, RewriteMode, Role, ShardedMappingKey,
+    SystemCatalogsBehavior, system_catalogs,
 };
 
 use super::database::Database;
@@ -383,19 +384,17 @@ impl Config {
     }
 
     /// Sharded mappings.
-    pub fn sharded_mappings(
-        &self,
-    ) -> HashMap<(String, String, Option<String>), Vec<ShardedMapping>> {
-        let mut mappings = HashMap::new();
+    pub fn sharded_mappings(&self) -> IndexMap<ShardedMappingKey, Vec<ShardedMapping>> {
+        let mut mappings = IndexMap::new();
 
         for mapping in &self.sharded_mappings {
             let mapping = mapping.clone();
             let entry = mappings
-                .entry((
-                    mapping.database.clone(),
-                    mapping.column.clone(),
-                    mapping.table.clone(),
-                ))
+                .entry(ShardedMappingKey {
+                    database: mapping.database.clone(),
+                    column: mapping.column.clone(),
+                    table: mapping.table.clone(),
+                })
                 .or_insert_with(Vec::new);
             entry.push(mapping);
         }

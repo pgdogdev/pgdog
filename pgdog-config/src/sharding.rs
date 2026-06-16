@@ -1,3 +1,4 @@
+use indexmap::Equivalent;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -196,9 +197,32 @@ impl Hash for ShardedMapping {
 
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone, Default, Eq, Hash, JsonSchema)]
 pub struct ShardedMappingKey {
-    database: String,
-    column: String,
-    table: Option<String>,
+    pub database: String,
+    pub column: String,
+    pub table: Option<String>,
+}
+
+#[derive(PartialEq, Eq, Hash)]
+pub struct ShardedMappingKeyRef<'a> {
+    pub database: &'a String,
+    pub column: &'a String,
+    pub table: Option<&'a String>,
+}
+
+impl<'a> From<&'a ShardedMappingKey> for ShardedMappingKeyRef<'a> {
+    fn from(key: &'a ShardedMappingKey) -> Self {
+        Self {
+            database: &key.database,
+            column: &key.column,
+            table: key.table.as_ref(),
+        }
+    }
+}
+
+impl<'a> Equivalent<ShardedMappingKey> for ShardedMappingKeyRef<'a> {
+    fn equivalent(&self, key: &ShardedMappingKey) -> bool {
+        self == &ShardedMappingKeyRef::from(key)
+    }
 }
 
 /// Strategy used to match column values to a shard.

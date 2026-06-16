@@ -6,10 +6,12 @@ use std::sync::Arc;
 
 use arc_swap::ArcSwap;
 use futures::future::try_join_all;
+use indexmap::IndexMap;
 use once_cell::sync::Lazy;
 use parking_lot::lock_api::MutexGuard;
 use parking_lot::{Mutex, RawMutex};
 use pgdog_config::users::PasswordKind;
+use pgdog_config::{ShardedMappingKey, ShardedMappingKeyRef};
 use tracing::{debug, error, info, warn};
 
 use crate::auth::AuthResult;
@@ -492,20 +494,24 @@ impl Databases {
 
 fn resolve_table_mappings(
     tables: &mut [ShardedTable],
-    mappings: &HashMap<(String, String, Option<String>), Vec<ShardedMapping>>,
+    mappings: &IndexMap<ShardedMappingKey, Vec<ShardedMapping>>,
 ) {
     for table in tables {
         let found = mappings
-            .get(&(
-                table.database.clone(),
-                table.column.clone(),
-                table.name.clone(),
-            ))
+            .get(&ShardedMappingKeyRef {
+                database: &table.database,
+                column: &table.column,
+                table: table.name.as_ref(),
+            })
             .or_else(|| {
                 table.name.as_ref().and_then(|_| {
                     // if the table is specified for `sharded_tables`, try to apply the default
                     // mapping that is not tied to specific table
-                    mappings.get(&(table.database.clone(), table.column.clone(), None))
+                    mappings.get(&ShardedMappingKeyRef {
+                        database: &table.database,
+                        column: &table.column,
+                        table: None,
+                    })
                 })
             });
 
