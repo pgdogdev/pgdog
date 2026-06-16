@@ -25,6 +25,7 @@ pub enum ParseResult {
     SetupSchema(SetupSchema),
     Shutdown(Shutdown),
     ShowLists(ShowLists),
+    ShowListeners(ShowListeners),
     ShowPrepared(ShowPreparedStatements),
     ShowReplication(ShowReplication),
     ShowServerMemory(ShowServerMemory),
@@ -71,6 +72,7 @@ impl ParseResult {
             SetupSchema(setup_schema) => setup_schema.execute().await,
             Shutdown(shutdown) => shutdown.execute().await,
             ShowLists(show_lists) => show_lists.execute().await,
+            ShowListeners(show_listeners) => show_listeners.execute().await,
             ShowPrepared(cmd) => cmd.execute().await,
             ShowReplication(show_replication) => show_replication.execute().await,
             ShowServerMemory(show_server_memory) => show_server_memory.execute().await,
@@ -117,6 +119,7 @@ impl ParseResult {
             SetupSchema(setup_schema) => setup_schema.name(),
             Shutdown(shutdown) => shutdown.name(),
             ShowLists(show_lists) => show_lists.name(),
+            ShowListeners(show_listeners) => show_listeners.name(),
             ShowPrepared(show) => show.name(),
             ShowReplication(show_replication) => show_replication.name(),
             ShowServerMemory(show_server_memory) => show_server_memory.name(),
@@ -183,6 +186,7 @@ impl Parser {
                 "version" => ParseResult::ShowVersion(ShowVersion::parse(&sql)?),
                 "instance_id" => ParseResult::ShowInstanceId(ShowInstanceId::parse(&sql)?),
                 "lists" => ParseResult::ShowLists(ShowLists::parse(&sql)?),
+                "listeners" => ParseResult::ShowListeners(ShowListeners::parse(&sql)?),
                 "prepared" => ParseResult::ShowPrepared(ShowPreparedStatements::parse(&sql)?),
                 "replication" => ParseResult::ShowReplication(ShowReplication::parse(&sql)?),
                 "replication_slots" => {
@@ -263,6 +267,12 @@ mod tests {
     fn parses_show_client_memory_command() {
         let result = Parser::parse("SHOW CLIENT MEMORY;");
         assert!(matches!(result, Ok(ParseResult::ShowClientMemory(_))));
+    }
+
+    #[test]
+    fn parses_show_listeners_command() {
+        let result = Parser::parse("SHOW LISTENERS;");
+        assert!(matches!(result, Ok(ParseResult::ShowListeners(_))));
     }
 
     #[test]

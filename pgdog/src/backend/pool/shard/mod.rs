@@ -4,7 +4,7 @@ use arc_swap::ArcSwap;
 use std::ops::Deref;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{OnceCell, broadcast};
+use tokio::sync::OnceCell;
 use tokio::{select, spawn, sync::Notify};
 use tracing::{debug, info};
 
@@ -12,9 +12,10 @@ use crate::backend::PubSubListener;
 use crate::backend::Schema;
 use crate::backend::databases::User;
 use crate::backend::pool::lb::ban::Ban;
+use crate::backend::pub_sub::listener::Listener;
 use crate::config::{LoadBalancingStrategy, ReadWriteSplit, Role};
+use crate::net::Parameters;
 use crate::net::messages::FrontendPid;
-use crate::net::{NotificationResponse, Parameters};
 
 use super::{Error, Guard, LoadBalancer, Pool, PoolConfig, Request};
 
@@ -103,10 +104,7 @@ impl Shard {
     }
 
     /// Listen for notifications on channel.
-    pub async fn listen(
-        &self,
-        channel: &str,
-    ) -> Result<broadcast::Receiver<NotificationResponse>, Error> {
+    pub async fn listen(&self, channel: &str) -> Result<Listener, Error> {
         match self.pub_sub.load_full().deref() {
             Some(listener) => listener.listen(channel).await,
             _ => Err(Error::PubSubDisabled),

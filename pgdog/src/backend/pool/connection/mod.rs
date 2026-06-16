@@ -256,8 +256,8 @@ impl Connection {
         };
 
         if let Some(shard) = self.cluster()?.shards().get(num) {
-            let rx = shard.listen(channel).await?;
-            self.pub_sub.listen(channel, rx);
+            let listener = shard.listen(channel).await?;
+            self.pub_sub.listen(channel, listener);
         }
 
         Ok(())
