@@ -11,7 +11,10 @@ use once_cell::sync::Lazy;
 use parking_lot::lock_api::MutexGuard;
 use parking_lot::{Mutex, RawMutex};
 use pgdog_config::users::PasswordKind;
-use pgdog_config::{ShardedMappingKey, ShardedMappingKeyRef};
+use pgdog_config::{
+    ShardedMappingConfig, ShardedMappingKey, ShardedMappingKeyRef, ShardedMappingKindDeprecated,
+    ShardedMappingList, ShardedMappingRange, ShardedTableConfig,
+};
 use tracing::{debug, error, info, warn};
 
 use crate::auth::AuthResult;
@@ -20,13 +23,12 @@ use crate::config::PoolerMode;
 use crate::frontend::PreparedStatements;
 use crate::frontend::client::query_engine::two_pc::Manager;
 use crate::frontend::router::parser::Cache;
-use crate::frontend::router::sharding::Mapping;
-use crate::frontend::router::sharding::mapping::mapping_valid;
+use crate::frontend::router::sharding::{Mapping, ShardedTable};
 use crate::{
     backend::pool::PoolConfig,
     config::{
-        ConfigAndUsers, ManualQuery, Role, ShardedMapping, ShardedTable, User as ConfigUser,
-        config, load, set,
+        ConfigAndUsers, ManualQuery, Role, ShardedMappingDeprecated, User as ConfigUser, config,
+        load, set,
     },
     net::{messages::FrontendPid, tls},
 };
@@ -492,47 +494,75 @@ impl Databases {
     }
 }
 
-fn resolve_table_mappings(
-    tables: &mut [ShardedTable],
-    mappings: &IndexMap<ShardedMappingKey, Vec<ShardedMapping>>,
-) {
-    for table in tables {
-        let found = mappings
-            .get(&ShardedMappingKeyRef {
-                database: &table.database,
-                column: &table.column,
-                table: table.name.as_ref(),
-            })
-            .or_else(|| {
-                table.name.as_ref().and_then(|_| {
-                    // if the table is specified for `sharded_tables`, try to apply the default
-                    // mapping that is not tied to specific table
-                    mappings.get(&ShardedMappingKeyRef {
-                        database: &table.database,
-                        column: &table.column,
-                        table: None,
-                    })
-                })
-            });
+fn resolve_sharded_table(
+    config: &ShardedTableConfig,
+    mappings: &IndexMap<ShardedMappingKey, Vec<ShardedMappingDeprecated>>,
+    num_shards: usize,
+) -> ShardedTable {
+    let mapping = config
+        .mapping
+        .clone()
+        .or_else(|| resolve_table_mapping_deprecated(config, mappings));
 
-        if let Some(found) = found {
-            table.mapping = Mapping::new(found);
-
-            if let Some(ref mapping) = table.mapping
-                && !mapping_valid(mapping)
-            {
-                warn!(
-                    "sharded table name=\"{}\", column=\"{}\" has overlapping ranges",
-                    table.name.as_deref().unwrap_or_default(),
-                    table.column
-                );
-            }
+    let mapping = mapping.map(|configs| {
+        let tname = config.name.as_deref().unwrap_or("*");
+        let column = &config.column;
+        for error in crate::backend::validation::validate(&configs, config.data_type, num_shards) {
+            warn!("sharded table name=\"{tname}\", column=\"{column}\": {error}");
         }
+        Mapping::new(configs)
+    });
+
+    ShardedTable {
+        database: config.database.clone(),
+        name: config.name.clone(),
+        schema: config.schema.clone(),
+        column: config.column.clone(),
+        primary: config.primary,
+        centroids: config.centroids.clone(),
+        data_type: config.data_type,
+        centroid_probes: config.centroid_probes,
+        hasher: config.hasher.clone(),
+        mapping: mapping.flatten(),
     }
 }
 
+fn resolve_table_mapping_deprecated(
+    table: &ShardedTableConfig,
+    mappings: &IndexMap<ShardedMappingKey, Vec<ShardedMappingDeprecated>>,
+) -> Option<Vec<ShardedMappingConfig>> {
+    let found = mappings.get(&ShardedMappingKeyRef {
+        database: &table.database,
+        column: &table.column,
+        table: table.name.as_ref(),
+    })?;
+
+    Some(
+        found
+            .iter()
+            .map(|map| match map.kind {
+                ShardedMappingKindDeprecated::List => {
+                    ShardedMappingConfig::List(ShardedMappingList {
+                        shard: map.shard,
+                        values: map.values.clone(),
+                    })
+                }
+                ShardedMappingKindDeprecated::Range => {
+                    ShardedMappingConfig::Range(ShardedMappingRange {
+                        shard: map.shard,
+                        start: map.start.clone(),
+                        end: map.end.clone(),
+                    })
+                }
+                ShardedMappingKindDeprecated::Default => {
+                    ShardedMappingConfig::Default { shard: map.shard }
+                }
+            })
+            .collect(),
+    )
+}
+
 fn new_pool(user: &crate::config::User, config: &crate::config::Config) -> Option<(User, Cluster)> {
-    let sharded_tables = config.sharded_tables();
     let omnisharded_tables = config.omnisharded_tables();
     let sharded_mappings = config.sharded_mappings();
     let sharded_schemas = config.sharded_schemas();
@@ -563,16 +593,16 @@ fn new_pool(user: &crate::config::User, config: &crate::config::Config) -> Optio
         shard_configs.push(ClusterShardConfig { primary, replicas });
     }
 
-    let mut sharded_tables = sharded_tables
-        .get(&user.database)
-        .cloned()
-        .unwrap_or_default();
+    let sharded_tables: Vec<_> = config
+        .sharded_tables
+        .iter()
+        .filter(|t| t.database == user.database)
+        .map(|t| resolve_sharded_table(t, &sharded_mappings, shard_configs.len()))
+        .collect();
     let sharded_schemas = sharded_schemas
         .get(&user.database)
         .cloned()
         .unwrap_or_default();
-
-    resolve_table_mappings(&mut sharded_tables, &sharded_mappings);
 
     let omnisharded_tables = omnisharded_tables
         .get(&user.database)

@@ -4,11 +4,10 @@ use pg_query::{NodeEnum, protobuf::CopyStmt};
 
 use crate::{
     backend::{Cluster, ShardingSchema},
-    config::ShardedTable,
     frontend::router::{
         CopyRow,
         parser::Shard,
-        sharding::{ContextBuilder, Tables},
+        sharding::{ContextBuilder, ShardedTable, Tables},
     },
     net::messages::{CopyData, ToBytes},
 };

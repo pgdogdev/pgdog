@@ -1,13 +1,12 @@
 use indexmap::Equivalent;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::collections::{HashSet, hash_map::DefaultHasher};
 use std::fmt::Display;
-use std::hash::{Hash, Hasher as StdHasher};
+use std::hash::Hash;
 use std::path::PathBuf;
 use std::str::FromStr;
 use tracing::{info, warn};
+use uuid::Uuid;
 
 use super::error::Error;
 use pgdog_vector::Vector;
@@ -17,7 +16,7 @@ use pgdog_vector::Vector;
 /// https://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
-pub struct ShardedTable {
+pub struct ShardedTableConfig {
     /// The name of the database in `[[databases]]` section in which the table is located.
     ///
     /// https://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/#database
@@ -81,12 +80,12 @@ pub struct ShardedTable {
     #[serde(default)]
     pub hasher: Hasher,
 
-    /// Resolved explicit routing rules derived from `[[sharded_mappings]]`. Not configurable directly in TOML.
-    #[serde(skip, default)]
-    pub mapping: Option<Mapping>,
+    /// The mapping definition for the column. By default, it's empty and only the hasher is used
+    /// to infer the shard to put the row into.
+    pub mapping: Option<Vec<ShardedMappingConfig>>,
 }
 
-impl ShardedTable {
+impl ShardedTableConfig {
     /// Load centroids from file, if provided.
     ///
     /// Centroids can be very large vectors (1000+ columns).
@@ -114,6 +113,23 @@ impl ShardedTable {
 
         Ok(())
     }
+}
+
+/// Explicit routing rule mapping specific column values or ranges to a shard.
+///
+/// https://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/#mapping-fields
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash, JsonSchema)]
+#[serde(rename_all = "snake_case", tag = "kind", deny_unknown_fields)]
+pub enum ShardedMappingConfig {
+    /// Catch-all fallback for values not matched by any other rule.
+    Default {
+        /// Target shard number for matched queries.
+        shard: usize,
+    },
+    /// Match an explicit set of values.
+    List(ShardedMappingList),
+    /// Match a contiguous range of values (inclusive start, exclusive end).
+    Range(ShardedMappingRange),
 }
 
 /// Hash function used to map a sharding key value to a shard number.
@@ -148,10 +164,10 @@ pub enum DataType {
 
 /// Explicit routing rule mapping specific column values or ranges to a shard.
 ///
-/// https://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/#mapping-fields
+/// **Deprecated**: Use [[sharded_table.mapping]] configuration instead
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, Eq, JsonSchema)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
-pub struct ShardedMapping {
+pub struct ShardedMappingDeprecated {
     /// Database name from the `[[databases]]` section.
     pub database: String,
     /// Must match a column defined in `[[sharded_tables]]`.
@@ -161,38 +177,16 @@ pub struct ShardedMapping {
     /// Optional; must match a `schema` in `[[sharded_tables]]` if specified.
     pub schema: Option<String>,
     /// Mapping strategy: `list`, `range`, or `default`.
-    pub kind: ShardedMappingKind,
+    pub kind: ShardedMappingKindDeprecated,
     /// Inclusive lower bound for range mappings.
     pub start: Option<FlexibleType>,
     /// Exclusive upper bound for range mappings.
     pub end: Option<FlexibleType>,
     /// Set of values for list mappings.
     #[serde(default)]
-    pub values: HashSet<FlexibleType>,
+    pub values: Vec<FlexibleType>,
     /// Target shard number for matched queries.
     pub shard: usize,
-}
-
-impl Hash for ShardedMapping {
-    fn hash<H: StdHasher>(&self, state: &mut H) {
-        self.database.hash(state);
-        self.column.hash(state);
-        self.table.hash(state);
-        self.kind.hash(state);
-        self.start.hash(state);
-        self.end.hash(state);
-
-        // Hash the values in a deterministic way by XORing their individual hashes
-        let mut values_hash = 0u64;
-        for value in &self.values {
-            let mut hasher = DefaultHasher::new();
-            value.hash(&mut hasher);
-            values_hash ^= hasher.finish();
-        }
-        values_hash.hash(state);
-
-        self.shard.hash(state);
-    }
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone, Default, Eq, Hash, JsonSchema)]
@@ -226,9 +220,11 @@ impl<'a> Equivalent<ShardedMappingKey> for ShardedMappingKeyRef<'a> {
 }
 
 /// Strategy used to match column values to a shard.
+///
+/// **Deprecated**: Use [[sharded_table.mapping]] configuration instead
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone, Default, Hash, Eq, JsonSchema)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
-pub enum ShardedMappingKind {
+pub enum ShardedMappingKindDeprecated {
     /// Match an explicit set of values (default).
     #[default]
     List,
@@ -236,6 +232,26 @@ pub enum ShardedMappingKind {
     Range,
     /// Catch-all fallback for values not matched by any other rule.
     Default,
+}
+
+#[derive(Serialize, Deserialize, PartialEq, Debug, Clone, Default, Hash, Eq, JsonSchema)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub struct ShardedMappingList {
+    /// Target shard number for matched queries.
+    pub shard: usize,
+    /// Set of values for list mappings.
+    pub values: Vec<FlexibleType>,
+}
+
+#[derive(Serialize, Deserialize, PartialEq, Debug, Clone, Default, Hash, Eq, JsonSchema)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub struct ShardedMappingRange {
+    /// Target shard number for matched queries.
+    pub shard: usize,
+    /// Inclusive lower bound for range mappings.
+    pub start: Option<FlexibleType>,
+    /// Exclusive upper bound for range mappings.
+    pub end: Option<FlexibleType>,
 }
 
 /// A sharding key value that can be an integer, UUID, or string.
@@ -246,7 +262,7 @@ pub enum FlexibleType {
     Integer(i64),
     /// UUID.
     #[schemars(with = "String")]
-    Uuid(uuid::Uuid),
+    Uuid(Uuid),
     /// Text string.
     String(String),
 }
@@ -323,89 +339,30 @@ impl ShardedSchema {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ListShards {
-    mapping: HashMap<FlexibleType, usize>,
-    default: Option<usize>,
+#[derive(Hash, PartialEq, Eq)]
+pub enum FlexibleTypeRef<'a> {
+    Integer(i64),
+    Uuid(&'a Uuid),
+    String(&'a str),
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Hash)]
-pub enum Mapping {
-    Range(Vec<ShardedMapping>), // TODO: optimize with a BTreeMap.
-    List(ListShards),           // Optimized.
-}
-
-impl Hash for ListShards {
-    fn hash<H: StdHasher>(&self, state: &mut H) {
-        // Hash the mapping in a deterministic way by XORing individual key-value hashes
-        let mut mapping_hash = 0u64;
-        for (key, value) in &self.mapping {
-            let mut hasher = DefaultHasher::new();
-            key.hash(&mut hasher);
-            value.hash(&mut hasher);
-            mapping_hash ^= hasher.finish();
-        }
-        mapping_hash.hash(state);
-    }
-}
-
-impl Mapping {
-    pub fn new(mappings: &[ShardedMapping]) -> Option<Self> {
-        let range = mappings
-            .iter()
-            .filter(|m| m.kind == ShardedMappingKind::Range)
-            .cloned()
-            .collect::<Vec<_>>();
-        let list = mappings.iter().any(|m| {
-            matches!(
-                m.kind,
-                ShardedMappingKind::List | ShardedMappingKind::Default
-            )
-        });
-
-        if !range.is_empty() {
-            Some(Self::Range(range))
-        } else if list {
-            Some(Self::List(ListShards::new(mappings)))
-        } else {
-            None
+impl<'a> Equivalent<FlexibleType> for FlexibleTypeRef<'a> {
+    fn equivalent(&self, key: &FlexibleType) -> bool {
+        match (self, key) {
+            (FlexibleTypeRef::Integer(a), FlexibleType::Integer(b)) => a == b,
+            (FlexibleTypeRef::Uuid(a), FlexibleType::Uuid(b)) => a == &b,
+            (FlexibleTypeRef::String(a), FlexibleType::String(b)) => a == b,
+            _ => false,
         }
     }
 }
 
-impl ListShards {
-    pub fn is_empty(&self) -> bool {
-        self.mapping.is_empty()
-    }
-
-    pub fn new(mappings: &[ShardedMapping]) -> Self {
-        let mut mapping = HashMap::new();
-
-        for map in mappings
-            .iter()
-            .filter(|m| m.kind == ShardedMappingKind::List)
-        {
-            for value in &map.values {
-                mapping.insert(value.clone(), map.shard);
-            }
-        }
-
-        Self {
-            mapping,
-            default: mappings
-                .iter()
-                .find(|mapping| mapping.kind == ShardedMappingKind::Default)
-                .map(|mapping| mapping.shard),
-        }
-    }
-
-    pub fn shard(&self, value: &FlexibleType) -> Result<Option<usize>, Error> {
-        if let Some(shard) = self.mapping.get(value) {
-            Ok(Some(*shard))
-        } else if let Some(default) = self.default {
-            Ok(Some(default))
-        } else {
-            Ok(None)
+impl<'a> From<&'a FlexibleType> for FlexibleTypeRef<'a> {
+    fn from(v: &'a FlexibleType) -> Self {
+        match v {
+            FlexibleType::Integer(i) => Self::Integer(*i),
+            FlexibleType::Uuid(u) => Self::Uuid(u),
+            FlexibleType::String(s) => Self::String(s),
         }
     }
 }
@@ -572,60 +529,5 @@ impl Display for UniqueIdFunction {
             Self::Compact => write!(f, "compact"),
             Self::Standard => write!(f, "standard"),
         }
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use super::*;
-
-    #[test]
-    fn test_list_shards_with_default() {
-        let mappings = vec![
-            ShardedMapping {
-                values: [FlexibleType::Integer(1), FlexibleType::Integer(2)]
-                    .into_iter()
-                    .collect(),
-                shard: 0,
-                ..Default::default()
-            },
-            ShardedMapping {
-                values: [FlexibleType::Integer(3)].into_iter().collect(),
-                shard: 1,
-                ..Default::default()
-            },
-            ShardedMapping {
-                kind: ShardedMappingKind::Default,
-                shard: 2,
-                ..Default::default()
-            },
-        ];
-
-        let list = ListShards::new(&mappings);
-
-        // Explicitly mapped values go to their configured shard
-        assert_eq!(list.shard(&FlexibleType::Integer(1)).unwrap(), Some(0));
-        assert_eq!(list.shard(&FlexibleType::Integer(2)).unwrap(), Some(0));
-        assert_eq!(list.shard(&FlexibleType::Integer(3)).unwrap(), Some(1));
-
-        // Unmapped values fall back to the default shard
-        assert_eq!(list.shard(&FlexibleType::Integer(999)).unwrap(), Some(2));
-        assert_eq!(list.shard(&FlexibleType::Integer(-1)).unwrap(), Some(2));
-    }
-
-    #[test]
-    fn test_list_shards_without_default() {
-        let mappings = vec![ShardedMapping {
-            values: [FlexibleType::Integer(1)].into_iter().collect(),
-            ..Default::default()
-        }];
-
-        let list = ListShards::new(&mappings);
-
-        // Explicitly mapped value
-        assert_eq!(list.shard(&FlexibleType::Integer(1)).unwrap(), Some(0));
-
-        // Unmapped value returns None when no default
-        assert_eq!(list.shard(&FlexibleType::Integer(999)).unwrap(), None);
     }
 }

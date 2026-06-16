@@ -95,7 +95,7 @@ for db in pgdog shard_0 shard_1 shard_2 shard_3; do
     psql -c "CREATE TABLE IF NOT EXISTS sharded_varchar (id_varchar VARCHAR)" ${db} -U pgdog
     psql -c "CREATE TABLE IF NOT EXISTS sharded_uuid (id_uuid UUID PRIMARY KEY)" -d "$db" -U pgdog
 
-    for table in list range; do
+    for table in list_deprecated range_deprecated list range mapping_hierarchy; do
         psql -c "CREATE TABLE IF NOT EXISTS sharded_${table} (id BIGINT)" ${db} -U pgdog
     done
 

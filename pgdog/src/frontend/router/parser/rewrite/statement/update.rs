@@ -648,8 +648,9 @@ fn create_stmts(
 
 #[cfg(test)]
 mod test {
+    use crate::frontend::router::sharding::ShardedTable;
     use pg_query::parse;
-    use pgdog_config::{Rewrite, ShardedTable};
+    use pgdog_config::Rewrite;
 
     use crate::backend::schema::Schema;
     use crate::backend::{ShardedTables, replication::ShardedSchemas};

@@ -252,11 +252,10 @@ struct Walk<'a> {
 }
 use crate::{
     backend::{Schema, ShardingSchema},
-    config::ShardedTable,
     frontend::router::{
         parser::{Shard, ee::ParserHooks},
         round_robin,
-        sharding::{ContextBuilder, SchemaSharder, Tables},
+        sharding::{ContextBuilder, SchemaSharder, ShardedTable, Tables},
     },
     net::{Bind, parameter::ParameterValue},
 };
@@ -1569,9 +1568,9 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
 
 #[cfg(test)]
 mod test {
+    use crate::frontend::router::sharding::{Mapping, ShardedTable};
     use pgdog_config::{
-        FlexibleType, Mapping, ShardedMapping, ShardedMappingKind, ShardedTable,
-        SystemCatalogsBehavior,
+        FlexibleType, ShardedMappingConfig, ShardedMappingList, SystemCatalogsBehavior,
     };
 
     use crate::backend::ShardedTables;
@@ -1595,13 +1594,12 @@ mod test {
                     },
                     ShardedTable {
                         column: "list_id".into(),
-                        mapping: Mapping::new(&[ShardedMapping {
-                            kind: ShardedMappingKind::List,
-                            values: vec![FlexibleType::Integer(1), FlexibleType::Integer(2)]
-                                .into_iter()
-                                .collect(),
-                            ..Default::default()
-                        }]),
+                        mapping: Mapping::new(vec![ShardedMappingConfig::List(
+                            ShardedMappingList {
+                                values: vec![FlexibleType::Integer(1), FlexibleType::Integer(2)],
+                                shard: 0,
+                            },
+                        )]),
                         ..Default::default()
                     },
                     // Schema-qualified sharded table with different column name

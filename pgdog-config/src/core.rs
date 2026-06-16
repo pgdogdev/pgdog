@@ -11,7 +11,7 @@ use crate::util::random_string;
 use crate::{
     EnumeratedDatabase, Memory, OmnishardedTable, PassthroughAuth, PreparedStatements,
     QueryParserEngine, QueryParserLevel, ReadWriteSplit, RewriteMode, Role, ShardedMappingKey,
-    SystemCatalogsBehavior, system_catalogs,
+    ShardedTableConfig, SystemCatalogsBehavior, system_catalogs,
 };
 
 use super::database::Database;
@@ -22,7 +22,7 @@ use super::otel::Otel;
 use super::pooling::PoolerMode;
 use super::replication::{MirrorConfig, Mirroring, MirroringLevel, ReplicaLag, Replication};
 use super::rewrite::Rewrite;
-use super::sharding::{ManualQuery, OmnishardedTables, ShardedMapping, ShardedTable};
+use super::sharding::{ManualQuery, OmnishardedTables, ShardedMappingDeprecated};
 use super::users::{Admin, Plugin, Users};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -227,7 +227,7 @@ pub struct Config {
     ///
     /// https://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/
     #[serde(default)]
-    pub sharded_tables: Vec<ShardedTable>,
+    pub sharded_tables: Vec<ShardedTableConfig>,
 
     /// Queries routed manually to a single shard.
     #[serde(default)]
@@ -243,7 +243,7 @@ pub struct Config {
 
     /// Explicit sharding key mappings.
     #[serde(default)]
-    pub sharded_mappings: Vec<ShardedMapping>,
+    pub sharded_mappings: Vec<ShardedMappingDeprecated>,
 
     /// [Schema-based sharding](https://docs.pgdog.dev/features/sharding/sharding-functions/#schema-based-sharding) places data from tables in different Postgres schemas on their own shards.
     ///
@@ -298,20 +298,6 @@ impl Config {
                 });
         }
         databases
-    }
-
-    /// Organize sharded tables by database name.
-    pub fn sharded_tables(&self) -> HashMap<String, Vec<ShardedTable>> {
-        let mut tables = HashMap::new();
-
-        for table in &self.sharded_tables {
-            let entry = tables
-                .entry(table.database.clone())
-                .or_insert_with(Vec::new);
-            entry.push(table.clone());
-        }
-
-        tables
     }
 
     pub fn omnisharded_tables(&self) -> HashMap<String, Vec<OmnishardedTable>> {
@@ -384,7 +370,7 @@ impl Config {
     }
 
     /// Sharded mappings.
-    pub fn sharded_mappings(&self) -> IndexMap<ShardedMappingKey, Vec<ShardedMapping>> {
+    pub fn sharded_mappings(&self) -> IndexMap<ShardedMappingKey, Vec<ShardedMappingDeprecated>> {
         let mut mappings = IndexMap::new();
 
         for mapping in &self.sharded_mappings {
@@ -571,6 +557,12 @@ impl Config {
                 r#""pg_query_raw" parser engine requires a large thread stack, setting it to 32MiB for each Tokio worker"#
             );
         }
+
+        if !self.sharded_mappings.is_empty() {
+            warn!(
+                "`[[sharded_mappings]]` config is deprecated, use `[[sharded_tables.mapping]]` instead"
+            )
+        }
     }
 
     /// Multi-tenancy is enabled.
@@ -661,7 +653,9 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{FlexibleType, ShardedMappingConfig, ShardedMappingList, ShardedMappingRange};
     use crate::{PoolerMode, PreparedStatements, ServerAuth};
+
     use std::time::Duration;
 
     #[test]
@@ -1367,5 +1361,175 @@ shard = 0
         let err = config.check().unwrap_err().to_string();
         assert!(err.contains("tls_verify"));
         assert!(err.contains("azure_workload_identity"));
+    }
+
+    #[test]
+    fn test_sharded_table_inline_mapping() {
+        let source = r#"
+[[sharded_tables]]
+database = "db"
+column = "user_id"
+mapping = [{kind = "list", values = [1, 2, 3], shard = 0}, {kind = "list", values = [4, 5, 6], shard = 1}, {kind = "default", shard = 2}]
+
+[[sharded_tables]]
+database = "db"
+column = "order_id"
+mapping = [{kind = "range", start = 0, end = 1000, shard = 0}, {kind = "range", start = 1000, end = 2000, shard = 1}]
+
+[[sharded_tables]]
+database = "db"
+column = "tenant_uuid"
+data_type = "uuid"
+mapping = [{kind = "list", values = ["00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000002"], shard = 0}]
+
+[[sharded_tables]]
+database = "db"
+column = "tenant_slug"
+data_type = "varchar"
+mapping = [{kind = "list", values = ["alpha", "beta"], shard = 0}, {kind = "default", shard = 1}]
+
+[[sharded_tables]]
+database = "db"
+column = "legacy_id"
+"#;
+        assert_mapping_config(&toml::from_str(source).unwrap());
+    }
+
+    #[test]
+    fn test_sharded_table_separate_mapping() {
+        let source = r#"
+[[sharded_tables]]
+database = "db"
+column = "user_id"
+
+[[sharded_tables.mapping]]
+kind = "list"
+values = [1, 2, 3]
+shard = 0
+
+[[sharded_tables.mapping]]
+kind = "list"
+values = [4, 5, 6]
+shard = 1
+
+[[sharded_tables.mapping]]
+kind = "default"
+shard = 2
+
+[[sharded_tables]]
+database = "db"
+column = "order_id"
+
+[[sharded_tables.mapping]]
+kind = "range"
+start = 0
+end = 1000
+shard = 0
+
+[[sharded_tables.mapping]]
+kind = "range"
+start = 1000
+end = 2000
+shard = 1
+
+[[sharded_tables]]
+database = "db"
+column = "tenant_uuid"
+data_type = "uuid"
+
+[[sharded_tables.mapping]]
+kind = "list"
+values = ["00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000002"]
+shard = 0
+
+[[sharded_tables]]
+database = "db"
+column = "tenant_slug"
+data_type = "varchar"
+
+[[sharded_tables.mapping]]
+kind = "list"
+values = ["alpha", "beta"]
+shard = 0
+
+[[sharded_tables.mapping]]
+kind = "default"
+shard = 1
+
+[[sharded_tables]]
+database = "db"
+column = "legacy_id"
+"#;
+        assert_mapping_config(&toml::from_str(source).unwrap());
+    }
+
+    fn assert_mapping_config(config: &Config) {
+        assert_eq!(config.sharded_tables.len(), 5);
+
+        assert_eq!(
+            config.sharded_tables[0].mapping,
+            Some(vec![
+                ShardedMappingConfig::List(ShardedMappingList {
+                    values: vec![
+                        FlexibleType::Integer(1),
+                        FlexibleType::Integer(2),
+                        FlexibleType::Integer(3)
+                    ],
+                    shard: 0
+                }),
+                ShardedMappingConfig::List(ShardedMappingList {
+                    values: vec![
+                        FlexibleType::Integer(4),
+                        FlexibleType::Integer(5),
+                        FlexibleType::Integer(6)
+                    ],
+                    shard: 1
+                }),
+                ShardedMappingConfig::Default { shard: 2 },
+            ])
+        );
+
+        assert_eq!(
+            config.sharded_tables[1].mapping,
+            Some(vec![
+                ShardedMappingConfig::Range(ShardedMappingRange {
+                    start: Some(FlexibleType::Integer(0)),
+                    end: Some(FlexibleType::Integer(1000)),
+                    shard: 0
+                }),
+                ShardedMappingConfig::Range(ShardedMappingRange {
+                    start: Some(FlexibleType::Integer(1000)),
+                    end: Some(FlexibleType::Integer(2000)),
+                    shard: 1
+                }),
+            ])
+        );
+
+        assert_eq!(
+            config.sharded_tables[2].mapping,
+            Some(vec![ShardedMappingConfig::List(ShardedMappingList {
+                values: vec![
+                    FlexibleType::Uuid("00000000-0000-0000-0000-000000000001".parse().unwrap()),
+                    FlexibleType::Uuid("00000000-0000-0000-0000-000000000002".parse().unwrap()),
+                ],
+                shard: 0,
+            }),])
+        );
+
+        assert_eq!(
+            config.sharded_tables[3].mapping,
+            Some(vec![
+                ShardedMappingConfig::List(ShardedMappingList {
+                    values: vec![
+                        FlexibleType::String("alpha".into()),
+                        FlexibleType::String("beta".into())
+                    ],
+                    shard: 0
+                }),
+                ShardedMappingConfig::Default { shard: 1 },
+            ])
+        );
+
+        assert_eq!(config.sharded_tables[4].mapping, None);
     }
 }

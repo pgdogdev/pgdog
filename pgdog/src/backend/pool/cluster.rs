@@ -16,6 +16,7 @@ use std::{
 use tokio::spawn;
 use tracing::error;
 
+use crate::frontend::router::sharding::ShardedTable;
 use crate::{
     backend::{
         Schema, ShardedTables,
@@ -24,8 +25,7 @@ use crate::{
         replication::{ReplicationConfig, ShardedSchemas},
     },
     config::{
-        ConnectionRecovery, MultiTenant, PoolerMode, ReadWriteSplit, ReadWriteStrategy,
-        ShardedTable, User,
+        ConnectionRecovery, MultiTenant, PoolerMode, ReadWriteSplit, ReadWriteStrategy, User,
     },
     frontend::{ClientRequest, RegexParser},
     net::{Query, messages::FrontendPid},
@@ -96,7 +96,7 @@ pub struct ShardingSchema {
     pub shards: usize,
     /// Sharded tables.
     pub tables: ShardedTables,
-    /// Scemas.
+    /// Schemas.
     pub schemas: ShardedSchemas,
     /// Rewrite config.
     pub rewrite: Rewrite,
@@ -732,6 +732,7 @@ mod test {
 
     use pgdog_config::{ConfigAndUsers, OmnishardedTable, QueryParserLevel, ShardedSchema};
 
+    use crate::frontend::router::sharding::ShardedTable;
     use crate::{
         backend::{
             Shard, ShardedTables,
@@ -740,7 +741,7 @@ mod test {
         },
         config::{
             DataType, Hasher, LoadBalancingStrategy, MultiTenant, ReadWriteSplit,
-            ReadWriteStrategy, Role, ShardedTable, config,
+            ReadWriteStrategy, Role, config,
         },
         frontend::ClientRequest,
         net::Query,
@@ -791,7 +792,6 @@ mod test {
                             primary: true,
                             centroids: vec![],
                             data_type: DataType::Bigint,
-                            centroids_path: None,
                             centroid_probes: 1,
                             hasher: Hasher::Postgres,
                             ..Default::default()
@@ -803,7 +803,6 @@ mod test {
                             primary: true,
                             centroids: vec![],
                             data_type: DataType::Bigint,
-                            centroids_path: None,
                             centroid_probes: 1,
                             hasher: Hasher::Postgres,
                             ..Default::default()
@@ -817,7 +816,6 @@ mod test {
                             primary: true,
                             centroids: vec![],
                             data_type: DataType::Bigint,
-                            centroids_path: None,
                             centroid_probes: 1,
                             hasher: Hasher::Postgres,
                             ..Default::default()

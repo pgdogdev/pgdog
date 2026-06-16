@@ -88,9 +88,9 @@ load_balancing_strategy = "random"
 # Default: conservative
 read_write_strategy = "conservative"
 # Path to PEM-encoded TLS certificate to use for client connections.
-tls_certificate = "relative/or/absolute/path/to/certificate.pem"
+# tls_certificate = "relative/or/absolute/path/to/certificate.pem"
 # Path to PEM-encoded TLS certificate private key
-tls_private_key = "relative/or/absolute/path/to/private_key.pem"
+# tls_private_key = "relative/or/absolute/path/to/private_key.pem"
 # Require clients to use TLS when connecting
 #
 # Default: false
@@ -109,7 +109,7 @@ tls_client_required = false
 tls_verify = "disabled"
 # Path to PEM-encoded certificate bundle to use for Postgres server
 # certificate validation.
-tls_server_ca_certificate = "relative/or/absolute/path/to/certificate.pem"
+# tls_server_ca_certificate = "relative/or/absolute/path/to/certificate.pem"
 # How long to wait for active connections to finish transactions
 # when shutting down PgDog.
 #
@@ -170,8 +170,7 @@ prepared_statements = "extended"
 # you don't have a primary/replica, have one shard, and don't want
 # prepared_statements = 'full' but still want to enable query parsing
 # in order to synchronise your clients `set` commands for instance.
-# NOTE: true enables, and false will just fallback to default behaviour.
-query_parser_enabled = true
+query_parser = "on"
 # Limit on the number of prepared statements active on
 # any Postgres server connection.
 #
@@ -381,22 +380,26 @@ column = "id"
 data_type = "bigint"
 primary = true
 
-# [[sharded_mappings]]
-# database = "pgdog_sharded"
-# table = "sharded"
-# column = "id"
-# kind = "range"
-# start = 0
-# end = 100
-# shard = 0
+[[sharded_tables.mapping]]
+kind = "list"
+values = [1, 2, 3, 4]
+shard = 0
 
-# [[sharded_mappings]]
-# database = "pgdog_sharded"
-# table = "sharded"
-# column = "id"
-# kind = "range"
-# start = 100
-# shard = 1
+[[sharded_tables.mapping]]
+kind = "list"
+values = [5, 6, 7]
+shard = 1
+
+[[sharded_tables.mapping]]
+kind = "range"
+start = 0
+end = 100
+shard = 0
+
+[[sharded_tables.mapping]]
+kind = "range"
+start = 100
+shard = 1
 
 [[sharded_tables]]
 column = "customer_id"
@@ -408,22 +411,6 @@ database = "pgdog_sharded"
 name = "sharded_varchar"
 column = "id_varchar"
 data_type = "varchar"
-
-[[sharded_mappings]]
-database = "pgdog_sharded"
-table = "sharded"
-column = "id"
-kind = "list"
-values = [1, 2, 3, 4]
-shard = 0
-
-[[sharded_mappings]]
-database = "pgdog_sharded"
-table = "sharded"
-column = "id"
-kind = "list"
-values = [5, 6, 7]
-shard = 1
 
 #
 # ActiveRecord sends these queries

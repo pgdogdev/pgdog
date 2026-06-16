@@ -221,7 +221,7 @@
       "type": "array",
       "default": [],
       "items": {
-        "$ref": "#/$defs/ShardedMapping"
+        "$ref": "#/$defs/ShardedMappingDeprecated"
       }
     },
     "sharded_schemas": {
@@ -237,7 +237,7 @@
       "type": "array",
       "default": [],
       "items": {
-        "$ref": "#/$defs/ShardedTable"
+        "$ref": "#/$defs/ShardedTableConfig"
       }
     },
     "tcp": {
@@ -1756,8 +1756,106 @@
         }
       ]
     },
-    "ShardedMapping": {
+    "ShardedMappingConfig": {
       "description": "Explicit routing rule mapping specific column values or ranges to a shard.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/#mapping-fields",
+      "oneOf": [
+        {
+          "description": "Catch-all fallback for values not matched by any other rule.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "default"
+            },
+            "shard": {
+              "description": "Target shard number for matched queries.",
+              "type": "integer",
+              "format": "uint",
+              "minimum": 0
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "shard"
+          ]
+        },
+        {
+          "description": "Match an explicit set of values.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "list"
+            },
+            "shard": {
+              "description": "Target shard number for matched queries.",
+              "type": "integer",
+              "format": "uint",
+              "minimum": 0
+            },
+            "values": {
+              "description": "Set of values for list mappings.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/FlexibleType"
+              }
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "shard",
+            "values"
+          ]
+        },
+        {
+          "description": "Match a contiguous range of values (inclusive start, exclusive end).",
+          "type": "object",
+          "properties": {
+            "end": {
+              "description": "Exclusive upper bound for range mappings.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/FlexibleType"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "kind": {
+              "type": "string",
+              "const": "range"
+            },
+            "shard": {
+              "description": "Target shard number for matched queries.",
+              "type": "integer",
+              "format": "uint",
+              "minimum": 0
+            },
+            "start": {
+              "description": "Inclusive lower bound for range mappings.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/FlexibleType"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "shard"
+          ]
+        }
+      ]
+    },
+    "ShardedMappingDeprecated": {
+      "description": "Explicit routing rule mapping specific column values or ranges to a shard.\n\n**Deprecated**: Use [[sharded_table.mapping]] configuration instead",
       "type": "object",
       "properties": {
         "column": {
@@ -1781,7 +1879,7 @@
         },
         "kind": {
           "description": "Mapping strategy: `list`, `range`, or `default`.",
-          "$ref": "#/$defs/ShardedMappingKind"
+          "$ref": "#/$defs/ShardedMappingKindDeprecated"
         },
         "schema": {
           "description": "Optional; must match a `schema` in `[[sharded_tables]]` if specified.",
@@ -1820,8 +1918,7 @@
           "default": [],
           "items": {
             "$ref": "#/$defs/FlexibleType"
-          },
-          "uniqueItems": true
+          }
         }
       },
       "additionalProperties": false,
@@ -1832,8 +1929,8 @@
         "shard"
       ]
     },
-    "ShardedMappingKind": {
-      "description": "Strategy used to match column values to a shard.",
+    "ShardedMappingKindDeprecated": {
+      "description": "Strategy used to match column values to a shard.\n\n**Deprecated**: Use [[sharded_table.mapping]] configuration instead",
       "oneOf": [
         {
           "description": "Match an explicit set of values (default).",
@@ -1882,7 +1979,7 @@
         "database"
       ]
     },
-    "ShardedTable": {
+    "ShardedTableConfig": {
       "description": "Configuration for sharding databases. Each entry tells PgDog which column to use as the sharding key for a given table.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/",
       "type": "object",
       "properties": {
@@ -1927,6 +2024,16 @@
           "description": "The hash function to use for sharding.\n\n_Default:_ `postgres`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/#hasher",
           "$ref": "#/$defs/Hasher",
           "default": "postgres"
+        },
+        "mapping": {
+          "description": "The mapping definition for the column. By default, it's empty and only the hasher is used\nto infer the shard to put the row into.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/ShardedMappingConfig"
+          }
         },
         "name": {
           "description": "The name of the PostgreSQL table. Only columns explicitly referencing that table will be sharded. If not specified, all tables with the specified column are considered sharded.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/#name",

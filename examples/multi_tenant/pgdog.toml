@@ -24,23 +24,17 @@ database = "prod"
 column = "tenant_id"
 data_type = "bigint"
 
-[[sharded_mappings]]
-database = "prod"
-column = "tenant_id"
+[[sharded_tables.mapping]]
 kind = "list"
 values = [1]
 shard = 0
 
-[[sharded_mappings]]
-database = "prod"
-column = "tenant_id"
+[[sharded_tables.mapping]]
 kind = "list"
 values = [2]
 shard = 1
 
-[[sharded_mappings]]
-database = "prod"
-column = "tenant_id"
+[[sharded_tables.mapping]]
 kind = "list"
 values = [3]
 shard = 2
