@@ -107,6 +107,10 @@ impl Error {
             return true;
         }
 
+        if let Error::Net(crate::net::Error::UnexpectedEof) = self {
+            return true;
+        }
+
         false
     }
 }
