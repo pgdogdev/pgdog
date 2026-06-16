@@ -385,9 +385,16 @@ impl Monitor {
         let duration = pool.config().stats_period;
         let comms = pool.comms();
 
+        // Don't tick that often.
+        if duration.is_zero() {
+            return;
+        }
+
+        let mut interval = interval(pool.config().stats_period);
+
         loop {
             select! {
-                _ = sleep(duration) => {
+                _ = interval.tick() => {
                     {
                         let mut lock = pool.lock();
                         lock.stats.calc_averages(duration);
