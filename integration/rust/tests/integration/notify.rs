@@ -26,14 +26,14 @@ async fn test_notify() {
     let received_barrier = Arc::new(Barrier::new(channels.len() + 1));
     let release_barrier = Arc::new(Barrier::new(channels.len() + 1));
 
-    for channel in channels.iter().cloned() {
+    for channel in &channels {
         let task_msgs = messages.clone();
 
         let mut listener = PgListener::connect("postgres://pgdog:pgdog@127.0.0.1:6432/pgdog")
             .await
             .unwrap();
 
-        listener.listen(&channel).await.unwrap();
+        listener.listen(channel).await.unwrap();
 
         let received_barrier = received_barrier.clone();
         let release_barrier = release_barrier.clone();
