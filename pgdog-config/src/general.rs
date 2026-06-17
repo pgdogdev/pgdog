@@ -469,6 +469,80 @@ pub struct General {
     #[serde(default)]
     pub auth_type: AuthType,
 
+    /// Path to an RSA/EC public key PEM file used to verify JWT tokens.
+    ///
+    /// **Note:** Takes priority over `jwt_jwks_url` when both are set.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#jwt_public_key_file
+    #[serde(default = "General::jwt_public_key_file")]
+    pub jwt_public_key_file: Option<String>,
+
+    /// URL of a JWKS endpoint (e.g. `https://auth.example.com/.well-known/jwks.json`).
+    ///
+    /// **Note:** Used when `jwt_public_key_file` is not set.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#jwt_jwks_url
+    #[serde(default = "General::jwt_jwks_url")]
+    pub jwt_jwks_url: Option<String>,
+
+    /// How long (seconds) to cache JWKS keys before re-fetching.
+    ///
+    /// _Default:_ `300`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#jwt_jwks_cache_ttl
+    #[serde(default = "General::jwt_jwks_cache_ttl")]
+    pub jwt_jwks_cache_ttl: u64,
+
+    /// Expected `aud` claim. If set, tokens without this audience are rejected.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#jwt_audience
+    #[serde(default = "General::jwt_audience")]
+    pub jwt_audience: Option<String>,
+
+    /// The JWT claim to use as the PostgreSQL database username.
+    ///
+    /// _Default:_ `sub`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#jwt_username_claim
+    #[serde(default = "General::jwt_username_claim")]
+    pub jwt_username_claim: String,
+
+    /// The username that pgDog should use to connect to the backend database on behalf of dynamically provisioned JWT users.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#jwt_server_user
+    #[serde(default = "General::jwt_server_user")]
+    pub jwt_server_user: Option<String>,
+
+    /// The password that pgDog should use to connect to the backend database on behalf of dynamically provisioned JWT users.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#jwt_server_password
+    #[serde(default = "General::jwt_server_password")]
+    pub jwt_server_password: Option<String>,
+
+    /// Optional suffix that usernames must end with to trigger JWT authentication.
+    ///
+    /// **Note:** If not configured, all users are validated with JWT when `auth_type` is `jwt`.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#jwt_user_suffix
+    #[serde(default = "General::jwt_user_suffix")]
+    pub jwt_user_suffix: Option<String>,
+
+    /// Automatically register and provision connection pools for successfully authenticated JWT users.
+    ///
+    /// _Default:_ `false`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#jwt_user_auto_provision
+    #[serde(default = "General::jwt_user_auto_provision")]
+    pub jwt_user_auto_provision: bool,
+
+    /// Mark dynamically auto-provisioned JWT users as read-only (routes them to replica).
+    ///
+    /// _Default:_ `false`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#jwt_user_auto_provision_read_only
+    #[serde(default = "General::jwt_user_auto_provision_read_only")]
+    pub jwt_user_auto_provision_read_only: bool,
+
     /// Disable cross-shard queries globally. When enabled, queries touching more than one shard are rejected.
     #[serde(default)]
     pub cross_shard_disabled: bool,
@@ -831,6 +905,16 @@ impl Default for General {
             mirror_queue: Self::mirror_queue(),
             mirror_exposure: Self::mirror_exposure(),
             auth_type: Self::auth_type(),
+            jwt_public_key_file: Self::jwt_public_key_file(),
+            jwt_jwks_url: Self::jwt_jwks_url(),
+            jwt_jwks_cache_ttl: Self::jwt_jwks_cache_ttl(),
+            jwt_audience: Self::jwt_audience(),
+            jwt_username_claim: Self::jwt_username_claim(),
+            jwt_server_user: Self::jwt_server_user(),
+            jwt_server_password: Self::jwt_server_password(),
+            jwt_user_suffix: Self::jwt_user_suffix(),
+            jwt_user_auto_provision: Self::jwt_user_auto_provision(),
+            jwt_user_auto_provision_read_only: Self::jwt_user_auto_provision_read_only(),
             cross_shard_disabled: Self::cross_shard_disabled(),
             dns_ttl: Self::default_dns_ttl(),
             pub_sub_channel_size: Self::pub_sub_channel_size(),
@@ -1319,6 +1403,46 @@ impl General {
         Self::env_or_default("PGDOG_STATS_PERIOD", 15_000)
     }
 
+    fn jwt_jwks_cache_ttl() -> u64 {
+        Self::env_or_default("PGDOG_JWT_JWKS_CACHE_TTL", 300)
+    }
+
+    fn jwt_username_claim() -> String {
+        Self::env_or_default("PGDOG_JWT_USERNAME_CLAIM", "sub".to_string())
+    }
+
+    fn jwt_public_key_file() -> Option<String> {
+        Self::env_option_string("PGDOG_JWT_PUBLIC_KEY_FILE")
+    }
+
+    fn jwt_jwks_url() -> Option<String> {
+        Self::env_option_string("PGDOG_JWT_JWKS_URL")
+    }
+
+    fn jwt_audience() -> Option<String> {
+        Self::env_option_string("PGDOG_JWT_AUDIENCE")
+    }
+
+    fn jwt_server_user() -> Option<String> {
+        Self::env_option_string("PGDOG_JWT_SERVER_USER")
+    }
+
+    fn jwt_server_password() -> Option<String> {
+        Self::env_option_string("PGDOG_JWT_SERVER_PASSWORD")
+    }
+
+    fn jwt_user_suffix() -> Option<String> {
+        Self::env_option_string("PGDOG_JWT_USER_SUFFIX")
+    }
+
+    fn jwt_user_auto_provision() -> bool {
+        Self::env_bool_or_default("PGDOG_JWT_USER_AUTO_PROVISION", false)
+    }
+
+    fn jwt_user_auto_provision_read_only() -> bool {
+        Self::env_bool_or_default("PGDOG_JWT_USER_AUTO_PROVISION_READ_ONLY", false)
+    }
+
     fn default_passthrough_auth() -> PassthroughAuth {
         if let Ok(auth) = env::var("PGDOG_PASSTHROUGH_AUTH") {
             // TODO: figure out why toml::from_str doesn't work.
@@ -1742,5 +1866,53 @@ mod tests {
         assert_eq!(general.pooler_mode, PoolerMode::Session);
         assert_eq!(general.auth_type, AuthType::Trust);
         assert!(general.dry_run);
+    }
+
+    #[test]
+    fn test_jwt_defaults() {
+        let general = General::default();
+        assert_eq!(general.jwt_public_key_file, None);
+        assert_eq!(general.jwt_jwks_url, None);
+        assert_eq!(general.jwt_jwks_cache_ttl, 300);
+        assert_eq!(general.jwt_audience, None);
+        assert_eq!(general.jwt_username_claim, "sub");
+        assert_eq!(general.jwt_server_user, None);
+        assert_eq!(general.jwt_server_password, None);
+        assert_eq!(general.jwt_user_suffix, None);
+        assert!(!general.jwt_user_auto_provision);
+        assert!(!general.jwt_user_auto_provision_read_only);
+    }
+
+    #[test]
+    fn test_jwt_env_overrides() {
+        let _guard1 = set_env_var("PGDOG_JWT_PUBLIC_KEY_FILE", "/tmp/key.pem");
+        let _guard2 = set_env_var("PGDOG_JWT_JWKS_URL", "https://auth.example.com/jwks.json");
+        let _guard3 = set_env_var("PGDOG_JWT_JWKS_CACHE_TTL", "600");
+        let _guard4 = set_env_var("PGDOG_JWT_AUDIENCE", "myapp");
+        let _guard5 = set_env_var("PGDOG_JWT_USERNAME_CLAIM", "email");
+        let _guard6 = set_env_var("PGDOG_JWT_SERVER_USER", "pgdogsvc");
+        let _guard7 = set_env_var("PGDOG_JWT_SERVER_PASSWORD", "secret");
+        let _guard8 = set_env_var("PGDOG_JWT_USER_SUFFIX", "@example.com");
+        let _guard9 = set_env_var("PGDOG_JWT_USER_AUTO_PROVISION", "true");
+        let _guard10 = set_env_var("PGDOG_JWT_USER_AUTO_PROVISION_READ_ONLY", "true");
+
+        let general = General::default();
+
+        assert_eq!(
+            general.jwt_public_key_file,
+            Some("/tmp/key.pem".to_string())
+        );
+        assert_eq!(
+            general.jwt_jwks_url,
+            Some("https://auth.example.com/jwks.json".to_string())
+        );
+        assert_eq!(general.jwt_jwks_cache_ttl, 600);
+        assert_eq!(general.jwt_audience, Some("myapp".to_string()));
+        assert_eq!(general.jwt_username_claim, "email");
+        assert_eq!(general.jwt_server_user, Some("pgdogsvc".to_string()));
+        assert_eq!(general.jwt_server_password, Some("secret".to_string()));
+        assert_eq!(general.jwt_user_suffix, Some("@example.com".to_string()));
+        assert!(general.jwt_user_auto_provision);
+        assert!(general.jwt_user_auto_provision_read_only);
     }
 }

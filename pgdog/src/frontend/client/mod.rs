@@ -22,6 +22,7 @@ use crate::backend::{
     pool::{Connection, Request},
 };
 use crate::config::convert::user_from_params;
+use crate::config::jwt_validator;
 use crate::config::{self, AuthType, ConfigAndUsers, config};
 use crate::frontend::ClientComms;
 use crate::frontend::client::query_engine::{QueryEngine, QueryEngineContext};
@@ -209,6 +210,10 @@ impl Client {
             }
 
             AuthType::Trust => AuthResult::Ok,
+
+            // JWT users are authenticated before check_password is called.
+            // Treat Jwt like Scram for admin auth (fall through to password check).
+            AuthType::Jwt => AuthResult::NoPasswordMatch,
         };
 
         Ok(result)
@@ -238,6 +243,20 @@ impl Client {
         let comms = ClientComms::new(id);
         let log_connections = config.config.general.log_connections;
 
+        // For JWT auth: the username extracted from the validated JWT claims (e.g. `sub`).
+        // When set, this overrides `user` for backend connection purposes.
+        let mut jwt_effective_user: Option<String> = None;
+
+        // Determine if this connection should use JWT authentication.
+        let use_jwt = !admin
+            && matches!(auth_type, AuthType::Jwt)
+            && config
+                .config
+                .general
+                .jwt_user_suffix
+                .as_deref()
+                .map_or(true, |suffix| user.ends_with(suffix));
+
         // Check if we need to ask the client for its password in plaintext
         // because we don't actually have it configured.
         //
@@ -248,6 +267,47 @@ impl Client {
             // map, so authenticate directly against the configured admin password.
             let passwords = [PasswordKind::Plain(admin_password.clone())];
             Self::check_password(&mut stream, user, auth_type, &passwords).await?
+        } else if use_jwt {
+            // JWT authentication: request a cleartext password (the JWT token) from the client,
+            // validate it, and optionally auto-provision a connection pool.
+            stream
+                .send_flush(&Authentication::ClearTextPassword)
+                .await?;
+            let response = stream.read().await?;
+            let response = Password::from_bytes(response.to_bytes())?;
+            if let Some(token) = response.password() {
+                match jwt_validator() {
+                    Ok(validator) => match validator.validate(token).await {
+                        Ok(claims) => {
+                            let sub = claims
+                                .get_username(config.config.general.jwt_username_claim.as_str());
+                            if let Some(sub) = sub {
+                                jwt_effective_user = Some(sub.to_string());
+                                if config.config.general.jwt_user_auto_provision {
+                                    use crate::config::convert::user_from_jwt;
+                                    let jwt_user =
+                                        user_from_jwt(user, database, &sub, &config.config.general);
+                                    databases::add(jwt_user)?
+                                } else {
+                                    AuthResult::Ok
+                                }
+                            } else {
+                                AuthResult::NoPasswordMatch
+                            }
+                        }
+                        Err(err) => {
+                            debug!("JWT validation failed for user \"{}\": {}", user, err);
+                            AuthResult::NoPasswordMatch
+                        }
+                    },
+                    Err(err) => {
+                        debug!("JWT validator initialization error: {}", err);
+                        AuthResult::NoPasswordMatch
+                    }
+                }
+            } else {
+                AuthResult::NoPasswordMessage
+            }
         } else if passthrough {
             // Get the password. We always need it because we need to check if
             // it's current and hasn't been changed.
@@ -288,14 +348,20 @@ impl Client {
             }
         };
 
+        // When JWT auth succeeded, `jwt_effective_user` holds the username from the token's claim.
+        // For all backend operations, use that name instead of the connection string username.
+        let effective_user = jwt_effective_user.as_deref().unwrap_or(user);
+
         if !auth_result.is_ok() {
             if log_connections {
                 warn!(
                     r#"user "{}" and database "{}" auth error: {}"#,
-                    user, database, auth_result
+                    effective_user, database, auth_result
                 );
             }
-            stream.fatal(ErrorResponse::auth(user, database)).await?;
+            stream
+                .fatal(ErrorResponse::auth(effective_user, database))
+                .await?;
             return Ok(None);
         } else {
             stream.send(&Authentication::Ok).await?;
@@ -312,11 +378,13 @@ impl Client {
             return Ok(None);
         }
 
-        let mut conn = match Connection::new(user, database, admin) {
+        let mut conn = match Connection::new(effective_user, database, admin) {
             Ok(conn) => conn,
             Err(err) => {
                 debug!("connection error: {}", err);
-                stream.fatal(ErrorResponse::auth(user, database)).await?;
+                stream
+                    .fatal(ErrorResponse::auth(effective_user, database))
+                    .await?;
                 return Ok(None);
             }
         };
@@ -332,7 +400,7 @@ impl Client {
                         addr
                     );
                     stream
-                        .fatal(ErrorResponse::connection(user, database))
+                        .fatal(ErrorResponse::connection(effective_user, database))
                         .await?;
                     return Ok(None);
                 } else {
@@ -352,7 +420,7 @@ impl Client {
         if config.config.general.log_connections {
             info!(
                 r#"client "{}" connected to database "{}" [{}, auth: {}] {}"#,
-                user,
+                effective_user,
                 database,
                 addr,
                 if passthrough {
@@ -366,7 +434,7 @@ impl Client {
 
         debug!(
             "client \"{}\" startup parameters: {} [{}]",
-            user, params, addr
+            effective_user, params, addr
         );
 
         Ok(Some(Self {

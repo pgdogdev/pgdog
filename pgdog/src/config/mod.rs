@@ -47,11 +47,27 @@ use once_cell::sync::Lazy;
 static CONFIG: Lazy<ArcSwap<ConfigAndUsers>> =
     Lazy::new(|| ArcSwap::from_pointee(ConfigAndUsers::default()));
 
+static JWT_VALIDATOR: Lazy<ArcSwap<Option<Arc<crate::auth::JwtValidator>>>> =
+    Lazy::new(|| ArcSwap::from_pointee(None));
+
 static LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 
 /// Load configuration.
 pub fn config() -> Arc<ConfigAndUsers> {
     CONFIG.load().clone()
+}
+
+/// Get the active JWT validator, creating it lazily if needed.
+pub fn jwt_validator() -> Result<Arc<crate::auth::JwtValidator>, crate::auth::JwtError> {
+    if let Some(ref validator) = **JWT_VALIDATOR.load() {
+        Ok(validator.clone())
+    } else {
+        let config = config();
+        let validator = crate::auth::JwtValidator::new(&config.config.general)?;
+        let arc_val = Arc::new(validator);
+        JWT_VALIDATOR.store(Arc::new(Some(arc_val.clone())));
+        Ok(arc_val)
+    }
 }
 
 /// Load the configuration file from disk.
@@ -65,6 +81,17 @@ pub fn set(mut config: ConfigAndUsers) -> Result<ConfigAndUsers, Error> {
     for table in config.config.sharded_tables.iter_mut() {
         table.load_centroids()?;
     }
+
+    let validator = if config.config.general.auth_type == AuthType::Jwt {
+        Some(Arc::new(
+            crate::auth::JwtValidator::new(&config.config.general)
+                .map_err(|e| Error::ParseError(e.to_string()))?,
+        ))
+    } else {
+        None
+    };
+    JWT_VALIDATOR.store(Arc::new(validator));
+
     CONFIG.store(Arc::new(config.clone()));
     Ok(config)
 }

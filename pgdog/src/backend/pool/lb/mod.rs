@@ -333,13 +333,19 @@ impl LoadBalancer {
             .filter(|target| !target.pool.config().resharding_only) // Don't let reads on resharding-only replicas.
             .collect();
 
-        let primary_reads = match self.rw_split {
-            IncludePrimary => true,
-            IncludePrimaryIfReplicaBanned => candidates.iter().any(|target| target.ban.banned()),
-            // we read from the primary if we have no replicas
-            ExcludePrimary => !candidates
-                .iter()
-                .any(|target| matches!(target.role(), Role::Replica | Role::Auto)),
+        let primary_reads = if request.replica_only {
+            false
+        } else {
+            match self.rw_split {
+                IncludePrimary => true,
+                IncludePrimaryIfReplicaBanned => {
+                    candidates.iter().any(|target| target.ban.banned())
+                }
+                // we read from the primary if we have no replicas
+                ExcludePrimary => !candidates
+                    .iter()
+                    .any(|target| matches!(target.role(), Role::Replica | Role::Auto)),
+            }
         };
 
         if !primary_reads {

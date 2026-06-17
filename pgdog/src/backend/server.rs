@@ -111,6 +111,22 @@ impl Server {
                 Ok(mut server) => {
                     auth_secret.valid(true);
                     server.password_attempts = idx + 1;
+
+                    if let Some(ref client_user) = addr.client_user {
+                        if client_user != &addr.user {
+                            debug!(
+                                "executing SET ROLE \"{}\" for server connection [{}]",
+                                client_user, addr
+                            );
+                            server
+                                .execute(crate::net::Query::new(format!(
+                                    r#"SET ROLE "{}""#,
+                                    client_user
+                                )))
+                                .await?;
+                        }
+                    }
+
                     return Ok(server);
                 }
                 Err(Error::ConnectionError(error)) => {

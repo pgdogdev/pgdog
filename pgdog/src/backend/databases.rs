@@ -175,8 +175,24 @@ pub(crate) fn add(user: ConfigUser) -> Result<AuthResult, Error> {
 
     // User already exists in users.toml.
     if let Some(mut existing) = existing {
-        // Password hasn't been set yet.
-        if existing.password.is_none() {
+        let cluster_is_offline = if let Ok(cluster) =
+            databases().cluster((user.name.as_str(), user.database.as_str()))
+        {
+            !cluster.online()
+        } else {
+            false
+        };
+
+        if cluster_is_offline {
+            debug!(
+                "re-creating pool for user \"{}\" on database \"{}\" because it is offline",
+                user.name, user.database
+            );
+            existing.password = user.password.clone();
+            add_user(existing)?;
+            reload_from_existing()?;
+            Ok(AuthResult::Ok)
+        } else if existing.password.is_none() {
             existing.password = user.password.clone();
             add_user(existing)?;
             reload_from_existing()?;
@@ -843,6 +859,32 @@ mod tests {
         let config = crate::config::config();
         let found = config.users.find(&make_user("dave", None));
         assert_eq!(found.unwrap().password, Some("new_pass".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_add_existing_user_offline_pool_recreated() {
+        setup_config(
+            crate::config::PassthroughAuth::EnabledPlain,
+            vec![make_user("dave", Some("pass"))],
+        );
+
+        // Initially online
+        let cluster = databases().cluster(("dave", "db1")).unwrap();
+        assert!(cluster.online());
+
+        // Shut down the cluster to simulate it going offline (e.g., due to previous role-not-found auth error)
+        cluster.shutdown();
+        assert!(!cluster.online());
+
+        // Now run add() again with the same user & password.
+        // It should notice the cluster is offline, recreate it (reload), and return Ok!
+        let result = add(make_user("dave", Some("pass")));
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_ok());
+
+        // The newly recreated cluster must be online!
+        let new_cluster = databases().cluster(("dave", "db1")).unwrap();
+        assert!(new_cluster.online());
     }
 
     #[test]

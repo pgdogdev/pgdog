@@ -252,7 +252,60 @@ mirror_queue = 128
 # - scram
 # - md5
 # - trust
+# - jwt
 auth_type = "scram"
+
+# ── JWT authentication settings ────────────────────────────────────────────────
+# Only used when auth_type = "jwt".
+
+# Path to an RSA/EC public-key PEM file used to verify JWT tokens.
+# Takes priority over jwt_jwks_url when both are configured.
+#
+# jwt_public_key_file = "/etc/pgdog/jwt_public.pem"
+
+# URL of a JWKS endpoint to fetch verification keys from.
+# Example: https://auth.example.com/.well-known/jwks.json
+#
+# jwt_jwks_url = "https://auth.example.com/.well-known/jwks.json"
+
+# How long (seconds) to cache JWKS keys before re-fetching.
+# Default: 300
+#
+# jwt_jwks_cache_ttl = 300
+
+# Expected audience claim. Tokens without this audience value are rejected.
+#
+# jwt_audience = "myapp"
+
+# The JWT claim to use as the PostgreSQL database username.
+# Default: sub
+#
+# jwt_username_claim = "sub"
+
+# Backend Postgres user pgDog uses to connect on behalf of JWT users.
+# Defaults to the connection-string username when not set.
+#
+# jwt_server_user = "pgdog_service"
+
+# Backend Postgres password used together with jwt_server_user.
+#
+# jwt_server_password = "supersecret"
+
+# Optional suffix that usernames must end with to trigger JWT authentication.
+# If not configured, all users are validated with JWT.
+#
+# jwt_user_suffix = "@example.com"
+
+# Automatically register a connection pool for successfully authenticated JWT users.
+# Default: false
+#
+# jwt_user_auto_provision = false
+
+# Mark auto-provisioned JWT users as read-only (routes them to replicas).
+# Default: false
+#
+# jwt_user_auto_provision_read_only = false
+
 # Disable cross-shard queries.
 #
 # Default: false

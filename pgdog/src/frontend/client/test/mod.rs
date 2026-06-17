@@ -22,8 +22,8 @@ use crate::{
     },
     net::{
         Bind, Close, CommandComplete, DataRow, Describe, ErrorResponse, Execute, Field, Flush,
-        Format, FromBytes, Message, Parameters, Parse, ProtocolVersion, Query, ReadyForQuery,
-        RowDescription, Sync, Terminate, ToBytes,
+        Format, FromBytes, Message, Parameters, Parse, Password, ProtocolVersion, Query,
+        ReadyForQuery, RowDescription, Sync, Terminate, ToBytes,
     },
     state::State,
 };
@@ -524,4 +524,138 @@ async fn test_query_timeout() {
     let pools = databases().cluster(("pgdog", "pgdog")).unwrap().shards()[0].pools();
     let state = pools[0].state();
     assert_eq!(state.force_close, 1);
+}
+
+#[tokio::test]
+async fn test_client_login_jwt() {
+    use crate::config::{AuthType, config, load_test, set};
+    use jsonwebtoken::{Algorithm, EncodingKey, Header};
+    use serde::{Deserialize, Serialize};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    crate::logger();
+    load_test();
+
+    // 1. Generate keys & write public key to temp file
+    const TEST_PRIVATE_KEY_PEM: &[u8] = b"-----BEGIN PRIVATE KEY-----
+MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQCmYC6Np7JXYe7a
+PBv7SB84oz3Cx8mqVFFgNSvqTsqROT3NCK8aEtnPwsStxYpkXw7cKD2M6qFx7Y12
+CpoNQWL12dY0x3MPDWV+uQTejbklq5NDOh9IID7+RqNMO/t8/yKwY/HzJutOU2SV
+CTFlJKG8KUJOQTFnWYC+rOcMk3L1befIdyQM3IDD2zBAJtDGTClZBrrjkEZmsb39
+lBsTM3pkzUIRcxpeFwITmTZeR/CqQpU3J/3aSqZt6EhTXheIotl3wdQYT28XpbcY
+TioVfNDhQhwBWwiGi6L70Q17EprClXdCzueHHQkzkuTQXHxWOj1k8EHU73QVyXUq
+VSx1TjwvAgMBAAECggEAO6rP10aWi4cYQZUAFgC6DbZhjmrXNKpTmtTG4JuMQ0PL
+ma4tGgU7rypzHbz0EmYS7rrRxClbZ//hVT2dHPbftjr++uOyrGnKBgX1rJkYFt3v
+DNOZ52SFIu0TYGI8oYngl3DokyLYjbkTn+1xlQvrow8K9ASmYqGzLe7VV+nDdyf0
+w3xPHigjXsSr+j0INa5IXe7HGDsCFAIOfAg0ruGPKEkKg1Sxwq6/BFr8Rq28kaMv
+wlMtHDyqfxXezf3JPjoe9hnNCi6d6n/buI/5qYHMR+r4Eb5iZbMzCEeOz5BT26Ku
+YHa36jJC3b5z7N1B1g2DgPYWIyvsu1LnEGfFJaHmSQKBgQDSS85TXvxMM0A419Jf
+LzVjWSN4dkqoJvM5/4ra7BB4/2353FP/TeSkGLARZ0WfpvFLvk/iTeH7IyMQTEB3
+xnoWT/kuPhLscwDwRZRgr0O+S6BFNMzGafI/SaD/TUy1lize9EKK2zYRsfT+EmTB
+0+hX5ILMxGqy3AqcH7TtcHTnKQKBgQDKiMlw5TcZ84gLW3HMVwiBIIu5xTUUrAq1
+65al69lWR2woma9eg2a70ES+oJpLkuM4FTXZq0/X/XXgmAQxszu091a6GdPb5XV8
+lYx31xpBiZwyeB2y5yEbSq+AawzFMIUWmRH94+mRv2+wsUmUZ84TVHua22A3+Qur
+l1/GoBYrlwKBgQDDie09pFKgX/9VW4inLPRNfnL27bcZh64dvblVOq9OcuPFstL/
+z2PMGZCNfiNFAivXrAwHdzerFs7htqUzOgAHgzFFiD58UasLvwbqp80rwpIyB5ho
+3dZ8dnAXM78iEZODdEfzaUVrSrdtD5lUiT+/iiD9WZ2E1gmfhfPr2+c3kQKBgHvf
+9fVK/MyumwL3Rz8H7HeuBEf3SmP+Zf6mvVl2S1PuE0Ux2oUgMXGmDKXbbQPUL41Z
+y7n6gbdFmxdnYwlS6q3gqfbhXScdzSIKBgQ2WCTFmfd0aBXIMAOVRopw7zqcVopf
+zRVQlMdEI3gatzpB01UXUxKAIvWZKX4l87p0p5q5AoGBALh91ATgdrEhe16TV0ru
+8B89ZtMcgqaKXVlPO/Rr6fBT/VhSW9KV52sik4Jea5AFfZty/DzhP8pXbJtZjHjA
+d5Bja4qZrKG67E92JhoCKMso/JaQELsln9GzQVkVsgLxF1IP0k797znJIfHDFvma
+ntQFcU46jCHtpmL7OyzV4NoT
+-----END PRIVATE KEY-----";
+
+    const TEST_PUBLIC_KEY_PEM: &[u8] = b"-----BEGIN PUBLIC KEY-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEApmAujaeyV2Hu2jwb+0gf
+OKM9wsfJqlRRYDUr6k7KkTk9zQivGhLZz8LErcWKZF8O3Cg9jOqhce2NdgqaDUFi
+9dnWNMdzDw1lfrkE3o25JauTQzofSCA+/kajTDv7fP8isGPx8ybrTlNklQkxZSSh
+vClCTkExZ1mAvqznDJNy9W3nyHckDNyAw9swQCbQxkwpWQa645BGZrG9/ZQbEzN6
+ZM1CEXMaXhcCE5k2XkfwqkKVNyf92kqmbehIU14XiKLZd8HUGE9vF6W3GE4qFXzQ
+4UIcAVsIhoui+9ENexKawpV3Qs7nhx0JM5Lk0Fx8Vjo9ZPBB1O90Fcl1KlUsdU48
+LwIDAQAB
+-----END PUBLIC KEY-----";
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    let pub_key_path = temp_dir.path().join("test_front.pub.pem");
+    std::fs::write(&pub_key_path, TEST_PUBLIC_KEY_PEM).unwrap();
+
+    // 2. Configure General for JWT auth with suffix and auto-provisioning
+    let mut config = (*config()).clone();
+    config.config.general.auth_type = AuthType::Jwt;
+    config.config.general.jwt_public_key_file = Some(pub_key_path.to_str().unwrap().to_string());
+    config.config.general.jwt_user_suffix = Some("@edreamsodigeo.com".to_string());
+    config.config.general.jwt_user_auto_provision = true;
+    config.config.general.jwt_user_auto_provision_read_only = true;
+    set(config).unwrap();
+
+    // 3. Generate a valid JWT token
+    #[derive(Debug, Serialize, Deserialize)]
+    struct Claims {
+        sub: String,
+        exp: u64,
+    }
+    let exp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+        + 120;
+    let claims = Claims {
+        sub: "postgres_user".to_string(),
+        exp,
+    };
+    let header = Header::new(Algorithm::RS256);
+    let key = EncodingKey::from_rsa_pem(TEST_PRIVATE_KEY_PEM).unwrap();
+    let token = jsonwebtoken::encode(&header, &claims, &key).unwrap();
+
+    // 4. Start mock pgdog listener & connect
+    let addr = "127.0.0.1:0".to_string();
+    let listener = TcpListener::bind(&addr).await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+
+    let server_handle = tokio::spawn(async move {
+        let (stream, addr) = listener.accept().await.unwrap();
+        let stream = Stream::plain(stream, 4096);
+
+        let mut params = crate::net::parameter::Parameters::default();
+        params.insert("user", "john.doe@edreamsodigeo.com");
+        params.insert("database", "pgdog");
+
+        Client::spawn(
+            stream,
+            params,
+            addr,
+            crate::config::config(),
+            ProtocolVersion::V3_0,
+        )
+        .await
+    });
+
+    let mut conn = TcpStream::connect(&format!("127.0.0.1:{}", port))
+        .await
+        .unwrap();
+
+    // 5. Read cleartext password request from pgdog
+    let mut buf = [0u8; 1024];
+    let n = conn.read(&mut buf).await.unwrap();
+    assert!(n > 0);
+    // Message type 'R' (Authentication) and subtype 3 (ClearTextPassword)
+    assert_eq!(buf[0], b'R');
+    assert_eq!(buf[8], 3); // cleartext password indicator
+
+    // 6. Send PasswordMessage with the JWT token
+    let password_msg = Password::new_password(&token).to_bytes();
+    conn.write_all(&password_msg).await.unwrap();
+
+    // 7. Verify login success (AuthenticationOk message: 'R' with subtype 0)
+    let n = conn.read(&mut buf).await.unwrap();
+    assert!(n > 0);
+    let contains_auth_ok = buf[..n].windows(9).any(|w| w[0] == b'R' && w[8] == 0);
+    assert!(
+        contains_auth_ok,
+        "Auth OK message not found in connection response!"
+    );
+
+    drop(conn);
+    server_handle.await.unwrap().unwrap();
 }

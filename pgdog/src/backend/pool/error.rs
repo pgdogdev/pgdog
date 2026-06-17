@@ -76,9 +76,17 @@ pub enum Error {
 
     #[error("replica lag")]
     ReplicaLag,
+
+    #[error("auth error")]
+    Auth,
 }
 
 impl Error {
+    /// Check if this is an authentication error.
+    pub fn is_auth(&self) -> bool {
+        matches!(self, Self::Auth)
+    }
+
     /// Transient availability fault worth retrying.
     ///
     /// Non-retryable: config errors, admin decisions, programming errors.
@@ -98,6 +106,8 @@ impl Error {
                 | Self::UntrackedConnCheckin(_)
                 // Deliberate shutdown.
                 | Self::FastShutdown
+                // Authentication errors.
+                | Self::Auth
         )
     }
 }
@@ -133,5 +143,6 @@ mod tests {
         assert!(!Error::PubSubDisabled.is_retryable());
         assert!(!Error::FastShutdown.is_retryable());
         assert!(!Error::NoShard(0).is_retryable());
+        assert!(!Error::Auth.is_retryable());
     }
 }

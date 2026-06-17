@@ -102,6 +102,7 @@ impl QueryParser {
     /// Parse a query and return a command.
     pub fn parse(&mut self, context: RouterContext) -> Result<Command, Error> {
         let mut context = QueryParserContext::new(context)?;
+        let user_read_only = context.router_context.cluster.user_read_only();
 
         let mut command = if context.query().is_ok() {
             self.write_override = context.write_override();
@@ -112,7 +113,9 @@ impl QueryParser {
         };
 
         match &mut command {
-            Command::Query(route) | Command::Set { route, .. } => {
+            Command::Query(route)
+            | Command::Set { route, .. }
+            | Command::StartTransaction { route, .. } => {
                 if route.is_cross_shard() && context.shards == 1 {
                     context
                         .shards_calculator
@@ -129,6 +132,12 @@ impl QueryParser {
                         Role::Primary => route.set_read(false),
                         _ => route.set_read(true),
                     }
+                }
+
+                // If the user is configured as read-only, force all routes to read-only (replica).
+                // This prevents write-escalation via SET pgdog.role = 'primary' or comments.
+                if user_read_only {
+                    route.set_read(true);
                 }
             }
 

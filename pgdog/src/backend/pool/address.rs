@@ -37,6 +37,8 @@ pub struct Address {
     /// Role given to the database at configuration time.
     /// For automatic roles, this can change at runtime.
     pub configured_role: Role,
+    /// Original client username (SSO / JWT user name).
+    pub client_user: Option<String>,
 }
 
 impl From<Address> for pgdog_stats::Address {
@@ -91,6 +93,7 @@ impl Address {
             server_iam_region: user.server_iam_region.clone(),
             database_number,
             configured_role: database.role,
+            client_user: Some(user.name.clone()),
         }
     }
 
@@ -155,6 +158,7 @@ impl Address {
             server_iam_region: None,
             database_number: 0,
             configured_role: Role::Primary,
+            client_user: None,
         }
     }
 }

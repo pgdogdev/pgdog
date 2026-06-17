@@ -8,6 +8,7 @@ pub struct Request {
     pub id: FrontendPid,
     pub created_at: Instant,
     pub read: bool,
+    pub replica_only: bool,
 }
 
 impl Request {
@@ -16,6 +17,7 @@ impl Request {
             id,
             created_at: Instant::now(),
             read,
+            replica_only: false,
         }
     }
 
@@ -24,6 +26,7 @@ impl Request {
             id,
             created_at: Instant::now(),
             read: false,
+            replica_only: false,
         }
     }
 }
