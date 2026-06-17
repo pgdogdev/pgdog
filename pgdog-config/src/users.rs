@@ -88,6 +88,13 @@ impl Users {
                 );
             }
 
+            if user.client_vault_path.is_some() && config.vault.is_none() {
+                warn!(
+                    r#"user "{}" (database "{}") uses Vault client auth but the [vault] section is missing from pgdog.toml"#,
+                    user.name, user.database
+                );
+            }
+
             if user.server_auth == ServerAuth::Vault {
                 if user.vault_path.is_none() {
                     warn!(
@@ -197,6 +204,12 @@ impl ServerAuth {
 pub enum PasswordKind {
     Plain(String),
     Hashed(String),
+    /// Verify the client's password against a Vault static database role.
+    ///
+    /// The inner `String` is the Vault path (e.g. `database/static-creds/my-role`).
+    /// Resolved to a [`Plain`](Self::Plain) password at authentication time;
+    /// never passed to the underlying md5 / SCRAM / plain verifiers directly.
+    VaultStaticRole(String),
 }
 
 impl PasswordKind {
@@ -204,6 +217,7 @@ impl PasswordKind {
         match self {
             Self::Plain(plain) => plain.as_str(),
             Self::Hashed(hash) => hash.as_str(),
+            Self::VaultStaticRole(path) => path.as_str(),
         }
     }
 }
@@ -213,6 +227,7 @@ impl Display for PasswordKind {
         match self {
             Self::Plain(plain) => write!(f, "{}", plain),
             Self::Hashed(hashed) => write!(f, "{}", hashed),
+            Self::VaultStaticRole(path) => write!(f, "{}", path),
         }
     }
 }
@@ -289,6 +304,11 @@ pub struct User {
     ///
     /// _Default:_ `80`
     pub vault_refresh_percent: Option<u8>,
+    /// Vault path to a static database role used to verify client passwords,
+    /// e.g. `database/static-creds/my-role`. When set, PgDog fetches the
+    /// current password from Vault and compares it to what the client
+    /// provides instead of using a statically configured password.
+    pub client_vault_path: Option<String>,
     /// Statement timeout.
     ///
     /// Sets the `statement_timeout` on all server connections at connection creation. This allows you to set a reasonable default for each user without modifying `postgresql.conf` or using `ALTER USER`.
@@ -364,11 +384,12 @@ impl User {
         if !self.password().is_empty() {
             passwords.push(PasswordKind::Plain(self.password().to_string()));
         }
-
         if let Some(hash) = self.password_hash.clone() {
             passwords.push(PasswordKind::Hashed(hash));
         }
-
+        if let Some(path) = self.client_vault_path.clone() {
+            passwords.push(PasswordKind::VaultStaticRole(path));
+        }
         passwords
     }
 

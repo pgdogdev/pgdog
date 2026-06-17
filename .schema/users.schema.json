@@ -102,6 +102,13 @@
           "type": "boolean",
           "default": false
         },
+        "client_vault_path": {
+          "description": "Vault path to a static database role used to verify client passwords,\ne.g. `database/static-creds/my-role`. When set, PgDog fetches the\ncurrent password from Vault and compares it to what the client\nprovides instead of using a statically configured password.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "cross_shard_disabled": {
           "description": "Disable cross-shard queries for this user.",
           "type": [

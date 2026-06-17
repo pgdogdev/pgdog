@@ -1,12 +1,18 @@
-//! HashiCorp Vault dynamic database credentials.
+//! HashiCorp Vault dynamic database credentials (backend pools) and static
+//! role password verification (client authentication).
 //!
-//! Pools configured with `server_auth = "vault"` fetch their username and
-//! password from the Vault path configured on the user
-//! (e.g. `database/creds/my-role`). Credentials are cached in the global
-//! [`TokenCache`](crate::backend::pool::token_cache::TokenCache) and
-//! refreshed by the pool monitor after a configured percentage of the
-//! lease has elapsed.
+//! **Dynamic credentials** — pools configured with `server_auth = "vault"`
+//! fetch their username and password from a Vault database secrets engine
+//! path (e.g. `database/creds/my-role`). Credentials are cached in the
+//! global [`TokenCache`](crate::backend::pool::token_cache::TokenCache) and
+//! refreshed by the pool monitor after a configured percentage of the lease.
+//!
+//! **Static role passwords** — users configured with `client_vault_path`
+//! (e.g. `database/static-creds/my-role`) have their client-supplied
+//! password verified against the current password held by Vault for that
+//! static role. Results are cached for the role's rotation TTL.
 
+use std::collections::HashMap;
 use std::time::{Duration, SystemTime};
 
 use once_cell::sync::Lazy;
@@ -29,6 +35,20 @@ struct VaultToken {
 /// Cached Vault client token, shared by all pools.
 static VAULT_TOKEN: Lazy<Mutex<Option<VaultToken>>> = Lazy::new(|| Mutex::new(None));
 
+// ── Static role client-auth cache ────────────────────────────────────────────
+
+/// How early to evict a static role password before its rotation TTL expires,
+/// to reduce the chance of serving a stale password right at the rotation boundary.
+const STATIC_CACHE_BUFFER: Duration = Duration::from_secs(10);
+
+struct CachedStaticPassword {
+    password: String,
+    expires_at: SystemTime,
+}
+
+static CLIENT_PASSWORD_CACHE: Lazy<Mutex<HashMap<String, CachedStaticPassword>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+
 #[derive(Deserialize)]
 struct AuthResponse {
     auth: AuthData,
@@ -50,6 +70,22 @@ struct SecretResponse {
 struct SecretData {
     username: String,
     password: String,
+}
+
+/// Response from a Vault static database role (`database/static-creds/<role>`).
+///
+/// Unlike dynamic leases, `lease_duration` is always 0; `data.ttl` is the
+/// seconds remaining until Vault rotates the password.
+#[derive(Deserialize)]
+struct StaticSecretResponse {
+    data: StaticSecretData,
+}
+
+#[derive(Deserialize)]
+struct StaticSecretData {
+    password: String,
+    /// Seconds until Vault rotates the password.
+    ttl: u64,
 }
 
 fn error(message: impl std::fmt::Display) -> Error {
@@ -257,6 +293,85 @@ pub(crate) async fn credentials(addr: Address) -> Result<FetchedCredentials, Err
         expires_at: now + lease,
         refresh_at: Some(refresh_at),
     })
+}
+
+/// Return the current password for a Vault static database role, using a
+/// per-path cache keyed by `vault_path`.
+///
+/// The cached value is evicted `STATIC_CACHE_BUFFER` before the role's
+/// rotation TTL expires so the next connection after a rotation picks up
+/// the new password.
+pub(crate) async fn static_client_password(vault_path: &str) -> Result<String, Error> {
+    if let Some(cached) = CLIENT_PASSWORD_CACHE.lock().get(vault_path) {
+        if SystemTime::now() < cached.expires_at {
+            return Ok(cached.password.clone());
+        }
+    }
+
+    let vault = config()
+        .config
+        .vault
+        .clone()
+        .ok_or_else(|| error("[vault] section is missing from pgdog.toml"))?;
+
+    let token = vault_token(&vault).await?;
+    let url = format!(
+        "{}/v1/{}",
+        vault.url.trim_end_matches('/'),
+        vault_path.trim_start_matches('/')
+    );
+
+    let response = client(&vault)?
+        .get(&url)
+        .header("X-Vault-Token", token)
+        .send()
+        .await
+        .map_err(|err| {
+            error(format!(
+                "Vault static credentials request to \"{}\" failed: {}",
+                url, err
+            ))
+        })?;
+
+    let status = response.status();
+
+    if status == reqwest::StatusCode::FORBIDDEN {
+        *VAULT_TOKEN.lock() = None;
+    }
+
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_default();
+        return Err(error(format!(
+            "Vault static credentials read at \"{}\" returned {}: {}",
+            url, status, body
+        )));
+    }
+
+    let secret: StaticSecretResponse = response.json().await.map_err(|err| {
+        error(format!(
+            "invalid Vault static credentials response: {}",
+            err
+        ))
+    })?;
+
+    let ttl = Duration::from_secs(secret.data.ttl);
+    let expires_at = SystemTime::now() + ttl.saturating_sub(STATIC_CACHE_BUFFER);
+
+    debug!(
+        vault_path,
+        ttl_secs = secret.data.ttl,
+        "fetched Vault static role password"
+    );
+
+    CLIENT_PASSWORD_CACHE.lock().insert(
+        vault_path.to_owned(),
+        CachedStaticPassword {
+            password: secret.data.password.clone(),
+            expires_at,
+        },
+    );
+
+    Ok(secret.data.password)
 }
 
 #[cfg(test)]

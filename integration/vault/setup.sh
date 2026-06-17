@@ -21,7 +21,7 @@ $VAULT secrets enable database 2>/dev/null || true
 
 $VAULT write database/config/pgdog \
     plugin_name=postgresql-database-plugin \
-    allowed_roles="pgdog-role" \
+    allowed_roles="pgdog-role,pgdog-static-role" \
     connection_url="postgresql://{{username}}:{{password}}@postgres:5432/pgdog?sslmode=disable" \
     username="postgres" \
     password="postgres"
@@ -33,11 +33,27 @@ $VAULT write database/roles/pgdog-role \
     default_ttl="10m" \
     max_ttl="30m"
 
+echo "Creating static Postgres user for Vault static role..."
+docker compose exec -T postgres psql -U postgres -c \
+    "CREATE USER pgdog_static WITH LOGIN PASSWORD 'initial_password'; \
+     GRANT ALL PRIVILEGES ON DATABASE pgdog TO pgdog_static;" \
+    2>/dev/null || true
+
+echo "Configuring Vault static database role..."
+$VAULT write database/static-roles/pgdog-static-role \
+    db_name=pgdog \
+    rotation_statements="ALTER USER \"{{name}}\" WITH PASSWORD '{{password}}';" \
+    username="pgdog_static" \
+    rotation_period=3600
+
 echo "Configuring AppRole auth..."
 $VAULT auth enable approle 2>/dev/null || true
 
 $VAULT policy write pgdog-policy - <<'EOF'
 path "database/creds/pgdog-role" {
+  capabilities = ["read"]
+}
+path "database/static-creds/pgdog-static-role" {
   capabilities = ["read"]
 }
 EOF
@@ -49,6 +65,7 @@ $VAULT write auth/approle/role/pgdog-role \
 
 ROLE_ID=$($VAULT read -field=role_id auth/approle/role/pgdog-role/role-id)
 SECRET_ID=$($VAULT write -f -field=secret_id auth/approle/role/pgdog-role/secret-id)
+STATIC_PWD=$($VAULT read -field=password database/static-creds/pgdog-static-role)
 
 echo "$SECRET_ID" > "$SCRIPT_DIR/vault-secret-id"
 echo "Written vault-secret-id"
@@ -77,6 +94,8 @@ approle_secret_id_file = "$SCRIPT_DIR/vault-secret-id"
 EOF
 
 echo "Generated pgdog.toml with role_id=$ROLE_ID"
+echo ""
+echo "Static role password is $STATIC_PWD"
 echo ""
 echo "Run pgdog with:"
 echo "  cargo run -- --config $SCRIPT_DIR/pgdog.toml --users $SCRIPT_DIR/users.toml"
