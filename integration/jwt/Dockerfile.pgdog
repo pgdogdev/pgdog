@@ -1,0 +1,24 @@
+FROM rust:1.80-slim AS builder
+
+RUN apt-get update && apt-get install -y \
+    libssl-dev \
+    pkg-config \
+    cmake \
+    clang \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY . .
+RUN cargo build --release --bin pgdog
+
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y \
+    libssl3 \
+    ca-certificates \
+    postgresql-client \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /app/target/release/pgdog /usr/local/bin/pgdog
+
+EXPOSE 6432
+ENTRYPOINT ["pgdog"]
