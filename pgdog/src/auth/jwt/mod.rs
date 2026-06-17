@@ -159,19 +159,19 @@ impl JwtValidator {
         // First check (read lock)
         {
             let cache = self.jwks_cache.lock().await;
-            if let Some(ref cached) = *cache {
-                if cached.fetched_at.elapsed() < self.jwks_cache_ttl {
-                    return Ok(std::sync::Arc::clone(&cached.jwks));
-                }
+            if let Some(ref cached) = *cache
+                && cached.fetched_at.elapsed() < self.jwks_cache_ttl
+            {
+                return Ok(std::sync::Arc::clone(&cached.jwks));
             }
         }
 
         // Second check under lock to prevent concurrent HTTP requests
         let mut cache = self.jwks_cache.lock().await;
-        if let Some(ref cached) = *cache {
-            if cached.fetched_at.elapsed() < self.jwks_cache_ttl {
-                return Ok(std::sync::Arc::clone(&cached.jwks));
-            }
+        if let Some(ref cached) = *cache
+            && cached.fetched_at.elapsed() < self.jwks_cache_ttl
+        {
+            return Ok(std::sync::Arc::clone(&cached.jwks));
         }
 
         let response = self

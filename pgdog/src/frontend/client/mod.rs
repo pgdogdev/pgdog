@@ -255,7 +255,7 @@ impl Client {
                 .general
                 .jwt_user_suffix
                 .as_deref()
-                .map_or(true, |suffix| user.ends_with(suffix));
+                .is_none_or(|suffix| user.ends_with(suffix));
 
         // Check if we need to ask the client for its password in plaintext
         // because we don't actually have it configured.

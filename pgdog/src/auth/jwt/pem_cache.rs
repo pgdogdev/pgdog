@@ -24,10 +24,10 @@ pub fn get_static_pem_bytes(path: &str) -> std::io::Result<&'static [u8]> {
     let mut cache = PEM_KEY_CACHE.lock();
 
     // Check if we already have the exact same file contents cached
-    if let Some(cached_bytes) = cache.get(&path_buf) {
-        if *cached_bytes == current_bytes.as_slice() {
-            return Ok(*cached_bytes);
-        }
+    if let Some(cached_bytes) = cache.get(&path_buf)
+        && *cached_bytes == current_bytes.as_slice()
+    {
+        return Ok(*cached_bytes);
     }
 
     // Leaking is only done when a new file is loaded or its contents changed on disk

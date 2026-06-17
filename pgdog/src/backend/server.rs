@@ -112,19 +112,21 @@ impl Server {
                     auth_secret.valid(true);
                     server.password_attempts = idx + 1;
 
-                    if let Some(ref client_user) = addr.client_user {
-                        if client_user != &addr.user {
-                            debug!(
-                                "executing SET ROLE \"{}\" for server connection [{}]",
-                                client_user, addr
-                            );
-                            server
-                                .execute(crate::net::Query::new(format!(
-                                    r#"SET ROLE "{}""#,
-                                    client_user
-                                )))
-                                .await?;
-                        }
+                    if let Some(ref client_user) = addr.client_user
+                        && client_user != &addr.user
+                    {
+                        // Escape the identifier: Postgres quoted identifiers escape an
+                        // embedded double quote by doubling it. The username originates
+                        // from a signed JWT claim, but we still escape it defensively to
+                        // prevent any possibility of SQL injection via crafted claims.
+                        let escaped = client_user.replace('"', "\"\"");
+                        debug!(
+                            "executing SET ROLE \"{}\" for server connection [{}]",
+                            escaped, addr
+                        );
+                        server
+                            .execute(crate::net::Query::new(format!(r#"SET ROLE "{}""#, escaped)))
+                            .await?;
                     }
 
                     return Ok(server);
