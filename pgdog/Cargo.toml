@@ -1,8 +1,8 @@
 [package]
 name = "pgdog"
-version = "0.1.44"
+version = "0.1.45"
 edition = "2024"
-description = "Modern PostgreSQL proxy, pooler and load balancer."
+description = "Modern PostgreSQL proxy, pooler, load balancer and database sharder."
 authors = ["PgDog <hi@pgdog.dev>"]
 license = "AGPL-3.0"
 homepage = "https://pgdog.dev"
@@ -10,11 +10,8 @@ repository = "https://github.com/pgdogdev/pgdog"
 readme = "README.md"
 default-run = "pgdog"
 
-
 [features]
 tui = ["ratatui"]
-# default = ["tui"]
-
 
 [dependencies]
 pin-project = "1"
