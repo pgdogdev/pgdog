@@ -86,6 +86,16 @@ impl ErrorResponse {
         }
     }
 
+    pub fn omni_in_direct_to_shard() -> ErrorResponse {
+        ErrorResponse {
+            severity: "ERROR".into(),
+            code: "58000".into(),
+            message: "cannot write to an omnisharded table in a direct-to-shard transaction".into(),
+            routine: Some("client::QueryEngine::route_query".into()),
+            ..Default::default()
+        }
+    }
+
     pub fn transaction_statement_mode() -> ErrorResponse {
         ErrorResponse {
             severity: "ERROR".into(),

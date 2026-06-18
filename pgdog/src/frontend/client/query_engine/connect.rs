@@ -1,6 +1,6 @@
 use tokio::time::timeout;
 
-use crate::frontend::router::parser::ShardWithPriority;
+use crate::frontend::router::parser::{ShardWithPriority, route::ShardSource};
 
 use super::*;
 
@@ -107,6 +107,20 @@ impl QueryEngine {
         self.connect(context, Some(&route)).await
     }
 
+    /// Return a route for the transaction statement.
+    ///
+    /// This determines how many shards we connect to when the transaction is started.
+    /// Typically, that's going to be all shards since we can't determine which shards we
+    /// will need in advance _and_ we don't currently support lazy connect.
+    ///
+    /// TODO(lev): Add support for lazily connecting to shards as needed.
+    ///
+    /// Some notable exceptions:
+    ///
+    /// 1. Deployment is not sharded
+    /// 2. Deployment uses schema-based sharding, and will talk to one shard per transaction, always
+    /// 3. Caller used `SET` to specify shard/sharding key for the transaction
+    ///
     pub(super) fn transaction_route(&mut self, route: &Route) -> Result<Route, Error> {
         let cluster = self.backend.cluster()?;
 
@@ -117,8 +131,11 @@ impl QueryEngine {
                 )))
                 .with_read(route.is_read()),
             )
-        } else if route.is_search_path_driven() {
-            // Schema-based routing will only go to one shard.
+        } else if route.is_search_path_driven()
+            || route.shard_with_priority().source() == &ShardSource::Set
+        {
+            // - Schema-based routing will only go to one shard.
+            // - SET is used to pick one shard, either with pgdog.shard or pgdog.sharding_key.
             Ok(route.clone())
         } else {
             Ok(

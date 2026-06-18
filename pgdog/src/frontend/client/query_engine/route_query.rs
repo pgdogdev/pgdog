@@ -102,6 +102,17 @@ impl QueryEngine {
                 if let Some(rewrite_result) = &context.rewrite_result {
                     rewrite_result.apply_after_parser(context.client_request)?;
                 }
+
+                // Make sure we don't send an omni write to a direct-to-shard mapping.
+                if command.route().is_omnisharded()
+                    && command.route().is_write()
+                    && self.backend.connected() // FIXME(lev): I wish there was a way to say > 0 and < shards in one shot.
+                    && self.backend.connected_servers() < cluster.shards().len()
+                {
+                    self.error_response(context, ErrorResponse::omni_in_direct_to_shard())
+                        .await?;
+                    return Ok(false);
+                }
             }
             Err(err) => {
                 self.error_response(context, ErrorResponse::syntax(err.to_string().as_str()))

@@ -18,6 +18,7 @@ impl QueryParser {
             context.router_context.cluster.user(),
             context.router_context.parameter_hints.search_path,
         );
+        let omnisharded = parser.is_all_omnisharded();
 
         let shard = parser.shard()?;
         if let Some(shard) = shard {
@@ -45,9 +46,9 @@ impl QueryParser {
             }
         }
 
-        Ok(Command::Query(Route::write(
-            context.shards_calculator.shard(),
-        )))
+        Ok(Command::Query(
+            Route::write(context.shards_calculator.shard()).with_omnisharded(omnisharded),
+        ))
     }
 }
 

@@ -122,7 +122,7 @@ impl QueryParser {
                     route.set_shard_mut(context.shards_calculator.shard());
                 }
 
-                route.set_search_path_driven_mut(context.shards_calculator.is_search_path());
+                route.set_search_path_driven(context.shards_calculator.is_search_path());
 
                 if let Some(role) = context.router_context.sticky.role {
                     match role {
@@ -551,6 +551,7 @@ impl QueryParser {
             context.router_context.cluster.user(),
             context.router_context.parameter_hints.search_path,
         );
+        let omnisharded = parser.is_all_omnisharded();
 
         let shard = parser.shard()?.unwrap_or(Shard::All);
 
@@ -574,7 +575,9 @@ impl QueryParser {
             };
         }
 
-        Ok(Command::Query(Route::write(shard)))
+        Ok(Command::Query(
+            Route::write(shard).with_omnisharded(omnisharded),
+        ))
     }
 }
 

@@ -39,25 +39,30 @@ impl QueryParser {
                 .push(ShardWithPriority::new_override_cross_shard_function());
         }
 
-        // Early return for any direct-to-shard queries.
-        if context.shards_calculator.shard().is_direct() {
-            let advisory_locks = StatementParser::from_select(
+        let (advisory_locks, omnisharded) = {
+            let mut parser = StatementParser::from_select(
                 stmt,
                 context.router_context.bind,
                 &context.sharding_schema,
                 None,
-            )
-            .extract_advisory_locks();
+            );
+
+            (parser.extract_advisory_locks(), parser.is_all_omnisharded())
+        };
+
+        // Early return for any direct-to-shard queries.
+        if context.shards_calculator.shard().is_direct() {
             return Ok(Command::Query(
                 Route::read(context.shards_calculator.shard().clone())
                     .with_functions(overrides)
+                    .with_omnisharded(omnisharded)
                     .with_advisory_locks(advisory_locks),
             ));
         }
 
         let mut shards = HashSet::new();
 
-        let (shard, is_sharded, tables, advisory_locks) = {
+        let (shard, is_sharded, tables) = {
             let mut statement_parser = StatementParser::from_select(
                 stmt,
                 context.router_context.bind,
@@ -67,12 +72,8 @@ impl QueryParser {
 
             let shard = statement_parser.shard()?;
 
-            // Piggyback on the parser's single AST walk — this reuses the cached
-            // traversal used for sharding / table extraction.
-            let advisory_locks = statement_parser.extract_advisory_locks();
-
             if shard.is_some() {
-                (shard, true, vec![], advisory_locks)
+                (shard, true, vec![])
             } else {
                 (
                     None,
@@ -82,7 +83,6 @@ impl QueryParser {
                         context.router_context.parameter_hints.search_path,
                     ),
                     statement_parser.extract_tables(),
-                    advisory_locks,
                 )
             }
         };
@@ -106,6 +106,7 @@ impl QueryParser {
             return Ok(Command::Query(
                 Route::read(context.shards_calculator.shard().clone())
                     .with_functions(overrides)
+                    .with_omnisharded(omnisharded)
                     .with_advisory_locks(advisory_locks),
             ));
         }
@@ -221,12 +222,13 @@ impl QueryParser {
 
         // Only rewrite if query is cross-shard.
         if query.is_cross_shard() && context.shards > 1 {
-            query.with_aggregate_rewrite_plan_mut(cached_ast.rewrite_plan.aggregates.clone());
+            query.set_rewrite_plan(cached_ast.rewrite_plan.aggregates.clone());
         }
 
         Ok(Command::Query(
             query
                 .with_functions(overrides)
+                .with_omnisharded(omnisharded)
                 .with_advisory_locks(advisory_locks),
         ))
     }
