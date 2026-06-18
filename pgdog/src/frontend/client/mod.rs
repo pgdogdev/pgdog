@@ -283,7 +283,19 @@ impl Client {
                                 .get_username(config.config.general.jwt_username_claim.as_str());
                             if let Some(sub) = sub {
                                 jwt_effective_user = Some(sub.to_string());
-                                if config.config.general.jwt_user_auto_provision {
+                                // If a usable pool already exists for this user (e.g. the
+                                // JWT subject matches a user already configured in
+                                // users.toml, or a previously provisioned JWT user), reuse
+                                // it instead of re-provisioning. The JWT has already
+                                // authenticated the client.
+                                let already_provisioned = databases::databases()
+                                    .cluster((sub.as_str(), database))
+                                    .map(|cluster| cluster.online())
+                                    .unwrap_or(false);
+
+                                if already_provisioned {
+                                    AuthResult::Ok
+                                } else if config.config.general.jwt_user_auto_provision {
                                     use crate::config::convert::user_from_jwt;
                                     let jwt_user =
                                         user_from_jwt(user, database, &sub, &config.config.general);

@@ -124,9 +124,20 @@ impl Server {
                             "executing SET ROLE \"{}\" for server connection [{}]",
                             escaped, addr
                         );
-                        server
+                        // A failed SET ROLE (e.g. the role does not exist in the
+                        // backend) leaves the connection usable: execute() drains
+                        // until ReadyForQuery. We log and continue as the configured
+                        // server user rather than dropping the connection, so that
+                        // role provisioning remains the operator's responsibility.
+                        if let Err(err) = server
                             .execute(crate::net::Query::new(format!(r#"SET ROLE "{}""#, escaped)))
-                            .await?;
+                            .await
+                        {
+                            warn!(
+                                "SET ROLE \"{}\" failed for server connection, continuing as \"{}\": {} [{}]",
+                                escaped, addr.user, err, addr
+                            );
+                        }
                     }
 
                     return Ok(server);

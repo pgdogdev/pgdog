@@ -22,6 +22,6 @@ password = "pgdog"
 name = "pgdog"
 host = "postgres"
 port = 5432
-database = "pgdog"
+database_name = "pgdog"
 user = "pgdog"
 password = "pgdog"

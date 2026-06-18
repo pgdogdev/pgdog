@@ -88,6 +88,7 @@ pub struct Cluster {
     regex_parser: RegexParser,
     identity: Option<String>,
     user_read_only: bool,
+    has_server_auth: bool,
 }
 
 /// Sharding configuration from the cluster.
@@ -176,6 +177,7 @@ pub struct ClusterConfig<'a> {
     pub pub_sub_enabled: bool,
     pub identity: &'a Option<String>,
     pub user_read_only: bool,
+    pub has_server_auth: bool,
 }
 
 impl<'a> ClusterConfig<'a> {
@@ -201,6 +203,12 @@ impl<'a> ClusterConfig<'a> {
         } else {
             general.read_write_split
         };
+
+        // The cluster can connect to the backend even without a client-facing
+        // password when it has dedicated server credentials (e.g. JWT users
+        // authenticated by token but connecting as a configured server user) or
+        // uses an external identity provider (RDS IAM, Azure).
+        let has_server_auth = user.server_password.is_some() || user.is_external_identity();
 
         Self {
             name: &user.database,
@@ -247,6 +255,7 @@ impl<'a> ClusterConfig<'a> {
             pub_sub_enabled: general.pub_sub_enabled(),
             identity: &user.identity,
             user_read_only,
+            has_server_auth,
         }
     }
 }
@@ -294,6 +303,7 @@ impl Cluster {
             pub_sub_enabled,
             identity,
             user_read_only,
+            has_server_auth,
         } = config;
 
         let identifier = Arc::new(DatabaseUser {
@@ -355,6 +365,7 @@ impl Cluster {
             regex_parser: RegexParser::new(regex_parser_limit, query_parser),
             identity: identity.clone(),
             user_read_only,
+            has_server_auth,
         }
     }
 
@@ -442,6 +453,13 @@ impl Cluster {
     /// Check if the user is configured as read-only.
     pub fn user_read_only(&self) -> bool {
         self.user_read_only
+    }
+
+    /// Whether the cluster has dedicated server-side credentials (or an external
+    /// identity provider) and can therefore connect to the backend even when no
+    /// client-facing password is configured (e.g. JWT-authenticated users).
+    pub fn has_server_auth(&self) -> bool {
+        self.has_server_auth
     }
 
     pub fn pooler_mode(&self) -> PoolerMode {

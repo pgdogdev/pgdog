@@ -97,7 +97,9 @@ async fn test_jwt_validation_expired() {
 
     let validator = JwtValidator::new(&general).unwrap();
 
-    let exp = current_time_secs() - 300;
+    // Only 10 seconds in the past: this is within `jsonwebtoken`'s default
+    // 60s leeway, so it would be accepted unless leeway is set to 0.
+    let exp = current_time_secs() - 10;
     let claims = Claims {
         sub: "postgres_user".to_string(),
         exp,

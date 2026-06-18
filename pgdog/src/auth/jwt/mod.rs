@@ -129,8 +129,13 @@ impl JwtValidator {
             _ => return Err(JwtError::InvalidAlgorithm),
         };
 
-        // Configure validation criteria
+        // Configure validation criteria.
+        //
+        // `jsonwebtoken` applies a default leeway of 60 seconds when validating
+        // `exp`/`nbf`. For database authentication we want strict expiry, so a
+        // token whose `exp` has passed is rejected immediately.
         let mut validation = jsonwebtoken::Validation::new(algorithm);
+        validation.leeway = 0;
         if let Some(ref aud) = self.audience {
             validation.set_audience(&[aud]);
         } else {

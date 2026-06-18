@@ -1,4 +1,4 @@
-FROM rust:1.80-slim AS builder
+FROM rust:1.96-slim AS builder
 
 RUN apt-get update && apt-get install -y \
     libssl-dev \
@@ -11,7 +11,7 @@ WORKDIR /app
 COPY . .
 RUN cargo build --release --bin pgdog
 
-FROM debian:bookworm-slim
+FROM debian:trixie-slim
 RUN apt-get update && apt-get install -y \
     libssl3 \
     ca-certificates \

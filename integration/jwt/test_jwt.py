@@ -132,10 +132,15 @@ class TestJwtTransactions:
     def test_rollback(self, token_factory):
         """INSERT + ROLLBACK leaves no trace."""
         token = token_factory("pgdog")
-        with psycopg.connect(pgdog_dsn("pgdog", token), autocommit=False) as conn:
+        # Ensure the table exists in a committed transaction first, otherwise the
+        # ROLLBACK below would also undo the CREATE TABLE and the verification
+        # query would fail with "relation does not exist".
+        with psycopg.connect(pgdog_dsn("pgdog", token), autocommit=True) as conn:
             conn.execute(
                 "CREATE TABLE IF NOT EXISTS jwt_test_rollback (id SERIAL PRIMARY KEY, val TEXT)"
             )
+
+        with psycopg.connect(pgdog_dsn("pgdog", token), autocommit=False) as conn:
             conn.execute("INSERT INTO jwt_test_rollback (val) VALUES ('ghost')")
             conn.rollback()
 
