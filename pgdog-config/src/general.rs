@@ -207,6 +207,16 @@ pub struct General {
     #[serde(default)]
     pub read_write_split: ReadWriteSplit,
 
+    /// Route all queries to the primary by default, unless an explicit role hint
+    /// (`SET pgdog.role`, `SET LOCAL pgdog.role`, or a `/* pgdog_role: replica */`
+    /// query comment) opts a query onto the replicas.
+    ///
+    /// _Default:_ `false`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#prefer_primary
+    #[serde(default = "General::prefer_primary")]
+    pub prefer_primary: bool,
+
     /// Path to the TLS certificate PgDog will use to setup TLS connections with clients.
     ///
     /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#tls_certificate
@@ -794,6 +804,7 @@ impl Default for General {
             load_balancing_strategy: Self::load_balancing_strategy(),
             read_write_strategy: Self::read_write_strategy(),
             read_write_split: Self::read_write_split(),
+            prefer_primary: Self::prefer_primary(),
             tls_certificate: Self::tls_certificate(),
             tls_private_key: Self::tls_private_key(),
             tls_client_required: bool::default(),
@@ -1196,6 +1207,10 @@ impl General {
 
     fn query_log_stdout() -> bool {
         Self::env_bool_or_default("PGDOG_QUERY_LOG_STDOUT", false)
+    }
+
+    fn prefer_primary() -> bool {
+        Self::env_bool_or_default("PGDOG_PREFER_PRIMARY", false)
     }
 
     fn default_log_min_duration_parse() -> Option<u64> {
@@ -1660,21 +1675,25 @@ mod tests {
         let _guard = set_env_var("PGDOG_CROSS_SHARD_DISABLED", "yes");
         let _guard = set_env_var("PGDOG_LOG_CONNECTIONS", "false");
         let _guard = set_env_var("PGDOG_LOG_DISCONNECTIONS", "0");
+        let _guard = set_env_var("PGDOG_PREFER_PRIMARY", "true");
 
         assert!(General::dry_run());
         assert!(General::cross_shard_disabled());
         assert!(!General::log_connections());
         assert!(!General::log_disconnections());
+        assert!(General::prefer_primary());
 
         let _guard = remove_env_var("PGDOG_DRY_RUN");
         let _guard = remove_env_var("PGDOG_CROSS_SHARD_DISABLED");
         let _guard = remove_env_var("PGDOG_LOG_CONNECTIONS");
         let _guard = remove_env_var("PGDOG_LOG_DISCONNECTIONS");
+        let _guard = remove_env_var("PGDOG_PREFER_PRIMARY");
 
         assert!(!General::dry_run());
         assert!(!General::cross_shard_disabled());
         assert!(General::log_connections());
         assert!(General::log_disconnections());
+        assert!(!General::prefer_primary());
     }
 
     #[test]

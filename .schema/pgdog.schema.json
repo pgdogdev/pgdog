@@ -80,6 +80,7 @@
         "passthrough_auth": "disabled",
         "pooler_mode": "transaction",
         "port": 6432,
+        "prefer_primary": false,
         "prepared_statements": "extended",
         "prepared_statements_limit": 9223372036854775807,
         "pub_sub_channel_size": 0,
@@ -938,6 +939,11 @@
           "default": 6432,
           "maximum": 65535,
           "minimum": 0
+        },
+        "prefer_primary": {
+          "description": "Route all queries to the primary by default, unless an explicit role hint\n(`SET pgdog.role`, `SET LOCAL pgdog.role`, or a `/* pgdog_role: replica */`\nquery comment) opts a query onto the replicas.\n\n_Default:_ `false`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#prefer_primary",
+          "type": "boolean",
+          "default": false
         },
         "prepared_statements": {
           "description": "Enables support for prepared statements.\n\n_Default:_ `extended`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#prepared_statements",

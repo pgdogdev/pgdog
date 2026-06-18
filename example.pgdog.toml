@@ -87,6 +87,13 @@ load_balancing_strategy = "random"
 #
 # Default: conservative
 read_write_strategy = "conservative"
+# Route all queries to the primary by default. Reads are sent to the primary unless a
+# query opts into replicas with `SET pgdog.role TO 'replica'`, `SET LOCAL pgdog.role TO
+# 'replica'`, or a `/* pgdog_role: replica */` query comment. Useful for migrating an
+# application onto replicas progressively without changing application code up front.
+#
+# Default: false
+prefer_primary = false
 # Path to PEM-encoded TLS certificate to use for client connections.
 tls_certificate = "relative/or/absolute/path/to/certificate.pem"
 # Path to PEM-encoded TLS certificate private key

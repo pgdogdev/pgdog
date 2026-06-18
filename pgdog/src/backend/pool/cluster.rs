@@ -61,6 +61,7 @@ pub struct Cluster {
     replication_sharding: Option<String>,
     multi_tenant: Option<MultiTenant>,
     rw_strategy: ReadWriteStrategy,
+    prefer_primary: bool,
     schema_admin: bool,
     stats: Arc<Mutex<MirrorStats>>,
     cross_shard_disabled: bool,
@@ -146,6 +147,7 @@ pub struct ClusterConfig<'a> {
     pub replication_sharding: Option<String>,
     pub multi_tenant: &'a Option<MultiTenant>,
     pub rw_strategy: ReadWriteStrategy,
+    pub prefer_primary: bool,
     pub rw_split: ReadWriteSplit,
     pub schema_admin: bool,
     pub cross_shard_disabled: bool,
@@ -204,6 +206,7 @@ impl<'a> ClusterConfig<'a> {
             sharded_tables,
             multi_tenant,
             rw_strategy: general.read_write_strategy,
+            prefer_primary: general.prefer_primary,
             rw_split: general.read_write_split,
             schema_admin: user.schema_admin,
             cross_shard_disabled: user
@@ -255,6 +258,7 @@ impl Cluster {
             replication_sharding,
             multi_tenant,
             rw_strategy,
+            prefer_primary,
             rw_split,
             schema_admin,
             cross_shard_disabled,
@@ -315,6 +319,7 @@ impl Cluster {
             replication_sharding,
             multi_tenant: multi_tenant.clone(),
             rw_strategy,
+            prefer_primary,
             schema_admin,
             stats: Arc::new(Mutex::new(MirrorStats::default())),
             cross_shard_disabled,
@@ -577,6 +582,11 @@ impl Cluster {
     /// Read/write strategy
     pub fn read_write_strategy(&self) -> &ReadWriteStrategy {
         &self.rw_strategy
+    }
+
+    /// Route queries to the primary by default unless an explicit role hint opts out.
+    pub fn prefer_primary(&self) -> bool {
+        self.prefer_primary
     }
 
     /// Cross-shard queries disabled for this cluster.
@@ -942,6 +952,10 @@ mod test {
 
         pub fn set_read_write_strategy(&mut self, rw_strategy: ReadWriteStrategy) {
             self.rw_strategy = rw_strategy;
+        }
+
+        pub fn set_prefer_primary(&mut self, prefer_primary: bool) {
+            self.prefer_primary = prefer_primary;
         }
     }
 

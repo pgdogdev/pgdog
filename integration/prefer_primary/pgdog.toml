@@ -1,0 +1,58 @@
+[general]
+host = "0.0.0.0"
+port = 6432
+shutdown_timeout = 5_000
+query_timeout = 15_000
+checkout_timeout = 5_000
+connect_timeout = 5_000
+idle_timeout = 30_000
+prepared_statements = "extended"
+passthrough_auth = "enabled_plain"
+default_pool_size = 90
+workers = 10
+min_pool_size = 1
+pooler_mode = "transaction"
+load_balancing_strategy = "round_robin"
+auth_type = "trust"
+query_parser = "on"
+# Feature under test: default every query to the primary. Replicas are only used
+# when a query opts in via SET pgdog.role, SET LOCAL pgdog.role, or a query comment.
+prefer_primary = true
+# Reads that do opt into replicas must land on a replica (not the primary), so the
+# test can deterministically observe pg_is_in_recovery().
+read_write_split = "exclude_primary"
+lsn_check_delay = 0
+lsn_check_interval = 1_000
+
+[rewrite]
+enabled = false
+shard_key = "ignore"
+split_inserts = "error"
+
+[admin]
+user = "pgdog"
+password = "pgdog"
+
+[[databases]]
+name = "postgres"
+host = "localhost"
+role = "primary"
+port = 45000
+
+[[databases]]
+name = "postgres"
+host = "localhost"
+port = 45001
+role = "replica"
+
+[[databases]]
+name = "postgres"
+host = "localhost"
+role = "replica"
+port = 45002
+
+[tcp]
+retries = 3
+time = 1000
+interval = 1000
+user_timeout = 1000
