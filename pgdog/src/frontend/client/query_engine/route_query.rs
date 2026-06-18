@@ -156,10 +156,10 @@ impl QueryEngine {
             if backend.session_mode() {
                 return false;
             }
-            if let Some(connected_shard) = backend.direct_shard_number() {
-                if *shard != connected_shard {
-                    return true;
-                }
+            if let Some(connected_shard) = backend.direct_shard_number()
+                && *shard != connected_shard
+            {
+                return true;
             }
         } else if let Command::Query(route) = command {
             // Tried to run a cross-shard query while connected to one shard only.
