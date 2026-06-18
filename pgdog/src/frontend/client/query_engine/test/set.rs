@@ -638,6 +638,57 @@ async fn test_direct_shard_match_allowed() {
     test_client.read_until('Z').await.unwrap();
 }
 
+/// A cross-shard query is rejected while the transaction is pinned to a single
+/// shard: it would need every shard but we are connected to only one.
+///
+/// `SET pgdog.shard TO 0` pins the transaction to shard 0. The follow-up calls a
+/// cross-shard function (`pgdog.install_sharded_sequence`), which routes to all
+/// shards at `Override` priority — out-ranking the `SET` pin — and so must be
+/// rejected rather than silently run on the single connected shard.
+#[tokio::test]
+async fn test_cross_shard_blocked_while_pinned_to_one_shard() {
+    let mut test_client = TestClient::new_sharded(Parameters::default()).await;
+    assert!(
+        shard_count(&mut test_client) > 1,
+        "test requires a multi-shard cluster"
+    );
+
+    test_client.send_simple(Query::new("BEGIN")).await;
+    test_client.read_until('Z').await.unwrap();
+
+    test_client
+        .send_simple(Query::new("SET pgdog.shard TO 0"))
+        .await;
+    test_client.read_until('Z').await.unwrap();
+
+    // Connect the transaction to the pinned shard.
+    test_client.send_simple(Query::new("SELECT 1")).await;
+    test_client.read_until('Z').await.unwrap();
+    assert_eq!(
+        connected_servers(&mut test_client),
+        1,
+        "transaction should be pinned to a single shard"
+    );
+
+    // A cross-shard query cannot be served from one shard, so it must be rejected.
+    test_client
+        .send_simple(Query::new(
+            "SELECT pgdog.install_sharded_sequence('foo', 'id')",
+        ))
+        .await;
+    let err = expect_message!(test_client.read().await, ErrorResponse);
+    assert_eq!(
+        err.message, DIRECT_SHARD_MISMATCH_MESSAGE,
+        "unexpected error: {:?}",
+        err
+    );
+    let rfq = expect_message!(test_client.read().await, ReadyForQuery);
+    assert_eq!(rfq.status, 'E', "transaction should be aborted");
+
+    test_client.send_simple(Query::new("ROLLBACK")).await;
+    test_client.read_until('Z').await.unwrap();
+}
+
 #[tokio::test]
 async fn test_lock_timeout() {
     let mut test_client = TestClient::new_sharded(Parameters::default()).await;

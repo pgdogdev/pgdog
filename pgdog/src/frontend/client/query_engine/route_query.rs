@@ -161,6 +161,11 @@ impl QueryEngine {
                     return true;
                 }
             }
+        } else if let Command::Query(route) = command {
+            // Tried to run a cross-shard query while connected to one shard only.
+            if route.is_cross_shard() && backend.direct_shard_number().is_some() {
+                return true;
+            }
         }
 
         false
