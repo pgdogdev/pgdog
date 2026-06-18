@@ -188,6 +188,9 @@ pub enum Error {
     #[error("binary format mismatch (likely int -> bigint), use text copy instead: {0}")]
     BinaryFormatMismatch(Box<ErrorResponse>),
 
+    #[error("frontend: {0}")]
+    Frontend(#[from] crate::frontend::Error),
+
     #[error("command complete has no rows: {0}")]
     CommandCompleteNoRows(CommandComplete),
 

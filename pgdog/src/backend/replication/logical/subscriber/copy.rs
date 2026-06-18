@@ -1,9 +1,13 @@
 //! Shard COPY stream from one source
 //! between N shards.
 
+use futures::future::join_all;
 use pg_query::{NodeEnum, parse_raw};
 use pgdog_config::QueryParserEngine;
 use tracing::debug;
+
+use crate::frontend::client::query_engine::TwoPcPhase;
+use crate::frontend::client::query_engine::two_pc::{Manager, TwoPcTransaction};
 
 use crate::{
     backend::{Cluster, ConnectReason, replication::subscriber::ParallelConnection},
@@ -232,15 +236,64 @@ impl CopySubscriber {
         // scope). Shards not yet committed roll back on connection close. The
         // destination_has_rows() guard in parallel_sync.rs prevents a doomed retry if this
         // window is ever hit.
-        for (shard, server) in self.connections.iter_mut().enumerate() {
-            if let Err(error) = Self::send_and_confirm(server, Query::new("COMMIT").into()).await {
-                tracing::error!(
-                    "COMMIT failed on destination shard {shard} during copy_done: {error}; \
-                     shards committed before it stay committed, the rest roll back on \
-                     connection close"
-                );
-                return Err(error);
+        if self.cluster.two_pc_enabled() {
+            self.commit_two_pc().await?;
+        } else {
+            for (shard, server) in self.connections.iter_mut().enumerate() {
+                if let Err(error) =
+                    Self::send_and_confirm(server, Query::new("COMMIT").into()).await
+                {
+                    tracing::error!(
+                        "COMMIT failed on destination shard {shard} during copy_done: {error}; \
+                         shards committed before it stay committed, the rest roll back on \
+                         connection close"
+                    );
+                    return Err(error);
+                }
             }
+        }
+
+        Ok(())
+    }
+
+    async fn commit_two_pc(&mut self) -> Result<(), Error> {
+        let manager = Manager::get();
+        let txn = TwoPcTransaction::new();
+        let identifier = self.cluster.identifier();
+
+        let _guard_phase_1 = manager
+            .transaction_state(&txn, &identifier, TwoPcPhase::Phase1)
+            .await?;
+        self.two_pc_on_shards(&txn, TwoPcPhase::Phase1).await?;
+
+        let _guard_phase_2 = manager
+            .transaction_state(&txn, &identifier, TwoPcPhase::Phase2)
+            .await?;
+        self.two_pc_on_shards(&txn, TwoPcPhase::Phase2).await?;
+
+        manager.done(&txn).await?;
+
+        Ok(())
+    }
+
+    async fn two_pc_on_shards(
+        &mut self,
+        txn: &TwoPcTransaction,
+        phase: TwoPcPhase,
+    ) -> Result<(), Error> {
+        let mut futures = Vec::new();
+
+        for (shard, server) in self.connections.iter_mut().enumerate() {
+            let query = match phase {
+                TwoPcPhase::Phase1 => format!("PREPARE TRANSACTION '{txn}_{shard}'"),
+                TwoPcPhase::Phase2 => format!("COMMIT PREPARED '{txn}_{shard}'"),
+                _ => unreachable!(),
+            };
+            futures.push(Self::send_and_confirm(server, Query::new(query).into()));
+        }
+
+        for result in join_all(futures).await {
+            result?;
         }
 
         Ok(())

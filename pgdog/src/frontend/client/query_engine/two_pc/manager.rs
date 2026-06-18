@@ -148,7 +148,7 @@ impl Manager {
     }
 
     /// Two-pc transaction finished.
-    pub(super) async fn done(&self, transaction: &TwoPcTransaction) -> Result<(), Error> {
+    pub(crate) async fn done(&self, transaction: &TwoPcTransaction) -> Result<(), Error> {
         self.remove(transaction).await;
 
         Ok(())
@@ -166,7 +166,7 @@ impl Manager {
     /// caller to issue PREPARE / COMMIT PREPARED to backends without a
     /// durable record, which is exactly the orphan-prepared-xact case
     /// the WAL exists to prevent.
-    pub(super) async fn transaction_state(
+    pub(crate) async fn transaction_state(
         &self,
         transaction: &TwoPcTransaction,
         identifier: &Arc<User>,
