@@ -1757,10 +1757,10 @@
       ]
     },
     "ShardedMappingConfig": {
-      "description": "Explicit routing rule mapping specific column values or ranges to a shard.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/#mapping-fields",
+      "description": "A single value-to-shard routing rule within a table's `mapping`.\n\nWhen routing a value, PgDog matches list rules first, then range rules, then\nfalls back to the default rule. A value matched by nothing, with no default\nrule present, is sent to all shards.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/#shard-by-list-and-range",
       "anyOf": [
         {
-          "description": "Catch-all fallback for values not matched by any other rule.",
+          "description": "Catch-all fallback for any value not matched by a list or range rule.",
           "type": "object",
           "properties": {
             "shard": {
@@ -1776,17 +1776,17 @@
           ]
         },
         {
-          "description": "Match an explicit set of values.",
+          "description": "Match an explicit set of values (`PARTITION BY LIST`).",
           "$ref": "#/$defs/ShardedMappingList"
         },
         {
-          "description": "Match a contiguous range of values (inclusive start, exclusive end).",
+          "description": "Match a contiguous range, `start` inclusive and `end` exclusive (`PARTITION BY RANGE`).",
           "$ref": "#/$defs/ShardedMappingRange"
         }
       ]
     },
     "ShardedMappingDeprecated": {
-      "description": "Explicit routing rule mapping specific column values or ranges to a shard.\n\n**Deprecated**: Use [[sharded_table.mapping]] configuration instead",
+      "description": "Explicit routing rule mapping specific column values or ranges to a shard.\n\n**Deprecated**: use a `[[sharded_tables.mapping]]` rule on the corresponding `[[sharded_tables]]` entry instead.",
       "type": "object",
       "properties": {
         "column": {
@@ -1861,7 +1861,7 @@
       ]
     },
     "ShardedMappingKindDeprecated": {
-      "description": "Strategy used to match column values to a shard.\n\n**Deprecated**: Use [[sharded_table.mapping]] configuration instead",
+      "description": "Strategy used to match column values to a shard.\n\n**Deprecated**: use a `[[sharded_tables.mapping]]` rule instead.",
       "oneOf": [
         {
           "description": "Match an explicit set of values (default).",
@@ -1881,6 +1881,7 @@
       ]
     },
     "ShardedMappingList": {
+      "description": "A list rule: routes an explicit set of `values` to `shard` (`PARTITION BY LIST`).",
       "type": "object",
       "properties": {
         "shard": {
@@ -1904,10 +1905,11 @@
       ]
     },
     "ShardedMappingRange": {
+      "description": "A range rule: routes values in `[start, end)` to `shard` (`PARTITION BY RANGE`).",
       "type": "object",
       "properties": {
         "end": {
-          "description": "Exclusive upper bound for range mappings.",
+          "description": "Exclusive upper bound. Omit for a range that is unbounded above.",
           "anyOf": [
             {
               "$ref": "#/$defs/FlexibleType"
@@ -1924,7 +1926,7 @@
           "minimum": 0
         },
         "start": {
-          "description": "Inclusive lower bound for range mappings.",
+          "description": "Inclusive lower bound. Omit for a range that is unbounded below.",
           "anyOf": [
             {
               "$ref": "#/$defs/FlexibleType"
@@ -2017,7 +2019,7 @@
           "default": "postgres"
         },
         "mapping": {
-          "description": "The mapping definition for the column. By default, it's empty and only the hasher is used\nto infer the shard to put the row into.",
+          "description": "Explicit value-to-shard routing rules for the column. When omitted (the\ndefault), PgDog shards by hashing the column value instead. Each entry is\na [`ShardedMappingConfig`]; see it for the list/range/default forms.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/#shard-by-list-and-range",
           "type": [
             "array",
             "null"

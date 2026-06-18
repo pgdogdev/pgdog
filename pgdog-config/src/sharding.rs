@@ -80,8 +80,11 @@ pub struct ShardedTableConfig {
     #[serde(default)]
     pub hasher: Hasher,
 
-    /// The mapping definition for the column. By default, it's empty and only the hasher is used
-    /// to infer the shard to put the row into.
+    /// Explicit value-to-shard routing rules for the column. When omitted (the
+    /// default), PgDog shards by hashing the column value instead. Each entry is
+    /// a [`ShardedMappingConfig`]; see it for the list/range/default forms.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/#shard-by-list-and-range
     pub mapping: Option<Vec<ShardedMappingConfig>>,
 }
 
@@ -115,20 +118,24 @@ impl ShardedTableConfig {
     }
 }
 
-/// Explicit routing rule mapping specific column values or ranges to a shard.
+/// A single value-to-shard routing rule within a table's `mapping`.
 ///
-/// https://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/#mapping-fields
+/// When routing a value, PgDog matches list rules first, then range rules, then
+/// falls back to the default rule. A value matched by nothing, with no default
+/// rule present, is sent to all shards.
+///
+/// https://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/#shard-by-list-and-range
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash, JsonSchema)]
 #[serde(rename_all = "snake_case", untagged, deny_unknown_fields)]
 pub enum ShardedMappingConfig {
-    /// Catch-all fallback for values not matched by any other rule.
+    /// Catch-all fallback for any value not matched by a list or range rule.
     Default {
         /// Target shard number for matched queries.
         shard: usize,
     },
-    /// Match an explicit set of values.
+    /// Match an explicit set of values (`PARTITION BY LIST`).
     List(ShardedMappingList),
-    /// Match a contiguous range of values (inclusive start, exclusive end).
+    /// Match a contiguous range, `start` inclusive and `end` exclusive (`PARTITION BY RANGE`).
     Range(ShardedMappingRange),
 }
 
@@ -164,9 +171,10 @@ pub enum DataType {
 
 /// Explicit routing rule mapping specific column values or ranges to a shard.
 ///
-/// **Deprecated**: Use [[sharded_table.mapping]] configuration instead
+/// **Deprecated**: use a `[[sharded_tables.mapping]]` rule on the corresponding `[[sharded_tables]]` entry instead.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, Eq, JsonSchema)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
+// TODO: try to remove this in the near future
 pub struct ShardedMappingDeprecated {
     /// Database name from the `[[databases]]` section.
     pub database: String,
@@ -221,7 +229,7 @@ impl<'a> Equivalent<ShardedMappingKey> for ShardedMappingKeyRef<'a> {
 
 /// Strategy used to match column values to a shard.
 ///
-/// **Deprecated**: Use [[sharded_table.mapping]] configuration instead
+/// **Deprecated**: use a `[[sharded_tables.mapping]]` rule instead.
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone, Default, Hash, Eq, JsonSchema)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum ShardedMappingKindDeprecated {
@@ -234,6 +242,7 @@ pub enum ShardedMappingKindDeprecated {
     Default,
 }
 
+/// A list rule: routes an explicit set of `values` to `shard` (`PARTITION BY LIST`).
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone, Default, Hash, Eq, JsonSchema)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct ShardedMappingList {
@@ -243,14 +252,15 @@ pub struct ShardedMappingList {
     pub values: Vec<FlexibleType>,
 }
 
+/// A range rule: routes values in `[start, end)` to `shard` (`PARTITION BY RANGE`).
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone, Default, Hash, Eq, JsonSchema)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct ShardedMappingRange {
     /// Target shard number for matched queries.
     pub shard: usize,
-    /// Inclusive lower bound for range mappings.
+    /// Inclusive lower bound. Omit for a range that is unbounded below.
     pub start: Option<FlexibleType>,
-    /// Exclusive upper bound for range mappings.
+    /// Exclusive upper bound. Omit for a range that is unbounded above.
     pub end: Option<FlexibleType>,
 }
 
