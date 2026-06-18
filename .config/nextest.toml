@@ -5,3 +5,4 @@ default-filter = "not package(rust)"
 
 [profile.default]
 slow-timeout = "15s"
+test-threads = 1
