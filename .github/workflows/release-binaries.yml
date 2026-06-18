@@ -89,3 +89,63 @@ jobs:
           shopt -s nullglob
           gh release upload "$TAG" \
             *.tar.gz *.tar.gz.sha256 *.deb *.deb.sha256 --clobber
+
+      # Hand the .deb files to the apt-publish job. The macOS leg has none, so
+      # only the Linux legs produce an artifact.
+      - name: Stash .deb artifacts
+        if: matrix.deb
+        uses: actions/upload-artifact@v4
+        with:
+          name: deb-${{ matrix.target }}
+          path: "*.deb"
+          if-no-files-found: error
+
+  # Publish the freshly built .deb files to the R2-hosted APT repository.
+  # deb-s3 reads and rewrites the repo manifests directly in the bucket, so it
+  # adds to the existing repo incrementally — no need to mirror the repo tree.
+  apt-publish:
+    needs: build
+    runs-on: ubuntu-latest
+    env:
+      R2_ENDPOINT: https://a4e699a861a65f776bd86cc88661f0c3.r2.cloudflarestorage.com
+      R2_BUCKET: pgdog-apt
+      DIST: stable
+    steps:
+      - name: Download .deb artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: deb-*
+          path: debs
+          merge-multiple: true
+
+      - name: Install deb-s3
+        run: sudo gem install deb-s3
+
+      - name: Import GPG signing key
+        env:
+          APT_GPG_PRIVATE_KEY: ${{ secrets.APT_GPG_PRIVATE_KEY }}
+        run: |
+          echo "$APT_GPG_PRIVATE_KEY" | gpg --batch --import
+          # The key id deb-s3 signs the Release file with.
+          KEYID=$(gpg --list-secret-keys --with-colons | awk -F: '/^sec:/ {print $5; exit}')
+          echo "GPG_KEYID=$KEYID" >> "$GITHUB_ENV"
+
+      - name: Publish .deb files to R2
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          # deb-s3 shells out to gpg; passphrase-less key keeps it non-interactive.
+          GPG_TTY: ""
+        run: |
+          shopt -s nullglob
+          for f in debs/*.deb; do
+            deb-s3 upload \
+              --bucket "$R2_BUCKET" \
+              --endpoint "$R2_ENDPOINT" \
+              --s3-region auto \
+              --codename "$DIST" \
+              --component main \
+              --sign "$GPG_KEYID" \
+              --preserve-versions \
+              "$f"
+          done
