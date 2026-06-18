@@ -464,7 +464,7 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
 
     /// Check if all tables in the query are in the omnisharded config.
     /// Result is cached after first computation.
-    fn is_all_omnisharded(&mut self) -> bool {
+    pub(crate) fn is_all_omnisharded(&mut self) -> bool {
         if let Some(cached) = self.all_omnisharded {
             return cached;
         }

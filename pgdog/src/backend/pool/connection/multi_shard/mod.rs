@@ -142,7 +142,7 @@ impl MultiShard {
             'C' => {
                 let cc = CommandComplete::from_bytes(message.to_bytes())?;
                 let has_rows = if let Some(rows) = cc.rows()? {
-                    if self.route.is_omni() {
+                    if self.route.is_omnisharded() {
                         // Only use the first shard's row count for consistency with DataRow.
                         if self.counters.command_complete_count == 0 {
                             self.counters.rows = rows;
@@ -244,7 +244,7 @@ impl MultiShard {
                 if !self.should_buffer()
                     && self.counters.row_description.is_multiple_of(self.shards)
                 {
-                    if self.route.is_omni() {
+                    if self.route.is_omnisharded() {
                         if self.counters.first_backend_data == message.source().backend_id() {
                             forward = Some(message);
                         }
@@ -328,8 +328,14 @@ impl MultiShard {
         Ok(forward)
     }
 
+    /// Return true if we need to buffer [`DataRow`] messages
+    /// received from the servers because we need to post-process them.
     fn should_buffer(&self) -> bool {
-        self.shards > 1 && self.route.should_buffer() && !self.route.is_omni()
+        // 1. We are talking to more than one shard (cross-shard query)
+        // 2. The route contains transformations we need to perform, e.g., aggregates, sorting, etc.
+        // 3. The route does not concern omnisharded tables which have the same data on all shards
+        //    anyway.
+        self.shards > 1 && self.route.should_buffer() && !self.route.is_omnisharded()
     }
 
     /// Multi-shard state is ready to send messages.

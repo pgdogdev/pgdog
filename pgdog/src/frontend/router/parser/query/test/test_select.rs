@@ -230,6 +230,7 @@ fn test_omnisharded_sticky_config_disabled() {
     for _ in 0..10 {
         let command = test.execute(vec![Query::new(q).into()]);
         assert!(matches!(command.route().shard(), Shard::Direct(_)));
+        assert!(command.route().is_omnisharded());
         shards_seen.insert(command.route().shard().clone());
     }
 
@@ -265,6 +266,7 @@ fn test_system_catalog_sharded() {
         &Shard::All,
         "system catalog query with WHERE clause should still go to all shards"
     );
+    assert!(!command.route().is_omnisharded());
 
     // Reset to default
     let mut updated = config().deref().clone();
@@ -289,9 +291,120 @@ fn test_system_catalog_omnisharded_default() {
         matches!(command.route().shard(), Shard::Direct(_)),
         "system catalog query with OmnishardedSticky should go to a single shard, not Shard::All"
     );
+    assert!(command.route().is_omnisharded());
 
     // Reset to default
     let mut updated = config().deref().clone();
     updated.config.general.system_catalogs = SystemCatalogsBehavior::default();
     config::set(updated).unwrap();
+}
+
+/// A SELECT against a table explicitly configured as omnisharded routes to a
+/// single shard and is flagged as omnisharded.
+#[test]
+fn test_omnisharded_configured_table() {
+    let mut test = QueryParserTest::new();
+
+    let command = test.execute(vec![Query::new("SELECT * FROM sharded_omni").into()]);
+    assert!(matches!(command.route().shard(), Shard::Direct(_)));
+    assert!(command.route().is_omnisharded());
+}
+
+/// A SELECT against a sticky omnisharded table routes to a single shard and is
+/// flagged as omnisharded.
+#[test]
+fn test_omnisharded_configured_sticky_table() {
+    let mut test = QueryParserTest::new();
+
+    let command = test.execute(vec![Query::new("SELECT * FROM sharded_omni_sticky").into()]);
+    assert!(matches!(command.route().shard(), Shard::Direct(_)));
+    assert!(command.route().is_omnisharded());
+}
+
+/// A SELECT against a table that is neither sharded nor explicitly omnisharded
+/// falls back to the omnisharded-by-default path: single shard, flagged as
+/// omnisharded.
+#[test]
+fn test_omnisharded_by_default_unknown_table() {
+    let mut test = QueryParserTest::new();
+
+    let command = test.execute(vec![Query::new("SELECT * FROM unknown_table").into()]);
+    assert!(matches!(command.route().shard(), Shard::Direct(_)));
+    assert!(command.route().is_omnisharded());
+}
+
+/// A join of two omnisharded tables stays on a single shard and remains flagged
+/// as omnisharded.
+#[test]
+fn test_omnisharded_join_of_omni_tables() {
+    let mut test = QueryParserTest::new();
+
+    let command = test.execute(vec![
+        Query::new("SELECT * FROM sharded_omni a JOIN sharded_omni_sticky b ON a.id = b.id").into(),
+    ]);
+    assert!(matches!(command.route().shard(), Shard::Direct(_)));
+    assert!(command.route().is_omnisharded());
+}
+
+/// A join of an omnisharded table with an unknown (omnisharded-by-default) table
+/// stays on a single shard and remains flagged as omnisharded.
+#[test]
+fn test_omnisharded_join_omni_and_unknown() {
+    let mut test = QueryParserTest::new();
+
+    let command = test.execute(vec![
+        Query::new("SELECT * FROM sharded_omni a JOIN unknown_table b ON a.id = b.id").into(),
+    ]);
+    assert!(matches!(command.route().shard(), Shard::Direct(_)));
+    assert!(command.route().is_omnisharded());
+}
+
+/// A join that mixes an omnisharded table with a sharded table is NOT
+/// omnisharded: it must fan out to all shards.
+#[test]
+fn test_omnisharded_join_omni_and_sharded_is_not_omni() {
+    let mut test = QueryParserTest::new();
+
+    let command = test.execute(vec![
+        Query::new("SELECT * FROM sharded_omni a JOIN sharded b ON a.id = b.id").into(),
+    ]);
+    assert_eq!(command.route().shard(), &Shard::All);
+    assert!(!command.route().is_omnisharded());
+}
+
+/// A sharded table queried without a sharding key fans out to all shards and is
+/// NOT omnisharded.
+#[test]
+fn test_sharded_no_key_is_not_omnisharded() {
+    let mut test = QueryParserTest::new();
+
+    let command = test.execute(vec![Query::new("SELECT * FROM sharded").into()]);
+    assert_eq!(command.route().shard(), &Shard::All);
+    assert!(!command.route().is_omnisharded());
+}
+
+/// A sharded table queried with a sharding key routes direct-to-shard and is NOT
+/// omnisharded.
+#[test]
+fn test_sharded_with_key_is_not_omnisharded() {
+    let mut test = QueryParserTest::new();
+
+    let command = test.execute(vec![
+        Query::new("SELECT * FROM sharded WHERE id = 1").into(),
+    ]);
+    assert!(matches!(command.route().shard(), Shard::Direct(_)));
+    assert!(!command.route().is_omnisharded());
+}
+
+/// A SELECT with no FROM clause (e.g. `SELECT 1`) round-robins to a single shard
+/// but is NOT flagged as omnisharded (it touches no tables).
+#[test]
+fn test_no_table_select_is_not_omnisharded() {
+    let mut test = QueryParserTest::new();
+
+    for q in ["SELECT 1", "SELECT NOW()"] {
+        let command = test.execute(vec![Query::new(q).into()]);
+        assert!(matches!(command.route().shard(), Shard::Direct(_)));
+        assert!(!command.route().is_omnisharded(), "query: {}", q);
+    }
 }

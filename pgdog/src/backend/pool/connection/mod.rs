@@ -63,7 +63,7 @@ impl Connection {
             binding: if admin {
                 Binding::Admin(AdminServer::new())
             } else {
-                Binding::Direct(None)
+                Binding::NotConnected
             },
             cluster: None,
             user: user.to_owned(),
@@ -83,7 +83,7 @@ impl Connection {
     /// Create a server connection if one doesn't exist already.
     pub(crate) async fn connect(&mut self, request: &Request, route: &Route) -> Result<(), Error> {
         let connect = match &self.binding {
-            Binding::Direct(None) => true,
+            Binding::NotConnected => true,
             Binding::MultiShard(shards, _) => shards.is_empty(),
             _ => false,
         };
@@ -147,17 +147,7 @@ impl Connection {
                 server.reset = true;
             }
 
-            match &mut self.binding {
-                Binding::Direct(existing) => {
-                    let _ = existing.replace(server);
-                }
-
-                Binding::MultiShard(_, _) => {
-                    self.binding = Binding::Direct(Some(server));
-                }
-
-                _ => (),
-            };
+            self.binding = Binding::Direct(server, *shard);
         } else {
             let mut shards = vec![];
             let mut shard_indices = vec![];
@@ -453,7 +443,7 @@ impl Connection {
     /// Get connected servers addresses.
     pub(crate) fn addr(&self) -> Result<Vec<&Address>, Error> {
         Ok(match self.binding {
-            Binding::Direct(Some(ref server)) => vec![server.addr()],
+            Binding::Direct(ref server, ..) => vec![server.addr()],
             Binding::MultiShard(ref servers, _) => servers.iter().map(|s| s.addr()).collect(),
             _ => {
                 return Err(Error::NotConnected);

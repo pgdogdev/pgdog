@@ -33,9 +33,6 @@ pub enum Error {
     #[error("server not connected")]
     NotConnected,
 
-    #[error("direct-to-shard not connected")]
-    DirectToShardNotConnected,
-
     #[error("multi-shard not connected")]
     MultiShardNotConnected,
 
@@ -178,7 +175,6 @@ impl Error {
             | Self::PreparedStatementError(resp) => resp.is_retryable(),
             // Connection dropped between operations.
             Self::NotConnected
-            | Self::DirectToShardNotConnected
             | Self::MultiShardNotConnected
             | Self::CopyNotConnected
             | Self::ClusterNotConnected => true,

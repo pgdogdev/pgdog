@@ -1,11 +1,18 @@
-import asyncpg
-import pytest
-from datetime import datetime
-from globals import normal_async, sharded_async, no_out_of_sync, admin, schema_sharded_async
 import random
 import string
-import pytest_asyncio
+from datetime import datetime
 from io import BytesIO
+
+import asyncpg
+import pytest
+import pytest_asyncio
+from globals import (
+    admin,
+    no_out_of_sync,
+    normal_async,
+    schema_sharded_async,
+    sharded_async,
+)
 
 
 @pytest_asyncio.fixture
@@ -20,10 +27,15 @@ async def conns():
     yield conns
 
     admin_conn = admin()
-    admin_conn.execute("RECONNECT") # Remove lock on schema
+    _ = admin_conn.execute("RECONNECT")  # Remove lock on schema
 
-    for conn in conns:
-        await conn.execute(f'DROP SCHEMA "{schema}" CASCADE')
+    try:
+        for conn in conns:
+            await conn.execute(f'DROP SCHEMA "{schema}" CASCADE')
+    except Exception as e:
+        # Only allow this not to work if we broke the connection intentionally
+        # with a test.
+        assert "connection is closed" in str(e)
 
 
 async def both():
@@ -204,12 +216,12 @@ async def test_direct_shard(conns):
 
             result = await conn.fetch(
                 """UPDATE sharded SET value = $1 WHERE id = $2 RETURNING *""",
-                f"value_{id+1}",
+                f"value_{id + 1}",
                 id,
             )
             assert len(result) == 1
             assert result[0][0] == id
-            assert result[0][1] == f"value_{id+1}"
+            assert result[0][1] == f"value_{id + 1}"
 
             await conn.execute("""DELETE FROM sharded WHERE id = $1""", id)
             result = await conn.fetch("""SELECT * FROM sharded WHERE id = $1""", id)
@@ -247,14 +259,45 @@ async def test_copy(conns):
                 "sharded", columns=["id", "value", "created_at"], output=buffer
             )
             buffer.seek(0)
-            lines = buffer.read().decode('utf-8').strip().split('\n')
-            assert len(lines) == records, f"expected {records} lines in COPY output, got {len(lines)}"
+            lines = buffer.read().decode("utf-8").strip().split("\n")
+            assert len(lines) == records, (
+                f"expected {records} lines in COPY output, got {len(lines)}"
+            )
 
             await conn.execute("DELETE FROM sharded")
 
 
 @pytest.mark.asyncio
 async def test_execute_many(conns):
+    # These IDs are generated assuming there are TWO shards only.
+    # Total hack.
+    #
+    # FIXME(lev): I'm sorry.
+    shard_0_ids = [
+        9029187720858166087,
+        -9147415122013096617,
+        4311339412397018981,
+        9209115575823406282,
+        -3686784878268236293,
+        7601672322540939969,
+        5392208491411541083,
+        -665097198208214684,
+        6762659581940201135,
+        -4719551123502797832,
+        2245430240240759095,
+        6530381198398044927,
+    ]
+    # This will not blow up, because we are connected to one shard.
+    for conn in conns:
+        values = [[x, f"value_{x}"] for x in shard_0_ids]
+        rows = await conn.fetchmany(
+            "INSERT INTO sharded (id, value) VALUES ($1, $2) RETURNING *", values
+        )
+        assert len(rows) == len(shard_0_ids)
+
+
+@pytest.mark.asyncio
+async def test_execute_many_cross_shard(conns):
     #
     # This WON'T work for multi-shard queries.
     # PgDog decides which shard to go to based on the first Bind
@@ -267,10 +310,16 @@ async def test_execute_many(conns):
     #
     for conn in conns:
         values = [[x, f"value_{x}"] for x in range(50)]
-        rows = await conn.fetchmany(
-            "INSERT INTO sharded (id, value) VALUES ($1, $2) RETURNING *", values
-        )
-        assert len(rows) == 50
+        try:
+            # This will blow up because we can't switch shards mid execution like this.
+            # TODO(lev): Open up a cross-shard transaction automatically and handle this.
+            #
+            rows = await conn.fetchmany(
+                "INSERT INTO sharded (id, value) VALUES ($1, $2) RETURNING *", values
+            )
+        except Exception as e:
+            assert "cannot switch shards in a direct-to-shard transaction" in str(e)
+
 
 @pytest.mark.asyncio
 async def test_stress():
@@ -285,7 +334,9 @@ async def test_stress():
             # await not_in_transaction(normal)
             await normal.execute("CREATE TABLE test_stress (id BIGINT)")
             # await not_in_transaction(normal)
-            result = await normal.fetch("INSERT INTO test_stress VALUES ($1) RETURNING *", num)
+            result = await normal.fetch(
+                "INSERT INTO test_stress VALUES ($1) RETURNING *", num
+            )
             assert result[0][0] == num
 
             # await not_in_transaction(normal)
@@ -345,14 +396,16 @@ async def test_timestamp_sorting_binary_format():
         for id_val, name, ts in test_data:
             await conn.execute(
                 "INSERT INTO timestamp_test (id, name, ts) VALUES ($1, $2, $3)",
-                id_val, name, ts
+                id_val,
+                name,
+                ts,
             )
 
         rows = await conn.fetch(
             "SELECT id, name, ts FROM timestamp_test ORDER BY ts DESC"
         )
 
-        actual_order = [(row['id'], row['name']) for row in rows]
+        actual_order = [(row["id"], row["name"]) for row in rows]
 
         expected_order = [
             (103, "Far future"),
@@ -365,7 +418,9 @@ async def test_timestamp_sorting_binary_format():
 
         await conn.execute("DROP TABLE IF EXISTS timestamp_test CASCADE")
 
-        assert actual_order == expected_order, "Timestamp sorting failed with asyncpg binary format"
+        assert actual_order == expected_order, (
+            "Timestamp sorting failed with asyncpg binary format"
+        )
 
     finally:
         await conn.close()
@@ -389,17 +444,44 @@ async def test_copy_jsonb():
         """)
 
         test_data = [
-            [1, json.dumps({"name": "Alice", "age": 30, "active": True}, sort_keys=True)],
-            [2, json.dumps({"name": "Bob", "scores": [95, 87, 92], "metadata": {"region": "US"}}, sort_keys=True)],
-            [3, json.dumps({"products": [{"id": 1, "price": 29.99}, {"id": 2, "price": 15.50}]}, sort_keys=True)],
+            [
+                1,
+                json.dumps(
+                    {"name": "Alice", "age": 30, "active": True}, sort_keys=True
+                ),
+            ],
+            [
+                2,
+                json.dumps(
+                    {
+                        "name": "Bob",
+                        "scores": [95, 87, 92],
+                        "metadata": {"region": "US"},
+                    },
+                    sort_keys=True,
+                ),
+            ],
+            [
+                3,
+                json.dumps(
+                    {
+                        "products": [
+                            {"id": 1, "price": 29.99},
+                            {"id": 2, "price": 15.50},
+                        ]
+                    },
+                    sort_keys=True,
+                ),
+            ],
             [4, json.dumps(None)],
-            [5, json.dumps({"empty": {}, "list": [], "string": "test"}, sort_keys=True)],
+            [
+                5,
+                json.dumps({"empty": {}, "list": [], "string": "test"}, sort_keys=True),
+            ],
         ]
 
         await conn.copy_records_to_table(
-            "jsonb_copy_test",
-            records=test_data,
-            columns=["id", "data"]
+            "jsonb_copy_test", records=test_data, columns=["id", "data"]
         )
 
         result = await conn.fetch("SELECT COUNT(*) FROM jsonb_copy_test")
@@ -407,14 +489,17 @@ async def test_copy_jsonb():
 
         rows = await conn.fetch("SELECT id, data FROM jsonb_copy_test ORDER BY id")
 
-        for (i, row) in enumerate(rows):
+        for i, row in enumerate(rows):
             expected = json.loads(test_data[i][1])
             got = json.loads(row[1])
-            assert json.dumps(got, sort_keys=True) == json.dumps(expected, sort_keys=True)
+            assert json.dumps(got, sort_keys=True) == json.dumps(
+                expected, sort_keys=True
+            )
 
     finally:
         await conn.execute("DROP TABLE IF EXISTS jsonb_copy_test")
         await conn.close()
+
 
 @pytest.mark.asyncio
 async def test_schema_sharding():
@@ -427,15 +512,23 @@ async def test_schema_sharding():
             await conn.execute(f"CREATE SCHEMA {schema}")
         for shard in [0, 1]:
             schema = f"shard_{shard}"
-            await conn.execute(f"CREATE TABLE {schema}.test(id BIGINT, created_at TIMESTAMPTZ DEFAULT NOW())")
+            await conn.execute(
+                f"CREATE TABLE {schema}.test(id BIGINT, created_at TIMESTAMPTZ DEFAULT NOW())"
+            )
             await conn.fetch(f"SELECT * FROM {schema}.test WHERE id = $1", 1)
 
-            insert = await conn.fetch(f"INSERT INTO {schema}.test VALUES ($1, NOW()), ($2, NOW()) RETURNING *", 1, 2)
+            insert = await conn.fetch(
+                f"INSERT INTO {schema}.test VALUES ($1, NOW()), ($2, NOW()) RETURNING *",
+                1,
+                2,
+            )
             assert len(insert) == 2
             assert insert[0][0] == 1
             assert insert[1][0] == 2
 
-            update = await conn.fetch(f"UPDATE {schema}.test SET id = $1 WHERE id = $2 RETURNING *", 3, 2)
+            update = await conn.fetch(
+                f"UPDATE {schema}.test SET id = $1 WHERE id = $2 RETURNING *", 3, 2
+            )
             assert len(update) == 1
             assert update[0][0] == 3
 
@@ -444,6 +537,7 @@ async def test_schema_sharding():
 
             await conn.execute(f"TRUNCATE {schema}.test")
     admin().cursor().execute("SET cross_shard_disabled TO false")
+
 
 @pytest.mark.asyncio
 async def test_schema_sharding_transactions():
@@ -459,21 +553,32 @@ async def test_schema_sharding_transactions():
             async with conn.transaction():
                 await conn.execute("SET LOCAL statement_timeout TO '10s'")
                 schema = f"shard_{shard}"
-                await conn.execute(f"CREATE TABLE {schema}.test(id BIGINT, created_at TIMESTAMPTZ DEFAULT NOW())")
+                await conn.execute(
+                    f"CREATE TABLE {schema}.test(id BIGINT, created_at TIMESTAMPTZ DEFAULT NOW())"
+                )
                 await conn.fetch(f"SELECT * FROM {schema}.test WHERE id = $1", 1)
 
-                insert = await conn.fetch(f"INSERT INTO {schema}.test VALUES ($1, NOW()), ($2, NOW()) RETURNING *", 1, 2)
+                insert = await conn.fetch(
+                    f"INSERT INTO {schema}.test VALUES ($1, NOW()), ($2, NOW()) RETURNING *",
+                    1,
+                    2,
+                )
                 assert len(insert) == 2
                 assert insert[0][0] == 1
                 assert insert[1][0] == 2
 
-                update = await conn.fetch(f"UPDATE {schema}.test SET id = $1 WHERE id = $2 RETURNING *", 3, 2)
+                update = await conn.fetch(
+                    f"UPDATE {schema}.test SET id = $1 WHERE id = $2 RETURNING *", 3, 2
+                )
                 assert len(update) == 1
                 assert update[0][0] == 3
 
-                delete = await conn.execute(f"DELETE FROM {schema}.test WHERE id = $1", 3)
+                delete = await conn.execute(
+                    f"DELETE FROM {schema}.test WHERE id = $1", 3
+                )
                 assert delete == "DELETE 1"
     admin().cursor().execute("SET cross_shard_disabled TO false")
+
 
 @pytest.mark.asyncio
 async def test_schema_sharding_default():
@@ -487,10 +592,12 @@ async def test_schema_sharding_default():
 
         await conn.execute("SELECT * FROM test_schema_sharding_default")
         try:
-            await conn.execute("/* pgdog_shard: 1 */ SELECT * FROM test_schema_sharding_default")
+            await conn.execute(
+                "/* pgdog_shard: 1 */ SELECT * FROM test_schema_sharding_default"
+            )
             raise Exception("table shouldn't exist on shard 1")
         except Exception as e:
-            assert "relation \"test_schema_sharding_default\" does not exist" == str(e)
+            assert 'relation "test_schema_sharding_default" does not exist' == str(e)
     admin().cursor().execute("SET cross_shard_disabled TO false")
 
 
@@ -502,8 +609,9 @@ async def test_schema_sharding_search_path():
 
     for schema in ["shard_0", "shard_1"]:
         await conn.execute(f"CREATE SCHEMA IF NOT EXISTS {schema}")
-        await conn.execute(f"CREATE TABLE IF NOT EXISTS {schema}.test(id BIGINT, created_at TIMESTAMPTZ DEFAULT NOW())")
-
+        await conn.execute(
+            f"CREATE TABLE IF NOT EXISTS {schema}.test(id BIGINT, created_at TIMESTAMPTZ DEFAULT NOW())"
+        )
 
     import asyncio
 
@@ -535,13 +643,15 @@ async def test_pgdog_role_selection():
         statement_cache_size=250,
         server_settings={
             "pgdog.role": "replica",
-        }
+        },
     )
 
     got_err = False
     for _ in range(10):
         try:
-            await conn.execute("CREATE TABLE IF NOT EXISTS test_pgdog_role_selection(id BIGINT)")
+            await conn.execute(
+                "CREATE TABLE IF NOT EXISTS test_pgdog_role_selection(id BIGINT)"
+            )
         except asyncpg.exceptions.ReadOnlySQLTransactionError:
             got_err = True
             pass

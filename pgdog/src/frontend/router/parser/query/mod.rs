@@ -28,7 +28,6 @@ mod ddl;
 mod delete;
 mod explain;
 mod plugins;
-mod schema_sharding;
 mod select;
 mod set;
 mod set_config;
@@ -119,10 +118,10 @@ impl QueryParser {
                         .push(ShardWithPriority::new_override_only_one_shard(
                             Shard::Direct(0),
                         ));
-                    route.set_shard_mut(context.shards_calculator.shard());
+                    route.set_shard(context.shards_calculator.shard());
                 }
 
-                route.set_search_path_driven_mut(context.shards_calculator.is_search_path());
+                route.set_search_path_driven(context.shards_calculator.is_search_path());
 
                 if let Some(role) = context.router_context.sticky.role {
                     match role {
@@ -395,7 +394,7 @@ impl QueryParser {
         if let Command::Query(ref mut route) = command {
             let shard = context.shards_calculator.shard();
             if shard.is_direct() {
-                route.set_shard_mut(shard);
+                route.set_shard(shard);
             }
         }
 
@@ -410,7 +409,7 @@ impl QueryParser {
                 context
                     .shards_calculator
                     .push(ShardWithPriority::new_plugin(shard.clone()));
-                route.set_shard_raw_mut(context.shards_calculator.shard());
+                route.set_shard(context.shards_calculator.shard());
             }
         }
 
@@ -429,7 +428,7 @@ impl QueryParser {
                 .push(ShardWithPriority::new_override_only_one_shard(
                     Shard::Direct(0),
                 ));
-            route.set_shard_mut(context.shards_calculator.shard());
+            route.set_shard(context.shards_calculator.shard());
         }
 
         if let Command::Query(ref mut route) = command {
@@ -453,7 +452,7 @@ impl QueryParser {
                         context.shards_calculator.push(ShardWithPriority::new_table(
                             Shard::Direct(round_robin::next() % context.shards),
                         ));
-                        route.set_shard_mut(context.shards_calculator.shard().clone());
+                        route.set_shard(context.shards_calculator.shard().clone());
                     }
                 }
             }
@@ -551,6 +550,7 @@ impl QueryParser {
             context.router_context.cluster.user(),
             context.router_context.parameter_hints.search_path,
         );
+        let omnisharded = parser.is_all_omnisharded();
 
         let shard = parser.shard()?.unwrap_or(Shard::All);
 
@@ -574,7 +574,9 @@ impl QueryParser {
             };
         }
 
-        Ok(Command::Query(Route::write(shard)))
+        Ok(Command::Query(
+            Route::write(shard).with_omnisharded(omnisharded),
+        ))
     }
 }
 

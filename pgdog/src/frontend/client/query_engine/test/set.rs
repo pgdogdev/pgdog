@@ -1,9 +1,21 @@
 use crate::{
+    backend::databases::reload_from_existing,
+    config::{config, load_test_sharded, set},
     expect_message,
-    net::{CommandComplete, ReadyForQuery, parameter::ParameterValue},
+    net::{CommandComplete, ErrorResponse, ReadyForQuery, parameter::ParameterValue},
 };
 
 use super::prelude::*;
+
+/// Number of shards the client is currently connected to.
+fn connected_servers(client: &mut TestClient) -> usize {
+    client.engine.backend().connected_servers()
+}
+
+/// Total number of shards in the client's cluster.
+fn shard_count(client: &mut TestClient) -> usize {
+    client.engine.backend().cluster().unwrap().shards().len()
+}
 
 #[tokio::test]
 async fn test_set() {
@@ -376,6 +388,305 @@ async fn test_reset_inside_transaction_rollback() {
         &ParameterValue::String("before_reset".into()),
         "application_name should be restored after rollback"
     );
+}
+
+/// `SET pgdog.shard` pins the transaction to a single shard: a subsequent query
+/// connects to exactly one backend, even on a multi-shard cluster.
+#[tokio::test]
+async fn test_set_shard_pins_transaction_to_one_shard() {
+    let mut test_client = TestClient::new_sharded(Parameters::default()).await;
+    assert!(
+        shard_count(&mut test_client) > 1,
+        "test requires a multi-shard cluster"
+    );
+
+    test_client.send_simple(Query::new("BEGIN")).await;
+    expect_message!(test_client.read().await, CommandComplete);
+    assert_eq!(
+        expect_message!(test_client.read().await, ReadyForQuery).status,
+        'T'
+    );
+
+    test_client
+        .send_simple(Query::new("SET pgdog.shard TO 0"))
+        .await;
+    assert_eq!(
+        expect_message!(test_client.read().await, CommandComplete).command(),
+        "SET"
+    );
+    expect_message!(test_client.read().await, ReadyForQuery);
+
+    // Force the backend to actually connect to the pinned shard.
+    test_client.send_simple(Query::new("SELECT 1")).await;
+    test_client.read_until('Z').await.unwrap();
+
+    assert_eq!(
+        connected_servers(&mut test_client),
+        1,
+        "SET pgdog.shard should pin the transaction to a single shard"
+    );
+
+    test_client.send_simple(Query::new("ROLLBACK")).await;
+    test_client.read_until('Z').await.unwrap();
+}
+
+/// `SET pgdog.sharding_key` pins the transaction to a single shard: a subsequent
+/// query touching a sharded table connects to exactly one backend.
+///
+/// Uses a config without sharded schemas (and a single sharding function) so the
+/// key resolves via its hash rather than being interpreted as a schema name.
+#[tokio::test]
+async fn test_set_sharding_key_pins_transaction_to_one_shard() {
+    load_test_sharded();
+    let mut cfg = (*config()).clone();
+    cfg.config.sharded_schemas.clear();
+    cfg.config
+        .sharded_tables
+        .retain(|t| t.name.as_deref() == Some("sharded"));
+    set(cfg).unwrap();
+    reload_from_existing().unwrap();
+
+    let mut test_client = TestClient::new(Parameters::default()).await;
+    assert!(
+        shard_count(&mut test_client) > 1,
+        "test requires a multi-shard cluster"
+    );
+
+    test_client.send_simple(Query::new("BEGIN")).await;
+    expect_message!(test_client.read().await, CommandComplete);
+    assert_eq!(
+        expect_message!(test_client.read().await, ReadyForQuery).status,
+        'T'
+    );
+
+    test_client
+        .send_simple(Query::new("SET pgdog.sharding_key TO '1'"))
+        .await;
+    assert_eq!(
+        expect_message!(test_client.read().await, CommandComplete).command(),
+        "SET"
+    );
+    expect_message!(test_client.read().await, ReadyForQuery);
+
+    // The sharding key only resolves to a single shard for queries that touch a
+    // sharded table, so connect with a read from `sharded`.
+    test_client
+        .send_simple(Query::new("SELECT * FROM sharded"))
+        .await;
+    test_client.read_until('Z').await.unwrap();
+
+    assert_eq!(
+        connected_servers(&mut test_client),
+        1,
+        "SET pgdog.sharding_key should pin the transaction to a single shard"
+    );
+
+    test_client.send_simple(Query::new("ROLLBACK")).await;
+    test_client.read_until('Z').await.unwrap();
+}
+
+/// Once a query has connected the transaction to a server, `SET pgdog.shard` is
+/// rejected: the connection is already pinned.
+#[tokio::test]
+async fn test_set_shard_rejected_after_connect() {
+    let mut test_client = TestClient::new_sharded(Parameters::default()).await;
+
+    test_client.send_simple(Query::new("BEGIN")).await;
+    expect_message!(test_client.read().await, CommandComplete);
+    expect_message!(test_client.read().await, ReadyForQuery);
+
+    // Connect the transaction to a server.
+    test_client.send_simple(Query::new("SELECT 1")).await;
+    test_client.read_until('Z').await.unwrap();
+    assert!(test_client.backend_connected());
+
+    test_client
+        .send_simple(Query::new("SET pgdog.shard TO 0"))
+        .await;
+    let err = expect_message!(test_client.read().await, ErrorResponse);
+    assert_eq!(
+        err.message,
+        "cannot use \"SET pgdog.shard\" after connecting to a server; \
+         set it before running any queries"
+    );
+    expect_message!(test_client.read().await, ReadyForQuery);
+
+    test_client.send_simple(Query::new("ROLLBACK")).await;
+    test_client.read_until('Z').await.unwrap();
+}
+
+/// Same as above for `SET pgdog.sharding_key`.
+#[tokio::test]
+async fn test_set_sharding_key_rejected_after_connect() {
+    let mut test_client = TestClient::new_sharded(Parameters::default()).await;
+
+    test_client.send_simple(Query::new("BEGIN")).await;
+    expect_message!(test_client.read().await, CommandComplete);
+    expect_message!(test_client.read().await, ReadyForQuery);
+
+    test_client.send_simple(Query::new("SELECT 1")).await;
+    test_client.read_until('Z').await.unwrap();
+    assert!(test_client.backend_connected());
+
+    test_client
+        .send_simple(Query::new("SET pgdog.sharding_key TO '1'"))
+        .await;
+    let err = expect_message!(test_client.read().await, ErrorResponse);
+    assert_eq!(
+        err.message,
+        "cannot use \"SET pgdog.sharding_key\" after connecting to a server; \
+         set it before running any queries"
+    );
+    expect_message!(test_client.read().await, ReadyForQuery);
+
+    test_client.send_simple(Query::new("ROLLBACK")).await;
+    test_client.read_until('Z').await.unwrap();
+}
+
+/// Message returned by [`ErrorResponse::direct_shard_mismatch`]. The SQLSTATE
+/// (58000) is shared by several errors, so we match on the message instead.
+const DIRECT_SHARD_MISMATCH_MESSAGE: &str = "cannot switch shards in a direct-to-shard transaction";
+
+/// Once a transaction is pinned to a single shard, a query that routes to a
+/// *different* shard is rejected: the transaction cannot switch shards.
+///
+/// `SET pgdog.shard TO 0` pins the transaction to shard 0. The follow-up query
+/// carries a `pgdog_shard: 1` comment, whose routing priority out-ranks the
+/// `SET` pin, so it resolves to shard 1 — a mismatch against the connected
+/// shard 0 — and must be rejected.
+#[tokio::test]
+async fn test_direct_shard_mismatch_rejected() {
+    let mut test_client = TestClient::new_sharded(Parameters::default()).await;
+    assert!(
+        shard_count(&mut test_client) > 1,
+        "test requires a multi-shard cluster"
+    );
+
+    test_client.send_simple(Query::new("BEGIN")).await;
+    test_client.read_until('Z').await.unwrap();
+
+    test_client
+        .send_simple(Query::new("SET pgdog.shard TO 0"))
+        .await;
+    test_client.read_until('Z').await.unwrap();
+
+    // Connect the transaction to the pinned shard.
+    test_client.send_simple(Query::new("SELECT 1")).await;
+    test_client.read_until('Z').await.unwrap();
+    assert_eq!(
+        connected_servers(&mut test_client),
+        1,
+        "transaction should be pinned to a single shard"
+    );
+
+    // A query routed to a different shard must be rejected.
+    test_client
+        .send_simple(Query::new("/* pgdog_shard: 1 */ SELECT 1"))
+        .await;
+    let err = expect_message!(test_client.read().await, ErrorResponse);
+    assert_eq!(
+        err.message, DIRECT_SHARD_MISMATCH_MESSAGE,
+        "unexpected error: {:?}",
+        err
+    );
+    let rfq = expect_message!(test_client.read().await, ReadyForQuery);
+    assert_eq!(rfq.status, 'E', "transaction should be aborted");
+
+    test_client.send_simple(Query::new("ROLLBACK")).await;
+    test_client.read_until('Z').await.unwrap();
+}
+
+/// A query that routes to the *same* shard the transaction is pinned to is
+/// allowed and stays on that single shard.
+///
+/// Mirror of [`test_direct_shard_mismatch_rejected`] with a matching shard: the
+/// `pgdog_shard: 0` comment resolves to the already-connected shard 0, so the
+/// query is not rejected.
+#[tokio::test]
+async fn test_direct_shard_match_allowed() {
+    let mut test_client = TestClient::new_sharded(Parameters::default()).await;
+    assert!(
+        shard_count(&mut test_client) > 1,
+        "test requires a multi-shard cluster"
+    );
+
+    test_client.send_simple(Query::new("BEGIN")).await;
+    test_client.read_until('Z').await.unwrap();
+
+    test_client
+        .send_simple(Query::new("SET pgdog.shard TO 0"))
+        .await;
+    test_client.read_until('Z').await.unwrap();
+
+    test_client.send_simple(Query::new("SELECT 1")).await;
+    test_client.read_until('Z').await.unwrap();
+    assert_eq!(connected_servers(&mut test_client), 1);
+
+    // A query routed to the pinned shard is allowed (read_until returns Err on
+    // an ErrorResponse, so unwrap doubles as the "not rejected" assertion).
+    test_client
+        .send_simple(Query::new("/* pgdog_shard: 0 */ SELECT 1"))
+        .await;
+    test_client.read_until('Z').await.unwrap();
+    assert_eq!(
+        connected_servers(&mut test_client),
+        1,
+        "matching query should stay on the pinned shard"
+    );
+
+    test_client.send_simple(Query::new("ROLLBACK")).await;
+    test_client.read_until('Z').await.unwrap();
+}
+
+/// A cross-shard query is rejected while the transaction is pinned to a single
+/// shard: it would need every shard but we are connected to only one.
+///
+/// `SET pgdog.shard TO 0` pins the transaction to shard 0. The follow-up calls a
+/// cross-shard function (`pgdog.install_sharded_sequence`), which routes to all
+/// shards at `Override` priority — out-ranking the `SET` pin — and so must be
+/// rejected rather than silently run on the single connected shard.
+#[tokio::test]
+async fn test_cross_shard_blocked_while_pinned_to_one_shard() {
+    let mut test_client = TestClient::new_sharded(Parameters::default()).await;
+    assert!(
+        shard_count(&mut test_client) > 1,
+        "test requires a multi-shard cluster"
+    );
+
+    test_client.send_simple(Query::new("BEGIN")).await;
+    test_client.read_until('Z').await.unwrap();
+
+    test_client
+        .send_simple(Query::new("SET pgdog.shard TO 0"))
+        .await;
+    test_client.read_until('Z').await.unwrap();
+
+    // Connect the transaction to the pinned shard.
+    test_client.send_simple(Query::new("SELECT 1")).await;
+    test_client.read_until('Z').await.unwrap();
+    assert_eq!(
+        connected_servers(&mut test_client),
+        1,
+        "transaction should be pinned to a single shard"
+    );
+
+    // A cross-shard query cannot be served from one shard, so it must be rejected.
+    test_client
+        .send_simple(Query::new(
+            "SELECT pgdog.install_sharded_sequence('foo', 'id')",
+        ))
+        .await;
+    let err = expect_message!(test_client.read().await, ErrorResponse);
+    assert_eq!(
+        err.message, DIRECT_SHARD_MISMATCH_MESSAGE,
+        "unexpected error: {:?}",
+        err
+    );
+    let rfq = expect_message!(test_client.read().await, ReadyForQuery);
+    assert_eq!(rfq.status, 'E', "transaction should be aborted");
+
+    test_client.send_simple(Query::new("ROLLBACK")).await;
+    test_client.read_until('Z').await.unwrap();
 }
 
 #[tokio::test]
