@@ -1,8 +1,7 @@
 """
 Integration tests for the `prefer_primary` setting.
 
-The pgdog.toml under test sets `prefer_primary = true` with
-`read_write_split = "exclude_primary"`. This means:
+The pgdog.toml under test sets `read_write_split = "prefer_primary"`. This means:
 
   * by default every query (including plain SELECTs) is routed to the primary, and
   * a query only reaches a replica when it explicitly opts in.

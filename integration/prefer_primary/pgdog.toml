@@ -15,12 +15,10 @@ pooler_mode = "transaction"
 load_balancing_strategy = "round_robin"
 auth_type = "trust"
 query_parser = "on"
-# Feature under test: default every query to the primary. Replicas are only used
-# when a query opts in via SET pgdog.role, SET LOCAL pgdog.role, or a query comment.
-prefer_primary = true
-# Reads that do opt into replicas must land on a replica (not the primary), so the
-# test can deterministically observe pg_is_in_recovery().
-read_write_split = "exclude_primary"
+# Feature under test: default every query to the primary. Replicas are only used when a
+# query opts in via SET pgdog.role, SET LOCAL pgdog.role, or a query comment, and those
+# opt-in reads land on a replica (so the test can observe pg_is_in_recovery()).
+read_write_split = "prefer_primary"
 lsn_check_delay = 0
 lsn_check_interval = 1_000
 

@@ -80,10 +80,6 @@ impl Command for Set {
                 config.config.general.read_write_split = Self::from_json(&self.value)?;
             }
 
-            "prefer_primary" => {
-                config.config.general.prefer_primary = Self::from_json(&self.value)?;
-            }
-
             "load_balancing_strategy" => {
                 config.config.general.load_balancing_strategy = Self::from_json(&self.value)?;
             }

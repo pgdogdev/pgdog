@@ -449,6 +449,12 @@ async fn test_prefer_primary_optin_read_honors_read_write_split() {
     let (ids, primary_id) = used_ids(ReadWriteSplit::IncludePrimaryIfReplicaBanned).await;
     assert!(!ids.contains(&primary_id));
     assert_eq!(ids.len(), 2);
+
+    // prefer_primary: opt-in reads stay on replicas (like exclude_primary); the
+    // primary-by-default behavior is enforced upstream in the router, not here.
+    let (ids, primary_id) = used_ids(ReadWriteSplit::PreferPrimary).await;
+    assert!(!ids.contains(&primary_id));
+    assert_eq!(ids.len(), 2);
 }
 
 #[tokio::test]
