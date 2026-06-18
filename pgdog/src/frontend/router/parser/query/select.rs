@@ -39,7 +39,7 @@ impl QueryParser {
                 .push(ShardWithPriority::new_override_cross_shard_function());
         }
 
-        let (advisory_locks, omnisharded) = {
+        let (advisory_locks, mut omnisharded) = {
             let mut parser = StatementParser::from_select(
                 stmt,
                 context.router_context.bind,
@@ -200,6 +200,10 @@ impl QueryParser {
                 };
 
                 let shard = Shard::Direct(rr_index % context.shards);
+
+                // Routed to a single shard via the omnisharded-by-default path
+                // (non-sharded tables, including system catalogs).
+                omnisharded = true;
 
                 if let Some(recorder) = self.recorder_mut() {
                     recorder

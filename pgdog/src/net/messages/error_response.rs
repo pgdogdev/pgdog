@@ -86,6 +86,20 @@ impl ErrorResponse {
         }
     }
 
+    pub fn set_shard_after_connect(name: &str) -> ErrorResponse {
+        ErrorResponse {
+            severity: "ERROR".into(),
+            code: "58000".into(),
+            message: format!(
+                "cannot use \"SET {}\" after connecting to a server; \
+                 set it before running any queries",
+                name
+            ),
+            routine: Some("client::QueryEngine::set".into()),
+            ..Default::default()
+        }
+    }
+
     pub fn omni_in_direct_to_shard() -> ErrorResponse {
         ErrorResponse {
             severity: "ERROR".into(),

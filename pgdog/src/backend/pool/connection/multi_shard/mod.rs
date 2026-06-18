@@ -328,7 +328,13 @@ impl MultiShard {
         Ok(forward)
     }
 
+    /// Return true if we need to buffer [`DataRow`] messages
+    /// received from the servers because we need to post-process them.
     fn should_buffer(&self) -> bool {
+        // 1. We are talking to more than one shard (cross-shard query)
+        // 2. The route contains transformations we need to perform, e.g., aggregates, sorting, etc.
+        // 3. The route does not concern omnisharded tables which have the same data on all shards
+        //    anyway.
         self.shards > 1 && self.route.should_buffer() && !self.route.is_omnisharded()
     }
 

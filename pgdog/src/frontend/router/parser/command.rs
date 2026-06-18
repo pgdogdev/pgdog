@@ -120,7 +120,7 @@ impl Command {
     pub(crate) fn dry_run(self) -> Self {
         match self {
             Command::Query(mut query) => {
-                query.set_shard_mut(ShardWithPriority::new_override_dry_run(Shard::Direct(0)));
+                query.set_shard(ShardWithPriority::new_override_dry_run(Shard::Direct(0)));
                 Command::Query(query)
             }
 

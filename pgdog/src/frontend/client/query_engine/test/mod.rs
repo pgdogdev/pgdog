@@ -32,6 +32,7 @@ mod set;
 mod set_schema_sharding;
 mod sharded;
 mod spliced;
+mod test_omnisharded;
 mod transaction_state;
 
 pub(super) fn test_client() -> Client {

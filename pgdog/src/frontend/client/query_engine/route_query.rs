@@ -103,10 +103,11 @@ impl QueryEngine {
                     rewrite_result.apply_after_parser(context.client_request)?;
                 }
 
-                // Make sure we don't send an omni write to a direct-to-shard mapping.
+                // Make sure we don't send an omni write to a direct-to-shard route.
+                // This will cause omni data inconsistency.
                 if command.route().is_omnisharded()
                     && command.route().is_write()
-                    && self.backend.connected() // FIXME(lev): I wish there was a way to say > 0 and < shards in one shot.
+                    && self.backend.connected() // FIXME(lev): I wish there was a way to say >0 and <n in one shot.
                     && self.backend.connected_servers() < cluster.shards().len()
                 {
                     self.error_response(context, ErrorResponse::omni_in_direct_to_shard())

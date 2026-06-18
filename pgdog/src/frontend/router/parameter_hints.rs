@@ -10,6 +10,13 @@ use crate::{
     net::{Parameters, parameter::ParameterValue},
 };
 
+/// `SET pgdog.shard` — pin queries to an explicit shard number.
+pub const PGDOG_SHARD: &str = "pgdog.shard";
+/// `SET pgdog.sharding_key` — pin queries to the shard a key resolves to.
+pub const PGDOG_SHARDING_KEY: &str = "pgdog.sharding_key";
+/// `SET pgdog.role` — pin queries to a primary or replica.
+pub const PGDOG_ROLE: &str = "pgdog.role";
+
 #[derive(Debug, Clone)]
 pub struct ParameterHints<'a> {
     pub search_path: Option<&'a ParameterValue>,
@@ -23,9 +30,9 @@ impl<'a> From<&'a Parameters> for ParameterHints<'a> {
     fn from(value: &'a Parameters) -> Self {
         Self {
             search_path: value.search_path(),
-            pgdog_shard: value.get("pgdog.shard"),
-            pgdog_role: value.get("pgdog.role"),
-            pgdog_sharding_key: value.get("pgdog.sharding_key"),
+            pgdog_shard: value.get(PGDOG_SHARD),
+            pgdog_role: value.get(PGDOG_ROLE),
+            pgdog_sharding_key: value.get(PGDOG_SHARDING_KEY),
             hooks: ParserHooks::default(),
         }
     }
