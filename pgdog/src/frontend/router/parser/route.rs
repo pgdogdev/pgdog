@@ -406,6 +406,12 @@ pub enum ShardSource {
     Override(OverrideReason),
 }
 
+impl ShardSource {
+    pub fn is_round_robin(&self) -> bool {
+        matches!(self, Self::RoundRobin(_))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Ord, PartialOrd)]
 pub enum RoundRobinReason {
     PrimaryShardedTableInsert,

@@ -110,6 +110,16 @@ impl ErrorResponse {
         }
     }
 
+    pub fn direct_shard_mismatch() -> ErrorResponse {
+        ErrorResponse {
+            severity: "ERROR".into(),
+            code: "58000".into(),
+            message: "cannot switch shards in a direct-to-shard transaction".into(),
+            routine: Some("client::QueryEngine::route_query".into()),
+            ..Default::default()
+        }
+    }
+
     pub fn transaction_statement_mode() -> ErrorResponse {
         ErrorResponse {
             severity: "ERROR".into(),

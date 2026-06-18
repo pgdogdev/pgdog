@@ -74,7 +74,7 @@ mod tests {
         });
 
         let guard = crate::backend::pool::Guard::new(pool, server, Instant::now());
-        let mut binding = Binding::Direct(Some(guard));
+        let mut binding = Binding::Direct(guard, 0);
 
         let result = binding.two_pc("test", TwoPcPhase::Phase1).await;
 
