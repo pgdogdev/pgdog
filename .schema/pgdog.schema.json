@@ -1758,15 +1758,11 @@
     },
     "ShardedMappingConfig": {
       "description": "Explicit routing rule mapping specific column values or ranges to a shard.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/#mapping-fields",
-      "oneOf": [
+      "anyOf": [
         {
           "description": "Catch-all fallback for values not matched by any other rule.",
           "type": "object",
           "properties": {
-            "kind": {
-              "type": "string",
-              "const": "default"
-            },
             "shard": {
               "description": "Target shard number for matched queries.",
               "type": "integer",
@@ -1776,81 +1772,16 @@
           },
           "additionalProperties": false,
           "required": [
-            "kind",
             "shard"
           ]
         },
         {
           "description": "Match an explicit set of values.",
-          "type": "object",
-          "properties": {
-            "kind": {
-              "type": "string",
-              "const": "list"
-            },
-            "shard": {
-              "description": "Target shard number for matched queries.",
-              "type": "integer",
-              "format": "uint",
-              "minimum": 0
-            },
-            "values": {
-              "description": "Set of values for list mappings.",
-              "type": "array",
-              "items": {
-                "$ref": "#/$defs/FlexibleType"
-              }
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "kind",
-            "shard",
-            "values"
-          ]
+          "$ref": "#/$defs/ShardedMappingList"
         },
         {
           "description": "Match a contiguous range of values (inclusive start, exclusive end).",
-          "type": "object",
-          "properties": {
-            "end": {
-              "description": "Exclusive upper bound for range mappings.",
-              "anyOf": [
-                {
-                  "$ref": "#/$defs/FlexibleType"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "kind": {
-              "type": "string",
-              "const": "range"
-            },
-            "shard": {
-              "description": "Target shard number for matched queries.",
-              "type": "integer",
-              "format": "uint",
-              "minimum": 0
-            },
-            "start": {
-              "description": "Inclusive lower bound for range mappings.",
-              "anyOf": [
-                {
-                  "$ref": "#/$defs/FlexibleType"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "kind",
-            "shard"
-          ]
+          "$ref": "#/$defs/ShardedMappingRange"
         }
       ]
     },
@@ -1947,6 +1878,66 @@
           "type": "string",
           "const": "default"
         }
+      ]
+    },
+    "ShardedMappingList": {
+      "type": "object",
+      "properties": {
+        "shard": {
+          "description": "Target shard number for matched queries.",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "values": {
+          "description": "Set of values for list mappings.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/FlexibleType"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "shard",
+        "values"
+      ]
+    },
+    "ShardedMappingRange": {
+      "type": "object",
+      "properties": {
+        "end": {
+          "description": "Exclusive upper bound for range mappings.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FlexibleType"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "shard": {
+          "description": "Target shard number for matched queries.",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "start": {
+          "description": "Inclusive lower bound for range mappings.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FlexibleType"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "shard"
       ]
     },
     "ShardedSchema": {

@@ -119,7 +119,7 @@ impl ShardedTableConfig {
 ///
 /// https://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/#mapping-fields
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash, JsonSchema)]
-#[serde(rename_all = "snake_case", tag = "kind", deny_unknown_fields)]
+#[serde(rename_all = "snake_case", untagged, deny_unknown_fields)]
 pub enum ShardedMappingConfig {
     /// Catch-all fallback for values not matched by any other rule.
     Default {

@@ -381,23 +381,19 @@ data_type = "bigint"
 primary = true
 
 [[sharded_tables.mapping]]
-kind = "list"
 values = [1, 2, 3, 4]
 shard = 0
 
 [[sharded_tables.mapping]]
-kind = "list"
 values = [5, 6, 7]
 shard = 1
 
 [[sharded_tables.mapping]]
-kind = "range"
 start = 0
 end = 100
 shard = 0
 
 [[sharded_tables.mapping]]
-kind = "range"
 start = 100
 shard = 1
 

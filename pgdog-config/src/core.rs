@@ -1369,24 +1369,24 @@ shard = 0
 [[sharded_tables]]
 database = "db"
 column = "user_id"
-mapping = [{kind = "list", values = [1, 2, 3], shard = 0}, {kind = "list", values = [4, 5, 6], shard = 1}, {kind = "default", shard = 2}]
+mapping = [{values = [1, 2, 3], shard = 0}, {values = [4, 5, 6], shard = 1}, {shard = 2}]
 
 [[sharded_tables]]
 database = "db"
 column = "order_id"
-mapping = [{kind = "range", start = 0, end = 1000, shard = 0}, {kind = "range", start = 1000, end = 2000, shard = 1}]
+mapping = [{start = 0, end = 1000, shard = 0}, {start = 1000, end = 2000, shard = 1}]
 
 [[sharded_tables]]
 database = "db"
 column = "tenant_uuid"
 data_type = "uuid"
-mapping = [{kind = "list", values = ["00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000002"], shard = 0}]
+mapping = [{values = ["00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000002"], shard = 0}]
 
 [[sharded_tables]]
 database = "db"
 column = "tenant_slug"
 data_type = "varchar"
-mapping = [{kind = "list", values = ["alpha", "beta"], shard = 0}, {kind = "default", shard = 1}]
+mapping = [{values = ["alpha", "beta"], shard = 0}, {shard = 1}]
 
 [[sharded_tables]]
 database = "db"
@@ -1403,17 +1403,14 @@ database = "db"
 column = "user_id"
 
 [[sharded_tables.mapping]]
-kind = "list"
 values = [1, 2, 3]
 shard = 0
 
 [[sharded_tables.mapping]]
-kind = "list"
 values = [4, 5, 6]
 shard = 1
 
 [[sharded_tables.mapping]]
-kind = "default"
 shard = 2
 
 [[sharded_tables]]
@@ -1421,13 +1418,11 @@ database = "db"
 column = "order_id"
 
 [[sharded_tables.mapping]]
-kind = "range"
 start = 0
 end = 1000
 shard = 0
 
 [[sharded_tables.mapping]]
-kind = "range"
 start = 1000
 end = 2000
 shard = 1
@@ -1438,7 +1433,6 @@ column = "tenant_uuid"
 data_type = "uuid"
 
 [[sharded_tables.mapping]]
-kind = "list"
 values = ["00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000002"]
 shard = 0
 
@@ -1448,12 +1442,10 @@ column = "tenant_slug"
 data_type = "varchar"
 
 [[sharded_tables.mapping]]
-kind = "list"
 values = ["alpha", "beta"]
 shard = 0
 
 [[sharded_tables.mapping]]
-kind = "default"
 shard = 1
 
 [[sharded_tables]]
