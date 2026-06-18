@@ -226,9 +226,9 @@ async fn test_jwt_validator_memory_leak_prevention() {
 #[test]
 fn test_jwt_user_suffix_matching() {
     // 1. With configured suffix
-    let suffix = Some("@edreamsodigeo.com".to_string());
+    let suffix = Some("@example.com".to_string());
 
-    let user_sso = "john.doe@edreamsodigeo.com";
+    let user_sso = "john.doe@example.com";
     let user_other = "datastream";
 
     let match_sso = match suffix {
@@ -287,12 +287,12 @@ async fn test_jwt_custom_username_claim() {
     };
     claims.extra.insert(
         "email".to_string(),
-        serde_json::Value::String("postgres_user_email@edreamsodigeo.com".to_string()),
+        serde_json::Value::String("postgres_user_email@example.com".to_string()),
     );
 
     let token = generate_token(&claims, Algorithm::RS256, TEST_PRIVATE_KEY_PEM);
     let decoded = validator.validate(&token).await.unwrap();
 
     let username = decoded.get_username(&general.jwt_username_claim).unwrap();
-    assert_eq!(username, "postgres_user_email@edreamsodigeo.com");
+    assert_eq!(username, "postgres_user_email@example.com");
 }

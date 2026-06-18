@@ -584,7 +584,7 @@ LwIDAQAB
     let mut config = (*config()).clone();
     config.config.general.auth_type = AuthType::Jwt;
     config.config.general.jwt_public_key_file = Some(pub_key_path.to_str().unwrap().to_string());
-    config.config.general.jwt_user_suffix = Some("@edreamsodigeo.com".to_string());
+    config.config.general.jwt_user_suffix = Some("@example.com".to_string());
     config.config.general.jwt_user_auto_provision = true;
     config.config.general.jwt_user_auto_provision_read_only = true;
     set(config).unwrap();
@@ -618,7 +618,7 @@ LwIDAQAB
         let stream = Stream::plain(stream, 4096);
 
         let mut params = crate::net::parameter::Parameters::default();
-        params.insert("user", "john.doe@edreamsodigeo.com");
+        params.insert("user", "john.doe@example.com");
         params.insert("database", "pgdog");
 
         Client::spawn(
