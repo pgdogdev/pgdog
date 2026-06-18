@@ -150,7 +150,7 @@ fn test_ready_for_query_error_preservation() {
 #[test]
 fn test_omni_command_complete_not_summed() {
     // For omni-sharded tables, we should NOT sum row counts across shards.
-    let route = Route::write(ShardWithPriority::new_table_omni(Shard::All));
+    let route = Route::write(ShardWithPriority::new_table_omni(Shard::All)).with_omnisharded(true);
     let mut multi_shard = MultiShard::new(vec![0, 1, 2], &route);
 
     let backend1 = BackendPid::for_test(1);
@@ -192,7 +192,7 @@ fn test_omni_command_complete_not_summed() {
 #[test]
 fn test_omni_command_complete_uses_first_shard_row_count() {
     // For omni, we use the first shard's row count for consistency with DataRow behavior.
-    let route = Route::write(ShardWithPriority::new_table_omni(Shard::All));
+    let route = Route::write(ShardWithPriority::new_table_omni(Shard::All)).with_omnisharded(true);
     let mut multi_shard = MultiShard::new(vec![0, 1], &route);
 
     let backend1 = BackendPid::for_test(1);
@@ -227,7 +227,7 @@ fn test_omni_command_complete_uses_first_shard_row_count() {
 #[test]
 fn test_omni_data_rows_only_from_first_server() {
     // For omni-sharded tables with RETURNING, only forward DataRows from the first server.
-    let route = Route::write(ShardWithPriority::new_table_omni(Shard::All));
+    let route = Route::write(ShardWithPriority::new_table_omni(Shard::All)).with_omnisharded(true);
     let mut multi_shard = MultiShard::new(vec![0, 1], &route);
 
     let backend1 = BackendPid::for_test(1);
