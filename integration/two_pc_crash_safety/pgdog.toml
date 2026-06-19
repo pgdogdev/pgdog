@@ -22,17 +22,11 @@ database = "pgdog"
 column = "id"
 data_type = "bigint"
 
-[[sharded_mappings]]
-database = "pgdog"
-column = "id"
-kind = "list"
+[[sharded_tables.mapping]]
 values = [0]
 shard = 0
 
-[[sharded_mappings]]
-database = "pgdog"
-column = "id"
-kind = "list"
+[[sharded_tables.mapping]]
 values = [1]
 shard = 1
 

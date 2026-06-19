@@ -1,4 +1,6 @@
-use super::{Centroids, Lists, Ranges};
+use crate::frontend::router::sharding::mapping::MappingResolver;
+
+use super::Centroids;
 
 #[derive(Debug)]
 pub enum Operator<'a> {
@@ -8,6 +10,5 @@ pub enum Operator<'a> {
         probes: usize,
         centroids: Centroids<'a>,
     },
-    Range(Ranges<'a>),
-    List(Lists<'a>),
+    Mapping(MappingResolver<'a>),
 }

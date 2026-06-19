@@ -22,6 +22,7 @@ pub use general::{General, LogFormat};
 pub use memory::*;
 pub use networking::{MultiTenant, Tcp, TlsVerifyMode};
 pub use overrides::Overrides;
+use pgdog_config::ShardedTableConfig;
 pub use pgdog_config::auth::{AuthType, PassthroughAuth};
 pub use pgdog_config::{LoadBalancingStrategy, ReadWriteSplit, ReadWriteStrategy};
 pub use pooling::{ConnectionRecovery, PoolerMode, PreparedStatements};
@@ -30,8 +31,9 @@ pub use users::{Admin, Plugin, ServerAuth, User, Users};
 
 // Re-export from sharding module
 pub use sharding::{
-    DataType, FlexibleType, Hasher, ManualQuery, OmnishardedTables, ShardedMapping,
-    ShardedMappingKind, ShardedTable,
+    DataType, FlexibleType, Hasher, ManualQuery, OmnishardedTables, ShardedMappingConfig,
+    ShardedMappingDeprecated, ShardedMappingKindDeprecated, ShardedMappingList,
+    ShardedMappingRange,
 };
 
 // Re-export from replication module
@@ -63,6 +65,8 @@ pub fn load(config: &PathBuf, users: &PathBuf) -> Result<ConfigAndUsers, Error> 
 pub fn set(mut config: ConfigAndUsers) -> Result<ConfigAndUsers, Error> {
     config.check()?;
     for table in config.config.sharded_tables.iter_mut() {
+        // TODO: synchronous io operations inside that could be parallelized.
+        // And also moved outside the configuration to the place of
         table.load_centroids()?;
     }
     CONFIG.store(Arc::new(config.clone()));
@@ -248,20 +252,20 @@ fn load_test_sharded_n(num_shards: usize) {
         })
         .collect();
     config.config.sharded_tables = vec![
-        ShardedTable {
+        ShardedTableConfig {
             database: "pgdog".into(),
             name: Some("sharded".into()),
             column: "id".into(),
             ..Default::default()
         },
-        ShardedTable {
+        ShardedTableConfig {
             database: "pgdog".into(),
             name: Some("sharded_varchar".into()),
             column: "id_varchar".into(),
             data_type: DataType::Varchar,
             ..Default::default()
         },
-        ShardedTable {
+        ShardedTableConfig {
             database: "pgdog".into(),
             name: Some("sharded_uuid".into()),
             column: "id_uuid".into(),

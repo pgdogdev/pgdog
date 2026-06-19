@@ -2,7 +2,7 @@ use uuid::Uuid;
 
 use crate::{
     backend::ShardingSchema,
-    config::{DataType, ShardedTable},
+    config::DataType,
     net::{
         messages::{Format, FromDataType, ParameterWithFormat, Vector},
         vector::str_to_vector,
@@ -18,10 +18,8 @@ pub mod distance_simd_rust;
 pub mod error;
 pub mod ffi;
 pub mod hasher;
-pub mod list;
 pub mod mapping;
 pub mod operator;
-pub mod range;
 pub mod schema;
 pub mod tables;
 #[cfg(test)]
@@ -33,6 +31,7 @@ pub use context::*;
 pub use context_builder::*;
 pub use error::Error;
 pub use hasher::Hasher;
+pub use mapping::Mapping;
 pub use operator::*;
 pub use schema::SchemaSharder;
 pub use tables::*;
@@ -40,9 +39,6 @@ pub use value::*;
 pub use vector::{Centroids, Distance};
 
 use super::parser::Shard;
-pub use list::{ListShards, Lists};
-pub use mapping::Mapping;
-pub use range::Ranges;
 
 /// Hash `BIGINT`.
 pub fn bigint(id: i64) -> u64 {

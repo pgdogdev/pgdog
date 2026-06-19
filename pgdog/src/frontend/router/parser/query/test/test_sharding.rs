@@ -7,7 +7,7 @@ use crate::frontend::router::parser::{Cache, Shard};
 
 use super::setup::{QueryParserTest, *};
 
-use pgdog_config::ShardedTable;
+use pgdog_config::ShardedTableConfig;
 
 #[test]
 fn test_show_shards() {
@@ -177,12 +177,15 @@ fn test_omnisharded_overrides_sharded_table_config() {
     // Add "sharded_omni" (which is already in omnisharded config in Cluster::new_test)
     // to sharded_tables config - omnisharded should still take priority
     let mut config_with_both = config().deref().clone();
-    config_with_both.config.sharded_tables.push(ShardedTable {
-        database: "pgdog".into(),
-        name: Some("sharded_omni".into()),
-        column: "id".into(),
-        ..Default::default()
-    });
+    config_with_both
+        .config
+        .sharded_tables
+        .push(ShardedTableConfig {
+            database: "pgdog".into(),
+            name: Some("sharded_omni".into()),
+            column: "id".into(),
+            ..Default::default()
+        });
 
     // Query against "sharded_omni" which is now in BOTH sharded_tables AND omnisharded
     // Should be treated as omnisharded (round-robin), NOT sharded (deterministic)

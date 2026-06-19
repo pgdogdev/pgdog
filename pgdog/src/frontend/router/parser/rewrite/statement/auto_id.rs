@@ -246,8 +246,9 @@ fn is_bigint_type(data_type: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use crate::frontend::router::sharding::ShardedTable;
     use indexmap::IndexMap;
-    use pgdog_config::{Rewrite, ShardedTable, SystemCatalogsBehavior};
+    use pgdog_config::{Rewrite, SystemCatalogsBehavior};
     use std::collections::HashMap;
 
     use super::*;

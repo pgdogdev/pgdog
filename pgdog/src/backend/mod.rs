@@ -16,6 +16,7 @@ pub mod schema;
 pub mod server;
 pub mod server_options;
 pub mod stats;
+pub mod validation;
 
 pub use connect_reason::ConnectReason;
 pub use disconnect_reason::DisconnectReason;

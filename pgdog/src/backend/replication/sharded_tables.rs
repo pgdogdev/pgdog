@@ -2,14 +2,14 @@
 use pgdog_config::{OmnishardedTable, SystemCatalogsBehavior};
 
 use crate::{
-    config::{DataType, ShardedTable},
-    frontend::router::{parser::Column, sharding::Mapping},
+    config::DataType,
+    frontend::router::{
+        parser::Column,
+        sharding::{Mapping, ShardedTable},
+    },
     net::messages::Vector,
 };
-use std::{
-    collections::{HashMap, HashSet},
-    sync::Arc,
-};
+use std::{collections::HashMap, sync::Arc};
 
 #[derive(Default, Debug)]
 struct Inner {
@@ -64,23 +64,25 @@ impl ShardedTables {
         omnisharded_sticky: bool,
         system_catalogs: SystemCatalogsBehavior,
     ) -> Self {
-        let mut common_mapping = HashSet::new();
-        for table in &tables {
-            common_mapping.insert((
-                table.data_type,
-                table.mapping.clone(),
-                table.centroid_probes,
-                table.centroids.clone(),
-            ));
-        }
-
-        let common_mapping = if common_mapping.len() == 1 {
-            common_mapping.iter().next().map(|dt| CommonMapping {
-                data_type: dt.0,
-                mapping: dt.1.clone(),
-            })
-        } else {
-            None
+        // common_mapping is used by comment-directive and parameter-hint routing
+        // (pgdog_sharding_key), which receive a bare value with no table name.
+        // It is only valid when every table agrees on the same sharding scheme,
+        // so that any table's function produces the same shard for the same key.
+        //
+        // Only data_type and mapping are compared because those are the only fields
+        // CommonMapping stores and infer_from_from_and_config reads.
+        let common_mapping = match tables.split_first() {
+            Some((first, rest))
+                if rest
+                    .iter()
+                    .all(|t| t.data_type == first.data_type && t.mapping == first.mapping) =>
+            {
+                Some(CommonMapping {
+                    data_type: first.data_type,
+                    mapping: first.mapping.clone(),
+                })
+            }
+            _ => None,
         };
 
         Self {

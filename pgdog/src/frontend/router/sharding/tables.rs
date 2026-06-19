@@ -1,8 +1,27 @@
+use pgdog_config::{DataType, Hasher};
+use pgdog_vector::Vector;
+
 use crate::{
     backend::ShardingSchema,
-    config::ShardedTable,
     frontend::router::parser::{Column, Table},
 };
+
+use super::Mapping;
+
+/// Runtime representation of a sharded table, derived from [`pgdog_config::ShardedTableConfig`].
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct ShardedTable {
+    pub database: String,
+    pub name: Option<String>,
+    pub schema: Option<String>,
+    pub column: String,
+    pub primary: bool,
+    pub centroids: Vec<Vector>,
+    pub data_type: DataType,
+    pub centroid_probes: usize,
+    pub hasher: Hasher,
+    pub mapping: Option<Mapping>,
+}
 
 #[derive(Debug)]
 pub struct Key<'a> {

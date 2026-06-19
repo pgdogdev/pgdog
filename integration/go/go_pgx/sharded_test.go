@@ -10,6 +10,140 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// drainCount consumes all rows and returns how many there were.
+func drainCount(rows pgx.Rows) int {
+	defer rows.Close()
+	n := 0
+	for rows.Next() {
+		n++
+	}
+	return n
+}
+
+// connectDirect opens a connection straight to a physical shard database,
+// bypassing pgdog, so tests can verify data placement.
+func connectDirect(t *testing.T, shard int) *pgx.Conn {
+	t.Helper()
+	dsn := fmt.Sprintf("postgres://pgdog:pgdog@127.0.0.1:5432/shard_%d", shard)
+	conn, err := pgx.Connect(context.Background(), dsn)
+	assert.NoError(t, err)
+	return conn
+}
+
+// countOnShard counts rows matching id on the given direct-shard connection.
+func countOnShard(t *testing.T, conn *pgx.Conn, table string, id int64) int {
+	t.Helper()
+	var n int
+	err := conn.QueryRow(context.Background(),
+		"SELECT COUNT(*) FROM "+table+" WHERE id = $1", id).Scan(&n)
+	assert.NoError(t, err)
+	return n
+}
+
+type shardCase struct {
+	id        int64
+	wantShard int
+}
+
+// runShardingTest is the shared verification body for all explicit-mapping tests.
+// Phase 1: inserts each case through pgdog and asserts the row landed on the
+// correct physical shard. Phase 2: verifies SELECT / UPDATE / DELETE route to
+// that same shard.
+func runShardingTest(t *testing.T, table string, cases []shardCase) {
+	t.Helper()
+
+	proxy, err := pgx.Connect(context.Background(), "postgres://pgdog:pgdog@127.0.0.1:6432/pgdog_sharded")
+	assert.NoError(t, err)
+	defer proxy.Close(context.Background())
+
+	shard0 := connectDirect(t, 0)
+	defer shard0.Close(context.Background())
+	shard1 := connectDirect(t, 1)
+	defer shard1.Close(context.Background())
+
+	ctx := context.Background()
+	_, err = proxy.Exec(ctx, "TRUNCATE TABLE "+table)
+	assert.NoError(t, err)
+
+	for _, tc := range cases {
+		rows, err := proxy.Query(ctx, "INSERT INTO "+table+" (id) VALUES ($1) RETURNING *", tc.id)
+		assert.NoError(t, err)
+		assert.Equal(t, 1, drainCount(rows), "INSERT id=%d must return 1 row", tc.id)
+
+		if tc.wantShard == 0 {
+			assert.Equal(t, 1, countOnShard(t, shard0, table, tc.id), "id=%d must be on shard 0", tc.id)
+			assert.Equal(t, 0, countOnShard(t, shard1, table, tc.id), "id=%d must NOT be on shard 1", tc.id)
+		} else {
+			assert.Equal(t, 0, countOnShard(t, shard0, table, tc.id), "id=%d must NOT be on shard 0", tc.id)
+			assert.Equal(t, 1, countOnShard(t, shard1, table, tc.id), "id=%d must be on shard 1", tc.id)
+		}
+	}
+
+	for _, tc := range cases {
+		for _, q := range []string{
+			"SELECT * FROM " + table + " WHERE id = $1",
+			"UPDATE " + table + " SET id = $1 WHERE id = $1 RETURNING *",
+			"DELETE FROM " + table + " WHERE id = $1 RETURNING *",
+		} {
+			rows, err := proxy.Query(ctx, q, tc.id)
+			assert.NoError(t, err)
+			assert.Equal(t, 1, drainCount(rows), "id=%d: %s must return 1 row", tc.id, q)
+		}
+	}
+}
+
+func listCases() []shardCase {
+	// 0–9 → shard 0, 10–19 → shard 1
+	cases := make([]shardCase, 20)
+	for i := range 20 {
+		shard := 0
+		if i >= 10 {
+			shard = 1
+		}
+		cases[i] = shardCase{int64(i), shard}
+	}
+	return cases
+}
+
+func rangeCases() []shardCase {
+	// [0, 100) → shard 0, [100, 200) → shard 1
+	cases := make([]shardCase, 200)
+	for i := range 200 {
+		shard := 0
+		if i >= 100 {
+			shard = 1
+		}
+		cases[i] = shardCase{int64(i), shard}
+	}
+	return cases
+}
+
+// TestShardedListDeprecated tests list mapping via the legacy [[sharded_mappings]] config format.
+func TestShardedListDeprecated(t *testing.T) { runShardingTest(t, "sharded_list_deprecated", listCases()) }
+
+// TestShardedList tests list mapping via the inline mapping = [...] config format.
+func TestShardedList(t *testing.T) { runShardingTest(t, "sharded_list", listCases()) }
+
+// TestShardedRangeDeprecated tests range mapping via the legacy [[sharded_mappings]] config format.
+func TestShardedRangeDeprecated(t *testing.T) {
+	runShardingTest(t, "sharded_range_deprecated", rangeCases())
+}
+
+// TestShardedRange tests range mapping via the inline mapping = [...] config format.
+func TestShardedRange(t *testing.T) { runShardingTest(t, "sharded_range", rangeCases()) }
+
+// TestShardedMappingHierarchy verifies the list → range → default resolution order.
+func TestShardedMappingHierarchy(t *testing.T) {
+	runShardingTest(t, "sharded_mapping_hierarchy", []shardCase{
+		// List entries take priority over everything.
+		{1, 0}, {2, 0}, {4, 1}, {6, 1},
+		// Range entries used when no list entry matches.
+		{100, 0}, {150, 0}, {200, 1}, {299, 1},
+		// Default used when neither list nor range matches.
+		{50, 0}, {999, 0},
+	})
+}
+
 func TestShardedVarchar(t *testing.T) {
 	conn, err := pgx.Connect(context.Background(), "postgres://pgdog:pgdog@127.0.0.1:6432/pgdog_sharded")
 	assert.NoError(t, err)
@@ -61,64 +195,6 @@ func TestShardedVarcharArray(t *testing.T) {
 		rows, err := conn.Query(context.Background(), "SELECT * FROM sharded_varchar WHERE id_varchar = ANY($1)", [5]string{"one", "two", "three", "four", "five"})
 		assert.NoError(t, err)
 		rows.Close()
-	}
-}
-
-func TestShardedList(t *testing.T) {
-	conn, err := pgx.Connect(context.Background(), "postgres://pgdog:pgdog@127.0.0.1:6432/pgdog_sharded")
-	assert.NoError(t, err)
-	defer conn.Close(context.Background())
-
-	_, err = conn.Exec(context.Background(), "TRUNCATE TABLE sharded_list")
-	assert.NoError(t, err)
-
-	for i := range 20 {
-		for _, query := range [4]string{
-			"INSERT INTO sharded_list (id) VALUES ($1) RETURNING *",
-			"SELECT * FROM sharded_list WHERE id = $1",
-			"UPDATE sharded_list SET id = $1 WHERE id = $1 RETURNING *",
-			"DELETE FROM sharded_list WHERE id = $1 RETURNING *",
-		} {
-			rows, err := conn.Query(context.Background(), query, int64(i))
-			assert.NoError(t, err)
-			count := 0
-
-			for rows.Next() {
-				count += 1
-			}
-
-			rows.Close()
-			assert.Equal(t, 1, count)
-		}
-	}
-}
-
-func TestShardedRange(t *testing.T) {
-	conn, err := pgx.Connect(context.Background(), "postgres://pgdog:pgdog@127.0.0.1:6432/pgdog_sharded")
-	assert.NoError(t, err)
-	defer conn.Close(context.Background())
-
-	_, err = conn.Exec(context.Background(), "TRUNCATE TABLE sharded_range")
-	assert.NoError(t, err)
-
-	for i := range 200 {
-		for _, query := range [4]string{
-			"INSERT INTO sharded_range (id) VALUES ($1) RETURNING *",
-			"SELECT * FROM sharded_range WHERE id = $1",
-			"UPDATE sharded_range SET id = $1 WHERE id = $1 RETURNING *",
-			"DELETE FROM sharded_range WHERE id = $1 RETURNING *",
-		} {
-			rows, err := conn.Query(context.Background(), query, int64(i))
-			assert.NoError(t, err)
-			count := 0
-
-			for rows.Next() {
-				count += 1
-			}
-
-			rows.Close()
-			assert.Equal(t, 1, count)
-		}
 	}
 }
 
