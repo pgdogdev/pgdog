@@ -132,8 +132,10 @@ jobs:
 
       - name: Publish .deb files to R2
         env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          # deb-s3's aws-sdk version doesn't reliably read AWS_* env vars, so we
+          # pass them explicitly via flags below; keep them here too for gpg/awscli.
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           # deb-s3 shells out to gpg; passphrase-less key keeps it non-interactive.
           GPG_TTY: ""
         run: |
@@ -143,6 +145,8 @@ jobs:
               --bucket "$R2_BUCKET" \
               --endpoint "$R2_ENDPOINT" \
               --s3-region auto \
+              --access-key-id "$R2_ACCESS_KEY_ID" \
+              --secret-access-key "$R2_SECRET_ACCESS_KEY" \
               --codename "$DIST" \
               --component main \
               --sign "$GPG_KEYID" \
