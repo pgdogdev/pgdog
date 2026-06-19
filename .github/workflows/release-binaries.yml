@@ -100,15 +100,15 @@ jobs:
           path: "*.deb"
           if-no-files-found: error
 
-  # Publish the freshly built .deb files to the R2-hosted APT repository.
+  # Publish the freshly built .deb files to the S3-hosted APT repository.
   # deb-s3 reads and rewrites the repo manifests directly in the bucket, so it
   # adds to the existing repo incrementally — no need to mirror the repo tree.
   apt-publish:
     needs: build
     runs-on: ubuntu-latest
     env:
-      R2_ENDPOINT: https://a4e699a861a65f776bd86cc88661f0c3.r2.cloudflarestorage.com
-      R2_BUCKET: pgdog-apt
+      S3_BUCKET: pgdog-apt
+      S3_REGION: us-east-1
       DIST: stable
     steps:
       - name: Download .deb artifacts
@@ -130,23 +130,22 @@ jobs:
           KEYID=$(gpg --list-secret-keys --with-colons | awk -F: '/^sec:/ {print $5; exit}')
           echo "GPG_KEYID=$KEYID" >> "$GITHUB_ENV"
 
-      - name: Publish .deb files to R2
+      - name: Publish .deb files to S3
         env:
           # deb-s3's aws-sdk version doesn't reliably read AWS_* env vars, so we
-          # pass them explicitly via flags below; keep them here too for gpg/awscli.
-          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          # pass them explicitly via flags below.
+          S3_AWS_ACCESS_KEY_ID: ${{ secrets.S3_AWS_ACCESS_KEY_ID }}
+          S3_AWS_SECRET_ACCESS_KEY: ${{ secrets.S3_AWS_SECRET_ACCESS_KEY }}
           # deb-s3 shells out to gpg; passphrase-less key keeps it non-interactive.
           GPG_TTY: ""
         run: |
           shopt -s nullglob
           for f in debs/*.deb; do
             deb-s3 upload \
-              --bucket "$R2_BUCKET" \
-              --endpoint "$R2_ENDPOINT" \
-              --s3-region auto \
-              --access-key-id "$R2_ACCESS_KEY_ID" \
-              --secret-access-key "$R2_SECRET_ACCESS_KEY" \
+              --bucket "$S3_BUCKET" \
+              --s3-region "$S3_REGION" \
+              --access-key-id "$S3_AWS_ACCESS_KEY_ID" \
+              --secret-access-key "$S3_AWS_SECRET_ACCESS_KEY" \
               --codename "$DIST" \
               --component main \
               --sign "$GPG_KEYID" \
