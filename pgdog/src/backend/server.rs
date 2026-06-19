@@ -348,7 +348,7 @@ impl Server {
             re_synced: false,
             sending_request: false,
             pooler_mode: PoolerMode::Transaction,
-            stream_buffer: MessageBuffer::new(config.config.memory.message_buffer),
+            stream_buffer: MessageBuffer::new(config.config.memory.message_buffer, None),
             disconnect_reason: None,
             password_attempts: 1, // This is going to be changed by parent caller.
             max_age: None,
@@ -1243,7 +1243,7 @@ pub mod test {
                 re_synced: false,
                 replication_mode: false,
                 pooler_mode: PoolerMode::Transaction,
-                stream_buffer: MessageBuffer::new(4096),
+                stream_buffer: MessageBuffer::new(4096, None),
                 disconnect_reason: None,
                 statement_executed: false,
                 sending_request: false,
