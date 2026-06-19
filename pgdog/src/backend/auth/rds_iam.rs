@@ -102,6 +102,7 @@ mod tests {
             server_auth: ServerAuth::RdsIam,
             server_iam_region: Some("us-east-1".into()),
             configured_role: Role::Auto,
+            client_user: None,
         }
     }
 

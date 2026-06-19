@@ -88,6 +88,12 @@ impl QueryParserTest {
         self
     }
 
+    /// Set whether the user is read-only.
+    pub(crate) fn with_user_read_only(mut self, read_only: bool) -> Self {
+        self.cluster.set_user_read_only(read_only);
+        self
+    }
+
     /// Enable expanded explain for this test.
     pub(crate) fn with_expanded_explain(mut self) -> Self {
         let mut updated = config().deref().clone();

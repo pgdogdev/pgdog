@@ -7,4 +7,7 @@ pub enum Error {
 
     #[error("server-side auth can only use one password")]
     ServerSideOnePassword,
+
+    #[error("JWT error: {0}")]
+    Jwt(#[from] super::jwt::JwtError),
 }

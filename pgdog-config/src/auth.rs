@@ -49,6 +49,8 @@ pub enum AuthType {
     Trust,
     /// Plaintext password.
     Plain,
+    /// JWT token (RS256 / ES256). The `sub` claim is the PostgreSQL role.
+    Jwt,
 }
 
 impl Display for AuthType {
@@ -58,6 +60,7 @@ impl Display for AuthType {
             Self::Scram => write!(f, "scram"),
             Self::Trust => write!(f, "trust"),
             Self::Plain => write!(f, "plain"),
+            Self::Jwt => write!(f, "jwt"),
         }
     }
 }
@@ -85,6 +88,7 @@ impl FromStr for AuthType {
             "scram" => Ok(Self::Scram),
             "trust" => Ok(Self::Trust),
             "plain" => Ok(Self::Plain),
+            "jwt" => Ok(Self::Jwt),
             _ => Err(format!("Invalid auth type: {}", s)),
         }
     }

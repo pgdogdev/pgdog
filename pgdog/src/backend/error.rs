@@ -187,8 +187,63 @@ impl Error {
     pub fn is_auth(&self) -> bool {
         match self {
             Self::Auth(_) => true,
-            Self::ConnectionError(err) => err.code == "28000" || err.is_bad_password(),
+            Self::ConnectionError(err) => {
+                err.code == "28000"
+                    || err.is_bad_password()
+                    || err.code == "22023"
+                    || err.code == "42704"
+            }
+            Self::ExecutionError(err) => {
+                err.code == "22023"
+                    || err.code == "28000"
+                    || err.code == "42704"
+                    || err.is_bad_password()
+            }
             _ => false,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::net::messages::ErrorResponse;
+
+    #[test]
+    fn test_error_is_auth() {
+        // Test role-does-not-exist and other auth-related error codes
+        let codes = vec!["28000", "28P01", "22023", "42704"];
+
+        for code in codes {
+            let response = ErrorResponse {
+                code: code.to_string(),
+                ..Default::default()
+            };
+
+            let conn_err = Error::ConnectionError(Box::new(response.clone()));
+            let exec_err = Error::ExecutionError(Box::new(response));
+
+            assert!(
+                conn_err.is_auth(),
+                "Expected code {} to be treated as auth error in ConnectionError",
+                code
+            );
+            assert!(
+                exec_err.is_auth(),
+                "Expected code {} to be treated as auth error in ExecutionError",
+                code
+            );
+        }
+
+        // Test non-auth error code
+        let non_auth_response = ErrorResponse {
+            code: "58000".to_string(),
+            ..Default::default()
+        };
+        let non_auth_conn_err = Error::ConnectionError(Box::new(non_auth_response.clone()));
+        let non_auth_exec_err = Error::ExecutionError(Box::new(non_auth_response));
+
+        assert!(!non_auth_conn_err.is_auth());
+        assert!(!non_auth_exec_err.is_auth());
     }
 }

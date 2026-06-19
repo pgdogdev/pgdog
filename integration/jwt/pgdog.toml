@@ -1,0 +1,27 @@
+[general]
+host = "0.0.0.0"
+port = 6432
+workers = 2
+auth_type = "jwt"
+jwt_public_key_file = "/keys/public.pem"
+jwt_username_claim = "sub"
+jwt_user_auto_provision = true
+jwt_user_auto_provision_read_only = false
+jwt_server_user = "pgdog"
+jwt_server_password = "pgdog"
+connect_timeout = 5_000
+checkout_timeout = 5_000
+query_timeout = 10_000
+
+[admin]
+name = "admin"
+user = "admin"
+password = "pgdog"
+
+[[databases]]
+name = "pgdog"
+host = "postgres"
+port = 5432
+database_name = "pgdog"
+user = "pgdog"
+password = "pgdog"

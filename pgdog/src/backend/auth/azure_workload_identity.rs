@@ -61,6 +61,7 @@ mod tests {
             server_auth: ServerAuth::AzureWorkloadIdentity,
             server_iam_region: None,
             configured_role: Role::Auto,
+            client_user: None,
         };
 
         let (b64_token, expires_at) = token(addr).await.unwrap();

@@ -134,11 +134,14 @@ impl Connection {
 
     /// Try to get a connection for the given route.
     async fn try_conn(&mut self, request: &Request, route: &Route) -> Result<(), Error> {
+        let mut req = *request;
+        req.replica_only = route.is_read();
+
         if let Shard::Direct(shard) = route.shard() {
             let mut server = if route.is_read() {
-                self.cluster()?.replica(*shard, request).await?
+                self.cluster()?.replica(*shard, &req).await?
             } else {
-                self.cluster()?.primary(*shard, request).await?
+                self.cluster()?.primary(*shard, &req).await?
             };
 
             // Cleanup session mode connections when
@@ -158,9 +161,9 @@ impl Connection {
                     continue;
                 };
                 let mut server = if route.is_read() {
-                    shard.replica(request).await?
+                    shard.replica(&req).await?
                 } else {
-                    shard.primary(request).await?
+                    shard.primary(&req).await?
                 };
 
                 if self.session_mode() {

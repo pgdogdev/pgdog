@@ -146,9 +146,13 @@ impl Monitor {
                     if let ShouldCreate::Yes { reason, .. } = should_create {
                         info!("new connection requested: {} [{}]", should_create, self.pool.addr());
                         let ok = match self.replenish(reason).await {
-                            Ok(ok) => ok,
+                            Ok(r) => r,
                             Err(err) => {
                                 error!("monitor error: {}", err);
+                                if err.is_auth() {
+                                    warn!("Authentication failed with backend database, shutting down pool [{}] to prevent connection storm", self.pool.addr());
+                                    self.pool.shutdown();
+                                }
                                 false
                             }
                         };
@@ -310,7 +314,7 @@ impl Monitor {
                 }
                 Ok(true)
             }
-            _ => Ok(false),
+            Err(err) => Err(err),
         }
     }
 
@@ -446,6 +450,19 @@ impl Monitor {
                     // We tried all passwords and they were all wrong.
                     if err.is_auth() {
                         pool.lock().stats.counts.auth_attempts += pool.addr().passwords.len();
+                        error!(
+                            "{}error connecting to server: {} [{}]",
+                            if attempt > 0 {
+                                format!("[attempt {}] ", attempt)
+                            } else {
+                                String::new()
+                            },
+                            err,
+                            pool.addr(),
+                        );
+                        return Err(Error::Auth);
+                    } else {
+                        error = Error::ServerError;
                     }
                     error!(
                         "{}error connecting to server: {} [{}]",
@@ -457,7 +474,6 @@ impl Monitor {
                         err,
                         pool.addr(),
                     );
-                    error = Error::ServerError;
                 }
 
                 Err(_) => {

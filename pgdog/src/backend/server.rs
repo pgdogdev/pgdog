@@ -111,6 +111,35 @@ impl Server {
                 Ok(mut server) => {
                     auth_secret.valid(true);
                     server.password_attempts = idx + 1;
+
+                    if let Some(ref client_user) = addr.client_user
+                        && client_user != &addr.user
+                    {
+                        // Escape the identifier: Postgres quoted identifiers escape an
+                        // embedded double quote by doubling it. The username originates
+                        // from a signed JWT claim, but we still escape it defensively to
+                        // prevent any possibility of SQL injection via crafted claims.
+                        let escaped = client_user.replace('"', "\"\"");
+                        debug!(
+                            "executing SET ROLE \"{}\" for server connection [{}]",
+                            escaped, addr
+                        );
+                        // A failed SET ROLE (e.g. the role does not exist in the
+                        // backend) leaves the connection usable: execute() drains
+                        // until ReadyForQuery. We log and continue as the configured
+                        // server user rather than dropping the connection, so that
+                        // role provisioning remains the operator's responsibility.
+                        if let Err(err) = server
+                            .execute(crate::net::Query::new(format!(r#"SET ROLE "{}""#, escaped)))
+                            .await
+                        {
+                            warn!(
+                                "SET ROLE \"{}\" failed for server connection, continuing as \"{}\": {} [{}]",
+                                escaped, addr.user, err, addr
+                            );
+                        }
+                    }
+
                     return Ok(server);
                 }
                 Err(Error::ConnectionError(error)) => {

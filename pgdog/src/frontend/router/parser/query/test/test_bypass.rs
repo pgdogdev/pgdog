@@ -55,6 +55,21 @@ async fn test_primary() {
 }
 
 #[tokio::test]
+async fn test_read_only_user_blocks_primary_escalation() {
+    let mut test = setup()
+        .with_user_read_only(true)
+        .with_param("pgdog.role", "primary");
+
+    for query in QUERIES {
+        let result = test.try_execute(vec![Query::new(query).into()]).unwrap();
+        // Since the user is configured as read-only, pgDog forces the route to read-only (replica)
+        // even though they requested pgdog.role=primary.
+        assert!(result.route().is_read());
+        assert_eq!(result.route().shard(), &Shard::Direct(0))
+    }
+}
+
+#[tokio::test]
 async fn test_no_hints() {
     let mut test = setup();
 

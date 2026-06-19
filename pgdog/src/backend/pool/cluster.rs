@@ -87,6 +87,8 @@ pub struct Cluster {
     resharding_replication_retry_min_delay: Duration,
     regex_parser: RegexParser,
     identity: Option<String>,
+    user_read_only: bool,
+    has_server_auth: bool,
 }
 
 /// Sharding configuration from the cluster.
@@ -174,6 +176,8 @@ pub struct ClusterConfig<'a> {
     pub regex_parser_limit: usize,
     pub pub_sub_enabled: bool,
     pub identity: &'a Option<String>,
+    pub user_read_only: bool,
+    pub has_server_auth: bool,
 }
 
 impl<'a> ClusterConfig<'a> {
@@ -193,6 +197,19 @@ impl<'a> ClusterConfig<'a> {
             .map(|shard| shard.pooler_mode())
             .unwrap_or(user.pooler_mode.unwrap_or(general.pooler_mode));
 
+        let user_read_only = user.read_only.unwrap_or(false);
+        let rw_split = if user_read_only {
+            ReadWriteSplit::ExcludePrimary
+        } else {
+            general.read_write_split
+        };
+
+        // The cluster can connect to the backend even without a client-facing
+        // password when it has dedicated server credentials (e.g. JWT users
+        // authenticated by token but connecting as a configured server user) or
+        // uses an external identity provider (RDS IAM, Azure).
+        let has_server_auth = user.server_password.is_some() || user.is_external_identity();
+
         Self {
             name: &user.database,
             passwords: user.passwords(),
@@ -204,7 +221,7 @@ impl<'a> ClusterConfig<'a> {
             sharded_tables,
             multi_tenant,
             rw_strategy: general.read_write_strategy,
-            rw_split: general.read_write_split,
+            rw_split,
             schema_admin: user.schema_admin,
             cross_shard_disabled: user
                 .cross_shard_disabled
@@ -237,6 +254,8 @@ impl<'a> ClusterConfig<'a> {
             regex_parser_limit: general.regex_parser_limit,
             pub_sub_enabled: general.pub_sub_enabled(),
             identity: &user.identity,
+            user_read_only,
+            has_server_auth,
         }
     }
 }
@@ -283,6 +302,8 @@ impl Cluster {
             regex_parser_limit,
             pub_sub_enabled,
             identity,
+            user_read_only,
+            has_server_auth,
         } = config;
 
         let identifier = Arc::new(DatabaseUser {
@@ -343,6 +364,8 @@ impl Cluster {
             ),
             regex_parser: RegexParser::new(regex_parser_limit, query_parser),
             identity: identity.clone(),
+            user_read_only,
+            has_server_auth,
         }
     }
 
@@ -427,6 +450,18 @@ impl Cluster {
     }
 
     /// Get pooler mode.
+    /// Check if the user is configured as read-only.
+    pub fn user_read_only(&self) -> bool {
+        self.user_read_only
+    }
+
+    /// Whether the cluster has dedicated server-side credentials (or an external
+    /// identity provider) and can therefore connect to the backend even when no
+    /// client-facing password is configured (e.g. JWT-authenticated users).
+    pub fn has_server_auth(&self) -> bool {
+        self.has_server_auth
+    }
+
     pub fn pooler_mode(&self) -> PoolerMode {
         self.pooler_mode
     }
@@ -942,6 +977,10 @@ mod test {
 
         pub fn set_read_write_strategy(&mut self, rw_strategy: ReadWriteStrategy) {
             self.rw_strategy = rw_strategy;
+        }
+
+        pub fn set_user_read_only(&mut self, read_only: bool) {
+            self.user_read_only = read_only;
         }
     }
 

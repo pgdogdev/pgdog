@@ -1,0 +1,4 @@
+psycopg==3.2.6
+pytest==8.3.5
+PyJWT==2.9.0
+cryptography==43.0.3
