@@ -287,7 +287,10 @@ impl CopySubscriber {
             let query = match phase {
                 TwoPcPhase::Phase1 => format!("PREPARE TRANSACTION '{txn}_{shard}'"),
                 TwoPcPhase::Phase2 => format!("COMMIT PREPARED '{txn}_{shard}'"),
-                _ => unreachable!(),
+                // Rollback is not issued here. If this path fails, the TwoPcGuards in
+                // commit_two_pc() are dropped without manager.done(), and the 2PC Manager
+                // cleanup task issues ROLLBACK PREPARED (Phase1) or COMMIT PREPARED (Phase2).
+                TwoPcPhase::Rollback => unreachable!(),
             };
             futures.push(Self::send_and_confirm(server, Query::new(query).into()));
         }
