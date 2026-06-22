@@ -13,7 +13,7 @@ use crate::backend::databases::databases;
 use crate::backend::replication::orchestrator::Orchestrator;
 use crate::backend::schema::sync::config::ShardConfig;
 use crate::backend::schema::sync::pg_dump::SyncState;
-use crate::config::{Config, Users};
+use crate::config::{Config, ConfigAndUsers, Role, Users};
 use crate::frontend::router::cli::RouterCli;
 
 /// PgDog is a PostgreSQL pooler, proxy, load balancer and query router.
@@ -178,6 +178,35 @@ pub enum Commands {
         /// Database name.
         #[arg(long)]
         database: String,
+    },
+
+    /// Open an interactive psql shell directly to a database server from the config.
+    ///
+    /// Looks up the database in pgdog.toml (and optionally the user in users.toml),
+    /// resolves connection details, then exec-replaces this process with psql.
+    /// Any arguments after `--` are forwarded verbatim to psql.
+    ///
+    /// Examples:
+    ///   pgdog psql --database prod --user pgdog
+    ///   pgdog psql --database prod --user pgdog -- -c "SELECT 1"
+    ///   pgdog psql --database prod --user pgdog -- -f migration.sql
+    Psql {
+        /// Database name as configured in pgdog.toml.
+        #[arg(short, long)]
+        database: String,
+
+        /// User name as configured in users.toml. When omitted, credentials are taken
+        /// directly from the database entry in pgdog.toml.
+        #[arg(short, long)]
+        user: Option<String>,
+
+        /// Shard number to connect to. Defaults to 0.
+        #[arg(long, default_value = "0")]
+        shard: usize,
+
+        /// Extra arguments forwarded verbatim to psql (pass after `--`).
+        #[arg(last = true)]
+        psql_args: Vec<String>,
     },
 }
 
@@ -442,4 +471,99 @@ pub async fn route(commands: Commands) -> Result<(), Box<dyn std::error::Error>>
     }
 
     Ok(())
+}
+
+/// Open an interactive psql shell to a database server defined in the config.
+///
+/// Resolves connection details from pgdog.toml (and users.toml when `user` is given),
+/// then exec-replaces this process with `psql`. On success this function never returns.
+/// `extra_args` are forwarded verbatim to psql after the connection flags.
+pub fn psql(
+    database: &str,
+    user: Option<&str>,
+    shard: usize,
+    extra_args: &[String],
+    config: &ConfigAndUsers,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use std::os::unix::process::CommandExt;
+
+    // Prefer primary; fall back to any matching entry for the shard.
+    let db = config
+        .config
+        .databases
+        .iter()
+        .find(|d| {
+            d.name == database && d.shard == shard && matches!(d.role, Role::Primary | Role::Auto)
+        })
+        .or_else(|| {
+            config
+                .config
+                .databases
+                .iter()
+                .find(|d| d.name == database && d.shard == shard)
+        })
+        .ok_or_else(|| {
+            format!(
+                "database '{}' (shard {}) not found in pgdog.toml",
+                database, shard
+            )
+        })?;
+
+    let db_name = db.database_name.as_deref().unwrap_or(&db.name);
+
+    let (server_user, server_password) = if let Some(user_name) = user {
+        let user_cfg = config
+            .users
+            .users
+            .iter()
+            .find(|u| {
+                u.name == user_name
+                    && (u.database == database
+                        || u.all_databases
+                        || u.databases.contains(&database.to_string()))
+            })
+            .ok_or_else(|| {
+                format!(
+                    "user '{}' for database '{}' not found in users.toml",
+                    user_name, database
+                )
+            })?;
+
+        let srv_user = db
+            .user
+            .as_deref()
+            .or(user_cfg.server_user.as_deref())
+            .unwrap_or(user_name);
+        let srv_password = db
+            .password
+            .as_deref()
+            .or(user_cfg.server_password.as_deref())
+            .or(user_cfg.password.as_deref())
+            .unwrap_or("");
+        (srv_user.to_string(), srv_password.to_string())
+    } else {
+        let srv_user = db.user.as_deref().unwrap_or(database);
+        let srv_password = db.password.as_deref().unwrap_or("");
+        (srv_user.to_string(), srv_password.to_string())
+    };
+
+    let mut cmd = std::process::Command::new("psql");
+    cmd.arg("-h")
+        .arg(&db.host)
+        .arg("-p")
+        .arg(db.port.to_string())
+        .arg("-U")
+        .arg(&server_user)
+        .arg("-d")
+        .arg(db_name);
+
+    if !server_password.is_empty() {
+        cmd.env("PGPASSWORD", &server_password);
+    }
+
+    cmd.args(extra_args);
+
+    // exec replaces the current process; returns only on failure.
+    let err = cmd.exec();
+    Err(Box::new(err))
 }
