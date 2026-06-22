@@ -302,6 +302,11 @@ impl Pool {
             let mut from_guard = self.lock();
             let mut to_guard = destination.lock();
 
+            // Propagate pause state so a paused database stays paused after reload.
+            if from_guard.paused {
+                to_guard.paused = true;
+            }
+
             from_guard.online = false;
             let (idle, taken) = from_guard.move_conns_to(destination);
             for server in idle {

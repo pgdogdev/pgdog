@@ -224,29 +224,42 @@ impl LoadBalancer {
     }
 
     /// Move connections from this replica set to another.
+    ///
+    /// Uses address-based matching so existing pools survive replica additions or
+    /// removals: each old target is paired with the new target that shares its
+    /// address. New targets with no matching old target start empty; old targets
+    /// with no match in the new config have their connections dropped.
     pub fn move_conns_to(&self, destination: &LoadBalancer) -> Result<(), Error> {
-        assert_eq!(self.targets.len(), destination.targets.len());
+        for from in &self.targets {
+            if let Some(to) = destination
+                .targets
+                .iter()
+                .find(|to| from.pool.can_move_conns_to(&to.pool))
+            {
+                from.pool.move_conns_to(&to.pool)?;
 
-        for (from, to) in self.targets.iter().zip(destination.targets.iter()) {
-            from.pool.move_conns_to(&to.pool)?;
-
-            // Carry over detected roles and LSN stats so the new load balancer
-            // doesn't briefly appear read-only before the role detector runs.
-            to.set_role(from.role());
-            *to.pool.inner().lsn_stats.write() = from.pool.lsn_stats();
+                // Carry over detected roles and LSN stats so the new load balancer
+                // doesn't briefly appear read-only before the role detector runs.
+                to.set_role(from.role());
+                *to.pool.inner().lsn_stats.write() = from.pool.lsn_stats();
+            }
         }
 
         Ok(())
     }
 
     /// The two replica sets are referring to the same databases.
+    ///
+    /// Returns `true` when every target in `self` has a matching address in
+    /// `destination`. This allows replica additions (new targets start empty)
+    /// while still preserving connections to unchanged replicas.
     pub fn can_move_conns_to(&self, destination: &LoadBalancer) -> bool {
-        self.targets.len() == destination.targets.len()
-            && self
+        self.targets.iter().all(|from| {
+            destination
                 .targets
                 .iter()
-                .zip(destination.targets.iter())
-                .all(|(a, b)| a.pool.can_move_conns_to(&b.pool))
+                .any(|to| from.pool.can_move_conns_to(&to.pool))
+        })
     }
 
     /// True if the LB has any target that can serve replica reads.

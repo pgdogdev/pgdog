@@ -999,7 +999,9 @@ async fn test_can_move_conns_to_same_config() {
 }
 
 #[tokio::test]
-async fn test_can_move_conns_to_different_count() {
+async fn test_can_move_conns_to_with_removed_replica() {
+    // Old LB has 2 replicas; new LB dropped one. The old replica with no
+    // matching address in the new LB makes this return false.
     let pool_config1 = create_test_pool_config("127.0.0.1", 5432);
     let pool_config2 = create_test_pool_config("localhost", 5432);
 
@@ -1018,6 +1020,80 @@ async fn test_can_move_conns_to_different_count() {
     );
 
     assert!(!lb1.can_move_conns_to(&lb2));
+}
+
+#[tokio::test]
+async fn test_can_move_conns_to_with_added_replica() {
+    // Old LB has 1 replica; new LB gained an extra one. Every old address
+    // still exists in the new LB, so connections can be preserved.
+    let pool_config1 = create_test_pool_config("127.0.0.1", 5432);
+    let pool_config2 = create_test_pool_config("localhost", 5432);
+
+    let lb_old = LoadBalancer::new(
+        &None,
+        &[pool_config1.clone()],
+        LoadBalancingStrategy::Random,
+        ReadWriteSplit::IncludePrimary,
+    );
+
+    let lb_new = LoadBalancer::new(
+        &None,
+        &[pool_config1, pool_config2],
+        LoadBalancingStrategy::Random,
+        ReadWriteSplit::IncludePrimary,
+    );
+
+    assert!(lb_old.can_move_conns_to(&lb_new));
+}
+
+#[tokio::test]
+async fn test_move_conns_to_with_added_replica_matches_by_address() {
+    // Old LB: one replica at 127.0.0.1.
+    // New LB: same replica plus a brand-new one at localhost.
+    // After the move the existing pool's connections land in the correct new
+    // pool (address match), and the new pool starts empty.
+    let pool_config1 = create_test_pool_config("127.0.0.1", 5432);
+    let pool_config2 = create_test_pool_config("localhost", 5432);
+
+    let lb_old = LoadBalancer::new(
+        &None,
+        &[pool_config1.clone()],
+        LoadBalancingStrategy::Random,
+        ReadWriteSplit::IncludePrimary,
+    );
+    lb_old.launch();
+
+    let lb_new = LoadBalancer::new(
+        &None,
+        &[pool_config1.clone(), pool_config2.clone()],
+        LoadBalancingStrategy::Random,
+        ReadWriteSplit::IncludePrimary,
+    );
+    lb_new.launch();
+
+    // Record the role on the old target so we can verify it was carried over.
+    lb_old.targets[0].set_role(Role::Primary);
+
+    assert!(lb_old.can_move_conns_to(&lb_new));
+    lb_old.move_conns_to(&lb_new).unwrap();
+
+    // The matching new target (same address) should have inherited the role.
+    let new_target_for_existing = lb_new
+        .targets
+        .iter()
+        .find(|t| t.pool.addr().host == "127.0.0.1")
+        .expect("should have target for 127.0.0.1");
+    assert_eq!(new_target_for_existing.role(), Role::Primary);
+
+    // The brand-new target (localhost) should not have been touched.
+    let new_target_for_added = lb_new
+        .targets
+        .iter()
+        .find(|t| t.pool.addr().host == "localhost")
+        .expect("should have target for localhost");
+    assert_eq!(new_target_for_added.role(), Role::Replica);
+
+    lb_new.shutdown();
 }
 
 #[tokio::test]

@@ -1205,3 +1205,51 @@ async fn test_token_refresh_loop_stops_on_shutdown() {
         "refresh loop must not write to cache after pool shutdown"
     );
 }
+
+#[tokio::test]
+async fn test_move_conns_to_propagates_pause_state() {
+    // When the source pool is paused, the destination pool should also
+    // start paused so the database stays paused across a RELOAD.
+    let source = Pool::new_test();
+    let destination = Pool::new_test();
+
+    source.launch();
+    destination.launch();
+
+    // Pause the source pool.
+    source.pause();
+    assert!(source.lock().paused);
+    assert!(!destination.lock().paused);
+
+    source.move_conns_to(&destination).unwrap();
+
+    assert!(
+        destination.lock().paused,
+        "destination should be paused after move from a paused source"
+    );
+
+    destination.shutdown();
+}
+
+#[tokio::test]
+async fn test_move_conns_to_does_not_pause_destination_when_source_is_not_paused() {
+    // When the source pool is NOT paused, the destination should also
+    // remain unpaused after the move.
+    let source = Pool::new_test();
+    let destination = Pool::new_test();
+
+    source.launch();
+    destination.launch();
+
+    assert!(!source.lock().paused);
+    assert!(!destination.lock().paused);
+
+    source.move_conns_to(&destination).unwrap();
+
+    assert!(
+        !destination.lock().paused,
+        "destination should remain unpaused when source is not paused"
+    );
+
+    destination.shutdown();
+}
