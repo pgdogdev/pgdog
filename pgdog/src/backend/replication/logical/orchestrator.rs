@@ -28,6 +28,23 @@ pub(crate) struct Orchestrator {
     replication_slot: String,
 }
 
+/// A handle to a publication's replication slots, decoupled from the rest of
+/// the orchestrator. Awaiting [`PublicationGuard::cleanup`] drops every slot
+/// the publisher still owns — a no-op once `replicate` has handed them off to
+/// the streaming tasks. Take one before data sync and await it on every exit
+/// so a failed or aborted migration never leaves slots lingering on the source
+/// (holding back WAL).
+pub(crate) struct PublicationGuard {
+    publisher: Arc<Mutex<Publisher>>,
+}
+
+impl PublicationGuard {
+    /// Drop any replication slots the publisher still owns.
+    pub(crate) async fn cleanup(self) -> Result<(), Error> {
+        self.publisher.lock().await.cleanup().await
+    }
+}
+
 impl Orchestrator {
     /// Create new orchestrator.
     pub(crate) fn new(
@@ -145,6 +162,13 @@ impl Orchestrator {
         Ok(())
     }
 
+    /// Take a [`PublicationGuard`] over this orchestrator's replication slots.
+    pub(crate) fn publication_guard(&self) -> PublicationGuard {
+        PublicationGuard {
+            publisher: self.publisher.clone(),
+        }
+    }
+
     /// Replicate forever.
     ///
     /// Useful for CLI interface only, since this will never stop.
@@ -160,38 +184,6 @@ impl Orchestrator {
             waiter,
             config: config(),
         })
-    }
-
-    /// Request replication stop.
-    pub(crate) async fn request_stop(&self) {
-        self.publisher.lock().await.request_stop();
-    }
-
-    /// Perform the entire flow in one swoop.
-    #[deprecated(note = "phase orchestration now lives in the migration tasks (see \
-                `crate::api::resharding::ReshardTask`); drive the individual \
-                steps directly. Remove once the remaining callers migrate.")]
-    pub(crate) async fn replicate_and_cutover(&mut self) -> Result<(), Error> {
-        // Load the schema from source.
-        self.load_schema().await?;
-
-        // Sync the schema to destination.
-        self.schema_sync_pre(true).await?;
-
-        // Sync the data to destination.
-        self.data_sync().await?;
-
-        // Create secondary indexes on destination.
-        self.schema_sync_post(true).await?;
-
-        // Start replication to catch up and cutover once done.
-        // Refresh cluster references: data_sync can take hours and the pools
-        // may have been reloaded (e.g. by a client DDL) in the meantime.
-        self.refresh()?;
-
-        self.replicate().await?.cutover().await?;
-
-        Ok(())
     }
 
     pub(crate) async fn schema_sync_post(&mut self, ignore_errors: bool) -> Result<(), Error> {
@@ -224,16 +216,21 @@ impl Orchestrator {
         let lag = self.publisher.lock().await.replication_lag();
         lag.values().copied().max().unwrap_or_default() as u64
     }
+}
 
-    pub(crate) async fn cleanup(&mut self) -> Result<(), Error> {
-        let mut guard = self.publisher.lock().await;
-        guard.cleanup().await?;
-
-        Ok(())
+impl Display for Orchestrator {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} -> {}",
+            self.source.identifier().database,
+            self.destination.identifier().database
+        )
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Display)]
+#[display("{orchestrator}")]
 pub struct ReplicationWaiter {
     orchestrator: Orchestrator,
     waiter: Waiter,
@@ -318,7 +315,7 @@ impl ReplicationWaiter {
                 maintenance_mode::start(None);
 
                 // Cancel any running queries.
-                cancel_all(&self.orchestrator.source.identifier().database).await?;
+                ok_or_abort!(cancel_all(&self.orchestrator.source.identifier().database).await);
 
                 break;
                 // TODO: wait for clients to all stop.
@@ -397,7 +394,7 @@ impl ReplicationWaiter {
 
                 // In case replication breaks now.
                 res = self.waiter.wait() => {
-                    res?;
+                    ok_or_abort!(res);
                 }
             }
 
@@ -467,16 +464,24 @@ impl ReplicationWaiter {
         // Fix any reverse replication blockers.
         ok_or_abort!(self.orchestrator.schema_sync_post_cutover(true).await);
 
-        // Create reverse replication in case we need to rollback.
+        // Create the reverse-replication slot synchronously, while traffic is
+        // still paused, so its consistent-point LSN captures every write made
+        // to the new primary after cutover. On failure, resume traffic and
+        // abort — the forward switch is already committed, so this surfaces as
+        // an error for the operator (rollback won't be available).
         let waiter = ok_or_abort!(self.orchestrator.replicate().await);
 
-        // Let it run in the background.
-        AsyncTasks::insert(TaskType::Replication(Box::new(waiter)));
+        // Drive the running waiter as a background api task so it stays visible
+        // in SHOW TASKS and can be cut over (rollback) or stopped.
+        crate::api::start(
+            crate::api::replication::ReplicationTask::builder()
+                .waiter(waiter)
+                .direction(crate::api::replication::Direction::Reverse)
+                .build(),
+        );
 
-        // It's not safe to resume traffic.
+        // Slot is established and capturing — now safe to resume traffic.
         info!("[cutover] complete, resuming traffic");
-
-        // Point traffic to the other database and resume.
         maintenance_mode::stop(None);
 
         cutover_state(CutoverState::Complete);

@@ -169,7 +169,7 @@ async fn start_replication(
         if Tasks::fetch(admin)
             .await
             .find(task_id)
-            .is_some_and(|t| t.kind == "replication")
+            .is_some_and(|t| t.kind == "replication pgdog -> pgdog_sharded")
         {
             appeared = true;
             break;
@@ -193,6 +193,30 @@ async fn wait_for_task_gone(admin: &Pool<Postgres>, task_id: i64) {
         sleep(Duration::from_millis(500)).await;
     }
     panic!("task {task_id} still present in SHOW TASKS after 30s");
+}
+
+/// Whether the relation `name` (table or index) exists on `db`, resolved
+/// through the connection's search_path — these tests create objects in the
+/// `pgdog` schema (the `$user` schema for role `pgdog`).
+async fn relation_present(pool: &Pool<Postgres>, name: &str) -> bool {
+    pool.fetch_one(format!("SELECT to_regclass('{name}') IS NOT NULL AS present").as_str())
+        .await
+        .unwrap()
+        .get::<bool, _>("present")
+}
+
+/// Poll until relation `name` exists on both destination shards (up to 30 s),
+/// proving a schema sync actually propagated it. Panics on timeout.
+async fn wait_for_relation_on_shards(name: &str) {
+    let shard_0 = connection_sqlx_direct_db("shard_0").await;
+    let shard_1 = connection_sqlx_direct_db("shard_1").await;
+    for _ in 0..60 {
+        if relation_present(&shard_0, name).await && relation_present(&shard_1, name).await {
+            return;
+        }
+        sleep(Duration::from_millis(500)).await;
+    }
+    panic!("relation {name} did not propagate to all shards within 30s");
 }
 
 // ─── Tests ──────────────────────────────────────────────────────────────────
@@ -261,8 +285,9 @@ async fn test_cutover() {
     cleanup(&admin, &direct).await;
 }
 
-/// `SCHEMA_SYNC pre` registers a `schema_sync` task synchronously before
-/// returning the `task_id`, so the task is in `SHOW TASKS` immediately.
+/// `SCHEMA_SYNC pre` syncs the table structure from the source to the
+/// destination shards. Asserts the table actually appears on both shards —
+/// not merely that the task registered.
 #[tokio::test]
 async fn test_schema_sync_pre() {
     let direct = connection_sqlx_direct().await;
@@ -284,35 +309,32 @@ async fn test_schema_sync_pre() {
         .fetch_one(format!("SCHEMA_SYNC pre pgdog pgdog_sharded {SCHEMA_SYNC_PRE_PUB}").as_str())
         .await
         .unwrap();
-    let task_id: i64 = row.get::<String, _>("task_id").parse().unwrap();
+    // Response carries the task id as TEXT; ensure it parses.
+    let _task_id: i64 = row.get::<String, _>("task_id").parse().unwrap();
 
-    // Task is registered before the command returns; verify kind if still running.
-    if let Some(task) = Tasks::fetch(&admin).await.find(task_id) {
-        assert_eq!(task.kind, "schema_sync");
-    }
-
-    let stop = admin
-        .fetch_one(format!("STOP_TASK {task_id}").as_str())
-        .await
-        .unwrap();
-    let status = stop.get::<String, _>("stop_task");
-    assert!(
-        status == "OK" || status == "task not found",
-        "unexpected STOP_TASK response: {status}"
-    );
+    // cleanup() dropped the table from the shards pre-flight, so its presence
+    // here proves the pre sync created it on both shards.
+    wait_for_relation_on_shards(TEST_TABLE).await;
 
     cleanup(&admin, &direct).await;
 }
 
-/// `SCHEMA_SYNC post` follows the same task lifecycle as `pre`.
+/// `SCHEMA_SYNC post` adds indexes/constraints to tables that already exist on
+/// the destination. Syncs the table with `pre` first, then asserts `post`
+/// propagates a secondary index — an effect `pre` does not produce.
 #[tokio::test]
 async fn test_schema_sync_post() {
     let direct = connection_sqlx_direct().await;
     let admin = admin_sqlx().await;
     cleanup(&admin, &direct).await;
 
+    let secondary_index = format!("{TEST_TABLE}_val_idx");
     direct
         .execute(format!("CREATE TABLE {TEST_TABLE} (id SERIAL PRIMARY KEY, val TEXT)").as_str())
+        .await
+        .unwrap();
+    direct
+        .execute(format!("CREATE INDEX {secondary_index} ON {TEST_TABLE} (val)").as_str())
         .await
         .unwrap();
     direct
@@ -322,32 +344,29 @@ async fn test_schema_sync_post() {
         .await
         .unwrap();
 
+    // pre creates the table (and primary key) on the shards, but not the
+    // secondary index — that is post-data.
+    admin
+        .fetch_one(format!("SCHEMA_SYNC pre pgdog pgdog_sharded {SCHEMA_SYNC_POST_PUB}").as_str())
+        .await
+        .unwrap();
+    wait_for_relation_on_shards(TEST_TABLE).await;
+
+    // post adds the secondary index on both destination shards.
     let row = admin
         .fetch_one(format!("SCHEMA_SYNC post pgdog pgdog_sharded {SCHEMA_SYNC_POST_PUB}").as_str())
         .await
         .unwrap();
-    let task_id: i64 = row.get::<String, _>("task_id").parse().unwrap();
+    let _task_id: i64 = row.get::<String, _>("task_id").parse().unwrap();
 
-    if let Some(task) = Tasks::fetch(&admin).await.find(task_id) {
-        assert_eq!(task.kind, "schema_sync");
-    }
-
-    let stop = admin
-        .fetch_one(format!("STOP_TASK {task_id}").as_str())
-        .await
-        .unwrap();
-    let status = stop.get::<String, _>("stop_task");
-    assert!(
-        status == "OK" || status == "task not found",
-        "unexpected STOP_TASK response: {status}"
-    );
+    wait_for_relation_on_shards(&secondary_index).await;
 
     cleanup(&admin, &direct).await;
 }
 
-/// `COPY_DATA` returns `task_id TEXT` and `replication_slot TEXT`.  A
-/// `copy_data` task is registered synchronously; it internally spawns a
-/// `replication` task when complete.
+/// `COPY_DATA` syncs the schema, copies data, then starts replication. Asserts
+/// the table is actually created on both destination shards (the schema phase),
+/// then `cleanup` stops the long-running replication the task spawns.
 #[tokio::test]
 async fn test_copy_data() {
     let direct = connection_sqlx_direct().await;
@@ -368,26 +387,12 @@ async fn test_copy_data() {
         .fetch_one(format!("COPY_DATA pgdog pgdog_sharded {COPY_DATA_PUB}").as_str())
         .await
         .unwrap();
-    let task_id: i64 = row.get::<String, _>("task_id").parse().unwrap();
+    let _task_id: i64 = row.get::<String, _>("task_id").parse().unwrap();
     let slot_name: String = row.get("replication_slot");
     assert!(!slot_name.is_empty(), "replication_slot must be non-empty");
 
-    // Verify kind while still running (may already be gone if fast).
-    if let Some(task) = Tasks::fetch(&admin).await.find(task_id) {
-        assert_eq!(task.kind, "copy_data");
-    }
-
-    // Abort early; STOP_TASK on a CopyData task emits a WARNING notice that
-    // sqlx ignores.  "task not found" is valid if the task finished first.
-    let stop = admin
-        .fetch_one(format!("STOP_TASK {task_id}").as_str())
-        .await
-        .unwrap();
-    let status = stop.get::<String, _>("stop_task");
-    assert!(
-        status == "OK" || status == "task not found",
-        "unexpected STOP_TASK response: {status}"
-    );
+    // copy_data's schema-sync phase must create the table on both shards.
+    wait_for_relation_on_shards(TEST_TABLE).await;
 
     cleanup(&admin, &direct).await;
 }

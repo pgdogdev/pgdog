@@ -1,35 +1,59 @@
-//! Reshard background task: the full automatic schema-sync + data-sync +
-//! replication + cutover flow.
+//! Reshard / migration composer task.
+//!
+//! Composes the full migration from a source database to a target: pre-data
+//! schema sync, the [`CopyDataTask`] bulk copy, post-data schema sync, then
+//! replication. With `auto_cutover` it cuts over automatically once replication
+//! has caught up (reshard); otherwise it waits for an operator `CUTOVER`
+//! (`copy_data`). The admin `COPY_DATA`/`RESHARD` commands and the CLI
+//! `data_sync` all run this task, differing only in their options.
+
+use std::time::Duration;
+
+use tracing::warn;
 
 use crate::api::async_task::AsyncTaskContext;
+use crate::api::copy_data::CopyDataTask;
 use crate::api::replication::ReplicationTask;
 use crate::api::schema_sync::{SchemaSyncPhase, SchemaSyncTask};
 use crate::api::{MigrationError, Task};
-use crate::backend::replication::logical::cutover_signal;
 use crate::backend::replication::logical::orchestrator::Orchestrator;
 
-/// Run the complete replicate-and-cutover flow from a source database to a
-/// target.
-#[derive(Display, Debug)]
-#[display("reshard")]
+/// Run the full migration from a source database to a target: schema sync
+/// (pre-data tables, then post-data indexes around the bulk copy), data copy,
+/// then replication. With `auto_cutover` it also performs the cutover.
+#[derive(Display, Debug, bon::Builder)]
+#[display("reshard {orchestrator}")]
 pub(crate) struct ReshardTask {
     pub orchestrator: Orchestrator,
+    /// Skip the pre- and post-data schema sync.
+    #[builder(default)]
+    pub skip_schema_sync: bool,
+    /// Only replicate; skip the initial data copy.
+    #[builder(default)]
+    pub replicate_only: bool,
+    /// Only copy data; skip replication.
+    #[builder(default)]
+    pub sync_only: bool,
+    /// Cut over automatically once replication has caught up, instead of
+    /// waiting for an operator `CUTOVER`. Set by the reshard flow.
+    #[builder(default)]
+    pub auto_cutover: bool,
 }
 
-/// Stages of the reshard flow, reported as the task's status. The
-/// fine-grained schema-sync and replication stages live on the child tasks.
+/// Stages of the migration, reported as the task's status. The fine-grained
+/// schema-sync, copy, and replication stages live on the child tasks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Display)]
 pub(crate) enum ReshardStatus {
     /// Running the pre-data schema-sync child task.
     #[display("syncing schema")]
     SchemaSync,
-    /// Copying table data to the destination.
+    /// Running the data-copy child task.
     #[display("syncing data")]
     SyncingData,
     /// Running the post-data schema-sync child task (indexes, constraints).
     #[display("finalizing schema")]
     FinalizingSchema,
-    /// Running the replication child task through cutover.
+    /// Running the replication child task.
     #[display("replicating")]
     Replication,
 }
@@ -39,41 +63,99 @@ impl Task for ReshardTask {
     type Output = ();
     type Error = MigrationError;
 
+    /// Composes long-lived child tasks; match their generous grace so a
+    /// `STOP_TASK` lets them wind down (and clean up replication slots) before
+    /// this task returns.
+    fn cancel_timeout() -> Duration {
+        Duration::from_secs(24 * 60 * 60)
+    }
+
     async fn run(self, ctx: AsyncTaskContext<Self>) -> Result<(), MigrationError> {
-        // Sync the pre-data schema (tables) as a child task.
-        ctx.set_status(ReshardStatus::SchemaSync);
-        let orchestrator = ctx
-            .run(SchemaSyncTask {
-                orchestrator: self.orchestrator,
-                phase: SchemaSyncPhase::Pre,
-            })
-            .await?;
+        // Take the cancellation token so a `STOP_TASK` winds the children down
+        // cooperatively (they'd otherwise outlive this task).
+        let _token = ctx.cancellation_token();
+        let mut orchestrator = self.orchestrator;
 
-        // Sync the data to destination.
-        ctx.set_status(ReshardStatus::SyncingData);
-        orchestrator.data_sync().await?;
+        // Pre-data schema sync, unless skipped. It runs before any replication
+        // slots exist, so it stays outside the cleanup guard below.
+        if !self.skip_schema_sync {
+            ctx.set_status(ReshardStatus::SchemaSync);
+            orchestrator = ctx
+                .run(
+                    SchemaSyncTask::builder()
+                        .orchestrator(orchestrator)
+                        .phase(SchemaSyncPhase::Pre)
+                        .ignore_errors(true)
+                        .build(),
+                )
+                .await?;
+        }
 
-        // Create secondary indexes as a child task (schema already loaded).
-        ctx.set_status(ReshardStatus::FinalizingSchema);
-        let mut orchestrator = ctx
-            .run(SchemaSyncTask {
-                orchestrator,
-                phase: SchemaSyncPhase::Post,
-            })
-            .await?;
+        // From the data copy onward the orchestrator may hold replication slots
+        // (created during data_sync, kept until replication takes them over).
+        // Awaiting this guard on every exit drops whatever the publisher still
+        // owns — a no-op once replication has claimed the slots — so a failed or
+        // aborted migration never leaves them lingering on the source.
+        let guard = orchestrator.publication_guard();
+        let result: Result<(), MigrationError> = async {
+            // Copy the data, unless replicate-only.
+            if !self.replicate_only {
+                ctx.set_status(ReshardStatus::SyncingData);
+                orchestrator = ctx
+                    .run(CopyDataTask::builder().orchestrator(orchestrator).build())
+                    .await?;
+            }
 
-        // Refresh cluster references: data_sync can take hours and the pools
-        // may have been reloaded (e.g. by a client DDL) in the meantime.
-        orchestrator.refresh()?;
+            // Post-data schema sync (secondary indexes, constraints): the
+            // second half of schema sync, after the bulk load.
+            if !self.skip_schema_sync {
+                ctx.set_status(ReshardStatus::FinalizingSchema);
+                orchestrator = ctx
+                    .run(
+                        SchemaSyncTask::builder()
+                            .orchestrator(orchestrator)
+                            .phase(SchemaSyncPhase::Post)
+                            .ignore_errors(true)
+                            .build(),
+                    )
+                    .await?;
+            }
 
-        // Reshard cuts over automatically: request it up front (the cutover
-        // signal is buffered), then run replication as a child that consumes
-        // the request and cuts over once it has caught up.
-        ctx.set_status(ReshardStatus::Replication);
-        cutover_signal::request();
-        ctx.run(ReplicationTask { orchestrator }).await?;
+            // Replication, unless sync-only.
+            if !self.sync_only {
+                ctx.set_status(ReshardStatus::Replication);
 
-        Ok(())
+                // data_sync / schema sync can run for hours; pools may have
+                // reloaded. Re-fetch live cluster refs before replicating.
+                orchestrator.refresh()?;
+
+                // `auto_cutover` (reshard) cuts over on its own; otherwise the
+                // task runs until an operator `CUTOVER`/`STOP_TASK`. Both of
+                // those resolve to `Ok`, so awaiting surfaces only a genuine
+                // replication failure.
+                let waiter = orchestrator.replicate().await?;
+                ctx.run(
+                    ReplicationTask::builder()
+                        .waiter(waiter)
+                        .auto_cutover(self.auto_cutover)
+                        .build(),
+                )
+                .await?;
+            }
+
+            Ok(())
+        }
+        .await;
+
+        // Drop any replication slots the publisher still owns only when the
+        // migration failed or was aborted mid-copy.
+        if result.is_err()
+            && let Err(err) = guard.cleanup().await
+        {
+            warn!("failed to clean up replication slots after migration: {err}");
+        }
+
+        result
     }
 }
 

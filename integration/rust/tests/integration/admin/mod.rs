@@ -12,8 +12,12 @@ use sqlx::{Column, Executor, Pool, Postgres, Row, TypeInfo};
 /// Wire layout expected from `SHOW TASKS`.
 const SHOW_TASKS_LAYOUT: &[(&str, &str)] = &[
     ("id", "INT8"),
+    ("root_id", "INT8"),
+    ("scope", "TEXT"),
     ("type", "TEXT"),
+    ("status", "TEXT"),
     ("started_at", "TEXT"),
+    ("updated_at", "TEXT"),
     ("elapsed", "TEXT"),
     ("elapsed_ms", "INT8"),
 ];
@@ -24,8 +28,12 @@ const SHOW_TASKS_LAYOUT: &[(&str, &str)] = &[
 #[derive(Debug, Clone)]
 pub struct Task {
     pub id: i64,
+    pub root_id: i64,
+    pub scope: String,
     pub kind: String,
+    pub status: String,
     pub started_at: String,
+    pub updated_at: String,
     pub elapsed: String,
     pub elapsed_ms: i64,
 }
@@ -57,18 +65,32 @@ impl Tasks {
             .iter()
             .map(|row| {
                 let id: i64 = row.get("id");
+                let root_id: i64 = row.get("root_id");
+                let scope: String = row.get("scope");
+                let status: String = row.get("status");
                 let started_at: String = row.get("started_at");
+                let updated_at: String = row.get("updated_at");
                 let elapsed: String = row.get("elapsed");
                 let elapsed_ms: i64 = row.get("elapsed_ms");
 
                 assert!(!started_at.is_empty(), "task {id}: started_at is empty");
+                assert!(!updated_at.is_empty(), "task {id}: updated_at is empty");
                 assert!(!elapsed.is_empty(), "task {id}: elapsed is empty");
+                assert!(!status.is_empty(), "task {id}: status is empty");
                 assert!(elapsed_ms >= 0, "task {id}: elapsed_ms is negative");
+                assert!(
+                    scope == "root" || scope == "subtask",
+                    "task {id}: unexpected scope {scope:?}"
+                );
 
                 Task {
                     id,
+                    root_id,
+                    scope,
                     kind: row.get("type"),
+                    status,
                     started_at,
+                    updated_at,
                     elapsed,
                     elapsed_ms,
                 }

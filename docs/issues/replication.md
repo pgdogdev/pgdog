@@ -20,6 +20,18 @@ A logical replication slot only decodes and delivers changes that belong to its 
 
 This means the lag metric permanently overstates the remaining work. On a three-shard benchmark where all source databases are on one instance, the observed lag was ~3.5 GB per slot even after each slot had replayed all of its own publication's data. The lag never dropped below the cutover threshold, so `wait_for_replication()` looped indefinitely and cutover never fired.
 
+The destination is a second, often worse, source of the same inflation. When the
+destination shards live on the **same PostgreSQL instance** as the source (a
+single-instance dev/test setup, or any deployment that co-locates them), every
+row pgdog copies or replicates *into* the destination is itself a write to that
+instance and advances `pg_current_wal_lsn()`. So the very act of catching the
+destination up pushes the instance WAL position forward, while the source slot's
+`confirmed_flush_lsn` only tracks the source publication — the measured lag rises
+as replication makes progress instead of falling. Every source slot on a shared
+instance reads back a near-identical, ever-growing lag, because they all subtract
+their publication-scoped `confirmed_flush_lsn` from the same instance-wide
+`pg_current_wal_lsn()`.
+
 ### Cause
 
 `pg_current_wal_lsn()` is instance-scoped. `confirmed_flush_lsn` is publication-scoped. Their difference is only meaningful when a single database accounts for all writes to the instance.
@@ -55,7 +67,18 @@ keepalive received
 
 ---
 
-## 🚧 Issue 2 — Stop signal only unblocked one task instead of all
+## ✅ Issue 2 — Stop signal only unblocked one task instead of all (resolved)
+
+> **Resolved.** The `Arc<Notify>` stop signal was replaced with a
+> [`CancellationToken`](https://docs.rs/tokio-util/latest/tokio_util/sync/struct.CancellationToken.html)
+> held by both `Publisher` and `Waiter`
+> ([`publisher_impl.rs`](../../pgdog/src/backend/replication/logical/publisher/publisher_impl.rs)).
+> `Waiter::stop()` calls `stop.cancel()`, which latches permanently and wakes
+> every per-shard stream task — whether already parked on `stop.cancelled()` or
+> polling later — so one call unblocks all N tasks. The token (not the
+> `watch::Sender<bool>` proposed below) is the primitive that shipped; both
+> satisfy the "persistent value, wakes every receiver" requirement. Each stream
+> latches the signal with a `stopping` flag, then drains its slot to completion.
 
 ### Description
 
@@ -148,7 +171,24 @@ The sentinel is overwritten by the first real measurement from each task's `chec
 
 ---
 
-## 🚧 Issue 4 — Divergent code paths for the same operation
+## ✅ Issue 4 — Divergent code paths for the same operation (resolved)
+
+> **Resolved.** The divergent paths were consolidated onto the `crate::api`
+> background-task framework. [`ReshardTask`](../../pgdog/src/api/resharding.rs)
+> is the single composite flow (pre-data schema sync → data copy → post-data
+> schema sync → replication), with `auto_cutover` toggling the final cutover;
+> [`CopyDataTask`](../../pgdog/src/api/copy_data.rs) is the bulk data-copy leaf
+> it composes; and `REPLICATE`/`CUTOVER`/`STOP_TASK` all drive one
+> [`ReplicationTask`](../../pgdog/src/api/replication.rs). The old
+> `backend/replication/logical/admin.rs` (`AsyncTasks`, `TaskType`) and
+> `Orchestrator::replicate_and_cutover()` referenced below no longer exist.
+>
+> The `notify_one()` race is gone: a cutover is delivered to the specific
+> running task through a latching `CancellationToken` held in a per-task
+> `CUTOVERS` map keyed by task id (`ReplicationTask::cutover`), so it cannot be
+> lost or leak into a later task. Natural slot drain intentionally does *not*
+> auto-cut-over in the operator flow (`REPLICATE`/`copy_data`); cutover is
+> explicit (operator `CUTOVER`) or automatic only under reshard's `auto_cutover`.
 
 ### Description
 
@@ -323,3 +363,119 @@ The `AbortSignal` type should be deleted. It carries no state that cannot be rep
 
 - [`tokio_util::sync::CancellationToken`](https://docs.rs/tokio-util/latest/tokio_util/sync/struct.CancellationToken.html) — cooperative cancellation token with child-token support and `cancelled().await`.
 - [`tokio::sync::watch`](https://docs.rs/tokio/latest/tokio/sync/watch/index.html) — persistent value channel; used for the stop-signal fix in Issue 2.
+
+---
+
+## ✅ Issue 6 — `STOP_TASK` during cutover removed the task but left it running (resolved)
+
+> **Resolved.** In the `crate::api` framework `STOP_TASK` only *requests*
+> cancellation through a `CancellationToken`; it never removes the registry
+> entry. The entry is dropped only after the task future actually reaches a
+> terminal state, so the registry always reflects real execution state. A
+> cutover that has passed its point of no return is allowed to finish rather
+> than being torn down mid-traffic-swap: `ReplicationTask` overrides
+> `cancel_timeout()` with a 60 s grace
+> ([`replication.rs`](../../pgdog/src/api/replication.rs)) — comfortably longer
+> than the committed swap (WAL drain + schema-sync DDL + reverse-replication
+> setup), so `STOP_TASK` lets it run to completion instead of aborting it after
+> the 5 s default. A genuinely hung swap is still reaped once the grace expires.
+
+### Description (old implementation)
+
+The old `AsyncTasks` registry (deleted `backend/replication/logical/admin.rs`)
+tracked each task in a `DashMap<u64, TaskInfo>`, where:
+
+```rust
+struct TaskInfo {
+    abort_tx: oneshot::Sender<()>, // dropped => abort_rx resolves
+    cutover: Arc<Notify>,
+    task_kind: TaskKind,
+    started_at: SystemTime,
+}
+```
+
+A replication task was driven by a detached `tokio::spawn`ed future selecting
+over three arms:
+
+```rust
+spawn(async move {
+    select! {
+        _ = abort_rx           => { waiter.stop(); }          // STOP_TASK
+        _ = cutover.notified() => { waiter.cutover().await; } // CUTOVER
+        result = waiter.wait() => { /* slot drained */ }
+    }
+    AsyncTasks::get().tasks.remove(&id); // self-remove on exit
+});
+```
+
+`STOP_TASK` called `AsyncTasks::remove(id)`, which did
+`tasks.remove(&id)` — synchronously deleting the map entry (and dropping
+`abort_tx`). Two things made the cutover-then-stop sequence broken:
+
+1. **Removal was immediate and unconditional.** The entry vanished from the map
+   the instant `remove` was called, and `remove` returned the `TaskKind` as if
+   it had succeeded. Nothing tied the entry's presence to the task having
+   actually stopped — the map said "gone" while the spawned future was still
+   running. There was no terminal state retained; `SHOW TASKS` simply stopped
+   listing it.
+
+2. **The abort arm could not win once cutover had started.** Dropping
+   `abort_tx` resolves `abort_rx`, but `select!` had already committed to the
+   `cutover.notified()` arm, so `waiter.cutover().await` ran to completion
+   regardless. Unlike the `SchemaSync`/`CopyData` variants — which held an
+   `abort_handle` and called `abort_handle.abort()` — the replication variant
+   had no hard-abort path at all; `STOP_TASK` could only ever request a
+   graceful `waiter.stop()`, and only if it won the race.
+
+So after `CUTOVER` then `STOP_TASK`, the registry reported the task removed and
+stopped, while the detached future kept flipping traffic, running post-data
+schema sync, and setting up reverse replication — mutating cluster state with
+no visibility and no way to stop it.
+
+### How the new implementation works
+
+The registry entry's lifetime is tied to the task future through the supervisor
+in `run_task` ([`async_task.rs`](../../pgdog/src/api/async_task.rs)), not to
+admin-side bookkeeping:
+
+1. **`STOP_TASK` requests; it does not remove.**
+   `AsyncTasksStorage::cancel_task` only calls `entry.cancel()` on the task's
+   `CancellationToken` and leaves the entry in the map. The entry transitions
+   to a terminal status (`Cancelled`/`Finished`) only when the spawned future
+   returns; `prune()` then drops it after the 24h retention. A running task is
+   never removed, so `SHOW TASKS` keeps showing it as `Stopping`/`CuttingOver`
+   until it has genuinely finished — the map always reflects real state.
+
+2. **A started cutover runs to completion.** `ReplicationTask::run`
+   ([`replication.rs`](../../pgdog/src/api/replication.rs)) `select!`s the
+   cutover arm (`waiter.cutover().await`) against `token.cancelled()`. Once the
+   `CUTOVER` signal fires and that arm is chosen, `select!` is committed to
+   awaiting it; a later `STOP_TASK` cancels the token but no longer has an arm
+   to win. The supervisor sees the cancelled token and — because
+   `ReplicationTask` is cooperative (it took its token) — waits
+   `cancel_timeout()` before aborting. `ReplicationTask` overrides
+   `cancel_timeout()` to **60 s** (vs. the 5 s trait default in
+   [`async_task.rs`](../../pgdog/src/api/async_task.rs)), comfortably longer than
+   the committed swap, so the traffic switch finishes instead of being aborted
+   mid-flight. Only a swap that hangs past the grace is force-aborted.
+
+3. **The reverse order winds down without cutover.** If `STOP_TASK` lands
+   first, the `token.cancelled()` arm sets status `Stopping`, calls
+   `waiter.stop()` (graceful slot drain), and returns — no traffic switch. A
+   subsequent `CUTOVER` finds the `CutoverWaiter` already dropped from the
+   `CUTOVERS` map, so `ReplicationTask::cutover` returns `false` and the admin
+   command rejects with `NotReplication`.
+
+Net: `STOP_TASK` gracefully stops a task that has not yet cut over, and is a
+deliberate no-op against an in-flight cutover — which completes within its 60 s
+grace — and in both cases the task stays visible in the registry until it has
+actually stopped.
+
+### Code references
+
+| Symbol | File |
+|---|---|
+| `AsyncTasksStorage::cancel_task` — cancels the token, keeps the entry | [`pgdog/src/api/async_task.rs`](../../pgdog/src/api/async_task.rs) |
+| `AsyncTasksStorage::prune` — drops only terminal entries past retention | same file |
+| `run_task` supervisor — cooperative grace via `cancel_timeout`; sets terminal status on completion | same file |
+| `ReplicationTask::run` / `cancel_timeout` — cutover-vs-stop `select!` | [`pgdog/src/api/replication.rs`](../../pgdog/src/api/replication.rs) |

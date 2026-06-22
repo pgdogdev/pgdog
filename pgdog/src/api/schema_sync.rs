@@ -1,14 +1,31 @@
-//! Schema-sync background task (pre-data or post-data).
+//! Schema-sync background task (pre-data, post-data, or cutover).
+
+use std::ops::Deref;
 
 use crate::api::Task;
 use crate::api::async_task::AsyncTaskContext;
 use crate::backend::replication::logical::Error;
 use crate::backend::replication::logical::orchestrator::Orchestrator;
+use crate::backend::schema::sync::pg_dump::SyncState;
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Display, FromStr)]
 pub enum SchemaSyncPhase {
+    #[display("pre")]
     Pre,
+    #[display("post")]
     Post,
+    #[display("cutover")]
+    Cutover,
+}
+
+impl From<SchemaSyncPhase> for SyncState {
+    fn from(phase: SchemaSyncPhase) -> Self {
+        match phase {
+            SchemaSyncPhase::Pre => SyncState::PreData,
+            SchemaSyncPhase::Post => SyncState::PostData,
+            SchemaSyncPhase::Cutover => SyncState::Cutover,
+        }
+    }
 }
 
 /// Stages of a schema sync, reported as the task's status.
@@ -23,14 +40,21 @@ pub(crate) enum SchemaSyncStatus {
     /// Creating indexes and constraints on the destination (post-data).
     #[display("creating indexes")]
     CreatingIndexes,
+    /// Restoring cutover-time schema on the destination.
+    #[display("syncing cutover schema")]
+    Cutover,
 }
 
-/// Sync the schema (pre- or post-data) from a source database to a target.
-#[derive(Display, Debug)]
-#[display("schema_sync")]
+/// Sync the schema (pre-data, post-data, or cutover) from a source database to a target.
+#[derive(Display, Debug, bon::Builder)]
+#[display("schema_sync({phase}) {orchestrator}")]
 pub(crate) struct SchemaSyncTask {
     pub orchestrator: Orchestrator,
     pub phase: SchemaSyncPhase,
+    #[builder(default)]
+    pub ignore_errors: bool,
+    #[builder(default)]
+    pub dry_run: bool,
 }
 
 impl Task for SchemaSyncTask {
@@ -42,6 +66,7 @@ impl Task for SchemaSyncTask {
     /// task can thread it into the next phase. The schema dump is skipped when
     /// the orchestrator already carries one (e.g. a parent that runs `Pre`
     /// then `Post` on the same orchestrator).
+    #[allow(clippy::print_stdout)]
     async fn run(self, ctx: AsyncTaskContext<Self>) -> Result<Orchestrator, Error> {
         let mut orchestrator = self.orchestrator;
 
@@ -50,14 +75,28 @@ impl Task for SchemaSyncTask {
             orchestrator.load_schema().await?;
         }
 
+        // Dry run prints the SQL this task would execute and stops short of
+        // touching the destination. The schema load above is required for it.
+        if self.dry_run {
+            let schema = orchestrator.schema()?;
+            for statement in schema.statements(self.phase.into())? {
+                println!("{}", statement.deref());
+            }
+            return Ok(orchestrator);
+        }
+
         match self.phase {
             SchemaSyncPhase::Pre => {
                 ctx.set_status(SchemaSyncStatus::SyncingTables);
-                orchestrator.schema_sync_pre(true).await?;
+                orchestrator.schema_sync_pre(self.ignore_errors).await?;
             }
             SchemaSyncPhase::Post => {
                 ctx.set_status(SchemaSyncStatus::CreatingIndexes);
-                orchestrator.schema_sync_post(true).await?;
+                orchestrator.schema_sync_post(self.ignore_errors).await?;
+            }
+            SchemaSyncPhase::Cutover => {
+                ctx.set_status(SchemaSyncStatus::Cutover);
+                orchestrator.schema_sync_cutover(self.ignore_errors).await?;
             }
         }
 
@@ -75,9 +114,28 @@ mod tests {
             SchemaSyncStatus::LoadingSchema.to_string(),
             SchemaSyncStatus::SyncingTables.to_string(),
             SchemaSyncStatus::CreatingIndexes.to_string(),
+            SchemaSyncStatus::Cutover.to_string(),
         ];
         assert!(labels.iter().all(|label| !label.is_empty()));
         let unique: std::collections::HashSet<_> = labels.iter().collect();
         assert_eq!(unique.len(), labels.len());
+    }
+
+    #[test]
+    fn schema_sync_phase_parses_and_displays() {
+        for (text, phase) in [
+            ("pre", SchemaSyncPhase::Pre),
+            ("post", SchemaSyncPhase::Post),
+            ("cutover", SchemaSyncPhase::Cutover),
+        ] {
+            assert_eq!(text.parse::<SchemaSyncPhase>().unwrap(), phase);
+            assert_eq!(phase.to_string(), text);
+        }
+        // Parsing is case-insensitive; unknown phases are rejected.
+        assert_eq!(
+            "CUTOVER".parse::<SchemaSyncPhase>().unwrap(),
+            SchemaSyncPhase::Cutover
+        );
+        assert!("bogus".parse::<SchemaSyncPhase>().is_err());
     }
 }

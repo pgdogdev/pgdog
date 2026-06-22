@@ -15,6 +15,7 @@ tui = ["ratatui"]
 new_parser = ["pg_raw_parse"]
 
 [dependencies]
+bon.workspace = true
 pin-project = "1"
 tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
@@ -22,7 +23,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "std"]
 tracing-throttle = "0.4"
 parking_lot = "0.12"
 thiserror = "2"
-derive_more = { version = "2", features = ["display", "error", "from"] }
+derive_more = { version = "2", features = ["display", "error", "from", "from_str"] }
 bytes = "1"
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }

@@ -45,6 +45,23 @@ pub(crate) enum MigrationError {
     Task(TaskError<Error>),
 }
 
+/// Flatten a nested migration task's outcome into a single [`MigrationError`],
+/// so a composite task (e.g. `reshard`) can run another composite task (e.g.
+/// `copy_data`, whose error is already a `MigrationError`) as a child and
+/// `?`-propagate its result without double-wrapping.
+impl From<TaskError<MigrationError>> for MigrationError {
+    fn from(err: TaskError<MigrationError>) -> Self {
+        match err {
+            // The child's own error: surface it directly.
+            TaskError::Failed(inner) => inner,
+            // Non-failure outcomes carry no inner error; re-wrap them.
+            TaskError::Cancelled => MigrationError::Task(TaskError::Cancelled),
+            TaskError::Panicked(msg) => MigrationError::Task(TaskError::Panicked(msg)),
+            TaskError::Abandoned => MigrationError::Task(TaskError::Abandoned),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -64,6 +81,16 @@ mod tests {
 
         // Non-failure child outcomes are preserved too (not stringified).
         let err = MigrationError::from(TaskError::<Error>::Cancelled);
+        assert!(matches!(err, MigrationError::Task(TaskError::Cancelled)));
+
+        // A nested migration task's failure is flattened, not double-wrapped.
+        let err = MigrationError::from(TaskError::Failed(MigrationError::Replication(
+            Error::NoSchema,
+        )));
+        assert!(matches!(err, MigrationError::Replication(Error::NoSchema)));
+
+        // A nested non-failure outcome is preserved as a task error.
+        let err = MigrationError::from(TaskError::<MigrationError>::Cancelled);
         assert!(matches!(err, MigrationError::Task(TaskError::Cancelled)));
     }
 }

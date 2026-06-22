@@ -111,7 +111,7 @@ fn should_convert_to_bigint<'a>(
     is_integer_type(sval.as_str())
 }
 
-use tokio::{process::Command, spawn};
+use tokio::{process::Command, task::JoinSet};
 
 #[derive(Debug, Clone)]
 pub struct PgDump {
@@ -1041,7 +1041,11 @@ impl PgDumpOutput {
                 })
                 .collect::<Vec<_>>(),
         ));
-        let mut handles = vec![];
+        // A JoinSet aborts every in-flight per-shard sync when it is dropped,
+        // so cancelling the task (dropping this future) actually stops the
+        // schema apply instead of leaving detached spawns running in the
+        // background against the destination.
+        let mut set: JoinSet<Result<(), Error>> = JoinSet::new();
 
         for (num, shard) in dest.shards().iter().enumerate() {
             let mut primary = shard.primary(&Request::default()).await?;
@@ -1056,7 +1060,7 @@ impl PgDumpOutput {
             let trackers = trackers.clone();
             let output = self.clone();
 
-            handles.push(spawn(async move {
+            set.spawn(async move {
                 let stmts = output.statements(state)?;
 
                 let mut progress = Progress::new(stmts.len());
@@ -1107,11 +1111,11 @@ impl PgDumpOutput {
                 }
 
                 Ok::<(), Error>(())
-            }));
+            });
         }
 
-        for handle in handles {
-            handle.await??;
+        while let Some(joined) = set.join_next().await {
+            joined??;
         }
 
         Ok(())

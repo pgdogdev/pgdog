@@ -23,6 +23,12 @@ impl From<u64> for AsyncTaskId {
     }
 }
 
+impl From<AsyncTaskId> for u64 {
+    fn from(id: AsyncTaskId) -> Self {
+        id.0
+    }
+}
+
 /// Status type for tasks that report no intermediate progress.
 ///
 /// [`Infallible`](std::convert::Infallible) is uninhabited, so a task
@@ -76,6 +82,14 @@ pub struct TaskState {
     pub updated_at: SystemTime,
 }
 
+impl TaskState {
+    /// Whether the task reached a terminal state (finished, cancelled,
+    /// errored, or panicked) and is only retained for status reporting.
+    pub fn is_terminal(&self) -> bool {
+        self.status.is_terminal()
+    }
+}
+
 /// Why a task did not complete, delivered to the waiter
 /// as the error half of its `Result`.
 #[derive(Debug, Display, Error)]
@@ -119,8 +133,6 @@ impl<S> TaskStatus<S> {
     }
 }
 
-type SharedStatus<T> = Arc<RwLock<TaskStatus<T>>>;
-
 #[derive(Default)]
 struct TasksMap {
     map: DashMap<AsyncTaskId, Arc<dyn TaskMapEntry>>,
@@ -128,12 +140,12 @@ struct TasksMap {
 }
 
 impl TasksMap {
-    fn insert_next(&self, value: Arc<dyn TaskMapEntry>) -> AsyncTaskId {
-        let id = AsyncTaskId(self.counter.fetch_add(1, Ordering::Relaxed));
+    fn next_id(&self) -> AsyncTaskId {
+        AsyncTaskId(self.counter.fetch_add(1, Ordering::Relaxed))
+    }
 
+    fn insert(&self, id: AsyncTaskId, value: Arc<dyn TaskMapEntry>) {
         self.map.insert(id, value);
-
-        id
     }
 }
 
@@ -153,6 +165,10 @@ impl<S> AsyncTaskState<S> {
 
 struct AsyncTask<T: Task> {
     started_at: SystemTime,
+    /// Id of the root task this task belongs to — its own id when it is a
+    /// root, inherited from the parent otherwise. Stable for the task's
+    /// lifetime and used to address its cutover signal.
+    root_id: AsyncTaskId,
     name: String,
     cancellation_token: CancellationToken,
     /// Set once the task asks for its cancellation token: only
@@ -300,13 +316,20 @@ fn run_task<T: Task>(
     parent_token: Option<&CancellationToken>,
     register_into: &TasksMap,
     subtasks: Arc<TasksMap>,
+    root: Option<AsyncTaskId>,
     task: T,
 ) -> AsyncTaskWaiter<T::Output, T::Error> {
+    // Allocate the id up front so a root task can record its own id as its
+    // root id; descendants inherit the root's id from their parent.
+    let id = register_into.next_id();
+    let root_id = root.unwrap_or(id);
+
     let state = Arc::new(RwLock::new(AsyncTaskState::new()));
 
     let entry = AsyncTask {
         started_at: SystemTime::now(),
         name: task.to_string(),
+        root_id,
         cancellation_token: match parent_token {
             Some(token) => token.child_token(),
             None => CancellationToken::new(),
@@ -319,8 +342,8 @@ fn run_task<T: Task>(
     };
 
     let entry = Arc::new(entry);
-    // Make sure we insert task to map before it's actually started
-    let id = register_into.insert_next(entry.clone());
+    // Make sure we insert task to map before it's actually started.
+    register_into.insert(id, entry.clone());
 
     let ctx = AsyncTaskContext {
         task: entry.clone(),
@@ -412,8 +435,15 @@ impl<T: Task> AsyncTaskContext<T> {
             Some(&self.task.cancellation_token),
             &self.task.subtasks,
             self.task.subtasks.clone(),
+            Some(self.task.root_id),
             task,
         )
+    }
+
+    /// Id of the root task this task belongs to (its own id when it is a
+    /// root). Used to address the task's cutover signal.
+    pub fn root_id(&self) -> AsyncTaskId {
+        self.task.root_id
     }
 }
 
@@ -428,20 +458,28 @@ impl AsyncTasksStorage {
     pub fn run<T: Task>(&self, task: T) -> AsyncTaskWaiter<T::Output, T::Error> {
         self.prune();
 
-        run_task(None, &self.tasks, Arc::new(TasksMap::default()), task)
+        run_task(None, &self.tasks, Arc::new(TasksMap::default()), None, task)
     }
 
     /// Request cancellation of a task. The task winds down
     /// cooperatively (or is aborted after the grace period) and
     /// stays in the registry with a terminal status until pruned.
-    /// Returns the state the task was in when cancellation was
-    /// requested, or `None` for an unknown id.
+    /// Returns the state the task was in when cancellation was requested,
+    /// or `None` for an unknown or already-terminal id.
     pub fn cancel_task(&self, id: AsyncTaskId) -> Option<TaskState> {
         let entry = self.tasks.map.get(&id)?;
+        let state = entry.state();
+
+        // Already terminal (finished/cancelled/errored) but still retained for
+        // status reporting: nothing to cancel. Report as not found so callers
+        // don't claim success or emit cleanup warnings for a finished task.
+        if state.is_terminal() {
+            return None;
+        }
 
         entry.cancel();
 
-        Some(entry.state())
+        Some(state)
     }
 
     /// Drop every task that reached a terminal state more than
@@ -1232,5 +1270,64 @@ mod tests {
         let id = waiter.id();
         waiter.await.unwrap();
         assert!(crate::api::storage().task(id).is_some());
+    }
+
+    #[test]
+    async fn test_cancel_finished_task_is_not_found() {
+        let notify = Arc::new(Notify::new());
+        let state = Arc::new(Mutex::new("initial"));
+        let a = mock_successful!(state, notify);
+
+        let async_storage = AsyncTasksStorage::default();
+        let task = async_storage.run(a);
+        let id = task.id();
+
+        notify.notify_one();
+        task.await.unwrap();
+
+        // The task is terminal (finished) but still retained for reporting:
+        // cancelling it now reports not-found, so STOP_TASK won't claim it
+        // stopped a completed task (nor emit a bogus cleanup warning).
+        assert!(async_storage.task(id).is_some());
+        assert!(async_storage.cancel_task(id).is_none());
+
+        // An unknown id is not-found too.
+        assert!(
+            async_storage
+                .cancel_task(AsyncTaskId::from(99_u64))
+                .is_none()
+        );
+    }
+
+    #[test]
+    async fn test_prune_expired_subtasks_under_running_root() {
+        let sub_gate = Arc::new(Notify::new());
+        let parent_gate = Arc::new(Notify::new());
+
+        // Zero retention: terminal tasks are pruned on next access.
+        let async_storage = AsyncTasksStorage::new(Duration::ZERO);
+
+        let task = async_storage.run(TraverseRoot {
+            sub_gate: sub_gate.clone(),
+            parent_gate: parent_gate.clone(),
+        });
+        let root_id = task.id();
+
+        settle().await;
+
+        // Root running with its two descendants registered.
+        assert_eq!(async_storage.task(root_id).unwrap().subtasks.len(), 2);
+
+        // Let the subtasks finish; the root parks on `parent_gate`, still running.
+        sub_gate.notify_one();
+        settle().await;
+
+        // The finished subtasks are pruned while the still-running root survives.
+        let snapshot = async_storage.task(root_id).unwrap();
+        assert!(matches!(snapshot.state.status, TaskStatus::Pending(_)));
+        assert!(snapshot.subtasks.is_empty());
+
+        parent_gate.notify_one();
+        task.await.unwrap();
     }
 }
