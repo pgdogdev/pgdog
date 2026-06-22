@@ -1191,6 +1191,10 @@ impl General {
         )
     }
 
+    pub fn lsn_checks_enabled(&self) -> bool {
+        self.lsn_check_delay < crate::MAX_DURATION.as_millis() as u64
+    }
+
     fn read_write_strategy() -> ReadWriteStrategy {
         Self::env_enum_or_default("PGDOG_READ_WRITE_STRATEGY")
     }
@@ -1562,6 +1566,21 @@ mod tests {
 
         assert_eq!(General::host(), "0.0.0.0");
         assert_eq!(General::port(), 6432);
+    }
+
+    #[test]
+    fn test_lsn_checks_enabled() {
+        let mut general = General::default();
+        assert!(!general.lsn_checks_enabled());
+
+        general.lsn_check_delay = 0;
+        assert!(general.lsn_checks_enabled());
+
+        general.lsn_check_delay = 5_000;
+        assert!(general.lsn_checks_enabled());
+
+        general.lsn_check_delay = crate::MAX_DURATION.as_millis() as u64;
+        assert!(!general.lsn_checks_enabled());
     }
 
     #[test]

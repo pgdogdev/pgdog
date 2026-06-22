@@ -415,6 +415,8 @@ impl Config {
             parser_warned: bool,
             mirror_parser_warned: bool,
             have_replicas: bool,
+            have_primary: bool,
+            have_auto: bool,
             sharded: bool,
         }
 
@@ -439,11 +441,17 @@ impl Config {
                 if !existing.have_replicas {
                     existing.have_replicas = database.role == Role::Replica;
                 }
+                if !existing.have_primary {
+                    existing.have_primary = database.role == Role::Primary;
+                }
+                if !existing.have_auto {
+                    existing.have_auto = database.role == Role::Auto;
+                }
                 if !existing.sharded {
                     existing.sharded = database.shard > 0;
                 }
 
-                if (existing.sharded || existing.have_replicas)
+                if (existing.sharded || (existing.have_replicas && existing.have_primary))
                     && self.general.query_parser == QueryParserLevel::Off
                     && !existing.parser_warned
                 {
@@ -462,7 +470,9 @@ impl Config {
                         role_warned: false,
                         parser_warned: false,
                         mirror_parser_warned: false,
+                        have_primary: database.role == Role::Primary,
                         have_replicas: database.role == Role::Replica,
+                        have_auto: database.role == Role::Auto,
                         sharded: database.shard > 0,
                     },
                 );
@@ -540,6 +550,20 @@ impl Config {
                 warn!(
                     r#"database "{}" has no replicas and "read_write_split" is set to "{}": read queries will be rejected"#,
                     database, self.general.read_write_split
+                );
+            }
+
+            if self.general.lsn_checks_enabled() && !check.have_auto && !check.have_replicas {
+                warn!(
+                    r#"database "{}" has no replicas and LSN checks are enabled: PgDog will query databases for their LSNs unnecessarily"#,
+                    database
+                )
+            }
+
+            if !self.general.lsn_checks_enabled() && check.have_auto {
+                warn!(
+                    r#"database "{}" has a role set to "auto" but LSN checks are disabled: this disables automatic role detection"#,
+                    database
                 );
             }
         }
