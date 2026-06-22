@@ -393,6 +393,70 @@ async fn test_read_write_split_include_primary() {
     replicas.shutdown();
 }
 
+/// Composition contract for `prefer_primary`.
+///
+/// `prefer_primary` lives in the router and only decides read-vs-write: a default
+/// query becomes a *write* and never reaches this load balancer. The only request
+/// that arrives here as a *read* is one that explicitly opted into replicas
+/// (`SET pgdog.role = replica`, `SET LOCAL ...`, or a `/* pgdog_role: replica */`
+/// comment). That read is a plain read — it is NOT pinned replica-only — so where it
+/// lands is governed entirely by `read_write_split`, independently of `prefer_primary`.
+///
+/// This verifies that handoff for every `read_write_split` value: the same opt-in read
+/// follows the split's rules, which is why `prefer_primary` +
+/// `include_primary_if_replica_banned` yields "default to primary, opt into replicas,
+/// fall back to primary when replicas are banned".
+#[tokio::test]
+async fn test_prefer_primary_optin_read_honors_read_write_split() {
+    async fn used_ids(split: ReadWriteSplit) -> (HashSet<u64>, u64) {
+        let primary_pool = Pool::new(&create_test_pool_config("127.0.0.1", 5432));
+        primary_pool.launch();
+        let primary_id = primary_pool.id();
+
+        let replica_configs = [
+            create_test_pool_config("localhost", 5432),
+            create_test_pool_config("127.0.0.1", 5432),
+        ];
+
+        let lb = LoadBalancer::new(
+            &Some(primary_pool),
+            &replica_configs,
+            LoadBalancingStrategy::RoundRobin,
+            split,
+        );
+        lb.launch();
+
+        let request = Request::default();
+        let mut ids = HashSet::new();
+        for _ in 0..50 {
+            let conn = lb.get(&request).await.unwrap();
+            ids.insert(conn.pool.id());
+        }
+        lb.shutdown();
+        (ids, primary_id)
+    }
+
+    // exclude_primary: opt-in reads stay on replicas only.
+    let (ids, primary_id) = used_ids(ReadWriteSplit::ExcludePrimary).await;
+    assert!(!ids.contains(&primary_id));
+    assert_eq!(ids.len(), 2);
+
+    // include_primary: opt-in reads may still be served by the primary.
+    let (ids, primary_id) = used_ids(ReadWriteSplit::IncludePrimary).await;
+    assert!(ids.contains(&primary_id));
+
+    // include_primary_if_replica_banned: with no bans, opt-in reads stay on replicas.
+    let (ids, primary_id) = used_ids(ReadWriteSplit::IncludePrimaryIfReplicaBanned).await;
+    assert!(!ids.contains(&primary_id));
+    assert_eq!(ids.len(), 2);
+
+    // prefer_primary: opt-in reads stay on replicas (like exclude_primary); the
+    // primary-by-default behavior is enforced upstream in the router, not here.
+    let (ids, primary_id) = used_ids(ReadWriteSplit::PreferPrimary).await;
+    assert!(!ids.contains(&primary_id));
+    assert_eq!(ids.len(), 2);
+}
+
 #[tokio::test]
 async fn test_read_write_split_exclude_primary_no_replicas() {
     let primary_config = create_test_pool_config("127.0.0.1", 5432);

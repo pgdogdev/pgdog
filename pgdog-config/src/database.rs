@@ -79,6 +79,10 @@ pub enum ReadWriteSplit {
     ExcludePrimary,
     /// Sends reads to the primary only if one or more replicas have been banned.
     IncludePrimaryIfReplicaBanned,
+    /// Routes all queries to the primary by default. Replicas are used only when a
+    /// query explicitly opts in (`SET pgdog.role`, `SET LOCAL pgdog.role`, or a
+    /// `/* pgdog_role: replica */` comment); those opt-in reads go to the replicas.
+    PreferPrimary,
 }
 
 impl FromStr for ReadWriteSplit {
@@ -89,6 +93,7 @@ impl FromStr for ReadWriteSplit {
             "includeprimary" => Ok(Self::IncludePrimary),
             "excludeprimary" => Ok(Self::ExcludePrimary),
             "includeprimaryifreplicabanned" => Ok(Self::IncludePrimaryIfReplicaBanned),
+            "preferprimary" => Ok(Self::PreferPrimary),
             _ => Err(format!("Invalid read-write split: {}", s)),
         }
     }
@@ -100,6 +105,7 @@ impl Display for ReadWriteSplit {
             Self::ExcludePrimary => "exclude_primary",
             Self::IncludePrimary => "include_primary",
             Self::IncludePrimaryIfReplicaBanned => "include_primary_if_replica_banned",
+            Self::PreferPrimary => "prefer_primary",
         };
 
         write!(f, "{}", display)

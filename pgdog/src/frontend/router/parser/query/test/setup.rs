@@ -88,6 +88,12 @@ impl QueryParserTest {
         self
     }
 
+    /// Route reads to the primary by default on the cluster.
+    pub(crate) fn with_prefer_primary(mut self, prefer_primary: bool) -> Self {
+        self.cluster.set_prefer_primary(prefer_primary);
+        self
+    }
+
     /// Enable expanded explain for this test.
     pub(crate) fn with_expanded_explain(mut self) -> Self {
         let mut updated = config().deref().clone();

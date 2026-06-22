@@ -61,6 +61,7 @@ pub struct Cluster {
     replication_sharding: Option<String>,
     multi_tenant: Option<MultiTenant>,
     rw_strategy: ReadWriteStrategy,
+    prefer_primary: bool,
     schema_admin: bool,
     stats: Arc<Mutex<MirrorStats>>,
     cross_shard_disabled: bool,
@@ -315,6 +316,7 @@ impl Cluster {
             replication_sharding,
             multi_tenant: multi_tenant.clone(),
             rw_strategy,
+            prefer_primary: rw_split == ReadWriteSplit::PreferPrimary,
             schema_admin,
             stats: Arc::new(Mutex::new(MirrorStats::default())),
             cross_shard_disabled,
@@ -577,6 +579,11 @@ impl Cluster {
     /// Read/write strategy
     pub fn read_write_strategy(&self) -> &ReadWriteStrategy {
         &self.rw_strategy
+    }
+
+    /// Route queries to the primary by default unless an explicit role hint opts out.
+    pub fn prefer_primary(&self) -> bool {
+        self.prefer_primary
     }
 
     /// Cross-shard queries disabled for this cluster.
@@ -940,6 +947,10 @@ mod test {
 
         pub fn set_read_write_strategy(&mut self, rw_strategy: ReadWriteStrategy) {
             self.rw_strategy = rw_strategy;
+        }
+
+        pub fn set_prefer_primary(&mut self, prefer_primary: bool) {
+            self.prefer_primary = prefer_primary;
         }
     }
 

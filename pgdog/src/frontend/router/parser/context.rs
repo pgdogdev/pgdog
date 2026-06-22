@@ -35,6 +35,8 @@ pub struct QueryParserContext<'a> {
     pub(super) router_context: RouterContext<'a>,
     /// How aggressively we want to send reads to replicas.
     pub(super) rw_strategy: &'a ReadWriteStrategy,
+    /// Route reads to the primary by default unless an explicit role hint opts out.
+    pub(super) prefer_primary: bool,
     /// Do we need the router at all? Shortcut to bypass this for unsharded
     /// clusters with databases that only read or write.
     pub(super) router_needed: bool,
@@ -64,6 +66,7 @@ impl<'a> QueryParserContext<'a> {
             shards: router_context.cluster.shards().len(),
             sharding_schema,
             rw_strategy: router_context.cluster.read_write_strategy(),
+            prefer_primary: router_context.cluster.prefer_primary(),
             router_needed: router_context.cluster.router_needed(),
             multi_tenant: router_context.cluster.multi_tenant(),
             dry_run: router_context.cluster.dry_run(),
@@ -75,11 +78,15 @@ impl<'a> QueryParserContext<'a> {
 
     /// Write override enabled?
     pub(super) fn write_override(&self) -> bool {
-        matches!(
+        let role = self.router_context.parameter_hints.compute_role();
+        let txn_write = matches!(
             self.router_context.transaction(),
             Some(TransactionType::ReadWrite)
-        ) && self.rw_conservative()
-            || self.router_context.parameter_hints.compute_role() == Some(Role::Primary)
+        ) && self.rw_conservative();
+        // prefer_primary defaults reads to the primary; an explicit replica hint opts out.
+        txn_write
+            || role == Some(Role::Primary)
+            || (self.prefer_primary && role != Some(Role::Replica))
     }
 
     /// Are we using the conservative read/write separation strategy?

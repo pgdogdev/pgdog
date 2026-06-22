@@ -87,6 +87,20 @@ load_balancing_strategy = "random"
 #
 # Default: conservative
 read_write_strategy = "conservative"
+# How to split reads between the primary and replicas.
+#
+# Default: include_primary
+#
+# Available options:
+# - include_primary: reads are load balanced across replicas and the primary.
+# - exclude_primary: reads go to replicas only (primary serves writes only).
+# - include_primary_if_replica_banned: reads go to replicas, falling back to the
+#   primary only when a replica is banned.
+# - prefer_primary: all queries go to the primary by default; replicas are used only
+#   when a query opts in via `SET pgdog.role TO 'replica'`, `SET LOCAL pgdog.role TO
+#   'replica'`, or a `/* pgdog_role: replica */` comment. Useful for migrating an
+#   application onto replicas progressively without changing application code up front.
+read_write_split = "include_primary"
 # Path to PEM-encoded TLS certificate to use for client connections.
 # tls_certificate = "relative/or/absolute/path/to/certificate.pem"
 # Path to PEM-encoded TLS certificate private key

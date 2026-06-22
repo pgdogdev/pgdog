@@ -1599,6 +1599,8 @@ mod tests {
         // Test read-write split
         let _guard = set_env_var("PGDOG_READ_WRITE_SPLIT", "exclude_primary");
         assert_eq!(General::read_write_split(), ReadWriteSplit::ExcludePrimary);
+        let _guard = set_env_var("PGDOG_READ_WRITE_SPLIT", "prefer_primary");
+        assert_eq!(General::read_write_split(), ReadWriteSplit::PreferPrimary);
         let _guard = remove_env_var("PGDOG_READ_WRITE_SPLIT");
         assert_eq!(General::read_write_split(), ReadWriteSplit::IncludePrimary);
 
