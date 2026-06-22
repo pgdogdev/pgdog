@@ -1031,7 +1031,7 @@ async fn test_can_move_conns_to_with_added_replica() {
 
     let lb_old = LoadBalancer::new(
         &None,
-        &[pool_config1.clone()],
+        std::slice::from_ref(&pool_config1),
         LoadBalancingStrategy::Random,
         ReadWriteSplit::IncludePrimary,
     );
@@ -1057,7 +1057,7 @@ async fn test_move_conns_to_with_added_replica_matches_by_address() {
 
     let lb_old = LoadBalancer::new(
         &None,
-        &[pool_config1.clone()],
+        std::slice::from_ref(&pool_config1),
         LoadBalancingStrategy::Random,
         ReadWriteSplit::IncludePrimary,
     );
