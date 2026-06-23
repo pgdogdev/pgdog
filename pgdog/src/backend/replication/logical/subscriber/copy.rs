@@ -7,7 +7,9 @@ use pgdog_config::QueryParserEngine;
 use tracing::debug;
 
 use crate::frontend::client::query_engine::TwoPcPhase;
-use crate::frontend::client::query_engine::two_pc::{Manager, TwoPcTransaction};
+use crate::frontend::client::query_engine::two_pc::{
+    Manager, TwoPcTransaction, statement::phase_control,
+};
 
 use crate::{
     backend::{Cluster, ConnectReason, replication::subscriber::ParallelConnection},
@@ -284,13 +286,13 @@ impl CopySubscriber {
         let mut futures = Vec::new();
 
         for (shard, server) in self.connections.iter_mut().enumerate() {
+            // Rollback is not issued here. If this path fails, the TwoPcGuards in
+            // commit_two_pc() are dropped without manager.done(), and the 2PC Manager
+            // cleanup task issues ROLLBACK PREPARED (Phase1) or COMMIT PREPARED (Phase2)
+            // via binding.rs using the same phase_control() helper.
             let query = match phase {
-                TwoPcPhase::Phase1 => format!("PREPARE TRANSACTION '{txn}_{shard}'"),
-                TwoPcPhase::Phase2 => format!("COMMIT PREPARED '{txn}_{shard}'"),
-                // Rollback is not issued here. If this path fails, the TwoPcGuards in
-                // commit_two_pc() are dropped without manager.done(), and the 2PC Manager
-                // cleanup task issues ROLLBACK PREPARED (Phase1) or COMMIT PREPARED (Phase2).
                 TwoPcPhase::Rollback => unreachable!(),
+                phase => phase_control(&txn.to_string(), shard, phase),
             };
             futures.push(Self::send_and_confirm(server, Query::new(query).into()));
         }

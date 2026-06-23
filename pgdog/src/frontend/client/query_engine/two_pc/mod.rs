@@ -9,6 +9,7 @@ pub mod guard;
 pub mod manager;
 pub mod phase;
 pub mod server_transactions;
+pub mod statement;
 pub mod stats;
 pub mod transaction;
 pub mod wal;
