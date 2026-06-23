@@ -263,19 +263,25 @@ impl CopySubscriber {
         let txn = TwoPcTransaction::new();
         let identifier = self.cluster.identifier();
 
-        let _guard_phase_1 = manager
-            .transaction_state(&txn, &identifier, TwoPcPhase::Phase1)
-            .await?;
-        self.two_pc_on_shards(&txn, TwoPcPhase::Phase1).await?;
+        async {
+            let _guard_phase_1 = manager
+                .transaction_state(&txn, &identifier, TwoPcPhase::Phase1)
+                .await?;
+            self.two_pc_on_shards(&txn, TwoPcPhase::Phase1).await?;
 
-        let _guard_phase_2 = manager
-            .transaction_state(&txn, &identifier, TwoPcPhase::Phase2)
-            .await?;
-        self.two_pc_on_shards(&txn, TwoPcPhase::Phase2).await?;
+            let _guard_phase_2 = manager
+                .transaction_state(&txn, &identifier, TwoPcPhase::Phase2)
+                .await?;
+            self.two_pc_on_shards(&txn, TwoPcPhase::Phase2).await?;
 
-        manager.done(&txn).await?;
-
-        Ok(())
+            manager.done(&txn).await?;
+            Ok(())
+        }
+        .await
+        .map_err(|source| Error::TwoPcCleanupPending {
+            transaction: txn,
+            source: Box::new(source),
+        })
     }
 
     async fn two_pc_on_shards(

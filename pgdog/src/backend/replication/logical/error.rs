@@ -5,6 +5,7 @@ use derive_more::{Display, Error};
 
 use crate::{
     backend::replication::publisher::PublicationTable,
+    frontend::client::query_engine::two_pc::TwoPcTransaction,
     net::{CommandComplete, ErrorResponse},
 };
 
@@ -219,6 +220,13 @@ pub enum Error {
         oid: pgdog_postgres_types::Oid,
         op: &'static str,
     },
+
+    #[error("2pc commit failed for {transaction}: {source}")]
+    TwoPcCleanupPending {
+        transaction: TwoPcTransaction,
+        #[source]
+        source: Box<Error>,
+    },
 }
 
 impl From<ErrorResponse> for Error {
@@ -240,9 +248,18 @@ impl From<TableValidationError> for Error {
 }
 
 impl Error {
+    /// Two-phase commit transaction that still needs manager cleanup, if any.
+    pub fn two_pc_cleanup_transaction(&self) -> Option<TwoPcTransaction> {
+        match self {
+            Self::TwoPcCleanupPending { transaction, .. } => Some(*transaction),
+            _ => None,
+        }
+    }
+
     /// Whether the table copy should be retried after this error.
     pub fn is_retryable(&self) -> bool {
         match self {
+            Self::TwoPcCleanupPending { source, .. } => source.is_retryable(),
             Self::Net(inner) => inner.is_retryable(),
             Self::Pool(inner) => inner.is_retryable(),
             Self::Backend(inner) => inner.is_retryable(),

@@ -154,6 +154,18 @@ impl Manager {
         Ok(())
     }
 
+    /// Block until the monitor has removed this transaction from the manager.
+    ///
+    /// No-op if the transaction was never registered or is already gone.
+    pub async fn wait_until_cleaned_up(&self, transaction: TwoPcTransaction) {
+        loop {
+            if !self.inner.lock().transactions.contains_key(&transaction) {
+                return;
+            }
+            self.notify.notify.notified().await;
+        }
+    }
+
     /// Record a phase transition for a 2PC transaction. Updates the
     /// in-memory state first, then writes the corresponding WAL record
     /// (Begin for Phase1, Committing for Phase2). The inner-first
