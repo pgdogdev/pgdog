@@ -11,8 +11,8 @@ use crate::net::messages::{FrontendPid, NegotiateProtocolVersion, Startup, hello
 use crate::net::tls::{acceptor, peer_identity};
 use crate::net::{self, Stream, tweak};
 use crate::sighup::Sighup;
+use crate::signals::Shutdown;
 use tokio::net::{TcpListener, TcpStream};
-use tokio::signal::ctrl_c;
 use tokio::sync::Notify;
 use tokio::time::timeout;
 use tokio::{select, spawn};
@@ -43,6 +43,7 @@ impl Listener {
         let listener = TcpListener::bind(&self.addr).await?;
         let shutdown_signal = comms().shutting_down();
         let mut sighup = Sighup::new()?;
+        let mut signals = Shutdown::new()?;
 
         loop {
             select! {
@@ -71,7 +72,7 @@ impl Listener {
                     self.start_shutdown();
                 }
 
-                _ = ctrl_c() => {
+                _ = signals.listen() => {
                     self.start_shutdown();
                 }
 

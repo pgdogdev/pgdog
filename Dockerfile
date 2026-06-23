@@ -24,5 +24,9 @@ COPY --from=builder /build/target/release/pgdog /usr/local/bin/pgdog
 COPY --from=builder /build/target/release/libpgdog_primary_only_tables.so /usr/lib/libpgdog_primary_only_tables.so
 
 WORKDIR /pgdog
+# PgDog drains gracefully on both SIGINT and SIGTERM, so the STOPSIGNAL value no
+# longer affects shutdown behavior. Keep SIGINT to preserve the historical
+# `docker stop` signal; SIGTERM (Kubernetes default, systemd, manual kill) is
+# handled the same way regardless.
 STOPSIGNAL SIGINT
 CMD ["/usr/local/bin/pgdog"]

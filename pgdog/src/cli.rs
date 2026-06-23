@@ -5,8 +5,8 @@ use std::time::Duration;
 use clap::{Parser, Subcommand};
 use std::fs::read_to_string;
 use thiserror::Error;
+use tokio::select;
 use tokio::time::sleep;
-use tokio::{select, signal::ctrl_c};
 use tracing::{info, warn};
 
 use crate::backend::databases::databases;
@@ -15,6 +15,7 @@ use crate::backend::schema::sync::config::ShardConfig;
 use crate::backend::schema::sync::pg_dump::SyncState;
 use crate::config::{Config, Users};
 use crate::frontend::router::cli::RouterCli;
+use crate::signals::Shutdown;
 
 /// PgDog is a PostgreSQL pooler, proxy, load balancer and query router.
 #[derive(Parser, Debug)]
@@ -322,6 +323,9 @@ pub async fn data_sync(commands: Commands) -> Result<(), Box<dyn std::error::Err
         )?;
         orchestrator.load_schema().await?;
 
+        // Drain cleanly on Ctrl-C / SIGINT and on SIGTERM (Kubernetes, systemd, ...).
+        let mut signals = Shutdown::new()?;
+
         if !skip_schema_sync {
             orchestrator.schema_sync_pre(true).await?;
         }
@@ -332,7 +336,7 @@ pub async fn data_sync(commands: Commands) -> Result<(), Box<dyn std::error::Err
                     result?;
                 }
 
-                _ = ctrl_c() => {
+                _ = signals.listen() => {
                     warn!("abort signal received, waiting 5 seconds and performing cleanup");
                     sleep(Duration::from_secs(5)).await;
 
@@ -351,7 +355,7 @@ pub async fn data_sync(commands: Commands) -> Result<(), Box<dyn std::error::Err
                     result?;
                 }
 
-                _ = ctrl_c() => {
+                _ = signals.listen() => {
                     warn!("abort signal received");
 
                     orchestrator.request_stop().await;

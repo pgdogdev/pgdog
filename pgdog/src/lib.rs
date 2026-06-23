@@ -12,6 +12,7 @@ pub mod healthcheck;
 pub mod net;
 pub mod plugin;
 pub mod sighup;
+pub mod signals;
 pub mod state;
 pub mod stats;
 #[cfg(test)]
