@@ -135,6 +135,10 @@ impl<'a> UpdateMulti<'a> {
                 return Err(UpdateError::TransactionRequired.into());
             }
 
+            if self.has_destructive_on_delete_reference(context)? {
+                return Err(UpdateError::ForeignKeyOnDelete.into());
+            }
+
             self.delete_row(context).await?;
             self.execute_request_internal(
                 context,
@@ -155,6 +159,31 @@ impl<'a> UpdateMulti<'a> {
 
             Ok(())
         }
+    }
+
+    fn has_destructive_on_delete_reference(
+        &self,
+        context: &QueryEngineContext<'_>,
+    ) -> Result<bool, Error> {
+        let cluster = self.engine.backend.cluster()?;
+        let schema = cluster.schema();
+        let Some(table) = self.rewrite.target_table() else {
+            return Ok(false);
+        };
+
+        let Some(relation) = schema.table(table, cluster.user(), context.params.search_path())
+        else {
+            return Ok(false);
+        };
+        let Some(sharded_table) = self.rewrite.sharded_table(cluster.sharded_tables()) else {
+            return Ok(false);
+        };
+
+        Ok(schema.has_destructive_on_delete_reference(
+            relation.schema(),
+            &relation.name,
+            &sharded_table.column,
+        ))
     }
 
     /// Execute request and return messages to the client if forward_reply is true.

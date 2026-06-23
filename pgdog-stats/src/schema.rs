@@ -32,6 +32,10 @@ impl ForeignKeyAction {
             _ => Self::NoAction,
         }
     }
+
+    pub fn is_destructive_on_delete(&self) -> bool {
+        matches!(self, Self::Cascade | Self::SetNull | Self::SetDefault)
+    }
 }
 
 /// A foreign key reference to another table's column.
@@ -182,6 +186,27 @@ impl Schema {
             .relations
             .get(schema)
             .and_then(|tables| tables.get(name))
+    }
+
+    /// Returns true if a column is referenced by a foreign key whose ON DELETE
+    /// action would be unsafe during a sharding-key row move.
+    pub fn has_destructive_on_delete_reference(
+        &self,
+        schema: &str,
+        table: &str,
+        column: &str,
+    ) -> bool {
+        self.relations
+            .values()
+            .flat_map(|tables| tables.values())
+            .flat_map(|relation| relation.columns.values())
+            .flat_map(|column| column.foreign_keys.iter())
+            .any(|foreign_key| {
+                foreign_key.schema == schema
+                    && foreign_key.table == table
+                    && foreign_key.column == column
+                    && foreign_key.on_delete.is_destructive_on_delete()
+            })
     }
 }
 

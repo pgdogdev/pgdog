@@ -39,6 +39,9 @@ pub enum UpdateError {
 
     #[error("sharding key update changes more than one row ({0})")]
     TooManyRows(usize),
+
+    #[error("sharding key update would move a row referenced by an ON DELETE foreign key")]
+    ForeignKeyOnDelete,
 }
 
 impl From<crate::frontend::Error> for Error {
