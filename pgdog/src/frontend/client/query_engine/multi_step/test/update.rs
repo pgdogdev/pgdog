@@ -20,12 +20,19 @@ use super::super::super::Error;
 
 const FK_CHILD_TABLE: &str = "shard_key_update_fk_child";
 
+const SHARDED_TABLE_DDL: &str = "CREATE TABLE IF NOT EXISTS sharded (
+    id BIGINT PRIMARY KEY,
+    value TEXT,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    enabled BOOLEAN DEFAULT false,
+    user_id BIGINT,
+    region_id INTEGER DEFAULT 10,
+    country_id SMALLINT DEFAULT 5,
+    options JSONB DEFAULT '{}'::jsonb
+)";
+
 async fn ensure_sharded_table(client: &mut TestClient) {
-    client
-        .send(Query::new(
-            "CREATE TABLE IF NOT EXISTS sharded (id BIGINT PRIMARY KEY, value TEXT)",
-        ))
-        .await;
+    client.send(Query::new(SHARDED_TABLE_DDL)).await;
     client.try_process().await.unwrap();
     client.read_until('Z').await.unwrap();
 }
