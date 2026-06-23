@@ -192,6 +192,8 @@ mod tests {
         let db_schema = default_db_schema();
         let mut rewrite = StatementRewrite::new(StatementRewriteContext {
             stmt: &mut ast,
+            #[cfg(feature = "new_parser")]
+            new_stmt: None,
             extended: true,
             prepared: false,
             prepared_statements: &mut ps,
@@ -218,6 +220,8 @@ mod tests {
         let db_schema = default_db_schema();
         let mut rewrite = StatementRewrite::new(StatementRewriteContext {
             stmt: &mut ast,
+            #[cfg(feature = "new_parser")]
+            new_stmt: None,
             extended: true,
             prepared: false,
             prepared_statements: &mut ps,
@@ -244,6 +248,8 @@ mod tests {
         let db_schema = default_db_schema();
         let mut rewrite = StatementRewrite::new(StatementRewriteContext {
             stmt: &mut ast,
+            #[cfg(feature = "new_parser")]
+            new_stmt: None,
             extended: true,
             prepared: false,
             prepared_statements: &mut ps,
@@ -271,6 +277,8 @@ mod tests {
         let db_schema = default_db_schema();
         let mut rewrite = StatementRewrite::new(StatementRewriteContext {
             stmt: &mut ast,
+            #[cfg(feature = "new_parser")]
+            new_stmt: None,
             extended: false,
             prepared: false,
             prepared_statements: &mut ps,
@@ -306,6 +314,8 @@ mod tests {
         let db_schema = default_db_schema();
         let mut rewrite = StatementRewrite::new(StatementRewriteContext {
             stmt: &mut ast,
+            #[cfg(feature = "new_parser")]
+            new_stmt: None,
             extended: false,
             prepared: false,
             prepared_statements: &mut ps,
@@ -333,6 +343,8 @@ mod tests {
         let db_schema = default_db_schema();
         let mut rewrite = StatementRewrite::new(StatementRewriteContext {
             stmt: &mut ast,
+            #[cfg(feature = "new_parser")]
+            new_stmt: None,
             extended: true,
             prepared: false,
             prepared_statements: &mut ps,
@@ -359,6 +371,8 @@ mod tests {
         let db_schema = default_db_schema();
         let mut rewrite = StatementRewrite::new(StatementRewriteContext {
             stmt: &mut ast,
+            #[cfg(feature = "new_parser")]
+            new_stmt: None,
             extended: true,
             prepared: false,
             prepared_statements: &mut ps,
@@ -385,6 +399,8 @@ mod tests {
         let db_schema = default_db_schema();
         let mut rewrite = StatementRewrite::new(StatementRewriteContext {
             stmt: &mut ast,
+            #[cfg(feature = "new_parser")]
+            new_stmt: None,
             extended: true,
             prepared: false,
             prepared_statements: &mut ps,
@@ -410,6 +426,8 @@ mod tests {
         let db_schema = default_db_schema();
         let mut rewrite = StatementRewrite::new(StatementRewriteContext {
             stmt: &mut ast,
+            #[cfg(feature = "new_parser")]
+            new_stmt: None,
             extended: true,
             prepared: false,
             prepared_statements: &mut ps,
@@ -435,6 +453,8 @@ mod tests {
         let db_schema = default_db_schema();
         let mut rewrite = StatementRewrite::new(StatementRewriteContext {
             stmt: &mut ast,
+            #[cfg(feature = "new_parser")]
+            new_stmt: None,
             extended: true,
             prepared: false,
             prepared_statements: &mut ps,
@@ -460,6 +480,8 @@ mod tests {
         let db_schema = default_db_schema();
         let mut rewrite = StatementRewrite::new(StatementRewriteContext {
             stmt: &mut ast,
+            #[cfg(feature = "new_parser")]
+            new_stmt: None,
             extended: true,
             prepared: false,
             prepared_statements: &mut ps,
@@ -485,6 +507,8 @@ mod tests {
         let db_schema = default_db_schema();
         let mut rewrite = StatementRewrite::new(StatementRewriteContext {
             stmt: &mut ast,
+            #[cfg(feature = "new_parser")]
+            new_stmt: None,
             extended: true,
             prepared: false,
             prepared_statements: &mut ps,
@@ -512,6 +536,8 @@ mod tests {
         let db_schema = default_db_schema();
         let mut rewrite = StatementRewrite::new(StatementRewriteContext {
             stmt: &mut ast,
+            #[cfg(feature = "new_parser")]
+            new_stmt: None,
             extended: true,
             prepared: false,
             prepared_statements: &mut ps,
@@ -540,6 +566,8 @@ mod tests {
         let db_schema = default_db_schema();
         let mut rewrite = StatementRewrite::new(StatementRewriteContext {
             stmt: &mut ast,
+            #[cfg(feature = "new_parser")]
+            new_stmt: None,
             extended: true,
             prepared: false,
             prepared_statements: &mut ps,
@@ -565,6 +593,8 @@ mod tests {
         let db_schema = default_db_schema();
         let mut rewrite = StatementRewrite::new(StatementRewriteContext {
             stmt: &mut ast,
+            #[cfg(feature = "new_parser")]
+            new_stmt: None,
             extended: true,
             prepared: false,
             prepared_statements: &mut ps,

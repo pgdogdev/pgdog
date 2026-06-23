@@ -4,10 +4,13 @@ impl QueryParser {
     pub(super) fn delete(
         &mut self,
         stmt: &DeleteStmt,
+        #[cfg(feature = "new_parser")] new_stmt: pg_raw_parse::Node<'_>,
         context: &mut QueryParserContext,
     ) -> Result<Command, Error> {
         let mut parser = StatementParser::from_delete(
             stmt,
+            #[cfg(feature = "new_parser")]
+            new_stmt,
             context.router_context.bind,
             &context.sharding_schema,
             self.recorder_mut(),

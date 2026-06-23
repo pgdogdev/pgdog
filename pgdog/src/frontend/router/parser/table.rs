@@ -153,6 +153,20 @@ impl<'a> TryFrom<&'a Vec<Node>> for Table<'a> {
     }
 }
 
+#[cfg(feature = "new_parser")]
+impl<'a> From<&'a pg_raw_parse::nodes::RangeVar> for Table<'a> {
+    fn from(range_var: &'a pg_raw_parse::nodes::RangeVar) -> Self {
+        let name = range_var.relname().unwrap_or_default();
+        let alias = range_var.alias().and_then(|a| a.aliasname());
+        let schema = range_var.schemaname();
+        Self {
+            name,
+            alias,
+            schema,
+        }
+    }
+}
+
 impl<'a> From<&'a RangeVar> for Table<'a> {
     fn from(range_var: &'a RangeVar) -> Self {
         let (name, alias) = if let Some(ref alias) = range_var.alias {

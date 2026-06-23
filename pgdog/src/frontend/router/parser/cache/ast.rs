@@ -38,6 +38,9 @@ pub struct Ast {
 pub struct AstInner {
     /// Cached AST.
     pub ast: ParseResult,
+    // FIXME(sage): Rename to ast when parser port is done
+    #[cfg(feature = "new_parser")]
+    pub new_ast: pg_raw_parse::ParseResult,
     /// AST stats.
     pub stats: Mutex<Stats>,
     /// Rewrite plan.
@@ -52,6 +55,8 @@ impl AstInner {
     /// Create new AST record, with no rewrite or comment routing.
     pub fn new(ast: ParseResult) -> Self {
         Self {
+            #[cfg(feature = "new_parser")]
+            new_ast: pg_raw_parse::parse(&ast.deparse().unwrap()).unwrap(),
             ast,
             stats: Mutex::new(Stats::new()),
             rewrite_plan: RewritePlan::default(),
@@ -85,6 +90,8 @@ impl Ast {
             QueryParserEngine::PgQueryRaw => parse_raw(query.query_without_comment),
         }
         .map_err(Error::PgQuery)?;
+        #[cfg(feature = "new_parser")]
+        let new_ast = pg_raw_parse::parse(query.query_without_comment).map_err(Error::Parse)?;
 
         // Run the rewrite unconditionally. Even when a shard comment will
         // route the query to a specific shard, we need to know whether the
@@ -92,6 +99,8 @@ impl Ast {
         // `Cache::query` can decide whether this entry is safe to cache.
         let rewrite_plan = StatementRewrite::new(StatementRewriteContext {
             stmt: &mut ast.protobuf,
+            #[cfg(feature = "new_parser")]
+            new_stmt: Some(&new_ast),
             extended: query.original_query.extended(),
             prepared: query.original_query.prepared(),
             prepared_statements,
@@ -123,6 +132,8 @@ impl Ast {
             query_parser_engine: schema.query_parser_engine,
             inner: Arc::new(AstInner {
                 stats: Mutex::new(stats),
+                #[cfg(feature = "new_parser")]
+                new_ast: pg_raw_parse::parse(&ast.deparse().unwrap()).unwrap(),
                 ast,
                 rewrite_plan,
                 fingerprint: OnceCell::new(),

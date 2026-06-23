@@ -9,6 +9,14 @@ impl QueryParser {
     ) -> Result<Command, Error> {
         let query = stmt.query.as_ref().ok_or(Error::EmptyQuery)?;
         let node = query.node.as_ref().ok_or(Error::EmptyQuery)?;
+        #[cfg(feature = "new_parser")]
+        let new_stmt = {
+            let stmt = cached_ast.new_ast.stmts().next().unwrap();
+            let pg_raw_parse::Node::ExplainStmt(query) = stmt else {
+                unreachable!()
+            };
+            query.query()
+        };
 
         if context.expanded_explain() {
             if self.explain_recorder.is_none() {
@@ -19,10 +27,31 @@ impl QueryParser {
         }
 
         let result = match node {
-            NodeEnum::SelectStmt(stmt) => self.select(cached_ast, stmt, context),
-            NodeEnum::InsertStmt(stmt) => self.insert(stmt, context),
-            NodeEnum::UpdateStmt(stmt) => self.update(stmt, context),
-            NodeEnum::DeleteStmt(stmt) => self.delete(stmt, context),
+            NodeEnum::SelectStmt(stmt) => self.select(
+                cached_ast,
+                stmt,
+                #[cfg(feature = "new_parser")]
+                new_stmt,
+                context,
+            ),
+            NodeEnum::InsertStmt(stmt) => self.insert(
+                stmt,
+                #[cfg(feature = "new_parser")]
+                new_stmt,
+                context,
+            ),
+            NodeEnum::UpdateStmt(stmt) => self.update(
+                stmt,
+                #[cfg(feature = "new_parser")]
+                new_stmt,
+                context,
+            ),
+            NodeEnum::DeleteStmt(stmt) => self.delete(
+                stmt,
+                #[cfg(feature = "new_parser")]
+                new_stmt,
+                context,
+            ),
 
             _ => {
                 // For other statement types, route to all shards

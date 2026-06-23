@@ -97,11 +97,24 @@ impl StatementRewrite<'_> {
     fn get_insert_table(&self) -> Option<(Table<'_>, bool)> {
         let stmt = self.stmt.stmts.first()?;
         let node = stmt.stmt.as_ref()?;
+        #[cfg(feature = "new_parser")]
+        // FIXME(sage): Propagate Nones when port is finished
+        let new_stmt = self
+            .new_stmt
+            .and_then(|r| r.stmts().next())
+            .unwrap_or(pg_raw_parse::Node::None);
 
         if let NodeEnum::InsertStmt(insert) = node.node.as_ref()? {
             let relation = insert.relation.as_ref()?;
-            let is_sharded = StatementParser::from_insert(insert, None, self.schema, None)
-                .is_sharded(self.db_schema, self.user, self.search_path);
+            let is_sharded = StatementParser::from_insert(
+                insert,
+                #[cfg(feature = "new_parser")]
+                new_stmt,
+                None,
+                self.schema,
+                None,
+            )
+            .is_sharded(self.db_schema, self.user, self.search_path);
 
             return Some((Table::from(relation), is_sharded));
         }
@@ -358,6 +371,8 @@ mod tests {
         let schema = sharding_schema_with_mode(mode);
         let mut rewriter = StatementRewrite::new(StatementRewriteContext {
             stmt: &mut ast,
+            #[cfg(feature = "new_parser")]
+            new_stmt: None,
             extended: false,
             prepared: false,
             prepared_statements: &mut prepared,
@@ -565,9 +580,13 @@ mod tests {
     ) -> Result<(String, RewritePlan), Error> {
         let _guard = set_env_var("NODE_ID", "pgdog-1");
         let mut ast = pg_query::parse(sql).unwrap().protobuf;
+        #[cfg(feature = "new_parser")]
+        let new_ast = pg_raw_parse::parse(sql).unwrap();
         let mut prepared = PreparedStatements::default();
         let mut rewriter = StatementRewrite::new(StatementRewriteContext {
             stmt: &mut ast,
+            #[cfg(feature = "new_parser")]
+            new_stmt: Some(&new_ast),
             extended: false,
             prepared: false,
             prepared_statements: &mut prepared,

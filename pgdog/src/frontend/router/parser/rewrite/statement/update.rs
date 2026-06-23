@@ -694,6 +694,8 @@ mod test {
 
         let ctx = StatementRewriteContext {
             stmt: &mut stmt.protobuf,
+            #[cfg(feature = "new_parser")]
+            new_stmt: None,
             schema: &schema,
             db_schema: &db_schema,
             extended: true,

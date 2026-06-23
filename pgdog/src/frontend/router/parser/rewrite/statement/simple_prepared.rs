@@ -156,6 +156,8 @@ mod tests {
             let mut ast = parse(sql).unwrap().protobuf;
             let mut rewrite = StatementRewrite::new(StatementRewriteContext {
                 stmt: &mut ast,
+                #[cfg(feature = "new_parser")]
+                new_stmt: None,
                 extended: false,
                 prepared: false,
                 prepared_statements: &mut self.ps,
