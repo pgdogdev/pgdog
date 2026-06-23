@@ -8,9 +8,9 @@ use tracing::{info, warn};
 
 use crate::api::Task;
 use crate::api::resharding::ReshardTask;
+use crate::api::run_task;
 use crate::api::schema_sync::{SchemaSyncPhase, SchemaSyncTask};
-use crate::api::start;
-use crate::api::storage;
+use crate::api::tasks_storage;
 use crate::backend::databases::databases;
 use crate::backend::replication::orchestrator::Orchestrator;
 use crate::backend::schema::sync::config::ShardConfig;
@@ -287,7 +287,7 @@ async fn run_to_completion<T: Task>(task: T) -> Result<T::Output, Box<dyn std::e
 where
     T::Error: std::error::Error + 'static,
 {
-    let mut waiter = start(task);
+    let mut waiter = run_task(task);
     let id = waiter.id();
 
     loop {
@@ -296,7 +296,7 @@ where
             signal = ctrl_c() => {
                 signal?;
                 warn!("interrupt received, cancelling task {id}");
-                storage().cancel_task(id);
+                tasks_storage().cancel_task(id);
             }
         }
     }

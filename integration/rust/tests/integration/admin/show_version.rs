@@ -3,8 +3,7 @@ use sqlx::{Executor, Row};
 
 use super::assert_layout;
 
-/// `SHOW VERSION` returns a single row described by one `version` TEXT column,
-/// carrying the PgDog version banner.
+/// `SHOW VERSION` returns a single `version` TEXT row carrying the banner.
 #[tokio::test]
 async fn test_show_version_reports_banner() {
     let admin = admin_sqlx().await;

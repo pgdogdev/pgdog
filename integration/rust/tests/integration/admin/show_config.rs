@@ -5,8 +5,7 @@ use sqlx::{Executor, Row};
 
 use super::assert_layout;
 
-/// `SHOW CONFIG` returns rows described by two TEXT columns, `name` and
-/// `value`, one per configuration setting.
+/// `SHOW CONFIG` returns `name`/`value` TEXT columns, one row per setting.
 #[tokio::test]
 async fn test_show_config_reports_settings() {
     let admin = admin_sqlx().await;

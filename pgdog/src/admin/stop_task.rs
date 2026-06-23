@@ -1,10 +1,10 @@
 use crate::api::async_task::AsyncTaskId;
-use crate::api::storage;
+use crate::api::tasks_storage;
 
 use super::prelude::*;
 
 pub struct StopTask {
-    task_id: u64,
+    task_id: AsyncTaskId,
 }
 
 #[async_trait]
@@ -26,7 +26,7 @@ impl Command for StopTask {
     }
 
     async fn execute(&self) -> Result<Vec<Message>, Error> {
-        let cancelled = storage().cancel_task(AsyncTaskId::from(self.task_id));
+        let cancelled = tasks_storage().cancel_task(self.task_id);
 
         let mut messages = vec![];
 

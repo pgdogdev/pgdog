@@ -637,6 +637,12 @@ impl Config {
     /// Swap database configs between `source` and `destination`.
     /// Uses tmp pattern: source -> tmp, destination -> source, tmp -> destination.
     pub fn cutover(&mut self, source: &str, destination: &str) {
+        // force setting the database name on cutover to make sure
+        // the proper database_name is present after the swap.
+        for db in self.databases.iter_mut() {
+            db.database_name = db.database_name.take().or(Some(db.name.clone()));
+        }
+
         let tmp = format!("__tmp_{}__", random_string(12));
 
         crate::swap_field!(self.databases.iter_mut(), name, source, destination, tmp);
@@ -1104,6 +1110,57 @@ tables = ["my_table"]
     }
 
     #[test]
+    fn test_cutover_preserves_physical_database_name() {
+        // `source_db` relies on the default (physical db == cluster name);
+        // `destination_db` sets an explicit `database_name`. After cutover the
+        // physical target of each entry must be unchanged — only the logical
+        // cluster name swaps. Regression test for entries connecting to a
+        // nonexistent database after a name swap.
+        let mut config = Config {
+            databases: vec![
+                Database {
+                    name: "source_db".to_string(),
+                    host: "source-host".to_string(),
+                    port: 5432,
+                    database_name: None,
+                    ..Default::default()
+                },
+                Database {
+                    name: "destination_db".to_string(),
+                    host: "destination-host".to_string(),
+                    port: 5433,
+                    database_name: Some("real_dest".to_string()),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+
+        config.cutover("source_db", "destination_db");
+
+        // The entry now named `source_db` carries destination's config; its
+        // physical target must remain destination's database.
+        let source = config
+            .databases
+            .iter()
+            .find(|d| d.name == "source_db")
+            .unwrap();
+        assert_eq!(source.host, "destination-host");
+        assert_eq!(source.database_name.as_deref(), Some("real_dest"));
+
+        // The entry now named `destination_db` carries source's config. Source
+        // relied on the default, so its physical target was pinned to the old
+        // name (`source_db`) — not silently changed to `destination_db`.
+        let destination = config
+            .databases
+            .iter()
+            .find(|d| d.name == "destination_db")
+            .unwrap();
+        assert_eq!(destination.host, "source-host");
+        assert_eq!(destination.database_name.as_deref(), Some("source_db"));
+    }
+
+    #[test]
     fn test_cutover_visual() {
         let before = r#"
 [[databases]]
@@ -1183,6 +1240,7 @@ destination_db = "destination_db"
         let expected_after = r#"
 [[databases]]
 name = "destination_db"
+database_name = "source_db"
 host = "source-host-0"
 port = 5432
 role = "primary"
@@ -1190,6 +1248,7 @@ shard = 0
 
 [[databases]]
 name = "destination_db"
+database_name = "source_db"
 host = "source-host-0-replica"
 port = 5432
 role = "replica"
@@ -1197,6 +1256,7 @@ shard = 0
 
 [[databases]]
 name = "destination_db"
+database_name = "source_db"
 host = "source-host-1"
 port = 5432
 role = "primary"
@@ -1204,6 +1264,7 @@ shard = 1
 
 [[databases]]
 name = "destination_db"
+database_name = "source_db"
 host = "source-host-1-replica"
 port = 5432
 role = "replica"
@@ -1211,6 +1272,7 @@ shard = 1
 
 [[databases]]
 name = "source_db"
+database_name = "destination_db"
 host = "destination-host-0"
 port = 5433
 role = "primary"
@@ -1218,6 +1280,7 @@ shard = 0
 
 [[databases]]
 name = "source_db"
+database_name = "destination_db"
 host = "destination-host-0-replica"
 port = 5433
 role = "replica"
@@ -1225,6 +1288,7 @@ shard = 0
 
 [[databases]]
 name = "source_db"
+database_name = "destination_db"
 host = "destination-host-1"
 port = 5433
 role = "primary"
@@ -1232,6 +1296,7 @@ shard = 1
 
 [[databases]]
 name = "source_db"
+database_name = "destination_db"
 host = "destination-host-1-replica"
 port = 5433
 role = "replica"

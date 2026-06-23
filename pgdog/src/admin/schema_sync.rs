@@ -2,8 +2,8 @@
 
 use tracing::info;
 
+use crate::api::run_task;
 use crate::api::schema_sync::{SchemaSyncPhase, SchemaSyncTask};
-use crate::api::start;
 use crate::backend::replication::orchestrator::Orchestrator;
 
 use super::prelude::*;
@@ -70,7 +70,7 @@ impl Command for SchemaSync {
             self.replication_slot.clone(),
         )?;
 
-        let task_id = start(
+        let task_id = run_task(
             SchemaSyncTask::builder()
                 .orchestrator(orchestrator)
                 .phase(self.phase)

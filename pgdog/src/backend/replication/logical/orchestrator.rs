@@ -14,7 +14,8 @@ use tokio::{
     sync::Mutex,
     time::{Instant, interval},
 };
-use tracing::{info, warn};
+use tokio_util::sync::CancellationToken;
+use tracing::{error, info, warn};
 
 use super::*;
 
@@ -31,9 +32,7 @@ pub(crate) struct Orchestrator {
 /// A handle to a publication's replication slots, decoupled from the rest of
 /// the orchestrator. Awaiting [`PublicationGuard::cleanup`] drops every slot
 /// the publisher still owns — a no-op once `replicate` has handed them off to
-/// the streaming tasks. Take one before data sync and await it on every exit
-/// so a failed or aborted migration never leaves slots lingering on the source
-/// (holding back WAL).
+/// the streaming tasks.
 pub(crate) struct PublicationGuard {
     publisher: Arc<Mutex<Publisher>>,
 }
@@ -435,9 +434,31 @@ impl ReplicationWaiter {
     }
 
     /// Perform traffic cutover between source and destination.
-    pub(crate) async fn cutover(&mut self) -> Result<(), Error> {
-        self.wait_for_replication().await?;
-        self.wait_for_cutover().await?;
+    ///
+    /// The pre-switch wait (`wait_for_replication`, `wait_for_cutover`) is
+    /// cancellable: a `STOP_TASK` (via `cancel`) there resumes traffic, stops
+    /// the replication streams, and returns without moving any traffic. Past
+    /// the point of no return the switch always runs to completion — cancelling
+    /// it would leave traffic split between source and destination.
+    pub(crate) async fn cutover(&mut self, cancel: &CancellationToken) -> Result<(), Error> {
+        select! {
+            // Nothing has moved yet (`wait_for_replication` only pauses traffic
+            // at its very end). Resume traffic (no-op if never paused) and wind
+            // the streams down, so the aborted cutover leaves nothing running.
+            _ = cancel.cancelled() => {
+                maintenance_mode::stop(None);
+                self.waiter.stop();
+                warn!("[cutover] stop requested before the traffic switch, aborting cutover");
+                cutover_state(CutoverState::Abort {
+                    error: "stopped before cutover".into(),
+                });
+                return Ok(());
+            }
+            res = async {
+                self.wait_for_replication().await?;
+                self.wait_for_cutover().await
+            } => { res?; }
+        }
 
         // We're going, point of no return.
         self.orchestrator.publisher.lock().await.request_stop();
@@ -464,16 +485,12 @@ impl ReplicationWaiter {
         // Fix any reverse replication blockers.
         ok_or_abort!(self.orchestrator.schema_sync_post_cutover(true).await);
 
-        // Create the reverse-replication slot synchronously, while traffic is
-        // still paused, so its consistent-point LSN captures every write made
-        // to the new primary after cutover. On failure, resume traffic and
-        // abort — the forward switch is already committed, so this surfaces as
-        // an error for the operator (rollback won't be available).
+        // Create reverse replication in case we need to rollback.
         let waiter = ok_or_abort!(self.orchestrator.replicate().await);
 
         // Drive the running waiter as a background api task so it stays visible
         // in SHOW TASKS and can be cut over (rollback) or stopped.
-        crate::api::start(
+        crate::api::run_task(
             crate::api::replication::ReplicationTask::builder()
                 .waiter(waiter)
                 .direction(crate::api::replication::Direction::Reverse)
@@ -482,6 +499,8 @@ impl ReplicationWaiter {
 
         // Slot is established and capturing — now safe to resume traffic.
         info!("[cutover] complete, resuming traffic");
+
+        // Point traffic to the other database and resume.
         maintenance_mode::stop(None);
 
         cutover_state(CutoverState::Complete);
@@ -495,6 +514,7 @@ macro_rules! ok_or_abort {
         match $expr {
             Ok(res) => res,
             Err(err) => {
+                error!("Orchestrator failed: {err}");
                 maintenance_mode::stop(None);
                 cutover_state(CutoverState::Abort {
                     error: err.to_string(),

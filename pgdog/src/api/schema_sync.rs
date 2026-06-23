@@ -62,10 +62,6 @@ impl Task for SchemaSyncTask {
     type Output = Orchestrator;
     type Error = Error;
 
-    /// Returns the orchestrator with its schema loaded and synced so a parent
-    /// task can thread it into the next phase. The schema dump is skipped when
-    /// the orchestrator already carries one (e.g. a parent that runs `Pre`
-    /// then `Post` on the same orchestrator).
     #[allow(clippy::print_stdout)]
     async fn run(self, ctx: AsyncTaskContext<Self>) -> Result<Orchestrator, Error> {
         let mut orchestrator = self.orchestrator;
@@ -75,8 +71,6 @@ impl Task for SchemaSyncTask {
             orchestrator.load_schema().await?;
         }
 
-        // Dry run prints the SQL this task would execute and stops short of
-        // touching the destination. The schema load above is required for it.
         if self.dry_run {
             let schema = orchestrator.schema()?;
             for statement in schema.statements(self.phase.into())? {

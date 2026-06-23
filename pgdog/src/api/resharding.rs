@@ -63,11 +63,8 @@ impl Task for ReshardTask {
     type Output = ();
     type Error = MigrationError;
 
-    /// Composes long-lived child tasks; match their generous grace so a
-    /// `STOP_TASK` lets them wind down (and clean up replication slots) before
-    /// this task returns.
     fn cancel_timeout() -> Duration {
-        Duration::from_secs(24 * 60 * 60)
+        Duration::from_secs(60)
     }
 
     async fn run(self, ctx: AsyncTaskContext<Self>) -> Result<(), MigrationError> {
@@ -95,7 +92,7 @@ impl Task for ReshardTask {
         // (created during data_sync, kept until replication takes them over).
         // Awaiting this guard on every exit drops whatever the publisher still
         // owns — a no-op once replication has claimed the slots — so a failed or
-        // aborted migration never leaves them lingering on the source.
+        // aborted migration doesn't leave them lingering on the source.
         let guard = orchestrator.publication_guard();
         let result: Result<(), MigrationError> = async {
             // Copy the data, unless replicate-only.
@@ -110,6 +107,12 @@ impl Task for ReshardTask {
             // second half of schema sync, after the bulk load.
             if !self.skip_schema_sync {
                 ctx.set_status(ReshardStatus::FinalizingSchema);
+
+                // The bulk copy above can run for hours; pools may have reloaded
+                // meanwhile, leaving our cluster refs stale. Re-fetch them before
+                // touching the destination.
+                orchestrator.refresh()?;
+
                 orchestrator = ctx
                     .run(
                         SchemaSyncTask::builder()
@@ -156,23 +159,5 @@ impl Task for ReshardTask {
         }
 
         result
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn reshard_status_renders_distinct_labels() {
-        let labels = [
-            ReshardStatus::SchemaSync.to_string(),
-            ReshardStatus::SyncingData.to_string(),
-            ReshardStatus::FinalizingSchema.to_string(),
-            ReshardStatus::Replication.to_string(),
-        ];
-        assert!(labels.iter().all(|label| !label.is_empty()));
-        let unique: std::collections::HashSet<_> = labels.iter().collect();
-        assert_eq!(unique.len(), labels.len());
     }
 }

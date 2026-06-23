@@ -3,7 +3,7 @@
 use tracing::info;
 
 use crate::api::replication::ReplicationTask;
-use crate::api::start;
+use crate::api::run_task;
 use crate::backend::replication::orchestrator::Orchestrator;
 
 use super::prelude::*;
@@ -61,7 +61,7 @@ impl Command for Replicate {
         )?;
 
         let waiter = orchestrator.replicate().await?;
-        let task_id = start(ReplicationTask::builder().waiter(waiter).build()).id();
+        let task_id = run_task(ReplicationTask::builder().waiter(waiter).build()).id();
 
         let mut dr = DataRow::new();
         dr.add(task_id.to_string());

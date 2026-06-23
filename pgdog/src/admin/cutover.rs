@@ -5,7 +5,7 @@ use crate::backend::replication::logical::Error as ReplicationError;
 use super::prelude::*;
 
 pub struct Cutover {
-    task_id: Option<u64>,
+    task_id: Option<AsyncTaskId>,
 }
 
 #[async_trait]
@@ -31,7 +31,7 @@ impl Command for Cutover {
 
     async fn execute(&self) -> Result<Vec<Message>, Error> {
         // With an id, cut over that task; without, the first running one.
-        if !ReplicationTask::cutover(self.task_id.map(AsyncTaskId::from)) {
+        if !ReplicationTask::trigger_cutover(self.task_id) {
             return Err(ReplicationError::NotReplication.into());
         }
 

@@ -1,103 +1,90 @@
-# Async Task Framework — Architecture
+# Async Task Framework
 
-The `crate::api` module ([`pgdog/src/api/`](../pgdog/src/api/)) is the execution layer that sits
-between PgDog's two user interfaces and its long-running operations. Any operation that may run for
-seconds to hours runs here as a background *task*.
+Long-running operations (resharding, copy, replication, schema sync) run as background *tasks* in
+`crate::api` ([`pgdog/src/api/`](../pgdog/src/api/)). The admin SQL API and the `pgdog` CLI both
+start the same task through the same registry; only how they consume the result differs.
 
-The central principle is that **the task is the single source of truth for execution**. A user
-interface only assembles options and starts the task; all behaviour, status transitions, and error
-handling live inside it. Whether an operation is started through a SQL command on the admin
-database or a terminal invocation of the CLI, the same task runs the same code.
+## The `Task` trait
 
-This document covers the framework itself — how tasks are started, tracked, composed, cancelled,
-and observed. It deliberately does not enumerate the individual task implementations; each task's
-behaviour is documented alongside its own code in [`pgdog/src/api/`](../pgdog/src/api/).
+A task is any type implementing `Task` ([`api/async_task.rs`](../pgdog/src/api/async_task.rs)):
 
----
+```rust
+pub trait Task: Display + Debug + Send + Sync + Sized + 'static {
+    type Status: Display + Send + Sync + 'static; // inner progress; Empty = none
+    type Output: Send + 'static;
+    type Error: std::error::Error + Send + 'static;
 
-## Architecture
+    fn cancel_timeout() -> Duration { Duration::from_secs(5) }
 
-```mermaid
-flowchart TD
-    subgraph Interfaces
-        ADMIN["admin database API\nSQL commands"]
-        CLI["pgdog CLI\nsubcommands"]
-    end
-
-    subgraph API["crate::api — execution layer"]
-        REG["process-global registry\nAsyncTasksStorage"]
-        TASKS["task implementations\n(impl Task)"]
-    end
-
-    WORK["underlying operation\n(engine / pipeline / I/O)"]
-
-    ADMIN -->|start task, get id| REG
-    CLI -->|start task, await result| REG
-    REG -->|spawns and tracks| TASKS
-    TASKS -->|drives| WORK
-    ADMIN -->|SHOW TASKS / STOP_TASK| REG
-    CLI -->|Ctrl-C → cancel_task| REG
+    fn run(self, ctx: AsyncTaskContext<Self>)
+        -> impl Future<Output = Result<Self::Output, Self::Error>> + Send + 'static;
+}
 ```
 
-A task is any type that implements the `Task` trait
-([`api/async_task.rs`](../pgdog/src/api/async_task.rs)): it defines its own status type, output, and
-error, and provides an `async run`. The framework owns everything around that `run` — spawning,
-registration, id assignment, status storage, cancellation, and retention.
+`run` is the whole task. Everything else — spawning, ids, status storage, cancellation,
+retention — is handled by the framework around it.
 
----
+## Starting a task
 
-## The registry
+`crate::api::run_task(task)` ([`api/mod.rs`](../pgdog/src/api/mod.rs)) calls
+`tasks_storage().run(task)`, which delegates to the private `run_task` in `async_task.rs`. That
+function:
 
-When a task is started via `crate::api::start()` ([`api/mod.rs`](../pgdog/src/api/mod.rs)), it is
-spawned as an async future and immediately registered in `AsyncTasksStorage`
-([`api/async_task.rs`](../pgdog/src/api/async_task.rs)) under a monotonically-increasing integer id.
-The id is returned before any work begins, so the caller can track the operation while it runs in
-the background.
+1. allocates an id from the registry (`tasks.next_id()`); a root task's `root_id` is its own id,
+2. builds the `AsyncTask` entry (cancellation token, state, tracing span) and inserts it into the
+   map *before* spawning,
+3. spawns the task future: `tokio::spawn(task.run(ctx).instrument(span))`,
+4. spawns a second watcher future that `select!`s the task handle against its cancellation token
+   and records the terminal status,
+5. returns an `AsyncTaskWaiter { id, waiter }`.
 
-One registry serves the entire process. A task started by the CLI and a task started through the
-admin SQL API are both registered in the same store and are equally visible to `SHOW TASKS` and
-equally cancellable by `STOP_TASK`. A task spawned automatically by another task registers itself
-the same way and is just as addressable from either interface.
+The id is known before `run` does any work, so the caller can address the task immediately.
 
-**Terminal tasks are retained for 24 hours** after they finish so their outcome can be inspected.
-A running task is never pruned. `SHOW TASKS` filters terminal tasks back out and shows only what
-is currently running; the retention period exists only so that an id returned by a command
-continues to be addressable for a reasonable window after completion.
+```rust
+pub struct AsyncTaskWaiter<R, E> {
+    id: AsyncTaskId,
+    waiter: Receiver<Result<R, TaskError<E>>>, // oneshot
+}
+```
 
----
+`AsyncTaskWaiter` is a `Future`; awaiting it yields the task's `Result`. A dropped sender (watcher
+gone) maps to `Err(TaskError::Abandoned)`. `.id()` returns the id without awaiting.
 
-## Task composition
+The registry is process-global:
 
-A task can spawn *child tasks* through its execution context. Children share the root task's
-registration entry and appear as a flat subtask list on the root's snapshot in the registry. The
-root's status describes which high-level phase is active; the child's status describes what is
-happening within that phase. A composite task that sequences several phases therefore reports
-fine-grained progress without any special support from the registry — each phase is just a child
-task whose status bubbles up.
+```rust
+static TASKS: LazyLock<AsyncTasksStorage> = LazyLock::new(AsyncTasksStorage::default);
+```
 
-`SHOW TASKS` surfaces both the root and its running children as separate rows, so a child appears
-with its own type even though it was never started as a top-level command. `STOP_TASK` only
-addresses root tasks by id; cancelling the root propagates to all its children through the
-cancellation token hierarchy (see [Cancellation](#cancellation) below).
+So a CLI task and an admin task land in the same `AsyncTasksStorage`, both visible to `SHOW TASKS`
+and cancellable by `STOP_TASK`.
 
----
+## Status
 
-## Status lifecycle
+Two separate axes. The lifecycle status is a fixed enum:
 
-Every task type defines its own set of progress stages. The registry stores a type-erased
-snapshot of the current status on every write and exposes it through `SHOW TASKS`. A task begins
-in `Started` the moment it is registered, transitions through `Pending(stage)` as it reports
-progress, and ends in one of four terminal states:
+```rust
+pub enum TaskStatus {
+    Started, Running, Cancelling,        // non-terminal
+    Finished, Cancelled, Error(String), Panic(String), // terminal
+}
+```
 
-- **`Finished`** — completed successfully.
-- **`Cancelled`** — stopped by `STOP_TASK`, Ctrl-C, or parent cancellation.
-- **`Error`** — the task's code returned an error; the message is stored in the status.
-- **`Panic`** — the task's future panicked; the message is stored.
+The domain-specific progress is `Task::Status`, reported by the task itself via
+`ctx.set_status(...)` and surfaced separately as `inner_status`. `set_status` flips the lifecycle
+to `Running` (but won't regress out of `Cancelling`) and stores the rendered inner status.
 
-Terminal states are **write-once**: a context clone that outlives the task cannot overwrite a
-recorded outcome.
+The registry stores both in a type-erased `TaskState` (`name`, `status`, `inner_status`,
+`started_at`, `updated_at`), so `SHOW TASKS` reads it without knowing `T`.
 
----
+Transitions are write-once at the terminal boundary: `transition` and `set_status` both bail early
+if `state.status.is_terminal()`, so a context clone that outlives the task can't clobber a
+recorded outcome. The watcher sets the terminal status based on the `select!` arm that won:
+
+- task returned `Ok` → `Finished` (or `Cancelled` if the token was already cancelled),
+- task returned `Err(e)` → `Error(e)`, waiter gets `TaskError::Failed(e)`,
+- join handle cancelled → `Cancelled` / `TaskError::Cancelled`,
+- join handle panicked → `Panic(msg)` / `TaskError::Panicked(msg)`.
 
 ## Cancellation
 

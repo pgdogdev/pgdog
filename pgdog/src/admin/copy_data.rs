@@ -3,7 +3,7 @@
 use tracing::info;
 
 use crate::api::resharding::ReshardTask;
-use crate::api::start;
+use crate::api::run_task;
 use crate::backend::replication::orchestrator::Orchestrator;
 
 use super::prelude::*;
@@ -62,7 +62,7 @@ impl Command for CopyData {
 
         let slot_name = orchestrator.replication_slot().to_owned();
 
-        let task_id = start(ReshardTask::builder().orchestrator(orchestrator).build()).id();
+        let task_id = run_task(ReshardTask::builder().orchestrator(orchestrator).build()).id();
 
         let mut dr = DataRow::new();
         dr.add(task_id.to_string()).add(slot_name);

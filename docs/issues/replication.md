@@ -42,7 +42,7 @@ their publication-scoped `confirmed_flush_lsn` from the same instance-wide
 |---|---|
 | `ReplicationSlot::replication_lag()` — the lag query | [`pgdog/src/backend/replication/logical/publisher/slot.rs`](../../pgdog/src/backend/replication/logical/publisher/slot.rs) |
 | `ReplicationWaiter::wait_for_replication()` — the cutover gate | [`pgdog/src/backend/replication/logical/orchestrator.rs`](../../pgdog/src/backend/replication/logical/orchestrator.rs) |
-| Keepalive handler / `flush_lsn` reply (`data_since_keepalive` flag) | [`pgdog/src/backend/replication/logical/publisher/publisher_impl.rs`](../../pgdog/src/backend/replication/logical/publisher/publisher_impl.rs) |
+| Keepalive handler / `flush_lsn` reply (proposed `data_since_keepalive` flag) | [`pgdog/src/backend/replication/logical/publisher/publisher_impl.rs`](../../pgdog/src/backend/replication/logical/publisher/publisher_impl.rs) |
 ### Fix
 
 The PostgreSQL walsender sends a keepalive message after exhausting all decoded changes available for the publication. The keepalive carries `wal_end` — the server's current WAL write position. When a keepalive arrives and no xlog data was received since the previous keepalive, the slot has drained: there is nothing for the publication between `committed_lsn` and `wal_end`, so that gap consists entirely of other databases' WAL.
@@ -51,7 +51,7 @@ In this state the client can safely reply with `flush_lsn = wal_end`. PostgreSQL
 
 Reporting `wal_end` is only valid when the slot is caught up. During active streaming — where the server is sending transactions and keepalives may arrive between commits — `flush_lsn` must remain at `committed_lsn`. Reporting `wal_end` prematurely would advance `confirmed_flush_lsn` past unapplied commits; if the connection dropped, the server would restart from `wal_end` and those commits would be lost.
 
-The implemented guard: `data_since_keepalive` flag. Set to `true` when any xlog data message arrives; cleared to `false` when a keepalive arrives. A keepalive is the catch-up signal only when this flag is `false` — meaning no data arrived between the last keepalive and this one.
+The proposed guard: a `data_since_keepalive` flag. Set to `true` when any xlog data message arrives; cleared to `false` when a keepalive arrives. A keepalive is the catch-up signal only when this flag is `false` — meaning no data arrived between the last keepalive and this one.
 
 ```
 keepalive received
@@ -225,8 +225,8 @@ Each entry point was built to satisfy a specific operational need without consol
 
 | Symbol | File |
 |---|---|
-| `TaskType::Replication` `select!` / `waiter.wait()` arm (line ~150) | [`pgdog/src/backend/replication/logical/admin.rs`](../../pgdog/src/backend/replication/logical/admin.rs) |
-| `AsyncTasks::cutover()` / `notify_one()` (line ~75) | same file |
+| `TaskType::Replication` `select!` / `waiter.wait()` arm (historical, line ~150) | now `ReplicationTask::run` in [`pgdog/src/api/replication.rs`](../../pgdog/src/api/replication.rs) |
+| `AsyncTasks::cutover()` / `notify_one()` (historical, line ~75) | now the cutover signal in [`pgdog/src/api/async_task.rs`](../../pgdog/src/api/async_task.rs) |
 | `Replicate::execute()` | [`pgdog/src/admin/replicate.rs`](../../pgdog/src/admin/replicate.rs) |
 | `Reshard::execute()` | [`pgdog/src/admin/reshard.rs`](../../pgdog/src/admin/reshard.rs) |
 | `Orchestrator::replicate_and_cutover()` — the canonical flow | [`pgdog/src/backend/replication/logical/orchestrator.rs`](../../pgdog/src/backend/replication/logical/orchestrator.rs) |
@@ -479,3 +479,72 @@ actually stopped.
 | `AsyncTasksStorage::prune` — drops only terminal entries past retention | same file |
 | `run_task` supervisor — cooperative grace via `cancel_timeout`; sets terminal status on completion | same file |
 | `ReplicationTask::run` / `cancel_timeout` — cutover-vs-stop `select!` | [`pgdog/src/api/replication.rs`](../../pgdog/src/api/replication.rs) |
+
+---
+
+## ✅ Issue 7 — Cutover swapped the cluster name but not `database_name`, repointing entries at a nonexistent database (resolved)
+
+> **Resolved.** `Config::cutover` now pins the effective `database_name` on the
+> two clusters being swapped *before* exchanging their logical `name`, so the
+> name swap only changes routing identity and never the physical database an
+> entry connects to.
+
+### Description
+
+Traffic cutover swaps the *logical* `name` of the source and destination
+clusters (`Config::cutover`, `pgdog-config/src/core.rs`) — clients keep
+connecting to the same name, which now resolves to the other cluster's backends.
+
+The physical Postgres database an entry connects to, however, is resolved as
+`database_name` **if set, otherwise the cluster `name`** (`Address::from`,
+`pgdog/src/backend/pool/address.rs`). `Config::cutover` rewrote `name` but left
+`database_name` untouched. So any database entry that relied on the default
+(no explicit `database_name`, i.e. cluster name == physical DB name) was, after
+the swap, silently repointed at a physical database named after the *other*
+cluster — which usually does not exist.
+
+Two symptoms, one cause:
+
+- The pool monitor logs `FATAL: 3D000 database "<name>" does not exist` and
+  retries forever against the dead config.
+- The post-cutover schema restore (`schema_sync_post_cutover` →
+  `PgDumpOutput::restore`) checks out a connection from that pool; since it can
+  never connect, the checkout waits out `checkout_timeout` and the cutover task
+  fails with `schema: checkout timeout`, past the point of no return.
+
+Configs that set `database_name` explicitly on every entry (e.g. the
+`integration/resharding` suite, where all entries use `database_name = "postgres"`)
+were unaffected, which is why this stayed hidden — the swap is a no-op for the
+physical target when `database_name` is already pinned.
+
+### Cause
+
+`database_name` defaults to the cluster `name` at connection time, and
+`Config::cutover` changed `name` without first materializing that default. The
+two fields are only equivalent until the name is swapped.
+
+### Code references
+
+| Symbol | File |
+|---|---|
+| `Config::cutover` — swaps `name`; now pins `database_name` first | [`pgdog-config/src/core.rs`](../../pgdog-config/src/core.rs) |
+| `Address::from` — `database_name` falls back to cluster `name` | [`pgdog/src/backend/pool/address.rs`](../../pgdog/src/backend/pool/address.rs) |
+| `databases::cutover` — applies the config swap and relaunches pools | [`pgdog/src/backend/databases.rs`](../../pgdog/src/backend/databases.rs) |
+| `test_cutover_preserves_physical_database_name` — regression test | [`pgdog-config/src/core.rs`](../../pgdog-config/src/core.rs) |
+
+### Fix
+
+Before the name swap, set `database_name` to the current `name` on any entry of
+the two clusters where it is unset:
+
+```rust
+for db in self.databases.iter_mut() {
+    if (db.name == source || db.name == destination) && db.database_name.is_none() {
+        db.database_name = Some(db.name.clone());
+    }
+}
+```
+
+The swap then moves only the logical name; the physical connection target is
+preserved. Covered by `test_cutover_preserves_physical_database_name` (asymmetric:
+one cluster relies on the default, the other sets `database_name` explicitly).
