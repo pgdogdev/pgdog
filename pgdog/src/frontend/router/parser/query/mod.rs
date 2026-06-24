@@ -283,6 +283,8 @@ impl QueryParser {
                 context.shards_calculator.shard(),
             )));
         };
+        #[cfg(feature = "new_parser")]
+        let new_root = statement.new_ast.stmts().next().unwrap();
 
         let mut command = match root.node {
             // SET statements -> return immediately.
@@ -302,15 +304,36 @@ impl QueryParser {
                 return Ok(Command::Deallocate);
             }
             // SELECT statements.
-            Some(NodeEnum::SelectStmt(ref stmt)) => self.select(&statement, stmt, context),
+            Some(NodeEnum::SelectStmt(ref stmt)) => self.select(
+                &statement,
+                stmt,
+                #[cfg(feature = "new_parser")]
+                new_root,
+                context,
+            ),
             // COPY statements.
             Some(NodeEnum::CopyStmt(ref stmt)) => Self::copy(stmt, context),
             // INSERT statements.
-            Some(NodeEnum::InsertStmt(ref stmt)) => self.insert(stmt, context),
+            Some(NodeEnum::InsertStmt(ref stmt)) => self.insert(
+                stmt,
+                #[cfg(feature = "new_parser")]
+                new_root,
+                context,
+            ),
             // UPDATE statements.
-            Some(NodeEnum::UpdateStmt(ref stmt)) => self.update(stmt, context),
+            Some(NodeEnum::UpdateStmt(ref stmt)) => self.update(
+                stmt,
+                #[cfg(feature = "new_parser")]
+                new_root,
+                context,
+            ),
             // DELETE statements.
-            Some(NodeEnum::DeleteStmt(ref stmt)) => self.delete(stmt, context),
+            Some(NodeEnum::DeleteStmt(ref stmt)) => self.delete(
+                stmt,
+                #[cfg(feature = "new_parser")]
+                new_root,
+                context,
+            ),
             // Transaction control statements,
             // e.g. BEGIN, COMMIT, etc.
             Some(NodeEnum::TransactionStmt(ref stmt)) => match self.transaction(stmt, context)? {
@@ -530,6 +553,7 @@ impl QueryParser {
     fn insert(
         &mut self,
         stmt: &InsertStmt,
+        #[cfg(feature = "new_parser")] new_stmt: pg_raw_parse::Node<'_>,
         context: &mut QueryParserContext,
     ) -> Result<Command, Error> {
         let schema_lookup = SchemaLookupContext {
@@ -539,6 +563,8 @@ impl QueryParser {
         };
         let mut parser = StatementParser::from_insert(
             stmt,
+            #[cfg(feature = "new_parser")]
+            new_stmt,
             context.router_context.bind,
             &context.sharding_schema,
             self.recorder_mut(),

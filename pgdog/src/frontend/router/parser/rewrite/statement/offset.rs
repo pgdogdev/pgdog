@@ -285,6 +285,8 @@ mod tests {
         let mut ps = PreparedStatements::default();
         let mut rewrite = StatementRewrite::new(StatementRewriteContext {
             stmt: &mut ast.protobuf,
+            #[cfg(feature = "new_parser")]
+            new_stmt: None,
             extended: false,
             prepared: false,
             prepared_statements: &mut ps,

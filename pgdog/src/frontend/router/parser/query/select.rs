@@ -18,6 +18,7 @@ impl QueryParser {
         &mut self,
         cached_ast: &Ast,
         stmt: &SelectStmt,
+        #[cfg(feature = "new_parser")] new_stmt: pg_raw_parse::Node<'_>,
         context: &mut QueryParserContext,
     ) -> Result<Command, Error> {
         let cte_writes = Self::cte_writes(stmt);
@@ -42,6 +43,8 @@ impl QueryParser {
         let (advisory_locks, mut omnisharded) = {
             let mut parser = StatementParser::from_select(
                 stmt,
+                #[cfg(feature = "new_parser")]
+                new_stmt,
                 context.router_context.bind,
                 &context.sharding_schema,
                 None,
@@ -65,6 +68,8 @@ impl QueryParser {
         let (shard, is_sharded, tables) = {
             let mut statement_parser = StatementParser::from_select(
                 stmt,
+                #[cfg(feature = "new_parser")]
+                new_stmt,
                 context.router_context.bind,
                 &context.sharding_schema,
                 self.recorder_mut(),
