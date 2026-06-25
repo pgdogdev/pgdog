@@ -16,6 +16,7 @@ use crate::{
         router::{
             Ast,
             parser::{Column, Table, Value, rewrite::statement::visitor::visit_and_mutate_nodes},
+            sharding::ShardedTable,
         },
     },
     net::{
@@ -93,6 +94,36 @@ impl Deref for ShardingKeyUpdate {
 
     fn deref(&self) -> &Self::Target {
         &self.inner
+    }
+}
+
+impl ShardingKeyUpdate {
+    pub(crate) fn target_table(&self) -> Option<Table<'_>> {
+        self.insert.table.as_ref().map(Table::from)
+    }
+
+    pub(crate) fn sharded_table<'a>(
+        &self,
+        sharded_tables: &'a [ShardedTable],
+    ) -> Option<&'a ShardedTable> {
+        let table = self.target_table()?;
+
+        sharded_tables.iter().find(|sharded| {
+            if let Some(name) = sharded.name.as_ref()
+                && !table.name_match(name)
+            {
+                return false;
+            }
+
+            if let Some(schema) = sharded.schema.as_ref()
+                && let Some(table_schema) = table.schema
+                && table_schema != schema
+            {
+                return false;
+            }
+
+            self.insert.mapping.contains_key(&sharded.column)
+        })
     }
 }
 
@@ -718,6 +749,11 @@ mod test {
         // SELECT should have WHERE clause with param renumbered to $1
         assert_eq!(result.select.stmt, "SELECT * FROM sharded WHERE email = $1");
         assert_eq!(result.select.params, vec![2]);
+
+        let schema = default_schema();
+        let tables = schema.tables.tables();
+        assert_eq!(result.target_table().unwrap().name, "sharded");
+        assert_eq!(result.sharded_table(tables).unwrap().column, "id");
     }
 
     #[test]
@@ -767,6 +803,26 @@ mod test {
             .unwrap();
 
         assert_eq!(result.delete.stmt, "DELETE FROM sharded WHERE email = $1");
+
+        assert!(result.sharded_table(&[]).is_none());
+        assert!(
+            result
+                .sharded_table(&[ShardedTable {
+                    name: Some("other".into()),
+                    column: "id".into(),
+                    ..Default::default()
+                }])
+                .is_none()
+        );
+        assert!(
+            result
+                .sharded_table(&[ShardedTable {
+                    name: Some("sharded".into()),
+                    column: "user_id".into(),
+                    ..Default::default()
+                }])
+                .is_none()
+        );
     }
 
     #[test]
