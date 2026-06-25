@@ -75,7 +75,7 @@ pub struct Server {
     /// Credentials generation at the time this connection was established.
     /// Compared against the pool's generation on check-in; a mismatch means
     /// the Vault lease rotated and this connection must be closed.
-    credentials_generation: u8,
+    credentials_generation: u64,
 }
 
 impl MemoryUsage for Server {
@@ -1062,12 +1062,12 @@ impl Server {
     }
 
     #[inline]
-    pub fn credentials_generation(&self) -> u8 {
+    pub fn credentials_generation(&self) -> u64 {
         self.credentials_generation
     }
 
     #[inline]
-    pub fn set_credentials_generation(&mut self, generation: u8) {
+    pub fn set_credentials_generation(&mut self, generation: u64) {
         self.credentials_generation = generation;
     }
 

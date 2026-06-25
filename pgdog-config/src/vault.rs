@@ -1,5 +1,7 @@
 //! HashiCorp Vault settings.
 
+use std::time::Duration;
+
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -11,6 +13,8 @@ pub const DEFAULT_APPROLE_MOUNT: &str = "approle";
 pub const DEFAULT_KUBERNETES_JWT_PATH: &str = "/var/run/secrets/kubernetes.io/serviceaccount/token";
 /// Default percentage of a credential lease after which it's refreshed.
 pub const DEFAULT_REFRESH_PERCENT: u8 = 80;
+/// Default seconds before the Vault client token expires to trigger a re-login.
+pub const DEFAULT_CLIENT_TOKEN_TTL_SECS: u64 = 60;
 
 /// How PgDog authenticates to Vault.
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Hash, JsonSchema)]
@@ -52,6 +56,10 @@ pub struct Vault {
     /// **Note:** If not set, the secret ID is read from the `VAULT_SECRET_ID`
     /// environment variable.
     pub approle_secret_id_file: Option<String>,
+    /// Seconds before the Vault client token expires to trigger a re-login.
+    ///
+    /// _Default:_ `60`
+    pub client_token_ttl: Option<u64>,
 }
 
 impl Vault {
@@ -71,6 +79,11 @@ impl Vault {
         self.kubernetes_jwt_path
             .as_deref()
             .unwrap_or(DEFAULT_KUBERNETES_JWT_PATH)
+    }
+
+    /// Duration before the Vault client token expires to trigger a re-login.
+    pub fn token_expiry_buffer(&self) -> Duration {
+        Duration::from_secs(self.client_token_ttl.unwrap_or(DEFAULT_CLIENT_TOKEN_TTL_SECS))
     }
 }
 

@@ -2109,6 +2109,15 @@
             "null"
           ]
         },
+        "client_token_ttl": {
+          "description": "Seconds before the Vault client token expires to trigger a re-login.\n\n_Default:_ `60`",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
         "kubernetes_jwt_path": {
           "description": "Kubernetes auth: path to the service account JWT.\n\n_Default:_ `/var/run/secrets/kubernetes.io/serviceaccount/token`",
           "type": [

@@ -20,8 +20,6 @@ use crate::backend::{Error, pool::Address};
 use crate::config::config;
 use pgdog_config::vault::{DEFAULT_REFRESH_PERCENT, Vault, VaultAuthMethod};
 
-/// Re-login this long before the Vault client token expires.
-const TOKEN_EXPIRY_BUFFER: Duration = Duration::from_secs(60);
 
 #[derive(Clone)]
 struct VaultToken {
@@ -162,7 +160,7 @@ async fn login(vault: &Vault) -> Result<VaultToken, Error> {
 /// missing or about to expire.
 async fn vault_token(vault: &Vault) -> Result<String, Error> {
     if let Some(cached) = VAULT_TOKEN.lock().clone()
-        && SystemTime::now() + TOKEN_EXPIRY_BUFFER < cached.expires_at
+        && SystemTime::now() + vault.token_expiry_buffer() < cached.expires_at
     {
         return Ok(cached.token);
     }

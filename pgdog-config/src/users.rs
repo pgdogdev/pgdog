@@ -91,23 +91,23 @@ impl Users {
             if user.server_auth == ServerAuth::Vault {
                 if user.vault_path.is_none() {
                     warn!(
-                        r#"user "{}" (database "{}") uses Vault server auth but "vault_path" is not set"#,
+                        r#"user "{}" (database "{}") uses "server_auth" = "vault" but "vault_path" is not set"#,
                         user.name, user.database
                     );
                 }
 
                 if config.vault.is_none() {
                     warn!(
-                        r#"user "{}" (database "{}") uses Vault server auth but the [vault] section is missing from pgdog.toml"#,
+                        r#"user "{}" (database "{}") uses "server_auth" = "vault" but the [vault] section is missing from pgdog.toml"#,
                         user.name, user.database
                     );
                 }
 
                 if let Some(percent) = user.vault_refresh_percent
-                    && (percent == 0 || percent > 100)
+                    && (percent == 0 || percent > 80)
                 {
                     warn!(
-                        r#"user "{}" (database "{}") has "vault_refresh_percent" of {}, expected 1-100, using default"#,
+                        r#"user "{}" (database "{}") has "vault_refresh_percent" of {}, expected 1-80, using default"#,
                         user.name, user.database, percent
                     );
                     user.vault_refresh_percent = None;

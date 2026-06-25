@@ -50,7 +50,7 @@ pub(super) struct Inner {
     pub(super) replica_lag: ReplicaLag,
     /// Bumped each time Vault credentials rotate. Connections stamped with
     /// an older generation are closed on check-in rather than reused.
-    pub(super) credentials_generation: u8,
+    pub(super) credentials_generation: u64,
 }
 
 impl std::fmt::Debug for Inner {
@@ -283,7 +283,7 @@ impl Inner {
     }
 
     #[inline]
-    pub(super) fn credentials_generation(&self) -> u8 {
+    pub(super) fn credentials_generation(&self) -> u64 {
         self.credentials_generation
     }
 
