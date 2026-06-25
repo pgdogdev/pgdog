@@ -83,7 +83,10 @@ impl Vault {
 
     /// Duration before the Vault client token expires to trigger a re-login.
     pub fn token_expiry_buffer(&self) -> Duration {
-        Duration::from_secs(self.client_token_ttl.unwrap_or(DEFAULT_CLIENT_TOKEN_TTL_SECS))
+        Duration::from_secs(
+            self.client_token_ttl
+                .unwrap_or(DEFAULT_CLIENT_TOKEN_TTL_SECS),
+        )
     }
 }
 
