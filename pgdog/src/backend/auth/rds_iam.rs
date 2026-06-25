@@ -101,6 +101,8 @@ mod tests {
             database_number: 0,
             server_auth: ServerAuth::RdsIam,
             server_iam_region: Some("us-east-1".into()),
+            vault_path: Default::default(),
+            vault_refresh_percent: None,
             configured_role: Role::Auto,
         }
     }

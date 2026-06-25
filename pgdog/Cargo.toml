@@ -76,7 +76,7 @@ azure_core = "0.34.0"
 crc32c = "0.6.8"
 bit-vec = "0.8"
 smallvec = "1"
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-webpki-roots-no-provider"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-webpki-roots-no-provider", "json"] }
 hex = "0.4"
 x509-parser = "0.18"
 pg_raw_parse = { git = "https://github.com/pgdogdev/pg_raw_parse.git", rev = "a5b12f3", optional = true }
@@ -96,6 +96,7 @@ cc = "1"
 tempfile = "3.23.0"
 stats_alloc = "0.1.10"
 brunch = "0.5"
+wiremock = "0.6"
 
 [[bench]]
 name = "comment_parser"

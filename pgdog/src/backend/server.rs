@@ -72,6 +72,10 @@ pub struct Server {
     /// "use the pool's configured `max_age`" (no jitter applied).
     /// Sampled once at creation by [`Server::apply_lifetime_jitter`].
     max_age: Option<Duration>,
+    /// Credentials generation at the time this connection was established.
+    /// Compared against the pool's generation on check-in; a mismatch means
+    /// the Vault lease rotated and this connection must be closed.
+    credentials_generation: u64,
 }
 
 impl MemoryUsage for Server {
@@ -97,11 +101,12 @@ impl Server {
         options: ServerOptions,
         connect_reason: ConnectReason,
     ) -> Result<Self, Error> {
-        let auth_secrets = addr.auth_secrets().await?;
+        let (user, auth_secrets) = addr.auth_credentials().await?;
         let total = auth_secrets.len();
         for (idx, auth_secret) in auth_secrets.into_iter().enumerate() {
             match Self::connect_with_auth_secret(
                 addr,
+                &user,
                 options.clone(),
                 connect_reason,
                 &auth_secret,
@@ -142,6 +147,7 @@ impl Server {
     /// Create new PostgreSQL server connection with the given auth secret (e.g. password).
     async fn connect_with_auth_secret(
         addr: &Address,
+        user: &str,
         options: ServerOptions,
         connect_reason: ConnectReason,
         auth_secret: &super::pool::Password,
@@ -220,14 +226,12 @@ impl Server {
         }
 
         stream
-            .write_all(
-                &Startup::new(&addr.user, &addr.database_name, options.params.clone()).to_bytes(),
-            )
+            .write_all(&Startup::new(user, &addr.database_name, options.params.clone()).to_bytes())
             .await?;
         stream.flush().await?;
 
         // Perform authentication.
-        let mut scram = Client::new(&addr.user, auth_secret);
+        let mut scram = Client::new(user, auth_secret);
         let mut auth_type = AuthType::Trust;
         loop {
             let message = stream.read().await?;
@@ -263,11 +267,8 @@ impl Server {
                         }
                         Authentication::Md5(salt) => {
                             auth_type = AuthType::Md5;
-                            let client = md5::Client::new_salt(
-                                &addr.user,
-                                &[auth_secret.to_string()],
-                                &salt,
-                            )?;
+                            let client =
+                                md5::Client::new_salt(user, &[auth_secret.to_string()], &salt)?;
                             stream.send_flush(&client.response()?).await?;
                         }
                     }
@@ -352,6 +353,7 @@ impl Server {
             disconnect_reason: None,
             password_attempts: 1, // This is going to be changed by parent caller.
             max_age: None,
+            credentials_generation: 0,
         };
 
         server.stats.memory_used(server.memory_stats()); // Stream capacity.
@@ -1059,6 +1061,16 @@ impl Server {
         self.max_age.unwrap_or(base)
     }
 
+    #[inline]
+    pub fn credentials_generation(&self) -> u64 {
+        self.credentials_generation
+    }
+
+    #[inline]
+    pub fn set_credentials_generation(&mut self, generation: u64) {
+        self.credentials_generation = generation;
+    }
+
     /// How long this connection has been idle.
     #[inline]
     pub fn idle_for(&self, instant: Instant) -> Duration {
@@ -1249,6 +1261,7 @@ pub mod test {
                 sending_request: false,
                 password_attempts: 1,
                 max_age: None,
+                credentials_generation: 0,
             }
         }
     }

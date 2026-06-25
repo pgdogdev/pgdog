@@ -24,6 +24,7 @@ use super::replication::{MirrorConfig, Mirroring, MirroringLevel, ReplicaLag, Re
 use super::rewrite::Rewrite;
 use super::sharding::{ManualQuery, OmnishardedTables, ShardedMappingDeprecated};
 use super::users::{Admin, Plugin, Users};
+use super::vault::Vault;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ConfigAndUsers {
@@ -125,13 +126,13 @@ impl ConfigAndUsers {
 
         if self.config.general.passthrough_auth != PassthroughAuth::Disabled {
             return Err(Error::ParseError(
-                "\"passthrough_auth\" must be \"disabled\" when any user has \"server_auth = \\\"rds_iam\\\"\" or \"server_auth = \\\"azure_workload_identity\\\"\"".into(),
+                "\"passthrough_auth\" must be \"disabled\" when any user has \"server_auth = \\\"rds_iam\\\"\", \"server_auth = \\\"azure_workload_identity\\\"\" or \"server_auth = \\\"vault\\\"\"".into(),
             ));
         }
 
         if self.config.general.tls_verify == TlsVerifyMode::Disabled {
             return Err(Error::ParseError(
-                "\"tls_verify\" cannot be \"disabled\" when any user has \"server_auth = \\\"rds_iam\\\"\" or \"server_auth = \\\"azure_workload_identity\\\"\"".into(),
+                "\"tls_verify\" cannot be \"disabled\" when any user has \"server_auth = \\\"rds_iam\\\"\", \"server_auth = \\\"azure_workload_identity\\\"\" or \"server_auth = \\\"vault\\\"\"".into(),
             ));
         }
 
@@ -276,6 +277,9 @@ pub struct Config {
     /// https://docs.pgdog.dev/configuration/pgdog.toml/otel/
     #[serde(default)]
     pub otel: Otel,
+
+    /// HashiCorp Vault settings, required for users configured with `server_auth = "vault"`.
+    pub vault: Option<Vault>,
 }
 
 impl Config {

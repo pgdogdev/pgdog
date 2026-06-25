@@ -117,6 +117,9 @@ pub enum Error {
     #[error("Azure Workload Identity token generation failed: {0}")]
     AzureWorkloadIdentityToken(String),
 
+    #[error("Vault credentials fetch failed: {0}")]
+    VaultCredentials(String),
+
     #[error("pub/sub channel disabled")]
     PubSubDisabled,
 

@@ -11,15 +11,57 @@ use crate::backend::{Error, pool::Address};
 /// know or re-apply this value.
 const EXPIRY_BUFFER: Duration = Duration::from_secs(45);
 
+/// Credentials fetched from an external identity provider.
+///
+/// Token-based providers (RDS IAM, Azure Workload Identity) only produce a
+/// secret; the username comes from the configuration. Vault's database
+/// secrets engine generates both, so `username` overrides the configured
+/// one when present.
+#[derive(Clone, Debug)]
+pub struct Credentials {
+    pub username: Option<String>,
+    pub secret: String,
+}
+
+/// Credentials plus their lifetime, as returned by a fetcher.
+///
+/// `refresh_at`, when set, tells the monitor exactly when to fetch a
+/// replacement (e.g. a percentage of a Vault lease). When `None`, the
+/// monitor refreshes [`EXPIRY_BUFFER`] before `expires_at`.
+#[derive(Clone, Debug)]
+pub struct FetchedCredentials {
+    pub credentials: Credentials,
+    pub expires_at: SystemTime,
+    pub refresh_at: Option<SystemTime>,
+}
+
 #[derive(Clone)]
 struct CachedToken {
-    token: String,
+    credentials: Credentials,
     expires_at: SystemTime,
+    refresh_at: Option<SystemTime>,
 }
 
 impl CachedToken {
     fn new(token: String, expires_at: SystemTime) -> Self {
-        Self { token, expires_at }
+        Self {
+            credentials: Credentials {
+                username: None,
+                secret: token,
+            },
+            expires_at,
+            refresh_at: None,
+        }
+    }
+}
+
+impl From<FetchedCredentials> for CachedToken {
+    fn from(fetched: FetchedCredentials) -> Self {
+        Self {
+            credentials: fetched.credentials,
+            expires_at: fetched.expires_at,
+            refresh_at: fetched.refresh_at,
+        }
     }
 }
 
@@ -96,14 +138,22 @@ impl TokenCache {
     /// instant is already in the past, returns [`Duration::ZERO`] so the
     /// monitor fires immediately.
     pub fn refresh_in(&self, addr: &Address) -> Duration {
-        let Some(expires_at) = self
+        let Some((expires_at, refresh_at)) = self
             .inner
             .lock()
             .get(&CacheKey::from(addr))
-            .map(|c| c.expires_at)
+            .map(|c| (c.expires_at, c.refresh_at))
         else {
             return Duration::ZERO; // cold start or eviction — fetch immediately
         };
+
+        // An explicit refresh instant (e.g. a percentage of a Vault lease)
+        // takes precedence over the expiry buffer.
+        if let Some(refresh_at) = refresh_at {
+            return refresh_at
+                .duration_since(SystemTime::now())
+                .unwrap_or(Duration::ZERO);
+        }
 
         // If the token is already expired or expires within the buffer,
         // fetch immediately.
@@ -120,6 +170,14 @@ impl TokenCache {
         self.inner
             .lock()
             .insert(CacheKey::from(addr), CachedToken::new(token, expires_at));
+    }
+
+    /// Store freshly fetched credentials for `addr`, including a
+    /// generated username and an explicit refresh instant when present.
+    pub fn set_credentials(&self, addr: &Address, fetched: FetchedCredentials) {
+        self.inner
+            .lock()
+            .insert(CacheKey::from(addr), fetched.into());
     }
 
     /// Remove the cached token for `addr`.
@@ -142,7 +200,7 @@ impl TokenCache {
         Fut: Future<Output = Result<(String, SystemTime), Error>>,
     {
         if let Some(cached) = self.inner.lock().get(&CacheKey::from(addr)).cloned() {
-            return Ok(cached.token);
+            return Ok(cached.credentials.secret);
         }
 
         // Cold miss — block once to prime the cache.
@@ -150,6 +208,30 @@ impl TokenCache {
         let (token, expires_at) = fetcher(addr.clone()).await?;
         self.set(addr, token.clone(), expires_at);
         Ok(token)
+    }
+
+    /// Like [`get_or_fetch`](Self::get_or_fetch), but for providers that
+    /// generate full credentials (username and password), e.g. Vault's
+    /// database secrets engine.
+    pub async fn credentials_or_fetch<F, Fut>(
+        &self,
+        addr: &Address,
+        fetcher: F,
+    ) -> Result<Credentials, Error>
+    where
+        F: Fn(Address) -> Fut + Send + Sync,
+        Fut: Future<Output = Result<FetchedCredentials, Error>>,
+    {
+        if let Some(cached) = self.inner.lock().get(&CacheKey::from(addr)).cloned() {
+            return Ok(cached.credentials);
+        }
+
+        // Cold miss — block once to prime the cache.
+        // After this the monitor's refresh loop takes over.
+        let fetched = fetcher(addr.clone()).await?;
+        let credentials = fetched.credentials.clone();
+        self.set_credentials(addr, fetched);
+        Ok(credentials)
     }
 }
 
@@ -234,6 +316,128 @@ mod tests {
         let expiry = SystemTime::UNIX_EPOCH + Duration::from_secs(1);
         cache().set(&a, "tok".into(), expiry);
         assert_eq!(cache().refresh_in(&a), Duration::ZERO);
+        cache().evict(&a);
+    }
+
+    #[test]
+    fn refresh_in_uses_explicit_refresh_at_when_set() {
+        let a = addr(9919);
+        let now = SystemTime::now();
+        cache().set_credentials(
+            &a,
+            FetchedCredentials {
+                credentials: Credentials {
+                    username: Some("vault-user".into()),
+                    secret: "vault-pass".into(),
+                },
+                expires_at: now + Duration::from_secs(3600),
+                // Refresh well before the expiry buffer would.
+                refresh_at: Some(now + Duration::from_secs(100)),
+            },
+        );
+        let d = cache().refresh_in(&a);
+        assert!(d > Duration::from_secs(95), "expected ~100s, got {d:?}");
+        assert!(d <= Duration::from_secs(100), "expected ~100s, got {d:?}");
+        cache().evict(&a);
+    }
+
+    #[test]
+    fn refresh_in_returns_zero_for_past_refresh_at() {
+        let a = addr(9920);
+        let now = SystemTime::now();
+        cache().set_credentials(
+            &a,
+            FetchedCredentials {
+                credentials: Credentials {
+                    username: None,
+                    secret: "tok".into(),
+                },
+                expires_at: now + Duration::from_secs(3600),
+                refresh_at: Some(now - Duration::from_secs(10)),
+            },
+        );
+        assert_eq!(cache().refresh_in(&a), Duration::ZERO);
+        cache().evict(&a);
+    }
+
+    #[test]
+    fn credentials_or_fetch_returns_cached_username() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let a = addr(9921);
+        let now = SystemTime::now();
+        cache().set_credentials(
+            &a,
+            FetchedCredentials {
+                credentials: Credentials {
+                    username: Some("v-user".into()),
+                    secret: "v-pass".into(),
+                },
+                expires_at: now + Duration::from_secs(3600),
+                refresh_at: None,
+            },
+        );
+
+        let credentials = rt
+            .block_on(cache().credentials_or_fetch(&a, |_| async {
+                panic!("fetcher must not be called on a cache hit");
+            }))
+            .unwrap();
+
+        assert_eq!(credentials.username.as_deref(), Some("v-user"));
+        assert_eq!(credentials.secret, "v-pass");
+        cache().evict(&a);
+    }
+
+    #[test]
+    fn credentials_or_fetch_cold_miss_primes_cache() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let a = addr(9922);
+        cache().evict(&a);
+
+        let now = SystemTime::now();
+        let credentials = rt
+            .block_on(cache().credentials_or_fetch(&a, move |_| async move {
+                Ok(FetchedCredentials {
+                    credentials: Credentials {
+                        username: Some("fresh-user".into()),
+                        secret: "fresh-pass".into(),
+                    },
+                    expires_at: now + Duration::from_secs(3600),
+                    refresh_at: Some(now + Duration::from_secs(2880)),
+                })
+            }))
+            .unwrap();
+
+        assert_eq!(credentials.username.as_deref(), Some("fresh-user"));
+        assert!(cache().expires_at(&a).is_some());
+        cache().evict(&a);
+    }
+
+    #[test]
+    fn get_or_fetch_returns_secret_of_cached_credentials() {
+        // A pool whose cache was primed via set_credentials still serves
+        // the secret through the token-only accessor.
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let a = addr(9923);
+        cache().set_credentials(
+            &a,
+            FetchedCredentials {
+                credentials: Credentials {
+                    username: Some("u".into()),
+                    secret: "s".into(),
+                },
+                expires_at: SystemTime::now() + Duration::from_secs(3600),
+                refresh_at: None,
+            },
+        );
+
+        let token = rt.block_on(cache().get_or_fetch(&a, |_| async {
+            panic!("fetcher must not be called on a cache hit");
+            #[allow(unreachable_code)]
+            Ok(("unreachable".into(), SystemTime::now()))
+        }));
+
+        assert_eq!(token.unwrap(), "s");
         cache().evict(&a);
     }
 

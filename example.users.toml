@@ -22,3 +22,11 @@ password = "pgdog"
 # PgDog still authenticates the client as configured by `general.auth_type`;
 # this only affects how PgDog authenticates to PostgreSQL servers.
 # server_auth = "azure_workload_identiy"
+
+# Example: backend authentication with HashiCorp Vault dynamic credentials.
+# Requires the [vault] section in pgdog.toml. PgDog fetches a generated
+# username and password from `vault_path` and rotates them after
+# `vault_refresh_percent` of the lease has elapsed.
+# server_auth = "vault"
+# vault_path = "database/creds/pgdog"
+# vault_refresh_percent = 80 # optional; default 80

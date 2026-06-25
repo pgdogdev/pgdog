@@ -85,6 +85,11 @@
           "description": "Generate an Azure Workload Identity auth token per connection attempt.",
           "type": "string",
           "const": "azure_workload_identity"
+        },
+        {
+          "description": "Fetch dynamic credentials from HashiCorp Vault.",
+          "type": "string",
+          "const": "vault"
         }
       ]
     },
@@ -287,6 +292,23 @@
             "boolean",
             "null"
           ]
+        },
+        "vault_path": {
+          "description": "Vault path to fetch dynamic database credentials from, e.g. `database/creds/my-role`.\nRequired when `server_auth` is set to `vault`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "vault_refresh_percent": {
+          "description": "Percentage of the Vault credential lease after which credentials are refreshed.\n\n_Default:_ `80`",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0
         }
       },
       "additionalProperties": false,

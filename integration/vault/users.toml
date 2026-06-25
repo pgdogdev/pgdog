@@ -1,0 +1,6 @@
+[[users]]
+name = "pgdog"
+database = "pgdog"
+password = "pgdog"
+server_auth = "vault"
+vault_path = "database/creds/pgdog-role"

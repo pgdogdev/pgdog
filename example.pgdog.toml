@@ -471,3 +471,20 @@ fingerprint = "2d9944fc9caeaadd"  # [3285733254894627549]
 # destination_db = "pgdog_mirror"
 # queue_length = 256  # Optional: overrides general.mirror_queue
 # exposure = 0.5      # Optional: overrides general.mirror_exposure
+
+# HashiCorp Vault settings, required when any user in users.toml
+# sets `server_auth = "vault"`.
+#
+# [vault]
+# url = "https://vault.internal:8200"
+# Auth method used to log into Vault: "kubernetes" or "approle".
+# auth_method = "kubernetes"
+# auth_mount = "kubernetes" # optional; defaults to the auth method name
+# kubernetes_role = "pgdog"
+# kubernetes_jwt_path = "/var/run/secrets/kubernetes.io/serviceaccount/token" # optional
+# For AppRole auth:
+# auth_method = "approle"
+# approle_role_id = "..."
+# approle_secret_id_file = "/etc/pgdog/vault-secret-id" # or set VAULT_SECRET_ID env var
+# Vault namespace (Vault Enterprise), optional.
+# namespace = "my-namespace"
