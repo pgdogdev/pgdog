@@ -104,10 +104,10 @@ impl ParallelSync {
 
                     sleep(backoff).await;
 
-                    if self.dest.two_pc_enabled() {
-                        if let Some(txn) = err.two_pc_cleanup_transaction() {
-                            Manager::get().wait_until_cleaned_up(txn).await;
-                        }
+                    if self.dest.two_pc_enabled()
+                        && let Some(txn) = err.two_pc_cleanup_transaction()
+                    {
+                        Manager::get().wait_until_cleaned_up(txn).await;
                     }
 
                     // Not idempotent (no truncate): if a prior attempt left rows on a
