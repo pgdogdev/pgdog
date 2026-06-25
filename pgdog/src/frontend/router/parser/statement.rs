@@ -18,6 +18,8 @@ use pg_query::{
     },
 };
 #[cfg(feature = "new_parser")]
+use pg_raw_parse::walk::Recurse;
+#[cfg(feature = "new_parser")]
 use pg_raw_parse::{Node, nodes, walk};
 
 #[cfg(feature = "new_parser")]
@@ -915,41 +917,44 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
     // Are we running? Or walking? MAKE UP YOUR MIND DAMMIT
     #[cfg(feature = "new_parser")]
     fn run_walk(&self) -> Walk<'a> {
-        use pg_raw_parse::walk::Recurse;
-        use std::ops::ControlFlow;
-        use std::ptr;
-
         let mut walk = Walk::default();
-        walk::walk(self.new_stmt, |node| match node {
-            Node::SelectStmt(s) => {
-                let values_columns = collect_values_columns(s);
+        self.walk_stmt(self.new_stmt, &mut walk);
+        walk
+    }
 
-                // Extract any advisory locks that exist in this, and only
-                // this select statement, using the values columns that appear
-                // in its FROM clause if any
-                walk::walk_manual::<()>(node, |node| match node {
-                    Node::FuncCall(func) => {
-                        walk.advisory_locks.extend(advisory_locks_from_func_call(
-                            func,
-                            self.bind,
-                            values_columns.as_ref(),
-                        ));
-                        ControlFlow::Continue(Recurse::No)
-                    }
-                    // Don't recurse into subselects, otherwise we'll resolve
-                    // advisory locks with the wrong set of values columns
-                    Node::SelectStmt(s2) => Recurse::recurse_if(ptr::eq(s, s2)),
-                    _ => ControlFlow::Continue(Recurse::Yes),
-                })
-                .expect("PG received an unrecognized node");
+    #[cfg(feature = "new_parser")]
+    fn walk_stmt(&self, stmt: Node<'a>, walk: &mut Walk<'a>) {
+        let values_columns = match stmt {
+            Node::SelectStmt(s) => collect_values_columns(s),
+            _ => None,
+        };
+        walk::walk_manual::<()>(stmt, |node| match node {
+            // Walk the select statement separately, as it may have its own
+            // set of VALUES columns.
+            Node::SelectStmt(_) => {
+                self.walk_stmt(node, walk);
+                Recurse::no()
             }
 
-            Node::RangeVar(r) => walk.tables.push(Table::from(r)),
-            _ => (),
+            // Extract any advisory locks that this function call may
+            // represent, using the values clause of the current statement
+            Node::FuncCall(func) => {
+                walk.advisory_locks.extend(advisory_locks_from_func_call(
+                    func,
+                    self.bind,
+                    values_columns.as_ref(),
+                ));
+                Recurse::no()
+            }
+
+            Node::RangeVar(r) => {
+                walk.tables.push(Table::from(r));
+                Recurse::yes()
+            }
+
+            _ => Recurse::yes(),
         })
         .expect("PG received an unrecognized node");
-
-        walk
     }
 
     #[cfg(not(feature = "new_parser"))]
