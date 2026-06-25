@@ -10,6 +10,7 @@
 
 use std::collections::HashMap;
 use std::sync::LazyLock;
+use std::time::Duration;
 
 use parking_lot::Mutex;
 use tokio::select;
@@ -100,6 +101,10 @@ impl Task for ReplicationTask {
     type Status = ReplicationStatus;
     type Output = ();
     type Error = Error;
+
+    fn cancel_timeout() -> Duration {
+        Duration::from_secs(60)
+    }
 
     async fn run(mut self, ctx: AsyncTaskContext<Self>) -> Result<(), Error> {
         let token = ctx.cancellation_token();

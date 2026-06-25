@@ -14,7 +14,7 @@ use tokio::select;
 use tokio::sync::oneshot::{self, Receiver};
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
-use tracing::warn;
+use tracing::{Instrument, Span, error, info, info_span, warn};
 
 /// Represent the ID of the async task.
 #[derive(Copy, Clone, Debug, Display, FromStr, Hash, PartialEq, Eq, PartialOrd, Ord)]
@@ -192,6 +192,8 @@ struct AsyncTask<T: Task> {
     state: Arc<RwLock<AsyncTaskState<T::Status>>>,
     /// The reference to the root map of tasks
     subtasks: Arc<TasksMap>,
+    /// The tracing span associated with the task
+    tracing_span: Span,
 }
 
 /// Wrapper trait for [AsyncTask] that is not tied to specific
@@ -335,10 +337,23 @@ fn run_task<P: Task, T: Task>(
     let root_id = parent_task.map(|p| p.root_id).unwrap_or(id);
 
     let state = Arc::new(RwLock::new(AsyncTaskState::new()));
+    let name = task.to_string();
+
+    let span = if let Some(parent_task) = parent_task {
+        let parent_span = &parent_task.tracing_span;
+        let parent_name = &parent_task.name;
+        info!(
+            "Starting new subtask '{name}' (id: {id}) for parent task '{parent_name}' (root_id: {root_id})"
+        );
+        info_span!(parent: parent_span, "task", %id)
+    } else {
+        info!("Starting new task '{name}' (id: {id})");
+        info_span!(parent: None, "task", %id)
+    };
 
     let entry = AsyncTask {
         started_at: SystemTime::now(),
-        name: task.to_string(),
+        name,
         root_id,
         cancellation_token: match parent_task {
             Some(parent) => parent.cancellation_token.child_token(),
@@ -353,6 +368,7 @@ fn run_task<P: Task, T: Task>(
             Arc::new(TasksMap::default())
         },
         state: state.clone(),
+        tracing_span: span.clone(),
     };
 
     let entry = Arc::new(entry);
@@ -363,7 +379,7 @@ fn run_task<P: Task, T: Task>(
         task: entry.clone(),
     };
 
-    let mut handle = tokio::spawn(task.run(ctx.clone()));
+    let mut handle = tokio::spawn(task.run(ctx.clone()).instrument(span));
     let (sender, receiver) = oneshot::channel();
 
     let cancellation_token = entry.cancellation_token.clone();
@@ -404,6 +420,7 @@ fn run_task<P: Task, T: Task>(
                 let _ = sender.send(Ok(res));
             }
             Ok(Err(err)) => {
+                error!("task failed: {err}");
                 ctx.transition(TaskStatus::Error(err.to_string()));
                 let _ = sender.send(Err(TaskError::Failed(err)));
             }
@@ -413,6 +430,7 @@ fn run_task<P: Task, T: Task>(
             }
             Err(err) => {
                 let panic = err.to_string();
+                error!("task panicked: {panic}");
                 ctx.transition(TaskStatus::Panic(panic.clone()));
                 let _ = sender.send(Err(TaskError::Panicked(panic)));
             }
@@ -430,25 +448,36 @@ impl<T: Task> AsyncTaskContext<T> {
     /// non-terminal `Cancelling`), preserving the last inner progress.
     /// No-op once the task is already terminal.
     fn transition(&self, status: TaskStatus) {
+        let _enter = self.task.tracing_span.enter();
+
         let mut state = self.task.state.write();
         if state.status.is_terminal() {
             return;
         }
+
+        info!("state transition to: {status}");
+
         state.status = status;
         state.updated_at = SystemTime::now();
     }
 
     /// Update the inner progress status of the current task.
     pub fn set_status(&self, status: T::Status) {
+        let _enter = self.task.tracing_span.enter();
+
         let mut state = self.task.state.write();
         if state.status.is_terminal() {
             return;
         }
+
+        info!("inner state transition to: {status}");
+
         // Don't regress a cancellation-in-progress back to Running; the task
         // may still report inner progress while it winds down.
         if state.status != TaskStatus::Cancelling {
             state.status = TaskStatus::Running;
         }
+
         state.inner_status = Some(status);
         state.updated_at = SystemTime::now();
     }
