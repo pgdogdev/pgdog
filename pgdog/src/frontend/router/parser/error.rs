@@ -12,7 +12,7 @@ pub enum Error {
 
     #[cfg(feature = "new_parser")]
     #[error("Error parsing query: {0}")]
-    Parse(pg_raw_parse::Error),
+    Parse(#[from] pg_raw_parse::Error),
 
     #[error("only CSV is supported for sharded copy")]
     OnlyCsv,
