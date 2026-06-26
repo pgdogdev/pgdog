@@ -28,10 +28,7 @@ fn advisory_locks_from_func_call(
     bind: Option<&Bind>,
     values_columns: Option<&ValuesColumns<'_>>,
 ) -> Vec<AdvisoryLock> {
-    let mut name_parts = func.funcname().filter_map(|node| match node {
-        Node::String(s) => s.sval(),
-        _ => None,
-    });
+    let mut name_parts = func.funcname().into_iter().filter_map(Node::as_str);
 
     if func.funcname().len() != 1 {
         return Vec::new();
@@ -60,7 +57,7 @@ fn advisory_locks_from_func_call(
         _ => return Vec::new(),
     };
 
-    let Some(arg) = func.args().next() else {
+    let Some(arg) = func.args().into_iter().next() else {
         return vec![AdvisoryLock {
             id: None,
             unlock,
@@ -201,11 +198,8 @@ fn advisory_locks_from_func_call(
 }
 
 #[cfg(feature = "new_parser")]
-fn last_column_name<'a>(fields: impl Iterator<Item = Node<'a>>) -> Option<&'a str> {
-    fields.last().and_then(|node| match node {
-        Node::String(s) => s.sval(),
-        _ => None,
-    })
+fn last_column_name<'a>(fields: impl IntoIterator<Item = Node<'a>>) -> Option<&'a str> {
+    fields.into_iter().last().and_then(Node::as_str)
 }
 
 #[cfg(not(feature = "new_parser"))]
@@ -227,7 +221,7 @@ type ValuesColumns<'a> = std::collections::HashMap<&'a str, Vec<&'a PgNode>>;
 
 #[cfg(feature = "new_parser")]
 fn collect_values_columns(stmt: &nodes::SelectStmt) -> Option<ValuesColumns<'_>> {
-    let Node::RangeSubselect(rs) = stmt.fromClause().exactly_one().ok()? else {
+    let Node::RangeSubselect(rs) = stmt.fromClause().into_iter().exactly_one().ok()? else {
         return None;
     };
     let alias = rs.alias();
@@ -240,17 +234,16 @@ fn collect_values_columns(stmt: &nodes::SelectStmt) -> Option<ValuesColumns<'_>>
     let colnames = alias
         .map(|a| {
             a.colnames()
-                .filter_map(|n| match n {
-                    Node::String(s) => s.sval(),
-                    _ => None,
-                })
+                .into_iter()
+                .filter_map(Node::as_str)
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
     let values = s
         .valuesLists()
-        .filter_map(|values| values.as_list())
-        .flat_map(|row| row.enumerate())
+        .into_iter()
+        .map(|values| values.expect_node_list())
+        .flat_map(|row| row.into_iter().enumerate())
         .map(|(i, v)| {
             let colname = colnames
                 .get(i)

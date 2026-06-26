@@ -32,6 +32,9 @@ indexmap = { version = "2.14", features = ["serde"] }
 # [patch."https://github.com/pgdogdev/pg_query.rs.git"]
 # pg_query = { path = "../pg_query.rs" }
 
+# [patch."https://github.com/pgdogdev/pg_raw_parse.git"]
+# pg_raw_parse = { path = "../pg_raw_parse" }
+
 [profile.release]
 lto = true
 codegen-units = 1
