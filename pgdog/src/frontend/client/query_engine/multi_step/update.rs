@@ -98,6 +98,33 @@ impl<'a> UpdateMulti<'a> {
         context: &mut QueryEngineContext<'_>,
         rows: Rows,
     ) -> Result<(), Error> {
+        let original_shard = context.client_request.route().shard();
+
+        // Pre-build and route all INSERT requests upfront so we can
+        // check whether every row stays on the same shard before
+        // committing to the delete+insert workflow.
+        let mut requests = Vec::with_capacity(rows.data_rows.len());
+        let mut all_same_shard = original_shard.is_direct();
+        for data_row in &rows.data_rows {
+            let mut request = self.rewrite.insert.build_request(
+                context.client_request,
+                &rows.row_description,
+                data_row,
+            )?;
+            self.route(&mut request, context)?;
+            if request.route().shard() != original_shard {
+                all_same_shard = false;
+            }
+            requests.push(request);
+        }
+
+        // If every row maps back to the original shard, forward the
+        // original UPDATE as-is — no delete+insert needed.
+        if all_same_shard {
+            debug!("[update] all rows are on the same shard");
+            return self.execute_original(context).await;
+        }
+
         debug!("[update] executing multi-shard insert/delete");
 
         // Check if we are allowed to do this operation by the config.
@@ -124,14 +151,8 @@ impl<'a> UpdateMulti<'a> {
         // Delete all matching rows from the original shard in one shot.
         self.delete_row(context).await?;
 
-        let n = rows.data_rows.len();
-        for data_row in rows.data_rows {
-            let mut request = self.rewrite.insert.build_request(
-                context.client_request,
-                &rows.row_description,
-                &data_row,
-            )?;
-            self.route(&mut request, context)?;
+        let n = requests.len();
+        for mut request in requests {
             self.execute_request_internal(
                 context,
                 &mut request,

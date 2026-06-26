@@ -178,14 +178,15 @@ async fn update_moves_row_between_shards() {
 }
 
 #[tokio::test]
-async fn update_rejects_multiple_rows() {
+async fn update_multiple_rows() {
     let admin = admin_sqlx().await;
     let _guard = RewriteConfigGuard::enable(admin.clone()).await;
 
     let mut pools = connections_sqlx().await;
     let pool = pools.swap_remove(1);
 
-    prepare_table(&pool).await;
+    // No PRIMARY KEY — both rows will get id=11 on shard 1 after the move.
+    prepare_table_no_pk(&pool).await;
 
     let insert_first = format!("INSERT INTO {TEST_TABLE} (id, value) VALUES (1, 'old')");
     pool.execute(insert_first.as_str())
@@ -200,36 +201,27 @@ async fn update_rejects_multiple_rows() {
     let mut txn = pool.begin().await.unwrap();
 
     let update = format!("UPDATE {TEST_TABLE} SET id = 11 WHERE id IN (1, 2)");
-    let err = txn
+    let result = txn
         .execute(update.as_str())
         .await
-        .expect_err("expected multi-row rewrite to fail");
-    let db_err = err
-        .as_database_error()
-        .expect("expected database error from proxy");
-    assert!(
-        db_err
-            .message()
-            .contains("sharding key update changes more than one row (2)"),
-        "unexpected error message: {}",
-        db_err.message()
-    );
-    txn.rollback().await.unwrap();
+        .expect("multi-row rewrite should succeed");
+    assert_eq!(result.rows_affected(), 2, "both rows updated");
+    txn.commit().await.unwrap();
 
     assert_eq!(
         count_on_shard(&pool, 0, 1).await,
-        1,
-        "row 1 still on shard 0"
+        0,
+        "row 1 moved off shard 0"
     );
     assert_eq!(
         count_on_shard(&pool, 0, 2).await,
-        1,
-        "row 2 still on shard 0"
+        0,
+        "row 2 moved off shard 0"
     );
     assert_eq!(
         count_on_shard(&pool, 1, 11).await,
-        0,
-        "no row inserted on shard 1"
+        2,
+        "both rows on shard 1 with id=11"
     );
 
     cleanup_table(&pool).await;
@@ -358,6 +350,17 @@ async fn prepare_table(pool: &Pool<Postgres>) {
         pool.execute(drop.as_str()).await.unwrap();
         let create = format!(
             "/* pgdog_shard: {shard} */ CREATE TABLE {TEST_TABLE} (id BIGINT PRIMARY KEY, value TEXT)"
+        );
+        pool.execute(create.as_str()).await.unwrap();
+    }
+}
+
+async fn prepare_table_no_pk(pool: &Pool<Postgres>) {
+    for shard in [0, 1] {
+        let drop = format!("/* pgdog_shard: {shard} */ DROP TABLE IF EXISTS {TEST_TABLE}");
+        pool.execute(drop.as_str()).await.unwrap();
+        let create = format!(
+            "/* pgdog_shard: {shard} */ CREATE TABLE {TEST_TABLE} (id BIGINT, value TEXT)"
         );
         pool.execute(create.as_str()).await.unwrap();
     }
