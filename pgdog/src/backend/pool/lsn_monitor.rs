@@ -253,9 +253,9 @@ impl LsnMonitor {
         match self.pool.get(&Request::default()).await {
             Ok(conn) => Ok(LsnConnection::Guard(conn)),
             Err(Error::Offline) => Err(Error::Offline),
-            Err(Error::CheckoutTimeout) => Ok(LsnConnection::Conn(
+            Err(Error::CheckoutTimeout) => Ok(LsnConnection::Conn(Box::new(
                 self.pool.standalone(ConnectReason::LsnCheck).await?,
-            )),
+            ))),
             Err(err) => Err(err),
         }
     }
@@ -263,7 +263,7 @@ impl LsnMonitor {
 
 enum LsnConnection {
     Guard(Guard),
-    Conn(Server),
+    Conn(Box<Server>),
 }
 
 impl Deref for LsnConnection {
