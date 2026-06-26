@@ -164,7 +164,7 @@ impl<'a> UpdateMulti<'a> {
         self.engine
             .process_server_message(
                 context,
-                CommandComplete::new(&format!("UPDATE {n}")).message()?,
+                CommandComplete::new(format!("UPDATE {n}")).message()?,
             )
             .await?;
         self.engine

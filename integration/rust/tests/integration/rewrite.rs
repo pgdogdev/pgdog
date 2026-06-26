@@ -359,9 +359,8 @@ async fn prepare_table_no_pk(pool: &Pool<Postgres>) {
     for shard in [0, 1] {
         let drop = format!("/* pgdog_shard: {shard} */ DROP TABLE IF EXISTS {TEST_TABLE}");
         pool.execute(drop.as_str()).await.unwrap();
-        let create = format!(
-            "/* pgdog_shard: {shard} */ CREATE TABLE {TEST_TABLE} (id BIGINT, value TEXT)"
-        );
+        let create =
+            format!("/* pgdog_shard: {shard} */ CREATE TABLE {TEST_TABLE} (id BIGINT, value TEXT)");
         pool.execute(create.as_str()).await.unwrap();
     }
 }
