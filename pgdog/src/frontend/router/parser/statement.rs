@@ -1725,6 +1725,7 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
             Node::A_Const(_) | Node::ParamRef(_) | Node::FuncCall(_) => {
                 ControlFlow::Continue(Value::try_from(node).map(SearchResult::Value).ok())
             }
+
             Node::ColumnRef(c) => {
                 let mut column = Column::try_from(c).break_err()?;
 
@@ -1736,12 +1737,15 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
                 }
                 ControlFlow::Continue(Some(SearchResult::Column(column)))
             }
+
             Node::NodeList(l) => ControlFlow::Continue(Some(SearchResult::Values(
                 l.into_iter()
                     .filter_map(|n| Value::try_from(n).ok())
                     .collect(),
             ))),
+
             Node::SelectStmt(_) => self.search_stmt(node).map_continue(|_| None),
+
             _ => {
                 let result = walk::walk_manual(node, |node| {
                     match self
