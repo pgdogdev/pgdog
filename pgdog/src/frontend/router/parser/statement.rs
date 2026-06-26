@@ -6,10 +6,11 @@ use std::collections::{HashMap, HashSet};
 use crate::util::ResultControlFlowExt;
 #[cfg(feature = "new_parser")]
 use itertools::*;
+#[cfg(not(feature = "new_parser"))]
 use pg_query::Node as PgNode;
 #[cfg(not(feature = "new_parser"))]
 use pg_query::Node;
-#[cfg(test)]
+#[cfg(all(test, not(feature = "new_parser")))]
 use pg_query::protobuf::RawStmt;
 #[cfg_attr(feature = "new_parser", allow(unused))]
 use pg_query::{
@@ -466,6 +467,7 @@ impl<'a> SearchContext<'a> {
         Self { aliases, table }
     }
 
+    #[cfg(not(feature = "new_parser"))]
     fn from_from_clause_old(nodes: &'a [PgNode]) -> Self {
         let mut ctx = Self::default();
         ctx.extract_aliases(nodes);
@@ -480,6 +482,7 @@ impl<'a> SearchContext<'a> {
         ctx
     }
 
+    #[cfg(not(feature = "new_parser"))]
     fn extract_aliases(&mut self, nodes: &'a [PgNode]) {
         for node in nodes {
             self.extract_alias_from_node_old(node);
@@ -517,6 +520,7 @@ impl<'a> SearchContext<'a> {
         }
     }
 
+    #[cfg(not(feature = "new_parser"))]
     fn extract_alias_from_node_old(&mut self, node: &'a PgNode) {
         match &node.node {
             Some(NodeEnum::RangeVar(range_var)) => {
@@ -562,8 +566,11 @@ enum SearchResult<'a> {
     Column(Column<'a>),
     Value(Value<'a>),
     Values(Vec<Value<'a>>),
+    #[cfg(not(feature = "new_parser"))]
     Match(Shard),
+    #[cfg(not(feature = "new_parser"))]
     Matches(Vec<Shard>),
+    #[cfg(not(feature = "new_parser"))]
     None,
 }
 
@@ -595,14 +602,17 @@ impl<'a, 'b> Iterator for ValueIterator<'a, 'b> {
 }
 
 impl<'a> SearchResult<'a> {
+    #[cfg(not(feature = "new_parser"))]
     fn is_none(&self) -> bool {
         matches!(self, Self::None)
     }
 
+    #[cfg(not(feature = "new_parser"))]
     fn is_match(&self) -> bool {
         matches!(self, Self::Match(_) | Self::Matches(_))
     }
 
+    #[cfg(not(feature = "new_parser"))]
     fn merge(self, other: Self) -> Self {
         match (self, other) {
             (Self::Match(first), Self::Match(second)) => Self::Matches(vec![first, second]),
@@ -644,6 +654,7 @@ pub struct SchemaLookupContext<'a> {
 }
 
 pub struct StatementParser<'a, 'b, 'c> {
+    #[cfg(not(feature = "new_parser"))]
     stmt: Statement<'a>,
     #[cfg(feature = "new_parser")]
     new_stmt: pg_raw_parse::Node<'a>,
@@ -659,15 +670,16 @@ pub struct StatementParser<'a, 'b, 'c> {
     all_omnisharded: Option<bool>,
 }
 
-impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
+impl<'a, 'b: 'a, 'c> StatementParser<'a, 'b, 'c> {
     fn new(
-        stmt: Statement<'a>,
+        #[cfg(not(feature = "new_parser"))] stmt: Statement<'a>,
         #[cfg(feature = "new_parser")] new_stmt: Node<'a>,
         bind: Option<&'b Bind>,
         schema: &'b ShardingSchema,
         recorder: Option<&'c mut ExplainRecorder>,
     ) -> Self {
         Self {
+            #[cfg(not(feature = "new_parser"))]
             stmt,
             #[cfg(feature = "new_parser")]
             new_stmt,
@@ -719,14 +731,15 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
         self
     }
 
-    pub fn from_select(
-        stmt: &'a SelectStmt,
+    pub(crate) fn from_select(
+        #[cfg(not(feature = "new_parser"))] stmt: &'a SelectStmt,
         #[cfg(feature = "new_parser")] new_stmt: Node<'a>,
         bind: Option<&'b Bind>,
         schema: &'b ShardingSchema,
         recorder: Option<&'c mut ExplainRecorder>,
     ) -> Self {
         Self::new(
+            #[cfg(not(feature = "new_parser"))]
             Statement::Select(stmt),
             #[cfg(feature = "new_parser")]
             new_stmt,
@@ -736,51 +749,54 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
         )
     }
 
-    pub fn from_update(
-        stmt: &'a UpdateStmt,
-        #[cfg(feature = "new_parser")] new_stmt: Node<'a>,
+    pub(crate) fn from_update(
+        #[cfg(not(feature = "new_parser"))] stmt: &'a UpdateStmt,
+        #[cfg(feature = "new_parser")] stmt: Node<'a>,
         bind: Option<&'b Bind>,
         schema: &'b ShardingSchema,
         recorder: Option<&'c mut ExplainRecorder>,
     ) -> Self {
         Self::new(
+            #[cfg(not(feature = "new_parser"))]
             Statement::Update(stmt),
             #[cfg(feature = "new_parser")]
-            new_stmt,
+            stmt,
             bind,
             schema,
             recorder,
         )
     }
 
-    pub fn from_delete(
-        stmt: &'a DeleteStmt,
-        #[cfg(feature = "new_parser")] new_stmt: Node<'a>,
+    pub(crate) fn from_delete(
+        #[cfg(not(feature = "new_parser"))] stmt: &'a DeleteStmt,
+        #[cfg(feature = "new_parser")] stmt: Node<'a>,
         bind: Option<&'b Bind>,
         schema: &'b ShardingSchema,
         recorder: Option<&'c mut ExplainRecorder>,
     ) -> Self {
         Self::new(
+            #[cfg(not(feature = "new_parser"))]
             Statement::Delete(stmt),
             #[cfg(feature = "new_parser")]
-            new_stmt,
+            stmt,
             bind,
             schema,
             recorder,
         )
     }
 
-    pub fn from_insert(
-        stmt: &'a InsertStmt,
-        #[cfg(feature = "new_parser")] new_stmt: Node<'a>,
+    pub(crate) fn from_insert(
+        #[cfg(not(feature = "new_parser"))] stmt: &'a InsertStmt,
+        #[cfg(feature = "new_parser")] stmt: Node<'a>,
         bind: Option<&'b Bind>,
         schema: &'b ShardingSchema,
         recorder: Option<&'c mut ExplainRecorder>,
     ) -> Self {
         Self::new(
+            #[cfg(not(feature = "new_parser"))]
             Statement::Insert(stmt),
             #[cfg(feature = "new_parser")]
-            new_stmt,
+            stmt,
             bind,
             schema,
             recorder,
@@ -810,47 +826,23 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
 
     #[cfg(test)]
     fn from_raw(
-        raw: &'a RawStmt,
-        #[cfg(feature = "new_parser")] new_stmt: Node<'a>,
+        #[cfg(not(feature = "new_parser"))] raw: &'a RawStmt,
+        #[cfg(feature = "new_parser")] stmt: Node<'a>,
         bind: Option<&'b Bind>,
         schema: &'b ShardingSchema,
         recorder: Option<&'c mut ExplainRecorder>,
     ) -> Result<Self, Error> {
-        match raw.stmt.as_ref().and_then(|n| n.node.as_ref()) {
-            Some(NodeEnum::SelectStmt(stmt)) => Ok(Self::from_select(
-                stmt,
-                #[cfg(feature = "new_parser")]
-                new_stmt,
-                bind,
-                schema,
-                recorder,
-            )),
-            Some(NodeEnum::UpdateStmt(stmt)) => Ok(Self::from_update(
-                stmt,
-                #[cfg(feature = "new_parser")]
-                new_stmt,
-                bind,
-                schema,
-                recorder,
-            )),
-            Some(NodeEnum::DeleteStmt(stmt)) => Ok(Self::from_delete(
-                stmt,
-                #[cfg(feature = "new_parser")]
-                new_stmt,
-                bind,
-                schema,
-                recorder,
-            )),
-            Some(NodeEnum::InsertStmt(stmt)) => Ok(Self::from_insert(
-                stmt,
-                #[cfg(feature = "new_parser")]
-                new_stmt,
-                bind,
-                schema,
-                recorder,
-            )),
+        #[cfg(not(feature = "new_parser"))]
+        return match raw.stmt.as_ref().and_then(|n| n.node.as_ref()) {
+            Some(NodeEnum::SelectStmt(stmt)) => Ok(Self::from_select(stmt, bind, schema, recorder)),
+            Some(NodeEnum::UpdateStmt(stmt)) => Ok(Self::from_update(stmt, bind, schema, recorder)),
+            Some(NodeEnum::DeleteStmt(stmt)) => Ok(Self::from_delete(stmt, bind, schema, recorder)),
+            Some(NodeEnum::InsertStmt(stmt)) => Ok(Self::from_insert(stmt, bind, schema, recorder)),
             _ => Err(Error::NotASelect),
-        }
+        };
+
+        #[cfg(feature = "new_parser")]
+        Ok(Self::new(stmt, bind, schema, recorder))
     }
 
     pub fn shard(&mut self) -> Result<Option<Shard>, Error> {
@@ -861,11 +853,7 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
         }
 
         #[cfg(feature = "new_parser")]
-        let result = if let Statement::Insert(stmt) = self.stmt {
-            self.shard_insert(stmt)?
-        } else {
-            self.shard_stmt(self.new_stmt)?
-        };
+        let result = self.shard_stmt(self.new_stmt)?;
 
         #[cfg(not(feature = "new_parser"))]
         let result = match self.stmt {
@@ -1264,6 +1252,7 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
         }
     }
 
+    #[cfg(not(feature = "new_parser"))]
     fn shard_insert(&mut self, stmt: &'a InsertStmt) -> Result<Option<Shard>, Error> {
         let ctx = self.context_from_relation_old(&stmt.relation);
         let result = self.search_insert_stmt(stmt, &ctx)?;
@@ -1289,6 +1278,7 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
         ctx
     }
 
+    #[cfg(not(feature = "new_parser"))]
     fn context_from_relation_old(&self, relation: &'a Option<RangeVar>) -> SearchContext<'a> {
         let mut ctx = SearchContext::default();
         if let Some(range_var) = relation {
@@ -1425,6 +1415,7 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
         }
     }
 
+    #[cfg(not(feature = "new_parser"))]
     fn select_search(
         &mut self,
         node: &'a pg_query::Node,
@@ -1641,6 +1632,12 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
             Node::SelectStmt(s) => SearchContext::from_from_clause(s.fromClause()),
             Node::UpdateStmt(s) => self.context_from_relation(s.relation()),
             Node::DeleteStmt(s) => self.context_from_relation(s.relation()),
+            Node::InsertStmt(s) => {
+                return match self.search_insert_stmt(s).break_err()? {
+                    Some(shard) => ControlFlow::Break(Ok(shard)),
+                    None => ControlFlow::Continue(()),
+                };
+            }
             // FIXME(sage): Do we want to error here?
             _ => return ControlFlow::Continue(()),
         };
@@ -1777,6 +1774,7 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
     }
 
     /// Search a SELECT statement with its own context.
+    #[cfg(not(feature = "new_parser"))]
     fn search_select_stmt(
         &mut self,
         stmt: &'a SelectStmt,
@@ -1928,6 +1926,41 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
     }
 
     /// Get column names from the INSERT statement, or look them up from schema if not specified.
+    #[cfg(feature = "new_parser")]
+    fn get_insert_columns(
+        &self,
+        stmt: &'a nodes::InsertStmt,
+        ctx: &SearchContext<'a>,
+    ) -> Result<Vec<&'a str>, Error> {
+        // First try to get columns from the INSERT statement itself
+        let cols = stmt
+            .cols()
+            .into_iter()
+            .map(|n| match n {
+                Node::ResTarget(r) => r.name().ok_or(Error::ColumnDecode),
+                _ => Err(Error::ColumnDecode),
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        if !cols.is_empty() {
+            Ok(cols)
+        // No columns specified in INSERT, try to look them up from schema
+        } else if let (Some(table), Some(schema_lookup)) = (ctx.table, &self.schema_lookup)
+            && let Some(relation) =
+                schema_lookup
+                    .db_schema
+                    .table(table, schema_lookup.user, schema_lookup.search_path)
+        {
+            Ok(relation.column_names().collect())
+        } else {
+            // FIXME(sage): What scenarios are leading to us not being able
+            // to look up the columns in the schema? This seems like it should
+            // be an error.
+            Ok(Vec::new())
+        }
+    }
+
+    #[cfg(not(feature = "new_parser"))]
     fn get_insert_columns(&self, stmt: &InsertStmt, ctx: &SearchContext<'_>) -> Vec<String> {
         // First try to get columns from the INSERT statement itself
         let cols: Vec<String> = stmt
@@ -1956,7 +1989,84 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
         vec![]
     }
 
+    #[cfg(feature = "new_parser")]
+    fn search_insert_stmt(&mut self, stmt: &'a nodes::InsertStmt) -> Result<Option<Shard>, Error> {
+        let ctx = self.context_from_relation(stmt.relation());
+
+        // Schema-based routing takes priority for INSERTs
+        if let Some(table) = ctx.table
+            && let Some(schema) = self.schema.schemas.get(table.schema())
+        {
+            return Ok(Some(schema.shard().into()));
+        }
+
+        if let Node::SelectStmt(select_stmt) = stmt.selectStmt() {
+            // Get the column names from INSERT INTO table (col1, col2, ...) or from schema
+            let columns = self.get_insert_columns(stmt, &ctx)?;
+
+            let mut values_lists = select_stmt
+                .valuesLists()
+                .into_iter()
+                .map(|l| l.expect_node_list().into_iter());
+
+            // Multi-row VALUES broadcasts to all shards
+            if values_lists.len() > 1 {
+                return Ok(Some(Shard::All));
+            }
+
+            // Grab either the single VALUES list or the targets list
+            let targets = select_stmt
+                .targetList()
+                .into_iter()
+                .map(|t| t.val())
+                .collect();
+            let row: Vec<_> = values_lists.next().map(|r| r.collect()).unwrap_or(targets);
+
+            for (column_name, target_node) in columns.into_iter().zip(row) {
+                let table_name = ctx.table.map(|t| t.name);
+                let table_schema = ctx.table.and_then(|t| t.schema);
+                let sharded_table =
+                    self.get_sharded_table_by_name(column_name, table_name, table_schema);
+
+                if let Ok(value) = Value::try_from(target_node)
+                    && let Some(shard) = self.compute_shard_for_table(sharded_table, value)?
+                {
+                    return Ok(Some(shard));
+                }
+            }
+        };
+
+        // No sharding key literals being inserted, check if any subselects
+        // determine the shard
+        // FIXME(sage): This has no test coverage. Do we actually need/want this
+        // behavior?
+        let result = walk::walk_manual(Node::InsertStmt(stmt), |node| match node {
+            Node::SelectStmt(_) => {
+                self.search_stmt(node)?;
+                Recurse::no()
+            }
+            _ => Recurse::yes(),
+        })?;
+
+        if let Some(shard) = result {
+            return shard.map(Some);
+        }
+
+        // Round-robin fallback: if table is sharded but no sharding key found,
+        // pick a shard at random
+        if let Some(table) = ctx.table
+            && Tables::new(self.schema).sharded(table).is_some()
+        {
+            Ok(Some(Shard::Direct(
+                round_robin::next() % self.schema.shards,
+            )))
+        } else {
+            Ok(None)
+        }
+    }
+
     /// Search an INSERT statement for sharding keys.
+    #[cfg(not(feature = "new_parser"))]
     fn search_insert_stmt(
         &mut self,
         stmt: &'a InsertStmt,
@@ -2134,6 +2244,7 @@ mod test {
             ),
             ..Default::default()
         };
+        #[cfg(not(feature = "new_parser"))]
         let raw = pg_query::parse(stmt)
             .unwrap()
             .protobuf
@@ -2142,13 +2253,14 @@ mod test {
             .cloned()
             .unwrap();
         #[cfg(feature = "new_parser")]
-        let new_raw = pg_raw_parse::parse(stmt).unwrap();
+        let raw = pg_raw_parse::parse(stmt).unwrap();
         #[cfg(feature = "new_parser")]
-        let new_stmt = new_raw.stmts().next().unwrap();
+        let stmt = raw.stmts().next().unwrap();
         let mut parser = StatementParser::from_raw(
+            #[cfg(not(feature = "new_parser"))]
             &raw,
             #[cfg(feature = "new_parser")]
-            new_stmt,
+            stmt,
             bind,
             &schema,
             None,
@@ -2859,7 +2971,7 @@ mod test {
     fn test_insert_no_sharding_key_uses_round_robin() {
         // When sharding key is missing but table is sharded, use round-robin
         let result = run_test("INSERT INTO sharded (name) VALUES ('foo')", None);
-        assert!(matches!(result.unwrap(), Some(Shard::Direct(_))));
+        std::assert_matches!(result.unwrap(), Some(Shard::Direct(_)));
     }
 
     #[test]
@@ -2967,6 +3079,7 @@ mod test {
             ]),
             ..Default::default()
         };
+        #[cfg(not(feature = "new_parser"))]
         let raw = pg_query::parse(stmt)
             .unwrap()
             .protobuf
@@ -2975,13 +3088,14 @@ mod test {
             .cloned()
             .unwrap();
         #[cfg(feature = "new_parser")]
-        let new_raw = pg_raw_parse::parse(stmt).unwrap();
+        let raw = pg_raw_parse::parse(stmt).unwrap();
         #[cfg(feature = "new_parser")]
-        let new_stmt = new_raw.stmts().next().unwrap();
+        let stmt = raw.stmts().next().unwrap();
         let mut parser = StatementParser::from_raw(
+            #[cfg(not(feature = "new_parser"))]
             &raw,
             #[cfg(feature = "new_parser")]
-            new_stmt,
+            stmt,
             bind,
             &schema,
             None,
@@ -3095,6 +3209,7 @@ mod test {
             ),
             ..Default::default()
         };
+        #[cfg(not(feature = "new_parser"))]
         let raw = pg_query::parse(stmt)
             .unwrap()
             .protobuf
@@ -3103,13 +3218,14 @@ mod test {
             .cloned()
             .unwrap();
         #[cfg(feature = "new_parser")]
-        let new_raw = pg_raw_parse::parse(stmt).unwrap();
+        let raw = pg_raw_parse::parse(stmt).unwrap();
         #[cfg(feature = "new_parser")]
-        let new_stmt = new_raw.stmts().next().unwrap();
+        let stmt = raw.stmts().next().unwrap();
         let mut parser = StatementParser::from_raw(
+            #[cfg(not(feature = "new_parser"))]
             &raw,
             #[cfg(feature = "new_parser")]
-            new_stmt,
+            stmt,
             bind,
             &schema,
             None,
@@ -3267,6 +3383,7 @@ mod test {
             user: "test",
             search_path: None,
         };
+        #[cfg(not(feature = "new_parser"))]
         let raw = pg_query::parse(stmt)
             .unwrap()
             .protobuf
@@ -3275,13 +3392,14 @@ mod test {
             .cloned()
             .unwrap();
         #[cfg(feature = "new_parser")]
-        let new_raw = pg_raw_parse::parse(stmt).unwrap();
+        let raw = pg_raw_parse::parse(stmt).unwrap();
         #[cfg(feature = "new_parser")]
-        let new_stmt = new_raw.stmts().next().unwrap();
+        let stmt = raw.stmts().next().unwrap();
         let mut parser = StatementParser::from_raw(
+            #[cfg(not(feature = "new_parser"))]
             &raw,
             #[cfg(feature = "new_parser")]
-            new_stmt,
+            stmt,
             bind,
             &sharding_schema,
             None,
@@ -3403,6 +3521,7 @@ mod test {
     fn run_is_sharded_test(stmt: &str) -> bool {
         let schema = make_omnisharded_sharding_schema();
         let db_schema = make_omnisharded_db_schema();
+        #[cfg(not(feature = "new_parser"))]
         let raw = pg_query::parse(stmt)
             .unwrap()
             .protobuf
@@ -3411,13 +3530,14 @@ mod test {
             .cloned()
             .unwrap();
         #[cfg(feature = "new_parser")]
-        let new_raw = pg_raw_parse::parse(stmt).unwrap();
+        let raw = pg_raw_parse::parse(stmt).unwrap();
         #[cfg(feature = "new_parser")]
-        let new_stmt = new_raw.stmts().next().unwrap();
+        let stmt = raw.stmts().next().unwrap();
         let mut parser = StatementParser::from_raw(
+            #[cfg(not(feature = "new_parser"))]
             &raw,
             #[cfg(feature = "new_parser")]
-            new_stmt,
+            stmt,
             None,
             &schema,
             None,
@@ -3496,6 +3616,7 @@ mod test {
 
     mod advisory_locks {
         use super::*;
+        #[cfg(not(feature = "new_parser"))]
         use pg_query::parse;
 
         fn locks(query: &str) -> Vec<AdvisoryLock> {
@@ -3503,17 +3624,20 @@ mod test {
         }
 
         fn locks_with_bind(query: &str, bind: Option<&Bind>) -> Vec<AdvisoryLock> {
+            #[cfg(not(feature = "new_parser"))]
             let ast = parse(query).unwrap().protobuf;
             let schema = ShardingSchema::default();
+            #[cfg(not(feature = "new_parser"))]
             let raw = ast.stmts.first().unwrap();
             #[cfg(feature = "new_parser")]
-            let new_ast = pg_raw_parse::parse(query).unwrap();
+            let raw = pg_raw_parse::parse(query).unwrap();
             #[cfg(feature = "new_parser")]
-            let new_stmt = new_ast.stmts().next().unwrap();
+            let stmt = raw.stmts().next().unwrap();
             let mut parser = StatementParser::from_raw(
+                #[cfg(not(feature = "new_parser"))]
                 raw,
                 #[cfg(feature = "new_parser")]
-                new_stmt,
+                stmt,
                 bind,
                 &schema,
                 None,
