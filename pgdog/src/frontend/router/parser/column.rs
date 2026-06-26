@@ -4,6 +4,8 @@ use pg_query::{
     Node, NodeEnum,
     protobuf::{self, String as PgQueryString},
 };
+#[cfg(feature = "new_parser")]
+use pg_raw_parse::{list, nodes};
 use std::fmt::{Display, Formatter, Result as FmtResult};
 
 use super::{Error, Table};
@@ -115,6 +117,58 @@ impl<'a> From<&'a OwnedColumn> for Column<'a> {
             name: &owned.name,
             table: owned.table.as_deref(),
             schema: owned.schema.as_deref(),
+        }
+    }
+}
+
+#[cfg(feature = "new_parser")]
+impl<'a> TryFrom<pg_raw_parse::Node<'a>> for Column<'a> {
+    type Error = Error;
+
+    fn try_from(value: pg_raw_parse::Node<'a>) -> Result<Self, Self::Error> {
+        use pg_raw_parse::Node;
+        match dbg!(value) {
+            Node::ColumnRef(c) => Self::try_from(c),
+            Node::ResTarget(r) => Ok(Self {
+                name: r.name().ok_or(Error::ColumnDecode)?,
+                ..Default::default()
+            }),
+            Node::DefElem(d) if d.defname() == Some("owned_by") => Self::try_from(d.arg()),
+            Node::NodeList(l) => Self::try_from(l),
+            _ => Err(Error::ColumnDecode),
+        }
+    }
+}
+
+#[cfg(feature = "new_parser")]
+impl<'a> TryFrom<&'a nodes::ColumnRef> for Column<'a> {
+    type Error = Error;
+
+    fn try_from(value: &'a nodes::ColumnRef) -> Result<Self, Self::Error> {
+        Self::try_from(value.fields())
+    }
+}
+
+#[cfg(feature = "new_parser")]
+impl<'a> TryFrom<&'a list::NodeList> for Column<'a> {
+    type Error = Error;
+
+    fn try_from(value: &'a list::NodeList) -> Result<Self, Self::Error> {
+        let mut fields = value
+            .into_iter()
+            .map(|s| s.as_str().ok_or(Error::ColumnDecode));
+        let name = fields.next_back().ok_or(Error::ColumnDecode)??;
+        let table = fields.next_back().transpose()?;
+        let schema = fields.next_back().transpose()?;
+
+        if fields.len() == 0 {
+            Ok(Self {
+                name,
+                table,
+                schema,
+            })
+        } else {
+            Err(Error::ColumnDecode)
         }
     }
 }
@@ -237,11 +291,38 @@ impl<'a> From<&'a str> for Column<'a> {
 
 #[cfg(test)]
 mod test {
+    #[cfg(feature = "new_parser")]
+    use itertools::*;
+    #[cfg(not(feature = "new_parser"))]
     use pg_query::{NodeEnum, parse};
+    #[cfg(feature = "new_parser")]
+    use pg_raw_parse::*;
 
-    use super::{Column, Error};
+    use super::Column;
 
     #[test]
+    #[cfg(feature = "new_parser")]
+    fn test_column() {
+        let result = parse("INSERT INTO my_table (id, email) VALUES (1, 'test@test.com')").unwrap();
+        let stmt = result.stmts().exactly_one().ok().unwrap();
+
+        let Node::InsertStmt(i) = stmt else {
+            panic!("{:?} is not an insert stmt", stmt);
+        };
+        let columns = i
+            .cols()
+            .into_iter()
+            .map(Column::try_from)
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        std::assert_matches!(
+            &*columns,
+            &[Column { name: "id", .. }, Column { name: "email", .. }]
+        );
+    }
+
+    #[test]
+    #[cfg(not(feature = "new_parser"))]
     fn test_column() {
         let query = parse("INSERT INTO my_table (id, email) VALUES (1, 'test@test.com')").unwrap();
         let select = query.protobuf.stmts.first().unwrap().stmt.as_ref().unwrap();
@@ -251,7 +332,7 @@ mod test {
                     .cols
                     .iter()
                     .map(Column::try_from)
-                    .collect::<Result<Vec<Column>, Error>>()
+                    .collect::<Result<Vec<_>, _>>()
                     .unwrap();
                 assert_eq!(
                     columns,
@@ -273,6 +354,30 @@ mod test {
     }
 
     #[test]
+    #[cfg(feature = "new_parser")]
+    fn test_column_sequence() {
+        let result =
+            parse("ALTER SEQUENCE public.user_profiles_id_seq OWNED BY public.user_profiles.id")
+                .unwrap();
+        let stmt = result.stmts().exactly_one().ok().unwrap();
+
+        let Node::AlterSeqStmt(stmt) = stmt else {
+            panic!("not an alter sequence");
+        };
+
+        let column = Column::try_from(stmt.options().into_iter().exactly_one().unwrap()).unwrap();
+        assert_eq!(
+            column,
+            Column {
+                name: "id",
+                schema: Some("public"),
+                table: Some("user_profiles")
+            }
+        );
+    }
+
+    #[test]
+    #[cfg(not(feature = "new_parser"))]
     fn test_column_sequence() {
         let query =
             parse("ALTER SEQUENCE public.user_profiles_id_seq OWNED BY public.user_profiles.id")
