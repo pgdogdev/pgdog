@@ -3,6 +3,8 @@ use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 
 #[cfg(feature = "new_parser")]
+use crate::util::ResultControlFlowExt;
+#[cfg(feature = "new_parser")]
 use itertools::*;
 use pg_query::Node as PgNode;
 #[cfg(not(feature = "new_parser"))]
@@ -20,7 +22,9 @@ use pg_query::{
 #[cfg(feature = "new_parser")]
 use pg_raw_parse::walk::Recurse;
 #[cfg(feature = "new_parser")]
-use pg_raw_parse::{Node, nodes, walk};
+use pg_raw_parse::{Node, list, nodes, walk};
+#[cfg(feature = "new_parser")]
+use std::ops::ControlFlow;
 
 #[cfg(feature = "new_parser")]
 fn advisory_locks_from_func_call(
@@ -445,7 +449,24 @@ struct SearchContext<'a> {
 
 impl<'a> SearchContext<'a> {
     /// Build context from a FROM clause, extracting table aliases.
-    fn from_from_clause(nodes: &'a [PgNode]) -> Self {
+    #[cfg(feature = "new_parser")]
+    fn from_from_clause(nodes: &'a list::NodeList) -> Self {
+        let mut aliases = HashMap::new();
+
+        for node in nodes {
+            Self::extract_alias_from_node(&mut aliases, node);
+        }
+
+        let table = nodes
+            .into_iter()
+            .exactly_one()
+            .ok()
+            .and_then(|n| Table::try_from(n).ok());
+
+        Self { aliases, table }
+    }
+
+    fn from_from_clause_old(nodes: &'a [PgNode]) -> Self {
         let mut ctx = Self::default();
         ctx.extract_aliases(nodes);
 
@@ -461,11 +482,42 @@ impl<'a> SearchContext<'a> {
 
     fn extract_aliases(&mut self, nodes: &'a [PgNode]) {
         for node in nodes {
-            self.extract_alias_from_node(node);
+            self.extract_alias_from_node_old(node);
         }
     }
 
-    fn extract_alias_from_node(&mut self, node: &'a PgNode) {
+    #[cfg(feature = "new_parser")]
+    fn extract_alias_from_node(aliases: &mut HashMap<&'a str, Table<'a>>, node: Node<'a>) {
+        match node {
+            Node::RangeVar(rv) if let Some(alias) = rv.alias() => {
+                let table = Table::from(rv);
+                aliases.insert(alias.aliasname().expect("alias name always present"), table);
+            }
+
+            Node::JoinExpr(join) => {
+                Self::extract_alias_from_node(aliases, join.larg());
+                Self::extract_alias_from_node(aliases, join.rarg());
+            }
+
+            Node::RangeSubselect(subselect) if let Some(alias) = subselect.alias() => {
+                // For subselects, we don't have a real table name
+                // but we record the alias anyway for future use
+                let aliasname = alias.aliasname().expect("alias name always present");
+                aliases.insert(
+                    aliasname,
+                    Table {
+                        name: aliasname,
+                        schema: None,
+                        alias: None,
+                    },
+                );
+            }
+
+            _ => {}
+        }
+    }
+
+    fn extract_alias_from_node_old(&mut self, node: &'a PgNode) {
         match &node.node {
             Some(NodeEnum::RangeVar(range_var)) => {
                 if let Some(ref alias) = range_var.alias {
@@ -475,10 +527,10 @@ impl<'a> SearchContext<'a> {
             }
             Some(NodeEnum::JoinExpr(join)) => {
                 if let Some(ref larg) = join.larg {
-                    self.extract_alias_from_node(larg);
+                    self.extract_alias_from_node_old(larg);
                 }
                 if let Some(ref rarg) = join.rarg {
-                    self.extract_alias_from_node(rarg);
+                    self.extract_alias_from_node_old(rarg);
                 }
             }
             Some(NodeEnum::RangeSubselect(subselect)) => {
@@ -572,6 +624,7 @@ impl<'a> SearchResult<'a> {
     }
 }
 
+#[cfg_attr(feature = "new_parser", allow(unused))]
 enum Statement<'a> {
     Select(&'a SelectStmt),
     Update(&'a UpdateStmt),
@@ -807,6 +860,14 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
             return Ok(None);
         }
 
+        #[cfg(feature = "new_parser")]
+        let result = if let Statement::Insert(stmt) = self.stmt {
+            self.shard_insert(stmt)?
+        } else {
+            self.shard_stmt(self.new_stmt)?
+        };
+
+        #[cfg(not(feature = "new_parser"))]
         let result = match self.stmt {
             Statement::Select(stmt) => self.shard_select(stmt),
             Statement::Update(stmt) => self.shard_update(stmt),
@@ -1162,8 +1223,14 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
         }
     }
 
+    #[cfg(feature = "new_parser")]
+    fn shard_stmt(&mut self, stmt: Node<'a>) -> Result<Option<Shard>, Error> {
+        self.search_stmt(stmt).break_value().transpose()
+    }
+
+    #[cfg(not(feature = "new_parser"))]
     fn shard_select(&mut self, stmt: &'a SelectStmt) -> Result<Option<Shard>, Error> {
-        let ctx = SearchContext::from_from_clause(&stmt.from_clause);
+        let ctx = SearchContext::from_from_clause_old(&stmt.from_clause);
         let result = self.search_select_stmt(stmt, &ctx)?;
 
         match result {
@@ -1173,8 +1240,9 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
         }
     }
 
+    #[cfg(not(feature = "new_parser"))]
     fn shard_update(&mut self, stmt: &'a UpdateStmt) -> Result<Option<Shard>, Error> {
-        let ctx = self.context_from_relation(&stmt.relation);
+        let ctx = self.context_from_relation_old(&stmt.relation);
         let result = self.search_update_stmt(stmt, &ctx)?;
 
         match result {
@@ -1184,8 +1252,9 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
         }
     }
 
+    #[cfg(not(feature = "new_parser"))]
     fn shard_delete(&mut self, stmt: &'a DeleteStmt) -> Result<Option<Shard>, Error> {
-        let ctx = self.context_from_relation(&stmt.relation);
+        let ctx = self.context_from_relation_old(&stmt.relation);
         let result = self.search_delete_stmt(stmt, &ctx)?;
 
         match result {
@@ -1196,7 +1265,7 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
     }
 
     fn shard_insert(&mut self, stmt: &'a InsertStmt) -> Result<Option<Shard>, Error> {
-        let ctx = self.context_from_relation(&stmt.relation);
+        let ctx = self.context_from_relation_old(&stmt.relation);
         let result = self.search_insert_stmt(stmt, &ctx)?;
 
         match result {
@@ -1206,7 +1275,21 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
         }
     }
 
-    fn context_from_relation(&self, relation: &'a Option<RangeVar>) -> SearchContext<'a> {
+    #[cfg(feature = "new_parser")]
+    fn context_from_relation(&self, relation: Option<&'a nodes::RangeVar>) -> SearchContext<'a> {
+        let mut ctx = SearchContext::default();
+        if let Some(range_var) = relation {
+            let table = Table::from(range_var);
+            ctx.table = Some(table);
+            if let Some(alias) = range_var.alias() {
+                ctx.aliases
+                    .insert(alias.aliasname().expect("Alias name always present"), table);
+            }
+        }
+        ctx
+    }
+
+    fn context_from_relation_old(&self, relation: &'a Option<RangeVar>) -> SearchContext<'a> {
         let mut ctx = SearchContext::default();
         if let Some(range_var) = relation {
             let table = Table::from(range_var);
@@ -1367,7 +1450,7 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
 
             Some(NodeEnum::SelectStmt(ref stmt)) => {
                 // Build context with aliases from the FROM clause
-                let ctx = SearchContext::from_from_clause(&stmt.from_clause);
+                let ctx = SearchContext::from_from_clause_old(&stmt.from_clause);
                 self.search_select_stmt(stmt, &ctx)
             }
 
@@ -1550,6 +1633,149 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
         }
     }
 
+    #[cfg(feature = "new_parser")]
+    fn search_stmt(&mut self, stmt: Node<'a>) -> ControlFlow<Result<Shard, Error>> {
+        use nodes::{A_Expr_Kind, BoolExprType};
+
+        let ctx = match stmt {
+            Node::SelectStmt(s) => SearchContext::from_from_clause(s.fromClause()),
+            Node::UpdateStmt(s) => self.context_from_relation(s.relation()),
+            Node::DeleteStmt(s) => self.context_from_relation(s.relation()),
+            // FIXME(sage): Do we want to error here?
+            _ => return ControlFlow::Continue(()),
+        };
+
+        let result = walk::walk_manual(stmt, |node| match node {
+            Node::SelectStmt(_) => {
+                self.search_stmt(node)?;
+                Recurse::no()
+            }
+
+            Node::A_Expr(expr) => {
+                let expr_name = expr
+                    .name()
+                    .into_iter()
+                    .exactly_one()
+                    .ok()
+                    .and_then(Node::as_str);
+                match expr.kind {
+                    A_Expr_Kind::AEXPR_NOT_DISTINCT => {}
+                    A_Expr_Kind::AEXPR_OP | A_Expr_Kind::AEXPR_IN | A_Expr_Kind::AEXPR_OP_ANY
+                        if expr_name == Some("=") => {}
+                    _ => return Recurse::no(),
+                }
+
+                let is_any = matches!(expr.kind, A_Expr_Kind::AEXPR_OP_ANY);
+
+                let left = self.search_expr(expr.lexpr(), &ctx)?;
+                let right = self.search_expr(expr.rexpr(), &ctx)?;
+
+                let Some(left) = left else {
+                    return Recurse::no();
+                };
+
+                match (left, right, is_any) {
+                    // For ANY expressions with sharding columns, we can't reliably
+                    // parse array literals or parameters, so route to all shards.
+                    (SearchResult::Column(column), _, true)
+                        if self.get_sharded_table(column).is_some() =>
+                    {
+                        ControlFlow::Break(Ok(Shard::All))
+                    }
+                    (SearchResult::Column(column), Some(values), false)
+                    | (values, Some(SearchResult::Column(column)), false) => {
+                        let shards = values
+                            .iter()
+                            .filter_map(|value| {
+                                self.compute_shard_with_ctx(column, value.clone(), &ctx)
+                                    .transpose()
+                            })
+                            .collect::<Result<Vec<_>, _>>()
+                            .break_err()?;
+                        match Self::converge(&shards) {
+                            Some(shard) => ControlFlow::Break(Ok(shard)),
+                            None => Recurse::no(),
+                        }
+                    }
+                    _ => Recurse::no(),
+                }
+            }
+
+            Node::BoolExpr(expr) => {
+                // Only AND expressions can determine a shard.
+                // OR expressions could route to multiple shards.
+                Recurse::recurse_if(expr.boolop == BoolExprType::AND_EXPR)
+            }
+
+            _ => Recurse::yes(),
+        })
+        .map_err(Error::from);
+
+        match result.transpose() {
+            Some(r) => ControlFlow::Break(r.flatten()),
+            None => ControlFlow::Continue(()),
+        }
+    }
+
+    #[cfg(feature = "new_parser")]
+    fn search_expr(
+        &mut self,
+        node: Node<'a>,
+        ctx: &SearchContext<'a>,
+    ) -> ControlFlow<Result<Shard, Error>, Option<SearchResult<'a>>> {
+        use itertools::Either;
+
+        match node {
+            // Value types - these are leaf nodes representing actual values
+            Node::A_Const(_) | Node::ParamRef(_) | Node::FuncCall(_) => {
+                ControlFlow::Continue(Value::try_from(node).map(SearchResult::Value).ok())
+            }
+
+            Node::ColumnRef(c) => {
+                let mut column = Column::try_from(c).break_err()?;
+
+                // If column has no table, qualify with context table
+                if column.table().is_none()
+                    && let Some(ref table) = ctx.table
+                {
+                    column.qualify(*table);
+                }
+                ControlFlow::Continue(Some(SearchResult::Column(column)))
+            }
+
+            Node::NodeList(l) => ControlFlow::Continue(Some(SearchResult::Values(
+                l.into_iter()
+                    .filter_map(|n| Value::try_from(n).ok())
+                    .collect(),
+            ))),
+
+            Node::SelectStmt(_) => self.search_stmt(node).map_continue(|_| None),
+
+            _ => {
+                let result = walk::walk_manual(node, |node| {
+                    match self
+                        .search_expr(node, ctx)
+                        .map_break(|b| b.map(Either::Left))?
+                    {
+                        Some(result) => ControlFlow::Break(Ok(Either::Right(result))),
+                        // We're manually recursing
+                        None => Recurse::no(),
+                    }
+                })
+                .map_err(Into::into)
+                .break_err()?
+                .transpose()
+                .break_err()?;
+
+                match result {
+                    Some(Either::Left(shard)) => ControlFlow::Break(Ok(shard)),
+                    Some(Either::Right(values)) => ControlFlow::Continue(Some(values)),
+                    None => ControlFlow::Continue(None),
+                }
+            }
+        }
+    }
+
     /// Search a SELECT statement with its own context.
     fn search_select_stmt(
         &mut self,
@@ -1559,14 +1785,14 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
         // Handle UNION/INTERSECT/EXCEPT (set operations)
         // These have larg and rarg instead of a regular SELECT structure
         if let Some(ref larg) = stmt.larg {
-            let larg_ctx = SearchContext::from_from_clause(&larg.from_clause);
+            let larg_ctx = SearchContext::from_from_clause_old(&larg.from_clause);
             let result = self.search_select_stmt(larg, &larg_ctx)?;
             if !result.is_none() {
                 return Ok(result);
             }
         }
         if let Some(ref rarg) = stmt.rarg {
-            let rarg_ctx = SearchContext::from_from_clause(&rarg.from_clause);
+            let rarg_ctx = SearchContext::from_from_clause_old(&rarg.from_clause);
             let result = self.search_select_stmt(rarg, &rarg_ctx)?;
             if !result.is_none() {
                 return Ok(result);
@@ -1630,6 +1856,7 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
     }
 
     /// Search an UPDATE statement for sharding keys.
+    #[cfg(not(feature = "new_parser"))]
     fn search_update_stmt(
         &mut self,
         stmt: &'a UpdateStmt,
@@ -1665,6 +1892,7 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
     }
 
     /// Search a DELETE statement for sharding keys.
+    #[cfg(not(feature = "new_parser"))]
     fn search_delete_stmt(
         &mut self,
         stmt: &'a DeleteStmt,

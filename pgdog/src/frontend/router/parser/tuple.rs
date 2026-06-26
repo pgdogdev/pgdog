@@ -2,7 +2,12 @@
 
 use std::ops::Deref;
 
-use pg_query::{NodeEnum, protobuf::*};
+use pg_query::{
+    NodeEnum,
+    protobuf::{Node as PgNode, *},
+};
+#[cfg(feature = "new_parser")]
+use pg_raw_parse::Node;
 
 use super::Value;
 
@@ -11,6 +16,29 @@ use super::Value;
 pub struct Tuple<'a> {
     /// List of values.
     pub values: Vec<Value<'a>>,
+}
+
+#[cfg(feature = "new_parser")]
+impl<'a> FromIterator<Node<'a>> for Tuple<'a> {
+    fn from_iter<T: IntoIterator<Item = Node<'a>>>(iter: T) -> Self {
+        // FIXME:
+        //
+        // This basically makes all values we can't parse NULL.
+        // Normally, the result of that is the query is sent to all
+        // shards, quietly.
+        //
+        // I think the right thing here is to throw an error,
+        // but more likely it'll be a value we don't actually need for sharding.
+        //
+        // We should check if its value we actually need and only then
+        // throw an error.
+        //
+        let values = iter
+            .into_iter()
+            .map(|v| v.try_into().unwrap_or(Value::Null))
+            .collect();
+        Self { values }
+    }
 }
 
 impl<'a> TryFrom<&'a List> for Tuple<'a> {
@@ -43,10 +71,10 @@ impl<'a> TryFrom<&'a List> for Tuple<'a> {
     }
 }
 
-impl<'a> TryFrom<&'a Node> for Tuple<'a> {
+impl<'a> TryFrom<&'a PgNode> for Tuple<'a> {
     type Error = ();
 
-    fn try_from(value: &'a Node) -> Result<Self, Self::Error> {
+    fn try_from(value: &'a PgNode) -> Result<Self, Self::Error> {
         match &value.node {
             Some(NodeEnum::List(list)) => list.try_into(),
             _ => Err(()),

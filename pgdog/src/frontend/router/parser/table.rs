@@ -87,6 +87,18 @@ impl<'a> From<&'a OwnedTable> for Table<'a> {
     }
 }
 
+#[cfg(feature = "new_parser")]
+impl<'a> TryFrom<pg_raw_parse::Node<'a>> for Table<'a> {
+    type Error = ();
+
+    fn try_from(value: pg_raw_parse::Node<'a>) -> Result<Self, Self::Error> {
+        match value {
+            pg_raw_parse::Node::RangeVar(rv) => Ok(rv.into()),
+            _ => Err(()),
+        }
+    }
+}
+
 impl<'a> TryFrom<&'a Node> for Table<'a> {
     type Error = ();
 

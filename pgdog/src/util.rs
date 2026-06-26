@@ -4,6 +4,8 @@ use chrono::{DateTime, Local, Utc};
 use once_cell::sync::Lazy;
 use pgdog_plugin::comp;
 use rand::{Rng, distr::Alphanumeric};
+#[cfg(feature = "new_parser")]
+use std::ops::ControlFlow;
 use std::{env, num::ParseIntError, ops::Deref, time::Duration};
 
 use crate::net::Parameters; // 0.8
@@ -278,6 +280,21 @@ pub fn truncate_utf8(s: &str, limit: usize) -> &str {
 /// bytes can't forge or flood log lines.
 pub fn sanitize_log_sample(s: &str, limit: usize) -> String {
     truncate_utf8(s, limit).replace(|c: char| c.is_control(), " ")
+}
+
+#[cfg(feature = "new_parser")]
+pub(crate) trait ResultControlFlowExt<T, E> {
+    fn break_err<B>(self) -> ControlFlow<Result<B, E>, T>;
+}
+
+#[cfg(feature = "new_parser")]
+impl<T, E> ResultControlFlowExt<T, E> for Result<T, E> {
+    fn break_err<B>(self) -> ControlFlow<Result<B, E>, T> {
+        match self {
+            Ok(t) => ControlFlow::Continue(t),
+            Err(e) => ControlFlow::Break(Err(e)),
+        }
+    }
 }
 
 #[cfg(test)]
