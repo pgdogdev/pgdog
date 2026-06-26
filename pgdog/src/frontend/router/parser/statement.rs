@@ -493,10 +493,12 @@ impl<'a> SearchContext<'a> {
                 let table = Table::from(rv);
                 aliases.insert(alias.aliasname().expect("alias name always present"), table);
             }
+
             Node::JoinExpr(join) => {
                 Self::extract_alias_from_node(aliases, join.larg());
                 Self::extract_alias_from_node(aliases, join.rarg());
             }
+
             Node::RangeSubselect(subselect) if let Some(alias) = subselect.alias() => {
                 // For subselects, we don't have a real table name
                 // but we record the alias anyway for future use
@@ -510,6 +512,7 @@ impl<'a> SearchContext<'a> {
                     },
                 );
             }
+
             _ => {}
         }
     }
