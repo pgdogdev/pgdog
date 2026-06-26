@@ -3268,7 +3268,7 @@ dependencies = [
 [[package]]
 name = "pg_raw_parse"
 version = "0.1.0"
-source = "git+https://github.com/pgdogdev/pg_raw_parse.git?rev=a5b12f3#a5b12f330f10ecf309c5621624fc8ee2063e63aa"
+source = "git+https://github.com/pgdogdev/pg_raw_parse.git?rev=adbfcae#adbfcae6fd22441b9e32e97be088e2a2c893cf72"
 dependencies = [
  "bindgen 0.72.1",
  "cc",
