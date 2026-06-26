@@ -4,6 +4,7 @@ use crate::backend::pool::mirror_stats::Counts;
 use crate::config::{self, ConfigAndUsers, Database, Role, User as ConfigUser};
 use crate::net::messages::{DataRow, DataType, FromBytes, Protocol, RowDescription};
 
+use super::show_bans::ShowBans;
 use super::show_client_memory::ShowClientMemory;
 use super::show_config::ShowConfig;
 use super::show_lists::ShowLists;
@@ -137,6 +138,103 @@ async fn show_pools_reports_schema_admin_flag() {
         .get_text(schema_admin_index)
         .expect("schema_admin value should be textual");
     assert_eq!(schema_admin_value.as_str(), "t");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn show_bans_lists_banned_pools_with_reason_and_time_left() {
+    use std::time::Duration;
+
+    use crate::backend::pool::Error as PoolError;
+
+    let context = TestAdminContext::new();
+
+    let mut config = ConfigAndUsers::default();
+    config.config.databases.push(Database {
+        name: "app".into(),
+        host: "127.0.0.1".into(),
+        role: Role::Primary,
+        shard: 0,
+        ..Default::default()
+    });
+    config.users.users.push(ConfigUser {
+        name: "alice".into(),
+        database: "app".into(),
+        password: Some("secret".into()),
+        ..Default::default()
+    });
+    context.set_config(config);
+
+    // The column layout is stable regardless of how many pools are banned.
+    let messages = ShowBans.execute().await.expect("show bans execution failed");
+    let row_description = RowDescription::from_bytes(messages[0].payload())
+        .expect("row description message should parse");
+    let actual_names: Vec<&str> = row_description
+        .fields
+        .iter()
+        .map(|field| field.name.as_str())
+        .collect();
+    assert_eq!(
+        actual_names,
+        vec![
+            "id",
+            "database",
+            "user",
+            "addr",
+            "port",
+            "shard",
+            "role",
+            "ban_reason",
+            "ban_time_left",
+        ]
+    );
+
+    let before = messages.len();
+
+    // Ban every pool belonging to the "app" cluster.
+    let mut banned = 0;
+    for (user, cluster) in databases().all() {
+        if user.database != "app" {
+            continue;
+        }
+        for shard in cluster.shards() {
+            for (_role, ban, _pool) in shard.pools_with_roles_and_bans() {
+                ban.ban(PoolError::ServerError, Duration::from_secs(60));
+                banned += 1;
+            }
+        }
+    }
+    assert!(banned > 0, "expected at least one pool to ban");
+
+    let messages = ShowBans.execute().await.expect("show bans execution failed");
+    assert_eq!(
+        messages.len(),
+        before + banned,
+        "every freshly banned pool should appear in SHOW BANS"
+    );
+
+    // The first data row should carry the ban reason and a positive time left.
+    let reason_index = row_description
+        .field_index("ban_reason")
+        .expect("ban_reason column index");
+    let time_left_index = row_description
+        .field_index("ban_time_left")
+        .expect("ban_time_left column index");
+    let data_row = DataRow::from_bytes(messages[1].payload()).expect("data row should parse");
+
+    let reason = data_row
+        .get_text(reason_index)
+        .expect("ban_reason should be present");
+    assert!(!reason.is_empty(), "ban reason should not be empty");
+
+    let time_left: i64 = data_row
+        .get_text(time_left_index)
+        .expect("ban_time_left should be present")
+        .parse()
+        .expect("ban_time_left should be an integer (ms)");
+    assert!(
+        time_left > 0 && time_left <= 60_000,
+        "time left should be within the ban window, got {time_left}"
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]
