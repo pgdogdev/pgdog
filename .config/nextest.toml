@@ -1,7 +1,12 @@
-[profile.dev]
-fail-fast = true
-test-threads = 1
-default-filter = "not package(rust)"
-
 [profile.default]
-slow-timeout = "15s"
+slow-timeout = { period = "15s" }
+fail-fast = true
+# ignore integration tests since they require a running pgdog instance
+default-filter = "not package(rust)"
+test-threads = 1
+
+[profile.dev]
+inherits = "default"
+
+[profile.integration]
+default-filter = "package(rust)"
