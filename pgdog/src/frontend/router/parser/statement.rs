@@ -1667,10 +1667,12 @@ impl<'a, 'b, 'c> StatementParser<'a, 'b, 'c> {
 
                 let is_any = matches!(expr.kind, A_Expr_Kind::AEXPR_OP_ANY);
 
-                let Some(left) = self.search_expr(expr.lexpr(), &ctx)? else {
+                let left = self.search_expr(expr.lexpr(), &ctx)?;
+                let right = self.search_expr(expr.rexpr(), &ctx)?;
+
+                let Some(left) = left else {
                     return Recurse::no();
                 };
-                let right = self.search_expr(expr.rexpr(), &ctx)?;
 
                 match (left, right, is_any) {
                     // For ANY expressions with sharding columns, we can't reliably
