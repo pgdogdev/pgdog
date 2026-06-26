@@ -8,6 +8,7 @@ use futures::future::try_join_all;
 use once_cell::sync::{Lazy, OnceCell};
 use parking_lot::RwLock;
 use parking_lot::{Mutex, RawMutex, lock_api::MutexGuard};
+use tokio::sync::Notify;
 use tokio::time::{Instant, timeout};
 use tracing::{debug, error};
 
@@ -45,6 +46,7 @@ pub(crate) struct InnerSync {
     pub(super) health: TargetHealth,
     pub(super) params: OnceCell<Parameters>,
     pub(super) lsn_stats: RwLock<LsnStats>,
+    pub(super) lsn_role_change: Notify,
 }
 
 impl std::fmt::Debug for Pool {
@@ -69,6 +71,7 @@ impl Pool {
                 health: TargetHealth::new(id),
                 params: OnceCell::new(),
                 lsn_stats: RwLock::new(LsnStats::default()),
+                lsn_role_change: Notify::new(),
             }),
         }
     }

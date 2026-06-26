@@ -11,6 +11,7 @@ pub enum ParseResult {
     ShowClients(ShowClients),
     Reload(Reload),
     ShowPools(ShowPools),
+    ShowBans(ShowBans),
     ShowConfig(ShowConfig),
     ShowServers(ShowServers),
     ShowPeers(ShowPeers),
@@ -58,6 +59,7 @@ impl ParseResult {
             ShowClients(show_clients) => show_clients.execute().await,
             Reload(reload) => reload.execute().await,
             ShowPools(show_pools) => show_pools.execute().await,
+            ShowBans(show_bans) => show_bans.execute().await,
             ShowConfig(show_config) => show_config.execute().await,
             ShowServers(show_servers) => show_servers.execute().await,
             ShowPeers(show_peers) => show_peers.execute().await,
@@ -105,6 +107,7 @@ impl ParseResult {
             ShowClients(show_clients) => show_clients.name(),
             Reload(reload) => reload.name(),
             ShowPools(show_pools) => show_pools.name(),
+            ShowBans(show_bans) => show_bans.name(),
             ShowConfig(show_config) => show_config.name(),
             ShowServers(show_servers) => show_servers.name(),
             ShowPeers(show_peers) => show_peers.name(),
@@ -162,6 +165,7 @@ impl Parser {
             "show" => match iter.next().ok_or(Error::Syntax)?.trim() {
                 "clients" => ParseResult::ShowClients(ShowClients::parse(&sql)?),
                 "pools" => ParseResult::ShowPools(ShowPools::parse(&sql)?),
+                "bans" => ParseResult::ShowBans(ShowBans::parse(&sql)?),
                 "config" => ParseResult::ShowConfig(ShowConfig::parse(&sql)?),
                 "servers" => ParseResult::ShowServers(ShowServers::parse(&sql)?),
                 "server" => match iter.next().ok_or(Error::Syntax)?.trim() {
@@ -273,6 +277,12 @@ mod tests {
     fn parses_show_listeners_command() {
         let result = Parser::parse("SHOW LISTENERS;");
         assert!(matches!(result, Ok(ParseResult::ShowListeners(_))));
+    }
+
+    #[test]
+    fn parses_show_bans_command() {
+        let result = Parser::parse("SHOW BANS;");
+        assert!(matches!(result, Ok(ParseResult::ShowBans(_))));
     }
 
     #[test]

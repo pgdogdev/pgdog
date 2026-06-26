@@ -30,6 +30,23 @@ impl Ban {
         self.inner.read().ban.as_ref().map(|b| b.error)
     }
 
+    /// Time remaining before the ban expires.
+    ///
+    /// Returns `None` when the pool isn't banned or the ban is manual, since
+    /// manual bans never expire on their own.
+    pub fn time_remaining(&self, now: Instant) -> Option<Duration> {
+        self.inner.read().ban.as_ref().and_then(|ban| {
+            if ban.error == Error::ManualBan {
+                None
+            } else {
+                Some(
+                    ban.ban_timeout
+                        .saturating_sub(now.saturating_duration_since(ban.created_at)),
+                )
+            }
+        })
+    }
+
     /// Unban the database.
     pub fn unban(&self, manual_check: bool) {
         let mut guard = self.inner.upgradable_read();

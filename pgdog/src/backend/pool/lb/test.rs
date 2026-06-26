@@ -1736,6 +1736,76 @@ fn test_ban_check_unbans_all_when_all_unhealthy() {
 }
 
 #[test]
+fn test_ban_check_unbans_all_when_all_healthy_but_banned() {
+    // Regression: bans can be applied outside the monitor (e.g. a failed
+    // checkout in `get_internal`), leaving every target banned even though
+    // they all report healthy. The monitor must clear these so reads can
+    // resume; otherwise reads fail until the (unexpired) bans time out even
+    // though every target is serviceable.
+    let replicas = setup_test_replicas_no_launch();
+
+    // Both targets banned with a long, unexpired timeout, but healthy.
+    replicas.targets[0]
+        .ban
+        .ban(Error::ConnectTimeout, Duration::from_secs(60));
+    replicas.targets[1]
+        .ban
+        .ban(Error::ConnectTimeout, Duration::from_secs(60));
+
+    assert!(replicas.targets[0].health.healthy());
+    assert!(replicas.targets[1].health.healthy());
+    assert!(replicas.targets[0].ban.banned());
+    assert!(replicas.targets[1].ban.banned());
+
+    let monitor = Monitor::new_test(&replicas);
+    let threshold = ReplicaLag {
+        duration: Duration::MAX,
+        bytes: i64::MAX,
+    };
+
+    monitor.ban_check(&threshold);
+
+    assert!(
+        !replicas.targets[0].ban.banned(),
+        "All bans should be cleared when every target is healthy but banned"
+    );
+    assert!(
+        !replicas.targets[1].ban.banned(),
+        "All bans should be cleared when every target is healthy but banned"
+    );
+}
+
+#[test]
+fn test_ban_check_preserves_manual_ban_when_all_banned() {
+    // The clear-all recovery must not undo an operator's manual ban, even when
+    // it makes every target unavailable.
+    let replicas = setup_test_replicas_no_launch();
+
+    replicas.targets[0].ban.ban(Error::ManualBan, Duration::MAX);
+    replicas.targets[1]
+        .ban
+        .ban(Error::ConnectTimeout, Duration::from_secs(60));
+
+    let monitor = Monitor::new_test(&replicas);
+    let threshold = ReplicaLag {
+        duration: Duration::MAX,
+        bytes: i64::MAX,
+    };
+
+    monitor.ban_check(&threshold);
+
+    assert!(
+        replicas.targets[0].ban.banned(),
+        "Manual ban must be preserved through the clear-all recovery"
+    );
+    assert_eq!(replicas.targets[0].ban.error(), Some(Error::ManualBan));
+    assert!(
+        !replicas.targets[1].ban.banned(),
+        "Automatic ban should be cleared so reads can resume on this target"
+    );
+}
+
+#[test]
 fn test_ban_check_does_not_clear_unexpired_ban() {
     let replicas = setup_test_replicas_no_launch();
 

@@ -204,6 +204,11 @@ impl Shard {
             .collect()
     }
 
+    /// Get a reference to all pools managed by this shard.
+    pub fn pool_iter(&self) -> impl Iterator<Item = &Pool> {
+        self.lb.targets.iter().map(|target| &target.pool)
+    }
+
     /// Get all connection pools along with their roles (i.e., primary or replica).
     pub fn pools_with_roles(&self) -> Vec<(Role, Pool)> {
         let mut pools = vec![];
