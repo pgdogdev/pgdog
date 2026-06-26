@@ -165,7 +165,10 @@ async fn show_bans_lists_banned_pools_with_reason_and_time_left() {
     context.set_config(config);
 
     // The column layout is stable regardless of how many pools are banned.
-    let messages = ShowBans.execute().await.expect("show bans execution failed");
+    let messages = ShowBans
+        .execute()
+        .await
+        .expect("show bans execution failed");
     let row_description = RowDescription::from_bytes(messages[0].payload())
         .expect("row description message should parse");
     let actual_names: Vec<&str> = row_description
@@ -205,7 +208,10 @@ async fn show_bans_lists_banned_pools_with_reason_and_time_left() {
     }
     assert!(banned > 0, "expected at least one pool to ban");
 
-    let messages = ShowBans.execute().await.expect("show bans execution failed");
+    let messages = ShowBans
+        .execute()
+        .await
+        .expect("show bans execution failed");
     assert_eq!(
         messages.len(),
         before + banned,
