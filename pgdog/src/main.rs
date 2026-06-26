@@ -49,7 +49,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         _ => (),
     }
 
-    bootstrap_logger(&args.config);
+    // psql execs immediately after config loads; don't initialize the logger
+    // so config-load info lines don't pollute the psql output.
+    if !matches!(command.as_ref(), Some(Commands::Psql { .. })) {
+        bootstrap_logger(&args.config);
+    }
 
     let nofile = pgdog::util::raise_nofile_limit();
 
@@ -67,6 +71,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if matches!(command.as_ref(), Some(Commands::Configcheck)) {
         info!("✅ config valid");
         exit(0);
+    }
+
+    if let Some(Commands::Psql {
+        database,
+        user,
+        shard,
+        psql_args,
+    }) = command.as_ref()
+    {
+        pgdog::cli::psql(database, user.as_deref(), *shard, psql_args, &config)?;
+        unreachable!("psql exec replaces the process");
     }
 
     info!("🐕 PgDog {}", pgdog_version());
