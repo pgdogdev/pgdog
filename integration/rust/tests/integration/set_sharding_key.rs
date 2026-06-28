@@ -1,6 +1,6 @@
 //! Test cluster with just one sharding function.
 
-use rust::setup::connections_sqlx;
+use crate::setup::connections_sqlx;
 use sqlx::Connection;
 use sqlx::prelude::*;
 

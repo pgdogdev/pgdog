@@ -1,4 +1,4 @@
-use rust::setup::{admin_sqlx, connections_tokio};
+use crate::setup::{admin_sqlx, connections_tokio};
 use sqlx::Executor;
 use tokio_postgres::SimpleQueryMessage;
 

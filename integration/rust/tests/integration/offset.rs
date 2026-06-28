@@ -1,4 +1,4 @@
-use rust::setup::{admin_sqlx, connections_sqlx};
+use crate::setup::{admin_sqlx, connections_sqlx};
 use sqlx::{Executor, Row, postgres::PgPool};
 
 const TABLE: &str = "offset_test";

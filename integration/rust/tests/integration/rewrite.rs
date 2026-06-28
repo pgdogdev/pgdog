@@ -1,4 +1,4 @@
-use rust::setup::{admin_sqlx, connections_sqlx};
+use crate::setup::{admin_sqlx, connections_sqlx};
 use sqlx::{Executor, Pool, Postgres};
 
 const TEST_TABLE: &str = "sharded_list";

@@ -1,4 +1,4 @@
-use rust::setup::{admin_sqlx, admin_tokio};
+use crate::setup::{admin_sqlx, admin_tokio};
 use serial_test::serial;
 use sqlx::{Executor, Row};
 use std::time::Duration;

@@ -1,4 +1,4 @@
-use rust::setup::connections_tokio;
+use crate::setup::connections_tokio;
 
 fn extract_simple_query_value(msgs: &[tokio_postgres::SimpleQueryMessage]) -> String {
     for msg in msgs {

@@ -1,5 +1,5 @@
+use crate::setup::connections_sqlx;
 use chrono::{Duration, Utc};
-use rust::setup::connections_sqlx;
 use sqlx::{Executor, Row};
 
 #[tokio::test]
@@ -41,7 +41,7 @@ async fn test_timestamp_sorting_across_shards() {
 
     for (id, name, timestamp) in &test_data {
         sqlx::query(
-            "INSERT INTO timestamp_test (id, name, created_at, updated_at) 
+            "INSERT INTO timestamp_test (id, name, created_at, updated_at)
              VALUES ($1, $2, $3, $3)",
         )
         .bind(id)
@@ -138,7 +138,7 @@ async fn test_timestamp_sorting_across_shards() {
     );
 
     sqlx::query(
-        "INSERT INTO timestamp_test (id, name, created_at, special_ts) 
+        "INSERT INTO timestamp_test (id, name, created_at, special_ts)
          VALUES ($1, $2, $3, 'infinity'::timestamp)",
     )
     .bind(301i64)
@@ -149,7 +149,7 @@ async fn test_timestamp_sorting_across_shards() {
     .unwrap();
 
     sqlx::query(
-        "INSERT INTO timestamp_test (id, name, created_at, special_ts) 
+        "INSERT INTO timestamp_test (id, name, created_at, special_ts)
          VALUES ($1, $2, $3, '-infinity'::timestamp)",
     )
     .bind(302i64)

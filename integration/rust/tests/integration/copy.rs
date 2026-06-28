@@ -1,4 +1,4 @@
-use rust::setup::{connections_sqlx, connections_tokio};
+use crate::setup::{connections_sqlx, connections_tokio};
 
 #[tokio::test]
 async fn copy_from_csv() -> Result<(), Box<dyn std::error::Error>> {

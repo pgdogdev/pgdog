@@ -1,4 +1,4 @@
-use rust::setup::*;
+use crate::setup::*;
 
 #[tokio::test]
 async fn test_prepared() {

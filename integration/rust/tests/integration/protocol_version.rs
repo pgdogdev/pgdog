@@ -1,8 +1,8 @@
-use bytes::{Buf, Bytes};
-use rust::{
+use crate::{
     setup::admin_sqlx,
     utils::{Message, startup_with_version},
 };
+use bytes::{Buf, Bytes};
 use serial_test::serial;
 use sqlx::Executor;
 use tokio::{io::AsyncWriteExt, net::TcpStream};
