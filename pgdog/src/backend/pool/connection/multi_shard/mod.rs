@@ -206,9 +206,7 @@ impl MultiShard {
                     }
 
                     if has_rows {
-                        let rows = if self.buffer.merge_active() {
-                            self.buffer.output_rows()
-                        } else if self.should_buffer() {
+                        let rows = if self.buffer.merge_active() || self.should_buffer() {
                             self.buffer.output_rows()
                         } else {
                             self.counters.rows
