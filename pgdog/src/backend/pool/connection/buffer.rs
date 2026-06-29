@@ -692,6 +692,84 @@ mod test {
     }
 
     #[test]
+    fn test_order_by_merge_waits_for_all_shards_heads() {
+        let mut buf = Buffer::default();
+        let rd = RowDescription::new(&[Field::bigint("id")]);
+        let decoder = Decoder::from(&rd);
+
+        buf.begin_order_by_merge(
+            2,
+            &[OrderBy::Asc(1)],
+            &Limit {
+                limit: None,
+                offset: None,
+            },
+            &decoder,
+        );
+
+        let mut row = DataRow::new();
+        row.add(1_i64);
+        buf.merge_add(0, row.message().unwrap(), &decoder).unwrap();
+
+        // Can't emit yet: shard 1 has not produced a head row or finished.
+        assert!(buf.take().is_none());
+
+        let mut row = DataRow::new();
+        row.add(2_i64);
+        buf.merge_add(1, row.message().unwrap(), &decoder).unwrap();
+        let out = DataRow::from_bytes(buf.take().unwrap().to_bytes()).unwrap();
+        assert_eq!(out.get::<i64>(0, Format::Text).unwrap(), 1_i64);
+
+        // Still can't emit row 2: shard 0 is neither done nor has another head row.
+        buf.merge_done(1, &decoder);
+        assert!(buf.take().is_none());
+
+        // Once shard 0 is done, shard 1's remaining head can be emitted.
+        buf.merge_done(0, &decoder);
+        let out = DataRow::from_bytes(buf.take().unwrap().to_bytes()).unwrap();
+        assert_eq!(out.get::<i64>(0, Format::Text).unwrap(), 2_i64);
+    }
+
+    #[test]
+    fn test_order_by_merge_honors_offset_and_limit() {
+        let mut buf = Buffer::default();
+        let rd = RowDescription::new(&[Field::bigint("id")]);
+        let decoder = Decoder::from(&rd);
+
+        buf.begin_order_by_merge(
+            2,
+            &[OrderBy::Asc(1)],
+            &Limit {
+                limit: Some(2),
+                offset: Some(1),
+            },
+            &decoder,
+        );
+
+        for value in [1_i64, 3_i64] {
+            let mut row = DataRow::new();
+            row.add(value);
+            buf.merge_add(0, row.message().unwrap(), &decoder).unwrap();
+        }
+        for value in [2_i64, 4_i64] {
+            let mut row = DataRow::new();
+            row.add(value);
+            buf.merge_add(1, row.message().unwrap(), &decoder).unwrap();
+        }
+
+        buf.merge_done(0, &decoder);
+        buf.merge_done(1, &decoder);
+
+        // Global order is 1,2,3,4 -> offset 1 + limit 2 => 2,3
+        let out = DataRow::from_bytes(buf.take().unwrap().to_bytes()).unwrap();
+        assert_eq!(out.get::<i64>(0, Format::Text).unwrap(), 2_i64);
+        let out = DataRow::from_bytes(buf.take().unwrap().to_bytes()).unwrap();
+        assert_eq!(out.get::<i64>(0, Format::Text).unwrap(), 3_i64);
+        assert!(buf.take().is_none());
+        assert_eq!(buf.output_rows(), 2);
+    }
+
+    #[test]
     fn test_limit() {
         let mut buf = Buffer::default();
 
