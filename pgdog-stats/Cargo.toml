@@ -7,6 +7,6 @@ edition = "2024"
 serde = {version = "*", features = ["derive", "rc"]}
 pgdog-config = { path = "../pgdog-config" }
 pgdog-postgres-types = { path = "../pgdog-postgres-types" }
-bytes = "*"
-indexmap = { version = "*", features = ["serde"] }
+bytes.workspace = true
+indexmap.workspace = true
 schemars.workspace = true
