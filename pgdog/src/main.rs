@@ -165,7 +165,11 @@ async fn pgdog(command: Option<Commands>) -> Result<(), Box<dyn std::error::Erro
         Some(ref command) => {
             if let Commands::DataSync { .. } = command {
                 info!("🔄 entering data sync mode");
-                if let Err(err) = cli::data_sync(command.clone()).await {
+                let result = cli::data_sync(command.clone()).await;
+                // Wait for the 2PC monitor to drain any in-flight cleanup
+                // before the process exits, even on error.
+                Manager::get().shutdown().await;
+                if let Err(err) = result {
                     error!("{}", err);
                     return Err(err);
                 }
