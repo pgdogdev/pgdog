@@ -103,7 +103,7 @@ impl Binding {
                             return Ok(message);
                         }
                         let mut read = false;
-                        for server in shards.iter_mut() {
+                        for (position, server) in shards.iter_mut().enumerate() {
                             if !server.has_more_messages() {
                                 continue;
                             }
@@ -111,7 +111,7 @@ impl Binding {
                             let message = server.read().await?;
 
                             read = true;
-                            if let Some(message) = state.forward(message)? {
+                            if let Some(message) = state.forward_from(position, message)? {
                                 return Ok(message);
                             }
                         }

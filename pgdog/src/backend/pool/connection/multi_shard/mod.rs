@@ -114,10 +114,29 @@ impl MultiShard {
 
     /// Check if the message should be sent to the client, skipped,
     /// or modified.
+    #[cfg(test)]
     pub(super) fn forward(&mut self, message: Message) -> Result<Option<Message>, Error> {
-        let mut forward = None;
+        self.forward_inner(None, message)
+    }
 
-        match message.code() {
+    /// Same as [`Self::forward`], but includes shard position.
+    pub(super) fn forward_from(
+        &mut self,
+        shard_position: usize,
+        message: Message,
+    ) -> Result<Option<Message>, Error> {
+        self.forward_inner(Some(shard_position), message)
+    }
+
+    fn forward_inner(
+        &mut self,
+        shard_position: Option<usize>,
+        message: Message,
+    ) -> Result<Option<Message>, Error> {
+        let mut forward = None;
+        let code = message.code();
+
+        match code {
             'Z' => {
                 self.counters.ready_for_query += 1;
                 if message.transaction_error() {
@@ -155,31 +174,42 @@ impl MultiShard {
                     false
                 };
                 self.counters.command_complete_count += 1;
+                if self.buffer.merge_active()
+                    && let Some(shard) = shard_position
+                {
+                    self.buffer.merge_done(shard, &self.decoder);
+                }
 
                 if self
                     .counters
                     .command_complete_count
                     .is_multiple_of(self.shards)
                 {
-                    self.buffer.full();
+                    if self.buffer.merge_active() {
+                        self.buffer.full();
+                    } else {
+                        self.buffer.full();
 
-                    if !self.buffer.is_empty() {
-                        self.buffer
-                            .aggregate(
-                                self.route.aggregate(),
-                                &self.decoder,
-                                self.route.aggregate_rewrite_plan(),
-                            )
-                            .map_err(Error::from)?;
+                        if !self.buffer.is_empty() {
+                            self.buffer
+                                .aggregate(
+                                    self.route.aggregate(),
+                                    &self.decoder,
+                                    self.route.aggregate_rewrite_plan(),
+                                )
+                                .map_err(Error::from)?;
 
-                        self.buffer.sort(self.route.order_by(), &self.decoder);
-                        self.buffer.distinct(self.route.distinct(), &self.decoder);
-                        self.buffer.limit(self.route.limit());
+                            self.buffer.sort(self.route.order_by(), &self.decoder);
+                            self.buffer.distinct(self.route.distinct(), &self.decoder);
+                            self.buffer.limit(self.route.limit());
+                        }
                     }
 
                     if has_rows {
-                        let rows = if self.should_buffer() {
-                            self.buffer.len()
+                        let rows = if self.buffer.merge_active() {
+                            self.buffer.output_rows()
+                        } else if self.should_buffer() {
+                            self.buffer.output_rows()
                         } else {
                             self.counters.rows
                         };
@@ -206,6 +236,14 @@ impl MultiShard {
                 if self.counters.row_description == self.shards {
                     // Only send it to the client once all shards sent it,
                     // so we don't get early requests from clients.
+                    if self.should_stream_order_by() {
+                        self.buffer.begin_order_by_merge(
+                            self.shards,
+                            self.route.order_by(),
+                            self.route.limit(),
+                            &self.decoder,
+                        );
+                    }
                     let plan = self.route.aggregate_rewrite_plan();
                     if plan.is_noop() {
                         forward = Some(message);
@@ -241,7 +279,14 @@ impl MultiShard {
                     self.counters.first_backend_data = message.source().backend_id();
                 }
 
-                if !self.should_buffer()
+                if self.buffer.merge_active()
+                    && self.counters.row_description.is_multiple_of(self.shards)
+                    && let Some(shard) = shard_position
+                {
+                    self.buffer
+                        .merge_add(shard, message, &self.decoder)
+                        .map_err(Error::from)?;
+                } else if !self.should_buffer()
                     && self.counters.row_description.is_multiple_of(self.shards)
                 {
                     if self.route.is_omnisharded() {
@@ -336,6 +381,14 @@ impl MultiShard {
         // 3. The route does not concern omnisharded tables which have the same data on all shards
         //    anyway.
         self.shards > 1 && self.route.should_buffer() && !self.route.is_omnisharded()
+    }
+
+    fn should_stream_order_by(&self) -> bool {
+        self.shards > 1
+            && !self.route.order_by().is_empty()
+            && self.route.aggregate().is_empty()
+            && self.route.distinct().is_none()
+            && !self.route.is_omnisharded()
     }
 
     /// Multi-shard state is ready to send messages.
