@@ -211,9 +211,18 @@ impl Orchestrator {
     }
 
     /// Get the largest replication lag out of all the shards.
-    async fn replication_lag(&self) -> u64 {
+    async fn replication_lag(&self) -> Option<u64> {
+        let shards_count = self.source.shards().len();
         let lag = self.publisher.lock().await.replication_lag();
-        lag.values().copied().max().unwrap_or_default() as u64
+
+        if lag.len() != shards_count {
+            // if the len of lag map is not equal to source shards_count
+            // then some entries are not initialized yet and the lag value
+            // is not yet reported.
+            return None;
+        }
+
+        lag.values().copied().max().map(|lag| lag as u64)
     }
 }
 
@@ -297,10 +306,13 @@ impl ReplicationWaiter {
                 }
             }
 
-            let lag = self.orchestrator.replication_lag().await;
+            let Some(lag) = self.orchestrator.replication_lag().await else {
+                info!("[cutover] replication lag is not calculated for all shards, yet");
+                continue;
+            };
             cutover_state(CutoverState::WaitingForReplication { lag });
 
-            info!("[cutover] replication lag: {}", format_bytes(lag as u64));
+            info!("[cutover] replication lag: {}", format_bytes(lag));
 
             // Time to go.
             if lag <= traffic_stop {
@@ -336,13 +348,13 @@ impl ReplicationWaiter {
 
         if cutover_timeout_exceeded {
             CutoverAction::Go(CutoverReason::Timeout)
-        } else if lag <= cutover_threshold {
+        } else if lag.is_some_and(|lag| lag <= cutover_threshold) {
             CutoverAction::Go(CutoverReason::Lag)
         } else if last_transaction.is_none_or(|t| t > last_transaction_delay) {
             CutoverAction::Go(CutoverReason::LastTransaction)
         } else {
             CutoverAction::NoGo(CutoverData {
-                lag,
+                lag: lag.unwrap_or(u64::MAX),
                 last_transaction,
                 elapsed,
             })
@@ -532,6 +544,7 @@ mod tests {
     use super::*;
     use crate::backend::pool::Cluster;
     use pgdog_config::ConfigAndUsers;
+    use std::assert_matches;
     use std::sync::Arc;
     use tokio::time::Instant;
 
@@ -570,12 +583,12 @@ mod tests {
 
         let orchestrator = Orchestrator::new_test(&config);
 
-        // Set replication lag below threshold
-        orchestrator
-            .publisher
-            .lock()
-            .await
-            .set_replication_lag(0, 500);
+        // Set replication lag below threshold for every shard.
+        {
+            let publisher = orchestrator.publisher.lock().await;
+            publisher.set_replication_lag(0, 500);
+            publisher.set_replication_lag(1, 500);
+        }
 
         let config = Arc::new(config);
         let mut waiter = ReplicationWaiter::new_test(orchestrator, config);
@@ -600,12 +613,12 @@ mod tests {
 
         let orchestrator = Orchestrator::new_test(&config);
 
-        // Set replication lag below cutover threshold
-        orchestrator
-            .publisher
-            .lock()
-            .await
-            .set_replication_lag(0, 50);
+        // Set replication lag below cutover threshold for every shard.
+        {
+            let publisher = orchestrator.publisher.lock().await;
+            publisher.set_replication_lag(0, 50);
+            publisher.set_replication_lag(1, 50);
+        }
 
         let config = Arc::new(config);
         let mut waiter = ReplicationWaiter::new_test(orchestrator, config);
@@ -745,5 +758,63 @@ mod tests {
 
         let result = waiter.should_cutover(Duration::from_millis(100)).await;
         assert!(matches!(result, CutoverAction::NoGo { .. }));
+    }
+
+    /// `replication_lag` returns `None` (so the decision stays `NoGo`) until
+    /// every source shard has reported a measurement:
+    ///   1. an empty map (no shard reported) → `None`, and
+    ///   2. a partial map (some shards reported, others missing) → `None`.
+    /// Only when every shard has a real, below-threshold measurement does it Go.
+    #[tokio::test]
+    async fn should_not_cutover_before_every_shard_reports() {
+        let mut config = ConfigAndUsers::default();
+        config.config.general.cutover_timeout = 10000;
+        config.config.general.cutover_replication_lag_threshold = 1000;
+        config.config.general.cutover_last_transaction_delay = 500;
+
+        // Fresh orchestrator: the publisher's lag map has no entries yet.
+        let orchestrator = Orchestrator::new_test(&config);
+        // Recent transaction so the last-transaction arm never forces a cutover;
+        // this isolates the lag check.
+        orchestrator
+            .publisher
+            .lock()
+            .await
+            .set_last_transaction(Some(Instant::now()));
+
+        let config = Arc::new(config);
+        let waiter = ReplicationWaiter::new_test(orchestrator.clone(), config);
+        let elapsed = Duration::from_millis(100);
+
+        // Empty map: lag is unknown -> None, no cutover.
+        assert_eq!(orchestrator.replication_lag().await, None);
+        assert_matches!(
+            waiter.should_cutover(elapsed).await,
+            CutoverAction::NoGo { .. }
+        );
+
+        // Only shard 0 reports; shard 1 is still missing from the map, so the
+        // lag stays unknown (None) and the decision remains NoGo — the gate waits
+        // for every shard, not just the first to report.
+        {
+            let publisher = orchestrator.publisher.lock().await;
+            publisher.set_replication_lag(0, 500);
+        }
+        assert_eq!(orchestrator.replication_lag().await, None);
+        assert_matches!(
+            waiter.should_cutover(elapsed).await,
+            CutoverAction::NoGo { .. }
+        );
+
+        // Once every shard has a real, below-threshold measurement, it cuts over.
+        orchestrator
+            .publisher
+            .lock()
+            .await
+            .set_replication_lag(1, 400);
+        assert_eq!(
+            waiter.should_cutover(elapsed).await,
+            CutoverAction::Go(CutoverReason::Lag)
+        );
     }
 }
