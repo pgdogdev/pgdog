@@ -12,7 +12,11 @@ use std::{
     },
     time::Duration,
 };
-use tokio::{select, spawn, sync::Notify, time::{Instant, interval, sleep}};
+use tokio::{
+    select, spawn,
+    sync::Notify,
+    time::{Instant, interval, sleep},
+};
 use tracing::{debug, error, info, warn};
 
 use crate::{
