@@ -23,6 +23,7 @@ use crate::backend::{
     pool::{Address, Request},
     replication::{publisher::Table, status::TableCopy},
 };
+use crate::frontend::client::query_engine::two_pc::Manager;
 use crate::net::messages::Protocol;
 use crate::util::escape_identifier;
 
@@ -102,6 +103,12 @@ impl ParallelSync {
                     tracker.reset();
 
                     sleep(backoff).await;
+
+                    if self.dest.two_pc_enabled()
+                        && let Some(txn) = err.two_pc_cleanup_transaction()
+                    {
+                        Manager::get().wait_until_cleaned_up(txn).await;
+                    }
 
                     // Not idempotent (no truncate): if a prior attempt left rows on a
                     // reachable shard, the re-copy can only collide, so stop instead of

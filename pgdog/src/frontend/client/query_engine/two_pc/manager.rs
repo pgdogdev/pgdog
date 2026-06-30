@@ -12,7 +12,11 @@ use std::{
     },
     time::Duration,
 };
-use tokio::{select, spawn, sync::Notify, time::interval};
+use tokio::{
+    select, spawn,
+    sync::Notify,
+    time::{Instant, interval, sleep},
+};
 use tracing::{debug, error, info, warn};
 
 use crate::{
@@ -148,10 +152,37 @@ impl Manager {
     }
 
     /// Two-pc transaction finished.
-    pub(super) async fn done(&self, transaction: &TwoPcTransaction) -> Result<(), Error> {
+    pub(crate) async fn done(&self, transaction: &TwoPcTransaction) -> Result<(), Error> {
         self.remove(transaction).await;
 
         Ok(())
+    }
+
+    /// Block until the monitor has removed this transaction from the manager,
+    /// or until a fixed timeout elapses.
+    ///
+    /// No-op if the transaction was never registered or is already gone.
+    pub async fn wait_until_cleaned_up(&self, transaction: TwoPcTransaction) {
+        const WAIT_TIMEOUT: Duration = Duration::from_secs(10);
+
+        let deadline = Instant::now() + WAIT_TIMEOUT;
+        loop {
+            if !self.inner.lock().transactions.contains_key(&transaction) {
+                return;
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                warn!(
+                    "[2pc] timed out waiting for transaction {} cleanup; monitor will retry",
+                    transaction
+                );
+                return;
+            }
+            select! {
+                _ = self.notify.notify.notified() => {}
+                _ = sleep(remaining) => {}
+            }
+        }
     }
 
     /// Record a phase transition for a 2PC transaction. Updates the
@@ -166,7 +197,7 @@ impl Manager {
     /// caller to issue PREPARE / COMMIT PREPARED to backends without a
     /// durable record, which is exactly the orphan-prepared-xact case
     /// the WAL exists to prevent.
-    pub(super) async fn transaction_state(
+    pub(crate) async fn transaction_state(
         &self,
         transaction: &TwoPcTransaction,
         identifier: &Arc<User>,

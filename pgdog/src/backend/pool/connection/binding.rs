@@ -1,7 +1,10 @@
 //! Binding between frontend client and a connection on the backend.
 
 use crate::{
-    frontend::{ClientRequest, client::query_engine::TwoPcPhase},
+    frontend::{
+        ClientRequest,
+        client::query_engine::{TwoPcPhase, two_pc::statement::phase_control},
+    },
     net::{FrontendPid, ProtocolMessage, Query, parameter::Parameters},
     state::State,
 };
@@ -365,14 +368,7 @@ impl Binding {
 
         let mut futures = Vec::new();
         for (shard, server) in servers.iter_mut().enumerate() {
-            let shard_name = format!("{}_{}", name, shard);
-
-            let query = match phase {
-                TwoPcPhase::Phase1 => format!("PREPARE TRANSACTION '{}'", shard_name),
-                TwoPcPhase::Phase2 => format!("COMMIT PREPARED '{}'", shard_name),
-                TwoPcPhase::Rollback => format!("ROLLBACK PREPARED '{}'", shard_name),
-            };
-
+            let query = phase_control(name, shard, phase);
             futures.push(server.execute(query));
         }
 
