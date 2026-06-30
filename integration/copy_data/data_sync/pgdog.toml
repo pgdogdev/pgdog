@@ -10,11 +10,6 @@ name = "source"
 host = "127.0.0.1"
 database_name = "pgdog"
 
-[[sharded_tables]]
-database = "source"
-column = "tenant_id"
-data_type = "bigint"
-
 #
 # Reshard 0 -> 2
 #
@@ -23,17 +18,6 @@ name = "destination"
 host = "127.0.0.1"
 database_name = "pgdog1"
 shard = 0
-
-[[databases]]
-name = "destination"
-host = "127.0.0.1"
-database_name = "pgdog2"
-shard = 1
-
-[[sharded_tables]]
-database = "destination"
-column = "tenant_id"
-data_type = "bigint"
 
 #
 # Reshard 2 -> 2
@@ -45,10 +29,26 @@ database_name = "shard_0"
 shard = 0
 
 [[databases]]
+name = "destination"
+host = "127.0.0.1"
+database_name = "pgdog2"
+shard = 1
+
+[[databases]]
 name = "destination2"
 host = "127.0.0.1"
 database_name = "shard_1"
 shard = 1
+
+[[sharded_tables]]
+database = "source"
+column = "tenant_id"
+data_type = "bigint"
+
+[[sharded_tables]]
+database = "destination"
+column = "tenant_id"
+data_type = "bigint"
 
 [[sharded_tables]]
 database = "destination2"

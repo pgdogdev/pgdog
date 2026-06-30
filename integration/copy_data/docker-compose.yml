@@ -15,7 +15,7 @@ services:
 
   shard_0:
     image: postgres:16
-    command: postgres -c wal_level=logical
+    command: postgres -c wal_level=logical -c max_prepared_transactions=100
     environment:
       POSTGRES_USER: pgdog
       POSTGRES_PASSWORD: pgdog
@@ -27,7 +27,7 @@ services:
 
   shard_1:
     image: postgres:16
-    command: postgres -c wal_level=logical
+    command: postgres -c wal_level=logical -c max_prepared_transactions=100
     environment:
       POSTGRES_USER: pgdog
       POSTGRES_PASSWORD: pgdog

@@ -1179,7 +1179,7 @@
           "default": "prefer"
         },
         "two_phase_commit": {
-          "description": "Enable two-phase commit for write, cross-shard transactions.\n\n_Default:_ `false`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#two_phase_commit",
+          "description": "Enable two-phase commit for write, cross-shard transactions and replications.\n\n_Default:_ `false`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#two_phase_commit",
           "type": "boolean",
           "default": false
         },

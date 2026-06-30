@@ -570,7 +570,7 @@ pub struct General {
     #[serde(default)]
     pub log_dedup_threshold: u64,
 
-    /// Enable two-phase commit for write, cross-shard transactions.
+    /// Enable two-phase commit for write, cross-shard transactions and replications.
     ///
     /// _Default:_ `false`
     ///
