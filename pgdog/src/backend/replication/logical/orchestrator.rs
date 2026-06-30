@@ -150,13 +150,15 @@ impl Orchestrator {
         Ok(())
     }
 
-    pub(crate) async fn data_sync(&self) -> Result<(), Error> {
+    pub(crate) async fn data_sync(&self, cancel: &CancellationToken) -> Result<(), Error> {
         let mut publisher = self.publisher.lock().await;
 
         orchestrator_state(OrchestratorState::DataSync);
         // Run data sync for all tables in parallel using multiple replicas,
         // if available.
-        publisher.data_sync(&self.source, &self.destination).await?;
+        publisher
+            .data_sync(&self.source, &self.destination, cancel)
+            .await?;
 
         Ok(())
     }
@@ -473,7 +475,7 @@ impl ReplicationWaiter {
         }
 
         // We're going, point of no return.
-        self.orchestrator.publisher.lock().await.request_stop();
+        self.waiter.stop();
         ok_or_abort!(self.waiter.wait().await);
         ok_or_abort!(self.orchestrator.schema_sync_cutover(true).await);
         // Traffic is about to go to the new cluster.
