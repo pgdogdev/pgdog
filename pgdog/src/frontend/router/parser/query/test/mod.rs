@@ -304,6 +304,27 @@ fn test_select_for_update_in_cte() {
 }
 
 #[test]
+#[cfg_attr(not(feature = "new_parser"), should_panic)]
+fn test_select_for_update_in_subselect() {
+    // FOR UPDATE buried inside a subselect should still route to the primary.
+    let route =
+        query!("SELECT * FROM locked WHERE id IN (SELECT id FROM sharded WHERE id = 1 FOR UPDATE)");
+    assert!(route.is_write());
+
+    // Doubly-nested subselect
+    let route = query!(
+        "SELECT * FROM locked WHERE id IN \
+            (SELECT id FROM sharded WHERE id IN \
+                (SELECT id FROM sharded WHERE id = 1 FOR UPDATE))"
+    );
+    assert!(route.is_write());
+
+    // Sanity check: a plain SELECT inside a subselect without locking is still a read.
+    let route = query!("SELECT * FROM locked WHERE id IN (SELECT id FROM sharded WHERE id = 1)");
+    assert!(route.is_read());
+}
+
+#[test]
 fn test_omni() {
     let mut omni_round_robin = HashSet::new();
     let q = "SELECT sharded_omni.* FROM sharded_omni WHERE sharded_omni.id = 1";

@@ -3,10 +3,15 @@ use crate::frontend::router::parser::{
 };
 
 use super::*;
+use pg_query::Node as PgNode;
 #[cfg(feature = "new_parser")]
-use pg_raw_parse::nodes;
+use pg_raw_parse::walk::{self, Recurse};
+#[cfg(feature = "new_parser")]
+use pg_raw_parse::{Node, nodes};
 use pgdog_config::system_catalogs;
 use shared::ConvergeAlgorithm;
+#[cfg(feature = "new_parser")]
+use std::ops::ControlFlow;
 
 impl QueryParser {
     /// Handle SELECT statement.
@@ -27,6 +32,9 @@ impl QueryParser {
         let cte_writes = Self::cte_writes(stmt);
         #[cfg(not(feature = "new_parser"))]
         let cte_writes = Self::cte_writes(stmt_old);
+        #[cfg(feature = "new_parser")]
+        let has_locking = Self::has_locking_clause(stmt);
+        #[cfg(not(feature = "new_parser"))]
         let has_locking = Self::has_locking_clause(stmt_old);
         let mut overrides = Self::functions(stmt_old)?;
 
@@ -256,7 +264,7 @@ impl QueryParser {
     /// * `nodes`: List of pg_query-generated nodes from the ORDER BY clause.
     /// * `params`: Bind parameters, if any.
     ///
-    fn select_sort(nodes: &[Node], params: Option<&Bind>) -> Vec<OrderBy> {
+    fn select_sort(nodes: &[PgNode], params: Option<&Bind>) -> Vec<OrderBy> {
         let mut order_by = vec![];
         for clause in nodes {
             if let Some(NodeEnum::SortBy(ref sort_by)) = clause.node {
@@ -378,6 +386,18 @@ impl QueryParser {
 
     /// Recursively check for a locking clause (FOR UPDATE, FOR SHARE, etc.)
     /// on this statement or any CTE nested within it.
+    #[cfg(feature = "new_parser")]
+    fn has_locking_clause(stmt: &nodes::SelectStmt) -> bool {
+        walk::walk_manual(stmt.into(), |node| match node {
+            Node::LockingClause(_) => ControlFlow::Break(()),
+            _ => Recurse::yes(),
+        })
+        .ok()
+        .flatten()
+        .is_some()
+    }
+
+    #[cfg(not(feature = "new_parser"))]
     fn has_locking_clause(stmt: &SelectStmt) -> bool {
         if !stmt.locking_clause.is_empty() {
             return true;
@@ -406,10 +426,6 @@ impl QueryParser {
     ///
     #[cfg(feature = "new_parser")]
     fn cte_writes(stmt: &nodes::SelectStmt) -> bool {
-        use pg_raw_parse::Node;
-        use pg_raw_parse::walk::{self, Recurse};
-        use std::ops::ControlFlow;
-
         walk::walk_manual(stmt.withClause().into(), |node| match node {
             Node::CommonTableExpr(expr) => match expr.ctequery() {
                 Node::SelectStmt(_) => Recurse::yes(),
