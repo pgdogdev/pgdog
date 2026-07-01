@@ -36,18 +36,12 @@ impl QueryParser {
         let has_locking = Self::has_locking_clause(stmt);
         #[cfg(not(feature = "new_parser"))]
         let has_locking = Self::has_locking_clause(stmt_old);
-        let mut overrides = Self::functions(stmt_old)?;
+        let function_behavior = Self::functions(stmt_old);
 
         // Write overwrite because of conservative read/write split.
-        if self.write_override {
-            overrides.writes = true;
-        }
+        let writes = self.write_override || function_behavior.writes || cte_writes || has_locking;
 
-        if cte_writes || has_locking {
-            overrides.writes = true;
-        }
-
-        if overrides.cross_shard {
+        if function_behavior.cross_shard {
             context
                 .shards_calculator
                 .push(ShardWithPriority::new_override_cross_shard_function());
@@ -67,11 +61,13 @@ impl QueryParser {
             (parser.extract_advisory_locks(), parser.is_all_omnisharded())
         };
 
+        let writes = writes || !advisory_locks.is_empty();
+
         // Early return for any direct-to-shard queries.
         if context.shards_calculator.shard().is_direct() {
             return Ok(Command::Query(
                 Route::read(context.shards_calculator.shard().clone())
-                    .with_functions(overrides)
+                    .with_read(!writes)
                     .with_omnisharded(omnisharded)
                     .with_advisory_locks(advisory_locks),
             ));
@@ -125,7 +121,7 @@ impl QueryParser {
 
             return Ok(Command::Query(
                 Route::read(context.shards_calculator.shard().clone())
-                    .with_functions(overrides)
+                    .with_read(!writes)
                     .with_omnisharded(omnisharded)
                     .with_advisory_locks(advisory_locks),
             ));
@@ -251,7 +247,7 @@ impl QueryParser {
 
         Ok(Command::Query(
             query
-                .with_functions(overrides)
+                .with_read(!writes)
                 .with_omnisharded(omnisharded)
                 .with_advisory_locks(advisory_locks),
         ))
@@ -358,10 +354,10 @@ impl QueryParser {
     ///
     /// * `stmt`: SELECT statement from pg_query.
     ///
-    fn functions(stmt: &SelectStmt) -> Result<FunctionBehavior, Error> {
+    fn functions(stmt: &SelectStmt) -> FunctionBehavior {
         for target in &stmt.target_list {
             if let Ok(func) = Function::try_from(target) {
-                return Ok(func.behavior());
+                return func.behavior();
             }
         }
 
@@ -373,15 +369,15 @@ impl QueryParser {
                     && let Some(ref query) = expr.ctequery
                     && let Some(NodeEnum::SelectStmt(ref inner)) = query.node
                 {
-                    let behavior = Self::functions(inner)?;
+                    let behavior = Self::functions(inner);
                     if behavior.writes {
-                        return Ok(behavior);
+                        return behavior;
                     }
                 }
             }
         }
 
-        Ok(FunctionBehavior::default())
+        FunctionBehavior::default()
     }
 
     /// Recursively check for a locking clause (FOR UPDATE, FOR SHARE, etc.)

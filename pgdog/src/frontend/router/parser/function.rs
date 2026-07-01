@@ -1,55 +1,18 @@
-use std::collections::{HashMap, HashSet};
-
-use once_cell::sync::Lazy;
 use pg_query::{Node, NodeEnum, protobuf};
 
-static WRITE_ONLY: Lazy<HashMap<&'static str, LockingBehavior>> = Lazy::new(|| {
-    HashMap::from([
-        ("pg_advisory_lock", LockingBehavior::Lock),
-        ("pg_advisory_xact_lock", LockingBehavior::None),
-        ("pg_advisory_lock_shared", LockingBehavior::Lock),
-        ("pg_advisory_xact_lock_shared", LockingBehavior::None),
-        ("pg_try_advisory_lock", LockingBehavior::Lock),
-        ("pg_try_advisory_xact_lock", LockingBehavior::None),
-        ("pg_try_advisory_lock_shared", LockingBehavior::Lock),
-        ("pg_try_advisory_xact_lock_shared", LockingBehavior::None),
-        ("pg_advisory_unlock_all", LockingBehavior::Unlock),
-        ("pg_advisory_unlock", LockingBehavior::Unlock), // TODO: we don't track multiple advisory locks.
-        ("nextval", LockingBehavior::None),
-        ("setval", LockingBehavior::None),
-    ])
-});
+const WRITE_ONLY: &[&str] = &["nextval", "setval"];
 
-static CROSS_SHARD: Lazy<HashSet<(&'static str, &'static str)>> =
-    Lazy::new(|| HashSet::from([("pgdog", "install_sharded_sequence")]));
-
-#[derive(Debug, Copy, Clone, PartialEq, Default)]
-pub enum LockingBehavior {
-    Lock,
-    Unlock,
-    #[default]
-    None,
-}
+const CROSS_SHARD: &[(Option<&str>, &str)] = &[(Some("pgdog"), "install_sharded_sequence")];
 
 #[derive(Default, Debug, Copy, Clone)]
-pub struct FunctionBehavior {
-    pub writes: bool,
-    pub locking_behavior: LockingBehavior,
-    pub cross_shard: bool,
+pub(crate) struct FunctionBehavior {
+    pub(crate) writes: bool,
+    pub(crate) cross_shard: bool,
 }
 
-impl FunctionBehavior {
-    pub fn writes_only() -> FunctionBehavior {
-        FunctionBehavior {
-            writes: true,
-            ..Default::default()
-        }
-    }
-}
-
-pub struct Function<'a> {
-    pub name: &'a str,
-    pub schema: Option<&'a str>,
+pub(crate) struct Function<'a> {
+    pub(crate) name: &'a str,
+    pub(crate) schema: Option<&'a str>,
 }
 
 impl<'a> Function<'a> {
@@ -75,23 +38,10 @@ impl<'a> Function<'a> {
     }
 
     /// This function likely writes.
-    pub fn behavior(&self) -> FunctionBehavior {
-        let cross_shard = self
-            .schema
-            .map(|schema| CROSS_SHARD.contains(&(schema, self.name)))
-            .unwrap_or(false);
-
-        if let Some(locks) = WRITE_ONLY.get(&self.name) {
-            FunctionBehavior {
-                writes: true,
-                locking_behavior: *locks,
-                cross_shard,
-            }
-        } else {
-            FunctionBehavior {
-                cross_shard,
-                ..FunctionBehavior::default()
-            }
+    pub(crate) fn behavior(&self) -> FunctionBehavior {
+        FunctionBehavior {
+            writes: WRITE_ONLY.contains(&self.name),
+            cross_shard: CROSS_SHARD.contains(&(self.schema, self.name)),
         }
     }
 }
@@ -100,32 +50,22 @@ impl<'a> TryFrom<&'a Node> for Function<'a> {
     type Error = ();
     fn try_from(value: &'a Node) -> Result<Self, Self::Error> {
         match &value.node {
-            Some(NodeEnum::FuncCall(func)) => {
-                return Self::from_strings(&func.funcname);
+            Some(NodeEnum::FuncCall(func)) => Self::from_strings(&func.funcname),
+
+            Some(NodeEnum::TypeCast(cast)) if let Some(node) = cast.arg.as_ref() => {
+                Self::try_from(node.as_ref())
             }
 
-            Some(NodeEnum::TypeCast(cast)) => {
-                if let Some(node) = cast.arg.as_ref() {
-                    return Self::try_from(node.as_ref());
-                }
+            Some(NodeEnum::ResTarget(res)) if let Some(val) = &res.val => {
+                Self::try_from(val.as_ref())
             }
 
-            Some(NodeEnum::ResTarget(res)) => {
-                if let Some(val) = &res.val {
-                    return Self::try_from(val.as_ref());
-                }
+            Some(NodeEnum::NullTest(test)) if let Some(node) = test.arg.as_ref() => {
+                Self::try_from(node.as_ref())
             }
 
-            Some(NodeEnum::NullTest(test)) => {
-                if let Some(node) = test.arg.as_ref() {
-                    return Self::try_from(node.as_ref());
-                }
-            }
-
-            _ => (),
+            _ => Err(()),
         }
-
-        Err(())
     }
 }
 

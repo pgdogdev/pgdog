@@ -3,7 +3,7 @@ use std::{fmt::Display, ops::Deref};
 use lazy_static::lazy_static;
 
 use super::{
-    Aggregate, DistinctBy, FunctionBehavior, Limit, OrderBy, explain_trace::ExplainTrace,
+    Aggregate, DistinctBy, Limit, OrderBy, explain_trace::ExplainTrace,
     rewrite::statement::aggregate::AggregateRewritePlan, statement::AdvisoryLocks,
 };
 
@@ -322,15 +322,6 @@ impl Route {
 
     pub fn rollback_savepoint(&self) -> bool {
         self.rollback_savepoint
-    }
-
-    pub fn with_functions(mut self, function: FunctionBehavior) -> Self {
-        self.set_functions(function);
-        self
-    }
-
-    pub fn set_functions(&mut self, function: FunctionBehavior) {
-        self.read = !function.writes;
     }
 
     pub fn with_advisory_locks(mut self, locks: AdvisoryLocks) -> Self {
