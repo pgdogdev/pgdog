@@ -30,3 +30,26 @@ password = "pgdog"
 # server_auth = "vault_dynamic"
 # backend_vault_path = "database/creds/pgdog"
 # vault_refresh_percent = 80 # optional; default 80
+
+# Example: client authentication against a HashiCorp Vault static database role.
+# Requires the [vault] section in pgdog.toml. PgDog verifies the password the
+# client sends against Vault's current password for the static role, instead
+# of a statically configured password. Independent of `server_auth` below;
+# combine it with any backend authentication method.
+# client_vault_path = "database/static-creds/pgdog-static-role"
+
+# Example: backend authentication with HashiCorp Vault static credentials.
+# Requires the [vault] section in pgdog.toml. Unlike vault_dynamic, the
+# username is fixed; only the password rotates. PgDog refreshes it after
+# `vault_refresh_percent` of the role's rotation TTL has elapsed.
+# server_auth = "vault_static"
+# backend_vault_path = "database/static-creds/pgdog-static-role"
+
+# Example: client and backend both authenticated against the same Vault
+# static role, so PgDog and Postgres always agree on the current password.
+# [[users]]
+# name = "pgdog_static"
+# database = "pgdog"
+# client_vault_path = "database/static-creds/pgdog-static-role"
+# server_auth = "vault_static"
+# backend_vault_path = "database/static-creds/pgdog-static-role"

@@ -198,12 +198,13 @@ role = "auto"
 
 &#128216; **[Authentication](https://docs.pgdog.dev/features/authentication/)**
 
-PgDog supports four authentication methods:
+PgDog supports five authentication methods:
 
 1. Password-based
 2. AWS RDS IAM
 3. Azure Workload Identity
 4. HashiCorp Vault dynamic credentials
+5. HashiCorp Vault static role credentials
 
 #### Password-based authentication
 
@@ -253,7 +254,7 @@ When any user has `server_auth = "azure_workload_identity"`, the following setti
 - `tls_verify` must **not** be `"disabled"`.
 - `passthrough_auth` must be `"disabled"`.
 
-#### HashiCorp Vault authentication
+#### HashiCorp Vault dynamic role authentication
 
 PgDog can fetch dynamic database credentials (username and password) from HashiCorp Vault's database secrets engine, while keeping client-to-PgDog authentication unchanged. Credentials are cached and rotated automatically after a configured percentage of the Vault lease has elapsed.
 
@@ -287,6 +288,32 @@ When any user has `server_auth = "vault_dynamic"` or `"vault_static"`, the follo
 
 - `tls_verify` must **not** be `"disabled"`.
 - `passthrough_auth` must be `"disabled"`.
+
+#### HashiCorp Vault static role authentication
+
+Unlike dynamic credentials, a Vault static database role has a fixed username; only its password rotates, on a schedule Vault manages. PgDog supports two independent uses of a static role, and they can be combined on the same user:
+
+- `client_vault_path`: verify the password a client sends to PgDog against Vault's current password for the role, instead of a statically configured password.
+- `server_auth = "vault_static"` with `backend_vault_path`: use the role's Vault-managed username and password for PgDog-to-PostgreSQL connections, refreshed like dynamic credentials.
+
+**Example**
+
+In `users.toml`:
+
+```toml
+[[users]]
+name = "alice"
+database = "pgdog"
+client_vault_path = "database/static-creds/pgdog-static-role"
+server_auth = "vault_static"
+backend_vault_path = "database/static-creds/pgdog-static-role"
+# Refresh the backend password after 80% of the rotation TTL (default).
+# vault_refresh_percent = 80
+```
+
+In `pgdog.toml`, the same `[vault]` section used for dynamic credentials applies.
+
+Both settings are optional and independent: set only `client_vault_path` to verify client passwords while keeping any other backend authentication method, or only `server_auth = "vault_static"` to use the static role for backend connections while clients authenticate with a regular password.
 
 ### Sharding
 
