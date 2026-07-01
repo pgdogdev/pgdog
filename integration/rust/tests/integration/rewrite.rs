@@ -178,7 +178,7 @@ async fn update_moves_row_between_shards() {
 }
 
 #[tokio::test]
-async fn update_multiple_rows() {
+async fn update_multiple_rows_from_same_shard() {
     let admin = admin_sqlx().await;
     let _guard = RewriteConfigGuard::enable(admin.clone()).await;
 
@@ -223,6 +223,78 @@ async fn update_multiple_rows() {
         2,
         "both rows on shard 1 with id=11"
     );
+
+    cleanup_table(&pool).await;
+}
+
+#[tokio::test]
+async fn update_multiple_rows_goes_to_same_shard() {
+    let admin = admin_sqlx().await;
+    let _guard = RewriteConfigGuard::enable(admin.clone()).await;
+
+    let mut pools = connections_sqlx().await;
+    let pool = pools.swap_remove(1);
+
+    prepare_table_no_pk(&pool).await;
+
+    pool.execute(format!("INSERT INTO {TEST_TABLE} (id, value) VALUES (1, 'first')").as_str())
+        .await
+        .expect("insert first row");
+
+    pool.execute(format!("INSERT INTO {TEST_TABLE} (id, value) VALUES (2, 'second')").as_str())
+        .await
+        .expect("insert second row");
+    
+    let result = pool
+        .execute(format!("UPDATE {TEST_TABLE} SET id = 3 WHERE id IN (1, 2)").as_str())
+        .await
+        .expect("same-shard multi-row update must not require a transaction");
+
+    assert_eq!(result.rows_affected(), 2, "both rows updated");
+
+    assert_eq!(count_on_shard(&pool, 0, 1).await, 0, "id=1 replaced");
+    assert_eq!(count_on_shard(&pool, 0, 2).await, 0, "id=2 replaced");
+    assert_eq!(count_on_shard(&pool, 0, 3).await, 2, "both rows on shard 0 with id=3");
+    assert_eq!(count_on_shard(&pool, 1, 3).await, 0, "no row on shard 1");
+
+    cleanup_table(&pool).await;
+}
+
+#[tokio::test]
+async fn update_rows_from_different_shards_to_same_shard() {
+    let admin = admin_sqlx().await;
+    let _guard = RewriteConfigGuard::enable(admin.clone()).await;
+
+    let mut pools = connections_sqlx().await;
+    let pool = pools.swap_remove(1);
+
+    // No PRIMARY KEY — both rows will be updated to id=3 on shard 0.
+    prepare_table_no_pk(&pool).await;
+
+    // id=1 lands on shard 0, id=11 lands on shard 1 (list-sharded: 0–10 → shard 0, 11–20 → shard 1).
+    pool.execute(format!("INSERT INTO {TEST_TABLE} (id, value) VALUES (1, 'on_shard_0')").as_str())
+        .await
+        .expect("insert row on shard 0");
+
+    pool.execute(format!("INSERT INTO {TEST_TABLE} (id, value) VALUES (11, 'on_shard_1')").as_str())
+        .await
+        .expect("insert row on shard 1");
+
+    assert_eq!(count_on_shard(&pool, 0, 1).await, 1, "id=1 on shard 0 before update");
+    assert_eq!(count_on_shard(&pool, 1, 11).await, 1, "id=11 on shard 1 before update");
+
+    let mut txn = pool.begin().await.unwrap();
+    let result = txn
+        .execute(format!("UPDATE {TEST_TABLE} SET id = 3 WHERE id IN (1, 11)").as_str())
+        .await
+        .expect("cross-shard to same-shard update should succeed");
+    assert_eq!(result.rows_affected(), 2, "both rows updated");
+    txn.commit().await.unwrap();
+
+    assert_eq!(count_on_shard(&pool, 0, 1).await, 0, "id=1 deleted from shard 0");
+    assert_eq!(count_on_shard(&pool, 1, 11).await, 0, "id=11 deleted from shard 1");
+    assert_eq!(count_on_shard(&pool, 0, 3).await, 2, "both rows now on shard 0 with id=3");
+    assert_eq!(count_on_shard(&pool, 1, 3).await, 0, "no row on shard 1");
 
     cleanup_table(&pool).await;
 }
