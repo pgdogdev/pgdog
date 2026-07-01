@@ -244,7 +244,7 @@ async fn update_multiple_rows_goes_to_same_shard() {
     pool.execute(format!("INSERT INTO {TEST_TABLE} (id, value) VALUES (2, 'second')").as_str())
         .await
         .expect("insert second row");
-    
+
     let result = pool
         .execute(format!("UPDATE {TEST_TABLE} SET id = 3 WHERE id IN (1, 2)").as_str())
         .await
@@ -254,7 +254,11 @@ async fn update_multiple_rows_goes_to_same_shard() {
 
     assert_eq!(count_on_shard(&pool, 0, 1).await, 0, "id=1 replaced");
     assert_eq!(count_on_shard(&pool, 0, 2).await, 0, "id=2 replaced");
-    assert_eq!(count_on_shard(&pool, 0, 3).await, 2, "both rows on shard 0 with id=3");
+    assert_eq!(
+        count_on_shard(&pool, 0, 3).await,
+        2,
+        "both rows on shard 0 with id=3"
+    );
     assert_eq!(count_on_shard(&pool, 1, 3).await, 0, "no row on shard 1");
 
     cleanup_table(&pool).await;
@@ -276,12 +280,22 @@ async fn update_rows_from_different_shards_to_same_shard() {
         .await
         .expect("insert row on shard 0");
 
-    pool.execute(format!("INSERT INTO {TEST_TABLE} (id, value) VALUES (11, 'on_shard_1')").as_str())
-        .await
-        .expect("insert row on shard 1");
+    pool.execute(
+        format!("INSERT INTO {TEST_TABLE} (id, value) VALUES (11, 'on_shard_1')").as_str(),
+    )
+    .await
+    .expect("insert row on shard 1");
 
-    assert_eq!(count_on_shard(&pool, 0, 1).await, 1, "id=1 on shard 0 before update");
-    assert_eq!(count_on_shard(&pool, 1, 11).await, 1, "id=11 on shard 1 before update");
+    assert_eq!(
+        count_on_shard(&pool, 0, 1).await,
+        1,
+        "id=1 on shard 0 before update"
+    );
+    assert_eq!(
+        count_on_shard(&pool, 1, 11).await,
+        1,
+        "id=11 on shard 1 before update"
+    );
 
     let mut txn = pool.begin().await.unwrap();
     let result = txn
@@ -291,9 +305,21 @@ async fn update_rows_from_different_shards_to_same_shard() {
     assert_eq!(result.rows_affected(), 2, "both rows updated");
     txn.commit().await.unwrap();
 
-    assert_eq!(count_on_shard(&pool, 0, 1).await, 0, "id=1 deleted from shard 0");
-    assert_eq!(count_on_shard(&pool, 1, 11).await, 0, "id=11 deleted from shard 1");
-    assert_eq!(count_on_shard(&pool, 0, 3).await, 2, "both rows now on shard 0 with id=3");
+    assert_eq!(
+        count_on_shard(&pool, 0, 1).await,
+        0,
+        "id=1 deleted from shard 0"
+    );
+    assert_eq!(
+        count_on_shard(&pool, 1, 11).await,
+        0,
+        "id=11 deleted from shard 1"
+    );
+    assert_eq!(
+        count_on_shard(&pool, 0, 3).await,
+        2,
+        "both rows now on shard 0 with id=3"
+    );
     assert_eq!(count_on_shard(&pool, 1, 3).await, 0, "no row on shard 1");
 
     cleanup_table(&pool).await;
