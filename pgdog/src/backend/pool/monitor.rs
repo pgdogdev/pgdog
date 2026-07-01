@@ -206,8 +206,10 @@ impl Monitor {
                         }
                         ServerAuth::VaultStatic => {
                             vault::static_backend_credentials(addr.clone()).await.map(
-                                |(token, expires_at)| {
-                                    TokenCache::global().set(&addr, token, expires_at)
+                                |(token, expires_at, refresh_at)| {
+                                    TokenCache::global().set_with_refresh_at(
+                                        &addr, token, expires_at, refresh_at,
+                                    )
                                 },
                             )
                         }

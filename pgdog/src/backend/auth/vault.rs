@@ -9,9 +9,12 @@
 //!
 //! Pools configured with `server_auth = "vault_static"` fetch the current
 //! password for a Vault static database role instead.
-//! The username is operator-supplied (like RDS IAM and Azure Workload Identity) so
-//! credentials are cached via [`TokenCache::get_or_fetch`] and refreshed
-//! only when the password is expired.
+//! The username is operator-supplied (like RDS IAM and Azure Workload
+//! Identity) so credentials are cached via
+//! [`TokenCache::get_or_fetch_with_refresh`]. Unlike RDS/Azure tokens, Vault
+//! only issues a new static-role password once the old one's TTL actually
+//! expires. That's why [`static_backend_credentials`] schedules its refresh
+//! at expiry rather than ahead of it.
 //!
 //! The Vault login/token cache itself lives in
 //! [`crate::auth::vault`], shared with static role client-auth verification.
@@ -104,18 +107,30 @@ pub(crate) async fn credentials(addr: Address) -> Result<FetchedCredentials, Err
     })
 }
 
+/// Minimum time between refresh attempts for a Vault static role.
+///
+/// This floor guards against hammering Vault when the
+/// observed TTL is very small — e.g. read close to the rotation boundary,
+/// or Vault's actual rotation lagging slightly behind the TTL it reported.
+const STATIC_ROLE_MIN_REFRESH_BACKOFF: Duration = Duration::from_secs(1);
+
 /// Fetch the current password for a Vault static database role, for use as
 /// a backend (server-side) connection password.
 ///
-/// Unlike dynamic credentials, the username it's fixed and supplied in the config.
-/// This is the raw fetcher passed to [`TokenCache::get_or_fetch`] and called
-/// by the monitor's refresh loop. Callers should never invoke it directly —
-/// go through
+/// Unlike dynamic credentials, the username is fixed and supplied in the
+/// config. This is the raw fetcher passed to
+/// [`TokenCache::get_or_fetch_with_refresh`] and called by the monitor's
+/// refresh loop. Callers should never invoke it directly — go through
 /// [`TokenCache::global`](crate::backend::pool::token_cache::TokenCache::global)
 /// instead.
+///
+/// Returns `(password, expires_at, refresh_at)`. `refresh_at` is `expires_at`
+/// itself (clamped to at least [`STATIC_ROLE_MIN_REFRESH_BACKOFF`] from now)
+/// rather than an early buffer, since Vault won't have a fresh password to
+/// give out before then.
 pub(crate) async fn static_backend_credentials(
     addr: Address,
-) -> Result<(String, SystemTime), Error> {
+) -> Result<(String, SystemTime, SystemTime), Error> {
     let (vault, path) = vault_and_path(&addr)?;
 
     let secret: StaticSecretResponse = fetch_secret(&vault, path).await?;
@@ -126,9 +141,11 @@ pub(crate) async fn static_backend_credentials(
         "fetched Vault static backend credentials"
     );
 
-    let expires_at = SystemTime::now() + Duration::from_secs(secret.data.ttl);
+    let now = SystemTime::now();
+    let expires_at = now + Duration::from_secs(secret.data.ttl);
+    let refresh_at = expires_at.max(now + STATIC_ROLE_MIN_REFRESH_BACKOFF);
 
-    Ok((secret.data.password, expires_at))
+    Ok((secret.data.password, expires_at, refresh_at))
 }
 
 #[cfg(test)]
@@ -360,12 +377,13 @@ mod tests {
         *VAULT_TOKEN.lock() = None;
         set_vault_config(approle_vault(&server.uri()));
 
-        let (password, expires_at) =
+        let (password, expires_at, refresh_at) =
             static_backend_credentials(make_addr(Some("database/static-creds/pgdog-static-role")))
                 .await
                 .unwrap();
         assert_eq!(password, "vault-rotated-pass");
         assert!(expires_at > SystemTime::now());
+        assert!(refresh_at > SystemTime::now());
     }
 
     #[tokio::test]

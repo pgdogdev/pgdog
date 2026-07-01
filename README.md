@@ -294,7 +294,7 @@ When any user has `server_auth = "vault_dynamic"` or `"vault_static"`, the follo
 Unlike dynamic credentials, a Vault static database role has a fixed username and only its password rotates, on a schedule Vault manages. PgDog supports two independent uses of a static role — they don't need to point at the same role, and each has its own username setting:
 
 - `client_vault_path`: verify the password a client sends to PgDog against Vault's current password for the role, instead of a statically configured password.
-- `server_auth = "vault_static"` with `backend_vault_path`: use the role's Vault-managed password for PgDog-to-PostgreSQL connections. Unlike `vault_dynamic`, PgDog doesn't take the username from Vault, it connects as `server_user` (or `name`, if `server_user` isn't set), and only checks the fetched password on demand (no proactive refresh).
+- `server_auth = "vault_static"` with `backend_vault_path`: use the role's Vault-managed password for PgDog-to-PostgreSQL connections. Unlike `vault_dynamic`, PgDog doesn't take the username from Vault, it connects as `server_user` or `name`, if `server_user` isn't set.
 
 **Example**
 

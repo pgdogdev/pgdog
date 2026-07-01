@@ -44,7 +44,7 @@ $VAULT write database/static-roles/pgdog-static-role \
     db_name=pgdog \
     rotation_statements="ALTER USER \"{{name}}\" WITH PASSWORD '{{password}}';" \
     username="pgdog_static" \
-    rotation_period=3600
+    rotation_period=300
 
 echo "Configuring AppRole auth..."
 $VAULT auth enable approle 2>/dev/null || true

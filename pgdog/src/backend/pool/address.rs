@@ -149,7 +149,7 @@ impl Address {
 
             ServerAuth::VaultStatic => {
                 let password = TokenCache::global()
-                    .get_or_fetch(self, vault::static_backend_credentials)
+                    .get_or_fetch_with_refresh(self, vault::static_backend_credentials)
                     .await?;
                 vec![Password::new(&password, PasswordSource::Vault)]
             }

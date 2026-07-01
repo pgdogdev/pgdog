@@ -172,6 +172,33 @@ impl TokenCache {
             .insert(CacheKey::from(addr), CachedToken::new(token, expires_at));
     }
 
+    /// Store a freshly fetched token for `addr`, along with an explicit
+    /// refresh instant.
+    ///
+    /// Use when a provider's own expiry can't be safely approached with the
+    /// default [`EXPIRY_BUFFER`] — e.g. a Vault static role, which only
+    /// issues a new password once its TTL actually expires and echoes back
+    /// a shrinking TTL if read early, resulting in a tight refresh loop.
+    pub fn set_with_refresh_at(
+        &self,
+        addr: &Address,
+        token: String,
+        expires_at: SystemTime,
+        refresh_at: SystemTime,
+    ) {
+        self.inner.lock().insert(
+            CacheKey::from(addr),
+            CachedToken {
+                credentials: Credentials {
+                    username: None,
+                    secret: token,
+                },
+                expires_at,
+                refresh_at: Some(refresh_at),
+            },
+        );
+    }
+
     /// Store freshly fetched credentials for `addr`, including a
     /// generated username and an explicit refresh instant when present.
     pub fn set_credentials(&self, addr: &Address, fetched: FetchedCredentials) {
@@ -207,6 +234,29 @@ impl TokenCache {
         // After this the monitor's refresh loop takes over.
         let (token, expires_at) = fetcher(addr.clone()).await?;
         self.set(addr, token.clone(), expires_at);
+        Ok(token)
+    }
+
+    /// Like [`get_or_fetch`](Self::get_or_fetch), but for providers that
+    /// compute their own refresh instant instead of relying on
+    /// [`EXPIRY_BUFFER`] — see [`set_with_refresh_at`](Self::set_with_refresh_at).
+    pub async fn get_or_fetch_with_refresh<F, Fut>(
+        &self,
+        addr: &Address,
+        fetcher: F,
+    ) -> Result<String, Error>
+    where
+        F: Fn(Address) -> Fut + Send + Sync,
+        Fut: Future<Output = Result<(String, SystemTime, SystemTime), Error>>,
+    {
+        if let Some(cached) = self.inner.lock().get(&CacheKey::from(addr)).cloned() {
+            return Ok(cached.credentials.secret);
+        }
+
+        // Cold miss — block once to prime the cache.
+        // After this the monitor's refresh loop takes over.
+        let (token, expires_at, refresh_at) = fetcher(addr.clone()).await?;
+        self.set_with_refresh_at(addr, token.clone(), expires_at, refresh_at);
         Ok(token)
     }
 
