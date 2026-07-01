@@ -5,6 +5,7 @@ use crate::frontend::router::parser::{
 use super::*;
 #[cfg(not(feature = "new_parser"))]
 use function::FunctionBehavior;
+#[cfg(not(feature = "new_parser"))]
 use pg_query::Node as PgNode;
 #[cfg(feature = "new_parser")]
 use pg_raw_parse::walk;
@@ -150,6 +151,9 @@ impl QueryParser {
             ));
         }
 
+        #[cfg(feature = "new_parser")]
+        let order_by = Self::select_sort(stmt, context.router_context.bind);
+        #[cfg(not(feature = "new_parser"))]
         let order_by = Self::select_sort(&stmt_old.sort_clause, context.router_context.bind);
         let from_clause = TablesSource::from(FromClause::new(&stmt_old.from_clause));
 
@@ -283,6 +287,75 @@ impl QueryParser {
     /// * `nodes`: List of pg_query-generated nodes from the ORDER BY clause.
     /// * `params`: Bind parameters, if any.
     ///
+    #[cfg(feature = "new_parser")]
+    fn select_sort(stmt: &nodes::SelectStmt, params: Option<&Bind>) -> Vec<OrderBy> {
+        stmt.sortClause()
+            .into_iter()
+            .filter_map(|sort_by| {
+                use pg_raw_parse::{
+                    ConstValue,
+                    raw::{A_Expr_Kind::*, SortByDir::*},
+                };
+
+                let asc = matches!(sort_by.sortby_dir, SORTBY_DEFAULT | SORTBY_ASC);
+                match sort_by.node() {
+                    Node::A_Const(c) if let Some(ConstValue::Integer(i)) = c.val() => {
+                        if asc {
+                            Some(OrderBy::Asc(i as _))
+                        } else {
+                            Some(OrderBy::Desc(i as _))
+                        }
+                    }
+
+                    Node::ColumnRef(c) => {
+                        // TODO: save the entire column and disambiguate
+                        // when reading data with RowDescription as context.
+                        let col_name = c.fields().into_iter().last()?.as_str()?;
+                        if asc {
+                            Some(OrderBy::AscColumn(col_name.into()))
+                        } else {
+                            Some(OrderBy::DescColumn(col_name.into()))
+                        }
+                    }
+
+                    Node::A_Expr(e @ nodes::A_Expr { kind: AEXPR_OP, .. })
+                        if let Some("<->") = e.name().iter().next().and_then(Node::as_str) =>
+                    {
+                        let mut vector: Option<Vector> = None;
+                        let mut column: Option<&str> = None;
+
+                        for e in [e.lexpr(), e.rexpr()] {
+                            if let Ok(vec) = Value::try_from(e) {
+                                match vec {
+                                    Value::Placeholder(p) => {
+                                        if let Ok(param) = params?.parameter((p - 1) as _) {
+                                            vector = param?.vector();
+                                        }
+                                    }
+                                    Value::Vector(vec) => vector = Some(vec),
+                                    _ => (),
+                                }
+                            } else if let Ok(col) = Column::try_from(e) {
+                                column = Some(col.name);
+                            }
+                        }
+
+                        if let Some(vector) = vector
+                            && let Some(column) = column
+                        {
+                            Some(OrderBy::AscVectorL2Column(column.into(), vector))
+                        } else {
+                            None
+                        }
+                    }
+
+                    _ => None,
+                }
+            })
+            .collect()
+    }
+
+    #[cfg(not(feature = "new_parser"))]
     fn select_sort(nodes: &[PgNode], params: Option<&Bind>) -> Vec<OrderBy> {
         let mut order_by = vec![];
         for clause in nodes {
