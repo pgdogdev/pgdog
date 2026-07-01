@@ -125,14 +125,25 @@ pub fn stop(&self) {
 
 ---
 
-## 🚧 Issue 3 — Premature cutover when lag map is empty at startup
+## ✅ Issue 3 — Premature cutover when lag map is empty at startup (resolved)
+
+> **Resolved.** `Orchestrator::replication_lag()` now returns `Option<u64>`: it
+> reports `None` until **every** source shard has written a real measurement
+> (`lag.len() != source.shards().len()`), and `Some(max_across_shards)`
+> otherwise. Callers treat `None` as "not caught up" — `wait_for_replication()`
+> logs and keeps waiting, and `should_cutover()` cannot return `Go(Lag)` — so
+> cutover never fires on an empty or partially populated map
+> ([`orchestrator.rs`](../../pgdog/src/backend/replication/logical/orchestrator.rs)).
+> This supersedes the `unwrap_or(i64::MAX)` / pre-seed sketch below: no sentinel
+> value is stored, and a partially-reported map (some shards in, others missing)
+> is handled too, not just the fully-empty case.
 
 ### Description
 
 The orchestrator computes the current replication lag as the maximum value across all per-shard lag entries:
 
 ```rust
-lag.values().copied().max().unwrap_or(i64::MAX) as u64
+lag.values().copied().max().unwrap_or_default() as u64
 ```
 
 Per-shard lag values are written into `replication_lag: HashMap<usize, i64>` by each task's `check_lag.tick()` interval. This interval fires once per second, but the first tick does not fire until one second after the task spawns.
@@ -149,25 +160,34 @@ Two independent races:
 
 | Symbol | File |
 |---|---|
-| `Publisher::replicate()` — pre-population loop for `replication_lag` map | [`pgdog/src/backend/replication/logical/publisher/publisher_impl.rs`](../../pgdog/src/backend/replication/logical/publisher/publisher_impl.rs) |
-| `Publisher::replication_lag()` — reads the map | same file |
+| `Publisher::replication_lag()` — reads the map | [`pgdog/src/backend/replication/logical/publisher/publisher_impl.rs`](../../pgdog/src/backend/replication/logical/publisher/publisher_impl.rs) |
 | `Orchestrator::replication_lag()` — takes the max across shards | [`pgdog/src/backend/replication/logical/orchestrator.rs`](../../pgdog/src/backend/replication/logical/orchestrator.rs) |
 ### Fix
 
-Pre-populate the map with `i64::MAX` for every shard index before spawning any tasks. Use `or_insert` so a real measurement written by a task is never overwritten by the sentinel. Change `unwrap_or_default()` to `unwrap_or(i64::MAX)` so an empty map (which should not occur after pre-population) is also treated as maximally lagged rather than zero.
+`Orchestrator::replication_lag()` returns `Option<u64>`. It treats the lag as
+unknown — `None` — whenever the map does not yet hold an entry for every source
+shard, and otherwise returns the max across shards:
 
 ```rust
-// Before spawning tasks:
-let mut guard = self.replication_lag.lock();
-for number in 0..n_sources {
-    guard.entry(number).or_insert(i64::MAX);
-}
+async fn replication_lag(&self) -> Option<u64> {
+    let shards_count = self.source.shards().len();
+    let lag = self.publisher.lock().await.replication_lag();
 
-// Orchestrator reads:
-lag.values().copied().max().unwrap_or(i64::MAX) as u64
+    // Some shards have not reported a measurement yet: lag is unknown.
+    if lag.len() != shards_count {
+        return None;
+    }
+
+    lag.values().copied().max().map(|lag| lag as u64)
+}
 ```
 
-The sentinel is overwritten by the first real measurement from each task's `check_lag.tick()`. Until that point the orchestrator treats every uninitialized shard as having infinite lag and will not proceed.
+Callers treat `None` as "not caught up": `wait_for_replication()` logs and
+continues its loop, and `should_cutover()` guards the lag arm with
+`lag.is_some_and(|lag| lag <= cutover_threshold)`, so neither stops traffic nor
+cuts over until every shard has reported. This needs no sentinel value in the
+map and covers a partially populated map (some shards reported, others still
+missing), not just the fully-empty case.
 
 ---
 
