@@ -46,7 +46,7 @@ pub use copy::{CopyFormat, CopyParser};
 pub use csv::{CsvStream, Record};
 pub use distinct::{Distinct, DistinctBy, DistinctColumn};
 pub use error::Error;
-pub(crate) use function::{Function, FunctionBehavior};
+use function::Function;
 pub use key::Key;
 pub use limit::{Limit, LimitClause};
 pub use order_by::OrderBy;
