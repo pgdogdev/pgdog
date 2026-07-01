@@ -4,6 +4,13 @@ database = "pgdog"
 password = "pgdog"
 
 [[users]]
+name = "pgdog_migrator"
+database = "pgdog"
+password = "pgdog"
+server_user = "pgdog"
+schema_admin = true
+
+[[users]]
 name = "pgdog_hashed"
 database = "pgdog"
 password_hash = "SCRAM-SHA-256$4096:b6lksqhYfkXiN2hDMl3zfA==$9Rh0FdfjsbECkf289/WO2yHGiUBnNOOb1uNHVtOCCDE=:V7jC7GHvIr4guRsI66S3u4aXNhHWj1Pz71ymRM7bLFU="

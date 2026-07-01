@@ -2,7 +2,11 @@
 #![allow(clippy::result_unit_err)]
 #![deny(clippy::print_stdout)]
 
+#[macro_use]
+extern crate derive_more;
+
 pub mod admin;
+pub mod api;
 pub mod auth;
 pub mod backend;
 pub mod cli;
@@ -179,35 +183,27 @@ fn init_logger(general: Option<&General>) {
         .map(|general| general.log_format)
         .unwrap_or_default();
 
+    let format = fmt::layer()
+        .with_ansi(std::io::stderr().is_terminal())
+        .with_writer(std::io::stderr)
+        .with_file(false);
+    #[cfg(not(debug_assertions))]
+    let format = format.with_target(false);
+
     match log_format {
         LogFormat::Text => {
-            let format = fmt::layer()
-                .with_ansi(std::io::stderr().is_terminal())
-                .with_writer(std::io::stderr)
-                .with_file(false);
-            #[cfg(not(debug_assertions))]
-            let format = format.with_target(false);
             let format = format.with_filter(throttle);
-
             let _ = tracing_subscriber::registry()
                 .with(format)
                 .with(filter)
                 .try_init();
         }
         LogFormat::Json | LogFormat::JsonFlattened => {
-            let format = fmt::layer()
-                .json()
-                .with_ansi(false)
-                .with_writer(std::io::stderr)
-                .with_file(false)
-                .with_current_span(false)
-                .with_span_list(false);
+            let format = format.json().with_current_span(false);
             let format = match log_format {
                 LogFormat::JsonFlattened => format.flatten_event(true),
                 _ => format,
             };
-            #[cfg(not(debug_assertions))]
-            let format = format.with_target(false);
             let format = format.with_filter(throttle);
 
             let _ = tracing_subscriber::registry()

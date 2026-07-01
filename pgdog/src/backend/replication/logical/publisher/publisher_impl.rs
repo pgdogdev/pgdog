@@ -4,11 +4,11 @@ use std::time::Duration;
 
 use parking_lot::Mutex;
 use pgdog_config::QueryParserEngine;
-use tokio::sync::Notify;
-use tokio::task::JoinHandle;
+use tokio::task::{JoinHandle, JoinSet};
 use tokio::time::{Instant, sleep};
 use tokio::try_join;
 use tokio::{select, spawn, time::interval};
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
 use super::super::{Error, ensure_validation, publisher::Table};
@@ -55,7 +55,7 @@ pub struct Publisher {
     /// Last transaction.
     last_transaction: Arc<Mutex<Option<Instant>>>,
     /// Stop signal.
-    stop: Arc<Notify>,
+    stop: CancellationToken,
     /// Slot name.
     slot_name: String,
 }
@@ -72,7 +72,7 @@ impl Publisher {
             slots: HashMap::new(),
             query_parser_engine,
             replication_lag: Arc::new(Mutex::new(HashMap::new())),
-            stop: Arc::new(Notify::new()),
+            stop: CancellationToken::new(),
             last_transaction: Arc::new(Mutex::new(None)),
             slot_name,
         }
@@ -234,10 +234,15 @@ impl Publisher {
                 let max_attempts = dest.resharding_replication_retry_max_attempts();
                 let delay = dest.resharding_replication_retry_min_delay();
                 let mut attempt = 0usize;
+                // Latches on the first cancellation so the `cancelled()` arm fires
+                // once (it stays ready forever after `cancel()`); the drain below
+                // then runs to completion.
+                let mut stopping = false;
                 loop {
                     select! {
-                        _ = stop.notified() => {
+                        _ = stop.cancelled(), if !stopping => {
                             slot.stop_replication().await?;
+                            stopping = true;
                         }
 
                         // This is cancellation-safe.
@@ -337,7 +342,7 @@ impl Publisher {
 
     /// Request the publisher to stop replication.
     pub fn request_stop(&self) {
-        self.stop.notify_one();
+        self.stop.cancel();
     }
 
     /// Get current replication lag.
@@ -371,10 +376,14 @@ impl Publisher {
         ensure_validation!(validation_errors);
 
         // Create replication slots only after validation passes — a slot
-        // created before valid() would be orphaned on a NoIdentityColumns error.
+        // created before valid() would be orphaned on validation errors.
         self.create_slots(source).await?;
 
-        let mut handles = vec![];
+        // A JoinSet aborts every in-flight shard copy when this future is
+        // dropped (e.g. the owning task is cancelled), so cancellation actually
+        // stops the copy instead of leaving detached syncs running in the
+        // background.
+        let mut set: JoinSet<Result<(usize, Vec<Table>), Error>> = JoinSet::new();
 
         for (number, shard) in source.shards().iter().enumerate() {
             let tables = self
@@ -411,16 +420,16 @@ impl Publisher {
             };
 
             let dest = dest.clone();
-            handles.push(spawn(async move {
+            set.spawn(async move {
                 let manager = ParallelSyncManager::new(tables, replicas, dest)?;
                 let tables = manager.run().await?;
 
-                Ok::<Vec<Table>, Error>(tables)
-            }));
+                Ok::<(usize, Vec<Table>), Error>((number, tables))
+            });
         }
 
-        for (number, handle) in handles.into_iter().enumerate() {
-            let tables = handle.await??;
+        while let Some(joined) = set.join_next().await {
+            let (number, tables) = joined??;
 
             info!(
                 "table sync for {} tables complete [{}, shard: {}]",
@@ -436,13 +445,20 @@ impl Publisher {
         Ok(())
     }
 
-    /// Cleanup after replication.
+    /// Drop the replication slots created during data sync.
+    ///
+    /// Idempotent: the slot map is taken out up front, so repeated calls — or a
+    /// call after replication already took the slots over — are no-ops. Every
+    /// slot is attempted even if one fails; the first error is returned.
     pub async fn cleanup(&mut self) -> Result<(), Error> {
-        for slot in self.slots.values_mut() {
-            slot.drop_slot().await?;
+        let mut error = None;
+        for (_, mut slot) in std::mem::take(&mut self.slots) {
+            if let Err(err) = slot.drop_slot().await {
+                error.get_or_insert(err);
+            }
         }
 
-        Ok(())
+        error.map_or(Ok(()), Err)
     }
 }
 
@@ -460,12 +476,12 @@ impl Publisher {
 #[derive(Debug)]
 pub struct Waiter {
     streams: Vec<JoinHandle<Result<(), Error>>>,
-    stop: Arc<Notify>,
+    stop: CancellationToken,
 }
 
 impl Waiter {
     pub fn stop(&self) {
-        self.stop.notify_one();
+        self.stop.cancel();
     }
 
     pub async fn wait(&mut self) -> Result<(), Error> {
@@ -482,7 +498,7 @@ impl Waiter {
     pub fn new_test() -> Self {
         Self {
             streams: vec![],
-            stop: Arc::new(Notify::new()),
+            stop: CancellationToken::new(),
         }
     }
 }

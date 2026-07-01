@@ -287,7 +287,13 @@ mod tests {
 
     #[test]
     fn parses_cutover_command() {
-        let result = Parser::parse("CUTOVER");
-        assert!(matches!(result, Ok(ParseResult::Cutover(_))));
+        assert!(matches!(
+            Parser::parse("CUTOVER"),
+            Ok(ParseResult::Cutover(_))
+        ));
+        assert!(matches!(
+            Parser::parse("CUTOVER 1"),
+            Ok(ParseResult::Cutover(_))
+        ));
     }
 }

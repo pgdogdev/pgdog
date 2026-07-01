@@ -167,8 +167,10 @@ traffic immediately via `maintenance_mode::stop()` and returns an error. Steps i
 1. `publisher.request_stop()` + `waiter.wait()` — stops the replication stream; drains remaining WAL.
 2. `schema_sync_cutover()` — applies `SyncState::Cutover` operations (e.g. drops sequences that
    won't be used in the sharded cluster).
-3. `cutover(source_db, dest_db)` in [`pgdog/src/backend/databases.rs`](../pgdog/src/backend/databases.rs) — atomically swaps source and
-   destination in the in-memory routing table.
+3. `cutover(source_db, dest_db)` in [`pgdog/src/backend/databases.rs`](../pgdog/src/backend/databases.rs) —
+   atomically swaps the two clusters' logical identity in the routing table (and config refs via
+   `Config::cutover`/`Users::cutover`); no data moves. Persisted to disk when
+   `cutover_save_config = true`.
 4. `orchestrator.refresh()` — re-fetches both clusters from `databases()` so the orchestrator now
    treats the new cluster as source for reverse replication.
 5. `schema_sync_post_cutover()` — applies `SyncState::PostCutover` (removes blockers that would
@@ -214,18 +216,18 @@ returned by any task surfaces via `table?` and aborts the manager's loop. Remain
 completion or abort via their own `AbortSignal`, but their results are ignored once the channel
 is dropped.
 
-### Temporary vs permanent replication slots
+On a failed or aborted migration, `ReshardTask::run` ([`api/resharding.rs`](../pgdog/src/api/resharding.rs))
+obtains a guard via `Orchestrator::publication_guard()` and calls `PublicationGuard::cleanup()`, which
+locks the publisher and has `Publisher::cleanup()` drop the permanent WAL slot via
+`DROP_REPLICATION_SLOT "name" WAIT`. On success the slot is kept so reverse replication can roll
+back. If the process crashes before this runs, the slot survives and keeps accumulating WAL on the
+source — drop it manually before retrying.
+
+### Temporary replication slots
 
 Per-table slots created in [`Table::data_sync()`](../pgdog/src/backend/replication/logical/publisher/table.rs) are `TEMPORARY` — PostgreSQL drops them
 automatically when the replication connection closes, including on error or panic. A failed copy
 task leaves no orphaned per-table slot.
-
-The `Publisher`'s named replication slot (the one used for the WAL streaming phase) is permanent.
-[`Publisher::cleanup()`](../pgdog/src/backend/replication/logical/publisher/publisher_impl.rs) drops it by calling `slot.drop_slot()`, which issues
-`DROP_REPLICATION_SLOT "name" WAIT` over the replication protocol connection. `cleanup()` is an
-explicit method on `Orchestrator` — it is not called automatically inside `replicate_and_cutover()`.
-If the orchestrator is dropped after Step 5 begins but before `cleanup()` is called (e.g. a
-process crash), the permanent slot survives and continues accumulating WAL on the source.
 
 ### The `ok_or_abort!` macro — guaranteed traffic resumption after cutover starts
 

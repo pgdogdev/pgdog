@@ -1,10 +1,9 @@
 //! COPY_DATA command.
 
-use tokio::spawn;
 use tracing::info;
 
-use crate::backend::replication::AsyncTasks;
-use crate::backend::replication::logical::admin::{Task, TaskType};
+use crate::api::resharding::ReshardTask;
+use crate::api::run_task;
 use crate::backend::replication::orchestrator::Orchestrator;
 
 use super::prelude::*;
@@ -54,7 +53,7 @@ impl Command for CopyData {
             self.from_database, self.to_database, self.publication
         );
 
-        let mut orchestrator = Orchestrator::new(
+        let orchestrator = Orchestrator::new(
             &self.from_database,
             &self.to_database,
             &self.publication,
@@ -63,20 +62,7 @@ impl Command for CopyData {
 
         let slot_name = orchestrator.replication_slot().to_owned();
 
-        let task_id = Task::register(TaskType::CopyData(spawn(async move {
-            orchestrator.load_schema().await?;
-            orchestrator.schema_sync_pre(true).await?;
-            orchestrator.data_sync().await?;
-            // data_sync can run for hours; any pool reload during the copy marks self.source
-            // offline.  Re-fetch live cluster refs from databases() before starting replication.
-            orchestrator.refresh()?;
-
-            AsyncTasks::insert(TaskType::Replication(Box::new(
-                orchestrator.replicate().await?,
-            )));
-
-            Ok(())
-        })));
+        let task_id = run_task(ReshardTask::builder().orchestrator(orchestrator).build()).id();
 
         let mut dr = DataRow::new();
         dr.add(task_id.to_string()).add(slot_name);

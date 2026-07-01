@@ -161,7 +161,7 @@ echo "[retry_test] shard_1 is ready."
 echo "[retry_test] Waiting for SHOW TASKS to report a Replication task..."
 REPLICATION_TASK_SEEN=0
 for _ in $(seq 1 "${REPLICATION_TIMEOUT}"); do
-    if admin_psql -tAc 'SHOW TASKS' 2>/dev/null | grep -q '|replication|'; then
+    if admin_psql -tAc 'SHOW TASKS' 2>/dev/null | grep -qE 'replication source -> destination\|running'; then
         REPLICATION_TASK_SEEN=1
         break
     fi
@@ -235,8 +235,8 @@ echo "[retry_test] shard_0 is ready."
 # exhausted, non-retryable error) waiting for the canary would just time out after the full
 # REPLICATION_TIMEOUT (${REPLICATION_TIMEOUT}s) with no useful signal. Check this BEFORE waiting
 # for canary delivery to localise the failure.
-if ! admin_psql -tAc 'SHOW TASKS' 2>/dev/null | grep -q '|replication|'; then
-    echo "[retry_test] FAIL: replication task is no longer present after shard_0 restart"
+if ! admin_psql -tAc 'SHOW TASKS' 2>/dev/null | grep -qE 'replication source -> destination\|running'; then
+    echo "[retry_test] FAIL: replication task is no longer running after shard_0 restart"
     echo "[retry_test]   the apply task likely errored and exited; not a delivery-latency issue"
     dump_state
     exit 1
