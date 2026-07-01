@@ -291,29 +291,28 @@ When any user has `server_auth = "vault_dynamic"` or `"vault_static"`, the follo
 
 #### HashiCorp Vault static role authentication
 
-Unlike dynamic credentials, a Vault static database role has a fixed username; only its password rotates, on a schedule Vault manages. PgDog supports two independent uses of a static role, and they can be combined on the same user:
+Unlike dynamic credentials, a Vault static database role has a fixed username and only its password rotates, on a schedule Vault manages. PgDog supports two independent uses of a static role — they don't need to point at the same role, and each has its own username setting:
 
 - `client_vault_path`: verify the password a client sends to PgDog against Vault's current password for the role, instead of a statically configured password.
-- `server_auth = "vault_static"` with `backend_vault_path`: use the role's Vault-managed username and password for PgDog-to-PostgreSQL connections, refreshed like dynamic credentials.
+- `server_auth = "vault_static"` with `backend_vault_path`: use the role's Vault-managed password for PgDog-to-PostgreSQL connections. Unlike `vault_dynamic`, PgDog doesn't take the username from Vault, it connects as `server_user` (or `name`, if `server_user` isn't set), and only checks the fetched password on demand (no proactive refresh).
 
 **Example**
 
-In `users.toml`:
+In `users.toml`, for a client authenticating as `alice` (verified against a static role registered under that same name) while PgDog connects to Postgres as `pgdog_service` (a separate static role):
 
 ```toml
 [[users]]
 name = "alice"
 database = "pgdog"
-client_vault_path = "database/static-creds/pgdog-static-role"
+client_vault_path = "database/static-creds/alice"
+server_user = "pgdog_service"
 server_auth = "vault_static"
-backend_vault_path = "database/static-creds/pgdog-static-role"
-# Refresh the backend password after 80% of the rotation TTL (default).
-# vault_refresh_percent = 80
+backend_vault_path = "database/static-creds/pgdog-service"
 ```
 
 In `pgdog.toml`, the same `[vault]` section used for dynamic credentials applies.
 
-Both settings are optional and independent: set only `client_vault_path` to verify client passwords while keeping any other backend authentication method, or only `server_auth = "vault_static"` to use the static role for backend connections while clients authenticate with a regular password.
+Both settings are optional and independent: set only `client_vault_path` to verify client passwords while keeping any other backend authentication method, or only `server_auth = "vault_static"` to use a static role for backend connections while clients authenticate with a regular password.
 
 ### Sharding
 

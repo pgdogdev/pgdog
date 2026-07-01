@@ -4,9 +4,7 @@
 //! consumer in the codebase:
 //!
 //! - **Client authentication** — users configured with `client_vault_path`
-//!   (e.g. `database/static-creds/my-role`) have their client-supplied
-//!   password verified against the current password held by Vault for that
-//!   static role. Results are cached for the role's rotation TTL.
+//!   retrieve their password from Vault and results are cached for the role's rotation TTL.
 //! - **Backend pools** (`src/backend/auth/vault.rs`) reuse the login/token
 //!   cache here to fetch dynamic database credentials.
 
@@ -16,6 +14,7 @@ use std::time::{Duration, SystemTime};
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 use serde::Deserialize;
+use serde::de::DeserializeOwned;
 use serde_json::json;
 use tracing::debug;
 
@@ -23,28 +22,14 @@ use crate::backend::Error;
 use crate::config::config;
 use pgdog_config::vault::{Vault, VaultAuthMethod};
 
+/// Cached Vault client token, shared by all pools.
+pub(crate) static VAULT_TOKEN: Lazy<Mutex<Option<VaultToken>>> = Lazy::new(|| Mutex::new(None));
+
 #[derive(Clone, Debug)]
 pub(crate) struct VaultToken {
     pub(crate) token: String,
     pub(crate) expires_at: SystemTime,
 }
-
-/// Cached Vault client token, shared by all pools.
-pub(crate) static VAULT_TOKEN: Lazy<Mutex<Option<VaultToken>>> = Lazy::new(|| Mutex::new(None));
-
-// ── Static role client-auth cache ────────────────────────────────────────────
-
-/// How early to evict a static role password before its rotation TTL expires,
-/// to reduce the chance of serving a stale password right at the rotation boundary.
-const STATIC_CACHE_BUFFER: Duration = Duration::from_secs(10);
-
-struct CachedStaticPassword {
-    password: String,
-    expires_at: SystemTime,
-}
-
-static CLIENT_PASSWORD_CACHE: Lazy<Mutex<HashMap<String, CachedStaticPassword>>> =
-    Lazy::new(|| Mutex::new(HashMap::new()));
 
 #[derive(Deserialize)]
 struct AuthResponse {
@@ -57,13 +42,21 @@ struct AuthData {
     lease_duration: u64,
 }
 
+/// Static role client-auth cache
+struct CachedStaticPassword {
+    password: String,
+    expires_at: SystemTime,
+}
+
+static CLIENT_PASSWORD_CACHE: Lazy<Mutex<HashMap<String, CachedStaticPassword>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+
 /// Response from a Vault static database role (`database/static-creds/<role>`).
 ///
 /// Unlike dynamic leases, `lease_duration` is always 0; `data.ttl` is the
 /// seconds remaining until Vault rotates the password.
 ///
-/// `pub(crate)` because [`crate::backend::auth::vault::static_backend_credentials`]
-/// deserializes into it directly to pick up the fixed username as well.
+/// `pub(crate)` because [`crate::backend::auth::vault::static_backend_credentials`] deserializes into it directly.
 #[derive(Deserialize)]
 pub(crate) struct StaticSecretResponse {
     pub(crate) data: StaticSecretData,
@@ -71,7 +64,6 @@ pub(crate) struct StaticSecretResponse {
 
 #[derive(Deserialize)]
 pub(crate) struct StaticSecretData {
-    pub(crate) username: String,
     pub(crate) password: String,
     /// Seconds until Vault rotates the password.
     pub(crate) ttl: u64,
@@ -197,43 +189,27 @@ pub(crate) async fn vault_token(vault: &Vault) -> Result<String, Error> {
     Ok(secret)
 }
 
-/// Return the current password for a Vault static database role, using a
-/// per-path cache keyed by `vault_path`.
+/// Fetch and parse a JSON secret from `path` in Vault.
 ///
-/// The cached value is evicted `STATIC_CACHE_BUFFER` before the role's
-/// rotation TTL expires so the next connection after a rotation picks up
-/// the new password.
-pub(crate) async fn static_client_password(vault_path: &str) -> Result<String, Error> {
-    if let Some(cached) = CLIENT_PASSWORD_CACHE.lock().get(vault_path) {
-        if SystemTime::now() < cached.expires_at {
-            return Ok(cached.password.clone());
-        }
-    }
-
-    let vault = config()
-        .config
-        .vault
-        .clone()
-        .ok_or_else(|| error("[vault] section is missing from pgdog.toml"))?;
-
-    let token = vault_token(&vault).await?;
+/// Handles token acquisition, a `403` response by dropping the cached
+/// client token (so the next attempt logs in again), and non-success responses. `context`
+pub(crate) async fn fetch_secret<T: DeserializeOwned>(
+    vault: &Vault,
+    path: &str,
+) -> Result<T, Error> {
+    let token = vault_token(vault).await?;
     let url = format!(
         "{}/v1/{}",
         vault.url.trim_end_matches('/'),
-        vault_path.trim_start_matches('/')
+        path.trim_start_matches('/')
     );
 
-    let response = client(&vault)?
+    let response = client(vault)?
         .get(&url)
         .header("X-Vault-Token", token)
         .send()
         .await
-        .map_err(|err| {
-            error(format!(
-                "Vault static credentials request to \"{}\" failed: {}",
-                url, err
-            ))
-        })?;
+        .map_err(|err| error(format!("request to \"{}\" failed: {}", url, err)))?;
 
     let status = response.status();
 
@@ -244,20 +220,36 @@ pub(crate) async fn static_client_password(vault_path: &str) -> Result<String, E
     if !status.is_success() {
         let body = response.text().await.unwrap_or_default();
         return Err(error(format!(
-            "Vault static credentials read at \"{}\" returned {}: {}",
+            "read at \"{}\" returned {}: {}",
             url, status, body
         )));
     }
 
-    let secret: StaticSecretResponse = response.json().await.map_err(|err| {
-        error(format!(
-            "invalid Vault static credentials response: {}",
-            err
-        ))
-    })?;
+    response
+        .json()
+        .await
+        .map_err(|err| error(format!("{} invalid response: {}", url, err)))
+}
+
+/// Return the current password for a Vault static database role, using a
+/// per-path cache keyed by `vault_path`.
+pub(crate) async fn static_client_password(vault_path: &str) -> Result<String, Error> {
+    if let Some(cached) = CLIENT_PASSWORD_CACHE.lock().get(vault_path)
+        && SystemTime::now() < cached.expires_at
+    {
+        return Ok(cached.password.clone());
+    }
+
+    let vault = config()
+        .config
+        .vault
+        .clone()
+        .ok_or_else(|| error("[vault] section is missing from pgdog.toml"))?;
+
+    let secret: StaticSecretResponse = fetch_secret(&vault, vault_path).await?;
 
     let ttl = Duration::from_secs(secret.data.ttl);
-    let expires_at = SystemTime::now() + ttl.saturating_sub(STATIC_CACHE_BUFFER);
+    let expires_at = SystemTime::now() + ttl;
 
     debug!(
         vault_path,

@@ -114,7 +114,7 @@ impl Address {
 
     /// Get the username and passwords to log into the server with.
     ///
-    /// The username is the configured one, except for Vault-backed pools
+    /// The username is the configured one, except for `vault_dynamic` pools
     /// where the database secrets engine generates it together with the
     /// password.
     pub async fn auth_credentials(&self) -> Result<(String, Vec<Password>), Error> {
@@ -148,13 +148,10 @@ impl Address {
             }
 
             ServerAuth::VaultStatic => {
-                let credentials = TokenCache::global()
-                    .credentials_or_fetch(self, vault::static_backend_credentials)
+                let password = TokenCache::global()
+                    .get_or_fetch(self, vault::static_backend_credentials)
                     .await?;
-                if let Some(username) = credentials.username {
-                    user = username;
-                }
-                vec![Password::new(&credentials.secret, PasswordSource::Vault)]
+                vec![Password::new(&password, PasswordSource::Vault)]
             }
         };
 
@@ -566,36 +563,23 @@ mod test {
     }
 
     #[tokio::test]
-    async fn test_auth_credentials_vault_static_serves_username_and_password_from_cache() {
-        use crate::backend::pool::token_cache::{Credentials, FetchedCredentials};
-
+    async fn test_auth_credentials_vault_static_serves_password_from_cache() {
         let addr = Address {
             host: "auth-secrets-vault-static.internal".into(),
             port: 15436,
-            user: "configured_user".into(),
+            user: "pgdog_static".into(),
             server_auth: ServerAuth::VaultStatic,
             vault_path: Some("database/static-creds/pgdog-static".into()),
             ..Default::default()
         };
 
-        let now = SystemTime::now();
-        TokenCache::global().set_credentials(
-            &addr,
-            FetchedCredentials {
-                credentials: Credentials {
-                    username: Some("pgdog_static".into()),
-                    secret: "vault-rotated-pass".into(),
-                },
-                expires_at: now + Duration::from_secs(3600),
-                refresh_at: Some(now + Duration::from_secs(2880)),
-            },
-        );
+        let expiry = SystemTime::now() + Duration::from_secs(3600);
+        TokenCache::global().set(&addr, "vault-rotated-pass".into(), expiry);
 
         let (user, secrets) = addr.auth_credentials().await.unwrap();
 
         TokenCache::global().evict(&addr);
 
-        // Static role: Vault's username overrides the configured one.
         assert_eq!(user, "pgdog_static");
         assert_eq!(secrets.first().unwrap(), "vault-rotated-pass");
     }

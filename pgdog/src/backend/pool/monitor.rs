@@ -204,19 +204,18 @@ impl Monitor {
                                 },
                             )
                         }
+                        ServerAuth::VaultStatic => {
+                            vault::static_backend_credentials(addr.clone()).await.map(
+                                |(token, expires_at)| {
+                                    TokenCache::global().set(&addr, token, expires_at)
+                                },
+                            )
+                        }
                         ServerAuth::VaultDynamic => {
                             vault::credentials(addr.clone()).await.map(|credentials| {
                                 TokenCache::global().set_credentials(&addr, credentials);
                                 pool.lock().bump_credentials_generation();
                             })
-                        }
-                        ServerAuth::VaultStatic => {
-                            vault::static_backend_credentials(addr.clone())
-                                .await
-                                .map(|credentials| {
-                                    TokenCache::global().set_credentials(&addr, credentials);
-                                    pool.lock().bump_credentials_generation();
-                                })
                         }
                         // Guard in spawn() ensures we only reach here for
                         // external identity pools.

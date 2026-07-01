@@ -1,25 +1,27 @@
 //! HashiCorp Vault dynamic and static database credentials for backend pools.
 //!
 //! Pools configured with `server_auth = "vault_dynamic"` fetch their
-//! username and password from a Vault database secrets engine path (e.g.
-//! `database/creds/my-role`). Pools configured with `server_auth =
-//! "vault_static"` fetch the current password for a Vault static database
-//! role instead (e.g. `database/static-creds/my-role`); the username is
-//! fixed and Vault manages rotation. Either way, credentials are cached in
-//! the global [`TokenCache`](crate::backend::pool::token_cache::TokenCache)
-//! and refreshed by the pool monitor after a configured percentage of the
-//! lease/TTL.
+//! username and password from a Vault database secrets engine path.
+//! Vault generates the username, so credentials are cached in the global
+//! [`TokenCache`](crate::backend::pool::token_cache::TokenCache) via
+//! [`TokenCache::credentials_or_fetch`] and proactively refreshed by the pool
+//! monitor after a configured percentage of the lease.
+//!
+//! Pools configured with `server_auth = "vault_static"` fetch the current
+//! password for a Vault static database role instead.
+//! The username is operator-supplied (like RDS IAM and Azure Workload Identity) so
+//! credentials are cached via [`TokenCache::get_or_fetch`] and refreshed
+//! only when the password is expired.
 //!
 //! The Vault login/token cache itself lives in
-//! [`crate::auth::vault`], shared with static role client-auth
-//! verification.
+//! [`crate::auth::vault`], shared with static role client-auth verification.
 
 use std::time::{Duration, SystemTime};
 
 use serde::Deserialize;
 use tracing::info;
 
-use crate::auth::vault::{StaticSecretResponse, VAULT_TOKEN, client, error, vault_token};
+use crate::auth::vault::{StaticSecretResponse, error, fetch_secret};
 use crate::backend::pool::token_cache::{Credentials, FetchedCredentials};
 use crate::backend::{Error, pool::Address};
 use crate::config::config;
@@ -37,14 +39,8 @@ struct SecretData {
     password: String,
 }
 
-/// Fetch fresh dynamic database credentials for `addr` from Vault.
-///
-/// This is the raw fetcher passed to [`TokenCache::credentials_or_fetch`]
-/// and called by the monitor's refresh loop. Callers should never invoke
-/// it directly — go through
-/// [`TokenCache::global`](crate::backend::pool::token_cache::TokenCache::global)
-/// instead.
-pub(crate) async fn credentials(addr: Address) -> Result<FetchedCredentials, Error> {
+/// Vault path and config lookup shared by every backend credential fetcher.
+fn vault_and_path(addr: &Address) -> Result<(pgdog_config::vault::Vault, &str), Error> {
     let vault = config()
         .config
         .vault
@@ -58,45 +54,33 @@ pub(crate) async fn credentials(addr: Address) -> Result<FetchedCredentials, Err
         ))
     })?;
 
-    let token = vault_token(&vault).await?;
-    let url = format!(
-        "{}/v1/{}",
-        vault.url.trim_end_matches('/'),
-        path.trim_start_matches('/')
-    );
+    Ok((vault, path))
+}
 
-    let response = client(&vault)?
-        .get(&url)
-        .header("X-Vault-Token", token)
-        .send()
-        .await
-        .map_err(|err| {
-            error(format!(
-                "Vault credentials request to \"{}\" failed: {}",
-                url, err
-            ))
-        })?;
+/// Compute when to refresh a credential given its total lifetime, clamping
+/// `refresh_percent` to the 1-80% range.
+fn scheduled_refresh(
+    now: SystemTime,
+    lifetime: Duration,
+    refresh_percent: Option<u8>,
+) -> SystemTime {
+    let refresh_percent = refresh_percent
+        .unwrap_or(DEFAULT_REFRESH_PERCENT)
+        .clamp(1, 80);
+    now + lifetime.mul_f64(refresh_percent as f64 / 100.0)
+}
 
-    let status = response.status();
+/// Fetch fresh dynamic database credentials for `addr` from Vault.
+///
+/// This is the raw fetcher passed to [`TokenCache::credentials_or_fetch`]
+/// and called by the monitor's refresh loop. Callers should never invoke
+/// it directly — go through
+/// [`TokenCache::global`](crate::backend::pool::token_cache::TokenCache::global)
+/// instead.
+pub(crate) async fn credentials(addr: Address) -> Result<FetchedCredentials, Error> {
+    let (vault, path) = vault_and_path(&addr)?;
 
-    // The cached Vault token may have been revoked — drop it so the next
-    // attempt logs in again.
-    if status == reqwest::StatusCode::FORBIDDEN {
-        *VAULT_TOKEN.lock() = None;
-    }
-
-    if !status.is_success() {
-        let body = response.text().await.unwrap_or_default();
-        return Err(error(format!(
-            "Vault credentials read at \"{}\" returned {}: {}",
-            url, status, body
-        )));
-    }
-
-    let secret: SecretResponse = response
-        .json()
-        .await
-        .map_err(|err| error(format!("invalid Vault credentials response: {}", err)))?;
+    let secret: SecretResponse = fetch_secret(&vault, path).await?;
 
     let lease = Duration::from_secs(secret.lease_duration);
 
@@ -107,12 +91,8 @@ pub(crate) async fn credentials(addr: Address) -> Result<FetchedCredentials, Err
         "fetched Vault credentials"
     );
 
-    let refresh_percent = addr
-        .vault_refresh_percent
-        .unwrap_or(DEFAULT_REFRESH_PERCENT)
-        .clamp(1, 80);
     let now = SystemTime::now();
-    let refresh_at = now + lease.mul_f64(refresh_percent as f64 / 100.0);
+    let refresh_at = scheduled_refresh(now, lease, addr.vault_refresh_percent);
 
     Ok(FetchedCredentials {
         credentials: Credentials {
@@ -124,93 +104,31 @@ pub(crate) async fn credentials(addr: Address) -> Result<FetchedCredentials, Err
     })
 }
 
-/// Fetch credentials for a Vault static database role for use as backend
-/// (server-side) connection credentials.
+/// Fetch the current password for a Vault static database role, for use as
+/// a backend (server-side) connection password.
 ///
-/// Unlike dynamic credentials, the username is fixed (Vault returns the same
-/// username that was registered with the role), and the lifetime is given by
-/// `data.ttl` rather than `lease_duration`.
-///
-/// The result is stored in the global [`TokenCache`] and kept warm by the
-/// pool monitor's refresh loop, identical to dynamic credentials.
-pub(crate) async fn static_backend_credentials(addr: Address) -> Result<FetchedCredentials, Error> {
-    let vault = config()
-        .config
-        .vault
-        .clone()
-        .ok_or_else(|| error("[vault] section is missing from pgdog.toml"))?;
+/// Unlike dynamic credentials, the username it's fixed and supplied in the config.
+/// This is the raw fetcher passed to [`TokenCache::get_or_fetch`] and called
+/// by the monitor's refresh loop. Callers should never invoke it directly —
+/// go through
+/// [`TokenCache::global`](crate::backend::pool::token_cache::TokenCache::global)
+/// instead.
+pub(crate) async fn static_backend_credentials(
+    addr: Address,
+) -> Result<(String, SystemTime), Error> {
+    let (vault, path) = vault_and_path(&addr)?;
 
-    let path = addr.vault_path.as_deref().ok_or_else(|| {
-        error(format!(
-            r#""vault_path" is not configured for {}@{}:{}"#,
-            addr.user, addr.host, addr.port
-        ))
-    })?;
-
-    let token = vault_token(&vault).await?;
-    let url = format!(
-        "{}/v1/{}",
-        vault.url.trim_end_matches('/'),
-        path.trim_start_matches('/')
-    );
-
-    let response = client(&vault)?
-        .get(&url)
-        .header("X-Vault-Token", token)
-        .send()
-        .await
-        .map_err(|err| {
-            error(format!(
-                "Vault static backend credentials request to \"{}\" failed: {}",
-                url, err
-            ))
-        })?;
-
-    let status = response.status();
-
-    if status == reqwest::StatusCode::FORBIDDEN {
-        *VAULT_TOKEN.lock() = None;
-    }
-
-    if !status.is_success() {
-        let body = response.text().await.unwrap_or_default();
-        return Err(error(format!(
-            "Vault static backend credentials read at \"{}\" returned {}: {}",
-            url, status, body
-        )));
-    }
-
-    let secret: StaticSecretResponse = response.json().await.map_err(|err| {
-        error(format!(
-            "invalid Vault static backend credentials response: {}",
-            err
-        ))
-    })?;
-
-    let ttl = Duration::from_secs(secret.data.ttl);
-    let now = SystemTime::now();
-
-    let refresh_percent = addr
-        .vault_refresh_percent
-        .unwrap_or(DEFAULT_REFRESH_PERCENT)
-        .clamp(1, 80);
-    let refresh_at = now + ttl.mul_f64(refresh_percent as f64 / 100.0);
+    let secret: StaticSecretResponse = fetch_secret(&vault, path).await?;
 
     info!(
         user = %addr.user,
-        vault_user = %secret.data.username,
         ttl_secs = secret.data.ttl,
         "fetched Vault static backend credentials"
     );
 
-    Ok(FetchedCredentials {
-        credentials: Credentials {
-            username: Some(secret.data.username),
-            secret: secret.data.password,
-        },
-        expires_at: now + ttl,
-        refresh_at: Some(refresh_at),
-    })
+    let expires_at = SystemTime::now() + Duration::from_secs(secret.data.ttl);
+
+    Ok((secret.data.password, expires_at))
 }
 
 #[cfg(test)]
@@ -222,7 +140,7 @@ mod tests {
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use super::*;
-    use crate::auth::vault::VaultToken;
+    use crate::auth::vault::{VAULT_TOKEN, VaultToken};
     use crate::config::ConfigAndUsers;
 
     fn setup() {
@@ -433,7 +351,7 @@ mod tests {
         Mock::given(method("GET"))
             .and(path("/v1/database/static-creds/pgdog-static-role"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-                "data": { "username": "pgdog_static", "password": "vault-rotated-pass", "ttl": 600 }
+                "data": { "username": "testuser", "password": "vault-rotated-pass", "ttl": 600 }
             })))
             .mount(&server)
             .await;
@@ -442,17 +360,12 @@ mod tests {
         *VAULT_TOKEN.lock() = None;
         set_vault_config(approle_vault(&server.uri()));
 
-        let fetched =
+        let (password, expires_at) =
             static_backend_credentials(make_addr(Some("database/static-creds/pgdog-static-role")))
                 .await
                 .unwrap();
-        assert_eq!(
-            fetched.credentials.username.as_deref(),
-            Some("pgdog_static")
-        );
-        assert_eq!(fetched.credentials.secret, "vault-rotated-pass");
-        assert!(fetched.expires_at > SystemTime::now());
-        assert!(fetched.refresh_at.is_some());
+        assert_eq!(password, "vault-rotated-pass");
+        assert!(expires_at > SystemTime::now());
     }
 
     #[tokio::test]
