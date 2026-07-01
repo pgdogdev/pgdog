@@ -324,15 +324,6 @@ impl Route {
         self.rollback_savepoint
     }
 
-    pub fn with_functions(mut self, function: FunctionBehavior) -> Self {
-        self.set_functions(function);
-        self
-    }
-
-    pub fn set_functions(&mut self, function: FunctionBehavior) {
-        self.read = !function.writes;
-    }
-
     pub fn with_advisory_locks(mut self, locks: AdvisoryLocks) -> Self {
         self.advisory_locks = locks;
         self
