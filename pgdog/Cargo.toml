@@ -80,7 +80,7 @@ smallvec = "1"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-webpki-roots-no-provider", "json"] }
 hex = "0.4"
 x509-parser = "0.18"
-pg_raw_parse = { git = "https://github.com/pgdogdev/pg_raw_parse.git", rev = "b94e4cf", optional = true }
+pg_raw_parse = { git = "https://github.com/pgdogdev/pg_raw_parse.git", rev = "ec24ce4", optional = true }
 itertools = "0.15.0"
 
 [target.'cfg(unix)'.dependencies]

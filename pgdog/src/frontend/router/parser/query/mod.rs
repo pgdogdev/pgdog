@@ -308,7 +308,11 @@ impl QueryParser {
                 &statement,
                 stmt,
                 #[cfg(feature = "new_parser")]
-                new_root,
+                if let pg_raw_parse::Node::SelectStmt(stmt) = new_root {
+                    stmt
+                } else {
+                    unreachable!()
+                },
                 context,
             ),
             // COPY statements.
