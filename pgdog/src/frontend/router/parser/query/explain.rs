@@ -31,7 +31,11 @@ impl QueryParser {
                 cached_ast,
                 stmt,
                 #[cfg(feature = "new_parser")]
-                new_stmt,
+                if let pg_raw_parse::Node::SelectStmt(stmt) = new_stmt {
+                    stmt
+                } else {
+                    unreachable!()
+                },
                 context,
             ),
             #[cfg_attr(feature = "new_parser", allow(unused))]

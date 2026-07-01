@@ -3,6 +3,8 @@ use crate::frontend::router::parser::{
 };
 
 use super::*;
+#[cfg(feature = "new_parser")]
+use pg_raw_parse::nodes;
 use pgdog_config::system_catalogs;
 use shared::ConvergeAlgorithm;
 
@@ -17,13 +19,16 @@ impl QueryParser {
     pub(super) fn select(
         &mut self,
         cached_ast: &Ast,
-        stmt: &SelectStmt,
-        #[cfg(feature = "new_parser")] new_stmt: pg_raw_parse::Node<'_>,
+        stmt_old: &SelectStmt,
+        #[cfg(feature = "new_parser")] stmt: &nodes::SelectStmt,
         context: &mut QueryParserContext,
     ) -> Result<Command, Error> {
+        #[cfg(feature = "new_parser")]
         let cte_writes = Self::cte_writes(stmt);
-        let has_locking = Self::has_locking_clause(stmt);
-        let mut overrides = Self::functions(stmt)?;
+        #[cfg(not(feature = "new_parser"))]
+        let cte_writes = Self::cte_writes(stmt_old);
+        let has_locking = Self::has_locking_clause(stmt_old);
+        let mut overrides = Self::functions(stmt_old)?;
 
         // Write overwrite because of conservative read/write split.
         if self.write_override {
@@ -43,9 +48,9 @@ impl QueryParser {
         let (advisory_locks, mut omnisharded) = {
             let mut parser = StatementParser::from_select(
                 #[cfg(not(feature = "new_parser"))]
-                stmt,
+                stmt_old,
                 #[cfg(feature = "new_parser")]
-                new_stmt,
+                stmt.into(),
                 context.router_context.bind,
                 &context.sharding_schema,
                 None,
@@ -69,9 +74,9 @@ impl QueryParser {
         let (shard, is_sharded, tables) = {
             let mut statement_parser = StatementParser::from_select(
                 #[cfg(not(feature = "new_parser"))]
-                stmt,
+                stmt_old,
                 #[cfg(feature = "new_parser")]
-                new_stmt,
+                stmt.into(),
                 context.router_context.bind,
                 &context.sharding_schema,
                 self.recorder_mut(),
@@ -99,7 +104,7 @@ impl QueryParser {
         }
 
         // SELECT NOW(), SELECT 1
-        if shards.is_empty() && stmt.from_clause.is_empty() {
+        if shards.is_empty() && stmt_old.from_clause.is_empty() {
             let shard = Shard::Direct(round_robin::next() % context.shards);
 
             if let Some(recorder) = self.recorder_mut() {
@@ -118,8 +123,8 @@ impl QueryParser {
             ));
         }
 
-        let order_by = Self::select_sort(&stmt.sort_clause, context.router_context.bind);
-        let from_clause = TablesSource::from(FromClause::new(&stmt.from_clause));
+        let order_by = Self::select_sort(&stmt_old.sort_clause, context.router_context.bind);
+        let from_clause = TablesSource::from(FromClause::new(&stmt_old.from_clause));
 
         // Shard by vector in ORDER BY clause.
         for order in &order_by {
@@ -146,9 +151,9 @@ impl QueryParser {
         }
 
         let shard = Self::converge(&shards, ConvergeAlgorithm::default());
-        let aggregates = Aggregate::parse(stmt, &context.router_context.schema);
-        let limit = LimitClause::new(stmt, context.router_context.bind).limit_offset()?;
-        let distinct = Distinct::new(stmt).distinct()?;
+        let aggregates = Aggregate::parse(stmt_old, &context.router_context.schema);
+        let limit = LimitClause::new(stmt_old, context.router_context.bind).limit_offset()?;
+        let distinct = Distinct::new(stmt_old).distinct()?;
 
         if let Some(shard) = shard {
             debug!("direct-to-shard {}", shard);
@@ -399,6 +404,25 @@ impl QueryParser {
     ///
     /// * `stmt`: SELECT statement from pg_query.
     ///
+    #[cfg(feature = "new_parser")]
+    fn cte_writes(stmt: &nodes::SelectStmt) -> bool {
+        use pg_raw_parse::Node;
+        use pg_raw_parse::walk::{self, Recurse};
+        use std::ops::ControlFlow;
+
+        walk::walk_manual(stmt.withClause().into(), |node| match node {
+            Node::CommonTableExpr(expr) => match expr.ctequery() {
+                Node::SelectStmt(_) => Recurse::yes(),
+                _ => ControlFlow::Break(()),
+            },
+            _ => Recurse::yes(), // CTEs are top level children of SelectStmt
+        })
+        .ok()
+        .flatten()
+        .is_some()
+    }
+
+    #[cfg(not(feature = "new_parser"))]
     fn cte_writes(stmt: &SelectStmt) -> bool {
         if let Some(ref with_clause) = stmt.with_clause {
             for cte in &with_clause.ctes {
