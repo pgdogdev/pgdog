@@ -2,7 +2,22 @@
 
 ---
 
-## 🚧 Issue 1 — Lag inflation when source databases share a PostgreSQL instance
+## ✅ Issue 1 — Lag inflation when source databases share a PostgreSQL instance (resolved)
+
+> **Resolved.** On a keepalive received **between transactions**
+> (`StreamSubscriber::in_transaction() == false`), the streaming loop advances
+> the subscriber's confirmed position to the keepalive's `wal_end`
+> (`stream.set_current_lsn(ka.wal_end)`), so the next standby status update
+> reports `flush_lsn = wal_end`. PostgreSQL then advances `confirmed_flush_lsn`
+> to `wal_end` and the lag query returns ~0
+> ([`publisher_impl.rs`](../../pgdog/src/backend/replication/logical/publisher/publisher_impl.rs)).
+> The `in_transaction` guard preserves the existing invariant
+> ([`stream.rs:122`](../../pgdog/src/backend/replication/logical/subscriber/stream.rs)) —
+> `committed_lsn` never advances mid-transaction — so a reply can't confirm past
+> an unapplied commit, even for a large transaction that triggers a
+> mid-stream keepalive. This is the realized form of the `data_since_keepalive`
+> sketch below: the "no data since the last keepalive" condition is read
+> directly off the subscriber's transaction state instead of a separate flag.
 
 ### Description
 
@@ -42,21 +57,37 @@ their publication-scoped `confirmed_flush_lsn` from the same instance-wide
 |---|---|
 | `ReplicationSlot::replication_lag()` — the lag query | [`pgdog/src/backend/replication/logical/publisher/slot.rs`](../../pgdog/src/backend/replication/logical/publisher/slot.rs) |
 | `ReplicationWaiter::wait_for_replication()` — the cutover gate | [`pgdog/src/backend/replication/logical/orchestrator.rs`](../../pgdog/src/backend/replication/logical/orchestrator.rs) |
-| Keepalive handler / `flush_lsn` reply (proposed `data_since_keepalive` flag) | [`pgdog/src/backend/replication/logical/publisher/publisher_impl.rs`](../../pgdog/src/backend/replication/logical/publisher/publisher_impl.rs) |
+| Keepalive handler — `set_current_lsn(wal_end)` guarded by `in_transaction` | [`pgdog/src/backend/replication/logical/publisher/publisher_impl.rs`](../../pgdog/src/backend/replication/logical/publisher/publisher_impl.rs) |
+| `StreamSubscriber::in_transaction()` / `set_current_lsn()` / `status_update()` | [`pgdog/src/backend/replication/logical/subscriber/stream.rs`](../../pgdog/src/backend/replication/logical/subscriber/stream.rs) |
 ### Fix
 
-The PostgreSQL walsender sends a keepalive message after exhausting all decoded changes available for the publication. The keepalive carries `wal_end` — the server's current WAL write position. When a keepalive arrives and no xlog data was received since the previous keepalive, the slot has drained: there is nothing for the publication between `committed_lsn` and `wal_end`, so that gap consists entirely of other databases' WAL.
+The PostgreSQL walsender sends a keepalive carrying `wal_end` — the server's current WAL write position — once it has exhausted the decoded changes for the publication. When the slot has drained, the gap between the last published commit and `wal_end` is entirely other databases' WAL, so the client can safely confirm `wal_end`.
 
-In this state the client can safely reply with `flush_lsn = wal_end`. PostgreSQL sets `confirmed_flush_lsn` on the slot to `wal_end`, and the lag query returns ~0.
+The streaming loop does this in the keepalive branch:
 
-Reporting `wal_end` is only valid when the slot is caught up. During active streaming — where the server is sending transactions and keepalives may arrive between commits — `flush_lsn` must remain at `committed_lsn`. Reporting `wal_end` prematurely would advance `confirmed_flush_lsn` past unapplied commits; if the connection dropped, the server would restart from `wal_end` and those commits would be lost.
+```rust
+if let Some(ReplicationMeta::KeepAlive(ka)) = data.replication_meta() {
+    // Only between transactions: advance the confirmed position to wal_end.
+    if !stream.in_transaction() {
+        stream.set_current_lsn(ka.wal_end);
+    }
+    if ka.reply() {
+        slot.status_update(stream.status_update()).await?;
+    }
+    // ...
+}
+```
 
-The proposed guard: a `data_since_keepalive` flag. Set to `true` when any xlog data message arrives; cleared to `false` when a keepalive arrives. A keepalive is the catch-up signal only when this flag is `false` — meaning no data arrived between the last keepalive and this one.
+`set_current_lsn` moves `committed_lsn` to `wal_end`; `status_update()` reports `flush_lsn = committed_lsn`, so the reply advances the slot's `confirmed_flush_lsn` to `wal_end` and the lag query returns ~0.
+
+The `in_transaction` guard is what keeps this safe. Reporting `wal_end` mid-transaction would advance `confirmed_flush_lsn` past changes received but not yet applied to the destination; on a dropped connection the server would restart from `wal_end` and those changes would be lost. Even in non-streaming logical replication (pgdog uses `proto_version '4'` without `streaming`), a large transaction whose send time exceeds `wal_sender_timeout/2` triggers a mid-stream keepalive — so the guard is load-bearing, not just defensive. While `in_transaction` is true the confirmed position holds at the last commit (`committed_lsn`), matching the invariant in [`stream.rs:122`](../../pgdog/src/backend/replication/logical/subscriber/stream.rs).
+
+This is the `data_since_keepalive` idea, with "no data since the last keepalive" read directly off the subscriber's transaction state:
 
 ```
 keepalive received
-  data_since_keepalive = true  -> reply flush_lsn = committed_lsn  (active, mid-stream)
-  data_since_keepalive = false -> reply flush_lsn = wal_end         (caught up)
+  in_transaction == true  -> reply flush_lsn = committed_lsn  (active, mid-stream)
+  in_transaction == false -> confirm wal_end                  (caught up)
 ```
 
 ### PostgreSQL references

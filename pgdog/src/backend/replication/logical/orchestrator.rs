@@ -310,8 +310,8 @@ impl ReplicationWaiter {
                 info!("[cutover] replication lag is not calculated for all shards, yet");
                 continue;
             };
-            cutover_state(CutoverState::WaitingForReplication { lag });
 
+            cutover_state(CutoverState::WaitingForReplication { lag });
             info!("[cutover] replication lag: {}", format_bytes(lag));
 
             // Time to go.
@@ -551,13 +551,20 @@ mod tests {
     impl Orchestrator {
         fn new_test(config: &ConfigAndUsers) -> Self {
             let cluster = Cluster::new_test(config);
+            let publication = "test_pub".to_owned();
+            let replication_slot = "test_slot".to_owned();
+            let publisher = Publisher::new(
+                &publication,
+                config.config.general.query_parser_engine,
+                replication_slot.clone(),
+            );
             Self {
                 source: cluster.clone(),
                 destination: cluster,
-                publication: "test_pub".to_owned(),
+                publication,
                 schema: None,
-                publisher: Arc::new(Mutex::new(Publisher::default())),
-                replication_slot: "test_slot".to_owned(),
+                publisher: Arc::new(Mutex::new(publisher)),
+                replication_slot,
             }
         }
     }
@@ -760,11 +767,8 @@ mod tests {
         assert!(matches!(result, CutoverAction::NoGo { .. }));
     }
 
-    /// `replication_lag` returns `None` (so the decision stays `NoGo`) until
-    /// every source shard has reported a measurement:
-    ///   1. an empty map (no shard reported) → `None`, and
-    ///   2. a partial map (some shards reported, others missing) → `None`.
-    /// Only when every shard has a real, below-threshold measurement does it Go.
+    /// Cutover holds off until every shard has reported a lag measurement; an
+    /// unreported shard reads as unknown (`None`), not zero.
     #[tokio::test]
     async fn should_not_cutover_before_every_shard_reports() {
         let mut config = ConfigAndUsers::default();
@@ -772,10 +776,9 @@ mod tests {
         config.config.general.cutover_replication_lag_threshold = 1000;
         config.config.general.cutover_last_transaction_delay = 500;
 
-        // Fresh orchestrator: the publisher's lag map has no entries yet.
+        // No shard has reported a lag yet.
         let orchestrator = Orchestrator::new_test(&config);
-        // Recent transaction so the last-transaction arm never forces a cutover;
-        // this isolates the lag check.
+        // Recent transaction so only the lag arm decides the outcome.
         orchestrator
             .publisher
             .lock()
@@ -793,9 +796,7 @@ mod tests {
             CutoverAction::NoGo { .. }
         );
 
-        // Only shard 0 reports; shard 1 is still missing from the map, so the
-        // lag stays unknown (None) and the decision remains NoGo — the gate waits
-        // for every shard, not just the first to report.
+        // Only shard 0 reported; shard 1 is missing, so the lag stays unknown.
         {
             let publisher = orchestrator.publisher.lock().await;
             publisher.set_replication_lag(0, 500);
@@ -815,6 +816,123 @@ mod tests {
         assert_eq!(
             waiter.should_cutover(elapsed).await,
             CutoverAction::Go(CutoverReason::Lag)
+        );
+    }
+
+    /// Writes to a table outside the publication must not block cutover.
+    /// Unrelated WAL advances the instance's LSN but not the publication's
+    /// `confirmed_flush_lsn`; keepalives advance it to `wal_end` between
+    /// transactions, so the drained slot reports ~0 lag and
+    /// `wait_for_replication` completes.
+    ///
+    /// Runs against the live `pgdog` database (integration/setup.sh).
+    #[tokio::test]
+    async fn wait_for_replication_finishes_with_unrelated_writes() {
+        use crate::backend::server::test::test_server;
+        use tokio::time::{sleep, timeout};
+
+        crate::logger();
+        maintenance_mode::stop(None);
+
+        const TRAFFIC_STOP: u64 = 1_000;
+
+        let mut config = ConfigAndUsers::default();
+        config.config.general.cutover_traffic_stop_threshold = TRAFFIC_STOP;
+        config.config.general.cutover_timeout = 120_000;
+
+        let orchestrator = Orchestrator::new_test(&config);
+        let publication = orchestrator.publication.clone();
+        let slot = orchestrator.replication_slot().to_owned();
+        let shards = orchestrator.source.shards().len();
+
+        // Publication covers only `issue1_main`; `issue1_noise` is never published.
+        let mut source = test_server().await;
+        let _ = source
+            .execute(format!("DROP PUBLICATION IF EXISTS {publication}"))
+            .await;
+        for shard in 0..shards {
+            let _ = source
+                .execute(format!("SELECT pg_drop_replication_slot('{slot}_{shard}')"))
+                .await;
+        }
+        source
+            .execute("DROP TABLE IF EXISTS issue1_main, issue1_noise")
+            .await
+            .unwrap();
+        source
+            .execute("CREATE TABLE issue1_main (id BIGINT PRIMARY KEY)")
+            .await
+            .unwrap();
+        source
+            .execute("CREATE TABLE issue1_noise (id BIGINT, payload TEXT)")
+            .await
+            .unwrap();
+        source
+            .execute(format!(
+                "CREATE PUBLICATION {publication} FOR TABLE issue1_main"
+            ))
+            .await
+            .unwrap();
+
+        orchestrator.source.launch();
+
+        let stream = orchestrator
+            .publisher
+            .lock()
+            .await
+            .replicate(&orchestrator.source, &orchestrator.destination)
+            .await
+            .unwrap();
+
+        let config = Arc::new(config);
+        let mut waiter = ReplicationWaiter {
+            orchestrator: orchestrator.clone(),
+            waiter: stream,
+            config,
+        };
+
+        // ~10MB of incompressible WAL into the unpublished table: the slot
+        // decodes none of it, but the instance LSN advances, inflating lag.
+        source
+            .execute(
+                "INSERT INTO issue1_noise \
+                 SELECT g, (SELECT string_agg(md5(random()::text), '') FROM generate_series(1, 64)) \
+                 FROM generate_series(1, 5000) g",
+            )
+            .await
+            .unwrap();
+
+        // Let one check_lag tick (1s) refresh the lag cache with the post-write
+        // value before sampling the gate.
+        sleep(Duration::from_secs(1)).await;
+
+        // 30s margin: keepalive cadence (wal_sender_timeout) is not bounded by
+        // the 1s sleep, so give confirmed_flush_lsn room to advance.
+        let result = timeout(Duration::from_secs(30), waiter.wait_for_replication()).await;
+        let maintenance_on = maintenance_mode::is_on("");
+
+        // Clean up before asserting so a failure can't leak slots or maintenance mode.
+        waiter.stop();
+        maintenance_mode::stop(None);
+        for shard in 0..shards {
+            let _ = source
+                .execute(format!("SELECT pg_drop_replication_slot('{slot}_{shard}')"))
+                .await;
+        }
+        let _ = source
+            .execute(format!("DROP PUBLICATION IF EXISTS {publication}"))
+            .await;
+        let _ = source
+            .execute("DROP TABLE IF EXISTS issue1_main, issue1_noise")
+            .await;
+
+        let waited = result
+            .expect("wait_for_replication never finished: lag stays inflated by unrelated WAL");
+        waited.expect("wait_for_replication returned an error");
+        // Cutover fired: once the lag fell below the threshold, traffic stopped.
+        assert!(
+            maintenance_on,
+            "wait_for_replication returned without stopping traffic (cutover did not fire)"
         );
     }
 }

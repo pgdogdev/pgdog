@@ -260,6 +260,17 @@ impl Publisher {
                                         if let Some(ReplicationMeta::KeepAlive(ka)) =
                                             data.replication_meta()
                                         {
+                                            // Between transactions, advance the
+                                            // confirmed position to the keepalive's
+                                            // wal_end: the slot has drained and the
+                                            // gap to wal_end is unrelated WAL the
+                                            // publication will never decode. Skipped
+                                            // mid-transaction so a reply can't confirm
+                                            // past an unapplied commit.
+                                            if !stream.in_transaction() {
+                                                stream.set_current_lsn(ka.wal_end);
+                                            }
+
                                             if ka.reply() {
                                                 slot.status_update(stream.status_update()).await?;
                                             }

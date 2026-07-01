@@ -941,7 +941,6 @@ impl StreamSubscriber {
     }
 
     /// Whether we are inside a transaction.
-    #[cfg(test)]
     pub(crate) fn in_transaction(&self) -> bool {
         self.in_transaction
     }
