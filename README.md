@@ -266,8 +266,8 @@ In `users.toml`:
 name = "alice"
 database = "pgdog"
 password = "client-password"
-server_auth = "vault"
-vault_path = "database/creds/pgdog"
+server_auth = "vault_dynamic"
+backend_vault_path = "database/creds/pgdog"
 # Refresh credentials after 80% of the lease has elapsed (default).
 # vault_refresh_percent = 80
 ```
@@ -283,7 +283,7 @@ kubernetes_role = "pgdog"
 
 PgDog logs into Vault with Kubernetes auth (using the pod's service account JWT) or AppRole (`approle_role_id` plus `approle_secret_id_file` or the `VAULT_SECRET_ID` environment variable).
 
-When any user has `server_auth = "vault"`, the following settings must be configured as well:
+When any user has `server_auth = "vault_dynamic"` or `"vault_static"`, the following settings must be configured as well:
 
 - `tls_verify` must **not** be `"disabled"`.
 - `passthrough_auth` must be `"disabled"`.

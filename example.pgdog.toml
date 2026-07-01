@@ -473,7 +473,7 @@ fingerprint = "2d9944fc9caeaadd"  # [3285733254894627549]
 # exposure = 0.5      # Optional: overrides general.mirror_exposure
 
 # HashiCorp Vault settings, required when any user in users.toml
-# sets `server_auth = "vault"`.
+# sets `server_auth = "vault_dynamic"`.
 #
 # [vault]
 # url = "https://vault.internal:8200"

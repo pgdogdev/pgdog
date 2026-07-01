@@ -1,11 +1,14 @@
-//! HashiCorp Vault dynamic database credentials for backend pools.
+//! HashiCorp Vault dynamic and static database credentials for backend pools.
 //!
-//! Pools configured with `server_auth = "vault"` fetch their username and
-//! password from a Vault database secrets engine path (e.g.
-//! `database/creds/my-role`). Credentials are cached in the global
-//! [`TokenCache`](crate::backend::pool::token_cache::TokenCache) and
-//! refreshed by the pool monitor after a configured percentage of the
-//! lease.
+//! Pools configured with `server_auth = "vault_dynamic"` fetch their
+//! username and password from a Vault database secrets engine path (e.g.
+//! `database/creds/my-role`). Pools configured with `server_auth =
+//! "vault_static"` fetch the current password for a Vault static database
+//! role instead (e.g. `database/static-creds/my-role`); the username is
+//! fixed and Vault manages rotation. Either way, credentials are cached in
+//! the global [`TokenCache`](crate::backend::pool::token_cache::TokenCache)
+//! and refreshed by the pool monitor after a configured percentage of the
+//! lease/TTL.
 //!
 //! The Vault login/token cache itself lives in
 //! [`crate::auth::vault`], shared with static role client-auth
@@ -16,7 +19,7 @@ use std::time::{Duration, SystemTime};
 use serde::Deserialize;
 use tracing::info;
 
-use crate::auth::vault::{VAULT_TOKEN, client, error, vault_token};
+use crate::auth::vault::{StaticSecretResponse, VAULT_TOKEN, client, error, vault_token};
 use crate::backend::pool::token_cache::{Credentials, FetchedCredentials};
 use crate::backend::{Error, pool::Address};
 use crate::config::config;
@@ -117,6 +120,95 @@ pub(crate) async fn credentials(addr: Address) -> Result<FetchedCredentials, Err
             secret: secret.data.password,
         },
         expires_at: now + lease,
+        refresh_at: Some(refresh_at),
+    })
+}
+
+/// Fetch credentials for a Vault static database role for use as backend
+/// (server-side) connection credentials.
+///
+/// Unlike dynamic credentials, the username is fixed (Vault returns the same
+/// username that was registered with the role), and the lifetime is given by
+/// `data.ttl` rather than `lease_duration`.
+///
+/// The result is stored in the global [`TokenCache`] and kept warm by the
+/// pool monitor's refresh loop, identical to dynamic credentials.
+pub(crate) async fn static_backend_credentials(addr: Address) -> Result<FetchedCredentials, Error> {
+    let vault = config()
+        .config
+        .vault
+        .clone()
+        .ok_or_else(|| error("[vault] section is missing from pgdog.toml"))?;
+
+    let path = addr.vault_path.as_deref().ok_or_else(|| {
+        error(format!(
+            r#""vault_path" is not configured for {}@{}:{}"#,
+            addr.user, addr.host, addr.port
+        ))
+    })?;
+
+    let token = vault_token(&vault).await?;
+    let url = format!(
+        "{}/v1/{}",
+        vault.url.trim_end_matches('/'),
+        path.trim_start_matches('/')
+    );
+
+    let response = client(&vault)?
+        .get(&url)
+        .header("X-Vault-Token", token)
+        .send()
+        .await
+        .map_err(|err| {
+            error(format!(
+                "Vault static backend credentials request to \"{}\" failed: {}",
+                url, err
+            ))
+        })?;
+
+    let status = response.status();
+
+    if status == reqwest::StatusCode::FORBIDDEN {
+        *VAULT_TOKEN.lock() = None;
+    }
+
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_default();
+        return Err(error(format!(
+            "Vault static backend credentials read at \"{}\" returned {}: {}",
+            url, status, body
+        )));
+    }
+
+    let secret: StaticSecretResponse = response.json().await.map_err(|err| {
+        error(format!(
+            "invalid Vault static backend credentials response: {}",
+            err
+        ))
+    })?;
+
+    let ttl = Duration::from_secs(secret.data.ttl);
+    let now = SystemTime::now();
+
+    let refresh_percent = addr
+        .vault_refresh_percent
+        .unwrap_or(DEFAULT_REFRESH_PERCENT)
+        .clamp(1, 80);
+    let refresh_at = now + ttl.mul_f64(refresh_percent as f64 / 100.0);
+
+    info!(
+        user = %addr.user,
+        vault_user = %secret.data.username,
+        ttl_secs = secret.data.ttl,
+        "fetched Vault static backend credentials"
+    );
+
+    Ok(FetchedCredentials {
+        credentials: Credentials {
+            username: Some(secret.data.username),
+            secret: secret.data.password,
+        },
+        expires_at: now + ttl,
         refresh_at: Some(refresh_at),
     })
 }
@@ -290,6 +382,135 @@ mod tests {
         let err = credentials(make_addr(Some("database/creds/pgdog-role")))
             .await
             .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("500"), "expected 500 in: {msg}");
+        assert!(msg.contains("internal error"), "expected body in: {msg}");
+    }
+
+    // ── static_backend_credentials(): config-level error cases ────────────────
+
+    #[tokio::test]
+    async fn test_static_backend_credentials_no_vault_config() {
+        crate::config::set(ConfigAndUsers::default()).unwrap();
+
+        let err = static_backend_credentials(make_addr(Some("database/static-creds/role")))
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("[vault] section is missing"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_static_backend_credentials_no_vault_path() {
+        set_vault_config(approle_vault("http://127.0.0.1:8200"));
+
+        let err = static_backend_credentials(make_addr(None))
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("vault_path"),
+            "unexpected error: {err}"
+        );
+    }
+
+    // ── static_backend_credentials(): HTTP responses ───────────────────────────
+
+    #[tokio::test]
+    async fn test_static_backend_credentials_success() {
+        setup();
+        let server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/v1/auth/approle/login"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "auth": { "client_token": "s.tok", "lease_duration": 3600 }
+            })))
+            .mount(&server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/v1/database/static-creds/pgdog-static-role"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": { "username": "pgdog_static", "password": "vault-rotated-pass", "ttl": 600 }
+            })))
+            .mount(&server)
+            .await;
+
+        let _guard = crate::test_utils::set_env_var("VAULT_SECRET_ID", "my-secret");
+        *VAULT_TOKEN.lock() = None;
+        set_vault_config(approle_vault(&server.uri()));
+
+        let fetched =
+            static_backend_credentials(make_addr(Some("database/static-creds/pgdog-static-role")))
+                .await
+                .unwrap();
+        assert_eq!(
+            fetched.credentials.username.as_deref(),
+            Some("pgdog_static")
+        );
+        assert_eq!(fetched.credentials.secret, "vault-rotated-pass");
+        assert!(fetched.expires_at > SystemTime::now());
+        assert!(fetched.refresh_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_static_backend_credentials_forbidden_clears_token_cache() {
+        setup();
+        let server = MockServer::start().await;
+
+        *VAULT_TOKEN.lock() = Some(VaultToken {
+            token: "s.stale".into(),
+            expires_at: SystemTime::now() + Duration::from_secs(3600),
+        });
+
+        Mock::given(method("GET"))
+            .and(path("/v1/database/static-creds/pgdog-static-role"))
+            .respond_with(ResponseTemplate::new(403).set_body_string("token revoked"))
+            .mount(&server)
+            .await;
+
+        set_vault_config(approle_vault(&server.uri()));
+
+        let err =
+            static_backend_credentials(make_addr(Some("database/static-creds/pgdog-static-role")))
+                .await
+                .unwrap_err();
+        assert!(err.to_string().contains("403"), "unexpected error: {err}");
+        assert!(
+            VAULT_TOKEN.lock().is_none(),
+            "token cache should be cleared after 403"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_static_backend_credentials_error_response() {
+        setup();
+        let server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/v1/auth/approle/login"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "auth": { "client_token": "s.tok2", "lease_duration": 3600 }
+            })))
+            .mount(&server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/v1/database/static-creds/pgdog-static-role"))
+            .respond_with(ResponseTemplate::new(500).set_body_string("internal error"))
+            .mount(&server)
+            .await;
+
+        let _guard = crate::test_utils::set_env_var("VAULT_SECRET_ID", "my-secret");
+        *VAULT_TOKEN.lock() = None;
+        set_vault_config(approle_vault(&server.uri()));
+
+        let err =
+            static_backend_credentials(make_addr(Some("database/static-creds/pgdog-static-role")))
+                .await
+                .unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("500"), "expected 500 in: {msg}");
         assert!(msg.contains("internal error"), "expected body in: {msg}");

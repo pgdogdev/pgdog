@@ -61,16 +61,20 @@ struct AuthData {
 ///
 /// Unlike dynamic leases, `lease_duration` is always 0; `data.ttl` is the
 /// seconds remaining until Vault rotates the password.
+///
+/// `pub(crate)` because [`crate::backend::auth::vault::static_backend_credentials`]
+/// deserializes into it directly to pick up the fixed username as well.
 #[derive(Deserialize)]
-struct StaticSecretResponse {
-    data: StaticSecretData,
+pub(crate) struct StaticSecretResponse {
+    pub(crate) data: StaticSecretData,
 }
 
 #[derive(Deserialize)]
-struct StaticSecretData {
-    password: String,
+pub(crate) struct StaticSecretData {
+    pub(crate) username: String,
+    pub(crate) password: String,
     /// Seconds until Vault rotates the password.
-    ttl: u64,
+    pub(crate) ttl: u64,
 }
 
 pub(crate) fn error(message: impl std::fmt::Display) -> Error {
@@ -367,7 +371,7 @@ mod tests {
         Mock::given(method("GET"))
             .and(path("/v1/database/static-creds/expired-role"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-                "data": { "password": "fresh-pw", "ttl": 3600 }
+                "data": { "username": "pgdog-static", "password": "fresh-pw", "ttl": 3600 }
             })))
             .mount(&server)
             .await;
@@ -400,7 +404,7 @@ mod tests {
         Mock::given(method("GET"))
             .and(path("/v1/database/static-creds/pgdog-static-role"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-                "data": { "password": "rotated-secret", "ttl": 3600 }
+                "data": { "username": "pgdog-static", "password": "rotated-secret", "ttl": 3600 }
             })))
             .mount(&server)
             .await;

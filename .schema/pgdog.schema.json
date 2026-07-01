@@ -2218,7 +2218,7 @@
       ]
     },
     "Vault": {
-      "description": "HashiCorp Vault settings, used by pools configured with `server_auth = \"vault\"`.\n\nPgDog logs into Vault using the configured auth method and fetches\ndynamic database credentials from the per-user `vault_path`.",
+      "description": "HashiCorp Vault settings, used by pools configured with `server_auth = \"vault_dynamic\"`\nor `\"vault_static\"`.\n\nPgDog logs into Vault using the configured auth method and fetches\ndatabase credentials from the per-user `backend_vault_path`.",
       "type": "object",
       "properties": {
         "approle_role_id": {
