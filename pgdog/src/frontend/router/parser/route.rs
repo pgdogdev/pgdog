@@ -3,7 +3,7 @@ use std::{fmt::Display, ops::Deref};
 use lazy_static::lazy_static;
 
 use super::{
-    Aggregate, DistinctBy, FunctionBehavior, Limit, OrderBy, explain_trace::ExplainTrace,
+    Aggregate, DistinctBy, Limit, OrderBy, explain_trace::ExplainTrace,
     rewrite::statement::aggregate::AggregateRewritePlan, statement::AdvisoryLocks,
 };
 
