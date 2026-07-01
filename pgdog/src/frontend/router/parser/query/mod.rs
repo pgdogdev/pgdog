@@ -314,21 +314,27 @@ impl QueryParser {
             // COPY statements.
             Some(NodeEnum::CopyStmt(ref stmt)) => Self::copy(stmt, context),
             // INSERT statements.
+            #[cfg_attr(feature = "new_parser", allow(unused))]
             Some(NodeEnum::InsertStmt(ref stmt)) => self.insert(
+                #[cfg(not(feature = "new_parser"))]
                 stmt,
                 #[cfg(feature = "new_parser")]
                 new_root,
                 context,
             ),
             // UPDATE statements.
+            #[cfg_attr(feature = "new_parser", allow(unused))]
             Some(NodeEnum::UpdateStmt(ref stmt)) => self.update(
+                #[cfg(not(feature = "new_parser"))]
                 stmt,
                 #[cfg(feature = "new_parser")]
                 new_root,
                 context,
             ),
             // DELETE statements.
+            #[cfg_attr(feature = "new_parser", allow(unused))]
             Some(NodeEnum::DeleteStmt(ref stmt)) => self.delete(
+                #[cfg(not(feature = "new_parser"))]
                 stmt,
                 #[cfg(feature = "new_parser")]
                 new_root,
@@ -552,8 +558,8 @@ impl QueryParser {
     ///
     fn insert(
         &mut self,
-        stmt: &InsertStmt,
-        #[cfg(feature = "new_parser")] new_stmt: pg_raw_parse::Node<'_>,
+        #[cfg(not(feature = "new_parser"))] stmt: &InsertStmt,
+        #[cfg(feature = "new_parser")] stmt: pg_raw_parse::Node<'_>,
         context: &mut QueryParserContext,
     ) -> Result<Command, Error> {
         let schema_lookup = SchemaLookupContext {
@@ -562,9 +568,10 @@ impl QueryParser {
             search_path: context.router_context.parameter_hints.search_path,
         };
         let mut parser = StatementParser::from_insert(
+            #[cfg(not(feature = "new_parser"))]
             stmt,
             #[cfg(feature = "new_parser")]
-            new_stmt,
+            stmt,
             context.router_context.bind,
             &context.sharding_schema,
             self.recorder_mut(),

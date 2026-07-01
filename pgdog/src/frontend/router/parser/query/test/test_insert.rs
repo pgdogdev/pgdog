@@ -66,6 +66,7 @@ fn test_insert_multi_row() {
 }
 
 #[test]
+#[cfg_attr(not(feature = "new_parser"), should_panic)] // Fixed in port
 fn test_insert_select() {
     let mut test = QueryParserTest::new();
 
@@ -77,10 +78,11 @@ fn test_insert_select() {
     ]);
 
     assert!(command.route().is_write());
-    assert!(command.route().is_all_shards());
+    assert!(command.route().shard().is_direct());
 }
 
 #[test]
+#[cfg_attr(not(feature = "new_parser"), should_panic)] // Fixed in port
 fn test_insert_default_values() {
     let mut test = QueryParserTest::new();
 
@@ -89,5 +91,5 @@ fn test_insert_default_values() {
     ]);
 
     assert!(command.route().is_write());
-    assert!(command.route().is_all_shards());
+    assert!(command.route().shard().is_direct());
 }

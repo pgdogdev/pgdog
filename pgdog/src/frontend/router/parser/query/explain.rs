@@ -34,19 +34,25 @@ impl QueryParser {
                 new_stmt,
                 context,
             ),
+            #[cfg_attr(feature = "new_parser", allow(unused))]
             NodeEnum::InsertStmt(stmt) => self.insert(
+                #[cfg(not(feature = "new_parser"))]
                 stmt,
                 #[cfg(feature = "new_parser")]
                 new_stmt,
                 context,
             ),
+            #[cfg_attr(feature = "new_parser", allow(unused))]
             NodeEnum::UpdateStmt(stmt) => self.update(
+                #[cfg(not(feature = "new_parser"))]
                 stmt,
                 #[cfg(feature = "new_parser")]
                 new_stmt,
                 context,
             ),
+            #[cfg_attr(feature = "new_parser", allow(unused))]
             NodeEnum::DeleteStmt(stmt) => self.delete(
+                #[cfg(not(feature = "new_parser"))]
                 stmt,
                 #[cfg(feature = "new_parser")]
                 new_stmt,

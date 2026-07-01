@@ -3,14 +3,15 @@ use super::*;
 impl QueryParser {
     pub(super) fn update(
         &mut self,
-        stmt: &UpdateStmt,
-        #[cfg(feature = "new_parser")] new_stmt: pg_raw_parse::Node<'_>,
+        #[cfg(not(feature = "new_parser"))] stmt: &UpdateStmt,
+        #[cfg(feature = "new_parser")] stmt: pg_raw_parse::Node<'_>,
         context: &mut QueryParserContext,
     ) -> Result<Command, Error> {
         let mut parser = StatementParser::from_update(
+            #[cfg(not(feature = "new_parser"))]
             stmt,
             #[cfg(feature = "new_parser")]
-            new_stmt,
+            stmt,
             context.router_context.bind,
             &context.sharding_schema,
             self.recorder_mut(),

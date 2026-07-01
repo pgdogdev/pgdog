@@ -42,6 +42,7 @@ impl QueryParser {
 
         let (advisory_locks, mut omnisharded) = {
             let mut parser = StatementParser::from_select(
+                #[cfg(not(feature = "new_parser"))]
                 stmt,
                 #[cfg(feature = "new_parser")]
                 new_stmt,
@@ -67,6 +68,7 @@ impl QueryParser {
 
         let (shard, is_sharded, tables) = {
             let mut statement_parser = StatementParser::from_select(
+                #[cfg(not(feature = "new_parser"))]
                 stmt,
                 #[cfg(feature = "new_parser")]
                 new_stmt,

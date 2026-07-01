@@ -107,6 +107,7 @@ impl StatementRewrite<'_> {
         if let NodeEnum::InsertStmt(insert) = node.node.as_ref()? {
             let relation = insert.relation.as_ref()?;
             let is_sharded = StatementParser::from_insert(
+                #[cfg(not(feature = "new_parser"))]
                 insert,
                 #[cfg(feature = "new_parser")]
                 new_stmt,
