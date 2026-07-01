@@ -79,7 +79,7 @@ async fn test_replica_manual_unban() {
     assert!(ban.banned());
 
     // Manually unban
-    ban.unban(false);
+    ban.unban(false, UnbanReason::default());
 
     assert!(!ban.banned());
 

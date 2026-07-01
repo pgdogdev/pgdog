@@ -25,6 +25,7 @@ pub mod monitor;
 pub mod target_health;
 
 use ban::Ban;
+pub use ban::UnbanReason;
 use monitor::*;
 pub use target_health::*;
 
@@ -427,7 +428,9 @@ impl LoadBalancer {
             }
         }
 
-        candidates.iter().for_each(|target| target.ban.unban(true));
+        candidates
+            .iter()
+            .for_each(|target| target.ban.unban(true, UnbanReason::AllTargetsBanned));
 
         Err(Error::AllReplicasDown)
     }

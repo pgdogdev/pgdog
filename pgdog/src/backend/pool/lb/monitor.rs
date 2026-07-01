@@ -128,7 +128,7 @@ impl Monitor {
         // intent.
         if targets.len() == unavailable {
             targets.iter().for_each(|target| {
-                target.ban.unban(true);
+                target.ban.unban(true, UnbanReason::AllTargetsBanned);
             });
         } else {
             for (i, reason) in ban_targets {
