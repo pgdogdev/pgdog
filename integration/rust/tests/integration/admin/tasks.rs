@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use rust::setup::{admin_sqlx, connection_sqlx_direct, connection_sqlx_direct_db};
+use crate::setup::{admin_sqlx, connection_sqlx_direct, connection_sqlx_direct_db};
 use sqlx::{Executor, Pool, Postgres, Row};
 use tokio::time::{sleep, timeout};
 

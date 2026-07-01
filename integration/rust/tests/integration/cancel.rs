@@ -1,7 +1,7 @@
 use std::time::Duration;
 
+use crate::setup::{admin_tokio, connection_sqlx_direct};
 use bytes::{BufMut, BytesMut};
-use rust::setup::{admin_tokio, connection_sqlx_direct};
 use sqlx::PgPool;
 use tokio::{io::AsyncWriteExt, net::TcpStream, task::JoinHandle, time::timeout};
 use tokio_postgres::{CancelToken, Error as PgError, NoTls, SimpleQueryMessage};

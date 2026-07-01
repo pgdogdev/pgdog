@@ -1,8 +1,8 @@
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use crate::setup::admin_sqlx;
 use parking_lot::Mutex;
-use rust::setup::admin_sqlx;
 use rust_decimal::prelude::ToPrimitive;
 use sqlx::{Connection, Executor, PgConnection, Pool, Postgres, Row, postgres::PgListener};
 use tokio::{

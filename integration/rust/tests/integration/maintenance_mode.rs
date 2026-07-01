@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use rust::setup::{admin_sqlx, admin_tokio, connection_failover, connections_sqlx};
+use crate::setup::{admin_sqlx, admin_tokio, connection_failover, connections_sqlx};
 use serial_test::serial;
 use sqlx::Executor;
 use tokio::time::sleep;

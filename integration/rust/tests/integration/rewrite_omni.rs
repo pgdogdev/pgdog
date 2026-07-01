@@ -1,4 +1,4 @@
-use rust::setup::*;
+use crate::setup::*;
 use sqlx::Executor;
 
 #[tokio::test]

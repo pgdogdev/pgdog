@@ -1,5 +1,5 @@
+use crate::setup::{admin_sqlx, connections_sqlx};
 use chrono::{DateTime, NaiveDateTime, Utc};
-use rust::setup::{admin_sqlx, connections_sqlx};
 use sqlx::{Connection, Executor, PgConnection, Row, postgres::PgPool};
 
 const SHARD_URLS: [&str; 2] = [

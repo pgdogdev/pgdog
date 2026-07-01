@@ -2,7 +2,7 @@
 // use tokio_postgres::binary_copy::{BinaryCopyInWriter, BinaryCopyOutStream};
 // use tokio_postgres::types::Type;
 
-// use rust::setup::connections;
+// use crate::setup::connections;
 
 // #[tokio::test]
 // async fn test_copy() {

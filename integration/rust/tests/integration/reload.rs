@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use rust::setup::{admin_tokio, backends, connection_failover, connection_sqlx_direct};
+use crate::setup::{admin_tokio, backends, connection_failover, connection_sqlx_direct};
 use serial_test::serial;
 use sqlx::{Executor, Row, postgres::PgPoolOptions};
 use tokio::time::sleep;
