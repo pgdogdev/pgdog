@@ -3,15 +3,15 @@ use crate::frontend::router::parser::{
 };
 
 use super::*;
+#[cfg(not(feature = "new_parser"))]
+use function::FunctionBehavior;
 use pg_query::Node as PgNode;
 #[cfg(feature = "new_parser")]
-use pg_raw_parse::walk::{self, Recurse};
+use pg_raw_parse::walk;
 #[cfg(feature = "new_parser")]
 use pg_raw_parse::{Node, nodes};
 use pgdog_config::system_catalogs;
 use shared::ConvergeAlgorithm;
-#[cfg(feature = "new_parser")]
-use std::ops::ControlFlow;
 
 impl QueryParser {
     /// Handle SELECT statement.
@@ -28,20 +28,43 @@ impl QueryParser {
         #[cfg(feature = "new_parser")] stmt: &nodes::SelectStmt,
         context: &mut QueryParserContext,
     ) -> Result<Command, Error> {
-        #[cfg(feature = "new_parser")]
-        let cte_writes = Self::cte_writes(stmt);
         #[cfg(not(feature = "new_parser"))]
         let cte_writes = Self::cte_writes(stmt_old);
-        #[cfg(feature = "new_parser")]
-        let has_locking = Self::has_locking_clause(stmt);
         #[cfg(not(feature = "new_parser"))]
         let has_locking = Self::has_locking_clause(stmt_old);
-        let function_behavior = Self::functions(stmt_old);
+        #[cfg(not(feature = "new_parser"))]
+        let FunctionBehavior {
+            writes,
+            cross_shard,
+        } = Self::functions(stmt_old);
+
+        #[cfg(feature = "new_parser")]
+        let mut cross_shard = false;
+        #[cfg(feature = "new_parser")]
+        let mut writes = self.write_override;
+        #[cfg(feature = "new_parser")]
+        walk::walk(stmt.into(), |node| match node {
+            Node::CommonTableExpr(expr) => match expr.ctequery() {
+                Node::SelectStmt(_) => (),
+                _ => writes = true,
+            },
+            Node::LockingClause(_) => writes = true,
+            Node::FuncCall(f) => {
+                if let Some(f) =
+                    Function::from_strings(f.funcname().into_iter().filter_map(Node::as_str))
+                {
+                    cross_shard = cross_shard || f.behavior().cross_shard;
+                    writes = writes || f.behavior().writes;
+                }
+            }
+            _ => (),
+        });
 
         // Write overwrite because of conservative read/write split.
-        let writes = self.write_override || function_behavior.writes || cte_writes || has_locking;
+        #[cfg(not(feature = "new_parser"))]
+        let writes = writes || self.write_override || cte_writes || has_locking;
 
-        if function_behavior.cross_shard {
+        if cross_shard {
             context
                 .shards_calculator
                 .push(ShardWithPriority::new_override_cross_shard_function());
@@ -354,6 +377,7 @@ impl QueryParser {
     ///
     /// * `stmt`: SELECT statement from pg_query.
     ///
+    #[cfg(not(feature = "new_parser"))]
     fn functions(stmt: &SelectStmt) -> FunctionBehavior {
         for target in &stmt.target_list {
             if let Ok(func) = Function::try_from(target) {
@@ -382,15 +406,6 @@ impl QueryParser {
 
     /// Recursively check for a locking clause (FOR UPDATE, FOR SHARE, etc.)
     /// on this statement or any CTE nested within it.
-    #[cfg(feature = "new_parser")]
-    fn has_locking_clause(stmt: &nodes::SelectStmt) -> bool {
-        walk::walk_manual(stmt.into(), |node| match node {
-            Node::LockingClause(_) => ControlFlow::Break(()),
-            _ => Recurse::yes(),
-        })
-        .is_some()
-    }
-
     #[cfg(not(feature = "new_parser"))]
     fn has_locking_clause(stmt: &SelectStmt) -> bool {
         if !stmt.locking_clause.is_empty() {
@@ -418,18 +433,6 @@ impl QueryParser {
     ///
     /// * `stmt`: SELECT statement from pg_query.
     ///
-    #[cfg(feature = "new_parser")]
-    fn cte_writes(stmt: &nodes::SelectStmt) -> bool {
-        walk::walk_manual(stmt.withClause().into(), |node| match node {
-            Node::CommonTableExpr(expr) => match expr.ctequery() {
-                Node::SelectStmt(_) => Recurse::yes(),
-                _ => ControlFlow::Break(()),
-            },
-            _ => Recurse::yes(), // CTEs are top level children of SelectStmt
-        })
-        .is_some()
-    }
-
     #[cfg(not(feature = "new_parser"))]
     fn cte_writes(stmt: &SelectStmt) -> bool {
         if let Some(ref with_clause) = stmt.with_clause {

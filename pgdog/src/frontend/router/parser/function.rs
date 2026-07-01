@@ -19,22 +19,13 @@ impl<'a> Function<'a> {
     /// Build a Function from a qualified name list (as found in `FuncCall.funcname`).
     /// The last element is the function name; the preceding element (if any) is the
     /// schema.
-    fn from_strings(parts: &'a [Node]) -> Result<Self, ()> {
-        let str_of = |node: &'a Node| match &node.node {
-            Some(NodeEnum::String(protobuf::String { sval })) => Ok(sval.as_str()),
-            _ => Err(()),
-        };
-        match parts {
-            [name] => Ok(Self {
-                name: str_of(name)?,
-                schema: None,
-            }),
-            [.., schema, name] => Ok(Self {
-                name: str_of(name)?,
-                schema: Some(str_of(schema)?),
-            }),
-            _ => Err(()),
-        }
+    pub(crate) fn from_strings(
+        mut parts: impl DoubleEndedIterator<Item = &'a str>,
+    ) -> Option<Self> {
+        Some(Self {
+            name: parts.next_back()?,
+            schema: parts.next_back(),
+        })
     }
 
     /// This function likely writes.
@@ -50,7 +41,13 @@ impl<'a> TryFrom<&'a Node> for Function<'a> {
     type Error = ();
     fn try_from(value: &'a Node) -> Result<Self, Self::Error> {
         match &value.node {
-            Some(NodeEnum::FuncCall(func)) => Self::from_strings(&func.funcname),
+            Some(NodeEnum::FuncCall(func)) => {
+                let strings = func.funcname.iter().filter_map(|s| match &s.node {
+                    Some(NodeEnum::String(protobuf::String { sval })) => Some(sval.as_str()),
+                    _ => None,
+                });
+                Self::from_strings(strings).ok_or(())
+            }
 
             Some(NodeEnum::TypeCast(cast)) if let Some(node) = cast.arg.as_ref() => {
                 Self::try_from(node.as_ref())

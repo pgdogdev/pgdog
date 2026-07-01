@@ -127,7 +127,7 @@ impl<'a> TryFrom<pg_raw_parse::Node<'a>> for Column<'a> {
 
     fn try_from(value: pg_raw_parse::Node<'a>) -> Result<Self, Self::Error> {
         use pg_raw_parse::Node;
-        match dbg!(value) {
+        match value {
             Node::ColumnRef(c) => Self::try_from(c),
             Node::ResTarget(r) => Ok(Self {
                 name: r.name().ok_or(Error::ColumnDecode)?,

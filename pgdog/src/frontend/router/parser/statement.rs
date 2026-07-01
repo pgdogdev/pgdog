@@ -995,8 +995,7 @@ impl<'a, 'b: 'a, 'c> StatementParser<'a, 'b, 'c> {
             }
 
             _ => Recurse::yes(),
-        })
-        .expect("PG received an unrecognized node");
+        });
     }
 
     #[cfg(not(feature = "new_parser"))]
