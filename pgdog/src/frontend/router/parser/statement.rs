@@ -1705,11 +1705,10 @@ impl<'a, 'b: 'a, 'c> StatementParser<'a, 'b, 'c> {
             }
 
             _ => Recurse::yes(),
-        })
-        .map_err(Error::from);
+        });
 
-        match result.transpose() {
-            Some(r) => ControlFlow::Break(r.flatten()),
+        match result {
+            Some(r) => ControlFlow::Break(r),
             None => ControlFlow::Continue(()),
         }
     }
@@ -1759,8 +1758,6 @@ impl<'a, 'b: 'a, 'c> StatementParser<'a, 'b, 'c> {
                         None => Recurse::no(),
                     }
                 })
-                .map_err(Into::into)
-                .break_err()?
                 .transpose()
                 .break_err()?;
 
@@ -2046,7 +2043,7 @@ impl<'a, 'b: 'a, 'c> StatementParser<'a, 'b, 'c> {
                 Recurse::no()
             }
             _ => Recurse::yes(),
-        })?;
+        });
 
         if let Some(shard) = result {
             return shard.map(Some);
