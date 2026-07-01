@@ -392,8 +392,6 @@ impl QueryParser {
             Node::LockingClause(_) => ControlFlow::Break(()),
             _ => Recurse::yes(),
         })
-        .ok()
-        .flatten()
         .is_some()
     }
 
@@ -433,8 +431,6 @@ impl QueryParser {
             },
             _ => Recurse::yes(), // CTEs are top level children of SelectStmt
         })
-        .ok()
-        .flatten()
         .is_some()
     }
 
