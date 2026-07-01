@@ -108,7 +108,7 @@ impl ShardMonitor {
                 for replica in replicas {
                     // Primary is ahead, there is replica lag.
                     let lag = if primary.1.lsn.lsn > replica.1.lsn.lsn {
-                        primary.1.replica_lag(&replica.1)
+                        replica.1.replica_lag(&primary.1)
                     } else {
                         ReplicaLag::default()
                     };
