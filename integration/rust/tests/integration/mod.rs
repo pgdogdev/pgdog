@@ -19,6 +19,7 @@ pub mod max;
 pub mod multi_set;
 pub mod notify;
 pub mod offset;
+pub mod order_by_cross_shard_merge;
 pub mod partial_req;
 pub mod per_stmt_routing;
 pub mod prepared;
