@@ -26,10 +26,11 @@ pub enum VaultAuthMethod {
     Approle,
 }
 
-/// HashiCorp Vault settings, used by pools configured with `server_auth = "vault"`.
+/// HashiCorp Vault settings, used by pools configured with `server_auth = "vault_dynamic"`
+/// or `"vault_static"`.
 ///
 /// PgDog logs into Vault using the configured auth method and fetches
-/// dynamic database credentials from the per-user `vault_path`.
+/// database credentials from the per-user `backend_vault_path`.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Vault {

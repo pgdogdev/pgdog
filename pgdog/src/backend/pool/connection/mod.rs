@@ -380,6 +380,9 @@ impl Connection {
                     PasswordKind::Plain(plain) => {
                         user.passwords.push(plain.clone());
                     }
+
+                    // Vault static roles are for client auth only; skip for passthrough.
+                    PasswordKind::VaultStaticRole(_) => {}
                 }
             }
 

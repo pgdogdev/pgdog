@@ -2,5 +2,14 @@
 name = "pgdog"
 database = "pgdog"
 password = "pgdog"
-server_auth = "vault"
-vault_path = "database/creds/pgdog-role"
+server_auth = "vault_dynamic"
+backend_vault_path = "database/creds/pgdog-role"
+
+# Client password verified against Vault static role; backend also uses the
+# static role so the same Vault-managed password is used end-to-end.
+[[users]]
+name = "pgdog_static"
+database = "pgdog"
+client_vault_path = "database/static-creds/pgdog-static-role"
+server_auth = "vault_static"
+backend_vault_path = "database/static-creds/pgdog-static-role"

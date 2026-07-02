@@ -204,7 +204,16 @@ impl Monitor {
                                 },
                             )
                         }
-                        ServerAuth::Vault => {
+                        ServerAuth::VaultStatic => {
+                            vault::static_backend_credentials(addr.clone()).await.map(
+                                |(token, expires_at, refresh_at)| {
+                                    TokenCache::global().set_with_refresh_at(
+                                        &addr, token, expires_at, refresh_at,
+                                    )
+                                },
+                            )
+                        }
+                        ServerAuth::VaultDynamic => {
                             vault::credentials(addr.clone()).await.map(|credentials| {
                                 TokenCache::global().set_credentials(&addr, credentials);
                                 pool.lock().bump_credentials_generation();
