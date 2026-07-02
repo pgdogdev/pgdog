@@ -1,4 +1,4 @@
-use crate::backend::pool::lsn_monitor::ReplicaLag;
+use crate::backend::pool::lsn_monitor::{LsnStats, ReplicaLag};
 
 use super::*;
 
@@ -92,30 +92,7 @@ impl ShardMonitor {
                 );
             }
 
-            let pool_with_stats = self
-                .shard
-                .pools()
-                .iter()
-                .map(|pool| (pool.clone(), pool.lsn_stats()))
-                .collect::<Vec<_>>();
-
-            let primary = pool_with_stats.iter().find(|pair| !pair.1.replica);
-
-            // There is a primary. If not, replica lag cannot be
-            // calculated.
-            if let Some(primary) = primary {
-                let replicas = pool_with_stats.iter().filter(|pair| pair.1.replica);
-                for replica in replicas {
-                    // Primary is ahead, there is replica lag.
-                    let lag = if primary.1.lsn.lsn > replica.1.lsn.lsn {
-                        primary.1.replica_lag(&replica.1)
-                    } else {
-                        ReplicaLag::default()
-                    };
-                    replica.0.lock().replica_lag = lag;
-                }
-                primary.0.lock().replica_lag = ReplicaLag::default();
-            }
+            update_replica_lag(&self.shard.pools());
         }
 
         debug!(
@@ -123,6 +100,53 @@ impl ShardMonitor {
             self.shard.number(),
             self.shard.identifier()
         );
+    }
+}
+
+fn update_replica_lag(pools: &[Pool]) {
+    let primary = pools
+        .iter()
+        .map(|pool| (pool, pool.lsn_stats()))
+        .find(|(_, stats)| !stats.replica);
+
+    // There is a primary. If not, replica lag cannot be calculated.
+    if let Some((primary_pool, primary_stats)) = primary {
+        for replica_pool in pools {
+            let replica_stats = replica_pool.lsn_stats();
+            if !replica_stats.replica {
+                continue;
+            }
+
+            let lag = calculate_replica_lag(&primary_stats, &replica_stats);
+            replica_pool.lock().replica_lag = lag;
+        }
+        primary_pool.lock().replica_lag = ReplicaLag::default();
+    }
+}
+
+fn calculate_replica_lag(primary: &LsnStats, replica: &LsnStats) -> ReplicaLag {
+    debug_assert!(
+        !primary.replica,
+        "primary stats must come from the primary pool"
+    );
+    debug_assert!(
+        replica.replica,
+        "replica stats must come from the replica pool"
+    );
+
+    // Replica lag is how far the replica trails the primary.
+    let bytes = primary.lsn.lsn - replica.lsn.lsn;
+    if bytes <= 0 {
+        return ReplicaLag::default();
+    }
+
+    let lag_ms = (primary.timestamp.to_naive_datetime() - replica.timestamp.to_naive_datetime())
+        .num_milliseconds()
+        .clamp(0, i64::MAX);
+
+    ReplicaLag {
+        bytes,
+        duration: Duration::from_millis(lag_ms as u64),
     }
 }
 
@@ -136,6 +160,7 @@ mod test {
     use crate::backend::pool::{Address, Config, PoolConfig};
     use crate::backend::replication::publisher::Lsn;
     use crate::config::{LoadBalancingStrategy, ReadWriteSplit, Role};
+    use pgdog_postgres_types::{Format, FromDataType, TimestampTz};
     use pgdog_stats::LsnStats as StatsLsnStats;
     use tokio::time::sleep;
 
@@ -166,6 +191,84 @@ mod test {
         }
         .into();
         *pools[index].inner().lsn_stats.write() = stats;
+    }
+
+    fn set_pool_lsn_stats(pool: &Pool, replica: bool, lsn: i64, timestamp: &str) {
+        *pool.inner().lsn_stats.write() = lsn_stats(replica, lsn, timestamp);
+    }
+
+    fn lsn_stats(replica: bool, lsn: i64, timestamp: &str) -> LsnStats {
+        StatsLsnStats {
+            replica,
+            lsn: Lsn::from_i64(lsn),
+            offset_bytes: lsn,
+            timestamp: TimestampTz::decode(timestamp.as_bytes(), Format::Text).unwrap(),
+            fetched: SystemTime::now(),
+            aurora: false,
+        }
+        .into()
+    }
+
+    // Regression test for the shard monitor lag calculation. The broken monitor
+    // called `primary.replica_lag(replica)`, which inverted bytes and clamped the
+    // duration to zero, preventing replica-lag bans from triggering.
+    #[test]
+    fn test_calculate_replica_lag_uses_replica_against_primary() {
+        let primary = lsn_stats(false, 200, "2026-07-01 13:33:10.000000+00");
+        let replica = lsn_stats(true, 100, "2026-07-01 13:33:00.000000+00");
+
+        let lag = calculate_replica_lag(&primary, &replica);
+
+        assert_eq!(lag.bytes, 100);
+        assert_eq!(lag.duration.as_secs(), 10);
+    }
+
+    #[test]
+    fn test_calculate_replica_lag_is_zero_when_replica_is_not_behind() {
+        let primary = lsn_stats(false, 100, "2026-07-01 13:33:00.000000+00");
+        let replica = lsn_stats(true, 200, "2026-07-01 13:33:10.000000+00");
+
+        let lag = calculate_replica_lag(&primary, &replica);
+
+        assert_eq!(lag.bytes, 0);
+        assert_eq!(lag.duration, Duration::default());
+    }
+
+    #[test]
+    #[should_panic(expected = "primary stats must come from the primary pool")]
+    fn test_calculate_replica_lag_rejects_swapped_stats() {
+        let primary = lsn_stats(false, 200, "2026-07-01 13:33:10.000000+00");
+        let replica = lsn_stats(true, 100, "2026-07-01 13:33:00.000000+00");
+
+        let _ = calculate_replica_lag(&replica, &primary);
+    }
+
+    #[test]
+    fn test_update_replica_lag_assigns_primary_minus_replica_to_replica_pool() {
+        let primary = Pool::new(&PoolConfig {
+            address: Address::new_test(),
+            config: Config::default(),
+        });
+        let replica = Pool::new(&PoolConfig {
+            address: Address {
+                configured_role: Role::Replica,
+                ..Address::new_test()
+            },
+            config: Config::default(),
+        });
+
+        set_pool_lsn_stats(&primary, false, 200, "2026-07-01 13:33:10.000000+00");
+        set_pool_lsn_stats(&replica, true, 100, "2026-07-01 13:33:00.000000+00");
+
+        update_replica_lag(&[replica.clone(), primary.clone()]);
+
+        let replica_lag = replica.replica_lag();
+        assert_eq!(replica_lag.bytes, 100);
+        assert_eq!(replica_lag.duration.as_secs(), 10);
+
+        let primary_lag = primary.replica_lag();
+        assert_eq!(primary_lag.bytes, 0);
+        assert_eq!(primary_lag.duration, Duration::default());
     }
 
     // The shard monitor reacts to an `lsn_role_change` notification by

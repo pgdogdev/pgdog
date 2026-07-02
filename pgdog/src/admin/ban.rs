@@ -53,7 +53,7 @@ impl Command for Ban {
                     }
 
                     if self.unban {
-                        ban.unban(false);
+                        ban.unban(false, pool::lb::UnbanReason::Manual);
                     } else {
                         ban.ban(pool::Error::ManualBan, Duration::MAX);
                     }

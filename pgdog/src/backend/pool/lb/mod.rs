@@ -25,6 +25,7 @@ pub mod monitor;
 pub mod target_health;
 
 use ban::Ban;
+pub use ban::UnbanReason;
 use monitor::*;
 pub use target_health::*;
 
@@ -349,12 +350,16 @@ impl LoadBalancer {
         let primary_reads = match self.rw_split {
             IncludePrimary => true,
             IncludePrimaryIfReplicaBanned => candidates.iter().any(|target| target.ban.banned()),
-            // Under PreferPrimary, default queries already route to the primary as writes;
-            // a read only reaches here when it explicitly opted into replicas, so honor it
-            // like ExcludePrimary and fall back to the primary only if there are no replicas.
-            ExcludePrimary | PreferPrimary => !candidates
+            // we read from the primary if we have no replicas
+            ExcludePrimary => !candidates
                 .iter()
                 .any(|target| matches!(target.role(), Role::Replica | Role::Auto)),
+            // PreferPrimary makes all queries writes. If a query lands here,
+            // it's because of pgdog.role=replica. Let it use the primary only if
+            // no replicas are available.
+            PreferPrimary => !candidates.iter().any(|target| {
+                matches!(target.role(), Role::Replica | Role::Auto) && !target.ban.banned()
+            }),
         };
 
         if !primary_reads {
@@ -427,7 +432,9 @@ impl LoadBalancer {
             }
         }
 
-        candidates.iter().for_each(|target| target.ban.unban(true));
+        candidates
+            .iter()
+            .for_each(|target| target.ban.unban(true, UnbanReason::AllTargetsBanned));
 
         Err(Error::AllReplicasDown)
     }
