@@ -80,12 +80,12 @@ impl MultiShard {
         }
     }
 
-    /// Map a positional index to the actual shard number.
-    pub(super) fn shard_index(&self, position: usize) -> usize {
+    /// Map a position in the connected servers list to the actual shard number.
+    pub(super) fn shard_index(&self, shard_position: usize) -> usize {
         self.shard_indices
-            .get(position)
+            .get(shard_position)
             .copied()
-            .unwrap_or(position)
+            .unwrap_or(shard_position)
     }
 
     /// Update multi-shard state.
