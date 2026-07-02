@@ -149,4 +149,14 @@ impl<'a> QueryParserContext<'a> {
     pub(super) fn expanded_explain(&self) -> bool {
         self.expanded_explain
     }
+
+    /// Are we running in session mode?
+    ///
+    /// In session mode, queries are forwarded to the server without
+    /// parsing or validation beyond what's required for routing.
+    pub(super) fn is_session_mode(&self) -> bool {
+        self.router_context
+            .cluster
+            .pooler_mode() == crate::config::PoolerMode::Session
+    }
 }
