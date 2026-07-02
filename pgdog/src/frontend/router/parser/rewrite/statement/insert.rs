@@ -334,6 +334,7 @@ mod tests {
 
     fn parse_and_split(sql: &str) -> Vec<InsertSplit> {
         let mut ast = pg_query::parse(sql).unwrap().protobuf;
+        #[cfg(feature = "new_parser")]
         let stmt = pg_raw_parse::parse(sql).unwrap();
         let mut prepared = PreparedStatements::default();
         let schema = default_schema();

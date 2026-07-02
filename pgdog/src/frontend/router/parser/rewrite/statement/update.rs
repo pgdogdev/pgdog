@@ -825,6 +825,7 @@ mod test {
 
     fn run_test(query: &str) -> Result<Option<ShardingKeyUpdate>, Error> {
         let mut stmt_old = parse(query)?;
+        #[cfg(feature = "new_parser")]
         let stmt = pg_raw_parse::parse(query)?;
         let schema = default_schema();
         let db_schema = default_db_schema();

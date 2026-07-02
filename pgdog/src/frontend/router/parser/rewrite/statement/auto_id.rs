@@ -364,6 +364,7 @@ mod tests {
     ) -> Result<(String, RewritePlan), Error> {
         let _guard = set_env_var("NODE_ID", "pgdog-1");
         let mut ast = pg_query::parse(sql).unwrap().protobuf;
+        #[cfg(feature = "new_parser")]
         let stmt = pg_raw_parse::parse(sql).unwrap();
         let mut prepared = PreparedStatements::default();
         let schema = sharding_schema_with_mode(mode);

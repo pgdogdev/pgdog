@@ -281,6 +281,7 @@ mod tests {
 
     fn run_limit_offset(sql: &str, schema: &ShardingSchema) -> RewritePlan {
         let mut ast = pg_query::parse(sql).unwrap();
+        #[cfg(feature = "new_parser")]
         let stmt = pg_raw_parse::parse(sql).unwrap();
         let db_schema = Schema::default();
         let mut ps = PreparedStatements::default();

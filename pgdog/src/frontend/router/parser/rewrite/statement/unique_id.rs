@@ -360,6 +360,7 @@ mod tests {
 
     fn run_test(sql: &str, extended: bool) -> (ParseResult, RewritePlan) {
         let mut ast = pg_query::parse(sql).unwrap().protobuf;
+        #[cfg(feature = "new_parser")]
         let stmt = pg_raw_parse::parse(sql).unwrap();
         let mut ps = PreparedStatements::default();
         let schema = default_schema();
