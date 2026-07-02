@@ -11,9 +11,8 @@ pub struct Ban {
     pool: Pool,
 }
 
-#[derive(Debug, Default, Copy, Clone)]
+#[derive(Debug, Copy, Clone)]
 pub enum UnbanReason {
-    #[default]
     AllTargetsBanned,
     Expired,
     Manual,
@@ -66,15 +65,25 @@ impl Ban {
     }
 
     /// Unban the database.
+    ///
+    /// FIXME(lev): `reason` seems like it should be
+    /// used as an operand but it's only used for logging.
+    /// We should unify methods and provide one public interface to this.
+    ///
     pub fn unban(&self, manual_check: bool, reason: UnbanReason) {
         let mut guard = self.inner.upgradable_read();
         if let Some(ref ban) = guard.ban {
+            let mut unbanned = false;
             if ban.error != Error::ManualBan || !manual_check {
                 guard.with_upgraded(|guard| {
                     guard.ban = None;
                 });
+                unbanned = true;
             }
-            warn!("resuming read queries: {} [{}]", reason, self.pool.addr());
+
+            if unbanned {
+                warn!("resuming read queries: {} [{}]", reason, self.pool.addr());
+            }
         }
     }
 
@@ -396,7 +405,7 @@ mod tests {
         for _ in 0..10 {
             assert!(ban.ban(Error::ServerError, Duration::from_secs(1)));
             assert!(ban.banned());
-            ban.unban(false, UnbanReason::default());
+            ban.unban(false, UnbanReason::AllTargetsBanned);
             assert!(!ban.banned());
         }
     }
