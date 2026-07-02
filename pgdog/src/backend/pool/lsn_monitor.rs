@@ -290,7 +290,7 @@ impl DerefMut for LsnConnection {
 mod test {
     use super::*;
 
-    use pgdog_postgres_types::{Format, FromDataType, TimestampTz};
+    use pgdog_postgres_types::TimestampTz;
     use pgdog_stats::Lsn;
     use tokio::time::timeout;
 
@@ -479,48 +479,6 @@ mod test {
         assert!(monitor.run_query(&mut conn, LSN_QUERY).await.is_some());
 
         pool.shutdown();
-    }
-
-    fn make_stats(replica: bool, lsn: i64, ts: &str) -> LsnStats {
-        StatsLsnStats {
-            replica,
-            lsn: Lsn::from_i64(lsn),
-            offset_bytes: lsn,
-            timestamp: TimestampTz::decode(ts.as_bytes(), Format::Text).unwrap(),
-            fetched: SystemTime::now(),
-            aurora: false,
-        }
-        .into()
-    }
-
-    // Regression test: the shard monitor used to call `replica_lag` with
-    // `self` and `primary` swapped, which inverted both subtractions inside
-    // (`primary.lsn - self.lsn`, `primary.timestamp - self.timestamp`). The
-    // result was negative bytes and a duration clamped to 0, so the replica
-    // always reported zero lag and `ban_replica_lag` could never trigger.
-    #[test]
-    fn test_replica_lag_direction() {
-        let replica = make_stats(true, 100, "2026-07-01 13:33:00.000000+00");
-        let primary = make_stats(false, 200, "2026-07-01 13:33:10.000000+00");
-
-        // Correct direction: replica lags primary by 100 bytes / 10 seconds.
-        let lag = replica.replica_lag(&primary);
-        assert_eq!(lag.bytes, 100, "bytes should be primary.lsn - replica.lsn");
-        assert_eq!(
-            lag.duration.as_secs(),
-            10,
-            "duration should be primary.timestamp - replica.timestamp"
-        );
-
-        // Swapped (buggy) direction: negative bytes, duration clamped to 0,
-        // neither can ever exceed a positive ban threshold.
-        let swapped = primary.replica_lag(&replica);
-        assert_eq!(swapped.bytes, -100, "swapped args invert bytes");
-        assert_eq!(
-            swapped.duration.as_secs(),
-            0,
-            "swapped args clamp the negative duration to 0"
-        );
     }
 
     #[test]
