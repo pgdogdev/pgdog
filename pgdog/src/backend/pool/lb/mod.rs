@@ -350,12 +350,17 @@ impl LoadBalancer {
         let primary_reads = match self.rw_split {
             IncludePrimary => true,
             IncludePrimaryIfReplicaBanned => candidates.iter().any(|target| target.ban.banned()),
-            // Under PreferPrimary, default queries already route to the primary as writes;
-            // a read only reaches here when it explicitly opted into replicas, so honor it
-            // like ExcludePrimary and fall back to the primary only if there are no replicas.
-            ExcludePrimary | PreferPrimary => !candidates
+            // we read from the primary if we have no replicas
+            ExcludePrimary => !candidates
                 .iter()
                 .any(|target| matches!(target.role(), Role::Replica | Role::Auto)),
+            // Under PreferPrimary, default queries already route to the primary as writes;
+            // a read only reaches here when it explicitly opted into replicas, so fall back to
+            // the primary only when no replica is actually usable (none configured, or every
+            // one currently banned) — otherwise honor the opt-in and stick to the replica.
+            PreferPrimary => !candidates.iter().any(|target| {
+                matches!(target.role(), Role::Replica | Role::Auto) && !target.ban.banned()
+            }),
         };
 
         if !primary_reads {
