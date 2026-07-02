@@ -98,11 +98,7 @@ impl StatementRewrite<'_> {
         let stmt = self.stmt.stmts.first()?;
         let node = stmt.stmt.as_ref()?;
         #[cfg(feature = "new_parser")]
-        // FIXME(sage): Propagate Nones when port is finished
-        let new_stmt = self
-            .new_stmt
-            .and_then(|r| r.stmts().next())
-            .unwrap_or(pg_raw_parse::Node::None);
+        let new_stmt = self.new_stmt.stmts().next()?;
 
         if let NodeEnum::InsertStmt(insert) = node.node.as_ref()? {
             let relation = insert.relation.as_ref()?;
@@ -368,12 +364,14 @@ mod tests {
     ) -> Result<(String, RewritePlan), Error> {
         let _guard = set_env_var("NODE_ID", "pgdog-1");
         let mut ast = pg_query::parse(sql).unwrap().protobuf;
+        #[cfg(feature = "new_parser")]
+        let stmt = pg_raw_parse::parse(sql).unwrap();
         let mut prepared = PreparedStatements::default();
         let schema = sharding_schema_with_mode(mode);
         let mut rewriter = StatementRewrite::new(StatementRewriteContext {
             stmt: &mut ast,
             #[cfg(feature = "new_parser")]
-            new_stmt: None,
+            new_stmt: &stmt,
             extended: false,
             prepared: false,
             prepared_statements: &mut prepared,
@@ -587,7 +585,7 @@ mod tests {
         let mut rewriter = StatementRewrite::new(StatementRewriteContext {
             stmt: &mut ast,
             #[cfg(feature = "new_parser")]
-            new_stmt: Some(&new_ast),
+            new_stmt: &new_ast,
             extended: false,
             prepared: false,
             prepared_statements: &mut prepared,

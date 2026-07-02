@@ -120,7 +120,9 @@ mod tests {
     use crate::backend::schema::Schema;
     use crate::frontend::PreparedStatements;
     use crate::frontend::router::parser::StatementRewriteContext;
+    use crate::frontend::router::parser::rewrite::statement::RewritePlan;
     use crate::test_utils::set_env_var;
+    use pg_query::protobuf::ParseResult;
 
     fn default_schema() -> ShardingSchema {
         ShardingSchema {
@@ -184,25 +186,7 @@ mod tests {
 
     #[test]
     fn test_rewrite_select_extended_single() {
-        let mut ast = pg_query::parse("SELECT pgdog.unique_id()")
-            .unwrap()
-            .protobuf;
-        let mut ps = PreparedStatements::default();
-        let schema = default_schema();
-        let db_schema = default_db_schema();
-        let mut rewrite = StatementRewrite::new(StatementRewriteContext {
-            stmt: &mut ast,
-            #[cfg(feature = "new_parser")]
-            new_stmt: None,
-            extended: true,
-            prepared: false,
-            prepared_statements: &mut ps,
-            schema: &schema,
-            db_schema: &db_schema,
-            user: "",
-            search_path: None,
-        });
-        let plan = rewrite.maybe_rewrite().unwrap();
+        let (ast, plan) = run_test("SELECT pgdog.unique_id()", true);
 
         let sql = ast.deparse().unwrap();
         assert_eq!(sql, "SELECT $1::bigint");
@@ -212,25 +196,7 @@ mod tests {
 
     #[test]
     fn test_rewrite_select_extended_with_existing_params() {
-        let mut ast = pg_query::parse("SELECT pgdog.unique_id(), $1, $2")
-            .unwrap()
-            .protobuf;
-        let mut ps = PreparedStatements::default();
-        let schema = default_schema();
-        let db_schema = default_db_schema();
-        let mut rewrite = StatementRewrite::new(StatementRewriteContext {
-            stmt: &mut ast,
-            #[cfg(feature = "new_parser")]
-            new_stmt: None,
-            extended: true,
-            prepared: false,
-            prepared_statements: &mut ps,
-            schema: &schema,
-            db_schema: &db_schema,
-            user: "",
-            search_path: None,
-        });
-        let plan = rewrite.maybe_rewrite().unwrap();
+        let (ast, plan) = run_test("SELECT pgdog.unique_id(), $1, $2", true);
 
         let sql = ast.deparse().unwrap();
         assert_eq!(sql, "SELECT $3::bigint, $1, $2");
@@ -240,25 +206,7 @@ mod tests {
 
     #[test]
     fn test_rewrite_select_extended_multiple_unique_ids() {
-        let mut ast = pg_query::parse("SELECT pgdog.unique_id(), pgdog.unique_id()")
-            .unwrap()
-            .protobuf;
-        let mut ps = PreparedStatements::default();
-        let schema = default_schema();
-        let db_schema = default_db_schema();
-        let mut rewrite = StatementRewrite::new(StatementRewriteContext {
-            stmt: &mut ast,
-            #[cfg(feature = "new_parser")]
-            new_stmt: None,
-            extended: true,
-            prepared: false,
-            prepared_statements: &mut ps,
-            schema: &schema,
-            db_schema: &db_schema,
-            user: "",
-            search_path: None,
-        });
-        let plan = rewrite.maybe_rewrite().unwrap();
+        let (ast, plan) = run_test("SELECT pgdog.unique_id(), pgdog.unique_id()", true);
 
         let sql = ast.deparse().unwrap();
         assert_eq!(sql, "SELECT $1::bigint, $2::bigint");
@@ -269,25 +217,7 @@ mod tests {
     #[test]
     fn test_rewrite_select_simple() {
         let _guard = set_env_var("NODE_ID", "pgdog-1");
-        let mut ast = pg_query::parse("SELECT pgdog.unique_id()")
-            .unwrap()
-            .protobuf;
-        let mut ps = PreparedStatements::default();
-        let schema = default_schema();
-        let db_schema = default_db_schema();
-        let mut rewrite = StatementRewrite::new(StatementRewriteContext {
-            stmt: &mut ast,
-            #[cfg(feature = "new_parser")]
-            new_stmt: None,
-            extended: false,
-            prepared: false,
-            prepared_statements: &mut ps,
-            schema: &schema,
-            db_schema: &db_schema,
-            user: "",
-            search_path: None,
-        });
-        let plan = rewrite.maybe_rewrite().unwrap();
+        let (ast, plan) = run_test("SELECT pgdog.unique_id()", false);
 
         let sql = ast.deparse().unwrap();
         // Value should be a bigint literal cast
@@ -306,25 +236,7 @@ mod tests {
     #[test]
     fn test_rewrite_select_simple_multiple_unique_ids() {
         let _guard = set_env_var("NODE_ID", "pgdog-1");
-        let mut ast = pg_query::parse("SELECT pgdog.unique_id(), pgdog.unique_id()")
-            .unwrap()
-            .protobuf;
-        let mut ps = PreparedStatements::default();
-        let schema = default_schema();
-        let db_schema = default_db_schema();
-        let mut rewrite = StatementRewrite::new(StatementRewriteContext {
-            stmt: &mut ast,
-            #[cfg(feature = "new_parser")]
-            new_stmt: None,
-            extended: false,
-            prepared: false,
-            prepared_statements: &mut ps,
-            schema: &schema,
-            db_schema: &db_schema,
-            user: "",
-            search_path: None,
-        });
-        let plan = rewrite.maybe_rewrite().unwrap();
+        let (ast, plan) = run_test("SELECT pgdog.unique_id(), pgdog.unique_id()", false);
 
         let sql = ast.deparse().unwrap();
         // Each unique_id call should get a different value
@@ -337,23 +249,7 @@ mod tests {
 
     #[test]
     fn test_rewrite_no_unique_id() {
-        let mut ast = pg_query::parse("SELECT 1, 2, 3").unwrap().protobuf;
-        let mut ps = PreparedStatements::default();
-        let schema = default_schema();
-        let db_schema = default_db_schema();
-        let mut rewrite = StatementRewrite::new(StatementRewriteContext {
-            stmt: &mut ast,
-            #[cfg(feature = "new_parser")]
-            new_stmt: None,
-            extended: true,
-            prepared: false,
-            prepared_statements: &mut ps,
-            schema: &schema,
-            db_schema: &db_schema,
-            user: "",
-            search_path: None,
-        });
-        let plan = rewrite.maybe_rewrite().unwrap();
+        let (ast, plan) = run_test("SELECT 1, 2, 3", true);
 
         let sql = ast.deparse().unwrap();
         assert_eq!(sql, "SELECT 1, 2, 3");
@@ -362,26 +258,10 @@ mod tests {
 
     #[test]
     fn test_rewrite_insert_values() {
-        let mut ast =
-            pg_query::parse("INSERT INTO t (id, name) VALUES (pgdog.unique_id(), 'test')")
-                .unwrap()
-                .protobuf;
-        let mut ps = PreparedStatements::default();
-        let schema = default_schema();
-        let db_schema = default_db_schema();
-        let mut rewrite = StatementRewrite::new(StatementRewriteContext {
-            stmt: &mut ast,
-            #[cfg(feature = "new_parser")]
-            new_stmt: None,
-            extended: true,
-            prepared: false,
-            prepared_statements: &mut ps,
-            schema: &schema,
-            db_schema: &db_schema,
-            user: "",
-            search_path: None,
-        });
-        let plan = rewrite.maybe_rewrite().unwrap();
+        let (ast, plan) = run_test(
+            "INSERT INTO t (id, name) VALUES (pgdog.unique_id(), 'test')",
+            true,
+        );
 
         let sql = ast.deparse().unwrap();
         assert_eq!(sql, "INSERT INTO t (id, name) VALUES ($1::bigint, 'test')");
@@ -390,26 +270,10 @@ mod tests {
 
     #[test]
     fn test_rewrite_insert_multiple_rows() {
-        let mut ast =
-            pg_query::parse("INSERT INTO t (id) VALUES (pgdog.unique_id()), (pgdog.unique_id())")
-                .unwrap()
-                .protobuf;
-        let mut ps = PreparedStatements::default();
-        let schema = default_schema();
-        let db_schema = default_db_schema();
-        let mut rewrite = StatementRewrite::new(StatementRewriteContext {
-            stmt: &mut ast,
-            #[cfg(feature = "new_parser")]
-            new_stmt: None,
-            extended: true,
-            prepared: false,
-            prepared_statements: &mut ps,
-            schema: &schema,
-            db_schema: &db_schema,
-            user: "",
-            search_path: None,
-        });
-        let plan = rewrite.maybe_rewrite().unwrap();
+        let (ast, plan) = run_test(
+            "INSERT INTO t (id) VALUES (pgdog.unique_id()), (pgdog.unique_id())",
+            true,
+        );
 
         let sql = ast.deparse().unwrap();
         assert_eq!(sql, "INSERT INTO t (id) VALUES ($1::bigint), ($2::bigint)");
@@ -418,25 +282,7 @@ mod tests {
 
     #[test]
     fn test_rewrite_insert_select() {
-        let mut ast = pg_query::parse("INSERT INTO t (id) SELECT pgdog.unique_id() FROM s")
-            .unwrap()
-            .protobuf;
-        let mut ps = PreparedStatements::default();
-        let schema = default_schema();
-        let db_schema = default_db_schema();
-        let mut rewrite = StatementRewrite::new(StatementRewriteContext {
-            stmt: &mut ast,
-            #[cfg(feature = "new_parser")]
-            new_stmt: None,
-            extended: true,
-            prepared: false,
-            prepared_statements: &mut ps,
-            schema: &schema,
-            db_schema: &db_schema,
-            user: "",
-            search_path: None,
-        });
-        let plan = rewrite.maybe_rewrite().unwrap();
+        let (ast, plan) = run_test("INSERT INTO t (id) SELECT pgdog.unique_id() FROM s", true);
 
         let sql = ast.deparse().unwrap();
         assert_eq!(sql, "INSERT INTO t (id) SELECT $1::bigint FROM s");
@@ -445,25 +291,10 @@ mod tests {
 
     #[test]
     fn test_rewrite_update_set() {
-        let mut ast = pg_query::parse("UPDATE t SET id = pgdog.unique_id() WHERE name = 'test'")
-            .unwrap()
-            .protobuf;
-        let mut ps = PreparedStatements::default();
-        let schema = default_schema();
-        let db_schema = default_db_schema();
-        let mut rewrite = StatementRewrite::new(StatementRewriteContext {
-            stmt: &mut ast,
-            #[cfg(feature = "new_parser")]
-            new_stmt: None,
-            extended: true,
-            prepared: false,
-            prepared_statements: &mut ps,
-            schema: &schema,
-            db_schema: &db_schema,
-            user: "",
-            search_path: None,
-        });
-        let plan = rewrite.maybe_rewrite().unwrap();
+        let (ast, plan) = run_test(
+            "UPDATE t SET id = pgdog.unique_id() WHERE name = 'test'",
+            true,
+        );
 
         let sql = ast.deparse().unwrap();
         assert_eq!(sql, "UPDATE t SET id = $1::bigint WHERE name = 'test'");
@@ -472,25 +303,10 @@ mod tests {
 
     #[test]
     fn test_rewrite_update_where() {
-        let mut ast = pg_query::parse("UPDATE t SET name = 'new' WHERE id = pgdog.unique_id()")
-            .unwrap()
-            .protobuf;
-        let mut ps = PreparedStatements::default();
-        let schema = default_schema();
-        let db_schema = default_db_schema();
-        let mut rewrite = StatementRewrite::new(StatementRewriteContext {
-            stmt: &mut ast,
-            #[cfg(feature = "new_parser")]
-            new_stmt: None,
-            extended: true,
-            prepared: false,
-            prepared_statements: &mut ps,
-            schema: &schema,
-            db_schema: &db_schema,
-            user: "",
-            search_path: None,
-        });
-        let plan = rewrite.maybe_rewrite().unwrap();
+        let (ast, plan) = run_test(
+            "UPDATE t SET name = 'new' WHERE id = pgdog.unique_id()",
+            true,
+        );
 
         let sql = ast.deparse().unwrap();
         assert_eq!(sql, "UPDATE t SET name = 'new' WHERE id = $1::bigint");
@@ -499,25 +315,7 @@ mod tests {
 
     #[test]
     fn test_rewrite_delete_where() {
-        let mut ast = pg_query::parse("DELETE FROM t WHERE id = pgdog.unique_id()")
-            .unwrap()
-            .protobuf;
-        let mut ps = PreparedStatements::default();
-        let schema = default_schema();
-        let db_schema = default_db_schema();
-        let mut rewrite = StatementRewrite::new(StatementRewriteContext {
-            stmt: &mut ast,
-            #[cfg(feature = "new_parser")]
-            new_stmt: None,
-            extended: true,
-            prepared: false,
-            prepared_statements: &mut ps,
-            schema: &schema,
-            db_schema: &db_schema,
-            user: "",
-            search_path: None,
-        });
-        let plan = rewrite.maybe_rewrite().unwrap();
+        let (ast, plan) = run_test("DELETE FROM t WHERE id = pgdog.unique_id()", true);
 
         let sql = ast.deparse().unwrap();
         assert_eq!(sql, "DELETE FROM t WHERE id = $1::bigint");
@@ -526,27 +324,10 @@ mod tests {
 
     #[test]
     fn test_rewrite_insert_returning() {
-        let mut ast = pg_query::parse(
+        let (ast, plan) = run_test(
             "INSERT INTO t (id) VALUES (pgdog.unique_id()) RETURNING pgdog.unique_id()",
-        )
-        .unwrap()
-        .protobuf;
-        let mut ps = PreparedStatements::default();
-        let schema = default_schema();
-        let db_schema = default_db_schema();
-        let mut rewrite = StatementRewrite::new(StatementRewriteContext {
-            stmt: &mut ast,
-            #[cfg(feature = "new_parser")]
-            new_stmt: None,
-            extended: true,
-            prepared: false,
-            prepared_statements: &mut ps,
-            schema: &schema,
-            db_schema: &db_schema,
-            user: "",
-            search_path: None,
-        });
-        let plan = rewrite.maybe_rewrite().unwrap();
+            true,
+        );
 
         let sql = ast.deparse().unwrap();
         assert_eq!(
@@ -558,25 +339,10 @@ mod tests {
 
     #[test]
     fn test_rewrite_explain_insert_select() {
-        let mut ast = pg_query::parse("EXPLAIN INSERT INTO t (id) SELECT pgdog.unique_id() FROM s")
-            .unwrap()
-            .protobuf;
-        let mut ps = PreparedStatements::default();
-        let schema = default_schema();
-        let db_schema = default_db_schema();
-        let mut rewrite = StatementRewrite::new(StatementRewriteContext {
-            stmt: &mut ast,
-            #[cfg(feature = "new_parser")]
-            new_stmt: None,
-            extended: true,
-            prepared: false,
-            prepared_statements: &mut ps,
-            schema: &schema,
-            db_schema: &db_schema,
-            user: "",
-            search_path: None,
-        });
-        let plan = rewrite.maybe_rewrite().unwrap();
+        let (ast, plan) = run_test(
+            "EXPLAIN INSERT INTO t (id) SELECT pgdog.unique_id() FROM s",
+            true,
+        );
 
         let sql = ast.deparse().unwrap();
         assert_eq!(sql, "EXPLAIN INSERT INTO t (id) SELECT $1::bigint FROM s");
@@ -585,17 +351,25 @@ mod tests {
 
     #[test]
     fn test_rewrite_explain_select() {
-        let mut ast = pg_query::parse("EXPLAIN SELECT pgdog.unique_id()")
-            .unwrap()
-            .protobuf;
+        let (ast, plan) = run_test("EXPLAIN SELECT pgdog.unique_id()", true);
+
+        let sql = ast.deparse().unwrap();
+        assert_eq!(sql, "EXPLAIN SELECT $1::bigint");
+        assert_eq!(plan.unique_ids, 1);
+    }
+
+    fn run_test(sql: &str, extended: bool) -> (ParseResult, RewritePlan) {
+        let mut ast = pg_query::parse(sql).unwrap().protobuf;
+        #[cfg(feature = "new_parser")]
+        let stmt = pg_raw_parse::parse(sql).unwrap();
         let mut ps = PreparedStatements::default();
         let schema = default_schema();
         let db_schema = default_db_schema();
         let mut rewrite = StatementRewrite::new(StatementRewriteContext {
             stmt: &mut ast,
             #[cfg(feature = "new_parser")]
-            new_stmt: None,
-            extended: true,
+            new_stmt: &stmt,
+            extended,
             prepared: false,
             prepared_statements: &mut ps,
             schema: &schema,
@@ -604,9 +378,6 @@ mod tests {
             search_path: None,
         });
         let plan = rewrite.maybe_rewrite().unwrap();
-
-        let sql = ast.deparse().unwrap();
-        assert_eq!(sql, "EXPLAIN SELECT $1::bigint");
-        assert_eq!(plan.unique_ids, 1);
+        (ast, plan)
     }
 }
