@@ -354,10 +354,9 @@ impl LoadBalancer {
             ExcludePrimary => !candidates
                 .iter()
                 .any(|target| matches!(target.role(), Role::Replica | Role::Auto)),
-            // Under PreferPrimary, default queries already route to the primary as writes;
-            // a read only reaches here when it explicitly opted into replicas, so fall back to
-            // the primary only when no replica is actually usable (none configured, or every
-            // one currently banned) — otherwise honor the opt-in and stick to the replica.
+            // PreferPrimary makes all queries writes. If a query lands here,
+            // it's because of pgdog.role=replica. Let it use the primary only if
+            // no replicas are available.
             PreferPrimary => !candidates.iter().any(|target| {
                 matches!(target.role(), Role::Replica | Role::Auto) && !target.ban.banned()
             }),
