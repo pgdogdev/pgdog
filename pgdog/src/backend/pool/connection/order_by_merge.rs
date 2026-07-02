@@ -221,7 +221,7 @@ pub(super) fn compare_rows(
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::net::messages::FromBytes;
+    use crate::net::messages::{FromBytes, ToBytes};
     use crate::net::{Field, Format, RowDescription};
 
     #[test]
