@@ -635,6 +635,41 @@ async fn test_read_write_split_with_banned_replicas() {
 }
 
 #[tokio::test]
+async fn test_prefer_primary_with_banned_replicas_falls_back_to_primary() {
+    let primary_config = create_test_pool_config("127.0.0.1", 5432);
+    let primary_pool = Pool::new(&primary_config);
+    primary_pool.launch();
+
+    let replica_configs = [create_test_pool_config("localhost", 5432)];
+
+    let replicas = LoadBalancer::new(
+        &Some(primary_pool),
+        &replica_configs,
+        LoadBalancingStrategy::Random,
+        ReadWriteSplit::PreferPrimary,
+    );
+    replicas.launch();
+
+    let replica_ban = &replicas.targets[0].ban;
+    replica_ban.ban(Error::ServerError, Duration::from_millis(1000));
+
+    let request = Request::default();
+
+    let mut used_pool_ids = HashSet::new();
+    for _ in 0..10 {
+        let conn = replicas.get(&request).await.unwrap();
+        used_pool_ids.insert(conn.pool.id());
+    }
+
+    assert_eq!(used_pool_ids.len(), 1);
+
+    let primary_id = replicas.primary().unwrap().id();
+    assert!(used_pool_ids.contains(&primary_id));
+
+    replicas.shutdown();
+}
+
+#[tokio::test]
 async fn test_read_write_split_exclude_primary_with_round_robin() {
     let primary_config = create_test_pool_config("127.0.0.1", 5432);
     let primary_pool = Pool::new(&primary_config);
