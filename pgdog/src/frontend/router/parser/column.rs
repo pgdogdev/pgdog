@@ -129,10 +129,7 @@ impl<'a> TryFrom<pg_raw_parse::Node<'a>> for Column<'a> {
         use pg_raw_parse::Node;
         match value {
             Node::ColumnRef(c) => Self::try_from(c),
-            Node::ResTarget(r) => Ok(Self {
-                name: r.name().ok_or(Error::ColumnDecode)?,
-                ..Default::default()
-            }),
+            Node::ResTarget(r) => Self::try_from(r),
             Node::DefElem(d) if d.defname() == Some("owned_by") => Self::try_from(d.arg()),
             Node::NodeList(l) => Self::try_from(l),
             _ => Err(Error::ColumnDecode),
@@ -146,6 +143,18 @@ impl<'a> TryFrom<&'a nodes::ColumnRef> for Column<'a> {
 
     fn try_from(value: &'a nodes::ColumnRef) -> Result<Self, Self::Error> {
         Self::try_from(value.fields())
+    }
+}
+
+#[cfg(feature = "new_parser")]
+impl<'a> TryFrom<&'a nodes::ResTarget> for Column<'a> {
+    type Error = Error;
+
+    fn try_from(value: &'a nodes::ResTarget) -> Result<Self, Self::Error> {
+        Ok(Self {
+            name: value.name().ok_or(Error::ColumnDecode)?,
+            ..Default::default()
+        })
     }
 }
 

@@ -1,13 +1,17 @@
 use std::{collections::HashMap, ops::Deref, sync::Arc};
 
 use pg_query::{
-    Node, NodeEnum,
+    Node as PgNode, NodeEnum,
     protobuf::{
         AExpr, AExprKind, AStar, ColumnRef, DeleteStmt, InsertStmt, LimitOption, List,
         OverridingKind, ParamRef, ParseResult, RangeVar, RawStmt, ResTarget, SelectStmt,
         SetOperation, String as PgString, UpdateStmt,
     },
 };
+#[cfg(feature = "new_parser")]
+use pg_raw_parse::make::owned;
+#[cfg(feature = "new_parser")]
+use pg_raw_parse::{DeparseResult, Node, deparse, nodes};
 use pgdog_config::{QueryParserEngine, RewriteMode};
 
 use crate::{
@@ -147,7 +151,7 @@ pub(crate) struct Insert {
     /// the original UPDATE statement.
     pub(super) mapping: HashMap<String, UpdateValue>,
     /// Return columns.
-    pub(super) returning_list: Vec<Node>,
+    pub(super) returning_list: Vec<PgNode>,
     /// Returning list deparsed.
     pub(super) returnin_list_deparsed: Option<String>,
 }
@@ -231,14 +235,14 @@ impl Insert {
                 values_str.push(format!("${}", bind_idx + 1));
             }
 
-            columns.push(Node {
+            columns.push(PgNode {
                 node: Some(NodeEnum::ResTarget(Box::new(ResTarget {
                     name: field.name.clone(),
                     ..Default::default()
                 }))),
             });
 
-            values.push(Node {
+            values.push(PgNode {
                 node: Some(NodeEnum::ParamRef(ParamRef {
                     number: bind_idx + 1,
                     ..Default::default()
@@ -251,14 +255,14 @@ impl Insert {
         let insert = InsertStmt {
             relation: self.table.clone(),
             cols: columns,
-            select_stmt: Some(Box::new(Node {
+            select_stmt: Some(Box::new(PgNode {
                 node: Some(NodeEnum::SelectStmt(Box::new(SelectStmt {
                     target_list: vec![],
                     from_clause: vec![],
                     limit_option: LimitOption::Default.into(),
                     where_clause: None,
                     op: SetOperation::SetopNone.into(),
-                    values_lists: vec![Node {
+                    values_lists: vec![PgNode {
                         node: Some(NodeEnum::List(List { items: values })),
                     }],
                     ..Default::default()
@@ -322,14 +326,14 @@ impl<'a> StatementRewrite<'a> {
             return Ok(());
         }
 
-        let stmt = self
+        let stmt_old = self
             .stmt
             .stmts
             .first()
             .and_then(|stmt| stmt.stmt.as_ref().map(|stmt| stmt.node.as_ref()))
             .flatten();
 
-        let stmt = if let Some(NodeEnum::UpdateStmt(stmt)) = stmt {
+        let stmt_old = if let Some(NodeEnum::UpdateStmt(stmt)) = stmt_old {
             stmt
         } else {
             // TODO: Handle EXPLAIN ANALYZE which needs to execute.
@@ -338,20 +342,95 @@ impl<'a> StatementRewrite<'a> {
             return Ok(());
         };
 
-        if let Some(value) = self.sharding_key_update_check(stmt)? {
+        #[cfg(feature = "new_parser")]
+        let Some(Node::UpdateStmt(stmt)) = self.new_stmt.stmts().next() else {
+            // TODO: Handle EXPLAIN ANALYZE which needs to execute.
+            // We could return a combined plan for all 3 queries
+            // we need to execute.
+            return Ok(());
+        };
+
+        if let Some(value) = self.sharding_key_update_check(
+            #[cfg(not(feature = "new_parser"))]
+            stmt_old,
+            #[cfg(feature = "new_parser")]
+            stmt,
+        )? {
+            #[cfg(feature = "new_parser")]
+            // Convert from pg_raw_parse::nodes::ResTarget to pg_query::protobuf::ResTarget
+            let parse_result = {
+                let sql = deparse_node(value)?;
+                pg_query::parse(sql.as_str())?.protobuf
+            };
+            #[cfg(feature = "new_parser")]
+            let value = {
+                let raw_stmt = parse_result.stmts.first().unwrap();
+                let Some(NodeEnum::SelectStmt(s)) = raw_stmt.stmt.as_ref().unwrap().node.as_ref()
+                else {
+                    unreachable!()
+                };
+                let Some(NodeEnum::ResTarget(r)) = s.target_list.first().unwrap().node.as_ref()
+                else {
+                    unreachable!()
+                };
+                r
+            };
             // Without a WHERE clause, this is a huge
             // cross-shard rewrite.
-            if stmt.where_clause.is_none() {
+            if stmt_old.where_clause.is_none() {
                 return Err(Error::WhereClauseMissing);
             }
-            plan.sharding_key_update =
-                Some(create_stmts(stmt, value, self.schema.query_parser_engine)?);
+            plan.sharding_key_update = Some(create_stmts(
+                stmt_old,
+                value,
+                self.schema.query_parser_engine,
+            )?);
         }
 
         Ok(())
     }
 
     /// Check if the sharding key could be updated.
+    #[cfg(feature = "new_parser")]
+    fn sharding_key_update_check(
+        &'a self,
+        stmt: &'a nodes::UpdateStmt,
+    ) -> Result<Option<&'a nodes::ResTarget>, Error> {
+        let table = stmt
+            .relation()
+            .map(Table::from)
+            .expect("UPDATE always has a table");
+
+        let Some(shard_key_assignment) = stmt.targetList().into_iter().find(|c| {
+            Column::try_from(*c).is_ok_and(|mut c| {
+                c.qualify(table);
+                self.schema.tables().get_table(c).is_some()
+            })
+        }) else {
+            return Ok(None);
+        };
+
+        // Check that it's a value assignment and not something like
+        // id = id + 1
+        if Value::try_from(shard_key_assignment.val()).is_ok() {
+            Ok(Some(shard_key_assignment))
+        } else {
+            let expr = shard_key_assignment.val();
+            let expr = deparse_expr(expr)?;
+            // FIXME:
+            //
+            // We can technically support this. We can inject this into
+            // the `SELECT` statement we use to pull the existing row
+            // and use the computed value for assignment.
+            Err(Error::UnsupportedShardingKeyUpdate(format!(
+                "\"{}\" = {}",
+                shard_key_assignment.name().unwrap_or_default(),
+                expr.as_str().strip_prefix("SELECT ").unwrap_or("<unknown>"),
+            )))
+        }
+    }
+
+    #[cfg(not(feature = "new_parser"))]
     fn sharding_key_update_check(
         &'a self,
         stmt: &'a UpdateStmt,
@@ -395,7 +474,7 @@ impl<'a> StatementRewrite<'a> {
                         let expr = res
                             .val
                             .as_ref()
-                            .map(|node| deparse_expr(node, self.schema.query_parser_engine))
+                            .map(|node| deparse_expr_old(node, self.schema.query_parser_engine))
                             .transpose()?
                             .unwrap_or_else(|| "<unknown>".to_string());
                         Err(Error::UnsupportedShardingKeyUpdate(format!(
@@ -418,7 +497,7 @@ impl<'a> StatementRewrite<'a> {
 fn rewrite_params(parse_result: &mut ParseResult) -> Result<Vec<u16>, Error> {
     let mut params = HashMap::new();
 
-    visit_and_mutate_nodes(parse_result, |node| -> Result<Option<Node>, Error> {
+    visit_and_mutate_nodes(parse_result, |node| -> Result<Option<PgNode>, Error> {
         if let Some(NodeEnum::ParamRef(ref mut param)) = node.node {
             if let Some(existing) = params.get(&param.number) {
                 param.number = *existing;
@@ -443,7 +522,7 @@ fn rewrite_params(parse_result: &mut ParseResult) -> Result<Vec<u16>, Error> {
 
 #[derive(Debug, Clone)]
 pub(super) enum UpdateValue {
-    Value(Box<Node>),
+    Value(Box<PgNode>),
     Expr(String), // We deparse the expression because we can't handle it yet.
 }
 
@@ -477,7 +556,7 @@ fn res_targets_to_insert_res_targets(
             let value = if valid {
                 UpdateValue::Value(target.val.clone().unwrap())
             } else {
-                UpdateValue::Expr(deparse_expr(
+                UpdateValue::Expr(deparse_expr_old(
                     target.val.as_ref().unwrap(),
                     query_parser_engine,
                 )?)
@@ -495,7 +574,7 @@ fn res_targets_to_insert_res_targets(
 /// for use in shard routing validation.
 fn res_target_to_a_expr(res_target: &ResTarget) -> AExpr {
     let column_ref = ColumnRef {
-        fields: vec![Node {
+        fields: vec![PgNode {
             node: Some(NodeEnum::String(PgString {
                 sval: res_target.name.clone(),
             })),
@@ -505,10 +584,10 @@ fn res_target_to_a_expr(res_target: &ResTarget) -> AExpr {
 
     AExpr {
         kind: AExprKind::AexprOp.into(),
-        name: vec![Node {
+        name: vec![PgNode {
             node: Some(NodeEnum::String(PgString { sval: "=".into() })),
         }],
-        lexpr: Some(Box::new(Node {
+        lexpr: Some(Box::new(PgNode {
             node: Some(NodeEnum::ColumnRef(column_ref)),
         })),
         rexpr: res_target.val.clone(),
@@ -516,13 +595,13 @@ fn res_target_to_a_expr(res_target: &ResTarget) -> AExpr {
     }
 }
 
-fn select_star() -> Vec<Node> {
-    vec![Node {
+fn select_star() -> Vec<PgNode> {
+    vec![PgNode {
         node: Some(NodeEnum::ResTarget(Box::new(ResTarget {
             name: "".into(),
-            val: Some(Box::new(Node {
+            val: Some(Box::new(PgNode {
                 node: Some(NodeEnum::ColumnRef(ColumnRef {
-                    fields: vec![Node {
+                    fields: vec![PgNode {
                         node: Some(NodeEnum::AStar(AStar {})),
                     }],
                     ..Default::default()
@@ -537,7 +616,7 @@ fn parse_result(node: NodeEnum) -> ParseResult {
     ParseResult {
         version: pg_query::PG_VERSION_NUM as i32,
         stmts: vec![RawStmt {
-            stmt: Some(Box::new(Node { node: Some(node) })),
+            stmt: Some(Box::new(PgNode { node: Some(node) })),
             stmt_location: 0,
             stmt_len: 0,
         }],
@@ -545,9 +624,36 @@ fn parse_result(node: NodeEnum) -> ParseResult {
 }
 
 /// Deparse an expression node by wrapping it in a SELECT statement.
-fn deparse_expr(node: &Node, query_parser_engine: QueryParserEngine) -> Result<String, Error> {
+#[cfg(feature = "new_parser")]
+fn deparse_expr(node: Node<'_>) -> Result<DeparseResult, Error> {
+    let res_target = owned(|mem| {
+        let mut res_target = mem.make_node::<nodes::ResTarget>();
+        res_target.as_mut().set_val(mem.make_unique(node));
+        res_target
+    });
+    deparse_node(&res_target)
+}
+
+#[cfg(feature = "new_parser")]
+fn deparse_node(node: &nodes::ResTarget) -> Result<DeparseResult, Error> {
+    let node = owned(|mem| {
+        let mut stmt = mem.make_node::<nodes::RawStmt>();
+        let mut select = mem.make_node::<nodes::SelectStmt>();
+        select
+            .as_mut()
+            .set_targetList(mem.make_List(&[mem.make_unique(node)]));
+        stmt.as_mut().set_stmt(select.as_node());
+        stmt
+    });
+    deparse(&*node).map_err(Into::into)
+}
+
+fn deparse_expr_old(
+    node: &PgNode,
+    query_parser_engine: QueryParserEngine,
+) -> Result<String, Error> {
     Ok(deparse_list(
-        &[Node {
+        &[PgNode {
             node: Some(NodeEnum::ResTarget(Box::new(ResTarget {
                 val: Some(Box::new(node.clone())),
                 ..Default::default()
@@ -560,7 +666,7 @@ fn deparse_expr(node: &Node, query_parser_engine: QueryParserEngine) -> Result<S
 
 /// Deparse a list of expressions by wrapping them into a SELECT statement.
 fn deparse_list(
-    list: &[Node],
+    list: &[PgNode],
     query_parser_engine: QueryParserEngine,
 ) -> Result<Option<String>, Error> {
     if list.is_empty() {
@@ -592,7 +698,7 @@ fn create_stmts(
 ) -> Result<ShardingKeyUpdate, Error> {
     let select = SelectStmt {
         target_list: select_star(),
-        from_clause: vec![Node {
+        from_clause: vec![PgNode {
             node: Some(NodeEnum::RangeVar(stmt.relation.clone().unwrap())), // SAFETY: we checked the UPDATE stmt has a table name.
         }],
         limit_option: LimitOption::Default.into(),
@@ -638,11 +744,11 @@ fn create_stmts(
 
     let check = SelectStmt {
         target_list: select_star(),
-        from_clause: vec![Node {
+        from_clause: vec![PgNode {
             node: Some(NodeEnum::RangeVar(stmt.relation.clone().unwrap())), // SAFETY: we checked the UPDATE stmt has a table name.
         }],
         limit_option: LimitOption::Default.into(),
-        where_clause: Some(Box::new(Node {
+        where_clause: Some(Box::new(PgNode {
             node: Some(NodeEnum::AExpr(Box::new(res_target_to_a_expr(new_value)))),
         })),
         op: SetOperation::SetopNone.into(),
@@ -718,15 +824,16 @@ mod test {
     }
 
     fn run_test(query: &str) -> Result<Option<ShardingKeyUpdate>, Error> {
-        let mut stmt = parse(query)?;
+        let mut stmt_old = parse(query)?;
+        let stmt = pg_raw_parse::parse(query)?;
         let schema = default_schema();
         let db_schema = default_db_schema();
         let mut stmts = PreparedStatements::new();
 
         let ctx = StatementRewriteContext {
-            stmt: &mut stmt.protobuf,
+            stmt: &mut stmt_old.protobuf,
             #[cfg(feature = "new_parser")]
-            new_stmt: None,
+            new_stmt: &stmt,
             schema: &schema,
             db_schema: &db_schema,
             extended: true,
@@ -1031,102 +1138,102 @@ mod test {
     #[test]
     fn test_unsupported_assignment() {
         let result = run_test("UPDATE sharded SET id = random() WHERE id = $1");
-        assert!(matches!(
+        std::assert_matches!(
             result,
             Err(Error::UnsupportedShardingKeyUpdate(msg)) if msg == "\"id\" = random()"
-        ));
+        );
     }
 
     #[test]
     fn test_unsupported_assignment_arithmetic_add() {
         let result = run_test("UPDATE sharded SET id = id + 1 WHERE id = $1");
-        assert!(matches!(
+        std::assert_matches!(
             result,
             Err(Error::UnsupportedShardingKeyUpdate(msg)) if msg == "\"id\" = id + 1"
-        ));
+        );
     }
 
     #[test]
     fn test_unsupported_assignment_arithmetic_multiply() {
         let result = run_test("UPDATE sharded SET id = id * 2 WHERE id = $1");
-        assert!(matches!(
+        std::assert_matches!(
             result,
             Err(Error::UnsupportedShardingKeyUpdate(msg)) if msg == "\"id\" = id * 2"
-        ));
+        );
     }
 
     #[test]
     fn test_unsupported_assignment_arithmetic_with_param() {
         let result = run_test("UPDATE sharded SET id = id + $2 WHERE id = $1");
-        assert!(matches!(
+        std::assert_matches!(
             result,
             Err(Error::UnsupportedShardingKeyUpdate(msg)) if msg == "\"id\" = id + $2"
-        ));
+        );
     }
 
     #[test]
     fn test_unsupported_assignment_now() {
         let result = run_test("UPDATE sharded SET id = now() WHERE id = $1");
-        assert!(matches!(
+        std::assert_matches!(
             result,
             Err(Error::UnsupportedShardingKeyUpdate(msg)) if msg == "\"id\" = now()"
-        ));
+        );
     }
 
     #[test]
     fn test_unsupported_assignment_coalesce() {
         let result = run_test("UPDATE sharded SET id = coalesce(id, 0) WHERE id = $1");
-        assert!(matches!(
+        std::assert_matches!(
             result,
             Err(Error::UnsupportedShardingKeyUpdate(msg)) if msg == "\"id\" = COALESCE(id, 0)"
-        ));
+        );
     }
 
     #[test]
     fn test_unsupported_assignment_case() {
         let result =
             run_test("UPDATE sharded SET id = CASE WHEN id > 0 THEN 1 ELSE 0 END WHERE id = $1");
-        assert!(matches!(
+        std::assert_matches!(
             result,
             Err(Error::UnsupportedShardingKeyUpdate(msg)) if msg == "\"id\" = CASE WHEN id > 0 THEN 1 ELSE 0 END"
-        ));
+        );
     }
 
     #[test]
     fn test_unsupported_assignment_subquery() {
         let result =
             run_test("UPDATE sharded SET id = (SELECT max(id) FROM sharded) WHERE id = $1");
-        assert!(matches!(
+        std::assert_matches!(
             result,
             Err(Error::UnsupportedShardingKeyUpdate(msg)) if msg == "\"id\" = (SELECT max(id) FROM sharded)"
-        ));
+        );
     }
 
     #[test]
     fn test_unsupported_assignment_column_reference() {
         let result = run_test("UPDATE sharded SET id = other_column WHERE id = $1");
-        assert!(matches!(
+        std::assert_matches!(
             result,
             Err(Error::UnsupportedShardingKeyUpdate(msg)) if msg == "\"id\" = other_column"
-        ));
+        );
     }
 
     #[test]
     fn test_unsupported_assignment_concat() {
         let result = run_test("UPDATE sharded SET id = id || '_suffix' WHERE id = $1");
-        assert!(matches!(
+        std::assert_matches!(
             result,
             Err(Error::UnsupportedShardingKeyUpdate(msg)) if msg == "\"id\" = id || '_suffix'"
-        ));
+        );
     }
 
     #[test]
     fn test_unsupported_assignment_negation() {
         let result = run_test("UPDATE sharded SET id = -id WHERE id = $1");
-        assert!(matches!(
+        std::assert_matches!(
             result,
             Err(Error::UnsupportedShardingKeyUpdate(msg)) if msg == "\"id\" = - id"
-        ));
+        );
     }
 
     #[test]
@@ -1156,7 +1263,7 @@ mod test {
 
         // The id column should be UpdateValue::Value (simple parameter)
         let id_value = result.insert.mapping.get("id").unwrap();
-        assert!(matches!(id_value, UpdateValue::Value(_)));
+        std::assert_matches!(id_value, UpdateValue::Value(_));
 
         // The email column should be UpdateValue::Expr with the deparsed expression
         let email_value = result.insert.mapping.get("email").unwrap();

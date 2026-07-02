@@ -33,7 +33,7 @@ pub struct StatementRewriteContext<'a> {
     /// The AST of the statement we are rewriting.
     pub stmt: &'a mut ParseResult,
     #[cfg(feature = "new_parser")]
-    pub(crate) new_stmt: Option<&'a pg_raw_parse::ParseResult>,
+    pub(crate) new_stmt: &'a pg_raw_parse::ParseResult,
     /// The statement is using the extended protocol with placeholders.
     pub extended: bool,
     /// The statement is named, so we need to save any derivatives into the global
@@ -56,7 +56,7 @@ pub struct StatementRewrite<'a> {
     /// SQL statement.
     stmt: &'a mut ParseResult,
     #[cfg(feature = "new_parser")]
-    new_stmt: Option<&'a pg_raw_parse::ParseResult>,
+    new_stmt: &'a pg_raw_parse::ParseResult,
     /// The statement was rewritten.
     rewritten: bool,
     /// Statement is using the extended protocol, so

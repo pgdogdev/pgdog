@@ -8,6 +8,10 @@ pub enum Error {
     #[error("pg_query: {0}")]
     PgQuery(#[from] pg_query::Error),
 
+    #[error("parser: {0}")]
+    #[cfg(feature = "new_parser")]
+    Parser(#[from] pg_raw_parse::Error),
+
     #[error("cache: {0}")]
     Cache(String),
 

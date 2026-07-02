@@ -154,10 +154,11 @@ mod tests {
 
         fn rewrite(&mut self, sql: &str) -> Result<(ParseResult, RewritePlan), Error> {
             let mut ast = parse(sql).unwrap().protobuf;
+            let stmt = pg_raw_parse::parse(sql).unwrap();
             let mut rewrite = StatementRewrite::new(StatementRewriteContext {
                 stmt: &mut ast,
                 #[cfg(feature = "new_parser")]
-                new_stmt: None,
+                new_stmt: &stmt,
                 extended: false,
                 prepared: false,
                 prepared_statements: &mut self.ps,
