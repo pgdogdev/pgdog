@@ -5,19 +5,10 @@
 //!
 use std::sync::Arc;
 
-use tokio::{
-    spawn,
-    sync::{
-        Semaphore,
-        mpsc::{UnboundedSender, unbounded_channel},
-    },
-    task::JoinHandle,
-    time::sleep,
-};
+use tokio::{spawn, sync::Semaphore, task::JoinHandle, time::sleep};
 use tracing::{info, warn};
 
 use super::super::Error;
-use super::AbortSignal;
 use crate::backend::{
     Cluster, Pool,
     pool::{Address, Request},
@@ -26,18 +17,20 @@ use crate::backend::{
 use crate::frontend::client::query_engine::two_pc::Manager;
 use crate::net::messages::Protocol;
 use crate::util::escape_identifier;
+use futures::{StreamExt, stream::FuturesUnordered};
+use tokio_util::sync::CancellationToken;
 
 struct ParallelSync {
     table: Table,
     addr: Address,
     dest: Cluster,
-    tx: UnboundedSender<Result<Table, Error>>,
     permit: Arc<Semaphore>,
+    cancel: CancellationToken,
 }
 
 impl ParallelSync {
     // Run parallel sync.
-    pub fn run(mut self) -> JoinHandle<Result<(), Error>> {
+    pub fn run(self) -> JoinHandle<Result<Table, Error>> {
         spawn(async move {
             // Record copy in queue before waiting for permit.
             let tracker = TableCopy::new(&self.table.table.schema, &self.table.table.name);
@@ -51,7 +44,7 @@ impl ParallelSync {
                 .await
                 .map_err(|_| Error::ParallelConnection)?;
 
-            if self.tx.is_closed() {
+            if self.cancel.is_cancelled() {
                 return Err(Error::DataSyncAborted);
             }
 
@@ -61,25 +54,18 @@ impl ParallelSync {
 
     /// Retry loop: attempt the table copy up to `max_retries` times.
     /// Abort signals and schema errors are not retried.
-    async fn run_with_retry(&mut self, tracker: &TableCopy) -> Result<(), Error> {
+    async fn run_with_retry(mut self, tracker: &TableCopy) -> Result<Table, Error> {
         let max_retries = self.dest.resharding_copy_retry_max_attempts();
         let base_delay = *self.dest.resharding_copy_retry_min_delay();
         let mut attempt = 0usize;
 
         loop {
-            let abort = AbortSignal::new(self.tx.clone());
-
             match self
                 .table
-                .data_sync(&self.addr, &self.dest, abort, tracker)
+                .data_sync(&self.addr, &self.dest, &self.cancel, tracker)
                 .await
             {
-                Ok(_) => {
-                    self.tx
-                        .send(Ok(self.table.clone()))
-                        .map_err(|_| Error::ParallelConnection)?;
-                    return Ok(());
-                }
+                Ok(_) => return Ok(self.table),
                 Err(err) if !err.is_retryable() || attempt >= max_retries => {
                     tracker.error(&err);
                     // Terminal failure: warn if rows remain so the operator can truncate.
@@ -202,20 +188,24 @@ impl ParallelSyncManager {
     }
 
     /// Run parallel table sync and return table LSNs when everything is done.
-    pub async fn run(self) -> Result<Vec<Table>, Error> {
+    pub async fn run(self, cancel: CancellationToken) -> Result<Vec<Table>, Error> {
         info!(
             "starting parallel table copy using {} replicas and {} parallel copies",
             self.replicas.len(),
             self.permit.available_permits() / self.replicas.len(),
         );
 
+        // Create a child cancel token with the guard to cancel the handles below
+        // in case any of it fails without affecting the parent task.
+        // If every handle succeed the guard token will just cancel already finished work
+        let cancel = cancel.child_token();
+        let _guard = cancel.clone().drop_guard();
+
         // cycle() is the idiomatic "rewind": it restarts the iterator from the
         // beginning once exhausted, giving round-robin distribution across replicas.
         let mut replicas_iter = self.replicas.iter().cycle();
 
-        let (tx, mut rx) = unbounded_channel();
-        let mut tables = vec![];
-        let mut handles = vec![];
+        let mut handles = FuturesUnordered::new();
 
         for table in self.tables {
             // SAFETY: cycle() on a non-empty slice never returns None.
@@ -227,21 +217,19 @@ impl ParallelSyncManager {
                     table,
                     addr: replica.addr().clone(),
                     dest: self.dest.clone(),
-                    tx: tx.clone(),
                     permit: self.permit.clone(),
+                    cancel: cancel.clone(),
                 }
                 .run(),
             );
         }
 
-        drop(tx);
+        let mut tables = Vec::with_capacity(handles.len());
 
-        while let Some(table) = rx.recv().await {
-            tables.push(table?);
-        }
-
-        for handle in handles {
-            handle.await??;
+        // Short-circuit on first error and cancel other futures (JoinHandles that are not cancellable on drop)
+        // thanks to cancel guard.
+        while let Some(joined) = handles.next().await {
+            tables.push(joined??);
         }
 
         Ok(tables)

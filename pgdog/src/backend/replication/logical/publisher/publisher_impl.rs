@@ -2,9 +2,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
+use futures::future::try_join_all;
 use parking_lot::Mutex;
 use pgdog_config::QueryParserEngine;
-use tokio::task::{JoinHandle, JoinSet};
+use tokio::task::JoinHandle;
 use tokio::time::{Instant, sleep};
 use tokio::try_join;
 use tokio::{select, spawn, time::interval};
@@ -54,8 +55,6 @@ pub struct Publisher {
     replication_lag: Arc<Mutex<HashMap<usize, i64>>>,
     /// Last transaction.
     last_transaction: Arc<Mutex<Option<Instant>>>,
-    /// Stop signal.
-    stop: CancellationToken,
     /// Slot name.
     slot_name: String,
 }
@@ -72,7 +71,6 @@ impl Publisher {
             slots: HashMap::new(),
             query_parser_engine,
             replication_lag: Arc::new(Mutex::new(HashMap::new())),
-            stop: CancellationToken::new(),
             last_transaction: Arc::new(Mutex::new(None)),
             slot_name,
         }
@@ -164,8 +162,19 @@ impl Publisher {
     /// If you're doing a cross-shard transaction, parts of it can be lost.
     ///
     /// TODO: Add support for 2-phase commit.
-    async fn create_slots(&mut self, source: &Cluster) -> Result<(), Error> {
+    async fn create_slots(
+        &mut self,
+        source: &Cluster,
+        cancel: &CancellationToken,
+    ) -> Result<(), Error> {
         for (number, shard) in source.shards().iter().enumerate() {
+            // Cancel at slot boundaries so we never tear down an in-flight
+            // CREATE_REPLICATION_SLOT: the current slot completes, the next is
+            // not started. Slots already created are dropped by the caller.
+            if cancel.is_cancelled() {
+                return Err(Error::DataSyncAborted);
+            }
+
             let addr = shard.primary(&Request::default()).await?.addr().clone();
 
             let mut slot = ReplicationSlot::replication(
@@ -190,12 +199,14 @@ impl Publisher {
         // Replicate shards in parallel.
         let mut streams = vec![];
 
+        let stop = CancellationToken::new();
+
         // Synchronize tables from publication.
         self.sync_tables(false, source, dest).await?;
 
         // Create replication slots if we haven't already.
         if self.slots.is_empty() {
-            self.create_slots(source).await?;
+            self.create_slots(source, &stop).await?;
         }
 
         let n_sources = source.shards().len();
@@ -221,7 +232,7 @@ impl Publisher {
 
             let mut check_lag = interval(Duration::from_secs(1));
             let replication_lag = self.replication_lag.clone();
-            let stop = self.stop.clone();
+            let stop = stop.clone();
             let last_transaction = self.last_transaction.clone();
 
             let source_cluster = source.clone();
@@ -345,15 +356,7 @@ impl Publisher {
             streams.push(handle);
         }
 
-        Ok(Waiter {
-            streams,
-            stop: self.stop.clone(),
-        })
-    }
-
-    /// Request the publisher to stop replication.
-    pub fn request_stop(&self) {
-        self.stop.cancel();
+        Ok(Waiter { streams, stop })
     }
 
     /// Get current replication lag.
@@ -370,7 +373,12 @@ impl Publisher {
     /// re-sharding the cluster in the process.
     ///
     /// TODO: Parallelize shard syncs.
-    pub async fn data_sync(&mut self, source: &Cluster, dest: &Cluster) -> Result<(), Error> {
+    pub async fn data_sync(
+        &mut self,
+        source: &Cluster,
+        dest: &Cluster,
+        cancel: &CancellationToken,
+    ) -> Result<(), Error> {
         // Fetch schema and column metadata first — valid() depends on it.
         self.sync_tables(true, source, dest).await?;
 
@@ -388,13 +396,13 @@ impl Publisher {
 
         // Create replication slots only after validation passes — a slot
         // created before valid() would be orphaned on validation errors.
-        self.create_slots(source).await?;
+        self.create_slots(source, cancel).await?;
 
-        // A JoinSet aborts every in-flight shard copy when this future is
-        // dropped (e.g. the owning task is cancelled), so cancellation actually
-        // stops the copy instead of leaving detached syncs running in the
-        // background.
-        let mut set: JoinSet<Result<(usize, Vec<Table>), Error>> = JoinSet::new();
+        // Each manager coordinates its own spawned per-table workers, so run the
+        // per-shard managers concurrently on this task. Cancellation reaches the
+        // workers through `cancel` (threaded down into the COPY loop), so no
+        // JoinSet is needed to stop the copy.
+        let mut syncs = Vec::new();
 
         for (number, shard) in source.shards().iter().enumerate() {
             let tables = self
@@ -431,17 +439,16 @@ impl Publisher {
             };
 
             let dest = dest.clone();
-            set.spawn(async move {
+            let cancel = cancel.clone();
+            syncs.push(async move {
                 let manager = ParallelSyncManager::new(tables, replicas, dest)?;
-                let tables = manager.run().await?;
+                let tables = manager.run(cancel).await?;
 
                 Ok::<(usize, Vec<Table>), Error>((number, tables))
             });
         }
 
-        while let Some(joined) = set.join_next().await {
-            let (number, tables) = joined??;
-
+        for (number, tables) in try_join_all(syncs).await? {
             info!(
                 "table sync for {} tables complete [{}, shard: {}]",
                 tables.len(),
@@ -628,7 +635,9 @@ mod test {
         );
 
         // Validation must fire before the copy begins.
-        let result = publisher.data_sync(&source, &dest).await;
+        let result = publisher
+            .data_sync(&source, &dest, &CancellationToken::new())
+            .await;
 
         let err = result.expect_err("data_sync must fail for a publication with no-pk tables");
 
@@ -684,7 +693,9 @@ mod test {
             "pub_full_identity_nothing_slot".into(),
         );
 
-        let result = publisher.data_sync(&source, &dest).await;
+        let result = publisher
+            .data_sync(&source, &dest, &CancellationToken::new())
+            .await;
 
         let err = result.expect_err("data_sync must fail for REPLICA IDENTITY NOTHING table");
         assert!(

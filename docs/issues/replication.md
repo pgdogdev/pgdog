@@ -319,7 +319,20 @@ Make `Orchestrator::replicate_and_cutover()` the single canonical implementation
 
 ---
 
-## 🚧 Issue 5 — `AbortSignal` is not an abort signal; it is a coordinator-gone detector
+## ✅ Issue 5 — `AbortSignal` is not an abort signal; it is a coordinator-gone detector (resolved)
+
+> **Resolved.** `AbortSignal` is gone. The api task's `CancellationToken`
+> (`ctx.cancellation_token()` in [`copy_data.rs`](../../pgdog/src/api/copy_data.rs))
+> is now threaded straight down the call chain —
+> `Orchestrator::data_sync(&token)` → `Publisher::data_sync(.., cancel)` →
+> `ParallelSyncManager::run(cancel)` → each `ParallelSync` worker →
+> `Table::data_sync(.., cancel, ..)` — where the COPY loop `select!`s on
+> `cancel.cancelled()` and the post-permit pre-flight is `cancel.is_cancelled()`.
+> Cancellation is now an explicit, level-triggered signal rather than a side
+> effect of the result channel's receiver being dropped: an external caller (the
+> task framework, a timeout) can cancel directly, and per-table cancellation is
+> available via `cancel.child_token()` if needed. The misleadingly-named
+> `AbortSignal` type and its `tx.closed()` mechanism were removed.
 
 ### Description
 
