@@ -626,24 +626,18 @@ fn parse_result(node: NodeEnum) -> ParseResult {
 /// Deparse an expression node by wrapping it in a SELECT statement.
 #[cfg(feature = "new_parser")]
 fn deparse_expr(node: Node<'_>) -> Result<DeparseResult, Error> {
-    let res_target = owned(|mem| {
-        let mut res_target = mem.make_node::<nodes::ResTarget>();
-        res_target.as_mut().set_val(mem.make_unique(node));
-        res_target
-    });
+    let res_target = owned(|mem| mem.make_ResTarget(None, mem.empty(), mem.make_unique(node)));
     deparse_node(&res_target)
 }
 
 #[cfg(feature = "new_parser")]
 fn deparse_node(node: &nodes::ResTarget) -> Result<DeparseResult, Error> {
     let node = owned(|mem| {
-        let mut stmt = mem.make_node::<nodes::RawStmt>();
         let mut select = mem.make_node::<nodes::SelectStmt>();
         select
             .as_mut()
             .set_targetList(mem.make_List(&[mem.make_unique(node)]));
-        stmt.as_mut().set_stmt(select.as_node());
-        stmt
+        mem.make_RawStmt(select.uncast())
     });
     deparse(&*node).map_err(Into::into)
 }
