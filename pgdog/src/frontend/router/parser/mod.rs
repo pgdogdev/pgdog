@@ -3,7 +3,7 @@
 pub mod aggregate;
 pub mod binary;
 pub mod cache;
-pub mod column;
+pub(crate) mod column;
 pub mod command;
 pub mod comment;
 pub mod context;
@@ -37,7 +37,7 @@ pub use expression::ExpressionRegistry;
 pub use aggregate::{Aggregate, AggregateFunction, AggregateTarget};
 pub use binary::BinaryStream;
 pub use cache::{Ast, AstContext, AstQuery, Cache};
-pub use column::{Column, OwnedColumn};
+pub(crate) use column::Column;
 pub use command::{Command, SetParam};
 pub(crate) use comment::parse_edge_comment;
 pub use context::QueryParserContext;

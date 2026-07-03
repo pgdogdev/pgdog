@@ -5,4 +5,4 @@ pub mod progress;
 
 pub use config::ShardConfig;
 pub use error::Error;
-pub use pg_dump::{PgDump, Statement, SyncState};
+pub(crate) use pg_dump::{PgDump, Statement, SyncState};
