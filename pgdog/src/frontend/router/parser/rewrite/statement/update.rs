@@ -1755,6 +1755,7 @@ mod test {
         )
     }
 
+    #[cfg(feature = "new_parser")]
     fn assert_all_bind_params_used(original: &str, rewritten: &str) {
         for captures in bind_param_regex().captures_iter(original) {
             let param = &captures[1];
