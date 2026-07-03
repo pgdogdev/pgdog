@@ -30,7 +30,7 @@ pub enum VaultAuthMethod {
 /// or `"vault_static"`.
 ///
 /// PgDog logs into Vault using the configured auth method and fetches
-/// database credentials from the per-user `backend_vault_path`.
+/// database credentials from the per-user `server_vault_path`.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Vault {

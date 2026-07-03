@@ -87,7 +87,7 @@
           "const": "azure_workload_identity"
         },
         {
-          "description": "Fetch dynamic credentials from HashiCorp Vault (database secrets engine).\nVault generates a new username and password on each lease.\n\n**Note:** `\"vault\"` is accepted as a deprecated alias for backward compatibility.",
+          "description": "Fetch dynamic credentials from HashiCorp Vault (database secrets engine).\nVault generates a new username and password on each lease.",
           "type": "string",
           "const": "vault_dynamic"
         },
@@ -106,20 +106,6 @@
           "description": "User belongs to all databases.",
           "type": "boolean",
           "default": false
-        },
-        "backend_vault_path": {
-          "description": "Vault path used to fetch backend (server-side) database credentials,\ne.g. `database/creds/my-role` for `server_auth = \"vault_dynamic\"` or\n`database/static-creds/my-role` for `server_auth = \"vault_static\"`.\n\n**Note:** `\"vault_path\"` is accepted as a deprecated alias for backward compatibility.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "client_vault_path": {
-          "description": "Vault path to a static database role used to verify client passwords,\ne.g. `database/static-creds/my-role`. When set, PgDog fetches the\ncurrent password from Vault and compares it to what the client\nprovides instead of using a statically configured password.",
-          "type": [
-            "string",
-            "null"
-          ]
         },
         "cross_shard_disabled": {
           "description": "Disable cross-shard queries for this user.",
@@ -289,6 +275,13 @@
             "null"
           ]
         },
+        "server_vault_path": {
+          "description": "Vault path used to fetch backend (server-side) database credentials,\ne.g. `database/creds/my-role` for `server_auth = \"vault_dynamic\"` or\n`database/static-creds/my-role` for `server_auth = \"vault_static\"`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "statement_timeout": {
           "description": "Statement timeout.\n\nSets the `statement_timeout` on all server connections at connection creation. This allows you to set a reasonable default for each user without modifying `postgresql.conf` or using `ALTER USER`.\n\n**Note:** Nothing is preventing the user from manually changing this setting at runtime, e.g., by running `SET statement_timeout TO 0`;\n\nhttps://docs.pgdog.dev/configuration/users.toml/users/#statement_timeout",
           "type": [
@@ -309,6 +302,13 @@
           "description": "Overrides [`two_phase_commit_auto`](https://docs.pgdog.dev/configuration/pgdog.toml/general/#two_phase_commit_auto) for this user.\n\nhttps://docs.pgdog.dev/configuration/users.toml/users/#two_phase_commit_auto",
           "type": [
             "boolean",
+            "null"
+          ]
+        },
+        "vault_path": {
+          "description": "Vault path to a static database role used to verify client passwords,\ne.g. `database/static-creds/my-role`. When set, PgDog fetches the\ncurrent password from Vault and compares it to what the client\nprovides instead of using a statically configured password.",
+          "type": [
+            "string",
             "null"
           ]
         },

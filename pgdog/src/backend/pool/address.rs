@@ -95,7 +95,7 @@ impl Address {
             },
             server_auth,
             server_iam_region: user.server_iam_region.clone(),
-            vault_path: user.backend_vault_path.clone(),
+            vault_path: user.server_vault_path.clone(),
             vault_refresh_percent: user.vault_refresh_percent,
             database_number,
             configured_role: database.role,
@@ -545,7 +545,7 @@ mod test {
         let user = User {
             name: "pgdog".into(),
             server_auth: ServerAuth::VaultDynamic,
-            backend_vault_path: Some("database/creds/pgdog".into()),
+            server_vault_path: Some("database/creds/pgdog".into()),
             vault_refresh_percent: Some(50),
             password: Some("ignored".into()),
             database: "pgdog".into(),
@@ -596,7 +596,7 @@ mod test {
         let user = User {
             name: "pgdog_static".into(),
             server_auth: ServerAuth::VaultStatic,
-            backend_vault_path: Some("database/static-creds/pgdog-static".into()),
+            server_vault_path: Some("database/static-creds/pgdog-static".into()),
             vault_refresh_percent: Some(70),
             password: Some("ignored".into()),
             database: "pgdog".into(),

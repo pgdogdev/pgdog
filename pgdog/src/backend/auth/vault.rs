@@ -52,7 +52,7 @@ fn vault_and_path(addr: &Address) -> Result<(pgdog_config::vault::Vault, &str), 
 
     let path = addr.vault_path.as_deref().ok_or_else(|| {
         error(format!(
-            r#""vault_path" is not configured for {}@{}:{}"#,
+            r#""server_vault_path" is not configured for {}@{}:{}"#,
             addr.user, addr.host, addr.port
         ))
     })?;

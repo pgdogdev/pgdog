@@ -25,21 +25,21 @@ password = "pgdog"
 
 # Example: backend authentication with HashiCorp Vault dynamic credentials.
 # Requires the [vault] section in pgdog.toml. PgDog fetches a generated
-# username and password from `backend_vault_path` and rotates them after
+# username and password from `server_vault_path` and rotates them after
 # `vault_refresh_percent` of the lease has elapsed.
 # server_auth = "vault_dynamic"
-# backend_vault_path = "database/creds/pgdog"
+# server_vault_path = "database/creds/pgdog"
 # vault_refresh_percent = 80 # optional; default 80
 
 # Example: client authentication against a HashiCorp Vault static database role.
 # Requires the [vault] section in pgdog.toml. PgDog verifies the password the
-# client sends against Vault's current password for the static role at `client_vault_path`,
+# client sends against Vault's current password for the static role at `vault_path`,
 # instead of a statically configured password.
 # Independent of `server_auth` below; combine it with any backend authentication method.
-# client_vault_path = "database/static-creds/alice"
+# vault_path = "database/static-creds/alice"
 
 # Example: backend authentication with a HashiCorp Vault static role.
 # Requires the [vault] section in pgdog.toml.
 # server_user = "pgdog_service"
 # server_auth = "vault_static"
-# backend_vault_path = "database/static-creds/pgdog-service"
+# server_vault_path = "database/static-creds/pgdog-service"

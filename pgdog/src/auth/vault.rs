@@ -3,7 +3,7 @@
 //! This module owns the Vault login/token machinery shared by every Vault
 //! consumer in the codebase:
 //!
-//! - **Client authentication** — users configured with `client_vault_path`
+//! - **Client authentication** — users configured with `vault_path`
 //!   retrieve their password from Vault and results are cached for the role's rotation TTL.
 //! - **Backend pools** (`src/backend/auth/vault.rs`) reuse the login/token
 //!   cache here to fetch dynamic database credentials.
