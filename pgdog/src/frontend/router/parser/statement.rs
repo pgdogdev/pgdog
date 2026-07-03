@@ -945,7 +945,7 @@ impl<'a, 'b: 'a, 'c> StatementParser<'a, 'b, 'c> {
     }
 
     /// Extract all tables referenced in the statement.
-    pub fn extract_tables(&self) -> Vec<Table<'a>> {
+    pub(crate) fn extract_tables(&self) -> Vec<Table<'a>> {
         self.run_walk().tables
     }
 

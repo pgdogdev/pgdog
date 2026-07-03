@@ -6,12 +6,12 @@ use pg_query::{
 };
 use std::string::String;
 
-use crate::frontend::router::parser::{Table, from_clause::FromClause};
+use crate::frontend::router::parser::{FromClause, Table};
 
 use super::Key;
 
 #[derive(Copy, Clone, Debug)]
-pub enum TablesSource<'a> {
+pub(crate) enum TablesSource<'a> {
     Table(Table<'a>),
     FromClause(FromClause<'a>),
 }
@@ -29,7 +29,7 @@ impl<'a> From<FromClause<'a>> for TablesSource<'a> {
 }
 
 impl<'a> TablesSource<'a> {
-    pub fn resolve_alias(&'a self, name: &'a str) -> &'a str {
+    pub(crate) fn resolve_alias(&'a self, name: &'a str) -> &'a str {
         match self {
             Self::Table(table) => {
                 if table.name_match(name) {
@@ -48,28 +48,21 @@ impl<'a> TablesSource<'a> {
         }
     }
 
-    pub fn table_name(&'a self) -> Option<&'a str> {
+    pub(crate) fn table_name(&'a self) -> Option<&'a str> {
         match self {
             Self::Table(table) => Some(table.name),
             Self::FromClause(fc) => fc.table_name(),
         }
     }
-
-    pub fn tables(&'a self) -> Vec<Table<'a>> {
-        match self {
-            Self::Table(table) => vec![*table],
-            Self::FromClause(from_clause) => from_clause.tables(),
-        }
-    }
 }
 
 #[derive(Debug)]
-pub struct Column<'a> {
+pub(crate) struct Column<'a> {
     /// Table name if fully qualified.
     /// Can be an alias.
-    pub table: Option<&'a str>,
+    pub(crate) table: Option<&'a str>,
     /// Column name.
-    pub name: &'a str,
+    pub(crate) name: &'a str,
 }
 
 #[derive(Debug)]
@@ -84,14 +77,14 @@ enum Output<'a> {
 
 /// Parse `WHERE` clause of a statement looking for sharding keys.
 #[derive(Debug)]
-pub struct WhereClause<'a> {
+pub(crate) struct WhereClause<'a> {
     output: Vec<Output<'a>>,
 }
 
 impl<'a> WhereClause<'a> {
     /// Parse the `WHERE` clause of a statement and extract
     /// all possible sharding keys.
-    pub fn new(
+    pub(crate) fn new(
         source: &'a TablesSource<'a>,
         where_clause: &'a Option<Box<Node>>,
     ) -> Option<WhereClause<'a>> {
@@ -104,7 +97,7 @@ impl<'a> WhereClause<'a> {
         Some(Self { output })
     }
 
-    pub fn keys(&self, table_name: Option<&str>, column_name: &str) -> Vec<Key> {
+    pub(crate) fn keys(&self, table_name: Option<&str>, column_name: &str) -> Vec<Key> {
         let mut keys = vec![];
         for output in &self.output {
             keys.extend(Self::search_for_keys(output, table_name, column_name));

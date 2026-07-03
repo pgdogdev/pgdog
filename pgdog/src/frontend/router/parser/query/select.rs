@@ -1,6 +1,4 @@
-use crate::frontend::router::parser::{
-    cache::Ast, from_clause::FromClause, where_clause::TablesSource,
-};
+use crate::frontend::router::parser::{FromClause, TablesSource, cache::Ast};
 
 use super::*;
 #[cfg(not(feature = "new_parser"))]

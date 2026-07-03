@@ -194,7 +194,7 @@ impl Schema {
     ///
     /// If the table has an explicit schema, looks up in that schema directly.
     /// Otherwise, iterates through the search_path to find the first match.
-    pub fn table(
+    pub(crate) fn table(
         &self,
         table: Table<'_>,
         user: &str,

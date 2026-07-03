@@ -1,15 +1,15 @@
 use once_cell::sync::OnceCell;
-use pg_query::{NodeEnum, NodeRef, ParseResult, parse, parse_raw, protobuf::ObjectType};
+use pg_query::{NodeEnum, ParseResult, parse, parse_raw};
 use pgdog_config::QueryParserEngine;
 use std::fmt::Debug;
+use std::ops::Deref;
 use std::time::Instant;
-use std::{collections::HashSet, ops::Deref};
 
 use parking_lot::Mutex;
 use std::sync::Arc;
 use tracing::warn;
 
-use super::super::{Error, Route, Shard, StatementRewrite, StatementRewriteContext, Table};
+use super::super::{Error, Route, Shard, StatementRewrite, StatementRewriteContext};
 use super::{Cache, Fingerprint, Stats};
 use crate::backend::schema::Schema;
 use crate::frontend::PreparedStatements;
@@ -189,44 +189,6 @@ impl Ast {
     /// Get the reference to the AST.
     pub fn parse_result(&self) -> &ParseResult {
         &self.ast
-    }
-
-    /// Get a list of tables referenced by the query.
-    ///
-    /// This is better than pg_query's version because we
-    /// also handle `NodeRef::CreateStmt` and we handle identifiers correctly.
-    ///
-    pub fn tables<'a>(&'a self) -> Vec<Table<'a>> {
-        let mut tables = HashSet::new();
-
-        for node in self.ast.protobuf.nodes() {
-            match node.0 {
-                NodeRef::RangeVar(table) => {
-                    let table = Table::from(table);
-                    tables.insert(table);
-                }
-
-                NodeRef::CreateStmt(stmt) => {
-                    if let Some(ref stmt) = stmt.relation {
-                        tables.insert(Table::from(stmt));
-                    }
-                }
-
-                NodeRef::DropStmt(stmt) if stmt.remove_type() == ObjectType::ObjectTable => {
-                    for object in &stmt.objects {
-                        if let Some(NodeEnum::List(ref list)) = object.node
-                            && let Ok(table) = Table::try_from(list)
-                        {
-                            tables.insert(table);
-                        }
-                    }
-                }
-
-                _ => (),
-            }
-        }
-
-        tables.into_iter().collect()
     }
 
     /// Update stats for this statement, given the route

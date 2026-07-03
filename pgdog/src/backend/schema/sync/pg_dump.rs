@@ -25,7 +25,7 @@ use crate::{
         replication::{publisher::PublicationTable, status::SchemaStatement},
     },
     config::config,
-    frontend::router::parser::{Column, Table, sequence::Sequence},
+    frontend::router::parser::{Column, Sequence, Table},
 };
 
 /// Key for looking up column types during pg_dump parsing.
