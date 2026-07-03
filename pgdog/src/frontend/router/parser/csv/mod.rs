@@ -1,12 +1,9 @@
 use csv_core::{ReadRecordResult, Reader, ReaderBuilder};
 
-pub mod iterator;
-pub mod record;
-
-pub use iterator::Iter;
-pub use record::Record;
+mod record;
 
 use super::CopyFormat;
+use record::Record;
 
 static RECORD_BUFFER: usize = 4096;
 static ENDS_BUFFER: usize = 2048; // Max of 2048 columns in a CSV.
@@ -14,44 +11,44 @@ static ENDS_BUFFER: usize = 2048; // Max of 2048 columns in a CSV.
 // so we are well within bounds.
 
 /// CSV reader that can handle partial inputs.
-#[derive(Clone)]
-pub struct CsvStream {
+#[derive(Clone, Debug)]
+pub(crate) struct CsvStream {
     /// Input buffer.
+    #[debug(skip)]
     buffer: Vec<u8>,
     /// Temporary buffer for the record.
+    #[debug(skip)]
     record: Vec<u8>,
     /// Temporary buffer for indices for the fields in a record.
+    #[debug(skip)]
     ends: Vec<usize>,
     /// CSV reader.
+    #[debug(skip)]
     reader: Reader,
     /// Number of bytes read so far.
     read: usize,
     /// CSV deliminter.
     delimiter: char,
     /// Null string.
+    #[debug(skip)]
     null_string: String,
     /// First record are headers.
     headers: bool,
     /// Read headers.
+    #[debug(skip)]
     headers_record: Option<Record>,
     /// Copy format
     format: CopyFormat,
 }
 
-impl std::fmt::Debug for CsvStream {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("CsvStream")
-            .field("read", &self.read)
-            .field("delimiter", &self.delimiter)
-            .field("headers", &self.headers)
-            .field("format", &self.format)
-            .finish()
-    }
-}
-
 impl CsvStream {
     /// Create new CSV stream reader.
-    pub fn new(delimiter: char, headers: bool, format: CopyFormat, null_string: &str) -> Self {
+    pub(crate) fn new(
+        delimiter: char,
+        headers: bool,
+        format: CopyFormat,
+        null_string: &str,
+    ) -> Self {
         Self {
             buffer: Vec::new(),
             record: vec![0u8; RECORD_BUFFER],
@@ -85,13 +82,13 @@ impl CsvStream {
     ///
     /// This data will be appended to the input buffer. To read records from
     /// that stream, call [`Self::record`].
-    pub fn write(&mut self, data: &[u8]) {
+    pub(crate) fn write(&mut self, data: &[u8]) {
         self.buffer.extend(data);
     }
 
     /// Fetch a record from the stream. This mutates the inner buffer,
     /// so you can only fetch the record once.
-    pub fn record(&mut self) -> Result<Option<Record>, super::Error> {
+    pub(crate) fn record(&mut self) -> Result<Option<Record>, super::Error> {
         loop {
             let (result, read, written, ends) = self.reader.read_record(
                 &self.buffer[self.read..],
@@ -140,12 +137,12 @@ impl CsvStream {
     }
 
     /// Get an iterator over all records available in the buffer.
-    pub fn records(&mut self) -> Iter<'_> {
-        Iter::new(self)
+    pub(crate) fn records(&mut self) -> impl Iterator<Item = Result<Record, super::Error>> {
+        std::iter::from_fn(|| self.record().transpose())
     }
 
     /// Get headers from the CSV, if any.
-    pub fn headers(&mut self) -> Result<Option<&Record>, super::Error> {
+    pub(crate) fn headers(&mut self) -> Result<Option<&Record>, super::Error> {
         if self.headers {
             if let Some(ref headers) = self.headers_record {
                 return Ok(Some(headers));

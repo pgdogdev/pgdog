@@ -2,30 +2,19 @@ use super::super::CopyFormat;
 use std::{ops::Range, str::from_utf8};
 
 /// A complete CSV record.
-#[derive(Clone)]
-pub struct Record {
+#[derive(Clone, Debug)]
+pub(crate) struct Record {
     /// Raw record data.
-    pub data: Vec<u8>,
+    #[debug("{:?}", from_utf8(&self.data))]
+    data: Vec<u8>,
     /// Field ranges.
-    pub fields: Vec<Range<usize>>,
+    fields: Vec<Range<usize>>,
     /// Delimiter.
-    pub delimiter: char,
+    delimiter: char,
     /// Format used.
-    pub format: CopyFormat,
+    format: CopyFormat,
     /// Null string.
-    pub null_string: String,
-}
-
-impl std::fmt::Debug for Record {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Record")
-            .field("data", &from_utf8(&self.data))
-            .field("fields", &self.fields)
-            .field("delimiter", &self.delimiter)
-            .field("format", &self.format)
-            .field("null_string", &self.null_string)
-            .finish()
-    }
+    null_string: String,
 }
 
 impl std::fmt::Display for Record {
@@ -75,16 +64,11 @@ impl Record {
     }
 
     /// Number of fields in the record.
-    pub fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.fields.len()
     }
 
-    /// Return true if there are no fields in the record.
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-
-    pub fn get(&self, index: usize) -> Option<&str> {
+    pub(crate) fn get(&self, index: usize) -> Option<&str> {
         self.fields
             .get(index)
             .cloned()
