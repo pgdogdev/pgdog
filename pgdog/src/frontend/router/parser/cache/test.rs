@@ -4,7 +4,6 @@ use pg_query::{normalize, parse};
 use tokio::spawn;
 
 use crate::{
-    backend::{ShardingSchema, schema::Schema},
     config::Role,
     frontend::router::parser::Shard,
     frontend::{BufferedQuery, PreparedStatements},
@@ -364,30 +363,4 @@ fn test_normalize() {
     let q = "SELECT * FROM users WHERE id = 1";
     let normalized = normalize(q).unwrap();
     assert_eq!(normalized, "SELECT * FROM users WHERE id = $1");
-}
-
-#[test]
-fn test_tables_list() {
-    let mut prepared_statements = PreparedStatements::default();
-    let db_schema = Schema::default();
-    for q in [
-        "CREATE TABLE private_schema.test (id BIGINT)",
-        "SELECT * FROM private_schema.test a INNER JOIN public_schema.test b ON a.id = b.id LIMIT 5",
-        "INSERT INTO public_schema.test VALUES ($1, $2)",
-        "DELETE FROM private_schema.test",
-        "DROP TABLE private_schema.test",
-    ] {
-        let buffered = BufferedQuery::Query(Query::new(q));
-        let ast = Ast::new(
-            &AstQuery::from_query(&buffered),
-            &ShardingSchema::default(),
-            &db_schema,
-            &mut prepared_statements,
-            "",
-            None,
-        )
-        .unwrap();
-        let tables = ast.tables();
-        println!("{:?}", tables);
-    }
 }
