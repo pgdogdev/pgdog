@@ -1,20 +1,13 @@
 use std::fmt::Display;
 
-use super::{Column, OwnedTable, Table, error::Error};
+use super::{Column, Table, error::Error};
 use crate::util::escape_identifier;
 
 /// Sequence name in a query.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
-pub struct Sequence<'a> {
+pub(crate) struct Sequence<'a> {
     /// Table representing the sequence name and schema.
-    pub table: Table<'a>,
-}
-
-/// Owned version of Sequence that owns its string data.
-#[derive(Debug, Clone, PartialEq, Default)]
-pub struct OwnedSequence {
-    /// Table representing the sequence name and schema.
-    pub table: OwnedTable,
+    pub(crate) table: Table<'a>,
 }
 
 impl Display for Sequence<'_> {
@@ -23,41 +16,7 @@ impl Display for Sequence<'_> {
     }
 }
 
-impl Display for OwnedSequence {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let borrowed = Sequence::from(self);
-        borrowed.fmt(f)
-    }
-}
-
-impl<'a> From<Sequence<'a>> for OwnedSequence {
-    fn from(sequence: Sequence<'a>) -> Self {
-        Self {
-            table: OwnedTable::from(sequence.table),
-        }
-    }
-}
-
-impl<'a> From<&'a OwnedSequence> for Sequence<'a> {
-    fn from(owned: &'a OwnedSequence) -> Self {
-        Self {
-            table: Table::from(&owned.table),
-        }
-    }
-}
-
-impl From<OwnedTable> for OwnedSequence {
-    fn from(table: OwnedTable) -> Self {
-        Self { table }
-    }
-}
-
 impl<'a> Sequence<'a> {
-    /// Convert this borrowed Sequence to an owned OwnedSequence
-    pub fn to_owned(&self) -> OwnedSequence {
-        OwnedSequence::from(*self)
-    }
-
     /// Generate a setval statement to set the sequence to the max value of the given column
     pub(crate) fn setval_from_column(&self, column: &Column<'a>) -> Result<String, Error> {
         let sequence_name = self.table.to_string();

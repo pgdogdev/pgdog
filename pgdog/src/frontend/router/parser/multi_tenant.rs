@@ -6,7 +6,7 @@ use crate::{
     config::MultiTenant,
     frontend::{
         SearchPath,
-        router::parser::{Table, WhereClause, where_clause::TablesSource},
+        router::parser::{Table, TablesSource, WhereClause},
     },
     net::parameter::ParameterValue,
 };

@@ -10,24 +10,13 @@ use crate::util::escape_identifier;
 
 /// Table name in a query.
 #[derive(Debug, Clone, Copy, PartialEq, Default, Hash, Eq)]
-pub struct Table<'a> {
+pub(crate) struct Table<'a> {
     /// Table name.
-    pub name: &'a str,
+    pub(crate) name: &'a str,
     /// Schema name, if specified.
-    pub schema: Option<&'a str>,
+    pub(crate) schema: Option<&'a str>,
     /// Alias.
-    pub alias: Option<&'a str>,
-}
-
-/// Owned version of Table that owns its string data.
-#[derive(Debug, Clone, PartialEq, Default)]
-pub struct OwnedTable {
-    /// Table name.
-    pub name: String,
-    /// Schema name, if specified.
-    pub schema: Option<String>,
-    /// Alias.
-    pub alias: Option<String>,
+    pub(crate) alias: Option<&'a str>,
 }
 
 impl Display for Table<'_> {
@@ -46,44 +35,12 @@ impl Display for Table<'_> {
 }
 
 impl<'a> Table<'a> {
-    /// Convert this borrowed Table to an owned OwnedTable
-    pub fn to_owned(&self) -> OwnedTable {
-        OwnedTable::from(*self)
-    }
-
-    pub fn name_match(&self, name: &str) -> bool {
+    pub(crate) fn name_match(&self, name: &str) -> bool {
         Some(name) == self.alias || name == self.name
     }
 
-    pub fn schema(&self) -> Option<Schema<'a>> {
+    pub(crate) fn schema(&self) -> Option<Schema<'a>> {
         self.schema.map(|s| s.into())
-    }
-}
-
-impl Display for OwnedTable {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let borrowed = Table::from(self);
-        borrowed.fmt(f)
-    }
-}
-
-impl<'a> From<Table<'a>> for OwnedTable {
-    fn from(table: Table<'a>) -> Self {
-        Self {
-            name: table.name.to_owned(),
-            schema: table.schema.map(|s| s.to_owned()),
-            alias: table.alias.map(|s| s.to_owned()),
-        }
-    }
-}
-
-impl<'a> From<&'a OwnedTable> for Table<'a> {
-    fn from(owned: &'a OwnedTable) -> Self {
-        Self {
-            name: &owned.name,
-            schema: owned.schema.as_deref(),
-            alias: owned.alias.as_deref(),
-        }
     }
 }
 
