@@ -1,5 +1,9 @@
+#[cfg(feature = "new_parser")]
+use itertools::*;
 use once_cell::sync::OnceCell;
 use pg_query::{NodeEnum, ParseResult, parse, parse_raw};
+#[cfg(feature = "new_parser")]
+use pg_raw_parse::{Owned, StmtList};
 use pgdog_config::QueryParserEngine;
 use std::fmt::Debug;
 use std::ops::Deref;
@@ -40,7 +44,7 @@ pub struct AstInner {
     pub ast: ParseResult,
     // FIXME(sage): Rename to ast when parser port is done
     #[cfg(feature = "new_parser")]
-    pub new_ast: pg_raw_parse::ParseResult,
+    pub new_ast: Owned<StmtList>,
     /// AST stats.
     pub stats: Mutex<Stats>,
     /// Rewrite plan.
@@ -53,10 +57,29 @@ pub struct AstInner {
 
 impl AstInner {
     /// Create new AST record, with no rewrite or comment routing.
-    pub fn new(ast: ParseResult) -> Self {
+    #[cfg(feature = "new_parser")]
+    pub(crate) fn new(ast: Owned<StmtList>) -> Self {
+        let deparse_results = ast
+            .iter()
+            .map(|s| pg_raw_parse::deparse(s))
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        Self {
+            new_ast: ast,
+            ast: pg_query::parse(&deparse_results.iter().map(|r| r.as_str()).join("; ")).unwrap(),
+            stats: Mutex::new(Stats::new()),
+            rewrite_plan: RewritePlan::default(),
+            fingerprint: OnceCell::new(),
+            query_without_comment: "".into(),
+        }
+    }
+
+    pub(crate) fn old(ast: ParseResult) -> Self {
         Self {
             #[cfg(feature = "new_parser")]
-            new_ast: pg_raw_parse::parse(&ast.deparse().unwrap()).unwrap(),
+            new_ast: pg_raw_parse::parse(&ast.deparse().unwrap())
+                .unwrap()
+                .into_inner(),
             ast,
             stats: Mutex::new(Stats::new()),
             rewrite_plan: RewritePlan::default(),
@@ -133,7 +156,9 @@ impl Ast {
             inner: Arc::new(AstInner {
                 stats: Mutex::new(stats),
                 #[cfg(feature = "new_parser")]
-                new_ast: pg_raw_parse::parse(&ast.deparse().unwrap()).unwrap(),
+                new_ast: pg_raw_parse::parse(&ast.deparse().unwrap())
+                    .unwrap()
+                    .into_inner(),
                 ast,
                 rewrite_plan,
                 fingerprint: OnceCell::new(),
@@ -171,8 +196,20 @@ impl Ast {
             comment_role: None,
             comment_shard: None,
             query_parser_engine,
-            inner: Arc::new(AstInner::new(ast)),
+            inner: Arc::new(AstInner::old(ast)),
         })
+    }
+
+    /// Create new AST from a parse result.
+    #[cfg(feature = "new_parser")]
+    pub fn from_raw_stmts(stmts: Owned<StmtList>) -> Self {
+        Self {
+            cached: true,
+            comment_role: None,
+            comment_shard: None,
+            query_parser_engine: QueryParserEngine::default(),
+            inner: Arc::new(AstInner::new(stmts)),
+        }
     }
 
     /// Create new AST from a parse result.
@@ -182,7 +219,7 @@ impl Ast {
             comment_role: None,
             comment_shard: None,
             query_parser_engine: QueryParserEngine::default(),
-            inner: Arc::new(AstInner::new(parse_result)),
+            inner: Arc::new(AstInner::old(parse_result)),
         }
     }
 
