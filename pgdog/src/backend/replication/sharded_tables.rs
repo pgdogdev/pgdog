@@ -134,7 +134,7 @@ impl ShardedTables {
 
     /// Determine if the column is sharded and return its data type,
     /// as declared in the schema.
-    pub fn get_table(&self, column: Column<'_>) -> Option<&ShardedTable> {
+    pub(crate) fn get_table(&self, column: Column<'_>) -> Option<&ShardedTable> {
         // Only fully-qualified columns can be matched.
         let table = column.table()?;
 

@@ -59,7 +59,7 @@ impl<'a> Sequence<'a> {
     }
 
     /// Generate a setval statement to set the sequence to the max value of the given column
-    pub fn setval_from_column(&self, column: &Column<'a>) -> Result<String, Error> {
+    pub(crate) fn setval_from_column(&self, column: &Column<'a>) -> Result<String, Error> {
         let sequence_name = self.table.to_string();
 
         let table = column.table().ok_or(Error::ColumnNoTable)?;

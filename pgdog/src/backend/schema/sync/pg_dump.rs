@@ -250,33 +250,16 @@ pub struct PgDumpOutput {
 pub use pgdog_stats::SyncState;
 
 #[derive(Debug)]
-pub enum Statement<'a> {
-    Index {
-        table: Table<'a>,
-        name: &'a str,
-        sql: String,
-    },
+pub(crate) enum Statement<'a> {
+    Index { table: Table<'a>, sql: String },
 
-    Table {
-        table: Table<'a>,
-        sql: String,
-    },
+    Table { table: Table<'a>, sql: String },
 
-    Other {
-        sql: String,
-        idempotent: bool,
-    },
+    Other { sql: String, idempotent: bool },
 
-    SequenceOwner {
-        column: Column<'a>,
-        sequence: Sequence<'a>,
-        sql: &'a str,
-    },
+    SequenceOwner { sql: &'a str },
 
-    SequenceSetMax {
-        sequence: Sequence<'a>,
-        sql: String,
-    },
+    SequenceSetMax { sql: String },
 }
 
 impl Statement<'_> {
@@ -325,7 +308,7 @@ impl<'a> From<String> for Statement<'a> {
 impl PgDumpOutput {
     /// Get integer primary key columns (columns that are part of PRIMARY KEY
     /// constraints and have integer types like int4, int2, serial, etc.).
-    pub fn integer_primary_key_columns(&self) -> HashSet<Column<'_>> {
+    pub(crate) fn integer_primary_key_columns(&self) -> HashSet<Column<'_>> {
         let column_types = self.column_types();
         let mut result = HashSet::new();
 
@@ -397,7 +380,7 @@ impl PgDumpOutput {
     }
 
     /// Get integer foreign key columns (FK columns that reference integer PKs).
-    pub fn integer_foreign_key_columns(&self) -> HashSet<Column<'_>> {
+    pub(crate) fn integer_foreign_key_columns(&self) -> HashSet<Column<'_>> {
         let integer_pks = self.integer_primary_key_columns();
         let mut result = HashSet::new();
 
@@ -643,7 +626,7 @@ impl PgDumpOutput {
 
     /// Get schema statements to execute before data sync,
     /// e.g., CREATE TABLE, primary key.
-    pub fn statements(&self, state: SyncState) -> Result<Vec<Statement<'_>>, Error> {
+    pub(crate) fn statements(&self, state: SyncState) -> Result<Vec<Statement<'_>>, Error> {
         let mut result = vec![];
 
         // Get integer PK and FK columns that need bigint conversion
@@ -899,16 +882,12 @@ impl PgDumpOutput {
                                 Column::try_from(column).map_err(|_| Error::MissingEntity)?;
 
                             if state == SyncState::PreData {
-                                result.push(Statement::SequenceOwner {
-                                    column,
-                                    sequence,
-                                    sql: original,
-                                });
+                                result.push(Statement::SequenceOwner { sql: original });
                             } else if state == SyncState::Cutover {
                                 let sql = sequence
                                     .setval_from_column(&column)
                                     .map_err(|_| Error::MissingEntity)?;
-                                result.push(Statement::SequenceSetMax { sequence, sql })
+                                result.push(Statement::SequenceSetMax { sql })
                             }
                         }
                     }
@@ -938,11 +917,7 @@ impl PgDumpOutput {
                                 idempotent: true,
                             });
 
-                            result.push(Statement::Index {
-                                table,
-                                name: stmt.idxname.as_str(),
-                                sql,
-                            });
+                            result.push(Statement::Index { table, sql });
                         }
                     }
 
