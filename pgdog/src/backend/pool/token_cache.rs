@@ -2,7 +2,7 @@ use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::future::Future;
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 use crate::backend::{Error, pool::Address};
 
@@ -31,15 +31,15 @@ pub struct Credentials {
 #[derive(Clone, Debug)]
 pub struct FetchedCredentials {
     pub credentials: Credentials,
-    pub expires_at: SystemTime,
-    pub refresh_at: Option<SystemTime>,
+    pub expires_at: Option<SystemTime>,
+    pub refresh_at: Option<Instant>,
 }
 
 #[derive(Clone)]
 struct CachedToken {
     credentials: Credentials,
-    expires_at: SystemTime,
-    refresh_at: Option<SystemTime>,
+    expires_at: Option<SystemTime>,
+    refresh_at: Option<Instant>,
 }
 
 impl CachedToken {
@@ -49,7 +49,7 @@ impl CachedToken {
                 username: None,
                 secret: token,
             },
-            expires_at,
+            expires_at: Some(expires_at),
             refresh_at: None,
         }
     }
@@ -127,7 +127,7 @@ impl TokenCache {
         self.inner
             .lock()
             .get(&CacheKey::from(addr))
-            .map(|c| c.expires_at)
+            .and_then(|c| c.expires_at)
     }
 
     /// How long the monitor should sleep before waking up to refresh the
@@ -150,17 +150,15 @@ impl TokenCache {
         // An explicit refresh instant (e.g. a percentage of a Vault lease)
         // takes precedence over the expiry buffer.
         if let Some(refresh_at) = refresh_at {
-            return refresh_at
-                .duration_since(SystemTime::now())
-                .unwrap_or(Duration::ZERO);
+            refresh_at.duration_since(Instant::now())
+        } else {
+            // If the token is already expired or expires within the buffer,
+            // fetch immediately.
+            expires_at
+                .and_then(|t| t.checked_sub(EXPIRY_BUFFER))
+                .and_then(|t| t.duration_since(SystemTime::now()).ok())
+                .unwrap_or(Duration::ZERO)
         }
-
-        // If the token is already expired or expires within the buffer,
-        // fetch immediately.
-        expires_at
-            .checked_sub(EXPIRY_BUFFER)
-            .and_then(|refresh_at| refresh_at.duration_since(SystemTime::now()).ok())
-            .unwrap_or(Duration::ZERO)
     }
 
     /// Store a freshly fetched token for `addr`.
@@ -179,13 +177,7 @@ impl TokenCache {
     /// default [`EXPIRY_BUFFER`] — e.g. a Vault static role, which only
     /// issues a new password once its TTL actually expires and echoes back
     /// a shrinking TTL if read early, resulting in a tight refresh loop.
-    pub fn set_with_refresh_at(
-        &self,
-        addr: &Address,
-        token: String,
-        expires_at: SystemTime,
-        refresh_at: SystemTime,
-    ) {
+    pub fn set_with_refresh_at(&self, addr: &Address, token: String, refresh_at: Instant) {
         self.inner.lock().insert(
             CacheKey::from(addr),
             CachedToken {
@@ -193,7 +185,7 @@ impl TokenCache {
                     username: None,
                     secret: token,
                 },
-                expires_at,
+                expires_at: None,
                 refresh_at: Some(refresh_at),
             },
         );
@@ -247,7 +239,7 @@ impl TokenCache {
     ) -> Result<String, Error>
     where
         F: Fn(Address) -> Fut + Send + Sync,
-        Fut: Future<Output = Result<(String, SystemTime, SystemTime), Error>>,
+        Fut: Future<Output = Result<(String, Instant), Error>>,
     {
         if let Some(cached) = self.inner.lock().get(&CacheKey::from(addr)).cloned() {
             return Ok(cached.credentials.secret);
@@ -255,8 +247,8 @@ impl TokenCache {
 
         // Cold miss — block once to prime the cache.
         // After this the monitor's refresh loop takes over.
-        let (token, expires_at, refresh_at) = fetcher(addr.clone()).await?;
-        self.set_with_refresh_at(addr, token.clone(), expires_at, refresh_at);
+        let (token, refresh_at) = fetcher(addr.clone()).await?;
+        self.set_with_refresh_at(addr, token.clone(), refresh_at);
         Ok(token)
     }
 
@@ -372,7 +364,7 @@ mod tests {
     #[test]
     fn refresh_in_uses_explicit_refresh_at_when_set() {
         let a = addr(9919);
-        let now = SystemTime::now();
+        let now = Instant::now();
         cache().set_credentials(
             &a,
             FetchedCredentials {
@@ -380,8 +372,7 @@ mod tests {
                     username: Some("vault-user".into()),
                     secret: "vault-pass".into(),
                 },
-                expires_at: now + Duration::from_secs(3600),
-                // Refresh well before the expiry buffer would.
+                expires_at: None,
                 refresh_at: Some(now + Duration::from_secs(100)),
             },
         );
@@ -394,7 +385,7 @@ mod tests {
     #[test]
     fn refresh_in_returns_zero_for_past_refresh_at() {
         let a = addr(9920);
-        let now = SystemTime::now();
+        let now = Instant::now();
         cache().set_credentials(
             &a,
             FetchedCredentials {
@@ -402,7 +393,7 @@ mod tests {
                     username: None,
                     secret: "tok".into(),
                 },
-                expires_at: now + Duration::from_secs(3600),
+                expires_at: None,
                 refresh_at: Some(now - Duration::from_secs(10)),
             },
         );
@@ -414,7 +405,7 @@ mod tests {
     fn credentials_or_fetch_returns_cached_username() {
         let rt = tokio::runtime::Runtime::new().unwrap();
         let a = addr(9921);
-        let now = SystemTime::now();
+        let now = Instant::now();
         cache().set_credentials(
             &a,
             FetchedCredentials {
@@ -422,8 +413,8 @@ mod tests {
                     username: Some("v-user".into()),
                     secret: "v-pass".into(),
                 },
-                expires_at: now + Duration::from_secs(3600),
-                refresh_at: None,
+                expires_at: None,
+                refresh_at: Some(now + Duration::from_secs(3600)),
             },
         );
 
@@ -452,8 +443,8 @@ mod tests {
                         username: Some("fresh-user".into()),
                         secret: "fresh-pass".into(),
                     },
-                    expires_at: now + Duration::from_secs(3600),
-                    refresh_at: Some(now + Duration::from_secs(2880)),
+                    expires_at: Some(now + Duration::from_secs(3600)),
+                    refresh_at: Some(Instant::now() + Duration::from_secs(2880)),
                 })
             }))
             .unwrap();
@@ -476,7 +467,7 @@ mod tests {
                     username: Some("u".into()),
                     secret: "s".into(),
                 },
-                expires_at: SystemTime::now() + Duration::from_secs(3600),
+                expires_at: Some(SystemTime::now() + Duration::from_secs(3600)),
                 refresh_at: None,
             },
         );

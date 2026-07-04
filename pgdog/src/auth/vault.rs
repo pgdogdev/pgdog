@@ -9,17 +9,18 @@
 //!   cache here to fetch dynamic database credentials.
 
 use std::collections::HashMap;
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant};
 
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::json;
-use tracing::debug;
+use tracing::{debug, warn};
 
 use crate::backend::Error;
 use crate::config::config;
+use pgdog_config::users::PasswordKind;
 use pgdog_config::vault::{Vault, VaultAuthMethod};
 
 /// Cached Vault client token, shared by all pools.
@@ -28,7 +29,7 @@ pub(crate) static VAULT_TOKEN: Lazy<Mutex<Option<VaultToken>>> = Lazy::new(|| Mu
 #[derive(Clone, Debug)]
 pub(crate) struct VaultToken {
     pub(crate) token: String,
-    pub(crate) expires_at: SystemTime,
+    pub(crate) expires_at: Instant,
 }
 
 #[derive(Deserialize)]
@@ -45,7 +46,7 @@ struct AuthData {
 /// Static role client-auth cache
 struct CachedStaticPassword {
     password: String,
-    expires_at: SystemTime,
+    expires_at: Instant,
 }
 
 static CLIENT_PASSWORD_CACHE: Lazy<Mutex<HashMap<String, CachedStaticPassword>>> =
@@ -168,7 +169,7 @@ pub(crate) async fn login(vault: &Vault) -> Result<VaultToken, Error> {
 
     Ok(VaultToken {
         token: auth.auth.client_token,
-        expires_at: SystemTime::now() + Duration::from_secs(auth.auth.lease_duration),
+        expires_at: Instant::now() + Duration::from_secs(auth.auth.lease_duration),
     })
 }
 
@@ -176,7 +177,7 @@ pub(crate) async fn login(vault: &Vault) -> Result<VaultToken, Error> {
 /// missing or about to expire.
 pub(crate) async fn vault_token(vault: &Vault) -> Result<String, Error> {
     if let Some(cached) = VAULT_TOKEN.lock().clone()
-        && SystemTime::now() + vault.token_expiry_buffer() < cached.expires_at
+        && Instant::now() + vault.token_expiry_buffer() < cached.expires_at
     {
         return Ok(cached.token);
     }
@@ -235,7 +236,7 @@ pub(crate) async fn fetch_secret<T: DeserializeOwned>(
 /// per-path cache keyed by `vault_path`.
 pub(crate) async fn static_client_password(vault_path: &str) -> Result<String, Error> {
     if let Some(cached) = CLIENT_PASSWORD_CACHE.lock().get(vault_path)
-        && SystemTime::now() < cached.expires_at
+        && Instant::now() < cached.expires_at
     {
         return Ok(cached.password.clone());
     }
@@ -249,7 +250,7 @@ pub(crate) async fn static_client_password(vault_path: &str) -> Result<String, E
     let secret: StaticSecretResponse = fetch_secret(&vault, vault_path).await?;
 
     let ttl = Duration::from_secs(secret.data.ttl);
-    let expires_at = SystemTime::now() + ttl;
+    let expires_at = Instant::now() + ttl;
 
     debug!(
         vault_path,
@@ -268,9 +269,29 @@ pub(crate) async fn static_client_password(vault_path: &str) -> Result<String, E
     Ok(secret.data.password)
 }
 
+/// Resolve any [`PasswordKind::VaultStaticRole`] entries in `passwords` to
+/// [`PasswordKind::Plain`] by fetching them from Vault.  Non-Vault entries are
+/// passed through unchanged.  Failed Vault fetches are logged and skipped so
+/// that any remaining plain/hashed passwords can still authenticate the client.
+pub(crate) async fn resolve_passwords(passwords: &[PasswordKind]) -> Vec<PasswordKind> {
+    let mut buf = Vec::with_capacity(passwords.len());
+    for p in passwords {
+        match p {
+            PasswordKind::VaultStaticRole(path) => match static_client_password(path).await {
+                Ok(pw) => buf.push(PasswordKind::Plain(pw)),
+                Err(err) => {
+                    warn!(vault_path = path, %err, "failed to resolve Vault password, skipping")
+                }
+            },
+            other => buf.push(other.clone()),
+        }
+    }
+    buf
+}
+
 #[cfg(test)]
 mod tests {
-    use std::time::{Duration, SystemTime};
+    use std::time::{Duration, Instant};
 
     use pgdog_config::vault::{Vault, VaultAuthMethod};
     use serde_json::json;
@@ -327,7 +348,7 @@ mod tests {
             "database/static-creds/cached-role".into(),
             CachedStaticPassword {
                 password: "cached-pw".into(),
-                expires_at: SystemTime::now() + Duration::from_secs(3600),
+                expires_at: Instant::now() + Duration::from_secs(3600),
             },
         );
 
@@ -348,7 +369,7 @@ mod tests {
             "database/static-creds/expired-role".into(),
             CachedStaticPassword {
                 password: "stale-pw".into(),
-                expires_at: SystemTime::now() - Duration::from_secs(1),
+                expires_at: Instant::now() - Duration::from_secs(1),
             },
         );
 
@@ -426,7 +447,7 @@ mod tests {
 
         *VAULT_TOKEN.lock() = Some(VaultToken {
             token: "s.stale".into(),
-            expires_at: SystemTime::now() + Duration::from_secs(3600),
+            expires_at: Instant::now() + Duration::from_secs(3600),
         });
 
         Mock::given(method("GET"))
@@ -565,7 +586,7 @@ mod tests {
 
         let token = login(&vault).await.unwrap();
         assert_eq!(token.token, "s.abc123");
-        assert!(token.expires_at > SystemTime::now());
+        assert!(token.expires_at > Instant::now());
     }
 
     #[tokio::test]
@@ -594,7 +615,7 @@ mod tests {
     async fn test_vault_token_uses_cached() {
         *VAULT_TOKEN.lock() = Some(VaultToken {
             token: "s.cached".into(),
-            expires_at: SystemTime::now() + Duration::from_secs(3600),
+            expires_at: Instant::now() + Duration::from_secs(3600),
         });
 
         // Port 1 is unreachable; proves no HTTP call was made.
@@ -626,5 +647,149 @@ mod tests {
     fn test_client_without_namespace() {
         setup();
         assert!(client(&approle_vault("http://127.0.0.1:8200")).is_ok());
+    }
+
+    // ── resolve_passwords() ────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_resolve_passwords_no_vault_roles_passthrough() {
+        let passwords = vec![
+            PasswordKind::Plain("secret".into()),
+            PasswordKind::Hashed("$2b$12$hash".into()),
+        ];
+        let result = resolve_passwords(&passwords).await;
+        assert_eq!(result, passwords);
+    }
+
+    #[tokio::test]
+    async fn test_resolve_passwords_empty() {
+        assert!(resolve_passwords(&[]).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_resolve_passwords_resolves_vault_role() {
+        setup();
+        let server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/v1/auth/approle/login"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "auth": { "client_token": "s.resolve1", "lease_duration": 3600 }
+            })))
+            .mount(&server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/v1/database/static-creds/my-role"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": { "username": "pgdog", "password": "vault-pw", "ttl": 3600 }
+            })))
+            .mount(&server)
+            .await;
+
+        let _guard = crate::test_utils::set_env_var("VAULT_SECRET_ID", "my-secret");
+        *VAULT_TOKEN.lock() = None;
+        CLIENT_PASSWORD_CACHE
+            .lock()
+            .remove("database/static-creds/my-role");
+        set_vault_config(approle_vault(&server.uri()));
+
+        let passwords = vec![PasswordKind::VaultStaticRole(
+            "database/static-creds/my-role".into(),
+        )];
+        let result = resolve_passwords(&passwords).await;
+        assert_eq!(result, vec![PasswordKind::Plain("vault-pw".into())]);
+    }
+
+    #[tokio::test]
+    async fn test_resolve_passwords_mixed_resolves_only_vault() {
+        setup();
+        let server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/v1/auth/approle/login"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "auth": { "client_token": "s.resolve2", "lease_duration": 3600 }
+            })))
+            .mount(&server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/v1/database/static-creds/mixed-role"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": { "username": "pgdog", "password": "mixed-pw", "ttl": 3600 }
+            })))
+            .mount(&server)
+            .await;
+
+        let _guard = crate::test_utils::set_env_var("VAULT_SECRET_ID", "my-secret");
+        *VAULT_TOKEN.lock() = None;
+        CLIENT_PASSWORD_CACHE
+            .lock()
+            .remove("database/static-creds/mixed-role");
+        set_vault_config(approle_vault(&server.uri()));
+
+        let passwords = vec![
+            PasswordKind::Plain("static-pw".into()),
+            PasswordKind::VaultStaticRole("database/static-creds/mixed-role".into()),
+        ];
+        let result = resolve_passwords(&passwords).await;
+        assert_eq!(
+            result,
+            vec![
+                PasswordKind::Plain("static-pw".into()),
+                PasswordKind::Plain("mixed-pw".into()),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_resolve_passwords_vault_error_skips_entry() {
+        setup();
+        let server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/v1/auth/approle/login"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "auth": { "client_token": "s.resolve3", "lease_duration": 3600 }
+            })))
+            .mount(&server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/v1/database/static-creds/bad-role"))
+            .respond_with(ResponseTemplate::new(500).set_body_string("vault internal error"))
+            .mount(&server)
+            .await;
+
+        let _guard = crate::test_utils::set_env_var("VAULT_SECRET_ID", "my-secret");
+        *VAULT_TOKEN.lock() = None;
+        CLIENT_PASSWORD_CACHE
+            .lock()
+            .remove("database/static-creds/bad-role");
+        set_vault_config(approle_vault(&server.uri()));
+
+        // Vault entry is skipped; the plain fallback survives.
+        let passwords = vec![
+            PasswordKind::VaultStaticRole("database/static-creds/bad-role".into()),
+            PasswordKind::Plain("fallback-pw".into()),
+        ];
+        let result = resolve_passwords(&passwords).await;
+        assert_eq!(result, vec![PasswordKind::Plain("fallback-pw".into())]);
+    }
+
+    #[tokio::test]
+    async fn test_resolve_passwords_all_vault_errors_yields_empty() {
+        crate::config::set(ConfigAndUsers::default()).unwrap();
+
+        // No vault config → static_client_password errors for every entry.
+        let passwords = vec![PasswordKind::VaultStaticRole(
+            "database/static-creds/no-config-role".into(),
+        )];
+        let result = resolve_passwords(&passwords).await;
+        assert!(
+            result.is_empty(),
+            "all vault entries failed, expected empty vec"
+        );
     }
 }

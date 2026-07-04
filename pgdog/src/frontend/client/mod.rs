@@ -160,30 +160,6 @@ impl Client {
             return Ok(AuthResult::NoPasswordConfig);
         }
 
-        // Resolve any Vault static role entries to plaintext before starting
-        // the auth exchange.  MD5, SCRAM, and plain all need the actual
-        // password, so this must happen before the first message is sent.
-        let resolved;
-        let passwords: &[PasswordKind] = if passwords
-            .iter()
-            .any(|p| matches!(p, PasswordKind::VaultStaticRole(_)))
-        {
-            let mut buf = Vec::with_capacity(passwords.len());
-            for p in passwords {
-                match p {
-                    PasswordKind::VaultStaticRole(path) => {
-                        let pw = crate::auth::vault::static_client_password(path).await?;
-                        buf.push(PasswordKind::Plain(pw));
-                    }
-                    other => buf.push(other.clone()),
-                }
-            }
-            resolved = buf;
-            &resolved
-        } else {
-            passwords
-        };
-
         let result = match auth_type {
             AuthType::Md5 => {
                 let md5 = md5::Client::new(
@@ -304,9 +280,11 @@ impl Client {
                             AuthResult::NoIdentity
                         }
                     } else {
-                        // Password authentication.
-                        Self::check_password(&mut stream, user, auth_type, cluster.passwords())
-                            .await?
+                        // Resolve Vault static role
+                        // entries to plaintext before the auth exchange
+                        let passwords =
+                            crate::auth::vault::resolve_passwords(cluster.passwords()).await;
+                        Self::check_password(&mut stream, user, auth_type, &passwords).await?
                     }
                 }
 

@@ -101,14 +101,14 @@ impl Users {
             ) {
                 if user.server_vault_path.is_none() {
                     warn!(
-                        r#"user "{}" (database "{}") uses "server_auth" = "{:?}" but "server_vault_path" is not set"#,
+                        r#"user "{}" (database "{}") uses "server_auth" = "{}" but "server_vault_path" is not set"#,
                         user.name, user.database, user.server_auth
                     );
                 }
 
                 if config.vault.is_none() {
                     warn!(
-                        r#"user "{}" (database "{}") uses "server_auth" = "{:?}" but the [vault] section is missing from pgdog.toml"#,
+                        r#"user "{}" (database "{}") uses "server_auth" = "{}" but the [vault] section is missing from pgdog.toml"#,
                         user.name, user.database, user.server_auth
                     );
                 }
@@ -195,6 +195,19 @@ pub enum ServerAuth {
     /// Fetch credentials for a Vault static database role.
     /// Vault manages password rotation; the username is fixed.
     VaultStatic,
+}
+
+impl Display for ServerAuth {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            Self::Password => "password",
+            Self::RdsIam => "rds_iam",
+            Self::AzureWorkloadIdentity => "azure_workload_identity",
+            Self::VaultDynamic => "vault_dynamic",
+            Self::VaultStatic => "vault_static",
+        };
+        write!(f, "{}", s)
+    }
 }
 
 impl ServerAuth {

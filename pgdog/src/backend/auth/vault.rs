@@ -19,7 +19,7 @@
 //! The Vault login/token cache itself lives in
 //! [`crate::auth::vault`], shared with static role client-auth verification.
 
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 use tracing::info;
@@ -62,11 +62,7 @@ fn vault_and_path(addr: &Address) -> Result<(pgdog_config::vault::Vault, &str), 
 
 /// Compute when to refresh a credential given its total lifetime, clamping
 /// `refresh_percent` to the 1-80% range.
-fn scheduled_refresh(
-    now: SystemTime,
-    lifetime: Duration,
-    refresh_percent: Option<u8>,
-) -> SystemTime {
+fn scheduled_refresh(now: Instant, lifetime: Duration, refresh_percent: Option<u8>) -> Instant {
     let refresh_percent = refresh_percent
         .unwrap_or(DEFAULT_REFRESH_PERCENT)
         .clamp(1, 80);
@@ -94,7 +90,7 @@ pub(crate) async fn credentials(addr: Address) -> Result<FetchedCredentials, Err
         "fetched Vault credentials"
     );
 
-    let now = SystemTime::now();
+    let now = Instant::now();
     let refresh_at = scheduled_refresh(now, lease, addr.vault_refresh_percent);
 
     Ok(FetchedCredentials {
@@ -102,7 +98,7 @@ pub(crate) async fn credentials(addr: Address) -> Result<FetchedCredentials, Err
             username: Some(secret.data.username),
             secret: secret.data.password,
         },
-        expires_at: now + lease,
+        expires_at: None,
         refresh_at: Some(refresh_at),
     })
 }
@@ -124,13 +120,10 @@ const STATIC_ROLE_MIN_REFRESH_BACKOFF: Duration = Duration::from_secs(1);
 /// [`TokenCache::global`](crate::backend::pool::token_cache::TokenCache::global)
 /// instead.
 ///
-/// Returns `(password, expires_at, refresh_at)`. `refresh_at` is `expires_at`
-/// itself (clamped to at least [`STATIC_ROLE_MIN_REFRESH_BACKOFF`] from now)
-/// rather than an early buffer, since Vault won't have a fresh password to
-/// give out before then.
-pub(crate) async fn static_backend_credentials(
-    addr: Address,
-) -> Result<(String, SystemTime, SystemTime), Error> {
+/// Returns `(password, refresh_at)`.
+/// `refresh_at` clamped to at least [`STATIC_ROLE_MIN_REFRESH_BACKOFF`]
+/// from now, since Vault won't have a fresh password to give out before then.
+pub(crate) async fn static_backend_credentials(addr: Address) -> Result<(String, Instant), Error> {
     let (vault, path) = vault_and_path(&addr)?;
 
     let secret: StaticSecretResponse = fetch_secret(&vault, path).await?;
@@ -141,11 +134,11 @@ pub(crate) async fn static_backend_credentials(
         "fetched Vault static backend credentials"
     );
 
-    let now = SystemTime::now();
-    let expires_at = now + Duration::from_secs(secret.data.ttl);
-    let refresh_at = expires_at.max(now + STATIC_ROLE_MIN_REFRESH_BACKOFF);
+    let now = Instant::now();
+    let refresh_at =
+        (now + Duration::from_secs(secret.data.ttl)).max(now + STATIC_ROLE_MIN_REFRESH_BACKOFF);
 
-    Ok((secret.data.password, expires_at, refresh_at))
+    Ok((secret.data.password, refresh_at))
 }
 
 #[cfg(test)]
@@ -259,7 +252,6 @@ mod tests {
             .unwrap();
         assert_eq!(fetched.credentials.username.as_deref(), Some("v-pgdog-abc"));
         assert_eq!(fetched.credentials.secret, "super-secret");
-        assert!(fetched.expires_at > SystemTime::now());
         assert!(fetched.refresh_at.is_some());
     }
 
@@ -270,7 +262,7 @@ mod tests {
 
         *VAULT_TOKEN.lock() = Some(VaultToken {
             token: "s.stale".into(),
-            expires_at: SystemTime::now() + Duration::from_secs(3600),
+            expires_at: Instant::now() + Duration::from_secs(3600),
         });
 
         Mock::given(method("GET"))
@@ -377,13 +369,12 @@ mod tests {
         *VAULT_TOKEN.lock() = None;
         set_vault_config(approle_vault(&server.uri()));
 
-        let (password, expires_at, refresh_at) =
+        let (password, refresh_at) =
             static_backend_credentials(make_addr(Some("database/static-creds/pgdog-static-role")))
                 .await
                 .unwrap();
         assert_eq!(password, "vault-rotated-pass");
-        assert!(expires_at > SystemTime::now());
-        assert!(refresh_at > SystemTime::now());
+        assert!(refresh_at > Instant::now());
     }
 
     #[tokio::test]
@@ -393,7 +384,7 @@ mod tests {
 
         *VAULT_TOKEN.lock() = Some(VaultToken {
             token: "s.stale".into(),
-            expires_at: SystemTime::now() + Duration::from_secs(3600),
+            expires_at: Instant::now() + Duration::from_secs(3600),
         });
 
         Mock::given(method("GET"))

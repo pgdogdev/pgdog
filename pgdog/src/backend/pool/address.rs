@@ -234,7 +234,7 @@ impl TryFrom<Url> for Address {
 
 #[cfg(test)]
 mod test {
-    use std::time::{Duration, SystemTime};
+    use std::time::{Duration, Instant, SystemTime};
 
     use crate::config;
 
@@ -503,7 +503,7 @@ mod test {
             ..Default::default()
         };
 
-        let now = SystemTime::now();
+        let now = Instant::now();
         TokenCache::global().set_credentials(
             &addr,
             FetchedCredentials {
@@ -511,7 +511,7 @@ mod test {
                     username: Some("v-generated-user".into()),
                     secret: "v-generated-pass".into(),
                 },
-                expires_at: now + Duration::from_secs(3600),
+                expires_at: None,
                 refresh_at: Some(now + Duration::from_secs(2880)),
             },
         );
