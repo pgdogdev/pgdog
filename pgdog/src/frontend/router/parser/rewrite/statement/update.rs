@@ -1,3 +1,5 @@
+#[cfg(feature = "new_parser")]
+use indexmap::IndexSet;
 #[cfg(not(feature = "new_parser"))]
 use std::collections::HashMap;
 use std::{ops::Deref, sync::Arc};
@@ -12,12 +14,7 @@ use pg_query::{
     },
 };
 #[cfg(feature = "new_parser")]
-use pg_raw_parse::{
-    DeparseResult, Node, Owned, deparse,
-    make::owned,
-    nodes,
-    walk::{self, Recurse},
-};
+use pg_raw_parse::{DeparseResult, Node, NodeMut, Owned, deparse, make::owned, nodes, walk};
 #[cfg(not(feature = "new_parser"))]
 use pgdog_config::QueryParserEngine;
 use pgdog_config::RewriteMode;
@@ -45,21 +42,14 @@ use super::*;
 pub(crate) struct Statement {
     pub(crate) ast: Ast,
     pub(crate) stmt: String,
+    #[cfg(feature = "new_parser")]
+    pub(crate) params: IndexSet<u16>,
     #[cfg(not(feature = "new_parser"))]
     pub(crate) params: Vec<u16>,
 }
 
 impl Statement {
     /// Create new Bind message for the statement from original Bind.
-    #[cfg(feature = "new_parser")]
-    pub(crate) fn rewrite_bind(&self, bind: &Bind) -> Result<Bind, Error> {
-        let mut new = bind.clone();
-        new.anonymize();
-        Ok(new)
-    }
-
-    /// Create new Bind message for the statement from original Bind.
-    #[cfg(not(feature = "new_parser"))]
     pub(crate) fn rewrite_bind(&self, bind: &Bind) -> Result<Bind, Error> {
         let mut new = Bind::new_statement(""); // We use anonymous prepared
         // statements for execution.
@@ -696,6 +686,19 @@ impl<'a> StatementRewrite<'a> {
 
 /// Visit all ParamRef nodes in a ParseResult and renumber them sequentially.
 /// Returns a sorted list of the original parameter numbers.
+#[cfg(feature = "new_parser")]
+fn rewrite_params(node: NodeMut<'_, '_>) -> IndexSet<u16> {
+    let mut params = IndexSet::new();
+    walk::walk_mut(node, |node| match node {
+        NodeMut::ParamRef(mut param) => {
+            params.insert(param.number as _);
+            param.set_number(params.get_index_of(&(param.number as u16)).unwrap() as i32 + 1)
+        }
+        _ => (),
+    });
+    params
+}
+
 #[cfg(not(feature = "new_parser"))]
 fn rewrite_params(parse_result: &mut ParseResult) -> Result<Vec<u16>, Error> {
     let mut params = HashMap::new();
@@ -899,40 +902,6 @@ fn create_stmts<'a>(
     stmt: &'a nodes::UpdateStmt,
     new_value: &'a nodes::ResTarget,
 ) -> Result<ShardingKeyUpdate, Error> {
-    let has_bind_params = walk::walk_manual(stmt.into(), |node| match node {
-        Node::ParamRef(_) => std::ops::ControlFlow::Break(()),
-        _ => Recurse::yes(),
-    })
-    .is_some();
-
-    // Stick the original UPDATE in a CTE with `AND false` at the end of the
-    // WHERE clause to ensure all bind parameters are used, and have their
-    // types inferred the same way they would have in the original query
-    let use_all_params = if has_bind_params {
-        Some(owned(|mem| {
-            let mut noop_query = mem.make_unique(stmt);
-            noop_query.as_mut().set_whereClause(
-                mem.make_BoolExpr(
-                    nodes::BoolExprType::AND_EXPR,
-                    mem.make_List(&[
-                        mem.make_A_Const(pg_raw_parse::ConstValue::Boolean(false))
-                            .uncast(),
-                        mem.make_unique(stmt.whereClause()),
-                    ]),
-                )
-                .uncast(),
-            );
-            let cte = mem.make_CommonTableExpr(
-                "__pgdog_use_bind_params",
-                mem.empty(),
-                noop_query.uncast(),
-            );
-            mem.make_WithClause(mem.make_List(&[cte]), false)
-        }))
-    } else {
-        None
-    };
-
     let select_star = owned(|mem| {
         let mut select_stmt = mem.make_node::<nodes::SelectStmt>();
         select_stmt.as_mut().set_targetList(
@@ -949,25 +918,25 @@ fn create_stmts<'a>(
                 .uncast()]),
         );
         select_stmt
-            .as_mut()
-            .set_withClause(mem.make_unique(use_all_params.as_deref()));
-        select_stmt
     });
 
+    let mut params = IndexSet::new();
     let select = owned(|mem| {
         let mut select_stmt = mem.make_unique(&*select_star);
         select_stmt
             .as_mut()
             .set_whereClause(mem.make_unique(stmt.whereClause()));
-        // let params = rewrite_params(&mut select)?;
+        params = rewrite_params(select_stmt.as_mut().into());
         mem.make_List(&[mem.make_RawStmt(select_stmt.uncast())])
     });
 
     let select = Statement {
         stmt: deparse(select.first().unwrap())?.as_str().to_owned(),
         ast: Ast::from_raw_stmts(select),
+        params,
     };
 
+    let mut params = IndexSet::new();
     let delete = owned(|mem| {
         let mut delete = mem.make_node::<nodes::DeleteStmt>();
         delete
@@ -976,18 +945,17 @@ fn create_stmts<'a>(
         delete
             .as_mut()
             .set_whereClause(mem.make_unique(stmt.whereClause()));
-        delete
-            .as_mut()
-            .set_withClause(mem.make_unique(use_all_params.as_deref()));
-        // let params = rewrite_params(&mut delete)?;
+        params = rewrite_params(delete.as_mut().into());
         mem.make_List(&[mem.make_RawStmt(delete.uncast())])
     });
 
     let delete = Statement {
         stmt: deparse(delete.first().unwrap())?.as_str().to_owned(),
         ast: Ast::from_raw_stmts(delete),
+        params,
     };
 
+    let mut params = IndexSet::new();
     let check = owned(|mem| {
         let mut select_stmt = mem.make_unique(&*select_star);
         select_stmt.as_mut().set_whereClause(
@@ -1000,13 +968,14 @@ fn create_stmts<'a>(
             )
             .uncast(),
         );
-        // let params = rewrite_params(&mut select_stmt)?;
+        params = rewrite_params(select_stmt.as_mut().into());
         mem.make_List(&[mem.make_RawStmt(select_stmt.uncast())])
     });
 
     let check = Statement {
         stmt: deparse(check.first().unwrap())?.as_str().to_owned(),
         ast: Ast::from_raw_stmts(check),
+        params,
     };
 
     Ok(ShardingKeyUpdate {
@@ -1115,15 +1084,23 @@ fn create_stmts(
 #[cfg(test)]
 mod test {
     use crate::frontend::router::sharding::ShardedTable;
+    #[cfg(feature = "new_parser")]
+    use indexmap::indexset;
     use pg_query::parse;
     use pgdog_config::Rewrite;
-    use regex::Regex;
 
     use crate::backend::schema::Schema;
     use crate::backend::{ShardedTables, replication::ShardedSchemas};
     use crate::net::messages::row_description::Field;
 
     use super::*;
+
+    #[cfg(not(feature = "new_parser"))]
+    macro_rules! indexset {
+        ($t:tt) => {
+            vec![$t]
+        };
+    }
 
     fn default_db_schema() -> Schema {
         Schema::default()
@@ -1180,18 +1157,13 @@ mod test {
 
     #[test]
     fn test_select_basic_where_param() {
-        let sql = "UPDATE sharded SET id = $1 WHERE email = $2";
-        let result = run_test(sql).unwrap().unwrap();
+        let result = run_test("UPDATE sharded SET id = $1 WHERE email = $2")
+            .unwrap()
+            .unwrap();
 
         // SELECT should have WHERE clause with param renumbered to $1
-        assert_equivalent_sql(
-            &result.select.stmt,
-            "SELECT * FROM sharded WHERE email = $1",
-        );
-        #[cfg(feature = "new_parser")]
-        assert_all_bind_params_used(sql, &result.select.stmt);
-        #[cfg(not(feature = "new_parser"))]
-        assert_eq!(result.select.params, vec![2]);
+        assert_eq!(result.select.stmt, "SELECT * FROM sharded WHERE email = $1");
+        assert_eq!(result.select.params, indexset![2]);
 
         let schema = default_schema();
         let tables = schema.tables.tables();
@@ -1201,61 +1173,51 @@ mod test {
 
     #[test]
     fn test_select_multiple_where_params() {
-        let query = "UPDATE sharded SET id = $1 WHERE email = $2 AND name = $3";
-        let result = run_test(query).unwrap().unwrap();
+        let result = run_test("UPDATE sharded SET id = $1 WHERE email = $2 AND name = $3")
+            .unwrap()
+            .unwrap();
 
-        assert_equivalent_sql(
-            &result.select.stmt,
-            "SELECT * FROM sharded WHERE email = $1 AND name = $2",
+        assert_eq!(
+            result.select.stmt,
+            "SELECT * FROM sharded WHERE email = $1 AND name = $2"
         );
-        #[cfg(feature = "new_parser")]
-        assert_all_bind_params_used(query, &result.select.stmt);
-        #[cfg(not(feature = "new_parser"))]
-        assert_eq!(result.select.params, vec![2, 3]);
+        assert_eq!(result.select.params, indexset![2, 3]);
         assert!(!result.is_returning());
     }
 
     #[test]
     fn test_select_non_sequential_params() {
-        // Resulting query must be valid with the client's bind params, even
-        // though the select stmt will only use $3 and $5
-        let query =
-            "UPDATE sharded SET id = $1, value = $2, other = $4 WHERE email = $3 AND name = $5";
-        let result = run_test(query).unwrap().unwrap();
+        // Params in WHERE are $3 and $5, should be renumbered to $1 and $2
+        let result = run_test(
+            "UPDATE sharded SET id = $1, value = $2, other = $4 WHERE email = $3 AND name = $5",
+        )
+        .unwrap()
+        .unwrap();
 
-        assert_equivalent_sql(
-            &result.select.stmt,
-            "SELECT * FROM sharded WHERE email = $1 AND name = $2",
+        assert_eq!(
+            result.select.stmt,
+            "SELECT * FROM sharded WHERE email = $1 AND name = $2"
         );
-        #[cfg(feature = "new_parser")]
-        assert_all_bind_params_used(query, &result.select.stmt);
-        #[cfg(not(feature = "new_parser"))]
-        assert_eq!(result.select.params, vec![3, 5]);
+        assert_eq!(result.select.params, indexset![3, 5]);
     }
 
     #[test]
     fn test_select_single_where_param() {
-        let query = "UPDATE sharded SET id = $1 WHERE email = $2";
-        let result = run_test(query).unwrap().unwrap();
+        let result = run_test("UPDATE sharded SET id = $1 WHERE email = $2")
+            .unwrap()
+            .unwrap();
 
-        assert_equivalent_sql(
-            &result.select.stmt,
-            "SELECT * FROM sharded WHERE email = $1",
-        );
-        #[cfg(feature = "new_parser")]
-        assert_all_bind_params_used(query, &result.select.stmt);
-        #[cfg(not(feature = "new_parser"))]
-        assert_eq!(result.select.params, vec![2]);
+        assert_eq!(result.select.stmt, "SELECT * FROM sharded WHERE email = $1");
+        assert_eq!(result.select.params, indexset![2]);
     }
 
     #[test]
     fn test_delete_basic() {
-        let query = "UPDATE sharded SET id = $1 WHERE email = $2";
-        let result = run_test(query).unwrap().unwrap();
+        let result = run_test("UPDATE sharded SET id = $1 WHERE email = $2")
+            .unwrap()
+            .unwrap();
 
-        assert_equivalent_sql(&result.delete.stmt, "DELETE FROM sharded WHERE email = $1");
-        #[cfg(feature = "new_parser")]
-        assert_all_bind_params_used(query, &result.delete.stmt);
+        assert_eq!(result.delete.stmt, "DELETE FROM sharded WHERE email = $1");
 
         assert!(result.sharded_table(&[]).is_none());
         assert!(
@@ -1280,90 +1242,79 @@ mod test {
 
     #[test]
     fn test_delete_multiple_where_params() {
-        let query = "UPDATE sharded SET id = $1 WHERE email = $2 AND name = $3";
-        let result = run_test(query).unwrap().unwrap();
+        let result = run_test("UPDATE sharded SET id = $1 WHERE email = $2 AND name = $3")
+            .unwrap()
+            .unwrap();
 
-        assert_equivalent_sql(
-            &result.delete.stmt,
-            "DELETE FROM sharded WHERE email = $1 AND name = $2",
+        assert_eq!(
+            result.delete.stmt,
+            "DELETE FROM sharded WHERE email = $1 AND name = $2"
         );
-        #[cfg(feature = "new_parser")]
-        assert_all_bind_params_used(query, &result.delete.stmt);
     }
 
     #[test]
     fn test_no_params_in_where() {
-        let query = "UPDATE sharded SET id = $1 WHERE email = 'test@example.com'";
-        let result = run_test(query).unwrap().unwrap();
+        let result = run_test("UPDATE sharded SET id = $1 WHERE email = 'test@example.com'")
+            .unwrap()
+            .unwrap();
 
-        assert_equivalent_sql(
-            &result.select.stmt,
-            "SELECT * FROM sharded WHERE email = 'test@example.com'",
+        assert_eq!(
+            result.select.stmt,
+            "SELECT * FROM sharded WHERE email = 'test@example.com'"
         );
-        #[cfg(feature = "new_parser")]
-        assert_all_bind_params_used(query, &result.select.stmt);
-        #[cfg(not(feature = "new_parser"))]
-        assert_eq!(result.select.params, Vec::<u16>::new());
+        assert!(result.select.params.is_empty());
     }
 
     #[test]
     fn test_where_with_in_clause() {
-        let query = "UPDATE sharded SET id = $1 WHERE email IN ($2, $3, $4)";
-        let result = run_test(query).unwrap().unwrap();
+        let result = run_test("UPDATE sharded SET id = $1 WHERE email IN ($2, $3, $4)")
+            .unwrap()
+            .unwrap();
 
-        assert_equivalent_sql(
-            &result.select.stmt,
-            "SELECT * FROM sharded WHERE email IN ($1, $2, $3)",
+        assert_eq!(
+            result.select.stmt,
+            "SELECT * FROM sharded WHERE email IN ($1, $2, $3)"
         );
-        #[cfg(feature = "new_parser")]
-        assert_all_bind_params_used(query, &result.select.stmt);
-        #[cfg(not(feature = "new_parser"))]
-        assert_eq!(result.select.params, vec![2, 3, 4]);
+        assert_eq!(result.select.params, indexset![2, 3, 4]);
     }
 
     #[test]
     fn test_where_with_comparison_operators() {
-        let query = "UPDATE sharded SET id = $1 WHERE count > $2 AND count < $3";
-        let result = run_test(query).unwrap().unwrap();
+        let result = run_test("UPDATE sharded SET id = $1 WHERE count > $2 AND count < $3")
+            .unwrap()
+            .unwrap();
 
-        assert_equivalent_sql(
-            &result.select.stmt,
-            "SELECT * FROM sharded WHERE count > $1 AND count < $2",
+        assert_eq!(
+            result.select.stmt,
+            "SELECT * FROM sharded WHERE count > $1 AND count < $2"
         );
-        #[cfg(feature = "new_parser")]
-        assert_all_bind_params_used(query, &result.select.stmt);
-        #[cfg(not(feature = "new_parser"))]
-        assert_eq!(result.select.params, vec![2, 3]);
+        assert_eq!(result.select.params, indexset![2, 3]);
     }
 
     #[test]
     fn test_where_with_or_condition() {
-        let query = "UPDATE sharded SET id = $1 WHERE email = $2 OR name = $3";
-        let result = run_test(query).unwrap().unwrap();
+        let result = run_test("UPDATE sharded SET id = $1 WHERE email = $2 OR name = $3")
+            .unwrap()
+            .unwrap();
 
-        assert_equivalent_sql(
-            &result.select.stmt,
-            "SELECT * FROM sharded WHERE email = $1 OR name = $2",
+        assert_eq!(
+            result.select.stmt,
+            "SELECT * FROM sharded WHERE email = $1 OR name = $2"
         );
-        #[cfg(feature = "new_parser")]
-        assert_all_bind_params_used(query, &result.select.stmt);
-        #[cfg(not(feature = "new_parser"))]
-        assert_eq!(result.select.params, vec![2, 3]);
+        assert_eq!(result.select.params, indexset![2, 3]);
     }
 
     #[test]
     fn test_high_param_numbers() {
-        let query = "UPDATE sharded SET id = $10 WHERE email = $20 AND name = $30";
-        let result = run_test(query).unwrap().unwrap();
+        let result = run_test("UPDATE sharded SET id = $10 WHERE email = $20 AND name = $30")
+            .unwrap()
+            .unwrap();
 
-        assert_equivalent_sql(
-            &result.select.stmt,
-            "SELECT * FROM sharded WHERE email = $1 AND name = $2",
+        assert_eq!(
+            result.select.stmt,
+            "SELECT * FROM sharded WHERE email = $1 AND name = $2"
         );
-        #[cfg(feature = "new_parser")]
-        assert_all_bind_params_used(query, &result.select.stmt);
-        #[cfg(not(feature = "new_parser"))]
-        assert_eq!(result.select.params, vec![20, 30]);
+        assert_eq!(result.select.params, indexset![20, 30]);
     }
 
     #[test]
@@ -1375,139 +1326,121 @@ mod test {
 
     #[test]
     fn test_where_with_like() {
-        let query = "UPDATE sharded SET id = $1 WHERE email LIKE $2";
-        let result = run_test(query).unwrap().unwrap();
+        let result = run_test("UPDATE sharded SET id = $1 WHERE email LIKE $2")
+            .unwrap()
+            .unwrap();
 
-        assert_equivalent_sql(
-            &result.select.stmt,
-            "SELECT * FROM sharded WHERE email LIKE $1",
+        assert_eq!(
+            result.select.stmt,
+            "SELECT * FROM sharded WHERE email LIKE $1"
         );
-        #[cfg(feature = "new_parser")]
-        assert_all_bind_params_used(query, &result.select.stmt);
-        #[cfg(not(feature = "new_parser"))]
-        assert_eq!(result.select.params, vec![2]);
+        assert_eq!(result.select.params, indexset![2]);
     }
 
     #[test]
     fn test_where_with_is_null() {
-        let query = "UPDATE sharded SET id = $1 WHERE email = $2 AND deleted_at IS NULL";
-        let result = run_test(query).unwrap().unwrap();
+        let result = run_test("UPDATE sharded SET id = $1 WHERE email = $2 AND deleted_at IS NULL")
+            .unwrap()
+            .unwrap();
 
-        assert_equivalent_sql(
-            &result.select.stmt,
-            "SELECT * FROM sharded WHERE email = $1 AND deleted_at IS NULL",
+        assert_eq!(
+            result.select.stmt,
+            "SELECT * FROM sharded WHERE email = $1 AND deleted_at IS NULL"
         );
-        #[cfg(feature = "new_parser")]
-        assert_all_bind_params_used(query, &result.select.stmt);
-        #[cfg(not(feature = "new_parser"))]
-        assert_eq!(result.select.params, vec![2]);
+        assert_eq!(result.select.params, indexset![2]);
     }
 
     #[test]
     fn test_where_with_between() {
-        let query = "UPDATE sharded SET id = $1 WHERE created_at BETWEEN $2 AND $3";
-        let result = run_test(query).unwrap().unwrap();
+        let result = run_test("UPDATE sharded SET id = $1 WHERE created_at BETWEEN $2 AND $3")
+            .unwrap()
+            .unwrap();
 
-        assert_equivalent_sql(
-            &result.select.stmt,
-            "SELECT * FROM sharded WHERE created_at BETWEEN $1 AND $2",
+        assert_eq!(
+            result.select.stmt,
+            "SELECT * FROM sharded WHERE created_at BETWEEN $1 AND $2"
         );
-        #[cfg(feature = "new_parser")]
-        assert_all_bind_params_used(query, &result.select.stmt);
-        #[cfg(not(feature = "new_parser"))]
-        assert_eq!(result.select.params, vec![2, 3]);
+        assert_eq!(result.select.params, indexset![2, 3]);
     }
 
     #[test]
     fn test_same_param_used_twice() {
         // Same parameter $2 used twice in WHERE clause
-        let query = "UPDATE sharded SET id = $1 WHERE email = $2 OR name = $2";
-        let result = run_test(query).unwrap().unwrap();
+        let result = run_test("UPDATE sharded SET id = $1 WHERE email = $2 OR name = $2")
+            .unwrap()
+            .unwrap();
 
         // Both occurrences should be renumbered to $1
-        assert_equivalent_sql(
-            &result.select.stmt,
-            "SELECT * FROM sharded WHERE email = $1 OR name = $1",
+        assert_eq!(
+            result.select.stmt,
+            "SELECT * FROM sharded WHERE email = $1 OR name = $1"
         );
         // Only one unique param in the mapping
-        #[cfg(feature = "new_parser")]
-        assert_all_bind_params_used(query, &result.select.stmt);
-        #[cfg(not(feature = "new_parser"))]
-        assert_eq!(result.select.params, vec![2]);
+        assert_eq!(result.select.params, indexset![2]);
     }
 
     #[test]
     fn test_same_param_used_multiple_times() {
         // $2 used three times
-        let query = "UPDATE sharded SET id = $1 WHERE a = $2 AND b = $2 AND c = $2";
-        let result = run_test(query).unwrap().unwrap();
+        let result = run_test("UPDATE sharded SET id = $1 WHERE a = $2 AND b = $2 AND c = $2")
+            .unwrap()
+            .unwrap();
 
-        assert_equivalent_sql(
-            &result.select.stmt,
-            "SELECT * FROM sharded WHERE a = $1 AND b = $1 AND c = $1",
+        assert_eq!(
+            result.select.stmt,
+            "SELECT * FROM sharded WHERE a = $1 AND b = $1 AND c = $1"
         );
-        #[cfg(feature = "new_parser")]
-        assert_all_bind_params_used(query, &result.select.stmt);
-        #[cfg(not(feature = "new_parser"))]
-        assert_eq!(result.select.params, vec![2]);
+        assert_eq!(result.select.params, indexset![2]);
     }
 
     #[test]
     fn test_mixed_repeated_and_unique_params() {
         // $2 used twice, $3 used once
-        let query = "UPDATE sharded SET id = $1 WHERE a = $2 AND b = $3 AND c = $2";
-        let result = run_test(query).unwrap().unwrap();
+        let result = run_test("UPDATE sharded SET id = $1 WHERE a = $2 AND b = $3 AND c = $2")
+            .unwrap()
+            .unwrap();
 
-        assert_equivalent_sql(
-            &result.select.stmt,
-            "SELECT * FROM sharded WHERE a = $1 AND b = $2 AND c = $1",
+        assert_eq!(
+            result.select.stmt,
+            "SELECT * FROM sharded WHERE a = $1 AND b = $2 AND c = $1"
         );
-        #[cfg(feature = "new_parser")]
-        assert_all_bind_params_used(query, &result.select.stmt);
-        #[cfg(not(feature = "new_parser"))]
-        assert_eq!(result.select.params, vec![2, 3]);
+        assert_eq!(result.select.params, indexset![2, 3]);
     }
 
     #[test]
     fn test_repeated_params_in_in_clause() {
         // Same param repeated in IN clause (unusual but valid)
-        let query = "UPDATE sharded SET id = $1 WHERE email IN ($2, $3, $2)";
-        let result = run_test(query).unwrap().unwrap();
+        let result = run_test("UPDATE sharded SET id = $1 WHERE email IN ($2, $3, $2)")
+            .unwrap()
+            .unwrap();
 
-        assert_equivalent_sql(
-            &result.select.stmt,
-            "SELECT * FROM sharded WHERE email IN ($1, $2, $1)",
+        assert_eq!(
+            result.select.stmt,
+            "SELECT * FROM sharded WHERE email IN ($1, $2, $1)"
         );
-        #[cfg(feature = "new_parser")]
-        assert_all_bind_params_used(query, &result.select.stmt);
-        #[cfg(not(feature = "new_parser"))]
-        assert_eq!(result.select.params, vec![2, 3]);
+        assert_eq!(result.select.params, indexset![2, 3]);
     }
 
     #[test]
     fn test_delete_with_repeated_params() {
-        let query = "UPDATE sharded SET id = $1 WHERE email = $2 OR name = $2";
-        let result = run_test(query).unwrap().unwrap();
+        let result = run_test("UPDATE sharded SET id = $1 WHERE email = $2 OR name = $2")
+            .unwrap()
+            .unwrap();
 
-        assert_equivalent_sql(
-            &result.delete.stmt,
-            "DELETE FROM sharded WHERE email = $1 OR name = $1",
+        assert_eq!(
+            result.delete.stmt,
+            "DELETE FROM sharded WHERE email = $1 OR name = $1"
         );
-        #[cfg(feature = "new_parser")]
-        assert_all_bind_params_used(query, &result.delete.stmt);
-        #[cfg(not(feature = "new_parser"))]
-        assert_eq!(result.delete.params, vec![2]);
+        assert_eq!(result.delete.params, indexset![2]);
     }
 
     #[test]
     fn test_sharding_key_not_changed() {
-        let query = "UPDATE sharded SET id = $1 WHERE id = $1 AND email = $2";
-        let result = run_test(query).unwrap().unwrap();
-        assert_equivalent_sql(&result.check.stmt, "SELECT * FROM sharded WHERE id = $1");
-        #[cfg(feature = "new_parser")]
-        assert_all_bind_params_used(query, &result.check.stmt);
-        #[cfg(not(feature = "new_parser"))]
-        assert_eq!(result.check.params, vec![1]);
+        let result = run_test("UPDATE sharded SET id = $1 WHERE id = $1 AND email = $2")
+            .unwrap()
+            .unwrap();
+        assert_eq!(result.check.stmt, "SELECT * FROM sharded WHERE id = $1");
+        assert_eq!(result.check.params, indexset![1]);
     }
 
     #[test]
@@ -1735,36 +1668,5 @@ mod test {
             "Parameter numbering should be sequential without gaps: {}",
             stmt
         );
-    }
-
-    const BIND_PARAM_PATTERN: &str = r#"(\$\d+)"#;
-
-    fn bind_param_regex() -> Regex {
-        Regex::new(BIND_PARAM_PATTERN).unwrap()
-    }
-
-    fn assert_equivalent_sql(actual: &str, expected: &str) {
-        let pattern = bind_param_regex().replace_all(expected, "BIND_PARAM");
-        let pattern = regex::escape(&pattern).replace("BIND_PARAM", BIND_PARAM_PATTERN);
-        let regex = Regex::new(&pattern).unwrap();
-        assert!(
-            regex.is_match(actual),
-            "Expected {:?} to match {:?}",
-            actual,
-            pattern
-        )
-    }
-
-    #[cfg(feature = "new_parser")]
-    fn assert_all_bind_params_used(original: &str, rewritten: &str) {
-        for captures in bind_param_regex().captures_iter(original) {
-            let param = &captures[1];
-            assert!(
-                rewritten.contains(param),
-                "Expected {:?} to use param {}",
-                rewritten,
-                param
-            );
-        }
     }
 }
