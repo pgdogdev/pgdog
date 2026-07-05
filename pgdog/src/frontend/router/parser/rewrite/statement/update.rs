@@ -33,8 +33,8 @@ use crate::{
         },
     },
     net::{
-        Bind, DataRow, Describe, Execute, Flush, Format, FromDataType, Parse, ProtocolMessage,
-        Query, RowDescription, Sync, bind::Parameter,
+        Bind, DataRow, Describe, Execute, Flush, Format, Parse, ProtocolMessage, Query,
+        RowDescription, Sync, bind::Parameter,
     },
 };
 
@@ -203,6 +203,7 @@ impl Inner {
             let mut values = Vec::new();
             for (idx, field) in row_description.iter().enumerate() {
                 columns.push(&*field.name);
+
                 if let Some(value) = self.from_update.targetList().iter().find_map(|rt| {
                     if rt.name() == Some(&*field.name) {
                         Some(rt.val())
@@ -210,41 +211,14 @@ impl Inner {
                         None
                     }
                 }) {
-                    let Ok(value) = Value::try_from(value) else {
+                    if let Ok(Value::Placeholder(number)) = Value::try_from(value) {
+                        let param = params
+                            .and_then(|p| p.parameter(number as usize - 1).transpose())
+                            .ok_or(Error::MissingParameter(number as u16))??;
+                        bind.push_param(param.parameter().clone(), param.format());
+                        values.push(mem.make_ParamRef(bind.params_raw().len() as _).uncast());
+                    } else {
                         values.push(mem.make_unique(value));
-                        continue;
-                    };
-
-                    match value {
-                        Value::Placeholder(number) => {
-                            let param = params
-                                .as_ref()
-                                .expect("param")
-                                .parameter(number as usize - 1)?
-                                .ok_or(Error::MissingParameter(number as u16))?;
-                            bind.push_param(param.parameter().clone(), param.format())
-                        }
-
-                        Value::Integer(int) => bind
-                            .push_param(Parameter::new(int.to_string().as_bytes()), Format::Text),
-
-                        Value::String(s) => {
-                            bind.push_param(Parameter::new(s.as_bytes()), Format::Text)
-                        }
-
-                        Value::Float(f) => {
-                            bind.push_param(Parameter::new(f.to_string().as_bytes()), Format::Text)
-                        }
-
-                        Value::Boolean(b) => bind.push_param(
-                            Parameter::new(if b { "t".as_bytes() } else { "f".as_bytes() }),
-                            Format::Text,
-                        ),
-
-                        Value::Vector(vec) => bind
-                            .push_param(Parameter::new(&vec.encode(Format::Text)?), Format::Text),
-
-                        Value::Null => bind.push_param(Parameter::new_null(), Format::Text),
                     }
                 } else {
                     let value = data_row.get_raw(idx).ok_or(Error::MissingColumn(idx))?;
@@ -254,8 +228,8 @@ impl Inner {
                     } else {
                         bind.push_param(Parameter::new(value), Format::Text);
                     }
+                    values.push(mem.make_ParamRef(bind.params_raw().len() as _).uncast());
                 }
-                values.push(mem.make_ParamRef(bind.params_raw().len() as _).uncast());
             }
 
             let mut insert = mem.make_node::<nodes::InsertStmt>();
@@ -280,9 +254,7 @@ impl Inner {
                 .set_returningList(mem.make_unique(returning_list));
             Ok(mem.make_List(&[mem.make_RawStmt(insert.uncast())]))
         })?;
-        dbg!(&insert);
         let stmt = deparse(insert.first().unwrap())?;
-        dbg!(stmt.as_str());
 
         //// Build the AST to be used with the router.
         //// It's identical to the string-generated statement above.
@@ -1595,6 +1567,7 @@ mod test {
             Field::bigint("id"),
             Field::text("email"),
             Field::text("other_col"),
+            Field::text("other_other_col"),
         ]);
 
         // Create a mock data row with values for columns not in the UPDATE SET clause
@@ -1602,6 +1575,7 @@ mod test {
         data_row.add("1"); // id - will be overwritten by mapping
         data_row.add("old@example.com"); // email - will be overwritten by mapping
         data_row.add("other_value"); // other_col - from existing row
+        data_row.add("other_other_value"); // other_other_col - from existing row
 
         // Create a simple query request (not prepared statement)
         let request = ClientRequest::from(vec![ProtocolMessage::from(Query::new(
