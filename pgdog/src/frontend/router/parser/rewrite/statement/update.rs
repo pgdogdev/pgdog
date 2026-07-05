@@ -194,15 +194,16 @@ impl Inner {
         data_row: &DataRow,
     ) -> Result<ClientRequest, Error> {
         let params = request.parameters()?;
-
         let mut bind = Bind::new_statement("");
-        let returning_list = self.from_update.returningList();
 
         let insert = try_owned(|mem| -> Result<_, Error> {
             let mut columns = Vec::new();
             let mut values = Vec::new();
             for (idx, field) in row_description.iter().enumerate() {
-                columns.push(&*field.name);
+                columns.push(
+                    mem.make_ResTarget(Some(&*field.name), mem.empty(), mem.none())
+                        .uncast(),
+                );
 
                 if let Some(value) = self.from_update.targetList().iter().find_map(|rt| {
                     if rt.name() == Some(&*field.name) {
@@ -221,6 +222,7 @@ impl Inner {
                         values.push(mem.make_unique(value));
                     }
                 } else {
+                    // This column wasn't changed, get the value from the select
                     let value = data_row.get_raw(idx).ok_or(Error::MissingColumn(idx))?;
 
                     if value.is_null() {
@@ -236,14 +238,7 @@ impl Inner {
             insert
                 .as_mut()
                 .set_relation(mem.make_unique(self.from_update.relation()));
-            let cols = columns
-                .into_iter()
-                .map(|c| {
-                    mem.make_ResTarget(Some(c), mem.empty(), mem.none())
-                        .uncast()
-                })
-                .collect::<Vec<_>>();
-            insert.as_mut().set_cols(mem.make_List(&cols));
+            insert.as_mut().set_cols(mem.make_List(&columns));
             let mut select = mem.make_node::<nodes::SelectStmt>();
             select
                 .as_mut()
@@ -251,7 +246,7 @@ impl Inner {
             insert.as_mut().set_selectStmt(select.uncast());
             insert
                 .as_mut()
-                .set_returningList(mem.make_unique(returning_list));
+                .set_returningList(mem.make_unique(self.from_update.returningList()));
             Ok(mem.make_List(&[mem.make_RawStmt(insert.uncast())]))
         })?;
         let stmt = deparse(insert.first().unwrap())?;
