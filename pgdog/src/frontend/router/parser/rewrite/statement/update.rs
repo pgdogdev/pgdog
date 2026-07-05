@@ -1064,8 +1064,8 @@ mod test {
 
     #[cfg(not(feature = "new_parser"))]
     macro_rules! indexset {
-        ($t:tt) => {
-            vec![$t]
+        ($($t:tt)*) => {
+            vec![$($t)*]
         };
     }
 
