@@ -23,6 +23,8 @@ use pgdog_config::RewriteMode;
 
 #[cfg(not(feature = "new_parser"))]
 use crate::frontend::router::parser::rewrite::statement::visitor::visit_and_mutate_nodes;
+#[cfg(not(feature = "new_parser"))]
+use crate::net::FromDataType;
 use crate::{
     frontend::{
         BufferedQuery, ClientRequest,
