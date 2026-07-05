@@ -14,7 +14,9 @@ use pg_query::{
     },
 };
 #[cfg(feature = "new_parser")]
-use pg_raw_parse::{DeparseResult, Node, NodeMut, Owned, deparse, make::owned, nodes, walk};
+use pg_raw_parse::make::{owned, try_owned};
+#[cfg(feature = "new_parser")]
+use pg_raw_parse::{DeparseResult, Node, NodeMut, Owned, deparse, nodes, walk};
 #[cfg(not(feature = "new_parser"))]
 use pgdog_config::QueryParserEngine;
 use pgdog_config::RewriteMode;
@@ -194,85 +196,68 @@ impl Inner {
         let params = request.parameters()?;
 
         let mut bind = Bind::new_statement("");
-        let mut columns = Vec::new();
-        let mut values = Vec::new();
-        let mut columns_str = Vec::new();
-        let mut values_str = Vec::new();
+        let returning_list = self.from_update.returningList();
 
-        let mut bind_idx = 1;
-        for (row_idx, field) in row_description.iter().enumerate() {
-            columns_str.push(format!(r#""{}""#, field.name.replace("\"", "\"\""))); // Escape "
+        let insert = try_owned(|mem| -> Result<_, Error> {
+            let mut columns = Vec::new();
+            let mut values = Vec::new();
+            for (idx, field) in row_description.iter().enumerate() {
+                columns.push(&*field.name);
+                if let Some(value) = self.from_update.targetList().iter().find_map(|rt| {
+                    if rt.name() == Some(&*field.name) {
+                        Some(rt.val())
+                    } else {
+                        None
+                    }
+                }) {
+                    let Ok(value) = Value::try_from(value) else {
+                        values.push(mem.make_unique(value));
+                        continue;
+                    };
 
-            if let Some(value) = self.from_update.targetList().iter().find_map(|rt| {
-                if rt.name() == Some(&*field.name) {
-                    Some(rt.val())
+                    match value {
+                        Value::Placeholder(number) => {
+                            let param = params
+                                .as_ref()
+                                .expect("param")
+                                .parameter(number as usize - 1)?
+                                .ok_or(Error::MissingParameter(number as u16))?;
+                            bind.push_param(param.parameter().clone(), param.format())
+                        }
+
+                        Value::Integer(int) => bind
+                            .push_param(Parameter::new(int.to_string().as_bytes()), Format::Text),
+
+                        Value::String(s) => {
+                            bind.push_param(Parameter::new(s.as_bytes()), Format::Text)
+                        }
+
+                        Value::Float(f) => {
+                            bind.push_param(Parameter::new(f.to_string().as_bytes()), Format::Text)
+                        }
+
+                        Value::Boolean(b) => bind.push_param(
+                            Parameter::new(if b { "t".as_bytes() } else { "f".as_bytes() }),
+                            Format::Text,
+                        ),
+
+                        Value::Vector(vec) => bind
+                            .push_param(Parameter::new(&vec.encode(Format::Text)?), Format::Text),
+
+                        Value::Null => bind.push_param(Parameter::new_null(), Format::Text),
+                    }
                 } else {
-                    None
+                    let value = data_row.get_raw(idx).ok_or(Error::MissingColumn(idx))?;
+
+                    if value.is_null() {
+                        bind.push_param(Parameter::new_null(), Format::Text);
+                    } else {
+                        bind.push_param(Parameter::new(value), Format::Text);
+                    }
                 }
-            }) {
-                let Ok(value) = Value::try_from(value) else {
-                    values_str.push(
-                        deparse_expr([value])?
-                            .as_str()
-                            .trim_start_matches("SELECT ")
-                            .to_owned(),
-                    );
-                    continue;
-                };
-
-                values_str.push(format!("${bind_idx}"));
-                match value {
-                    Value::Placeholder(number) => {
-                        let param = params
-                            .as_ref()
-                            .expect("param")
-                            .parameter(number as usize - 1)?
-                            .ok_or(Error::MissingParameter(number as u16))?;
-                        bind.push_param(param.parameter().clone(), param.format())
-                    }
-
-                    Value::Integer(int) => {
-                        bind.push_param(Parameter::new(int.to_string().as_bytes()), Format::Text)
-                    }
-
-                    Value::String(s) => bind.push_param(Parameter::new(s.as_bytes()), Format::Text),
-
-                    Value::Float(f) => {
-                        bind.push_param(Parameter::new(f.to_string().as_bytes()), Format::Text)
-                    }
-
-                    Value::Boolean(b) => bind.push_param(
-                        Parameter::new(if b { "t".as_bytes() } else { "f".as_bytes() }),
-                        Format::Text,
-                    ),
-
-                    Value::Vector(vec) => {
-                        bind.push_param(Parameter::new(&vec.encode(Format::Text)?), Format::Text)
-                    }
-
-                    Value::Null => bind.push_param(Parameter::new_null(), Format::Text),
-                }
-            } else {
-                let value = data_row
-                    .get_raw(row_idx)
-                    .ok_or(Error::MissingColumn(row_idx))?;
-
-                if value.is_null() {
-                    bind.push_param(Parameter::new_null(), Format::Text);
-                } else {
-                    bind.push_param(Parameter::new(value), Format::Text);
-                }
-
-                values_str.push(format!("${bind_idx}"));
+                values.push(mem.make_ParamRef(bind.params_raw().len() as _).uncast());
             }
 
-            columns.push(&*field.name);
-            values.push(bind_idx);
-            bind_idx += 1;
-        }
-
-        let returning_list = self.from_update.returningList();
-        let insert = owned(|mem| {
             let mut insert = mem.make_node::<nodes::InsertStmt>();
             insert
                 .as_mut()
@@ -286,10 +271,6 @@ impl Inner {
                 .collect::<Vec<_>>();
             insert.as_mut().set_cols(mem.make_List(&cols));
             let mut select = mem.make_node::<nodes::SelectStmt>();
-            let values = values
-                .into_iter()
-                .map(|v| mem.make_ParamRef(v).uncast())
-                .collect::<Vec<_>>();
             select
                 .as_mut()
                 .set_valuesLists(mem.make_List(&[mem.make_List(&values)]));
@@ -297,32 +278,18 @@ impl Inner {
             insert
                 .as_mut()
                 .set_returningList(mem.make_unique(returning_list));
-            mem.make_List(&[mem.make_RawStmt(insert.uncast())])
-        });
-
-        let stmt = format!(
-            "INSERT INTO {} ({}) VALUES ({}){}",
-            self.target_table(),
-            columns_str.join(", "),
-            values_str.join(", "),
-            if returning_list.is_empty() {
-                String::from("")
-            } else {
-                format!(
-                    " RETURNING {}",
-                    deparse_expr(returning_list)?
-                        .as_str()
-                        .trim_start_matches("SELECT ")
-                )
-            }
-        );
+            Ok(mem.make_List(&[mem.make_RawStmt(insert.uncast())]))
+        })?;
+        dbg!(&insert);
+        let stmt = deparse(insert.first().unwrap())?;
+        dbg!(stmt.as_str());
 
         //// Build the AST to be used with the router.
         //// It's identical to the string-generated statement above.
         let ast = Ast::from_raw_stmts(insert);
 
         let mut req = ClientRequest::from(vec![
-            ProtocolMessage::from(Parse::new_anonymous(&stmt)),
+            ProtocolMessage::from(Parse::new_anonymous(stmt.as_str())),
             Describe::new_statement("").into(), // So we get both T and t,
             bind.into(),
             Execute::new().into(),
