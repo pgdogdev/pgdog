@@ -105,60 +105,44 @@ impl<'a> UpdateMulti<'a> {
             &row.data_row,
         )?;
         self.route(&mut request, context)?;
+        debug!("[update] executing multi-shard insert/delete");
 
-        let original_shard = context.client_request.route().shard();
-        let new_shard = request.route().shard();
+        // Check if we are allowed to do this operation by the config.
+        if self.engine.backend.cluster()?.rewrite().shard_key == RewriteMode::Error {
+            self.engine
+                .error_response(context, ErrorResponse::from_err(&UpdateError::Disabled))
+                .await?;
+            return Ok(());
+        }
 
-        // The new row maps to the same shard as the old row.
-        // We don't need to do the multi-step UPDATE anymore.
-        // Forward the original request as-is.
-        if original_shard.is_direct() && new_shard == original_shard {
-            debug!("[update] selected row is on the same shard");
-            self.execute_original(context).await
-        } else {
-            debug!("[update] executing multi-shard insert/delete");
+        if !context.in_transaction() || !self.engine.backend.is_multishard()
+        // Do this check at the last possible moment.
+        // Just in case we change how transactions are
+        // routed in the future.
+        {
+            self.engine.cleanup_backend(context)?;
+            return Err(UpdateError::TransactionRequired.into());
+        }
 
-            // Check if we are allowed to do this operation by the config.
-            if self.engine.backend.cluster()?.rewrite().shard_key == RewriteMode::Error {
-                self.engine
-                    .error_response(context, ErrorResponse::from_err(&UpdateError::Disabled))
-                    .await?;
-                return Ok(());
-            }
+        if self.has_destructive_on_delete_reference(context)? {
+            return Err(UpdateError::ForeignKeyOnDelete.into());
+        }
 
-            if !context.in_transaction() || !self.engine.backend.is_multishard()
-            // Do this check at the last possible moment.
-            // Just in case we change how transactions are
-            // routed in the future.
-            {
-                self.engine.cleanup_backend(context)?;
-                return Err(UpdateError::TransactionRequired.into());
-            }
+        self.delete_row(context).await?;
+        self.execute_request_internal(context, &mut request, self.rewrite.insert.is_returning())
+            .await?;
 
-            if self.has_destructive_on_delete_reference(context)? {
-                return Err(UpdateError::ForeignKeyOnDelete.into());
-            }
-
-            self.delete_row(context).await?;
-            self.execute_request_internal(
+        self.engine
+            .process_server_message(context, CommandComplete::new("UPDATE 1").message()?) // We only allow to update one row at a time.
+            .await?;
+        self.engine
+            .process_server_message(
                 context,
-                &mut request,
-                self.rewrite.insert.is_returning(),
+                ReadyForQuery::in_transaction(context.in_transaction()).message()?,
             )
             .await?;
 
-            self.engine
-                .process_server_message(context, CommandComplete::new("UPDATE 1").message()?) // We only allow to update one row at a time.
-                .await?;
-            self.engine
-                .process_server_message(
-                    context,
-                    ReadyForQuery::in_transaction(context.in_transaction()).message()?,
-                )
-                .await?;
-
-            Ok(())
-        }
+        Ok(())
     }
 
     fn has_destructive_on_delete_reference(
