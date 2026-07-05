@@ -1564,6 +1564,7 @@ mod test {
             Field::bigint("id"),
             Field::text("email"),
             Field::text("other_col"),
+            #[cfg(feature = "new_parser")]
             Field::text("other_other_col"),
         ]);
 
@@ -1572,6 +1573,7 @@ mod test {
         data_row.add("1"); // id - will be overwritten by mapping
         data_row.add("old@example.com"); // email - will be overwritten by mapping
         data_row.add("other_value"); // other_col - from existing row
+        #[cfg(feature = "new_parser")]
         data_row.add("other_other_value"); // other_other_col - from existing row
 
         // Create a simple query request (not prepared statement)
