@@ -1,7 +1,7 @@
 #[cfg(not(feature = "new_parser"))]
 use pg_query::{Node, NodeEnum, protobuf};
 #[cfg(feature = "new_parser")]
-use pg_raw_parse::Node;
+use pg_raw_parse::{Node, nodes};
 
 const WRITE_ONLY: &[&str] = &["nextval", "setval"];
 
@@ -38,6 +38,16 @@ impl<'a> Function<'a> {
             cross_shard: CROSS_SHARD.contains(&(self.schema, self.name)),
         }
     }
+
+    #[cfg(feature = "new_parser")]
+    pub(crate) fn extract_func_call(node: Node<'a>) -> Option<&'a nodes::FuncCall> {
+        match node {
+            Node::FuncCall(func) => Some(func),
+            Node::TypeCast(cast) => Self::extract_func_call(cast.arg()),
+            Node::NullTest(test) => Self::extract_func_call(test.arg()),
+            _ => None,
+        }
+    }
 }
 
 #[cfg(feature = "new_parser")]
@@ -45,15 +55,9 @@ impl<'a> TryFrom<Node<'a>> for Function<'a> {
     type Error = ();
 
     fn try_from(value: Node<'a>) -> Result<Self, Self::Error> {
-        match value {
-            Node::FuncCall(f) => {
-                Self::from_strings(f.funcname().iter().filter_map(Node::as_str)).ok_or(())
-            }
-
-            Node::TypeCast(n) => Self::try_from(n.arg()),
-            Node::NullTest(n) => Self::try_from(n.arg()),
-            _ => Err(()),
-        }
+        Self::extract_func_call(value)
+            .and_then(|f| Self::from_strings(f.funcname().iter().filter_map(Node::as_str)))
+            .ok_or(())
     }
 }
 

@@ -368,11 +368,11 @@ impl Route {
         self.is_cross_shard() && self.is_write()
     }
 
-    pub fn aggregate_rewrite_plan(&self) -> &AggregateRewritePlan {
+    pub(crate) fn aggregate_rewrite_plan(&self) -> &AggregateRewritePlan {
         &self.rewrite_plan
     }
 
-    pub fn set_rewrite_plan(&mut self, plan: AggregateRewritePlan) {
+    pub(crate) fn set_rewrite_plan(&mut self, plan: AggregateRewritePlan) {
         self.rewrite_plan = plan;
     }
 }

@@ -3,7 +3,7 @@
 use pg_query::Node as PgNode;
 use pg_query::protobuf::ParseResult;
 #[cfg(feature = "new_parser")]
-use pg_raw_parse::Node;
+use pg_raw_parse::{Node, make};
 use pgdog_config::QueryParserEngine;
 
 use crate::backend::ShardingSchema;
@@ -148,16 +148,26 @@ impl<'a> StatementRewrite<'a> {
             }
         })?;
 
+        #[cfg(not(feature = "new_parser"))]
+        self.rewrite_aggregates(&mut plan, self.db_schema)?;
+
+        #[cfg(feature = "new_parser")]
+        let reparsed = pg_raw_parse::parse(&pg_query::deparse(self.stmt)?)?;
+        #[cfg(feature = "new_parser")]
+        let node = reparsed.stmts().next().unwrap();
         #[cfg(feature = "new_parser")]
         if let Node::SelectStmt(select) = node {
-            self.rewrite_aggregates(select, &mut plan, self.db_schema)?;
-            self.limit_offset(&mut plan)?;
+            let stmt = make::try_owned(|mem| {
+                let mut select = mem.make_unique(select);
+                self.rewrite_aggregates(select.as_mut(), mem, &mut plan, self.db_schema)?;
+                Ok::<_, Error>(mem.make_RawStmt(select.uncast()))
+            })?;
+            self.stmt.stmts = pg_query::parse(pg_raw_parse::deparse(&stmt)?.as_str())?
+                .protobuf
+                .stmts;
         }
-        #[cfg(not(feature = "new_parser"))]
-        {
-            self.rewrite_aggregates(&mut plan, self.db_schema)?;
-            self.limit_offset(&mut plan)?;
-        }
+
+        self.limit_offset(&mut plan)?;
 
         if self.rewritten {
             plan.stmt = Some(match self.schema.query_parser_engine {
