@@ -124,8 +124,6 @@ pub struct Route {
     /// This query is only touching omnisharded tables
     /// and requires special checks to be executed.
     omnisharded: bool,
-    /// Pin the connection because client requested it.
-    pin: Option<bool>,
 }
 
 impl Display for Route {
