@@ -223,12 +223,11 @@ impl QueryEngine {
             }
 
             self.stats.idle(context.in_transaction());
-            // N.B. Call this before self.cleanup_backend(), since that resets
+            // N.B. Call this before self.cleanup_backend(), since `cleanup_backend()` resets
             // the router and the command state.
             self.advisory_locks
                 .merge(self.router.command().route().advisory_locks());
-            self.backend.lock(self.advisory_locks.locked());
-            self.stats.locked(self.advisory_locks.locked());
+            self.check_lock();
 
             if !context.in_transaction() {
                 self.stats.transaction(two_pc_auto);

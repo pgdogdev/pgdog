@@ -6,12 +6,19 @@ use crate::net::{Close, Query};
 use super::{super::Server, Guard};
 
 static PREPARED: Lazy<Vec<Query>> = Lazy::new(|| vec![Query::new("DEALLOCATE ALL")]);
+/// A dirty connection contains session state which can be safely discard because:
+///
+/// 1. It should never leak between sessions, e.g., advisory locks, temp tables
+/// 2. Because we can re-create it when we check the connection out again, e.g., parameters.
+///
 static DIRTY: Lazy<Vec<Query>> = Lazy::new(|| {
     vec![
-        Query::new("RESET ALL"),
-        Query::new("SELECT pg_advisory_unlock_all()"),
+        Query::new("RESET ALL"),                       // Reset all parameters.
+        Query::new("SELECT pg_advisory_unlock_all()"), // Remove all advisory locks.
+        Query::new("DISCARD TEMP"),                    // Drop all temporary tables.
     ]
 });
+
 static ALL: Lazy<Vec<Query>> =
     Lazy::new(|| vec!["DISCARD ALL"].into_iter().map(Query::new).collect());
 static NONE: Lazy<Vec<Query>> = Lazy::new(Vec::new);

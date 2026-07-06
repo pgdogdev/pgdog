@@ -480,15 +480,6 @@ impl Binding {
         }
     }
 
-    #[cfg(test)]
-    pub fn is_dirty(&self) -> bool {
-        match self {
-            Binding::Direct(server, ..) => server.dirty(),
-            Binding::MultiShard(servers, _state) => servers.iter().any(|s| s.dirty()),
-            _ => false,
-        }
-    }
-
     pub fn is_multishard(&self) -> bool {
         match self {
             Binding::MultiShard(servers, _) => !servers.is_empty(),
