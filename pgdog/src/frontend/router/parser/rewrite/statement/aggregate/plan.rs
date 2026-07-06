@@ -1,6 +1,6 @@
 /// Type of aggregate function added to the result set.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HelperKind {
+pub(crate) enum HelperKind {
     /// COUNT(*) or COUNT(name)
     Count,
     /// SUM(column)
@@ -11,7 +11,7 @@ pub enum HelperKind {
 
 impl HelperKind {
     /// Suffix for the aggregate function.
-    pub fn alias_suffix(&self) -> &'static str {
+    pub(crate) fn alias_suffix(&self) -> &'static str {
         match self {
             HelperKind::Count => "count",
             HelperKind::Sum => "sum",
@@ -22,53 +22,53 @@ impl HelperKind {
 
 /// Context on the aggregate function column added to the result set.
 #[derive(Debug, Clone, PartialEq)]
-pub struct HelperMapping {
-    pub target_column: usize,
-    pub helper_column: usize,
-    pub distinct: bool,
-    pub kind: HelperKind,
-    pub alias: String,
+pub(crate) struct HelperMapping {
+    pub(crate) target_column: usize,
+    pub(crate) helper_column: usize,
+    pub(crate) distinct: bool,
+    pub(crate) kind: HelperKind,
+    pub(crate) alias: String,
 }
 
 /// Plan describing how the proxy rewrites a query and its results.
 #[derive(Debug, Clone, Default, PartialEq)]
-pub struct AggregateRewritePlan {
+pub(crate) struct AggregateRewritePlan {
     helpers: Vec<HelperMapping>,
 }
 
 impl AggregateRewritePlan {
     /// Create new no-op aggregate rewrite plan.
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             helpers: Vec::new(),
         }
     }
 
     /// Is this plan a no-op? Doesn't do anything.
-    pub fn is_noop(&self) -> bool {
+    pub(crate) fn is_noop(&self) -> bool {
         self.helpers.is_empty()
     }
 
-    pub fn drop_columns(&self) -> impl Iterator<Item = usize> + '_ {
+    pub(crate) fn drop_columns(&self) -> impl Iterator<Item = usize> + '_ {
         self.helpers.iter().map(|h| h.helper_column)
     }
 
-    pub fn helpers(&self) -> &[HelperMapping] {
+    pub(crate) fn helpers(&self) -> &[HelperMapping] {
         &self.helpers
     }
 
-    pub fn add_helper(&mut self, mapping: HelperMapping) {
+    pub(crate) fn add_helper(&mut self, mapping: HelperMapping) {
         self.helpers.push(mapping);
     }
 }
 
 #[derive(Debug, Default, Clone)]
-pub struct RewriteOutput {
-    pub plan: AggregateRewritePlan,
+pub(crate) struct RewriteOutput {
+    pub(crate) plan: AggregateRewritePlan,
 }
 
 impl RewriteOutput {
-    pub fn new(plan: AggregateRewritePlan) -> Self {
+    pub(crate) fn new(plan: AggregateRewritePlan) -> Self {
         Self { plan }
     }
 }
