@@ -197,9 +197,9 @@ impl ParallelSyncManager {
 
         // Create a child cancel token with the guard to cancel the handles below
         // in case any of it fails without affecting the parent task.
-        // If every handle succeed the guard token will just cancel already finished work
+        // If every handle succeeds the guard token will just cancel already finished work
         let cancel = cancel.child_token();
-        let _guard = cancel.clone().drop_guard();
+        let _guard = cancel.drop_guard_ref();
 
         // cycle() is the idiomatic "rewind": it restarts the iterator from the
         // beginning once exhausted, giving round-robin distribution across replicas.

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use futures::future::try_join_all;
+use futures::stream::{FuturesUnordered, StreamExt};
 use parking_lot::Mutex;
 use pgdog_config::QueryParserEngine;
 use tokio::task::JoinHandle;
@@ -398,11 +398,13 @@ impl Publisher {
         // created before valid() would be orphaned on validation errors.
         self.create_slots(source, cancel).await?;
 
-        // Each manager coordinates its own spawned per-table workers, so run the
-        // per-shard managers concurrently on this task. Cancellation reaches the
-        // workers through `cancel` (threaded down into the COPY loop), so no
-        // JoinSet is needed to stop the copy.
-        let mut syncs = Vec::new();
+        // Create a child cancel token with the guard to cancel the spawned shard
+        // syncs below in case any of them fails without affecting the parent task.
+        // If every task succeeds the guard token will just cancel already finished work
+        let cancel = cancel.child_token();
+        let _guard = cancel.drop_guard_ref();
+
+        let mut handles = FuturesUnordered::new();
 
         for (number, shard) in source.shards().iter().enumerate() {
             let tables = self
@@ -440,15 +442,18 @@ impl Publisher {
 
             let dest = dest.clone();
             let cancel = cancel.clone();
-            syncs.push(async move {
+            handles.push(spawn(async move {
                 let manager = ParallelSyncManager::new(tables, replicas, dest)?;
                 let tables = manager.run(cancel).await?;
 
                 Ok::<(usize, Vec<Table>), Error>((number, tables))
-            });
+            }));
         }
 
-        for (number, tables) in try_join_all(syncs).await? {
+        // Short-circuit on first error and cancel other tasks (JoinHandles that are not cancellable on drop)
+        // thanks to cancel guard.
+        while let Some(joined) = handles.next().await {
+            let (number, tables) = joined??;
             info!(
                 "table sync for {} tables complete [{}, shard: {}]",
                 tables.len(),
