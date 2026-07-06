@@ -13,7 +13,7 @@ RUN source ~/.cargo/env && \
         export RUSTFLAGS="-Ctarget-feature=+lse"; \
     fi && \
     cd pgdog && \
-    cargo build --release && \
+    cargo build --release --features new_parser && \
     cd .. && \
     cargo build --release -p pgdog-primary-only-tables
 

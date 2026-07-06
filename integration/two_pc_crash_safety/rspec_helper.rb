@@ -52,7 +52,7 @@ def spawn_pgdog(config_dir, wal_dir: nil)
   wal_dir ||= Dir.mktmpdir('pgdog_wal_')
   binary = ENV['PGDOG_BIN'] || File.expand_path('../../target/release/pgdog', __dir__)
   unless File.exist?(binary)
-    system('cargo', 'build', '--release', chdir: File.expand_path('../..', __dir__)) ||
+    system('cargo', 'build', '--release', '--features', 'new_parser', chdir: File.expand_path('../..', __dir__)) ||
       raise('cargo build failed')
   end
   log_path = File.join(config_dir, 'pgdog.log')
