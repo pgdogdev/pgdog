@@ -257,6 +257,20 @@ mod tests {
     use super::*;
     use crate::frontend::router::parser::aggregate::Aggregate;
     use pg_query::protobuf::ParseResult;
+    #[cfg(feature = "new_parser")]
+    use pg_raw_parse::{Node, Owned, make, nodes};
+
+    #[cfg(feature = "new_parser")]
+    fn select_stmt(ast: &ParseResult) -> Owned<nodes::SelectStmt> {
+        let sql = pg_query::deparse(ast).unwrap();
+        let ast = pg_raw_parse::parse(&sql).unwrap();
+        make::owned(|mem| {
+            let Node::SelectStmt(stmt) = ast.stmts().next().unwrap() else {
+                unreachable!("not a select");
+            };
+            mem.make_unique(stmt)
+        })
+    }
 
     fn select(ast: &mut ParseResult) -> &mut pg_query::protobuf::SelectStmt {
         match ast
@@ -272,9 +286,17 @@ mod tests {
 
     fn rewrite(sql: &str) -> (ParseResult, RewriteOutput) {
         let mut parsed = pg_query::parse(sql).unwrap().protobuf;
-        let stmt = select(&mut parsed);
-        let aggregate = Aggregate::parse(stmt, &Default::default());
-        let output = AggregatesRewrite.rewrite_select(stmt, &aggregate);
+
+        #[cfg(not(feature = "new_parser"))]
+        let stmt_mut = select(&mut parsed);
+        #[cfg(feature = "new_parser")]
+        let aggregate = Aggregate::parse(&select_stmt(&parsed), &Default::default());
+        #[cfg(not(feature = "new_parser"))]
+        let aggregate = Aggregate::parse(stmt_mut, &Default::default());
+        #[cfg(feature = "new_parser")]
+        let stmt_mut = select(&mut parsed);
+
+        let output = AggregatesRewrite.rewrite_select(stmt_mut, &aggregate);
         (parsed, output)
     }
 
@@ -297,6 +319,9 @@ mod tests {
         assert!(!helper.distinct);
         assert!(matches!(helper.kind, HelperKind::Count));
 
+        #[cfg(feature = "new_parser")]
+        let aggregate = Aggregate::parse(&select_stmt(&mut ast), &Default::default());
+        #[cfg(not(feature = "new_parser"))]
         let aggregate = Aggregate::parse(select(&mut ast), &Default::default());
         assert_eq!(aggregate.targets().len(), 2);
         assert!(
@@ -318,6 +343,9 @@ mod tests {
         assert!(!helper.distinct);
         assert!(matches!(helper.kind, HelperKind::Count));
 
+        #[cfg(feature = "new_parser")]
+        let aggregate = Aggregate::parse(&select_stmt(&mut ast), &Default::default());
+        #[cfg(not(feature = "new_parser"))]
         let aggregate = Aggregate::parse(select(&mut ast), &Default::default());
         assert_eq!(aggregate.targets().len(), 3);
         assert!(
@@ -346,6 +374,9 @@ mod tests {
         assert_eq!(helper_discount.helper_column, 3);
         assert!(matches!(helper_discount.kind, HelperKind::Count));
 
+        #[cfg(feature = "new_parser")]
+        let aggregate = Aggregate::parse(&select_stmt(&mut ast), &Default::default());
+        #[cfg(not(feature = "new_parser"))]
         let aggregate = Aggregate::parse(select(&mut ast), &Default::default());
         assert_eq!(aggregate.targets().len(), 4);
         assert_eq!(
