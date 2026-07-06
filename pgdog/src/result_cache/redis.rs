@@ -169,7 +169,13 @@ impl RedisResultCache {
         let session_sig = format!("{:x}", md5::compute(format!("search_path={}", search_path)));
 
         // Query fingerprint: normalize to make cache key stable.
-        let fingerprint = format!("{:x}", md5::compute(&req.query));
+        // Include parameters to distinguish between queries with different values.
+        let mut hasher = md5::Context::new();
+        hasher.consume(req.query.as_bytes());
+        for param in &req.parameters {
+            hasher.consume(param);
+        }
+        let fingerprint = format!("{:x}", hasher.compute());
 
         let key = format!(
             "{}:v1:{}:{}:{}:{}:{}",
@@ -198,6 +204,13 @@ impl RedisResultCache {
         };
 
         let res: redis::RedisResult<Vec<u8>> = conn.get(&key.redis_key).await;
+        if let Ok(ref bytes) = res {
+            if !bytes.is_empty() {
+                if let Some(ttl) = key.ttl {
+                    let _: redis::RedisResult<()> = conn.expire(&key.redis_key, ttl.as_secs() as i64).await;
+                }
+            }
+        }
 
         let mut shared = self.shared.write();
         shared.manager = Some(conn);

@@ -125,6 +125,7 @@ impl QueryEngine {
         self.stats
             .received(context.client_request.total_message_len());
         self.set_state(State::Active); // Client is active.
+        self.router.reset();
 
         // Rewrite prepared statements.
         self.rewrite_extended(context)?;
@@ -161,7 +162,7 @@ impl QueryEngine {
         // Table-based invalidation: invalidate cache entries dependent on touched tables.
         if let (Some(ref cache), Ok(cluster)) = (&self.result_cache, self.backend.cluster()) {
             let route = context.client_request.route();
-            if route.is_write() && context.client_request.is_executable() && !context.in_transaction()
+            if route.is_write() && context.client_request.is_executable()
             {
                 let tables = context
                     .client_request
@@ -175,9 +176,9 @@ impl QueryEngine {
             }
         }
 
-        // Cache lookup (MVP: simple SELECT only, outside transactions).
+        // Cache lookup (MVP: simple SELECT only).
         if let (Some(ref cache), Ok(cluster)) = (&self.result_cache, self.backend.cluster()) {
-            if !context.in_transaction() && context.client_request.is_executable() {
+            if context.client_request.is_executable() {
                 if let Some(req) = CacheableRequest::from_client_request(context.client_request) {
                     let user = context.params.get_required("user").unwrap_or("unknown");
                     if let Some(key) =

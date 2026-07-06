@@ -1,33 +1,19 @@
 [[databases]]
-name = "postgres"
-host = "shard_0"
+name = "database_name"
+host = "server_address"
 role = "primary"
-shard = 0
+#shard = 0
 
-[[databases]]
-name = "postgres"
-host = "shard_1"
-role = "primary"
-shard = 1
-
-[[databases]]
-name = "postgres"
-host = "shard_2"
-role = "primary"
-shard = 2
-
-[[sharded_tables]]
-database = "postgres"
-name = "users"
-column = "id"
-
-[[sharded_tables]]
-database = "postgres"
-column = "user_id"
+#[[databases]]
+#name = "database_name"
+#host = "server_address"
+#role = "primary"
+#shard = 1
 
 [result_cache]
 enabled = true
 redis_url = "redis://redis:6379"
-expire_seconds = 30
+expire_seconds = 60
 max_entry_bytes = 524288
 key_prefix = "pgdog:result_cache"
+encryption_key = "uma-chave-secreta-muito-longa-e-dificil-de-adivinhar-aqui-321"

@@ -9,6 +9,11 @@ static CMD_BASE: &[&str] = &[
     "(?i)^ *BEGIN",
     "(?i)^ *COMMIT",
     "(?i)^ *ROLLBACK",
+    "(?i)^ *SELECT",
+    "(?i)^ *WITH",
+    "(?i)^ *VALUES",
+    "(?i)^ *SHOW",
+    "(?i)^ *EXPLAIN",
 ];
 
 static CMD_ADVISORY: &[&str] = &[
@@ -182,8 +187,17 @@ mod test {
     }
 
     #[test]
+    fn test_read_queries() {
+        assert!(matches("SELECT 1"));
+        assert!(matches("   select * from users"));
+        assert!(matches("WITH t AS (SELECT 1) SELECT * FROM t"));
+        assert!(matches("VALUES (1, 2), (3, 4)"));
+        assert!(matches("SHOW ALL"));
+        assert!(matches("EXPLAIN SELECT 1"));
+    }
+
+    #[test]
     fn test_no_match() {
-        assert!(!matches("SELECT 1"));
         assert!(!matches("INSERT INTO users VALUES (1)"));
         assert!(!matches("UPDATE users SET name = 'foo'"));
         assert!(!matches("DELETE FROM users"));

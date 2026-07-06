@@ -36,17 +36,22 @@ async fn healthcheck(
     _: Request<hyper::body::Incoming>,
 ) -> Result<Response<Full<Bytes>>, Infallible> {
     let databases = databases();
-    let broken = databases.all().iter().all(|(_, cluster)| {
-        let pools = cluster
-            .shards()
-            .iter()
-            .map(|shard| shard.pools())
-            .collect::<Vec<_>>()
-            .into_iter()
-            .flatten()
-            .collect::<Vec<_>>();
-        pools.iter().all(|p| !p.healthy())
-    });
+    let online_clusters: Vec<_> = databases.all().values().filter(|c| c.online()).collect();
+    let broken = if online_clusters.is_empty() {
+        false
+    } else {
+        online_clusters.iter().all(|cluster| {
+            let pools = cluster
+                .shards()
+                .iter()
+                .map(|shard| shard.pools())
+                .collect::<Vec<_>>()
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>();
+            pools.iter().all(|p| !p.healthy())
+        })
+    };
 
     let response = if broken { "down" } else { "up" };
     let status = if broken { 502 } else { 200 };

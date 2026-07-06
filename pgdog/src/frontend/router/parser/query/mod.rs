@@ -167,6 +167,21 @@ impl QueryParser {
                 Role::Replica => Route::read(shard),
                 Role::Primary | Role::Auto => Route::write(shard),
             })
+        // Detect read queries even if we bypassed the parser.
+        } else if context
+            .query()
+            .map(|q| {
+                let q = q.query().trim_start();
+                q.get(..6)
+                    .map(|s| s.eq_ignore_ascii_case("select"))
+                    .unwrap_or(false)
+                    || q.get(..4)
+                        .map(|s| s.eq_ignore_ascii_case("with"))
+                        .unwrap_or(false)
+            })
+            .unwrap_or(false)
+        {
+            Some(Route::read(shard))
         // Default to primary.
         } else {
             Some(Route::write(shard))

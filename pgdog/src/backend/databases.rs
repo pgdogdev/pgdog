@@ -327,6 +327,14 @@ impl Databases {
     pub fn cluster(&self, user: impl ToUser) -> Result<Cluster, Error> {
         let user = user.to_user();
         if let Some(cluster) = self.databases.get(&user) {
+            if !cluster.passwords().is_empty() {
+                cluster.launch();
+                if let Some(mirrors) = self.mirrors.get(&user) {
+                    for mirror in mirrors {
+                        mirror.launch();
+                    }
+                }
+            }
             Ok(cluster.clone())
         } else {
             Err(Error::NoDatabase(user.clone()))
@@ -337,6 +345,7 @@ impl Databases {
     pub fn schema_owner(&self, database: &str) -> Result<Cluster, Error> {
         for (user, cluster) in &self.databases {
             if cluster.schema_admin() && user.database == database {
+                cluster.launch();
                 return Ok(cluster.clone());
             }
         }
@@ -354,6 +363,7 @@ impl Databases {
 
         for cluster in self.databases.values() {
             if cluster.schema_admin() {
+                cluster.launch();
                 schema_owners.insert(cluster.name().to_string(), cluster.clone());
             }
         }
@@ -458,26 +468,9 @@ impl Databases {
             }
         }
 
-        // Launch all clusters
-        for cluster in self.all().values() {
-            if cluster.passwords().is_empty() {
-                warn!(
-                    r#"disabling pool for user "{}" and database "{}", password not set"#,
-                    cluster.user(),
-                    cluster.name()
-                );
-            } else {
-                cluster.launch();
-            }
-
-            if cluster.pooler_mode() == PoolerMode::Session && cluster.router_needed() {
-                warn!(
-                    r#"user "{}" for database "{}" requires transaction mode to route queries"#,
-                    cluster.user(),
-                    cluster.name()
-                );
-            }
-        }
+        // Launch schema owners at startup to ensure basic database connectivity and schema loading.
+        // Other pools will be launched lazily when requested.
+        let _ = self.schema_owners();
     }
 }
 
@@ -1757,6 +1750,71 @@ mod tests {
 
         // Total pools: admin(3) + limited(2) + single(1) = 6
         assert_eq!(databases.all().len(), 6);
+    }
+
+    #[test]
+    fn test_lazy_cluster_initialization() {
+        let config = Config {
+            databases: vec![
+                Database {
+                    name: "db1".to_string(),
+                    host: "localhost".to_string(),
+                    port: 5432,
+                    role: Role::Primary,
+                    ..Default::default()
+                },
+                Database {
+                    name: "db2".to_string(),
+                    host: "localhost".to_string(),
+                    port: 5433,
+                    role: Role::Primary,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+
+        let users = crate::config::Users {
+            users: vec![
+                crate::config::User {
+                    name: "user1".to_string(),
+                    database: "db1".to_string(),
+                    password: Some("pass".to_string()),
+                    ..Default::default()
+                },
+                crate::config::User {
+                    name: "user2".to_string(),
+                    database: "db2".to_string(),
+                    password: Some("pass".to_string()),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+
+        let databases = from_config(&ConfigAndUsers {
+            config,
+            users,
+            config_path: std::path::PathBuf::new(),
+            users_path: std::path::PathBuf::new(),
+        });
+
+        // Launch is called by the system (usually during init/reload)
+        databases.launch();
+
+        // Verify that pools are NOT online initially
+        for cluster in databases.all().values() {
+            assert!(!cluster.online(), "Clusters should not be online after Databases::launch()");
+        }
+
+        // Request db1
+        let cluster1 = databases.cluster(("user1", "db1")).unwrap();
+        assert!(cluster1.online(), "Cluster 1 should be online after being requested");
+
+        // Verify db2 is still offline
+        let user2 = User { user: "user2".to_string(), database: "db2".to_string() };
+        let cluster2 = databases.all().get(&user2).unwrap();
+        assert!(!cluster2.online(), "Cluster 2 should still be offline");
     }
 
     #[test]

@@ -1,6 +1,6 @@
 services:
   redis:
-    image: redis:7
+    image: valkey/valkey
     ports:
       - 6379:6379
     networks:
