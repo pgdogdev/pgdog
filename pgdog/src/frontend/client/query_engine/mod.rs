@@ -31,7 +31,6 @@ mod query_log_stdout;
 pub mod rewrite;
 pub mod route_query;
 pub mod set;
-pub mod shard_key_rewrite;
 pub mod start_transaction;
 #[cfg(test)]
 mod test;
