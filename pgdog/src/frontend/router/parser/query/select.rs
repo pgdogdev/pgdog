@@ -183,7 +183,7 @@ impl QueryParser {
         let stmt = stmt_old;
         let shard = Self::converge(&shards, ConvergeAlgorithm::default());
         let aggregates = Aggregate::parse(stmt, &context.router_context.schema);
-        let limit = LimitClause::new(stmt_old, context.router_context.bind).limit_offset()?;
+        let limit = LimitClause::new(stmt, context.router_context.bind).limit_offset()?;
         let distinct = Distinct::new(stmt_old).distinct()?;
 
         if let Some(shard) = shard {
