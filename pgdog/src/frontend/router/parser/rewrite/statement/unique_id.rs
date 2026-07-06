@@ -367,8 +367,6 @@ mod tests {
         let db_schema = default_db_schema();
         let mut rewrite = StatementRewrite::new(StatementRewriteContext {
             stmt: &mut ast,
-            #[cfg(feature = "new_parser")]
-            new_stmt: &stmt,
             extended,
             prepared: false,
             prepared_statements: &mut ps,
@@ -377,7 +375,12 @@ mod tests {
             user: "",
             search_path: None,
         });
-        let plan = rewrite.maybe_rewrite().unwrap();
+        let plan = rewrite
+            .maybe_rewrite(
+                #[cfg(feature = "new_parser")]
+                stmt.stmts().next().unwrap(),
+            )
+            .unwrap();
         (ast, plan)
     }
 }

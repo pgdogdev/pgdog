@@ -2,7 +2,9 @@
 
 use indexmap::IndexSet;
 use pg_query::protobuf::{FuncCall, ResTarget, String as PgString};
-use pg_query::{Node, NodeEnum};
+use pg_query::{Node as PgNode, NodeEnum};
+#[cfg(feature = "new_parser")]
+use pg_raw_parse::Node;
 use pgdog_config::RewriteMode;
 
 use super::{Error, RewritePlan, StatementRewrite};
@@ -19,14 +21,21 @@ impl StatementRewrite<'_> {
     ///
     /// This runs before unique_id replacement so injected function calls
     /// will be processed by the unique_id rewriter.
-    pub(super) fn inject_auto_id(&mut self, plan: &mut RewritePlan) -> Result<(), Error> {
+    pub(super) fn inject_auto_id(
+        &mut self,
+        #[cfg(feature = "new_parser")] node: Node<'_>,
+        plan: &mut RewritePlan,
+    ) -> Result<(), Error> {
         let mode = self.schema.rewrite.primary_key;
 
         if mode == RewriteMode::Ignore || self.schema.shards == 1 {
             return Ok(());
         }
 
-        let Some((table, is_sharded)) = self.get_insert_table() else {
+        let Some((table, is_sharded)) = self.get_insert_table(
+            #[cfg(feature = "new_parser")]
+            node,
+        ) else {
             return Ok(());
         };
 
@@ -94,19 +103,20 @@ impl StatementRewrite<'_> {
     }
 
     /// Get the table from an INSERT statement.
-    fn get_insert_table(&self) -> Option<(Table<'_>, bool)> {
+    fn get_insert_table(
+        &self,
+        #[cfg(feature = "new_parser")] node: Node<'_>,
+    ) -> Option<(Table<'_>, bool)> {
         let stmt = self.stmt.stmts.first()?;
-        let node = stmt.stmt.as_ref()?;
-        #[cfg(feature = "new_parser")]
-        let new_stmt = self.new_stmt.stmts().next()?;
+        let pg_node = stmt.stmt.as_ref()?;
 
-        if let NodeEnum::InsertStmt(insert) = node.node.as_ref()? {
+        if let NodeEnum::InsertStmt(insert) = pg_node.node.as_ref()? {
             let relation = insert.relation.as_ref()?;
             let is_sharded = StatementParser::from_insert(
                 #[cfg(not(feature = "new_parser"))]
                 insert,
                 #[cfg(feature = "new_parser")]
-                new_stmt,
+                node,
                 None,
                 self.schema,
                 None,
@@ -195,7 +205,7 @@ impl StatementRewrite<'_> {
         };
 
         // Add the column to the column list
-        let col_node = Node {
+        let col_node = PgNode {
             node: Some(NodeEnum::ResTarget(Box::new(ResTarget {
                 name: column_name.to_string(),
                 ..Default::default()
@@ -223,16 +233,16 @@ impl StatementRewrite<'_> {
     }
 
     /// Create a function call node for pgdog.unique_id().
-    fn unique_id_func_call() -> Node {
-        Node {
+    fn unique_id_func_call() -> PgNode {
+        PgNode {
             node: Some(NodeEnum::FuncCall(Box::new(FuncCall {
                 funcname: vec![
-                    Node {
+                    PgNode {
                         node: Some(NodeEnum::String(PgString {
                             sval: "pgdog".to_string(),
                         })),
                     },
-                    Node {
+                    PgNode {
                         node: Some(NodeEnum::String(PgString {
                             sval: "unique_id".to_string(),
                         })),
@@ -370,8 +380,6 @@ mod tests {
         let schema = sharding_schema_with_mode(mode);
         let mut rewriter = StatementRewrite::new(StatementRewriteContext {
             stmt: &mut ast,
-            #[cfg(feature = "new_parser")]
-            new_stmt: &stmt,
             extended: false,
             prepared: false,
             prepared_statements: &mut prepared,
@@ -380,7 +388,10 @@ mod tests {
             user: "",
             search_path: None,
         });
-        let plan = rewriter.maybe_rewrite()?;
+        let plan = rewriter.maybe_rewrite(
+            #[cfg(feature = "new_parser")]
+            stmt.stmts().next().unwrap(),
+        )?;
         let result = if plan.stmt.is_some() {
             plan.stmt.clone().unwrap()
         } else {
@@ -584,8 +595,6 @@ mod tests {
         let mut prepared = PreparedStatements::default();
         let mut rewriter = StatementRewrite::new(StatementRewriteContext {
             stmt: &mut ast,
-            #[cfg(feature = "new_parser")]
-            new_stmt: &new_ast,
             extended: false,
             prepared: false,
             prepared_statements: &mut prepared,
@@ -594,7 +603,10 @@ mod tests {
             user: "",
             search_path: None,
         });
-        let plan = rewriter.maybe_rewrite()?;
+        let plan = rewriter.maybe_rewrite(
+            #[cfg(feature = "new_parser")]
+            new_ast.stmts().next().unwrap(),
+        )?;
         let result = if plan.stmt.is_some() {
             plan.stmt.clone().unwrap()
         } else {

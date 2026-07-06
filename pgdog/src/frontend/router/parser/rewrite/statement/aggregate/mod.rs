@@ -6,7 +6,7 @@ use crate::backend::schema::Schema;
 use crate::frontend::router::parser::aggregate::Aggregate;
 use pg_query::NodeEnum;
 #[cfg(feature = "new_parser")]
-use pg_raw_parse::Node;
+use pg_raw_parse::nodes;
 
 pub use engine::AggregatesRewrite;
 pub use plan::{AggregateRewritePlan, HelperKind, HelperMapping, RewriteOutput};
@@ -15,6 +15,7 @@ impl StatementRewrite<'_> {
     /// Add missing COUNT(*) and other helps when using aggregates.
     pub(super) fn rewrite_aggregates(
         &mut self,
+        #[cfg(feature = "new_parser")] select: &nodes::SelectStmt,
         plan: &mut RewritePlan,
         schema: &Schema,
     ) -> Result<(), Error> {
@@ -36,11 +37,6 @@ impl StatementRewrite<'_> {
 
         #[cfg(not(feature = "new_parser"))]
         let select = &*select_old;
-
-        #[cfg(feature = "new_parser")]
-        let Some(Node::SelectStmt(select)) = self.new_stmt.stmts().next() else {
-            return Ok(());
-        };
 
         let aggregate = Aggregate::parse(select, schema);
         if aggregate.is_empty() {

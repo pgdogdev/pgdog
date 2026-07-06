@@ -1,7 +1,9 @@
 //! Statement rewriter.
 
-use pg_query::Node;
+use pg_query::Node as PgNode;
 use pg_query::protobuf::ParseResult;
+#[cfg(feature = "new_parser")]
+use pg_raw_parse::Node;
 use pgdog_config::QueryParserEngine;
 
 use crate::backend::ShardingSchema;
@@ -32,8 +34,6 @@ pub(crate) use update::*;
 pub struct StatementRewriteContext<'a> {
     /// The AST of the statement we are rewriting.
     pub stmt: &'a mut ParseResult,
-    #[cfg(feature = "new_parser")]
-    pub(crate) new_stmt: &'a pg_raw_parse::ParseResult,
     /// The statement is using the extended protocol with placeholders.
     pub extended: bool,
     /// The statement is named, so we need to save any derivatives into the global
@@ -55,8 +55,6 @@ pub struct StatementRewriteContext<'a> {
 pub struct StatementRewrite<'a> {
     /// SQL statement.
     stmt: &'a mut ParseResult,
-    #[cfg(feature = "new_parser")]
-    new_stmt: &'a pg_raw_parse::ParseResult,
     /// The statement was rewritten.
     rewritten: bool,
     /// Statement is using the extended protocol, so
@@ -86,8 +84,6 @@ impl<'a> StatementRewrite<'a> {
     pub fn new(ctx: StatementRewriteContext<'a>) -> Self {
         Self {
             stmt: ctx.stmt,
-            #[cfg(feature = "new_parser")]
-            new_stmt: ctx.new_stmt,
             rewritten: false,
             extended: ctx.extended,
             prepared: ctx.prepared,
@@ -111,7 +107,10 @@ impl<'a> StatementRewrite<'a> {
 
     /// Maybe rewrite the statement and produce a rewrite plan
     /// we can apply to Bind messages.
-    pub fn maybe_rewrite(&mut self) -> Result<RewritePlan, Error> {
+    pub fn maybe_rewrite(
+        &mut self,
+        #[cfg(feature = "new_parser")] node: Node<'a>,
+    ) -> Result<RewritePlan, Error> {
         let params = visitor::count_params(self.stmt);
         let mut plan = RewritePlan {
             params,
@@ -128,14 +127,17 @@ impl<'a> StatementRewrite<'a> {
         // Inject pgdog.unique_id() for missing BIGINT primary keys.
         // This must run BEFORE the unique_id rewriter so the injected
         // function calls get processed.
-        self.inject_auto_id(&mut plan)?;
+        self.inject_auto_id(
+            #[cfg(feature = "new_parser")]
+            node,
+            &mut plan,
+        )?;
 
         // Track the next parameter number to use
         let mut next_param = plan.params as i32 + 1;
 
-        // if self.schema.rewrite.enabled {
         let extended = self.extended;
-        visitor::visit_and_mutate_nodes(self.stmt, |node| -> Result<Option<Node>, Error> {
+        visitor::visit_and_mutate_nodes(self.stmt, |node| -> Result<Option<PgNode>, Error> {
             match Self::rewrite_unique_id(node, extended, &mut next_param)? {
                 Some(replacement) => {
                     plan.unique_ids += 1;
@@ -146,8 +148,16 @@ impl<'a> StatementRewrite<'a> {
             }
         })?;
 
-        self.rewrite_aggregates(&mut plan, self.db_schema)?;
-        self.limit_offset(&mut plan)?;
+        #[cfg(feature = "new_parser")]
+        if let Node::SelectStmt(select) = node {
+            self.rewrite_aggregates(select, &mut plan, self.db_schema)?;
+            self.limit_offset(&mut plan)?;
+        }
+        #[cfg(not(feature = "new_parser"))]
+        {
+            self.rewrite_aggregates(&mut plan, self.db_schema)?;
+            self.limit_offset(&mut plan)?;
+        }
 
         if self.rewritten {
             plan.stmt = Some(match self.schema.query_parser_engine {
@@ -157,6 +167,11 @@ impl<'a> StatementRewrite<'a> {
         }
 
         self.split_insert(&mut plan)?;
+        #[cfg(feature = "new_parser")]
+        if let Node::UpdateStmt(stmt) = node {
+            self.sharding_key_update(stmt, &mut plan)?;
+        }
+        #[cfg(not(feature = "new_parser"))]
         self.sharding_key_update(&mut plan)?;
 
         Ok(plan)

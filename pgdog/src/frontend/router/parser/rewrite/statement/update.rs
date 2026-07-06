@@ -469,7 +469,11 @@ impl Insert {
 impl<'a> StatementRewrite<'a> {
     /// Create a plan for shardking key updates, if we suspect there is one
     /// in the query.
-    pub(super) fn sharding_key_update(&mut self, plan: &mut RewritePlan) -> Result<(), Error> {
+    pub(super) fn sharding_key_update(
+        &mut self,
+        #[cfg(feature = "new_parser")] stmt: &nodes::UpdateStmt,
+        plan: &mut RewritePlan,
+    ) -> Result<(), Error> {
         if self.schema.shards == 1 || self.schema.rewrite.shard_key == RewriteMode::Ignore {
             return Ok(());
         }
@@ -482,14 +486,6 @@ impl<'a> StatementRewrite<'a> {
             .and_then(|stmt| stmt.stmt.as_ref().map(|stmt| stmt.node.as_ref()))
             .flatten()
         else {
-            // TODO: Handle EXPLAIN ANALYZE which needs to execute.
-            // We could return a combined plan for all 3 queries
-            // we need to execute.
-            return Ok(());
-        };
-
-        #[cfg(feature = "new_parser")]
-        let Some(Node::UpdateStmt(stmt)) = self.new_stmt.stmts().next() else {
             // TODO: Handle EXPLAIN ANALYZE which needs to execute.
             // We could return a combined plan for all 3 queries
             // we need to execute.
@@ -1076,8 +1072,6 @@ mod test {
 
         let ctx = StatementRewriteContext {
             stmt: &mut stmt_old.protobuf,
-            #[cfg(feature = "new_parser")]
-            new_stmt: &stmt,
             schema: &schema,
             db_schema: &db_schema,
             extended: true,
@@ -1087,7 +1081,14 @@ mod test {
             search_path: None,
         };
         let mut plan = RewritePlan::default();
-        StatementRewrite::new(ctx).sharding_key_update(&mut plan)?;
+        StatementRewrite::new(ctx).sharding_key_update(
+            #[cfg(feature = "new_parser")]
+            match stmt.stmts().next().unwrap() {
+                Node::UpdateStmt(stmt) => stmt,
+                _ => panic!("Not an update"),
+            },
+            &mut plan,
+        )?;
         Ok(plan.sharding_key_update)
     }
 
