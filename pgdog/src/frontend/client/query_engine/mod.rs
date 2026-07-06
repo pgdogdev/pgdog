@@ -154,6 +154,12 @@ impl QueryEngine {
 
         self.pending_explain = None;
 
+        // Check if we need to lock the backend in-place.
+        // This is here because ROLLBACK and COMMIT
+        // can be handled by a separate path than [`QueryEngine::execute`],
+        // e.g., if using two-phase commit.
+        self.check_lock();
+
         let command = self.router.command();
 
         if let Some(trace) = context
@@ -182,9 +188,6 @@ impl QueryEngine {
                     .await?
             }
             Command::CommitTransaction { extended } => {
-                self.backend.lock(self.advisory_locks.locked());
-                self.stats.locked(self.advisory_locks.locked());
-
                 if self.backend.connected() || *extended {
                     let extended = *extended;
                     let transaction_route =
@@ -201,9 +204,6 @@ impl QueryEngine {
                 }
             }
             Command::RollbackTransaction { extended } => {
-                self.backend.lock(self.advisory_locks.locked());
-                self.stats.locked(self.advisory_locks.locked());
-
                 if self.backend.connected() || *extended {
                     let extended = *extended;
                     let transaction_route =
