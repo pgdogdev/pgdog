@@ -115,7 +115,7 @@ mod test {
         let root = ast.protobuf.stmts.first().unwrap().stmt.as_ref().unwrap();
 
         match root.node.as_ref() {
-            Some(Node::SelectStmt(stmt)) => {
+            Some(NodeEnum::SelectStmt(stmt)) => {
                 for node in &stmt.target_list {
                     let func = Function::try_from(node).unwrap();
                     assert!(func.name.contains("advisory_lock"));

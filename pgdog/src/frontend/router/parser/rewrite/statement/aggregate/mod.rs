@@ -35,7 +35,7 @@ impl StatementRewrite<'_> {
         };
 
         #[cfg(not(feature = "new_parser"))]
-        let select = select_old;
+        let select = &*select_old;
 
         #[cfg(feature = "new_parser")]
         let Some(Node::SelectStmt(select)) = self.new_stmt.stmts().next() else {

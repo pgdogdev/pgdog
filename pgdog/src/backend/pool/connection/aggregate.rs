@@ -402,7 +402,7 @@ mod test {
     };
     use bytes::Bytes;
     #[cfg(not(feature = "new_parser"))]
-    use pg_query::{NodeEnum, protobuf::SelectStmt};
+    use pg_query::NodeEnum;
     #[cfg(feature = "new_parser")]
     use pg_raw_parse::Node;
     use pgdog_postgres_types::Double;
@@ -463,10 +463,10 @@ mod test {
             .remove(0)
             .stmt
             .unwrap();
-        match stmt.node.unwrap() {
+        let stmt = match stmt.node.unwrap() {
             NodeEnum::SelectStmt(stmt) => *stmt,
             _ => panic!("not a select"),
-        }
+        };
         Aggregate::parse(&stmt, &Default::default())
     }
 
