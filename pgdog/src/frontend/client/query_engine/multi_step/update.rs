@@ -99,7 +99,7 @@ impl<'a> UpdateMulti<'a> {
         context: &mut QueryEngineContext<'_>,
         row: Row,
     ) -> Result<(), Error> {
-        let mut request = self.rewrite.insert.build_request(
+        let mut request = self.rewrite.build_insert_request(
             context.client_request,
             &row.row_description,
             &row.data_row,
@@ -140,12 +140,8 @@ impl<'a> UpdateMulti<'a> {
             }
 
             self.delete_row(context).await?;
-            self.execute_request_internal(
-                context,
-                &mut request,
-                self.rewrite.insert.is_returning(),
-            )
-            .await?;
+            self.execute_request_internal(context, &mut request, self.rewrite.is_returning())
+                .await?;
 
             self.engine
                 .process_server_message(context, CommandComplete::new("UPDATE 1").message()?) // We only allow to update one row at a time.
@@ -167,9 +163,7 @@ impl<'a> UpdateMulti<'a> {
     ) -> Result<bool, Error> {
         let cluster = self.engine.backend.cluster()?;
         let schema = cluster.schema();
-        let Some(table) = self.rewrite.target_table() else {
-            return Ok(false);
-        };
+        let table = self.rewrite.target_table();
 
         let Some(relation) = schema.table(table, cluster.user(), context.params.search_path())
         else {
