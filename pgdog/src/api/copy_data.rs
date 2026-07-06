@@ -4,8 +4,6 @@
 //! indexes) and replication around it are composed by
 //! [`ReshardTask`](crate::api::resharding::ReshardTask).
 
-use tokio::select;
-
 use crate::api::Task;
 use crate::api::async_task::{AsyncTaskContext, Empty};
 use crate::backend::replication::logical::Error;
@@ -28,14 +26,14 @@ impl Task for CopyDataTask {
         let token = ctx.cancellation_token();
         let orchestrator = self.orchestrator;
 
-        select! {
-            res = orchestrator.data_sync() => res?,
-            // Cancellation drops the `data_sync()` future, whose internal
-            // `JoinSet` aborts every in-flight shard copy; closing those
-            // connections releases the temporary data-sync slots. The
-            // composing task drops the persistent replication slots afterward.
-            _ = token.cancelled() => return Err(Error::DataSyncAborted),
+        // Don't start a sync that's already cancelled. Once it's running, the
+        // token is threaded into the copy workers, which abort their COPY loops
+        // on cancellation; the composing task drops the slots afterward.
+        if token.is_cancelled() {
+            return Err(Error::DataSyncAborted);
         }
+
+        orchestrator.data_sync(&token).await?;
 
         Ok(orchestrator)
     }

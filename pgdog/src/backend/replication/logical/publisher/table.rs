@@ -21,9 +21,8 @@ use super::super::{
     Error, TableValidationError, TableValidationErrorKind, subscriber::CopySubscriber,
 };
 use super::non_identity_columns_presence::NonIdentityColumnsPresence;
-use super::{
-    AbortSignal, Copy, PublicationTable, PublicationTableColumn, ReplicaIdentity, ReplicationSlot,
-};
+use super::{Copy, PublicationTable, PublicationTableColumn, ReplicaIdentity, ReplicationSlot};
+use tokio_util::sync::CancellationToken;
 
 use tracing::info;
 
@@ -441,7 +440,7 @@ impl Table {
         &mut self,
         source: &Address,
         dest: &Cluster,
-        abort: AbortSignal,
+        cancel: &CancellationToken,
         tracker: &TableCopy,
     ) -> Result<Lsn, Error> {
         info!(
@@ -476,12 +475,11 @@ impl Table {
 
         while let Some(data_row) = copy.data(slot.server()?).await? {
             select! {
-                _ = abort.aborted() =>  {
+                _ = cancel.cancelled() =>  {
                     error!("aborting data sync for table {}", self.table);
 
                     return Err(Error::CopyAborted(self.table.clone()))
                 },
-
                 result = copy_sub.copy_data(data_row) => {
                     let (rows, bytes) = result?;
                     progress.update(copy_sub.bytes_sharded(), slot.lsn().lsn);
