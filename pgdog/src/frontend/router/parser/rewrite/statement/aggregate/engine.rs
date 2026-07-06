@@ -62,12 +62,8 @@ impl AggregatesRewrite {
             for helper in helper_specs {
                 let HelperSpec { func, kind } = helper;
 
-                let helper_alias = format!(
-                    "__pgdog_{}_expr{}_col{}",
-                    kind.alias_suffix(),
-                    target.expr_id(),
-                    target.column()
-                );
+                let helper_alias =
+                    format!("__pgdog_{}_col{}", kind.alias_suffix(), target.column());
 
                 let helper_column = base_len + helper_nodes.len();
 
@@ -88,7 +84,6 @@ impl AggregatesRewrite {
                 plan.add_helper(HelperMapping {
                     target_column: target.column(),
                     helper_column,
-                    expr_id: target.expr_id(),
                     distinct: target.is_distinct(),
                     kind,
                     alias: helper_alias,
@@ -299,7 +294,6 @@ mod tests {
         let helper = &output.plan.helpers()[0];
         assert_eq!(helper.target_column, 0);
         assert_eq!(helper.helper_column, 1);
-        assert_eq!(helper.expr_id, 0);
         assert!(!helper.distinct);
         assert!(matches!(helper.kind, HelperKind::Count));
 

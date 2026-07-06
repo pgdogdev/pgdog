@@ -13,7 +13,6 @@ pub mod distinct;
 pub mod ee;
 pub mod error;
 pub mod explain_trace;
-mod expression;
 mod from_clause;
 pub mod function;
 pub mod key;
@@ -31,8 +30,6 @@ mod table;
 pub(crate) mod util;
 pub mod value;
 mod where_clause;
-
-pub use expression::ExpressionRegistry;
 
 pub use aggregate::{Aggregate, AggregateFunction, AggregateTarget};
 pub use binary::BinaryStream;

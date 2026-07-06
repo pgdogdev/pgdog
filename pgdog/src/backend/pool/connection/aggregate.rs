@@ -57,16 +57,13 @@ struct Accumulator<'a> {
 impl<'a> Accumulator<'a> {
     pub fn from_aggregate(
         aggregate: &'a Aggregate,
-        helpers: &HashMap<(usize, bool), HelperColumns>,
+        helpers: &HashMap<usize, HelperColumns>,
     ) -> Result<Vec<Self>, Error> {
         aggregate
             .targets()
             .iter()
             .map(|target| {
-                let helper = helpers
-                    .get(&(target.expr_id(), target.is_distinct()))
-                    .copied()
-                    .unwrap_or_default();
+                let helper = helpers.get(&target.column()).copied().unwrap_or_default();
 
                 let accumulator = Accumulator {
                     target,
@@ -231,7 +228,7 @@ pub(super) struct Aggregates<'a> {
     mappings: HashMap<Grouping, Vec<Accumulator<'a>>>,
     decoder: &'a Decoder,
     aggregate: &'a Aggregate,
-    helper_columns: HashMap<(usize, bool), HelperColumns>,
+    helper_columns: HashMap<usize, HelperColumns>,
 }
 
 impl<'a> Aggregates<'a> {
@@ -241,10 +238,10 @@ impl<'a> Aggregates<'a> {
         aggregate: &'a Aggregate,
         plan: &AggregateRewritePlan,
     ) -> Option<Self> {
-        let mut helper_columns: HashMap<(usize, bool), HelperColumns> = HashMap::new();
+        let mut helper_columns: HashMap<usize, HelperColumns> = HashMap::new();
 
         for target in aggregate.targets() {
-            let key = (target.expr_id(), target.is_distinct());
+            let key = target.column();
             match target.function() {
                 AggregateFunction::Count => {
                     helper_columns.entry(key).or_default().count = Some(target.column());
@@ -261,9 +258,7 @@ impl<'a> Aggregates<'a> {
                 continue;
             };
 
-            let entry = helper_columns
-                .entry((helper.expr_id, helper.distinct))
-                .or_default();
+            let entry = helper_columns.entry(helper.target_column).or_default();
             match helper.kind {
                 HelperKind::Count => entry.count = Some(index),
                 HelperKind::Sum => entry.sum = Some(index),
@@ -272,7 +267,7 @@ impl<'a> Aggregates<'a> {
         }
 
         let helpers_present = aggregate.targets().iter().all(|target| {
-            let key = (target.expr_id(), target.is_distinct());
+            let key = target.column();
             match target.function() {
                 AggregateFunction::Avg => helper_columns
                     .get(&key)
@@ -513,7 +508,6 @@ mod test {
         plan.add_helper(HelperMapping {
             target_column: 0,
             helper_column: 1,
-            expr_id: 0,
             distinct: false,
             kind: HelperKind::Count,
             alias: "__pgdog_count_expr0_col0".into(),
