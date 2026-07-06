@@ -42,7 +42,7 @@ impl StatementRewrite<'_> {
     }
 
     #[cfg(not(feature = "new_parser"))]
-    pub(super) fn rewrite_aggregates<'a>(
+    pub(super) fn rewrite_aggregates(
         &mut self,
         plan: &mut RewritePlan,
         schema: &Schema,
