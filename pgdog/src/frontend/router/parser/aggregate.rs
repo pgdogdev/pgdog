@@ -1,6 +1,10 @@
-use pg_query::NodeEnum;
-use pg_query::protobuf::Integer;
-use pg_query::protobuf::{Node, SelectStmt, String as PgQueryString, a_const::Val};
+#[cfg(not(feature = "new_parser"))]
+use pg_query::{
+    NodeEnum,
+    protobuf::{Integer, Node, SelectStmt, String as PgQueryString, a_const::Val},
+};
+#[cfg(feature = "new_parser")]
+use pg_raw_parse::{Node, nodes};
 use std::fmt;
 
 use super::Function;
@@ -64,14 +68,30 @@ pub struct Aggregate {
     group_by: Vec<usize>,
 }
 
-fn target_list_to_index(stmt: &SelectStmt, column_names: Vec<&String>) -> Option<usize> {
+#[cfg(feature = "new_parser")]
+fn index_of_column(stmt: &nodes::SelectStmt, qualified_column_name: &[&str]) -> Option<usize> {
+    stmt.targetList().iter().position(|node| {
+        let Node::ColumnRef(c) = node.val() else {
+            return false;
+        };
+        let selected_column = c
+            .fields()
+            .iter()
+            .filter_map(Node::as_str)
+            .collect::<Vec<_>>();
+        columns_match(&selected_column, qualified_column_name)
+    })
+}
+
+#[cfg(not(feature = "new_parser"))]
+fn target_list_to_index(stmt: &SelectStmt, column_names: &[&str]) -> Option<usize> {
     for (idx, node) in stmt.target_list.iter().enumerate() {
         if let Some(NodeEnum::ResTarget(res_target_box)) = node.node.as_ref() {
             let res_target = res_target_box.as_ref();
             if let Some(node_box) = res_target.val.as_ref()
                 && let Some(NodeEnum::ColumnRef(column_ref)) = node_box.node.as_ref()
             {
-                let select_names: Vec<&String> = column_ref
+                let select_names: Vec<_> = column_ref
                     .fields
                     .iter()
                     .filter_map(|field_node| {
@@ -80,7 +100,7 @@ fn target_list_to_index(stmt: &SelectStmt, column_names: Vec<&String>) -> Option
                                 NodeEnum::String(PgQueryString {
                                     sval: found_column_name,
                                     ..
-                                }) => Some(found_column_name),
+                                }) => Some(found_column_name.as_str()),
                                 _ => None,
                             }
                         } else {
@@ -93,7 +113,7 @@ fn target_list_to_index(stmt: &SelectStmt, column_names: Vec<&String>) -> Option
                     continue;
                 }
 
-                if columns_match(&column_names, &select_names) {
+                if columns_match(column_names, &select_names) {
                     return Some(idx);
                 }
             }
@@ -102,7 +122,7 @@ fn target_list_to_index(stmt: &SelectStmt, column_names: Vec<&String>) -> Option
     None
 }
 
-fn columns_match(group_by_names: &[&String], select_names: &[&String]) -> bool {
+fn columns_match(group_by_names: &[&str], select_names: &[&str]) -> bool {
     if group_by_names == select_names {
         return true;
     }
@@ -120,6 +140,71 @@ fn columns_match(group_by_names: &[&String], select_names: &[&String]) -> bool {
 
 impl Aggregate {
     /// Figure out what aggregates are present and which ones PgDog supports.
+    #[cfg(feature = "new_parser")]
+    pub(crate) fn parse(stmt: &nodes::SelectStmt, schema: &Schema) -> Self {
+        let group_by = stmt
+            .groupClause()
+            .iter()
+            .filter_map(|node| match node {
+                // We use 0-indexed arrays, Postgres uses 1-indexed.
+                Node::A_Const(c) => c
+                    .val()
+                    .and_then(|v| v.numeric_value::<i32>().map(|x| x as usize - 1)),
+                Node::ColumnRef(c) => index_of_column(
+                    stmt,
+                    &c.fields()
+                        .iter()
+                        .filter_map(Node::as_str)
+                        .collect::<Vec<_>>(),
+                ),
+                _ => None, // FIXME: We should error instead of silently skipping
+            })
+            .collect();
+
+        let targets = stmt
+            .targetList()
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, node)| {
+                let func = Function::try_from(node.val()).ok()?;
+                let function = match func.name {
+                    "count" => AggregateFunction::Count,
+                    "max" => AggregateFunction::Max,
+                    "min" => AggregateFunction::Min,
+                    "sum" => AggregateFunction::Sum,
+                    "avg" => AggregateFunction::Avg,
+                    "stddev" | "stddev_samp" => AggregateFunction::StddevSamp,
+                    "stddev_pop" => AggregateFunction::StddevPop,
+                    "variance" | "var_samp" => AggregateFunction::VarSamp,
+                    "var_pop" => AggregateFunction::VarPop,
+                    fname => {
+                        if schema.aggregate_functions.contains(fname) {
+                            AggregateFunction::Unrecognized(fname.to_owned())
+                        } else {
+                            return None;
+                        }
+                    }
+                };
+
+                // FIXME: This doesn't correctly handle distinct behind type
+                // casts any other nodes that Function::try_from handles
+                let distinct = if let Node::FuncCall(func) = node.val() {
+                    func.agg_distinct
+                } else {
+                    false
+                };
+
+                Some(AggregateTarget {
+                    column: idx,
+                    function,
+                    distinct,
+                })
+            })
+            .collect();
+        Self { group_by, targets }
+    }
+
+    #[cfg(not(feature = "new_parser"))]
     pub fn parse(stmt: &SelectStmt, schema: &Schema) -> Self {
         let mut targets = vec![];
         let group_by = stmt
@@ -132,18 +217,18 @@ impl Aggregate {
                         _ => None,
                     }),
                     NodeEnum::ColumnRef(column_ref) => {
-                        let column_names: Vec<&String> = column_ref
+                        let column_names: Vec<_> = column_ref
                             .fields
                             .iter()
                             .filter_map(|node| match node {
                                 Node {
                                     node:
                                         Some(NodeEnum::String(PgQueryString { sval: column_name })),
-                                } => Some(column_name),
+                                } => Some(column_name.as_str()),
                                 _ => None,
                             })
                             .collect();
-                        Some(target_list_to_index(stmt, column_names))
+                        Some(target_list_to_index(stmt, &column_names))
                     }
                     _ => None,
                 })
@@ -236,7 +321,18 @@ impl Aggregate {
 #[cfg(test)]
 mod test {
     use super::*;
+    #[cfg(feature = "new_parser")]
+    use pg_raw_parse::{Owned, make};
 
+    #[cfg(feature = "new_parser")]
+    fn select(stmt: &str) -> Owned<nodes::SelectStmt> {
+        match pg_raw_parse::parse(stmt).unwrap().stmts().next().unwrap() {
+            Node::SelectStmt(stmt) => make::owned(|mem| mem.make_unique(stmt)),
+            _ => panic!("not a select"),
+        }
+    }
+
+    #[cfg(not(feature = "new_parser"))]
     fn select(stmt: &str) -> SelectStmt {
         let stmt = pg_query::parse(stmt)
             .unwrap()

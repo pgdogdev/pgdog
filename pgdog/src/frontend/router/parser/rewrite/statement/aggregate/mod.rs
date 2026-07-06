@@ -5,6 +5,8 @@ use super::{Error, RewritePlan, StatementRewrite};
 use crate::backend::schema::Schema;
 use crate::frontend::router::parser::aggregate::Aggregate;
 use pg_query::NodeEnum;
+#[cfg(feature = "new_parser")]
+use pg_raw_parse::Node;
 
 pub use engine::AggregatesRewrite;
 pub use plan::{AggregateRewritePlan, HelperKind, HelperMapping, RewriteOutput};
@@ -28,7 +30,15 @@ impl StatementRewrite<'_> {
             return Ok(());
         };
 
-        let Some(NodeEnum::SelectStmt(select)) = stmt.node.as_mut() else {
+        let Some(NodeEnum::SelectStmt(select_old)) = stmt.node.as_mut() else {
+            return Ok(());
+        };
+
+        #[cfg(not(feature = "new_parser"))]
+        let select = &*select_old;
+
+        #[cfg(feature = "new_parser")]
+        let Some(Node::SelectStmt(select)) = self.new_stmt.stmts().next() else {
             return Ok(());
         };
 
@@ -37,7 +47,7 @@ impl StatementRewrite<'_> {
             return Ok(());
         }
 
-        let output = AggregatesRewrite.rewrite_select(select, &aggregate);
+        let output = AggregatesRewrite.rewrite_select(select_old, &aggregate);
         if output.plan.is_noop() {
             return Ok(());
         }

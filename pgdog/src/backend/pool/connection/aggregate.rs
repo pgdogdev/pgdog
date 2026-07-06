@@ -401,7 +401,10 @@ mod test {
         messages::{Field, Format, RowDescription},
     };
     use bytes::Bytes;
-    use pg_query::{NodeEnum, protobuf::SelectStmt};
+    #[cfg(not(feature = "new_parser"))]
+    use pg_query::NodeEnum;
+    #[cfg(feature = "new_parser")]
+    use pg_raw_parse::Node;
     use pgdog_postgres_types::Double;
     use std::assert_matches;
     use std::collections::VecDeque;
@@ -442,7 +445,17 @@ mod test {
         }
     }
 
-    fn select(stmt: &str) -> SelectStmt {
+    #[cfg(feature = "new_parser")]
+    fn parse(stmt: &str) -> Aggregate {
+        let ast = pg_raw_parse::parse(stmt).unwrap();
+        let Node::SelectStmt(stmt) = ast.stmts().next().unwrap() else {
+            panic!("not a select")
+        };
+        Aggregate::parse(&stmt, &Default::default())
+    }
+
+    #[cfg(not(feature = "new_parser"))]
+    fn parse(stmt: &str) -> Aggregate {
         let stmt = pg_query::parse(stmt)
             .unwrap()
             .protobuf
@@ -450,14 +463,11 @@ mod test {
             .remove(0)
             .stmt
             .unwrap();
-        match stmt.node.unwrap() {
+        let stmt = match stmt.node.unwrap() {
             NodeEnum::SelectStmt(stmt) => *stmt,
             _ => panic!("not a select"),
-        }
-    }
-
-    fn parse(stmt: &str) -> Aggregate {
-        Aggregate::parse(&select(stmt), &Default::default())
+        };
+        Aggregate::parse(&stmt, &Default::default())
     }
 
     #[test]

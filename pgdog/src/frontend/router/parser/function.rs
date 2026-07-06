@@ -1,4 +1,7 @@
+#[cfg(not(feature = "new_parser"))]
 use pg_query::{Node, NodeEnum, protobuf};
+#[cfg(feature = "new_parser")]
+use pg_raw_parse::Node;
 
 const WRITE_ONLY: &[&str] = &["nextval", "setval"];
 
@@ -37,6 +40,24 @@ impl<'a> Function<'a> {
     }
 }
 
+#[cfg(feature = "new_parser")]
+impl<'a> TryFrom<Node<'a>> for Function<'a> {
+    type Error = ();
+
+    fn try_from(value: Node<'a>) -> Result<Self, Self::Error> {
+        match value {
+            Node::FuncCall(f) => {
+                Self::from_strings(f.funcname().iter().filter_map(Node::as_str)).ok_or(())
+            }
+
+            Node::TypeCast(n) => Self::try_from(n.arg()),
+            Node::NullTest(n) => Self::try_from(n.arg()),
+            _ => Err(()),
+        }
+    }
+}
+
+#[cfg(not(feature = "new_parser"))]
 impl<'a> TryFrom<&'a Node> for Function<'a> {
     type Error = ();
     fn try_from(value: &'a Node) -> Result<Self, Self::Error> {
@@ -68,11 +89,26 @@ impl<'a> TryFrom<&'a Node> for Function<'a> {
 
 #[cfg(test)]
 mod test {
+    #[cfg(not(feature = "new_parser"))]
     use pg_query::parse;
+    #[cfg(feature = "new_parser")]
+    use pg_raw_parse::parse;
 
     use super::*;
 
     #[test]
+    #[cfg(feature = "new_parser")]
+    fn test_function() {
+        let query = "SELECT pg_advisory_lock(234234), pg_try_advisory_lock(23234)::bool";
+        funcs(query, |func| {
+            assert!(func.name.contains("advisory_lock"));
+            assert!(func.schema.is_none());
+            assert!(!func.behavior().cross_shard);
+        });
+    }
+
+    #[test]
+    #[cfg(not(feature = "new_parser"))]
     fn test_function() {
         let ast =
             parse("SELECT pg_advisory_lock(234234), pg_try_advisory_lock(23234)::bool").unwrap();
@@ -92,6 +128,28 @@ mod test {
         }
     }
 
+    #[cfg(feature = "new_parser")]
+    fn funcs(query: &str, mut check: impl FnMut(Function<'_>)) {
+        let ast = parse(query).unwrap();
+        let Node::SelectStmt(stmt) = ast.stmts().next().unwrap() else {
+            unreachable!();
+        };
+
+        for node in stmt.targetList() {
+            let func = Function::try_from(node.val()).unwrap();
+            check(func);
+        }
+    }
+
+    #[cfg(feature = "new_parser")]
+    fn first_func(query: &str, check: impl FnOnce(Function<'_>)) {
+        let mut check = Some(check);
+        funcs(query, |func| {
+            check.take().map(|c| c(func));
+        });
+    }
+
+    #[cfg(not(feature = "new_parser"))]
     fn first_func<R>(query: &str, check: impl FnOnce(Function<'_>) -> R) -> R {
         let ast = parse(query).unwrap();
         let root = ast.protobuf.stmts.first().unwrap().stmt.as_ref().unwrap();
