@@ -160,6 +160,7 @@ impl<'a> StatementRewrite<'a> {
             let stmt = make::try_owned(|mem| {
                 let mut select = mem.make_unique(select);
                 self.rewrite_aggregates(select.as_mut(), mem, &mut plan, self.db_schema)?;
+                self.limit_offset(&select, &mut plan);
                 Ok::<_, Error>(mem.make_RawStmt(select.uncast()))
             })?;
             self.stmt.stmts = pg_query::parse(pg_raw_parse::deparse(&stmt)?.as_str())?
@@ -167,6 +168,7 @@ impl<'a> StatementRewrite<'a> {
                 .stmts;
         }
 
+        #[cfg(not(feature = "new_parser"))]
         self.limit_offset(&mut plan)?;
 
         if self.rewritten {
