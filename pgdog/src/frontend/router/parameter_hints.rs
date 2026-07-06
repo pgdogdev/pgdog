@@ -25,7 +25,6 @@ pub struct ParameterHints<'a> {
     pub pgdog_shard: Option<&'a ParameterValue>,
     pub pgdog_sharding_key: Option<&'a ParameterValue>,
     pub pgdog_role: Option<&'a ParameterValue>,
-    pub pgdog_pin: Option<&'a ParameterValue>,
     hooks: ParserHooks,
 }
 
@@ -36,7 +35,6 @@ impl<'a> From<&'a Parameters> for ParameterHints<'a> {
             pgdog_shard: value.get(PGDOG_SHARD),
             pgdog_role: value.get(PGDOG_ROLE),
             pgdog_sharding_key: value.get(PGDOG_SHARDING_KEY),
-            pgdog_pin: value.get(PGDOG_PIN),
             hooks: ParserHooks::default(),
         }
     }
@@ -122,21 +120,6 @@ impl ParameterHints<'_> {
         }
 
         role
-    }
-
-    /// The client requests the connection to be pinned, while
-    /// it does something that requires session state.
-    pub(crate) fn pin(&self) -> Option<bool> {
-        match self
-            .pgdog_pin
-            .as_ref()
-            .map(|param| param.as_str())
-            .flatten()
-        {
-            Some("true" | "t") => Some(true),
-            Some("false" | "f") => Some(false),
-            _ => None,
-        }
     }
 }
 

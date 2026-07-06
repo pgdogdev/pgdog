@@ -8,7 +8,7 @@ impl QueryEngine {
         // indicates we cannot release the backend.
         let locked = self.advisory_locks.locked() || self.manual_lock;
 
-        self.backend.lock(self.advisory_locks.locked());
+        self.backend.lock(locked);
         self.stats.locked(locked);
     }
 }

@@ -16,7 +16,10 @@ use crate::{
         client::query_engine::QueryEngine,
         router::{parser::Shard, sharding::ContextBuilder},
     },
-    net::{ErrorResponse, Message, Parameters, Protocol, ProtocolVersion, Stream},
+    net::{
+        DataRow, ErrorResponse, Message, Parameters, Protocol, ProtocolVersion, Query,
+        RowDescription, Stream,
+    },
 };
 
 /// Try to convert a Message to the specified type.
@@ -242,6 +245,19 @@ impl TestClient {
     /// Check if the backend is locked to this client.
     pub(crate) fn backend_locked(&mut self) -> bool {
         self.engine.backend().locked()
+    }
+
+    /// Get the PostgreSQL backend pid for the currently routed server.
+    pub(crate) async fn backend_pid(&mut self) -> i32 {
+        self.send_simple(Query::new("SELECT pg_backend_pid()"))
+            .await;
+        expect_message!(self.read().await, RowDescription);
+        let row = expect_message!(self.read().await, DataRow);
+        let pid = row
+            .get_int(0, true)
+            .expect("backend pid should be returned") as i32;
+        self.read_until('Z').await.unwrap();
+        pid
     }
 
     /// Generate a random ID for a given shard.

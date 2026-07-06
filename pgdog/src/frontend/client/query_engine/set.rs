@@ -37,8 +37,7 @@ impl QueryEngine {
                         self.manual_lock = param
                             .value
                             .as_ref()
-                            .map(|p| p.as_str())
-                            .flatten()
+                            .and_then(|p| p.as_str())
                             .map(|p| matches!(p, "true" | "t"))
                             .unwrap_or_default();
                     }

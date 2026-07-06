@@ -377,14 +377,6 @@ impl Route {
     pub fn set_rewrite_plan(&mut self, plan: AggregateRewritePlan) {
         self.rewrite_plan = plan;
     }
-
-    pub(crate) fn set_pin(&mut self, pin: Option<bool>) {
-        self.pin = pin;
-    }
-
-    pub(crate) fn pinned(&self) -> Option<bool> {
-        self.pin
-    }
 }
 
 /// Shard source.
