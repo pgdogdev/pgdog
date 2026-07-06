@@ -139,7 +139,7 @@ impl Display for Route {
 
 impl Route {
     /// Create new route for a `SELECT` query.
-    pub fn select(
+    pub(crate) fn select(
         shard: ShardWithPriority,
         order_by: Vec<OrderBy>,
         aggregate: Aggregate,
@@ -286,11 +286,11 @@ impl Route {
             || self.limit().offset.is_some()
     }
 
-    pub fn limit(&self) -> &Limit {
+    pub(crate) fn limit(&self) -> &Limit {
         &self.limit
     }
 
-    pub fn set_limit(&mut self, limit: Limit) {
+    pub(crate) fn set_limit(&mut self, limit: Limit) {
         self.limit = limit;
     }
 
