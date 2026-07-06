@@ -25,7 +25,6 @@ impl HelperKind {
 pub struct HelperMapping {
     pub target_column: usize,
     pub helper_column: usize,
-    pub expr_id: usize,
     pub distinct: bool,
     pub kind: HelperKind,
     pub alias: String,
@@ -92,7 +91,6 @@ mod tests {
         plan.add_helper(HelperMapping {
             target_column: 0,
             helper_column: 1,
-            expr_id: 7,
             distinct: false,
             kind: HelperKind::Count,
             alias: "__pgdog_count_expr7_col0".into(),
@@ -101,7 +99,6 @@ mod tests {
         let helper = &plan.helpers()[0];
         assert_eq!(helper.target_column, 0);
         assert_eq!(helper.helper_column, 1);
-        assert_eq!(helper.expr_id, 7);
         assert!(!helper.distinct);
         assert!(matches!(helper.kind, HelperKind::Count));
         assert_eq!(helper.alias, "__pgdog_count_expr7_col0");

@@ -3,14 +3,13 @@ use pg_query::protobuf::Integer;
 use pg_query::protobuf::{Node, SelectStmt, String as PgQueryString, a_const::Val};
 use std::fmt;
 
-use super::{ExpressionRegistry, Function};
+use super::Function;
 use crate::backend::schema::Schema;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct AggregateTarget {
     column: usize,
     function: AggregateFunction,
-    expr_id: usize,
     distinct: bool,
 }
 
@@ -21,10 +20,6 @@ impl AggregateTarget {
 
     pub fn column(&self) -> usize {
         self.column
-    }
-
-    pub fn expr_id(&self) -> usize {
-        self.expr_id
     }
 
     pub fn is_distinct(&self) -> bool {
@@ -127,7 +122,6 @@ impl Aggregate {
     /// Figure out what aggregates are present and which ones PgDog supports.
     pub fn parse(stmt: &SelectStmt, schema: &Schema) -> Self {
         let mut targets = vec![];
-        let mut registry = ExpressionRegistry::new();
         let group_by = stmt
             .group_clause
             .iter()
@@ -183,22 +177,14 @@ impl Aggregate {
                 };
 
                 if let Some(function) = function {
-                    let (expr_id, distinct) = match node.node.as_ref() {
-                        Some(NodeEnum::FuncCall(func)) => {
-                            let arg_id = func
-                                .args
-                                .first()
-                                .map(|arg| registry.intern(arg))
-                                .unwrap_or_else(|| registry.intern(node.as_ref()));
-                            (arg_id, func.agg_distinct)
-                        }
-                        _ => (registry.intern(node.as_ref()), false),
+                    let distinct = match node.node.as_ref() {
+                        Some(NodeEnum::FuncCall(func)) => func.agg_distinct,
+                        _ => false,
                     };
 
                     targets.push(AggregateTarget {
                         column: idx,
                         function,
-                        expr_id,
                         distinct,
                     });
                 }
@@ -221,7 +207,6 @@ impl Aggregate {
             targets: vec![AggregateTarget {
                 function: AggregateFunction::Count,
                 column,
-                expr_id: 0,
                 distinct: false,
             }],
             group_by: vec![],
@@ -233,7 +218,6 @@ impl Aggregate {
             targets: vec![AggregateTarget {
                 function: AggregateFunction::Count,
                 column,
-                expr_id: 0,
                 distinct: false,
             }],
             group_by: group_by.to_vec(),
@@ -281,33 +265,7 @@ mod test {
     }
 
     #[test]
-    fn test_parse_avg_count_expr_id_matches() {
-        let aggr = parse("SELECT COUNT(price), AVG(price) FROM menu");
-        assert_eq!(aggr.targets().len(), 2);
-        let count = &aggr.targets()[0];
-        let avg = &aggr.targets()[1];
-        assert!(matches!(count.function(), AggregateFunction::Count));
-        assert!(matches!(avg.function(), AggregateFunction::Avg));
-        assert_eq!(count.expr_id(), avg.expr_id());
-        assert!(!count.is_distinct());
-        assert!(!avg.is_distinct());
-    }
-
-    #[test]
-    fn test_parse_avg_count_expr_id_differs() {
-        let aggr = parse("SELECT COUNT(price), AVG(cost) FROM menu");
-        assert_eq!(aggr.targets().len(), 2);
-        let count = &aggr.targets()[0];
-        let avg = &aggr.targets()[1];
-        assert!(matches!(count.function(), AggregateFunction::Count));
-        assert!(matches!(avg.function(), AggregateFunction::Avg));
-        assert_ne!(count.expr_id(), avg.expr_id());
-        assert!(!count.is_distinct());
-        assert!(!avg.is_distinct());
-    }
-
-    #[test]
-    fn test_parse_distinct_count_not_matching_avg() {
+    fn test_parse_distinct_and_not_distinct() {
         let aggr = parse("SELECT COUNT(DISTINCT price), AVG(price) FROM menu");
         assert_eq!(aggr.targets().len(), 2);
         let count = &aggr.targets()[0];
@@ -316,7 +274,6 @@ mod test {
         assert!(matches!(avg.function(), AggregateFunction::Avg));
         assert!(count.is_distinct());
         assert!(!avg.is_distinct());
-        assert_eq!(count.expr_id(), avg.expr_id());
     }
 
     #[test]
