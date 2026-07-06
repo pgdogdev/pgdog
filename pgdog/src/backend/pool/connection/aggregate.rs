@@ -258,7 +258,7 @@ impl<'a> Aggregates<'a> {
                 continue;
             };
 
-            let entry = helper_columns.entry(index).or_default();
+            let entry = helper_columns.entry(helper.target_column).or_default();
             match helper.kind {
                 HelperKind::Count => entry.count = Some(index),
                 HelperKind::Sum => entry.sum = Some(index),
