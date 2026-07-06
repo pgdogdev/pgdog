@@ -18,6 +18,7 @@ mod graceful_disconnect;
 mod graceful_shutdown;
 mod idle_in_transaction_recovery;
 mod lock_session;
+mod manual_lock;
 mod multi_binding;
 mod omni;
 pub mod prelude;

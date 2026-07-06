@@ -16,13 +16,16 @@ pub const PGDOG_SHARD: &str = "pgdog.shard";
 pub const PGDOG_SHARDING_KEY: &str = "pgdog.sharding_key";
 /// `SET pgdog.role` — pin queries to a primary or replica.
 pub const PGDOG_ROLE: &str = "pgdog.role";
+/// Connection pinning.
+pub const PGDOG_PIN: &str = "pgdog.pin";
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ParameterHints<'a> {
     pub search_path: Option<&'a ParameterValue>,
     pub pgdog_shard: Option<&'a ParameterValue>,
     pub pgdog_sharding_key: Option<&'a ParameterValue>,
     pub pgdog_role: Option<&'a ParameterValue>,
+    pub pgdog_pin: Option<&'a ParameterValue>,
     hooks: ParserHooks,
 }
 
@@ -33,6 +36,7 @@ impl<'a> From<&'a Parameters> for ParameterHints<'a> {
             pgdog_shard: value.get(PGDOG_SHARD),
             pgdog_role: value.get(PGDOG_ROLE),
             pgdog_sharding_key: value.get(PGDOG_SHARDING_KEY),
+            pgdog_pin: value.get(PGDOG_PIN),
             hooks: ParserHooks::default(),
         }
     }
@@ -119,6 +123,21 @@ impl ParameterHints<'_> {
 
         role
     }
+
+    /// The client requests the connection to be pinned, while
+    /// it does something that requires session state.
+    pub(crate) fn pin(&self) -> Option<bool> {
+        match self
+            .pgdog_pin
+            .as_ref()
+            .map(|param| param.as_str())
+            .flatten()
+        {
+            Some("true" | "t") => Some(true),
+            Some("false" | "f") => Some(false),
+            _ => None,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -151,11 +170,8 @@ mod tests {
 
         let sharding_key = ParameterValue::String("sales".to_string());
         let hints = ParameterHints {
-            search_path: None,
-            pgdog_shard: None,
             pgdog_sharding_key: Some(&sharding_key),
-            pgdog_role: None,
-            hooks: ParserHooks::default(),
+            ..Default::default()
         };
 
         let mut shards = ShardsWithPriority::default();
@@ -173,10 +189,8 @@ mod tests {
         let search_path = ParameterValue::String("inventory".to_string());
         let hints = ParameterHints {
             search_path: Some(&search_path),
-            pgdog_shard: None,
             pgdog_sharding_key: Some(&sharding_key),
-            pgdog_role: None,
-            hooks: ParserHooks::default(),
+            ..Default::default()
         };
 
         let mut shards = ShardsWithPriority::default();

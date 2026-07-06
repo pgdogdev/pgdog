@@ -22,6 +22,7 @@ pub mod fake;
 pub mod hooks;
 pub mod incomplete_requests;
 pub mod internal_values;
+pub mod lock;
 pub mod multi_step;
 pub mod notify_buffer;
 pub mod pub_sub;
@@ -47,6 +48,8 @@ use notify_buffer::NotifyBuffer;
 use two_pc::TwoPc;
 pub use two_pc::phase::TwoPcPhase;
 
+/// Implements the entire client/server message exchange.
+/// State here is preserved between requests.
 #[derive(Debug)]
 pub struct QueryEngine {
     begin_stmt: Option<BufferedQuery>,
@@ -60,6 +63,10 @@ pub struct QueryEngine {
     pending_explain: Option<ExplainResponseState>,
     hooks: QueryEngineHooks,
     advisory_locks: AdvisoryLocks,
+    // The client requested we disable transaction mode temporarily.
+    // They will remain pinned to their connection until they unpin manually
+    // or disconnect.
+    manual_lock: bool,
 }
 
 impl QueryEngine {
@@ -82,6 +89,7 @@ impl QueryEngine {
             begin_stmt: None,
             router: Router::default(),
             advisory_locks: AdvisoryLocks::default(),
+            manual_lock: false,
         })
     }
 

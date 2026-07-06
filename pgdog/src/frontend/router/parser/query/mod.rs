@@ -129,6 +129,8 @@ impl QueryParser {
                         _ => route.set_read(true),
                     }
                 }
+
+                route.set_pin(context.router_context.parameter_hints.pin());
             }
 
             _ => (),

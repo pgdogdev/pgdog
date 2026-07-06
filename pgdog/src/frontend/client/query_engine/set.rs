@@ -1,5 +1,5 @@
 use crate::frontend::SetParam;
-use crate::frontend::router::parameter_hints::{PGDOG_SHARD, PGDOG_SHARDING_KEY};
+use crate::frontend::router::parameter_hints::{PGDOG_PIN, PGDOG_SHARD, PGDOG_SHARDING_KEY};
 use crate::net::messages::ErrorResponse;
 
 use super::*;
@@ -24,6 +24,8 @@ impl QueryEngine {
 
         let mut fake_command = "SET";
         for param in params {
+            let is_pin = param.name == PGDOG_PIN;
+
             if let Some(value) = param.value.clone() {
                 if context.in_transaction() {
                     context
@@ -31,10 +33,22 @@ impl QueryEngine {
                         .insert_transaction(&param.name, value, param.local);
                 } else {
                     context.params.insert(&param.name, value);
+                    if is_pin {
+                        self.manual_lock = param
+                            .value
+                            .as_ref()
+                            .map(|p| p.as_str())
+                            .flatten()
+                            .map(|p| matches!(p, "true" | "t"))
+                            .unwrap_or_default();
+                    }
                 }
             } else {
                 fake_command = "RESET";
                 context.params.reset(&param.name);
+                if is_pin {
+                    self.manual_lock = false;
+                }
             }
         }
 
