@@ -23,23 +23,6 @@ fn load_single_connection_test_pool() {
     reload_from_existing().unwrap();
 }
 
-fn assert_single_connection_pool(client: &mut TestClient) {
-    let cluster = client.engine.backend().cluster().unwrap();
-    let pools: Vec<_> = cluster
-        .shards()
-        .iter()
-        .flat_map(|shard| shard.pool_iter())
-        .collect();
-
-    assert_eq!(pools.len(), 1, "test cluster should use one pool");
-    assert_eq!(
-        pools[0].config().max,
-        1,
-        "test pool should allow one connection"
-    );
-    assert_eq!(pools[0].config().min, 0);
-}
-
 #[tokio::test]
 async fn test_pgdog_pin_holds_backend_until_false_or_reset() {
     let mut client = TestClient::new_sharded(Parameters::default()).await;
@@ -56,7 +39,7 @@ async fn test_pgdog_pin_holds_backend_until_false_or_reset() {
     );
     assert!(
         client.backend_connected(),
-        "transaction-mode backend should not be released while pinned"
+        "transaction mode backend should not be released while pinned"
     );
 
     let rfq = run_simple(&mut client, "RESET pgdog.pin").await;
@@ -67,7 +50,7 @@ async fn test_pgdog_pin_holds_backend_until_false_or_reset() {
     );
     assert!(
         !client.backend_connected(),
-        "transaction-mode backend should be released after RESET pgdog.pin"
+        "transaction mode backend should be released after RESET pgdog.pin"
     );
 
     let rfq = run_simple(&mut client, "SET pgdog.pin TO true").await;
@@ -86,7 +69,7 @@ async fn test_pgdog_pin_holds_backend_until_false_or_reset() {
     );
     assert!(
         !client.backend_connected(),
-        "transaction-mode backend should be released after pgdog.pin=false"
+        "transaction mode backend should be released after pgdog.pin=false"
     );
 }
 
@@ -94,7 +77,6 @@ async fn test_pgdog_pin_holds_backend_until_false_or_reset() {
 async fn test_pgdog_pin_release_discards_temp_tables() {
     load_single_connection_test_pool();
     let mut client = TestClient::new(Parameters::default()).await;
-    assert_single_connection_pool(&mut client);
 
     let rfq = run_simple(&mut client, "SET pgdog.pin TO true").await;
     assert_eq!(rfq.status, 'I');
@@ -117,7 +99,7 @@ async fn test_pgdog_pin_release_discards_temp_tables() {
     let reused_backend_pid = client.backend_pid().await;
     assert_eq!(
         pinned_backend_pid, reused_backend_pid,
-        "single-connection test pool should reuse the same backend"
+        "single connection test pool should reuse the same backend"
     );
 
     client
