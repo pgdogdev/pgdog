@@ -87,9 +87,14 @@
           "const": "azure_workload_identity"
         },
         {
-          "description": "Fetch dynamic credentials from HashiCorp Vault.",
+          "description": "Fetch dynamic credentials from HashiCorp Vault (database secrets engine).\nVault generates a new username and password on each lease.",
           "type": "string",
-          "const": "vault"
+          "const": "vault_dynamic"
+        },
+        {
+          "description": "Fetch credentials for a Vault static database role.\nVault manages password rotation; the username is fixed.",
+          "type": "string",
+          "const": "vault_static"
         }
       ]
     },
@@ -270,6 +275,13 @@
             "null"
           ]
         },
+        "server_vault_path": {
+          "description": "Vault path used to fetch backend (server-side) database credentials,\ne.g. `database/creds/my-role` for `server_auth = \"vault_dynamic\"` or\n`database/static-creds/my-role` for `server_auth = \"vault_static\"`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "statement_timeout": {
           "description": "Statement timeout.\n\nSets the `statement_timeout` on all server connections at connection creation. This allows you to set a reasonable default for each user without modifying `postgresql.conf` or using `ALTER USER`.\n\n**Note:** Nothing is preventing the user from manually changing this setting at runtime, e.g., by running `SET statement_timeout TO 0`;\n\nhttps://docs.pgdog.dev/configuration/users.toml/users/#statement_timeout",
           "type": [
@@ -294,7 +306,7 @@
           ]
         },
         "vault_path": {
-          "description": "Vault path to fetch dynamic database credentials from, e.g. `database/creds/my-role`.\nRequired when `server_auth` is set to `vault`.",
+          "description": "Vault path to a static database role used to verify client passwords,\ne.g. `database/static-creds/my-role`. When set, PgDog fetches the\ncurrent password from Vault and compares it to what the client\nprovides instead of using a statically configured password.",
           "type": [
             "string",
             "null"

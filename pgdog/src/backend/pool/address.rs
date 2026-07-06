@@ -95,7 +95,7 @@ impl Address {
             },
             server_auth,
             server_iam_region: user.server_iam_region.clone(),
-            vault_path: user.vault_path.clone(),
+            vault_path: user.server_vault_path.clone(),
             vault_refresh_percent: user.vault_refresh_percent,
             database_number,
             configured_role: database.role,
@@ -114,7 +114,7 @@ impl Address {
 
     /// Get the username and passwords to log into the server with.
     ///
-    /// The username is the configured one, except for Vault-backed pools
+    /// The username is the configured one, except for `vault_dynamic` pools
     /// where the database secrets engine generates it together with the
     /// password.
     pub async fn auth_credentials(&self) -> Result<(String, Vec<Password>), Error> {
@@ -137,7 +137,7 @@ impl Address {
                 vec![Password::new(&token, PasswordSource::AzureIdentity)]
             }
 
-            ServerAuth::Vault => {
+            ServerAuth::VaultDynamic => {
                 let credentials = TokenCache::global()
                     .credentials_or_fetch(self, vault::credentials)
                     .await?;
@@ -145,6 +145,13 @@ impl Address {
                     user = username;
                 }
                 vec![Password::new(&credentials.secret, PasswordSource::Vault)]
+            }
+
+            ServerAuth::VaultStatic => {
+                let password = TokenCache::global()
+                    .get_or_fetch_with_refresh(self, vault::static_backend_credentials)
+                    .await?;
+                vec![Password::new(&password, PasswordSource::Vault)]
             }
         };
 
@@ -227,7 +234,7 @@ impl TryFrom<Url> for Address {
 
 #[cfg(test)]
 mod test {
-    use std::time::{Duration, SystemTime};
+    use std::time::{Duration, Instant, SystemTime};
 
     use crate::config;
 
@@ -491,12 +498,12 @@ mod test {
             host: "auth-secrets-vault.internal".into(),
             port: 15435,
             user: "configured_user".into(),
-            server_auth: ServerAuth::Vault,
+            server_auth: ServerAuth::VaultDynamic,
             vault_path: Some("database/creds/pgdog".into()),
             ..Default::default()
         };
 
-        let now = SystemTime::now();
+        let now = Instant::now();
         TokenCache::global().set_credentials(
             &addr,
             FetchedCredentials {
@@ -504,7 +511,7 @@ mod test {
                     username: Some("v-generated-user".into()),
                     secret: "v-generated-pass".into(),
                 },
-                expires_at: now + Duration::from_secs(3600),
+                expires_at: None,
                 refresh_at: Some(now + Duration::from_secs(2880)),
             },
         );
@@ -537,8 +544,8 @@ mod test {
 
         let user = User {
             name: "pgdog".into(),
-            server_auth: ServerAuth::Vault,
-            vault_path: Some("database/creds/pgdog".into()),
+            server_auth: ServerAuth::VaultDynamic,
+            server_vault_path: Some("database/creds/pgdog".into()),
             vault_refresh_percent: Some(50),
             password: Some("ignored".into()),
             database: "pgdog".into(),
@@ -550,9 +557,63 @@ mod test {
             address.passwords.is_empty(),
             "Vault addresses must not carry static passwords"
         );
-        assert_eq!(address.server_auth, ServerAuth::Vault);
+        assert_eq!(address.server_auth, ServerAuth::VaultDynamic);
         assert_eq!(address.vault_path.as_deref(), Some("database/creds/pgdog"));
         assert_eq!(address.vault_refresh_percent, Some(50));
+    }
+
+    #[tokio::test]
+    async fn test_auth_credentials_vault_static_serves_password_from_cache() {
+        let addr = Address {
+            host: "auth-secrets-vault-static.internal".into(),
+            port: 15436,
+            user: "pgdog_static".into(),
+            server_auth: ServerAuth::VaultStatic,
+            vault_path: Some("database/static-creds/pgdog-static".into()),
+            ..Default::default()
+        };
+
+        let expiry = SystemTime::now() + Duration::from_secs(3600);
+        TokenCache::global().set(&addr, "vault-rotated-pass".into(), expiry);
+
+        let (user, secrets) = addr.auth_credentials().await.unwrap();
+
+        TokenCache::global().evict(&addr);
+
+        assert_eq!(user, "pgdog_static");
+        assert_eq!(secrets.first().unwrap(), "vault-rotated-pass");
+    }
+
+    #[test]
+    fn test_vault_static_fields_from_config() {
+        let database = Database {
+            name: "pgdog".into(),
+            host: "127.0.0.1".into(),
+            port: 6432,
+            ..Default::default()
+        };
+
+        let user = User {
+            name: "pgdog_static".into(),
+            server_auth: ServerAuth::VaultStatic,
+            server_vault_path: Some("database/static-creds/pgdog-static".into()),
+            vault_refresh_percent: Some(70),
+            password: Some("ignored".into()),
+            database: "pgdog".into(),
+            ..Default::default()
+        };
+
+        let address = Address::new(&database, &user, 0);
+        assert!(
+            address.passwords.is_empty(),
+            "VaultStatic addresses must not carry static passwords"
+        );
+        assert_eq!(address.server_auth, ServerAuth::VaultStatic);
+        assert_eq!(
+            address.vault_path.as_deref(),
+            Some("database/static-creds/pgdog-static")
+        );
+        assert_eq!(address.vault_refresh_percent, Some(70));
     }
 
     #[tokio::test]

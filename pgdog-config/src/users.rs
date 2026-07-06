@@ -88,18 +88,28 @@ impl Users {
                 );
             }
 
-            if user.server_auth == ServerAuth::Vault {
-                if user.vault_path.is_none() {
+            if user.vault_path.is_some() && config.vault.is_none() {
+                warn!(
+                    r#"user "{}" (database "{}") uses Vault client auth but the [vault] section is missing from pgdog.toml"#,
+                    user.name, user.database
+                );
+            }
+
+            if matches!(
+                user.server_auth,
+                ServerAuth::VaultDynamic | ServerAuth::VaultStatic
+            ) {
+                if user.server_vault_path.is_none() {
                     warn!(
-                        r#"user "{}" (database "{}") uses "server_auth" = "vault" but "vault_path" is not set"#,
-                        user.name, user.database
+                        r#"user "{}" (database "{}") uses "server_auth" = "{}" but "server_vault_path" is not set"#,
+                        user.name, user.database, user.server_auth
                     );
                 }
 
                 if config.vault.is_none() {
                     warn!(
-                        r#"user "{}" (database "{}") uses "server_auth" = "vault" but the [vault] section is missing from pgdog.toml"#,
-                        user.name, user.database
+                        r#"user "{}" (database "{}") uses "server_auth" = "{}" but the [vault] section is missing from pgdog.toml"#,
+                        user.name, user.database, user.server_auth
                     );
                 }
 
@@ -179,15 +189,32 @@ pub enum ServerAuth {
     RdsIam,
     /// Generate an Azure Workload Identity auth token per connection attempt.
     AzureWorkloadIdentity,
-    /// Fetch dynamic credentials from HashiCorp Vault.
-    Vault,
+    /// Fetch dynamic credentials from HashiCorp Vault (database secrets engine).
+    /// Vault generates a new username and password on each lease.
+    VaultDynamic,
+    /// Fetch credentials for a Vault static database role.
+    /// Vault manages password rotation; the username is fixed.
+    VaultStatic,
+}
+
+impl Display for ServerAuth {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            Self::Password => "password",
+            Self::RdsIam => "rds_iam",
+            Self::AzureWorkloadIdentity => "azure_workload_identity",
+            Self::VaultDynamic => "vault_dynamic",
+            Self::VaultStatic => "vault_static",
+        };
+        write!(f, "{}", s)
+    }
 }
 
 impl ServerAuth {
     pub fn is_external_identity(&self) -> bool {
         matches!(
             self,
-            Self::RdsIam | Self::AzureWorkloadIdentity | Self::Vault
+            Self::RdsIam | Self::AzureWorkloadIdentity | Self::VaultDynamic | Self::VaultStatic
         )
     }
 }
@@ -197,6 +224,12 @@ impl ServerAuth {
 pub enum PasswordKind {
     Plain(String),
     Hashed(String),
+    /// Verify the client's password against a Vault static database role.
+    ///
+    /// The inner `String` is the Vault path (e.g. `database/static-creds/my-role`).
+    /// Resolved to a [`Plain`](Self::Plain) password at authentication time;
+    /// never passed to the underlying md5 / SCRAM / plain verifiers directly.
+    VaultStaticRole(String),
 }
 
 impl PasswordKind {
@@ -204,6 +237,7 @@ impl PasswordKind {
         match self {
             Self::Plain(plain) => plain.as_str(),
             Self::Hashed(hash) => hash.as_str(),
+            Self::VaultStaticRole(path) => path.as_str(),
         }
     }
 }
@@ -213,6 +247,7 @@ impl Display for PasswordKind {
         match self {
             Self::Plain(plain) => write!(f, "{}", plain),
             Self::Hashed(hashed) => write!(f, "{}", hashed),
+            Self::VaultStaticRole(path) => write!(f, "{}", path),
         }
     }
 }
@@ -282,13 +317,19 @@ pub struct User {
     pub server_auth: ServerAuth,
     /// Optional region override for RDS IAM token generation.
     pub server_iam_region: Option<String>,
-    /// Vault path to fetch dynamic database credentials from, e.g. `database/creds/my-role`.
-    /// Required when `server_auth` is set to `vault`.
-    pub vault_path: Option<String>,
+    /// Vault path used to fetch backend (server-side) database credentials,
+    /// e.g. `database/creds/my-role` for `server_auth = "vault_dynamic"` or
+    /// `database/static-creds/my-role` for `server_auth = "vault_static"`.
+    pub server_vault_path: Option<String>,
     /// Percentage of the Vault credential lease after which credentials are refreshed.
     ///
     /// _Default:_ `80`
     pub vault_refresh_percent: Option<u8>,
+    /// Vault path to a static database role used to verify client passwords,
+    /// e.g. `database/static-creds/my-role`. When set, PgDog fetches the
+    /// current password from Vault and compares it to what the client
+    /// provides instead of using a statically configured password.
+    pub vault_path: Option<String>,
     /// Statement timeout.
     ///
     /// Sets the `statement_timeout` on all server connections at connection creation. This allows you to set a reasonable default for each user without modifying `postgresql.conf` or using `ALTER USER`.
@@ -364,11 +405,12 @@ impl User {
         if !self.password().is_empty() {
             passwords.push(PasswordKind::Plain(self.password().to_string()));
         }
-
         if let Some(hash) = self.password_hash.clone() {
             passwords.push(PasswordKind::Hashed(hash));
         }
-
+        if let Some(path) = self.vault_path.clone() {
+            passwords.push(PasswordKind::VaultStaticRole(path));
+        }
         passwords
     }
 
@@ -671,22 +713,89 @@ server_auth = "azure_workload_identity"
     }
 
     #[test]
-    fn test_user_server_auth_vault() {
+    fn test_user_server_auth_vault_dynamic() {
         let source = r#"
 [[users]]
 name = "alice"
 database = "db"
-server_auth = "vault"
-vault_path = "database/creds/pgdog"
+server_auth = "vault_dynamic"
+server_vault_path = "database/creds/pgdog"
 vault_refresh_percent = 75
 "#;
 
         let users: Users = toml::from_str(source).unwrap();
         let user = users.users.first().unwrap();
-        assert_eq!(user.server_auth, ServerAuth::Vault);
+        assert_eq!(user.server_auth, ServerAuth::VaultDynamic);
         assert!(user.server_auth.is_external_identity());
-        assert_eq!(user.vault_path.as_deref(), Some("database/creds/pgdog"));
+        assert_eq!(
+            user.server_vault_path.as_deref(),
+            Some("database/creds/pgdog")
+        );
         assert_eq!(user.vault_refresh_percent, Some(75));
+    }
+
+    #[test]
+    fn test_user_server_auth_vault_static() {
+        let source = r#"
+[[users]]
+name = "alice"
+database = "db"
+server_auth = "vault_static"
+server_vault_path = "database/static-creds/my-role"
+vault_refresh_percent = 60
+"#;
+
+        let users: Users = toml::from_str(source).unwrap();
+        let user = users.users.first().unwrap();
+        assert_eq!(user.server_auth, ServerAuth::VaultStatic);
+        assert!(user.server_auth.is_external_identity());
+        assert_eq!(
+            user.server_vault_path.as_deref(),
+            Some("database/static-creds/my-role")
+        );
+        assert_eq!(user.vault_refresh_percent, Some(60));
+    }
+
+    #[test]
+    fn test_vault_path_appears_in_passwords_as_vault_static_role() {
+        let user = User {
+            name: "alice".into(),
+            database: "db".into(),
+            vault_path: Some("database/static-creds/alice-role".into()),
+            ..Default::default()
+        };
+
+        let passwords = user.passwords();
+        assert_eq!(passwords.len(), 1);
+        assert!(
+            matches!(&passwords[0], PasswordKind::VaultStaticRole(p) if p == "database/static-creds/alice-role")
+        );
+    }
+
+    #[test]
+    fn test_vault_path_combined_with_static_password() {
+        let user = User {
+            name: "alice".into(),
+            database: "db".into(),
+            password: Some("fallback".into()),
+            vault_path: Some("database/static-creds/alice-role".into()),
+            ..Default::default()
+        };
+
+        let passwords = user.passwords();
+        assert_eq!(passwords.len(), 2);
+        assert!(
+            passwords
+                .iter()
+                .any(|p| matches!(p, PasswordKind::Plain(s) if s == "fallback"))
+        );
+        assert!(passwords.iter().any(|p| matches!(p, PasswordKind::VaultStaticRole(s) if s == "database/static-creds/alice-role")));
+    }
+
+    #[test]
+    fn test_vault_static_is_external_identity() {
+        assert!(ServerAuth::VaultStatic.is_external_identity());
+        assert!(ServerAuth::VaultDynamic.is_external_identity());
     }
 
     #[test]
@@ -695,8 +804,8 @@ vault_refresh_percent = 75
             users: vec![User {
                 name: "alice".into(),
                 database: "db".into(),
-                server_auth: ServerAuth::Vault,
-                vault_path: Some("database/creds/pgdog".into()),
+                server_auth: ServerAuth::VaultDynamic,
+                server_vault_path: Some("database/creds/pgdog".into()),
                 vault_refresh_percent: Some(150),
                 ..Default::default()
             }],

@@ -280,9 +280,11 @@ impl Client {
                             AuthResult::NoIdentity
                         }
                     } else {
-                        // Password authentication.
-                        Self::check_password(&mut stream, user, auth_type, cluster.passwords())
-                            .await?
+                        // Resolve Vault static role
+                        // entries to plaintext before the auth exchange
+                        let passwords =
+                            crate::auth::vault::resolve_passwords(cluster.passwords()).await;
+                        Self::check_password(&mut stream, user, auth_type, &passwords).await?
                     }
                 }
 
