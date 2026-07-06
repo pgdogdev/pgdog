@@ -120,10 +120,8 @@ impl Ast {
         // route the query to a specific shard, we need to know whether the
         // same query body (without the comment) would require a rewrite, so
         // `Cache::query` can decide whether this entry is safe to cache.
-        let rewrite_plan = StatementRewrite::new(StatementRewriteContext {
+        let mut rewriter = StatementRewrite::new(StatementRewriteContext {
             stmt: &mut ast.protobuf,
-            #[cfg(feature = "new_parser")]
-            new_stmt: &new_ast,
             extended: query.original_query.extended(),
             prepared: query.original_query.prepared(),
             prepared_statements,
@@ -131,8 +129,16 @@ impl Ast {
             db_schema,
             user,
             search_path,
-        })
-        .maybe_rewrite()?;
+        });
+        #[cfg(feature = "new_parser")]
+        let rewrite_plan = if let Some(node) = new_ast.stmts().next() {
+            rewriter.maybe_rewrite(node)?
+        } else {
+            Default::default()
+        };
+
+        #[cfg(not(feature = "new_parser"))]
+        let rewrite_plan = rewriter.maybe_rewrite()?;
 
         let elapsed = now.elapsed();
         let mut stats = Stats::new();

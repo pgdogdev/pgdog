@@ -158,8 +158,6 @@ mod tests {
             let stmt = pg_raw_parse::parse(sql).unwrap();
             let mut rewrite = StatementRewrite::new(StatementRewriteContext {
                 stmt: &mut ast,
-                #[cfg(feature = "new_parser")]
-                new_stmt: &stmt,
                 extended: false,
                 prepared: false,
                 prepared_statements: &mut self.ps,
@@ -168,7 +166,10 @@ mod tests {
                 user: "",
                 search_path: None,
             });
-            let plan = rewrite.maybe_rewrite()?;
+            let plan = rewrite.maybe_rewrite(
+                #[cfg(feature = "new_parser")]
+                stmt.stmts().next().unwrap(),
+            )?;
             Ok((ast, plan))
         }
     }
