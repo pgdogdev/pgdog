@@ -3,7 +3,7 @@
 use pg_query::Node as PgNode;
 use pg_query::protobuf::ParseResult;
 #[cfg(feature = "new_parser")]
-use pg_raw_parse::{Node, make};
+use pg_raw_parse::{Node, make, walk};
 #[cfg(not(feature = "new_parser"))]
 use pgdog_config::QueryParserEngine;
 
@@ -112,6 +112,20 @@ impl<'a> StatementRewrite<'a> {
         &mut self,
         #[cfg(feature = "new_parser")] node: Node<'a>,
     ) -> Result<RewritePlan, Error> {
+        #[cfg(feature = "new_parser")]
+        let mut params = 0;
+        #[cfg(feature = "new_parser")]
+        match node {
+            Node::InsertStmt(_)
+            | Node::SelectStmt(_)
+            | Node::UpdateStmt(_)
+            | Node::DeleteStmt(_) => walk::walk(node, |node| match node {
+                Node::ParamRef(param) => params = params.max(param.number as u16),
+                _ => (),
+            }),
+            _ => (),
+        }
+        #[cfg(not(feature = "new_parser"))]
         let params = visitor::count_params(self.stmt);
         let mut plan = RewritePlan {
             params,
