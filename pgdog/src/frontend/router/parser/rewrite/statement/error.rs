@@ -41,4 +41,7 @@ pub enum Error {
 
     #[error("missing AST on request")]
     MissingAst,
+
+    #[error("prepared statement '{0}' does not exist")]
+    ExecuteMissingPrepare(String),
 }
