@@ -108,24 +108,79 @@ impl<'a> StatementRewrite<'a> {
 
     /// Maybe rewrite the statement and produce a rewrite plan
     /// we can apply to Bind messages.
-    pub fn maybe_rewrite(
-        &mut self,
-        #[cfg(feature = "new_parser")] node: Node<'a>,
-    ) -> Result<RewritePlan, Error> {
-        #[cfg(feature = "new_parser")]
-        let mut params = 0;
-        #[cfg(feature = "new_parser")]
-        match node {
-            Node::InsertStmt(_)
-            | Node::SelectStmt(_)
-            | Node::UpdateStmt(_)
-            | Node::DeleteStmt(_) => walk::walk(node, |node| match node {
-                Node::ParamRef(param) => params = params.max(param.number as u16),
+    #[cfg(feature = "new_parser")]
+    pub fn maybe_rewrite(&mut self, node: Node<'a>) -> Result<RewritePlan, Error> {
+        let mut plan = RewritePlan::default();
+
+        make::try_owned(|mem| {
+            match node {
+                Node::InsertStmt(_)
+                | Node::SelectStmt(_)
+                | Node::UpdateStmt(_)
+                | Node::DeleteStmt(_) => walk::walk(node, |node| match node {
+                    Node::ParamRef(param) => plan.params = plan.params.max(param.number as u16),
+                    _ => (),
+                }),
                 _ => (),
-            }),
-            _ => (),
-        }
-        #[cfg(not(feature = "new_parser"))]
+            }
+
+            // Handle top-level PREPARE/EXECUTE statements.
+            let prepared_result = self.rewrite_simple_prepared()?;
+            if prepared_result.rewritten {
+                self.rewritten = true;
+                plan.prepares = prepared_result.prepares;
+            }
+
+            // Inject pgdog.unique_id() for missing BIGINT primary keys.
+            // This must run BEFORE the unique_id rewriter so the injected
+            // function calls get processed.
+            self.inject_auto_id(node, &mut plan)?;
+
+            // Track the next parameter number to use
+            let mut next_param = plan.params as i32 + 1;
+
+            let extended = self.extended;
+            visitor::visit_and_mutate_nodes(self.stmt, |node| -> Result<Option<PgNode>, Error> {
+                match Self::rewrite_unique_id(node, extended, &mut next_param)? {
+                    Some(replacement) => {
+                        plan.unique_ids += 1;
+                        self.rewritten = true;
+                        Ok(Some(replacement))
+                    }
+                    None => Ok(None),
+                }
+            })?;
+
+            let reparsed = pg_raw_parse::parse(&pg_query::deparse(self.stmt)?)?;
+            let mut node = reparsed.stmts().next().unwrap();
+            let mut select_stmt;
+            if let Node::SelectStmt(select) = node {
+                select_stmt = mem.make_unique(select);
+                self.rewrite_aggregates(select_stmt.as_mut(), mem, &mut plan, self.db_schema)?;
+                self.limit_offset(&select_stmt, &mut plan);
+                node = (&*select_stmt).into();
+                self.stmt.stmts = pg_query::parse(pg_raw_parse::deparse(node)?.as_str())?
+                    .protobuf
+                    .stmts;
+            }
+
+            if self.rewritten {
+                plan.stmt = Some(pg_raw_parse::deparse(node)?.as_str().to_owned());
+            }
+
+            self.split_insert(&mut plan)?;
+            if let Node::UpdateStmt(stmt) = node {
+                self.sharding_key_update(stmt, &mut plan)?;
+            }
+
+            Ok::<_, Error>(mem.make_RawStmt(mem.make_unique(node)))
+        })?;
+
+        Ok(plan)
+    }
+
+    #[cfg(not(feature = "new_parser"))]
+    pub fn maybe_rewrite(&mut self) -> Result<RewritePlan, Error> {
         let params = visitor::count_params(self.stmt);
         let mut plan = RewritePlan {
             params,
@@ -142,11 +197,7 @@ impl<'a> StatementRewrite<'a> {
         // Inject pgdog.unique_id() for missing BIGINT primary keys.
         // This must run BEFORE the unique_id rewriter so the injected
         // function calls get processed.
-        self.inject_auto_id(
-            #[cfg(feature = "new_parser")]
-            node,
-            &mut plan,
-        )?;
+        self.inject_auto_id(&mut plan)?;
 
         // Track the next parameter number to use
         let mut next_param = plan.params as i32 + 1;
@@ -163,38 +214,9 @@ impl<'a> StatementRewrite<'a> {
             }
         })?;
 
-        #[cfg(not(feature = "new_parser"))]
         self.rewrite_aggregates(&mut plan, self.db_schema)?;
-
-        #[cfg(feature = "new_parser")]
-        let reparsed = pg_raw_parse::parse(&pg_query::deparse(self.stmt)?)?;
-        #[cfg(feature = "new_parser")]
-        let mut node = reparsed.stmts().next().unwrap();
-        #[cfg(feature = "new_parser")]
-        let select_stmt;
-        #[cfg(feature = "new_parser")]
-        if let Node::SelectStmt(select) = node {
-            select_stmt = make::try_owned(|mem| {
-                let mut select = mem.make_unique(select);
-                self.rewrite_aggregates(select.as_mut(), mem, &mut plan, self.db_schema)?;
-                self.limit_offset(&select, &mut plan);
-                Ok::<_, Error>(select)
-            })?;
-            node = (&*select_stmt).into();
-            self.stmt.stmts = pg_query::parse(pg_raw_parse::deparse(node)?.as_str())?
-                .protobuf
-                .stmts;
-        }
-
-        #[cfg(not(feature = "new_parser"))]
         self.limit_offset(&mut plan)?;
 
-        #[cfg(feature = "new_parser")]
-        if self.rewritten {
-            plan.stmt = Some(pg_raw_parse::deparse(node)?.as_str().to_owned());
-        }
-
-        #[cfg(not(feature = "new_parser"))]
         if self.rewritten {
             plan.stmt = Some(match self.schema.query_parser_engine {
                 QueryParserEngine::PgQueryProtobuf => self.stmt.deparse(),
@@ -203,11 +225,6 @@ impl<'a> StatementRewrite<'a> {
         }
 
         self.split_insert(&mut plan)?;
-        #[cfg(feature = "new_parser")]
-        if let Node::UpdateStmt(stmt) = node {
-            self.sharding_key_update(stmt, &mut plan)?;
-        }
-        #[cfg(not(feature = "new_parser"))]
         self.sharding_key_update(&mut plan)?;
 
         Ok(plan)
