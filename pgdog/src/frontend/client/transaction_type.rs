@@ -3,6 +3,7 @@ pub enum TransactionType {
     ReadOnly,
     #[default]
     ReadWrite,
+    Implicit,
     ErrorReadWrite,
     ErrorReadOnly,
 }
