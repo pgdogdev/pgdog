@@ -1,10 +1,13 @@
+use std::str::FromStr;
+
+use pgdog_stats::replication::Lsn;
 use tokio::time::timeout;
 
 use crate::frontend::router::parser::{ShardWithPriority, route::ShardSource};
 
 use super::*;
 
-use tracing::{error, trace};
+use tracing::{debug, error, trace};
 
 impl QueryEngine {
     /// Connect to backend, if necessary.
@@ -30,7 +33,17 @@ impl QueryEngine {
 
         let connect_route = connect_route.unwrap_or(context.client_request.route());
 
-        let request = Request::new(context.id, connect_route.is_read());
+        // Read-your-writes floor: a client sets `pgdog.min_lsn` (startup param or
+        // `SET`) to the commit LSN it must observe; the LB routes the read only to
+        // a replica that has replayed at least this far.
+        let min_lsn = context
+            .params
+            .get("pgdog.min_lsn")
+            .and_then(|value| value.as_str())
+            .and_then(|value| Lsn::from_str(value).ok())
+            .map(|lsn| lsn.lsn);
+
+        let request = Request::new(context.id, connect_route.is_read()).with_min_lsn(min_lsn);
 
         self.stats.waiting(request.created_at);
         self.comms.update_stats(self.stats);
@@ -58,7 +71,12 @@ impl QueryEngine {
             }
 
             Err(err) => {
-                self.stats.error();
+                // A min_lsn miss is expected read-your-writes backpressure, not a
+                // server fault: don't inflate the pool error stat with it.
+                let expected_backpressure = err.is_no_replica_caught_up();
+                if !expected_backpressure {
+                    self.stats.error();
+                }
                 let can_recover = self
                     .backend
                     .cluster()
@@ -66,7 +84,12 @@ impl QueryEngine {
                     .unwrap_or_default();
 
                 if err.no_server() && can_recover {
-                    error!("{} [{:?}]", err, context.stream.peer_addr());
+                    // Expected backpressure logs at debug; real faults at error.
+                    if expected_backpressure {
+                        debug!("{} [{:?}]", err, context.stream.peer_addr());
+                    } else {
+                        error!("{} [{:?}]", err, context.stream.peer_addr());
+                    }
 
                     let error = ErrorResponse::from_err(&err);
 

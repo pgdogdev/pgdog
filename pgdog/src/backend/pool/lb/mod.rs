@@ -29,6 +29,10 @@ pub use ban::UnbanReason;
 use monitor::*;
 pub use target_health::*;
 
+/// A real catch-up estimate is floored at 1s; `0` is reserved for "not
+/// estimable", which tells the client to fall back to its own default backoff.
+const MIN_ETA_SECONDS: i64 = 1;
+
 #[cfg(test)]
 mod test;
 
@@ -86,6 +90,9 @@ pub struct LoadBalancer {
     pub(super) role_detection: Arc<Notify>,
     /// Read/write split.
     pub(super) rw_split: ReadWriteSplit,
+    /// Fall back to the primary when no replica satisfies a read's `min_lsn`
+    /// (instead of erroring).
+    pub(super) min_lsn_primary_fallback: bool,
 }
 
 impl LoadBalancer {
@@ -126,7 +133,14 @@ impl LoadBalancer {
             maintenance: Arc::new(Notify::new()),
             role_detection: Arc::new(Notify::new()),
             rw_split,
+            min_lsn_primary_fallback: false,
         }
+    }
+
+    /// Fall back to the primary when no replica satisfies a read's `min_lsn`.
+    pub fn with_min_lsn_primary_fallback(mut self, fallback: bool) -> Self {
+        self.min_lsn_primary_fallback = fallback;
+        self
     }
 
     /// Get the primary pool, if configured.
@@ -368,6 +382,41 @@ impl LoadBalancer {
 
         if candidates.is_empty() {
             return Err(Error::AllReplicasDown);
+        }
+
+        // Read-your-writes floor: keep only replicas that have replayed at least
+        // `min_lsn` (replay LSN is monotonic and the cached value is <= actual, so
+        // this never serves a stale read). If none qualify, fall back to the
+        // primary when `min_lsn_primary_fallback` is set, else error with an ETA.
+        if let Some(min_lsn) = request.min_lsn {
+            let caught_up: Vec<&Target> = candidates
+                .iter()
+                .copied()
+                .filter(|target| {
+                    let stats = target.pool.lsn_stats();
+                    stats.valid() && stats.lsn.lsn >= min_lsn
+                })
+                .collect();
+
+            if !caught_up.is_empty() {
+                candidates = caught_up;
+            } else if let Some(primary) = self
+                .min_lsn_primary_fallback
+                .then(|| self.primary_target())
+                .flatten()
+            {
+                candidates = vec![primary];
+            } else {
+                // ETA until the soonest replica reaches the floor, so the client
+                // can size its defer; `0` = not estimable (no valid LSN stats).
+                let eta_seconds = candidates
+                    .iter()
+                    .filter_map(|target| target.pool.lsn_stats().eta_to(min_lsn))
+                    .min()
+                    .map(|eta| (eta.as_secs() as i64).max(MIN_ETA_SECONDS))
+                    .unwrap_or(0);
+                return Err(Error::NoReplicaCaughtUp { eta_seconds });
+            }
         }
 
         match self.lb_strategy {

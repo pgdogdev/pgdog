@@ -100,6 +100,18 @@ impl Error {
         )
     }
 
+    /// Expected read-your-writes backpressure: the `pgdog.min_lsn` floor isn't
+    /// met yet. The client receives SQLSTATE 58000 and defers, so this is normal
+    /// control flow; log it at debug, not error.
+    pub fn is_no_replica_caught_up(&self) -> bool {
+        use crate::backend::Error as BackendError;
+        use crate::backend::pool::Error as PoolError;
+        matches!(
+            self,
+            Error::Backend(BackendError::Pool(PoolError::NoReplicaCaughtUp { .. }))
+        )
+    }
+
     pub(crate) fn disconnect(&self) -> bool {
         if let Error::Net(crate::net::Error::Io(err)) = self
             && err.kind() == ErrorKind::UnexpectedEof

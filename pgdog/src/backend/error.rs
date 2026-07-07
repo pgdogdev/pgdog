@@ -160,8 +160,18 @@ impl Error {
             Error::Pool(PoolError::CheckoutTimeout) => true,
             Error::Pool(PoolError::AllReplicasDown) => true,
             Error::Pool(PoolError::Banned) => true,
+            Error::Pool(PoolError::NoReplicaCaughtUp { .. }) => true,
             _ => false,
         }
+    }
+
+    /// Expected read-your-writes backpressure: the `pgdog.min_lsn` floor isn't
+    /// met yet. The client receives SQLSTATE 58000 and defers/retries, so this
+    /// is normal control flow, not a server fault; callers log it at debug and
+    /// do not count it as a pool error.
+    pub fn is_no_replica_caught_up(&self) -> bool {
+        use crate::backend::pool::Error as PoolError;
+        matches!(self, Error::Pool(PoolError::NoReplicaCaughtUp { .. }))
     }
 
     /// Transient network/pool fault worth retrying.

@@ -2031,3 +2031,23 @@ async fn test_params_returns_all_replicas_down_when_empty() {
         "params() should return AllReplicasDown when no targets exist"
     );
 }
+
+#[tokio::test]
+async fn test_min_lsn_errors_when_no_replica_caught_up() {
+    // Two replicas with default (invalid, lsn 0) stats: nothing is caught up.
+    let replicas = LoadBalancer::new(
+        &None,
+        &[
+            create_test_pool_config("127.0.0.1", 5432),
+            create_test_pool_config("localhost", 5432),
+        ],
+        LoadBalancingStrategy::Random,
+        ReadWriteSplit::IncludePrimary,
+    );
+
+    // Fallback is off by default, so an unmet min_lsn must error before any checkout.
+    let request = Request::default().with_min_lsn(Some(100));
+    let result = replicas.get(&request).await;
+
+    assert!(matches!(result, Err(Error::NoReplicaCaughtUp { .. })));
+}

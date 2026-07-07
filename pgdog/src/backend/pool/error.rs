@@ -76,6 +76,13 @@ pub enum Error {
 
     #[error("replica lag")]
     ReplicaLag,
+
+    // `eta_seconds`: how long until the soonest replica reaches `min_lsn`,
+    // derived from its replication lag in time; `0` means not estimable. Clients
+    // size their read-your-writes defer from it. The message text is part of the
+    // wire contract (clients match on it), so keep it stable.
+    #[error("no replica caught up to the requested min_lsn (eta ~{eta_seconds}s)")]
+    NoReplicaCaughtUp { eta_seconds: i64 },
 }
 
 impl Error {
@@ -98,6 +105,10 @@ impl Error {
                 | Self::UntrackedConnCheckin(_)
                 // Deliberate shutdown.
                 | Self::FastShutdown
+                // Read-your-writes backpressure: no replica has reached the
+                // requested min_lsn. An immediate retry can't help; the client
+                // must wait out the reported ETA.
+                | Self::NoReplicaCaughtUp { .. }
         )
     }
 }
@@ -133,5 +144,6 @@ mod tests {
         assert!(!Error::PubSubDisabled.is_retryable());
         assert!(!Error::FastShutdown.is_retryable());
         assert!(!Error::NoShard(0).is_retryable());
+        assert!(!Error::NoReplicaCaughtUp { eta_seconds: 5 }.is_retryable());
     }
 }

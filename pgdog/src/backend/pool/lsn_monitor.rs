@@ -48,7 +48,16 @@ SELECT
             COALESCE(pg_last_xact_replay_timestamp(), now())
         ELSE
             now()
-    END AS timestamp
+    END AS timestamp,
+    CASE
+        WHEN pg_is_in_recovery() THEN
+            COALESCE(
+                EXTRACT(EPOCH FROM (now() - pg_last_xact_replay_timestamp()))::bigint,
+                0
+            )
+        ELSE
+            0
+    END AS replay_lag_seconds
 ";
 
 static AURORA_LSN_QUERY: &str = "
@@ -56,13 +65,23 @@ SELECT
     pg_is_in_recovery() AS replica,
     '0/0'::pg_lsn AS lsn,
     0::bigint AS offset_bytes,
-    now() AS timestamp
+    now() AS timestamp,
+    0::bigint AS replay_lag_seconds
 ";
+
+/// Cap a replication-lag ETA at one day so a pathological lag value can't
+/// overflow `Duration`; clients clamp further.
+const MAX_REPLAY_LAG_SECONDS: i64 = 86_400;
 
 /// LSN information.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct LsnStats {
     inner: StatsLsnStats,
+    /// Replica replication lag in whole seconds: `now() -
+    /// pg_last_xact_replay_timestamp()`, computed DB-side (one clock, no
+    /// pgdog<->DB skew or timezone handling). `0` on the primary, on Aurora, or
+    /// when the replica has not replayed any transaction yet.
+    replay_lag_seconds: i64,
 }
 
 impl Deref for LsnStats {
@@ -81,7 +100,10 @@ impl DerefMut for LsnStats {
 
 impl From<StatsLsnStats> for LsnStats {
     fn from(value: StatsLsnStats) -> Self {
-        Self { inner: value }
+        Self {
+            inner: value,
+            replay_lag_seconds: 0,
+        }
     }
 }
 
@@ -109,11 +131,30 @@ impl LsnStats {
             duration: lag,
         }
     }
+
+    /// Estimated time for this replica to reach `min_lsn`: its replication lag in
+    /// time (`now() - pg_last_xact_replay_timestamp()`, measured DB-side), used by
+    /// the client to size its read-your-writes defer. A stable single-sample
+    /// reading — a bytes/apply-rate derivative gets fooled by bursty replay into a
+    /// runaway ETA. Safe-biased (true wait <= lag, since `min_lsn` committed after
+    /// the frontier). `None` if stats are invalid; `ZERO` once at/past the floor.
+    pub fn eta_to(&self, min_lsn: i64) -> Option<Duration> {
+        if !self.valid() {
+            return None;
+        }
+        if self.lsn.lsn >= min_lsn {
+            return Some(Duration::ZERO);
+        }
+        // Negative lag (clock wobble) floors at zero; clamp the top so a
+        // pathological value can't overflow. Clients clamp further.
+        let secs = self.replay_lag_seconds.clamp(0, MAX_REPLAY_LAG_SECONDS) as u64;
+        Some(Duration::from_secs(secs))
+    }
 }
 
 impl LsnStats {
     fn from_row(value: DataRow, aurora: bool) -> Self {
-        StatsLsnStats {
+        let mut stats: LsnStats = StatsLsnStats {
             replica: value.get(0, Format::Text).unwrap_or_default(),
             lsn: value.get(1, Format::Text).unwrap_or_default(),
             offset_bytes: value.get(2, Format::Text).unwrap_or_default(),
@@ -121,7 +162,9 @@ impl LsnStats {
             fetched: SystemTime::now(),
             aurora,
         }
-        .into()
+        .into();
+        stats.replay_lag_seconds = value.get(4, Format::Text).unwrap_or_default();
+        stats
     }
 }
 
@@ -515,5 +558,37 @@ mod test {
             !stats.valid(),
             "Non-Aurora stats should be invalid with zero LSN"
         );
+    }
+
+    #[test]
+    fn test_eta_to_uses_replay_lag() {
+        let mut stats: LsnStats = StatsLsnStats {
+            replica: true,
+            lsn: Lsn::from_i64(1000),
+            offset_bytes: 1000,
+            timestamp: TimestampTz::default(),
+            fetched: SystemTime::now(),
+            aurora: false,
+        }
+        .into();
+
+        // Behind the floor: eta is the replica's replication lag in time.
+        stats.replay_lag_seconds = 7;
+        assert_eq!(stats.eta_to(1500).map(|d| d.as_secs()), Some(7));
+
+        // Already at/past the floor -> zero, regardless of lag.
+        assert_eq!(stats.eta_to(1000), Some(Duration::ZERO));
+        assert_eq!(stats.eta_to(500), Some(Duration::ZERO));
+
+        // Pathological lag is clamped, not overflowed.
+        stats.replay_lag_seconds = i64::MAX;
+        assert_eq!(
+            stats.eta_to(1500).map(|d| d.as_secs()),
+            Some(MAX_REPLAY_LAG_SECONDS as u64)
+        );
+
+        // Negative lag (clock wobble) floors at zero.
+        stats.replay_lag_seconds = -5;
+        assert_eq!(stats.eta_to(1500), Some(Duration::ZERO));
     }
 }

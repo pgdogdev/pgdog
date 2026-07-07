@@ -221,6 +221,15 @@ pub struct General {
     #[serde(default)]
     pub read_write_split: ReadWriteSplit,
 
+    /// When a read sets `pgdog.min_lsn` and no replica has replayed that far, fall
+    /// back to the primary instead of erroring.
+    ///
+    /// _Default:_ `false`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#min_lsn_primary_fallback
+    #[serde(default)]
+    pub min_lsn_primary_fallback: bool,
+
     /// Path to the TLS certificate PgDog will use to setup TLS connections with clients.
     ///
     /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#tls_certificate
@@ -829,6 +838,7 @@ impl Default for General {
             load_balancing_strategy: Self::load_balancing_strategy(),
             read_write_strategy: Self::read_write_strategy(),
             read_write_split: Self::read_write_split(),
+            min_lsn_primary_fallback: false,
             tls_certificate: Self::tls_certificate(),
             tls_private_key: Self::tls_private_key(),
             tls_client_required: bool::default(),

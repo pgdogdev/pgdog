@@ -8,6 +8,10 @@ pub struct Request {
     pub id: FrontendPid,
     pub created_at: Instant,
     pub read: bool,
+    /// Minimum replica replay LSN (64-bit) the read requires. Reads are routed
+    /// only to a replica that has replayed at least this far; `None` disables
+    /// the floor.
+    pub min_lsn: Option<i64>,
 }
 
 impl Request {
@@ -16,6 +20,7 @@ impl Request {
             id,
             created_at: Instant::now(),
             read,
+            min_lsn: None,
         }
     }
 
@@ -24,7 +29,14 @@ impl Request {
             id,
             created_at: Instant::now(),
             read: false,
+            min_lsn: None,
         }
+    }
+
+    /// Require the serving replica to have replayed at least `lsn` (read-your-writes).
+    pub fn with_min_lsn(mut self, lsn: Option<i64>) -> Self {
+        self.min_lsn = lsn;
+        self
     }
 }
 
