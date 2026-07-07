@@ -158,6 +158,7 @@ impl<'a> StatementRewrite<'a> {
         let mut node = reparsed.stmts().next().unwrap();
         #[cfg(feature = "new_parser")]
         let select_stmt;
+        #[cfg(feature = "new_parser")]
         if let Node::SelectStmt(select) = node {
             select_stmt = make::try_owned(|mem| {
                 let mut select = mem.make_unique(select);
