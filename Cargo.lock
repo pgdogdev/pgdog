@@ -1184,6 +1184,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "convert_case"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "affbf0190ed2caf063e3def54ff444b449371d55c58e513a95ab98eca50adb49"
+dependencies = [
+ "unicode-segmentation",
+]
+
+[[package]]
 name = "core-foundation"
 version = "0.9.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1582,7 +1591,7 @@ version = "2.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "799a97264921d8623a957f6c3b9011f3b5492f557bbb7a5a19b7fa6d06ba8dcb"
 dependencies = [
- "convert_case",
+ "convert_case 0.10.0",
  "proc-macro2",
  "quote",
  "rustc_version",
@@ -3304,10 +3313,11 @@ dependencies = [
 [[package]]
 name = "pg_raw_parse"
 version = "0.1.0"
-source = "git+https://github.com/pgdogdev/pg_raw_parse.git?rev=92a3be8#92a3be878b98f46f968717a6ba0c0e37c3dc118e"
+source = "git+https://github.com/pgdogdev/pg_raw_parse.git?rev=6c7cee4#6c7cee4125a1f8f38b790aa138bee5842b41c026"
 dependencies = [
  "bindgen 0.72.1",
  "cc",
+ "convert_case 0.11.0",
  "generativity",
  "glob",
  "libc",

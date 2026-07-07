@@ -199,10 +199,10 @@ impl StatementRewrite<'_> {
             return;
         }
 
-        let Some(limit_info) = extract_limit_value(select.limitCount()) else {
+        let Some(limit_info) = extract_limit_value(select.limit_count()) else {
             return;
         };
-        let Some(offset_info) = extract_limit_value(select.limitOffset()) else {
+        let Some(offset_info) = extract_limit_value(select.limit_offset()) else {
             return;
         };
 

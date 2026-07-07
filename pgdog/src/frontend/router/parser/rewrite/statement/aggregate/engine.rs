@@ -36,7 +36,7 @@ impl AggregatesRewrite {
             .targets()
             .iter()
             .flat_map(|target| {
-                let Some(node) = select.targetList().iter().nth(target.column()) else {
+                let Some(node) = select.target_list().iter().nth(target.column()) else {
                     // FIXME: We should make this impossible statically
                     panic!("SelectStmt did not contain previously parsed column");
                 };
@@ -53,11 +53,11 @@ impl AggregatesRewrite {
             .map(|(idx, (target, HelperSpec { func, kind }))| {
                 let helper_alias =
                     format!("__pgdog_{}_col{}", kind.alias_suffix(), target.column());
-                let node = mem.make_ResTarget(Some(&helper_alias), mem.empty(), func.uncast());
+                let node = mem.make_res_target(Some(&helper_alias), mem.empty(), func.uncast());
 
                 plan.add_helper(HelperMapping {
                     target_column: target.column(),
-                    helper_column: select.targetList().len() + idx,
+                    helper_column: select.target_list().len() + idx,
                     distinct: target.is_distinct(),
                     kind,
                     alias: helper_alias,
@@ -70,12 +70,12 @@ impl AggregatesRewrite {
             RewriteOutput::default()
         } else {
             let mut target_list = select
-                .targetList()
+                .target_list()
                 .into_iter()
                 .map(|n| mem.make_unique(n))
                 .collect::<Vec<_>>();
             target_list.extend(helper_nodes);
-            select.set_targetList(mem.make_List(&target_list));
+            select.set_target_list(mem.make_list(&target_list));
             RewriteOutput::new(plan)
         }
     }
@@ -241,25 +241,25 @@ impl AggregatesRewrite {
 
         // We need to cast to NUMERIC to avoid overflow
         let mut numeric_type = mem.make_node::<nodes::TypeName>();
-        numeric_type.as_mut().set_names(mem.make_List(&[
-            mem.make_String(Some("pg_catalog")),
-            mem.make_String(Some("numeric")),
+        numeric_type.as_mut().set_names(mem.make_list(&[
+            mem.make_string(Some("pg_catalog")),
+            mem.make_string(Some("numeric")),
         ]));
-        numeric_type.as_mut().set_typeOid(1700);
+        numeric_type.as_mut().set_type_oid(1700);
 
         let mut cast_arg = mem.make_node::<nodes::TypeCast>();
-        cast_arg.as_mut().set_typeName(numeric_type.as_option());
+        cast_arg.as_mut().set_type_name(numeric_type.as_option());
         cast_arg.as_mut().set_arg(mem.make_unique(arg));
 
-        let arg_squared = mem.make_A_Expr(
+        let arg_squared = mem.make_a_expr(
             nodes::A_Expr_Kind::AEXPR_OP,
-            mem.make_List(&[mem.make_String(Some("*")).uncast()]),
+            mem.make_list(&[mem.make_string(Some("*")).uncast()]),
             mem.make_unique(Node::from(cast_arg.as_ref())),
             cast_arg.uncast(),
         );
         sumsq
             .as_mut()
-            .set_args(mem.make_List(&[arg_squared.uncast()]));
+            .set_args(mem.make_list(&[arg_squared.uncast()]));
         sumsq
     }
 
@@ -371,7 +371,7 @@ impl AggregatesRewrite {
     ) -> make::Unique<'a, &'a nodes::FuncCall> {
         let mut func = mem.make_unique(func_call);
         func.as_mut()
-            .set_funcname(mem.make_List(&[mem.make_String(Some(name)).uncast()]));
+            .set_funcname(mem.make_list(&[mem.make_string(Some(name)).uncast()]));
         func
     }
 
@@ -484,7 +484,7 @@ mod tests {
         let (mut ast, output) = rewrite("SELECT COUNT(price) FROM menu");
         assert!(output.plan.is_noop());
         #[cfg(feature = "new_parser")]
-        assert_eq!(ast.targetList().len(), 1);
+        assert_eq!(ast.target_list().len(), 1);
         #[cfg(not(feature = "new_parser"))]
         assert_eq!(select(&mut ast).target_list.len(), 1);
     }
@@ -594,7 +594,7 @@ mod tests {
 
         // Expect original STDDEV plus three helpers.
         #[cfg(feature = "new_parser")]
-        assert_eq!(ast.targetList().len(), 4);
+        assert_eq!(ast.target_list().len(), 4);
         #[cfg(not(feature = "new_parser"))]
         assert_eq!(select(&mut ast).target_list.len(), 4);
     }

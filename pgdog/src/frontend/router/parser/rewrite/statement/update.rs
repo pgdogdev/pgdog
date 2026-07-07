@@ -139,7 +139,7 @@ impl ShardingKeyUpdate {
             #[cfg(feature = "new_parser")]
             {
                 self.from_update
-                    .targetList()
+                    .target_list()
                     .iter()
                     .any(|rt| rt.name() == Some(&*sharded.column))
             }
@@ -203,11 +203,11 @@ impl Inner {
             let mut values = Vec::new();
             for (idx, field) in row_description.iter().enumerate() {
                 columns.push(
-                    mem.make_ResTarget(Some(&*field.name), mem.empty(), mem.none())
+                    mem.make_res_target(Some(&*field.name), mem.empty(), mem.none())
                         .uncast(),
                 );
 
-                if let Some(value) = self.from_update.targetList().iter().find_map(|rt| {
+                if let Some(value) = self.from_update.target_list().iter().find_map(|rt| {
                     if rt.name() == Some(&*field.name) {
                         Some(rt.val())
                     } else {
@@ -219,7 +219,7 @@ impl Inner {
                             .and_then(|p| p.parameter(number as usize - 1).transpose())
                             .ok_or(Error::MissingParameter(number as u16))??;
                         bind.push_param(param.parameter().clone(), param.format());
-                        values.push(mem.make_ParamRef(bind.params_raw().len() as _).uncast());
+                        values.push(mem.make_param_ref(bind.params_raw().len() as _).uncast());
                     } else {
                         values.push(mem.make_unique(value));
                     }
@@ -232,7 +232,7 @@ impl Inner {
                     } else {
                         bind.push_param(Parameter::new(value), Format::Text);
                     }
-                    values.push(mem.make_ParamRef(bind.params_raw().len() as _).uncast());
+                    values.push(mem.make_param_ref(bind.params_raw().len() as _).uncast());
                 }
             }
 
@@ -240,16 +240,16 @@ impl Inner {
             insert
                 .as_mut()
                 .set_relation(mem.make_unique(self.from_update.relation()));
-            insert.as_mut().set_cols(mem.make_List(&columns));
+            insert.as_mut().set_cols(mem.make_list(&columns));
             let mut select = mem.make_node::<nodes::SelectStmt>();
             select
                 .as_mut()
-                .set_valuesLists(mem.make_List(&[mem.make_List(&values)]));
-            insert.as_mut().set_selectStmt(select.uncast());
+                .set_values_lists(mem.make_list(&[mem.make_list(&values)]));
+            insert.as_mut().set_select_stmt(select.uncast());
             insert
                 .as_mut()
-                .set_returningList(mem.make_unique(self.from_update.returningList()));
-            Ok(mem.make_List(&[mem.make_RawStmt(insert.uncast())]))
+                .set_returning_list(mem.make_unique(self.from_update.returning_list()));
+            Ok(mem.make_list(&[mem.make_raw_stmt(insert.uncast())]))
         })?;
         let stmt = deparse(insert.first().unwrap())?;
 
@@ -284,7 +284,7 @@ impl Inner {
     #[cfg(feature = "new_parser")]
     /// Do we have to return the rows to the client?
     pub(crate) fn is_returning(&self) -> bool {
-        !self.from_update.returningList().is_empty()
+        !self.from_update.returning_list().is_empty()
     }
 
     #[cfg(not(feature = "new_parser"))]
@@ -496,7 +496,7 @@ impl<'a> StatementRewrite<'a> {
             // Without a WHERE clause, this is a huge
             // cross-shard rewrite.
             #[cfg(feature = "new_parser")]
-            if let Node::None = stmt.whereClause() {
+            if let Node::None = stmt.where_clause() {
                 return Err(Error::WhereClauseMissing);
             }
             #[cfg(not(feature = "new_parser"))]
@@ -525,7 +525,7 @@ impl<'a> StatementRewrite<'a> {
             .map(Table::from)
             .expect("UPDATE always has a table");
 
-        let Some(shard_key_assignment) = stmt.targetList().into_iter().find(|c| {
+        let Some(shard_key_assignment) = stmt.target_list().into_iter().find(|c| {
             Column::try_from(*c).is_ok_and(|mut c| {
                 c.qualify(table);
                 self.schema.tables().get_table(c).is_some()
@@ -775,11 +775,11 @@ fn deparse_expr<'a>(nodes: impl IntoIterator<Item = Node<'a>>) -> Result<Deparse
             .into_iter()
             .map(|node| match node {
                 Node::ResTarget(r) => mem.make_unique(r),
-                _ => mem.make_ResTarget(None, mem.empty(), mem.make_unique(node)),
+                _ => mem.make_res_target(None, mem.empty(), mem.make_unique(node)),
             })
             .collect::<Vec<_>>();
-        select.as_mut().set_targetList(mem.make_List(&res_targets));
-        mem.make_RawStmt(select.uncast())
+        select.as_mut().set_target_list(mem.make_list(&res_targets));
+        mem.make_raw_stmt(select.uncast())
     });
     deparse(&*node).map_err(Into::into)
 }
@@ -836,16 +836,16 @@ fn create_stmts<'a>(
 ) -> Result<ShardingKeyUpdate, Error> {
     let select_star = owned(|mem| {
         let mut select_stmt = mem.make_node::<nodes::SelectStmt>();
-        select_stmt.as_mut().set_targetList(
-            mem.make_List(&[mem.make_ResTarget(
+        select_stmt.as_mut().set_target_list(
+            mem.make_list(&[mem.make_res_target(
                 None,
                 mem.empty(),
-                mem.make_ColumnRef(mem.make_List(&[mem.make_node::<nodes::A_Star>().uncast()]))
+                mem.make_column_ref(mem.make_list(&[mem.make_node::<nodes::A_Star>().uncast()]))
                     .uncast(),
             )]),
         );
-        select_stmt.as_mut().set_fromClause(
-            mem.make_List(&[mem
+        select_stmt.as_mut().set_from_clause(
+            mem.make_list(&[mem
                 .make_unique(stmt.relation().expect("UPDATE always has a table"))
                 .uncast()]),
         );
@@ -857,9 +857,9 @@ fn create_stmts<'a>(
         let mut select_stmt = mem.make_unique(&*select_star);
         select_stmt
             .as_mut()
-            .set_whereClause(mem.make_unique(stmt.whereClause()));
+            .set_where_clause(mem.make_unique(stmt.where_clause()));
         params = rewrite_params(select_stmt.as_mut().into());
-        mem.make_List(&[mem.make_RawStmt(select_stmt.uncast())])
+        mem.make_list(&[mem.make_raw_stmt(select_stmt.uncast())])
     });
 
     let select = Statement {
@@ -876,9 +876,9 @@ fn create_stmts<'a>(
             .set_relation(mem.make_unique(stmt.relation()));
         delete
             .as_mut()
-            .set_whereClause(mem.make_unique(stmt.whereClause()));
+            .set_where_clause(mem.make_unique(stmt.where_clause()));
         params = rewrite_params(delete.as_mut().into());
-        mem.make_List(&[mem.make_RawStmt(delete.uncast())])
+        mem.make_list(&[mem.make_raw_stmt(delete.uncast())])
     });
 
     let delete = Statement {
@@ -890,18 +890,18 @@ fn create_stmts<'a>(
     let mut params = IndexSet::new();
     let check = owned(|mem| {
         let mut select_stmt = mem.make_unique(&*select_star);
-        select_stmt.as_mut().set_whereClause(
-            mem.make_A_Expr(
+        select_stmt.as_mut().set_where_clause(
+            mem.make_a_expr(
                 nodes::A_Expr_Kind::AEXPR_OP,
-                mem.make_List(&[mem.make_String(Some("=")).uncast()]),
-                mem.make_ColumnRef(mem.make_List(&[mem.make_String(new_value.name()).uncast()]))
+                mem.make_list(&[mem.make_string(Some("=")).uncast()]),
+                mem.make_column_ref(mem.make_list(&[mem.make_string(new_value.name()).uncast()]))
                     .uncast(),
                 mem.make_unique(new_value.val()),
             )
             .uncast(),
         );
         params = rewrite_params(select_stmt.as_mut().into());
-        mem.make_List(&[mem.make_RawStmt(select_stmt.uncast())])
+        mem.make_list(&[mem.make_raw_stmt(select_stmt.uncast())])
     });
 
     let check = Statement {

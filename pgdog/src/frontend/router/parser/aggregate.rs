@@ -70,7 +70,7 @@ pub struct Aggregate {
 
 #[cfg(feature = "new_parser")]
 fn index_of_column(stmt: &nodes::SelectStmt, qualified_column_name: &[&str]) -> Option<usize> {
-    stmt.targetList().iter().position(|node| {
+    stmt.target_list().iter().position(|node| {
         let Node::ColumnRef(c) = node.val() else {
             return false;
         };
@@ -143,7 +143,7 @@ impl Aggregate {
     #[cfg(feature = "new_parser")]
     pub(crate) fn parse(stmt: &nodes::SelectStmt, schema: &Schema) -> Self {
         let group_by = stmt
-            .groupClause()
+            .group_clause()
             .iter()
             .filter_map(|node| match node {
                 // We use 0-indexed arrays, Postgres uses 1-indexed.
@@ -162,7 +162,7 @@ impl Aggregate {
             .collect();
 
         let targets = stmt
-            .targetList()
+            .target_list()
             .iter()
             .enumerate()
             .filter_map(|(idx, node)| {

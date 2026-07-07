@@ -178,7 +178,7 @@ impl<'a> StatementRewrite<'a> {
                 self.sharding_key_update(stmt, &mut plan)?;
             }
 
-            Ok::<_, Error>(mem.make_RawStmt(mem.make_unique(node)))
+            Ok::<_, Error>(mem.make_raw_stmt(mem.make_unique(node)))
         })?;
 
         Ok(plan)

@@ -35,8 +35,8 @@ impl<'a> LimitClause<'a> {
     pub(crate) fn limit_offset(&self) -> Result<Limit, Error> {
         let mut limit = Limit::default();
 
-        limit.limit = self.decode(self.stmt.limitCount())?;
-        limit.offset = self.decode(self.stmt.limitOffset())?;
+        limit.limit = self.decode(self.stmt.limit_count())?;
+        limit.offset = self.decode(self.stmt.limit_offset())?;
 
         Ok(limit)
     }
