@@ -1,4 +1,4 @@
-use rust::setup::connections_sqlx;
+use crate::setup::connections_sqlx;
 use sqlx::query_scalar;
 use std::assert_matches;
 

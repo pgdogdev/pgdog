@@ -1,4 +1,4 @@
-use rust::setup::{admin_sqlx, connection_sqlx_direct, connections_sqlx};
+use crate::setup::{admin_sqlx, connection_sqlx_direct, connections_sqlx};
 use sqlx::{Executor, Row};
 
 /// Test that PgDog gracefully handles connections terminated by administrator command.
@@ -38,8 +38,8 @@ async fn test_admin_termination_retry() {
     // The pooler passes through the client's application_name, which is "sqlx"
     let pids: Vec<i32> = admin_pool
         .fetch_all(
-            "SELECT pid FROM pg_stat_activity 
-             WHERE datname = 'pgdog' 
+            "SELECT pid FROM pg_stat_activity
+             WHERE datname = 'pgdog'
              AND application_name = 'sqlx'
              AND state = 'idle'
              AND pid != pg_backend_pid()",

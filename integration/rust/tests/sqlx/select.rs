@@ -1,4 +1,4 @@
-use rust::setup::connections_sqlx;
+use crate::setup::connections_sqlx;
 use tokio::task::JoinSet;
 
 use crate::get_stat;

@@ -1,5 +1,5 @@
-use rust::setup::admin_sqlx;
-use rust::utils::assert_setting_str;
+use crate::setup::admin_sqlx;
+use crate::utils::assert_setting_str;
 use serial_test::serial;
 use sqlx::{Connection, Executor, PgConnection};
 

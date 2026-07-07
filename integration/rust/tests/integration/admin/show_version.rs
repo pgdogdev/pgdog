@@ -1,4 +1,4 @@
-use rust::setup::admin_sqlx;
+use crate::setup::admin_sqlx;
 use sqlx::{Executor, Row};
 
 use super::assert_layout;

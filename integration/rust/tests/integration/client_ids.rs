@@ -1,5 +1,5 @@
+use crate::setup::admin_sqlx;
 use futures_util::future::join_all;
-use rust::setup::admin_sqlx;
 use serial_test::serial;
 use sqlx::{Executor, Row};
 use std::collections::HashSet;

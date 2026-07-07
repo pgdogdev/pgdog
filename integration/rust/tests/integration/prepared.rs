@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use rust::setup::*;
+use crate::setup::*;
 use sqlx::{Executor, Row, postgres::PgPoolOptions, types::BigDecimal};
 use tokio::{spawn, time::sleep};
 

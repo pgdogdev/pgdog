@@ -9,7 +9,7 @@ use std::{
     time::Duration,
 };
 
-use rust::setup::admin_tokio;
+use crate::setup::admin_tokio;
 use serial_test::serial;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},

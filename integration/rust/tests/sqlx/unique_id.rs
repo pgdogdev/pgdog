@@ -1,4 +1,4 @@
-use rust::setup::connection_sqlx_direct;
+use crate::setup::connection_sqlx_direct;
 use sqlx::{Executor, Postgres, pool::Pool, postgres::PgPoolOptions};
 
 async fn sharded_pool() -> Pool<Postgres> {

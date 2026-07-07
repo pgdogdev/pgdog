@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use rust::{
+use crate::{
     setup::{admin_sqlx, connection_sqlx_direct},
     utils::{Message, connect},
 };

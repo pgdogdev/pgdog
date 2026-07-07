@@ -1,5 +1,5 @@
-use rust::setup::admin_sqlx;
-use rust::setup::connections_sqlx;
+use crate::setup::admin_sqlx;
+use crate::setup::connections_sqlx;
 use sqlx::{Executor, Row, postgres::PgPool};
 
 #[tokio::test]
