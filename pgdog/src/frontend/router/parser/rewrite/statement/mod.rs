@@ -124,17 +124,22 @@ impl<'a> StatementRewrite<'a> {
                 _ => (),
             }
 
+            let mut node = mem.make_unique(node);
+
             // Handle top-level PREPARE/EXECUTE statements.
-            let prepared_result = self.rewrite_simple_prepared()?;
+            let prepared_result = self.rewrite_simple_prepared(node.as_mut(), mem)?;
             if prepared_result.rewritten {
                 self.rewritten = true;
                 plan.prepares = prepared_result.prepares;
+                self.stmt.stmts = pg_query::parse(pg_raw_parse::deparse(node.as_ref())?.as_str())?
+                    .protobuf
+                    .stmts;
             }
 
             // Inject pgdog.unique_id() for missing BIGINT primary keys.
             // This must run BEFORE the unique_id rewriter so the injected
             // function calls get processed.
-            self.inject_auto_id(node, &mut plan)?;
+            self.inject_auto_id(node.as_ref(), &mut plan)?;
 
             // Track the next parameter number to use
             let mut next_param = plan.params as i32 + 1;

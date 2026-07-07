@@ -1,4 +1,8 @@
+#[cfg(not(feature = "new_parser"))]
 use pg_query::{Error as PgQueryError, NodeEnum};
+#[cfg(feature = "new_parser")]
+use pg_raw_parse::{NodeMut, make::MemoryToken};
+#[cfg(not(feature = "new_parser"))]
 use pgdog_config::QueryParserEngine;
 
 use crate::net::Parse;
@@ -39,82 +43,159 @@ impl StatementRewrite<'_> {
     /// should prepend `ProtocolMessage::Prepare` to the client request using the returned
     /// name and statement.
     ///
-    pub(super) fn rewrite_simple_prepared(&mut self) -> Result<SimplePreparedResult, Error> {
+    #[cfg(feature = "new_parser")]
+    pub(super) fn rewrite_simple_prepared<'a>(
+        &mut self,
+        node: NodeMut<'a, '_>,
+        mem: MemoryToken<'a>,
+    ) -> Result<SimplePreparedResult, Error> {
         let mut result = SimplePreparedResult::default();
 
         if !self.prepared_statements.level.full() {
             return Ok(result);
         }
 
-        for stmt in &mut self.stmt.stmts {
-            if let Some(ref mut node) = stmt.stmt
-                && let Some(ref mut inner) = node.node
-            {
-                match rewrite_single_prepared(inner, self.prepared_statements, self.schema)? {
-                    SimplePreparedRewrite::Prepared => {
-                        result.rewritten = true;
-                    }
-                    SimplePreparedRewrite::Executed { name, statement } => {
-                        result.prepares.push((name, statement));
-                        result.rewritten = true;
-                    }
-                    SimplePreparedRewrite::None => {}
-                }
+        match rewrite_single_prepared(node, mem, self.prepared_statements, self.schema)? {
+            SimplePreparedRewrite::Prepared => {
+                result.rewritten = true;
             }
+            SimplePreparedRewrite::Executed { name, statement } => {
+                result.prepares.push((name, statement));
+                result.rewritten = true;
+            }
+            SimplePreparedRewrite::None => {}
         }
 
         Ok(result)
     }
+
+    cfg_select! {
+        not(feature = "new_parser") => {
+            pub(super) fn rewrite_simple_prepared(&mut self) -> Result<SimplePreparedResult, Error> {
+                let mut result = SimplePreparedResult::default();
+
+                if !self.prepared_statements.level.full() {
+                    return Ok(result);
+                }
+
+                for stmt in &mut self.stmt.stmts {
+                    if let Some(ref mut node) = stmt.stmt
+                        && let Some(ref mut inner) = node.node
+                    {
+                        match rewrite_single_prepared(inner, self.prepared_statements, self.schema)? {
+                            SimplePreparedRewrite::Prepared => {
+                                result.rewritten = true;
+                            }
+                            SimplePreparedRewrite::Executed { name, statement } => {
+                                result.prepares.push((name, statement));
+                                result.rewritten = true;
+                            }
+                            SimplePreparedRewrite::None => {}
+                        }
+                    }
+                }
+
+                Ok(result)
+            }
+        }
+        _ => {}
+    }
 }
 
 /// Rewrites a single `PREPARE` or `EXECUTE` node.
-fn rewrite_single_prepared(
-    node: &mut NodeEnum,
+#[cfg(feature = "new_parser")]
+fn rewrite_single_prepared<'a>(
+    node: NodeMut<'a, '_>,
+    mem: MemoryToken<'a>,
     prepared_statements: &mut PreparedStatements,
-    schema: &ShardingSchema,
 ) -> Result<SimplePreparedRewrite, Error> {
     match node {
-        NodeEnum::PrepareStmt(stmt) => {
-            let query = stmt
-                .query
-                .as_ref()
-                .ok_or(Error::PgQuery(PgQueryError::Parse(
-                    "missing query in PREPARE".into(),
-                )))?;
-            let query = match schema.query_parser_engine {
-                QueryParserEngine::PgQueryProtobuf => query.deparse(),
-                QueryParserEngine::PgQueryRaw => query.deparse_raw(),
-            }
-            .map_err(Error::PgQuery)?;
+        NodeMut::PrepareStmt(mut stmt) => {
+            let query = pg_raw_parse::deparse(stmt.query())?;
 
-            let mut parse = Parse::named(&stmt.name, &query);
+            let mut parse = Parse::named(
+                &stmt.name().expect("PREPARE always has a name"),
+                query.as_str(),
+            );
             prepared_statements.insert_anyway(&mut parse);
-            stmt.name = parse.name().to_string();
+            stmt.set_name(Some(mem.copy_string(parse.name())));
 
             Ok(SimplePreparedRewrite::Prepared)
         }
 
-        NodeEnum::ExecuteStmt(stmt) => {
-            let parse = prepared_statements.parse(&stmt.name);
+        NodeMut::ExecuteStmt(mut stmt) => {
+            let stmt_name = stmt.name().expect("EXECUTE always has name");
+            let parse = prepared_statements.parse(stmt_name);
             if let Some(parse) = parse {
                 let global_name = parse.name().to_string();
                 let statement = parse.query().to_string();
-                stmt.name = global_name.clone();
+                stmt.set_name(Some(mem.copy_string(&global_name)));
 
                 Ok(SimplePreparedRewrite::Executed {
                     name: global_name,
                     statement,
                 })
             } else {
-                Err(Error::PgQuery(PgQueryError::Parse(format!(
-                    "prepared statement '{}' does not exist",
-                    stmt.name
-                ))))
+                Err(Error::ExecuteMissingPrepare(stmt_name.to_owned()))
             }
         }
 
         _ => Ok(SimplePreparedRewrite::None),
     }
+}
+
+cfg_select! {
+    not(feature = "new_parser") => {
+        fn rewrite_single_prepared(
+            node: &mut NodeEnum,
+            prepared_statements: &mut PreparedStatements,
+            schema: &ShardingSchema,
+        ) -> Result<SimplePreparedRewrite, Error> {
+            match node {
+                NodeEnum::PrepareStmt(stmt) => {
+                    let query = stmt
+                        .query
+                        .as_ref()
+                        .ok_or(Error::PgQuery(PgQueryError::Parse(
+                            "missing query in PREPARE".into(),
+                        )))?;
+                    let query = match schema.query_parser_engine {
+                        QueryParserEngine::PgQueryProtobuf => query.deparse(),
+                        QueryParserEngine::PgQueryRaw => query.deparse_raw(),
+                    }
+                    .map_err(Error::PgQuery)?;
+
+                    let mut parse = Parse::named(&stmt.name, &query);
+                    prepared_statements.insert_anyway(&mut parse);
+                    stmt.name = parse.name().to_string();
+
+                    Ok(SimplePreparedRewrite::Prepared)
+                }
+
+                NodeEnum::ExecuteStmt(stmt) => {
+                    let parse = prepared_statements.parse(&stmt.name);
+                    if let Some(parse) = parse {
+                        let global_name = parse.name().to_string();
+                        let statement = parse.query().to_string();
+                        stmt.name = global_name.clone();
+
+                        Ok(SimplePreparedRewrite::Executed {
+                            name: global_name,
+                            statement,
+                        })
+                    } else {
+                        Err(Error::PgQuery(PgQueryError::Parse(format!(
+                            "prepared statement '{}' does not exist",
+                            stmt.name
+                        ))))
+                    }
+                }
+
+                _ => Ok(SimplePreparedRewrite::None),
+            }
+        }
+    }
+    _ => {}
 }
 
 #[cfg(test)]
