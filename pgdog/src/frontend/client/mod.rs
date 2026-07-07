@@ -551,6 +551,7 @@ impl Client {
         } else {
             let total = spliced.len();
             let mut reqs = spliced.into_iter().enumerate();
+            self.transaction.get_or_insert(TransactionType::Implicit);
             while let Some((num, mut req)) = reqs.next() {
                 debug!("processing spliced request {}/{}", num + 1, total);
                 let mut context = QueryEngineContext::new(self).spliced(&mut req, reqs.len());

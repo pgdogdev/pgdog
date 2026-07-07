@@ -172,7 +172,9 @@ impl QueryEngine {
                 TransactionState::Error => {
                     let error_state = match context.transaction {
                         Some(TransactionType::ReadOnly) => Some(TransactionType::ErrorReadOnly),
-                        Some(TransactionType::ReadWrite) => Some(TransactionType::ErrorReadWrite),
+                        Some(TransactionType::ReadWrite | TransactionType::Implicit) => {
+                            Some(TransactionType::ErrorReadWrite)
+                        }
                         _ => None,
                     };
                     context.transaction = error_state;
