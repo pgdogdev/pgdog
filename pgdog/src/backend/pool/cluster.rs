@@ -737,7 +737,9 @@ impl Cluster {
 mod test {
     use std::{sync::Arc, time::Duration};
 
-    use pgdog_config::{ConfigAndUsers, OmnishardedTable, QueryParserLevel, ShardedSchema};
+    use pgdog_config::{
+        ConfigAndUsers, OmnishardedTable, PoolerMode, QueryParserLevel, ShardedSchema,
+    };
 
     use crate::frontend::router::sharding::ShardedTable;
     use crate::{
@@ -876,6 +878,12 @@ mod test {
             let mut cluster = Self::new_test(config);
             cluster.shards.pop();
 
+            cluster
+        }
+
+        pub fn new_test_session_mode(config: &ConfigAndUsers) -> Cluster {
+            let mut cluster = Self::new_test(config);
+            cluster.pooler_mode = PoolerMode::Session;
             cluster
         }
 

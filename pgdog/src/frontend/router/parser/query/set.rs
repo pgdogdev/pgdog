@@ -60,11 +60,21 @@ impl QueryParser {
     /// - All SETs → returns `Ok(Some(Command::Set { .. }))`
     /// - No SETs → returns `Ok(None)`, caller falls through to default parsing
     /// - Mix of SET + non-SET → returns `Err(MultiStatementMixedSet)`
+    ///
+    /// In session mode, returns `Ok(Some(Command::Query(..)))` immediately so that
+    /// all multi-statement queries are forwarded to the server verbatim.
     pub(super) fn try_multi_set(
         &mut self,
         stmts: &[RawStmt],
         context: &QueryParserContext,
     ) -> Result<Option<Command>, Error> {
+        // In session mode, pass through without validation — the server
+        // owns the session and can handle mixed SET + other statements.
+        if context.is_session_mode() {
+            return Ok(Some(Command::Query(Route::write(
+                context.shards_calculator.shard(),
+            ))));
+        }
         let mut params = Vec::with_capacity(stmts.len());
         let mut has_set = false;
         let mut has_other = false;
