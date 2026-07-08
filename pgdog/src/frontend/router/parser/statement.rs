@@ -226,14 +226,14 @@ type ValuesColumns<'a> = std::collections::HashMap<&'a str, Vec<&'a PgNode>>;
 
 #[cfg(feature = "new_parser")]
 fn collect_values_columns(stmt: &nodes::SelectStmt) -> Option<ValuesColumns<'_>> {
-    let Node::RangeSubselect(rs) = stmt.fromClause().into_iter().exactly_one().ok()? else {
+    let Node::RangeSubselect(rs) = stmt.from_clause().into_iter().exactly_one().ok()? else {
         return None;
     };
     let alias = rs.alias();
     let Node::SelectStmt(s) = rs.subquery() else {
         return None;
     };
-    if s.valuesLists().len() == 0 {
+    if s.values_lists().len() == 0 {
         return None;
     }
     let colnames = alias
@@ -245,7 +245,7 @@ fn collect_values_columns(stmt: &nodes::SelectStmt) -> Option<ValuesColumns<'_>>
         })
         .unwrap_or_default();
     let values = s
-        .valuesLists()
+        .values_lists()
         .into_iter()
         .map(|values| values.expect_node_list())
         .flat_map(|row| row.into_iter().enumerate())
@@ -1628,7 +1628,7 @@ impl<'a, 'b: 'a, 'c> StatementParser<'a, 'b, 'c> {
         use nodes::{A_Expr_Kind, BoolExprType};
 
         let ctx = match stmt {
-            Node::SelectStmt(s) => SearchContext::from_from_clause(s.fromClause()),
+            Node::SelectStmt(s) => SearchContext::from_from_clause(s.from_clause()),
             Node::UpdateStmt(s) => self.context_from_relation(s.relation()),
             Node::DeleteStmt(s) => self.context_from_relation(s.relation()),
             Node::InsertStmt(s) => {
@@ -1996,12 +1996,12 @@ impl<'a, 'b: 'a, 'c> StatementParser<'a, 'b, 'c> {
             return Ok(Some(schema.shard().into()));
         }
 
-        if let Node::SelectStmt(select_stmt) = stmt.selectStmt() {
+        if let Node::SelectStmt(select_stmt) = stmt.select_stmt() {
             // Get the column names from INSERT INTO table (col1, col2, ...) or from schema
             let columns = self.get_insert_columns(stmt, &ctx)?;
 
             let mut values_lists = select_stmt
-                .valuesLists()
+                .values_lists()
                 .into_iter()
                 .map(|l| l.expect_node_list().into_iter());
 
@@ -2012,7 +2012,7 @@ impl<'a, 'b: 'a, 'c> StatementParser<'a, 'b, 'c> {
 
             // Grab either the single VALUES list or the targets list
             let targets = select_stmt
-                .targetList()
+                .target_list()
                 .into_iter()
                 .map(|t| t.val())
                 .collect();

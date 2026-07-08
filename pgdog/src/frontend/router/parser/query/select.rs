@@ -289,7 +289,7 @@ impl QueryParser {
     ///
     #[cfg(feature = "new_parser")]
     fn select_sort(stmt: &nodes::SelectStmt, params: Option<&Bind>) -> Vec<OrderBy> {
-        stmt.sortClause()
+        stmt.sort_clause()
             .into_iter()
             .filter_map(|sort_by| {
                 use pg_raw_parse::{
