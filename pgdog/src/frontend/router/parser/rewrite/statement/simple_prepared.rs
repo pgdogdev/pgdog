@@ -5,8 +5,10 @@ use pg_raw_parse::{NodeMut, make::MemoryToken};
 #[cfg(not(feature = "new_parser"))]
 use pgdog_config::QueryParserEngine;
 
+#[cfg(not(feature = "new_parser"))]
+use crate::backend::ShardingSchema;
+use crate::frontend::PreparedStatements;
 use crate::net::Parse;
-use crate::{backend::ShardingSchema, frontend::PreparedStatements};
 
 use super::{Error, StatementRewrite};
 
@@ -55,7 +57,7 @@ impl StatementRewrite<'_> {
             return Ok(result);
         }
 
-        match rewrite_single_prepared(node, mem, self.prepared_statements, self.schema)? {
+        match rewrite_single_prepared(node, mem, self.prepared_statements)? {
             SimplePreparedRewrite::Prepared => {
                 result.rewritten = true;
             }

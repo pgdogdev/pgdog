@@ -69,13 +69,9 @@ impl AggregatesRewrite {
         if helper_nodes.is_empty() {
             RewriteOutput::default()
         } else {
-            let mut target_list = select
-                .target_list()
-                .into_iter()
-                .map(|n| mem.make_unique(n))
-                .collect::<Vec<_>>();
-            target_list.extend(helper_nodes);
-            select.set_target_list(mem.make_list(&target_list));
+            select
+                .target_list_mut()
+                .extend(mem, mem.make_list(&helper_nodes));
             RewriteOutput::new(plan)
         }
     }
