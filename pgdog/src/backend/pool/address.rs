@@ -62,7 +62,7 @@ impl From<Address> for pgdog_stats::Address {
 
 impl Address {
     /// Create new address from config values.
-    pub fn new(database: &Database, user: &User, database_number: usize) -> Self {
+    pub(crate) fn new(database: &Database, user: &User, database_number: usize) -> Self {
         let server_auth = user.server_auth;
 
         Address {
@@ -108,7 +108,7 @@ impl Address {
     /// [`TokenCache`], which is kept warm by the pool monitor. This call
     /// only blocks on the very first connection before the monitor has had
     /// a chance to prime the cache.
-    pub async fn auth_secrets(&self) -> Result<Vec<Password>, Error> {
+    pub(crate) async fn auth_secrets(&self) -> Result<Vec<Password>, Error> {
         Ok(self.auth_credentials().await?.1)
     }
 
@@ -117,7 +117,7 @@ impl Address {
     /// The username is the configured one, except for `vault_dynamic` pools
     /// where the database secrets engine generates it together with the
     /// password.
-    pub async fn auth_credentials(&self) -> Result<(String, Vec<Password>), Error> {
+    pub(crate) async fn auth_credentials(&self) -> Result<(String, Vec<Password>), Error> {
         let mut user = self.user.clone();
 
         let mut secrets = match self.server_auth {
@@ -161,7 +161,12 @@ impl Address {
         Ok((user, secrets))
     }
 
-    pub async fn addr(&self) -> Result<SocketAddr, Error> {
+    /// Get the _actual_ IP address behind this host. Uses DNS resolution
+    /// powered by the cache, if configured, and can even bypass DNS TTL.
+    ///
+    /// You should use this address to connect to the database.
+    ///
+    pub(crate) async fn addr(&self) -> Result<SocketAddr, Error> {
         let dns_cache_override_enabled = config().config.general.dns_ttl().is_some();
 
         if dns_cache_override_enabled {
@@ -175,6 +180,21 @@ impl Address {
         socket_addrs
             .next()
             .ok_or(Error::DnsResolutionFailed(self.host.clone()))
+    }
+
+    /// A replacement for [`PartialEq`] which accounts for
+    /// differences that do not require us to close connections to Postgres
+    /// when reloading the config.
+    pub(crate) fn compatible(&self, other: &Self) -> bool {
+        if self != other {
+            // Requires an allocation, which isn't very efficient
+            // but this is an "edge case": how often are you changing passwords anyway?
+            let mut other = other.clone();
+            other.passwords = self.passwords.clone();
+            self == &other
+        } else {
+            true
+        }
     }
 
     /// Test convention: `new_test()` represents a primary. Tests that need
@@ -348,6 +368,24 @@ mod test {
         assert_eq!(addr.passwords.first().unwrap(), "password");
         assert_eq!(addr.server_auth, ServerAuth::Password);
         assert!(addr.server_iam_region.is_none());
+    }
+
+    #[test]
+    fn test_compatible_ignores_password_changes() {
+        let address = Address::new_test();
+        let mut rotated = address.clone();
+        rotated.passwords = vec!["rotated".into()];
+
+        assert!(address.compatible(&rotated));
+    }
+
+    #[test]
+    fn test_compatible_rejects_other_field_changes() {
+        let address = Address::new_test();
+        let mut moved = address.clone();
+        moved.port += 1;
+
+        assert!(!address.compatible(&moved));
     }
 
     // ── auth_secrets: password mode ──────────────────────────────────────────

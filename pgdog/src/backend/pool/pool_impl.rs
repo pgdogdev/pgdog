@@ -325,7 +325,7 @@ impl Pool {
 
     /// The two pools refer to the same database.
     pub(crate) fn can_move_conns_to(&self, destination: &Pool) -> bool {
-        self.addr() == destination.addr()
+        self.addr().compatible(destination.addr())
     }
 
     /// Pause pool, closing all open connections.

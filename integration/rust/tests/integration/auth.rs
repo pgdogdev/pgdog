@@ -251,6 +251,54 @@ async fn test_multi_password_server_rotation() {
 }
 
 #[tokio::test]
+#[serial]
+async fn test_multi_password_server_rotation_reload_keeps_pool_connection() {
+    let admin = admin_sqlx().await;
+    admin.execute("RELOAD").await.unwrap();
+
+    let mut direct =
+        PgConnection::connect("postgres://pgdog:pgdog@127.0.0.1:5432/pgdog?sslmode=disable")
+            .await
+            .unwrap();
+
+    direct
+        .execute("ALTER USER pgdog2 PASSWORD 'pgdog'")
+        .await
+        .unwrap();
+
+    let url = "postgres://pgdog_pw_rotate:rotated_pass@127.0.0.1:6432/pgdog";
+    let mut conn = PgConnection::connect(url).await.unwrap();
+    let original_backend_pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+        .fetch_one(&mut conn)
+        .await
+        .unwrap();
+    conn.close().await.unwrap();
+
+    direct
+        .execute("ALTER USER pgdog2 PASSWORD 'rotated_pass'")
+        .await
+        .unwrap();
+
+    admin.execute("RELOAD").await.unwrap();
+
+    let mut conn = PgConnection::connect(url).await.unwrap();
+    let backend_pid_after_reload: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+        .fetch_one(&mut conn)
+        .await
+        .unwrap();
+    conn.close().await.unwrap();
+
+    direct
+        .execute("ALTER USER pgdog2 PASSWORD 'pgdog'")
+        .await
+        .unwrap();
+    admin.execute("RELOAD").await.unwrap();
+    admin.execute("RECONNECT").await.unwrap();
+
+    assert_eq!(backend_pid_after_reload, original_backend_pid);
+}
+
+#[tokio::test]
 async fn test_passthrough_password_change() {
     let admin = admin_sqlx().await;
     let mut direct =
