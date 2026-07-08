@@ -282,6 +282,7 @@ pub struct Config {
     pub vault: Option<Vault>,
 
     /// Query parser levels per-database.
+    #[serde(default)]
     pub query_parser: Vec<QueryParser>,
 }
 
@@ -580,9 +581,13 @@ impl Config {
             self.general.query_parser = QueryParserLevel::On;
         }
 
-        if self.general.query_parser_engine == QueryParserEngine::PgQueryRaw
-            && self.memory.stack_size < 32 * 1024 * 1024
-        {
+        let raw_query_parser = self.general.query_parser_engine == QueryParserEngine::PgQueryRaw
+            || self
+                .query_parser
+                .iter()
+                .any(|query_parser| query_parser.engine == QueryParserEngine::PgQueryRaw);
+
+        if raw_query_parser && self.memory.stack_size < 32 * 1024 * 1024 {
             self.memory.stack_size = 32 * 1024 * 1024;
             warn!(
                 r#""pg_query_raw" parser engine requires a large thread stack, setting it to 32MiB for each Tokio worker"#
