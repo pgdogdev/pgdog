@@ -489,3 +489,8 @@ shard = 1
 
 [admin]
 password = "pgdog"
+
+[[query_parser]]
+database = "pgdog"
+level = "auto"
+engine = "pg_query_raw"

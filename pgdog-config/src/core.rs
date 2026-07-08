@@ -9,7 +9,7 @@ use tracing::{error, info, warn};
 use crate::sharding::ShardedSchema;
 use crate::util::random_string;
 use crate::{
-    EnumeratedDatabase, Memory, OmnishardedTable, PassthroughAuth, PreparedStatements,
+    EnumeratedDatabase, Memory, OmnishardedTable, PassthroughAuth, PreparedStatements, QueryParser,
     QueryParserEngine, QueryParserLevel, ReadWriteSplit, RewriteMode, Role, ShardedMappingKey,
     ShardedTableConfig, SystemCatalogsBehavior, system_catalogs,
 };
@@ -280,6 +280,9 @@ pub struct Config {
 
     /// HashiCorp Vault settings, required for users configured with `server_auth = "vault"`.
     pub vault: Option<Vault>,
+
+    /// Query parser levels per-database.
+    pub query_parser: Vec<QueryParser>,
 }
 
 impl Config {

@@ -3,8 +3,8 @@
 use futures::future::try_join_all;
 use parking_lot::Mutex;
 use pgdog_config::{
-    LoadSchema, PreparedStatements, QueryParserEngine, QueryParserLevel, Rewrite, RewriteMode,
-    users::PasswordKind,
+    LoadSchema, PreparedStatements, QueryParser, QueryParserEngine, QueryParserLevel, Rewrite,
+    RewriteMode, users::PasswordKind,
 };
 use std::{
     sync::{
@@ -184,6 +184,7 @@ impl<'a> ClusterConfig<'a> {
         shards: &'a [ClusterShardConfig],
         sharded_tables: ShardedTables,
         sharded_schemas: ShardedSchemas,
+        query_parser: QueryParser,
     ) -> Self {
         let general = &config.general;
         let multi_tenant = config.multi_tenant();
@@ -220,8 +221,8 @@ impl<'a> ClusterConfig<'a> {
             dry_run: general.dry_run,
             expanded_explain: general.expanded_explain,
             pub_sub_channel_size: general.pub_sub_channel_size,
-            query_parser: general.query_parser,
-            query_parser_engine: general.query_parser_engine,
+            query_parser: query_parser.level,
+            query_parser_engine: query_parser.engine,
             log_min_duration_parse: general.log_min_duration_parse(),
             log_query_sample_length: general.log_query_sample_length,
             connection_recovery: general.connection_recovery,
