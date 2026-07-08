@@ -616,7 +616,7 @@ fn new_pool(user: &crate::config::User, config: &crate::config::Config) -> Optio
     );
     let sharded_schemas = ShardedSchemas::new(sharded_schemas);
     let query_parser = config
-        .query_parser
+        .query_parsers
         .iter()
         .find(|config| config.database == user.database)
         .cloned()

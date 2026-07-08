@@ -283,7 +283,7 @@ pub struct Config {
 
     /// Query parser levels per-database.
     #[serde(default)]
-    pub query_parser: Vec<QueryParser>,
+    pub query_parsers: Vec<QueryParser>,
 }
 
 impl Config {
@@ -583,7 +583,7 @@ impl Config {
 
         let raw_query_parser = self.general.query_parser_engine == QueryParserEngine::PgQueryRaw
             || self
-                .query_parser
+                .query_parsers
                 .iter()
                 .any(|query_parser| query_parser.engine == QueryParserEngine::PgQueryRaw);
 
