@@ -18,6 +18,7 @@ use super::super::publisher::{NonIdentityColumnsPresence, tables_missing_unique_
 use super::super::{
     Error, TableValidationError, TableValidationErrorKind, ensure_validation, publisher::Table,
 };
+use super::PipelinedConnection;
 use super::StreamContext;
 use super::omni_ownership::OmniOwnership;
 use crate::net::messages::replication::logical::tuple_data::{Identifier, TupleData};
@@ -27,8 +28,7 @@ use crate::{
     config::Role,
     frontend::router::parser::Shard,
     net::{
-        Bind, CommandComplete, CopyData, ErrorResponse, Execute, Flush, FromBytes, Parse, Protocol,
-        Sync, ToBytes,
+        Bind, CopyData, ErrorResponse, FromBytes, Parse, Protocol, Sync, ToBytes,
         replication::{
             Commit as XLogCommit, Delete as XLogDelete, Insert as XLogInsert, Relation,
             StatusUpdate, UpdateIdentity, xlog_data::XLogPayload,
@@ -116,8 +116,9 @@ pub struct StreamSubscriber {
     // watermark on commit so equal-LSN rows in the same transaction are not skipped.
     changed_tables: HashSet<Oid>,
 
-    // Connections to shards.
-    connections: Vec<Server>,
+    // Pipelined connections to shards. DML is pushed without waiting per event;
+    // a background task per connection reads responses and reconciles them.
+    connections: Vec<PipelinedConnection>,
 
     // Last commit LSN acked to Postgres. Reported in status updates; never
     // advances mid-transaction so KeepAlive replies can't skip an open transaction.
@@ -129,9 +130,6 @@ pub struct StreamSubscriber {
 
     // Bytes sharded
     bytes_sharded: usize,
-
-    // Missed rows.
-    missed_rows: MissedRows,
 
     // Determines which destination shards this subscriber owns for omni tables.
     partition: OmniOwnership,
@@ -164,15 +162,19 @@ impl StreamSubscriber {
             bytes_sharded: 0,
             lsn_changed: true,
             in_transaction: false,
-            missed_rows: MissedRows::default(),
             keys: HashMap::default(),
             partition,
         }
     }
 
     // Connect to all the shards.
+    //
+    // The transaction-control prepare and the omni FULL-identity validation run
+    // synchronously on the raw `Server` connections (both are one-shot,
+    // request/response query flows). Only once they succeed are the connections
+    // moved into their per-shard pipelined tasks for the streaming apply path.
     pub async fn connect(&mut self) -> Result<(), Error> {
-        let mut conns = vec![];
+        let mut conns: Vec<Server> = vec![];
 
         for shard in self.cluster.shards() {
             let primary = shard
@@ -186,12 +188,10 @@ impl StreamSubscriber {
             conns.push(primary);
         }
 
-        self.connections = conns;
-
         // Transaction control statements.
         //
         // TODO: Figure out if we need to use them?
-        for server in &mut self.connections {
+        for server in &mut conns {
             let begin = Parse::named("__pgdog_repl_begin", "BEGIN");
             let commit = Parse::named("__pgdog_repl_commit", "COMMIT");
 
@@ -223,23 +223,42 @@ impl StreamSubscriber {
             .cloned()
             .collect();
         if !omni_full.is_empty() {
-            self.validate_full_identity_omni_has_unique_index(&omni_full)
+            self.validate_full_identity_omni_has_unique_index(&mut conns, &omni_full)
                 .await?;
         }
+
+        // Hand each connection to its background pipelining task.
+        self.connections = conns
+            .into_iter()
+            .map(PipelinedConnection::new)
+            .collect::<Result<Vec<_>, _>>()?;
 
         Ok(())
     }
 
     // Dispatch a pre-built bind to the matching shard(s).
+    //
+    // Fire-and-forget: the `Bind/Execute/Flush` is enqueued on each owning
+    // shard's pipelined connection without waiting for the response. Responses
+    // are reconciled by the per-shard background task; missed-row counting and
+    // error detection happen there. A cheap, non-blocking fail-fast peek surfaces
+    // an already-latched error so we roll back instead of piling work onto a
+    // transaction Postgres has already aborted. The authoritative check is the
+    // commit drain (`commit()`).
     async fn send(&mut self, val: &Shard, bind: &Bind) -> Result<(), Error> {
+        // Fail-fast: the replicated transaction spans every shard, so an error
+        // latched on any connection means whole transaction is aborted.
+        for conn in &self.connections {
+            if let Some(err) = conn.take_error() {
+                return Err(err);
+            }
+        }
+
         // Locals avoid borrowing self inside the iter_mut closure.
         let partition = self.partition;
         let n_conns = self.connections.len();
-        let mut conns: Vec<_> = self
-            .connections
-            .iter_mut()
-            .enumerate()
-            .filter(|(shard, _)| match val {
+        let targets: Vec<usize> = (0..n_conns)
+            .filter(|shard| match val {
                 // With a single destination shard the router collapses Shard::All
                 // to Direct(0), bypassing the partition ownership check.  Apply
                 // partition.owns() for all variants when there is only one connection
@@ -248,48 +267,11 @@ impl StreamSubscriber {
                 Shard::Multi(multi) if n_conns > 1 => multi.contains(shard),
                 _ => partition.owns(*shard),
             })
-            .map(|(_, server)| server)
             .collect();
 
-        for conn in &mut conns {
-            conn.send(&vec![bind.clone().into(), Execute::new().into(), Flush.into()].into())
-                .await?;
-        }
-
-        for conn in &mut conns {
-            conn.flush().await?;
-        }
-
-        for conn in &mut conns {
-            // Keep server connections always synchronized.
-            for _ in 0..2 {
-                let msg = conn.read().await?;
-                match msg.code() {
-                    'C' => {
-                        let cmd = CommandComplete::try_from(msg)?;
-                        let rows = cmd
-                            .rows()?
-                            .ok_or(Error::CommandCompleteNoRows(cmd.clone()))?;
-                        // A direct-to-shard update indicates a row has changed on source.
-                        // This row must exist on the destination, or we missed some data during sync.
-                        if rows == 0 && val.is_direct() {
-                            match cmd.tag() {
-                                "UPDATE" => self.missed_rows.update += 1,
-                                "DELETE" => self.missed_rows.delete += 1,
-                                "INSERT" => self.missed_rows.insert += 1,
-                                _ => (),
-                            }
-                        }
-                    }
-                    '2' => (),
-                    'E' => {
-                        return Err(Error::PgError(Box::new(ErrorResponse::from_bytes(
-                            msg.to_bytes(),
-                        )?)));
-                    }
-                    c => return Err(Error::SendOutOfSync(c)),
-                }
-            }
+        let is_direct = val.is_direct();
+        for &idx in &targets {
+            self.connections[idx].execute(bind, is_direct).await?;
         }
 
         Ok(())
@@ -458,37 +440,11 @@ impl StreamSubscriber {
     /// not in a transaction).
     async fn prepare_statements(&mut self, parses: &[Parse]) -> Result<(), Error> {
         let in_txn = self.in_transaction;
-        let mut msgs: Vec<_> = parses.iter().map(|p| p.clone().into()).collect();
-        msgs.push(if in_txn { Flush.into() } else { Sync.into() });
-        let payload = msgs.into();
-
-        for server in &mut self.connections {
+        for server in &self.connections {
             for p in parses {
                 debug!("preparing \"{}\" [{}]", p.query(), server.addr());
             }
-            server.send(&payload).await?;
-        }
-
-        let num_acks = if in_txn {
-            parses.len()
-        } else {
-            parses.len() + 1
-        };
-        for server in &mut self.connections {
-            for _ in 0..num_acks {
-                let msg = server.read().await?;
-                trace!("[{}] --> {:?}", server.addr(), msg);
-                match msg.code() {
-                    'E' => {
-                        return Err(Error::PgError(Box::new(ErrorResponse::from_bytes(
-                            msg.to_bytes(),
-                        )?)));
-                    }
-                    'Z' => break,
-                    '1' => continue,
-                    c => return Err(Error::RelationOutOfSync(c)),
-                }
-            }
+            server.prepare(parses, in_txn).await?;
         }
         Ok(())
     }
@@ -683,26 +639,27 @@ impl StreamSubscriber {
 
     // Handle Commit message.
     //
-    // Send Sync to all shards, ensuring they close the transaction.
+    // Two-phase to preserve "all shards commit or none do":
+    //   1. Drain every shard — wait until all outstanding DML has been acked
+    //      and confirm none errored. A `?` here (an errored shard) returns before
+    //      any shard is `Sync`ed, so `handle()` drops every connection and Postgres
+    //      rolls back the open implicit transactions cluster-wide.
+    //   2. Only once every shard is drained and clean, send `Sync` to commit.
+    //
+    // NOTE: phase 2 is not atomic across shards. If an earlier shard's `Sync`
+    // commits and a later shard's `Sync` fails (e.g. a deferred constraint that
+    // only fires at COMMIT), the earlier shard is already durable and cannot be
+    // rolled back. Phase 1 narrows this window to commit-time-only failures.
+    // TODO: use 2PC (see the `two_pc` path) for true cross-shard atomicity.
     async fn commit(&mut self, commit: XLogCommit) -> Result<(), Error> {
-        for server in &mut self.connections {
-            server.send_one(&Sync.into()).await?;
-            server.flush().await?;
+        // Phase 1: drain outstanding DML without committing.
+        for server in &self.connections {
+            server.drain_acks().await?;
         }
-        for server in &mut self.connections {
-            // Drain responses from server.
-            let msg = server.read().await?;
-            trace!("[{}] --> {:?}", server.addr(), msg);
 
-            match msg.code() {
-                'E' => {
-                    return Err(Error::PgError(Box::new(ErrorResponse::from_bytes(
-                        msg.to_bytes(),
-                    )?)));
-                }
-                'Z' => (),
-                c => return Err(Error::CommitOutOfSync(c)),
-            }
+        // Phase 2: every shard is clean — commit each one.
+        for server in &self.connections {
+            server.sync_and_drain().await?;
         }
 
         let transaction_lsn = self.lsn;
@@ -945,9 +902,13 @@ impl StreamSubscriber {
         self.in_transaction
     }
 
-    /// Get and reset missing rows.
+    /// Aggregate and reset the missed-row counters across all shard connections.
     pub(crate) fn missed_rows(&mut self) -> MissedRows {
-        std::mem::take(&mut self.missed_rows)
+        let mut total = MissedRows::default();
+        for conn in &self.connections {
+            total.merge(conn.take_missed_rows());
+        }
+        total
     }
 
     /// Verify every destination shard has a qualifying unique index for all `tables`.
@@ -956,15 +917,15 @@ impl StreamSubscriber {
     /// Queries all shards in parallel (one bulk query per shard) then surfaces
     /// the complete set of missing indexes across the cluster in a single error.
     async fn validate_full_identity_omni_has_unique_index(
-        &mut self,
+        &self,
+        servers: &mut [Server],
         tables: &[Table],
     ) -> Result<(), Error> {
         // Fan out to all shards concurrently; each gets one IN-list query.
-        let per_shard: Vec<Vec<String>> =
-            try_join_all(self.connections.iter_mut().map(|dest_server| {
-                tables_missing_unique_index(tables.iter().map(|t| &t.table), dest_server)
-            }))
-            .await?;
+        let per_shard: Vec<Vec<String>> = try_join_all(servers.iter_mut().map(|dest_server| {
+            tables_missing_unique_index(tables.iter().map(|t| &t.table), dest_server)
+        }))
+        .await?;
 
         // Flatten; ensure_validation! deduplicates and sorts before reporting.
         let errors: Vec<TableValidationError> = per_shard
@@ -990,6 +951,23 @@ pub(crate) struct MissedRows {
 impl MissedRows {
     pub(crate) fn non_zero(&self) -> bool {
         self.insert > 0 || self.delete > 0 || self.update > 0
+    }
+
+    /// Count a direct-to-shard DML that touched 0 rows, keyed by command tag.
+    pub(crate) fn record(&mut self, tag: &str) {
+        match tag {
+            "UPDATE" => self.update += 1,
+            "DELETE" => self.delete += 1,
+            "INSERT" => self.insert += 1,
+            _ => (),
+        }
+    }
+
+    /// Fold another shard's counts into this one.
+    pub(crate) fn merge(&mut self, other: MissedRows) {
+        self.insert += other.insert;
+        self.update += other.update;
+        self.delete += other.delete;
     }
 }
 
