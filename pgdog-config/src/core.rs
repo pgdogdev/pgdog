@@ -9,7 +9,7 @@ use tracing::{error, info, warn};
 use crate::sharding::ShardedSchema;
 use crate::util::random_string;
 use crate::{
-    EnumeratedDatabase, Memory, OmnishardedTable, PassthroughAuth, PreparedStatements,
+    EnumeratedDatabase, Memory, OmnishardedTable, PassthroughAuth, PreparedStatements, QueryParser,
     QueryParserEngine, QueryParserLevel, ReadWriteSplit, RewriteMode, Role, ShardedMappingKey,
     ShardedTableConfig, SystemCatalogsBehavior, system_catalogs,
 };
@@ -280,6 +280,10 @@ pub struct Config {
 
     /// HashiCorp Vault settings, required for users configured with `server_auth = "vault"`.
     pub vault: Option<Vault>,
+
+    /// Query parser levels per-database.
+    #[serde(default)]
+    pub query_parser: Vec<QueryParser>,
 }
 
 impl Config {
@@ -577,9 +581,13 @@ impl Config {
             self.general.query_parser = QueryParserLevel::On;
         }
 
-        if self.general.query_parser_engine == QueryParserEngine::PgQueryRaw
-            && self.memory.stack_size < 32 * 1024 * 1024
-        {
+        let raw_query_parser = self.general.query_parser_engine == QueryParserEngine::PgQueryRaw
+            || self
+                .query_parser
+                .iter()
+                .any(|query_parser| query_parser.engine == QueryParserEngine::PgQueryRaw);
+
+        if raw_query_parser && self.memory.stack_size < 32 * 1024 * 1024 {
             self.memory.stack_size = 32 * 1024 * 1024;
             warn!(
                 r#""pg_query_raw" parser engine requires a large thread stack, setting it to 32MiB for each Tokio worker"#

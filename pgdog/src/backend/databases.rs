@@ -12,8 +12,8 @@ use parking_lot::lock_api::MutexGuard;
 use parking_lot::{Mutex, RawMutex};
 use pgdog_config::users::PasswordKind;
 use pgdog_config::{
-    ShardedMappingConfig, ShardedMappingKey, ShardedMappingKeyRef, ShardedMappingKindDeprecated,
-    ShardedMappingList, ShardedMappingRange, ShardedTableConfig,
+    QueryParser, ShardedMappingConfig, ShardedMappingKey, ShardedMappingKeyRef,
+    ShardedMappingKindDeprecated, ShardedMappingList, ShardedMappingRange, ShardedTableConfig,
 };
 use tracing::{debug, error, info, warn};
 
@@ -615,6 +615,16 @@ fn new_pool(user: &crate::config::User, config: &crate::config::Config) -> Optio
         general.system_catalogs,
     );
     let sharded_schemas = ShardedSchemas::new(sharded_schemas);
+    let query_parser = config
+        .query_parser
+        .iter()
+        .find(|config| config.database == user.database)
+        .cloned()
+        .unwrap_or(QueryParser {
+            database: user.database.clone(),
+            level: config.general.query_parser,
+            engine: config.general.query_parser_engine,
+        });
 
     let cluster_config = ClusterConfig::new(
         config,
@@ -622,6 +632,7 @@ fn new_pool(user: &crate::config::User, config: &crate::config::Config) -> Optio
         &shard_configs,
         sharded_tables,
         sharded_schemas,
+        query_parser,
     );
 
     Some((

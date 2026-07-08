@@ -380,7 +380,20 @@ impl<'a> From<&'a FlexibleType> for FlexibleTypeRef<'a> {
 /// Controls when the query parser is active.
 ///
 /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#query_parser
-#[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Eq, Hash, Default, JsonSchema)]
+#[derive(
+    Serialize,
+    Deserialize,
+    Debug,
+    Copy,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    Default,
+    JsonSchema,
+    PartialOrd,
+    Ord,
+)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum QueryParserLevel {
     /// Always enable the query parser.
@@ -540,4 +553,16 @@ impl Display for UniqueIdFunction {
             Self::Standard => write!(f, "standard"),
         }
     }
+}
+
+/// Per-database query parser configuration.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash, Default, JsonSchema)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub struct QueryParser {
+    /// Database name.
+    pub database: String,
+    /// Query parser level.
+    pub level: QueryParserLevel,
+    /// Query parser engine used.
+    pub engine: QueryParserEngine,
 }
