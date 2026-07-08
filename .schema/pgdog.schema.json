@@ -189,6 +189,14 @@
         "$ref": "#/$defs/Plugin"
       }
     },
+    "query_parser": {
+      "description": "Query parser levels per-database.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/QueryParser"
+      }
+    },
     "replica_lag": {
       "description": "Replica lag configuration.",
       "anyOf": [
@@ -1601,6 +1609,30 @@
           "type": "string",
           "const": "full"
         }
+      ]
+    },
+    "QueryParser": {
+      "description": "Per-database query parser configuration.",
+      "type": "object",
+      "properties": {
+        "database": {
+          "description": "Database name.",
+          "type": "string"
+        },
+        "engine": {
+          "description": "Query parser engine used.",
+          "$ref": "#/$defs/QueryParserEngine"
+        },
+        "level": {
+          "description": "Query parser level.",
+          "$ref": "#/$defs/QueryParserLevel"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "database",
+        "level",
+        "engine"
       ]
     },
     "QueryParserEngine": {
