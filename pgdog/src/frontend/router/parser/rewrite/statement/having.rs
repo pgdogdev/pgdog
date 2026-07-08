@@ -159,7 +159,7 @@ fn materialize_hidden_expressions(
         let target = Node {
             node: Some(NodeEnum::ResTarget(Box::new(ResTarget {
                 name: alias.clone(),
-                val: Some(Box::new(expr.clone())),
+                val: Some(expr.clone()),
                 ..Default::default()
             }))),
         };
@@ -176,15 +176,15 @@ fn rewrite_template_values(
 ) {
     match expr {
         HavingExprTemplate::Compare { left, right, .. } => {
-            callback(left);
-            callback(right);
+            callback(left.as_mut());
+            callback(right.as_mut());
         }
         HavingExprTemplate::And(children) | HavingExprTemplate::Or(children) => {
             for child in children {
                 rewrite_template_values(child, callback);
             }
         }
-        HavingExprTemplate::IsNull { value, .. } => callback(value),
+        HavingExprTemplate::IsNull { value, .. } => callback(value.as_mut()),
     }
 }
 

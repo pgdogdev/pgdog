@@ -222,7 +222,7 @@ impl MultiShard {
                         }
                         drop.sort_unstable();
                         drop.dedup();
-                        let client_rd = rd.drop_columns(drop.into_iter());
+                        let client_rd = rd.drop_columns(drop);
                         forward = Some(client_rd.message()?);
                     }
                 }

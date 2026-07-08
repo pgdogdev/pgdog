@@ -46,7 +46,7 @@ pub(crate) enum HavingValueTemplate {
     ColumnName(String),
     Param(usize),
     Literal(HavingLiteral),
-    Expression(pg_query::protobuf::Node),
+    Expression(Box<pg_query::protobuf::Node>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -59,14 +59,14 @@ pub(crate) enum HavingValue {
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum HavingExprTemplate {
     Compare {
-        left: HavingValueTemplate,
+        left: Box<HavingValueTemplate>,
         op: CompareOp,
-        right: HavingValueTemplate,
+        right: Box<HavingValueTemplate>,
     },
     And(Vec<HavingExprTemplate>),
     Or(Vec<HavingExprTemplate>),
     IsNull {
-        value: HavingValueTemplate,
+        value: Box<HavingValueTemplate>,
         not: bool,
     },
 }
@@ -132,15 +132,15 @@ impl HavingExprTemplate {
     fn collect_params(&self, params: &mut Vec<usize>) {
         match self {
             Self::Compare { left, right, .. } => {
-                Self::collect_value_params(left, params);
-                Self::collect_value_params(right, params);
+                Self::collect_value_params(left.as_ref(), params);
+                Self::collect_value_params(right.as_ref(), params);
             }
             Self::And(children) | Self::Or(children) => {
                 for child in children {
                     child.collect_params(params);
                 }
             }
-            Self::IsNull { value, .. } => Self::collect_value_params(value, params),
+            Self::IsNull { value, .. } => Self::collect_value_params(value.as_ref(), params),
         }
     }
 
@@ -156,9 +156,9 @@ impl HavingExprTemplate {
     ) -> Option<HavingExpr> {
         match self {
             HavingExprTemplate::Compare { left, op, right } => Some(HavingExpr::Compare {
-                left: Self::resolve_value(left, lookup)?,
+                left: Self::resolve_value(left.as_ref(), lookup)?,
                 op: op.clone(),
-                right: Self::resolve_value(right, lookup)?,
+                right: Self::resolve_value(right.as_ref(), lookup)?,
             }),
             HavingExprTemplate::And(children) => {
                 let children = children
@@ -175,7 +175,7 @@ impl HavingExprTemplate {
                 Some(HavingExpr::Or(children))
             }
             HavingExprTemplate::IsNull { value, not } => Some(HavingExpr::IsNull {
-                value: Self::resolve_value(value, lookup)?,
+                value: Self::resolve_value(value.as_ref(), lookup)?,
                 not: *not,
             }),
         }
@@ -227,7 +227,11 @@ impl HavingExprTemplate {
                     .as_ref()
                     .ok_or(HavingParseError::Unsupported)
                     .and_then(|node| Self::parse_value(stmt, aggregate, node))?;
-                Ok(Self::Compare { left, op, right })
+                Ok(Self::Compare {
+                    left: Box::new(left),
+                    op,
+                    right: Box::new(right),
+                })
             }
             Some(NodeEnum::NullTest(test)) => {
                 let value = test
@@ -240,7 +244,10 @@ impl HavingExprTemplate {
                     test.nulltesttype(),
                     NullTestType::IsNull | NullTestType::IsNotNull
                 ) {
-                    Ok(Self::IsNull { value, not })
+                    Ok(Self::IsNull {
+                        value: Box::new(value),
+                        not,
+                    })
                 } else {
                     Err(HavingParseError::Unsupported)
                 }
@@ -284,7 +291,7 @@ impl HavingExprTemplate {
                     if let Some(index) = Self::target_index_by_alias(stmt, name) {
                         return Ok(HavingValueTemplate::ColumnIndex(index));
                     }
-                    return Ok(HavingValueTemplate::Expression(node.clone()));
+                    return Ok(HavingValueTemplate::Expression(Box::new(node.clone())));
                 }
                 Err(HavingParseError::Unsupported)
             }
@@ -302,7 +309,7 @@ impl HavingExprTemplate {
                 if candidates.len() == 1 {
                     Ok(HavingValueTemplate::ColumnIndex(candidates[0]))
                 } else {
-                    Ok(HavingValueTemplate::Expression(node.clone()))
+                    Ok(HavingValueTemplate::Expression(Box::new(node.clone())))
                 }
             }
             Some(NodeEnum::ResTarget(res_target)) => res_target

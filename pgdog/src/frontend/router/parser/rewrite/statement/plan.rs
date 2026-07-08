@@ -58,12 +58,12 @@ pub(crate) enum RewriteResult {
 
 impl RewriteResult {
     pub(crate) fn apply_after_parser(&self, request: &mut ClientRequest) -> Result<(), Error> {
-        match self {
-            Self::InPlace {
-                offset: Some(offset),
-            } => offset.apply_after_parser(request)?,
-            _ => {}
-        };
+        if let Self::InPlace {
+            offset: Some(offset),
+        } = self
+        {
+            offset.apply_after_parser(request)?;
+        }
         apply_having_after_parser(request)
     }
 }
