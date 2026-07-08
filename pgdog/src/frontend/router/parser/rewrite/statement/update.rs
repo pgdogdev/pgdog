@@ -622,7 +622,7 @@ impl<'a> StatementRewrite<'a> {
 fn rewrite_params(node: NodeMut<'_, '_>) -> IndexSet<u16> {
     let mut params = IndexSet::new();
     walk::walk_mut(node, |node| match node {
-        NodeMut::ParamRef(mut param) => {
+        NodeMut::ParamRef(param) => {
             params.insert(param.number as _);
             param.set_number(params.get_index_of(&(param.number as u16)).unwrap() as i32 + 1)
         }

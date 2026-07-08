@@ -281,7 +281,7 @@ mod test {
     fn selected_expr(result: &pg_raw_parse::ParseResult) -> Node<'_> {
         let stmt = result.stmts().exactly_one().ok().unwrap();
         match stmt {
-            Node::SelectStmt(s) => s.targetList().into_iter().exactly_one().unwrap().val(),
+            Node::SelectStmt(s) => s.target_list().into_iter().exactly_one().unwrap().val(),
             _ => unreachable!(),
         }
     }

@@ -139,7 +139,7 @@ mod test {
             unreachable!();
         };
 
-        for node in stmt.targetList() {
+        for node in stmt.target_list() {
             let func = Function::try_from(node.val()).unwrap();
             check(func);
         }
