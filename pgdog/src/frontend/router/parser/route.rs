@@ -3,8 +3,9 @@ use std::{fmt::Display, ops::Deref};
 use lazy_static::lazy_static;
 
 use super::{
-    Aggregate, DistinctBy, Limit, OrderBy, explain_trace::ExplainTrace,
-    rewrite::statement::aggregate::AggregateRewritePlan, statement::AdvisoryLocks,
+    Aggregate, DistinctBy, HavingExpr, HavingRewritePlan, Limit, OrderBy,
+    explain_trace::ExplainTrace, rewrite::statement::aggregate::AggregateRewritePlan,
+    statement::AdvisoryLocks,
 };
 
 /// The shard destination for a query.
@@ -105,6 +106,11 @@ pub struct Route {
     advisory_locks: AdvisoryLocks,
     /// `DISTINCT` clause, if set.
     distinct: Option<DistinctBy>,
+    /// Parsed `HAVING` clause.
+    having: Option<HavingExpr>,
+    /// Rewrites performed by the HAVING rewriter; adds hidden
+    /// select targets needed for post-aggregation filtering.
+    having_rewrite_plan: HavingRewritePlan,
     /// Rewrites performed by the aggregate rewriter; adds
     /// helper columns to this query so we can compute things
     /// like avg() or variance().
@@ -278,11 +284,13 @@ impl Route {
     /// 2. `GROUP BY` clause
     /// 3. `DISTINCT` clause
     /// 4. `LIMIT` or `OFFSET` clause
+    /// 5. `HAVING` clause
     ///
     pub fn should_buffer(&self) -> bool {
         !self.order_by().is_empty()
             || !self.aggregate().is_empty()
             || self.distinct().is_some()
+            || self.having().is_some()
             || self.limit().offset.is_some()
     }
 
@@ -362,6 +370,22 @@ impl Route {
 
     pub fn distinct(&self) -> &Option<DistinctBy> {
         &self.distinct
+    }
+
+    pub(crate) fn having(&self) -> &Option<HavingExpr> {
+        &self.having
+    }
+
+    pub(crate) fn set_having(&mut self, having: Option<HavingExpr>) {
+        self.having = having;
+    }
+
+    pub(crate) fn having_rewrite_plan(&self) -> &HavingRewritePlan {
+        &self.having_rewrite_plan
+    }
+
+    pub(crate) fn set_having_rewrite_plan(&mut self, plan: HavingRewritePlan) {
+        self.having_rewrite_plan = plan;
     }
 
     pub fn should_2pc(&self) -> bool {

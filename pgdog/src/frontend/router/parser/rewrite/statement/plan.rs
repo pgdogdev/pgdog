@@ -3,6 +3,7 @@ use crate::net::messages::bind::{Format, Parameter};
 use crate::net::{Bind, Parse, ProtocolMessage, Query};
 use crate::unique_id::UniqueId;
 
+use super::having::apply_having_after_parser;
 use super::insert::build_split_requests;
 use super::offset::OffsetPlan;
 use super::{Error, InsertSplit, ShardingKeyUpdate, aggregate::AggregateRewritePlan};
@@ -60,9 +61,10 @@ impl RewriteResult {
         match self {
             Self::InPlace {
                 offset: Some(offset),
-            } => offset.apply_after_parser(request),
-            _ => Ok(()),
-        }
+            } => offset.apply_after_parser(request)?,
+            _ => {}
+        };
+        apply_having_after_parser(request)
     }
 }
 

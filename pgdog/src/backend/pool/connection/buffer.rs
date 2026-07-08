@@ -2,12 +2,13 @@
 
 use std::{
     cmp::Ordering,
-    collections::{HashSet, VecDeque},
+    collections::{BTreeSet, HashSet, VecDeque},
 };
 
 use crate::{
     frontend::router::parser::{
-        Aggregate, DistinctBy, DistinctColumn, Limit, OrderBy,
+        Aggregate, CompareOp, DistinctBy, DistinctColumn, HavingExpr, HavingLiteral,
+        HavingRewritePlan, HavingValue, Limit, OrderBy,
         rewrite::statement::aggregate::AggregateRewritePlan,
     },
     net::{
@@ -146,30 +147,16 @@ impl Buffer {
         plan: &AggregateRewritePlan,
     ) -> Result<(), super::Error> {
         let buffer: VecDeque<DataRow> = std::mem::take(&mut self.buffer);
-        let mut rows = if aggregate.is_empty() {
+        let rows = if aggregate.is_empty() {
             buffer
         } else if let Some(aggregates) = Aggregates::new(&buffer, decoder, aggregate, plan) {
             aggregates.aggregate()?
         } else {
             buffer
         };
-
-        Self::drop_helper_columns(&mut rows, plan);
         self.buffer = rows;
 
         Ok(())
-    }
-
-    fn drop_helper_columns(rows: &mut VecDeque<DataRow>, plan: &AggregateRewritePlan) {
-        if plan.is_noop() {
-            return;
-        }
-
-        let drop = plan.drop_columns().collect();
-
-        for row in rows.iter_mut() {
-            row.drop_columns(&drop);
-        }
     }
 
     pub(super) fn distinct(&mut self, distinct: &Option<DistinctBy>, decoder: &Decoder) {
@@ -207,6 +194,48 @@ impl Buffer {
         }
     }
 
+    pub(super) fn having(
+        &mut self,
+        having: &Option<HavingExpr>,
+        decoder: &Decoder,
+    ) -> Result<(), super::Error> {
+        let Some(having) = having else {
+            return Ok(());
+        };
+
+        let mut filtered = VecDeque::with_capacity(self.buffer.len());
+        for row in self.buffer.drain(..) {
+            if eval_having(having, &row, decoder)? {
+                filtered.push_back(row);
+            }
+        }
+        self.buffer = filtered;
+        Ok(())
+    }
+
+    pub(super) fn drop_hidden_columns(
+        &mut self,
+        aggregate: &AggregateRewritePlan,
+        having: &HavingRewritePlan,
+        decoder: &Decoder,
+    ) {
+        let mut drop = aggregate.drop_columns().collect::<Vec<_>>();
+        for alias in having.hidden_aliases() {
+            if let Some(index) = decoder.rd().field_index(alias) {
+                drop.push(index);
+            }
+        }
+        drop.sort_unstable();
+        drop.dedup();
+        if drop.is_empty() {
+            return;
+        }
+        let drop: BTreeSet<_> = drop.into_iter().collect();
+        for row in &mut self.buffer {
+            row.drop_columns(&drop);
+        }
+    }
+
     /// Take messages from buffer.
     pub(super) fn take(&mut self) -> Option<Message> {
         if self.full {
@@ -236,9 +265,127 @@ impl Buffer {
     }
 }
 
+fn eval_having(
+    having: &HavingExpr,
+    row: &DataRow,
+    decoder: &Decoder,
+) -> Result<bool, super::Error> {
+    match having {
+        HavingExpr::Compare { left, op, right } => {
+            let left = eval_value(left, row, decoder)?;
+            let right = eval_value(right, row, decoder)?;
+            compare_values(left.as_ref(), op, right.as_ref())
+        }
+        HavingExpr::And(children) => {
+            for child in children {
+                if !eval_having(child, row, decoder)? {
+                    return Ok(false);
+                }
+            }
+            Ok(true)
+        }
+        HavingExpr::Or(children) => {
+            for child in children {
+                if eval_having(child, row, decoder)? {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
+        }
+        HavingExpr::IsNull { value, not } => {
+            let value = eval_value(value, row, decoder)?;
+            let result = value.as_ref().map(|datum| datum.is_null()).unwrap_or(true);
+            Ok(if *not { !result } else { result })
+        }
+    }
+}
+
+fn eval_value(
+    value: &HavingValue,
+    row: &DataRow,
+    decoder: &Decoder,
+) -> Result<Option<Datum>, super::Error> {
+    match value {
+        HavingValue::ColumnIndex(index) => Ok(row
+            .get_column(*index, decoder)?
+            .map(|column| column.value)
+            .or(Some(Datum::Null))),
+        HavingValue::ColumnName(name) => Ok(decoder
+            .rd()
+            .field_index(name)
+            .and_then(|index| row.get_column(index, decoder).ok().flatten())
+            .map(|column| column.value)
+            .or(Some(Datum::Null))),
+        HavingValue::Literal(literal) => Ok(Some(match literal {
+            HavingLiteral::Integer(value) => Datum::Bigint(*value),
+            HavingLiteral::Float(value) => Datum::Double((*value).into()),
+            HavingLiteral::Boolean(value) => Datum::Boolean(*value),
+            HavingLiteral::String(value) => Datum::Text(value.clone()),
+            HavingLiteral::Null => Datum::Null,
+        })),
+    }
+}
+
+fn compare_values(
+    left: Option<&Datum>,
+    op: &CompareOp,
+    right: Option<&Datum>,
+) -> Result<bool, super::Error> {
+    let (Some(left), Some(right)) = (left, right) else {
+        return Ok(false);
+    };
+
+    if left.is_null() || right.is_null() {
+        return Ok(false);
+    }
+
+    if let Some(ordering) = compare_numeric(left, right) {
+        return Ok(match op {
+            CompareOp::Eq => ordering == Ordering::Equal,
+            CompareOp::NotEq => ordering != Ordering::Equal,
+            CompareOp::Lt => ordering == Ordering::Less,
+            CompareOp::Lte => ordering != Ordering::Greater,
+            CompareOp::Gt => ordering == Ordering::Greater,
+            CompareOp::Gte => ordering != Ordering::Less,
+        });
+    }
+
+    let Some(ordering) = left.partial_cmp(right) else {
+        return Ok(false);
+    };
+    Ok(match op {
+        CompareOp::Eq => ordering == Ordering::Equal,
+        CompareOp::NotEq => ordering != Ordering::Equal,
+        CompareOp::Lt => ordering == Ordering::Less,
+        CompareOp::Lte => ordering != Ordering::Greater,
+        CompareOp::Gt => ordering == Ordering::Greater,
+        CompareOp::Gte => ordering != Ordering::Less,
+    })
+}
+
+fn compare_numeric(left: &Datum, right: &Datum) -> Option<Ordering> {
+    let left = datum_to_f64(left)?;
+    let right = datum_to_f64(right)?;
+    left.partial_cmp(&right)
+}
+
+fn datum_to_f64(value: &Datum) -> Option<f64> {
+    match value {
+        Datum::Bigint(value) => Some(*value as f64),
+        Datum::Integer(value) => Some(*value as f64),
+        Datum::SmallInt(value) => Some(*value as f64),
+        Datum::Float(value) => Some(value.0 as f64),
+        Datum::Double(value) => Some(value.0),
+        Datum::Numeric(value) => value.to_f64(),
+        Datum::Text(value) => value.parse::<f64>().ok(),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::frontend::router::parser::{CompareOp, HavingExpr, HavingLiteral, HavingValue};
     use crate::net::{Datum, Field, Format, RowDescription};
     use bytes::Bytes;
 
@@ -626,5 +773,32 @@ mod test {
         buf.distinct(&Some(DistinctBy::Row), &decoder);
 
         assert_eq!(buf.buffer.len(), 3);
+    }
+
+    #[test]
+    fn test_having_filters_after_aggregate() {
+        let mut buf = Buffer::default();
+        let rd = RowDescription::new(&[Field::bigint("customer_id"), Field::bigint("order_count")]);
+        let decoder = Decoder::from(&rd);
+
+        let mut row1 = DataRow::new();
+        row1.add(1_i64).add(3_i64);
+        buf.add(row1.message().unwrap()).unwrap();
+
+        let mut row2 = DataRow::new();
+        row2.add(2_i64).add(2_i64);
+        buf.add(row2.message().unwrap()).unwrap();
+
+        let having = HavingExpr::Compare {
+            left: HavingValue::ColumnName("order_count".into()),
+            op: CompareOp::Gt,
+            right: HavingValue::Literal(HavingLiteral::Integer(2)),
+        };
+        buf.having(&Some(having), &decoder).unwrap();
+
+        assert_eq!(buf.len(), 1);
+        let remaining = buf.buffer.front().unwrap();
+        assert_eq!(remaining.get::<i64>(0, Format::Text).unwrap(), 1);
+        assert_eq!(remaining.get::<i64>(1, Format::Text).unwrap(), 3);
     }
 }

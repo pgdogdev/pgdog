@@ -15,6 +15,7 @@ pub mod error;
 pub mod explain_trace;
 mod from_clause;
 pub mod function;
+pub mod having;
 pub mod key;
 mod limit;
 pub mod multi_tenant;
@@ -44,6 +45,9 @@ pub use distinct::{Distinct, DistinctBy, DistinctColumn};
 pub use error::Error;
 pub(crate) use from_clause::FromClause;
 use function::Function;
+pub(crate) use having::{
+    CompareOp, HavingExpr, HavingExprTemplate, HavingLiteral, HavingRewritePlan, HavingValue,
+};
 pub use key::Key;
 pub(crate) use limit::{Limit, LimitClause};
 pub use order_by::OrderBy;

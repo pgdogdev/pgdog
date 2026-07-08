@@ -164,17 +164,20 @@ impl MultiShard {
                     self.buffer.full();
 
                     if !self.buffer.is_empty() {
+                        let aggregate_plan = self.route.aggregate_rewrite_plan();
+                        let having_plan = self.route.having_rewrite_plan();
                         self.buffer
-                            .aggregate(
-                                self.route.aggregate(),
-                                &self.decoder,
-                                self.route.aggregate_rewrite_plan(),
-                            )
+                            .aggregate(self.route.aggregate(), &self.decoder, aggregate_plan)
+                            .map_err(Error::from)?;
+                        self.buffer
+                            .having(self.route.having(), &self.decoder)
                             .map_err(Error::from)?;
 
                         self.buffer.sort(self.route.order_by(), &self.decoder);
                         self.buffer.distinct(self.route.distinct(), &self.decoder);
                         self.buffer.limit(self.route.limit());
+                        self.buffer
+                            .drop_hidden_columns(aggregate_plan, having_plan, &self.decoder);
                     }
 
                     if has_rows {
@@ -207,10 +210,19 @@ impl MultiShard {
                     // Only send it to the client once all shards sent it,
                     // so we don't get early requests from clients.
                     let plan = self.route.aggregate_rewrite_plan();
-                    if plan.is_noop() {
+                    let having_plan = self.route.having_rewrite_plan();
+                    if plan.is_noop() && having_plan.is_noop() {
                         forward = Some(message);
                     } else {
-                        let client_rd = rd.drop_columns(plan.drop_columns());
+                        let mut drop = plan.drop_columns().collect::<Vec<_>>();
+                        for alias in having_plan.hidden_aliases() {
+                            if let Some(index) = rd.field_index(alias) {
+                                drop.push(index);
+                            }
+                        }
+                        drop.sort_unstable();
+                        drop.dedup();
+                        let client_rd = rd.drop_columns(drop.into_iter());
                         forward = Some(client_rd.message()?);
                     }
                 }
