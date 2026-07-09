@@ -3,7 +3,7 @@
 use pg_query::Node as PgNode;
 use pg_query::protobuf::ParseResult;
 #[cfg(feature = "new_parser")]
-use pg_raw_parse::{Node, make, walk};
+use pg_raw_parse::{Node, NodeMut, make, walk};
 #[cfg(not(feature = "new_parser"))]
 use pgdog_config::QueryParserEngine;
 
@@ -131,19 +131,23 @@ impl<'a> StatementRewrite<'a> {
             if prepared_result.rewritten {
                 self.rewritten = true;
                 plan.prepares = prepared_result.prepares;
-                self.stmt.stmts = pg_query::parse(pg_raw_parse::deparse(node.as_ref())?.as_str())?
-                    .protobuf
-                    .stmts;
             }
 
             // Inject pgdog.unique_id() for missing BIGINT primary keys.
             // This must run BEFORE the unique_id rewriter so the injected
             // function calls get processed.
-            self.inject_auto_id(node.as_ref(), &mut plan)?;
+            if let NodeMut::InsertStmt(insert) = node.as_mut() {
+                self.inject_auto_id(insert, mem, &mut plan)?;
+            }
 
             // Track the next parameter number to use
             let mut next_param = plan.params as i32 + 1;
 
+            self.stmt.stmts[0] = pg_query::parse(pg_raw_parse::deparse(node.as_ref())?.as_str())?
+                .protobuf
+                .stmts
+                .pop()
+                .unwrap();
             let extended = self.extended;
             visitor::visit_and_mutate_nodes(self.stmt, |node| -> Result<Option<PgNode>, Error> {
                 match Self::rewrite_unique_id(node, extended, &mut next_param)? {

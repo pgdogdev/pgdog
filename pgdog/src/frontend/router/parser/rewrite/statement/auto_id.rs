@@ -1,10 +1,14 @@
 //! Auto-inject pgdog.unique_id() for missing BIGINT primary keys in INSERT statements.
 
 use indexmap::IndexSet;
+#[cfg(feature = "new_parser")]
+use itertools::*;
+#[cfg(not(feature = "new_parser"))]
 use pg_query::protobuf::{FuncCall, ResTarget, String as PgString};
+#[cfg(not(feature = "new_parser"))]
 use pg_query::{Node as PgNode, NodeEnum};
 #[cfg(feature = "new_parser")]
-use pg_raw_parse::Node;
+use pg_raw_parse::{Node, NodeMut, make, nodes};
 use pgdog_config::RewriteMode;
 
 use super::{Error, RewritePlan, StatementRewrite};
@@ -21,9 +25,11 @@ impl StatementRewrite<'_> {
     ///
     /// This runs before unique_id replacement so injected function calls
     /// will be processed by the unique_id rewriter.
-    pub(super) fn inject_auto_id(
+    #[cfg(feature = "new_parser")]
+    pub(super) fn inject_auto_id<'a>(
         &mut self,
-        #[cfg(feature = "new_parser")] node: Node<'_>,
+        mut node: nodes::InsertStmtMut<'a, '_>,
+        mem: make::MemoryToken<'a>,
         plan: &mut RewritePlan,
     ) -> Result<(), Error> {
         let mode = self.schema.rewrite.primary_key;
@@ -32,19 +38,14 @@ impl StatementRewrite<'_> {
             return Ok(());
         }
 
-        let Some((table, is_sharded)) = self.get_insert_table(
-            #[cfg(feature = "new_parser")]
-            node,
-        ) else {
-            return Ok(());
-        };
+        let (table, is_sharded) = self.get_insert_table(&node);
 
         let Some(relation) = self.db_schema.table(table, self.user, self.search_path) else {
             return Ok(());
         };
 
         // Get the columns specified in the INSERT (preserving order)
-        let insert_columns: IndexSet<&str> = self.get_insert_column_names_ordered();
+        let insert_columns: IndexSet<&str> = self.get_insert_column_names_ordered(&node);
 
         // Find BIGINT primary key columns
         let bigint_pk_columns: Vec<&str> = relation
@@ -59,24 +60,21 @@ impl StatementRewrite<'_> {
         }
 
         // Find positions of present PK columns (for DEFAULT replacement)
-        let present_pk_positions: Vec<usize> = bigint_pk_columns
-            .iter()
-            .filter_map(|pk_col| insert_columns.get_index_of(pk_col))
-            .collect();
-
-        // Find which PK columns are missing
-        let missing_columns: Vec<&str> = bigint_pk_columns
-            .iter()
-            .filter(|pk_col| !insert_columns.contains(*pk_col))
-            .copied()
-            .collect();
+        let (present_pk_positions, missing_columns): (Vec<_>, Vec<_>) =
+            bigint_pk_columns.into_iter().partition_map(|pk_col| {
+                insert_columns
+                    .get_index_of(&pk_col)
+                    .map(Either::Left)
+                    .unwrap_or(Either::Right(pk_col))
+            });
 
         let rewrite =
             mode == RewriteMode::Rewrite || mode == RewriteMode::RewriteOmni && !is_sharded;
 
         // Replace DEFAULT values with unique_id() for present columns (only in rewrite mode)
         if rewrite {
-            let replaced = self.replace_set_to_default_at_positions(&present_pk_positions);
+            let replaced =
+                self.replace_set_to_default_at_positions(&mut node, mem, &present_pk_positions);
             if replaced > 0 {
                 plan.auto_id_injected += replaced as u16;
                 self.rewritten = true;
@@ -93,7 +91,7 @@ impl StatementRewrite<'_> {
 
         if rewrite {
             for column in missing_columns {
-                self.inject_column_with_unique_id(column)?;
+                self.inject_column_with_unique_id(&mut node, mem, column);
                 plan.auto_id_injected += 1;
             }
             self.rewritten = true;
@@ -102,89 +100,190 @@ impl StatementRewrite<'_> {
         Ok(())
     }
 
-    /// Get the table from an INSERT statement.
-    fn get_insert_table(
-        &self,
-        #[cfg(feature = "new_parser")] node: Node<'_>,
-    ) -> Option<(Table<'_>, bool)> {
-        let stmt = self.stmt.stmts.first()?;
-        let pg_node = stmt.stmt.as_ref()?;
+    cfg_select! {
+        not(feature = "new_parser") => {
+            pub(super) fn inject_auto_id(
+                &mut self,
+                plan: &mut RewritePlan,
+            ) -> Result<(), Error> {
+                let mode = self.schema.rewrite.primary_key;
 
-        if let NodeEnum::InsertStmt(insert) = pg_node.node.as_ref()? {
-            let relation = insert.relation.as_ref()?;
-            let is_sharded = StatementParser::from_insert(
-                #[cfg(not(feature = "new_parser"))]
-                insert,
-                #[cfg(feature = "new_parser")]
-                node,
-                None,
-                self.schema,
-                None,
-            )
+                if mode == RewriteMode::Ignore || self.schema.shards == 1 {
+                    return Ok(());
+                }
+
+                let Some((table, is_sharded)) = self.get_insert_table() else {
+                    return Ok(());
+                };
+
+                let Some(relation) = self.db_schema.table(table, self.user, self.search_path) else {
+                    return Ok(());
+                };
+
+                // Get the columns specified in the INSERT (preserving order)
+                let insert_columns: IndexSet<&str> = self.get_insert_column_names_ordered();
+
+                // Find BIGINT primary key columns
+                let bigint_pk_columns: Vec<&str> = relation
+                    .columns()
+                    .values()
+                    .filter(|col| col.is_primary_key && is_bigint_type(&col.data_type))
+                    .map(|col| col.column_name.as_str())
+                    .collect();
+
+                if bigint_pk_columns.is_empty() {
+                    return Ok(());
+                }
+
+                // Find positions of present PK columns (for DEFAULT replacement)
+                let present_pk_positions: Vec<usize> = bigint_pk_columns
+                    .iter()
+                    .filter_map(|pk_col| insert_columns.get_index_of(pk_col))
+                    .collect();
+
+                // Find which PK columns are missing
+                let missing_columns: Vec<&str> = bigint_pk_columns
+                    .iter()
+                    .filter(|pk_col| !insert_columns.contains(*pk_col))
+                    .copied()
+                    .collect();
+
+                let rewrite =
+                    mode == RewriteMode::Rewrite || mode == RewriteMode::RewriteOmni && !is_sharded;
+
+                // Replace DEFAULT values with unique_id() for present columns (only in rewrite mode)
+                if rewrite {
+                    let replaced = self.replace_set_to_default_at_positions(&present_pk_positions);
+                    if replaced > 0 {
+                        plan.auto_id_injected += replaced as u16;
+                        self.rewritten = true;
+                    }
+                }
+
+                if missing_columns.is_empty() {
+                    return Ok(());
+                }
+
+                if mode == RewriteMode::Error {
+                    return Err(Error::MissingPrimaryKey);
+                }
+
+                if rewrite {
+                    for column in missing_columns {
+                        self.inject_column_with_unique_id(column)?;
+                        plan.auto_id_injected += 1;
+                    }
+                    self.rewritten = true;
+                }
+
+                Ok(())
+            }
+        }
+        _ => {}
+    }
+
+    /// Get the table from an INSERT statement.
+    #[cfg(feature = "new_parser")]
+    fn get_insert_table<'a>(&self, insert: &'a nodes::InsertStmt) -> (Table<'a>, bool) {
+        let relation = insert.relation().expect("INSERT always has table");
+        let is_sharded = StatementParser::from_insert(insert.into(), None, self.schema, None)
             .is_sharded(self.db_schema, self.user, self.search_path);
 
-            return Some((Table::from(relation), is_sharded));
-        }
+        (Table::from(relation), is_sharded)
+    }
 
-        None
+    cfg_select! {
+        not(feature = "new_parser") => {
+            fn get_insert_table(
+                &self,
+            ) -> Option<(Table<'_>, bool)> {
+                let stmt = self.stmt.stmts.first()?;
+                let pg_node = stmt.stmt.as_ref()?;
+
+                if let NodeEnum::InsertStmt(insert) = pg_node.node.as_ref()? {
+                    let relation = insert.relation.as_ref()?;
+                    let is_sharded = StatementParser::from_insert(
+                        insert,
+                        None,
+                        self.schema,
+                        None,
+                    )
+                    .is_sharded(self.db_schema, self.user, self.search_path);
+
+                    return Some((Table::from(relation), is_sharded));
+                }
+
+                None
+            }
+        }
+        _ => {}
     }
 
     /// Get the column names specified in the INSERT statement, preserving order.
-    fn get_insert_column_names_ordered(&self) -> IndexSet<&str> {
-        let Some(stmt) = self.stmt.stmts.first() else {
-            return IndexSet::new();
-        };
-        let Some(node) = stmt.stmt.as_ref() else {
-            return IndexSet::new();
-        };
-        let Some(NodeEnum::InsertStmt(insert)) = node.node.as_ref() else {
-            return IndexSet::new();
-        };
-
+    #[cfg(feature = "new_parser")]
+    fn get_insert_column_names_ordered<'a>(
+        &self,
+        insert: &'a nodes::InsertStmt,
+    ) -> IndexSet<&'a str> {
         insert
-            .cols
+            .cols()
             .iter()
-            .filter_map(|col| {
-                if let Some(NodeEnum::ResTarget(res)) = &col.node
-                    && !res.name.is_empty()
-                {
-                    return Some(res.name.as_str());
-                }
-                None
+            .map(|col| match col {
+                Node::ResTarget(res) => res.name().expect("ResTarget always has a name in INSERT"),
+                _ => unreachable!("InsertStmt.cols is always ResTarget"),
             })
             .collect()
     }
 
+    cfg_select! {
+        not(feature = "new_parser") => {
+            fn get_insert_column_names_ordered(&self) -> IndexSet<&str> {
+                let Some(stmt) = self.stmt.stmts.first() else {
+                    return IndexSet::new();
+                };
+                let Some(node) = stmt.stmt.as_ref() else {
+                    return IndexSet::new();
+                };
+                let Some(NodeEnum::InsertStmt(insert)) = node.node.as_ref() else {
+                    return IndexSet::new();
+                };
+
+                insert
+                    .cols
+                    .iter()
+                    .filter_map(|col| {
+                        if let Some(NodeEnum::ResTarget(res)) = &col.node
+                            && !res.name.is_empty()
+                        {
+                            return Some(res.name.as_str());
+                        }
+                        None
+                    })
+                    .collect()
+            }
+        }
+        _ => {}
+    }
+
     /// Replace SetToDefault nodes at the specified column positions with pgdog.unique_id().
-    fn replace_set_to_default_at_positions(&mut self, positions: &[usize]) -> usize {
-        let Some(stmt) = self.stmt.stmts.first_mut() else {
-            return 0;
-        };
-        let Some(node) = stmt.stmt.as_mut() else {
-            return 0;
-        };
-        let Some(NodeEnum::InsertStmt(insert)) = node.node.as_mut() else {
-            return 0;
-        };
-        let Some(select) = insert.select_stmt.as_mut() else {
-            return 0;
-        };
-        let Some(NodeEnum::SelectStmt(select_stmt)) = select.node.as_mut() else {
-            return 0;
+    #[cfg(feature = "new_parser")]
+    fn replace_set_to_default_at_positions<'a, 'b>(
+        &mut self,
+        insert: &mut nodes::InsertStmtMut<'a, 'b>,
+        mem: make::MemoryToken<'a>,
+        positions: &[usize],
+    ) -> usize {
+        let NodeMut::SelectStmt(mut select_stmt) = insert.select_stmt_mut() else {
+            return 0; // DEFAULT VALUES
         };
 
         let mut replaced = 0;
-        let unique_id_call = Self::unique_id_func_call();
-
-        for values_node in &mut select_stmt.values_lists {
-            if let Some(NodeEnum::List(list)) = &mut values_node.node {
-                for &pos in positions {
-                    if pos < list.items.len()
-                        && let Some(NodeEnum::SetToDefault(_)) = &list.items[pos].node
-                    {
-                        list.items[pos] = unique_id_call.clone();
-                        replaced += 1;
-                    }
+        for list in select_stmt.values_lists_mut() {
+            let mut list = list.expect_node_list();
+            for pos in positions {
+                if matches!(list.get(*pos), Some(Node::SetToDefault(..))) {
+                    list.set(*pos, Self::unique_id_func_call(mem).uncast());
+                    replaced += 1;
                 }
             }
         }
@@ -192,67 +291,153 @@ impl StatementRewrite<'_> {
         replaced
     }
 
-    /// Inject a column with pgdog.unique_id() as the value.
-    fn inject_column_with_unique_id(&mut self, column_name: &str) -> Result<(), Error> {
-        let Some(stmt) = self.stmt.stmts.first_mut() else {
-            return Ok(());
-        };
-        let Some(node) = stmt.stmt.as_mut() else {
-            return Ok(());
-        };
-        let Some(NodeEnum::InsertStmt(insert)) = node.node.as_mut() else {
-            return Ok(());
-        };
+    cfg_select! {
+        not(feature = "new_parser") => {
+            fn replace_set_to_default_at_positions(&mut self, positions: &[usize]) -> usize {
+                let Some(stmt) = self.stmt.stmts.first_mut() else {
+                    return 0;
+                };
+                let Some(node) = stmt.stmt.as_mut() else {
+                    return 0;
+                };
+                let Some(NodeEnum::InsertStmt(insert)) = node.node.as_mut() else {
+                    return 0;
+                };
+                let Some(select) = insert.select_stmt.as_mut() else {
+                    return 0;
+                };
+                let Some(NodeEnum::SelectStmt(select_stmt)) = select.node.as_mut() else {
+                    return 0;
+                };
 
-        // Add the column to the column list
-        let col_node = PgNode {
-            node: Some(NodeEnum::ResTarget(Box::new(ResTarget {
-                name: column_name.to_string(),
-                ..Default::default()
-            }))),
-        };
-        insert.cols.push(col_node);
+                let mut replaced = 0;
+                let unique_id_call = Self::unique_id_func_call();
 
-        // Add pgdog.unique_id() to each values list
-        let Some(select) = insert.select_stmt.as_mut() else {
-            return Ok(());
-        };
-        let Some(NodeEnum::SelectStmt(select_stmt)) = select.node.as_mut() else {
-            return Ok(());
-        };
+                for values_node in &mut select_stmt.values_lists {
+                    if let Some(NodeEnum::List(list)) = &mut values_node.node {
+                        for &pos in positions {
+                            if pos < list.items.len()
+                                && let Some(NodeEnum::SetToDefault(_)) = &list.items[pos].node
+                            {
+                                list.items[pos] = unique_id_call.clone();
+                                replaced += 1;
+                            }
+                        }
+                    }
+                }
 
-        let unique_id_call = Self::unique_id_func_call();
-
-        for values_node in &mut select_stmt.values_lists {
-            if let Some(NodeEnum::List(list)) = &mut values_node.node {
-                list.items.push(unique_id_call.clone());
+                replaced
             }
         }
+        _ => {}
+    }
 
-        Ok(())
+    /// Inject a column with pgdog.unique_id() as the value.
+    #[cfg(feature = "new_parser")]
+    fn inject_column_with_unique_id<'a>(
+        &mut self,
+        insert: &mut nodes::InsertStmtMut<'a, '_>,
+        mem: make::MemoryToken<'a>,
+        column_name: &str,
+    ) {
+        insert.cols_mut().push(
+            mem,
+            mem.make_res_target(Some(column_name), mem.empty(), mem.none())
+                .uncast(),
+        );
+
+        let NodeMut::SelectStmt(mut select_stmt) = insert.select_stmt_mut() else {
+            panic!("Attempted to add pgdog.unique_id() to DEFAULT VALUES")
+        };
+
+        for list in select_stmt.values_lists_mut().into_iter() {
+            list.expect_node_list()
+                .push(mem, Self::unique_id_func_call(mem).uncast())
+        }
+    }
+
+    cfg_select! {
+        not(feature = "new_parser") => {
+            fn inject_column_with_unique_id(&mut self, column_name: &str) -> Result<(), Error> {
+                let Some(stmt) = self.stmt.stmts.first_mut() else {
+                    return Ok(());
+                };
+                let Some(node) = stmt.stmt.as_mut() else {
+                    return Ok(());
+                };
+                let Some(NodeEnum::InsertStmt(insert)) = node.node.as_mut() else {
+                    return Ok(());
+                };
+
+                // Add the column to the column list
+                let col_node = PgNode {
+                    node: Some(NodeEnum::ResTarget(Box::new(ResTarget {
+                        name: column_name.to_string(),
+                        ..Default::default()
+                    }))),
+                };
+                insert.cols.push(col_node);
+
+                // Add pgdog.unique_id() to each values list
+                let Some(select) = insert.select_stmt.as_mut() else {
+                    return Ok(());
+                };
+                let Some(NodeEnum::SelectStmt(select_stmt)) = select.node.as_mut() else {
+                    return Ok(());
+                };
+
+                let unique_id_call = Self::unique_id_func_call();
+
+                for values_node in &mut select_stmt.values_lists {
+                    if let Some(NodeEnum::List(list)) = &mut values_node.node {
+                        list.items.push(unique_id_call.clone());
+                    }
+                }
+
+                Ok(())
+            }
+        }
+        _ => {}
     }
 
     /// Create a function call node for pgdog.unique_id().
-    fn unique_id_func_call() -> PgNode {
-        PgNode {
-            node: Some(NodeEnum::FuncCall(Box::new(FuncCall {
-                funcname: vec![
-                    PgNode {
-                        node: Some(NodeEnum::String(PgString {
-                            sval: "pgdog".to_string(),
-                        })),
-                    },
-                    PgNode {
-                        node: Some(NodeEnum::String(PgString {
-                            sval: "unique_id".to_string(),
-                        })),
-                    },
-                ],
-                args: vec![],
-                func_variadic: false,
-                ..Default::default()
-            }))),
+    #[cfg(feature = "new_parser")]
+    fn unique_id_func_call(mem: make::MemoryToken<'_>) -> make::Unique<'_, &nodes::FuncCall> {
+        mem.make_func_call(
+            mem.make_list(&[
+                mem.make_string(Some("pgdog")).uncast(),
+                mem.make_string(Some("unique_id")).uncast(),
+            ]),
+            mem.empty(),
+            Default::default(),
+        )
+    }
+
+    cfg_select! {
+        not(feature = "new_parser") => {
+            fn unique_id_func_call() -> PgNode {
+                PgNode {
+                    node: Some(NodeEnum::FuncCall(Box::new(FuncCall {
+                        funcname: vec![
+                            PgNode {
+                                node: Some(NodeEnum::String(PgString {
+                                    sval: "pgdog".to_string(),
+                                })),
+                            },
+                            PgNode {
+                                node: Some(NodeEnum::String(PgString {
+                                    sval: "unique_id".to_string(),
+                                })),
+                            },
+                        ],
+                        args: vec![],
+                        func_variadic: false,
+                        ..Default::default()
+                    }))),
+                }
+            }
         }
+        _ => {}
     }
 }
 
