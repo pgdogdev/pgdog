@@ -188,6 +188,8 @@ impl Server {
                 let connector = connector_with_verify_mode(
                     tls_mode,
                     config.config.general.tls_server_ca_certificate.as_ref(),
+                    config.config.general.tls_server_certificate.as_ref(),
+                    config.config.general.tls_server_private_key.as_ref(),
                 )?;
                 let plain = stream.take()?;
 
