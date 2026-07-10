@@ -3,7 +3,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs::read_to_string;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tracing::{error, info, warn};
 
 use crate::sharding::ShardedSchema;
@@ -26,26 +26,33 @@ use super::sharding::{ManualQuery, OmnishardedTables, ShardedMappingDeprecated};
 use super::users::{Admin, Plugin, Users};
 use super::vault::Vault;
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ConfigAndUsers {
-    /// pgdog.toml
+    /// parsed pgdog.toml or default [Config]
     pub config: Config,
-    /// users.toml
+    /// parsed users.toml or default [Users]
     pub users: Users,
     /// Path to pgdog.toml.
     pub config_path: PathBuf,
     /// Path to users.toml.
     pub users_path: PathBuf,
+    /// Raw, unparsed text of `pgdog.toml`.
+    /// None when the file is missing.
+    pub config_text: Option<String>,
+    /// Raw, unparsed text of `users.toml`.
+    /// None when the file is missing.
+    pub users_text: Option<String>,
 }
 
 impl ConfigAndUsers {
     /// Load configuration from disk or use defaults.
-    pub fn load(config_path: &PathBuf, users_path: &PathBuf) -> Result<Self, Error> {
-        let mut config: Config = if let Ok(config) = read_to_string(config_path) {
-            let config = match toml::from_str(&config) {
+    pub fn load(config_path: &Path, users_path: &Path) -> Result<Self, Error> {
+        let config_text = read_to_string(config_path).ok();
+        let mut config: Config = if let Some(text) = &config_text {
+            let config = match toml::from_str(text) {
                 Ok(config) => config,
                 Err(err) => {
-                    let error = Error::config(&config, err);
+                    let error = Error::config(text, err);
                     error!("failed to load {}: {}", config_path.display(), error);
                     return Err(error);
                 }
@@ -64,11 +71,12 @@ impl ConfigAndUsers {
             info!("multi-tenant protection enabled");
         }
 
-        let mut users: Users = if let Ok(users) = read_to_string(users_path) {
-            let users: Users = match toml::from_str(&users) {
+        let users_text = read_to_string(users_path).ok();
+        let mut users: Users = if let Some(text) = &users_text {
+            let users: Users = match toml::from_str(text) {
                 Ok(config) => config,
                 Err(err) => {
-                    let error = Error::config(&users, err);
+                    let error = Error::config(text, err);
                     error!("failed to load {}: {}", users_path.display(), error);
                     return Err(error);
                 }
@@ -101,6 +109,8 @@ impl ConfigAndUsers {
             users,
             config_path: config_path.to_owned(),
             users_path: users_path.to_owned(),
+            config_text,
+            users_text,
         };
 
         Ok(config_and_users)
@@ -170,6 +180,8 @@ impl Default for ConfigAndUsers {
             users: Users::default(),
             config_path: PathBuf::from("pgdog.toml"),
             users_path: PathBuf::from("users.toml"),
+            config_text: None,
+            users_text: None,
         }
     }
 }
@@ -699,11 +711,13 @@ mod tests {
     use crate::{FlexibleType, ShardedMappingConfig, ShardedMappingList, ShardedMappingRange};
     use crate::{PoolerMode, PreparedStatements, ServerAuth};
 
+    use std::io::Write;
     use std::time::Duration;
+    use tempfile::NamedTempFile;
 
     #[test]
     fn test_basic() {
-        let source = r#"
+        let pgdog_source = r#"
 [general]
 host = "0.0.0.0"
 port = 6432
@@ -731,7 +745,20 @@ name = "pgdog_routing"
 column = "tenant_id"
 "#;
 
-        let config: Config = toml::from_str(source).unwrap();
+        let users_source =
+            "[[users]]\nname = \"alice\"\ndatabase = \"production\"\npassword = \"pw\"\n";
+
+        let mut pgdog_file = NamedTempFile::new().unwrap();
+        pgdog_file.write_all(pgdog_source.as_bytes()).unwrap();
+        pgdog_file.flush().unwrap();
+
+        let mut users_file = NamedTempFile::new().unwrap();
+        users_file.write_all(users_source.as_bytes()).unwrap();
+        users_file.flush().unwrap();
+
+        let loaded = ConfigAndUsers::load(pgdog_file.path(), users_file.path()).unwrap();
+        let config = &loaded.config;
+
         assert_eq!(config.databases[0].name, "production");
         assert_eq!(config.plugins[0].name, "pgdog_routing");
         assert!(config.tcp.keepalive());
@@ -742,7 +769,21 @@ column = "tenant_id"
         );
         assert_eq!(config.tcp.time().unwrap(), Duration::from_millis(1000));
         assert_eq!(config.tcp.retries().unwrap(), 5);
-        assert_eq!(config.multi_tenant.unwrap().column, "tenant_id");
+        assert_eq!(config.multi_tenant.as_ref().unwrap().column, "tenant_id");
+
+        // Users parsed from the second file.
+        assert_eq!(loaded.users.users.len(), 1);
+        assert_eq!(loaded.users.users[0].name, "alice");
+        assert_eq!(loaded.users.users[0].database, "production");
+        assert_eq!(loaded.users.users[0].password.as_deref(), Some("pw"));
+
+        // Raw text captured verbatim from the files that were read.
+        assert_eq!(loaded.config_text.as_deref(), Some(pgdog_source));
+        assert_eq!(loaded.users_text.as_deref(), Some(users_source));
+
+        // Paths point at the files we loaded.
+        assert_eq!(loaded.config_path, pgdog_file.path());
+        assert_eq!(loaded.users_path, users_file.path());
     }
 
     #[test]
@@ -866,9 +907,6 @@ exposure = 0.75
 
     #[test]
     fn test_admin_override_from_users_toml() {
-        use std::io::Write;
-        use tempfile::NamedTempFile;
-
         let pgdog_config = r#"
 [admin]
 name = "pgdog_admin"
@@ -892,8 +930,7 @@ password = "users_admin_password"
         pgdog_file.flush().unwrap();
         users_file.flush().unwrap();
 
-        let config_and_users =
-            ConfigAndUsers::load(&pgdog_file.path().into(), &users_file.path().into()).unwrap();
+        let config_and_users = ConfigAndUsers::load(pgdog_file.path(), users_file.path()).unwrap();
 
         assert_eq!(config_and_users.config.admin.name, "users_admin");
         assert_eq!(config_and_users.config.admin.user, "users_admin_user");
@@ -906,9 +943,6 @@ password = "users_admin_password"
 
     #[test]
     fn test_admin_override_with_default_config() {
-        use std::io::Write;
-        use tempfile::NamedTempFile;
-
         let pgdog_config = r#"
 [general]
 host = "0.0.0.0"
@@ -931,8 +965,7 @@ password = "users_admin_password"
         pgdog_file.flush().unwrap();
         users_file.flush().unwrap();
 
-        let config_and_users =
-            ConfigAndUsers::load(&pgdog_file.path().into(), &users_file.path().into()).unwrap();
+        let config_and_users = ConfigAndUsers::load(pgdog_file.path(), users_file.path()).unwrap();
 
         assert_eq!(config_and_users.config.admin.name, "users_admin");
         assert_eq!(config_and_users.config.admin.user, "users_admin_user");
