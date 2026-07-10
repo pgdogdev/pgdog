@@ -189,7 +189,7 @@
         "$ref": "#/$defs/Plugin"
       }
     },
-    "query_parser": {
+    "query_parsers": {
       "description": "Query parser levels per-database.",
       "type": "array",
       "default": [],
@@ -1621,18 +1621,18 @@
         },
         "engine": {
           "description": "Query parser engine used.",
-          "$ref": "#/$defs/QueryParserEngine"
+          "$ref": "#/$defs/QueryParserEngine",
+          "default": "pg_query_protobuf"
         },
         "level": {
           "description": "Query parser level.",
-          "$ref": "#/$defs/QueryParserLevel"
+          "$ref": "#/$defs/QueryParserLevel",
+          "default": "auto"
         }
       },
       "additionalProperties": false,
       "required": [
-        "database",
-        "level",
-        "engine"
+        "database"
       ]
     },
     "QueryParserEngine": {
