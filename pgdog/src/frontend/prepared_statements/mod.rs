@@ -32,6 +32,10 @@ fn str_mem(s: &str) -> usize {
 pub struct PreparedStatements {
     pub(super) global: Arc<RwLock<GlobalCache>>,
     pub(super) local: HashMap<String, String>,
+    /// SQL-level `PREPARE` statements sent over the simple protocol,
+    /// name -> statement text. Tracked so `EXECUTE` can be routed
+    /// based on the statement behind the name.
+    pub(super) simple: HashMap<String, String>,
     pub(super) level: PreparedStatementsLevel,
     pub(super) memory_used: usize,
 }
@@ -41,6 +45,7 @@ impl Default for PreparedStatements {
         Self {
             global: Arc::new(RwLock::new(GlobalCache::default())),
             local: HashMap::default(),
+            simple: HashMap::default(),
             level: PreparedStatementsLevel::Extended,
             memory_used: 0,
         }
@@ -110,6 +115,21 @@ impl PreparedStatements {
         self.local.get(name)
     }
 
+    /// Record a SQL-level `PREPARE` statement.
+    pub fn insert_simple(&mut self, name: &str, query: &str) {
+        if let Some(old_query) = self.simple.insert(name.to_owned(), query.to_owned()) {
+            self.memory_used = self.memory_used.saturating_sub(str_mem(&old_query));
+            self.memory_used += str_mem(query);
+        } else {
+            self.memory_used += str_mem(name) + str_mem(query);
+        }
+    }
+
+    /// Get the query behind a SQL-level `PREPARE` statement name.
+    pub fn simple_query(&self, name: &str) -> Option<&str> {
+        self.simple.get(name).map(|query| query.as_str())
+    }
+
     /// Get globally-prepared statement by local name.
     pub fn parse(&self, name: &str) -> Option<Parse> {
         self.local
@@ -154,6 +174,7 @@ impl PreparedStatements {
         }
 
         self.local.clear();
+        self.simple.clear();
         self.memory_used = 0;
     }
 

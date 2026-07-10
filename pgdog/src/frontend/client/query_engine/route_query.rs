@@ -91,7 +91,8 @@ impl QueryEngine {
             context.params,
             context.transaction,
             context.sticky,
-        )?;
+        )?
+        .with_prepared_statements(context.prepared_statements);
         match self.router.query(router_context) {
             Ok(command) => {
                 context.client_request.route = Some(command.route().clone());

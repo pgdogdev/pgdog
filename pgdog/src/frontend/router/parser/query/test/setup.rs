@@ -187,7 +187,8 @@ impl QueryParserTest {
             self.transaction,
             self.sticky,
         )
-        .unwrap();
+        .unwrap()
+        .with_prepared_statements(&mut self.prepared);
 
         let command = self.parser.parse(router_ctx)?;
         Ok(command.clone())
