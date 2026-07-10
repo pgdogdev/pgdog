@@ -31,7 +31,7 @@ function run_pgdog() {
     local pid_file="${COMMON_DIR}/pgdog.pid"
     local config_file="${COMMON_DIR}/pgdog.config"
     if [ -z "${binary}" ]; then
-        cargo build
+        cargo build --features new_parser
         binary="target/debug/pgdog"
     fi
     if [ -f "${pid_file}" ]; then

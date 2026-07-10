@@ -41,7 +41,7 @@ bench_run() {
         local root_dir
         root_dir="$(cd "${BENCH_DIR}/.." && pwd)"
         echo "Building pgdog (release)..."
-        cargo build --release --manifest-path "${root_dir}/Cargo.toml"
+        cargo build --release --features new_parser --manifest-path "${root_dir}/Cargo.toml"
         export PGDOG_BIN="${root_dir}/target/release/pgdog"
     fi
     echo "Binary: $(${PGDOG_BIN} --version 2>&1 || true)"

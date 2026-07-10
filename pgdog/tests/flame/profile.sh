@@ -15,7 +15,7 @@ if [ ! -f ${PGDOG_BIN} ]; then
     echo "PgDog is not compiled in release mode (target/release/pgdog is missing)"
     echo "Please compile PgDog with:"
     echo
-    printf "\tcargo build --release"
+    printf "\tcargo build --release --features new_parser"
     echo
     echo
     exit 1

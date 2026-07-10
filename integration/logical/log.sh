@@ -1,6 +1,6 @@
 #!/bin/bash
 touch log.txt
-cargo run > log.txt 2>&1 &
+cargo run --features new_parser > log.txt 2>&1 &
 pid=$!
 
 trap shutdown INT

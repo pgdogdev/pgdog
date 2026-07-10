@@ -35,10 +35,10 @@ jobs:
           prefix-key: build-v1
       - name: Build (debug)
         if: steps.pgdog-bin.outputs.cache-hit != 'true'
-        run: cargo build --bin pgdog
+        run: cargo build --bin pgdog --features new_parser
       - name: Build (release)
         if: steps.pgdog-bin.outputs.cache-hit != 'true'
-        run: cargo build --release --bin pgdog
+        run: cargo build --release --bin pgdog --features new_parser
       - name: Save pgdog binaries
         if: steps.pgdog-bin.outputs.cache-hit != 'true'
         uses: actions/cache/save@v5
