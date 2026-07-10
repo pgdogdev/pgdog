@@ -26,7 +26,7 @@ impl AggregatesRewrite {
     /// Rewrite a SELECT query in-place, adding helper aggregates when necessary.
     #[cfg(feature = "new_parser")]
     pub(crate) fn rewrite_select<'a>(
-        mut select: nodes::SelectStmtMut<'a, '_>,
+        select: &mut nodes::SelectStmtMut<'a, '_>,
         mem: make::MemoryToken<'a>,
         aggregate: &Aggregate,
     ) -> RewriteOutput {
@@ -455,7 +455,7 @@ mod tests {
 
             let aggregate = Aggregate::parse(&*stmt, &Default::default());
             output = Some(AggregatesRewrite::rewrite_select(
-                stmt.as_mut(),
+                &mut stmt.as_mut(),
                 mem,
                 &aggregate,
             ));
