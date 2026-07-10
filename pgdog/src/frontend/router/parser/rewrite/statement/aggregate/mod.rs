@@ -17,7 +17,7 @@ impl StatementRewrite<'_> {
     #[cfg(feature = "new_parser")]
     pub(super) fn rewrite_aggregates<'a>(
         &mut self,
-        select: SelectStmtMut<'a, '_>,
+        select: &mut SelectStmtMut<'a, '_>,
         mem: MemoryToken<'a>,
         plan: &mut RewritePlan,
         schema: &Schema,

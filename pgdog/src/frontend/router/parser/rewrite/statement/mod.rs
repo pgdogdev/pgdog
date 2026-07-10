@@ -1,9 +1,10 @@
 //! Statement rewriter.
 
+#[cfg(not(feature = "new_parser"))]
 use pg_query::Node as PgNode;
 use pg_query::protobuf::ParseResult;
 #[cfg(feature = "new_parser")]
-use pg_raw_parse::{Node, NodeMut, make, walk};
+use pg_raw_parse::{Node, NodeMut, make, transform, walk};
 #[cfg(not(feature = "new_parser"))]
 use pgdog_config::QueryParserEngine;
 
@@ -142,47 +143,45 @@ impl<'a> StatementRewrite<'a> {
 
             // Track the next parameter number to use
             let mut next_param = plan.params as i32 + 1;
+            let generator = crate::unique_id::UniqueId::generator()?;
+            transform::transform(&mut node, |node| {
+                if let Some(replacement) = Self::rewrite_unique_id(
+                    node.as_ref(),
+                    mem,
+                    generator,
+                    self.extended,
+                    &mut next_param,
+                ) {
+                    plan.unique_ids += 1;
+                    self.rewritten = true;
+                    node.replace(replacement);
+                    None
+                } else {
+                    Some(node)
+                }
+            });
+
+            if let NodeMut::SelectStmt(mut select) = node.as_mut() {
+                self.rewrite_aggregates(&mut select, mem, &mut plan, self.db_schema)?;
+                self.limit_offset(&select, &mut plan);
+            }
+
+            if self.rewritten {
+                plan.stmt = Some(pg_raw_parse::deparse(node.as_ref())?.as_str().to_owned());
+            }
+
+            self.split_insert(&mut plan)?;
+            if let Node::UpdateStmt(stmt) = node.as_ref() {
+                self.sharding_key_update(stmt, &mut plan)?;
+            }
 
             self.stmt.stmts[0] = pg_query::parse(pg_raw_parse::deparse(node.as_ref())?.as_str())?
                 .protobuf
                 .stmts
                 .pop()
                 .unwrap();
-            let extended = self.extended;
-            visitor::visit_and_mutate_nodes(self.stmt, |node| -> Result<Option<PgNode>, Error> {
-                match Self::rewrite_unique_id(node, extended, &mut next_param)? {
-                    Some(replacement) => {
-                        plan.unique_ids += 1;
-                        self.rewritten = true;
-                        Ok(Some(replacement))
-                    }
-                    None => Ok(None),
-                }
-            })?;
 
-            let reparsed = pg_raw_parse::parse(&pg_query::deparse(self.stmt)?)?;
-            let mut node = reparsed.stmts().next().unwrap();
-            let mut select_stmt;
-            if let Node::SelectStmt(select) = node {
-                select_stmt = mem.make_unique(select);
-                self.rewrite_aggregates(select_stmt.as_mut(), mem, &mut plan, self.db_schema)?;
-                self.limit_offset(&select_stmt, &mut plan);
-                node = (&*select_stmt).into();
-                self.stmt.stmts = pg_query::parse(pg_raw_parse::deparse(node)?.as_str())?
-                    .protobuf
-                    .stmts;
-            }
-
-            if self.rewritten {
-                plan.stmt = Some(pg_raw_parse::deparse(node)?.as_str().to_owned());
-            }
-
-            self.split_insert(&mut plan)?;
-            if let Node::UpdateStmt(stmt) = node {
-                self.sharding_key_update(stmt, &mut plan)?;
-            }
-
-            Ok::<_, Error>(mem.make_raw_stmt(mem.make_unique(node)))
+            Ok::<_, Error>(mem.make_raw_stmt(node))
         })?;
 
         Ok(plan)
