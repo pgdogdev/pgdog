@@ -221,7 +221,7 @@ mod tests {
 
     cfg_select! {
         not(feature = "new_parser") => {
-            fn parse_first_target(sql: &str) -> Owned {
+            fn parse_first_target(sql: &str) -> Node {
                 let ast = pg_query::parse(sql).unwrap();
                 let stmt = ast.protobuf.stmts.first().unwrap().stmt.as_ref().unwrap();
                 match &stmt.node {
