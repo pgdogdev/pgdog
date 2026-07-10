@@ -13,6 +13,35 @@ use crate::{
 use super::setup::*;
 
 #[test]
+fn test_mixed_set_passthrough_in_session_mode() {
+    let mut test = QueryParserTest::new_session_mode(&config());
+
+    // In session mode, mixed SET + non-SET multi-statement queries must not be rejected.
+    // This is the exact batch psqlODBC sends during connection startup (issue #1087).
+    let command = test.execute(vec![
+        Query::new("SET DateStyle='ISO';SET extra_float_digits = 2;show transaction_isolation")
+            .into(),
+    ]);
+    assert!(
+        matches!(command, Command::Query(_)),
+        "expected Command::Query passthrough in session mode, got {command:#?}",
+    );
+}
+
+#[test]
+fn test_mixed_set_rejected_in_transaction_mode() {
+    let mut test = QueryParserTest::new();
+
+    let result = test.try_execute(vec![
+        Query::new("SET DateStyle='ISO'; show transaction_isolation").into(),
+    ]);
+    assert!(
+        result.is_err(),
+        "expected error for mixed SET in transaction mode, got {result:#?}",
+    );
+}
+
+#[test]
 fn test_set_comment() {
     let mut test = QueryParserTest::new();
 
