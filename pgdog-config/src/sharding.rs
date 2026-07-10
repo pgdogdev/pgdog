@@ -561,8 +561,37 @@ impl Display for UniqueIdFunction {
 pub struct QueryParser {
     /// Database name.
     pub database: String,
+
+    #[serde(default)]
     /// Query parser level.
     pub level: QueryParserLevel,
+
     /// Query parser engine used.
+    #[serde(default)]
     pub engine: QueryParserEngine,
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::Config;
+
+    use super::{QueryParserEngine, QueryParserLevel};
+
+    #[test]
+    fn query_parser_reads_default_values_from_config() {
+        let source = r#"
+[[query_parsers]]
+database = "production"
+"#;
+
+        let config: Config = toml::from_str(source).unwrap();
+
+        assert_eq!(config.query_parsers.len(), 1);
+        assert_eq!(config.query_parsers[0].database, "production");
+        assert_eq!(config.query_parsers[0].level, QueryParserLevel::Auto);
+        assert_eq!(
+            config.query_parsers[0].engine,
+            QueryParserEngine::PgQueryProtobuf
+        );
+    }
 }
