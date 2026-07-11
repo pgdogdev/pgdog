@@ -102,6 +102,12 @@ impl QueryParserTest {
         self
     }
 
+    /// Replace the sharded/omnisharded tables on the cluster.
+    pub(crate) fn with_sharded_tables(mut self, tables: crate::backend::ShardedTables) -> Self {
+        self.cluster.set_sharded_tables(tables);
+        self
+    }
+
     /// Route reads to the primary by default on the cluster.
     pub(crate) fn with_rw_split(mut self, rw_split: ReadWriteSplit) -> Self {
         self.cluster.set_rw_split(rw_split);

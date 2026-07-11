@@ -252,6 +252,28 @@ mod test {
     }
 
     #[test]
+    fn test_insert_simple_overwrite() {
+        let mut statements = PreparedStatements::default();
+
+        statements.insert_simple("upd", "UPDATE one SET x = 1");
+        let memory_used = statements.memory_used();
+
+        statements.insert_simple("upd", "UPDATE two SET x = 22");
+        assert_eq!(
+            statements.simple_query("upd"),
+            Some("UPDATE two SET x = 22")
+        );
+        assert_eq!(
+            statements.memory_used(),
+            memory_used + "UPDATE two SET x = 22".len() - "UPDATE one SET x = 1".len()
+        );
+
+        statements.close_all();
+        assert_eq!(statements.simple_query("upd"), None);
+        assert_eq!(statements.memory_used(), 0);
+    }
+
+    #[test]
     fn test_counted_only_once_per_client() {
         let mut statements = PreparedStatements::default();
 
