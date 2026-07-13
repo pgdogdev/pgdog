@@ -697,4 +697,24 @@ mod tests {
         assert_eq!(extracted.params_raw().len(), 1);
         assert_eq!(extracted.params_raw()[0].data.as_ref(), b"p3");
     }
+
+    #[test]
+    #[cfg(feature = "new_parser")]
+    fn test_extract_bind_params_incorrect_count() {
+        let splits = parse_and_split("INSERT INTO t (a, b) VALUES ($1, $2), ($3, $4)");
+        let bind = Bind::new_params(
+            "test",
+            &[
+                Parameter::new(b"p1"),
+                Parameter::new(b"p2"),
+                Parameter::new(b"p3"),
+            ],
+        );
+
+        std::assert_matches!(splits[0].extract_bind_params(&bind), Ok(_));
+        std::assert_matches!(
+            splits[1].extract_bind_params(&bind),
+            Err(Error::MissingParameter(_))
+        );
+    }
 }
