@@ -325,7 +325,7 @@ impl Listener {
                     false
                 };
                 if resolved {
-                    if let Some((_, done)) = self.prepare_sync_points.pop_front() {
+                    if let Some((_, done)) = self.parse_ack_sync_points.pop_front() {
                         let _ = done.send(());
                     }
                 }
