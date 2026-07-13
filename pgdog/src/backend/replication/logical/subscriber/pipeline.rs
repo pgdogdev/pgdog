@@ -324,10 +324,10 @@ impl Listener {
                 } else {
                     false
                 };
-                if resolved {
-                    if let Some((_, done)) = self.parse_ack_sync_points.pop_front() {
-                        let _ = done.send(());
-                    }
+                if resolved
+                    && let Some((_, done)) = self.parse_ack_sync_points.pop_front()
+                {
+                    let _ = done.send(());
                 }
             }
             // BindComplete: nothing to account for.
@@ -335,12 +335,11 @@ impl Listener {
             // CommandComplete: match to the DML op and count missed rows.
             'C' => {
                 let is_direct = self.direct.pop_front().unwrap_or(false);
-                if is_direct {
-                    if let Ok(complete) = CommandComplete::try_from(message) {
-                        if matches!(complete.rows(), Ok(Some(0))) {
-                            self.shared.lock().missed.record(complete.tag());
-                        }
-                    }
+                if is_direct
+                    && let Ok(complete) = CommandComplete::try_from(message)
+                    && matches!(complete.rows(), Ok(Some(0)))
+                {
+                    self.shared.lock().missed.record(complete.tag());
                 }
                 if self.direct.is_empty() {
                     self.wake_drain();
