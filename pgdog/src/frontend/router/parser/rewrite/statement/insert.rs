@@ -589,13 +589,13 @@ mod tests {
         );
 
         // First split uses params 0 and 1
-        let extracted = splits[0].extract_bind_params(&bind);
+        let extracted = splits[0].extract_bind_params(&bind).unwrap();
         assert_eq!(extracted.params_raw().len(), 2);
         assert_eq!(extracted.params_raw()[0].data.as_ref(), b"p0");
         assert_eq!(extracted.params_raw()[1].data.as_ref(), b"p1");
 
         // Second split uses params 2 and 3
-        let extracted = splits[1].extract_bind_params(&bind);
+        let extracted = splits[1].extract_bind_params(&bind).unwrap();
         assert_eq!(extracted.params_raw().len(), 2);
         assert_eq!(extracted.params_raw()[0].data.as_ref(), b"p2");
         assert_eq!(extracted.params_raw()[1].data.as_ref(), b"p3");
@@ -616,7 +616,7 @@ mod tests {
         );
 
         // Second split uses params 2 and 3 (Text, Binary)
-        let extracted = splits[1].extract_bind_params(&bind);
+        let extracted = splits[1].extract_bind_params(&bind).unwrap();
         assert_eq!(extracted.params_raw().len(), 2);
         assert_eq!(extracted.params_raw()[0].data.as_ref(), b"p2");
         assert_eq!(extracted.params_raw()[1].data.as_ref(), b"p3");
@@ -634,7 +634,7 @@ mod tests {
             &[Format::Binary], // Uniform format
         );
 
-        let extracted = splits[0].extract_bind_params(&bind);
+        let extracted = splits[0].extract_bind_params(&bind).unwrap();
         assert_eq!(extracted.params_raw().len(), 1);
         assert_eq!(extracted.format_codes_raw().len(), 1);
         assert_eq!(extracted.format_codes_raw()[0], Format::Binary);
@@ -655,13 +655,13 @@ mod tests {
 
         // First split: statement uses $1 with literal, bind extracts param 0
         assert_eq!(splits[0].stmt(), "INSERT INTO t (a, b) VALUES ($1, 'lit1')");
-        let extracted = splits[0].extract_bind_params(&bind);
+        let extracted = splits[0].extract_bind_params(&bind).unwrap();
         assert_eq!(extracted.params_raw().len(), 1);
         assert_eq!(extracted.params_raw()[0].data.as_ref(), b"value_for_param1");
 
         // Second split: statement uses $1 (renumbered from $2) with literal, bind extracts param 1
         assert_eq!(splits[1].stmt(), "INSERT INTO t (a, b) VALUES ($1, 'lit2')");
-        let extracted = splits[1].extract_bind_params(&bind);
+        let extracted = splits[1].extract_bind_params(&bind).unwrap();
         assert_eq!(extracted.params_raw().len(), 1);
         assert_eq!(extracted.params_raw()[0].data.as_ref(), b"value_for_param2");
     }
@@ -683,7 +683,7 @@ mod tests {
 
         // First split: uses params 0 and 1 (original $1, $2)
         assert_eq!(splits[0].stmt(), "INSERT INTO t (a, b) VALUES ($1, $2)");
-        let extracted = splits[0].extract_bind_params(&bind);
+        let extracted = splits[0].extract_bind_params(&bind).unwrap();
         assert_eq!(extracted.params_raw().len(), 2);
         assert_eq!(extracted.params_raw()[0].data.as_ref(), b"p1");
         assert_eq!(extracted.params_raw()[1].data.as_ref(), b"p2");
@@ -693,7 +693,7 @@ mod tests {
             splits[1].stmt(),
             "INSERT INTO t (a, b) VALUES ($1, 'literal')"
         );
-        let extracted = splits[1].extract_bind_params(&bind);
+        let extracted = splits[1].extract_bind_params(&bind).unwrap();
         assert_eq!(extracted.params_raw().len(), 1);
         assert_eq!(extracted.params_raw()[0].data.as_ref(), b"p3");
     }
