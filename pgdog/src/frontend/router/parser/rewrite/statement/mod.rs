@@ -113,18 +113,20 @@ impl<'a> StatementRewrite<'a> {
     pub fn maybe_rewrite(&mut self, node: Node<'a>) -> Result<RewritePlan, Error> {
         let mut plan = RewritePlan::default();
 
-        make::try_owned(|mem| {
-            match node {
-                Node::InsertStmt(_)
-                | Node::SelectStmt(_)
-                | Node::UpdateStmt(_)
-                | Node::DeleteStmt(_) => walk::walk(node, |node| match node {
-                    Node::ParamRef(param) => plan.params = plan.params.max(param.number as u16),
-                    _ => (),
-                }),
-                _ => (),
-            }
+        match node {
+            Node::InsertStmt(_)
+            | Node::SelectStmt(_)
+            | Node::UpdateStmt(_)
+            | Node::DeleteStmt(_) => walk::walk(node, |node| match node {
+                Node::ParamRef(param) => plan.params = plan.params.max(param.number as u16),
+                _ => {}
+            }),
+            Node::PrepareStmt(_) | Node::ExecuteStmt(_) | Node::ExplainStmt(_) => {}
+            // We can't do anything with DDL statements
+            _ => return Ok(plan),
+        }
 
+        make::try_owned(|mem| {
             let mut node = mem.make_unique(node);
 
             // Handle top-level PREPARE/EXECUTE statements.
@@ -170,7 +172,10 @@ impl<'a> StatementRewrite<'a> {
                 plan.stmt = Some(pg_raw_parse::deparse(node.as_ref())?.as_str().to_owned());
             }
 
-            self.split_insert(&mut plan)?;
+            if let Node::InsertStmt(insert) = node.as_ref() {
+                self.split_insert(insert, &mut plan)?;
+            }
+
             if let Node::UpdateStmt(stmt) = node.as_ref() {
                 self.sharding_key_update(stmt, &mut plan)?;
             }
