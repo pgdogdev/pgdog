@@ -80,7 +80,7 @@ smallvec = "1"
 reqwest.workspace = true
 hex = "0.4"
 x509-parser = "0.18"
-pg_raw_parse = { git = "https://github.com/pgdogdev/pg_raw_parse.git", rev = "6b424c4", optional = true }
+pg_raw_parse = { git = "https://github.com/pgdogdev/pg_raw_parse.git", rev = "576226d", optional = true }
 itertools = "0.15.0"
 
 [target.'cfg(unix)'.dependencies]

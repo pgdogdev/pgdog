@@ -277,11 +277,15 @@ impl QueryParser {
             .run()?;
         }
 
+        #[cfg(feature = "new_parser")]
+        let stmts = &statement.new_ast;
+        #[cfg(not(feature = "new_parser"))]
         let stmts = &statement.parse_result().protobuf.stmts;
 
         // Handle multi-statement SET commands (e.g. "SET x TO 1; SET y TO 2").
+        #[cfg_attr(not(feature = "new_parser"), allow(clippy::explicit_auto_deref))]
         if stmts.len() > 1
-            && let Some(command) = self.try_multi_set(stmts, context)?
+            && let Some(command) = self.try_multi_set(&**stmts, context)?
         {
             return Ok(command);
         }
@@ -292,6 +296,9 @@ impl QueryParser {
         // We don't expect clients to send multiple queries. If they do
         // only the first one is used for routing.
         //
+        #[cfg(feature = "new_parser")]
+        let root = statement.parse_result().protobuf.stmts.first();
+        #[cfg(not(feature = "new_parser"))]
         let root = stmts.first();
 
         let root = if let Some(root) = root {
@@ -312,7 +319,19 @@ impl QueryParser {
 
         let mut command = match root.node {
             // SET statements -> return immediately.
-            Some(NodeEnum::VariableSetStmt(ref stmt)) => return self.set(stmt, context),
+            #[cfg_attr(feature = "new_parser", allow(unused))]
+            Some(NodeEnum::VariableSetStmt(ref stmt)) => {
+                return self.set(
+                    #[cfg(feature = "new_parser")]
+                    match new_root {
+                        Node::VariableSetStmt(stmt) => stmt,
+                        _ => unreachable!(),
+                    },
+                    #[cfg(not(feature = "new_parser"))]
+                    stmt,
+                    context,
+                );
+            }
 
             // SELECT set_config(...) -> treat as SET and return
             Some(NodeEnum::SelectStmt(ref stmt))

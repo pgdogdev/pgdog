@@ -1018,6 +1018,7 @@ mod test {
     use crate::frontend::router::sharding::ShardedTable;
     #[cfg(feature = "new_parser")]
     use indexmap::indexset;
+    #[cfg(not(feature = "new_parser"))]
     use pg_query::parse;
     use pgdog_config::Rewrite;
 
