@@ -37,6 +37,9 @@ mod transaction;
 mod update;
 
 use multi_tenant::MultiTenantCheck;
+use pg_query::protobuf::Node as PgNode;
+#[cfg(feature = "new_parser")]
+use pg_raw_parse::Node;
 use pgdog_plugin::pg_query::{
     NodeEnum,
     protobuf::{a_const::Val, *},
@@ -71,21 +74,37 @@ impl QueryParser {
         self.explain_recorder.as_mut()
     }
 
-    fn ensure_explain_recorder(
-        &mut self,
-        ast: &pg_query::ParseResult,
-        context: &QueryParserContext,
-    ) {
+    #[cfg(feature = "new_parser")]
+    fn ensure_explain_recorder(&mut self, node: Node<'_>, context: &QueryParserContext) {
         if self.explain_recorder.is_some() || !context.expanded_explain() {
             return;
         }
 
-        if let Some(root) = ast.protobuf.stmts.first()
-            && let Some(node) = root.stmt.as_ref().and_then(|stmt| stmt.node.as_ref())
-            && matches!(node, NodeEnum::ExplainStmt(_))
-        {
+        if matches!(node, Node::ExplainStmt(_)) {
             self.explain_recorder = Some(ExplainRecorder::new());
         }
+    }
+
+    cfg_select! {
+        not(feature = "new_parser") => {
+            fn ensure_explain_recorder(
+                &mut self,
+                ast: &pg_query::ParseResult,
+                context: &QueryParserContext,
+            ) {
+                if self.explain_recorder.is_some() || !context.expanded_explain() {
+                    return;
+                }
+
+                if let Some(root) = ast.protobuf.stmts.first()
+                    && let Some(node) = root.stmt.as_ref().and_then(|stmt| stmt.node.as_ref())
+                    && matches!(node, NodeEnum::ExplainStmt(_))
+                {
+                    self.explain_recorder = Some(ExplainRecorder::new());
+                }
+            }
+        }
+        _ => {}
     }
 
     fn attach_explain(&mut self, command: &mut Command) {
@@ -213,6 +232,11 @@ impl QueryParser {
             .clone()
             .ok_or(Error::EmptyQuery)?;
 
+        #[cfg(feature = "new_parser")]
+        if let Some(stmt) = statement.new_ast.stmts().next() {
+            self.ensure_explain_recorder(stmt, context);
+        }
+        #[cfg(not(feature = "new_parser"))]
         self.ensure_explain_recorder(statement.parse_result(), context);
 
         // Parse hardcoded shard from a query comment.
@@ -624,12 +648,12 @@ fn extract_set_config(stmt: &SelectStmt) -> Option<&FuncCall> {
     ];
     // FIXME(sage): Dear god we need some pattern macros for this
     if let [
-        Node {
+        PgNode {
             node: Some(NodeEnum::ResTarget(r)),
         },
     ] = &*stmt.target_list
         && let ResTarget { val: Some(n), .. } = &**r
-        && let Node {
+        && let PgNode {
             node: Some(NodeEnum::FuncCall(f)),
         } = &**n
         && SET_CONFIG.iter().any(|&n| n == f.funcname)

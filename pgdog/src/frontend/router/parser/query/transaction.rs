@@ -61,7 +61,7 @@ impl QueryParser {
     }
 
     #[inline]
-    fn transaction_type(options: &[Node]) -> Option<TransactionType> {
+    fn transaction_type(options: &[PgNode]) -> Option<TransactionType> {
         for option_node in options {
             let node_enum = option_node.node.as_ref()?;
             if let NodeEnum::DefElem(def_elem) = node_enum

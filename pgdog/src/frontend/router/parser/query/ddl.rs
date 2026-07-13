@@ -51,7 +51,7 @@ impl QueryParser {
                 }
 
                 ObjectType::ObjectSchema => {
-                    if let Some(Node {
+                    if let Some(PgNode {
                         node: Some(NodeEnum::String(string)),
                     }) = stmt.objects.first()
                         && let Some(schema) = schema.schemas.get(Some(string.sval.as_str().into()))

@@ -30,7 +30,7 @@ fn parse_args(fcall: &FuncCall) -> Option<SetParam> {
 }
 
 /// Returns None if the name could not be parsed
-fn parse_config_name(arg: &Node) -> Option<String> {
+fn parse_config_name(arg: &PgNode) -> Option<String> {
     match &arg.node {
         Some(NodeEnum::AConst(AConst {
             val: Some(Val::Sval(PgString { sval })),
@@ -43,7 +43,7 @@ fn parse_config_name(arg: &Node) -> Option<String> {
 
 /// Returns None if the value could not be parsed, Some(None) if the value
 /// is NULL, and Some if the value was successfully parsed
-fn parse_config_value(arg: &Node) -> Option<Option<ParameterValue>> {
+fn parse_config_value(arg: &PgNode) -> Option<Option<ParameterValue>> {
     match &arg.node {
         Some(NodeEnum::AConst(AConst {
             val: Some(Val::Sval(PgString { sval })),
@@ -57,7 +57,7 @@ fn parse_config_value(arg: &Node) -> Option<Option<ParameterValue>> {
 }
 
 /// Returns None if the node was not a constant boolean
-fn parse_is_local(arg: &Node) -> Option<bool> {
+fn parse_is_local(arg: &PgNode) -> Option<bool> {
     match &arg.node {
         Some(NodeEnum::AConst(AConst {
             val: Some(Val::Boolval(Boolean { boolval })),
