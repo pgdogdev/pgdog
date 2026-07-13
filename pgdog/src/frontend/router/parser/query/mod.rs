@@ -347,8 +347,10 @@ impl QueryParser {
                 return Ok(Command::Deallocate);
             }
             // SELECT statements.
+            #[cfg_attr(feature = "new_parser", allow(unused))]
             Some(NodeEnum::SelectStmt(ref stmt)) => self.select(
                 &statement,
+                #[cfg(not(feature = "new_parser"))]
                 stmt,
                 #[cfg(feature = "new_parser")]
                 if let pg_raw_parse::Node::SelectStmt(stmt) = new_root {
