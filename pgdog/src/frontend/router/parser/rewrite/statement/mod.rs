@@ -2,9 +2,10 @@
 
 #[cfg(not(feature = "new_parser"))]
 use pg_query::Node as PgNode;
+#[cfg(not(feature = "new_parser"))]
 use pg_query::protobuf::ParseResult;
 #[cfg(feature = "new_parser")]
-use pg_raw_parse::{Node, NodeMut, make, transform, walk};
+use pg_raw_parse::{Node, NodeMut, make, nodes, transform, walk};
 #[cfg(not(feature = "new_parser"))]
 use pgdog_config::QueryParserEngine;
 
@@ -35,6 +36,7 @@ pub(crate) use update::*;
 #[derive(Debug)]
 pub struct StatementRewriteContext<'a> {
     /// The AST of the statement we are rewriting.
+    #[cfg(not(feature = "new_parser"))]
     pub stmt: &'a mut ParseResult,
     /// The statement is using the extended protocol with placeholders.
     pub extended: bool,
@@ -56,6 +58,7 @@ pub struct StatementRewriteContext<'a> {
 #[derive(Debug)]
 pub struct StatementRewrite<'a> {
     /// SQL statement.
+    #[cfg(not(feature = "new_parser"))]
     stmt: &'a mut ParseResult,
     /// The statement was rewritten.
     rewritten: bool,
@@ -85,6 +88,7 @@ impl<'a> StatementRewrite<'a> {
     ///
     pub fn new(ctx: StatementRewriteContext<'a>) -> Self {
         Self {
+            #[cfg(not(feature = "new_parser"))]
             stmt: ctx.stmt,
             rewritten: false,
             extended: ctx.extended,
@@ -110,14 +114,18 @@ impl<'a> StatementRewrite<'a> {
     /// Maybe rewrite the statement and produce a rewrite plan
     /// we can apply to Bind messages.
     #[cfg(feature = "new_parser")]
-    pub fn maybe_rewrite(&mut self, node: Node<'a>) -> Result<RewritePlan, Error> {
+    pub fn maybe_rewrite<'mem>(
+        &mut self,
+        mut stmt: nodes::RawStmtMut<'mem, '_>,
+        mem: make::MemoryToken<'mem>,
+    ) -> Result<RewritePlan, Error> {
         let mut plan = RewritePlan::default();
 
-        match node {
+        match stmt.stmt() {
             Node::InsertStmt(_)
             | Node::SelectStmt(_)
             | Node::UpdateStmt(_)
-            | Node::DeleteStmt(_) => walk::walk(node, |node| match node {
+            | Node::DeleteStmt(_) => walk::walk(stmt.stmt(), |node| match node {
                 Node::ParamRef(param) => plan.params = plan.params.max(param.number as u16),
                 _ => {}
             }),
@@ -126,27 +134,26 @@ impl<'a> StatementRewrite<'a> {
             _ => return Ok(plan),
         }
 
-        make::try_owned(|mem| {
-            let mut node = mem.make_unique(node);
+        // Handle top-level PREPARE/EXECUTE statements.
+        let prepared_result = self.rewrite_simple_prepared(stmt.stmt_mut(), mem)?;
+        if prepared_result.rewritten {
+            self.rewritten = true;
+            plan.prepares = prepared_result.prepares;
+        }
 
-            // Handle top-level PREPARE/EXECUTE statements.
-            let prepared_result = self.rewrite_simple_prepared(node.as_mut(), mem)?;
-            if prepared_result.rewritten {
-                self.rewritten = true;
-                plan.prepares = prepared_result.prepares;
-            }
+        // Inject pgdog.unique_id() for missing BIGINT primary keys.
+        // This must run BEFORE the unique_id rewriter so the injected
+        // function calls get processed.
+        if let NodeMut::InsertStmt(insert) = stmt.stmt_mut() {
+            self.inject_auto_id(insert, mem, &mut plan)?;
+        }
 
-            // Inject pgdog.unique_id() for missing BIGINT primary keys.
-            // This must run BEFORE the unique_id rewriter so the injected
-            // function calls get processed.
-            if let NodeMut::InsertStmt(insert) = node.as_mut() {
-                self.inject_auto_id(insert, mem, &mut plan)?;
-            }
-
-            // Track the next parameter number to use
-            let mut next_param = plan.params as i32 + 1;
-            let generator = crate::unique_id::UniqueId::generator()?;
-            transform::transform(&mut node, |node| {
+        // Track the next parameter number to use
+        let mut next_param = plan.params as i32 + 1;
+        let generator = crate::unique_id::UniqueId::generator()?;
+        transform::transform_node(
+            stmt.stmt_mut(),
+            &mut transform::TransformClosure::new(|node| {
                 if let Some(replacement) = Self::rewrite_unique_id(
                     node.as_ref(),
                     mem,
@@ -161,33 +168,25 @@ impl<'a> StatementRewrite<'a> {
                 } else {
                     Some(node)
                 }
-            });
+            }),
+        );
 
-            if let NodeMut::SelectStmt(mut select) = node.as_mut() {
-                self.rewrite_aggregates(&mut select, mem, &mut plan, self.db_schema)?;
-                self.limit_offset(&select, &mut plan);
-            }
+        if let NodeMut::SelectStmt(mut select) = stmt.stmt_mut() {
+            self.rewrite_aggregates(&mut select, mem, &mut plan, self.db_schema)?;
+            self.limit_offset(&select, &mut plan);
+        }
 
-            if self.rewritten {
-                plan.stmt = Some(pg_raw_parse::deparse(node.as_ref())?.as_str().to_owned());
-            }
+        if self.rewritten {
+            plan.stmt = Some(pg_raw_parse::deparse(&*stmt)?.as_str().to_owned());
+        }
 
-            if let Node::InsertStmt(insert) = node.as_ref() {
-                self.split_insert(insert, &mut plan)?;
-            }
+        if let Node::InsertStmt(insert) = stmt.stmt() {
+            self.split_insert(insert, &mut plan)?;
+        }
 
-            if let Node::UpdateStmt(stmt) = node.as_ref() {
-                self.sharding_key_update(stmt, &mut plan)?;
-            }
-
-            self.stmt.stmts[0] = pg_query::parse(pg_raw_parse::deparse(node.as_ref())?.as_str())?
-                .protobuf
-                .stmts
-                .pop()
-                .unwrap();
-
-            Ok::<_, Error>(mem.make_raw_stmt(node))
-        })?;
+        if let Node::UpdateStmt(stmt) = stmt.stmt() {
+            self.sharding_key_update(stmt, &mut plan)?;
+        }
 
         Ok(plan)
     }

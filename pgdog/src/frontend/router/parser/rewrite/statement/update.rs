@@ -1063,6 +1063,7 @@ mod test {
     }
 
     fn run_test(query: &str) -> Result<Option<ShardingKeyUpdate>, Error> {
+        #[cfg(not(feature = "new_parser"))]
         let mut stmt_old = parse(query)?;
         #[cfg(feature = "new_parser")]
         let stmt = pg_raw_parse::parse(query)?;
@@ -1071,6 +1072,7 @@ mod test {
         let mut stmts = PreparedStatements::new();
 
         let ctx = StatementRewriteContext {
+            #[cfg(not(feature = "new_parser"))]
             stmt: &mut stmt_old.protobuf,
             schema: &schema,
             db_schema: &db_schema,

@@ -465,6 +465,7 @@ mod tests {
     }
 
     fn parse_and_split(sql: &str) -> Vec<InsertSplit> {
+        #[cfg(not(feature = "new_parser"))]
         let mut ast = pg_query::parse(sql).unwrap().protobuf;
         #[cfg(feature = "new_parser")]
         let root = pg_raw_parse::parse(sql).unwrap();
@@ -477,6 +478,7 @@ mod tests {
         let schema = default_schema();
         let db_schema = default_db_schema();
         let mut rewriter = StatementRewrite::new(StatementRewriteContext {
+            #[cfg(not(feature = "new_parser"))]
             stmt: &mut ast,
             extended: false,
             prepared: false,
