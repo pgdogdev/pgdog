@@ -89,6 +89,11 @@ impl QueryParser {
     cfg_select! {
         not(feature = "new_parser") => {
             fn parse_set_param(stmt: &VariableSetStmt) -> Result<Option<SetParam>, Error> {
+                let transaction_state = stmt.name.starts_with("TRANSACTION");
+                if transaction_state {
+                    return Ok(None);
+                }
+
                 let is_reset = stmt.kind() == VariableSetKind::VarReset;
                 let value = Self::parse_set_value(stmt)?;
 
