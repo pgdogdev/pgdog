@@ -55,7 +55,7 @@ impl InsertSplit {
     }
 
     /// Build a ClientRequest from this split and the original request.
-    pub fn build_request(&self, request: &ClientRequest) -> ClientRequest {
+    pub fn build_request(&self, request: &ClientRequest) -> Result<ClientRequest, Error> {
         let mut new_request = ClientRequest::default();
         let mut has_parse = false;
 
@@ -78,7 +78,7 @@ impl InsertSplit {
                     ProtocolMessage::Query(new_query)
                 }
                 ProtocolMessage::Bind(bind) => {
-                    let new_bind = self.extract_bind_params(bind);
+                    let new_bind = self.extract_bind_params(bind)?;
                     ProtocolMessage::Bind(new_bind)
                 }
                 other => other.clone(),
@@ -103,28 +103,26 @@ impl InsertSplit {
             new_request.last_parse = Some(split_parse);
         }
 
-        new_request
+        Ok(new_request)
     }
 
     /// Extract specific parameters from a Bind message based on this split's param indices.
     #[cfg(feature = "new_parser")]
-    fn extract_bind_params(&self, bind: &Bind) -> Bind {
+    fn extract_bind_params(&self, bind: &Bind) -> Result<Bind, Error> {
         let mut new = Bind::new_statement(self.statement_name().unwrap_or_default());
         for param in &self.params {
             let param = bind
-                .parameter(*param as usize - 1)
-                .expect("Remove when port done")
-                .ok_or(Error::MissingParameter(*param))
-                .expect("Remove when port done");
+                .parameter(*param as usize - 1)?
+                .ok_or(Error::MissingParameter(*param))?;
             new.push_param(param.parameter().clone(), param.format());
         }
 
-        new
+        Ok(new)
     }
 
     cfg_select! {
         not(feature = "new_parser") => {
-            fn extract_bind_params(&self, bind: &Bind) -> Bind {
+            fn extract_bind_params(&self, bind: &Bind) -> Result<Bind, Error> {
                 let params: Vec<Parameter> = self
                     .params
                     .iter()
@@ -152,7 +150,7 @@ impl InsertSplit {
                     .as_deref()
                     .unwrap_or_else(|| bind.statement());
 
-                Bind::new_params_codes(statement_name, &params, &codes)
+                Ok(Bind::new_params_codes(statement_name, &params, &codes))
             }
         }
         _ => {}
@@ -160,7 +158,10 @@ impl InsertSplit {
 }
 
 /// Build separate ClientRequests for each insert split.
-pub fn build_split_requests(splits: &[InsertSplit], request: &ClientRequest) -> Vec<ClientRequest> {
+pub fn build_split_requests(
+    splits: &[InsertSplit],
+    request: &ClientRequest,
+) -> Result<Vec<ClientRequest>, Error> {
     splits
         .iter()
         .map(|split| split.build_request(request))
@@ -588,13 +589,13 @@ mod tests {
         );
 
         // First split uses params 0 and 1
-        let extracted = splits[0].extract_bind_params(&bind);
+        let extracted = splits[0].extract_bind_params(&bind).unwrap();
         assert_eq!(extracted.params_raw().len(), 2);
         assert_eq!(extracted.params_raw()[0].data.as_ref(), b"p0");
         assert_eq!(extracted.params_raw()[1].data.as_ref(), b"p1");
 
         // Second split uses params 2 and 3
-        let extracted = splits[1].extract_bind_params(&bind);
+        let extracted = splits[1].extract_bind_params(&bind).unwrap();
         assert_eq!(extracted.params_raw().len(), 2);
         assert_eq!(extracted.params_raw()[0].data.as_ref(), b"p2");
         assert_eq!(extracted.params_raw()[1].data.as_ref(), b"p3");
@@ -615,7 +616,7 @@ mod tests {
         );
 
         // Second split uses params 2 and 3 (Text, Binary)
-        let extracted = splits[1].extract_bind_params(&bind);
+        let extracted = splits[1].extract_bind_params(&bind).unwrap();
         assert_eq!(extracted.params_raw().len(), 2);
         assert_eq!(extracted.params_raw()[0].data.as_ref(), b"p2");
         assert_eq!(extracted.params_raw()[1].data.as_ref(), b"p3");
@@ -633,7 +634,7 @@ mod tests {
             &[Format::Binary], // Uniform format
         );
 
-        let extracted = splits[0].extract_bind_params(&bind);
+        let extracted = splits[0].extract_bind_params(&bind).unwrap();
         assert_eq!(extracted.params_raw().len(), 1);
         assert_eq!(extracted.format_codes_raw().len(), 1);
         assert_eq!(extracted.format_codes_raw()[0], Format::Binary);
@@ -654,13 +655,13 @@ mod tests {
 
         // First split: statement uses $1 with literal, bind extracts param 0
         assert_eq!(splits[0].stmt(), "INSERT INTO t (a, b) VALUES ($1, 'lit1')");
-        let extracted = splits[0].extract_bind_params(&bind);
+        let extracted = splits[0].extract_bind_params(&bind).unwrap();
         assert_eq!(extracted.params_raw().len(), 1);
         assert_eq!(extracted.params_raw()[0].data.as_ref(), b"value_for_param1");
 
         // Second split: statement uses $1 (renumbered from $2) with literal, bind extracts param 1
         assert_eq!(splits[1].stmt(), "INSERT INTO t (a, b) VALUES ($1, 'lit2')");
-        let extracted = splits[1].extract_bind_params(&bind);
+        let extracted = splits[1].extract_bind_params(&bind).unwrap();
         assert_eq!(extracted.params_raw().len(), 1);
         assert_eq!(extracted.params_raw()[0].data.as_ref(), b"value_for_param2");
     }
@@ -682,7 +683,7 @@ mod tests {
 
         // First split: uses params 0 and 1 (original $1, $2)
         assert_eq!(splits[0].stmt(), "INSERT INTO t (a, b) VALUES ($1, $2)");
-        let extracted = splits[0].extract_bind_params(&bind);
+        let extracted = splits[0].extract_bind_params(&bind).unwrap();
         assert_eq!(extracted.params_raw().len(), 2);
         assert_eq!(extracted.params_raw()[0].data.as_ref(), b"p1");
         assert_eq!(extracted.params_raw()[1].data.as_ref(), b"p2");
@@ -692,8 +693,28 @@ mod tests {
             splits[1].stmt(),
             "INSERT INTO t (a, b) VALUES ($1, 'literal')"
         );
-        let extracted = splits[1].extract_bind_params(&bind);
+        let extracted = splits[1].extract_bind_params(&bind).unwrap();
         assert_eq!(extracted.params_raw().len(), 1);
         assert_eq!(extracted.params_raw()[0].data.as_ref(), b"p3");
+    }
+
+    #[test]
+    #[cfg(feature = "new_parser")]
+    fn test_extract_bind_params_incorrect_count() {
+        let splits = parse_and_split("INSERT INTO t (a, b) VALUES ($1, $2), ($3, $4)");
+        let bind = Bind::new_params(
+            "test",
+            &[
+                Parameter::new(b"p1"),
+                Parameter::new(b"p2"),
+                Parameter::new(b"p3"),
+            ],
+        );
+
+        std::assert_matches!(splits[0].extract_bind_params(&bind), Ok(_));
+        std::assert_matches!(
+            splits[1].extract_bind_params(&bind),
+            Err(Error::MissingParameter(_))
+        );
     }
 }

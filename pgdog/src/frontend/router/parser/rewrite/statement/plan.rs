@@ -143,7 +143,7 @@ impl RewritePlan {
         // separately (e.g. go/pq with Parse, Describe, Sync). We don't need to rewrite
         // those since insert split will return the same row(s) as multi-tuple insert.
         if !self.insert_split.is_empty() && request.is_executable() {
-            let requests = build_split_requests(&self.insert_split, request);
+            let requests = build_split_requests(&self.insert_split, request)?;
             return Ok(RewriteResult::InsertSplit(requests));
         }
 
