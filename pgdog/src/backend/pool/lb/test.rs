@@ -3,8 +3,9 @@ use std::time::Duration;
 use tokio::time::sleep;
 
 use crate::backend::pool::{Address, Config, Error, PoolConfig, Request};
+use crate::backend::replication::publisher::Lsn;
 use crate::config::{LoadBalancingStrategy, Role};
-use pgdog_stats::ReplicaLag;
+use pgdog_stats::{LsnStats as StatsLsnStats, ReplicaLag};
 
 use super::*;
 use monitor::Monitor;
@@ -43,6 +44,18 @@ fn setup_test_replicas() -> LoadBalancer {
     );
     replicas.launch();
     replicas
+}
+
+fn set_lsn_stats(target: &Target, replica: bool, lsn: i64) {
+    let stats: crate::backend::pool::lsn_monitor::LsnStats = StatsLsnStats {
+        replica,
+        lsn: Lsn::from_i64(lsn),
+        offset_bytes: lsn,
+        fetched: std::time::SystemTime::now(),
+        ..Default::default()
+    }
+    .into();
+    *target.pool.inner().lsn_stats.write() = stats;
 }
 
 #[tokio::test]
@@ -1214,6 +1227,59 @@ async fn test_move_conns_to_with_added_replica_matches_by_address() {
     assert_eq!(new_target_for_added.role(), Role::Replica);
 
     lb_new.shutdown();
+}
+
+#[tokio::test]
+async fn test_redetect_roles_marks_added_auto_target_replica_when_primary_unchanged() {
+    let mut primary_config = create_test_pool_config("127.0.0.1", 5432);
+    primary_config.address.configured_role = Role::Auto;
+
+    let mut existing_replica_config = create_test_pool_config("localhost", 5432);
+    existing_replica_config.address.configured_role = Role::Auto;
+
+    let old_primary = Pool::new(&primary_config);
+    let lb_old = LoadBalancer::new(
+        &Some(old_primary),
+        std::slice::from_ref(&existing_replica_config),
+        LoadBalancingStrategy::Random,
+        ReadWriteSplit::IncludePrimary,
+    );
+
+    set_lsn_stats(&lb_old.targets[0], true, 100);
+    set_lsn_stats(&lb_old.targets[1], false, 200);
+    assert!(!lb_old.redetect_roles());
+    assert!(lb_old.roles_detected());
+
+    let mut added_replica_config = create_test_pool_config("localhost", 5433);
+    added_replica_config.address.configured_role = Role::Auto;
+
+    let new_primary = Pool::new(&primary_config);
+    let lb_new = LoadBalancer::new(
+        &Some(new_primary),
+        &[existing_replica_config, added_replica_config],
+        LoadBalancingStrategy::Random,
+        ReadWriteSplit::IncludePrimary,
+    );
+
+    lb_old.move_conns_to(&lb_new).unwrap();
+
+    let added_target = lb_new
+        .targets
+        .iter()
+        .find(|target| target.pool.addr().port == 5433)
+        .expect("newly added target should exist");
+    assert_eq!(added_target.role(), Role::Auto);
+
+    set_lsn_stats(&lb_new.targets[0], true, 100);
+    set_lsn_stats(&lb_new.targets[1], true, 90);
+    set_lsn_stats(&lb_new.targets[2], false, 200);
+
+    assert!(
+        !lb_new.redetect_roles(),
+        "primary did not change, so role detector reports no promotion"
+    );
+    assert_eq!(added_target.role(), Role::Replica);
+    assert!(lb_new.roles_detected());
 }
 
 #[tokio::test]

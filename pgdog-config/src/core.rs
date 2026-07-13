@@ -554,6 +554,7 @@ impl Config {
         for (database, check) in &checks {
             if !check.have_replicas
                 && self.general.read_write_split == ReadWriteSplit::ExcludePrimary
+                && !check.have_auto
             {
                 warn!(
                     r#"database "{}" has no replicas and "read_write_split" is set to "{}": read queries will be rejected"#,

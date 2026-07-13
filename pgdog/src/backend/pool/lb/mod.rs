@@ -176,16 +176,16 @@ impl LoadBalancer {
 
             if promoted {
                 warn!("new primary chosen: {}", targets[primary].1.pool.addr());
-
-                // Demote everyone else to replicas.
-                targets
-                    .iter()
-                    .enumerate()
-                    .filter(|(i, _)| *i != primary)
-                    .for_each(|(_, target)| {
-                        target.1.set_role(Role::Replica);
-                    });
             }
+
+            // Demote everyone else to replicas.
+            targets
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| *i != primary)
+                .for_each(|(_, target)| {
+                    target.1.set_role(Role::Replica);
+                });
         }
 
         if promoted {
