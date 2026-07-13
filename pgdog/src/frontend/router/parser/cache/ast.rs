@@ -3,7 +3,7 @@ use itertools::*;
 use once_cell::sync::OnceCell;
 use pg_query::{NodeEnum, ParseResult, parse, parse_raw};
 #[cfg(feature = "new_parser")]
-use pg_raw_parse::{Owned, StmtList};
+use pg_raw_parse::{Owned, StmtList, make};
 use pgdog_config::QueryParserEngine;
 use std::fmt::Debug;
 use std::ops::Deref;
@@ -108,19 +108,21 @@ impl Ast {
         search_path: Option<&ParameterValue>,
     ) -> Result<Self, Error> {
         let now = Instant::now();
+        #[cfg(not(feature = "new_parser"))]
         let mut ast = match schema.query_parser_engine {
             QueryParserEngine::PgQueryProtobuf => parse(query.query_without_comment),
             QueryParserEngine::PgQueryRaw => parse_raw(query.query_without_comment),
         }
         .map_err(Error::PgQuery)?;
         #[cfg(feature = "new_parser")]
-        let new_ast = pg_raw_parse::parse(query.query_without_comment).map_err(Error::Parse)?;
+        let ast = pg_raw_parse::parse(query.query_without_comment).map_err(Error::Parse)?;
 
         // Run the rewrite unconditionally. Even when a shard comment will
         // route the query to a specific shard, we need to know whether the
         // same query body (without the comment) would require a rewrite, so
         // `Cache::query` can decide whether this entry is safe to cache.
         let mut rewriter = StatementRewrite::new(StatementRewriteContext {
+            #[cfg(not(feature = "new_parser"))]
             stmt: &mut ast.protobuf,
             extended: query.original_query.extended(),
             prepared: query.original_query.prepared(),
@@ -131,11 +133,18 @@ impl Ast {
             search_path,
         });
         #[cfg(feature = "new_parser")]
-        let rewrite_plan = if let Some(node) = new_ast.stmts().next() {
-            rewriter.maybe_rewrite(node)?
-        } else {
-            Default::default()
-        };
+        let mut rewrite_plan = Default::default();
+        #[cfg(feature = "new_parser")]
+        let ast = make::try_owned(|mem| {
+            // FIXME(sage): We should have a parse function on mem so we don't
+            // need to parse and then copy the parsed tree just to throw the
+            // original away
+            let mut copy = mem.make_unique(&*ast.into_inner());
+            if let Some(stmt) = copy.as_mut().into_iter().next() {
+                rewrite_plan = rewriter.maybe_rewrite(stmt, mem)?;
+            }
+            Ok::<_, Error>(copy)
+        })?;
 
         #[cfg(not(feature = "new_parser"))]
         let rewrite_plan = rewriter.maybe_rewrite()?;
@@ -154,6 +163,10 @@ impl Ast {
             );
         }
 
+        #[cfg(feature = "new_parser")]
+        let old_ast =
+            pg_query::parse(&pg_raw_parse::deparse_stmts(&*ast)?).map_err(Error::PgQuery)?;
+
         Ok(Self {
             cached: true,
             comment_shard: None,
@@ -162,9 +175,10 @@ impl Ast {
             inner: Arc::new(AstInner {
                 stats: Mutex::new(stats),
                 #[cfg(feature = "new_parser")]
-                new_ast: pg_raw_parse::parse(&ast.deparse().unwrap())
-                    .unwrap()
-                    .into_inner(),
+                new_ast: ast,
+                #[cfg(feature = "new_parser")]
+                ast: old_ast,
+                #[cfg(not(feature = "new_parser"))]
                 ast,
                 rewrite_plan,
                 fingerprint: OnceCell::new(),

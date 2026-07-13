@@ -322,6 +322,7 @@ mod tests {
     }
 
     fn run_limit_offset(sql: &str, schema: &ShardingSchema) -> RewritePlan {
+        #[cfg(not(feature = "new_parser"))]
         let mut ast = pg_query::parse(sql).unwrap();
         #[cfg(feature = "new_parser")]
         let stmt = pg_raw_parse::parse(sql).unwrap();
@@ -329,6 +330,7 @@ mod tests {
         let mut ps = PreparedStatements::default();
         #[cfg_attr(feature = "new_parser", allow(unused_mut))]
         let mut rewrite = StatementRewrite::new(StatementRewriteContext {
+            #[cfg(not(feature = "new_parser"))]
             stmt: &mut ast.protobuf,
             extended: false,
             prepared: false,

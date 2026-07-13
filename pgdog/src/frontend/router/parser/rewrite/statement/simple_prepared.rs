@@ -207,8 +207,8 @@ mod tests {
     use crate::backend::ShardingSchema;
     use crate::backend::schema::Schema;
     use crate::config::PreparedStatements as PreparedStatementsLevel;
+    #[cfg(not(feature = "new_parser"))]
     use pg_query::parse;
-    use pg_query::protobuf::ParseResult;
     use pgdog_config::Rewrite;
 
     struct TestContext {
@@ -235,12 +235,10 @@ mod tests {
             }
         }
 
-        fn rewrite(&mut self, sql: &str) -> Result<(ParseResult, RewritePlan), Error> {
-            let mut ast = parse(sql).unwrap().protobuf;
-            #[cfg(feature = "new_parser")]
-            let stmt = pg_raw_parse::parse(sql).unwrap();
+        #[cfg(feature = "new_parser")]
+        fn rewrite(&mut self, sql: &str) -> Result<(String, RewritePlan), Error> {
+            let stmt = pg_raw_parse::parse(sql)?;
             let mut rewrite = StatementRewrite::new(StatementRewriteContext {
-                stmt: &mut ast,
                 extended: false,
                 prepared: false,
                 prepared_statements: &mut self.ps,
@@ -249,20 +247,43 @@ mod tests {
                 user: "",
                 search_path: None,
             });
-            let plan = rewrite.maybe_rewrite(
-                #[cfg(feature = "new_parser")]
-                stmt.stmts().next().unwrap(),
-            )?;
-            Ok((ast, plan))
+            let mut plan = Default::default();
+            let ast = pg_raw_parse::make::try_owned(|mem| {
+                let mut copy = mem.make_unique(&*stmt.into_inner());
+                plan = rewrite.maybe_rewrite(copy.as_mut().into_iter().next().unwrap(), mem)?;
+                Ok::<_, Error>(copy)
+            })?;
+            let sql = pg_raw_parse::deparse_stmts(&*ast)?;
+            Ok((sql, plan))
+        }
+
+        cfg_select! {
+            not(feature = "new_parser") => {
+                fn rewrite(&mut self, sql: &str) -> Result<(String, RewritePlan), Error> {
+                    let mut ast = parse(sql).unwrap().protobuf;
+                    let mut rewrite = StatementRewrite::new(StatementRewriteContext {
+                        stmt: &mut ast,
+                        extended: false,
+                        prepared: false,
+                        prepared_statements: &mut self.ps,
+                        schema: &self.schema,
+                        db_schema: &self.db_schema,
+                        user: "",
+                        search_path: None,
+                    });
+                    let plan = rewrite.maybe_rewrite()?;
+                    Ok((ast.deparse().unwrap(), plan))
+                }
+            }
+            _ => {}
         }
     }
 
     #[test]
     fn test_rewrite_prepare() {
         let mut ctx = TestContext::new();
-        let (ast, plan) = ctx.rewrite("PREPARE test_stmt AS SELECT $1, $2").unwrap();
+        let (sql, plan) = ctx.rewrite("PREPARE test_stmt AS SELECT $1, $2").unwrap();
 
-        let sql = ast.deparse().unwrap();
         assert!(
             sql.contains("__pgdog_"),
             "PREPARE should be renamed to __pgdog_N, got: {sql}"
@@ -279,9 +300,8 @@ mod tests {
     fn test_rewrite_execute() {
         let mut ctx = TestContext::new();
         ctx.rewrite("PREPARE test_stmt AS SELECT 1").unwrap();
-        let (ast, plan) = ctx.rewrite("EXECUTE test_stmt").unwrap();
+        let (sql, plan) = ctx.rewrite("EXECUTE test_stmt").unwrap();
 
-        let sql = ast.deparse().unwrap();
         assert!(
             sql.contains("__pgdog_"),
             "EXECUTE should use global name, got: {sql}"
@@ -297,9 +317,8 @@ mod tests {
     fn test_rewrite_execute_with_params() {
         let mut ctx = TestContext::new();
         ctx.rewrite("PREPARE test_stmt AS SELECT $1, $2").unwrap();
-        let (ast, plan) = ctx.rewrite("EXECUTE test_stmt(1, 'hello')").unwrap();
+        let (sql, plan) = ctx.rewrite("EXECUTE test_stmt(1, 'hello')").unwrap();
 
-        let sql = ast.deparse().unwrap();
         assert!(
             sql.contains("__pgdog_"),
             "EXECUTE should use global name, got: {sql}"
@@ -321,9 +340,8 @@ mod tests {
     #[test]
     fn test_no_rewrite_for_regular_select() {
         let mut ctx = TestContext::new();
-        let (ast, plan) = ctx.rewrite("SELECT 1, 2, 3").unwrap();
+        let (sql, plan) = ctx.rewrite("SELECT 1, 2, 3").unwrap();
 
-        let sql = ast.deparse().unwrap();
         assert_eq!(sql, "SELECT 1, 2, 3");
         assert!(plan.prepares.is_empty());
         assert!(plan.stmt.is_none());

@@ -557,32 +557,8 @@ mod tests {
         db_schema: &Schema,
         mode: RewriteMode,
     ) -> Result<(String, RewritePlan), Error> {
-        let _guard = set_env_var("NODE_ID", "pgdog-1");
-        let mut ast = pg_query::parse(sql).unwrap().protobuf;
-        #[cfg(feature = "new_parser")]
-        let stmt = pg_raw_parse::parse(sql).unwrap();
-        let mut prepared = PreparedStatements::default();
         let schema = sharding_schema_with_mode(mode);
-        let mut rewriter = StatementRewrite::new(StatementRewriteContext {
-            stmt: &mut ast,
-            extended: false,
-            prepared: false,
-            prepared_statements: &mut prepared,
-            schema: &schema,
-            db_schema,
-            user: "",
-            search_path: None,
-        });
-        let plan = rewriter.maybe_rewrite(
-            #[cfg(feature = "new_parser")]
-            stmt.stmts().next().unwrap(),
-        )?;
-        let result = if plan.stmt.is_some() {
-            plan.stmt.clone().unwrap()
-        } else {
-            ast.deparse().unwrap()
-        };
-        Ok((result, plan))
+        rewrite_sql_with_sharding_schema(sql, db_schema, &schema)
     }
 
     #[test]
@@ -768,18 +744,16 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "new_parser")]
     fn rewrite_sql_with_sharding_schema(
         sql: &str,
         db_schema: &Schema,
         schema: &ShardingSchema,
     ) -> Result<(String, RewritePlan), Error> {
         let _guard = set_env_var("NODE_ID", "pgdog-1");
-        let mut ast = pg_query::parse(sql).unwrap().protobuf;
-        #[cfg(feature = "new_parser")]
-        let new_ast = pg_raw_parse::parse(sql).unwrap();
+        let ast = pg_raw_parse::parse(sql).unwrap();
         let mut prepared = PreparedStatements::default();
         let mut rewriter = StatementRewrite::new(StatementRewriteContext {
-            stmt: &mut ast,
             extended: false,
             prepared: false,
             prepared_statements: &mut prepared,
@@ -788,16 +762,46 @@ mod tests {
             user: "",
             search_path: None,
         });
-        let plan = rewriter.maybe_rewrite(
-            #[cfg(feature = "new_parser")]
-            new_ast.stmts().next().unwrap(),
-        )?;
-        let result = if plan.stmt.is_some() {
-            plan.stmt.clone().unwrap()
-        } else {
-            ast.deparse().unwrap()
-        };
-        Ok((result, plan))
+        let mut plan = Default::default();
+        let ast = make::try_owned(|mem| {
+            let mut copy = mem.make_unique(&*ast.into_inner());
+            plan = rewriter.maybe_rewrite(copy.as_mut().into_iter().next().unwrap(), mem)?;
+            Ok::<_, Error>(copy)
+        })?;
+        let sql = pg_raw_parse::deparse_stmts(&*ast)?;
+        Ok((sql, plan))
+    }
+
+    cfg_select! {
+        not(feature = "new_parser") => {
+            fn rewrite_sql_with_sharding_schema(
+                sql: &str,
+                db_schema: &Schema,
+                schema: &ShardingSchema,
+            ) -> Result<(String, RewritePlan), Error> {
+                let _guard = set_env_var("NODE_ID", "pgdog-1");
+                let mut ast = pg_query::parse(sql).unwrap().protobuf;
+                let mut prepared = PreparedStatements::default();
+                let mut rewriter = StatementRewrite::new(StatementRewriteContext {
+                    stmt: &mut ast,
+                    extended: false,
+                    prepared: false,
+                    prepared_statements: &mut prepared,
+                    schema,
+                    db_schema,
+                    user: "",
+                    search_path: None,
+                });
+                let plan = rewriter.maybe_rewrite()?;
+                let result = if plan.stmt.is_some() {
+                    plan.stmt.clone().unwrap()
+                } else {
+                    ast.deparse().unwrap()
+                };
+                Ok((result, plan))
+            }
+        }
+        _ => {}
     }
 
     #[test]
