@@ -46,6 +46,27 @@ fn setup_test_replicas() -> LoadBalancer {
 }
 
 #[tokio::test]
+async fn test_include_primary_if_replica_banned_only_primary() {
+    let mut primary = create_test_pool_config("127.0.0.1", 5432);
+    primary.address.configured_role = Role::Primary;
+    let pool = Pool::new(&primary);
+
+    let lb = LoadBalancer::new(
+        &Some(pool),
+        &[],
+        LoadBalancingStrategy::default(),
+        ReadWriteSplit::IncludePrimaryIfReplicaBanned,
+    );
+
+    lb.launch();
+
+    let conn = lb.get(&Request::default()).await.unwrap();
+    drop(conn);
+
+    lb.shutdown();
+}
+
+#[tokio::test]
 async fn test_replica_ban_recovery_after_timeout() {
     let replicas = setup_test_replicas();
 
