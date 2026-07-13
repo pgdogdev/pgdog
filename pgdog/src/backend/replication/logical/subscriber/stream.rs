@@ -237,14 +237,6 @@ impl StreamSubscriber {
     }
 
     // Dispatch a pre-built bind to the matching shard(s).
-    //
-    // Fire-and-forget: the `Bind/Execute/Flush` is enqueued on each owning
-    // shard's pipelined connection without waiting for the response. Responses
-    // are reconciled by the per-shard background task; missed-row counting and
-    // error detection happen there. A cheap, non-blocking fail-fast peek surfaces
-    // an already-latched error so we roll back instead of piling work onto a
-    // transaction Postgres has already aborted. The authoritative check is the
-    // commit drain (`commit()`).
     async fn send(&mut self, val: &Shard, bind: &Bind) -> Result<(), Error> {
         // Fail-fast: the replicated transaction spans every shard, so an error
         // latched on any connection means whole transaction is aborted.

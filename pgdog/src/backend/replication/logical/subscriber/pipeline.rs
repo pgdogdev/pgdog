@@ -77,8 +77,8 @@ impl PipelinedConnection {
             server,
             shared: shared.clone(),
             direct: VecDeque::new(),
-            prepare_sync_points: VecDeque::new(),
-            ready_sync_points: VecDeque::new(),
+            parse_ack_sync_points: VecDeque::new(),
+            ready_to_commit_sync_points: VecDeque::new(),
             drain_waiter: None,
         };
 
@@ -114,14 +114,15 @@ impl PipelinedConnection {
     /// uses `Flush` (must not commit the open implicit transaction); otherwise
     /// uses `Sync`.
     pub async fn prepare(&self, parses: &[Parse], in_transaction: bool) -> Result<(), Error> {
-        if parses.is_empty() {
-            return Ok(());
-        }
         let mut messages: Vec<ProtocolMessage> = parses.iter().map(|p| p.clone().into()).collect();
         let kind = if in_transaction {
+            // If in transaction we send flush and wait for the acknowledgements
+            // since we donot want to commit the open transaction.
             messages.push(Flush.into());
             SyncPointKind::ParseAcks(parses.len())
         } else {
+            // Since we are not in a transaction we send Sync and wait for postgres
+            // to becomes ready for the next command.
             messages.push(Sync.into());
             SyncPointKind::ReadyForQuery
         };
@@ -197,9 +198,9 @@ struct Listener {
     // each CommandComplete.
     direct: VecDeque<bool>,
     // In-transaction prepare sync points: (remaining ParseComplete acks, waiter).
-    prepare_sync_points: VecDeque<(usize, oneshot::Sender<()>)>,
+    parse_ack_sync_points: VecDeque<(usize, oneshot::Sender<()>)>,
     // Commit / out-of-transaction prepare sync points, resolved on ReadyForQuery.
-    ready_sync_points: VecDeque<oneshot::Sender<()>>,
+    ready_to_commit_sync_points: VecDeque<oneshot::Sender<()>>,
     // Waiter that resolves once every DML ack has been read. At most one is
     // outstanding: `commit()` issues drain_acks sequentially, one per connection.
     drain_waiter: Option<oneshot::Sender<()>>,
@@ -242,9 +243,14 @@ impl Listener {
                 messages,
                 is_direct,
             } => {
+                // If any connection has already reported and error in the shared state,
+                // we do not need to enqueue the command as postgres will ignore the command.
                 if errored {
                     return Ok(());
                 }
+                // If our command fails to be executed, we latch the error to the shared state.
+                // we also wake up all the sync point and resolve all the sync point waiters to
+                // resolve with the error.
                 if let Err(err) = self.write(&messages).await {
                     self.latch_error(err);
                     self.wake_all();
@@ -268,11 +274,14 @@ impl Listener {
                     return Err(Error::PipelineClosed);
                 }
                 match kind {
-                    // `prepare()` never enqueues an empty batch, so `remaining >= 1`.
+                    // We enqueue the number of acknowledgements we are waiting for and the waiter to resolve.
                     SyncPointKind::ParseAcks(remaining) => {
-                        self.prepare_sync_points.push_back((remaining, done));
+                        self.parse_ack_sync_points.push_back((remaining, done));
                     }
-                    SyncPointKind::ReadyForQuery => self.ready_sync_points.push_back(done),
+                    // We enqueue the waiter to resolve when postgres is ready to commit.
+                    SyncPointKind::ReadyForQuery => {
+                        self.ready_to_commit_sync_points.push_back(done);
+                    }
                 }
             }
             Command::DrainAcks { done } => {
@@ -305,9 +314,11 @@ impl Listener {
                 self.direct.clear();
                 self.wake_all();
             }
-            // ParseComplete: advance the front in-transaction prepare sync point.
+            // as sync points arrive we decrement the remaining count and resolve th waiter
+            // when the remaining count becomes 0.
             '1' => {
-                let resolved = if let Some((remaining, _)) = self.prepare_sync_points.front_mut() {
+                let resolved = if let Some((remaining, _)) = self.parse_ack_sync_points.front_mut()
+                {
                     *remaining -= 1;
                     *remaining == 0
                 } else {
@@ -335,9 +346,9 @@ impl Listener {
                     self.wake_drain();
                 }
             }
-            // ReadyForQuery: resolve the front commit sync point.
+            // When Ready to commit sync point arrives we resolve the waiter.
             'Z' => {
-                if let Some(done) = self.ready_sync_points.pop_front() {
+                if let Some(done) = self.ready_to_commit_sync_points.pop_front() {
                     let _ = done.send(());
                 }
             }
@@ -363,10 +374,10 @@ impl Listener {
     }
 
     fn wake_all(&mut self) {
-        while let Some((_, done)) = self.prepare_sync_points.pop_front() {
+        while let Some((_, done)) = self.parse_ack_sync_points.pop_front() {
             let _ = done.send(());
         }
-        while let Some(done) = self.ready_sync_points.pop_front() {
+        while let Some(done) = self.ready_to_commit_sync_points.pop_front() {
             let _ = done.send(());
         }
         self.wake_drain();
