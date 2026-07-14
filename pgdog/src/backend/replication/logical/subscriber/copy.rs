@@ -2,7 +2,11 @@
 //! between N shards.
 
 use futures::future::join_all;
+#[cfg(not(feature = "new_parser"))]
 use pg_query::{NodeEnum, parse_raw};
+#[cfg(feature = "new_parser")]
+use pg_raw_parse::Node;
+#[cfg(not(feature = "new_parser"))]
 use pgdog_config::QueryParserEngine;
 use tracing::debug;
 
@@ -11,6 +15,8 @@ use crate::frontend::client::query_engine::two_pc::{
     Manager, TwoPcTransaction, statement::phase_control,
 };
 
+#[cfg(feature = "new_parser")]
+use crate::frontend::router::parser::Error as ParseError;
 use crate::{
     backend::{Cluster, ConnectReason, replication::subscriber::ParallelConnection},
     config::Role,
@@ -44,29 +50,11 @@ impl CopySubscriber {
     /// 1. What kind of encoding we use.
     /// 2. Which column is used for sharding.
     ///
-    pub fn new(
-        copy_stmt: &CopyStatement,
-        cluster: &Cluster,
-        query_parser_engine: QueryParserEngine,
-    ) -> Result<Self, Error> {
-        let stmt = match query_parser_engine {
-            QueryParserEngine::PgQueryProtobuf => {
-                pg_query::parse(copy_stmt.clone().copy_in().as_str())
-            }
-            QueryParserEngine::PgQueryRaw => parse_raw(copy_stmt.clone().copy_in().as_str()),
-        }?;
-        let stmt = stmt
-            .protobuf
-            .stmts
-            .first()
-            .ok_or(Error::MissingData)?
-            .stmt
-            .as_ref()
-            .ok_or(Error::MissingData)?
-            .node
-            .as_ref()
-            .ok_or(Error::MissingData)?;
-        let copy = if let NodeEnum::CopyStmt(stmt) = stmt {
+    #[cfg(feature = "new_parser")]
+    pub fn new(copy_stmt: &CopyStatement, cluster: &Cluster) -> Result<Self, Error> {
+        let ast = pg_raw_parse::parse(&copy_stmt.copy_in()).map_err(ParseError::from)?;
+        let stmt = ast.stmts().next().ok_or(ParseError::EmptyQuery)?;
+        let copy = if let Node::CopyStmt(stmt) = stmt {
             CopyParser::new(stmt, cluster).map_err(|_| Error::MissingData)?
         } else {
             return Err(Error::MissingData);
@@ -80,6 +68,49 @@ impl CopySubscriber {
             stmt: copy_stmt.clone(),
             bytes_sharded: 0,
         })
+    }
+
+    cfg_select! {
+        not(feature = "new_parser") => {
+            pub fn new(
+                copy_stmt: &CopyStatement,
+                cluster: &Cluster,
+                query_parser_engine: QueryParserEngine,
+            ) -> Result<Self, Error> {
+                let stmt = match query_parser_engine {
+                    QueryParserEngine::PgQueryProtobuf => {
+                        pg_query::parse(copy_stmt.clone().copy_in().as_str())
+                    }
+                    QueryParserEngine::PgQueryRaw => parse_raw(copy_stmt.clone().copy_in().as_str()),
+                }?;
+                let stmt = stmt
+                    .protobuf
+                    .stmts
+                    .first()
+                    .ok_or(Error::MissingData)?
+                    .stmt
+                    .as_ref()
+                    .ok_or(Error::MissingData)?
+                    .node
+                    .as_ref()
+                    .ok_or(Error::MissingData)?;
+                let copy = if let NodeEnum::CopyStmt(stmt) = stmt {
+                    CopyParser::new(stmt, cluster).map_err(|_| Error::MissingData)?
+                } else {
+                    return Err(Error::MissingData);
+                };
+
+                Ok(Self {
+                    copy,
+                    cluster: cluster.clone(),
+                    buffer: vec![],
+                    connections: vec![],
+                    stmt: copy_stmt.clone(),
+                    bytes_sharded: 0,
+                })
+            }
+        }
+        _ => {}
     }
 
     /// Connect to all shards. One connection per primary.
@@ -398,9 +429,13 @@ mod test {
             .await
             .unwrap();
 
-        let mut subscriber =
-            CopySubscriber::new(&copy, &cluster, config().config.general.query_parser_engine)
-                .unwrap();
+        let mut subscriber = CopySubscriber::new(
+            &copy,
+            &cluster,
+            #[cfg(not(feature = "new_parser"))]
+            config().config.general.query_parser_engine,
+        )
+        .unwrap();
         subscriber.start_copy().await.unwrap();
 
         let header = CopyData::new(&Header::new().to_bytes());

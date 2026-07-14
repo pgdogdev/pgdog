@@ -1,9 +1,6 @@
 //! Column name reference.
 
-use pg_query::{
-    Node, NodeEnum,
-    protobuf::{self, String as PgQueryString},
-};
+use pg_query::{Node, NodeEnum, protobuf::String as PgQueryString};
 #[cfg(feature = "new_parser")]
 use pg_raw_parse::{list, nodes};
 use std::fmt::{Display, Formatter, Result as FmtResult};
@@ -31,9 +28,10 @@ impl<'a> Column<'a> {
         })
     }
 
+    #[cfg(not(feature = "new_parser"))]
     pub(crate) fn from_string(string: &'a Node) -> Result<Self, ()> {
         match &string.node {
-            Some(NodeEnum::String(protobuf::String { sval })) => Ok(Self {
+            Some(NodeEnum::String(PgQueryString { sval })) => Ok(Self {
                 name: sval.as_str(),
                 ..Default::default()
             }),
