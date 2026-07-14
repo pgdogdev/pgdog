@@ -186,6 +186,11 @@ impl LoadBalancer {
                 .for_each(|(_, target)| {
                     target.1.set_role(Role::Replica);
                 });
+        } else {
+            // All targets are replicas until we get a primary.
+            targets.iter().for_each(|target| {
+                target.1.set_role(Role::Replica);
+            });
         }
 
         if promoted {

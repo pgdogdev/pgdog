@@ -1283,6 +1283,38 @@ async fn test_redetect_roles_marks_added_auto_target_replica_when_primary_unchan
 }
 
 #[tokio::test]
+async fn test_redetect_roles_marks_auto_targets_replicas_when_no_primary_discovered() {
+    let mut config1 = create_test_pool_config("127.0.0.1", 5432);
+    config1.address.configured_role = Role::Auto;
+
+    let mut config2 = create_test_pool_config("localhost", 5432);
+    config2.address.configured_role = Role::Auto;
+
+    let lb = LoadBalancer::new(
+        &None,
+        &[config1, config2],
+        LoadBalancingStrategy::Random,
+        ReadWriteSplit::IncludePrimary,
+    );
+
+    assert!(lb.targets.iter().all(|target| target.role() == Role::Auto));
+    assert!(!lb.roles_detected());
+
+    assert!(
+        !lb.redetect_roles(),
+        "no valid primary was discovered, so no promotion is reported"
+    );
+
+    assert!(
+        lb.targets
+            .iter()
+            .all(|target| target.role() == Role::Replica)
+    );
+    assert!(lb.roles_detected());
+    assert!(lb.has_replicas());
+}
+
+#[tokio::test]
 async fn test_can_move_conns_to_different_addresses() {
     let pool_config1 = create_test_pool_config("127.0.0.1", 5432);
     let pool_config2 = create_test_pool_config("localhost", 5432);
