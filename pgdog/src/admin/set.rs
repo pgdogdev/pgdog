@@ -180,7 +180,7 @@ impl Command for Set {
                 config.config.general.connect_timeout = self.value.parse()?;
             }
 
-            _ => return Err(Error::Syntax),
+            _ => return Ok(vec![]),
         }
 
         config::set(config)?;
