@@ -1,22 +1,16 @@
 use super::*;
+#[cfg(feature = "new_parser")]
+use pg_raw_parse::nodes;
 
 impl QueryParser {
+    #[cfg(feature = "new_parser")]
     pub(super) fn explain(
         &mut self,
         cached_ast: &Ast,
-        stmt: &ExplainStmt,
+        stmt: &nodes::ExplainStmt,
         context: &mut QueryParserContext,
     ) -> Result<Command, Error> {
-        let query = stmt.query.as_ref().ok_or(Error::EmptyQuery)?;
-        let node = query.node.as_ref().ok_or(Error::EmptyQuery)?;
-        #[cfg(feature = "new_parser")]
-        let new_stmt = {
-            let stmt = cached_ast.new_ast.stmts().next().unwrap();
-            let pg_raw_parse::Node::ExplainStmt(query) = stmt else {
-                unreachable!()
-            };
-            query.query()
-        };
+        let query = stmt.query();
 
         if context.expanded_explain() {
             if self.explain_recorder.is_none() {
@@ -26,44 +20,11 @@ impl QueryParser {
             self.explain_recorder = None;
         }
 
-        let result = match node {
-            #[cfg_attr(feature = "new_parser", allow(unused))]
-            NodeEnum::SelectStmt(stmt) => self.select(
-                cached_ast,
-                #[cfg(not(feature = "new_parser"))]
-                stmt,
-                #[cfg(feature = "new_parser")]
-                if let pg_raw_parse::Node::SelectStmt(stmt) = new_stmt {
-                    stmt
-                } else {
-                    unreachable!()
-                },
-                context,
-            ),
-            #[cfg_attr(feature = "new_parser", allow(unused))]
-            NodeEnum::InsertStmt(stmt) => self.insert(
-                #[cfg(not(feature = "new_parser"))]
-                stmt,
-                #[cfg(feature = "new_parser")]
-                new_stmt,
-                context,
-            ),
-            #[cfg_attr(feature = "new_parser", allow(unused))]
-            NodeEnum::UpdateStmt(stmt) => self.update(
-                #[cfg(not(feature = "new_parser"))]
-                stmt,
-                #[cfg(feature = "new_parser")]
-                new_stmt,
-                context,
-            ),
-            #[cfg_attr(feature = "new_parser", allow(unused))]
-            NodeEnum::DeleteStmt(stmt) => self.delete(
-                #[cfg(not(feature = "new_parser"))]
-                stmt,
-                #[cfg(feature = "new_parser")]
-                new_stmt,
-                context,
-            ),
+        let result = match query {
+            Node::SelectStmt(stmt) => self.select(cached_ast, stmt, context),
+            Node::InsertStmt(stmt) => self.insert(stmt.into(), context),
+            Node::UpdateStmt(stmt) => self.update(stmt.into(), context),
+            Node::DeleteStmt(stmt) => self.delete(stmt.into(), context),
 
             _ => {
                 // For other statement types, route to all shards
@@ -83,6 +44,67 @@ impl QueryParser {
                 Err(err)
             }
         }
+    }
+
+    cfg_select! {
+        not(feature = "new_parser") => {
+            pub(super) fn explain(
+                &mut self,
+                cached_ast: &Ast,
+                stmt: &ExplainStmt,
+                context: &mut QueryParserContext,
+            ) -> Result<Command, Error> {
+                let query = stmt.query.as_ref().ok_or(Error::EmptyQuery)?;
+                let node = query.node.as_ref().ok_or(Error::EmptyQuery)?;
+
+                if context.expanded_explain() {
+                    if self.explain_recorder.is_none() {
+                        self.explain_recorder = Some(ExplainRecorder::new());
+                    }
+                } else {
+                    self.explain_recorder = None;
+                }
+
+                let result = match node {
+                    NodeEnum::SelectStmt(stmt) => self.select(
+                        cached_ast,
+                        stmt,
+                        context,
+                    ),
+                    NodeEnum::InsertStmt(stmt) => self.insert(
+                        stmt,
+                        context,
+                    ),
+                    NodeEnum::UpdateStmt(stmt) => self.update(
+                        stmt,
+                        context,
+                    ),
+                    NodeEnum::DeleteStmt(stmt) => self.delete(
+                        stmt,
+                        context,
+                    ),
+
+                    _ => {
+                        // For other statement types, route to all shards
+                        context
+                            .shards_calculator
+                            .push(ShardWithPriority::new_table(Shard::All));
+                        Ok(Command::Query(Route::write(
+                            context.shards_calculator.shard(),
+                        )))
+                    }
+                };
+
+                match result {
+                    Ok(command) => Ok(command),
+                    Err(err) => {
+                        self.explain_recorder = None;
+                        Err(err)
+                    }
+                }
+            }
+        }
+        _ => {}
     }
 }
 
