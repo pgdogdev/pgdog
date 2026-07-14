@@ -1,4 +1,6 @@
-use crate::frontend::router::parser::{FromClause, TablesSource, cache::Ast};
+use crate::frontend::router::parser::cache::Ast;
+#[cfg(not(feature = "new_parser"))]
+use crate::frontend::router::parser::{FromClause, TablesSource};
 
 use super::*;
 #[cfg(not(feature = "new_parser"))]
@@ -20,28 +22,16 @@ impl QueryParser {
     /// * `stmt`: SELECT statement from pg_query.
     /// * `context`: Query parser context.
     ///
+    #[cfg(feature = "new_parser")]
     pub(super) fn select(
         &mut self,
         cached_ast: &Ast,
-        stmt_old: &SelectStmt,
-        #[cfg(feature = "new_parser")] stmt: &nodes::SelectStmt,
+        stmt: &nodes::SelectStmt,
         context: &mut QueryParserContext,
     ) -> Result<Command, Error> {
-        #[cfg(not(feature = "new_parser"))]
-        let cte_writes = Self::cte_writes(stmt_old);
-        #[cfg(not(feature = "new_parser"))]
-        let has_locking = Self::has_locking_clause(stmt_old);
-        #[cfg(not(feature = "new_parser"))]
-        let FunctionBehavior {
-            writes,
-            cross_shard,
-        } = Self::functions(stmt_old);
-
-        #[cfg(feature = "new_parser")]
         let mut cross_shard = false;
-        #[cfg(feature = "new_parser")]
+        // Write overwrite because of conservative read/write split.
         let mut writes = self.write_override;
-        #[cfg(feature = "new_parser")]
         walk::walk(stmt.into(), |node| match node {
             Node::CommonTableExpr(expr) => match expr.ctequery() {
                 Node::SelectStmt(_) => (),
@@ -59,10 +49,6 @@ impl QueryParser {
             _ => (),
         });
 
-        // Write overwrite because of conservative read/write split.
-        #[cfg(not(feature = "new_parser"))]
-        let writes = writes || self.write_override || cte_writes || has_locking;
-
         if cross_shard {
             context
                 .shards_calculator
@@ -71,9 +57,6 @@ impl QueryParser {
 
         let (advisory_locks, mut omnisharded) = {
             let mut parser = StatementParser::from_select(
-                #[cfg(not(feature = "new_parser"))]
-                stmt_old,
-                #[cfg(feature = "new_parser")]
                 stmt.into(),
                 context.router_context.bind,
                 &context.sharding_schema,
@@ -99,9 +82,6 @@ impl QueryParser {
 
         let (shard, is_sharded, tables) = {
             let mut statement_parser = StatementParser::from_select(
-                #[cfg(not(feature = "new_parser"))]
-                stmt_old,
-                #[cfg(feature = "new_parser")]
                 stmt.into(),
                 context.router_context.bind,
                 &context.sharding_schema,
@@ -130,7 +110,7 @@ impl QueryParser {
         }
 
         // SELECT NOW(), SELECT 1
-        if shards.is_empty() && stmt_old.from_clause.is_empty() {
+        if shards.is_empty() && stmt.from_clause().is_empty() {
             let shard = Shard::Direct(round_robin::next() % context.shards);
 
             if let Some(recorder) = self.recorder_mut() {
@@ -149,19 +129,18 @@ impl QueryParser {
             ));
         }
 
-        #[cfg(feature = "new_parser")]
         let order_by = Self::select_sort(stmt, context.router_context.bind);
-        #[cfg(not(feature = "new_parser"))]
-        let order_by = Self::select_sort(&stmt_old.sort_clause, context.router_context.bind);
-        let from_clause = TablesSource::from(FromClause::new(&stmt_old.from_clause));
+        let from_clause_table_name = stmt.from_clause().first().and_then(|node| match node {
+            Node::RangeVar(r) => Some(r.relname().expect("RangeVar always has relname")),
+            _ => None,
+        });
 
         // Shard by vector in ORDER BY clause.
         for order in &order_by {
             if let Some((vector, column_name)) = order.vector() {
                 for table in context.sharding_schema.tables.tables() {
                     if &table.column == column_name
-                        && (table.name.is_none()
-                            || table.name.as_deref() == from_clause.table_name())
+                        && (table.name.is_none() || table.name.as_deref() == from_clause_table_name)
                     {
                         let centroids = Centroids::from(&table.centroids);
                         let shard: Shard = centroids
@@ -179,12 +158,10 @@ impl QueryParser {
             }
         }
 
-        #[cfg(not(feature = "new_parser"))]
-        let stmt = stmt_old;
         let shard = Self::converge(&shards, ConvergeAlgorithm::default());
         let aggregates = Aggregate::parse(stmt, &context.router_context.schema);
         let limit = LimitClause::new(stmt, context.router_context.bind).limit_offset()?;
-        let distinct = Distinct::new(stmt_old).distinct()?;
+        let distinct = Distinct::new(stmt).distinct();
 
         if let Some(shard) = shard {
             debug!("direct-to-shard {}", shard);
@@ -278,6 +255,234 @@ impl QueryParser {
                 .with_omnisharded(omnisharded)
                 .with_advisory_locks(advisory_locks),
         ))
+    }
+
+    cfg_select! {
+        not(feature = "new_parser") => {
+            pub(super) fn select(
+                &mut self,
+                cached_ast: &Ast,
+                stmt_old: &SelectStmt,
+                context: &mut QueryParserContext,
+            ) -> Result<Command, Error> {
+                let cte_writes = Self::cte_writes(stmt_old);
+                let has_locking = Self::has_locking_clause(stmt_old);
+                let FunctionBehavior {
+                    writes,
+                    cross_shard,
+                } = Self::functions(stmt_old);
+
+                // Write overwrite because of conservative read/write split.
+                let writes = writes || self.write_override || cte_writes || has_locking;
+
+                if cross_shard {
+                    context
+                        .shards_calculator
+                        .push(ShardWithPriority::new_override_cross_shard_function());
+                }
+
+                let (advisory_locks, mut omnisharded) = {
+                    let mut parser = StatementParser::from_select(
+                        stmt_old,
+                        context.router_context.bind,
+                        &context.sharding_schema,
+                        None,
+                    );
+
+                    (parser.extract_advisory_locks(), parser.is_all_omnisharded())
+                };
+
+                let writes = writes || !advisory_locks.is_empty();
+
+                // Early return for any direct-to-shard queries.
+                if context.shards_calculator.shard().is_direct() {
+                    return Ok(Command::Query(
+                        Route::read(context.shards_calculator.shard().clone())
+                            .with_read(!writes)
+                            .with_omnisharded(omnisharded)
+                            .with_advisory_locks(advisory_locks),
+                    ));
+                }
+
+                let mut shards = HashSet::new();
+
+                let (shard, is_sharded, tables) = {
+                    let mut statement_parser = StatementParser::from_select(
+                        stmt_old,
+                        context.router_context.bind,
+                        &context.sharding_schema,
+                        self.recorder_mut(),
+                    );
+
+                    let shard = statement_parser.shard()?;
+
+                    if shard.is_some() {
+                        (shard, true, vec![])
+                    } else {
+                        (
+                            None,
+                            statement_parser.is_sharded(
+                                &context.router_context.schema,
+                                context.router_context.cluster.user(),
+                                context.router_context.parameter_hints.search_path,
+                            ),
+                            statement_parser.extract_tables(),
+                        )
+                    }
+                };
+
+                if let Some(shard) = shard {
+                    shards.insert(shard);
+                }
+
+                // SELECT NOW(), SELECT 1
+                if shards.is_empty() && stmt_old.from_clause.is_empty() {
+                    let shard = Shard::Direct(round_robin::next() % context.shards);
+
+                    if let Some(recorder) = self.recorder_mut() {
+                        recorder.record_entry(Some(shard.clone()), "SELECT omnishard no table".to_string());
+                    }
+
+                    context
+                        .shards_calculator
+                        .push(ShardWithPriority::new_rr_no_table(shard));
+
+                    return Ok(Command::Query(
+                        Route::read(context.shards_calculator.shard().clone())
+                            .with_read(!writes)
+                            .with_omnisharded(omnisharded)
+                            .with_advisory_locks(advisory_locks),
+                    ));
+                }
+
+                let order_by = Self::select_sort(&stmt_old.sort_clause, context.router_context.bind);
+                let from_clause = TablesSource::from(FromClause::new(&stmt_old.from_clause));
+
+                // Shard by vector in ORDER BY clause.
+                for order in &order_by {
+                    if let Some((vector, column_name)) = order.vector() {
+                        for table in context.sharding_schema.tables.tables() {
+                            if &table.column == column_name
+                                && (table.name.is_none()
+                                    || table.name.as_deref() == from_clause.table_name())
+                            {
+                                let centroids = Centroids::from(&table.centroids);
+                                let shard: Shard = centroids
+                                    .shard(vector, context.shards, table.centroid_probes)
+                                    .into();
+                                if let Some(recorder) = self.recorder_mut() {
+                                    recorder.record_entry(
+                                        Some(shard.clone()),
+                                        format!("ORDER BY vector distance on {}", column_name),
+                                    );
+                                }
+                                shards.insert(shard);
+                            }
+                        }
+                    }
+                }
+
+                let stmt = stmt_old;
+                let shard = Self::converge(&shards, ConvergeAlgorithm::default());
+                let aggregates = Aggregate::parse(stmt, &context.router_context.schema);
+                let limit = LimitClause::new(stmt, context.router_context.bind).limit_offset()?;
+                let distinct = Distinct::new(stmt_old).distinct()?;
+
+                if let Some(shard) = shard {
+                    debug!("direct-to-shard {}", shard);
+
+                    context
+                        .shards_calculator
+                        .push(ShardWithPriority::new_table(shard));
+                } else if is_sharded {
+                    debug!("table is sharded, but no sharding key detected");
+
+                    context
+                        .shards_calculator
+                        .push(ShardWithPriority::new_table(Shard::All));
+                } else {
+                    let system_catalog_sharded =
+                        if context.sharding_schema.tables().is_system_catalog_sharded() {
+                            {
+                                tables
+                                    .iter()
+                                    .any(|table| system_catalogs().contains(&table.name))
+                            }
+                        } else {
+                            Default::default()
+                        };
+
+                    if system_catalog_sharded {
+                        debug!("system catalog sharded");
+
+                        context
+                            .shards_calculator
+                            .push(ShardWithPriority::new_table(Shard::All));
+                    } else {
+                        debug!(
+                            "table is not sharded, defaulting to omnisharded (schema loaded: {})",
+                            context.router_context.schema.is_loaded()
+                        );
+
+                        // Omnisharded by default.
+                        let sticky = tables.iter().any(|table| {
+                            context
+                                .sharding_schema
+                                .tables()
+                                .is_omnisharded_sticky(table.name)
+                                == Some(true)
+                        });
+
+                        let (rr_index, explain) = if sticky
+                            || context
+                                .sharding_schema
+                                .tables()
+                                .is_omnisharded_sticky_default()
+                        {
+                            (context.router_context.sticky.omni_index, "sticky")
+                        } else {
+                            (round_robin::next(), "round robin")
+                        };
+
+                        let shard = Shard::Direct(rr_index % context.shards);
+
+                        // Routed to a single shard via the omnisharded-by-default path
+                        // (non-sharded tables, including system catalogs).
+                        omnisharded = true;
+
+                        if let Some(recorder) = self.recorder_mut() {
+                            recorder
+                                .record_entry(Some(shard.clone()), format!("SELECT omnishard {}", explain));
+                        }
+
+                        context
+                            .shards_calculator
+                            .push(ShardWithPriority::new_rr_omni(shard));
+                    }
+                }
+
+                let mut query = Route::select(
+                    context.shards_calculator.shard().clone(),
+                    order_by,
+                    aggregates,
+                    limit,
+                    distinct,
+                );
+
+                // Only rewrite if query is cross-shard.
+                if query.is_cross_shard() && context.shards > 1 {
+                    query.set_rewrite_plan(cached_ast.rewrite_plan.aggregates.clone());
+                }
+
+                Ok(Command::Query(
+                    query
+                        .with_read(!writes)
+                        .with_omnisharded(omnisharded)
+                        .with_advisory_locks(advisory_locks),
+                ))
+            }
+        }
+        _ => {}
     }
 
     /// Handle the `ORDER BY` clause of a `SELECT` statement.

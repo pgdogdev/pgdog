@@ -10,6 +10,7 @@ pub(crate) struct FromClause<'a> {
 
 impl<'a> FromClause<'a> {
     /// Create new FROM clause parser.
+    #[cfg(any(not(feature = "new_parser"), test))]
     pub(crate) fn new(nodes: &'a [Node]) -> Self {
         Self { nodes }
     }

@@ -27,8 +27,10 @@ impl QueryParser {
         }
 
         let result = match node {
+            #[cfg_attr(feature = "new_parser", allow(unused))]
             NodeEnum::SelectStmt(stmt) => self.select(
                 cached_ast,
+                #[cfg(not(feature = "new_parser"))]
                 stmt,
                 #[cfg(feature = "new_parser")]
                 if let pg_raw_parse::Node::SelectStmt(stmt) = new_stmt {

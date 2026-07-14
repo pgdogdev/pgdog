@@ -360,7 +360,7 @@ impl Route {
         }
     }
 
-    pub fn distinct(&self) -> &Option<DistinctBy> {
+    pub(crate) fn distinct(&self) -> &Option<DistinctBy> {
         &self.distinct
     }
 
