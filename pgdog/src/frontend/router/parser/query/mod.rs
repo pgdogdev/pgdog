@@ -348,16 +348,7 @@ impl QueryParser {
             Node::DeleteStmt(stmt) => self.delete(stmt.into(), context),
 
             // e.g. BEGIN, COMMIT, etc.
-            Node::TransactionStmt(stmt) => match self.transaction(
-                match &old_root {
-                    Some(NodeEnum::TransactionStmt(stmt)) => stmt,
-                    _ => unreachable!(),
-                },
-                context,
-            )? {
-                Command::Query(query) => Ok(Command::Query(query)),
-                command => return Ok(command),
-            },
+            Node::TransactionStmt(stmt) => self.transaction(stmt, context),
 
             Node::ListenStmt(stmt) => {
                 let channel = stmt
