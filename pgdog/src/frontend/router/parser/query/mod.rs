@@ -273,20 +273,22 @@ impl QueryParser {
         debug!("{}", context.query()?.query());
         trace!("{:#?}", statement);
 
-        if let Some(multi_tenant) = context.multi_tenant() {
+        let stmts = &statement.new_ast;
+
+        if let Some(multi_tenant) = context.multi_tenant()
+            && let Some(stmt) = stmts.stmts().next()
+        {
             debug!("running multi-tenant check");
 
             MultiTenantCheck::new(
                 context.router_context.cluster.user(),
                 multi_tenant,
                 context.router_context.cluster.schema(),
-                statement.parse_result(),
+                stmt,
                 context.router_context.parameter_hints.search_path,
             )
             .run()?;
         }
-
-        let stmts = &statement.new_ast;
 
         // Handle multi-statement SET commands (e.g. "SET x TO 1; SET y TO 2").
         if stmts.len() > 1

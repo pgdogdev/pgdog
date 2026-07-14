@@ -1,4 +1,7 @@
+#[cfg(not(feature = "new_parser"))]
 use pg_query::{NodeEnum, ParseResult};
+#[cfg(feature = "new_parser")]
+use pg_raw_parse::Node;
 
 use super::Error;
 use crate::{
@@ -15,6 +18,9 @@ pub struct MultiTenantCheck<'a> {
     user: &'a str,
     config: &'a MultiTenant,
     schema: Schema,
+    #[cfg(feature = "new_parser")]
+    ast: Node<'a>,
+    #[cfg(not(feature = "new_parser"))]
     ast: &'a ParseResult,
     search_path: Option<&'a ParameterValue>,
 }
@@ -24,7 +30,8 @@ impl<'a> MultiTenantCheck<'a> {
         user: &'a str,
         config: &'a MultiTenant,
         schema: Schema,
-        ast: &'a ParseResult,
+        #[cfg(feature = "new_parser")] ast: Node<'a>,
+        #[cfg(not(feature = "new_parser"))] ast: &'a ParseResult,
         search_path: Option<&'a ParameterValue>,
     ) -> Self {
         Self {
@@ -36,39 +43,33 @@ impl<'a> MultiTenantCheck<'a> {
         }
     }
 
+    #[cfg(feature = "new_parser")]
     pub fn run(&self) -> Result<(), Error> {
-        let stmt = self
-            .ast
-            .protobuf
-            .stmts
-            .first()
-            .and_then(|s| s.stmt.as_ref());
-
-        match stmt.and_then(|n| n.node.as_ref()) {
-            Some(NodeEnum::UpdateStmt(stmt)) => {
-                let table = stmt.relation.as_ref().map(Table::from);
+        match self.ast {
+            Node::UpdateStmt(stmt) => {
+                let table = stmt.relation().map(Table::from);
 
                 if let Some(table) = table {
                     let source = TablesSource::from(table);
-                    let where_clause = WhereClause::new(&source, &stmt.where_clause);
+                    let where_clause = WhereClause::new(&source, stmt.where_clause());
                     self.check(table, where_clause)?;
                 }
             }
-            Some(NodeEnum::SelectStmt(stmt)) => {
-                let table = Table::try_from(&stmt.from_clause).ok();
+            Node::SelectStmt(stmt) => {
+                let table = Table::try_from(stmt.from_clause()).ok();
 
                 if let Some(table) = table {
                     let source = TablesSource::from(table);
-                    let where_clause = WhereClause::new(&source, &stmt.where_clause);
+                    let where_clause = WhereClause::new(&source, stmt.where_clause());
                     self.check(table, where_clause)?;
                 }
             }
-            Some(NodeEnum::DeleteStmt(stmt)) => {
-                let table = stmt.relation.as_ref().map(Table::from);
+            Node::DeleteStmt(stmt) => {
+                let table = stmt.relation().map(Table::from);
 
                 if let Some(table) = table {
                     let source = TablesSource::from(table);
-                    let where_clause = WhereClause::new(&source, &stmt.where_clause);
+                    let where_clause = WhereClause::new(&source, stmt.where_clause());
                     self.check(table, where_clause)?;
                 }
             }
@@ -76,6 +77,53 @@ impl<'a> MultiTenantCheck<'a> {
             _ => (),
         }
         Ok(())
+    }
+
+    cfg_select! {
+        not(feature = "new_parser") => {
+            pub fn run(&self) -> Result<(), Error> {
+                let stmt = self
+                    .ast
+                    .protobuf
+                    .stmts
+                    .first()
+                    .and_then(|s| s.stmt.as_ref());
+
+                match stmt.and_then(|n| n.node.as_ref()) {
+                    Some(NodeEnum::UpdateStmt(stmt)) => {
+                        let table = stmt.relation.as_ref().map(Table::from);
+
+                        if let Some(table) = table {
+                            let source = TablesSource::from(table);
+                            let where_clause = WhereClause::new(&source, &stmt.where_clause);
+                            self.check(table, where_clause)?;
+                        }
+                    }
+                    Some(NodeEnum::SelectStmt(stmt)) => {
+                        let table = Table::try_from(&stmt.from_clause).ok();
+
+                        if let Some(table) = table {
+                            let source = TablesSource::from(table);
+                            let where_clause = WhereClause::new(&source, &stmt.where_clause);
+                            self.check(table, where_clause)?;
+                        }
+                    }
+                    Some(NodeEnum::DeleteStmt(stmt)) => {
+                        let table = stmt.relation.as_ref().map(Table::from);
+
+                        if let Some(table) = table {
+                            let source = TablesSource::from(table);
+                            let where_clause = WhereClause::new(&source, &stmt.where_clause);
+                            self.check(table, where_clause)?;
+                        }
+                    }
+
+                    _ => (),
+                }
+                Ok(())
+            }
+        }
+        _ => {}
     }
 
     fn check(&self, table: Table, where_clause: Option<WhereClause>) -> Result<(), Error> {
@@ -139,33 +187,76 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "new_parser")]
     fn multi_tenant_check_passes_with_matching_filter() {
         let schema = schema_with_tenant_column("tenant_id");
-        let ast = pg_query::parse("SELECT * FROM accounts WHERE tenant_id = 1")
-            .expect("parse select statement");
+        let ast = pg_raw_parse::parse("SELECT * FROM accounts WHERE tenant_id = 1").unwrap();
+        let stmt = ast.stmts().next().unwrap();
         let config = MultiTenant {
             column: "tenant_id".into(),
         };
 
-        let check = MultiTenantCheck::new("alice", &config, schema, &ast, None);
+        let check = MultiTenantCheck::new("alice", &config, schema, stmt, None);
         assert!(check.run().is_ok());
     }
 
+    cfg_select! {
+        not(feature = "new_parser") => {
+            #[test]
+            fn multi_tenant_check_passes_with_matching_filter() {
+                let schema = schema_with_tenant_column("tenant_id");
+                let ast = pg_query::parse("SELECT * FROM accounts WHERE tenant_id = 1")
+                    .expect("parse select statement");
+                let config = MultiTenant {
+                    column: "tenant_id".into(),
+                };
+
+                let check = MultiTenantCheck::new("alice", &config, schema, &ast, None);
+                assert!(check.run().is_ok());
+            }
+        }
+        _ => {}
+    }
+
     #[test]
+    #[cfg(feature = "new_parser")]
     fn multi_tenant_check_requires_tenant_column_in_filter() {
         let schema = schema_with_tenant_column("tenant_id");
-        let ast = pg_query::parse("SELECT * FROM accounts WHERE other_id = 1")
-            .expect("parse select statement");
+        let ast = pg_raw_parse::parse("SELECT * FROM accounts WHERE other_id = 1").unwrap();
+        let stmt = ast.stmts().next().unwrap();
         let config = MultiTenant {
             column: "tenant_id".into(),
         };
 
-        let check = MultiTenantCheck::new("alice", &config, schema, &ast, None);
+        let check = MultiTenantCheck::new("alice", &config, schema, stmt, None);
         let err = check
             .run()
             .expect_err("expected tenant id validation error");
         matches!(err, Error::MultiTenantId)
             .then_some(())
             .expect("should return multi-tenant id error");
+    }
+
+    cfg_select! {
+        not(feature = "new_parser") => {
+            #[test]
+            fn multi_tenant_check_requires_tenant_column_in_filter() {
+                let schema = schema_with_tenant_column("tenant_id");
+                let ast = pg_query::parse("SELECT * FROM accounts WHERE other_id = 1")
+                    .expect("parse select statement");
+                let config = MultiTenant {
+                    column: "tenant_id".into(),
+                };
+
+                let check = MultiTenantCheck::new("alice", &config, schema, &ast, None);
+                let err = check
+                    .run()
+                    .expect_err("expected tenant id validation error");
+                matches!(err, Error::MultiTenantId)
+                    .then_some(())
+                    .expect("should return multi-tenant id error");
+            }
+        }
+        _ => {}
     }
 }

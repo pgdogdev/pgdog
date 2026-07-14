@@ -194,6 +194,7 @@ impl<'a> TryFrom<&'a NodeList> for Table<'a> {
         let name = match list.next() {
             Some(Node::String(s)) => s.sval(),
             Some(Node::NodeList(l)) if value.len() == 1 => return Self::try_from(l),
+            Some(Node::RangeVar(rv)) if value.len() == 1 => return Ok(Self::from(rv)),
             _ => None,
         }
         .ok_or(Error::TableDecode)?;
