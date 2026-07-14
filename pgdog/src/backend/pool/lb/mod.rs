@@ -353,7 +353,7 @@ impl LoadBalancer {
                 candidates.iter().any(|target| target.ban.banned()) || candidates.len() == 1 // The second condition is for when there is only the primary (just one target, doesn't matter what role it is).
             }
             // we read from the primary if we have no replicas
-            ExcludePrimary => !candidates
+            ExcludePrimary | PreferReplica => !candidates
                 .iter()
                 .any(|target| matches!(target.role(), Role::Replica | Role::Auto)),
             // PreferPrimary makes all queries writes. If a query lands here,

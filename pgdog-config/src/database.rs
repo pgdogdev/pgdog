@@ -83,6 +83,8 @@ pub enum ReadWriteSplit {
     /// query explicitly opts in (`SET pgdog.role`, `SET LOCAL pgdog.role`, or a
     /// `/* pgdog_role: replica */` comment); those opt-in reads go to the replicas.
     PreferPrimary,
+    /// Primary is used only when `pgdog.role` is set or it's the only database available.
+    PreferReplica,
 }
 
 impl FromStr for ReadWriteSplit {
@@ -94,6 +96,7 @@ impl FromStr for ReadWriteSplit {
             "excludeprimary" => Ok(Self::ExcludePrimary),
             "includeprimaryifreplicabanned" => Ok(Self::IncludePrimaryIfReplicaBanned),
             "preferprimary" => Ok(Self::PreferPrimary),
+            "preferreplica" => Ok(Self::PreferReplica),
             _ => Err(format!("Invalid read-write split: {}", s)),
         }
     }
@@ -106,6 +109,7 @@ impl Display for ReadWriteSplit {
             Self::IncludePrimary => "include_primary",
             Self::IncludePrimaryIfReplicaBanned => "include_primary_if_replica_banned",
             Self::PreferPrimary => "prefer_primary",
+            Self::PreferReplica => "prefer_replica",
         };
 
         write!(f, "{}", display)

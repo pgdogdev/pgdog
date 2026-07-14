@@ -1,6 +1,6 @@
 use std::ops::Deref;
 
-use pgdog_config::ConfigAndUsers;
+use pgdog_config::{ConfigAndUsers, QueryParserLevel, ReadWriteSplit};
 
 use crate::{
     backend::Cluster,
@@ -96,8 +96,8 @@ impl QueryParserTest {
     }
 
     /// Route reads to the primary by default on the cluster.
-    pub(crate) fn with_prefer_primary(mut self, prefer_primary: bool) -> Self {
-        self.cluster.set_prefer_primary(prefer_primary);
+    pub(crate) fn with_rw_split(mut self, rw_split: ReadWriteSplit) -> Self {
+        self.cluster.set_rw_split(rw_split);
         self
     }
 
@@ -107,6 +107,11 @@ impl QueryParserTest {
         updated.config.general.expanded_explain = true;
         config::set(updated).unwrap();
         self.cluster = Cluster::new_test(&config());
+        self
+    }
+
+    pub(crate) fn with_query_parser(mut self, query_parser: QueryParserLevel) -> Self {
+        self.cluster.set_query_parser(query_parser);
         self
     }
 

@@ -192,8 +192,14 @@ impl QueryParser {
                 Role::Replica => Route::read(shard),
                 Role::Primary | Role::Auto => Route::write(shard),
             })
-        // Default to primary.
+        } else if context.prefer_primary {
+            // Send queries to primary by default.
+            Some(Route::write(shard))
+        } else if context.prefer_replica {
+            // Send queries to replicas by default.
+            Some(Route::read(shard))
         } else {
+            // Default to primary.
             Some(Route::write(shard))
         }
     }
