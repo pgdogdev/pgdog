@@ -191,10 +191,13 @@ impl<'a> TryFrom<&'a NodeList> for Table<'a> {
 
     fn try_from(value: &'a NodeList) -> Result<Self, Self::Error> {
         let mut list = value.into_iter().rev();
-        let name = list
-            .next()
-            .and_then(Node::as_str)
-            .ok_or(Error::TableDecode)?;
+        let name = match list.next() {
+            Some(Node::String(s)) => s.sval(),
+            Some(Node::NodeList(l)) if value.len() == 1 => return Self::try_from(l),
+            _ => None,
+        }
+        .ok_or(Error::TableDecode)?;
+
         match (list.next(), list.next()) {
             (schema, None) => {
                 let schema = schema
