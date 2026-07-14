@@ -231,7 +231,7 @@ impl<'a> WhereClause<'a> {
             // Only AND expressions can really be asserted.
             // OR needs both sides to be evaluated and either one
             // can direct to a shard. Most cases, this will end up on all shards.
-            Node::BoolExpr(expr) if expr.boolop != nodes::BoolExprType::AND_EXPR => expr
+            Node::BoolExpr(expr) if expr.boolop == nodes::BoolExprType::AND_EXPR => expr
                 .args()
                 .iter()
                 .flat_map(|arg| Self::parse(source, arg, array))
