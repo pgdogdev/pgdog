@@ -1,4 +1,6 @@
 use pg_query::parse;
+#[cfg(feature = "new_parser")]
+use pg_query::protobuf::{ObjectType, RangeVar};
 
 use super::*;
 

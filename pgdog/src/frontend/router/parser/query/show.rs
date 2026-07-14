@@ -1,5 +1,7 @@
 use super::*;
 use crate::frontend::router::{parser::Shard, round_robin};
+#[cfg(feature = "new_parser")]
+use pg_query::protobuf::VariableShowStmt;
 
 impl QueryParser {
     /// Handle SHOW command.

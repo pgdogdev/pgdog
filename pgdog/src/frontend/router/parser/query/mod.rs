@@ -1,15 +1,14 @@
 //! Route queries to correct shards.
 use std::{collections::HashSet, ops::Deref};
 
+#[cfg(not(feature = "new_parser"))]
+use crate::frontend::router::parser::util::{PgStr, pg_str};
 use crate::{
     backend::{ShardingSchema, databases::databases},
     config::Role,
     frontend::router::{
         context::RouterContext,
-        parser::{
-            OrderBy, Shard,
-            util::{PgStr, pg_str},
-        },
+        parser::{OrderBy, Shard},
         round_robin,
         sharding::{Centroids, ContextBuilder},
     },
@@ -36,10 +35,15 @@ mod show;
 mod transaction;
 mod update;
 
+#[cfg(feature = "new_parser")]
+use itertools::*;
 use multi_tenant::MultiTenantCheck;
 use pg_query::protobuf::Node as PgNode;
 #[cfg(feature = "new_parser")]
-use pg_raw_parse::Node;
+use pg_query::{NodeEnum, protobuf::CopyStmt};
+#[cfg(feature = "new_parser")]
+use pg_raw_parse::{Node, nodes};
+#[cfg(not(feature = "new_parser"))]
 use pgdog_plugin::pg_query::{
     NodeEnum,
     protobuf::{a_const::Val, *},
@@ -327,12 +331,7 @@ impl QueryParser {
         let mut command = match root.stmt() {
             Node::VariableSetStmt(stmt) => return self.set(stmt, context),
 
-            Node::SelectStmt(stmt)
-                if let Some(set_config) = extract_set_config(match &old_root {
-                    Some(NodeEnum::SelectStmt(stmt)) => stmt,
-                    _ => unreachable!(),
-                }) =>
-            {
+            Node::SelectStmt(stmt) if let Some(set_config) = extract_set_config(stmt) => {
                 return Ok(self.set_config(set_config, context));
             }
 
@@ -962,27 +961,55 @@ impl QueryParser {
     }
 }
 
-fn extract_set_config(stmt: &SelectStmt) -> Option<&FuncCall> {
-    static SET_CONFIG: &[&[PgStr<'static>]] = &[
-        &[pg_str("pg_catalog"), pg_str("set_config")],
-        &[pg_str("set_config")],
-    ];
-    // FIXME(sage): Dear god we need some pattern macros for this
-    if let [
-        PgNode {
-            node: Some(NodeEnum::ResTarget(r)),
-        },
-    ] = &*stmt.target_list
-        && let ResTarget { val: Some(n), .. } = &**r
-        && let PgNode {
-            node: Some(NodeEnum::FuncCall(f)),
-        } = &**n
-        && SET_CONFIG.iter().any(|&n| n == f.funcname)
-    {
-        Some(f)
-    } else {
-        None
+#[cfg(feature = "new_parser")]
+fn extract_set_config(stmt: &nodes::SelectStmt) -> Option<&nodes::FuncCall> {
+    static SET_CONFIG: &[&[&str]] = &[&["pg_catalog", "set_config"], &["set_config"]];
+
+    stmt.target_list()
+        .iter()
+        .exactly_one()
+        .ok()
+        .and_then(|r| match r.val() {
+            Node::FuncCall(f)
+                if SET_CONFIG.iter().any(|n| {
+                    f.funcname()
+                        .iter()
+                        .filter_map(Node::as_str)
+                        .eq(n.iter().copied())
+                }) =>
+            {
+                Some(f)
+            }
+            _ => None,
+        })
+}
+
+cfg_select! {
+    not(feature = "new_parser") => {
+        fn extract_set_config(stmt: &SelectStmt) -> Option<&FuncCall> {
+            static SET_CONFIG: &[&[PgStr<'static>]] = &[
+                &[pg_str("pg_catalog"), pg_str("set_config")],
+                &[pg_str("set_config")],
+            ];
+            // FIXME(sage): Dear god we need some pattern macros for this
+            if let [
+                PgNode {
+                    node: Some(NodeEnum::ResTarget(r)),
+                },
+            ] = &*stmt.target_list
+                && let ResTarget { val: Some(n), .. } = &**r
+                && let PgNode {
+                    node: Some(NodeEnum::FuncCall(f)),
+                } = &**n
+                && SET_CONFIG.iter().any(|&n| n == f.funcname)
+            {
+                Some(f)
+            } else {
+                None
+            }
+        }
     }
+    _ => {}
 }
 
 #[cfg(test)]
