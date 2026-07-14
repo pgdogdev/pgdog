@@ -959,6 +959,29 @@ mod test {
             }
         }
 
+        pub fn new_test_single_replica(config: &ConfigAndUsers) -> Cluster {
+            let mut cluster = Self::new_test_single_shard(config);
+            let identifier = cluster.identifier.clone();
+            cluster.shards[0] = Shard::new(ShardConfig {
+                number: 0,
+                primary: &None,
+                replicas: &[PoolConfig {
+                    address: Address {
+                        configured_role: Role::Replica,
+                        ..Address::new_test()
+                    },
+                    config: Config::default(),
+                }],
+                lb_strategy: LoadBalancingStrategy::default(),
+                rw_split: ReadWriteSplit::default(),
+                identifier,
+                lsn_check_interval: Duration::default(),
+                pub_sub_enabled: false,
+            });
+
+            cluster
+        }
+
         pub(crate) fn set_read_write_strategy(&mut self, rw_strategy: ReadWriteStrategy) {
             self.rw_strategy = rw_strategy;
         }
