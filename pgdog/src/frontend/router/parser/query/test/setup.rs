@@ -1,6 +1,6 @@
 use std::ops::Deref;
 
-use pgdog_config::{ConfigAndUsers, QueryParserLevel, ReadWriteSplit};
+use pgdog_config::{ConfigAndUsers, ReadWriteSplit};
 
 use crate::{
     backend::Cluster,
@@ -114,11 +114,6 @@ impl QueryParserTest {
         updated.config.general.expanded_explain = true;
         config::set(updated).unwrap();
         self.cluster = Cluster::new_test(&config());
-        self
-    }
-
-    pub(crate) fn with_query_parser(mut self, query_parser: QueryParserLevel) -> Self {
-        self.cluster.set_query_parser(query_parser);
         self
     }
 
