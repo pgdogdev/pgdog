@@ -164,7 +164,7 @@ impl<'a> TryFrom<&'a CastNodeList<nodes::String>> for Table<'a> {
     type Error = Error;
 
     fn try_from(value: &'a CastNodeList<nodes::String>) -> Result<Self, Self::Error> {
-        let mut list = value.into_iter();
+        let mut list = value.into_iter().rev();
         let name = list
             .next()
             .and_then(nodes::String::sval)
@@ -190,7 +190,7 @@ impl<'a> TryFrom<&'a NodeList> for Table<'a> {
     type Error = Error;
 
     fn try_from(value: &'a NodeList) -> Result<Self, Self::Error> {
-        let mut list = value.into_iter();
+        let mut list = value.into_iter().rev();
         let name = list
             .next()
             .and_then(Node::as_str)
