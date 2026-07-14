@@ -1,9 +1,11 @@
+use pgdog_config::ReadWriteSplit;
+
 use super::setup::*;
 
 /// With `prefer_primary` enabled, a plain read routes to the primary.
 #[test]
 fn test_prefer_primary_routes_read_to_primary() {
-    let mut test = QueryParserTest::new().with_prefer_primary(true);
+    let mut test = QueryParserTest::new().with_rw_split(ReadWriteSplit::PreferPrimary);
 
     let command = test.execute(vec![Query::new("SELECT * FROM users").into()]);
 
@@ -13,7 +15,7 @@ fn test_prefer_primary_routes_read_to_primary() {
 /// Baseline: without `prefer_primary`, a plain read still routes to a replica.
 #[test]
 fn test_prefer_primary_disabled_routes_read_to_replica() {
-    let mut test = QueryParserTest::new().with_prefer_primary(false);
+    let mut test = QueryParserTest::new().with_rw_split(ReadWriteSplit::default());
 
     let command = test.execute(vec![Query::new("SELECT * FROM users").into()]);
 
@@ -24,7 +26,7 @@ fn test_prefer_primary_disabled_routes_read_to_replica() {
 #[test]
 fn test_prefer_primary_param_replica_overrides() {
     let mut test = QueryParserTest::new()
-        .with_prefer_primary(true)
+        .with_rw_split(ReadWriteSplit::PreferPrimary)
         .with_param("pgdog.role", "replica");
 
     let command = test.execute(vec![Query::new("SELECT * FROM users").into()]);
@@ -35,7 +37,7 @@ fn test_prefer_primary_param_replica_overrides() {
 /// A `/* pgdog_role: replica */` query comment opts a read back onto replicas.
 #[test]
 fn test_prefer_primary_comment_replica_overrides() {
-    let mut test = QueryParserTest::new().with_prefer_primary(true);
+    let mut test = QueryParserTest::new().with_rw_split(ReadWriteSplit::PreferPrimary);
 
     let command = test.execute(vec![
         Query::new("/* pgdog_role: replica */ SELECT * FROM users").into(),
@@ -47,7 +49,7 @@ fn test_prefer_primary_comment_replica_overrides() {
 /// Writes are unaffected: they still route to the primary.
 #[test]
 fn test_prefer_primary_write_routes_to_primary() {
-    let mut test = QueryParserTest::new().with_prefer_primary(true);
+    let mut test = QueryParserTest::new().with_rw_split(ReadWriteSplit::PreferPrimary);
 
     let command = test.execute(vec![Query::new("INSERT INTO users (id) VALUES (1)").into()]);
 

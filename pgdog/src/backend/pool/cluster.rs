@@ -61,7 +61,7 @@ pub struct Cluster {
     replication_sharding: Option<String>,
     multi_tenant: Option<MultiTenant>,
     rw_strategy: ReadWriteStrategy,
-    prefer_primary: bool,
+    rw_split: ReadWriteSplit,
     schema_admin: bool,
     stats: Arc<Mutex<MirrorStats>>,
     cross_shard_disabled: bool,
@@ -317,7 +317,7 @@ impl Cluster {
             replication_sharding,
             multi_tenant: multi_tenant.clone(),
             rw_strategy,
-            prefer_primary: rw_split == ReadWriteSplit::PreferPrimary,
+            rw_split,
             schema_admin,
             stats: Arc::new(Mutex::new(MirrorStats::default())),
             cross_shard_disabled,
@@ -582,9 +582,14 @@ impl Cluster {
         &self.rw_strategy
     }
 
-    /// Route queries to the primary by default unless an explicit role hint opts out.
-    pub fn prefer_primary(&self) -> bool {
-        self.prefer_primary
+    /// Route queries to the primary by default unless an explicit role hint says otherwise.
+    pub(crate) fn prefer_primary(&self) -> bool {
+        self.rw_split == ReadWriteSplit::PreferPrimary
+    }
+
+    /// Route qeuries to the replicas by default unless an explicit role hint says otherwise.
+    pub(crate) fn prefer_replica(&self) -> bool {
+        self.rw_split == ReadWriteSplit::ExcludePrimary
     }
 
     /// Cross-shard queries disabled for this cluster.
@@ -954,12 +959,39 @@ mod test {
             }
         }
 
-        pub fn set_read_write_strategy(&mut self, rw_strategy: ReadWriteStrategy) {
+        pub fn new_test_single_replica(config: &ConfigAndUsers) -> Cluster {
+            let mut cluster = Self::new_test_single_shard(config);
+            let identifier = cluster.identifier.clone();
+            cluster.shards[0] = Shard::new(ShardConfig {
+                number: 0,
+                primary: &None,
+                replicas: &[PoolConfig {
+                    address: Address {
+                        configured_role: Role::Replica,
+                        ..Address::new_test()
+                    },
+                    config: Config::default(),
+                }],
+                lb_strategy: LoadBalancingStrategy::default(),
+                rw_split: ReadWriteSplit::default(),
+                identifier,
+                lsn_check_interval: Duration::default(),
+                pub_sub_enabled: false,
+            });
+
+            cluster
+        }
+
+        pub(crate) fn set_read_write_strategy(&mut self, rw_strategy: ReadWriteStrategy) {
             self.rw_strategy = rw_strategy;
         }
 
-        pub fn set_prefer_primary(&mut self, prefer_primary: bool) {
-            self.prefer_primary = prefer_primary;
+        pub(crate) fn set_rw_split(&mut self, rw_split: ReadWriteSplit) {
+            self.rw_split = rw_split;
+        }
+
+        pub(crate) fn set_query_parser(&mut self, query_parser: QueryParserLevel) {
+            self.query_parser = query_parser;
         }
     }
 

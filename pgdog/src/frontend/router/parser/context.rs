@@ -35,8 +35,10 @@ pub struct QueryParserContext<'a> {
     pub(super) router_context: RouterContext<'a>,
     /// How aggressively we want to send reads to replicas.
     pub(super) rw_strategy: &'a ReadWriteStrategy,
-    /// Route reads to the primary by default unless an explicit role hint opts out.
+    /// Route reads to the primary by default unless an explicit role hint says otherwise.
     pub(super) prefer_primary: bool,
+    /// Route all queries to replicas by default unless an explicit role hint says otherwise.
+    pub(super) prefer_replica: bool,
     /// Do we need the router at all? Shortcut to bypass this for unsharded
     /// clusters with databases that only read or write.
     pub(super) router_needed: bool,
@@ -67,6 +69,7 @@ impl<'a> QueryParserContext<'a> {
             sharding_schema,
             rw_strategy: router_context.cluster.read_write_strategy(),
             prefer_primary: router_context.cluster.prefer_primary(),
+            prefer_replica: router_context.cluster.prefer_replica(),
             router_needed: router_context.cluster.router_needed(),
             multi_tenant: router_context.cluster.multi_tenant(),
             dry_run: router_context.cluster.dry_run(),
