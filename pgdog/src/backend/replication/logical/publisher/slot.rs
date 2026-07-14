@@ -49,6 +49,9 @@ pub struct ReplicationSlot {
     snapshot: Snapshot,
     lsn: Lsn,
     dropped: bool,
+    /// CopyDone sent — our copy-in half is closed, so no further CopyData
+    /// (status updates included) may be written until the stream restarts.
+    stopped: bool,
     server: Option<Server>,
     kind: SlotKind,
     server_meta: Option<Server>,
@@ -73,6 +76,7 @@ impl ReplicationSlot {
             lsn: Lsn::default(),
             publication: publication.to_string(),
             dropped: false,
+            stopped: false,
             server: None,
             kind: SlotKind::Replication,
             server_meta: None,
@@ -91,6 +95,7 @@ impl ReplicationSlot {
             lsn: Lsn::default(),
             publication: publication.to_string(),
             dropped: true, // Temporary.
+            stopped: false,
             server: None,
             kind: SlotKind::DataSync,
             server_meta: None,
@@ -296,6 +301,8 @@ impl ReplicationSlot {
 
     /// Start replication.
     pub async fn start_replication(&mut self) -> Result<(), Error> {
+        // Fresh copy stream (including after a reconnect): re-enable status updates.
+        self.stopped = false;
         let is_binary = config().config.general.resharding_copy_format == CopyFormat::Binary;
         // TODO: This is definitely Postgres version-specific.
         let query = Query::new(format!(
@@ -359,6 +366,14 @@ impl ReplicationSlot {
 
     /// Update origin on last flushed LSN.
     pub async fn status_update(&mut self, status_update: StatusUpdate) -> Result<(), Error> {
+        // Once CopyDone is sent, our copy-in half is closed and any further
+        // CopyData would violate the copy protocol. The origin resends
+        // unconfirmed WAL on reconnect and our applies are idempotent, so
+        // dropping the confirm during teardown is safe.
+        if self.stopped {
+            return Ok(());
+        }
+
         debug!(
             "confirmed {} flushed [{}]",
             status_update.last_flushed,
@@ -391,6 +406,7 @@ impl ReplicationSlot {
     pub async fn stop_replication(&mut self) -> Result<(), Error> {
         self.server()?.send_one(&CopyDone.into()).await?;
         self.server()?.flush().await?;
+        self.stopped = true;
 
         Ok(())
     }

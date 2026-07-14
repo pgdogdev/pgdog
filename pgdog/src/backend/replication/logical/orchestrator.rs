@@ -910,7 +910,7 @@ mod tests {
 
         // 30s margin: keepalive cadence (wal_sender_timeout) is not bounded by
         // the 1s sleep, so give confirmed_flush_lsn room to advance.
-        let result = timeout(Duration::from_secs(30), waiter.wait_for_replication()).await;
+        let result = timeout(Duration::from_secs(20), waiter.wait_for_replication()).await;
         let maintenance_on = maintenance_mode::is_on("");
 
         // Clean up before asserting so a failure can't leak slots or maintenance mode.

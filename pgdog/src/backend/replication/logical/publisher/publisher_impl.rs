@@ -271,18 +271,20 @@ impl Publisher {
                                         if let Some(ReplicationMeta::KeepAlive(ka)) =
                                             data.replication_meta()
                                         {
-                                            // Between transactions, advance the
-                                            // confirmed position to the keepalive's
-                                            // wal_end: the slot has drained and the
-                                            // gap to wal_end is unrelated WAL the
-                                            // publication will never decode. Skipped
-                                            // mid-transaction so a reply can't confirm
-                                            // past an unapplied commit.
-                                            if !stream.in_transaction() {
-                                                stream.set_current_lsn(ka.wal_end);
-                                            }
+                                            // Advance the lsn if we are not in the transaction currently
+                                            // (we don't use transactions actually without streaming on protocol version 4,
+                                            // but let it be as a safeguard).
+                                            // If we got the keep-alive message and not the update message
+                                            // then it's for the unrelated changes that advanced WAL.
+                                            // Since it's unrelated we can advance our progress and
+                                            // consider that lag replication
+                                            let advanced = !stream.in_transaction()
+                                                && stream.set_current_lsn(ka.wal_end);
 
-                                            if ka.reply() {
+                                            // Reply to walsender if it asked for reply or
+                                            // if we advanced due to the WAL progress but
+                                            // the update was not related
+                                            if advanced || ka.reply() {
                                                 slot.status_update(stream.status_update()).await?;
                                             }
                                             debug!(
