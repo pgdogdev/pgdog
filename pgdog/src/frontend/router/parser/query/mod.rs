@@ -214,6 +214,7 @@ impl QueryParser {
     ///
     /// Returns a `Command` if successful, error otherwise.
     ///
+    #[cfg(feature = "new_parser")]
     fn query(&mut self, context: &mut QueryParserContext) -> Result<Command, Error> {
         let parser_enabled = context.router_context.ast.is_some();
 
@@ -242,12 +243,9 @@ impl QueryParser {
             .clone()
             .ok_or(Error::EmptyQuery)?;
 
-        #[cfg(feature = "new_parser")]
         if let Some(stmt) = statement.new_ast.stmts().next() {
             self.ensure_explain_recorder(stmt, context);
         }
-        #[cfg(not(feature = "new_parser"))]
-        self.ensure_explain_recorder(statement.parse_result(), context);
 
         // Parse hardcoded shard from a query comment.
         if context.router_needed || context.dry_run {
@@ -287,13 +285,9 @@ impl QueryParser {
             .run()?;
         }
 
-        #[cfg(feature = "new_parser")]
         let stmts = &statement.new_ast;
-        #[cfg(not(feature = "new_parser"))]
-        let stmts = &statement.parse_result().protobuf.stmts;
 
         // Handle multi-statement SET commands (e.g. "SET x TO 1; SET y TO 2").
-        #[cfg_attr(not(feature = "new_parser"), allow(clippy::explicit_auto_deref))]
         if stmts.len() > 1
             && let Some(command) = self.try_multi_set(&**stmts, context)?
         {
@@ -306,14 +300,9 @@ impl QueryParser {
         // We don't expect clients to send multiple queries. If they do
         // only the first one is used for routing.
         //
-        #[cfg(feature = "new_parser")]
-        let root = statement.parse_result().protobuf.stmts.first();
-        #[cfg(not(feature = "new_parser"))]
         let root = stmts.first();
 
-        let root = if let Some(root) = root {
-            root.stmt.as_ref().ok_or(Error::EmptyQuery)?
-        } else {
+        let Some(root) = root else {
             context
                 .shards_calculator
                 .push(ShardWithPriority::new_rr_empty_query(Shard::Direct(
@@ -324,127 +313,117 @@ impl QueryParser {
                 context.shards_calculator.shard(),
             )));
         };
-        #[cfg(feature = "new_parser")]
-        let new_root = statement.new_ast.stmts().next().unwrap();
 
-        let mut command = match root.node {
-            // SET statements -> return immediately.
-            #[cfg_attr(feature = "new_parser", allow(unused))]
-            Some(NodeEnum::VariableSetStmt(ref stmt)) => {
-                return self.set(
-                    #[cfg(feature = "new_parser")]
-                    match new_root {
-                        Node::VariableSetStmt(stmt) => stmt,
-                        _ => unreachable!(),
-                    },
-                    #[cfg(not(feature = "new_parser"))]
-                    stmt,
-                    context,
-                );
-            }
+        let old_root = &statement
+            .parse_result()
+            .protobuf
+            .stmts
+            .first()
+            .unwrap()
+            .stmt
+            .as_ref()
+            .unwrap()
+            .node;
+        let mut command = match root.stmt() {
+            Node::VariableSetStmt(stmt) => return self.set(stmt, context),
 
-            // SELECT set_config(...) -> treat as SET and return
-            Some(NodeEnum::SelectStmt(ref stmt))
-                if let Some(set_config) = extract_set_config(stmt) =>
+            Node::SelectStmt(stmt)
+                if let Some(set_config) = extract_set_config(match &old_root {
+                    Some(NodeEnum::SelectStmt(stmt)) => stmt,
+                    _ => unreachable!(),
+                }) =>
             {
                 return Ok(self.set_config(set_config, context));
             }
 
-            // SHOW statements -> return immediately.
-            Some(NodeEnum::VariableShowStmt(ref stmt)) => return self.show(stmt, context),
-            // DEALLOCATE statements -> return immediately.
-            Some(NodeEnum::DeallocateStmt(_)) => {
+            Node::VariableShowStmt(stmt) => {
+                return self.show(
+                    match &old_root {
+                        Some(NodeEnum::VariableShowStmt(stmt)) => stmt,
+                        _ => unreachable!(),
+                    },
+                    context,
+                );
+            }
+
+            Node::DeallocateStmt(_) => {
                 return Ok(Command::Deallocate);
             }
-            // SELECT statements.
-            #[cfg_attr(feature = "new_parser", allow(unused))]
-            Some(NodeEnum::SelectStmt(ref stmt)) => self.select(
-                &statement,
-                #[cfg(not(feature = "new_parser"))]
-                stmt,
-                #[cfg(feature = "new_parser")]
-                if let pg_raw_parse::Node::SelectStmt(stmt) = new_root {
-                    stmt
-                } else {
-                    unreachable!()
+
+            Node::SelectStmt(stmt) => self.select(&statement, stmt, context),
+
+            Node::CopyStmt(stmt) => Self::copy(
+                match &old_root {
+                    Some(NodeEnum::CopyStmt(stmt)) => stmt,
+                    _ => unreachable!(),
                 },
                 context,
             ),
-            // COPY statements.
-            Some(NodeEnum::CopyStmt(ref stmt)) => Self::copy(stmt, context),
-            // INSERT statements.
-            #[cfg_attr(feature = "new_parser", allow(unused))]
-            Some(NodeEnum::InsertStmt(ref stmt)) => self.insert(
-                #[cfg(not(feature = "new_parser"))]
-                stmt,
-                #[cfg(feature = "new_parser")]
-                new_root,
-                context,
-            ),
-            // UPDATE statements.
-            #[cfg_attr(feature = "new_parser", allow(unused))]
-            Some(NodeEnum::UpdateStmt(ref stmt)) => self.update(
-                #[cfg(not(feature = "new_parser"))]
-                stmt,
-                #[cfg(feature = "new_parser")]
-                new_root,
-                context,
-            ),
-            // DELETE statements.
-            #[cfg_attr(feature = "new_parser", allow(unused))]
-            Some(NodeEnum::DeleteStmt(ref stmt)) => self.delete(
-                #[cfg(not(feature = "new_parser"))]
-                stmt,
-                #[cfg(feature = "new_parser")]
-                new_root,
-                context,
-            ),
-            // Transaction control statements,
+
+            Node::InsertStmt(stmt) => self.insert(stmt.into(), context),
+            Node::UpdateStmt(stmt) => self.update(stmt.into(), context),
+            Node::DeleteStmt(stmt) => self.delete(stmt.into(), context),
+
             // e.g. BEGIN, COMMIT, etc.
-            Some(NodeEnum::TransactionStmt(ref stmt)) => match self.transaction(stmt, context)? {
+            Node::TransactionStmt(stmt) => match self.transaction(
+                match &old_root {
+                    Some(NodeEnum::TransactionStmt(stmt)) => stmt,
+                    _ => unreachable!(),
+                },
+                context,
+            )? {
                 Command::Query(query) => Ok(Command::Query(query)),
                 command => return Ok(command),
             },
 
-            // LISTEN <channel>;
-            Some(NodeEnum::ListenStmt(ref stmt)) => {
-                let shard = ContextBuilder::from_string(&stmt.conditionname)?
+            Node::ListenStmt(stmt) => {
+                let channel = stmt
+                    .conditionname()
+                    .expect("LISTEN always has name")
+                    .to_owned();
+                let shard = ContextBuilder::from_string(&channel)?
                     .shards(context.shards)
                     .build()?
                     .apply()?;
 
-                return Ok(Command::Listen {
-                    shard,
-                    channel: stmt.conditionname.clone(),
-                });
+                return Ok(Command::Listen { shard, channel });
             }
 
-            Some(NodeEnum::NotifyStmt(ref stmt)) => {
-                let shard = ContextBuilder::from_string(&stmt.conditionname)?
+            Node::NotifyStmt(stmt) => {
+                let channel = stmt
+                    .conditionname()
+                    .expect("NOTIFY always has name")
+                    .to_owned();
+                let shard = ContextBuilder::from_string(&channel)?
                     .shards(context.shards)
                     .build()?
                     .apply()?;
 
                 return Ok(Command::Notify {
                     shard,
-                    channel: stmt.conditionname.clone(),
-                    payload: stmt.payload.clone(),
+                    channel,
+                    // FIXME: NOTIFY without payload is not the same as a
+                    // payload of an empty string
+                    payload: stmt.payload().unwrap_or_default().to_owned(),
                 });
             }
 
-            Some(NodeEnum::UnlistenStmt(ref stmt)) => {
-                return Ok(Command::Unlisten(stmt.conditionname.clone()));
+            Node::UnlistenStmt(stmt) => {
+                // FIXME: UNLISTEN * is sent represented as None
+                return Ok(Command::Unlisten(
+                    stmt.conditionname().unwrap_or_default().to_owned(),
+                ));
             }
 
-            Some(NodeEnum::ExplainStmt(ref stmt)) => self.explain(&statement, stmt, context),
+            Node::ExplainStmt(stmt) => self.explain(&statement, stmt, context),
 
-            Some(NodeEnum::DiscardStmt { .. }) => {
+            Node::DiscardStmt { .. } => {
                 return Ok(Command::Discard {
                     extended: !context.query()?.simple(),
                 });
             }
 
-            _ => self.ddl(&root.node, context),
+            _ => self.ddl(old_root, context),
         }?;
 
         // e.g. Parse, Describe, Flush-style flow.
@@ -562,6 +541,317 @@ impl QueryParser {
         } else {
             Ok(command)
         }
+    }
+
+    cfg_select! {
+        not(feature = "new_parser") => {
+            fn query(&mut self, context: &mut QueryParserContext) -> Result<Command, Error> {
+                let parser_enabled = context.router_context.ast.is_some();
+
+                debug!(
+                    "parser is {}",
+                    if parser_enabled {
+                        "enabled"
+                    } else {
+                        "disabled"
+                    }
+                );
+
+                if !parser_enabled {
+                    // Try to figure out where we can send the query without
+                    // parsing SQL.
+                    if let Some(route) = Self::query_parser_bypass(context) {
+                        return Ok(Command::Query(route));
+                    } else {
+                        return Err(Error::QueryParserRequired);
+                    }
+                }
+
+                let statement = context
+                    .router_context
+                    .ast
+                    .clone()
+                    .ok_or(Error::EmptyQuery)?;
+
+                self.ensure_explain_recorder(statement.parse_result(), context);
+
+                // Parse hardcoded shard from a query comment.
+                if context.router_needed || context.dry_run {
+                    if let Some(comment_shard) = statement.comment_shard.clone() {
+                        context
+                            .shards_calculator
+                            .push(ShardWithPriority::new_comment(comment_shard));
+                    }
+
+                    let role_override = statement.comment_role;
+                    if let Some(role) = role_override {
+                        self.write_override = role == Role::Primary;
+                    }
+
+                    if statement.comment_shard.is_some() || role_override.is_some() {
+                        let shard = context.shards_calculator.shard();
+
+                        if let Some(recorder) = self.recorder_mut() {
+                            recorder.record_comment_override(shard.deref().clone(), role_override);
+                        }
+                    }
+                }
+
+                debug!("{}", context.query()?.query());
+                trace!("{:#?}", statement);
+
+                if let Some(multi_tenant) = context.multi_tenant() {
+                    debug!("running multi-tenant check");
+
+                    MultiTenantCheck::new(
+                        context.router_context.cluster.user(),
+                        multi_tenant,
+                        context.router_context.cluster.schema(),
+                        statement.parse_result(),
+                        context.router_context.parameter_hints.search_path,
+                    )
+                    .run()?;
+                }
+
+                let stmts = &statement.parse_result().protobuf.stmts;
+
+                // Handle multi-statement SET commands (e.g. "SET x TO 1; SET y TO 2").
+                if stmts.len() > 1
+                    && let Some(command) = self.try_multi_set(stmts, context)?
+                {
+                    return Ok(command);
+                }
+
+                //
+                // Get the root AST node.
+                //
+                // We don't expect clients to send multiple queries. If they do
+                // only the first one is used for routing.
+                //
+                let root = stmts.first();
+
+                let root = if let Some(root) = root {
+                    root.stmt.as_ref().ok_or(Error::EmptyQuery)?
+                } else {
+                    context
+                        .shards_calculator
+                        .push(ShardWithPriority::new_rr_empty_query(Shard::Direct(
+                            round_robin::next() % context.shards,
+                        )));
+                    // Send empty query to any shard.
+                    return Ok(Command::Query(Route::read(
+                        context.shards_calculator.shard(),
+                    )));
+                };
+
+                let mut command = match root.node {
+                    // SET statements -> return immediately.
+                    Some(NodeEnum::VariableSetStmt(ref stmt)) => {
+                        return self.set(stmt, context);
+                    }
+
+                    // SELECT set_config(...) -> treat as SET and return
+                    Some(NodeEnum::SelectStmt(ref stmt))
+                        if let Some(set_config) = extract_set_config(stmt) =>
+                    {
+                        return Ok(self.set_config(set_config, context));
+                    }
+
+                    // SHOW statements -> return immediately.
+                    Some(NodeEnum::VariableShowStmt(ref stmt)) => return self.show(stmt, context),
+                    // DEALLOCATE statements -> return immediately.
+                    Some(NodeEnum::DeallocateStmt(_)) => {
+                        return Ok(Command::Deallocate);
+                    }
+                    // SELECT statements.
+                    Some(NodeEnum::SelectStmt(ref stmt)) => self.select(
+                        &statement,
+                        stmt,
+                        context,
+                    ),
+                    // COPY statements.
+                    Some(NodeEnum::CopyStmt(ref stmt)) => Self::copy(stmt, context),
+                    // INSERT statements.
+                    Some(NodeEnum::InsertStmt(ref stmt)) => self.insert(
+                        stmt,
+                        context,
+                    ),
+                    // UPDATE statements.
+                    Some(NodeEnum::UpdateStmt(ref stmt)) => self.update(
+                        stmt,
+                        context,
+                    ),
+                    // DELETE statements.
+                    Some(NodeEnum::DeleteStmt(ref stmt)) => self.delete(
+                        stmt,
+                        context,
+                    ),
+                    // Transaction control statements,
+                    // e.g. BEGIN, COMMIT, etc.
+                    Some(NodeEnum::TransactionStmt(ref stmt)) => match self.transaction(stmt, context)? {
+                        Command::Query(query) => Ok(Command::Query(query)),
+                        command => return Ok(command),
+                    },
+
+                    // LISTEN <channel>;
+                    Some(NodeEnum::ListenStmt(ref stmt)) => {
+                        let shard = ContextBuilder::from_string(&stmt.conditionname)?
+                            .shards(context.shards)
+                            .build()?
+                            .apply()?;
+
+                        return Ok(Command::Listen {
+                            shard,
+                            channel: stmt.conditionname.clone(),
+                        });
+                    }
+
+                    Some(NodeEnum::NotifyStmt(ref stmt)) => {
+                        let shard = ContextBuilder::from_string(&stmt.conditionname)?
+                            .shards(context.shards)
+                            .build()?
+                            .apply()?;
+
+                        return Ok(Command::Notify {
+                            shard,
+                            channel: stmt.conditionname.clone(),
+                            payload: stmt.payload.clone(),
+                        });
+                    }
+
+                    Some(NodeEnum::UnlistenStmt(ref stmt)) => {
+                        return Ok(Command::Unlisten(stmt.conditionname.clone()));
+                    }
+
+                    Some(NodeEnum::ExplainStmt(ref stmt)) => self.explain(&statement, stmt, context),
+
+                    Some(NodeEnum::DiscardStmt { .. }) => {
+                        return Ok(Command::Discard {
+                            extended: !context.query()?.simple(),
+                        });
+                    }
+
+                    _ => self.ddl(&root.node, context),
+                }?;
+
+                // e.g. Parse, Describe, Flush-style flow.
+                if !context.router_context.executable
+                    && let Command::Query(ref query) = command
+                    && query.is_cross_shard()
+                    && statement.rewrite_plan.insert_split.is_empty()
+                {
+                    context
+                        .shards_calculator
+                        .push(ShardWithPriority::new_rr_not_executable(Shard::Direct(
+                            round_robin::next() % context.shards,
+                        )));
+
+                    // Since this query isn't executable and we decided
+                    // to route it to any shard, we can early return here.
+                    return Ok(Command::Query(
+                        query
+                            .clone()
+                            .with_shard(context.shards_calculator.shard().clone()),
+                    ));
+                }
+
+                // Run plugins, if any.
+                self.plugins(
+                    context,
+                    &statement,
+                    match &command {
+                        Command::Query(query) => query.is_read(),
+                        _ => false,
+                    },
+                )?;
+
+                // Set shard on route, if we're ready.
+                if let Command::Query(ref mut route) = command {
+                    let shard = context.shards_calculator.shard();
+                    if shard.is_direct() {
+                        route.set_shard(shard);
+                    }
+                }
+
+                // Set plugin-specified route, if available.
+                // Plugins override what we calculated above.
+                if let Command::Query(ref mut route) = command {
+                    if let Some(read) = self.plugin_output.read {
+                        route.set_read(read);
+                    }
+
+                    if let Some(ref shard) = self.plugin_output.shard {
+                        context
+                            .shards_calculator
+                            .push(ShardWithPriority::new_plugin(shard.clone()));
+                        route.set_shard(context.shards_calculator.shard());
+                    }
+                }
+
+                // If we only have one shard, set it.
+                //
+                // If the query parser couldn't figure it out,
+                // there is no point of doing a multi-shard query with only one shard
+                // in the set.
+                //
+                if context.shards == 1
+                    && !context.dry_run
+                    && let Command::Query(ref mut route) = command
+                {
+                    context
+                        .shards_calculator
+                        .push(ShardWithPriority::new_override_only_one_shard(
+                            Shard::Direct(0),
+                        ));
+                    route.set_shard(context.shards_calculator.shard());
+                }
+
+                if let Command::Query(ref mut route) = command {
+                    // Last ditch attempt to route a query to a specific shard.
+                    //
+                    // Looking through manual queries to see if we have any
+                    // with the fingerprint.
+                    //
+                    if route.shard().is_all() {
+                        let databases = databases();
+                        // Only fingerprint the query if some manual queries are configured.
+                        // Otherwise, we're wasting time parsing SQL.
+                        if !databases.manual_queries().is_empty() {
+                            let fingerprint = statement.fingerprint()?;
+                            let fingerprint = &fingerprint.hex;
+                            debug!("fingerprint: {}", fingerprint);
+                            let manual_route = databases.manual_query(fingerprint).cloned();
+
+                            // TODO: check routing logic required by config.
+                            if manual_route.is_some() {
+                                context.shards_calculator.push(ShardWithPriority::new_table(
+                                    Shard::Direct(round_robin::next() % context.shards),
+                                ));
+                                route.set_shard(context.shards_calculator.shard().clone());
+                            }
+                        }
+                    }
+                }
+
+                statement.update_stats(command.route());
+
+                if context.dry_run {
+                    // Record statement in cache with normalized parameters.
+                    if !statement.cached {
+                        let query = context.query()?.query();
+                        Cache::get().record_normalized(
+                            query,
+                            command.route(),
+                            context.sharding_schema.query_parser_engine,
+                        )?;
+                    }
+                    Ok(command.dry_run())
+                } else {
+                    Ok(command)
+                }
+            }
+        }
+        _ => {}
     }
 
     /// Handle COPY command.
