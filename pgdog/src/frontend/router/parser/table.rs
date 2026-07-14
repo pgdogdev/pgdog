@@ -1,9 +1,14 @@
 use std::fmt::Display;
 
+use pg_query::Node as PgNode;
 use pg_query::{
-    Node, NodeEnum,
+    NodeEnum,
     protobuf::{List, RangeVar},
 };
+#[cfg(feature = "new_parser")]
+use pg_raw_parse::list::{CastNodeList, NodeList};
+#[cfg(feature = "new_parser")]
+use pg_raw_parse::{Node, nodes};
 
 use super::{Error, Schema};
 use crate::util::escape_identifier;
@@ -56,10 +61,10 @@ impl<'a> TryFrom<pg_raw_parse::Node<'a>> for Table<'a> {
     }
 }
 
-impl<'a> TryFrom<&'a Node> for Table<'a> {
+impl<'a> TryFrom<&'a PgNode> for Table<'a> {
     type Error = ();
 
-    fn try_from(value: &'a Node) -> Result<Self, Self::Error> {
+    fn try_from(value: &'a PgNode) -> Result<Self, Self::Error> {
         if let Some(NodeEnum::RangeVar(range_var)) = &value.node {
             return Ok(range_var.into());
         }
@@ -68,10 +73,10 @@ impl<'a> TryFrom<&'a Node> for Table<'a> {
     }
 }
 
-impl<'a> TryFrom<&'a Vec<Node>> for Table<'a> {
+impl<'a> TryFrom<&'a Vec<PgNode>> for Table<'a> {
     type Error = Error;
 
-    fn try_from(value: &'a Vec<Node>) -> Result<Self, Self::Error> {
+    fn try_from(value: &'a Vec<PgNode>) -> Result<Self, Self::Error> {
         match value.len() {
             1 => {
                 let table = value
@@ -151,6 +156,57 @@ impl<'a> From<&'a RangeVar> for Table<'a> {
                 None
             },
             alias,
+        }
+    }
+}
+#[cfg(feature = "new_parser")]
+impl<'a> TryFrom<&'a CastNodeList<nodes::String>> for Table<'a> {
+    type Error = Error;
+
+    fn try_from(value: &'a CastNodeList<nodes::String>) -> Result<Self, Self::Error> {
+        let mut list = value.into_iter();
+        let name = list
+            .next()
+            .and_then(nodes::String::sval)
+            .ok_or(Error::TableDecode)?;
+        match (list.next(), list.next()) {
+            (schema, None) => {
+                let schema = schema
+                    .map(|s| s.sval().ok_or(Error::TableDecode))
+                    .transpose()?;
+                Ok(Self {
+                    schema,
+                    name,
+                    alias: None,
+                })
+            }
+            (_, Some(_)) => Err(Error::TableDecode),
+        }
+    }
+}
+
+#[cfg(feature = "new_parser")]
+impl<'a> TryFrom<&'a NodeList> for Table<'a> {
+    type Error = Error;
+
+    fn try_from(value: &'a NodeList) -> Result<Self, Self::Error> {
+        let mut list = value.into_iter();
+        let name = list
+            .next()
+            .and_then(Node::as_str)
+            .ok_or(Error::TableDecode)?;
+        match (list.next(), list.next()) {
+            (schema, None) => {
+                let schema = schema
+                    .map(|s| s.as_str().ok_or(Error::TableDecode))
+                    .transpose()?;
+                Ok(Self {
+                    schema,
+                    name,
+                    alias: None,
+                })
+            }
+            (_, Some(_)) => Err(Error::TableDecode),
         }
     }
 }

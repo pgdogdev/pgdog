@@ -59,6 +59,8 @@ impl QueryParser {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "new_parser")]
+    use pg_query::NodeEnum;
 
     #[test]
     fn update_preserves_decimal_values() {
