@@ -38,12 +38,13 @@ mod update;
 #[cfg(feature = "new_parser")]
 use itertools::*;
 use multi_tenant::MultiTenantCheck;
-use pg_query::NodeEnum;
-use pg_query::protobuf::Node as PgNode;
 #[cfg(feature = "new_parser")]
 use pg_raw_parse::{Node, nodes};
 #[cfg(not(feature = "new_parser"))]
-use pgdog_plugin::pg_query::protobuf::{a_const::Val, *};
+use pgdog_plugin::pg_query::{
+    Node as PgNode, NodeEnum,
+    protobuf::{a_const::Val, *},
+};
 use plugins::PluginOutput;
 
 use tracing::{debug, trace};
@@ -314,16 +315,6 @@ impl QueryParser {
             )));
         };
 
-        let old_root = &statement
-            .parse_result()
-            .protobuf
-            .stmts
-            .first()
-            .unwrap()
-            .stmt
-            .as_ref()
-            .unwrap()
-            .node;
         let mut command = match root.stmt() {
             Node::VariableSetStmt(stmt) => return self.set(stmt, context),
 
@@ -397,7 +388,7 @@ impl QueryParser {
                 });
             }
 
-            _ => self.ddl(old_root, context),
+            node => self.ddl(node, context),
         }?;
 
         // e.g. Parse, Describe, Flush-style flow.
