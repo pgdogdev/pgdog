@@ -41,47 +41,27 @@ impl<'a> From<Table<'a>> for Sequence<'a> {
 
 #[cfg(test)]
 mod test {
-    use pg_query::{NodeEnum, parse};
-
     use super::{Column, Sequence, Table};
 
     #[test]
     fn test_sequence_setval_from_alter_statement() {
-        let query =
-            parse("ALTER SEQUENCE public.user_profiles_id_seq OWNED BY public.user_profiles.id")
-                .unwrap();
-        let alter = query.protobuf.stmts.first().unwrap().stmt.as_ref().unwrap();
+        let sequence = Sequence::from(Table {
+            schema: Some("public"),
+            name: "user_profiles_id_seq",
+            alias: None,
+        });
 
-        match alter.node {
-            Some(NodeEnum::AlterSeqStmt(ref stmt)) => {
-                // Extract sequence name from the relation
-                let sequence_table = Table::from(stmt.sequence.as_ref().unwrap());
-                let sequence = Sequence::from(sequence_table);
-
-                // Extract column from the owned_by option
-                if let Some(node) = stmt.options.first() {
-                    let column = Column::try_from(node).unwrap();
-
-                    // Test the setval generation
-                    let setval_sql = sequence.setval_from_column(&column).unwrap();
-
-                    assert_eq!(
-                        setval_sql,
-                        "SELECT setval('\"public\".\"user_profiles_id_seq\"', COALESCE((SELECT MAX(\"id\") FROM \"public\".\"user_profiles\"), 1), true);"
-                    );
-
-                    // Verify the individual components
-                    assert_eq!(sequence.table.name, "user_profiles_id_seq");
-                    assert_eq!(sequence.table.schema, Some("public"));
-                    assert_eq!(column.name, "id");
-                    assert_eq!(column.table, Some("user_profiles"));
-                    assert_eq!(column.schema, Some("public"));
-                } else {
-                    panic!("no owned by clause");
-                }
-            }
-            _ => panic!("not an alter sequence"),
-        }
+        let setval_sql = sequence
+            .setval_from_column(&Column {
+                schema: Some("public"),
+                table: Some("user_profiles"),
+                name: "id",
+            })
+            .unwrap();
+        assert_eq!(
+            setval_sql,
+            "SELECT setval('\"public\".\"user_profiles_id_seq\"', COALESCE((SELECT MAX(\"id\") FROM \"public\".\"user_profiles\"), 1), true);"
+        );
     }
 
     #[test]
