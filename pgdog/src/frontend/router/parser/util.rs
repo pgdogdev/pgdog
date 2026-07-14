@@ -1,13 +1,12 @@
+#![cfg(not(feature = "new_parser"))]
 use pg_query::NodeEnum;
 use pg_query::protobuf::{Node, String as PgString};
 use std::cmp::PartialEq;
 
-#[cfg(not(feature = "new_parser"))]
 pub(crate) fn pg_string(s: impl Into<String>) -> Node {
     node(NodeEnum::String(PgString { sval: s.into() }))
 }
 
-#[cfg(not(feature = "new_parser"))]
 pub(crate) fn node(n: NodeEnum) -> Node {
     Node { node: Some(n) }
 }

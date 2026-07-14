@@ -1,4 +1,6 @@
 use crate::frontend::client::TransactionType;
+#[cfg(feature = "new_parser")]
+use pg_query::protobuf::{TransactionStmt, TransactionStmtKind, a_const};
 
 use super::*;
 
