@@ -149,6 +149,7 @@ impl LoadBalancer {
     /// return new primary (if any), and replicas.
     pub fn redetect_roles(&self) -> bool {
         let mut promoted = false;
+        let roles_detected_before = self.roles_detected();
 
         let mut targets = self
             .targets
@@ -186,14 +187,14 @@ impl LoadBalancer {
                 .for_each(|(_, target)| {
                     target.1.set_role(Role::Replica);
                 });
-        } else {
+        } else if targets.iter().all(|target| target.0.valid()) {
             // All targets are replicas until we get a primary.
             targets.iter().for_each(|target| {
                 target.1.set_role(Role::Replica);
             });
         }
 
-        if promoted {
+        if promoted || (!roles_detected_before && self.roles_detected()) {
             self.role_detection.notify_one();
         }
 
