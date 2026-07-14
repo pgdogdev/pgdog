@@ -1,6 +1,6 @@
 use std::ops::Deref;
 
-use pgdog_config::{ConfigAndUsers, QueryParserLevel, ReadWriteSplit};
+use pgdog_config::{ConfigAndUsers, ReadWriteSplit};
 
 use crate::{
     backend::Cluster,
@@ -117,11 +117,6 @@ impl QueryParserTest {
         self
     }
 
-    pub(crate) fn with_query_parser(mut self, query_parser: QueryParserLevel) -> Self {
-        self.cluster.set_query_parser(query_parser);
-        self
-    }
-
     /// Enable dry run mode for this test.
     pub(crate) fn with_dry_run(mut self) -> Self {
         let mut updated = config().deref().clone();
@@ -172,13 +167,17 @@ impl QueryParserTest {
             }
         }
 
-        // Some requests (like Close) don't have a query
-        if let Ok(Some(buffered_query)) = request.query() {
-            let ctx = AstContext::from_cluster(&self.cluster, &self.params);
-            let ast = Cache::get()
-                .query(&buffered_query, &ctx, &mut self.prepared)
-                .unwrap();
-            request.ast = Some(ast);
+        let use_parser = self.cluster.use_query_parser(&request);
+
+        if use_parser {
+            // Some requests (like Close) don't have a query
+            if let Ok(Some(buffered_query)) = request.query() {
+                let ctx = AstContext::from_cluster(&self.cluster, &self.params);
+                let ast = Cache::get()
+                    .query(&buffered_query, &ctx, &mut self.prepared)
+                    .unwrap();
+                request.ast = Some(ast);
+            }
         }
 
         let router_ctx = RouterContext::new(

@@ -215,14 +215,18 @@ impl QueryParser {
     /// Returns a `Command` if successful, error otherwise.
     ///
     fn query(&mut self, context: &mut QueryParserContext) -> Result<Command, Error> {
-        let use_parser = context.use_parser();
+        let parser_enabled = context.router_context.ast.is_some();
 
         debug!(
             "parser is {}",
-            if use_parser { "enabled" } else { "disabled" }
+            if parser_enabled {
+                "enabled"
+            } else {
+                "disabled"
+            }
         );
 
-        if !use_parser {
+        if !parser_enabled {
             // Try to figure out where we can send the query without
             // parsing SQL.
             if let Some(route) = Self::query_parser_bypass(context) {

@@ -989,10 +989,6 @@ mod test {
         pub(crate) fn set_rw_split(&mut self, rw_split: ReadWriteSplit) {
             self.rw_split = rw_split;
         }
-
-        pub(crate) fn set_query_parser(&mut self, query_parser: QueryParserLevel) {
-            self.query_parser = query_parser;
-        }
     }
 
     #[test]

@@ -97,15 +97,6 @@ impl<'a> QueryParserContext<'a> {
         self.rw_strategy == &ReadWriteStrategy::Conservative
     }
 
-    /// We need to parse queries using pg_query.
-    ///
-    /// Shortcut to avoid the overhead if we can.
-    pub(super) fn use_parser(&self) -> bool {
-        self.router_context
-            .cluster
-            .use_query_parser(self.router_context.client_request)
-    }
-
     /// Get the query we're parsing, if any.
     pub(super) fn query(&self) -> Result<&BufferedQuery, Error> {
         self.router_context.query.as_ref().ok_or(Error::EmptyQuery)
