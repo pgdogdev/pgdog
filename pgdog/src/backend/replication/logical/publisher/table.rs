@@ -457,7 +457,12 @@ impl Table {
 
         // Create new standalone connection for the copy.
         // let mut server = Server::connect(source, ServerOptions::new_replication()).await?;
-        let mut copy_sub = CopySubscriber::new(copy.statement(), dest, self.query_parser_engine)?;
+        let mut copy_sub = CopySubscriber::new(
+            copy.statement(),
+            dest,
+            #[cfg(not(feature = "new_parser"))]
+            self.query_parser_engine,
+        )?;
         copy_sub.connect().await?;
 
         // Create sync slot.

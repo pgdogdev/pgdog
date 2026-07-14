@@ -38,16 +38,12 @@ mod update;
 #[cfg(feature = "new_parser")]
 use itertools::*;
 use multi_tenant::MultiTenantCheck;
+use pg_query::NodeEnum;
 use pg_query::protobuf::Node as PgNode;
-#[cfg(feature = "new_parser")]
-use pg_query::{NodeEnum, protobuf::CopyStmt};
 #[cfg(feature = "new_parser")]
 use pg_raw_parse::{Node, nodes};
 #[cfg(not(feature = "new_parser"))]
-use pgdog_plugin::pg_query::{
-    NodeEnum,
-    protobuf::{a_const::Val, *},
-};
+use pgdog_plugin::pg_query::protobuf::{a_const::Val, *};
 use plugins::PluginOutput;
 
 use tracing::{debug, trace};
@@ -351,13 +347,7 @@ impl QueryParser {
 
             Node::SelectStmt(stmt) => self.select(&statement, stmt, context),
 
-            Node::CopyStmt(stmt) => Self::copy(
-                match &old_root {
-                    Some(NodeEnum::CopyStmt(stmt)) => stmt,
-                    _ => unreachable!(),
-                },
-                context,
-            ),
+            Node::CopyStmt(stmt) => Self::copy(stmt, context),
 
             Node::InsertStmt(stmt) => self.insert(stmt.into(), context),
             Node::UpdateStmt(stmt) => self.update(stmt.into(), context),
@@ -854,7 +844,8 @@ impl QueryParser {
     }
 
     /// Handle COPY command.
-    fn copy(stmt: &CopyStmt, context: &mut QueryParserContext) -> Result<Command, Error> {
+    #[cfg(feature = "new_parser")]
+    fn copy(stmt: &nodes::CopyStmt, context: &mut QueryParserContext) -> Result<Command, Error> {
         // Schema-based routing.
         //
         // We do this here as well because COPY <table> TO STDOUT
@@ -865,7 +856,7 @@ impl QueryParser {
         // but that's only used for logical replication during the first
         // phase of data-sync.
         //
-        let table = stmt.relation.as_ref().map(Table::from);
+        let table = stmt.relation().map(Table::from);
         if let Some(table) = table
             && let Some(schema) = context.sharding_schema.schemas.get(table.schema())
         {
@@ -895,6 +886,54 @@ impl QueryParser {
         } else {
             Ok(Command::Copy(Box::new(parser)))
         }
+    }
+
+    cfg_select! {
+        not(feature = "new_parser") => {
+            fn copy(stmt: &CopyStmt, context: &mut QueryParserContext) -> Result<Command, Error> {
+                // Schema-based routing.
+                //
+                // We do this here as well because COPY <table> TO STDOUT
+                // doesn't use the CopyParser (doesn't need to, normally),
+                // so we need to handle this case here.
+                //
+                // The CopyParser itself has handling for schema-based sharding,
+                // but that's only used for logical replication during the first
+                // phase of data-sync.
+                //
+                let table = stmt.relation.as_ref().map(Table::from);
+                if let Some(table) = table
+                    && let Some(schema) = context.sharding_schema.schemas.get(table.schema())
+                {
+                    let shard: Shard = schema.shard().into();
+                    context
+                        .shards_calculator
+                        .push(ShardWithPriority::new_table(shard));
+                    if !stmt.is_from {
+                        return Ok(Command::Query(Route::read(
+                            context.shards_calculator.shard(),
+                        )));
+                    } else {
+                        return Ok(Command::Query(Route::write(
+                            context.shards_calculator.shard(),
+                        )));
+                    }
+                }
+
+                let parser = CopyParser::new(stmt, context.router_context.cluster)?;
+                if !stmt.is_from {
+                    context
+                        .shards_calculator
+                        .push(ShardWithPriority::new_table(Shard::All));
+                    Ok(Command::Query(Route::read(
+                        context.shards_calculator.shard(),
+                    )))
+                } else {
+                    Ok(Command::Copy(Box::new(parser)))
+                }
+            }
+        }
+        _ => {}
     }
 
     /// Handle INSERT statement.
