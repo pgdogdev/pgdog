@@ -172,13 +172,17 @@ impl QueryParserTest {
             }
         }
 
-        // Some requests (like Close) don't have a query
-        if let Ok(Some(buffered_query)) = request.query() {
-            let ctx = AstContext::from_cluster(&self.cluster, &self.params);
-            let ast = Cache::get()
-                .query(&buffered_query, &ctx, &mut self.prepared)
-                .unwrap();
-            request.ast = Some(ast);
+        let use_parser = self.cluster.use_query_parser(&request);
+
+        if use_parser {
+            // Some requests (like Close) don't have a query
+            if let Ok(Some(buffered_query)) = request.query() {
+                let ctx = AstContext::from_cluster(&self.cluster, &self.params);
+                let ast = Cache::get()
+                    .query(&buffered_query, &ctx, &mut self.prepared)
+                    .unwrap();
+                request.ast = Some(ast);
+            }
         }
 
         let router_ctx = RouterContext::new(
