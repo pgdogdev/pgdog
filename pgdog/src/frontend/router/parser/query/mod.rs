@@ -336,13 +336,7 @@ impl QueryParser {
             }
 
             Node::VariableShowStmt(stmt) => {
-                return self.show(
-                    match &old_root {
-                        Some(NodeEnum::VariableShowStmt(stmt)) => stmt,
-                        _ => unreachable!(),
-                    },
-                    context,
-                );
+                return self.show(stmt, context);
             }
 
             Node::DeallocateStmt(_) => {
