@@ -6,14 +6,18 @@ use super::setup::QueryParserTest;
 
 const QUERY: &str = "SELECT 1";
 
-fn parser_disabled_config() -> pgdog_config::ConfigAndUsers {
-    let mut config = (*config()).clone();
-    config.config.general.query_parser = QueryParserLevel::SessionControl;
-    config
+fn single_shard() -> QueryParserTest {
+    QueryParserTest::new_single_shard(&config()).with_query_parser(QueryParserLevel::SessionControl)
 }
 
-fn single_shard() -> QueryParserTest {
-    QueryParserTest::new_single_shard(&parser_disabled_config())
+fn single_replica() -> QueryParserTest {
+    QueryParserTest::new_single_replica(&config())
+        .with_query_parser(QueryParserLevel::SessionControl)
+}
+
+fn single_primary() -> QueryParserTest {
+    QueryParserTest::new_single_primary(&config())
+        .with_query_parser(QueryParserLevel::SessionControl)
 }
 
 fn assert_read(mut test: QueryParserTest) {
@@ -33,7 +37,7 @@ fn assert_write(mut test: QueryParserTest) {
 #[test]
 fn read_only_cluster_routes_to_replica() {
     assert_read(
-        QueryParserTest::new_single_replica(&parser_disabled_config())
+        single_replica()
             .with_param("pgdog.role", "primary")
             .with_rw_split(ReadWriteSplit::PreferPrimary),
     );
@@ -42,7 +46,7 @@ fn read_only_cluster_routes_to_replica() {
 #[test]
 fn write_only_cluster_routes_to_primary() {
     assert_write(
-        QueryParserTest::new_single_primary(&parser_disabled_config())
+        single_primary()
             .with_param("pgdog.role", "replica")
             .with_rw_split(ReadWriteSplit::ExcludePrimary),
     );
