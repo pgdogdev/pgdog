@@ -42,7 +42,7 @@ impl Deref for PdStr<'_> {
         // The only way to construct this is from a valid string
         unsafe {
             str::from_utf8_unchecked(slice::from_raw_parts(
-                self.data.map(ptr::from_ref).unwrap_or_default(),
+                self.data.map(ptr::from_ref).unwrap_or(ptr::dangling()),
                 self.len,
             ))
         }

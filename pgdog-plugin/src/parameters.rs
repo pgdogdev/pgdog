@@ -96,7 +96,10 @@ impl<'a> Parameter<'a> {
             // which guarantees that this is safe. Neither `data` nor `len` are
             // public
             Some(unsafe {
-                slice::from_raw_parts(self.data.map(ptr::from_ref).unwrap_or_default(), self.len)
+                slice::from_raw_parts(
+                    self.data.map(ptr::from_ref).unwrap_or(ptr::dangling()),
+                    self.len,
+                )
             })
         }
     }
@@ -169,14 +172,18 @@ impl<'a> Parameters<'a> {
         // SAFETY: into_raw always returns a valid pointer/len combo
         let parameters = unsafe {
             slice::from_raw_parts(
-                raw.parameters_data.map(ptr::from_ref).unwrap_or_default(),
+                raw.parameters_data
+                    .map(ptr::from_ref)
+                    .unwrap_or(ptr::dangling()),
                 raw.parameters_len,
             )
         };
         // SAFETY: into_raw always returns a valid pointer/len combo
         let format_codes = unsafe {
             slice::from_raw_parts(
-                raw.format_codes_data.map(ptr::from_ref).unwrap_or_default(),
+                raw.format_codes_data
+                    .map(ptr::from_ref)
+                    .unwrap_or(ptr::dangling()),
                 raw.format_codes_len,
             )
         };
