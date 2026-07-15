@@ -1,14 +1,9 @@
 //! Shortcut the parser given the cluster config.
 
-use std::os::raw::c_void;
-
 use pgdog_config::Role;
-use pgdog_plugin::pg_query::protobuf::ParseResult;
-use pgdog_plugin::{PdParameters, PdRouterContext, PdStatement};
 
 use crate::frontend::client::TransactionType;
 use crate::frontend::router::parser::ShardsWithPriority;
-use crate::net::Bind;
 use crate::{
     backend::ShardingSchema,
     config::{MultiTenant, ReadWriteStrategy},
@@ -105,39 +100,6 @@ impl<'a> QueryParserContext<'a> {
     /// Multi-tenant checks.
     pub(super) fn multi_tenant(&self) -> &Option<MultiTenant> {
         self.multi_tenant
-    }
-
-    /// Create plugin context.
-    pub(super) fn plugin_context(
-        &self,
-        ast: &ParseResult,
-        bind: &Option<&Bind>,
-    ) -> PdRouterContext {
-        let params = if let Some(bind) = bind {
-            PdParameters {
-                params: bind.params_raw().as_ptr() as *mut c_void,
-                num_params: bind.params_raw().len() as u64,
-                format_codes: bind.format_codes_raw().as_ptr() as *mut c_void,
-                num_format_codes: bind.format_codes_raw().len() as u64,
-            }
-        } else {
-            PdParameters::default()
-        };
-        PdRouterContext {
-            shards: self.shards as u64,
-            has_replicas: if self.read_only { 0 } else { 1 },
-            has_primary: if self.write_only { 0 } else { 1 },
-            in_transaction: if self.router_context.in_transaction() {
-                1
-            } else {
-                0
-            },
-            // SAFETY: ParseResult lives for the entire time the plugin is executed.
-            // We could use lifetimes to guarantee this, but bindgen doesn't generate them.
-            query: unsafe { PdStatement::from_proto(ast) },
-            write_override: 0, // This is set inside `QueryParser::plugins`.
-            params,
-        }
     }
 
     pub(super) fn expanded_explain(&self) -> bool {

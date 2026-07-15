@@ -6,9 +6,11 @@
 
 use std::path::Path;
 
+use crate::{
+    Config, Context, PdStr, Route,
+    parameters::{Parameters, RawParameters},
+};
 use libloading::{Library, Symbol, library_filename};
-
-use crate::{PdConfig, PdRoute, PdRouterContext, PdStr};
 
 /// Plugin interface.
 ///
@@ -19,28 +21,114 @@ use crate::{PdConfig, PdRoute, PdRouterContext, PdStr};
 /// Using this interface is reasonably safe.
 ///
 #[derive(Debug)]
-pub struct Plugin<'a> {
-    /// Plugin name.
-    name: String,
+pub struct PluginVtable {
     /// Initialization routine.
-    init: Option<Symbol<'a, unsafe extern "C" fn()>>,
+    init: extern "C-unwind" fn(),
     /// Shutdown routine.
-    fini: Option<Symbol<'a, unsafe extern "C" fn()>>,
+    fini: extern "C-unwind" fn(),
     /// Configure plugin.
-    config: Option<Symbol<'a, unsafe extern "C" fn(PdConfig, *mut u8)>>,
+    config: extern "C-unwind" fn(Config<'_>) -> bool,
     /// Route query.
-    route: Option<Symbol<'a, unsafe extern "C" fn(PdRouterContext, *mut PdRoute)>>,
+    route: extern "C-unwind" fn(
+        u64,
+        bool,
+        bool,
+        bool,
+        bool,
+        &pg_query::protobuf::ParseResult,
+        RawParameters<'_>,
+    ) -> Route,
     /// Compiler version.
-    rustc_version: Option<Symbol<'a, unsafe extern "C" fn(*mut PdStr)>>,
+    rustc_version: extern "C-unwind" fn() -> PdStr<'static>,
+    /// Plugin version
+    plugin_version: extern "C-unwind" fn() -> PdStr<'static>,
     /// Plugin API version.
-    pgdog_plugin_api_version: Option<Symbol<'a, unsafe extern "C" fn(*mut PdStr)>>,
-    /// Plugin version.
-    plugin_version: Option<Symbol<'a, unsafe extern "C" fn(*mut PdStr)>>,
+    pgdog_plugin_api_version: extern "C-unwind" fn() -> PdStr<'static>,
     /// Logging initialization.
-    logging_init: Option<Symbol<'a, extern "C" fn(PdConfig)>>,
+    logging_init: extern "C-unwind" fn(Config<'_>),
 }
 
-impl<'a> Plugin<'a> {
+pub trait Plugin {
+    /// The version of your plugin. You can simply return
+    /// `env!("CARGO_PKG_VERSION").into()`
+    extern "C-unwind" fn version() -> PdStr<'static>;
+
+    /// Execute plugin's initialization routine.
+    /// Returns true if the route exists and was executed, false otherwise.
+    extern "C-unwind" fn init() {}
+    /// Execute plugin's shutdown routine.
+    extern "C-unwind" fn fini() {}
+    /// Pass configuration to the plugin.
+    extern "C-unwind" fn config(_config: Config<'_>) -> bool {
+        false
+    }
+    /// Execute plugin's route routine. Determines where a statement should be sent.
+    /// Returns a route if the routine is defined, or `None` if not.
+    ///
+    /// ### Arguments
+    ///
+    /// * `context`: Statement context created by PgDog's query router.
+    fn route(_context: Context<'_>) -> Route {
+        Route::unknown()
+    }
+
+    #[doc(hidden)]
+    extern "C-unwind" fn route_raw(
+        shards: u64,
+        has_replicas: bool,
+        has_primary: bool,
+        in_transaction: bool,
+        write_override: bool,
+        query: &pg_query::protobuf::ParseResult,
+        params: RawParameters<'_>,
+    ) -> Route {
+        let context = Context {
+            shards,
+            has_replicas,
+            has_primary,
+            in_transaction,
+            write_override,
+            query,
+            params: Parameters::from_raw(params),
+        };
+        Self::route(context)
+    }
+
+    /// Returns the Rust compiler version used to build the plugin.
+    /// This version must match the compiler version used to build
+    /// PgDog, or the plugin won't be loaded.
+    extern "C-unwind" fn rustc_version() -> PdStr<'static> {
+        crate::RUSTC_VERSION.into()
+    }
+
+    /// Get plugin API version based on `pgdog-plugin` crate version.
+    /// This version must match the version used when building pgdog main executable,
+    /// otherwise the plugin won't be loaded.
+    extern "C-unwind" fn plugin_api_version() -> PdStr<'static> {
+        crate::VERSION.into()
+    }
+
+    /// Initialize plugin logging with PgDog's log configuration.
+    extern "C-unwind" fn logging_init(config: Config<'_>) {
+        crate::logging::init(config)
+    }
+}
+
+impl PluginVtable {
+    #[doc(hidden)]
+    pub const fn from_plugin<T: Plugin>() -> Self {
+        Self {
+            init: T::init,
+            fini: T::fini,
+            config: T::config,
+            route: T::route_raw,
+            rustc_version: T::rustc_version,
+            plugin_version: T::version,
+            pgdog_plugin_api_version: T::plugin_api_version,
+            logging_init: T::logging_init,
+        }
+    }
+
     /// Load plugin's shared library using a cross-platform naming convention.
     ///
     /// Plugin has to be in `LD_LIBRARY_PATH`, in a standard location
@@ -67,129 +155,52 @@ impl<'a> Plugin<'a> {
     }
 
     /// Load standard plugin methods from the plugin library.
-    ///
-    /// ### Arguments
-    ///
-    /// * `name`: Plugin name. Can be any name you want, it's only used for logging.
-    /// * `library`: `libloading::Library` reference. Must have the same, ideally static, lifetime as the plugin.
-    ///
-    pub fn load(name: &str, library: &'a Library) -> Self {
-        let init = unsafe { library.get(b"pgdog_init\0") }.ok();
-        let fini = unsafe { library.get(b"pgdog_fini\0") }.ok();
-        let route = unsafe { library.get(b"pgdog_route\0") }.ok();
-        let rustc_version = unsafe { library.get(b"pgdog_rustc_version\0") }.ok();
-        let pgdog_plugin_api_version = unsafe { library.get(b"pgdog_plugin_api_version\0") }.ok();
-        let plugin_version = unsafe { library.get(b"pgdog_plugin_version\0") }.ok();
-        let config = unsafe { library.get(b"pgdog_config\0") }.ok();
-        let logging_init = unsafe { library.get(b"pgdog_logging_init\0") }.ok();
-
-        Self {
-            name: name.to_owned(),
-            init,
-            fini,
-            route,
-            rustc_version,
-            pgdog_plugin_api_version,
-            plugin_version,
-            config,
-            logging_init,
+    pub fn load<'a>(library: &'a Library) -> &'a Self {
+        // SAFETY: This symbol should have been generated by our macro, meaning
+        // it is never visible to outside code
+        unsafe {
+            let symbol: Symbol<'a, *const Self> = library.get(b"PGDOG_PLUGIN_VTABLE\0").unwrap();
+            &**symbol
         }
     }
 
-    /// Initialize plugin logging with PgDog's log configuration.
-    pub fn logging_init(&self, config: PdConfig) {
-        if let Some(ref logging_init) = self.logging_init {
-            logging_init(config);
-        }
+    pub fn init(&self) {
+        (self.init)()
     }
 
-    /// Execute plugin's initialization routine.
-    /// Returns true if the route exists and was executed, false otherwise.
-    pub fn init(&self) -> bool {
-        if let Some(init) = &self.init {
-            unsafe {
-                init();
-            }
-            true
-        } else {
-            false
-        }
-    }
-
-    /// Execute plugin's shutdown routine.
     pub fn fini(&self) {
-        if let Some(fini) = &self.fini {
-            unsafe { fini() }
-        }
+        (self.fini)()
     }
 
-    /// Pass configuration to the plugin.
-    pub fn config(&self, config: PdConfig) -> bool {
-        if let Some(ref config_fn) = self.config {
-            let mut code = 1;
-            unsafe {
-                config_fn(config, &mut code);
-            }
-            code == 0
-        } else {
-            true
-        }
+    pub fn config(&self, config: Config<'_>) -> bool {
+        (self.config)(config)
     }
 
-    /// Execute plugin's route routine. Determines where a statement should be sent.
-    /// Returns a route if the routine is defined, or `None` if not.
-    ///
-    /// ### Arguments
-    ///
-    /// * `context`: Statement context created by PgDog's query router.
-    ///
-    pub fn route(&self, context: PdRouterContext) -> Option<PdRoute> {
-        if let Some(route) = &self.route {
-            let mut output = PdRoute::default();
-            unsafe {
-                route(context, &mut output as *mut PdRoute);
-            }
-            Some(output)
-        } else {
-            None
-        }
+    pub fn route(&self, context: Context<'_>) -> Route {
+        (self.route)(
+            context.shards,
+            context.has_replicas,
+            context.has_primary,
+            context.in_transaction,
+            context.write_override,
+            context.query,
+            context.params.as_raw(),
+        )
     }
 
-    /// Returns plugin's name. This  is the same name as what
-    /// is passed to [`Plugin::load`] function.
-    pub fn name(&self) -> &str {
-        &self.name
+    pub fn rustc_version(&self) -> PdStr<'static> {
+        (self.rustc_version)()
     }
 
-    /// Returns the Rust compiler version used to build the plugin.
-    /// This version must match the compiler version used to build
-    /// PgDog, or the plugin won't be loaded.
-    pub fn rustc_version(&self) -> Option<PdStr> {
-        let mut output = PdStr::default();
-        self.rustc_version.as_ref().map(|rustc_version| unsafe {
-            rustc_version(&mut output);
-            output
-        })
+    pub fn plugin_version(&self) -> PdStr<'static> {
+        (self.plugin_version)()
     }
 
-    /// Get plugin API version based on `pgdog-plugin` crate version.
-    /// This version must match the version used when building pgdog main executable,
-    /// otherwise the plugin won't be loaded.
-    pub fn pgdog_plugin_api_version(&self) -> Option<PdStr> {
-        let mut output = PdStr::default();
-        self.pgdog_plugin_api_version.as_ref().map(|func| unsafe {
-            func(&mut output as *mut PdStr);
-            output
-        })
+    pub fn pgdog_plugin_api_version(&self) -> PdStr<'static> {
+        (self.pgdog_plugin_api_version)()
     }
 
-    /// Get plugin version. It's set in plugin's
-    /// `Cargo.toml`.
-    pub fn version(&self) -> Option<PdStr> {
-        let mut output = PdStr::default();
-        self.plugin_version.as_ref().map(|func| unsafe {
-            func(&mut output as *mut PdStr);
-            output
-        })
+    pub fn logging_init(&self, config: Config<'_>) {
+        (self.logging_init)(config)
     }
 }

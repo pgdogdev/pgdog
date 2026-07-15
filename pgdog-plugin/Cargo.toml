@@ -1,6 +1,6 @@
 [package]
 name = "pgdog-plugin"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2024"
 license = "MIT"
 authors = ["Lev Kokotov <lev.kokotov@gmail.com>"]
@@ -16,7 +16,7 @@ crate-type = ["rlib", "cdylib"]
 [dependencies]
 libloading = "0.8"
 pg_query = { git = "https://github.com/pgdogdev/pg_query.rs.git", rev = "97019d0c13ad0b888fe91ee5bed5448b5f409cdd" }
-pgdog-macros = { path = "../pgdog-macros", version = "0.1.1" }
+pgdog-postgres-types.workspace = true
 
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }

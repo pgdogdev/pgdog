@@ -1,5 +1,8 @@
 use crate::frontend::router::parser::cache::Ast;
-use pgdog_plugin::{ReadWrite, Shard as PdShard};
+use pgdog_plugin::{
+    Context as PdRouterContext, ReadWrite, Shard as PdShard,
+    parameters::{Parameter, Parameters},
+};
 use std::string::String as StdString;
 
 use super::*;
@@ -45,62 +48,83 @@ impl QueryParser {
         // The first plugin to returns something, wins.
         debug!("executing {} router plugins", plugins.len());
 
-        let mut context = context.plugin_context(
-            &statement.parse_result().protobuf,
-            &context.router_context.bind,
-        );
-        context.write_override = if self.write_override || !read { 1 } else { 0 };
-
-        for plugin in plugins {
-            if let Some(route) = plugin.route(context) {
-                let plugin_name = plugin.name().to_owned();
-                match route.shard.try_into() {
-                    Ok(shard) => match shard {
-                        PdShard::All => self.plugin_output.shard = Some(Shard::All),
-                        PdShard::Direct(shard) => {
-                            self.plugin_output.shard = Some(Shard::Direct(shard))
-                        }
-                        PdShard::Unknown => self.plugin_output.shard = None,
-                        PdShard::Blocked => {
-                            return Err(Error::BlockedByPlugin(plugin.name().to_owned()));
-                        }
-                    },
-                    Err(_) => self.plugin_output.shard = None,
-                }
-
-                match route.read_write.try_into() {
-                    Ok(ReadWrite::Read) => self.plugin_output.read = Some(true),
-                    Ok(ReadWrite::Write) => self.plugin_output.read = Some(false),
-                    _ => self.plugin_output.read = None,
-                }
-
-                self.plugin_output.plugin_name = Some(plugin_name.clone());
-
-                if self.plugin_output.provided() {
-                    let shard_override = self.plugin_output.shard.clone();
-                    let read_override = self.plugin_output.read;
-                    if let Some(recorder) = self.recorder_mut() {
-                        recorder.record_plugin_override(
-                            plugin_name.clone(),
-                            shard_override,
-                            read_override,
-                        );
+        let params_data;
+        let params = if let Some(bind) = context.router_context.bind {
+            params_data = bind
+                .params_raw()
+                .iter()
+                .map(|param| {
+                    if param.len == -1 {
+                        None
+                    } else {
+                        Some(&*param.data)
                     }
-                    debug!(
-                        "plugin \"{}\" returned route [{}, {}]",
-                        plugin_name,
-                        match self.plugin_output.shard.as_ref() {
-                            Some(shard) => format!("shard={}", shard),
-                            None => "shard=unknown".to_string(),
-                        },
-                        match self.plugin_output.read {
-                            Some(read) =>
-                                format!("role={}", if read { "replica" } else { "primary" }),
-                            None => "read=unknown".to_string(),
-                        }
+                    .into()
+                })
+                .collect::<Vec<Parameter<'_>>>();
+
+            Parameters {
+                parameters: &params_data,
+                format_codes: &bind.format_codes_raw(),
+            }
+        } else {
+            Parameters::default()
+        };
+        let context = PdRouterContext {
+            shards: context.shards as u64,
+            has_replicas: !context.read_only,
+            has_primary: !context.write_only,
+            in_transaction: context.router_context.in_transaction(),
+            write_override: self.write_override || !read, // This is set inside `QueryParser::plugins`.
+            query: &statement.parse_result().protobuf,
+            params,
+        };
+
+        for (plugin_name, plugin) in plugins {
+            let route = plugin.route(context);
+            match route.shard.try_into() {
+                Ok(shard) => match shard {
+                    PdShard::All => self.plugin_output.shard = Some(Shard::All),
+                    PdShard::Direct(shard) => self.plugin_output.shard = Some(Shard::Direct(shard)),
+                    PdShard::Unknown => self.plugin_output.shard = None,
+                    PdShard::Blocked => {
+                        return Err(Error::BlockedByPlugin(plugin_name.clone()));
+                    }
+                },
+                Err(_) => self.plugin_output.shard = None,
+            }
+
+            match route.read_write.try_into() {
+                Ok(ReadWrite::Read) => self.plugin_output.read = Some(true),
+                Ok(ReadWrite::Write) => self.plugin_output.read = Some(false),
+                _ => self.plugin_output.read = None,
+            }
+
+            self.plugin_output.plugin_name = Some(plugin_name.clone());
+
+            if self.plugin_output.provided() {
+                let shard_override = self.plugin_output.shard.clone();
+                let read_override = self.plugin_output.read;
+                if let Some(recorder) = self.recorder_mut() {
+                    recorder.record_plugin_override(
+                        plugin_name.clone(),
+                        shard_override,
+                        read_override,
                     );
-                    break;
                 }
+                debug!(
+                    "plugin \"{}\" returned route [{}, {}]",
+                    plugin_name,
+                    match self.plugin_output.shard.as_ref() {
+                        Some(shard) => format!("shard={}", shard),
+                        None => "shard=unknown".to_string(),
+                    },
+                    match self.plugin_output.read {
+                        Some(read) => format!("role={}", if read { "replica" } else { "primary" }),
+                        None => "read=unknown".to_string(),
+                    }
+                );
+                break;
             }
         }
 

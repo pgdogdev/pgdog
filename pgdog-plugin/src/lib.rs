@@ -158,28 +158,25 @@
 //! ```
 //!
 
-/// Bindgen-generated FFI bindings.
-#[allow(non_upper_case_globals)]
-#[allow(non_camel_case_types)]
-#[allow(non_snake_case)]
-pub mod bindings {
-    include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
-}
-
-pub mod ast;
-pub mod comp;
+mod config;
 pub mod context;
 pub mod logging;
+pub mod macros;
 pub mod parameters;
 pub mod plugin;
 pub mod prelude;
 pub mod string;
 
-pub use bindings::*;
+pub use config::Config;
 pub use context::*;
+pub use parameters::*;
+pub use pgdog_postgres_types::Format as ParameterFormat;
 pub use plugin::*;
+pub use string::PdStr;
 
 pub use libloading;
 
 pub use pg_query;
-pub use pgdog_macros as macros;
+
+pub const RUSTC_VERSION: &str = env!("RUSTC_VERSION");
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");

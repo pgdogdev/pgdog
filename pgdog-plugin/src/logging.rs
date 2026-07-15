@@ -5,14 +5,13 @@
 
 use std::io::IsTerminal;
 
+use crate::Config;
 use tracing::level_filters::LevelFilter;
 use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
-use crate::PdConfig;
-
-pub fn init(config: &PdConfig) {
-    let log_level = std::ops::Deref::deref(&config.log_level);
-    let log_json = config.log_json == 1;
+pub fn init(config: Config<'_>) {
+    let log_level = &*config.log_level;
+    let log_json = config.log_json;
 
     let filter = EnvFilter::builder()
         .with_default_directive(log_level.parse().unwrap_or(LevelFilter::INFO.into()))

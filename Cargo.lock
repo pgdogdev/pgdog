@@ -3370,6 +3370,7 @@ dependencies = [
  "pg_query",
  "pg_raw_parse",
  "pgdog-config",
+ "pgdog-macros",
  "pgdog-plugin",
  "pgdog-postgres-types",
  "pgdog-stats",
@@ -3461,12 +3462,12 @@ dependencies = [
 
 [[package]]
 name = "pgdog-plugin"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "bindgen 0.71.1",
  "libloading",
  "pg_query",
- "pgdog-macros",
+ "pgdog-postgres-types",
  "tracing",
  "tracing-subscriber",
 ]
