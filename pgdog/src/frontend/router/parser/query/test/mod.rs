@@ -688,12 +688,6 @@ fn test_any() {
 }
 
 #[test]
-fn test_commit_prepared() {
-    let stmt = pg_query::parse("COMMIT PREPARED 'test'").unwrap();
-    println!("{:?}", stmt);
-}
-
-#[test]
 fn test_set_comments() {
     // let command = query_parser!(
     //     QueryParser::default(),
@@ -708,39 +702,4 @@ fn test_set_comments() {
         true
     );
     assert!(matches!(command, Command::Set { .. }));
-}
-
-#[test]
-fn test_subqueries() {
-    println!(
-        "{:#?}",
-        pg_query::parse(r#"
-        SELECT
-            count(*) AS "count"
-        FROM
-        (
-            SELECT "companies".* FROM
-            (
-                 SELECT "companies".*
-                 FROM "companies"
-                 INNER JOIN "organizations_relevant_companies" ON
-                 ("organizations_relevant_companies"."company_id" = "companies"."id")
-                 WHERE
-                 (
-                     ("organizations_relevant_companies"."org_id" = 1)
-                     AND NOT
-                     (
-                        EXISTS
-                        (
-                           SELECT * FROM "hidden_globals"
-                           WHERE
-                           (
-                               ("hidden_globals"."org_id" = 1)
-                               AND ("hidden_globals"."global_company_id" = "organizations_relevant_companies"."company_id")
-                           )
-                     )
-                )
-            )
-        ) AS "companies" OFFSET 0) AS "t1" LIMIT 1"#).unwrap()
-    );
 }
