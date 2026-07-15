@@ -4,6 +4,7 @@ pub mod auth;
 pub mod auto_id;
 pub mod avg;
 pub mod ban;
+pub mod cache_bench;
 pub mod cancel;
 pub mod client_ids;
 pub mod connection_recovery;
