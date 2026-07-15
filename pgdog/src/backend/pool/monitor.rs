@@ -303,6 +303,7 @@ impl Monitor {
                     if guard.should_create().yes() {
                         comms.request.notify_one();
                     }
+                    guard.cleanup_waiters();
 
                     // Don't perform any additional maintenance tasks.
                     if guard.paused {

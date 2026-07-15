@@ -22,8 +22,10 @@ pub(super) struct Inner {
     taken: Taken,
     /// Pool configuration.
     pub(super) config: Config,
-    /// Number of clients waiting for a connection.
+    /// Waiter queue. Cancelled waiters are removed lazily.
     pub(super) waiting: VecDeque<Waiter>,
+    /// Number of clients still waiting for a connection.
+    pub(super) live_waiters: usize,
     /// Pool is online and available to clients.
     pub(super) online: bool,
     /// Pool is paused.
@@ -59,7 +61,7 @@ impl std::fmt::Debug for Inner {
             .field("paused", &self.paused)
             .field("taken", &self.taken.len())
             .field("idle_connections", &self.idle_connections.len())
-            .field("waiting", &self.waiting.len())
+            .field("waiting", &self.live_waiters)
             .field("online", &self.online)
             .finish()
     }
@@ -73,6 +75,7 @@ impl Inner {
             taken: Taken::default(),
             config,
             waiting: VecDeque::new(),
+            live_waiters: 0,
             online: false,
             paused: false,
             force_close: 0,
@@ -157,8 +160,7 @@ impl Inner {
         let below_min = self.total() < self.min();
         let below_max = self.total() < self.max();
         let maintain_min = below_min && below_max;
-        let client_needs =
-            below_max && !self.waiting.is_empty() && self.idle_connections.is_empty();
+        let client_needs = below_max && self.live_waiters > 0 && self.idle_connections.is_empty();
         let maintenance_on = self.online && !self.paused;
 
         // Clients from banned pools won't be able to request connections
@@ -177,7 +179,27 @@ impl Inner {
             max: self.max(),
             idle: self.idle(),
             taken: self.checked_out(),
-            waiting: self.waiting.len(),
+            waiting: self.live_waiters,
+        }
+    }
+
+    /// Register a waiter after it is pushed into the queue.
+    #[inline]
+    pub(super) fn add_waiter(&mut self) {
+        self.live_waiters += 1;
+    }
+
+    /// Mark a waiter as no longer waiting.
+    #[inline]
+    pub(super) fn remove_live_waiter(&mut self) {
+        self.live_waiters = self.live_waiters.saturating_sub(1);
+    }
+
+    /// Remove cancelled waiters from the physical queue.
+    #[inline]
+    pub(super) fn cleanup_waiters(&mut self) {
+        if self.waiting.len() > 64 {
+            self.waiting.retain(|waiter| !waiter.tx.is_closed());
         }
     }
 
@@ -259,6 +281,11 @@ impl Inner {
         let server_id = conn.id();
         while let Some(waiter) = self.waiting.pop_front() {
             match waiter.tx.send(Ok(conn)) {
+                // The waiter is gone, which means it cancelled waiting, probably
+                // due to checkout timeout.
+                //
+                // Try next waiter.
+                //
                 Err(conn_ret) => {
                     conn = conn_ret.unwrap(); // SAFETY: We sent Ok(conn), we'll get back Ok(conn) if channel is closed.
                 }
@@ -411,29 +438,6 @@ impl Inner {
         }
 
         Ok(result)
-    }
-
-    /// Remove waiter from the queue.
-    ///
-    /// This happens if the waiter timed out, e.g. checkout timeout,
-    /// or the caller got cancelled.
-    #[inline]
-    pub(super) fn remove_waiter(&mut self, id: FrontendPid) {
-        if let Some(waiter) = self.waiting.pop_front()
-            && waiter.request.id != id
-        {
-            // Put me back.
-            self.waiting.push_front(waiter);
-
-            // Slow search, but we should be somewhere towards the front
-            // if the runtime is doing scheduling correctly.
-            for (i, waiter) in self.waiting.iter().enumerate() {
-                if waiter.request.id == id {
-                    self.waiting.remove(i);
-                    break;
-                }
-            }
-        }
     }
 
     #[inline]
@@ -613,6 +617,7 @@ mod test {
             request: Request::default(),
             tx: channel().0,
         });
+        inner.add_waiter();
 
         assert_eq!(inner.idle(), 0);
         assert!(matches!(
@@ -898,36 +903,6 @@ mod test {
     }
 
     #[test]
-    fn test_remove_waiter() {
-        let mut inner = Inner::default();
-        let (tx1, _) = channel();
-        let (tx2, _) = channel();
-        let (tx3, _) = channel();
-
-        let req1 = Request::default();
-        let req2 = Request::default();
-        let req3 = Request::default();
-        let target_id = req2.id;
-
-        inner.waiting.push_back(Waiter {
-            request: req1,
-            tx: tx1,
-        });
-        inner.waiting.push_back(Waiter {
-            request: req2,
-            tx: tx2,
-        });
-        inner.waiting.push_back(Waiter {
-            request: req3,
-            tx: tx3,
-        });
-
-        assert_eq!(inner.waiting.len(), 3);
-        inner.remove_waiter(target_id);
-        assert_eq!(inner.waiting.len(), 2);
-    }
-
-    #[test]
     fn test_close_waiters() {
         let mut inner = Inner::default();
         let (tx1, mut rx1) = channel();
@@ -977,11 +952,12 @@ mod test {
             request: Request::default(),
             tx: channel().0,
         });
+        inner.add_waiter();
 
         assert!(inner.total() > inner.min()); // Above minimum
         assert!(inner.total() < inner.max()); // Below maximum
         assert_eq!(inner.idle(), 0); // No idle connections
-        assert!(!inner.waiting.is_empty()); // Has waiting clients
+        assert!(inner.live_waiters > 0); // Has waiting clients
         assert!(matches!(
             inner.should_create(),
             ShouldCreate::Yes {
@@ -1098,6 +1074,34 @@ mod test {
         // Connection should go to idle pool since no waiters could receive it
         assert_eq!(inner.idle(), 1);
         assert_eq!(inner.checked_out(), 0);
+    }
+
+    #[test]
+    fn test_cleanup_waiters_after_threshold() {
+        let mut inner = Inner::default();
+
+        for _ in 0..64 {
+            let (tx, rx) = channel();
+            inner.waiting.push_back(Waiter {
+                request: Request::default(),
+                tx,
+            });
+            drop(rx);
+        }
+
+        inner.cleanup_waiters();
+        assert_eq!(inner.waiting.len(), 64);
+
+        let (tx, rx) = channel();
+        inner.waiting.push_back(Waiter {
+            request: Request::default(),
+            tx,
+        });
+        drop(rx);
+
+        inner.cleanup_waiters();
+        assert_eq!(inner.waiting.len(), 0);
+        assert_eq!(inner.live_waiters, 0);
     }
 
     #[test]

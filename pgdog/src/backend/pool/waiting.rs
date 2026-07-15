@@ -6,22 +6,14 @@ use tokio::{sync::oneshot::*, time::Instant};
 pub(super) struct Waiting {
     pool: Pool,
     rx: Option<Receiver<Result<Box<Server>, Error>>>,
-    request: Request,
     waiting: bool,
-}
-
-impl Drop for Waiting {
-    fn drop(&mut self) {
-        if self.waiting {
-            self.pool.lock().remove_waiter(self.request.id);
-        }
-    }
 }
 
 impl Waiting {
     /// Create new waiter.
     ///
-    /// N.B. You must call and await `Waiting::wait`, otherwise you'll leak waiters.
+    /// N.B. You must call and await `Waiting::wait`, otherwise you'll leave
+    /// stale queue entries until maintenance cleanup runs.
     ///
     pub(super) fn new(pool: Pool, request: &Request) -> Result<Self, Error> {
         let request = *request;
@@ -38,6 +30,7 @@ impl Waiting {
                 guard.stats.counts.writes += 1;
             }
             guard.waiting.push_back(Waiter { request, tx });
+            guard.add_waiter();
             guard.full()
         };
 
@@ -49,20 +42,27 @@ impl Waiting {
         Ok(Self {
             pool,
             rx: Some(rx),
-            request,
             waiting: true,
         })
+    }
+
+    fn done_waiting(&mut self) {
+        if self.waiting {
+            self.pool.lock().remove_live_waiter();
+            self.waiting = false;
+        }
     }
 
     /// Wait for connection from the pool.
     pub(super) async fn wait(&mut self) -> Result<(Guard, Instant), Error> {
         let rx = self.rx.take().expect("waiter rx taken");
 
-        // Can be cancelled. Drop will remove the waiter from the queue.
+        // Can be cancelled. Drop will mark the waiter as gone; the queue
+        // entry is removed lazily.
         let server = rx.await;
 
         // Disarm the guard. We can't be cancelled beyond this point.
-        self.waiting = false;
+        self.done_waiting();
 
         let now = Instant::now();
         match server {
@@ -78,6 +78,12 @@ impl Waiting {
                 Err(Error::CheckoutTimeout)
             }
         }
+    }
+}
+
+impl Drop for Waiting {
+    fn drop(&mut self) {
+        self.done_waiting();
     }
 }
 
@@ -133,9 +139,9 @@ mod tests {
         sleep(Duration::from_millis(10)).await;
 
         let pool_guard = pool.lock();
-        assert!(
-            pool_guard.waiting.is_empty(),
-            "All waiters should be removed from queue on cancellation"
+        assert_eq!(
+            pool_guard.live_waiters, 0,
+            "All waiters should be marked done on cancellation"
         );
     }
 
@@ -178,9 +184,6 @@ mod tests {
         assert!(result.is_err());
 
         let pool_guard = pool.lock();
-        assert!(
-            pool_guard.waiting.is_empty(),
-            "Waiter should be removed on timeout"
-        );
+        assert_eq!(pool_guard.live_waiters, 0, "Waiter should time out");
     }
 }

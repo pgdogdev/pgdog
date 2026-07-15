@@ -42,7 +42,7 @@ impl State {
                 empty: guard.idle() == 0,
                 config: *guard.config,
                 paused: guard.paused,
-                waiting: guard.waiting.len(),
+                waiting: guard.live_waiters,
                 errors: guard.errors,
                 out_of_sync: guard.out_of_sync,
                 re_synced: guard.re_synced,
@@ -50,7 +50,7 @@ impl State {
                 maxwait: guard
                     .waiting
                     .iter()
-                    .next()
+                    .find(|waiter| !waiter.tx.is_closed())
                     .map(|req| now.duration_since(req.request.created_at))
                     .unwrap_or(Duration::ZERO),
                 pooler_mode: guard.config().pooler_mode,

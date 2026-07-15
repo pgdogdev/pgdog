@@ -594,7 +594,7 @@ async fn test_checkout_timeout() {
     let result = pool.get(&Request::default()).await;
     assert!(result.is_err());
     assert_eq!(result.unwrap_err(), Error::CheckoutTimeout);
-    assert!(pool.lock().waiting.is_empty());
+    assert_eq!(pool.lock().live_waiters, 0);
 }
 
 #[tokio::test]
