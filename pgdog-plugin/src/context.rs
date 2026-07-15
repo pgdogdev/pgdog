@@ -56,7 +56,11 @@ pub struct Context<'a> {
     // We are relying on an implemenation detail of the compiler that could
     // change at any time to make this work. There is no safe way to pass
     // this type, but this won't be an issue with the new parser
+    #[cfg(not(feature = "new_parser"))]
     pub query: &'a pg_query::protobuf::ParseResult,
+    #[cfg(feature = "new_parser")]
+    /// The parsed Abstract Syntax Tree of the statement(s).
+    pub query: &'a pg_raw_parse::StmtList,
     /// Bound parameters.
     pub params: Parameters<'a>,
 }
@@ -197,7 +201,9 @@ impl Context<'_> {
 impl Context<'_> {
     #[doc(hidden)]
     pub fn doc_test() -> Self {
+        #[cfg(not(feature = "new_parser"))]
         use pg_query::protobuf::ParseResult;
+        #[cfg(not(feature = "new_parser"))]
         static EMPTY_PARSE_RESULT: ParseResult = ParseResult {
             version: 0,
             stmts: Vec::new(),
@@ -208,7 +214,10 @@ impl Context<'_> {
             has_primary: true,
             in_transaction: false,
             write_override: false,
+            #[cfg(not(feature = "new_parser"))]
             query: &EMPTY_PARSE_RESULT,
+            #[cfg(feature = "new_parser")]
+            query: pg_raw_parse::list::empty_list(),
             params: Parameters::default(),
         }
     }
