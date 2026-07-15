@@ -15,7 +15,8 @@ crate-type = ["rlib", "cdylib"]
 
 [dependencies]
 libloading = "0.8"
-pg_query = { git = "https://github.com/pgdogdev/pg_query.rs.git", rev = "97019d0c13ad0b888fe91ee5bed5448b5f409cdd" }
+pg_query = { git = "https://github.com/pgdogdev/pg_query.rs.git", rev = "97019d0c13ad0b888fe91ee5bed5448b5f409cdd", optional = true }
+pg_raw_parse = { workspace = true, optional = true }
 pgdog-postgres-types.workspace = true
 
 tracing = "0.1"
@@ -23,3 +24,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 
 [build-dependencies]
 bindgen = "0.71.0"
+
+[features]
+default = ["pg_query"]
+new_parser = ["pg_raw_parse"]

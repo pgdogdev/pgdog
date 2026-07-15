@@ -11,8 +11,9 @@ readme = "README.md"
 default-run = "pgdog"
 
 [features]
+default = ["pgdog-plugin/pg_query"]
 tui = ["ratatui"]
-new_parser = ["pg_raw_parse"]
+new_parser = ["pg_raw_parse", "pgdog-plugin/new_parser"]
 
 [dependencies]
 bon.workspace = true
@@ -81,7 +82,7 @@ smallvec = "1"
 reqwest.workspace = true
 hex = "0.4"
 x509-parser = "0.18"
-pg_raw_parse = { git = "https://github.com/pgdogdev/pg_raw_parse.git", rev = "576226d", optional = true }
+pg_raw_parse = { workspace = true, optional = true }
 itertools = "0.15.0"
 
 [target.'cfg(unix)'.dependencies]

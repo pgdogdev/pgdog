@@ -11,3 +11,8 @@ pgdog-plugin.workspace = true
 once_cell = "1"
 parking_lot = "0.12"
 thiserror = "2"
+pg_raw_parse = { workspace = true, optional = true }
+
+[features]
+default = ["pgdog-plugin/pg_query"]
+new_parser = ["pg_raw_parse", "pgdog-plugin/new_parser"]

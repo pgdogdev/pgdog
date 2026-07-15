@@ -76,7 +76,10 @@ impl QueryParser {
             has_primary: !context.write_only,
             in_transaction: context.router_context.in_transaction(),
             write_override: self.write_override || !read, // This is set inside `QueryParser::plugins`.
+            #[cfg(not(feature = "new_parser"))]
             query: &statement.parse_result().protobuf,
+            #[cfg(feature = "new_parser")]
+            query: &statement.new_ast,
             params,
         };
 
