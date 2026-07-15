@@ -182,6 +182,13 @@
 //! ```
 //!
 
+#[cfg(all(feature = "pg_query", feature = "pg_raw_parse"))]
+compile_error!("Cannot build with both the old and new parser");
+#[cfg(not(any(feature = "pg_query", feature = "pg_raw_parse")))]
+compile_error!(
+    r#"pg-plugin must be built with either default features, or features = "new_parser""#
+);
+
 mod config;
 pub mod context;
 pub mod logging;
@@ -200,6 +207,7 @@ pub use string::PdStr;
 
 pub use libloading;
 
+#[cfg(feature = "pg_query")]
 pub use pg_query;
 
 pub const RUSTC_VERSION: &str = env!("RUSTC_VERSION");

@@ -15,3 +15,8 @@ toml = "0.8"
 serde = { version = "1", features = ["derive"]}
 arc-swap = "1"
 tracing = "0.1"
+pg_raw_parse = { workspace = true, optional = true }
+
+[features]
+default = ["pgdog-plugin/pg_query"]
+new_parser = ["pg_raw_parse", "pgdog-plugin/new_parser"]

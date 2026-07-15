@@ -3434,6 +3434,7 @@ version = "0.1.0"
 dependencies = [
  "once_cell",
  "parking_lot",
+ "pg_raw_parse",
  "pgdog-plugin",
  "thiserror 2.0.18",
 ]
@@ -3467,6 +3468,7 @@ dependencies = [
  "bindgen 0.71.1",
  "libloading",
  "pg_query",
+ "pg_raw_parse",
  "pgdog-postgres-types",
  "tracing",
  "tracing-subscriber",
@@ -3494,6 +3496,7 @@ dependencies = [
  "arc-swap",
  "once_cell",
  "parking_lot",
+ "pg_raw_parse",
  "pgdog-plugin",
  "serde",
  "thiserror 2.0.18",

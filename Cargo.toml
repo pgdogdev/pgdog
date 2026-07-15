@@ -20,7 +20,7 @@ members = [
 edition = "2024"
 
 [workspace.dependencies]
-pgdog-plugin = { path = "./pgdog-plugin", version = "0.4.0" }
+pgdog-plugin = { path = "./pgdog-plugin", version = "0.4.0", default-features = false }
 pgdog-config = { path = "./pgdog-config", version = "0.1.0" }
 pgdog-postgres-types = { path = "./pgdog-postgres-types"}
 pg_raw_parse = { git = "https://github.com/pgdogdev/pg_raw_parse.git", rev = "7770583" }

@@ -10,5 +10,5 @@ path = "src/main.rs"
 
 [dependencies]
 bytes = "1"
-pgdog = { path = "../../../pgdog" }
+pgdog = { path = "../../../pgdog", default-features = false }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

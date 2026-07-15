@@ -64,7 +64,7 @@ mod tests {
 
     #[test]
     fn update_preserves_decimal_values() {
-        let parsed = pgdog_plugin::pg_query::parse(
+        let parsed = pg_query::parse(
             "UPDATE transactions SET amount = 50.00, status = 'completed' WHERE id = 1",
         )
         .expect("parse");
@@ -110,9 +110,8 @@ mod tests {
 
     #[test]
     fn update_with_quoted_decimal() {
-        let parsed =
-            pgdog_plugin::pg_query::parse("UPDATE transactions SET amount = '50.00' WHERE id = 1")
-                .expect("parse");
+        let parsed = pg_query::parse("UPDATE transactions SET amount = '50.00' WHERE id = 1")
+            .expect("parse");
 
         let stmt = parsed
             .protobuf

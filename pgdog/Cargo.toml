@@ -11,8 +11,9 @@ readme = "README.md"
 default-run = "pgdog"
 
 [features]
+default = ["pgdog-plugin/pg_query"]
 tui = ["ratatui"]
-new_parser = ["pg_raw_parse"]
+new_parser = ["pg_raw_parse", "pgdog-plugin/new_parser"]
 
 [dependencies]
 bon.workspace = true
