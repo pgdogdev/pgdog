@@ -315,12 +315,6 @@ pub struct OmnishardedTable {
     pub sticky_routing: bool,
 }
 
-/// Queries with manual routing rules.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, JsonSchema)]
-pub struct ManualQuery {
-    pub fingerprint: String,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, Default, JsonSchema)]
 pub struct ShardedSchema {
     /// Database name.

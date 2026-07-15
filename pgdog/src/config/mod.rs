@@ -31,7 +31,7 @@ pub use users::{Admin, Plugin, ServerAuth, User, Users};
 
 // Re-export from sharding module
 pub use sharding::{
-    DataType, FlexibleType, Hasher, ManualQuery, OmnishardedTables, ShardedMappingConfig,
+    DataType, FlexibleType, Hasher, OmnishardedTables, ShardedMappingConfig,
     ShardedMappingDeprecated, ShardedMappingKindDeprecated, ShardedMappingList,
     ShardedMappingRange,
 };

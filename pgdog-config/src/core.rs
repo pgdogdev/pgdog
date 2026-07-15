@@ -22,7 +22,7 @@ use super::otel::Otel;
 use super::pooling::PoolerMode;
 use super::replication::{MirrorConfig, Mirroring, MirroringLevel, ReplicaLag, Replication};
 use super::rewrite::Rewrite;
-use super::sharding::{ManualQuery, OmnishardedTables, ShardedMappingDeprecated};
+use super::sharding::{OmnishardedTables, ShardedMappingDeprecated};
 use super::users::{Admin, Plugin, Users};
 use super::vault::Vault;
 
@@ -230,10 +230,6 @@ pub struct Config {
     #[serde(default)]
     pub sharded_tables: Vec<ShardedTableConfig>,
 
-    /// Queries routed manually to a single shard.
-    #[serde(default)]
-    pub manual_queries: Vec<ManualQuery>,
-
     /// Omnisharded tables are tables that contain the same data on all shards. This is useful for storing relatively static metadata used in joins or data that doesn't fit the sharding schema of the database, e.g., list of countries, global settings, list of blocked IPs, etc.
     ///
     /// **Note:** Unless explicitly configured as sharded tables, all tables default to omnisharded status, which makes configuration simpler, and doesn't require explicitly enumerating all tables in `pgdog.toml`.
@@ -364,17 +360,6 @@ impl Config {
         }
 
         schemas
-    }
-
-    /// Manual queries.
-    pub fn manual_queries(&self) -> HashMap<String, ManualQuery> {
-        let mut queries = HashMap::new();
-
-        for query in &self.manual_queries {
-            queries.insert(query.fingerprint.clone(), query.clone());
-        }
-
-        queries
     }
 
     /// Sharded mappings.

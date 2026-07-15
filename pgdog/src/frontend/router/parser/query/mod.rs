@@ -4,7 +4,7 @@ use std::{collections::HashSet, ops::Deref};
 #[cfg(not(feature = "new_parser"))]
 use crate::frontend::router::parser::util::{PgStr, pg_str};
 use crate::{
-    backend::{ShardingSchema, databases::databases},
+    backend::ShardingSchema,
     config::Role,
     frontend::router::{
         context::RouterContext,
@@ -465,33 +465,6 @@ impl QueryParser {
             route.set_shard(context.shards_calculator.shard());
         }
 
-        if let Command::Query(ref mut route) = command {
-            // Last ditch attempt to route a query to a specific shard.
-            //
-            // Looking through manual queries to see if we have any
-            // with the fingerprint.
-            //
-            if route.shard().is_all() {
-                let databases = databases();
-                // Only fingerprint the query if some manual queries are configured.
-                // Otherwise, we're wasting time parsing SQL.
-                if !databases.manual_queries().is_empty() {
-                    let fingerprint = statement.fingerprint()?;
-                    let fingerprint = &fingerprint.hex;
-                    debug!("fingerprint: {}", fingerprint);
-                    let manual_route = databases.manual_query(fingerprint).cloned();
-
-                    // TODO: check routing logic required by config.
-                    if manual_route.is_some() {
-                        context.shards_calculator.push(ShardWithPriority::new_table(
-                            Shard::Direct(round_robin::next() % context.shards),
-                        ));
-                        route.set_shard(context.shards_calculator.shard().clone());
-                    }
-                }
-            }
-        }
-
         statement.update_stats(command.route());
 
         if context.dry_run {
@@ -771,33 +744,6 @@ impl QueryParser {
                             Shard::Direct(0),
                         ));
                     route.set_shard(context.shards_calculator.shard());
-                }
-
-                if let Command::Query(ref mut route) = command {
-                    // Last ditch attempt to route a query to a specific shard.
-                    //
-                    // Looking through manual queries to see if we have any
-                    // with the fingerprint.
-                    //
-                    if route.shard().is_all() {
-                        let databases = databases();
-                        // Only fingerprint the query if some manual queries are configured.
-                        // Otherwise, we're wasting time parsing SQL.
-                        if !databases.manual_queries().is_empty() {
-                            let fingerprint = statement.fingerprint()?;
-                            let fingerprint = &fingerprint.hex;
-                            debug!("fingerprint: {}", fingerprint);
-                            let manual_route = databases.manual_query(fingerprint).cloned();
-
-                            // TODO: check routing logic required by config.
-                            if manual_route.is_some() {
-                                context.shards_calculator.push(ShardWithPriority::new_table(
-                                    Shard::Direct(round_robin::next() % context.shards),
-                                ));
-                                route.set_shard(context.shards_calculator.shard().clone());
-                            }
-                        }
-                    }
                 }
 
                 statement.update_stats(command.route());
