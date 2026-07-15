@@ -48,7 +48,7 @@ impl<'a> Parameter<'a> {
     /// Construct this from the given slice
     pub fn new(data: Option<&'a [u8]>) -> Self {
         let len = data.map(|d| d.len()).unwrap_or(usize::MAX);
-        let data = data.and_then(|d| d.get(0));
+        let data = data.and_then(|d| d.first());
         Self { len, data }
     }
 
