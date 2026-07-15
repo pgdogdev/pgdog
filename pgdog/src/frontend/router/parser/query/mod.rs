@@ -244,7 +244,7 @@ impl QueryParser {
             .clone()
             .ok_or(Error::EmptyQuery)?;
 
-        if let Some(stmt) = statement.new_ast.stmts().next() {
+        if let Some(stmt) = statement.ast.stmts().next() {
             self.ensure_explain_recorder(stmt, context);
         }
 
@@ -273,7 +273,7 @@ impl QueryParser {
         debug!("{}", context.query()?.query());
         trace!("{:#?}", statement);
 
-        let stmts = &statement.new_ast;
+        let stmts = &statement.ast;
 
         if let Some(multi_tenant) = context.multi_tenant()
             && let Some(stmt) = stmts.stmts().next()
