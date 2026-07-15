@@ -29,11 +29,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             exit(0);
         }
 
-        Some(Commands::Fingerprint { query, path }) => {
-            pgdog::cli::fingerprint(query.clone(), path.clone())?;
-            exit(0);
-        }
-
         Some(Commands::Run {
             pool_size,
             min_pool_size,

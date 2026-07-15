@@ -59,14 +59,6 @@ pub enum Commands {
         password: String,
     },
 
-    /// Fingerprint a query.
-    Fingerprint {
-        #[arg(short, long)]
-        query: Option<String>,
-        #[arg(short, long)]
-        path: Option<PathBuf>,
-    },
-
     /// Execute the router on the queries.
     Route {
         /// User in users.toml.
@@ -193,36 +185,6 @@ pub fn hash_password(password: &str) {
         "{}",
         crate::auth::scram::generate_hash(password, iterations, &salt)
     );
-}
-
-/// Fingerprint some queries.
-#[allow(clippy::print_stdout)]
-pub fn fingerprint(
-    query: Option<String>,
-    path: Option<PathBuf>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    if let Some(query) = query {
-        let fingerprint = pg_query::fingerprint(&query)?;
-        println!("{} [{}]", fingerprint.hex, fingerprint.value);
-    } else if let Some(path) = path {
-        let queries = read_to_string(path)?;
-        for query in queries.split(";") {
-            if query.trim().is_empty() {
-                continue;
-            }
-            tracing::debug!("{}", query);
-            if let Ok(fingerprint) = pg_query::fingerprint(query) {
-                println!(
-                    r#"
-[[manual_query]]
-fingerprint = "{}" #[{}]"#,
-                    fingerprint.hex, fingerprint.value
-                );
-            }
-        }
-    }
-
-    Ok(())
 }
 
 #[derive(Debug, Error)]

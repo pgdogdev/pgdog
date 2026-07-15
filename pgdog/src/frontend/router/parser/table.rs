@@ -1,8 +1,8 @@
 use std::fmt::Display;
 
-use pg_query::Node as PgNode;
+#[cfg(not(feature = "new_parser"))]
 use pg_query::{
-    NodeEnum,
+    Node as PgNode, NodeEnum,
     protobuf::{List, RangeVar},
 };
 #[cfg(feature = "new_parser")]
@@ -61,6 +61,7 @@ impl<'a> TryFrom<pg_raw_parse::Node<'a>> for Table<'a> {
     }
 }
 
+#[cfg(not(feature = "new_parser"))]
 impl<'a> TryFrom<&'a PgNode> for Table<'a> {
     type Error = ();
 
@@ -73,6 +74,7 @@ impl<'a> TryFrom<&'a PgNode> for Table<'a> {
     }
 }
 
+#[cfg(not(feature = "new_parser"))]
 impl<'a> TryFrom<&'a Vec<PgNode>> for Table<'a> {
     type Error = Error;
 
@@ -141,6 +143,7 @@ impl<'a> From<&'a pg_raw_parse::nodes::RangeVar> for Table<'a> {
     }
 }
 
+#[cfg(not(feature = "new_parser"))]
 impl<'a> From<&'a RangeVar> for Table<'a> {
     fn from(range_var: &'a RangeVar) -> Self {
         let (name, alias) = if let Some(ref alias) = range_var.alias {
@@ -215,6 +218,7 @@ impl<'a> TryFrom<&'a NodeList> for Table<'a> {
     }
 }
 
+#[cfg(not(feature = "new_parser"))]
 impl<'a> TryFrom<&'a List> for Table<'a> {
     type Error = Error;
 
