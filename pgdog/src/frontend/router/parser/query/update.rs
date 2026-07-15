@@ -59,86 +59,152 @@ impl QueryParser {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[cfg(feature = "new_parser")]
+    #[cfg(not(feature = "new_parser"))]
     use pg_query::NodeEnum;
 
     #[test]
+    #[cfg(feature = "new_parser")]
     fn update_preserves_decimal_values() {
-        let parsed = pg_query::parse(
+        let parsed = pg_raw_parse::parse(
             "UPDATE transactions SET amount = 50.00, status = 'completed' WHERE id = 1",
         )
-        .expect("parse");
+        .unwrap();
 
-        let stmt = parsed
-            .protobuf
-            .stmts
-            .first()
-            .and_then(|node| node.stmt.as_ref())
-            .and_then(|node| node.node.as_ref())
-            .expect("statement node");
-
-        let update = match stmt {
-            NodeEnum::UpdateStmt(update) => update,
-            _ => panic!("expected update stmt"),
+        let Some(Node::UpdateStmt(update)) = parsed.stmts().next() else {
+            panic!("expected update stmt");
         };
 
         // Check that we can extract assignment values including decimals
         let mut found_decimal = false;
         let mut found_string = false;
 
-        for target in &update.target_list {
-            if let Some(NodeEnum::ResTarget(res)) = &target.node
-                && let Some(val) = &res.val
-            {
-                let value = Value::try_from(&val.node).unwrap();
-                match value {
-                    Value::Float(f) => {
-                        assert_eq!(f, 50.0);
-                        found_decimal = true;
-                    }
-                    Value::String(s) => {
-                        assert_eq!(s, "completed");
-                        found_string = true;
-                    }
-                    _ => {}
+        for target in update.target_list() {
+            let value = Value::try_from(target.val()).unwrap();
+            match value {
+                Value::Float(f) => {
+                    assert_eq!(f, 50.0);
+                    found_decimal = true;
                 }
+                Value::String(s) => {
+                    assert_eq!(s, "completed");
+                    found_string = true;
+                }
+                _ => {}
             }
         }
         assert!(found_decimal, "Should have found decimal value");
         assert!(found_string, "Should have found string value");
     }
 
+    cfg_select! {
+        not(feature = "new_parser") => {
+            #[test]
+            fn update_preserves_decimal_values() {
+                let parsed = pg_query::parse(
+                    "UPDATE transactions SET amount = 50.00, status = 'completed' WHERE id = 1",
+                )
+                .expect("parse");
+
+                let stmt = parsed
+                    .protobuf
+                    .stmts
+                    .first()
+                    .and_then(|node| node.stmt.as_ref())
+                    .and_then(|node| node.node.as_ref())
+                    .expect("statement node");
+
+                let update = match stmt {
+                    NodeEnum::UpdateStmt(update) => update,
+                    _ => panic!("expected update stmt"),
+                };
+
+                // Check that we can extract assignment values including decimals
+                let mut found_decimal = false;
+                let mut found_string = false;
+
+                for target in &update.target_list {
+                    if let Some(NodeEnum::ResTarget(res)) = &target.node
+                        && let Some(val) = &res.val
+                    {
+                        let value = Value::try_from(&val.node).unwrap();
+                        match value {
+                            Value::Float(f) => {
+                                assert_eq!(f, 50.0);
+                                found_decimal = true;
+                            }
+                            Value::String(s) => {
+                                assert_eq!(s, "completed");
+                                found_string = true;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                assert!(found_decimal, "Should have found decimal value");
+                assert!(found_string, "Should have found string value");
+            }
+        }
+        _ => {}
+    }
+
     #[test]
+    #[cfg(feature = "new_parser")]
     fn update_with_quoted_decimal() {
-        let parsed = pg_query::parse("UPDATE transactions SET amount = '50.00' WHERE id = 1")
-            .expect("parse");
+        let parsed =
+            pg_raw_parse::parse("UPDATE transactions SET amount = '50.00' WHERE id = 1").unwrap();
 
-        let stmt = parsed
-            .protobuf
-            .stmts
-            .first()
-            .and_then(|node| node.stmt.as_ref())
-            .and_then(|node| node.node.as_ref())
-            .expect("statement node");
-
-        let update = match stmt {
-            NodeEnum::UpdateStmt(update) => update,
-            _ => panic!("expected update stmt"),
+        let Some(Node::UpdateStmt(update)) = parsed.stmts().next() else {
+            panic!("expected update stmt");
         };
 
         // Quoted decimals should be treated as strings
         let mut found_string = false;
-        for target in &update.target_list {
-            if let Some(NodeEnum::ResTarget(res)) = &target.node
-                && let Some(val) = &res.val
-            {
-                let value = Value::try_from(&val.node).unwrap();
-                if let Value::String(s) = value {
-                    assert_eq!(s, "50.00");
-                    found_string = true;
-                }
+        for target in update.target_list() {
+            let value = Value::try_from(target.val()).unwrap();
+            if let Value::String(s) = value {
+                assert_eq!(s, "50.00");
+                found_string = true;
             }
         }
         assert!(found_string, "Should have found string value");
+    }
+
+    cfg_select! {
+        not(feature = "new_parser") => {
+            #[test]
+            fn update_with_quoted_decimal() {
+                let parsed = pg_query::parse("UPDATE transactions SET amount = '50.00' WHERE id = 1")
+                    .expect("parse");
+
+                let stmt = parsed
+                    .protobuf
+                    .stmts
+                    .first()
+                    .and_then(|node| node.stmt.as_ref())
+                    .and_then(|node| node.node.as_ref())
+                    .expect("statement node");
+
+                let update = match stmt {
+                    NodeEnum::UpdateStmt(update) => update,
+                    _ => panic!("expected update stmt"),
+                };
+
+                // Quoted decimals should be treated as strings
+                let mut found_string = false;
+                for target in &update.target_list {
+                    if let Some(NodeEnum::ResTarget(res)) = &target.node
+                        && let Some(val) = &res.val
+                    {
+                        let value = Value::try_from(&val.node).unwrap();
+                        if let Value::String(s) = value {
+                            assert_eq!(s, "50.00");
+                            found_string = true;
+                        }
+                    }
+                }
+                assert!(found_string, "Should have found string value");
+            }
+        }
+        _ => {}
     }
 }

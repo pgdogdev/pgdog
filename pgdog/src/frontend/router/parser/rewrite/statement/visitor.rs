@@ -1,10 +1,11 @@
+#![cfg(not(feature = "new_parser"))]
 //! AST visitor utilities for statement rewriting.
 
 use pg_query::protobuf::ParseResult;
 use pg_query::{Node, NodeEnum};
 
 /// Count the maximum parameter number ($1, $2, etc.) in the parse result.
-pub fn count_params(ast: &mut ParseResult) -> u16 {
+pub(crate) fn count_params(ast: &mut ParseResult) -> u16 {
     let mut max_param = 0i32;
     let _: Result<(), std::convert::Infallible> = visit_and_mutate_nodes(ast, |node| {
         if let Some(NodeEnum::ParamRef(param)) = &node.node {
