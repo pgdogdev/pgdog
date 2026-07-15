@@ -79,7 +79,7 @@ impl QueryParser {
             #[cfg(not(feature = "new_parser"))]
             query: &statement.parse_result().protobuf,
             #[cfg(feature = "new_parser")]
-            query: &statement.new_ast,
+            query: &statement.ast,
             params,
         };
 
