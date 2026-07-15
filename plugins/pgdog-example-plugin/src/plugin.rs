@@ -30,8 +30,8 @@ pub(crate) fn route_query(context: Context) -> Result<Route, PluginError> {
     // sure you checked the AST first.
     let write_override = context.write_override();
 
-    let proto = context.statement().protobuf();
-    let root = proto
+    let root = context
+        .query
         .stmts
         .first()
         .ok_or(PluginError::EmptyQuery)?
@@ -90,10 +90,11 @@ pub(crate) fn route_query(context: Context) -> Result<Route, PluginError> {
 
     // Get prepared statement parameters.
     let params = context.parameters();
-    if params.is_empty() {
+    if params.parameters.is_empty() {
         // No params bound.
     } else {
         let param = params
+            .parameters
             .first()
             .and_then(|p| p.decode(params.parameter_format(0)));
         if let Some(param) = param {
@@ -107,7 +108,7 @@ pub(crate) fn route_query(context: Context) -> Result<Route, PluginError> {
 
 #[cfg(test)]
 mod test {
-    use pgdog_plugin::{PdParameters, PdStatement};
+    use pgdog_plugin::parameters::Parameters;
 
     use super::*;
 
@@ -115,17 +116,16 @@ mod test {
     fn test_routing_plugin() {
         // Keep protobuf in memory.
         let proto = pg_query::parse("SELECT * FROM users").unwrap().protobuf;
-        let query = unsafe { PdStatement::from_proto(&proto) };
-        let context = pgdog_plugin::PdRouterContext {
+        let context = pgdog_plugin::Context {
             shards: 1,
-            has_replicas: 1,
-            has_primary: 1,
-            in_transaction: 0,
-            write_override: 0,
-            query,
-            params: PdParameters::default(),
+            has_replicas: true,
+            has_primary: true,
+            in_transaction: false,
+            write_override: false,
+            query: &proto,
+            params: Parameters::default(),
         };
-        let route = route_query(context.into()).unwrap();
+        let route = route_query(context).unwrap();
         let read_write: ReadWrite = route.read_write.try_into().unwrap();
         let shard: Shard = route.shard.try_into().unwrap();
 

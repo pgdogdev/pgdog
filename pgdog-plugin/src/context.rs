@@ -1,53 +1,6 @@
 //! Context passed to and from the plugins.
 
-use std::ops::Deref;
-
-use crate::{
-    PdParameters, PdRoute, PdStatement, bindings::PdRouterContext, parameters::Parameters,
-};
-
-/// PostgreSQL statement, parsed by [`pg_query`].
-///
-/// Implements [`Deref`] on [`PdStatement`], which is passed
-/// in using the FFI interface.
-/// Use the [`PdStatement::protobuf`] method to obtain a reference
-/// to the Abstract Syntax Tree.
-///
-/// ### Example
-///
-/// ```no_run
-/// # use pgdog_plugin::Context;
-/// # let context = unsafe { Context::doc_test() };
-/// # let statement = context.statement();
-/// use pgdog_plugin::pg_query::NodeEnum;
-///
-/// let ast = statement.protobuf();
-/// let root = ast
-///     .stmts
-///     .first()
-///     .unwrap()
-///     .stmt
-///     .as_ref()
-///     .unwrap()
-///     .node
-///     .as_ref();
-///
-/// if let Some(NodeEnum::SelectStmt(stmt)) = root {
-///     println!("SELECT statement: {:#?}", stmt);
-/// }
-///
-/// ```
-pub struct Statement {
-    ffi: PdStatement,
-}
-
-impl Deref for Statement {
-    type Target = PdStatement;
-
-    fn deref(&self) -> &Self::Target {
-        &self.ffi
-    }
-}
+use crate::parameters::Parameters;
 
 /// Context information provided by PgDog to the plugin at statement execution. It contains the actual statement and several metadata about
 /// the state of the database cluster:
@@ -59,13 +12,17 @@ impl Deref for Statement {
 /// ### Example
 ///
 /// ```
-/// use pgdog_plugin::{Context, Route, macros, Shard, ReadWrite};
+/// use pgdog_plugin::{Context, Route, Shard, ReadWrite};
+/// # use pgdog_plugin::{Plugin, PdStr};
 ///
-/// #[macros::route]
-/// fn route(context: Context) -> Route {
+/// # pgdog_plugin::plugin!(MyPlugin);
+/// # struct MyPlugin;
+/// # impl Plugin for MyPlugin {
+/// #     extern "C-unwind" fn version() -> PdStr<'static> { "0".into() }
+/// fn route(context: Context<'_>) -> Route {
 ///     let shards = context.shards();
 ///     let read_only = context.read_only();
-///     let ast = context.statement().protobuf();
+///     let ast = context.query;
 ///
 ///     println!("shards: {} (read_only: {})", shards, read_only);
 ///     println!("ast: {:#?}", ast);
@@ -78,37 +35,33 @@ impl Deref for Statement {
 ///
 ///     Route::new(Shard::Direct(0), read_write)
 /// }
+/// # }
 /// ```
 ///
-#[derive(Debug)]
-pub struct Context {
-    ffi: PdRouterContext,
+#[derive(Debug, Clone, Copy)]
+#[repr(C)]
+pub struct Context<'a> {
+    /// How many shards are configured.
+    pub shards: u64,
+    /// Does the database cluster have replicas?
+    pub has_replicas: bool,
+    /// Does the database cluster have a primary?
+    pub has_primary: bool,
+    /// Is the query being executed inside a transaction?
+    pub in_transaction: bool,
+    /// PgDog strongly believes this statement should go to a primary.
+    pub write_override: bool,
+    /// pg_query generated Abstract Syntax Tree of the statement.
+    // Note: This is not at all FFI safe, and is UB across an FFI boundary.
+    // We are relying on an implemenation detail of the compiler that could
+    // change at any time to make this work. There is no safe way to pass
+    // this type, but this won't be an issue with the new parser
+    pub query: &'a pg_query::protobuf::ParseResult,
+    /// Bound parameters.
+    pub params: Parameters<'a>,
 }
 
-impl From<PdRouterContext> for Context {
-    fn from(value: PdRouterContext) -> Self {
-        Self { ffi: value }
-    }
-}
-
-impl Context {
-    /// Returns a reference to the Abstract Syntax Tree (AST) created by [`pg_query`].
-    ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// # use pgdog_plugin::Context;
-    /// # let context = unsafe { Context::doc_test() };
-    /// # let statement = context.statement();
-    /// let ast = context.statement().protobuf();
-    /// let nodes = ast.nodes();
-    /// ```
-    pub fn statement(&self) -> Statement {
-        Statement {
-            ffi: self.ffi.query,
-        }
-    }
-
+impl Context<'_> {
     /// Returns true if the database cluster doesn't have a primary database and can only serve
     /// read queries.
     ///
@@ -116,7 +69,7 @@ impl Context {
     ///
     /// ```
     /// # use pgdog_plugin::Context;
-    /// # let context = unsafe { Context::doc_test() };
+    /// # let context = Context::doc_test();
     ///
     /// let read_only = context.read_only();
     ///
@@ -125,7 +78,7 @@ impl Context {
     /// }
     /// ```
     pub fn read_only(&self) -> bool {
-        self.ffi.has_primary == 0
+        !self.has_primary
     }
 
     /// Returns true if the database cluster has replica databases.
@@ -134,7 +87,7 @@ impl Context {
     ///
     /// ```
     /// # use pgdog_plugin::Context;
-    /// # let context = unsafe { Context::doc_test() };
+    /// # let context = Context::doc_test();
     /// let has_replicas = context.has_replicas();
     ///
     /// if has_replicas {
@@ -142,7 +95,7 @@ impl Context {
     /// }
     /// ```
     pub fn has_replicas(&self) -> bool {
-        self.ffi.has_replicas == 1
+        self.has_replicas
     }
 
     /// Returns true if the database cluster has a primary database and can serve write queries.
@@ -151,7 +104,7 @@ impl Context {
     ///
     /// ```
     /// # use pgdog_plugin::Context;
-    /// # let context = unsafe { Context::doc_test() };
+    /// # let context = Context::doc_test();
     /// let has_primary = context.has_primary();
     ///
     /// if has_primary {
@@ -168,7 +121,7 @@ impl Context {
     ///
     /// ```
     /// # use pgdog_plugin::Context;
-    /// # let context = unsafe { Context::doc_test() };
+    /// # let context = Context::doc_test();
     /// let shards = context.shards();
     ///
     /// if shards > 1 {
@@ -176,7 +129,7 @@ impl Context {
     /// }
     /// ```
     pub fn shards(&self) -> usize {
-        self.ffi.shards as usize
+        self.shards as usize
     }
 
     /// Returns true if the database cluster has more than one shard.
@@ -185,7 +138,7 @@ impl Context {
     ///
     /// ```
     /// # use pgdog_plugin::Context;
-    /// # let context = unsafe { Context::doc_test() };
+    /// # let context = Context::doc_test();
     /// let sharded = context.sharded();
     /// let shards = context.shards();
     ///
@@ -213,13 +166,13 @@ impl Context {
     ///
     /// ```
     /// # use pgdog_plugin::Context;
-    /// # let context = unsafe { Context::doc_test() };
+    /// # let context = Context::doc_test();
     /// if context.write_override() {
     ///     println!("We should really send this query to the primary.");
     /// }
     /// ```
     pub fn write_override(&self) -> bool {
-        self.ffi.write_override == 1
+        self.write_override
     }
 
     /// Returns a list of parameters bound on the statement. If using the simple protocol,
@@ -229,42 +182,34 @@ impl Context {
     ///
     /// ```
     /// use pgdog_plugin::prelude::*;
-    /// # let context = unsafe { Context::doc_test() };
+    /// # let context = Context::doc_test();
     /// let params = context.parameters();
-    /// if let Some(param) = params.get(0) {
+    /// if let Some(param) = params.parameters.get(0) {
     ///     let value = param.decode(params.parameter_format(0));
     ///     println!("{:?}", value);
     /// }
     /// ```
-    pub fn parameters(&self) -> Parameters {
-        self.ffi.params.into()
+    pub fn parameters(&self) -> Parameters<'_> {
+        self.params
     }
 }
 
-impl Context {
-    /// Used for doc tests only. **Do not use**.
-    ///
-    /// # Safety
-    ///
-    /// Not safe, don't use. We use it for doc tests only.
-    ///
-    pub unsafe fn doc_test() -> Context {
-        use std::{os::raw::c_void, ptr::null};
-
+impl Context<'_> {
+    #[doc(hidden)]
+    pub fn doc_test() -> Self {
+        use pg_query::protobuf::ParseResult;
+        static EMPTY_PARSE_RESULT: ParseResult = ParseResult {
+            version: 0,
+            stmts: Vec::new(),
+        };
         Context {
-            ffi: PdRouterContext {
-                shards: 1,
-                has_replicas: 1,
-                has_primary: 1,
-                in_transaction: 0,
-                write_override: 0,
-                query: PdStatement {
-                    version: 1,
-                    len: 0,
-                    data: null::<c_void>() as *mut c_void,
-                },
-                params: PdParameters::default(),
-            },
+            shards: 1,
+            has_replicas: true,
+            has_primary: true,
+            in_transaction: false,
+            write_override: false,
+            query: &EMPTY_PARSE_RESULT,
+            params: Parameters::default(),
         }
     }
 }
@@ -380,12 +325,6 @@ impl From<ReadWrite> for u8 {
     }
 }
 
-impl Default for PdRoute {
-    fn default() -> Self {
-        Route::unknown().ffi
-    }
-}
-
 /// Statement route.
 ///
 /// PgDog uses this to decide where a query should be sent to. Read statements are sent to a replica,
@@ -407,33 +346,21 @@ impl Default for PdRoute {
 /// // No routing information is available. PgDog will ignore it
 /// // and make its own decision.
 /// let route = Route::unknown();
+#[repr(C)]
 pub struct Route {
-    ffi: PdRoute,
+    /// Which shard the query should go to.
+    ///
+    /// `-1` for all shards, `-2` for unknown, this setting is ignored.
+    pub shard: i64,
+    /// Is the query a read and should go to a replica?
+    ///
+    /// `1` for `true`, `0` for `false`, `2` for unknown, this setting is ignored.
+    pub read_write: u8,
 }
 
 impl Default for Route {
     fn default() -> Self {
         Self::unknown()
-    }
-}
-
-impl Deref for Route {
-    type Target = PdRoute;
-
-    fn deref(&self) -> &Self::Target {
-        &self.ffi
-    }
-}
-
-impl From<PdRoute> for Route {
-    fn from(value: PdRoute) -> Self {
-        Self { ffi: value }
-    }
-}
-
-impl From<Route> for PdRoute {
-    fn from(value: Route) -> Self {
-        value.ffi
     }
 }
 
@@ -447,10 +374,8 @@ impl Route {
     ///
     pub fn new(shard: Shard, read_write: ReadWrite) -> Route {
         Self {
-            ffi: PdRoute {
-                shard: shard.into(),
-                read_write: read_write.into(),
-            },
+            shard: shard.into(),
+            read_write: read_write.into(),
         }
     }
 
@@ -460,10 +385,8 @@ impl Route {
     /// can return this route.
     pub fn unknown() -> Route {
         Self {
-            ffi: PdRoute {
-                shard: -2,
-                read_write: 2,
-            },
+            shard: -2,
+            read_write: 2,
         }
     }
 
@@ -471,10 +394,8 @@ impl Route {
     /// and return an error to the client, telling them which plugin blocked it.
     pub fn block() -> Route {
         Self {
-            ffi: PdRoute {
-                shard: -3,
-                read_write: 2,
-            },
+            shard: -3,
+            read_write: 2,
         }
     }
 }

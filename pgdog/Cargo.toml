@@ -71,7 +71,8 @@ aws-sdk-rds = { version = "1", default-features = false }
 pgdog-config = { path = "../pgdog-config" }
 pgdog-vector = { path = "../pgdog-vector" }
 pgdog-stats = { path = "../pgdog-stats" }
-pgdog-postgres-types = { path = "../pgdog-postgres-types"}
+pgdog-macros = { path = "../pgdog-macros" }
+pgdog-postgres-types.workspace = true
 azure_identity = "1.0.0"
 azure_core = "1.0.0"
 crc32c = "0.6.8"

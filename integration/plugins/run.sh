@@ -17,10 +17,6 @@ pushd ${SCRIPT_DIR}/test-plugins/test-plugin-outdated
 cargo build --release
 popd
 
-pushd ${SCRIPT_DIR}/test-plugins/test-plugin-main
-cargo build --release
-popd
-
 unset CARGO_TARGET_DIR
 
 pushd ${SCRIPT_DIR}/../../plugins/pgdog-example-plugin

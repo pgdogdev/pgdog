@@ -1,23 +1,7 @@
-use std::{path::PathBuf, process::Command};
+use std::process::Command;
 
 #[cfg(not(docsrs))]
 fn main() {
-    println!("cargo:rerun-if-changed=include/types.h");
-
-    let bindings = bindgen::Builder::default()
-        .header("include/wrapper.h")
-        .generate_comments(true)
-        // Tell cargo to invalidate the built crate whenever any of the
-        // included header files changed.
-        .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
-        // Finish the builder and generate the bindings.
-        .generate()
-        // Unwrap the Result and panic on failure.
-        .expect("Unable to generate bindings");
-
-    let out_path = PathBuf::from(std::env::var("OUT_DIR").unwrap());
-    let _ = bindings.write_to_file(out_path.join("bindings.rs"));
-
     let rustc = std::env::var("RUSTC").unwrap();
     let version = Command::new(rustc).arg("--version").output().unwrap();
     let version_str = String::from_utf8(version.stdout).unwrap();

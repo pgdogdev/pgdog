@@ -97,7 +97,7 @@ async fn test_pool_checkout() {
 }
 
 // This test flakes in CI because of iffy hardware I think.
-#[pgdog_plugin::macros::flaky]
+#[pgdog_macros::flaky]
 #[tokio::test]
 async fn test_concurrency() {
     let pool = pool();

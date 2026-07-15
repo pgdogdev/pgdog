@@ -8,40 +8,40 @@ use std::{
 use arc_swap::ArcSwap;
 use once_cell::sync::Lazy;
 use pgdog_plugin::{
-    Context, PdConfig, ReadWrite, Route, Shard, macros, pg_query::NodeEnum, pg_query::NodeRef,
+    Config as PluginConfig, Context, PdStr, Plugin, ReadWrite, Route, Shard,
+    pg_query::{NodeEnum, NodeRef},
 };
 use serde::{Deserialize, Serialize};
 use tracing::{error, info};
 
 static CONFIG: Lazy<ArcSwap<Config>> = Lazy::new(|| ArcSwap::from_pointee(Config::default()));
 
-macros::plugin!();
+pgdog_plugin::plugin!(PrimaryOnlyTables);
 
-#[macros::route]
-fn route(context: Context) -> Route {
-    route_query(context).unwrap_or(Route::unknown())
-}
+struct PrimaryOnlyTables;
 
-#[macros::config]
-fn config(config: PdConfig, result: *mut u8) {
-    let plugin_config = config.plugin_config.to_string();
-    if plugin_config.is_empty() {
-        unsafe {
-            *result = 0;
-        }
-        return;
+impl Plugin for PrimaryOnlyTables {
+    extern "C-unwind" fn version() -> PdStr<'static> {
+        env!("CARGO_PKG_VERSION").into()
     }
 
-    let path = PathBuf::from(plugin_config);
-    if let Err(err) = read_config(&path) {
-        error!("[pgdog_primary_only_tables] failed to load config: {}", err);
+    fn route(context: Context<'_>) -> Route {
+        route_query(context).unwrap_or(Route::unknown())
+    }
 
-        unsafe {
-            *result = 1;
+    extern "C-unwind" fn config(config: PluginConfig<'_>) -> bool {
+        let plugin_config = config.plugin_config;
+        if plugin_config.is_empty() {
+            return true;
         }
-    } else {
-        unsafe {
-            *result = 0;
+
+        let path = PathBuf::from(&*plugin_config);
+        if let Err(err) = read_config(&path) {
+            error!("[pgdog_primary_only_tables] failed to load config: {}", err);
+
+            false
+        } else {
+            true
         }
     }
 }
@@ -75,8 +75,8 @@ fn read_config(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn route_query(context: Context) -> Result<Route, Box<dyn std::error::Error>> {
-    let ast = context.statement().protobuf();
+fn route_query(context: Context<'_>) -> Result<Route, Box<dyn std::error::Error>> {
+    let ast = &context.query;
 
     let root_node = ast
         .stmts

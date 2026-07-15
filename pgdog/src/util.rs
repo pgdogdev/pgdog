@@ -2,11 +2,10 @@
 
 use chrono::{DateTime, Local, Utc};
 use once_cell::sync::Lazy;
-use pgdog_plugin::comp;
 use rand::{Rng, distr::Alphanumeric};
 #[cfg(feature = "new_parser")]
 use std::ops::ControlFlow;
-use std::{env, num::ParseIntError, ops::Deref, time::Duration};
+use std::{env, num::ParseIntError, time::Duration};
 
 use crate::net::Parameters; // 0.8
 
@@ -164,8 +163,8 @@ pub fn pgdog_version() -> String {
         "v{} [main@{}, pgdog-plugin {}, {}]",
         env!("CARGO_PKG_VERSION"),
         env!("GIT_HASH"),
-        comp::pgdog_plugin_api_version().deref(),
-        comp::rustc_version().deref()
+        pgdog_plugin::VERSION,
+        pgdog_plugin::RUSTC_VERSION,
     )
 }
 
