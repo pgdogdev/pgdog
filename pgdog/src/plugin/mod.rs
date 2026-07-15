@@ -125,7 +125,7 @@ pub fn load(config: &Config) -> Result<(), libloading::Error> {
 /// Shutdown plugins.
 pub fn shutdown() {
     if let Some(plugins) = plugins() {
-        for (_, plugin) in plugins {
+        for plugin in plugins.values() {
             plugin.fini();
         }
     }

@@ -65,7 +65,7 @@ impl QueryParser {
 
             Parameters {
                 parameters: &params_data,
-                format_codes: &bind.format_codes_raw(),
+                format_codes: bind.format_codes_raw(),
             }
         } else {
             Parameters::default()
