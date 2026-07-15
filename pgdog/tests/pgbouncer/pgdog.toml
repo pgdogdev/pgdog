@@ -4,6 +4,9 @@ min_pool_size = 0
 prepared_statements_limit = 500
 openmetrics_port = 9090
 prepared_statements = "extended"
+query_parser = "on"
+query_parser_engine = "pg_query_raw"
+query_cache_limit = 10_000
 
 [[databases]]
 name = "pgdog"
