@@ -54,17 +54,13 @@ pub fn load(config: &Config) -> Result<(), libloading::Error> {
     let plugin_libs = plugins.iter().enumerate().filter_map(|(i, plugin)| {
         if let Some(lib) = LIBS.get().unwrap().get(i) {
             let now = Instant::now();
-            let plugin_lib = PluginVtable::load(lib);
-
-            // Check Rust compiler version.
-            if rustc_version != &*plugin_lib.rustc_version() {
+            let Some(plugin_lib) = PluginVtable::load(lib) else {
                 warn!(
-                    "skipping plugin \"{}\" because it was compiled with different compiler version ({})",
+                    "skipping plugin \"{}\" because its vtable could not be loaded",
                     plugin.name,
-                    &*plugin_lib.rustc_version()
                 );
                 return None;
-            }
+            };
 
             // Check plugin api version (compare major.minor only)
             if !same_major_minor(&plugin_lib.pgdog_plugin_api_version(), pgdog_plugin_api_version) {
@@ -72,6 +68,17 @@ pub fn load(config: &Config) -> Result<(), libloading::Error> {
                     "skipping plugin \"{}\" because it was compiled with different plugin API version ({})",
                     plugin.name,
                     &*plugin_lib.pgdog_plugin_api_version()
+                );
+                return None;
+            }
+
+
+            // Check Rust compiler version.
+            if rustc_version != &*plugin_lib.rustc_version() {
+                warn!(
+                    "skipping plugin \"{}\" because it was compiled with different compiler version ({})",
+                    plugin.name,
+                    &*plugin_lib.rustc_version()
                 );
                 return None;
             }
