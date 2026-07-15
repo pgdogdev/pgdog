@@ -69,7 +69,7 @@ impl Context<'_> {
     ///
     /// ```
     /// # use pgdog_plugin::Context;
-    /// # let context = unsafe { Context::doc_test() };
+    /// # let context = Context::doc_test();
     ///
     /// let read_only = context.read_only();
     ///
@@ -87,7 +87,7 @@ impl Context<'_> {
     ///
     /// ```
     /// # use pgdog_plugin::Context;
-    /// # let context = unsafe { Context::doc_test() };
+    /// # let context = Context::doc_test();
     /// let has_replicas = context.has_replicas();
     ///
     /// if has_replicas {
@@ -104,7 +104,7 @@ impl Context<'_> {
     ///
     /// ```
     /// # use pgdog_plugin::Context;
-    /// # let context = unsafe { Context::doc_test() };
+    /// # let context = Context::doc_test();
     /// let has_primary = context.has_primary();
     ///
     /// if has_primary {
@@ -121,7 +121,7 @@ impl Context<'_> {
     ///
     /// ```
     /// # use pgdog_plugin::Context;
-    /// # let context = unsafe { Context::doc_test() };
+    /// # let context = Context::doc_test();
     /// let shards = context.shards();
     ///
     /// if shards > 1 {
@@ -138,7 +138,7 @@ impl Context<'_> {
     ///
     /// ```
     /// # use pgdog_plugin::Context;
-    /// # let context = unsafe { Context::doc_test() };
+    /// # let context = Context::doc_test();
     /// let sharded = context.sharded();
     /// let shards = context.shards();
     ///
@@ -166,7 +166,7 @@ impl Context<'_> {
     ///
     /// ```
     /// # use pgdog_plugin::Context;
-    /// # let context = unsafe { Context::doc_test() };
+    /// # let context = Context::doc_test();
     /// if context.write_override() {
     ///     println!("We should really send this query to the primary.");
     /// }
@@ -182,7 +182,7 @@ impl Context<'_> {
     ///
     /// ```
     /// use pgdog_plugin::prelude::*;
-    /// # let context = unsafe { Context::doc_test() };
+    /// # let context = Context::doc_test();
     /// let params = context.parameters();
     /// if let Some(param) = params.parameters.get(0) {
     ///     let value = param.decode(params.parameter_format(0));

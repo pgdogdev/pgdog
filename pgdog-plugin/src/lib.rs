@@ -103,7 +103,7 @@
 //!
 //! ```
 //! # use pgdog_plugin::prelude::*;
-//! # let context = unsafe { Context::doc_test() };
+//! # let context = Context::doc_test();
 //! let params = context.parameters();
 //! if let Some(param) = params
 //!     .parameters
