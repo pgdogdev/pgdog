@@ -14,12 +14,10 @@ use libloading::{Library, Symbol, library_filename};
 
 /// Plugin interface.
 ///
-/// Methods are loaded using `libloading`. If required methods aren't found,
-/// the plugin isn't loaded. All optional methods are checked first, before being
-/// executed.
-///
-/// Using this interface is reasonably safe.
-///
+/// This is the vtable of a struct which implements [`Plugin`]
+// !IMPORTANT!
+// Any changes to this struct *must* come with a change to the crate's minor
+// version
 #[derive(Debug)]
 #[repr(C)]
 pub struct PluginVtable {
