@@ -9,10 +9,14 @@ use std::{
 
 use lazy_static::lazy_static;
 use parking_lot::Mutex;
+#[cfg(not(feature = "new_parser"))]
 use pg_query::{
     Node, NodeEnum,
     protobuf::{AlterTableType, ConstrType, ObjectType, ParseResult, RangeVar, String as PgString},
 };
+#[cfg(feature = "new_parser")]
+use pg_raw_parse::{Node, Owned, StmtList, make, nodes};
+#[cfg(not(feature = "new_parser"))]
 use pgdog_config::QueryParserEngine;
 use regex::Regex;
 use tracing::{info, trace, warn};
@@ -36,6 +40,7 @@ struct ColumnTypeKey<'a> {
     column: &'a str,
 }
 
+#[cfg(not(feature = "new_parser"))]
 fn deparse_node(node: NodeEnum) -> Result<String, pg_query::Error> {
     match config().config.general.query_parser_engine {
         QueryParserEngine::PgQueryProtobuf => node.deparse(),
@@ -43,6 +48,7 @@ fn deparse_node(node: NodeEnum) -> Result<String, pg_query::Error> {
     }
 }
 
+#[cfg(not(feature = "new_parser"))]
 fn parse(query: &str) -> Result<pg_query::ParseResult, pg_query::Error> {
     match config().config.general.query_parser_engine {
         QueryParserEngine::PgQueryProtobuf => pg_query::parse(query),
@@ -50,12 +56,22 @@ fn parse(query: &str) -> Result<pg_query::ParseResult, pg_query::Error> {
     }
 }
 
-fn schema_name(relation: &RangeVar) -> &str {
-    if relation.schemaname.is_empty() {
-        "public"
-    } else {
-        relation.schemaname.as_str()
+#[cfg(feature = "new_parser")]
+fn schema_name(relation: &nodes::RangeVar) -> &str {
+    relation.schemaname().unwrap_or("public")
+}
+
+cfg_select! {
+    not(feature = "new_parser") => {
+        fn schema_name(relation: &RangeVar) -> &str {
+            if relation.schemaname.is_empty() {
+                "public"
+            } else {
+                relation.schemaname.as_str()
+            }
+        }
     }
+    _ => {}
 }
 
 fn is_integer_type(type_name: &str) -> bool {
@@ -70,9 +86,10 @@ fn is_integer_type(type_name: &str) -> bool {
 /// A column should be converted if:
 /// 1. It's in the columns_to_convert set (PK/FK that references integer PK), OR
 /// 2. It's a child partition column where the parent has bigint and child has integer
+#[cfg(feature = "new_parser")]
 fn should_convert_to_bigint<'a>(
     col: &Column<'a>,
-    col_type_name: Option<&pg_query::protobuf::TypeName>,
+    col_type_name: Option<&nodes::TypeName>,
     columns_to_convert: &HashSet<Column<'a>>,
     parent_table: Option<&Table<'a>>,
     parent_column_types: &HashMap<(Table<'a>, &str), &'static str>,
@@ -96,19 +113,60 @@ fn should_convert_to_bigint<'a>(
     }
 
     // Parent has bigint, check if child has integer type
-    let Some(type_name) = col_type_name else {
+    let Some(type_name) = col_type_name
+        .and_then(|n| n.names().iter().last())
+        .and_then(|s| s.sval())
+    else {
         return false;
     };
 
-    let Some(last) = type_name.names.last() else {
-        return false;
-    };
+    is_integer_type(type_name)
+}
 
-    let Some(NodeEnum::String(PgString { sval })) = &last.node else {
-        return false;
-    };
+cfg_select! {
+    not(feature = "new_parser") => {
+        fn should_convert_to_bigint<'a>(
+            col: &Column<'a>,
+            col_type_name: Option<&pg_query::protobuf::TypeName>,
+            columns_to_convert: &HashSet<Column<'a>>,
+            parent_table: Option<&Table<'a>>,
+            parent_column_types: &HashMap<(Table<'a>, &str), &'static str>,
+        ) -> bool {
+            // Check if this column is directly marked for conversion (PK/FK)
+            if columns_to_convert.contains(col) {
+                return true;
+            }
 
-    is_integer_type(sval.as_str())
+            // Check if this is a child partition where parent has bigint
+            let Some(parent) = parent_table else {
+                return false;
+            };
+
+            let Some(&parent_type) = parent_column_types.get(&(*parent, col.name)) else {
+                return false;
+            };
+
+            if parent_type != "int8" {
+                return false;
+            }
+
+            // Parent has bigint, check if child has integer type
+            let Some(type_name) = col_type_name else {
+                return false;
+            };
+
+            let Some(last) = type_name.names.last() else {
+                return false;
+            };
+
+            let Some(NodeEnum::String(PgString { sval })) = &last.node else {
+                return false;
+            };
+
+            is_integer_type(sval.as_str())
+        }
+    }
+    _ => {}
 }
 
 use tokio::{process::Command, task::JoinSet};
@@ -232,7 +290,10 @@ impl PgDump {
         let cleaned = Self::clean(&original);
         trace!("[pg_dump (clean)] {}", cleaned);
 
+        #[cfg(not(feature = "new_parser"))]
         let stmts = parse(&cleaned)?.protobuf;
+        #[cfg(feature = "new_parser")]
+        let stmts = pg_raw_parse::parse(&cleaned)?.into_inner();
 
         Ok(PgDumpOutput {
             stmts,
@@ -241,10 +302,24 @@ impl PgDump {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
+#[cfg_attr(not(feature = "new_parser"), derive(Clone))]
 pub struct PgDumpOutput {
+    #[cfg(not(feature = "new_parser"))]
     stmts: ParseResult,
+    #[cfg(feature = "new_parser")]
+    stmts: Owned<StmtList>,
     original: String,
+}
+
+#[cfg(feature = "new_parser")]
+impl Clone for PgDumpOutput {
+    fn clone(&self) -> Self {
+        Self {
+            stmts: make::owned(|mem| mem.make_unique(&*self.stmts)),
+            original: self.original.clone(),
+        }
+    }
 }
 
 pub use pgdog_stats::SyncState;
@@ -308,52 +383,45 @@ impl<'a> From<String> for Statement<'a> {
 impl PgDumpOutput {
     /// Get integer primary key columns (columns that are part of PRIMARY KEY
     /// constraints and have integer types like int4, int2, serial, etc.).
+    #[cfg(feature = "new_parser")]
     pub(crate) fn integer_primary_key_columns(&self) -> HashSet<Column<'_>> {
         let column_types = self.column_types();
         let mut result = HashSet::new();
 
-        for stmt in &self.stmts.stmts {
-            let Some(ref node) = stmt.stmt else {
-                continue;
-            };
-            let Some(NodeEnum::AlterTableStmt(ref alter_stmt)) = node.node else {
+        for stmt in self.stmts.stmts() {
+            let Node::AlterTableStmt(alter_stmt) = stmt else {
                 continue;
             };
 
-            let Some(ref relation) = alter_stmt.relation else {
+            let Some(relation) = alter_stmt.relation() else {
                 continue;
             };
 
-            for cmd in &alter_stmt.cmds {
-                let Some(NodeEnum::AlterTableCmd(ref cmd)) = cmd.node else {
+            for cmd in alter_stmt.cmds() {
+                let Node::AlterTableCmd(cmd) = cmd else {
                     continue;
                 };
 
-                if cmd.subtype() != AlterTableType::AtAddConstraint {
+                if cmd.subtype != nodes::AlterTableType::AT_AddConstraint {
                     continue;
                 }
 
-                let Some(ref def) = cmd.def else {
+                let Node::Constraint(cons) = cmd.def() else {
                     continue;
                 };
 
-                let Some(NodeEnum::Constraint(ref cons)) = def.node else {
-                    continue;
-                };
-
-                if cons.contype() != ConstrType::ConstrPrimary {
+                if cons.contype != nodes::ConstrType::CONSTR_PRIMARY {
                     continue;
                 }
 
                 let schema = schema_name(relation);
-                let table_name = relation.relname.as_str();
+                let table_name = relation.relname().unwrap_or_default();
 
-                for key in &cons.keys {
-                    let Some(NodeEnum::String(PgString { sval })) = &key.node else {
+                for key in cons.keys() {
+                    let Some(col_name) = key.as_str() else {
                         continue;
                     };
 
-                    let col_name = sval.as_str();
                     let type_key = ColumnTypeKey {
                         schema,
                         table: table_name,
@@ -379,71 +447,137 @@ impl PgDumpOutput {
         result
     }
 
+    cfg_select! {
+        not(feature = "new_parser") => {
+            pub(crate) fn integer_primary_key_columns(&self) -> HashSet<Column<'_>> {
+                let column_types = self.column_types();
+                let mut result = HashSet::new();
+
+                for stmt in &self.stmts.stmts {
+                    let Some(ref node) = stmt.stmt else {
+                        continue;
+                    };
+                    let Some(NodeEnum::AlterTableStmt(ref alter_stmt)) = node.node else {
+                        continue;
+                    };
+
+                    let Some(ref relation) = alter_stmt.relation else {
+                        continue;
+                    };
+
+                    for cmd in &alter_stmt.cmds {
+                        let Some(NodeEnum::AlterTableCmd(ref cmd)) = cmd.node else {
+                            continue;
+                        };
+
+                        if cmd.subtype() != AlterTableType::AtAddConstraint {
+                            continue;
+                        }
+
+                        let Some(ref def) = cmd.def else {
+                            continue;
+                        };
+
+                        let Some(NodeEnum::Constraint(ref cons)) = def.node else {
+                            continue;
+                        };
+
+                        if cons.contype() != ConstrType::ConstrPrimary {
+                            continue;
+                        }
+
+                        let schema = schema_name(relation);
+                        let table_name = relation.relname.as_str();
+
+                        for key in &cons.keys {
+                            let Some(NodeEnum::String(PgString { sval })) = &key.node else {
+                                continue;
+                            };
+
+                            let col_name = sval.as_str();
+                            let type_key = ColumnTypeKey {
+                                schema,
+                                table: table_name,
+                                column: col_name,
+                            };
+
+                            let is_integer = column_types
+                                .get(&type_key)
+                                .map(|t| is_integer_type(t))
+                                .unwrap_or(false);
+
+                            if is_integer {
+                                result.insert(Column {
+                                    name: col_name,
+                                    table: Some(table_name),
+                                    schema: Some(schema),
+                                });
+                            }
+                        }
+                    }
+                }
+
+                result
+            }
+        }
+        _ => {}
+    }
+
     /// Get integer foreign key columns (FK columns that reference integer PKs).
+    #[cfg(feature = "new_parser")]
     pub(crate) fn integer_foreign_key_columns(&self) -> HashSet<Column<'_>> {
         let integer_pks = self.integer_primary_key_columns();
         let mut result = HashSet::new();
 
-        for stmt in &self.stmts.stmts {
-            let Some(ref node) = stmt.stmt else {
-                continue;
-            };
-            let Some(NodeEnum::AlterTableStmt(ref alter_stmt)) = node.node else {
+        for stmt in self.stmts.stmts() {
+            let Node::AlterTableStmt(alter_stmt) = stmt else {
                 continue;
             };
 
-            let Some(ref fk_table) = alter_stmt.relation else {
+            let Some(fk_table) = alter_stmt.relation() else {
                 continue;
             };
 
-            for cmd in &alter_stmt.cmds {
-                let Some(NodeEnum::AlterTableCmd(ref cmd)) = cmd.node else {
+            for cmd in alter_stmt.cmds() {
+                let Node::AlterTableCmd(cmd) = cmd else {
                     continue;
                 };
 
-                if cmd.subtype() != AlterTableType::AtAddConstraint {
+                if cmd.subtype != nodes::AlterTableType::AT_AddConstraint {
                     continue;
                 }
 
-                let Some(ref def) = cmd.def else {
+                let Node::Constraint(cons) = cmd.def() else {
                     continue;
                 };
 
-                let Some(NodeEnum::Constraint(ref cons)) = def.node else {
-                    continue;
-                };
-
-                if cons.contype() != ConstrType::ConstrForeign {
+                if cons.contype != nodes::ConstrType::CONSTR_FOREIGN {
                     continue;
                 }
 
-                let Some(ref pk_table) = cons.pktable else {
+                let Some(pk_table) = cons.pktable() else {
                     continue;
                 };
 
                 let pk_schema = schema_name(pk_table);
-                let pk_table_name = pk_table.relname.as_str();
+                let pk_table_name = pk_table.relname().unwrap_or_default();
                 let fk_schema = schema_name(fk_table);
-                let fk_table_name = fk_table.relname.as_str();
+                let fk_table_name = fk_table.relname().unwrap_or_default();
 
-                for (pk_attr, fk_attr) in cons.pk_attrs.iter().zip(cons.fk_attrs.iter()) {
-                    let (
-                        Some(NodeEnum::String(PgString { sval: pk_col })),
-                        Some(NodeEnum::String(PgString { sval: fk_col })),
-                    ) = (&pk_attr.node, &fk_attr.node)
-                    else {
+                for (pk_attr, fk_attr) in cons.pk_attrs().iter().zip(cons.fk_attrs()) {
+                    let (Some(pk_col), Some(fk_col)) = (pk_attr.as_str(), fk_attr.as_str()) else {
                         continue;
                     };
 
                     let pk_column = Column {
-                        name: pk_col.as_str(),
+                        name: pk_col,
                         table: Some(pk_table_name),
                         schema: Some(pk_schema),
                     };
 
                     if integer_pks.contains(&pk_column) {
                         result.insert(Column {
-                            name: fk_col.as_str(),
+                            name: fk_col,
                             table: Some(fk_table_name),
                             schema: Some(fk_schema),
                         });
@@ -455,21 +589,99 @@ impl PgDumpOutput {
         result
     }
 
+    cfg_select! {
+        not(feature = "new_parser") => {
+            pub(crate) fn integer_foreign_key_columns(&self) -> HashSet<Column<'_>> {
+                let integer_pks = self.integer_primary_key_columns();
+                let mut result = HashSet::new();
+
+                for stmt in &self.stmts.stmts {
+                    let Some(ref node) = stmt.stmt else {
+                        continue;
+                    };
+                    let Some(NodeEnum::AlterTableStmt(ref alter_stmt)) = node.node else {
+                        continue;
+                    };
+
+                    let Some(ref fk_table) = alter_stmt.relation else {
+                        continue;
+                    };
+
+                    for cmd in &alter_stmt.cmds {
+                        let Some(NodeEnum::AlterTableCmd(ref cmd)) = cmd.node else {
+                            continue;
+                        };
+
+                        if cmd.subtype() != AlterTableType::AtAddConstraint {
+                            continue;
+                        }
+
+                        let Some(ref def) = cmd.def else {
+                            continue;
+                        };
+
+                        let Some(NodeEnum::Constraint(ref cons)) = def.node else {
+                            continue;
+                        };
+
+                        if cons.contype() != ConstrType::ConstrForeign {
+                            continue;
+                        }
+
+                        let Some(ref pk_table) = cons.pktable else {
+                            continue;
+                        };
+
+                        let pk_schema = schema_name(pk_table);
+                        let pk_table_name = pk_table.relname.as_str();
+                        let fk_schema = schema_name(fk_table);
+                        let fk_table_name = fk_table.relname.as_str();
+
+                        for (pk_attr, fk_attr) in cons.pk_attrs.iter().zip(cons.fk_attrs.iter()) {
+                            let (
+                                Some(NodeEnum::String(PgString { sval: pk_col })),
+                                Some(NodeEnum::String(PgString { sval: fk_col })),
+                            ) = (&pk_attr.node, &fk_attr.node)
+                            else {
+                                continue;
+                            };
+
+                            let pk_column = Column {
+                                name: pk_col.as_str(),
+                                table: Some(pk_table_name),
+                                schema: Some(pk_schema),
+                            };
+
+                            if integer_pks.contains(&pk_column) {
+                                result.insert(Column {
+                                    name: fk_col.as_str(),
+                                    table: Some(fk_table_name),
+                                    schema: Some(fk_schema),
+                                });
+                            }
+                        }
+                    }
+                }
+
+                result
+            }
+        }
+        _ => {}
+    }
+
     /// Get partitioned parent tables (tables with PARTITION BY).
+    #[cfg(feature = "new_parser")]
     fn partitioned_tables(&self) -> HashSet<Table<'_>> {
         let mut result = HashSet::new();
 
-        for stmt in &self.stmts.stmts {
-            let Some(ref node) = stmt.stmt else {
-                continue;
-            };
-            let Some(NodeEnum::CreateStmt(ref create_stmt)) = node.node else {
+        for stmt in self.stmts.stmts() {
+            let Node::CreateStmt(create_stmt) = stmt else {
                 continue;
             };
 
             // Tables with partspec are partitioned parent tables
-            if create_stmt.partspec.is_some()
-                && let Some(ref relation) = create_stmt.relation
+            if create_stmt.partspec().is_some()
+                && let Some(relation) = create_stmt.relation()
             {
                 result.insert(Table::from(relation));
             }
@@ -478,41 +690,62 @@ impl PgDumpOutput {
         result
     }
 
+    cfg_select! {
+        not(feature = "new_parser") => {
+            fn partitioned_tables(&self) -> HashSet<Table<'_>> {
+                let mut result = HashSet::new();
+
+                for stmt in &self.stmts.stmts {
+                    let Some(ref node) = stmt.stmt else {
+                        continue;
+                    };
+                    let Some(NodeEnum::CreateStmt(ref create_stmt)) = node.node else {
+                        continue;
+                    };
+
+                    // Tables with partspec are partitioned parent tables
+                    if create_stmt.partspec.is_some()
+                        && let Some(ref relation) = create_stmt.relation
+                    {
+                        result.insert(Table::from(relation));
+                    }
+                }
+
+                result
+            }
+        }
+        _ => {}
+    }
+
     /// Get parent-child relationships from ATTACH PARTITION statements.
     /// Returns a map from child table to parent table.
+    #[cfg(feature = "new_parser")]
     fn partition_parents(&self) -> HashMap<Table<'_>, Table<'_>> {
         let mut result = HashMap::new();
 
-        for stmt in &self.stmts.stmts {
-            let Some(ref node) = stmt.stmt else {
-                continue;
-            };
-            let Some(NodeEnum::AlterTableStmt(ref alter_stmt)) = node.node else {
+        for stmt in self.stmts.stmts() {
+            let Node::AlterTableStmt(alter_stmt) = stmt else {
                 continue;
             };
 
-            let Some(ref parent_relation) = alter_stmt.relation else {
+            let Some(parent_relation) = alter_stmt.relation() else {
                 continue;
             };
 
-            for cmd in &alter_stmt.cmds {
-                let Some(NodeEnum::AlterTableCmd(ref cmd)) = cmd.node else {
+            for cmd in alter_stmt.cmds() {
+                let Node::AlterTableCmd(cmd) = cmd else {
                     continue;
                 };
 
-                if cmd.subtype() != AlterTableType::AtAttachPartition {
+                if cmd.subtype != nodes::AlterTableType::AT_AttachPartition {
                     continue;
                 }
 
-                let Some(ref def) = cmd.def else {
+                let Node::PartitionCmd(partition_cmd) = cmd.def() else {
                     continue;
                 };
 
-                let Some(NodeEnum::PartitionCmd(ref partition_cmd)) = def.node else {
-                    continue;
-                };
-
-                let Some(ref child_relation) = partition_cmd.name else {
+                let Some(child_relation) = partition_cmd.name() else {
                     continue;
                 };
 
@@ -525,8 +758,59 @@ impl PgDumpOutput {
         result
     }
 
+    cfg_select! {
+        not(feature = "new_parser") => {
+            fn partition_parents(&self) -> HashMap<Table<'_>, Table<'_>> {
+                let mut result = HashMap::new();
+
+                for stmt in &self.stmts.stmts {
+                    let Some(ref node) = stmt.stmt else {
+                        continue;
+                    };
+                    let Some(NodeEnum::AlterTableStmt(ref alter_stmt)) = node.node else {
+                        continue;
+                    };
+
+                    let Some(ref parent_relation) = alter_stmt.relation else {
+                        continue;
+                    };
+
+                    for cmd in &alter_stmt.cmds {
+                        let Some(NodeEnum::AlterTableCmd(ref cmd)) = cmd.node else {
+                            continue;
+                        };
+
+                        if cmd.subtype() != AlterTableType::AtAttachPartition {
+                            continue;
+                        }
+
+                        let Some(ref def) = cmd.def else {
+                            continue;
+                        };
+
+                        let Some(NodeEnum::PartitionCmd(ref partition_cmd)) = def.node else {
+                            continue;
+                        };
+
+                        let Some(ref child_relation) = partition_cmd.name else {
+                            continue;
+                        };
+
+                        let parent = Table::from(parent_relation);
+                        let child = Table::from(child_relation);
+                        result.insert(child, parent);
+                    }
+                }
+
+                result
+            }
+        }
+        _ => {}
+    }
+
     /// Get column types for partitioned parent tables after bigint conversion.
     /// Returns a map from (parent_table, column_name) to the converted type.
+    #[cfg(feature = "new_parser")]
     fn partitioned_parent_column_types(
         &self,
         columns_to_convert: &HashSet<Column<'_>>,
@@ -534,15 +818,12 @@ impl PgDumpOutput {
         let mut result = HashMap::new();
         let partitioned = self.partitioned_tables();
 
-        for stmt in &self.stmts.stmts {
-            let Some(ref node) = stmt.stmt else {
-                continue;
-            };
-            let Some(NodeEnum::CreateStmt(ref create_stmt)) = node.node else {
+        for stmt in self.stmts.stmts() {
+            let Node::CreateStmt(create_stmt) = stmt else {
                 continue;
             };
 
-            let Some(ref relation) = create_stmt.relation else {
+            let Some(relation) = create_stmt.relation() else {
                 continue;
             };
 
@@ -554,29 +835,26 @@ impl PgDumpOutput {
             let schema = table.schema().map(|s| s.name).unwrap_or("public");
             let table_name = table.name;
 
-            for elt in &create_stmt.table_elts {
-                if let Some(NodeEnum::ColumnDef(ref col_def)) = elt.node {
-                    let col = Column {
-                        name: col_def.colname.as_str(),
-                        table: Some(table_name),
-                        schema: Some(schema),
-                    };
+            for col_def in create_stmt.table_elts() {
+                let col = Column {
+                    name: col_def.colname().unwrap_or_default(),
+                    table: Some(table_name),
+                    schema: Some(schema),
+                };
 
-                    // Check if this column needs conversion
-                    if columns_to_convert.contains(&col) {
-                        result.insert((table, col_def.colname.as_str()), "int8");
-                    } else if let Some(ref type_name) = col_def.type_name
-                        && let Some(last_name) = type_name.names.last()
-                        && let Some(NodeEnum::String(PgString { sval })) = &last_name.node
-                    {
-                        // Store original type for non-converted columns
-                        let type_str: &'static str = match sval.as_str() {
-                            "int4" => "int4",
-                            "int8" => "int8",
-                            _ => continue, // Only track integer types
-                        };
-                        result.insert((table, col_def.colname.as_str()), type_str);
-                    }
+                // Check if this column needs conversion
+                if columns_to_convert.contains(&col) {
+                    result.insert((table, col_def.colname().unwrap_or_default()), "int8");
+                } else if let Some(type_name) = col_def.type_name()
+                    && let Some(last_name) = type_name.names().iter().last()
+                {
+                    // Store original type for non-converted columns
+                    let type_str = match last_name.sval() {
+                        Some("int4") => "int4",
+                        Some("int8") => "int8",
+                        _ => continue, // Only track integer types
+                    };
+                    result.insert((table, col_def.colname().unwrap_or_default()), type_str);
                 }
             }
         }
@@ -584,38 +862,96 @@ impl PgDumpOutput {
         result
     }
 
+    cfg_select! {
+        not(feature = "new_parser") => {
+            fn partitioned_parent_column_types(
+                &self,
+                columns_to_convert: &HashSet<Column<'_>>,
+            ) -> HashMap<(Table<'_>, &str), &'static str> {
+                let mut result = HashMap::new();
+                let partitioned = self.partitioned_tables();
+
+                for stmt in &self.stmts.stmts {
+                    let Some(ref node) = stmt.stmt else {
+                        continue;
+                    };
+                    let Some(NodeEnum::CreateStmt(ref create_stmt)) = node.node else {
+                        continue;
+                    };
+
+                    let Some(ref relation) = create_stmt.relation else {
+                        continue;
+                    };
+
+                    let table = Table::from(relation);
+                    if !partitioned.contains(&table) {
+                        continue;
+                    }
+
+                    let schema = table.schema().map(|s| s.name).unwrap_or("public");
+                    let table_name = table.name;
+
+                    for elt in &create_stmt.table_elts {
+                        if let Some(NodeEnum::ColumnDef(ref col_def)) = elt.node {
+                            let col = Column {
+                                name: col_def.colname.as_str(),
+                                table: Some(table_name),
+                                schema: Some(schema),
+                            };
+
+                            // Check if this column needs conversion
+                            if columns_to_convert.contains(&col) {
+                                result.insert((table, col_def.colname.as_str()), "int8");
+                            } else if let Some(ref type_name) = col_def.type_name
+                                && let Some(last_name) = type_name.names.last()
+                                && let Some(NodeEnum::String(PgString { sval })) = &last_name.node
+                            {
+                                // Store original type for non-converted columns
+                                let type_str: &'static str = match sval.as_str() {
+                                    "int4" => "int4",
+                                    "int8" => "int8",
+                                    _ => continue, // Only track integer types
+                                };
+                                result.insert((table, col_def.colname.as_str()), type_str);
+                            }
+                        }
+                    }
+                }
+
+                result
+            }
+        }
+        _ => {}
+    }
+
     /// Get all column types from CREATE TABLE statements.
+    #[cfg(feature = "new_parser")]
     fn column_types(&self) -> HashMap<ColumnTypeKey<'_>, &str> {
         let mut result = HashMap::new();
 
-        for stmt in &self.stmts.stmts {
-            let Some(ref node) = stmt.stmt else {
-                continue;
-            };
-            let Some(NodeEnum::CreateStmt(ref create_stmt)) = node.node else {
+        for stmt in self.stmts.stmts() {
+            let Node::CreateStmt(create_stmt) = stmt else {
                 continue;
             };
 
-            let Some(ref relation) = create_stmt.relation else {
+            let Some(relation) = create_stmt.relation() else {
                 continue;
             };
 
             let schema = schema_name(relation);
-            let table_name = relation.relname.as_str();
+            let table_name = relation.relname().unwrap_or_default();
 
-            for elt in &create_stmt.table_elts {
-                if let Some(NodeEnum::ColumnDef(col_def)) = &elt.node
-                    && let Some(ref type_name) = col_def.type_name
-                    && let Some(last_name) = type_name.names.last()
-                    && let Some(NodeEnum::String(PgString { sval })) = &last_name.node
+            for col_def in create_stmt.table_elts() {
+                if let Some(type_name) = col_def.type_name()
+                    && let Some(last_name) = type_name.names().iter().last()
                 {
                     result.insert(
                         ColumnTypeKey {
                             schema,
                             table: table_name,
-                            column: col_def.colname.as_str(),
+                            column: col_def.colname().unwrap_or_default(),
                         },
-                        sval.as_str(),
+                        last_name.sval().unwrap_or_default(),
                     );
                 }
             }
@@ -624,8 +960,53 @@ impl PgDumpOutput {
         result
     }
 
+    cfg_select! {
+        not(feature = "new_parser") => {
+            fn column_types(&self) -> HashMap<ColumnTypeKey<'_>, &str> {
+                let mut result = HashMap::new();
+
+                for stmt in &self.stmts.stmts {
+                    let Some(ref node) = stmt.stmt else {
+                        continue;
+                    };
+                    let Some(NodeEnum::CreateStmt(ref create_stmt)) = node.node else {
+                        continue;
+                    };
+
+                    let Some(ref relation) = create_stmt.relation else {
+                        continue;
+                    };
+
+                    let schema = schema_name(relation);
+                    let table_name = relation.relname.as_str();
+
+                    for elt in &create_stmt.table_elts {
+                        if let Some(NodeEnum::ColumnDef(col_def)) = &elt.node
+                            && let Some(ref type_name) = col_def.type_name
+                            && let Some(last_name) = type_name.names.last()
+                            && let Some(NodeEnum::String(PgString { sval })) = &last_name.node
+                        {
+                            result.insert(
+                                ColumnTypeKey {
+                                    schema,
+                                    table: table_name,
+                                    column: col_def.colname.as_str(),
+                                },
+                                sval.as_str(),
+                            );
+                        }
+                    }
+                }
+
+                result
+            }
+        }
+        _ => {}
+    }
+
     /// Get schema statements to execute before data sync,
     /// e.g., CREATE TABLE, primary key.
+    #[cfg(feature = "new_parser")]
     pub(crate) fn statements(&self, state: SyncState) -> Result<Vec<Statement<'_>>, Error> {
         let mut result = vec![];
 
@@ -640,7 +1021,7 @@ impl PgDumpOutput {
         let parent_column_types = self.partitioned_parent_column_types(&columns_to_convert);
         let partition_parents = self.partition_parents();
 
-        for stmt in &self.stmts.stmts {
+        for stmt in self.stmts.into_iter() {
             let (_, original_start) = self
                 .original
                 .split_at_checked(stmt.stmt_location as usize)
@@ -649,20 +1030,15 @@ impl PgDumpOutput {
                 .split_at_checked(stmt.stmt_len as usize)
                 .ok_or(Error::StmtOutOfBounds)?;
 
-            if let Some(ref node) = stmt.stmt
-                && let Some(ref node) = node.node
-            {
-                match node {
-                    NodeEnum::CreateStmt(create_stmt) => {
-                        let mut stmt = create_stmt.clone();
-                        stmt.if_not_exists = true;
+            match stmt.stmt() {
+                Node::CreateStmt(create_stmt) => {
+                    let table = create_stmt.relation().map(Table::from).unwrap_or_default();
+
+                    let stmt = make::owned(|mem| {
+                        let mut stmt = mem.make_unique(create_stmt);
+                        stmt.as_mut().set_if_not_exists(true);
 
                         // Get table info
-                        let table = create_stmt
-                            .relation
-                            .as_ref()
-                            .map(Table::from)
-                            .unwrap_or_default();
                         let schema = table.schema().map(|s| s.name).unwrap_or("public");
                         let table_name = table.name;
 
@@ -670,105 +1046,141 @@ impl PgDumpOutput {
                         let parent_table = partition_parents.get(&table);
 
                         // Convert integer PK/FK columns to bigint
-                        for elt in &mut stmt.table_elts {
-                            if let Some(NodeEnum::ColumnDef(ref mut col_def)) = elt.node {
-                                let col = Column {
-                                    name: col_def.colname.as_str(),
-                                    table: Some(table_name),
-                                    schema: Some(schema),
-                                };
+                        for mut col_def in stmt.as_mut().table_elts_mut() {
+                            let col = Column {
+                                name: col_def.colname().unwrap_or_default(),
+                                table: Some(table_name),
+                                schema: Some(schema),
+                            };
 
-                                if should_convert_to_bigint(
-                                    &col,
-                                    col_def.type_name.as_ref(),
-                                    &columns_to_convert,
-                                    parent_table,
-                                    &parent_column_types,
-                                ) && let Some(ref mut type_name) = col_def.type_name
-                                {
-                                    type_name.names = vec![
-                                        Node {
-                                            node: Some(NodeEnum::String(PgString {
-                                                sval: "pg_catalog".to_owned(),
-                                            })),
-                                        },
-                                        Node {
-                                            node: Some(NodeEnum::String(PgString {
-                                                sval: "int8".to_owned(),
-                                            })),
-                                        },
-                                    ];
-                                }
+                            if should_convert_to_bigint(
+                                &col,
+                                col_def.type_name(),
+                                &columns_to_convert,
+                                parent_table,
+                                &parent_column_types,
+                            ) && let Some(mut type_name) = col_def.type_name_mut()
+                            {
+                                type_name.set_names(mem.make_list(&[
+                                    mem.make_string(Some("pg_catalog")),
+                                    mem.make_string(Some("int8")),
+                                ]));
                             }
                         }
+                        stmt
+                    });
 
-                        if state == SyncState::PreData {
-                            let sql = deparse_node(NodeEnum::CreateStmt(stmt))?;
-                            result.push(Statement::Table { table, sql });
-                        }
+                    if state == SyncState::PreData {
+                        let sql = pg_raw_parse::deparse(&*stmt)?;
+                        result.push(Statement::Table {
+                            table,
+                            sql: sql.as_str().to_owned(),
+                        });
                     }
+                }
 
-                    NodeEnum::CreateSeqStmt(stmt) => {
-                        let mut stmt = stmt.clone();
-                        stmt.if_not_exists = true;
-                        let sql = deparse_node(NodeEnum::CreateSeqStmt(stmt))?;
-                        if state == SyncState::PreData {
-                            // Bring sequences over.
-                            result.push(sql.into());
-                        }
+                Node::CreateSeqStmt(stmt) => {
+                    let stmt = make::owned(|mem| {
+                        let mut stmt = mem.make_unique(&*stmt);
+                        stmt.as_mut().set_if_not_exists(true);
+                        stmt
+                    });
+                    let sql = pg_raw_parse::deparse(&*stmt)?;
+                    if state == SyncState::PreData {
+                        // Bring sequences over.
+                        result.push(sql.as_str().to_owned().into());
                     }
+                }
 
-                    NodeEnum::CreateExtensionStmt(stmt) => {
-                        let mut stmt = stmt.clone();
-                        stmt.if_not_exists = true;
-                        let sql = deparse_node(NodeEnum::CreateExtensionStmt(stmt))?;
-                        if state == SyncState::PreData {
-                            result.push(sql.into());
-                        }
+                Node::CreateExtensionStmt(stmt) => {
+                    let stmt = make::owned(|mem| {
+                        let mut stmt = mem.make_unique(&*stmt);
+                        stmt.as_mut().set_if_not_exists(true);
+                        stmt
+                    });
+                    let sql = pg_raw_parse::deparse(&*stmt)?;
+                    if state == SyncState::PreData {
+                        result.push(sql.as_str().to_owned().into());
                     }
+                }
 
-                    NodeEnum::CreateSchemaStmt(stmt) => {
-                        let mut stmt = stmt.clone();
-                        stmt.if_not_exists = true;
-                        let sql = deparse_node(NodeEnum::CreateSchemaStmt(stmt))?;
-                        if state == SyncState::PreData {
-                            result.push(sql.into());
-                        }
+                Node::CreateSchemaStmt(stmt) => {
+                    let stmt = make::owned(|mem| {
+                        let mut stmt = mem.make_unique(&*stmt);
+                        stmt.as_mut().set_if_not_exists(true);
+                        stmt
+                    });
+                    let sql = pg_raw_parse::deparse(&*stmt)?;
+                    if state == SyncState::PreData {
+                        result.push(sql.as_str().to_owned().into());
                     }
+                }
 
-                    NodeEnum::AlterTableStmt(stmt) => {
-                        for cmd in &stmt.cmds {
-                            if let Some(NodeEnum::AlterTableCmd(ref cmd)) = cmd.node {
-                                match cmd.subtype() {
-                                    AlterTableType::AtAddConstraint => {
-                                        if let Some(ref def) = cmd.def
-                                            && let Some(NodeEnum::Constraint(ref cons)) = def.node
+                Node::AlterTableStmt(stmt) => {
+                    for cmd in stmt.cmds() {
+                        if let Node::AlterTableCmd(cmd) = cmd {
+                            match cmd.subtype {
+                                nodes::AlterTableType::AT_AddConstraint => {
+                                    if let Node::Constraint(cons) = cmd.def() {
+                                        // Only allow primary key constraints.
+                                        if matches!(
+                                            cons.contype,
+                                            nodes::ConstrType::CONSTR_PRIMARY
+                                                | nodes::ConstrType::CONSTR_NOTNULL
+                                                | nodes::ConstrType::CONSTR_NULL
+                                        ) {
+                                            // Integer PKs are already tracked and converted
+                                            // to bigint in CreateStmt handler
+                                            if state == SyncState::PreData {
+                                                result.push(Statement::Other {
+                                                    sql: original.to_string(),
+                                                    idempotent: false,
+                                                });
+                                            }
+                                        } else if cons.contype == nodes::ConstrType::CONSTR_FOREIGN
                                         {
-                                            // Only allow primary key constraints.
-                                            if matches!(
-                                                cons.contype(),
-                                                ConstrType::ConstrPrimary
-                                                    | ConstrType::ConstrNotnull
-                                                    | ConstrType::ConstrNull
-                                            ) {
-                                                // Integer PKs are already tracked and converted
-                                                // to bigint in CreateStmt handler
-                                                if state == SyncState::PreData {
-                                                    result.push(Statement::Other {
-                                                        sql: original.to_string(),
-                                                        idempotent: false,
-                                                    });
-                                                }
-                                            } else if cons.contype() == ConstrType::ConstrForeign {
-                                                // FK columns referencing integer PKs are
-                                                // computed from fk_columns at the end
-                                                if state == SyncState::PostData {
-                                                    result.push(Statement::Other {
-                                                        sql: original.to_string(),
-                                                        idempotent: false,
-                                                    });
-                                                }
-                                            } else if state == SyncState::PostData {
+                                            // FK columns referencing integer PKs are
+                                            // computed from fk_columns at the end
+                                            if state == SyncState::PostData {
+                                                result.push(Statement::Other {
+                                                    sql: original.to_string(),
+                                                    idempotent: false,
+                                                });
+                                            }
+                                        } else if state == SyncState::PostData {
+                                            result.push(Statement::Other {
+                                                sql: original.to_string(),
+                                                idempotent: false,
+                                            });
+                                        }
+                                    }
+                                }
+                                nodes::AlterTableType::AT_AttachPartition => {
+                                    match stmt.objtype {
+                                        // Index partitions need to be attached to indexes,
+                                        // which we create in the post-data step.
+                                        nodes::ObjectType::OBJECT_INDEX => {
+                                            if state == SyncState::PostData {
+                                                result.push(Statement::Other {
+                                                    sql: original.to_string(),
+                                                    idempotent: false,
+                                                });
+                                            }
+                                        }
+
+                                        // Table partitions are attached in pre-data
+                                        // after the partition tables are created.
+                                        nodes::ObjectType::OBJECT_TABLE => {
+                                            if state == SyncState::PreData {
+                                                result.push(Statement::Other {
+                                                    sql: original.to_string(),
+                                                    idempotent: false,
+                                                });
+                                            }
+                                        }
+
+                                        _ => {
+                                            if state == SyncState::PreData {
                                                 result.push(Statement::Other {
                                                     sql: original.to_string(),
                                                     idempotent: false,
@@ -776,221 +1188,570 @@ impl PgDumpOutput {
                                             }
                                         }
                                     }
-                                    AlterTableType::AtAttachPartition => {
-                                        match stmt.objtype() {
-                                            // Index partitions need to be attached to indexes,
-                                            // which we create in the post-data step.
-                                            ObjectType::ObjectIndex => {
-                                                if state == SyncState::PostData {
-                                                    result.push(Statement::Other {
-                                                        sql: original.to_string(),
-                                                        idempotent: false,
-                                                    });
-                                                }
-                                            }
+                                }
 
-                                            // Table partitions are attached in pre-data
-                                            // after the partition tables are created.
-                                            ObjectType::ObjectTable => {
-                                                if state == SyncState::PreData {
-                                                    result.push(Statement::Other {
-                                                        sql: original.to_string(),
-                                                        idempotent: false,
-                                                    });
-                                                }
-                                            }
-
-                                            _ => {
-                                                if state == SyncState::PreData {
-                                                    result.push(Statement::Other {
-                                                        sql: original.to_string(),
-                                                        idempotent: false,
-                                                    });
-                                                }
-                                            }
-                                        }
+                                nodes::AlterTableType::AT_ColumnDefault => {
+                                    if state == SyncState::PreData {
+                                        result.push(original.into())
                                     }
+                                }
 
-                                    AlterTableType::AtColumnDefault => {
-                                        if state == SyncState::PreData {
-                                            result.push(original.into())
-                                        }
-                                    }
-
-                                    AlterTableType::AtAddIdentity => (),
-                                    // AlterTableType::AtChangeOwner => {
-                                    //     continue; // Don't change owners, for now.
-                                    // }
-                                    _ => {
-                                        if state == SyncState::PreData {
-                                            result.push(original.into());
-                                        }
+                                nodes::AlterTableType::AT_AddIdentity => (),
+                                // AlterTableType::AtChangeOwner => {
+                                //     continue; // Don't change owners, for now.
+                                // }
+                                _ => {
+                                    if state == SyncState::PreData {
+                                        result.push(original.into());
                                     }
                                 }
                             }
                         }
                     }
+                }
 
-                    NodeEnum::CreateTrigStmt(stmt) => {
-                        let mut stmt = stmt.clone();
-                        stmt.replace = true;
+                Node::CreateTrigStmt(stmt) => {
+                    let stmt = make::owned(|mem| {
+                        let mut stmt = mem.make_unique(&*stmt);
+                        stmt.as_mut().set_replace(true);
+                        stmt
+                    });
+
+                    if state == SyncState::PreData {
+                        result.push(pg_raw_parse::deparse(&*stmt)?.as_str().to_owned().into());
+                    }
+                }
+
+                Node::CreatePublicationStmt(stmt) => {
+                    if state == SyncState::PreData {
+                        // DROP first for idempotency
+                        result.push(Statement::Other {
+                            sql: format!(
+                                "DROP PUBLICATION IF EXISTS \"{}\"",
+                                crate::util::escape_identifier(stmt.pubname().unwrap_or_default())
+                            ),
+                            idempotent: true,
+                        });
+                        result.push(Statement::Other {
+                            sql: original.to_string(),
+                            idempotent: false,
+                        });
+                    }
+                }
+
+                Node::AlterPublicationStmt(_) => {
+                    if state == SyncState::PreData {
+                        result.push(Statement::Other {
+                            sql: original.to_string(),
+                            idempotent: false,
+                        });
+                    }
+                }
+
+                // Skip these.
+                Node::CreateSubscriptionStmt(_) | Node::AlterSubscriptionStmt(_) => (),
+
+                Node::AlterSeqStmt(stmt) => {
+                    if matches!(state, SyncState::PreData | SyncState::Cutover) {
+                        let sequence = stmt
+                            .sequence()
+                            .map(Table::from)
+                            .ok_or(Error::MissingEntity)?;
+                        let sequence = Sequence::from(sequence);
+                        let column = stmt.options().first().ok_or(Error::MissingEntity)?;
+                        let column = Column::try_from(column).map_err(|_| Error::MissingEntity)?;
 
                         if state == SyncState::PreData {
-                            result.push(deparse_node(NodeEnum::CreateTrigStmt(stmt))?.into());
+                            result.push(Statement::SequenceOwner { sql: original });
+                        } else if state == SyncState::Cutover {
+                            let sql = sequence
+                                .setval_from_column(&column)
+                                .map_err(|_| Error::MissingEntity)?;
+                            result.push(Statement::SequenceSetMax { sql })
                         }
                     }
+                }
 
-                    NodeEnum::CreatePublicationStmt(stmt) => {
-                        if state == SyncState::PreData {
-                            // DROP first for idempotency
-                            result.push(Statement::Other {
-                                sql: format!(
-                                    "DROP PUBLICATION IF EXISTS \"{}\"",
-                                    crate::util::escape_identifier(&stmt.pubname)
-                                ),
-                                idempotent: true,
-                            });
-                            result.push(Statement::Other {
-                                sql: original.to_string(),
-                                idempotent: false,
-                            });
-                        }
+                Node::IndexStmt(stmt) => {
+                    if state == SyncState::PostData {
+                        let changed_stmt = make::owned(|mem| {
+                            let mut stmt = mem.make_unique(&*stmt);
+                            let concurrent = stmt.relation().is_some_and(|relation| relation.inh);
+                            stmt.as_mut().set_concurrent(concurrent); // ONLY used for partitioned tables, which can't be created concurrently.
+                            stmt.as_mut().set_if_not_exists(true);
+                            stmt
+                        });
+                        let sql = pg_raw_parse::deparse(&*changed_stmt)?;
+
+                        let table = stmt.relation().map(Table::from).unwrap_or_default();
+
+                        let index_schema = stmt.relation().map(schema_name).unwrap_or("public");
+                        result.push(Statement::Other {
+                            sql: format!(
+                                "DROP INDEX IF EXISTS \"{}\".\"{}\"",
+                                index_schema,
+                                stmt.idxname().expect("name always present"),
+                            ),
+                            idempotent: true,
+                        });
+
+                        result.push(Statement::Index {
+                            table,
+                            sql: sql.as_str().to_owned(),
+                        });
                     }
+                }
 
-                    NodeEnum::AlterPublicationStmt(_) => {
-                        if state == SyncState::PreData {
-                            result.push(Statement::Other {
-                                sql: original.to_string(),
-                                idempotent: false,
-                            });
-                        }
+                Node::ViewStmt(stmt) => {
+                    let stmt = make::owned(|mem| {
+                        let mut stmt = mem.make_unique(&*stmt);
+                        stmt.as_mut().set_replace(true);
+                        stmt
+                    });
+
+                    if state == SyncState::PreData {
+                        result.push(Statement::Other {
+                            sql: pg_raw_parse::deparse(&*stmt)?.as_str().to_owned(),
+                            idempotent: true,
+                        });
                     }
+                }
 
-                    // Skip these.
-                    NodeEnum::CreateSubscriptionStmt(_) | NodeEnum::AlterSubscriptionStmt(_) => (),
+                Node::CreateTableAsStmt(stmt) => {
+                    let stmt = make::owned(|mem| {
+                        let mut stmt = mem.make_unique(&*stmt);
+                        stmt.as_mut().set_if_not_exists(true);
+                        stmt
+                    });
 
-                    NodeEnum::AlterSeqStmt(stmt) => {
-                        if matches!(state, SyncState::PreData | SyncState::Cutover) {
-                            let sequence = stmt
-                                .sequence
-                                .as_ref()
-                                .map(Table::from)
-                                .ok_or(Error::MissingEntity)?;
-                            let sequence = Sequence::from(sequence);
-                            let column = stmt.options.first().ok_or(Error::MissingEntity)?;
-                            let column =
-                                Column::try_from(column).map_err(|_| Error::MissingEntity)?;
-
-                            if state == SyncState::PreData {
-                                result.push(Statement::SequenceOwner { sql: original });
-                            } else if state == SyncState::Cutover {
-                                let sql = sequence
-                                    .setval_from_column(&column)
-                                    .map_err(|_| Error::MissingEntity)?;
-                                result.push(Statement::SequenceSetMax { sql })
-                            }
-                        }
+                    if state == SyncState::PreData {
+                        result.push(Statement::Other {
+                            sql: pg_raw_parse::deparse(&*stmt)?.as_str().to_owned(),
+                            idempotent: true,
+                        });
                     }
+                }
 
-                    NodeEnum::IndexStmt(stmt) => {
-                        if state == SyncState::PostData {
-                            let sql = {
-                                let mut stmt = stmt.clone();
-                                stmt.concurrent = stmt
-                                    .relation
-                                    .as_ref()
-                                    .map(|relation| relation.inh) // ONLY used for partitioned tables, which can't be created concurrently.
-                                    .unwrap_or(false);
-                                stmt.if_not_exists = true;
-                                deparse_node(NodeEnum::IndexStmt(stmt))?
-                            };
+                Node::CreateFunctionStmt(stmt) => {
+                    let stmt = make::owned(|mem| {
+                        let mut stmt = mem.make_unique(&*stmt);
+                        stmt.as_mut().set_replace(true);
+                        stmt
+                    });
 
-                            let table = stmt.relation.as_ref().map(Table::from).unwrap_or_default();
-
-                            let index_schema =
-                                stmt.relation.as_ref().map(schema_name).unwrap_or("public");
-                            result.push(Statement::Other {
-                                sql: format!(
-                                    "DROP INDEX IF EXISTS \"{}\".\"{}\"",
-                                    index_schema, stmt.idxname
-                                ),
-                                idempotent: true,
-                            });
-
-                            result.push(Statement::Index { table, sql });
-                        }
+                    if state == SyncState::PreData {
+                        result.push(Statement::Other {
+                            sql: pg_raw_parse::deparse(&*stmt)?.as_str().to_owned(),
+                            idempotent: true,
+                        });
                     }
+                }
 
-                    NodeEnum::ViewStmt(stmt) => {
-                        let mut stmt = stmt.clone();
-                        stmt.replace = true;
-
-                        if state == SyncState::PreData {
-                            result.push(Statement::Other {
-                                sql: deparse_node(NodeEnum::ViewStmt(stmt))?,
-                                idempotent: true,
-                            });
-                        }
+                Node::AlterOwnerStmt(stmt) => {
+                    if stmt.object_type != nodes::ObjectType::OBJECT_PUBLICATION
+                        && state == SyncState::PreData
+                    {
+                        result.push(Statement::Other {
+                            sql: original.to_string(),
+                            idempotent: true,
+                        });
                     }
+                }
 
-                    NodeEnum::CreateTableAsStmt(stmt) => {
-                        let mut stmt = stmt.clone();
-                        stmt.if_not_exists = true;
-
-                        if state == SyncState::PreData {
-                            result.push(Statement::Other {
-                                sql: deparse_node(NodeEnum::CreateTableAsStmt(stmt))?,
-                                idempotent: true,
-                            });
-                        }
+                Node::CreateEnumStmt(_)
+                | Node::CreateDomainStmt(_)
+                | Node::CompositeTypeStmt(_) => {
+                    if state == SyncState::PreData {
+                        result.push(Statement::Other {
+                            sql: original.to_owned(),
+                            idempotent: false,
+                        });
                     }
+                }
 
-                    NodeEnum::CreateFunctionStmt(stmt) => {
-                        let mut stmt = stmt.clone();
-                        stmt.replace = true;
-
-                        if state == SyncState::PreData {
-                            result.push(Statement::Other {
-                                sql: deparse_node(NodeEnum::CreateFunctionStmt(stmt))?,
-                                idempotent: true,
-                            });
-                        }
-                    }
-
-                    NodeEnum::AlterOwnerStmt(stmt) => {
-                        if stmt.object_type() != ObjectType::ObjectPublication
-                            && state == SyncState::PreData
-                        {
-                            result.push(Statement::Other {
-                                sql: original.to_string(),
-                                idempotent: true,
-                            });
-                        }
-                    }
-
-                    NodeEnum::CreateEnumStmt(_)
-                    | NodeEnum::CreateDomainStmt(_)
-                    | NodeEnum::CompositeTypeStmt(_) => {
-                        if state == SyncState::PreData {
-                            result.push(Statement::Other {
-                                sql: original.to_owned(),
-                                idempotent: false,
-                            });
-                        }
-                    }
-
-                    NodeEnum::VariableSetStmt(_) => continue,
-                    NodeEnum::SelectStmt(_) => continue,
-                    _ => {
-                        if state == SyncState::PreData {
-                            result.push(original.into());
-                        }
+                Node::VariableSetStmt(_) => continue,
+                Node::SelectStmt(_) => continue,
+                _ => {
+                    if state == SyncState::PreData {
+                        result.push(original.into());
                     }
                 }
             }
         }
 
         Ok(result)
+    }
+
+    cfg_select! {
+        not(feature = "new_parser") => {
+            pub(crate) fn statements(&self, state: SyncState) -> Result<Vec<Statement<'_>>, Error> {
+                let mut result = vec![];
+
+                // Get integer PK and FK columns that need bigint conversion
+                let columns_to_convert: HashSet<Column<'_>> = self
+                    .integer_primary_key_columns()
+                    .union(&self.integer_foreign_key_columns())
+                    .copied()
+                    .collect();
+
+                // Get partitioned parent column types and parent-child relationships
+                let parent_column_types = self.partitioned_parent_column_types(&columns_to_convert);
+                let partition_parents = self.partition_parents();
+
+                for stmt in &self.stmts.stmts {
+                    let (_, original_start) = self
+                        .original
+                        .split_at_checked(stmt.stmt_location as usize)
+                        .ok_or(Error::StmtOutOfBounds)?;
+                    let (original, _) = original_start
+                        .split_at_checked(stmt.stmt_len as usize)
+                        .ok_or(Error::StmtOutOfBounds)?;
+
+                    if let Some(ref node) = stmt.stmt
+                        && let Some(ref node) = node.node
+                    {
+                        match node {
+                            NodeEnum::CreateStmt(create_stmt) => {
+                                let mut stmt = create_stmt.clone();
+                                stmt.if_not_exists = true;
+
+                                // Get table info
+                                let table = create_stmt
+                                    .relation
+                                    .as_ref()
+                                    .map(Table::from)
+                                    .unwrap_or_default();
+                                let schema = table.schema().map(|s| s.name).unwrap_or("public");
+                                let table_name = table.name;
+
+                                // Check if this table is a child partition
+                                let parent_table = partition_parents.get(&table);
+
+                                // Convert integer PK/FK columns to bigint
+                                for elt in &mut stmt.table_elts {
+                                    if let Some(NodeEnum::ColumnDef(ref mut col_def)) = elt.node {
+                                        let col = Column {
+                                            name: col_def.colname.as_str(),
+                                            table: Some(table_name),
+                                            schema: Some(schema),
+                                        };
+
+                                        if should_convert_to_bigint(
+                                            &col,
+                                            col_def.type_name.as_ref(),
+                                            &columns_to_convert,
+                                            parent_table,
+                                            &parent_column_types,
+                                        ) && let Some(ref mut type_name) = col_def.type_name
+                                        {
+                                            type_name.names = vec![
+                                                Node {
+                                                    node: Some(NodeEnum::String(PgString {
+                                                        sval: "pg_catalog".to_owned(),
+                                                    })),
+                                                },
+                                                Node {
+                                                    node: Some(NodeEnum::String(PgString {
+                                                        sval: "int8".to_owned(),
+                                                    })),
+                                                },
+                                            ];
+                                        }
+                                    }
+                                }
+
+                                if state == SyncState::PreData {
+                                    let sql = deparse_node(NodeEnum::CreateStmt(stmt))?;
+                                    result.push(Statement::Table { table, sql });
+                                }
+                            }
+
+                            NodeEnum::CreateSeqStmt(stmt) => {
+                                let mut stmt = stmt.clone();
+                                stmt.if_not_exists = true;
+                                let sql = deparse_node(NodeEnum::CreateSeqStmt(stmt))?;
+                                if state == SyncState::PreData {
+                                    // Bring sequences over.
+                                    result.push(sql.into());
+                                }
+                            }
+
+                            NodeEnum::CreateExtensionStmt(stmt) => {
+                                let mut stmt = stmt.clone();
+                                stmt.if_not_exists = true;
+                                let sql = deparse_node(NodeEnum::CreateExtensionStmt(stmt))?;
+                                if state == SyncState::PreData {
+                                    result.push(sql.into());
+                                }
+                            }
+
+                            NodeEnum::CreateSchemaStmt(stmt) => {
+                                let mut stmt = stmt.clone();
+                                stmt.if_not_exists = true;
+                                let sql = deparse_node(NodeEnum::CreateSchemaStmt(stmt))?;
+                                if state == SyncState::PreData {
+                                    result.push(sql.into());
+                                }
+                            }
+
+                            NodeEnum::AlterTableStmt(stmt) => {
+                                for cmd in &stmt.cmds {
+                                    if let Some(NodeEnum::AlterTableCmd(ref cmd)) = cmd.node {
+                                        match cmd.subtype() {
+                                            AlterTableType::AtAddConstraint => {
+                                                if let Some(ref def) = cmd.def
+                                                    && let Some(NodeEnum::Constraint(ref cons)) = def.node
+                                                {
+                                                    // Only allow primary key constraints.
+                                                    if matches!(
+                                                        cons.contype(),
+                                                        ConstrType::ConstrPrimary
+                                                            | ConstrType::ConstrNotnull
+                                                            | ConstrType::ConstrNull
+                                                    ) {
+                                                        // Integer PKs are already tracked and converted
+                                                        // to bigint in CreateStmt handler
+                                                        if state == SyncState::PreData {
+                                                            result.push(Statement::Other {
+                                                                sql: original.to_string(),
+                                                                idempotent: false,
+                                                            });
+                                                        }
+                                                    } else if cons.contype() == ConstrType::ConstrForeign {
+                                                        // FK columns referencing integer PKs are
+                                                        // computed from fk_columns at the end
+                                                        if state == SyncState::PostData {
+                                                            result.push(Statement::Other {
+                                                                sql: original.to_string(),
+                                                                idempotent: false,
+                                                            });
+                                                        }
+                                                    } else if state == SyncState::PostData {
+                                                        result.push(Statement::Other {
+                                                            sql: original.to_string(),
+                                                            idempotent: false,
+                                                        });
+                                                    }
+                                                }
+                                            }
+                                            AlterTableType::AtAttachPartition => {
+                                                match stmt.objtype() {
+                                                    // Index partitions need to be attached to indexes,
+                                                    // which we create in the post-data step.
+                                                    ObjectType::ObjectIndex => {
+                                                        if state == SyncState::PostData {
+                                                            result.push(Statement::Other {
+                                                                sql: original.to_string(),
+                                                                idempotent: false,
+                                                            });
+                                                        }
+                                                    }
+
+                                                    // Table partitions are attached in pre-data
+                                                    // after the partition tables are created.
+                                                    ObjectType::ObjectTable => {
+                                                        if state == SyncState::PreData {
+                                                            result.push(Statement::Other {
+                                                                sql: original.to_string(),
+                                                                idempotent: false,
+                                                            });
+                                                        }
+                                                    }
+
+                                                    _ => {
+                                                        if state == SyncState::PreData {
+                                                            result.push(Statement::Other {
+                                                                sql: original.to_string(),
+                                                                idempotent: false,
+                                                            });
+                                                        }
+                                                    }
+                                                }
+                                            }
+
+                                            AlterTableType::AtColumnDefault => {
+                                                if state == SyncState::PreData {
+                                                    result.push(original.into())
+                                                }
+                                            }
+
+                                            AlterTableType::AtAddIdentity => (),
+                                            // AlterTableType::AtChangeOwner => {
+                                            //     continue; // Don't change owners, for now.
+                                            // }
+                                            _ => {
+                                                if state == SyncState::PreData {
+                                                    result.push(original.into());
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            NodeEnum::CreateTrigStmt(stmt) => {
+                                let mut stmt = stmt.clone();
+                                stmt.replace = true;
+
+                                if state == SyncState::PreData {
+                                    result.push(deparse_node(NodeEnum::CreateTrigStmt(stmt))?.into());
+                                }
+                            }
+
+                            NodeEnum::CreatePublicationStmt(stmt) => {
+                                if state == SyncState::PreData {
+                                    // DROP first for idempotency
+                                    result.push(Statement::Other {
+                                        sql: format!(
+                                            "DROP PUBLICATION IF EXISTS \"{}\"",
+                                            crate::util::escape_identifier(&stmt.pubname)
+                                        ),
+                                        idempotent: true,
+                                    });
+                                    result.push(Statement::Other {
+                                        sql: original.to_string(),
+                                        idempotent: false,
+                                    });
+                                }
+                            }
+
+                            NodeEnum::AlterPublicationStmt(_) => {
+                                if state == SyncState::PreData {
+                                    result.push(Statement::Other {
+                                        sql: original.to_string(),
+                                        idempotent: false,
+                                    });
+                                }
+                            }
+
+                            // Skip these.
+                            NodeEnum::CreateSubscriptionStmt(_) | NodeEnum::AlterSubscriptionStmt(_) => (),
+
+                            NodeEnum::AlterSeqStmt(stmt) => {
+                                if matches!(state, SyncState::PreData | SyncState::Cutover) {
+                                    let sequence = stmt
+                                        .sequence
+                                        .as_ref()
+                                        .map(Table::from)
+                                        .ok_or(Error::MissingEntity)?;
+                                    let sequence = Sequence::from(sequence);
+                                    let column = stmt.options.first().ok_or(Error::MissingEntity)?;
+                                    let column =
+                                        Column::try_from(column).map_err(|_| Error::MissingEntity)?;
+
+                                    if state == SyncState::PreData {
+                                        result.push(Statement::SequenceOwner { sql: original });
+                                    } else if state == SyncState::Cutover {
+                                        let sql = sequence
+                                            .setval_from_column(&column)
+                                            .map_err(|_| Error::MissingEntity)?;
+                                        result.push(Statement::SequenceSetMax { sql })
+                                    }
+                                }
+                            }
+
+                            NodeEnum::IndexStmt(stmt) => {
+                                if state == SyncState::PostData {
+                                    let sql = {
+                                        let mut stmt = stmt.clone();
+                                        stmt.concurrent = stmt
+                                            .relation
+                                            .as_ref()
+                                            .map(|relation| relation.inh) // ONLY used for partitioned tables, which can't be created concurrently.
+                                            .unwrap_or(false);
+                                        stmt.if_not_exists = true;
+                                        deparse_node(NodeEnum::IndexStmt(stmt))?
+                                    };
+
+                                    let table = stmt.relation.as_ref().map(Table::from).unwrap_or_default();
+
+                                    let index_schema =
+                                        stmt.relation.as_ref().map(schema_name).unwrap_or("public");
+                                    result.push(Statement::Other {
+                                        sql: format!(
+                                            "DROP INDEX IF EXISTS \"{}\".\"{}\"",
+                                            index_schema, stmt.idxname
+                                        ),
+                                        idempotent: true,
+                                    });
+
+                                    result.push(Statement::Index { table, sql });
+                                }
+                            }
+
+                            NodeEnum::ViewStmt(stmt) => {
+                                let mut stmt = stmt.clone();
+                                stmt.replace = true;
+
+                                if state == SyncState::PreData {
+                                    result.push(Statement::Other {
+                                        sql: deparse_node(NodeEnum::ViewStmt(stmt))?,
+                                        idempotent: true,
+                                    });
+                                }
+                            }
+
+                            NodeEnum::CreateTableAsStmt(stmt) => {
+                                let mut stmt = stmt.clone();
+                                stmt.if_not_exists = true;
+
+                                if state == SyncState::PreData {
+                                    result.push(Statement::Other {
+                                        sql: deparse_node(NodeEnum::CreateTableAsStmt(stmt))?,
+                                        idempotent: true,
+                                    });
+                                }
+                            }
+
+                            NodeEnum::CreateFunctionStmt(stmt) => {
+                                let mut stmt = stmt.clone();
+                                stmt.replace = true;
+
+                                if state == SyncState::PreData {
+                                    result.push(Statement::Other {
+                                        sql: deparse_node(NodeEnum::CreateFunctionStmt(stmt))?,
+                                        idempotent: true,
+                                    });
+                                }
+                            }
+
+                            NodeEnum::AlterOwnerStmt(stmt) => {
+                                if stmt.object_type() != ObjectType::ObjectPublication
+                                    && state == SyncState::PreData
+                                {
+                                    result.push(Statement::Other {
+                                        sql: original.to_string(),
+                                        idempotent: true,
+                                    });
+                                }
+                            }
+
+                            NodeEnum::CreateEnumStmt(_)
+                            | NodeEnum::CreateDomainStmt(_)
+                            | NodeEnum::CompositeTypeStmt(_) => {
+                                if state == SyncState::PreData {
+                                    result.push(Statement::Other {
+                                        sql: original.to_owned(),
+                                        idempotent: false,
+                                    });
+                                }
+                            }
+
+                            NodeEnum::VariableSetStmt(_) => continue,
+                            NodeEnum::SelectStmt(_) => continue,
+                            _ => {
+                                if state == SyncState::PreData {
+                                    result.push(original.into());
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Ok(result)
+            }
+        }
+        _ => {}
     }
 
     /// Create objects in destination cluster.
@@ -1216,24 +1977,24 @@ ALTER TABLE ONLY public.users
 
 \unrestrict nu6jB5ogH2xGMn2dB3dMyMbSZ2PsVDqB2IaWK6zZVjngeba0UrnmxMy6s63SwzR
 "#;
+        #[cfg(not(feature = "new_parser"))]
         let _parse = pg_query::parse(&PgDump::clean(dump)).unwrap();
+        #[cfg(feature = "new_parser")]
+        let _parse = pg_raw_parse::parse(&PgDump::clean(dump)).unwrap();
     }
 
     #[test]
     fn test_generated_identity() {
-        let q = "ALTER TABLE public.users ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY (
+        let output = parse(
+            "ALTER TABLE public.users ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY (
             SEQUENCE NAME public.users_id_seq
             START WITH 1
             INCREMENT BY 1
             NO MINVALUE
             NO MAXVALUE
             CACHE 1
-        );";
-        let parse = pg_query::parse(q).unwrap();
-        let output = PgDumpOutput {
-            stmts: parse.protobuf,
-            original: q.to_string(),
-        };
+        );",
+        );
 
         // Identity constraints should be skipped in PreData
         let statements = output.statements(SyncState::PreData).unwrap();
@@ -1249,19 +2010,16 @@ ALTER TABLE ONLY public.users
 
     #[test]
     fn test_generated_identity_post_cutover() {
-        let q = "ALTER TABLE public.users ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY (
+        let output = parse(
+            "ALTER TABLE public.users ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY (
             SEQUENCE NAME public.users_id_seq
             START WITH 1
             INCREMENT BY 1
             NO MINVALUE
             NO MAXVALUE
             CACHE 1
-        );";
-        let parse = pg_query::parse(q).unwrap();
-        let output = PgDumpOutput {
-            stmts: parse.protobuf,
-            original: q.to_string(),
-        };
+        );",
+        );
 
         // PostCutover should skip identity constraints
         let statements = output.statements(SyncState::PostCutover).unwrap();
@@ -1270,14 +2028,11 @@ ALTER TABLE ONLY public.users
 
     #[test]
     fn test_integer_primary_key_columns() {
-        let query = r#"
+        let output = parse(
+            r#"
 CREATE TABLE users (id INTEGER, name TEXT);
-ALTER TABLE users ADD CONSTRAINT users_pkey PRIMARY KEY (id);"#;
-
-        let output = PgDumpOutput {
-            stmts: parse(query).unwrap().protobuf,
-            original: query.to_owned(),
-        };
+ALTER TABLE users ADD CONSTRAINT users_pkey PRIMARY KEY (id);"#,
+        );
 
         let pk_columns = output.integer_primary_key_columns();
 
@@ -1292,14 +2047,11 @@ ALTER TABLE users ADD CONSTRAINT users_pkey PRIMARY KEY (id);"#;
 
     #[test]
     fn test_non_integer_pk_excluded() {
-        let query = r#"
+        let output = parse(
+            r#"
 CREATE TABLE users (id UUID, name TEXT);
-ALTER TABLE users ADD CONSTRAINT users_pkey PRIMARY KEY (id);"#;
-
-        let output = PgDumpOutput {
-            stmts: parse(query).unwrap().protobuf,
-            original: query.to_owned(),
-        };
+ALTER TABLE users ADD CONSTRAINT users_pkey PRIMARY KEY (id);"#,
+        );
 
         let pk_columns = output.integer_primary_key_columns();
 
@@ -1309,16 +2061,13 @@ ALTER TABLE users ADD CONSTRAINT users_pkey PRIMARY KEY (id);"#;
 
     #[test]
     fn test_integer_foreign_key_columns() {
-        let query = r#"
+        let output = parse(
+            r#"
 CREATE TABLE parent (id INTEGER, name TEXT);
 CREATE TABLE child (id INTEGER, parent_id INTEGER);
 ALTER TABLE parent ADD CONSTRAINT parent_pkey PRIMARY KEY (id);
-ALTER TABLE child ADD CONSTRAINT child_parent_fk FOREIGN KEY (parent_id) REFERENCES parent(id);"#;
-
-        let output = PgDumpOutput {
-            stmts: parse(query).unwrap().protobuf,
-            original: query.to_owned(),
-        };
+ALTER TABLE child ADD CONSTRAINT child_parent_fk FOREIGN KEY (parent_id) REFERENCES parent(id);"#,
+        );
 
         let fk_columns = output.integer_foreign_key_columns();
 
@@ -1333,16 +2082,13 @@ ALTER TABLE child ADD CONSTRAINT child_parent_fk FOREIGN KEY (parent_id) REFEREN
 
     #[test]
     fn test_integer_foreign_key_columns_composite() {
-        let query = r#"
+        let output = parse(
+            r#"
 CREATE TABLE parent (id1 INTEGER, id2 INTEGER, name TEXT);
 CREATE TABLE child (id INTEGER, parent_id1 INTEGER, parent_id2 INTEGER);
 ALTER TABLE parent ADD CONSTRAINT parent_pkey PRIMARY KEY (id1, id2);
-ALTER TABLE child ADD CONSTRAINT child_parent_fk FOREIGN KEY (parent_id1, parent_id2) REFERENCES parent(id1, id2);"#;
-
-        let output = PgDumpOutput {
-            stmts: parse(query).unwrap().protobuf,
-            original: query.to_owned(),
-        };
+ALTER TABLE child ADD CONSTRAINT child_parent_fk FOREIGN KEY (parent_id1, parent_id2) REFERENCES parent(id1, id2);"#,
+        );
 
         let fk_columns = output.integer_foreign_key_columns();
 
@@ -1362,14 +2108,11 @@ ALTER TABLE child ADD CONSTRAINT child_parent_fk FOREIGN KEY (parent_id1, parent
 
     #[test]
     fn test_integer_primary_key_columns_composite() {
-        let query = r#"
+        let output = parse(
+            r#"
 CREATE TABLE order_items (order_id INTEGER, item_id INTEGER, quantity INTEGER);
-ALTER TABLE order_items ADD CONSTRAINT order_items_pkey PRIMARY KEY (order_id, item_id);"#;
-
-        let output = PgDumpOutput {
-            stmts: parse(query).unwrap().protobuf,
-            original: query.to_owned(),
-        };
+ALTER TABLE order_items ADD CONSTRAINT order_items_pkey PRIMARY KEY (order_id, item_id);"#,
+        );
 
         let pk_columns = output.integer_primary_key_columns();
 
@@ -1389,14 +2132,11 @@ ALTER TABLE order_items ADD CONSTRAINT order_items_pkey PRIMARY KEY (order_id, i
 
     #[test]
     fn test_bigint_rewrite() {
-        let query = r#"
+        let output = parse(
+            r#"
 CREATE TABLE test (id INTEGER, value TEXT);
-ALTER TABLE test ADD CONSTRAINT id_pkey PRIMARY KEY (id);"#;
-
-        let output = PgDumpOutput {
-            stmts: parse(query).unwrap().protobuf,
-            original: query.to_owned(),
-        };
+ALTER TABLE test ADD CONSTRAINT id_pkey PRIMARY KEY (id);"#,
+        );
 
         let statements = output.statements(SyncState::PreData).unwrap();
         assert_eq!(statements.len(), 2);
@@ -1414,16 +2154,13 @@ ALTER TABLE test ADD CONSTRAINT id_pkey PRIMARY KEY (id);"#;
 
     #[test]
     fn test_bigint_rewrite_foreign_key() {
-        let query = r#"
+        let output = parse(
+            r#"
 CREATE TABLE parent (id INTEGER, name TEXT);
 CREATE TABLE child (id INTEGER, parent_id INTEGER);
 ALTER TABLE parent ADD CONSTRAINT parent_pkey PRIMARY KEY (id);
-ALTER TABLE child ADD CONSTRAINT child_parent_fk FOREIGN KEY (parent_id) REFERENCES parent(id);"#;
-
-        let output = PgDumpOutput {
-            stmts: parse(query).unwrap().protobuf,
-            original: query.to_owned(),
-        };
+ALTER TABLE child ADD CONSTRAINT child_parent_fk FOREIGN KEY (parent_id) REFERENCES parent(id);"#,
+        );
 
         let statements = output.statements(SyncState::PreData).unwrap();
         assert_eq!(statements.len(), 3);
@@ -1447,15 +2184,12 @@ ALTER TABLE child ADD CONSTRAINT child_parent_fk FOREIGN KEY (parent_id) REFEREN
     #[test]
     fn test_attach_partition() {
         // pg_dump generates ATTACH PARTITION for partitioned tables
-        let query = r#"
+        let output = parse(
+            r#"
 CREATE TABLE parent (id INTEGER, created_at DATE) PARTITION BY RANGE (created_at);
 CREATE TABLE parent_2024 (id INTEGER, created_at DATE);
-ALTER TABLE ONLY parent ATTACH PARTITION parent_2024 FOR VALUES FROM ('2024-01-01') TO ('2025-01-01');"#;
-
-        let output = PgDumpOutput {
-            stmts: parse(query).unwrap().protobuf,
-            original: query.to_owned(),
-        };
+ALTER TABLE ONLY parent ATTACH PARTITION parent_2024 FOR VALUES FROM ('2024-01-01') TO ('2025-01-01');"#,
+        );
 
         let pre_data = output.statements(SyncState::PreData).unwrap();
         let post_data = output.statements(SyncState::PostData).unwrap();
@@ -1472,11 +2206,7 @@ ALTER TABLE ONLY parent ATTACH PARTITION parent_2024 FOR VALUES FROM ('2024-01-0
 
     #[test]
     fn test_create_publication_restored() {
-        let q = "CREATE PUBLICATION my_pub FOR TABLE users, orders;";
-        let output = PgDumpOutput {
-            stmts: parse(q).unwrap().protobuf,
-            original: q.to_owned(),
-        };
+        let output = parse("CREATE PUBLICATION my_pub FOR TABLE users, orders;");
 
         let statements = output.statements(SyncState::PreData).unwrap();
 
@@ -1495,11 +2225,7 @@ ALTER TABLE ONLY parent ATTACH PARTITION parent_2024 FOR VALUES FROM ('2024-01-0
     #[test]
     fn test_alter_publication_add_table_restored() {
         // pg_dump outputs publication tables as ALTER PUBLICATION ... ADD TABLE
-        let q = "ALTER PUBLICATION my_pub ADD TABLE ONLY public.users;";
-        let output = PgDumpOutput {
-            stmts: parse(q).unwrap().protobuf,
-            original: q.to_owned(),
-        };
+        let output = parse("ALTER PUBLICATION my_pub ADD TABLE ONLY public.users;");
 
         let statements = output.statements(SyncState::PreData).unwrap();
 
@@ -1516,19 +2242,16 @@ ALTER TABLE ONLY parent ATTACH PARTITION parent_2024 FOR VALUES FROM ('2024-01-0
         // pg_dump generates FK constraints only for parent tables, not child partitions.
         // When parent has integer columns converted to bigint (via PK/FK),
         // child partitions should also have those columns converted.
-        let query = r#"
+        let output = parse(
+            r#"
 CREATE TABLE users (id INTEGER);
 CREATE TABLE orders (id INTEGER, user_id INTEGER, created_at DATE) PARTITION BY RANGE (created_at);
 CREATE TABLE orders_2024 (id INTEGER, user_id INTEGER, created_at DATE);
 ALTER TABLE users ADD CONSTRAINT users_pkey PRIMARY KEY (id);
 ALTER TABLE orders ADD CONSTRAINT orders_pkey PRIMARY KEY (id);
 ALTER TABLE orders ADD CONSTRAINT orders_user_fk FOREIGN KEY (user_id) REFERENCES users(id);
-ALTER TABLE ONLY orders ATTACH PARTITION orders_2024 FOR VALUES FROM ('2024-01-01') TO ('2025-01-01');"#;
-
-        let output = PgDumpOutput {
-            stmts: parse(query).unwrap().protobuf,
-            original: query.to_owned(),
-        };
+ALTER TABLE ONLY orders ATTACH PARTITION orders_2024 FOR VALUES FROM ('2024-01-01') TO ('2025-01-01');"#,
+        );
 
         let statements = output.statements(SyncState::PreData).unwrap();
 
@@ -1570,5 +2293,25 @@ ALTER TABLE ONLY orders ATTACH PARTITION orders_2024 FOR VALUES FROM ('2024-01-0
             "child user_id should be bigint: {}",
             child_sql
         );
+    }
+
+    #[cfg(feature = "new_parser")]
+    fn parse(query: &str) -> PgDumpOutput {
+        PgDumpOutput {
+            stmts: pg_raw_parse::parse(query).unwrap().into_inner(),
+            original: query.to_owned(),
+        }
+    }
+
+    cfg_select! {
+        not(feature = "new_parser") => {
+            fn parse(query: &str) -> PgDumpOutput {
+                PgDumpOutput {
+                    stmts: super::parse(query).unwrap().protobuf,
+                    original: query.to_owned(),
+                }
+            }
+        }
+        _ => {}
     }
 }
