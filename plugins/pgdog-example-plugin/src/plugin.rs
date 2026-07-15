@@ -125,7 +125,7 @@ mod test {
             query: &proto,
             params: Parameters::default(),
         };
-        let route = route_query(context.into()).unwrap();
+        let route = route_query(context).unwrap();
         let read_write: ReadWrite = route.read_write.try_into().unwrap();
         let shard: Shard = route.shard.try_into().unwrap();
 

@@ -80,6 +80,12 @@ impl Parameter<'_> {
         self.len
     }
 
+    /// Is the data empty? (Note that this is not the same as `null`, as some
+    /// types are valid with no data)
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
     /// The raw data for this parameter
     pub fn data(&self) -> Option<&[u8]> {
         if self.len == usize::MAX {
@@ -104,7 +110,7 @@ impl<'a> From<Option<&'a [u8]>> for Parameter<'a> {
     fn from(value: Option<&'a [u8]>) -> Self {
         Self {
             len: value.map(|s| s.len()).unwrap_or(usize::MAX),
-            data: value.and_then(|s| s.get(0)),
+            data: value.and_then(|s| s.first()),
         }
     }
 }
@@ -139,11 +145,10 @@ impl<'a> Parameters<'a> {
         match self.format_codes.len() {
             0 => ParameterFormat::Text,
             1 => self.format_codes[0],
-            _ => self
+            _ => *self
                 .format_codes
                 .get(param)
-                .unwrap_or(&ParameterFormat::Text)
-                .clone(),
+                .unwrap_or(&ParameterFormat::Text),
         }
     }
 
@@ -151,9 +156,9 @@ impl<'a> Parameters<'a> {
     /// [`Self::into_raw`] on the other side of the FFI boundary
     pub fn as_raw(&'a self) -> RawParameters<'a> {
         RawParameters {
-            parameters_data: self.parameters.get(0),
+            parameters_data: self.parameters.first(),
             parameters_len: self.parameters.len(),
-            format_codes_data: self.format_codes.get(0),
+            format_codes_data: self.format_codes.first(),
             format_codes_len: self.format_codes.len(),
         }
     }
