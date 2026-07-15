@@ -25,7 +25,12 @@ pub enum Error {
     PgDump(String),
 
     #[error("{0}")]
+    #[cfg(not(feature = "new_parser"))]
     Syntax(#[from] pg_query::Error),
+
+    #[error("{0}")]
+    #[cfg(feature = "new_parser")]
+    Syntax(#[from] pg_raw_parse::Error),
 
     #[error("parse error, stmt out of bounds")]
     StmtOutOfBounds,
