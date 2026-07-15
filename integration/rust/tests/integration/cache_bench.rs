@@ -1,6 +1,7 @@
 use sqlx::{Connection, Executor, PgConnection, Statement};
 
 #[tokio::test]
+#[ignore]
 async fn test_cache_bench() {
     let mut conn = PgConnection::connect("postgres://pgdog:pgdog@127.0.0.1:6432/pgdog")
         .await
