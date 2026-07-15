@@ -65,8 +65,8 @@ integration/**/vendor
 integration/**/*.test
 
 .rustup
-enterprise/control-web/dist
-enterprise/control-web/node_modules
-enterprise/control-web/.vite/*
+enterprise/web2/dist
+enterprise/web2/node_modules
+enterprise/web2/.vite/*
 
 .tokensave

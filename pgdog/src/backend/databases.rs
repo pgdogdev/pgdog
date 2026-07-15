@@ -824,6 +824,7 @@ mod tests {
             users,
             config_path: std::path::PathBuf::new(),
             users_path: std::path::PathBuf::new(),
+            ..Default::default()
         };
 
         crate::config::set(cu).expect("set config");
@@ -975,6 +976,7 @@ mod tests {
             users,
             config_path: std::path::PathBuf::new(),
             users_path: std::path::PathBuf::new(),
+            ..Default::default()
         });
 
         let alice_mirrors = databases.mirrors(("alice", "db1")).unwrap().unwrap_or(&[]);
@@ -1049,6 +1051,7 @@ mod tests {
             users,
             config_path: std::path::PathBuf::new(),
             users_path: std::path::PathBuf::new(),
+            ..Default::default()
         });
 
         // Mirrors should be empty due to user mismatch
@@ -1120,6 +1123,7 @@ mod tests {
             users,
             config_path: std::path::PathBuf::new(),
             users_path: std::path::PathBuf::new(),
+            ..Default::default()
         });
 
         // Verify mirror config exists and has custom values
@@ -1197,6 +1201,7 @@ mod tests {
             users,
             config_path: std::path::PathBuf::new(),
             users_path: std::path::PathBuf::new(),
+            ..Default::default()
         });
 
         let mirror_config = databases.mirror_config("db1", "db2");
@@ -1290,6 +1295,7 @@ mod tests {
             users,
             config_path: std::path::PathBuf::new(),
             users_path: std::path::PathBuf::new(),
+            ..Default::default()
         });
 
         // Check mirror1 config - custom queue, default exposure
@@ -1369,6 +1375,7 @@ mod tests {
             users,
             config_path: std::path::PathBuf::new(),
             users_path: std::path::PathBuf::new(),
+            ..Default::default()
         });
 
         // Should not have precomputed this invalid config
@@ -1423,6 +1430,7 @@ mod tests {
             users,
             config_path: std::path::PathBuf::new(),
             users_path: std::path::PathBuf::new(),
+            ..Default::default()
         });
 
         // Mirror config should not be precomputed when there are no users
@@ -1451,6 +1459,7 @@ mod tests {
             users: users_partial,
             config_path: std::path::PathBuf::new(),
             users_path: std::path::PathBuf::new(),
+            ..Default::default()
         });
 
         // Mirror config should not be precomputed when destination has no users
@@ -1479,6 +1488,7 @@ mod tests {
             users: users_dest_only,
             config_path: std::path::PathBuf::new(),
             users_path: std::path::PathBuf::new(),
+            ..Default::default()
         });
 
         // Mirror config should not be precomputed when source has no users
@@ -1533,6 +1543,7 @@ mod tests {
             users,
             config_path: std::path::PathBuf::new(),
             users_path: std::path::PathBuf::new(),
+            ..Default::default()
         });
 
         // User should have pools for all three databases
@@ -1597,6 +1608,7 @@ mod tests {
             users,
             config_path: std::path::PathBuf::new(),
             users_path: std::path::PathBuf::new(),
+            ..Default::default()
         });
 
         // User should have pools for db1 and db3 only
@@ -1663,6 +1675,7 @@ mod tests {
             users,
             config_path: std::path::PathBuf::new(),
             users_path: std::path::PathBuf::new(),
+            ..Default::default()
         });
 
         // all_databases should take priority - user gets all 3 databases
@@ -1737,6 +1750,7 @@ mod tests {
             users,
             config_path: std::path::PathBuf::new(),
             users_path: std::path::PathBuf::new(),
+            ..Default::default()
         });
 
         assert!(
@@ -1809,6 +1823,7 @@ mod tests {
             users,
             config_path: std::path::PathBuf::new(),
             users_path: std::path::PathBuf::new(),
+            ..Default::default()
         });
 
         // Admin has all 3 databases
@@ -1859,6 +1874,7 @@ mod tests {
             users,
             config_path: std::path::PathBuf::new(),
             users_path: std::path::PathBuf::new(),
+            ..Default::default()
         });
 
         // Should only create pool for db1, nonexistent is silently skipped

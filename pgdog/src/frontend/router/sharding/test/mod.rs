@@ -545,6 +545,7 @@ fn make_sharding_schema(
         users,
         config_path: PathBuf::new(),
         users_path: PathBuf::new(),
+        ..Default::default()
     });
     databases.cluster(("user", "db")).unwrap().sharding_schema()
 }

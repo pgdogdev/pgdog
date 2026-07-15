@@ -27,6 +27,7 @@ pub use pgdog_config::auth::{AuthType, PassthroughAuth};
 pub use pgdog_config::{LoadBalancingStrategy, ReadWriteSplit, ReadWriteStrategy};
 pub use pooling::{ConnectionRecovery, PoolerMode, PreparedStatements};
 pub use rewrite::{Rewrite, RewriteMode};
+use std::path::Path;
 pub use users::{Admin, Plugin, ServerAuth, User, Users};
 
 // Re-export from sharding module
@@ -40,8 +41,8 @@ pub use sharding::{
 pub use replication::{MirrorConfig, Mirroring, ReplicaLag, Replication};
 
 use parking_lot::Mutex;
+use std::env;
 use std::sync::Arc;
-use std::{env, path::PathBuf};
 
 use arc_swap::ArcSwap;
 use once_cell::sync::Lazy;
@@ -57,7 +58,7 @@ pub fn config() -> Arc<ConfigAndUsers> {
 }
 
 /// Load the configuration file from disk.
-pub fn load(config: &PathBuf, users: &PathBuf) -> Result<ConfigAndUsers, Error> {
+pub fn load(config: &Path, users: &Path) -> Result<ConfigAndUsers, Error> {
     let config = ConfigAndUsers::load(config, users)?;
     set(config)
 }
