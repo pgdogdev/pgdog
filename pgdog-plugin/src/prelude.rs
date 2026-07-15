@@ -2,6 +2,6 @@
 
 pub use crate::pg_query;
 pub use crate::{
-    Context, ParameterFormat, ReadWrite, Route, Shard,
+    Context, ParameterFormat, PdStr, Plugin, ReadWrite, Route, Shard,
     parameters::{Parameter, ParameterValue, Parameters},
 };

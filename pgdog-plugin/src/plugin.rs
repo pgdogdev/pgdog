@@ -138,10 +138,10 @@ impl PluginVtable {
     /// ### Example
     ///
     /// ```no_run
-    /// use pgdog_plugin::Plugin;
+    /// use pgdog_plugin::PluginVtable;
     ///
-    /// let plugin_lib = Plugin::library("/home/pgdog/plugin.so").unwrap();
-    /// let plugin_lib = Plugin::library("plugin.so").unwrap();
+    /// let plugin_lib = PluginVtable::library("/home/pgdog/plugin.so").unwrap();
+    /// let plugin_lib = PluginVtable::library("plugin.so").unwrap();
     /// ```
     ///
     pub fn library<P: AsRef<Path>>(name: P) -> Result<Library, libloading::Error> {

@@ -12,13 +12,17 @@ use crate::parameters::Parameters;
 /// ### Example
 ///
 /// ```
-/// use pgdog_plugin::{Context, Route, macros, Shard, ReadWrite};
+/// use pgdog_plugin::{Context, Route, Shard, ReadWrite};
+/// # use pgdog_plugin::{Plugin, PdStr};
 ///
-/// #[macros::route]
-/// fn route(context: Context) -> Route {
+/// # pgdog_plugin::plugin!(MyPlugin);
+/// # struct MyPlugin;
+/// # impl Plugin for MyPlugin {
+/// #     extern "C-unwind" fn version() -> PdStr<'static> { "0".into() }
+/// fn route(context: Context<'_>) -> Route {
 ///     let shards = context.shards();
 ///     let read_only = context.read_only();
-///     let ast = context.statement().protobuf();
+///     let ast = context.query;
 ///
 ///     println!("shards: {} (read_only: {})", shards, read_only);
 ///     println!("ast: {:#?}", ast);
@@ -31,6 +35,7 @@ use crate::parameters::Parameters;
 ///
 ///     Route::new(Shard::Direct(0), read_write)
 /// }
+/// # }
 /// ```
 ///
 #[derive(Debug, Clone, Copy)]
@@ -179,7 +184,7 @@ impl Context<'_> {
     /// use pgdog_plugin::prelude::*;
     /// # let context = unsafe { Context::doc_test() };
     /// let params = context.parameters();
-    /// if let Some(param) = params.get(0) {
+    /// if let Some(param) = params.parameters.get(0) {
     ///     let value = param.decode(params.parameter_format(0));
     ///     println!("{:?}", value);
     /// }
@@ -190,18 +195,20 @@ impl Context<'_> {
 }
 
 impl Context<'_> {
-    #[cfg(doctest)]
-    pub fn doc_test() -> Context {
+    #[doc(hidden)]
+    pub fn doc_test() -> Self {
+        use pg_query::protobuf::ParseResult;
+        static EMPTY_PARSE_RESULT: ParseResult = ParseResult {
+            version: 0,
+            stmts: Vec::new(),
+        };
         Context {
             shards: 1,
-            has_replicas: 1,
-            has_primary: 1,
-            in_transaction: 0,
-            write_override: 0,
-            query: &ParseResult {
-                version: 0,
-                stmts: Vec::new(),
-            },
+            has_replicas: true,
+            has_primary: true,
+            in_transaction: false,
+            write_override: false,
+            query: &EMPTY_PARSE_RESULT,
             params: Parameters::default(),
         }
     }

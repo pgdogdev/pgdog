@@ -8,7 +8,7 @@
 //! let params = Parameters::default();
 //! assert_eq!(ParameterFormat::Text, params.parameter_format(0));
 //!
-//! if let Some(param) = params.get(0) {
+//! if let Some(param) = params.parameters.get(0) {
 //!     let value = param.decode(params.parameter_format(0));
 //! }
 //! ```
@@ -44,7 +44,14 @@ pub struct Parameter<'a> {
     data: Option<&'a u8>,
 }
 
-impl Parameter<'_> {
+impl<'a> Parameter<'a> {
+    /// Construct this from the given slice
+    pub fn new(data: Option<&'a [u8]>) -> Self {
+        let len = data.map(|d| d.len()).unwrap_or(usize::MAX);
+        let data = data.and_then(|d| d.get(0));
+        Self { len, data }
+    }
+
     /// Decode parameter given the provided format. If the parameter is encoded using text encoding (default),
     /// a UTF-8 string is returned. If encoded using binary encoding, a slice of bytes.
     ///
@@ -55,16 +62,10 @@ impl Parameter<'_> {
     /// ```
     /// use pgdog_plugin::prelude::*;
     ///
-    /// let parameter = Parameter {
-    ///     len: -1,
-    ///     data: vec![],
-    /// };
+    /// let parameter = Parameter::new(None);
     /// assert!(parameter.decode(ParameterFormat::Text).is_none());
     ///
-    /// let parameter = Parameter {
-    ///     len: 5,
-    ///     data: "hello".as_bytes().to_vec(),
-    /// };
+    /// let parameter = Parameter::new(Some(b"hello"));
     /// assert_eq!(parameter.decode(ParameterFormat::Text), Some(ParameterValue::Text("hello")));
     /// ```
     ///
@@ -101,7 +102,7 @@ impl Parameter<'_> {
     }
 
     /// Returns true if the parameter is `NULL`.
-    pub fn null(&self) -> bool {
+    pub fn is_null(&self) -> bool {
         self.len == usize::MAX
     }
 }
