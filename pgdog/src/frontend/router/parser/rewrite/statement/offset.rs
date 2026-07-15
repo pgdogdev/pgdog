@@ -105,7 +105,7 @@ impl OffsetPlan {
             }
 
             #[cfg(feature = "new_parser")]
-            if let Some(rewritten) = rewrite_ast_limit_offset(&ast.new_ast, new_limit) {
+            if let Some(rewritten) = rewrite_ast_limit_offset(&ast.ast, new_limit) {
                 let result = pg_raw_parse::deparse(&*rewritten)?;
                 let new_sql = result.as_str();
                 for message in request.messages.iter_mut() {

@@ -1,9 +1,8 @@
-#[cfg(feature = "new_parser")]
-use itertools::*;
 use once_cell::sync::OnceCell;
+#[cfg(not(feature = "new_parser"))]
 use pg_query::{NodeEnum, ParseResult, parse, parse_raw};
 #[cfg(feature = "new_parser")]
-use pg_raw_parse::{Owned, StmtList, make};
+use pg_raw_parse::{Node, Owned, StmtList, make};
 use pgdog_config::QueryParserEngine;
 use std::fmt::Debug;
 use std::ops::Deref;
@@ -41,10 +40,11 @@ pub struct Ast {
 #[derive(Debug)]
 pub struct AstInner {
     /// Cached AST.
-    pub ast: ParseResult,
     // FIXME(sage): Rename to ast when parser port is done
     #[cfg(feature = "new_parser")]
-    pub new_ast: Owned<StmtList>,
+    pub(crate) ast: Owned<StmtList>,
+    #[cfg(not(feature = "new_parser"))]
+    pub(crate) ast: ParseResult,
     /// AST stats.
     pub stats: Mutex<Stats>,
     /// Rewrite plan.
@@ -59,14 +59,8 @@ impl AstInner {
     /// Create new AST record, with no rewrite or comment routing.
     #[cfg(feature = "new_parser")]
     pub(crate) fn new(ast: Owned<StmtList>) -> Self {
-        let deparse_results = ast
-            .iter()
-            .map(|s| pg_raw_parse::deparse(s))
-            .collect::<Result<Vec<_>, _>>()
-            .unwrap();
         Self {
-            new_ast: ast,
-            ast: pg_query::parse(&deparse_results.iter().map(|r| r.as_str()).join("; ")).unwrap(),
+            ast,
             stats: Mutex::new(Stats::new()),
             rewrite_plan: RewritePlan::default(),
             fingerprint: OnceCell::new(),
@@ -74,12 +68,9 @@ impl AstInner {
         }
     }
 
+    #[cfg(not(feature = "new_parser"))]
     pub(crate) fn old(ast: ParseResult) -> Self {
         Self {
-            #[cfg(feature = "new_parser")]
-            new_ast: pg_raw_parse::parse(&ast.deparse().unwrap())
-                .unwrap()
-                .into_inner(),
             ast,
             stats: Mutex::new(Stats::new()),
             rewrite_plan: RewritePlan::default(),
@@ -163,10 +154,6 @@ impl Ast {
             );
         }
 
-        #[cfg(feature = "new_parser")]
-        let old_ast =
-            pg_query::parse(&pg_raw_parse::deparse_stmts(&*ast)?).map_err(Error::PgQuery)?;
-
         Ok(Self {
             cached: true,
             comment_shard: None,
@@ -175,9 +162,7 @@ impl Ast {
             inner: Arc::new(AstInner {
                 stats: Mutex::new(stats),
                 #[cfg(feature = "new_parser")]
-                new_ast: ast,
-                #[cfg(feature = "new_parser")]
-                ast: old_ast,
+                ast,
                 #[cfg(not(feature = "new_parser"))]
                 ast,
                 rewrite_plan,
@@ -204,20 +189,41 @@ impl Ast {
     }
 
     /// Record new AST entry, without rewriting or comment-routing.
-    pub fn new_record(query: &str, query_parser_engine: QueryParserEngine) -> Result<Self, Error> {
-        let ast = match query_parser_engine {
-            QueryParserEngine::PgQueryProtobuf => parse(query),
-            QueryParserEngine::PgQueryRaw => parse_raw(query),
-        }
-        .map_err(Error::PgQuery)?;
+    #[cfg(feature = "new_parser")]
+    pub(crate) fn new_record(
+        query: &str,
+        query_parser_engine: QueryParserEngine,
+    ) -> Result<Self, Error> {
+        let ast = pg_raw_parse::parse(query)?;
 
         Ok(Self {
             cached: true,
             comment_role: None,
             comment_shard: None,
             query_parser_engine,
-            inner: Arc::new(AstInner::old(ast)),
+            inner: Arc::new(AstInner::new(ast.into_inner())),
         })
+    }
+
+    cfg_select! {
+        not(feature = "new_parser") => {
+            pub fn new_record(query: &str, query_parser_engine: QueryParserEngine) -> Result<Self, Error> {
+                let ast = match query_parser_engine {
+                    QueryParserEngine::PgQueryProtobuf => parse(query),
+                    QueryParserEngine::PgQueryRaw => parse_raw(query),
+                }
+                .map_err(Error::PgQuery)?;
+
+                Ok(Self {
+                    cached: true,
+                    comment_role: None,
+                    comment_shard: None,
+                    query_parser_engine,
+                    inner: Arc::new(AstInner::old(ast)),
+                })
+            }
+        }
+        _ => {}
     }
 
     /// Create new AST from a parse result.
@@ -233,7 +239,8 @@ impl Ast {
     }
 
     /// Create new AST from a parse result.
-    pub fn from_parse_result(parse_result: ParseResult) -> Self {
+    #[cfg(not(feature = "new_parser"))]
+    pub(crate) fn from_parse_result(parse_result: ParseResult) -> Self {
         Self {
             cached: true,
             comment_role: None,
@@ -244,7 +251,8 @@ impl Ast {
     }
 
     /// Get the reference to the AST.
-    pub fn parse_result(&self) -> &ParseResult {
+    #[cfg(not(feature = "new_parser"))]
+    pub(crate) fn parse_result(&self) -> &ParseResult {
         &self.ast
     }
 
@@ -261,34 +269,64 @@ impl Ast {
     }
 
     /// Get statement type.
-    pub fn statement_type(&self) -> StatementType {
-        let root = self
-            .ast
-            .protobuf
-            .stmts
-            .first()
-            .and_then(|s| s.stmt.as_ref())
-            .and_then(|s| s.node.as_ref());
+    #[cfg(feature = "new_parser")]
+    pub(crate) fn statement_type(&self) -> StatementType {
+        let root = self.ast.stmts().next();
 
         match root {
-            Some(NodeEnum::SelectStmt(_))
-            | Some(NodeEnum::InsertStmt(_))
-            | Some(NodeEnum::UpdateStmt(_))
-            | Some(NodeEnum::DeleteStmt(_))
-            | Some(NodeEnum::CopyStmt(_))
-            | Some(NodeEnum::ExplainStmt(_))
-            | Some(NodeEnum::TransactionStmt(_)) => StatementType::Dml,
+            Some(Node::SelectStmt(_))
+            | Some(Node::InsertStmt(_))
+            | Some(Node::UpdateStmt(_))
+            | Some(Node::DeleteStmt(_))
+            | Some(Node::CopyStmt(_))
+            | Some(Node::ExplainStmt(_))
+            | Some(Node::TransactionStmt(_)) => StatementType::Dml,
 
-            Some(NodeEnum::VariableSetStmt(_))
-            | Some(NodeEnum::VariableShowStmt(_))
-            | Some(NodeEnum::DeallocateStmt(_))
-            | Some(NodeEnum::ListenStmt(_))
-            | Some(NodeEnum::NotifyStmt(_))
-            | Some(NodeEnum::UnlistenStmt(_))
-            | Some(NodeEnum::DiscardStmt(_)) => StatementType::Session,
+            Some(Node::VariableSetStmt(_))
+            | Some(Node::VariableShowStmt(_))
+            | Some(Node::DeallocateStmt(_))
+            | Some(Node::ListenStmt(_))
+            | Some(Node::NotifyStmt(_))
+            | Some(Node::UnlistenStmt(_))
+            | Some(Node::DiscardStmt(_)) => StatementType::Session,
 
             _ => StatementType::Ddl,
         }
+    }
+
+    cfg_select! {
+        not(feature = "new_parser") => {
+            pub(crate) fn statement_type(&self) -> StatementType {
+                let root = self
+                    .ast
+                    .protobuf
+                    .stmts
+                    .first()
+                    .and_then(|s| s.stmt.as_ref())
+                    .and_then(|s| s.node.as_ref());
+
+                match root {
+                    Some(NodeEnum::SelectStmt(_))
+                    | Some(NodeEnum::InsertStmt(_))
+                    | Some(NodeEnum::UpdateStmt(_))
+                    | Some(NodeEnum::DeleteStmt(_))
+                    | Some(NodeEnum::CopyStmt(_))
+                    | Some(NodeEnum::ExplainStmt(_))
+                    | Some(NodeEnum::TransactionStmt(_)) => StatementType::Dml,
+
+                    Some(NodeEnum::VariableSetStmt(_))
+                    | Some(NodeEnum::VariableShowStmt(_))
+                    | Some(NodeEnum::DeallocateStmt(_))
+                    | Some(NodeEnum::ListenStmt(_))
+                    | Some(NodeEnum::NotifyStmt(_))
+                    | Some(NodeEnum::UnlistenStmt(_))
+                    | Some(NodeEnum::DiscardStmt(_)) => StatementType::Session,
+
+                    _ => StatementType::Ddl,
+                }
+            }
+        }
+        _ => {}
     }
 
     /// Get a pre-computed fingerprint, or compute it again.
