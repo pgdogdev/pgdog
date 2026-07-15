@@ -171,6 +171,12 @@ async fn test_offset_with_unique_id_simple() {
         final_sql.contains("LIMIT 15"),
         "LIMIT should be 10+5=15: {final_sql}"
     );
+    #[cfg(feature = "new_parser")]
+    assert!(
+        !final_sql.contains("OFFSET"),
+        "SQL should not contain OFFSET: {final_sql}",
+    );
+    #[cfg(not(feature = "new_parser"))]
     assert!(
         final_sql.contains("OFFSET 0"),
         "OFFSET should be 0: {final_sql}"

@@ -1,9 +1,10 @@
-use pg_query::NodeEnum;
 #[cfg(not(feature = "new_parser"))]
-use pg_query::protobuf::ParamRef;
-use pg_query::protobuf::{AConst, Integer, ParseResult, a_const::Val};
+use pg_query::{
+    NodeEnum,
+    protobuf::{AConst, Integer, ParamRef, ParseResult, a_const::Val},
+};
 #[cfg(feature = "new_parser")]
-use pg_raw_parse::{Node, nodes};
+use pg_raw_parse::{ConstValue, Node, Owned, StmtList, nodes};
 
 use crate::frontend::ClientRequest;
 use crate::frontend::router::parser::Limit;
@@ -88,7 +89,9 @@ impl OffsetPlan {
         if self.limit.limit.is_some() || self.limit.offset.is_some() {
             let new_limit = (limit_val.unwrap_or(0) + offset_val.unwrap_or(0)) as i32;
             let ast = request.ast.as_ref().ok_or(Error::MissingAst)?;
+            #[cfg(not(feature = "new_parser"))]
             let mut protobuf = ast.ast.protobuf.clone();
+            #[cfg(not(feature = "new_parser"))]
             if rewrite_ast_limit_offset(&mut protobuf, new_limit) {
                 let result = pg_query::ParseResult::new(protobuf, "".into());
                 let new_sql = result.deparse()?;
@@ -96,6 +99,19 @@ impl OffsetPlan {
                     match message {
                         ProtocolMessage::Query(q) => q.set_query(&new_sql),
                         ProtocolMessage::Parse(p) => p.set_query(&new_sql),
+                        _ => {}
+                    }
+                }
+            }
+
+            #[cfg(feature = "new_parser")]
+            if let Some(rewritten) = rewrite_ast_limit_offset(&ast.new_ast, new_limit) {
+                let result = pg_raw_parse::deparse(&*rewritten)?;
+                let new_sql = result.as_str();
+                for message in request.messages.iter_mut() {
+                    match message {
+                        ProtocolMessage::Query(q) => q.set_query(new_sql),
+                        ProtocolMessage::Parse(p) => p.set_query(new_sql),
                         _ => {}
                     }
                 }
@@ -159,37 +175,58 @@ fn extract_limit_value(node: &Option<pg_query::NodeEnum>) -> Option<LimitValueIn
     }
 }
 
-fn rewrite_ast_limit_offset(ast: &mut ParseResult, new_limit: i32) -> bool {
-    let raw_stmt = match ast.stmts.first_mut() {
-        Some(s) => s,
-        None => return false,
-    };
-    let stmt = match raw_stmt.stmt.as_mut() {
-        Some(s) => s,
-        None => return false,
-    };
-    let select = match &mut stmt.node {
-        Some(NodeEnum::SelectStmt(s)) => s,
-        _ => return false,
+#[cfg(feature = "new_parser")]
+fn rewrite_ast_limit_offset(ast: &StmtList, new_limit: i32) -> Option<Owned<nodes::SelectStmt>> {
+    let Some(Node::SelectStmt(select)) = ast.stmts().next() else {
+        return None;
     };
 
-    select.limit_count = Some(Box::new(pg_query::Node {
-        node: Some(NodeEnum::AConst(AConst {
-            val: Some(Val::Ival(Integer { ival: new_limit })),
-            isnull: false,
-            location: -1i32,
-        })),
-    }));
+    Some(make::owned(|mem| {
+        let mut select = mem.make_unique(select);
+        select
+            .as_mut()
+            .set_limit_count(mem.make_a_const(ConstValue::Integer(new_limit)).uncast());
+        select.as_mut().set_limit_offset(mem.none());
+        select
+    }))
+}
 
-    select.limit_offset = Some(Box::new(pg_query::Node {
-        node: Some(NodeEnum::AConst(AConst {
-            val: Some(Val::Ival(Integer { ival: 0 })),
-            isnull: false,
-            location: -1i32,
-        })),
-    }));
+cfg_select! {
+    not(feature = "new_parser") => {
+        fn rewrite_ast_limit_offset(ast: &mut ParseResult, new_limit: i32) -> bool {
+            let raw_stmt = match ast.stmts.first_mut() {
+                Some(s) => s,
+                None => return false,
+            };
+            let stmt = match raw_stmt.stmt.as_mut() {
+                Some(s) => s,
+                None => return false,
+            };
+            let select = match &mut stmt.node {
+                Some(NodeEnum::SelectStmt(s)) => s,
+                _ => return false,
+            };
 
-    true
+            select.limit_count = Some(Box::new(pg_query::Node {
+                node: Some(NodeEnum::AConst(AConst {
+                    val: Some(Val::Ival(Integer { ival: new_limit })),
+                    isnull: false,
+                    location: -1i32,
+                })),
+            }));
+
+            select.limit_offset = Some(Box::new(pg_query::Node {
+                node: Some(NodeEnum::AConst(AConst {
+                    val: Some(Val::Ival(Integer { ival: 0 })),
+                    isnull: false,
+                    location: -1i32,
+                })),
+            }));
+
+            true
+        }
+    }
+    _ => {}
 }
 
 impl StatementRewrite<'_> {
@@ -431,6 +468,9 @@ mod tests {
             ProtocolMessage::Query(q) => q.query().to_owned(),
             _ => panic!("expected Query"),
         };
+        #[cfg(feature = "new_parser")]
+        assert_eq!(query, "SELECT * FROM t LIMIT 15");
+        #[cfg(not(feature = "new_parser"))]
         assert_eq!(query, "SELECT * FROM t LIMIT 15 OFFSET 0");
 
         let route = request.route.unwrap();
@@ -521,6 +561,9 @@ mod tests {
             ProtocolMessage::Parse(p) => p.query().to_owned(),
             _ => panic!("expected Parse"),
         };
+        #[cfg(feature = "new_parser")]
+        assert_eq!(sql, "SELECT * FROM t LIMIT 15");
+        #[cfg(not(feature = "new_parser"))]
         assert_eq!(sql, "SELECT * FROM t LIMIT 15 OFFSET 0");
 
         let route = request.route.unwrap();
