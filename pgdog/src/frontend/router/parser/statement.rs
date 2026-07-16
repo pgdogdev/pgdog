@@ -12,7 +12,7 @@ use pg_query::Node as PgNode;
 use pg_query::Node;
 #[cfg(all(test, not(feature = "new_parser")))]
 use pg_query::protobuf::RawStmt;
-#[cfg_attr(feature = "new_parser", allow(unused))]
+#[cfg(not(feature = "new_parser"))]
 use pg_query::{
     NodeEnum,
     protobuf::{
@@ -634,7 +634,7 @@ impl<'a> SearchResult<'a> {
     }
 }
 
-#[cfg_attr(feature = "new_parser", allow(unused))]
+#[cfg(not(feature = "new_parser"))]
 enum Statement<'a> {
     Select(&'a SelectStmt),
     Update(&'a UpdateStmt),

@@ -1,6 +1,9 @@
 #![allow(clippy::print_stdout)]
 
-use pg_query::{normalize, parse};
+#[cfg(not(feature = "new_parser"))]
+use pg_query::parse;
+#[cfg(feature = "new_parser")]
+use pg_raw_parse::parse;
 use tokio::spawn;
 
 use crate::{
@@ -356,11 +359,4 @@ fn test_truncated_query_non_ascii_char_boundary() {
     let buffered = BufferedQuery::Query(Query::new("SELECT '€'"));
     let ast_query = AstQuery::from_query(&buffered);
     assert_eq!(ast_query.truncated_query(9), "SELECT '€");
-}
-
-#[test]
-fn test_normalize() {
-    let q = "SELECT * FROM users WHERE id = 1";
-    let normalized = normalize(q).unwrap();
-    assert_eq!(normalized, "SELECT * FROM users WHERE id = $1");
 }
