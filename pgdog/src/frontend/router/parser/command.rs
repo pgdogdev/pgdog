@@ -35,7 +35,6 @@ pub enum Command {
         behave_like_select: bool,
     },
     ResetAll,
-    PreparedStatement(Prepare),
     InternalField {
         name: String,
         value: String,
