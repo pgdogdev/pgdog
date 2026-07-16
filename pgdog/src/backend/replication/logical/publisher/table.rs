@@ -528,6 +528,10 @@ mod test {
         replication::logical::publisher::queries::{PublicationTableColumn, ReplicaIdentity},
         server::test::test_server,
     };
+    #[cfg(not(feature = "new_parser"))]
+    use pg_query::parse;
+    #[cfg(feature = "new_parser")]
+    use pg_raw_parse::parse;
 
     use crate::config::config;
     use crate::net::messages::replication::logical::tuple_data::{
@@ -588,16 +592,16 @@ mod test {
         let table = make_table(vec![("id", true), ("name", false), ("value", false)]);
 
         let insert = table.insert();
-        assert!(pg_query::parse(&insert).is_ok(), "insert: {}", insert);
+        assert!(parse(&insert).is_ok(), "insert: {}", insert);
 
         let upsert = table.upsert();
-        assert!(pg_query::parse(&upsert).is_ok(), "upsert: {}", upsert);
+        assert!(parse(&upsert).is_ok(), "upsert: {}", upsert);
 
         let update = table.update();
-        assert!(pg_query::parse(&update).is_ok(), "update: {}", update);
+        assert!(parse(&update).is_ok(), "update: {}", update);
 
         let delete = table.delete();
-        assert!(pg_query::parse(&delete).is_ok(), "delete: {}", delete);
+        assert!(parse(&delete).is_ok(), "delete: {}", delete);
     }
 
     #[test]
@@ -605,16 +609,16 @@ mod test {
         let table = make_table(vec![("id", true), ("has\"quote", false), ("normal", false)]);
 
         let insert = table.insert();
-        assert!(pg_query::parse(&insert).is_ok(), "insert: {}", insert);
+        assert!(parse(&insert).is_ok(), "insert: {}", insert);
 
         let upsert = table.upsert();
-        assert!(pg_query::parse(&upsert).is_ok(), "upsert: {}", upsert);
+        assert!(parse(&upsert).is_ok(), "upsert: {}", upsert);
 
         let update = table.update();
-        assert!(pg_query::parse(&update).is_ok(), "update: {}", update);
+        assert!(parse(&update).is_ok(), "update: {}", update);
 
         let delete = table.delete();
-        assert!(pg_query::parse(&delete).is_ok(), "delete: {}", delete);
+        assert!(parse(&delete).is_ok(), "delete: {}", delete);
     }
 
     #[test]
@@ -692,16 +696,16 @@ mod test {
         ]);
 
         let insert = table.insert();
-        assert!(pg_query::parse(&insert).is_ok(), "insert: {}", insert);
+        assert!(parse(&insert).is_ok(), "insert: {}", insert);
 
         let upsert = table.upsert();
-        assert!(pg_query::parse(&upsert).is_ok(), "upsert: {}", upsert);
+        assert!(parse(&upsert).is_ok(), "upsert: {}", upsert);
 
         let update = table.update();
-        assert!(pg_query::parse(&update).is_ok(), "update: {}", update);
+        assert!(parse(&update).is_ok(), "update: {}", update);
 
         let delete = table.delete();
-        assert!(pg_query::parse(&delete).is_ok(), "delete: {}", delete);
+        assert!(parse(&delete).is_ok(), "delete: {}", delete);
     }
 
     #[test]
@@ -711,16 +715,16 @@ mod test {
         table.table.schema = "schema\"quote".to_string();
 
         let insert = table.insert();
-        assert!(pg_query::parse(&insert).is_ok(), "insert: {}", insert);
+        assert!(parse(&insert).is_ok(), "insert: {}", insert);
 
         let upsert = table.upsert();
-        assert!(pg_query::parse(&upsert).is_ok(), "upsert: {}", upsert);
+        assert!(parse(&upsert).is_ok(), "upsert: {}", upsert);
 
         let update = table.update();
-        assert!(pg_query::parse(&update).is_ok(), "update: {}", update);
+        assert!(parse(&update).is_ok(), "update: {}", update);
 
         let delete = table.delete();
-        assert!(pg_query::parse(&delete).is_ok(), "delete: {}", delete);
+        assert!(parse(&delete).is_ok(), "delete: {}", delete);
     }
 
     #[test]
@@ -849,13 +853,13 @@ mod test {
 
         for table in tables {
             let upsert = table.upsert();
-            assert!(pg_query::parse(&upsert).is_ok());
+            assert!(parse(&upsert).is_ok());
 
             let update = table.update();
-            assert!(pg_query::parse(&update).is_ok());
+            assert!(parse(&update).is_ok());
 
             let delete = table.delete();
-            assert!(pg_query::parse(&delete).is_ok());
+            assert!(parse(&delete).is_ok());
         }
 
         publication.cleanup().await;
@@ -1003,7 +1007,7 @@ mod test {
             sql,
             format!("DELETE FROM {q}{s}{q}.{q}{t}{q} WHERE (tableoid, ctid) = {subq}")
         );
-        assert!(pg_query::parse(&sql).is_ok(), "delete_full_identity: {sql}");
+        assert!(parse(&sql).is_ok(), "delete_full_identity: {sql}");
     }
 
     #[test]
@@ -1018,10 +1022,7 @@ mod test {
             sql,
             format!("DELETE FROM {q}{s}{q}.{q}{t}{q} WHERE (tableoid, ctid) = {subq}")
         );
-        assert!(
-            pg_query::parse(&sql).is_ok(),
-            "delete_full_identity single: {sql}"
-        );
+        assert!(parse(&sql).is_ok(), "delete_full_identity single: {sql}");
     }
 
     #[test]
@@ -1040,7 +1041,7 @@ mod test {
             format!("UPDATE {q}{s}{q}.{q}{t}{q} SET {set}WHERE (tableoid, ctid) = {subq}")
         );
         assert!(
-            pg_query::parse(&sql).is_ok(),
+            parse(&sql).is_ok(),
             "update_full_identity all_present: {sql}"
         );
     }
@@ -1064,10 +1065,7 @@ mod test {
             sql,
             format!("UPDATE {q}{s}{q}.{q}{t}{q} SET {set}WHERE (tableoid, ctid) = {subq}")
         );
-        assert!(
-            pg_query::parse(&sql).is_ok(),
-            "update_full_identity partial: {sql}"
-        );
+        assert!(parse(&sql).is_ok(), "update_full_identity partial: {sql}");
     }
 
     #[test]
@@ -1090,7 +1088,7 @@ mod test {
             format!("UPDATE {q}{s}{q}.{q}{t}{q} SET {set}WHERE (tableoid, ctid) = {subq}")
         );
         assert!(
-            pg_query::parse(&sql).is_ok(),
+            parse(&sql).is_ok(),
             "update_full_identity first_toasted: {sql}"
         );
     }
@@ -1115,7 +1113,7 @@ mod test {
             format!("UPDATE {q}{s}{q}.{q}{t}{q} SET {set}WHERE (tableoid, ctid) = {subq}")
         );
         assert!(
-            pg_query::parse(&sql).is_ok(),
+            parse(&sql).is_ok(),
             "update_full_identity single col: {sql}"
         );
     }

@@ -11,7 +11,7 @@ readme = "README.md"
 default-run = "pgdog"
 
 [features]
-default = ["pgdog-plugin/pg_query"]
+default = ["pg_query", "pgdog-plugin/pg_query"]
 tui = ["ratatui"]
 new_parser = ["pg_raw_parse", "pgdog-plugin/new_parser"]
 
@@ -46,7 +46,7 @@ base64 = "0.22"
 md5 = "0.7"
 futures = "0.3"
 csv-core = "0.1"
-pg_query = { git = "https://github.com/pgdogdev/pg_query.rs.git", rev = "97019d0c13ad0b888fe91ee5bed5448b5f409cdd" }
+pg_query = { git = "https://github.com/pgdogdev/pg_query.rs.git", rev = "97019d0c13ad0b888fe91ee5bed5448b5f409cdd", optional = true }
 regex = "1"
 memchr = "2"
 semver = "1"
