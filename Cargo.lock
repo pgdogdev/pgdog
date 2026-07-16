@@ -3313,7 +3313,7 @@ dependencies = [
 [[package]]
 name = "pg_raw_parse"
 version = "0.1.0"
-source = "git+https://github.com/pgdogdev/pg_raw_parse.git?rev=e522144#e5221448fa2fd848e0807ece2ef30c1f5de22aef"
+source = "git+https://github.com/pgdogdev/pg_raw_parse.git?branch=levkk-linker-fix#36df51192b28bcead6d05a6dfd74794d3b62204d"
 dependencies = [
  "bindgen 0.72.1",
  "cc",
