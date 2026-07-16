@@ -66,7 +66,7 @@ jobs:
           - { name: mirror,        script: integration/mirror/run.sh }
           - { name: sql,           script: integration/sql/run.sh }
           - { name: toxi,          script: integration/toxi/run.sh }
-          - { name: rust,          script: integration/rust/run.sh }
+          - { name: rust,          script: integration/rust/run.sh, pgdog_gdb: false }
           - { name: python,        script: integration/python/run.sh }
           - { name: complex,       script: integration/complex/run.sh }
           - { name: dry-run,       script: integration/dry_run/run.sh }
@@ -80,7 +80,7 @@ jobs:
           - { name: plugins,       script: integration/plugins/run.sh, needs_rust_cache: true, continue_on_error: true }
     env:
       PGDOG_BIN: ${{ github.workspace }}/target/release/pgdog
-      PGDOG_GDB: "1"
+      PGDOG_GDB: ${{ matrix.pgdog_gdb == false && '' || '1' }}
       PGDOG_PLUGIN_FEATURES: new_parser
     steps:
       - uses: actions/checkout@v6
