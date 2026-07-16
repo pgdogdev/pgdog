@@ -9,8 +9,16 @@ command -v bundle >/dev/null || sudo gem install bundler --no-document
 
 export CARGO_TARGET_DIR=${SCRIPT_DIR}/target
 
+function build_plugin() {
+    if [ -n "${PGDOG_PLUGIN_FEATURES:-}" ]; then
+        cargo build --release --no-default-features --features "${PGDOG_PLUGIN_FEATURES}"
+    else
+        cargo build --release
+    fi
+}
+
 pushd ${SCRIPT_DIR}/test-plugins/test-plugin-compatible
-cargo build --release
+build_plugin
 popd
 
 pushd ${SCRIPT_DIR}/test-plugins/test-plugin-outdated
@@ -20,7 +28,7 @@ popd
 unset CARGO_TARGET_DIR
 
 pushd ${SCRIPT_DIR}/../../plugins/pgdog-example-plugin
-cargo build --release
+build_plugin
 popd
 
 export LD_LIBRARY_PATH=${SCRIPT_DIR}/target/release:${SCRIPT_DIR}/../../target/release

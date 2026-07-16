@@ -10,3 +10,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 pgdog-plugin = { path = "../../../../pgdog-plugin" }
+
+[features]
+default = ["pgdog-plugin/pg_query"]
+new_parser = ["pgdog-plugin/new_parser"]

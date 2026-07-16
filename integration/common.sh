@@ -54,7 +54,7 @@ function run_pgdog() {
             --batch \
             -ex "set pagination off" \
             -ex "set confirm off" \
-            -ex "handle SIGPIPE nostop noprint pass" \
+            -ex "handle SIGPIPE nostop noprint nopass" \
             -ex "run" \
             -ex "thread apply all bt full" \
             -ex "quit" \

@@ -31,7 +31,10 @@ impl Plugin for TestPlugin {
 
         // query should be accessible
         let query = context.query;
+        #[cfg(not(feature = "new_parser"))]
         assert!(query.nodes().len() >= 1);
+        #[cfg(feature = "new_parser")]
+        assert!(query.stmts().next().is_some());
 
         // Write to output file on first call only
         ROUTE_CALLED.get_or_init(|| {
