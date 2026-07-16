@@ -2158,6 +2158,12 @@ ALTER TABLE test ADD CONSTRAINT id_pkey PRIMARY KEY (id);"#,
             statements[0].deref(),
             "CREATE TABLE IF NOT EXISTS test (id bigint, value text)"
         );
+        #[cfg(feature = "new_parser")]
+        assert_eq!(
+            statements[1].deref(),
+            "ALTER TABLE test ADD CONSTRAINT id_pkey PRIMARY KEY (id)"
+        );
+        #[cfg(not(feature = "new_parser"))]
         assert_eq!(
             statements[1].deref(),
             "\nALTER TABLE test ADD CONSTRAINT id_pkey PRIMARY KEY (id)"
