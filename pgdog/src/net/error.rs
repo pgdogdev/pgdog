@@ -117,6 +117,11 @@ pub enum Error {
 
     #[error("message size {size} bytes exceeds query_size_limit of {limit} bytes")]
     MessageTooLarge { size: usize, limit: usize },
+
+    /// The length field counts itself, so it can never be below 4. A message
+    /// declaring less than that can't be framed, and the peer is out of sync.
+    #[error("malformed message: declared length {0} is below the minimum of 4 bytes")]
+    MalformedMessageLength(i32),
 }
 
 impl Error {
@@ -127,6 +132,12 @@ impl Error {
         match self {
             Self::MessageTooLarge { size, limit } => Some(
                 super::messages::ErrorResponse::query_too_large(*size, *limit),
+            ),
+            Self::MalformedMessageLength(len) => Some(
+                super::messages::ErrorResponse::protocol_violation(&format!(
+                    "declared message length {} is below the minimum of 4 bytes",
+                    len
+                )),
             ),
             _ => None,
         }
@@ -159,5 +170,17 @@ mod tests {
         assert!(!Error::UnexpectedMessage('Z', 'Q').is_retryable());
         assert!(!Error::NotTextEncoding.is_retryable());
         assert!(!Error::UnexpectedPayload.is_retryable());
+    }
+
+    #[test]
+    fn malformed_message_length_is_permanent() {
+        // Re-reading a peer that framed a message wrongly just re-reads the
+        // same bytes, so this must not be treated as a transient fault.
+        let err = Error::MalformedMessageLength(-1);
+        assert!(!err.is_retryable());
+
+        // The client gets told why before it is disconnected.
+        let response = err.as_fatal_error_response().unwrap();
+        assert_eq!(response.code, "08P01");
     }
 }
