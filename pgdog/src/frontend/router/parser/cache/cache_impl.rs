@@ -1,6 +1,9 @@
 use lru::LruCache;
 use once_cell::sync::Lazy;
+#[cfg(not(feature = "new_parser"))]
 use pg_query::normalize;
+#[cfg(feature = "new_parser")]
+use pg_raw_parse::normalize::normalize;
 use pgdog_config::QueryParserEngine;
 use std::collections::HashMap;
 use std::time::Duration;
@@ -198,7 +201,7 @@ impl Cache {
         route: &Route,
         query_parser_engine: QueryParserEngine,
     ) -> Result<(), Error> {
-        let normalized = normalize(query).map_err(Error::PgQuery)?;
+        let normalized = normalize(query)?;
 
         {
             let mut guard = self.inner.lock();
