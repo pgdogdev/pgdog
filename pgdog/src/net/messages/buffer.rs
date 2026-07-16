@@ -56,7 +56,7 @@ impl MessageBuffer {
         stream: &mut (impl Unpin + AsyncReadExt),
     ) -> Result<Message, Error> {
         loop {
-            if let Some(size) = self.message_size() {
+            if let Some(size) = self.message_size()? {
                 if let Some(limit) = self.size_limit_block
                     && size > limit
                     && self.is_query_message()
@@ -75,7 +75,7 @@ impl MessageBuffer {
                     return Err(Error::MessageTooLarge { size, limit });
                 }
 
-                if self.have_message() {
+                if self.buffer.len() >= size {
                     return Ok(Message::new(self.buffer.split_to(size).freeze()));
                 }
 
@@ -116,7 +116,7 @@ impl MessageBuffer {
     /// will see: Query ('Q', simple protocol) or Parse ('P', extended).
     /// The size limit protects the parser, so only these are subject to it.
     ///
-    /// Invariant: only called when `message_size()` returned `Some`, which
+    /// Invariant: only called when `message_size()` returned `Ok(Some)`, which
     /// requires at least the 5-byte header in the buffer, so indexing the
     /// message code byte can't panic.
     fn is_query_message(&self) -> bool {
@@ -138,20 +138,21 @@ impl MessageBuffer {
         }
     }
 
-    fn have_message(&self) -> bool {
-        self.message_size()
-            .map(|len| self.buffer.len() >= len)
-            .unwrap_or(false)
-    }
-
-    fn message_size(&self) -> Option<usize> {
+    fn message_size(&self) -> Result<Option<usize>, Error> {
         if self.buffer.len() >= HEADER_SIZE {
             let mut cur = Cursor::new(&self.buffer);
             let _code = cur.get_u8();
-            let len = cur.get_i32() as usize + 1;
-            Some(len)
+            let len = cur.get_i32();
+            // The length counts itself but not the message code, so 4 is the
+            // floor. Validating before the `as usize` widening below matters:
+            // it sign-extends a negative length into a huge size, which then
+            // panics the connection task in `reserve`.
+            if len < 4 {
+                return Err(Error::MalformedMessageLength(len));
+            }
+            Ok(Some(len as usize + 1))
         } else {
-            None
+            Ok(None)
         }
     }
 
@@ -446,13 +447,64 @@ mod test {
             .unwrap();
         assert_eq!(msg.code(), 'S');
 
-        // Malformed query header declaring size < HEADER_SIZE: the
-        // log-sample slice must clamp to HEADER_SIZE and not panic.
+        // Smallest legal query header, still over the limit: the log-sample
+        // slice has no payload to read and must not panic.
         let mut buf = MessageBuffer::new(4096, Some(3));
         let err = buf
-            .read(&mut Cursor::new(vec![b'Q', 0, 0, 0, 3]))
+            .read(&mut Cursor::new(vec![b'Q', 0, 0, 0, 4]))
             .await
             .unwrap_err();
         assert!(matches!(err, Error::MessageTooLarge { limit: 3, .. }));
+    }
+
+    #[tokio::test]
+    async fn test_malformed_message_length_rejected() {
+        // Lengths below 4 are unframable. Before they were validated, the
+        // `as usize` widening turned them into enormous sizes: -1 wrapped to
+        // a size of 0 under the release profile's disabled overflow checks,
+        // yielding empty messages forever, and -2 reserved usize::MAX.
+        for len in [-1_i32, -2, i32::MIN, 0, 3] {
+            let mut data = BytesMut::new();
+            data.put_u8(b'Q');
+            data.put_i32(len);
+
+            let mut buf = MessageBuffer::new(4096, None);
+            let err = buf.read(&mut Cursor::new(data.to_vec())).await.unwrap_err();
+
+            assert!(
+                matches!(err, Error::MalformedMessageLength(got) if got == len),
+                "length {} should be rejected as malformed, got {:?}",
+                len,
+                err
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_minimum_message_length_accepted() {
+        // 4 is legal: the length counts itself and Sync carries no payload.
+        let mut buf = MessageBuffer::new(4096, None);
+        let msg = buf
+            .read(&mut Cursor::new(Sync.to_bytes().to_vec()))
+            .await
+            .unwrap();
+        assert_eq!(msg.code(), 'S');
+        assert_eq!(msg.len(), HEADER_SIZE);
+    }
+
+    #[tokio::test]
+    async fn test_malformed_length_does_not_stall_the_buffer() {
+        // The malformed header used to stay in the buffer and be re-read
+        // forever. It must surface as an error instead of an empty message.
+        let mut data = BytesMut::new();
+        data.put_u8(b'Q');
+        data.put_i32(-1);
+        data.extend_from_slice(&Sync.to_bytes());
+
+        let mut buf = MessageBuffer::new(4096, None);
+        assert!(matches!(
+            buf.read(&mut Cursor::new(data.to_vec())).await,
+            Err(Error::MalformedMessageLength(-1))
+        ));
     }
 }
