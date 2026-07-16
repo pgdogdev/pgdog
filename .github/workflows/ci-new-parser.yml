@@ -81,6 +81,7 @@ jobs:
     env:
       PGDOG_BIN: ${{ github.workspace }}/target/release/pgdog
       PGDOG_GDB: ${{ matrix.pgdog_gdb == true && '1' || '' }}
+      PGDOG_PLUGIN_FEATURES: new_parser
     steps:
       - uses: actions/checkout@v6
       - name: Install CI deps
