@@ -57,6 +57,30 @@ fn test_set_comment() {
 }
 
 #[test]
+fn test_set_config_null_value() {
+    let mut test = QueryParserTest::new();
+
+    let command = test.execute(vec![
+        Query::new("SELECT set_config('lock_timeout', NULL, false)").into(),
+    ]);
+
+    match command {
+        Command::Set {
+            params,
+            behave_like_select,
+            ..
+        } => {
+            assert_eq!(params.len(), 1);
+            assert_eq!(params[0].name, "lock_timeout");
+            assert_eq!(params[0].value, None);
+            assert!(!params[0].local);
+            assert!(behave_like_select);
+        }
+        _ => panic!("expected Command::Set, got {command:#?}"),
+    }
+}
+
+#[test]
 fn test_set_multi_statement() {
     let mut test = QueryParserTest::new();
 
