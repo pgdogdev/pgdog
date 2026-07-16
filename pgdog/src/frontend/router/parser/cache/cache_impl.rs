@@ -1,12 +1,11 @@
 use lru::LruCache;
 use once_cell::sync::Lazy;
-use parking_lot::lock_api::MutexGuard;
 use pg_query::normalize;
 use pgdog_config::QueryParserEngine;
 use std::collections::HashMap;
 use std::time::Duration;
 
-use parking_lot::{Mutex, RawMutex};
+use parking_lot::Mutex;
 use std::sync::Arc;
 use tracing::debug;
 
@@ -95,11 +94,6 @@ impl Cache {
             BufferedQuery::Prepared(_) => self.parse(query, ctx, prepared_statements),
             BufferedQuery::Query(_) => self.simple(query, ctx, prepared_statements),
         }
-    }
-
-    /// Get the inner struct.
-    pub(super) fn lock<'a>(&'a self) -> MutexGuard<'a, RawMutex, Inner> {
-        self.inner.lock()
     }
 
     /// Parse a statement by either getting it from cache

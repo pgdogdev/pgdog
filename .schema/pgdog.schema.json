@@ -126,14 +126,6 @@
         "workers": 2
       }
     },
-    "manual_queries": {
-      "description": "Queries routed manually to a single shard.",
-      "type": "array",
-      "default": [],
-      "items": {
-        "$ref": "#/$defs/ManualQuery"
-      }
-    },
     "memory": {
       "description": "Memory settings control buffer sizes used by PgDog for network I/O and task execution.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/memory/",
       "$ref": "#/$defs/Memory",
@@ -1328,18 +1320,6 @@
           "type": "string",
           "const": "json_flattened"
         }
-      ]
-    },
-    "ManualQuery": {
-      "description": "Queries with manual routing rules.",
-      "type": "object",
-      "properties": {
-        "fingerprint": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "fingerprint"
       ]
     },
     "Memory": {

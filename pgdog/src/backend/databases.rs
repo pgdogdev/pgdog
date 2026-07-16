@@ -27,8 +27,7 @@ use crate::frontend::router::sharding::{Mapping, ShardedTable};
 use crate::{
     backend::pool::PoolConfig,
     config::{
-        ConfigAndUsers, ManualQuery, Role, ShardedMappingDeprecated, User as ConfigUser, config,
-        load, set,
+        ConfigAndUsers, Role, ShardedMappingDeprecated, User as ConfigUser, config, load, set,
     },
     net::{messages::FrontendPid, tls},
 };
@@ -310,7 +309,6 @@ impl ToUser for (&str, Option<&str>) {
 #[derive(Default, Clone)]
 pub struct Databases {
     databases: HashMap<User, Cluster>,
-    manual_queries: HashMap<String, ManualQuery>,
     mirrors: HashMap<User, Vec<Cluster>>,
     mirror_configs: HashMap<(String, String), crate::config::MirrorConfig>,
 }
@@ -419,16 +417,6 @@ impl Databases {
         }
 
         Ok(())
-    }
-
-    /// Get manual query, if exists.
-    pub fn manual_query(&self, fingerprint: &str) -> Option<&ManualQuery> {
-        self.manual_queries.get(fingerprint)
-    }
-
-    /// Manual queries collection, keyed by query fingerprint.
-    pub fn manual_queries(&self) -> &HashMap<String, ManualQuery> {
-        &self.manual_queries
     }
 
     /// Move all connections we can from old databases config to new
@@ -784,7 +772,6 @@ pub fn from_config(config: &ConfigAndUsers) -> Databases {
 
     Databases {
         databases,
-        manual_queries: config.config.manual_queries(),
         mirrors,
         mirror_configs,
     }

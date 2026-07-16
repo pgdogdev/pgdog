@@ -1,4 +1,3 @@
-use once_cell::sync::OnceCell;
 #[cfg(not(feature = "new_parser"))]
 use pg_query::{NodeEnum, ParseResult, parse, parse_raw};
 #[cfg(feature = "new_parser")]
@@ -13,7 +12,7 @@ use std::sync::Arc;
 use tracing::warn;
 
 use super::super::{Error, Route, Shard, StatementRewrite, StatementRewriteContext};
-use super::{Cache, Fingerprint, Stats};
+use super::Stats;
 use crate::backend::schema::Schema;
 use crate::frontend::PreparedStatements;
 use crate::frontend::router::parser::cache::AstQuery;
@@ -49,8 +48,6 @@ pub struct AstInner {
     pub stats: Mutex<Stats>,
     /// Rewrite plan.
     pub rewrite_plan: RewritePlan,
-    /// Fingerprint.
-    pub fingerprint: OnceCell<Fingerprint>,
     /// Original query.
     pub query_without_comment: Arc<str>,
 }
@@ -63,7 +60,6 @@ impl AstInner {
             ast,
             stats: Mutex::new(Stats::new()),
             rewrite_plan: RewritePlan::default(),
-            fingerprint: OnceCell::new(),
             query_without_comment: "".into(),
         }
     }
@@ -74,7 +70,6 @@ impl AstInner {
             ast,
             stats: Mutex::new(Stats::new()),
             rewrite_plan: RewritePlan::default(),
-            fingerprint: OnceCell::new(),
             query_without_comment: "".into(),
         }
     }
@@ -166,7 +161,6 @@ impl Ast {
                 #[cfg(not(feature = "new_parser"))]
                 ast,
                 rewrite_plan,
-                fingerprint: OnceCell::new(),
                 query_without_comment: query.query_without_comment.into(),
             }),
         })
@@ -328,38 +322,6 @@ impl Ast {
         }
         _ => {}
     }
-
-    /// Get a pre-computed fingerprint, or compute it again.
-    pub fn fingerprint(&self) -> Result<&Fingerprint, Error> {
-        if let Some(fingerprint) = self.fingerprint.get() {
-            return Ok(fingerprint);
-        }
-
-        let start = Instant::now();
-        let fingerprint = Fingerprint::new(&self.query_without_comment, self.query_parser_engine)
-            .map_err(Error::PgQuery)?;
-        let elapsed = start.elapsed();
-
-        // try_insert is non-blocking: if another thread beat us to it, we
-        // return their value and drop ours. Only the winner bumps stats so
-        // we don't double-count under contention.
-        match self.fingerprint.try_insert(fingerprint) {
-            Ok(inserted) => {
-                let mut my_stats = self.stats.lock();
-                my_stats.parse_time += elapsed;
-                my_stats.fingerprints += 1;
-                drop(my_stats);
-
-                let cache = Cache::get();
-                let mut lock = cache.lock();
-                lock.stats.parse_time += elapsed;
-                lock.stats.fingerprints += 1;
-
-                Ok(inserted)
-            }
-            Err((existing, _)) => Ok(existing),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -367,155 +329,4 @@ pub enum StatementType {
     Ddl,
     Dml,
     Session,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::backend::ShardingSchema;
-    use crate::backend::schema::Schema;
-    use crate::frontend::BufferedQuery;
-    use crate::net::Query;
-
-    fn make_ast(sql: &str) -> Ast {
-        let buffered = BufferedQuery::Query(Query::new(sql));
-        Ast::new(
-            &AstQuery::from_query(&buffered),
-            &ShardingSchema::default(),
-            &Schema::default(),
-            &mut PreparedStatements::default(),
-            "",
-            None,
-        )
-        .unwrap()
-    }
-
-    #[test]
-    fn test_fingerprint_returns_ok() {
-        let ast = make_ast("SELECT 1");
-        ast.fingerprint().unwrap();
-    }
-
-    #[test]
-    fn test_fingerprint_is_cached() {
-        let ast = make_ast("SELECT 2");
-        let fp1 = ast.fingerprint().unwrap() as *const _;
-        let fp2 = ast.fingerprint().unwrap() as *const _;
-        // Second call should return the cached reference (same address).
-        assert_eq!(fp1, fp2);
-    }
-
-    #[test]
-    fn test_fingerprint_same_for_equivalent_queries() {
-        let a = make_ast("SELECT 1 FROM users WHERE id = 1");
-        let b = make_ast("SELECT 1 FROM users WHERE id = 2");
-        let fp_a = a.fingerprint().unwrap();
-        let fp_b = b.fingerprint().unwrap();
-        assert_eq!(
-            fp_a.value, fp_b.value,
-            "queries differing only in constants should have the same fingerprint"
-        );
-    }
-
-    #[test]
-    fn test_fingerprint_differs_for_different_queries() {
-        let a = make_ast("SELECT 1 FROM users");
-        let b = make_ast("INSERT INTO users VALUES (1)");
-        let fp_a = a.fingerprint().unwrap();
-        let fp_b = b.fingerprint().unwrap();
-        assert_ne!(
-            fp_a.value, fp_b.value,
-            "structurally different queries should have different fingerprints"
-        );
-    }
-
-    #[test]
-    fn test_fingerprint_updates_statement_parse_time() {
-        let ast = make_ast("SELECT 1 FROM fp_stmt_time");
-        let before = ast.stats.lock().parse_time;
-        ast.fingerprint().unwrap();
-        let after = ast.stats.lock().parse_time;
-        assert!(
-            after > before,
-            "fingerprint() must bump per-statement parse_time"
-        );
-    }
-
-    #[test]
-    fn test_fingerprint_updates_global_parse_time() {
-        let ast = make_ast("SELECT 1 FROM fp_global_time");
-        let before = Cache::stats().0.parse_time;
-        ast.fingerprint().unwrap();
-        let after = Cache::stats().0.parse_time;
-        assert!(
-            after > before,
-            "fingerprint() must bump global cache parse_time"
-        );
-    }
-
-    #[test]
-    fn test_fingerprint_cached_does_not_update_parse_time() {
-        let ast = make_ast("SELECT 1 FROM fp_no_double_bump");
-        // First call — computes and caches.
-        ast.fingerprint().unwrap();
-        let stmt_after_first = ast.stats.lock().parse_time;
-        let global_after_first = Cache::stats().0.parse_time;
-
-        // Second call — returns cached, should NOT bump times.
-        ast.fingerprint().unwrap();
-        let stmt_after_second = ast.stats.lock().parse_time;
-        let global_after_second = Cache::stats().0.parse_time;
-
-        assert_eq!(
-            stmt_after_first, stmt_after_second,
-            "cached fingerprint must not bump per-statement parse_time"
-        );
-        assert_eq!(
-            global_after_first, global_after_second,
-            "cached fingerprint must not bump global parse_time"
-        );
-    }
-
-    #[test]
-    fn test_fingerprint_increments_statement_fingerprints_counter() {
-        let ast = make_ast("SELECT 1 FROM fp_stmt_counter");
-        assert_eq!(ast.stats.lock().fingerprints, 0);
-        ast.fingerprint().unwrap();
-        assert_eq!(ast.stats.lock().fingerprints, 1);
-    }
-
-    #[test]
-    fn test_fingerprint_increments_global_fingerprints_counter() {
-        let ast = make_ast("SELECT 1 FROM fp_global_counter");
-        let before = Cache::stats().0.fingerprints;
-        ast.fingerprint().unwrap();
-        let after = Cache::stats().0.fingerprints;
-        // Other tests share the global counter under parallel execution,
-        // so only assert it moved forward.
-        assert!(
-            after > before,
-            "fingerprint() must increment global fingerprints counter"
-        );
-    }
-
-    #[test]
-    fn test_fingerprint_cached_does_not_increment_counters() {
-        let ast = make_ast("SELECT 1 FROM fp_no_double_count");
-        ast.fingerprint().unwrap();
-        let stmt_after_first = ast.stats.lock().fingerprints;
-        let global_after_first = Cache::stats().0.fingerprints;
-
-        // Second call — cached, counters must not change.
-        ast.fingerprint().unwrap();
-        assert_eq!(
-            ast.stats.lock().fingerprints,
-            stmt_after_first,
-            "cached fingerprint must not increment per-statement counter"
-        );
-        assert_eq!(
-            Cache::stats().0.fingerprints,
-            global_after_first,
-            "cached fingerprint must not increment global counter"
-        );
-    }
 }
