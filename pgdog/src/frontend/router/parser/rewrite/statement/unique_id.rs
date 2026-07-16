@@ -1,6 +1,4 @@
 use super::StatementRewrite;
-#[cfg(feature = "new_parser")]
-use crate::unique_id::UniqueId;
 #[cfg(not(feature = "new_parser"))]
 use pg_query::protobuf::{AConst, ParamRef, String as PgString, TypeCast, TypeName, a_const::Val};
 #[cfg(not(feature = "new_parser"))]

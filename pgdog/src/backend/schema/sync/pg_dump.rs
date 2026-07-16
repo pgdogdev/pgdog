@@ -15,7 +15,7 @@ use pg_query::{
     protobuf::{AlterTableType, ConstrType, ObjectType, ParseResult, RangeVar, String as PgString},
 };
 #[cfg(feature = "new_parser")]
-use pg_raw_parse::{Node, Owned, StmtList, make, nodes};
+use pg_raw_parse::{Node, NodeMut, Owned, StmtList, make, nodes};
 #[cfg(not(feature = "new_parser"))]
 use pgdog_config::QueryParserEngine;
 use regex::Regex;
@@ -835,7 +835,11 @@ impl PgDumpOutput {
             let schema = table.schema().map(|s| s.name).unwrap_or("public");
             let table_name = table.name;
 
-            for col_def in create_stmt.table_elts() {
+            for elt in create_stmt.table_elts() {
+                let Node::ColumnDef(col_def) = elt else {
+                    continue;
+                };
+
                 let col = Column {
                     name: col_def.colname().unwrap_or_default(),
                     table: Some(table_name),
@@ -941,7 +945,11 @@ impl PgDumpOutput {
             let schema = schema_name(relation);
             let table_name = relation.relname().unwrap_or_default();
 
-            for col_def in create_stmt.table_elts() {
+            for elt in create_stmt.table_elts() {
+                let Node::ColumnDef(col_def) = elt else {
+                    continue;
+                };
+
                 if let Some(type_name) = col_def.type_name()
                     && let Some(last_name) = type_name.names().iter().last()
                 {
@@ -1046,7 +1054,11 @@ impl PgDumpOutput {
                         let parent_table = partition_parents.get(&table);
 
                         // Convert integer PK/FK columns to bigint
-                        for mut col_def in stmt.as_mut().table_elts_mut() {
+                        for elt in stmt.as_mut().table_elts_mut() {
+                            let NodeMut::ColumnDef(mut col_def) = elt else {
+                                continue;
+                            };
+
                             let col = Column {
                                 name: col_def.colname().unwrap_or_default(),
                                 table: Some(table_name),

@@ -13,6 +13,7 @@ export PGPASSWORD=postgres
 
 echo "[load_balancer] Using PGDOG_BIN=${PGDOG_BIN}"
 echo "[load_balancer] LLVM_PROFILE_FILE=${LLVM_PROFILE_FILE}"
+echo "[load_balancer] PGDOG_PLUGIN_FEATURES=${PGDOG_PLUGIN_FEATURES:-}"
 
 docker compose down 2>/dev/null || true
 
@@ -29,7 +30,11 @@ for p in 45000 45001 45002; do
 done
 
 pushd ${SCRIPT_DIR}/../../plugins/pgdog-primary-only-tables
-cargo build --release
+if [ -n "${PGDOG_PLUGIN_FEATURES:-}" ]; then
+    cargo build --release --no-default-features --features "${PGDOG_PLUGIN_FEATURES}"
+else
+    cargo build --release
+fi
 popd
 
 export LD_LIBRARY_PATH=${SCRIPT_DIR}/../../target/release:${LD_LIBRARY_PATH:-}

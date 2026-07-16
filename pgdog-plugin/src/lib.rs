@@ -68,6 +68,9 @@
 //!
 //! ```no_run
 //! use pgdog_plugin::prelude::*;
+//! #[cfg(feature = "new_parser")]
+//! use pg_raw_parse::Node;
+//! #[cfg(not(feature = "new_parser"))]
 //! use pg_query::{protobuf::{Node, RawStmt}, NodeEnum};
 //!
 //! pgdog_plugin::plugin!(MyPlugin);
@@ -80,15 +83,18 @@
 //!     }
 //!
 //!     fn route(context: Context<'_>) -> Route {
-//!         let root = context.query.stmts.first();
-//!         if let Some(root) = root {
-//!             if let Some(ref stmt) = root.stmt {
-//!                 if let Some(ref node) = stmt.node {
-//!                     if let NodeEnum::SelectStmt(_) = node {
-//!                         return Route::new(Shard::Unknown, ReadWrite::Read);
-//!                     }
-//!                 }
-//!             }
+//!         #[cfg(feature = "new_parser")]
+//!         if let Some(Node::SelectStmt(_)) = context.query.stmts().next() {
+//!             return Route::new(Shard::Unknown, ReadWrite::Read);
+//!         }
+//!
+//!         #[cfg(not(feature = "new_parser"))]
+//!         if let Some(root) = context.query.stmts.first()
+//!             && let Some(ref stmt) = root.stmt
+//!             && let Some(ref node) = stmt.node
+//!             && let NodeEnum::SelectStmt(_) = node
+//!         {
+//!             return Route::new(Shard::Unknown, ReadWrite::Read);
 //!         }
 //!
 //!         Route::new(Shard::Unknown, ReadWrite::Write)

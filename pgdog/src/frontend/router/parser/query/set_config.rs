@@ -51,7 +51,7 @@ impl QueryParser {
 /// Returns None if the arguments could not be parsed
 #[cfg(feature = "new_parser")]
 fn parse_args(fcall: &nodes::FuncCall) -> Option<SetParam> {
-    let name = fcall.args().first().and_then(Node::as_str)?.to_owned();
+    let name = parse_config_name(fcall.args().first()?)?;
     let value = parse_config_value(fcall.args().get(1)?)?;
     let local = parse_is_local(fcall.args().get(2)?)?;
     Some(SetParam { name, value, local })
@@ -67,6 +67,16 @@ cfg_select! {
         }
     }
     _ => {}
+}
+
+/// Returns None if the name could not be parsed
+#[cfg(feature = "new_parser")]
+fn parse_config_name(arg: Node<'_>) -> Option<String> {
+    match arg {
+        Node::A_Const(c) => c.val()?.string_value().map(ToOwned::to_owned),
+        // Only constant strings can be handled for now
+        _ => None,
+    }
 }
 
 /// Returns None if the name could not be parsed
@@ -87,9 +97,12 @@ fn parse_config_name(arg: &PgNode) -> Option<String> {
 #[cfg(feature = "new_parser")]
 fn parse_config_value(arg: Node<'_>) -> Option<Option<ParameterValue>> {
     match arg {
-        Node::A_Const(c) => Some(Some(ParameterValue::String(
-            c.val()?.string_value()?.to_owned(),
-        ))),
+        Node::A_Const(c) => match c.val() {
+            Some(value) => Some(Some(ParameterValue::String(
+                value.string_value()?.to_owned(),
+            ))),
+            None => Some(None),
+        },
         _ => None,
     }
 }
