@@ -248,7 +248,7 @@ impl Inner {
             insert.as_mut().set_select_stmt(select.uncast());
             insert
                 .as_mut()
-                .set_returning_list(mem.make_unique(self.from_update.returning_list()));
+                .set_returning_clause(mem.make_unique(self.from_update.returning_clause()));
             Ok(mem.make_list(&[mem.make_raw_stmt(insert.uncast())]))
         })?;
         let stmt = deparse(insert.first().unwrap())?;
@@ -284,7 +284,7 @@ impl Inner {
     #[cfg(feature = "new_parser")]
     /// Do we have to return the rows to the client?
     pub(crate) fn is_returning(&self) -> bool {
-        !self.from_update.returning_list().is_empty()
+        self.from_update.returning_clause().is_some()
     }
 
     #[cfg(not(feature = "new_parser"))]

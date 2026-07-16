@@ -2158,6 +2158,12 @@ ALTER TABLE test ADD CONSTRAINT id_pkey PRIMARY KEY (id);"#,
             statements[0].deref(),
             "CREATE TABLE IF NOT EXISTS test (id bigint, value text)"
         );
+        #[cfg(feature = "new_parser")]
+        assert_eq!(
+            statements[1].deref(),
+            "ALTER TABLE test ADD CONSTRAINT id_pkey PRIMARY KEY (id)"
+        );
+        #[cfg(not(feature = "new_parser"))]
         assert_eq!(
             statements[1].deref(),
             "\nALTER TABLE test ADD CONSTRAINT id_pkey PRIMARY KEY (id)"
@@ -2187,6 +2193,12 @@ ALTER TABLE child ADD CONSTRAINT child_parent_fk FOREIGN KEY (parent_id) REFEREN
             statements[1].deref(),
             "CREATE TABLE IF NOT EXISTS child (id int, parent_id bigint)"
         );
+        #[cfg(feature = "new_parser")]
+        assert_eq!(
+            statements[2].deref(),
+            "ALTER TABLE parent ADD CONSTRAINT parent_pkey PRIMARY KEY (id)"
+        );
+        #[cfg(not(feature = "new_parser"))]
         assert_eq!(
             statements[2].deref(),
             "\nALTER TABLE parent ADD CONSTRAINT parent_pkey PRIMARY KEY (id)"
