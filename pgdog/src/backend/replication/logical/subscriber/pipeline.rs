@@ -27,6 +27,9 @@ struct Shared {
     error: Option<Error>,
     // Rows a direct-to-shard DML expected to touch but didn't (0 rows affected).
     missed: MissedRows,
+    // Test-only: total ParseComplete acks consumed by parse-ack sync points.
+    #[cfg(test)]
+    parse_acks_consumed: usize,
 }
 
 // How a sync point completes.
@@ -78,7 +81,7 @@ impl PipelinedConnection {
             shared: shared.clone(),
             direct: VecDeque::new(),
             parse_ack_sync_points: VecDeque::new(),
-            ready_to_commit_sync_points: VecDeque::new(),
+            ready_for_query_sync_points: VecDeque::new(),
             drain_waiter: None,
         };
 
@@ -158,6 +161,13 @@ impl PipelinedConnection {
         std::mem::take(&mut self.shared.lock().missed)
     }
 
+    /// Test-only: number of ParseComplete acks the listener has attributed to
+    /// parse-ack sync points so far.
+    #[cfg(test)]
+    fn parse_acks_consumed(&self) -> usize {
+        self.shared.lock().parse_acks_consumed
+    }
+
     async fn sync_point(
         &self,
         messages: Vec<ProtocolMessage>,
@@ -200,7 +210,7 @@ struct Listener {
     // In-transaction prepare sync points: (remaining ParseComplete acks, waiter).
     parse_ack_sync_points: VecDeque<(usize, oneshot::Sender<()>)>,
     // Commit / out-of-transaction prepare sync points, resolved on ReadyForQuery.
-    ready_to_commit_sync_points: VecDeque<oneshot::Sender<()>>,
+    ready_for_query_sync_points: VecDeque<oneshot::Sender<()>>,
     // Waiter that resolves once every DML ack has been read. At most one is
     // outstanding: `commit()` issues drain_acks sequentially, one per connection.
     drain_waiter: Option<oneshot::Sender<()>>,
@@ -278,9 +288,9 @@ impl Listener {
                     SyncPointKind::ParseAcks(remaining) => {
                         self.parse_ack_sync_points.push_back((remaining, done));
                     }
-                    // We enqueue the waiter to resolve when postgres is ready to commit.
+                    // We enqueue the waiter to resolve when postgres is ready for next query.
                     SyncPointKind::ReadyForQuery => {
-                        self.ready_to_commit_sync_points.push_back(done);
+                        self.ready_for_query_sync_points.push_back(done);
                     }
                 }
             }
@@ -314,12 +324,16 @@ impl Listener {
                 self.direct.clear();
                 self.wake_all();
             }
-            // as sync points arrive we decrement the remaining count and resolve th waiter
+            // as parse query acknowledgements arrive we decrement the remaining count and resolve th waiter
             // when the remaining count becomes 0.
             '1' => {
                 let resolved = if let Some((remaining, _)) = self.parse_ack_sync_points.front_mut()
                 {
                     *remaining -= 1;
+                    #[cfg(test)]
+                    {
+                        self.shared.lock().parse_acks_consumed += 1;
+                    }
                     *remaining == 0
                 } else {
                     false
@@ -343,9 +357,9 @@ impl Listener {
                     self.wake_drain();
                 }
             }
-            // When Ready to commit sync point arrives we resolve the waiter.
+            // When Ready for query sync point arrives we resolve the waiter.
             'Z' => {
-                if let Some(done) = self.ready_to_commit_sync_points.pop_front() {
+                if let Some(done) = self.ready_for_query_sync_points.pop_front() {
                     let _ = done.send(());
                 }
             }
@@ -374,7 +388,7 @@ impl Listener {
         while let Some((_, done)) = self.parse_ack_sync_points.pop_front() {
             let _ = done.send(());
         }
-        while let Some(done) = self.ready_to_commit_sync_points.pop_front() {
+        while let Some(done) = self.ready_for_query_sync_points.pop_front() {
             let _ = done.send(());
         }
         self.wake_drain();
@@ -394,30 +408,123 @@ impl Listener {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::{backend::server::test::test_server, net::Parse};
+    use crate::{
+        backend::server::test::test_server,
+        net::{Parse, messages::Parameter},
+    };
 
     #[tokio::test]
-    async fn prepare_and_commit_drain() {
+    async fn prepare_execute_drain_commit() {
         let server = test_server().await;
         let conn = PipelinedConnection::new(server).unwrap();
 
-        // Prepare out of a transaction (uses Sync internally).
-        conn.prepare(&[Parse::named("__pipe_test", "SELECT $1::bigint")], false)
+        // Prepare + create a temp table (out of transaction: uses Sync).
+        conn.prepare(
+            &[Parse::named(
+                "__pipe_create",
+                "CREATE TEMP TABLE __pipe_t (id bigint)",
+            )],
+            false,
+        )
+        .await
+        .unwrap();
+        conn.execute(&Bind::new_statement("__pipe_create"), false)
             .await
             .unwrap();
 
-        // A bare Sync must drain cleanly with no error.
+        // Prepare an insert (Sync) and enqueue a single row.
+        conn.prepare(
+            &[Parse::named(
+                "__pipe_insert",
+                "INSERT INTO __pipe_t (id) VALUES ($1)",
+            )],
+            false,
+        )
+        .await
+        .unwrap();
+        conn.execute(
+            &Bind::new_params("__pipe_insert", &[Parameter::new(b"42")]),
+            false,
+        )
+        .await
+        .unwrap();
+
+        // Drain the outstanding DML ack, then commit.
+        conn.drain_acks().await.unwrap();
         conn.sync_and_drain().await.unwrap();
         assert!(conn.take_error().is_none());
     }
 
     #[tokio::test]
-    async fn drain_acks_with_no_outstanding_is_immediate() {
+    async fn in_transaction_prepare_uses_flush() {
         let server = test_server().await;
         let conn = PipelinedConnection::new(server).unwrap();
 
-        // No DML enqueued: drain_acks resolves immediately without error.
-        conn.drain_acks().await.unwrap();
+        // In-transaction prepare sends Flush and waits for ParseComplete acks
+        // (ParseAcks path) rather than committing with Sync.
+        conn.prepare(&[Parse::named("__pipe_flush", "SELECT $1::bigint")], true)
+            .await
+            .unwrap();
+
+        // Execute against the just-prepared statement, then commit.
+        conn.execute(
+            &Bind::new_params("__pipe_flush", &[Parameter::new(b"42")]),
+            false,
+        )
+        .await
+        .unwrap();
+        conn.sync_and_drain().await.unwrap();
         assert!(conn.take_error().is_none());
+    }
+
+    #[tokio::test]
+    async fn in_transaction_multi_parse_acks() {
+        let server = test_server().await;
+        let conn = PipelinedConnection::new(server).unwrap();
+
+        // A single in-transaction prepare with several statements uses
+        // ParseAcks(n): the waiter must resolve only after ALL n ParseComplete
+        // acks arrive (exercises the n -> 0 countdown, not just n == 1).
+        conn.prepare(
+            &[
+                Parse::named("__pipe_m1", "SELECT $1::bigint"),
+                Parse::named("__pipe_m2", "SELECT $1::text"),
+                Parse::named("__pipe_m3", "SELECT $1::bool"),
+            ],
+            true,
+        )
+        .await
+        .unwrap();
+
+        // The waiter only resolves once all 3 ParseComplete acks were counted.
+        assert_eq!(conn.parse_acks_consumed(), 3);
+
+        // Nothing committed yet; a Sync cleanly ends the implicit transaction.
+        conn.sync_and_drain().await.unwrap();
+        assert!(conn.take_error().is_none());
+    }
+
+    #[tokio::test]
+    async fn out_of_transaction_multi_parse_sync() {
+        let server = test_server().await;
+        let conn = PipelinedConnection::new(server).unwrap();
+
+        // Multiple Parses out of a transaction use the Sync/ReadyForQuery path:
+        // the n ParseComplete acks are ignored (parse-ack queue is empty) and
+        // the single ReadyForQuery resolves the waiter.
+        conn.prepare(
+            &[
+                Parse::named("__pipe_s1", "SELECT $1::bigint"),
+                Parse::named("__pipe_s2", "SELECT $1::text"),
+                Parse::named("__pipe_s3", "SELECT $1::bool"),
+            ],
+            false,
+        )
+        .await
+        .unwrap();
+        assert!(conn.take_error().is_none());
+        // The ParseComplete acks are ignored on the Sync path, not attributed
+        // to any parse-ack sync point.
+        assert_eq!(conn.parse_acks_consumed(), 0);
     }
 }
