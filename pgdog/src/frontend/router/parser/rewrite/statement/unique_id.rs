@@ -17,12 +17,11 @@ impl StatementRewrite<'_> {
     pub(super) fn rewrite_unique_id<'mem>(
         node: Node<'_>,
         mem: make::MemoryToken<'mem>,
-        generator: &UniqueId,
         extended: bool,
         next_param: &mut i32,
-    ) -> Option<make::Unique<'mem, Node<'mem>>> {
+    ) -> Result<Option<make::Unique<'mem, Node<'mem>>>, super::Error> {
         if !Self::is_unique_id(node) {
-            return None;
+            return Ok(None);
         }
 
         let replacement = if extended {
@@ -32,12 +31,12 @@ impl StatementRewrite<'_> {
         } else {
             use pg_raw_parse::ConstValue;
 
-            let unique_id = generator.next_id();
+            let unique_id = crate::unique_id::UniqueId::generator()?.next_id();
             mem.make_a_const(ConstValue::Float(&unique_id.to_string()))
                 .uncast()
         };
 
-        Some(
+        Ok(Some(
             mem.make_type_cast(
                 replacement,
                 mem.make_list(&[
@@ -46,7 +45,7 @@ impl StatementRewrite<'_> {
                 ]),
             )
             .uncast(),
-        )
+        ))
     }
 
     cfg_select! {

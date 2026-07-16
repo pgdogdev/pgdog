@@ -150,26 +150,28 @@ impl<'a> StatementRewrite<'a> {
 
         // Track the next parameter number to use
         let mut next_param = plan.params as i32 + 1;
-        let generator = crate::unique_id::UniqueId::generator()?;
+        let mut err = None;
         transform::transform_node(
             stmt.stmt_mut(),
             &mut transform::TransformClosure::new(|node| {
-                if let Some(replacement) = Self::rewrite_unique_id(
-                    node.as_ref(),
-                    mem,
-                    generator,
-                    self.extended,
-                    &mut next_param,
-                ) {
-                    plan.unique_ids += 1;
-                    self.rewritten = true;
-                    node.replace(replacement);
-                    None
-                } else {
-                    Some(node)
+                match Self::rewrite_unique_id(node.as_ref(), mem, self.extended, &mut next_param) {
+                    Ok(Some(replacement)) => {
+                        plan.unique_ids += 1;
+                        self.rewritten = true;
+                        node.replace(replacement);
+                        None
+                    }
+                    Err(e) => {
+                        err = Some(e);
+                        None
+                    }
+                    Ok(None) => Some(node),
                 }
             }),
         );
+        if let Some(err) = err {
+            return Err(err);
+        }
 
         if let NodeMut::SelectStmt(mut select) = stmt.stmt_mut() {
             self.rewrite_aggregates(&mut select, mem, &mut plan, self.db_schema)?;
