@@ -114,18 +114,13 @@ pub fn random_string(n: usize) -> String {
         .collect()
 }
 
-// Generate a unique 8-character hex instance ID on first access
+// Generate a random id on first access
 static INSTANCE_ID: Lazy<String> = Lazy::new(|| {
     if let Ok(node_id) = env::var("NODE_ID") {
         node_id
     } else {
         let mut rng = rand::rng();
-        (0..8)
-            .map(|_| {
-                let n: u8 = rng.random_range(0..16);
-                format!("{:x}", n)
-            })
-            .collect()
+        rng.random_range(0..1024).to_string()
     }
 });
 
