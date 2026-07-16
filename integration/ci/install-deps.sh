@@ -15,9 +15,9 @@ NEXTEST_VERSION="${NEXTEST_VERSION:-0.9.78}"
 LLVM_COV_VERSION="${LLVM_COV_VERSION:-0.6.10}"
 CMAKE_VERSION="${CMAKE_VERSION:-3.31.6}"
 
-if ! dpkg -s mold >/dev/null 2>&1; then
+if ! dpkg -s mold gdb >/dev/null 2>&1; then
     sudo apt-get update
-    sudo apt-get install -y --no-install-recommends mold
+    sudo apt-get install -y --no-install-recommends mold gdb
 fi
 
 # The protocol_version smoke test needs a psql >= 18 client. The runner

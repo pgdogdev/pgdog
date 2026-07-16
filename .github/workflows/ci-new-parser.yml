@@ -71,7 +71,7 @@ jobs:
           - { name: complex,       script: integration/complex/run.sh }
           - { name: dry-run,       script: integration/dry_run/run.sh }
           - { name: copy-data,     script: integration/copy_data/run.sh }
-          - { name: load-balancer, script: integration/load_balancer/run.sh }
+          - { name: load-balancer, script: integration/load_balancer/run.sh, pgdog_gdb: true }
           - { name: tls,           script: integration/tls/run.sh }
           - { name: resharding, script: integration/resharding/run.sh }
           # plugins/run.sh builds 4 plugin crates with cargo, so it needs
@@ -80,6 +80,7 @@ jobs:
           - { name: plugins,       script: integration/plugins/run.sh, needs_rust_cache: true, continue_on_error: true }
     env:
       PGDOG_BIN: ${{ github.workspace }}/target/release/pgdog
+      PGDOG_GDB: ${{ matrix.pgdog_gdb == true && '1' || '' }}
     steps:
       - uses: actions/checkout@v6
       - name: Install CI deps

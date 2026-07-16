@@ -49,10 +49,24 @@ function run_pgdog() {
         fi
     fi
     echo "Launching PgDog binary '${binary}' with config path '${config_path}'"
-    "${binary}" \
-        --config ${config_path}/pgdog.toml \
-        --users ${config_path}/users.toml \
-        > ${COMMON_DIR}/log.txt &
+    if [ "${PGDOG_GDB:-0}" = "1" ]; then
+        gdb \
+            --batch \
+            -ex "set pagination off" \
+            -ex "set confirm off" \
+            -ex "run" \
+            -ex "thread apply all bt full" \
+            -ex "quit" \
+            --args "${binary}" \
+                --config ${config_path}/pgdog.toml \
+                --users ${config_path}/users.toml \
+            > ${COMMON_DIR}/log.txt 2>&1 &
+    else
+        "${binary}" \
+            --config ${config_path}/pgdog.toml \
+            --users ${config_path}/users.toml \
+            > ${COMMON_DIR}/log.txt &
+    fi
     echo $! > "${pid_file}"
     printf '%s\n' "${config_path}" > "${config_file}"
     if [ -z "${PGDOG_STOP_TRAP:-}" ]; then
