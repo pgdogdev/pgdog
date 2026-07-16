@@ -1,5 +1,6 @@
 //! Column name reference.
 
+#[cfg(not(feature = "new_parser"))]
 use pg_query::{Node, NodeEnum, protobuf::String as PgQueryString};
 #[cfg(feature = "new_parser")]
 use pg_raw_parse::{list, nodes};
@@ -137,6 +138,7 @@ impl<'a> TryFrom<&'a list::NodeList> for Column<'a> {
     }
 }
 
+#[cfg(not(feature = "new_parser"))]
 impl<'a> TryFrom<&'a Node> for Column<'a> {
     type Error = Error;
 
@@ -145,6 +147,7 @@ impl<'a> TryFrom<&'a Node> for Column<'a> {
     }
 }
 
+#[cfg(not(feature = "new_parser"))]
 impl<'a> TryFrom<&'a Option<NodeEnum>> for Column<'a> {
     type Error = Error;
 
@@ -231,6 +234,7 @@ impl<'a> TryFrom<&'a Option<NodeEnum>> for Column<'a> {
     }
 }
 
+#[cfg(not(feature = "new_parser"))]
 impl<'a> TryFrom<&Option<&'a Node>> for Column<'a> {
     type Error = Error;
 
