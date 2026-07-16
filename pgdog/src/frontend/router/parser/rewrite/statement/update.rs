@@ -284,7 +284,7 @@ impl Inner {
     #[cfg(feature = "new_parser")]
     /// Do we have to return the rows to the client?
     pub(crate) fn is_returning(&self) -> bool {
-        self.from_update.returning_clause().is_none()
+        self.from_update.returning_clause().is_some()
     }
 
     #[cfg(not(feature = "new_parser"))]
