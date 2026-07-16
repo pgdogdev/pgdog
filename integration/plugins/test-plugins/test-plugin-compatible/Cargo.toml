@@ -9,7 +9,7 @@ edition = "2024"
 crate-type = ["cdylib"]
 
 [dependencies]
-pgdog-plugin = { path = "../../../../pgdog-plugin" }
+pgdog-plugin = { path = "../../../../pgdog-plugin", default-features = false }
 
 [features]
 default = ["pgdog-plugin/pg_query"]
