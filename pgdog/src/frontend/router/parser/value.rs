@@ -4,6 +4,7 @@ use std::fmt::Display;
 
 #[cfg(feature = "new_parser")]
 use itertools::*;
+#[cfg(not(feature = "new_parser"))]
 use pg_query::{
     NodeEnum,
     protobuf::{Node as PgNode, a_const::Val, *},
@@ -87,6 +88,7 @@ impl<'a> From<&'a nodes::A_Const> for Value<'a> {
     }
 }
 
+#[cfg(not(feature = "new_parser"))]
 impl<'a> From<&'a AConst> for Value<'a> {
     fn from(value: &'a AConst) -> Self {
         if value.isnull {
@@ -129,6 +131,7 @@ impl<'a> From<&'a AConst> for Value<'a> {
     }
 }
 
+#[cfg(not(feature = "new_parser"))]
 impl<'a> TryFrom<&'a PgNode> for Value<'a> {
     type Error = ();
 
@@ -160,6 +163,7 @@ impl<'a> TryFrom<Node<'a>> for Value<'a> {
     }
 }
 
+#[cfg(not(feature = "new_parser"))]
 impl<'a> TryFrom<&'a Option<NodeEnum>> for Value<'a> {
     type Error = ();
 
