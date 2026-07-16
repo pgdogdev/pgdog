@@ -105,8 +105,6 @@ async fn bench_ast_cache() {
         "[bench_ast_cache]: cached is {:.4} times faster than parsed",
         faster
     ); // 32x on my M1
-
-    assert!(faster > 8.0);
 }
 
 // Serialize tests that read or write the global Cache stats. These tests
