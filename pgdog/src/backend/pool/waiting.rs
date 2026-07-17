@@ -1,6 +1,7 @@
-use crate::backend::Server;
+use crate::backend::{Server, pool::Inner};
 
 use super::{Error, Guard, Pool, Request};
+use parking_lot::{RawMutex, lock_api::MutexGuard};
 use tokio::{sync::oneshot::*, time::Instant};
 
 pub(super) struct Waiting {
@@ -23,12 +24,15 @@ impl Waiting {
     ///
     /// N.B. You must call and await `Waiting::wait`, otherwise you'll leak waiters.
     ///
-    pub(super) fn new(pool: Pool, request: &Request) -> Result<Self, Error> {
+    pub(super) fn new(
+        pool: Pool,
+        mut guard: MutexGuard<'_, RawMutex, Inner>,
+        request: &Request,
+    ) -> Result<Self, Error> {
         let request = *request;
         let (tx, rx) = channel();
 
         let full = {
-            let mut guard = pool.lock();
             if !guard.online {
                 return Err(Error::Offline);
             }
@@ -105,7 +109,8 @@ mod tests {
         for i in 0..num_tasks {
             let pool_clone = pool.clone();
             let request = Request::unrouted(FrontendPid::new());
-            let mut waiting = Waiting::new(pool_clone, &request).unwrap();
+            let guard = pool_clone.lock();
+            let mut waiting = Waiting::new(pool_clone.clone(), guard, &request).unwrap();
 
             let wait_task = tokio::spawn(async move { waiting.wait().await });
 
@@ -170,7 +175,8 @@ mod tests {
         let request = Request::unrouted(FrontendPid::new());
         let waiter_pool = pool.clone();
         let get_conn = async move {
-            let mut waiting = Waiting::new(waiter_pool.clone(), &request).unwrap();
+            let mut waiting =
+                Waiting::new(waiter_pool.clone(), waiter_pool.lock(), &request).unwrap();
             waiting.wait().await
         };
         let result = timeout(Duration::from_millis(100), get_conn).await;

@@ -49,6 +49,11 @@ pub(crate) struct InnerSync {
     pub(super) lsn_role_change: Notify,
 }
 
+enum PoolResult {
+    Waiting(Waiting),
+    Server(Box<Server>),
+}
+
 impl std::fmt::Debug for Pool {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Pool")
@@ -125,7 +130,7 @@ impl Pool {
             let pool = self.clone();
 
             // Fast path, idle connection probably available.
-            let (server, granted_at, paused) = {
+            let (result, granted_at, paused) = {
                 // Ask for time before we acquire the lock
                 // and only if we actually waited for a connection.
                 let granted_at = request.created_at;
@@ -138,7 +143,8 @@ impl Pool {
 
                 let conn = guard.take(request)?;
 
-                if conn.is_some() {
+                // Fast path, we have the connection.
+                if let Some(conn) = conn {
                     guard.stats.counts.wait_time += elapsed;
                     guard.stats.counts.server_assignment_count += 1;
                     if request.read {
@@ -146,22 +152,23 @@ impl Pool {
                     } else {
                         guard.stats.counts.writes += 1;
                     }
-                }
 
-                (conn, granted_at, guard.paused)
+                    (PoolResult::Server(conn), granted_at, guard.paused)
+                } else {
+                    // Slow path, create a waiter.
+                    let paused = guard.paused;
+                    let waiting = Waiting::new(pool.clone(), guard, request)?;
+                    (PoolResult::Waiting(waiting), granted_at, paused)
+                }
             };
 
             if paused {
                 self.comms().ready.notified().await;
             }
 
-            let (mut server, granted_at) = if let Some(server) = server {
-                (Guard::new(pool, server, granted_at), granted_at)
-            } else {
-                // Slow path, pool is empty, will create new connection
-                // or wait for one to be returned if the pool is maxed out.
-                let mut waiting = Waiting::new(pool, request)?;
-                waiting.wait().await?
+            let (mut server, granted_at) = match result {
+                PoolResult::Server(server) => (Guard::new(pool, server, granted_at), granted_at),
+                PoolResult::Waiting(mut waiter) => waiter.wait().await?,
             };
 
             server
