@@ -7,9 +7,9 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
+use dashmap::DashMap;
 use fnv::FnvHashMap as HashMap;
 use once_cell::sync::Lazy;
-use parking_lot::Mutex;
 use tokio::sync::Notify;
 use tokio_util::task::TaskTracker;
 
@@ -33,7 +33,7 @@ struct Global {
     // This uses the FNV hasher, which is safe,
     // because FrontendPid is monotonically minted by us,
     // not derived from untrusted client input.
-    clients: Mutex<HashMap<FrontendPid, ConnectedClient>>,
+    clients: Arc<DashMap<FrontendPid, ConnectedClient>>,
     tracker: TaskTracker,
 }
 
@@ -56,7 +56,7 @@ impl Comms {
             global: Arc::new(Global {
                 shutdown: Arc::new(Notify::new()),
                 offline: AtomicBool::new(false),
-                clients: Mutex::new(HashMap::default()),
+                clients: Arc::new(DashMap::default()),
                 tracker: TaskTracker::new(),
             }),
         }
@@ -64,12 +64,16 @@ impl Comms {
 
     /// Get all connected clients.
     pub fn clients(&self) -> HashMap<FrontendPid, ConnectedClient> {
-        self.global.clients.lock().clone()
+        self.global
+            .clients
+            .iter()
+            .map(|client| (*client.key(), client.value().clone()))
+            .collect()
     }
 
     /// Number of connected clients.
     pub fn clients_len(&self) -> usize {
-        self.global.clients.lock().len()
+        self.global.clients.len()
     }
 
     pub fn tracker(&self) -> &TaskTracker {
@@ -78,7 +82,7 @@ impl Comms {
 
     /// Get number of connected clients.
     pub fn len(&self) -> usize {
-        self.global.clients.lock().len()
+        self.global.clients.len()
     }
 
     /// New client connected.
@@ -86,27 +90,24 @@ impl Comms {
         let pid = FrontendPid::from(&key);
         self.global
             .clients
-            .lock()
             .insert(pid, ConnectedClient::new(key, addr, params));
     }
 
     /// Update client parameters.
     pub fn update_params(&self, id: FrontendPid, params: Parameters) {
-        let mut guard = self.global.clients.lock();
-        if let Some(entry) = guard.get_mut(&id) {
+        if let Some(mut entry) = self.global.clients.get_mut(&id) {
             entry.paramters = params;
         }
     }
 
     /// Client disconnected.
     pub fn disconnect(&self, id: FrontendPid) {
-        self.global.clients.lock().remove(&id);
+        self.global.clients.remove(&id);
     }
 
     /// Update stats.
     pub fn update_stats(&self, id: FrontendPid, stats: Stats) {
-        let mut guard = self.global.clients.lock();
-        if let Some(entry) = guard.get_mut(&id) {
+        if let Some(mut entry) = self.global.clients.get_mut(&id) {
             entry.stats = stats;
         }
     }
@@ -116,7 +117,6 @@ impl Comms {
         let pid = FrontendPid::from(key);
         self.global
             .clients
-            .lock()
             .get(&pid)
             .map(|client| client.key.secret.constant_time_eq(&key.secret))
             .unwrap_or(false)
