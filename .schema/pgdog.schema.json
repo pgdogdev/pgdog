@@ -71,6 +71,7 @@
         "lsn_check_delay": 9223372036854775807,
         "lsn_check_interval": 5000,
         "lsn_check_timeout": 5000,
+        "min_lsn_primary_fallback": false,
         "min_pool_size": 1,
         "mirror_exposure": 1.0,
         "mirror_queue": 128,
@@ -891,6 +892,11 @@
           "format": "uint64",
           "default": 5000,
           "minimum": 0
+        },
+        "min_lsn_primary_fallback": {
+          "description": "When a read sets `pgdog.min_lsn` and no replica has replayed that far, fall\nback to the primary instead of erroring.\n\n_Default:_ `false`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#min_lsn_primary_fallback",
+          "type": "boolean",
+          "default": false
         },
         "min_pool_size": {
           "description": "Default minimum number of connections per database pool to keep open at all times.\n\n_Default:_ `1`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#min_pool_size",

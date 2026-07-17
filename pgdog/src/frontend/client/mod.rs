@@ -452,10 +452,19 @@ impl Client {
                     .await;
                 if config().config.general.log_disconnections {
                     let (user, database) = user_database_from_params(&self.params);
-                    error!(
-                        r#"client "{}" disconnected from database "{}" with error [{}]: {}"#,
-                        user, database, self.addr, err
-                    )
+                    // A min_lsn miss is expected backpressure (client gets 58000 and
+                    // defers), not a server fault; log at debug to avoid flooding.
+                    if err.is_no_replica_caught_up() {
+                        debug!(
+                            r#"client "{}" disconnected from database "{}" with error [{}]: {}"#,
+                            user, database, self.addr, err
+                        )
+                    } else {
+                        error!(
+                            r#"client "{}" disconnected from database "{}" with error [{}]: {}"#,
+                            user, database, self.addr, err
+                        )
+                    }
                 }
             }
         }
