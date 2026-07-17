@@ -13,6 +13,7 @@ mod close_parse_global_cache;
 mod cross_shard_disabled;
 mod extended;
 mod extended_anonymous;
+mod extended_transaction;
 mod fatal_error;
 mod graceful_disconnect;
 mod graceful_shutdown;

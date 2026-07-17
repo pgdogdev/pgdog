@@ -1,6 +1,9 @@
 use crate::{
     frontend::client::TransactionType,
-    net::{BindComplete, CommandComplete, NoticeResponse, ParseComplete, Protocol, ReadyForQuery},
+    net::{
+        BindComplete, CommandComplete, NoData, NoticeResponse, ParameterDescription, ParseComplete,
+        Protocol, ProtocolMessage, ReadyForQuery,
+    },
 };
 
 use super::*;
@@ -50,7 +53,13 @@ impl QueryEngine {
             match message.code() {
                 'P' => reply.push(ParseComplete.message()?),
                 'B' => reply.push(BindComplete.message()?),
-                'D' | 'H' => (),
+                'D' => {
+                    if matches!(message, ProtocolMessage::Describe(d) if d.is_statement()) {
+                        reply.push(ParameterDescription::empty().message()?);
+                    }
+                    reply.push(NoData.message()?);
+                }
+                'H' => (),
                 'E' => reply.push(if in_transaction {
                     CommandComplete::new_begin().message()?
                 } else if !rollback {
