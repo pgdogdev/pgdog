@@ -1,0 +1,4 @@
+# No users are configured up front. When a client connects to "pgdog",
+# passthrough auth adds the source-side record AND propagates the same
+# credentials to the mirror destination "pgdog_mirror" so the mirror
+# pool can authenticate. See pgdog/src/backend/databases.rs::add.
