@@ -5,7 +5,7 @@ use std::ops::Deref;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::OnceCell;
-use tokio::{select, spawn, sync::Notify};
+use tokio::{select, sync::Notify};
 use tracing::{debug, info};
 
 use crate::backend::PubSubListener;

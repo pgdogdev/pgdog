@@ -121,15 +121,15 @@ async fn pgdog(command: Option<Commands>) -> Result<(), Box<dyn std::error::Erro
     }
 
     if let Some(openmetrics_port) = general.openmetrics_port {
-        tokio::spawn(async move { stats::http_server::server(openmetrics_port).await });
+        pgdog::tasks::spawn(async move { stats::http_server::server(openmetrics_port).await });
     }
 
     if config::config().config.otel.endpoint.is_some() {
-        tokio::spawn(stats::otel_exporter::run());
+        pgdog::tasks::spawn(stats::otel_exporter::run());
     }
 
     if let Some(healthcheck_port) = general.healthcheck_port {
-        tokio::spawn(async move { healthcheck::server(healthcheck_port).await });
+        pgdog::tasks::spawn(async move { healthcheck::server(healthcheck_port).await });
     }
 
     let stats_logger = stats::StatsLogger::new();
@@ -199,9 +199,11 @@ async fn pgdog(command: Option<Commands>) -> Result<(), Box<dyn std::error::Erro
 
     info!("🐕 PgDog is shutting down");
     stats_logger.shutdown();
+    Manager::get().shutdown().await;
 
     // Any shutdown routines go below.
     plugin::shutdown();
+    pgdog::tasks::shutdown().await;
 
     Ok(())
 }

@@ -13,7 +13,7 @@ use std::{
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 use tokio::{
-    select, spawn,
+    select,
     sync::{Notify, broadcast, mpsc},
     time::sleep,
 };
@@ -27,6 +27,7 @@ use crate::{
         FromBytes, FrontendPid, NotificationResponse, Parameter, Parameters, Protocol,
         ProtocolMessage, Query, ToBytes,
     },
+    tasks,
 };
 
 #[derive(Debug, Clone)]
@@ -186,7 +187,7 @@ impl PubSubListener {
         let channels = listener.channels.clone();
         let pool = listener.pool.clone();
         let comms = listener.comms.clone();
-        spawn(async move {
+        tasks::spawn(async move {
             loop {
                 comms.start.notified().await;
 
@@ -200,7 +201,10 @@ impl PubSubListener {
                             error!("pub/sub error: {} [{}]", err, pool.addr());
                             // Don't reconnect for another connect attempt delay
                             // to avoid connection storms during incidents.
-                            sleep(Duration::from_millis(config().config.general.connect_attempt_delay)).await;
+                            select! {
+                                _ = sleep(Duration::from_millis(config().config.general.connect_attempt_delay)) => {}
+                                _ = comms.shutdown.notified() => rx.close(),
+                            }
                         }
                     }
                 }

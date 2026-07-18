@@ -4,7 +4,7 @@ use std::{
 };
 
 use tokio::{
-    select, spawn,
+    select,
     time::{interval, sleep, timeout},
 };
 use tracing::{debug, error, trace};
@@ -12,6 +12,7 @@ use tracing::{debug, error, trace};
 use crate::{
     backend::{ConnectReason, Server},
     net::DataRow,
+    tasks,
 };
 
 use super::*;
@@ -134,7 +135,7 @@ impl LsnMonitor {
     pub(super) fn run(pool: &Pool) {
         let monitor = Self { pool: pool.clone() };
 
-        spawn(async move {
+        tasks::spawn(async move {
             monitor.spawn().await;
         });
     }

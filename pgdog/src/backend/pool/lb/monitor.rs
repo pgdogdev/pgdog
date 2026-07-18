@@ -1,11 +1,11 @@
 use std::time::Instant;
 
-use crate::config::config;
+use crate::{config::config, tasks};
 
 use super::*;
 
 use pgdog_stats::ReplicaLag;
-use tokio::{select, spawn, task::JoinHandle, time::interval};
+use tokio::{select, task::JoinHandle, time::interval};
 use tracing::debug;
 
 static MAINTENANCE: Duration = Duration::from_millis(333);
@@ -22,7 +22,7 @@ impl Monitor {
             replicas: replicas.clone(),
         };
 
-        spawn(async move {
+        tasks::spawn(async move {
             monitor.run().await;
         })
     }

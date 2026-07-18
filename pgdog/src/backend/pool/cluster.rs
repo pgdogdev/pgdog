@@ -13,10 +13,10 @@ use std::{
     },
     time::Duration,
 };
-use tokio::spawn;
 use tracing::error;
 
 use crate::frontend::router::sharding::ShardedTable;
+use crate::tasks;
 use crate::{
     backend::{
         Schema, ShardedTables,
@@ -654,7 +654,7 @@ impl Cluster {
             let identifier = self.identifier();
             let shard = shard.clone();
 
-            spawn(async move {
+            tasks::spawn(async move {
                 use tokio::time::sleep;
 
                 loop {

@@ -8,20 +8,26 @@ use hyper::service::service_fn;
 use hyper::{Request, Response};
 use hyper_util::rt::TokioIo;
 use tokio::net::TcpListener;
+use tokio::select;
 use tracing::info;
 
 use crate::backend::databases::{Databases, databases};
+use crate::tasks;
 
 pub async fn server(port: u16) -> std::io::Result<()> {
     info!("healthcheck endpoint http://0.0.0.0:{}", port);
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
     let listener = TcpListener::bind(addr).await?;
+    let shutdown = tasks::shutdown_signal();
 
     loop {
-        let (stream, _) = listener.accept().await?;
+        let (stream, _) = select! {
+            result = listener.accept() => result?,
+            _ = shutdown.notified() => break,
+        };
         let io = TokioIo::new(stream);
 
-        tokio::task::spawn(async move {
+        tasks::spawn(async move {
             if let Err(err) = http1::Builder::new()
                 .serve_connection(io, service_fn(healthcheck))
                 .await
@@ -30,6 +36,8 @@ pub async fn server(port: u16) -> std::io::Result<()> {
             }
         });
     }
+
+    Ok(())
 }
 
 async fn healthcheck(

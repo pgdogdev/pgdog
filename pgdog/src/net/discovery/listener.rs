@@ -11,10 +11,11 @@ use std::sync::Arc;
 use std::time::SystemTime;
 
 use tokio::net::UdpSocket;
+use tokio::select;
 use tokio::time::{Duration, interval};
-use tokio::{select, spawn};
 
 use super::{Error, Message, Payload};
+use crate::tasks;
 
 /// Service discovery listener.
 #[derive(Clone, Debug)]
@@ -63,7 +64,7 @@ impl Listener {
     pub fn run(&self, address: Ipv4Addr, port: u16) {
         let listener = self.clone();
         info!("launching service discovery ({}:{})", address, port);
-        spawn(async move {
+        tasks::spawn(async move {
             if let Err(err) = listener.spawn(address, port).await {
                 error!("crashed: {:?}", err);
             }
@@ -78,9 +79,11 @@ impl Listener {
 
         let mut buf = vec![0u8; 1024];
         let mut interval = interval(Duration::from_secs(1));
+        let shutdown = tasks::shutdown_signal();
 
         loop {
             select! {
+                _ = shutdown.notified() => return Ok(self.clone()),
                 result = socket.recv_from(&mut buf) => {
                     let (len, addr) = result?;
                     let message = Message::from_bytes(&buf[..len]).ok();

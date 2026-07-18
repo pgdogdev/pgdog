@@ -1,4 +1,7 @@
-use crate::backend::pool::lsn_monitor::{LsnStats, ReplicaLag};
+use crate::{
+    backend::pool::lsn_monitor::{LsnStats, ReplicaLag},
+    tasks,
+};
 
 use super::*;
 
@@ -37,7 +40,7 @@ impl ShardMonitor {
             shard: shard.clone(),
         };
 
-        spawn(async move { monitor.spawn().await });
+        tasks::spawn(async move { monitor.spawn().await });
     }
 }
 
