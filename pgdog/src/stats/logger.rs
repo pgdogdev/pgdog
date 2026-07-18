@@ -46,7 +46,7 @@ impl Logger {
                         );
                     }
                     _ = me.shutdown.notified() => break,
-                    _ = shutdown.notified() => break,
+                    _ = shutdown.cancelled() => break,
                 }
             }
         });

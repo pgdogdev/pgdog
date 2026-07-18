@@ -83,7 +83,7 @@ impl Listener {
 
         loop {
             select! {
-                _ = shutdown.notified() => return Ok(self.clone()),
+                _ = shutdown.cancelled() => return Ok(self.clone()),
                 result = socket.recv_from(&mut buf) => {
                     let (len, addr) = result?;
                     let message = Message::from_bytes(&buf[..len]).ok();

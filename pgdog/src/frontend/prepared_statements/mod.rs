@@ -177,7 +177,7 @@ pub fn start_maintenance() {
         loop {
             tokio::select! {
                 _ = sleep(Duration::from_secs(1)) => {}
-                _ = shutdown.notified() => break,
+                _ = shutdown.cancelled() => break,
             }
             run_maintenance();
         }

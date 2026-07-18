@@ -65,7 +65,7 @@ pub async fn server(port: u16) -> std::io::Result<()> {
     loop {
         let (stream, _) = select! {
             result = listener.accept() => result?,
-            _ = shutdown.notified() => break,
+            _ = shutdown.cancelled() => break,
         };
         let io = TokioIo::new(stream);
 

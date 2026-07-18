@@ -37,7 +37,7 @@ pub async fn run() {
     loop {
         tokio::select! {
             _ = sleep(interval) => {}
-            _ = shutdown.notified() => break,
+            _ = shutdown.cancelled() => break,
         }
 
         let clients = Clients::load();

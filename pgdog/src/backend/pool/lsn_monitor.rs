@@ -187,7 +187,7 @@ impl LsnMonitor {
     async fn spawn(&self) {
         select! {
             _ = sleep(self.pool.config().lsn_check_delay) => {},
-            _ = self.pool.comms().shutdown.notified() => { return; }
+            _ = self.pool.comms().shutdown.cancelled() => { return; }
         }
 
         debug!("lsn monitor loop is running [{}]", self.pool.addr());
@@ -198,7 +198,7 @@ impl LsnMonitor {
         loop {
             select! {
                 _ = interval.tick() => {},
-                _ = self.pool.comms().shutdown.notified() => { break; }
+                _ = self.pool.comms().shutdown.cancelled() => { break; }
             }
 
             match self.run_check(aurora_detected).await {

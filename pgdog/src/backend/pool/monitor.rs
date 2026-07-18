@@ -106,7 +106,7 @@ impl Monitor {
             tasks::spawn(async move {
                 select! {
                     _ = sleep(delay) => {}
-                    _ = pool.comms().shutdown.notified() => return,
+                    _ = pool.comms().shutdown.cancelled() => return,
                 }
                 Self::healthchecks(pool).await
             });
@@ -163,7 +163,7 @@ impl Monitor {
                 }
 
                 // Pool is shutting down.
-                _ = comms.shutdown.notified() => {
+                _ = comms.shutdown.cancelled() => {
                     break;
                 }
             }
@@ -239,7 +239,7 @@ impl Monitor {
                     }
                 }
 
-                _ = comms.shutdown.notified() => break,
+                _ = comms.shutdown.cancelled() => break,
             }
         }
 
@@ -276,7 +276,7 @@ impl Monitor {
                 }
 
 
-                _ = comms.shutdown.notified() => break,
+                _ = comms.shutdown.cancelled() => break,
             }
         }
 
@@ -317,7 +317,7 @@ impl Monitor {
                     guard.close_old(now);
                 }
 
-                _ = comms.shutdown.notified() => break,
+                _ = comms.shutdown.cancelled() => break,
             }
         }
 
@@ -427,7 +427,7 @@ impl Monitor {
                     }
                 }
 
-                _ = comms.shutdown.notified() => {
+                _ = comms.shutdown.cancelled() => {
                     break;
                 }
             }

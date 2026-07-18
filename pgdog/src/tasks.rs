@@ -2,14 +2,12 @@
 
 use std::{
     future::Future,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
+    sync::atomic::{AtomicBool, Ordering},
 };
 
 use once_cell::sync::Lazy;
-use tokio::{sync::Notify, task::JoinHandle};
+use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
 static TASKS: Lazy<BackgroundTasks> = Lazy::new(BackgroundTasks::default);
@@ -17,7 +15,7 @@ static TASKS: Lazy<BackgroundTasks> = Lazy::new(BackgroundTasks::default);
 #[derive(Debug, Default)]
 struct BackgroundTasks {
     tracker: TaskTracker,
-    shutdown: Arc<Notify>,
+    shutdown: CancellationToken,
     shutting_down: AtomicBool,
 }
 
@@ -31,7 +29,7 @@ where
 }
 
 /// Shared shutdown signal for background tasks that are not tied to a pool/client signal.
-pub fn shutdown_signal() -> Arc<Notify> {
+pub fn shutdown_signal() -> CancellationToken {
     TASKS.shutdown.clone()
 }
 
@@ -43,7 +41,7 @@ pub fn shutting_down() -> bool {
 /// Ask all tracked background tasks to stop and wait for them.
 pub async fn shutdown() {
     TASKS.shutting_down.store(true, Ordering::Relaxed);
-    TASKS.shutdown.notify_waiters();
+    TASKS.shutdown.cancel();
     TASKS.tracker.close();
     TASKS.tracker.wait().await;
 }

@@ -17,6 +17,7 @@ use tokio::{
     sync::{Notify, broadcast, mpsc},
     time::sleep,
 };
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info};
 
 use super::{Stats, StatsSnapshot, channel_size};
@@ -151,7 +152,7 @@ pub(crate) mod test_support {
 #[derive(Debug)]
 struct Comms {
     start: Notify,
-    shutdown: Notify,
+    shutdown: CancellationToken,
 }
 
 /// Notification listener.
@@ -179,7 +180,7 @@ impl PubSubListener {
             channels,
             comms: Arc::new(Comms {
                 start: Notify::new(),
-                shutdown: Notify::new(),
+                shutdown: CancellationToken::new(),
             }),
         };
 
@@ -189,10 +190,19 @@ impl PubSubListener {
         let comms = listener.comms.clone();
         tasks::spawn(async move {
             loop {
-                comms.start.notified().await;
+                select! {
+                    _ = comms.start.notified() => {}
+                    _ = comms.shutdown.cancelled() => {
+                        rx.close();
+                    }
+                }
+
+                if rx.is_closed() {
+                    break;
+                }
 
                 select! {
-                    _ = comms.shutdown.notified() => {
+                    _ = comms.shutdown.cancelled() => {
                         rx.close(); // Drain remaining messages.
                     }
 
@@ -203,7 +213,7 @@ impl PubSubListener {
                             // to avoid connection storms during incidents.
                             select! {
                                 _ = sleep(Duration::from_millis(config().config.general.connect_attempt_delay)) => {}
-                                _ = comms.shutdown.notified() => rx.close(),
+                                _ = comms.shutdown.cancelled() => rx.close(),
                             }
                         }
                     }
@@ -225,7 +235,7 @@ impl PubSubListener {
 
     /// Shutdown the listener.
     pub fn shutdown(&self) {
-        self.comms.shutdown.notify_one();
+        self.comms.shutdown.cancel();
     }
 
     /// Listen on a channel.
@@ -368,7 +378,7 @@ mod test {
                 channels: Arc::new(Mutex::new(HashMap::new())),
                 comms: Arc::new(Comms {
                     start: Notify::new(),
-                    shutdown: Notify::new(),
+                    shutdown: CancellationToken::new(),
                 }),
             },
             rx,
