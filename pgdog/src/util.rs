@@ -282,11 +282,14 @@ pub fn sanitize_log_sample(s: &str, limit: usize) -> String {
     truncate_utf8(s, limit).replace(|c: char| c.is_control(), " ")
 }
 
-/// Wait for `future` to complete, unless `duration` elapses.
+/// Avoid calling [`tokio::time::timeout`] on [`Duration`] that lasts effectively forever.
 ///
-/// `Duration::MAX` is treated as an unlimited timeout. Tokio's timeout
-/// converts the duration to an instant internally, so skip it for the sentinel
-/// value to avoid overflowing that conversion.
+/// The Tokio timers can run hot and, if we can, we should avoid that mutex.
+///
+/// We did switch to the experimental timer that uses thread-locals, so
+/// this shouldn't be a problem anymore, but I still would like to avoid
+/// calling into time runtime if we don't have to.
+///
 pub(crate) async fn safe_timeout<F>(
     duration: Duration,
     future: F,
