@@ -214,6 +214,7 @@ fn build_runtime(workers: usize, stack_size: usize) -> std::io::Result<tokio::ru
             .build(),
         workers => Builder::new_multi_thread()
             .worker_threads(workers)
+            .enable_alt_timer()
             .enable_all()
             .thread_stack_size(stack_size)
             .build(),
