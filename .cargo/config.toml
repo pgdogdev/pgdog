@@ -2,6 +2,10 @@
 linker = "/usr/bin/clang"
 rustflags = ["-C", "link-arg=--ld-path=/usr/bin/mold", "--cfg", "tokio_unstable"]
 
+[target.aarch64-unknown-linux-gnu]
+linker = "/usr/bin/clang"
+rustflags = ["-C", "link-arg=--ld-path=/usr/bin/mold", "--cfg", "tokio_unstable"]
+
 # Bump reserved stack size size to 2 MB (from default 1 MB) on
 # Windows to buid pg_query. This setting applies to all binaries,
 # not just build scripts but should be harmless because the bumped
