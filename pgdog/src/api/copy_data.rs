@@ -8,6 +8,8 @@ use crate::api::Task;
 use crate::api::async_task::{AsyncTaskContext, Empty};
 use crate::backend::replication::logical::Error;
 use crate::backend::replication::logical::orchestrator::Orchestrator;
+use crate::tasks;
+use tokio::select;
 
 /// Bulk-copy table data from a source database to a target, returning the
 /// orchestrator so the composing task can thread it into the next phase.
@@ -25,6 +27,7 @@ impl Task for CopyDataTask {
     async fn run(self, ctx: AsyncTaskContext<Self>) -> Result<Orchestrator, Error> {
         let token = ctx.cancellation_token();
         let orchestrator = self.orchestrator;
+        let shutdown = tasks::shutdown_signal();
 
         // Don't start a sync that's already cancelled. Once it's running, the
         // token is threaded into the copy workers, which abort their COPY loops
@@ -33,7 +36,10 @@ impl Task for CopyDataTask {
             return Err(Error::DataSyncAborted);
         }
 
-        orchestrator.data_sync(&token).await?;
+        select! {
+            _ = shutdown.cancelled() => return Ok(orchestrator),
+            res = orchestrator.data_sync(&token) => res?,
+        }
 
         Ok(orchestrator)
     }
