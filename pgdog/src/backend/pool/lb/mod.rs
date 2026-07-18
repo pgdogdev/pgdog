@@ -12,7 +12,7 @@ use rand::seq::SliceRandom;
 use tokio::{sync::Notify, time::timeout};
 use tracing::warn;
 
-use crate::net::messages::FrontendPid;
+use crate::{config::config, net::messages::FrontendPid};
 use crate::{
     config::{LoadBalancingStrategy, ReadWriteSplit, Role},
     net::Parameters,
@@ -74,9 +74,8 @@ impl Target {
 pub struct LoadBalancer {
     /// Read/write targets.
     pub(super) targets: Vec<Target>,
-
+    /// Connection checkout timeout.
     checkout_timeout: Duration,
-
     /// Round robin atomic counter.
     pub(super) round_robin: Arc<AtomicUsize>,
     /// Chosen load balancing strategy.
@@ -104,7 +103,9 @@ impl LoadBalancer {
                 addrs
                     .first()
                     .map(|addr| addr.config.checkout_timeout)
-                    .unwrap_or(Duration::MAX),
+                    .unwrap_or(Duration::from_millis(
+                        config().config.general.checkout_timeout,
+                    )),
             );
 
         let mut targets: Vec<_> = addrs
@@ -309,7 +310,10 @@ impl LoadBalancer {
     /// callers will block until their `checkout_timeout` fires.
     async fn wait_roles_detected(&self) -> Result<(), Error> {
         if !self.roles_detected() {
-            if let Err(_) = timeout(self.checkout_timeout, self.role_detection.notified()).await {
+            if timeout(self.checkout_timeout, self.role_detection.notified())
+                .await
+                .is_err()
+            {
                 return Err(Error::CheckoutTimeout);
             };
             // Chain the wakeup so any other waiter that arrived after us
