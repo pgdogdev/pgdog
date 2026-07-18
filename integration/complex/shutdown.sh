@@ -12,7 +12,7 @@ pushd ${SCRIPT_DIR}
 python shutdown.py pgdog
 popd
 
-sleep 1
+sleep 3
 
 if pgrep pgdog; then
     echo "Shutdown failed"
@@ -26,7 +26,7 @@ pushd ${SCRIPT_DIR}
 python shutdown.py pgdog_sharded
 popd
 
-sleep 1
+sleep 3
 
 if pgrep pgdog; then
     echo "Shutdown failed"
