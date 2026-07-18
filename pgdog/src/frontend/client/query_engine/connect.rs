@@ -1,6 +1,5 @@
-use tokio::time::timeout;
-
 use crate::frontend::router::parser::{ShardWithPriority, route::ShardSource};
+use crate::util::safe_timeout;
 
 use super::*;
 
@@ -44,7 +43,7 @@ impl QueryEngine {
                 let begin_stmt = self.begin_stmt.take();
 
                 // We may need to sync params with the server and that reads from the socket.
-                timeout(
+                safe_timeout(
                     query_timeout,
                     self.backend.link_client(
                         context.id,

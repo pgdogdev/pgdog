@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use pgdog_config::users::PasswordKind;
 use timeouts::Timeouts;
-use tokio::{select, spawn, time::timeout};
+use tokio::{select, spawn};
 use tracing::{Level as LogLevel, debug, enabled, error, info, trace, warn};
 
 use super::{ClientRequest, Error, PreparedStatements};
@@ -32,7 +32,7 @@ use crate::net::messages::{
 use crate::net::{MessageBuffer, ProtocolMessage, Stream, parameter::Parameters};
 use crate::state::State;
 use crate::stats::memory::MemoryUsage;
-use crate::util::user_database_from_params;
+use crate::util::{safe_timeout, user_database_from_params};
 
 pub mod query_engine;
 pub mod sticky;
@@ -118,7 +118,7 @@ impl Client {
     ) -> Result<(), Error> {
         let login_timeout = Duration::from_millis(config.config.general.client_login_timeout);
 
-        match timeout(
+        match safe_timeout(
             login_timeout,
             Self::login(stream, params, addr, config, protocol_version),
         )
@@ -608,7 +608,7 @@ impl Client {
                 .client_idle_timeout(&state, &self.client_request);
 
             let message =
-                match timeout(idle_timeout, self.stream_buffer.read(&mut self.stream)).await {
+                match safe_timeout(idle_timeout, self.stream_buffer.read(&mut self.stream)).await {
                     Err(_) => {
                         self.stream
                             .fatal(ErrorResponse::client_idle_timeout(idle_timeout, &state))

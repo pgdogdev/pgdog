@@ -5,7 +5,7 @@ use once_cell::sync::Lazy;
 use rand::{Rng, distr::Alphanumeric};
 #[cfg(feature = "new_parser")]
 use std::ops::ControlFlow;
-use std::{env, num::ParseIntError, time::Duration};
+use std::{env, future::Future, num::ParseIntError, time::Duration};
 
 use crate::net::Parameters; // 0.8
 
@@ -281,6 +281,25 @@ pub fn sanitize_log_sample(s: &str, limit: usize) -> String {
     truncate_utf8(s, limit).replace(|c: char| c.is_control(), " ")
 }
 
+/// Wait for `future` to complete, unless `duration` elapses.
+///
+/// `Duration::MAX` is treated as an unlimited timeout. Tokio's timeout
+/// converts the duration to an instant internally, so skip it for the sentinel
+/// value to avoid overflowing that conversion.
+pub(crate) async fn safe_timeout<F>(
+    duration: Duration,
+    future: F,
+) -> Result<F::Output, tokio::time::error::Elapsed>
+where
+    F: Future,
+{
+    if duration == Duration::MAX {
+        Ok(future.await)
+    } else {
+        tokio::time::timeout(duration, future).await
+    }
+}
+
 #[cfg(feature = "new_parser")]
 pub(crate) trait ResultControlFlowExt<T, E> {
     fn break_err<B>(self) -> ControlFlow<Result<B, E>, T>;
@@ -308,6 +327,17 @@ mod test {
         assert_eq!(human_duration(Duration::from_millis(2000)), "2s");
         assert_eq!(human_duration(Duration::from_millis(1000 * 60 * 2)), "2m");
         assert_eq!(human_duration(Duration::from_millis(1000 * 3600)), "1h");
+    }
+
+    #[tokio::test]
+    async fn test_safe_timeout_allows_duration_max() {
+        assert_eq!(safe_timeout(Duration::MAX, async { 42 }).await.unwrap(), 42);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_safe_timeout_times_out() {
+        let result = safe_timeout(Duration::from_millis(1), std::future::pending::<()>()).await;
+        assert!(result.is_err());
     }
 
     #[test]
