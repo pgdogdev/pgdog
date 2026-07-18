@@ -16,6 +16,8 @@ use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, Span, error, info, info_span, warn};
 
+use crate::tasks;
+
 /// Represent the ID of the async task.
 #[derive(Copy, Clone, Debug, Display, FromStr, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct AsyncTaskId(u64);
@@ -379,12 +381,12 @@ fn run_task<P: Task, T: Task>(
         task: entry.clone(),
     };
 
-    let mut handle = tokio::spawn(task.run(ctx.clone()).instrument(span));
+    let mut handle = tasks::spawn(task.run(ctx.clone()).instrument(span));
     let (sender, receiver) = oneshot::channel();
 
     let cancellation_token = entry.cancellation_token.clone();
 
-    tokio::spawn(async move {
+    tasks::spawn(async move {
         let res = select! {
             _ = cancellation_token.cancelled() => {
                 ctx.transition(TaskStatus::Cancelling);

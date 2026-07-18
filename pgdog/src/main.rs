@@ -200,10 +200,10 @@ async fn pgdog(command: Option<Commands>) -> Result<(), Box<dyn std::error::Erro
     info!("🐕 PgDog is shutting down");
     stats_logger.shutdown();
     Manager::get().shutdown().await;
+    pgdog::tasks::shutdown().await;
 
     // Any shutdown routines go below.
     plugin::shutdown();
-    pgdog::tasks::shutdown().await;
 
     Ok(())
 }

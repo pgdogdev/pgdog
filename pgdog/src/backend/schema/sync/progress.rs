@@ -1,8 +1,10 @@
 use std::fmt::Display;
+use tokio::select;
 use tokio::sync::mpsc;
 use tokio::time::Instant;
-use tokio::{select, spawn};
 use tracing::info;
+
+use crate::tasks;
 
 use super::Statement;
 
@@ -129,7 +131,7 @@ impl Progress {
         let (tx, rx) = mpsc::unbounded_channel();
         let timer = Instant::now();
 
-        spawn(async move {
+        tasks::spawn(async move {
             Self::listen(rx, total).await;
         });
 
