@@ -2,6 +2,7 @@
 
 use chrono::{DateTime, Local, Utc};
 use once_cell::sync::Lazy;
+use pgdog_config::MAX_DURATION;
 use rand::{Rng, distr::Alphanumeric};
 #[cfg(feature = "new_parser")]
 use std::ops::ControlFlow;
@@ -293,7 +294,7 @@ pub(crate) async fn safe_timeout<F>(
 where
     F: Future,
 {
-    if duration == Duration::MAX {
+    if duration == Duration::MAX || duration == MAX_DURATION {
         Ok(future.await)
     } else {
         tokio::time::timeout(duration, future).await
