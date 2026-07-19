@@ -27,9 +27,6 @@ struct Shared {
     error: Option<Error>,
     // Rows a direct-to-shard DML expected to touch but didn't (0 rows affected).
     missed: MissedRows,
-    // Test-only: total ParseComplete acks consumed by parse-ack sync points.
-    #[cfg(test)]
-    parse_acks_consumed: usize,
 }
 
 // How a sync point completes.
@@ -38,6 +35,16 @@ enum SyncPointKind {
     ParseAcks(usize),
     // Wait for a single ReadyForQuery (`Sync`: commit, or out-of-transaction prepare).
     ReadyForQuery,
+}
+
+// One entry per command sent to Postgres, in send order. Popped as acks arrive.
+enum OpSyncPoint {
+    // Bind/Execute/Flush: resolved by CommandComplete ('C').
+    DirectDml { is_direct: bool },
+    // In-transaction prepare (Flush): resolved after `remaining` ParseComplete ('1') acks.
+    ParseAcks { remaining: usize, done: oneshot::Sender<()> },
+    // Commit or out-of-transaction prepare (Sync): resolved by ReadyForQuery ('Z').
+    ReadyForQuery { done: oneshot::Sender<()> },
 }
 
 // Work sent from the handle to the listener task.
@@ -79,9 +86,7 @@ impl PipelinedConnection {
             rx,
             server,
             shared: shared.clone(),
-            direct: VecDeque::new(),
-            parse_ack_sync_points: VecDeque::new(),
-            ready_for_query_sync_points: VecDeque::new(),
+            queue: VecDeque::new(),
             drain_waiter: None,
         };
 
@@ -129,13 +134,13 @@ impl PipelinedConnection {
             messages.push(Sync.into());
             SyncPointKind::ReadyForQuery
         };
-        self.sync_point(messages, kind).await
+        self.send_command_and_wait_for_sync_point(messages, kind).await
     }
 
     /// Send `Sync` and wait for `ReadyForQuery` (commits the open implicit
     /// transaction on this shard).
     pub async fn sync_and_drain(&self) -> Result<(), Error> {
-        self.sync_point(vec![Sync.into()], SyncPointKind::ReadyForQuery)
+        self.send_command_and_wait_for_sync_point(vec![Sync.into()], SyncPointKind::ReadyForQuery)
             .await
     }
 
@@ -147,7 +152,7 @@ impl PipelinedConnection {
             .send(Command::DrainAcks { done })
             .await
             .map_err(|_| Error::PipelineClosed)?;
-        self.await_done(rx).await
+        self.resolve_sync_point(rx).await
     }
 
     /// Non-blocking peek + take of the latched error. `Some` means the shard
@@ -161,14 +166,8 @@ impl PipelinedConnection {
         std::mem::take(&mut self.shared.lock().missed)
     }
 
-    /// Test-only: number of ParseComplete acks the listener has attributed to
-    /// parse-ack sync points so far.
-    #[cfg(test)]
-    fn parse_acks_consumed(&self) -> usize {
-        self.shared.lock().parse_acks_consumed
-    }
-
-    async fn sync_point(
+    // This function send the prepared command along with the type of sync point we are waiting for.
+    async fn send_command_and_wait_for_sync_point(
         &self,
         messages: Vec<ProtocolMessage>,
         kind: SyncPointKind,
@@ -182,19 +181,13 @@ impl PipelinedConnection {
             })
             .await
             .map_err(|_| Error::PipelineClosed)?;
-        self.await_done(rx).await
+        self.resolve_sync_point(rx).await
     }
 
-    // Wait for a sync point to resolve, then report any latched error. If the
-    // task died before signaling, surface the latched error or a generic one.
-    async fn await_done(&self, rx: oneshot::Receiver<()>) -> Result<(), Error> {
-        match rx.await {
-            Ok(()) => match self.take_error() {
-                Some(err) => Err(err),
-                None => Ok(()),
-            },
-            Err(_) => Err(self.take_error().unwrap_or(Error::PipelineClosed)),
-        }
+    // Resolve a sync point (signaled by the listener task).
+    // If the task died before signaling, surface the latched error.
+    async fn resolve_sync_point(&self, rx: oneshot::Receiver<()>) -> Result<(), Error> {
+        rx.await.map_err(|_| self.take_error().unwrap_or(Error::PipelineClosed))
     }
 }
 
@@ -204,13 +197,7 @@ struct Listener {
     rx: Receiver<Command>,
     server: Server,
     shared: Arc<Mutex<Shared>>,
-    // One entry per outstanding DML op, in send order: `is_direct`. Popped on
-    // each CommandComplete.
-    direct: VecDeque<bool>,
-    // In-transaction prepare sync points: (remaining ParseComplete acks, waiter).
-    parse_ack_sync_points: VecDeque<(usize, oneshot::Sender<()>)>,
-    // Commit / out-of-transaction prepare sync points, resolved on ReadyForQuery.
-    ready_for_query_sync_points: VecDeque<oneshot::Sender<()>>,
+    queue: VecDeque<OpSyncPoint>,
     // Waiter that resolves once every DML ack has been read. At most one is
     // outstanding: `commit()` issues drain_acks sequentially, one per connection.
     drain_waiter: Option<oneshot::Sender<()>>,
@@ -266,7 +253,7 @@ impl Listener {
                     self.wake_all();
                     return Err(Error::PipelineClosed);
                 }
-                self.direct.push_back(is_direct);
+                self.queue.push_back(OpSyncPoint::DirectDml { is_direct });
             }
             Command::SyncPoint {
                 messages,
@@ -284,18 +271,17 @@ impl Listener {
                     return Err(Error::PipelineClosed);
                 }
                 match kind {
-                    // We enqueue the number of acknowledgements we are waiting for and the waiter to resolve.
                     SyncPointKind::ParseAcks(remaining) => {
-                        self.parse_ack_sync_points.push_back((remaining, done));
+                        self.queue.push_back(OpSyncPoint::ParseAcks { remaining, done });
                     }
-                    // We enqueue the waiter to resolve when postgres is ready for next query.
                     SyncPointKind::ReadyForQuery => {
-                        self.ready_for_query_sync_points.push_back(done);
+                        self.queue.push_back(OpSyncPoint::ReadyForQuery { done });
                     }
                 }
             }
             Command::DrainAcks { done } => {
-                if errored || self.direct.is_empty() {
+                let has_dml = self.queue.iter().any(|op| matches!(op, OpSyncPoint::DirectDml { .. }));
+                if errored || !has_dml {
                     let _ = done.send(());
                 } else {
                     // At most one drain is outstanding (issued one-at-a-time by
@@ -321,45 +307,44 @@ impl Listener {
                 self.latch_error(err);
                 // After an error Postgres skips until Sync; abandon tracking and
                 // resolve every waiter so the handle can roll back.
-                self.direct.clear();
                 self.wake_all();
             }
-            // as parse query acknowledgements arrive we decrement the remaining count and resolve th waiter
-            // when the remaining count becomes 0.
+            // ParseComplete: decrement the front ParseSync counter; resolve when it hits 0.
             '1' => {
-                let resolved = if let Some((remaining, _)) = self.parse_ack_sync_points.front_mut()
-                {
-                    *remaining -= 1;
-                    #[cfg(test)]
-                    {
-                        self.shared.lock().parse_acks_consumed += 1;
+                let resolved =
+                    if let Some(OpSyncPoint::ParseAcks { remaining, .. }) = self.queue.front_mut() {
+                        *remaining -= 1;
+                        *remaining == 0
+                    } else {
+                        false
+                    };
+                if resolved {
+                    if let Some(OpSyncPoint::ParseAcks { done, .. }) = self.queue.pop_front() {
+                        let _ = done.send(());
                     }
-                    *remaining == 0
-                } else {
-                    false
-                };
-                if resolved && let Some((_, done)) = self.parse_ack_sync_points.pop_front() {
-                    let _ = done.send(());
                 }
             }
             // BindComplete: nothing to account for.
             '2' => {}
             // CommandComplete: match to the DML op and count missed rows.
             'C' => {
-                let is_direct = self.direct.pop_front().unwrap_or(false);
+                let is_direct = match self.queue.pop_front() {
+                    Some(OpSyncPoint::DirectDml { is_direct }) => is_direct,
+                    _ => false,
+                };
                 if is_direct
                     && let Ok(complete) = CommandComplete::try_from(message)
                     && matches!(complete.rows(), Ok(Some(0)))
                 {
                     self.shared.lock().missed.record(complete.tag());
                 }
-                if self.direct.is_empty() {
+                if !self.queue.iter().any(|op| matches!(op, OpSyncPoint::DirectDml { .. })) {
                     self.wake_drain();
                 }
             }
-            // When Ready for query sync point arrives we resolve the waiter.
+            // ReadyForQuery: resolve the front ReadySync waiter.
             'Z' => {
-                if let Some(done) = self.ready_for_query_sync_points.pop_front() {
+                if let Some(OpSyncPoint::ReadyForQuery { done }) = self.queue.pop_front() {
                     let _ = done.send(());
                 }
             }
@@ -385,11 +370,13 @@ impl Listener {
     }
 
     fn wake_all(&mut self) {
-        while let Some((_, done)) = self.parse_ack_sync_points.pop_front() {
-            let _ = done.send(());
-        }
-        while let Some(done) = self.ready_for_query_sync_points.pop_front() {
-            let _ = done.send(());
+        while let Some(op) = self.queue.pop_front() {
+            match op {
+                OpSyncPoint::ParseAcks { done, .. } | OpSyncPoint::ReadyForQuery { done } => {
+                    let _ = done.send(());
+                }
+                OpSyncPoint::DirectDml { .. } => {}
+            }
         }
         self.wake_drain();
     }
@@ -478,53 +465,34 @@ mod test {
     }
 
     #[tokio::test]
-    async fn in_transaction_multi_parse_acks() {
+    async fn prepare_invalid_sql_sync_returns_error() {
         let server = test_server().await;
         let conn = PipelinedConnection::new(server).unwrap();
 
-        // A single in-transaction prepare with several statements uses
-        // ParseAcks(n): the waiter must resolve only after ALL n ParseComplete
-        // acks arrive (exercises the n -> 0 countdown, not just n == 1).
-        conn.prepare(
-            &[
-                Parse::named("__pipe_m1", "SELECT $1::bigint"),
-                Parse::named("__pipe_m2", "SELECT $1::text"),
-                Parse::named("__pipe_m3", "SELECT $1::bool"),
-            ],
-            true,
-        )
-        .await
-        .unwrap();
-
-        // The waiter only resolves once all 3 ParseComplete acks were counted.
-        assert_eq!(conn.parse_acks_consumed(), 3);
-
-        // Nothing committed yet; a Sync cleanly ends the implicit transaction.
-        conn.sync_and_drain().await.unwrap();
+        // Out-of-transaction prepare of invalid SQL: Postgres replies with an
+        // ErrorResponse, which is latched and surfaced through the Sync path.
+        let err = conn
+            .prepare(&[Parse::named("__pipe_bad", "NOT VALID SQL")], false)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, Error::PgError(_)), "unexpected error: {err:?}");
+        // The error was taken while surfacing, so nothing remains latched.
         assert!(conn.take_error().is_none());
     }
 
     #[tokio::test]
-    async fn out_of_transaction_multi_parse_sync() {
+    async fn prepare_invalid_sql_flush_returns_error() {
         let server = test_server().await;
         let conn = PipelinedConnection::new(server).unwrap();
 
-        // Multiple Parses out of a transaction use the Sync/ReadyForQuery path:
-        // the n ParseComplete acks are ignored (parse-ack queue is empty) and
-        // the single ReadyForQuery resolves the waiter.
-        conn.prepare(
-            &[
-                Parse::named("__pipe_s1", "SELECT $1::bigint"),
-                Parse::named("__pipe_s2", "SELECT $1::text"),
-                Parse::named("__pipe_s3", "SELECT $1::bool"),
-            ],
-            false,
-        )
-        .await
-        .unwrap();
+        // In-transaction prepare uses Flush, so Postgres sends no ReadyForQuery
+        // on error. The parked ParseAcks waiter can only be released by the
+        // 'E' handler's wake_all(): this proves the prepare does not hang.
+        let err = conn
+            .prepare(&[Parse::named("__pipe_bad", "NOT VALID SQL")], true)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, Error::PgError(_)), "unexpected error: {err:?}");
         assert!(conn.take_error().is_none());
-        // The ParseComplete acks are ignored on the Sync path, not attributed
-        // to any parse-ack sync point.
-        assert_eq!(conn.parse_acks_consumed(), 0);
     }
 }
