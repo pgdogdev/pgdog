@@ -100,9 +100,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     runtime.block_on(async move { pgdog(args.command).await })?;
-    runtime.shutdown_background();
 
-    Ok(())
+    // FIXME(lev): The runtime won't shut down rn
+    // because of some stuck background tasks
+    // and enable_alt_timer. The regular timer doesn't care
+    // if we leave stuff behind, but the thread-local one blocks
+    // until all tasks are done.
+    std::process::exit(0);
 }
 
 async fn pgdog(command: Option<Commands>) -> Result<(), Box<dyn std::error::Error>> {
@@ -198,13 +202,14 @@ async fn pgdog(command: Option<Commands>) -> Result<(), Box<dyn std::error::Erro
         }
     }
 
-    info!("🐕 PgDog is shutting down");
     stats_logger.shutdown();
     Manager::get().shutdown().await;
     pgdog::tasks::shutdown().await;
 
     // Any shutdown routines go below.
     plugin::shutdown();
+
+    info!("🐕 PgDog is shutting down");
 
     Ok(())
 }
