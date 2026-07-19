@@ -68,19 +68,24 @@ pub async fn server(port: u16) -> std::io::Result<()> {
             _ = shutdown.cancelled() => break,
         };
         let io = TokioIo::new(stream);
+        let shutdown = shutdown.clone();
 
         tasks::spawn("openmetrics http server", async move {
-            if let Err(err) = http1::Builder::new()
-                .serve_connection(io, service_fn(metrics))
-                .await
-            {
-                // Clients (TCP health probes, scrapers that disconnect
-                // mid-request, keep-alive teardown) routinely close the socket
-                // before sending a complete request. That surfaces as
-                // IncompleteMessage and is benign.
-                if !err.is_incomplete_message() {
-                    warn!("OpenMetrics endpoint error: {:?}", err);
+            let connection = http1::Builder::new().serve_connection(io, service_fn(metrics));
+
+            tokio::select! {
+                result = connection => {
+                    if let Err(err) = result {
+                        // Clients (TCP health probes, scrapers that disconnect
+                        // mid-request, keep-alive teardown) routinely close the socket
+                        // before sending a complete request. That surfaces as
+                        // IncompleteMessage and is benign.
+                        if !err.is_incomplete_message() {
+                            warn!("OpenMetrics endpoint error: {:?}", err);
+                        }
+                    }
                 }
+                _ = shutdown.cancelled() => {}
             }
         });
     }

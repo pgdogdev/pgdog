@@ -26,13 +26,18 @@ pub async fn server(port: u16) -> std::io::Result<()> {
             _ = shutdown.cancelled() => break,
         };
         let io = TokioIo::new(stream);
+        let shutdown = shutdown.clone();
 
         tasks::spawn("http healthcheck", async move {
-            if let Err(err) = http1::Builder::new()
-                .serve_connection(io, service_fn(healthcheck))
-                .await
-            {
-                eprintln!("Healthcheck endpoint error: {:?}", err);
+            let connection = http1::Builder::new().serve_connection(io, service_fn(healthcheck));
+
+            tokio::select! {
+                result = connection => {
+                    if let Err(err) = result {
+                        eprintln!("Healthcheck endpoint error: {:?}", err);
+                    }
+                }
+                _ = shutdown.cancelled() => {}
             }
         });
     }
