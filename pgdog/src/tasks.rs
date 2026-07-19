@@ -7,10 +7,12 @@ use std::{
 
 use dashmap::DashMap;
 use once_cell::sync::Lazy;
-use tokio::task::JoinHandle;
+use tokio::{task::JoinHandle, time::timeout};
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
-use tracing::info;
+use tracing::{error, info};
+
+use crate::config::config;
 
 static TASKS: Lazy<BackgroundTasks> = Lazy::new(BackgroundTasks::default);
 
@@ -65,5 +67,13 @@ pub async fn shutdown() {
     TASKS.tracker.close();
 
     info!("waiting on {} background tasks", TASKS.tracker.len());
-    TASKS.tracker.wait().await;
+
+    let wait = timeout(
+        config().config.general.shutdown_timeout(),
+        TASKS.tracker.wait(),
+    );
+
+    if wait.await.is_err() {
+        error!("unterminated background tasks: {:?}", TASKS.counter);
+    }
 }
