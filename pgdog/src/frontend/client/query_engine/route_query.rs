@@ -1,8 +1,8 @@
 use pgdog_config::PoolerMode;
-use tokio::time::timeout;
 use tracing::trace;
 
 use crate::backend::Cluster;
+use crate::util::safe_timeout;
 
 use super::*;
 
@@ -53,7 +53,7 @@ impl QueryEngine {
             // Make sure schema is loaded before we throw traffic
             // at it. This matters for sharded deployments only.
             if let Ok(cluster) = self.backend.cluster() {
-                timeout(
+                safe_timeout(
                     context.timeouts.query_timeout(&State::Active),
                     cluster.wait_schema_loaded(),
                 )

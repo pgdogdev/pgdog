@@ -37,8 +37,8 @@ use super::error::Error;
 use super::record::{BeginPayload, CheckpointEntry, CheckpointPayload, Record, TxnPayload};
 use super::recovery;
 use super::segment::{Segment, gc_before_lsn};
-use crate::config::config;
 use crate::frontend::client::query_engine::two_pc::{Manager, TwoPcTransaction};
+use crate::{config::config, tasks};
 
 /// Acquire an exclusive flock on `<dir>/.lock` and stamp it with our
 /// PID + start time. Returns the locked `File`; dropping it releases
@@ -159,7 +159,7 @@ impl Wal {
         let (tx, rx) = mpsc::channel::<WriteRequest>(CHANNEL_CAPACITY);
         let shutdown = Arc::new(WalShutdown::default());
 
-        tokio::spawn({
+        tasks::spawn("2pc wal writer", {
             let shutdown = Arc::clone(&shutdown);
 
             async move {
@@ -331,7 +331,7 @@ async fn run(
                 // the previous one before starting.
                 let prev = gc_handle.take();
                 let wal_dir = wal_dir.clone();
-                gc_handle = Some(tokio::spawn(async move {
+                gc_handle = Some(tasks::spawn("2pc wal gc", async move {
                     if let Some(prev) = prev {
                         let _ = prev.await;
                     }

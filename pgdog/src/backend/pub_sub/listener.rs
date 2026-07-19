@@ -13,10 +13,11 @@ use std::{
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 use tokio::{
-    select, spawn,
+    select,
     sync::{Notify, broadcast, mpsc},
     time::sleep,
 };
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info};
 
 use super::{Stats, StatsSnapshot, channel_size};
@@ -27,6 +28,7 @@ use crate::{
         FromBytes, FrontendPid, NotificationResponse, Parameter, Parameters, Protocol,
         ProtocolMessage, Query, ToBytes,
     },
+    tasks,
 };
 
 #[derive(Debug, Clone)]
@@ -150,7 +152,7 @@ pub(crate) mod test_support {
 #[derive(Debug)]
 struct Comms {
     start: Notify,
-    shutdown: Notify,
+    shutdown: CancellationToken,
 }
 
 /// Notification listener.
@@ -178,7 +180,7 @@ impl PubSubListener {
             channels,
             comms: Arc::new(Comms {
                 start: Notify::new(),
-                shutdown: Notify::new(),
+                shutdown: CancellationToken::new(),
             }),
         };
 
@@ -186,12 +188,21 @@ impl PubSubListener {
         let channels = listener.channels.clone();
         let pool = listener.pool.clone();
         let comms = listener.comms.clone();
-        spawn(async move {
+        tasks::spawn("pub sub", async move {
             loop {
-                comms.start.notified().await;
+                select! {
+                    _ = comms.start.notified() => {}
+                    _ = comms.shutdown.cancelled() => {
+                        rx.close();
+                    }
+                }
+
+                if rx.is_closed() {
+                    break;
+                }
 
                 select! {
-                    _ = comms.shutdown.notified() => {
+                    _ = comms.shutdown.cancelled() => {
                         rx.close(); // Drain remaining messages.
                     }
 
@@ -200,7 +211,10 @@ impl PubSubListener {
                             error!("pub/sub error: {} [{}]", err, pool.addr());
                             // Don't reconnect for another connect attempt delay
                             // to avoid connection storms during incidents.
-                            sleep(Duration::from_millis(config().config.general.connect_attempt_delay)).await;
+                            select! {
+                                _ = sleep(Duration::from_millis(config().config.general.connect_attempt_delay)) => {}
+                                _ = comms.shutdown.cancelled() => rx.close(),
+                            }
                         }
                     }
                 }
@@ -221,7 +235,7 @@ impl PubSubListener {
 
     /// Shutdown the listener.
     pub fn shutdown(&self) {
-        self.comms.shutdown.notify_one();
+        self.comms.shutdown.cancel();
     }
 
     /// Listen on a channel.
@@ -364,7 +378,7 @@ mod test {
                 channels: Arc::new(Mutex::new(HashMap::new())),
                 comms: Arc::new(Comms {
                     start: Notify::new(),
-                    shutdown: Notify::new(),
+                    shutdown: CancellationToken::new(),
                 }),
             },
             rx,

@@ -5,7 +5,7 @@
 //!
 use std::sync::Arc;
 
-use tokio::{spawn, sync::Semaphore, task::JoinHandle, time::sleep};
+use tokio::{sync::Semaphore, task::JoinHandle, time::sleep};
 use tracing::{info, warn};
 
 use super::super::Error;
@@ -16,6 +16,7 @@ use crate::backend::{
 };
 use crate::frontend::client::query_engine::two_pc::Manager;
 use crate::net::messages::Protocol;
+use crate::tasks;
 use crate::util::escape_identifier;
 use futures::{StreamExt, stream::FuturesUnordered};
 use tokio_util::sync::CancellationToken;
@@ -31,7 +32,7 @@ struct ParallelSync {
 impl ParallelSync {
     // Run parallel sync.
     pub fn run(self) -> JoinHandle<Result<Table, Error>> {
-        spawn(async move {
+        tasks::spawn("parallel sync", async move {
             // Record copy in queue before waiting for permit.
             let tracker = TableCopy::new(&self.table.table.schema, &self.table.table.name);
 

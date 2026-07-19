@@ -10,9 +10,6 @@ WORKDIR /build
 
 RUN rm /bin/sh && ln -s /bin/bash /bin/sh
 RUN source ~/.cargo/env && \
-    if [ "$(uname -m)" = "aarch64" ] || [ "$(uname -m)" = "arm64" ]; then \
-        export RUSTFLAGS="-Ctarget-feature=+lse"; \
-    fi && \
     cargo_features=(); \
     if [ -n "${FEATURES}" ]; then \
         cargo_features=(--no-default-features --features "${FEATURES}"); \

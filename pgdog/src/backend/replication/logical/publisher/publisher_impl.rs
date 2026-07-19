@@ -8,7 +8,7 @@ use pgdog_config::QueryParserEngine;
 use tokio::task::JoinHandle;
 use tokio::time::{Instant, sleep};
 use tokio::try_join;
-use tokio::{select, spawn, time::interval};
+use tokio::{select, time::interval};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
@@ -25,6 +25,7 @@ use crate::backend::replication::{
 use crate::backend::{Cluster, pool::Request};
 use crate::config::Role;
 use crate::net::replication::ReplicationMeta;
+use crate::tasks;
 
 fn merge_table_lsns(
     tables: Vec<Table>,
@@ -239,7 +240,7 @@ impl Publisher {
             let dest = dest.clone();
 
             // Replicate in parallel.
-            let handle = spawn(async move {
+            let handle = tasks::spawn("replication", async move {
                 slot.start_replication().await?;
                 let progress = Progress::new_stream();
                 let max_attempts = dest.resharding_replication_retry_max_attempts();
@@ -444,7 +445,7 @@ impl Publisher {
 
             let dest = dest.clone();
             let cancel = cancel.clone();
-            handles.push(spawn(async move {
+            handles.push(tasks::spawn("parallel sync manager", async move {
                 let manager = ParallelSyncManager::new(tables, replicas, dest)?;
                 let tables = manager.run(cancel).await?;
 

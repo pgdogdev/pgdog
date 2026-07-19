@@ -1,22 +1,26 @@
-use crate::backend::pool::lsn_monitor::{LsnStats, ReplicaLag};
+use crate::{
+    backend::pool::lsn_monitor::{LsnStats, ReplicaLag},
+    tasks,
+};
 
 use super::*;
 
 use futures::stream::{FuturesUnordered, StreamExt};
 use tokio::time::interval;
+use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 /// Shard communication primitives.
 #[derive(Debug)]
 pub(super) struct ShardComms {
-    pub(super) shutdown: Notify,
+    pub(super) shutdown: CancellationToken,
     pub(super) lsn_check_interval: Duration,
 }
 
 impl Default for ShardComms {
     fn default() -> Self {
         Self {
-            shutdown: Notify::new(),
+            shutdown: CancellationToken::new(),
             lsn_check_interval: Duration::MAX,
         }
     }
@@ -37,7 +41,7 @@ impl ShardMonitor {
             shard: shard.clone(),
         };
 
-        spawn(async move { monitor.spawn().await });
+        tasks::spawn("shard monitor", async move { monitor.spawn().await });
     }
 }
 
@@ -79,7 +83,7 @@ impl ShardMonitor {
                 },
                 // Role change needs us to run this asap.
                 _ = role_changes.next() => {}
-                _ = self.shard.comms().shutdown.notified() => {
+                _ = self.shard.comms().shutdown.cancelled() => {
                     break;
                 },
             }

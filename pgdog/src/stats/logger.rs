@@ -1,9 +1,10 @@
 use std::{sync::Arc, time::Duration};
 
-use tokio::{select, spawn, sync::Notify, time::sleep};
+use tokio::{select, sync::Notify, time::sleep};
 use tracing::info;
 
 use crate::frontend::router::parser::Cache;
+use crate::tasks;
 
 #[derive(Debug, Clone)]
 pub struct Logger {
@@ -32,7 +33,8 @@ impl Logger {
     pub fn spawn(&self) {
         let me = self.clone();
 
-        spawn(async move {
+        tasks::spawn("stats logger", async move {
+            let shutdown = tasks::shutdown_signal();
             loop {
                 select! {
                     _ = sleep(me.interval) => {
@@ -44,6 +46,7 @@ impl Logger {
                         );
                     }
                     _ = me.shutdown.notified() => break,
+                    _ = shutdown.cancelled() => break,
                 }
             }
         });

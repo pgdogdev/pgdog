@@ -13,7 +13,7 @@ use std::{
     time::Duration,
 };
 use tokio::{
-    select, spawn,
+    select,
     sync::Notify,
     time::{Instant, interval, sleep},
 };
@@ -35,6 +35,7 @@ use crate::{
             parser::{Shard, ShardWithPriority},
         },
     },
+    tasks,
 };
 
 use super::Error;
@@ -66,6 +67,7 @@ impl Manager {
             notify: Arc::new(InnerNotify {
                 notify: Notify::new(),
                 offline: AtomicBool::new(false),
+                done_flag: AtomicBool::new(false),
                 done: Notify::new(),
             }),
             wal: Arc::new(ArcSwapOption::const_empty()),
@@ -73,7 +75,7 @@ impl Manager {
         };
 
         let monitor = manager.clone();
-        spawn(async move {
+        tasks::spawn("2pc monitor", async move {
             Self::monitor(monitor).await;
         });
 
@@ -91,7 +93,7 @@ impl Manager {
             Ok(wal) => {
                 self.wal.store(Some(Arc::new(wal)));
                 info!("[2pc] wal enabled");
-                spawn(Self::checkpoint_loop());
+                tasks::spawn("2pc wal", Self::checkpoint_loop());
             }
             Err(err) => {
                 warn!(
@@ -326,6 +328,7 @@ impl Manager {
                 notify.notify.notify_one();
             } else if notify.offline.load(Ordering::Relaxed) {
                 // No more transactions to cleanup.
+                notify.done_flag.store(true, Ordering::Relaxed);
                 notify.done.notify_waiters();
                 break;
             }
@@ -386,8 +389,13 @@ impl Manager {
     /// Once the monitor has drained the cleanup queue, the WAL is shut
     /// down too so any final End records make it to disk before exit.
     pub async fn shutdown(&self) {
+        if self.notify.done_flag.load(Ordering::Relaxed) {
+            return;
+        }
+
         let waiter = self.notify.done.notified();
         self.notify.offline.store(true, Ordering::Relaxed);
+        self.notify.notify.notify_one();
         let transactions = self.inner.lock().queue.len();
 
         info!("cleaning up {} two-phase transactions", transactions);
@@ -416,5 +424,6 @@ struct Inner {
 struct InnerNotify {
     notify: Notify,
     offline: AtomicBool,
+    done_flag: AtomicBool,
     done: Notify,
 }

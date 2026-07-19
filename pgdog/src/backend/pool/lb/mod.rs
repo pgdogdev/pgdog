@@ -12,7 +12,7 @@ use rand::seq::SliceRandom;
 use tokio::{sync::Notify, time::timeout};
 use tracing::warn;
 
-use crate::net::messages::FrontendPid;
+use crate::{config::config, net::messages::FrontendPid};
 use crate::{
     config::{LoadBalancingStrategy, ReadWriteSplit, Role},
     net::Parameters,
@@ -74,8 +74,8 @@ impl Target {
 pub struct LoadBalancer {
     /// Read/write targets.
     pub(super) targets: Vec<Target>,
-    /// Checkout timeout.
-    pub(super) checkout_timeout: Duration,
+    /// Connection checkout timeout.
+    checkout_timeout: Duration,
     /// Round robin atomic counter.
     pub(super) round_robin: Arc<AtomicUsize>,
     /// Chosen load balancing strategy.
@@ -98,12 +98,15 @@ impl LoadBalancer {
     ) -> LoadBalancer {
         let checkout_timeout = primary
             .as_ref()
-            .map(|primary| primary.config().checkout_timeout)
-            .unwrap_or(Duration::ZERO)
-            + addrs
-                .iter()
-                .map(|c| c.config.checkout_timeout)
-                .sum::<Duration>();
+            .map(|pool| pool.config().checkout_timeout)
+            .unwrap_or(
+                addrs
+                    .first()
+                    .map(|addr| addr.config.checkout_timeout)
+                    .unwrap_or(Duration::from_millis(
+                        config().config.general.checkout_timeout,
+                    )),
+            );
 
         let mut targets: Vec<_> = addrs
             .iter()
@@ -214,11 +217,7 @@ impl LoadBalancer {
 
     /// Get a live connection from the pool.
     pub async fn get(&self, request: &Request) -> Result<Guard, Error> {
-        match timeout(self.checkout_timeout, self.get_internal(request)).await {
-            Ok(Ok(conn)) => Ok(conn),
-            Ok(Err(err)) => Err(err),
-            Err(_) => Err(Error::ReplicaCheckoutTimeout),
-        }
+        self.get_internal(request).await
     }
 
     /// Get parameters from first non-banned connection pool.
@@ -309,13 +308,20 @@ impl LoadBalancer {
     /// `Primary` or `Replica`. The wakeup is driven by `pick_primary`, so
     /// if no primary is ever elected (e.g. LSN stats never populate),
     /// callers will block until their `checkout_timeout` fires.
-    async fn wait_roles_detected(&self) {
+    async fn wait_roles_detected(&self) -> Result<(), Error> {
         if !self.roles_detected() {
-            self.role_detection.notified().await;
+            if timeout(self.checkout_timeout, self.role_detection.notified())
+                .await
+                .is_err()
+            {
+                return Err(Error::CheckoutTimeout);
+            };
             // Chain the wakeup so any other waiter that arrived after us
             // also gets released without needing another promotion event.
             self.role_detection.notify_one();
         }
+
+        Ok(())
     }
 
     /// True once no target is still in the `Auto` state.
@@ -327,15 +333,11 @@ impl LoadBalancer {
     }
 
     pub(super) async fn get_primary(&self, request: &Request) -> Result<Guard, Error> {
-        match timeout(self.checkout_timeout, self.get_primary_internal(request)).await {
-            Ok(Ok(guard)) => Ok(guard),
-            Err(_) => Err(Error::CheckoutTimeout),
-            Ok(Err(err)) => Err(err),
-        }
+        self.get_primary_internal(request).await
     }
 
     async fn get_primary_internal(&self, request: &Request) -> Result<Guard, Error> {
-        self.wait_roles_detected().await;
+        self.wait_roles_detected().await?;
         self.primary_target()
             .ok_or(Error::NoPrimary)?
             .pool
