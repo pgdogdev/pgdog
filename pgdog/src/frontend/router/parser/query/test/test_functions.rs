@@ -1,8 +1,11 @@
 use bytes::Bytes;
+#[cfg(feature = "new_parser")]
 use pgdog_config::WriteFunctions;
+#[cfg(feature = "new_parser")]
 use std::ops::Deref;
 
 use super::setup::*;
+#[cfg(feature = "new_parser")]
 use crate::config::config;
 
 #[test]
@@ -68,6 +71,7 @@ fn test_install_sharded_sequence_without_schema_not_cross_shard() {
 }
 
 #[test]
+#[cfg(feature = "new_parser")]
 fn test_configured_write_function_routes_to_primary() {
     let mut updated = config().deref().clone();
     updated.config.write_functions = vec![WriteFunctions {
@@ -82,6 +86,7 @@ fn test_configured_write_function_routes_to_primary() {
 }
 
 #[test]
+#[cfg(feature = "new_parser")]
 fn test_configured_write_function_case_insensitive_and_any_match() {
     let mut updated = config().deref().clone();
     updated.config.write_functions = vec![WriteFunctions {

@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -152,6 +154,10 @@ func TestWriteFunctions(t *testing.T) {
 }
 
 func TestConfiguredWriteFunctionsRouteToPrimary(t *testing.T) {
+	if !strings.Contains(os.Getenv("PGDOG_PLUGIN_FEATURES"), "new_parser") {
+		t.Skip("write_functions routing is implemented in the new parser path only")
+	}
+
 	pool := GetPool()
 	defer pool.Close()
 
