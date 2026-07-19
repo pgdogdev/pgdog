@@ -75,7 +75,7 @@ impl Manager {
         };
 
         let monitor = manager.clone();
-        tasks::spawn(async move {
+        tasks::spawn("2pc monitor", async move {
             Self::monitor(monitor).await;
         });
 
@@ -93,7 +93,7 @@ impl Manager {
             Ok(wal) => {
                 self.wal.store(Some(Arc::new(wal)));
                 info!("[2pc] wal enabled");
-                tasks::spawn(Self::checkpoint_loop());
+                tasks::spawn("2pc wal", Self::checkpoint_loop());
             }
             Err(err) => {
                 warn!(

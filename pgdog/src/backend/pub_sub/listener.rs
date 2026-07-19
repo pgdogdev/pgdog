@@ -188,7 +188,7 @@ impl PubSubListener {
         let channels = listener.channels.clone();
         let pool = listener.pool.clone();
         let comms = listener.comms.clone();
-        tasks::spawn(async move {
+        tasks::spawn("pub sub", async move {
             loop {
                 select! {
                     _ = comms.start.notified() => {}

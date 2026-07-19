@@ -126,15 +126,19 @@ async fn pgdog(command: Option<Commands>) -> Result<(), Box<dyn std::error::Erro
     }
 
     if let Some(openmetrics_port) = general.openmetrics_port {
-        pgdog::tasks::spawn(async move { stats::http_server::server(openmetrics_port).await });
+        pgdog::tasks::spawn("openmetrics server", async move {
+            stats::http_server::server(openmetrics_port).await
+        });
     }
 
     if config::config().config.otel.endpoint.is_some() {
-        pgdog::tasks::spawn(stats::otel_exporter::run());
+        pgdog::tasks::spawn("otel publisher", stats::otel_exporter::run());
     }
 
     if let Some(healthcheck_port) = general.healthcheck_port {
-        pgdog::tasks::spawn(async move { healthcheck::server(healthcheck_port).await });
+        pgdog::tasks::spawn("http healthcheck server", async move {
+            healthcheck::server(healthcheck_port).await
+        });
     }
 
     let stats_logger = stats::StatsLogger::new();
@@ -169,6 +173,8 @@ async fn pgdog(command: Option<Commands>) -> Result<(), Box<dyn std::error::Erro
                 // Wait for the 2PC monitor to drain any in-flight cleanup
                 // before the process exits, even on error.
                 Manager::get().shutdown().await;
+                databases::shutdown();
+
                 if let Err(err) = result {
                     error!("{}", err);
                     return Err(err);
@@ -177,7 +183,14 @@ async fn pgdog(command: Option<Commands>) -> Result<(), Box<dyn std::error::Erro
 
             if let Commands::SchemaSync { .. } = command {
                 info!("🔄 entering schema sync mode");
-                if let Err(err) = cli::schema_sync(command.clone()).await {
+                let result = cli::schema_sync(command.clone()).await;
+
+                // Wait for the 2PC monitor to drain any in-flight cleanup
+                // before the process exits, even on error.
+                Manager::get().shutdown().await;
+                databases::shutdown();
+
+                if let Err(err) = result {
                     error!("{}", err);
                     return Err(err);
                 }
@@ -203,8 +216,8 @@ async fn pgdog(command: Option<Commands>) -> Result<(), Box<dyn std::error::Erro
     }
 
     stats_logger.shutdown();
-    Manager::get().shutdown().await;
     pgdog::tasks::shutdown().await;
+    println!("tasks shutdown");
 
     // Any shutdown routines go below.
     plugin::shutdown();

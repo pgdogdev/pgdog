@@ -74,7 +74,7 @@ impl Monitor {
     pub(super) fn run(pool: &Pool) {
         let monitor = Self { pool: pool.clone() };
 
-        tasks::spawn(async move {
+        tasks::spawn("pool monitor", async move {
             monitor.spawn().await;
         });
     }
@@ -85,9 +85,12 @@ impl Monitor {
 
         // Maintenance loop.
         let pool = self.pool.clone();
-        tasks::spawn(async move { Self::maintenance(pool).await });
+        tasks::spawn(
+            "pool maintenance",
+            async move { Self::maintenance(pool).await },
+        );
         let pool = self.pool.clone();
-        tasks::spawn(async move { Self::stats(pool).await });
+        tasks::spawn("pool stats", async move { Self::stats(pool).await });
 
         // Delay starting health checks to give
         // time for the pool to spin up.
@@ -103,7 +106,7 @@ impl Monitor {
         };
 
         if !replication_mode && interval > Duration::ZERO {
-            tasks::spawn(async move {
+            tasks::spawn("pool healthchecks", async move {
                 select! {
                     _ = sleep(delay) => {}
                     _ = pool.comms().shutdown.cancelled() => return,
@@ -116,7 +119,9 @@ impl Monitor {
         // Only spawned for pools that use an external identity provider.
         if self.pool.addr().server_auth.is_external_identity() {
             let pool = self.pool.clone();
-            tasks::spawn(async move { Self::token_refresh(pool).await });
+            tasks::spawn("pool token refresh", async move {
+                Self::token_refresh(pool).await
+            });
         }
 
         loop {

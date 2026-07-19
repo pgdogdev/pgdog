@@ -32,7 +32,7 @@ struct ParallelSync {
 impl ParallelSync {
     // Run parallel sync.
     pub fn run(self) -> JoinHandle<Result<Table, Error>> {
-        tasks::spawn(async move {
+        tasks::spawn("parallel sync", async move {
             // Record copy in queue before waiting for permit.
             let tracker = TableCopy::new(&self.table.table.schema, &self.table.table.name);
 

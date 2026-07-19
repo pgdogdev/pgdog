@@ -381,12 +381,12 @@ fn run_task<P: Task, T: Task>(
         task: entry.clone(),
     };
 
-    let mut handle = tasks::spawn(task.run(ctx.clone()).instrument(span));
+    let mut handle = tasks::spawn("async task", task.run(ctx.clone()).instrument(span));
     let (sender, receiver) = oneshot::channel();
 
     let cancellation_token = entry.cancellation_token.clone();
 
-    tasks::spawn(async move {
+    tasks::spawn("async task_waiter", async move {
         let res = select! {
             _ = cancellation_token.cancelled() => {
                 ctx.transition(TaskStatus::Cancelling);

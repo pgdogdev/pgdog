@@ -54,7 +54,7 @@ impl Progress {
 
         let notify = inner.clone();
 
-        tasks::spawn(async move {
+        tasks::spawn("logical publisher progress", async move {
             let mut prev = 0;
             let table = if let Some(ref table) = notify.table {
                 format!(" for table \"{}\".\"{}\"", table.schema, table.name)

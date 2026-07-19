@@ -41,7 +41,7 @@ impl ShardMonitor {
             shard: shard.clone(),
         };
 
-        tasks::spawn(async move { monitor.spawn().await });
+        tasks::spawn("shard monitor", async move { monitor.spawn().await });
     }
 }
 

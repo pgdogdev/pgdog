@@ -240,7 +240,7 @@ impl Publisher {
             let dest = dest.clone();
 
             // Replicate in parallel.
-            let handle = tasks::spawn(async move {
+            let handle = tasks::spawn("replication", async move {
                 slot.start_replication().await?;
                 let progress = Progress::new_stream();
                 let max_attempts = dest.resharding_replication_retry_max_attempts();
@@ -445,7 +445,7 @@ impl Publisher {
 
             let dest = dest.clone();
             let cancel = cancel.clone();
-            handles.push(tasks::spawn(async move {
+            handles.push(tasks::spawn("parallel sync manager", async move {
                 let manager = ParallelSyncManager::new(tables, replicas, dest)?;
                 let tables = manager.run(cancel).await?;
 

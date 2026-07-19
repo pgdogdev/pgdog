@@ -33,7 +33,7 @@ impl Logger {
     pub fn spawn(&self) {
         let me = self.clone();
 
-        tasks::spawn(async move {
+        tasks::spawn("stats logger", async move {
             let shutdown = tasks::shutdown_signal();
             loop {
                 select! {

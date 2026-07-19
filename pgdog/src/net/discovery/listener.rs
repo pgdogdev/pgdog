@@ -64,7 +64,7 @@ impl Listener {
     pub fn run(&self, address: Ipv4Addr, port: u16) {
         let listener = self.clone();
         info!("launching service discovery ({}:{})", address, port);
-        tasks::spawn(async move {
+        tasks::spawn("service discovery", async move {
             if let Err(err) = listener.spawn(address, port).await {
                 error!("crashed: {:?}", err);
             }

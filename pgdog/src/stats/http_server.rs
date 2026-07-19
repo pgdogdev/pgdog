@@ -69,7 +69,7 @@ pub async fn server(port: u16) -> std::io::Result<()> {
         };
         let io = TokioIo::new(stream);
 
-        tasks::spawn(async move {
+        tasks::spawn("openmetrics http server", async move {
             if let Err(err) = http1::Builder::new()
                 .serve_connection(io, service_fn(metrics))
                 .await

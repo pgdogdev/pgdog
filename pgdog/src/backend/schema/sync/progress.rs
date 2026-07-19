@@ -131,7 +131,7 @@ impl Progress {
         let (tx, rx) = mpsc::unbounded_channel();
         let timer = Instant::now();
 
-        tasks::spawn(async move {
+        tasks::spawn("schema sync progress", async move {
             Self::listen(rx, total).await;
         });
 

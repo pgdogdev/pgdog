@@ -654,7 +654,7 @@ impl Cluster {
             let identifier = self.identifier();
             let shard = shard.clone();
 
-            tasks::spawn(async move {
+            tasks::spawn("cluster schema sync", async move {
                 use tokio::time::sleep;
 
                 loop {

@@ -115,7 +115,7 @@ impl Mirror {
         let handler = MirrorHandler::new(tx, &mirror_config, cluster.stats());
 
         let stats_for_errors = cluster.stats();
-        tasks::spawn(async move {
+        tasks::spawn("mirror", async move {
             loop {
                 select! {
                     req = rx.recv() => {

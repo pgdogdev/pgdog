@@ -135,7 +135,7 @@ impl LsnMonitor {
     pub(super) fn run(pool: &Pool) {
         let monitor = Self { pool: pool.clone() };
 
-        tasks::spawn(async move {
+        tasks::spawn("pool lsn monitor", async move {
             monitor.spawn().await;
         });
     }

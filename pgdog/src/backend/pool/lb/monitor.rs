@@ -22,7 +22,7 @@ impl Monitor {
             replicas: replicas.clone(),
         };
 
-        tasks::spawn(async move {
+        tasks::spawn("lb monitor", async move {
             monitor.run().await;
         })
     }

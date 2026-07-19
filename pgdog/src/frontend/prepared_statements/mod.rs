@@ -171,7 +171,7 @@ impl PreparedStatements {
 /// Run prepared statements maintenance task
 /// every second.
 pub fn start_maintenance() {
-    crate::tasks::spawn(async move {
+    crate::tasks::spawn("prepared statements cache", async move {
         debug!("prepared statements cache maintenance started");
         let shutdown = crate::tasks::shutdown_signal();
         loop {

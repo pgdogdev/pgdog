@@ -159,7 +159,7 @@ impl Wal {
         let (tx, rx) = mpsc::channel::<WriteRequest>(CHANNEL_CAPACITY);
         let shutdown = Arc::new(WalShutdown::default());
 
-        tasks::spawn({
+        tasks::spawn("2pc wal writer", {
             let shutdown = Arc::clone(&shutdown);
 
             async move {
@@ -331,7 +331,7 @@ async fn run(
                 // the previous one before starting.
                 let prev = gc_handle.take();
                 let wal_dir = wal_dir.clone();
-                gc_handle = Some(tasks::spawn(async move {
+                gc_handle = Some(tasks::spawn("2pc wal gc", async move {
                     if let Some(prev) = prev {
                         let _ = prev.await;
                     }
