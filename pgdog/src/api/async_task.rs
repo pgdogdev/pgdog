@@ -386,7 +386,7 @@ fn run_task<P: Task, T: Task>(
 
     let cancellation_token = entry.cancellation_token.clone();
 
-    tasks::spawn("async task_waiter", async move {
+    tasks::spawn("async task waiter", async move {
         let res = select! {
             _ = cancellation_token.cancelled() => {
                 ctx.transition(TaskStatus::Cancelling);
