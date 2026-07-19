@@ -1,0 +1,33 @@
+# Wildcard integration test config.
+# Only "pgdog" is explicitly configured. All other database names
+# are handled by the wildcard "*" template pointing at the same
+# Postgres instance.
+#
+# Uses passthrough auth: pgdog forwards the client's credentials
+# to Postgres for verification. This lets wildcard users connect
+# with their own Postgres username and password.
+
+[general]
+host = "0.0.0.0"
+port = 6432
+query_timeout = 5_000
+checkout_timeout = 5_000
+connect_timeout = 5_000
+idle_timeout = 30_000
+min_pool_size = 0
+default_pool_size = 5
+pooler_mode = "transaction"
+passthrough_auth = "enabled_plain"
+
+# Explicit database — always available.
+[[databases]]
+name = "pgdog"
+host = "127.0.0.1"
+port = 5432
+
+# Wildcard template — any database name not explicitly listed
+# will spawn a pool using these connection settings.
+[[databases]]
+name = "*"
+host = "127.0.0.1"
+port = 5432

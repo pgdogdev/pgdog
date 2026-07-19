@@ -316,6 +316,34 @@ impl Config {
         databases
     }
 
+    /// Get wildcard database entries (name = "*"), organized by shard.
+    /// Returns None if no wildcard databases are configured.
+    pub fn wildcard_databases(&self) -> Option<Vec<Vec<EnumeratedDatabase>>> {
+        let wildcard_dbs: Vec<&Database> =
+            self.databases.iter().filter(|d| d.is_wildcard()).collect();
+        if wildcard_dbs.is_empty() {
+            return None;
+        }
+
+        let mut shards: Vec<Vec<EnumeratedDatabase>> = Vec::new();
+        for (number, database) in self.databases.iter().enumerate() {
+            if database.is_wildcard() {
+                while shards.len() <= database.shard {
+                    shards.push(vec![]);
+                }
+                shards
+                    .get_mut(database.shard)
+                    .unwrap()
+                    .push(EnumeratedDatabase {
+                        number,
+                        database: database.clone(),
+                    });
+            }
+        }
+
+        Some(shards)
+    }
+
     pub fn omnisharded_tables(&self) -> HashMap<String, Vec<OmnishardedTable>> {
         let mut tables = HashMap::new();
 
@@ -396,7 +424,17 @@ impl Config {
     pub fn check(&mut self) {
         // Check databases.
         let mut duplicate_dbs = HashSet::new();
+        let mut wildcard_db_count = 0usize;
         for database in self.databases.clone() {
+            if database.is_wildcard() {
+                wildcard_db_count += 1;
+                if database.shard > 0 {
+                    warn!(
+                        r#"wildcard database "*" with shard={} is not supported, use shard=0 only"#,
+                        database.shard
+                    );
+                }
+            }
             let id = (
                 database.name.clone(),
                 database.role,
@@ -411,6 +449,13 @@ impl Config {
                     database.name, database.shard, database.role,
                 );
             }
+        }
+
+        if wildcard_db_count > 2 {
+            warn!(
+                r#"multiple wildcard "*" database entries detected ({} entries), only one primary and one replica are expected"#,
+                wildcard_db_count
+            );
         }
 
         struct Check {

@@ -424,6 +424,16 @@ impl User {
         }
     }
 
+    /// Whether this user entry has a wildcard name (`name = "*"`).
+    pub fn is_wildcard_name(&self) -> bool {
+        self.name == "*"
+    }
+
+    /// Whether this user entry has a wildcard database (`database = "*"`).
+    pub fn is_wildcard_database(&self) -> bool {
+        self.database == "*"
+    }
+
     pub fn is_external_identity(&self) -> bool {
         self.server_auth.is_external_identity()
     }
@@ -565,6 +575,30 @@ mod tests {
             .find(|u| u.name == "bob" && u.database == "source_db")
             .unwrap();
         assert_eq!(bob_source.password(), "pass4");
+    }
+
+    #[test]
+    fn test_user_wildcard_name() {
+        let mut user = User::default();
+        assert!(!user.is_wildcard_name());
+
+        user.name = "alice".to_string();
+        assert!(!user.is_wildcard_name());
+
+        user.name = "*".to_string();
+        assert!(user.is_wildcard_name());
+    }
+
+    #[test]
+    fn test_user_wildcard_database() {
+        let mut user = User::default();
+        assert!(!user.is_wildcard_database());
+
+        user.database = "mydb".to_string();
+        assert!(!user.is_wildcard_database());
+
+        user.database = "*".to_string();
+        assert!(user.is_wildcard_database());
     }
 
     #[test]

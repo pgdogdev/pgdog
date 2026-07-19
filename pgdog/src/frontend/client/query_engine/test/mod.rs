@@ -35,6 +35,7 @@ mod sharded;
 mod spliced;
 mod test_omnisharded;
 mod transaction_state;
+mod wildcard;
 
 pub(super) fn test_client() -> Client {
     load_test();

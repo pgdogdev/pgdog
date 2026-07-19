@@ -355,6 +355,15 @@ impl Connection {
 
         let user = (self.user.as_str(), self.database.as_str());
         let config = config();
+        let passthrough_password = self.cluster.as_ref().and_then(|cluster| {
+            cluster
+                .passwords()
+                .iter()
+                .find_map(|password| match password {
+                    PasswordKind::Plain(password) => Some(password.clone()),
+                    _ => None,
+                })
+        });
 
         // Check if we need re-configure passthrough auth using our existing password.
         //
@@ -389,11 +398,28 @@ impl Connection {
             databases::add(user)?;
         }
 
-        let databases = databases();
-        let cluster = databases.cluster(user)?;
+        let databases = databases::databases();
+        let cluster = match databases.cluster(user) {
+            Ok(cluster) => cluster,
+            Err(_) => {
+                drop(databases);
+                databases::add_wildcard_pool(
+                    &self.user,
+                    &self.database,
+                    passthrough_password.as_deref(),
+                )?
+                .ok_or_else(|| {
+                    Error::NoDatabase(databases::User {
+                        user: self.user.clone(),
+                        database: self.database.clone(),
+                    })
+                })?
+            }
+        };
 
         self.cluster = Some(cluster.clone());
         let source_db = cluster.name();
+        let databases = databases::databases();
         self.mirrors = databases
             .mirrors(user)?
             .unwrap_or(&[])

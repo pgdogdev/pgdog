@@ -262,15 +262,61 @@ impl Client {
             // and lets Postgres perform the authentication instead. If Postgres
             // returns an error, the connection pool will be banned and the client
             // won't be able to run queries.
-            let user = user_from_params(&params, &password).ok();
-            if let Some(user) = user {
-                databases::add(user)?
+            let user_config = user_from_params(&params, &password).ok();
+            if let Some(user_config) = user_config {
+                let provided_password = user_config.password.as_deref().unwrap_or_default();
+                let databases = databases::databases();
+                let exists = databases.exists((user, database));
+                let wildcard_available = databases.exists_or_wildcard((user, database));
+                let password_matches =
+                    databases
+                        .passwords((user, database))
+                        .is_some_and(|passwords| {
+                            passwords.iter().any(|password| {
+                                crate::util::constant_time_eq(
+                                    password.as_str().as_bytes(),
+                                    provided_password.as_bytes(),
+                                )
+                            })
+                        });
+                drop(databases);
+
+                if password_matches {
+                    AuthResult::Ok
+                } else if databases::remove_wildcard_pool(user, database) {
+                    if databases::add_wildcard_pool(user, database, Some(provided_password))?
+                        .is_some()
+                    {
+                        AuthResult::Ok
+                    } else {
+                        AuthResult::NoUserOrDatabase
+                    }
+                } else if !exists && wildcard_available {
+                    if databases::add_wildcard_pool(user, database, Some(provided_password))?
+                        .is_some()
+                    {
+                        AuthResult::Ok
+                    } else {
+                        AuthResult::NoUserOrDatabase
+                    }
+                } else {
+                    databases::add(user_config)?
+                }
             } else {
                 AuthResult::NoPassthroughNoUser
             }
         } else {
-            match databases::databases().cluster((user, database)) {
-                Ok(cluster) => {
+            let databases = databases::databases();
+            let cluster = match databases.cluster((user, database)) {
+                Ok(cluster) => Some(cluster),
+                Err(_) => {
+                    drop(databases);
+                    databases::add_wildcard_pool(user, database, None)?
+                }
+            };
+
+            match cluster {
+                Some(cluster) => {
                     if let Some(identity) = cluster.identity() {
                         // mTLS authentication: the client certificate identity
                         // must match the configured user identity.
@@ -287,8 +333,7 @@ impl Client {
                         Self::check_password(&mut stream, user, auth_type, &passwords).await?
                     }
                 }
-
-                Err(_) => AuthResult::NoUserOrDatabase,
+                None => AuthResult::NoUserOrDatabase,
             }
         };
 

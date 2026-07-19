@@ -1,0 +1,73 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: pgdog
+  namespace: pgdog-test
+  labels:
+    app: pgdog
+spec:
+  type: ClusterIP
+  ports:
+    - port: 6432
+      targetPort: 6432
+      name: proxy
+    - port: 9090
+      targetPort: 9090
+      name: metrics
+  selector:
+    app: pgdog
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pgdog
+  namespace: pgdog-test
+  labels:
+    app: pgdog
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: pgdog
+  template:
+    metadata:
+      labels:
+        app: pgdog
+    spec:
+      containers:
+        - name: pgdog
+          image: docker.io/library/pgdog:local
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 6432
+              name: proxy
+            - containerPort: 9090
+              name: metrics
+          env:
+            - name: RUST_LOG
+              value: info
+          resources:
+            requests:
+              memory: 256Mi
+              cpu: 250m
+            limits:
+              memory: 1Gi
+              cpu: "1"
+          readinessProbe:
+            tcpSocket:
+              port: 6432
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          volumeMounts:
+            - name: config
+              mountPath: /pgdog/pgdog.toml
+              subPath: pgdog.toml
+              readOnly: true
+            - name: config
+              mountPath: /pgdog/users.toml
+              subPath: users.toml
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: pgdog-config
