@@ -101,6 +101,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     runtime.block_on(async move { pgdog(args.command).await })?;
 
+    databases::shutdown();
+
     Ok(())
 }
 
@@ -193,19 +195,34 @@ async fn pgdog(command: Option<Commands>) -> Result<(), Box<dyn std::error::Erro
 
             if let Commands::Setup { database } = command {
                 info!("🔄 entering setup mode");
-                cli::setup(database).await?;
+                let result = cli::setup(database).await;
+
+                Manager::get().shutdown().await;
+                databases::shutdown();
+
+                result?;
             }
 
             if let Commands::ReplicateAndCutover { .. } = command {
                 info!("🔄 entering test mode");
-                cli::replicate_and_cutover(command.clone()).await?;
+                let result = cli::replicate_and_cutover(command.clone()).await;
+
+                Manager::get().shutdown().await;
+                databases::shutdown();
+
+                result?;
             }
 
-            if let Commands::Route { .. } = command
-                && let Err(err) = cli::route(command.clone()).await
-            {
-                error!("{}", err);
-                return Err(err);
+            if let Commands::Route { .. } = command {
+                let result = cli::route(command.clone()).await;
+
+                Manager::get().shutdown().await;
+                databases::shutdown();
+
+                if let Err(err) = result {
+                    error!("{}", err);
+                    return Err(err);
+                }
             }
         }
     }
