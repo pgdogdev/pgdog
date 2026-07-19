@@ -2,6 +2,8 @@
 use pg_query::{Node, NodeEnum, protobuf};
 #[cfg(feature = "new_parser")]
 use pg_raw_parse::{Node, nodes};
+#[cfg(feature = "new_parser")]
+use std::collections::HashSet;
 
 const WRITE_ONLY: &[&str] = &["nextval", "setval"];
 
@@ -34,8 +36,32 @@ impl<'a> Function<'a> {
     /// This function likely writes.
     pub(crate) fn behavior(&self) -> FunctionBehavior {
         FunctionBehavior {
-            writes: WRITE_ONLY.contains(&self.name),
+            writes: WRITE_ONLY
+                .iter()
+                .any(|write_only| self.name.eq_ignore_ascii_case(write_only)),
             cross_shard: CROSS_SHARD.contains(&(self.schema, self.name)),
+        }
+    }
+
+    #[cfg(feature = "new_parser")]
+    pub(crate) fn behavior_with_write_functions(
+        &self,
+        configured_write_functions: &HashSet<String>,
+    ) -> FunctionBehavior {
+        let base = self.behavior();
+        let configured_match = if configured_write_functions.is_empty() {
+            false
+        } else {
+            configured_write_functions.contains(&self.name.to_ascii_lowercase())
+                || self.schema.is_some_and(|schema| {
+                    configured_write_functions
+                        .contains(&format!("{}.{}", schema, self.name).to_ascii_lowercase())
+                })
+        };
+
+        FunctionBehavior {
+            writes: configured_match || base.writes,
+            cross_shard: base.cross_shard,
         }
     }
 
@@ -192,5 +218,16 @@ mod test {
                 assert!(!func.behavior().cross_shard);
             },
         );
+    }
+
+    #[test]
+    #[cfg(feature = "new_parser")]
+    fn test_configured_write_function_case_insensitive() {
+        let mut configured = HashSet::new();
+        configured.insert("my_write_fn".to_string());
+
+        first_func("SELECT My_Write_Fn(1)", |func| {
+            assert!(func.behavior_with_write_functions(&configured).writes);
+        });
     }
 }

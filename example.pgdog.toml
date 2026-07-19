@@ -277,6 +277,16 @@ cross_shard_disabled = false
 dns_ttl = 5_000
 
 #
+# Per-database list of functions that should always route to the primary.
+#
+# Function matching is case-insensitive.
+#
+# [[write_functions]]
+# database = "pgdog"
+# functions = ["my_write_fn", "set_customer_balance"]
+#
+
+#
 # Admin database used for stats and system admin.
 #
 [admin]

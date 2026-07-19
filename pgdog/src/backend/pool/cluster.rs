@@ -7,6 +7,7 @@ use pgdog_config::{
     RewriteMode, users::PasswordKind,
 };
 use std::{
+    collections::HashSet,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -62,6 +63,7 @@ pub struct Cluster {
     multi_tenant: Option<MultiTenant>,
     rw_strategy: ReadWriteStrategy,
     rw_split: ReadWriteSplit,
+    write_functions: HashSet<String>,
     schema_admin: bool,
     stats: Arc<Mutex<MirrorStats>>,
     cross_shard_disabled: bool,
@@ -101,6 +103,7 @@ pub struct ShardingSchema {
     pub schemas: ShardedSchemas,
     /// Rewrite config.
     pub rewrite: Rewrite,
+    pub write_functions: HashSet<String>,
     /// Query parser engine.
     pub query_parser_engine: QueryParserEngine,
     pub log_min_duration_parse: Option<Duration>,
@@ -148,6 +151,7 @@ pub struct ClusterConfig<'a> {
     pub multi_tenant: &'a Option<MultiTenant>,
     pub rw_strategy: ReadWriteStrategy,
     pub rw_split: ReadWriteSplit,
+    pub write_functions: HashSet<String>,
     pub schema_admin: bool,
     pub cross_shard_disabled: bool,
     pub two_pc: bool,
@@ -207,6 +211,13 @@ impl<'a> ClusterConfig<'a> {
             multi_tenant,
             rw_strategy: general.read_write_strategy,
             rw_split: general.read_write_split,
+            write_functions: config
+                .write_functions
+                .iter()
+                .filter(|entry| entry.database == user.database)
+                .flat_map(|entry| entry.functions.iter())
+                .map(|func| func.to_ascii_lowercase())
+                .collect(),
             schema_admin: user.schema_admin,
             cross_shard_disabled: user
                 .cross_shard_disabled
@@ -258,6 +269,7 @@ impl Cluster {
             multi_tenant,
             rw_strategy,
             rw_split,
+            write_functions,
             schema_admin,
             cross_shard_disabled,
             two_pc,
@@ -318,6 +330,7 @@ impl Cluster {
             multi_tenant: multi_tenant.clone(),
             rw_strategy,
             rw_split,
+            write_functions,
             schema_admin,
             stats: Arc::new(Mutex::new(MirrorStats::default())),
             cross_shard_disabled,
@@ -551,6 +564,7 @@ impl Cluster {
             tables: self.sharded_tables.clone(),
             schemas: self.sharded_schemas.clone(),
             rewrite: self.rewrite.clone(),
+            write_functions: self.write_functions.clone(),
             query_parser_engine: self.query_parser_engine,
             log_min_duration_parse: self.log_min_duration_parse,
             log_query_sample_length: self.log_query_sample_length,
@@ -741,7 +755,7 @@ impl Cluster {
 
 #[cfg(test)]
 mod test {
-    use std::{sync::Arc, time::Duration};
+    use std::{collections::HashSet, sync::Arc, time::Duration};
 
     use pgdog_config::{
         ConfigAndUsers, OmnishardedTable, PoolerMode, QueryParserLevel, ShardedSchema,
@@ -765,6 +779,17 @@ mod test {
     use super::{Cluster, DatabaseUser};
 
     impl Cluster {
+        fn test_write_functions(config: &ConfigAndUsers, database: &str) -> HashSet<String> {
+            config
+                .config
+                .write_functions
+                .iter()
+                .filter(|entry| entry.database == database)
+                .flat_map(|entry| entry.functions.iter())
+                .map(|func| func.to_ascii_lowercase())
+                .collect()
+        }
+
         pub fn new_test(config: &ConfigAndUsers) -> Self {
             let identifier = Arc::new(DatabaseUser {
                 user: "pgdog".into(),
@@ -874,6 +899,7 @@ mod test {
                     config.config.general.query_parser,
                 ),
                 rewrite: config.config.rewrite.clone(),
+                write_functions: Self::test_write_functions(config, "pgdog"),
                 two_phase_commit: config.config.general.two_phase_commit,
                 two_phase_commit_auto: config.config.general.two_phase_commit_auto.unwrap_or(false),
                 ..Default::default()
@@ -953,6 +979,7 @@ mod test {
                     config.config.general.query_parser,
                 ),
                 rewrite: config.config.rewrite.clone(),
+                write_functions: Self::test_write_functions(config, "pgdog"),
                 two_phase_commit: config.config.general.two_phase_commit,
                 two_phase_commit_auto: config.config.general.two_phase_commit_auto.unwrap_or(false),
                 ..Default::default()
