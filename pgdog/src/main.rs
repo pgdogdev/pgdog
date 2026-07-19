@@ -247,6 +247,7 @@ fn build_runtime(workers: usize, stack_size: usize) -> std::io::Result<tokio::ru
             builder.worker_threads(workers);
 
             if workers > 2 {
+                info!("🚀 using alternative Tokio timer");
                 builder.enable_alt_timer();
             }
 
