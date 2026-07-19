@@ -100,6 +100,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     runtime.block_on(async move { pgdog(args.command).await })?;
+    runtime.shutdown_background();
 
     Ok(())
 }
