@@ -50,11 +50,11 @@ impl ReadyForQuery {
 }
 
 impl ToBytes for ReadyForQuery {
-    fn to_bytes(&self) -> Result<bytes::Bytes, Error> {
+    fn to_bytes(&self) -> bytes::Bytes {
         let mut payload = Payload::named(self.code());
         payload.put_u8(self.status as u8);
 
-        Ok(payload.freeze())
+        payload.freeze()
     }
 }
 

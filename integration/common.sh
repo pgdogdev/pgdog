@@ -7,8 +7,17 @@ export NODE_ID=pgdog-dev-1
 COMMON_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 function wait_for_pgdog() {
     echo "Waiting for PgDog"
+    local pid_file="${COMMON_DIR}/pgdog.pid"
+    local pid=""
+    if [ -f "${pid_file}" ]; then
+        pid=$(cat "${pid_file}")
+    fi
     while ! pg_isready -h 127.0.0.1 -p 6432 -U pgdog -d pgdog > /dev/null; do
-        echo "waiting for PgDog" > /dev/null
+        if [ -n "${pid}" ] && ! kill -0 "${pid}" 2> /dev/null; then
+            echo "PgDog process (pid ${pid}) exited before becoming ready"
+            exit 1
+        fi
+        sleep 0.1
     done
     echo "PgDog is ready"
 }
@@ -22,9 +31,8 @@ function run_pgdog() {
     local pid_file="${COMMON_DIR}/pgdog.pid"
     local config_file="${COMMON_DIR}/pgdog.config"
     if [ -z "${binary}" ]; then
-        # Testing in release is faster and mirrors production.
-        cargo build --release
-        binary="target/release/pgdog"
+        cargo build
+        binary="target/debug/pgdog"
     fi
     if [ -f "${pid_file}" ]; then
         local existing_pid=$(cat "${pid_file}")
@@ -41,10 +49,25 @@ function run_pgdog() {
         fi
     fi
     echo "Launching PgDog binary '${binary}' with config path '${config_path}'"
-    "${binary}" \
-        --config ${config_path}/pgdog.toml \
-        --users ${config_path}/users.toml \
-        > ${COMMON_DIR}/log.txt &
+    if [ "${PGDOG_GDB:-0}" = "1" ]; then
+        gdb \
+            --batch \
+            -ex "set pagination off" \
+            -ex "set confirm off" \
+            -ex "handle SIGPIPE nostop noprint nopass" \
+            -ex "run" \
+            -ex "thread apply all bt full" \
+            -ex "quit" \
+            --args "${binary}" \
+                --config ${config_path}/pgdog.toml \
+                --users ${config_path}/users.toml \
+            > ${COMMON_DIR}/log.txt 2>&1 &
+    else
+        "${binary}" \
+            --config ${config_path}/pgdog.toml \
+            --users ${config_path}/users.toml \
+            > ${COMMON_DIR}/log.txt &
+    fi
     echo $! > "${pid_file}"
     printf '%s\n' "${config_path}" > "${config_file}"
     if [ -z "${PGDOG_STOP_TRAP:-}" ]; then
@@ -103,6 +126,12 @@ function stop_toxi() {
 
 function active_venv() {
     pushd ${COMMON_DIR}/python
-    source venv/bin/activate
+    if [[ ! -f venv/bin/activate ]]; then
+        virtualenv venv
+        source venv/bin/activate
+        pip install -r requirements.txt
+    else
+        source venv/bin/activate
+    fi
     popd
 }

@@ -3,18 +3,24 @@ use std::{fmt::Display, ops::Deref};
 use lazy_static::lazy_static;
 
 use super::{
-    explain_trace::ExplainTrace, rewrite::statement::aggregate::AggregateRewritePlan, Aggregate,
-    DistinctBy, FunctionBehavior, Limit, LockingBehavior, OrderBy,
+    Aggregate, DistinctBy, Limit, OrderBy, explain_trace::ExplainTrace,
+    rewrite::statement::aggregate::AggregateRewritePlan, statement::AdvisoryLocks,
 };
 
-/// The shard destination for a statement.
+/// The shard destination for a query.
 #[derive(Debug, Clone, PartialEq, PartialOrd, Ord, Eq, Hash, Default)]
 pub enum Shard {
-    /// Direct-to-shard number.
+    /// Connect to one shard (aka direct-to-shard).
+    ///
+    /// Shards are numbered 0 to n - 1, inclusively.
     Direct(usize),
     /// Multiple shards, enumerated.
+    ///
+    /// Used to connect to specific shard numbers, 0 to n - 1 inclusively.
+    /// Rarely used.
     Multi(Vec<usize>),
-    /// All shards.
+
+    /// Connect to all shards.
     #[default]
     All,
 }
@@ -48,6 +54,11 @@ impl Shard {
     pub fn is_direct(&self) -> bool {
         matches!(self, Self::Direct(_))
     }
+
+    /// Create new all shard mapping.
+    pub fn new_all(&self) -> Self {
+        Self::All
+    }
 }
 
 impl From<Option<usize>> for Shard {
@@ -76,20 +87,43 @@ impl From<Vec<usize>> for Shard {
 /// that should be applied to the response.
 #[derive(Debug, Clone, Default, PartialEq, derive_builder::Builder)]
 pub struct Route {
+    /// Computed shard. This is where the query carrying
+    /// this route will go no matter what.
     shard: ShardWithPriority,
+    /// Is this query a read, e.g. SELECT.
     read: bool,
+    /// `ORDER BY` clause, transformed into something
+    /// we can quickly use to sort the result.
     order_by: Vec<OrderBy>,
+    /// `GROUP BY` clause, transformed into something
+    /// we can quickly use to aggregate the result.
     aggregate: Aggregate,
+    /// `LIMIT` clause, transformed into something
+    /// we can quickly use to limit the resutl set.
     limit: Limit,
-    lock_session: bool,
+    /// Advisory locks requested by this query, if any.
+    advisory_locks: AdvisoryLocks,
+    /// `DISTINCT` clause, if set.
     distinct: Option<DistinctBy>,
-    maintenance: bool,
+    /// Rewrites performed by the aggregate rewriter; adds
+    /// helper columns to this query so we can compute things
+    /// like avg() or variance().
     rewrite_plan: AggregateRewritePlan,
-    rewritten_sql: Option<String>,
+    /// Our query explain plan. We attach
+    /// this to the `EXPLAIN` output.
     explain: Option<ExplainTrace>,
+    /// This query is a `ROLLBACK SAVEPOINT` command.
+    /// Nasty one.
     rollback_savepoint: bool,
+    /// This query will be routed using schema-based sharding
+    /// and will only go to one shard, always.
     search_path_driven: bool,
+    /// This query is a DDL statement. We will need to
+    /// reload the schema from Postgres once this runs.
     schema_changed: bool,
+    /// This query is only touching omnisharded tables
+    /// and requires special checks to be executed.
+    omnisharded: bool,
 }
 
 impl Display for Route {
@@ -105,7 +139,7 @@ impl Display for Route {
 
 impl Route {
     /// Create new route for a `SELECT` query.
-    pub fn select(
+    pub(crate) fn select(
         shard: ShardWithPriority,
         order_by: Vec<OrderBy>,
         aggregate: Aggregate,
@@ -190,17 +224,32 @@ impl Route {
         &mut self.aggregate
     }
 
-    pub fn set_shard_mut(&mut self, shard: ShardWithPriority) {
+    /// Set shard on this route, along with reasoning
+    /// for that shard selection.
+    pub fn set_shard(&mut self, shard: ShardWithPriority) {
         self.shard = shard;
     }
 
+    /// Same as [`Self::set_shard`].
     pub fn with_shard(mut self, shard: ShardWithPriority) -> Self {
-        self.set_shard_mut(shard);
+        self.set_shard(shard);
         self
     }
 
-    pub fn set_schema_changed(&mut self, changed: bool) {
-        self.schema_changed = changed;
+    /// Set the omnisharded flag on this route.
+    pub fn with_omnisharded(mut self, omnisharded: bool) -> Self {
+        self.omnisharded = omnisharded;
+        self
+    }
+
+    /// Return true if the statement is touching only omnisharded tables.
+    ///
+    /// Indicates that this route is only touching omnisharded tables
+    /// and can be load-balanced across shards or has to be sent to all shards
+    /// if it's a write.
+    ///
+    pub fn is_omnisharded(&self) -> bool {
+        self.omnisharded
     }
 
     pub fn is_schema_changed(&self) -> bool {
@@ -212,7 +261,7 @@ impl Route {
         self
     }
 
-    pub fn set_search_path_driven_mut(&mut self, schema_driven: bool) {
+    pub fn set_search_path_driven(&mut self, schema_driven: bool) {
         self.search_path_driven = schema_driven;
     }
 
@@ -220,14 +269,16 @@ impl Route {
         self.search_path_driven
     }
 
-    pub fn is_maintenance(&self) -> bool {
-        self.maintenance
-    }
-
-    pub fn set_shard_raw_mut(&mut self, shard: ShardWithPriority) {
-        self.shard = shard;
-    }
-
+    /// Return true if this route requires result set manipulation to
+    /// return correct results.
+    ///
+    /// This is the case if the statement has any of the following:
+    ///
+    /// 1. `ORDER BY` clause
+    /// 2. `GROUP BY` clause
+    /// 3. `DISTINCT` clause
+    /// 4. `LIMIT` or `OFFSET` clause
+    ///
     pub fn should_buffer(&self) -> bool {
         !self.order_by().is_empty()
             || !self.aggregate().is_empty()
@@ -235,11 +286,11 @@ impl Route {
             || self.limit().offset.is_some()
     }
 
-    pub fn limit(&self) -> &Limit {
+    pub(crate) fn limit(&self) -> &Limit {
         &self.limit
     }
 
-    pub fn set_limit(&mut self, limit: Limit) {
+    pub(crate) fn set_limit(&mut self, limit: Limit) {
         self.limit = limit;
     }
 
@@ -273,46 +324,56 @@ impl Route {
         self.rollback_savepoint
     }
 
-    pub fn with_write(mut self, write: FunctionBehavior) -> Self {
-        self.set_write(write);
+    pub fn with_advisory_locks(mut self, locks: AdvisoryLocks) -> Self {
+        self.advisory_locks = locks;
         self
     }
 
-    pub fn set_write(&mut self, write: FunctionBehavior) {
-        let FunctionBehavior {
-            writes,
-            locking_behavior,
-        } = write;
-        self.read = !writes;
-        self.lock_session = matches!(locking_behavior, LockingBehavior::Lock);
+    pub fn set_advisory_locks(&mut self, locks: AdvisoryLocks) {
+        self.advisory_locks = locks;
     }
 
+    pub fn advisory_locks(&self) -> &AdvisoryLocks {
+        &self.advisory_locks
+    }
+
+    /// True when the statement acquires an advisory lock whose lifetime outlives
+    /// a single transaction — the client must stay pinned to the same backend.
     pub fn is_lock_session(&self) -> bool {
-        self.lock_session
+        self.advisory_locks.has_lock()
     }
 
-    pub fn distinct(&self) -> &Option<DistinctBy> {
+    /// True when the statement only releases advisory locks — safe to unpin.
+    pub fn is_unlock_session(&self) -> bool {
+        !self.advisory_locks.is_empty() && !self.advisory_locks.has_lock()
+    }
+
+    /// Tri-state used by `connect.rs` / tests:
+    /// `Some(true)` — lock, `Some(false)` — unlock, `None` — no advisory lock activity.
+    pub fn lock_session(&self) -> Option<bool> {
+        if self.is_lock_session() {
+            Some(true)
+        } else if self.is_unlock_session() {
+            Some(false)
+        } else {
+            None
+        }
+    }
+
+    pub(crate) fn distinct(&self) -> &Option<DistinctBy> {
         &self.distinct
     }
 
     pub fn should_2pc(&self) -> bool {
-        self.is_cross_shard() && self.is_write() && !self.is_maintenance()
+        self.is_cross_shard() && self.is_write()
     }
 
-    pub fn aggregate_rewrite_plan(&self) -> &AggregateRewritePlan {
+    pub(crate) fn aggregate_rewrite_plan(&self) -> &AggregateRewritePlan {
         &self.rewrite_plan
     }
 
-    pub fn with_aggregate_rewrite_plan_mut(&mut self, plan: AggregateRewritePlan) {
+    pub(crate) fn set_rewrite_plan(&mut self, plan: AggregateRewritePlan) {
         self.rewrite_plan = plan;
-    }
-
-    /// This route is for an omnisharded table.
-    pub fn is_omni(&self) -> bool {
-        matches!(
-            self.shard.source(),
-            ShardSource::Table(TableReason::Omni) | ShardSource::RoundRobin(RoundRobinReason::Omni)
-        )
     }
 }
 
@@ -336,6 +397,12 @@ pub enum ShardSource {
     Override(OverrideReason),
 }
 
+impl ShardSource {
+    pub fn is_round_robin(&self) -> bool {
+        matches!(self, Self::RoundRobin(_))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Ord, PartialOrd)]
 pub enum RoundRobinReason {
     PrimaryShardedTableInsert,
@@ -352,6 +419,7 @@ pub enum OverrideReason {
     Transaction,
     OnlyOneShard,
     RewriteUpdate,
+    CrossShardFunction,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Ord, PartialOrd)]
@@ -409,6 +477,13 @@ impl ShardWithPriority {
         Self {
             shard,
             source: ShardSource::Override(OverrideReason::RewriteUpdate),
+        }
+    }
+
+    pub fn new_override_cross_shard_function() -> Self {
+        Self {
+            shard: Shard::All,
+            source: ShardSource::Override(OverrideReason::CrossShardFunction),
         }
     }
 

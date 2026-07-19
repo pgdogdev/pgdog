@@ -1,32 +1,33 @@
 SELECT DISTINCT
-    kcu.table_schema::text AS source_schema,
-    kcu.table_name::text AS source_table,
-    kcu.column_name::text AS source_column,
-    ref_kcu.table_schema::text AS ref_schema,
-    ref_kcu.table_name::text AS ref_table,
-    ref_kcu.column_name::text AS ref_column,
-    rc.delete_rule::text AS on_delete,
-    rc.update_rule::text AS on_update
-FROM
-    information_schema.table_constraints tc
-JOIN
-    information_schema.key_column_usage kcu
-    ON tc.constraint_catalog = kcu.constraint_catalog
-    AND tc.constraint_schema = kcu.constraint_schema
-    AND tc.constraint_name = kcu.constraint_name
-JOIN
-    information_schema.referential_constraints rc
-    ON tc.constraint_catalog = rc.constraint_catalog
-    AND tc.constraint_schema = rc.constraint_schema
-    AND tc.constraint_name = rc.constraint_name
-JOIN
-    information_schema.key_column_usage ref_kcu
-    ON rc.unique_constraint_catalog = ref_kcu.constraint_catalog
-    AND rc.unique_constraint_schema = ref_kcu.constraint_schema
-    AND rc.unique_constraint_name = ref_kcu.constraint_name
-    AND kcu.position_in_unique_constraint = ref_kcu.ordinal_position
-WHERE
-    tc.constraint_type = 'FOREIGN KEY'
-    AND tc.table_schema NOT IN ('pg_catalog', 'information_schema')
-ORDER BY
-    source_schema, source_table, source_column;
+      n.nspname::text AS source_schema,
+      c.relname::text AS source_table,
+      a.attname::text AS source_column,
+      rn.nspname::text AS ref_schema,
+      rc.relname::text AS ref_table,
+      ra.attname::text AS ref_column,
+      CASE con.confdeltype
+          WHEN 'a' THEN 'NO ACTION'
+          WHEN 'r' THEN 'RESTRICT'
+          WHEN 'c' THEN 'CASCADE'
+          WHEN 'n' THEN 'SET NULL'
+          WHEN 'd' THEN 'SET DEFAULT'
+      END AS on_delete,
+      CASE con.confupdtype
+          WHEN 'a' THEN 'NO ACTION'
+          WHEN 'r' THEN 'RESTRICT'
+          WHEN 'c' THEN 'CASCADE'
+          WHEN 'n' THEN 'SET NULL'
+          WHEN 'd' THEN 'SET DEFAULT'
+      END AS on_update
+  FROM pg_constraint con
+  JOIN pg_class c ON c.oid = con.conrelid
+  JOIN pg_namespace n ON n.oid = c.relnamespace
+  JOIN pg_class rc ON rc.oid = con.confrelid
+  JOIN pg_namespace rn ON rn.oid = rc.relnamespace
+  JOIN LATERAL unnest(con.conkey) WITH ORDINALITY AS src(attnum, ord) ON true
+  JOIN LATERAL unnest(con.confkey) WITH ORDINALITY AS dst(attnum, ord) ON src.ord = dst.ord
+  JOIN pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = src.attnum
+  JOIN pg_attribute ra ON ra.attrelid = con.confrelid AND ra.attnum = dst.attnum
+  WHERE con.contype = 'f'
+    AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+  ORDER BY source_schema, source_table, source_column;

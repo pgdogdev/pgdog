@@ -1,46 +1,61 @@
+use indexmap::IndexMap;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs::read_to_string;
-use std::path::PathBuf;
-use tracing::{info, warn};
+use std::path::{Path, PathBuf};
+use tracing::{error, info, warn};
 
 use crate::sharding::ShardedSchema;
 use crate::util::random_string;
 use crate::{
-    system_catalogs, EnumeratedDatabase, Memory, OmnishardedTable, PassthoughAuth,
-    PreparedStatements, QueryParserEngine, QueryParserLevel, ReadWriteSplit, RewriteMode, Role,
-    SystemCatalogsBehavior,
+    EnumeratedDatabase, Memory, OmnishardedTable, PassthroughAuth, PreparedStatements, QueryParser,
+    QueryParserEngine, QueryParserLevel, ReadWriteSplit, RewriteMode, Role, ShardedMappingKey,
+    ShardedTableConfig, SystemCatalogsBehavior, system_catalogs,
 };
 
 use super::database::Database;
 use super::error::Error;
 use super::general::General;
-use super::networking::{MultiTenant, Tcp};
+use super::networking::{MultiTenant, Tcp, TlsVerifyMode};
+use super::otel::Otel;
 use super::pooling::PoolerMode;
-use super::replication::{MirrorConfig, Mirroring, ReplicaLag, Replication};
+use super::replication::{MirrorConfig, Mirroring, MirroringLevel, ReplicaLag, Replication};
 use super::rewrite::Rewrite;
-use super::sharding::{ManualQuery, OmnishardedTables, ShardedMapping, ShardedTable};
+use super::sharding::{OmnishardedTables, ShardedMappingDeprecated};
 use super::users::{Admin, Plugin, Users};
+use super::vault::Vault;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ConfigAndUsers {
-    /// pgdog.toml
+    /// parsed pgdog.toml or default [Config]
     pub config: Config,
-    /// users.toml
+    /// parsed users.toml or default [Users]
     pub users: Users,
     /// Path to pgdog.toml.
     pub config_path: PathBuf,
     /// Path to users.toml.
     pub users_path: PathBuf,
+    /// Raw, unparsed text of `pgdog.toml`.
+    /// None when the file is missing.
+    pub config_text: Option<String>,
+    /// Raw, unparsed text of `users.toml`.
+    /// None when the file is missing.
+    pub users_text: Option<String>,
 }
 
 impl ConfigAndUsers {
     /// Load configuration from disk or use defaults.
-    pub fn load(config_path: &PathBuf, users_path: &PathBuf) -> Result<Self, Error> {
-        let mut config: Config = if let Ok(config) = read_to_string(config_path) {
-            let config = match toml::from_str(&config) {
+    pub fn load(config_path: &Path, users_path: &Path) -> Result<Self, Error> {
+        let config_text = read_to_string(config_path).ok();
+        let mut config: Config = if let Some(text) = &config_text {
+            let config = match toml::from_str(text) {
                 Ok(config) => config,
-                Err(err) => return Err(Error::config(&config, err)),
+                Err(err) => {
+                    let error = Error::config(text, err);
+                    error!("failed to load {}: {}", config_path.display(), error);
+                    return Err(error);
+                }
             };
             info!("loaded \"{}\"", config_path.display());
             config
@@ -56,9 +71,16 @@ impl ConfigAndUsers {
             info!("multi-tenant protection enabled");
         }
 
-        let mut users: Users = if let Ok(users) = read_to_string(users_path) {
-            let mut users: Users = toml::from_str(&users)?;
-            users.check(&config);
+        let users_text = read_to_string(users_path).ok();
+        let mut users: Users = if let Some(text) = &users_text {
+            let users: Users = match toml::from_str(text) {
+                Ok(config) => config,
+                Err(err) => {
+                    let error = Error::config(text, err);
+                    error!("failed to load {}: {}", users_path.display(), error);
+                    return Err(error);
+                }
+            };
             info!("loaded \"{}\"", users_path.display());
             users
         } else {
@@ -82,12 +104,49 @@ impl ConfigAndUsers {
             warn!("admin password has been randomly generated");
         }
 
-        Ok(ConfigAndUsers {
+        let config_and_users = ConfigAndUsers {
             config,
             users,
             config_path: config_path.to_owned(),
             users_path: users_path.to_owned(),
-        })
+            config_text,
+            users_text,
+        };
+
+        Ok(config_and_users)
+    }
+
+    pub fn check(&mut self) -> Result<(), Error> {
+        self.config.check();
+        self.users.check(&self.config);
+        self.validate_server_auth()?;
+        Ok(())
+    }
+
+    fn validate_server_auth(&self) -> Result<(), Error> {
+        let is_external_identity = self
+            .users
+            .users
+            .iter()
+            .any(|user| user.is_external_identity());
+
+        if !is_external_identity {
+            return Ok(());
+        }
+
+        if self.config.general.passthrough_auth != PassthroughAuth::Disabled {
+            return Err(Error::ParseError(
+                "\"passthrough_auth\" must be \"disabled\" when any user has \"server_auth = \\\"rds_iam\\\"\", \"server_auth = \\\"azure_workload_identity\\\"\" or \"server_auth = \\\"vault\\\"\"".into(),
+            ));
+        }
+
+        if self.config.general.tls_verify == TlsVerifyMode::Disabled {
+            return Err(Error::ParseError(
+                "\"tls_verify\" cannot be \"disabled\" when any user has \"server_auth = \\\"rds_iam\\\"\", \"server_auth = \\\"azure_workload_identity\\\"\" or \"server_auth = \\\"vault\\\"\"".into(),
+            ));
+        }
+
+        Ok(())
     }
 
     /// Prepared statements are enabled.
@@ -121,55 +180,83 @@ impl Default for ConfigAndUsers {
             users: Users::default(),
             config_path: PathBuf::from("pgdog.toml"),
             users_path: PathBuf::from("users.toml"),
+            config_text: None,
+            users_text: None,
         }
     }
 }
 
 /// Configuration.
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
-    /// General configuration.
+    /// General settings are relevant to the operations of the pooler itself, or apply to all database pools.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/
     #[serde(default)]
     pub general: General,
 
-    /// Rewrite configuration.
+    /// Controls PgDog's automatic SQL rewrites for sharded databases. It affects sharding key updates and multi-tuple inserts.
+    ///
+    /// **Note:** Consider enabling two-phase commit when either feature is set to `rewrite`. Without it, rewrites are committed shard-by-shard and can leave partial changes if a transaction fails.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/rewrite/
     #[serde(default)]
     pub rewrite: Rewrite,
 
-    /// TCP settings
+    /// PgDog speaks the Postgres protocol which, underneath, uses TCP. Optimal TCP settings are necessary to quickly recover from database incidents.
+    ///
+    /// **Note:** Not all networks support or play well with TCP keep-alives. If you see an increased number of dropped connections after enabling these settings, you may have to disable them.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/network/
     #[serde(default)]
     pub tcp: Tcp,
 
-    /// Multi-tenant
+    /// Multi-tenant isolation settings.
     pub multi_tenant: Option<MultiTenant>,
 
-    /// Servers.
+    /// Database settings configure which databases PgDog is managing. This is a TOML list of hosts, ports, and other settings like database roles (primary or replica).
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/databases/
     #[serde(default)]
     pub databases: Vec<Database>,
 
+    /// [Plugins](https://docs.pgdog.dev/features/plugins/) are dynamically loaded at PgDog startup. These settings control which plugins are loaded.
+    ///
+    /// **Note:** Plugins can only be configured at PgDog startup. They cannot be changed after the process is running.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/plugins/
     #[serde(default)]
     pub plugins: Vec<Plugin>,
 
+    /// Admin database settings control access to the [admin](https://docs.pgdog.dev/administration/) database which contains real time statistics about internal operations of PgDog.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/admin/
     #[serde(default)]
+    #[schemars(default = "crate::users::Admin::schemars_default_stub")]
     pub admin: Admin,
 
-    /// List of sharded tables.
+    /// To detect and route queries with sharding keys, PgDog expects the sharded column to be specified in the configuration.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/
     #[serde(default)]
-    pub sharded_tables: Vec<ShardedTable>,
+    pub sharded_tables: Vec<ShardedTableConfig>,
 
-    /// Queries routed manually to a single shard.
-    #[serde(default)]
-    pub manual_queries: Vec<ManualQuery>,
-
-    /// List of omnisharded tables.
+    /// Omnisharded tables are tables that contain the same data on all shards. This is useful for storing relatively static metadata used in joins or data that doesn't fit the sharding schema of the database, e.g., list of countries, global settings, list of blocked IPs, etc.
+    ///
+    /// **Note:** Unless explicitly configured as sharded tables, all tables default to omnisharded status, which makes configuration simpler, and doesn't require explicitly enumerating all tables in `pgdog.toml`.
+    ///
+    /// https://docs.pgdog.dev/features/sharding/omnishards/
     #[serde(default)]
     pub omnisharded_tables: Vec<OmnishardedTables>,
 
     /// Explicit sharding key mappings.
     #[serde(default)]
-    pub sharded_mappings: Vec<ShardedMapping>,
+    pub sharded_mappings: Vec<ShardedMappingDeprecated>,
 
+    /// [Schema-based sharding](https://docs.pgdog.dev/features/sharding/sharding-functions/#schema-based-sharding) places data from tables in different Postgres schemas on their own shards.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/sharded_schemas/
     #[serde(default)]
     pub sharded_schemas: Vec<ShardedSchema>,
 
@@ -181,21 +268,37 @@ pub struct Config {
     #[serde(default)]
     pub replication: Replication,
 
-    /// Mirroring configurations.
+    /// [Mirroring](https://docs.pgdog.dev/features/mirroring/) settings configure traffic mirroring between two databases. When enabled, query traffic is copied from the source database to the destination database, in real time.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/mirroring/
     #[serde(default)]
     pub mirroring: Vec<Mirroring>,
 
-    /// Memory tweaks
+    /// Memory settings control buffer sizes used by PgDog for network I/O and task execution.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/memory/
     #[serde(default)]
     pub memory: Memory,
+
+    /// OpenTelemetry push exporter settings.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/otel/
+    #[serde(default)]
+    pub otel: Otel,
+
+    /// HashiCorp Vault settings, required for users configured with `server_auth = "vault"`.
+    pub vault: Option<Vault>,
+
+    /// Query parser levels per-database.
+    #[serde(default)]
+    pub query_parsers: Vec<QueryParser>,
 }
 
 impl Config {
     /// Organize all databases by name for quicker retrieval.
     pub fn databases(&self) -> HashMap<String, Vec<Vec<EnumeratedDatabase>>> {
         let mut databases = HashMap::new();
-        let mut number = 0;
-        for database in &self.databases {
+        for (number, database) in self.databases.iter().enumerate() {
             let entry = databases
                 .entry(database.name.clone())
                 .or_insert_with(Vec::new);
@@ -209,7 +312,6 @@ impl Config {
                     number,
                     database: database.clone(),
                 });
-            number += 1;
         }
         databases
     }
@@ -240,20 +342,6 @@ impl Config {
         }
 
         Some(shards)
-    }
-
-    /// Organize sharded tables by database name.
-    pub fn sharded_tables(&self) -> HashMap<String, Vec<ShardedTable>> {
-        let mut tables = HashMap::new();
-
-        for table in &self.sharded_tables {
-            let entry = tables
-                .entry(table.database.clone())
-                .or_insert_with(Vec::new);
-            entry.push(table.clone());
-        }
-
-        tables
     }
 
     pub fn omnisharded_tables(&self) -> HashMap<String, Vec<OmnishardedTable>> {
@@ -314,31 +402,18 @@ impl Config {
         schemas
     }
 
-    /// Manual queries.
-    pub fn manual_queries(&self) -> HashMap<String, ManualQuery> {
-        let mut queries = HashMap::new();
-
-        for query in &self.manual_queries {
-            queries.insert(query.fingerprint.clone(), query.clone());
-        }
-
-        queries
-    }
-
     /// Sharded mappings.
-    pub fn sharded_mappings(
-        &self,
-    ) -> HashMap<(String, String, Option<String>), Vec<ShardedMapping>> {
-        let mut mappings = HashMap::new();
+    pub fn sharded_mappings(&self) -> IndexMap<ShardedMappingKey, Vec<ShardedMappingDeprecated>> {
+        let mut mappings = IndexMap::new();
 
         for mapping in &self.sharded_mappings {
             let mapping = mapping.clone();
             let entry = mappings
-                .entry((
-                    mapping.database.clone(),
-                    mapping.column.clone(),
-                    mapping.table.clone(),
-                ))
+                .entry(ShardedMappingKey {
+                    database: mapping.database.clone(),
+                    column: mapping.column.clone(),
+                    table: mapping.table.clone(),
+                })
                 .or_insert_with(Vec::new);
             entry.push(mapping);
         }
@@ -388,7 +463,10 @@ impl Config {
             role: Role,
             role_warned: bool,
             parser_warned: bool,
+            mirror_parser_warned: bool,
             have_replicas: bool,
+            have_primary: bool,
+            have_auto: bool,
             sharded: bool,
         }
 
@@ -413,11 +491,17 @@ impl Config {
                 if !existing.have_replicas {
                     existing.have_replicas = database.role == Role::Replica;
                 }
+                if !existing.have_primary {
+                    existing.have_primary = database.role == Role::Primary;
+                }
+                if !existing.have_auto {
+                    existing.have_auto = database.role == Role::Auto;
+                }
                 if !existing.sharded {
                     existing.sharded = database.shard > 0;
                 }
 
-                if (existing.sharded || existing.have_replicas)
+                if (existing.sharded || (existing.have_replicas && existing.have_primary))
                     && self.general.query_parser == QueryParserLevel::Off
                     && !existing.parser_warned
                 {
@@ -435,7 +519,10 @@ impl Config {
                         role: database.role,
                         role_warned: false,
                         parser_warned: false,
+                        mirror_parser_warned: false,
+                        have_primary: database.role == Role::Primary,
                         have_replicas: database.role == Role::Replica,
+                        have_auto: database.role == Role::Auto,
                         sharded: database.shard > 0,
                     },
                 );
@@ -454,12 +541,12 @@ impl Config {
 
         // Warn about plain auth and TLS
         match self.general.passthrough_auth {
-            PassthoughAuth::Enabled if !self.general.tls_client_required => {
+            PassthroughAuth::Enabled if !self.general.tls_client_required => {
                 warn!(
                     "consider setting \"tls_client_required\" while \"passthrough_auth\" is enabled to prevent clients from exposing plaintext passwords"
                 );
             }
-            PassthoughAuth::EnabledPlain => {
+            PassthroughAuth::EnabledPlain => {
                 warn!(
                     "\"passthrough_auth\" is set to \"plain\", network traffic may expose plaintext passwords"
                 )
@@ -481,13 +568,53 @@ impl Config {
             }
         }
 
-        for (database, check) in checks {
+        for mirror in &self.mirroring {
+            if mirror.level == MirroringLevel::All {
+                continue;
+            }
+            if let Some(check) = checks.get_mut(&mirror.source_db) {
+                if check.mirror_parser_warned {
+                    continue;
+                }
+                let parser_enabled = match self.general.query_parser {
+                    QueryParserLevel::On => true,
+                    QueryParserLevel::Off
+                    | QueryParserLevel::SessionControl
+                    | QueryParserLevel::SessionControlAndLocks => false,
+                    QueryParserLevel::Auto => check.have_replicas || check.sharded,
+                };
+                if !parser_enabled {
+                    check.mirror_parser_warned = true;
+                    warn!(
+                        r#"mirroring from "{}" with level "{}" requires the query parser to classify statements, but it won't be enabled, set query_parser = "on""#,
+                        mirror.source_db, mirror.level
+                    );
+                }
+            }
+        }
+
+        for (database, check) in &checks {
             if !check.have_replicas
                 && self.general.read_write_split == ReadWriteSplit::ExcludePrimary
+                && !check.have_auto
             {
                 warn!(
                     r#"database "{}" has no replicas and "read_write_split" is set to "{}": read queries will be rejected"#,
                     database, self.general.read_write_split
+                );
+            }
+
+            if self.general.lsn_checks_enabled() && !check.have_auto && !check.have_replicas {
+                warn!(
+                    r#"database "{}" has no replicas and LSN checks are enabled: PgDog will query databases for their LSNs unnecessarily"#,
+                    database
+                )
+            }
+
+            if !self.general.lsn_checks_enabled() && check.have_auto {
+                warn!(
+                    r#"database "{}" has a role set to "auto" but LSN checks are disabled: this disables automatic role detection"#,
+                    database
                 );
             }
         }
@@ -497,13 +624,23 @@ impl Config {
             self.general.query_parser = QueryParserLevel::On;
         }
 
-        if self.general.query_parser_engine == QueryParserEngine::PgQueryRaw
-            && self.memory.stack_size < 32 * 1024 * 1024
-        {
+        let raw_query_parser = self.general.query_parser_engine == QueryParserEngine::PgQueryRaw
+            || self
+                .query_parsers
+                .iter()
+                .any(|query_parser| query_parser.engine == QueryParserEngine::PgQueryRaw);
+
+        if raw_query_parser && self.memory.stack_size < 32 * 1024 * 1024 {
             self.memory.stack_size = 32 * 1024 * 1024;
             warn!(
                 r#""pg_query_raw" parser engine requires a large thread stack, setting it to 32MiB for each Tokio worker"#
             );
+        }
+
+        if !self.sharded_mappings.is_empty() {
+            warn!(
+                "`[[sharded_mappings]]` config is deprecated, use `[[sharded_tables.mapping]]` instead"
+            )
         }
     }
 
@@ -524,6 +661,7 @@ impl Config {
             .map(|m| MirrorConfig {
                 queue_length: m.queue_length.unwrap_or(self.general.mirror_queue),
                 exposure: m.exposure.unwrap_or(self.general.mirror_exposure),
+                level: m.level,
             })
     }
 
@@ -535,6 +673,7 @@ impl Config {
             let config = MirrorConfig {
                 queue_length: mirror.queue_length.unwrap_or(self.general.mirror_queue),
                 exposure: mirror.exposure.unwrap_or(self.general.mirror_exposure),
+                level: mirror.level,
             };
 
             result
@@ -549,6 +688,12 @@ impl Config {
     /// Swap database configs between `source` and `destination`.
     /// Uses tmp pattern: source -> tmp, destination -> source, tmp -> destination.
     pub fn cutover(&mut self, source: &str, destination: &str) {
+        // force setting the database name on cutover to make sure
+        // the proper database_name is present after the swap.
+        for db in self.databases.iter_mut() {
+            db.database_name = db.database_name.take().or(Some(db.name.clone()));
+        }
+
         let tmp = format!("__tmp_{}__", random_string(12));
 
         crate::swap_field!(self.databases.iter_mut(), name, source, destination, tmp);
@@ -593,12 +738,16 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{PoolerMode, PreparedStatements};
+    use crate::{FlexibleType, ShardedMappingConfig, ShardedMappingList, ShardedMappingRange};
+    use crate::{PoolerMode, PreparedStatements, ServerAuth};
+
+    use std::io::Write;
     use std::time::Duration;
+    use tempfile::NamedTempFile;
 
     #[test]
     fn test_basic() {
-        let source = r#"
+        let pgdog_source = r#"
 [general]
 host = "0.0.0.0"
 port = 6432
@@ -626,7 +775,20 @@ name = "pgdog_routing"
 column = "tenant_id"
 "#;
 
-        let config: Config = toml::from_str(source).unwrap();
+        let users_source =
+            "[[users]]\nname = \"alice\"\ndatabase = \"production\"\npassword = \"pw\"\n";
+
+        let mut pgdog_file = NamedTempFile::new().unwrap();
+        pgdog_file.write_all(pgdog_source.as_bytes()).unwrap();
+        pgdog_file.flush().unwrap();
+
+        let mut users_file = NamedTempFile::new().unwrap();
+        users_file.write_all(users_source.as_bytes()).unwrap();
+        users_file.flush().unwrap();
+
+        let loaded = ConfigAndUsers::load(pgdog_file.path(), users_file.path()).unwrap();
+        let config = &loaded.config;
+
         assert_eq!(config.databases[0].name, "production");
         assert_eq!(config.plugins[0].name, "pgdog_routing");
         assert!(config.tcp.keepalive());
@@ -637,7 +799,21 @@ column = "tenant_id"
         );
         assert_eq!(config.tcp.time().unwrap(), Duration::from_millis(1000));
         assert_eq!(config.tcp.retries().unwrap(), 5);
-        assert_eq!(config.multi_tenant.unwrap().column, "tenant_id");
+        assert_eq!(config.multi_tenant.as_ref().unwrap().column, "tenant_id");
+
+        // Users parsed from the second file.
+        assert_eq!(loaded.users.users.len(), 1);
+        assert_eq!(loaded.users.users[0].name, "alice");
+        assert_eq!(loaded.users.users[0].database, "production");
+        assert_eq!(loaded.users.users[0].password.as_deref(), Some("pw"));
+
+        // Raw text captured verbatim from the files that were read.
+        assert_eq!(loaded.config_text.as_deref(), Some(pgdog_source));
+        assert_eq!(loaded.users_text.as_deref(), Some(users_source));
+
+        // Paths point at the files we loaded.
+        assert_eq!(loaded.config_path, pgdog_file.path());
+        assert_eq!(loaded.users_path, users_file.path());
     }
 
     #[test]
@@ -752,16 +928,15 @@ exposure = 0.75
         assert_eq!(mirror_config2.exposure, 0.75);
 
         // Non-existent mirror config should return None
-        assert!(config
-            .get_mirroring_config("source_db", "non_existent")
-            .is_none());
+        assert!(
+            config
+                .get_mirroring_config("source_db", "non_existent")
+                .is_none()
+        );
     }
 
     #[test]
     fn test_admin_override_from_users_toml() {
-        use std::io::Write;
-        use tempfile::NamedTempFile;
-
         let pgdog_config = r#"
 [admin]
 name = "pgdog_admin"
@@ -785,8 +960,7 @@ password = "users_admin_password"
         pgdog_file.flush().unwrap();
         users_file.flush().unwrap();
 
-        let config_and_users =
-            ConfigAndUsers::load(&pgdog_file.path().into(), &users_file.path().into()).unwrap();
+        let config_and_users = ConfigAndUsers::load(pgdog_file.path(), users_file.path()).unwrap();
 
         assert_eq!(config_and_users.config.admin.name, "users_admin");
         assert_eq!(config_and_users.config.admin.user, "users_admin_user");
@@ -799,9 +973,6 @@ password = "users_admin_password"
 
     #[test]
     fn test_admin_override_with_default_config() {
-        use std::io::Write;
-        use tempfile::NamedTempFile;
-
         let pgdog_config = r#"
 [general]
 host = "0.0.0.0"
@@ -824,8 +995,7 @@ password = "users_admin_password"
         pgdog_file.flush().unwrap();
         users_file.flush().unwrap();
 
-        let config_and_users =
-            ConfigAndUsers::load(&pgdog_file.path().into(), &users_file.path().into()).unwrap();
+        let config_and_users = ConfigAndUsers::load(pgdog_file.path(), users_file.path()).unwrap();
 
         assert_eq!(config_and_users.config.admin.name, "users_admin");
         assert_eq!(config_and_users.config.admin.user, "users_admin_user");
@@ -955,23 +1125,25 @@ tables = ["my_table"]
 
     #[test]
     fn test_cutover_swaps_database_configs() {
-        let mut config = Config::default();
-        config.databases = vec![
-            Database {
-                name: "source_db".to_string(),
-                host: "source-host".to_string(),
-                port: 5432,
-                role: Role::Primary,
-                ..Default::default()
-            },
-            Database {
-                name: "destination_db".to_string(),
-                host: "destination-host".to_string(),
-                port: 5433,
-                role: Role::Primary,
-                ..Default::default()
-            },
-        ];
+        let mut config = Config {
+            databases: vec![
+                Database {
+                    name: "source_db".to_string(),
+                    host: "source-host".to_string(),
+                    port: 5432,
+                    role: Role::Primary,
+                    ..Default::default()
+                },
+                Database {
+                    name: "destination_db".to_string(),
+                    host: "destination-host".to_string(),
+                    port: 5433,
+                    role: Role::Primary,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
 
         // After cutover: looking up source_db returns destination's config
         config.cutover("source_db", "destination_db");
@@ -1007,6 +1179,57 @@ tables = ["my_table"]
             destination.port, 5432,
             "destination_db should now have source's port after cutover"
         );
+    }
+
+    #[test]
+    fn test_cutover_preserves_physical_database_name() {
+        // `source_db` relies on the default (physical db == cluster name);
+        // `destination_db` sets an explicit `database_name`. After cutover the
+        // physical target of each entry must be unchanged — only the logical
+        // cluster name swaps. Regression test for entries connecting to a
+        // nonexistent database after a name swap.
+        let mut config = Config {
+            databases: vec![
+                Database {
+                    name: "source_db".to_string(),
+                    host: "source-host".to_string(),
+                    port: 5432,
+                    database_name: None,
+                    ..Default::default()
+                },
+                Database {
+                    name: "destination_db".to_string(),
+                    host: "destination-host".to_string(),
+                    port: 5433,
+                    database_name: Some("real_dest".to_string()),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+
+        config.cutover("source_db", "destination_db");
+
+        // The entry now named `source_db` carries destination's config; its
+        // physical target must remain destination's database.
+        let source = config
+            .databases
+            .iter()
+            .find(|d| d.name == "source_db")
+            .unwrap();
+        assert_eq!(source.host, "destination-host");
+        assert_eq!(source.database_name.as_deref(), Some("real_dest"));
+
+        // The entry now named `destination_db` carries source's config. Source
+        // relied on the default, so its physical target was pinned to the old
+        // name (`source_db`) — not silently changed to `destination_db`.
+        let destination = config
+            .databases
+            .iter()
+            .find(|d| d.name == "destination_db")
+            .unwrap();
+        assert_eq!(destination.host, "source-host");
+        assert_eq!(destination.database_name.as_deref(), Some("source_db"));
     }
 
     #[test]
@@ -1089,6 +1312,7 @@ destination_db = "destination_db"
         let expected_after = r#"
 [[databases]]
 name = "destination_db"
+database_name = "source_db"
 host = "source-host-0"
 port = 5432
 role = "primary"
@@ -1096,6 +1320,7 @@ shard = 0
 
 [[databases]]
 name = "destination_db"
+database_name = "source_db"
 host = "source-host-0-replica"
 port = 5432
 role = "replica"
@@ -1103,6 +1328,7 @@ shard = 0
 
 [[databases]]
 name = "destination_db"
+database_name = "source_db"
 host = "source-host-1"
 port = 5432
 role = "primary"
@@ -1110,6 +1336,7 @@ shard = 1
 
 [[databases]]
 name = "destination_db"
+database_name = "source_db"
 host = "source-host-1-replica"
 port = 5432
 role = "replica"
@@ -1117,6 +1344,7 @@ shard = 1
 
 [[databases]]
 name = "source_db"
+database_name = "destination_db"
 host = "destination-host-0"
 port = 5433
 role = "primary"
@@ -1124,6 +1352,7 @@ shard = 0
 
 [[databases]]
 name = "source_db"
+database_name = "destination_db"
 host = "destination-host-0-replica"
 port = 5433
 role = "replica"
@@ -1131,6 +1360,7 @@ shard = 0
 
 [[databases]]
 name = "source_db"
+database_name = "destination_db"
 host = "destination-host-1"
 port = 5433
 role = "primary"
@@ -1138,6 +1368,7 @@ shard = 1
 
 [[databases]]
 name = "source_db"
+database_name = "destination_db"
 host = "destination-host-1-replica"
 port = 5433
 role = "replica"
@@ -1223,5 +1454,239 @@ shard = 0
             .unwrap();
         assert_eq!(dest.host, "source-host");
         assert_eq!(dest.port, 5432);
+    }
+
+    #[test]
+    fn test_rds_iam_rejects_passthrough_auth() {
+        let mut config = ConfigAndUsers::default();
+        config.config.general.passthrough_auth = PassthroughAuth::EnabledPlain;
+        config.config.general.tls_verify = TlsVerifyMode::VerifyFull;
+        config.users.users.push(crate::User {
+            name: "alice".into(),
+            database: "db".into(),
+            password: Some("secret".into()),
+            server_auth: ServerAuth::RdsIam,
+            ..Default::default()
+        });
+
+        let err = config.check().unwrap_err().to_string();
+        assert!(err.contains("passthrough_auth"));
+        assert!(err.contains("rds_iam"));
+    }
+
+    #[test]
+    fn test_rds_iam_rejects_tls_verify_disabled() {
+        let mut config = ConfigAndUsers::default();
+        config.config.general.tls_verify = TlsVerifyMode::Disabled;
+        config.config.general.passthrough_auth = PassthroughAuth::Disabled;
+        config.users.users.push(crate::User {
+            name: "alice".into(),
+            database: "db".into(),
+            password: Some("secret".into()),
+            server_auth: ServerAuth::RdsIam,
+            ..Default::default()
+        });
+
+        let err = config.check().unwrap_err().to_string();
+        assert!(err.contains("tls_verify"));
+        assert!(err.contains("rds_iam"));
+    }
+
+    #[test]
+    fn test_azure_workload_identity_rejects_passthrough_auth() {
+        let mut config = ConfigAndUsers::default();
+        config.config.general.passthrough_auth = PassthroughAuth::EnabledPlain;
+        config.config.general.tls_verify = TlsVerifyMode::VerifyFull;
+        config.users.users.push(crate::User {
+            name: "alice".into(),
+            database: "db".into(),
+            password: Some("secret".into()),
+            server_auth: ServerAuth::AzureWorkloadIdentity,
+            ..Default::default()
+        });
+
+        let err = config.check().unwrap_err().to_string();
+        assert!(err.contains("passthrough_auth"));
+        assert!(err.contains("azure_workload_identity"));
+    }
+
+    #[test]
+    fn test_azure_workload_identity_rejects_tls_verify_disabled() {
+        let mut config = ConfigAndUsers::default();
+        config.config.general.tls_verify = TlsVerifyMode::Disabled;
+        config.config.general.passthrough_auth = PassthroughAuth::Disabled;
+        config.users.users.push(crate::User {
+            name: "alice".into(),
+            database: "db".into(),
+            password: Some("secret".into()),
+            server_auth: ServerAuth::AzureWorkloadIdentity,
+            ..Default::default()
+        });
+
+        let err = config.check().unwrap_err().to_string();
+        assert!(err.contains("tls_verify"));
+        assert!(err.contains("azure_workload_identity"));
+    }
+
+    #[test]
+    fn test_sharded_table_inline_mapping() {
+        let source = r#"
+[[sharded_tables]]
+database = "db"
+column = "user_id"
+mapping = [{values = [1, 2, 3], shard = 0}, {values = [4, 5, 6], shard = 1}, {shard = 2}]
+
+[[sharded_tables]]
+database = "db"
+column = "order_id"
+mapping = [{start = 0, end = 1000, shard = 0}, {start = 1000, end = 2000, shard = 1}]
+
+[[sharded_tables]]
+database = "db"
+column = "tenant_uuid"
+data_type = "uuid"
+mapping = [{values = ["00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000002"], shard = 0}]
+
+[[sharded_tables]]
+database = "db"
+column = "tenant_slug"
+data_type = "varchar"
+mapping = [{values = ["alpha", "beta"], shard = 0}, {shard = 1}]
+
+[[sharded_tables]]
+database = "db"
+column = "legacy_id"
+"#;
+        assert_mapping_config(&toml::from_str(source).unwrap());
+    }
+
+    #[test]
+    fn test_sharded_table_separate_mapping() {
+        let source = r#"
+[[sharded_tables]]
+database = "db"
+column = "user_id"
+
+[[sharded_tables.mapping]]
+values = [1, 2, 3]
+shard = 0
+
+[[sharded_tables.mapping]]
+values = [4, 5, 6]
+shard = 1
+
+[[sharded_tables.mapping]]
+shard = 2
+
+[[sharded_tables]]
+database = "db"
+column = "order_id"
+
+[[sharded_tables.mapping]]
+start = 0
+end = 1000
+shard = 0
+
+[[sharded_tables.mapping]]
+start = 1000
+end = 2000
+shard = 1
+
+[[sharded_tables]]
+database = "db"
+column = "tenant_uuid"
+data_type = "uuid"
+
+[[sharded_tables.mapping]]
+values = ["00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000002"]
+shard = 0
+
+[[sharded_tables]]
+database = "db"
+column = "tenant_slug"
+data_type = "varchar"
+
+[[sharded_tables.mapping]]
+values = ["alpha", "beta"]
+shard = 0
+
+[[sharded_tables.mapping]]
+shard = 1
+
+[[sharded_tables]]
+database = "db"
+column = "legacy_id"
+"#;
+        assert_mapping_config(&toml::from_str(source).unwrap());
+    }
+
+    fn assert_mapping_config(config: &Config) {
+        assert_eq!(config.sharded_tables.len(), 5);
+
+        assert_eq!(
+            config.sharded_tables[0].mapping,
+            Some(vec![
+                ShardedMappingConfig::List(ShardedMappingList {
+                    values: vec![
+                        FlexibleType::Integer(1),
+                        FlexibleType::Integer(2),
+                        FlexibleType::Integer(3)
+                    ],
+                    shard: 0
+                }),
+                ShardedMappingConfig::List(ShardedMappingList {
+                    values: vec![
+                        FlexibleType::Integer(4),
+                        FlexibleType::Integer(5),
+                        FlexibleType::Integer(6)
+                    ],
+                    shard: 1
+                }),
+                ShardedMappingConfig::Default { shard: 2 },
+            ])
+        );
+
+        assert_eq!(
+            config.sharded_tables[1].mapping,
+            Some(vec![
+                ShardedMappingConfig::Range(ShardedMappingRange {
+                    start: Some(FlexibleType::Integer(0)),
+                    end: Some(FlexibleType::Integer(1000)),
+                    shard: 0
+                }),
+                ShardedMappingConfig::Range(ShardedMappingRange {
+                    start: Some(FlexibleType::Integer(1000)),
+                    end: Some(FlexibleType::Integer(2000)),
+                    shard: 1
+                }),
+            ])
+        );
+
+        assert_eq!(
+            config.sharded_tables[2].mapping,
+            Some(vec![ShardedMappingConfig::List(ShardedMappingList {
+                values: vec![
+                    FlexibleType::Uuid("00000000-0000-0000-0000-000000000001".parse().unwrap()),
+                    FlexibleType::Uuid("00000000-0000-0000-0000-000000000002".parse().unwrap()),
+                ],
+                shard: 0,
+            }),])
+        );
+
+        assert_eq!(
+            config.sharded_tables[3].mapping,
+            Some(vec![
+                ShardedMappingConfig::List(ShardedMappingList {
+                    values: vec![
+                        FlexibleType::String("alpha".into()),
+                        FlexibleType::String("beta".into())
+                    ],
+                    shard: 0
+                }),
+                ShardedMappingConfig::Default { shard: 1 },
+            ])
+        );
+
+        assert_eq!(config.sharded_tables[4].mapping, None);
     }
 }

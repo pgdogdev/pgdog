@@ -19,12 +19,20 @@
        end                                                        AS "persistence",
        am.amname                                                  AS "access_method",
         pg_catalog.obj_description(c.oid, 'pg_class')              AS "description",
-       c.oid::integer                                             AS "oid"
+       c.oid::integer                                             AS "oid",
+       parent_ns.nspname                                          AS "parent_table_schema",
+       parent_c.relname                                           AS "parent_table_name"
 FROM   pg_catalog.pg_class c
        LEFT JOIN pg_catalog.pg_namespace n
               ON n.oid = c.relnamespace
        LEFT JOIN pg_catalog.pg_am am
               ON am.oid = c.relam
+       LEFT JOIN pg_catalog.pg_inherits inh
+              ON inh.inhrelid = c.oid
+       LEFT JOIN pg_catalog.pg_class parent_c
+              ON parent_c.oid = inh.inhparent
+       LEFT JOIN pg_catalog.pg_namespace parent_ns
+              ON parent_ns.oid = parent_c.relnamespace
 WHERE  c.relkind IN ( 'r', 'p', 'v', 'm',
                       'S', 'f', '' )
        AND n.nspname <> 'pg_catalog'

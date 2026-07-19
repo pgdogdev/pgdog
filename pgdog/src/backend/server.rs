@@ -1,6 +1,6 @@
 //! PostgreSQL server connection.
 
-use std::time::Duration;
+use std::{ops::Deref, time::Duration};
 
 use bytes::{BufMut, BytesMut};
 use rustls_pki_types::ServerName;
@@ -13,8 +13,8 @@ use tokio::{
 use tracing::{debug, error, info, trace, warn};
 
 use super::{
-    pool::Address, prepared_statements::HandleResult, ConnectReason, DisconnectReason, Error,
-    PreparedStatements, ServerOptions, Stats,
+    ConnectReason, DisconnectReason, Error, PreparedStatements, ServerOptions, Stats,
+    pool::Address, prepared_statements::HandleResult,
 };
 use crate::{
     auth::{md5, scram::Client},
@@ -22,21 +22,22 @@ use crate::{
     config::AuthType,
     frontend::ClientRequest,
     net::{
-        messages::{
-            hello::SslReply, Authentication, BackendKeyData, ErrorResponse, FromBytes, Message,
-            ParameterStatus, Password, Protocol, Query, ReadyForQuery, Startup, Terminate, ToBytes,
-        },
         Close, MessageBuffer, Parameter, ProtocolMessage, Sync,
+        messages::{
+            Authentication, BackendKeyData, BackendPid, ErrorResponse, FromBytes, FrontendPid,
+            Message, ParameterStatus, Password, Protocol, Query, ReadyForQuery, Startup, Terminate,
+            ToBytes, hello::SslReply,
+        },
     },
     stats::memory::MemoryUsage,
 };
 use crate::{
-    config::{config, PoolerMode, TlsVerifyMode},
+    config::{PoolerMode, TlsVerifyMode, config},
     net::{
+        CommandComplete, Stream,
         messages::{DataRow, NoticeResponse},
         parameter::Parameters,
         tls::connector_with_verify_mode,
-        CommandComplete, Stream,
     },
 };
 use crate::{net::tweak, state::State};
@@ -46,7 +47,8 @@ use crate::{net::tweak, state::State};
 pub struct Server {
     addr: Address,
     stream: Option<Stream>,
-    id: BackendKeyData,
+    key: BackendKeyData,
+    id: BackendPid,
     params: Parameters,
     changed_params: Parameters,
     client_params: Parameters,
@@ -64,6 +66,16 @@ pub struct Server {
     pooler_mode: PoolerMode,
     stream_buffer: MessageBuffer,
     disconnect_reason: Option<DisconnectReason>,
+    password_attempts: usize,
+    /// Per-connection lifetime cap. When `Some`, the connection
+    /// retires once its age reaches the stored value. `None` means
+    /// "use the pool's configured `max_age`" (no jitter applied).
+    /// Sampled once at creation by [`Server::apply_lifetime_jitter`].
+    max_age: Option<Duration>,
+    /// Credentials generation at the time this connection was established.
+    /// Compared against the pool's generation on check-in; a mismatch means
+    /// the Vault lease rotated and this connection must be closed.
+    credentials_generation: u64,
 }
 
 impl MemoryUsage for Server {
@@ -78,6 +90,7 @@ impl MemoryUsage for Server {
             + 7 * std::mem::size_of::<bool>()
             + std::mem::size_of::<PoolerMode>()
             + self.stream_buffer.capacity()
+            + self.password_attempts.memory_usage()
     }
 }
 
@@ -88,14 +101,71 @@ impl Server {
         options: ServerOptions,
         connect_reason: ConnectReason,
     ) -> Result<Self, Error> {
+        let (user, auth_secrets) = addr.auth_credentials().await?;
+        let total = auth_secrets.len();
+        for (idx, auth_secret) in auth_secrets.into_iter().enumerate() {
+            match Self::connect_with_auth_secret(
+                addr,
+                &user,
+                options.clone(),
+                connect_reason,
+                &auth_secret,
+            )
+            .await
+            {
+                Ok(mut server) => {
+                    auth_secret.valid(true);
+                    server.password_attempts = idx + 1;
+                    return Ok(server);
+                }
+                Err(Error::ConnectionError(error)) => {
+                    if error.is_bad_password() {
+                        warn!(
+                            "{}/{} password is incorrect, {} password candidates remaining [{}]",
+                            idx + 1,
+                            total,
+                            total - idx - 1,
+                            addr
+                        );
+                        auth_secret.valid(false);
+                        continue;
+                    } else {
+                        return Err(Error::ConnectionError(error));
+                    }
+                }
+
+                Err(err) => return Err(err),
+            }
+        }
+
+        Err(Error::ConnectionError(Box::new(ErrorResponse::auth(
+            &addr.user,
+            &addr.database_name,
+        ))))
+    }
+
+    /// Create new PostgreSQL server connection with the given auth secret (e.g. password).
+    async fn connect_with_auth_secret(
+        addr: &Address,
+        user: &str,
+        options: ServerOptions,
+        connect_reason: ConnectReason,
+        auth_secret: &super::pool::Password,
+    ) -> Result<Self, Error> {
         debug!("=> {}", addr);
         let stream = TcpStream::connect(addr.addr().await?).await?;
-        tweak(&stream)?;
-        let cfg = config();
+        let config = config();
 
-        let mut stream = Stream::plain(stream, cfg.config.memory.net_buffer);
+        if let Err(err) = tweak(&stream, &config.config.tcp) {
+            warn!(
+                "keepalive settings ({}) are not supported on this system, ignoring, error: {} [{}]",
+                config.config.tcp, err, addr,
+            );
+        }
 
-        let tls_mode = cfg.config.general.tls_verify;
+        let mut stream = Stream::plain(stream, config.config.memory.net_buffer);
+
+        let tls_mode = config.config.general.tls_verify;
 
         // Only attempt TLS if not in Disabled mode
         if tls_mode != TlsVerifyMode::Disabled {
@@ -105,7 +175,7 @@ impl Server {
             );
 
             // Request TLS.
-            stream.write_all(&Startup::tls().to_bytes()?).await?;
+            stream.write_all(&Startup::tls().to_bytes()).await?;
             stream.flush().await?;
 
             let mut ssl = BytesMut::new();
@@ -117,7 +187,7 @@ impl Server {
 
                 let connector = connector_with_verify_mode(
                     tls_mode,
-                    cfg.config.general.tls_server_ca_certificate.as_ref(),
+                    config.config.general.tls_server_ca_certificate.as_ref(),
                 )?;
                 let plain = stream.take()?;
 
@@ -128,7 +198,7 @@ impl Server {
                     Ok(tls_stream) => {
                         debug!("TLS handshake successful with {}", addr.host);
                         let cipher = tokio_rustls::TlsStream::Client(tls_stream);
-                        stream = Stream::tls(cipher, cfg.config.memory.net_buffer);
+                        stream = Stream::tls(cipher, config.config.memory.net_buffer, None);
                     }
                     Err(e) => {
                         error!("TLS handshake failed with {:?} [{}]", e, addr);
@@ -156,15 +226,12 @@ impl Server {
         }
 
         stream
-            .write_all(
-                &Startup::new(&addr.user, &addr.database_name, options.params.clone())
-                    .to_bytes()?,
-            )
+            .write_all(&Startup::new(user, &addr.database_name, options.params.clone()).to_bytes())
             .await?;
         stream.flush().await?;
 
         // Perform authentication.
-        let mut scram = Client::new(&addr.user, &addr.password);
+        let mut scram = Client::new(user, auth_secret);
         let mut auth_type = AuthType::Trust;
         loop {
             let message = stream.read().await?;
@@ -180,7 +247,7 @@ impl Server {
                     match auth {
                         Authentication::Ok => break,
                         Authentication::ClearTextPassword => {
-                            let password = Password::new_password(&addr.password);
+                            let password = Password::new_password(auth_secret.deref());
                             stream.send_flush(&password).await?;
                         }
                         Authentication::Sasl(_) => {
@@ -200,8 +267,9 @@ impl Server {
                         }
                         Authentication::Md5(salt) => {
                             auth_type = AuthType::Md5;
-                            let client = md5::Client::new_salt(&addr.user, &addr.password, &salt)?;
-                            stream.send_flush(&client.response()).await?;
+                            let client =
+                                md5::Client::new_salt(user, &[auth_secret.to_string()], &salt)?;
+                            stream.send_flush(&client.response()?).await?;
                         }
                     }
                 }
@@ -231,7 +299,7 @@ impl Server {
                 // ErrorResponse (B)
                 'E' => {
                     return Err(Error::ConnectionError(Box::new(ErrorResponse::from_bytes(
-                        message.to_bytes()?,
+                        message.to_bytes(),
                     )?)));
                 }
                 // NoticeResponse (B)
@@ -244,22 +312,29 @@ impl Server {
             }
         }
 
-        let id = key_data.ok_or(Error::NoBackendKeyData)?;
+        // Some backends, e.g. RDS proxy don't support query cancellation,
+        // so they don't send BackendKeyData.
+        // Generating a random one is fine, it just won't work when we try to
+        // cancel a query with this secret.
+        let key = key_data.unwrap_or_else(BackendKeyData::random_legacy);
         let params: Parameters = params.into();
 
         info!(
-            "new server connection [{}, auth: {}, reason: {}] {}",
-            addr,
+            "new server connection: auth={}, source={}, reason={} [{}] {}",
             auth_type,
+            auth_secret.source,
             connect_reason,
+            addr,
             if stream.is_tls() { "🔒" } else { "" },
         );
 
+        let id = BackendPid::from(&key);
         let mut server = Server {
             addr: addr.clone(),
             stream: Some(stream),
+            key,
             id,
-            stats: Stats::connect(id, addr, &params, &options, &cfg.config.memory),
+            stats: Stats::connect(id, addr, &params, &options, &config.config.memory),
             replication_mode: options.replication_mode(),
             params,
             changed_params: Parameters::default(),
@@ -274,8 +349,11 @@ impl Server {
             re_synced: false,
             sending_request: false,
             pooler_mode: PoolerMode::Transaction,
-            stream_buffer: MessageBuffer::new(cfg.config.memory.message_buffer),
+            stream_buffer: MessageBuffer::new(config.config.memory.message_buffer, None),
             disconnect_reason: None,
+            password_attempts: 1, // This is going to be changed by parent caller.
+            max_age: None,
+            credentials_generation: 0,
         };
 
         server.stats.memory_used(server.memory_stats()); // Stream capacity.
@@ -284,17 +362,9 @@ impl Server {
     }
 
     /// Request query cancellation for the given backend server identifier.
-    pub async fn cancel(addr: &Address, id: &BackendKeyData) -> Result<(), Error> {
+    pub async fn cancel(addr: &Address, id: BackendKeyData) -> Result<(), Error> {
         let mut stream = TcpStream::connect(addr.addr().await?).await?;
-        stream
-            .write_all(
-                &Startup::Cancel {
-                    pid: id.pid,
-                    secret: id.secret,
-                }
-                .to_bytes()?,
-            )
-            .await?;
+        stream.write_all(&Startup::Cancel { id }.to_bytes()).await?;
         stream.flush().await?;
 
         Ok(())
@@ -333,6 +403,11 @@ impl Server {
             HandleResult::Drop => [None, None],
             HandleResult::Prepend(ref prepare) => [Some(prepare), Some(message)],
             HandleResult::Forward => [Some(message), None],
+            HandleResult::Rewrite(ref message) => [Some(message), None],
+            HandleResult::PrependRewrite {
+                ref prepend,
+                ref rewrite,
+            } => [Some(prepend), Some(rewrite)],
         };
 
         for message in queue.iter().flatten() {
@@ -340,12 +415,32 @@ impl Server {
         }
 
         for message in queue.into_iter().flatten() {
-            match self.stream().send(message).await {
-                Ok(sent) => self.stats.send(sent, message.code() as u8),
-                Err(err) => {
-                    self.stats.state(State::Error);
-                    return Err(err.into());
-                }
+            self.send_stream(message).await?;
+        }
+
+        Ok(())
+    }
+
+    /// Send a message to Postgres and force us to ignore its respose in [`Self::read`].
+    ///
+    /// This is useful for injecting messages into the extended protocol flow
+    /// without waiting on I/O.
+    ///
+    pub async fn send_ignore(&mut self, message: &ProtocolMessage) -> Result<(), Error> {
+        self.prepared_statements.handle_ignore(message)?;
+        self.send_stream(message).await?;
+
+        Ok(())
+    }
+
+    /// Send message to Postgres, checking for any errors
+    /// and setting the server state accordingly.
+    async fn send_stream(&mut self, message: &ProtocolMessage) -> Result<(), Error> {
+        match self.stream().send(message).await {
+            Ok(sent) => self.stats.send(sent, message.code() as u8),
+            Err(err) => {
+                self.stats.state(State::Error);
+                return Err(err.into());
             }
         }
 
@@ -372,10 +467,14 @@ impl Server {
     pub async fn read(&mut self) -> Result<Message, Error> {
         let message = loop {
             if let Some(message) = self.prepared_statements.state_mut().get_simulated() {
+                // INVARIANT: omni dedup in multi_shard relies on this being process-unique;
+                // never substitute a non-unique value here.
                 return Ok(message.backend(self.id));
             }
             match self.stream_buffer.read(self.stream.as_mut().unwrap()).await {
                 Ok(message) => {
+                    // INVARIANT: omni dedup in multi_shard relies on this being process-unique;
+                    // never substitute a non-unique value here.
                     let message = message.stream(self.streaming).backend(self.id);
                     match self.prepared_statements.forward(&message) {
                         Ok(forward) => {
@@ -437,20 +536,30 @@ impl Server {
                 self.statement_executed = false;
             }
             'E' => {
-                let error = ErrorResponse::from_bytes(message.to_bytes()?)?;
+                let error = ErrorResponse::from_bytes(message.to_bytes())?;
                 self.schema_changed = error.code == "0A000";
                 self.stats.error();
+
+                // Non-recoverable, Postgres is about to close the connection,
+                // by no fault of ours or theirs.
+                //
+                // This shouldn't trigger ban behavior either, so that's why
+                // we are setting ForceClose and not Error state.
+                if matches!(error.severity.as_str(), "FATAL" | "PANIC") {
+                    self.stats.state(State::ForceClose);
+                    return Err(Error::ExecutionError(Box::new(error)));
+                }
             }
             'W' => {
                 debug!("streaming replication on [{}]", self.addr());
                 self.streaming = true;
             }
             'S' => {
-                let ps = ParameterStatus::from_bytes(message.to_bytes()?)?;
+                let ps = ParameterStatus::from_bytes(message.to_bytes())?;
                 self.changed_params.insert(ps.name, ps.value);
             }
             'C' => {
-                let cmd = CommandComplete::from_bytes(message.to_bytes()?)?;
+                let cmd = CommandComplete::from_bytes(message.to_bytes())?;
                 match cmd.command() {
                     "PREPARE" | "DEALLOCATE" => self.sync_prepared = true,
                     "DEALLOCATE ALL" => self.prepared_statements.clear(),
@@ -478,7 +587,7 @@ impl Server {
     /// Synchronize parameters between client and server.
     pub async fn link_client(
         &mut self,
-        id: &BackendKeyData,
+        id: FrontendPid,
         params: &Parameters,
         start_transaction: Option<&str>,
     ) -> Result<usize, Error> {
@@ -689,7 +798,7 @@ impl Server {
             }
 
             if message.code() == 'E' {
-                err = Some(ErrorResponse::from_bytes(message.to_bytes()?)?);
+                err = Some(ErrorResponse::from_bytes(message.to_bytes())?);
             }
             messages.push(message);
         }
@@ -713,9 +822,16 @@ impl Server {
         query: impl Into<Query>,
     ) -> Result<Vec<Message>, Error> {
         let messages = self.execute(query).await?;
+        let notices = messages.iter().filter(|m| m.code() == 'N');
+
+        for notice in notices {
+            let notice = NoticeResponse::from_bytes(notice.to_bytes())?;
+            warn!("{} [{}]", notice.message.message, self.addr());
+        }
+
         let error = messages.iter().find(|m| m.code() == 'E');
         if let Some(error) = error {
-            let error = ErrorResponse::from_bytes(error.to_bytes()?)?;
+            let error = ErrorResponse::from_bytes(error.to_bytes())?;
             Err(Error::ExecutionError(Box::new(error)))
         } else {
             Ok(messages)
@@ -731,12 +847,10 @@ impl Server {
         Ok(messages
             .into_iter()
             .filter(|message| message.code() == 'D')
-            .map(|message| message.to_bytes().unwrap())
+            .map(|message| message.to_bytes())
             .map(DataRow::from_bytes)
-            .collect::<Result<Vec<DataRow>, crate::net::Error>>()?
-            .into_iter()
-            .map(|row| T::from(row))
-            .collect())
+            .map(|maybe_row| maybe_row.map(T::from))
+            .collect::<Result<Vec<T>, _>>()?)
     }
 
     /// Perform a healthcheck on this connection using the provided query.
@@ -840,7 +954,7 @@ impl Server {
                 '3' => self.prepared_statements.remove(close.name()),
                 'E' => {
                     return Err(Error::PreparedStatementError(Box::new(
-                        ErrorResponse::from_bytes(response.to_bytes()?)?,
+                        ErrorResponse::from_bytes(response.to_bytes())?,
                     )));
                 }
                 c => {
@@ -888,14 +1002,73 @@ impl Server {
 
     /// Server connection unique identifier.
     #[inline]
-    pub fn id(&self) -> &BackendKeyData {
-        &self.id
+    pub fn id(&self) -> BackendPid {
+        self.id
+    }
+
+    /// Backend key data for query cancellation.
+    #[inline]
+    pub fn key(&self) -> &BackendKeyData {
+        &self.key
+    }
+
+    /// Number of password attempts it took to authenticate this connection.
+    #[inline]
+    pub fn password_attempts(&self) -> usize {
+        self.password_attempts
     }
 
     /// How old this connection is.
     #[inline]
     pub fn age(&self, instant: Instant) -> Duration {
         instant.duration_since(self.stats().created_at())
+    }
+
+    /// Set this connection's lifetime cap directly. Bypasses jitter
+    /// sampling; mainly useful in tests.
+    #[inline]
+    pub fn set_max_age(&mut self, max_age: Duration) {
+        self.max_age = Some(max_age);
+    }
+
+    /// Sample and apply a per-connection `max_age` uniformly from
+    /// `[base - jitter, base + jitter]`, breaking up synchronized
+    /// retirement of connection cohorts. Saturates at zero on
+    /// negative overflow. No-op when `jitter` is zero. Called once
+    /// by the pool after a successful connect.
+    #[inline]
+    pub fn apply_lifetime_jitter(&mut self, base: Duration, jitter: Duration) {
+        if jitter.is_zero() {
+            return;
+        }
+        use rand::Rng;
+        // Sampling is signed, so drop into ms locally; result goes back
+        // out as a Duration immediately, no leak across the API.
+        let jitter_ms = jitter.as_millis() as i64;
+        let offset_ms = rand::rng().random_range(-jitter_ms..=jitter_ms);
+        let offset = Duration::from_millis(offset_ms.unsigned_abs());
+        self.max_age = Some(if offset_ms >= 0 {
+            base.saturating_add(offset)
+        } else {
+            base.saturating_sub(offset)
+        });
+    }
+
+    /// Effective max_age for this connection: the per-connection
+    /// jittered value if one was sampled, otherwise `base`.
+    #[inline]
+    pub fn effective_max_age(&self, base: Duration) -> Duration {
+        self.max_age.unwrap_or(base)
+    }
+
+    #[inline]
+    pub fn credentials_generation(&self) -> u64 {
+        self.credentials_generation
+    }
+
+    #[inline]
+    pub fn set_credentials_generation(&mut self, generation: u64) {
+        self.credentials_generation = generation;
     }
 
     /// How long this connection has been idle.
@@ -1006,14 +1179,14 @@ impl Drop for Server {
         self.stats().disconnect();
         if let Some(mut stream) = self.stream.take() {
             info!(
-                "closing server connection [{}, state: {}, reason: {}]",
-                self.addr,
+                "closing server connection: state={}, reason={} [{}]",
                 self.stats.get_state(),
                 self.disconnect_reason.take().unwrap_or_default(),
+                self.addr,
             );
 
             spawn(async move {
-                stream.write_all(&Terminate.to_bytes()?).await?;
+                stream.write_all(&Terminate.to_bytes()).await?;
                 stream.flush().await?;
                 Ok::<(), Error>(())
             });
@@ -1024,16 +1197,43 @@ impl Drop for Server {
 // Used for testing.
 #[cfg(test)]
 pub mod test {
-    use crate::{config::Memory, frontend::PreparedStatements, net::*};
+    use std::time::SystemTime;
+
+    use bytes::{BufMut, BytesMut};
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpListener,
+    };
+
+    use crate::{
+        backend::pool::token_cache::TokenCache, config::Memory, frontend::PreparedStatements,
+        net::*,
+    };
 
     use super::{Error, *};
 
+    async fn read_password_message(stream: &mut tokio::net::TcpStream) -> Password {
+        let code = stream.read_u8().await.unwrap();
+        let len = stream.read_i32().await.unwrap();
+        let mut payload = vec![0; (len - 4) as usize];
+        stream.read_exact(&mut payload).await.unwrap();
+
+        let mut bytes = BytesMut::with_capacity(len as usize + 1);
+        bytes.put_u8(code);
+        bytes.put_i32(len);
+        bytes.extend_from_slice(&payload);
+
+        Password::from_bytes(bytes.freeze()).unwrap()
+    }
+
     impl Default for Server {
         fn default() -> Self {
-            let id = BackendKeyData::new();
+            let key = BackendKeyData::random_legacy();
+            let id = BackendPid::from(&key);
             let addr = Address::default();
             Self {
                 stream: None,
+                key,
                 id,
                 params: Parameters::default(),
                 changed_params: Parameters::default(),
@@ -1055,10 +1255,13 @@ pub mod test {
                 re_synced: false,
                 replication_mode: false,
                 pooler_mode: PoolerMode::Transaction,
-                stream_buffer: MessageBuffer::new(4096),
+                stream_buffer: MessageBuffer::new(4096, None),
                 disconnect_reason: None,
                 statement_executed: false,
                 sending_request: false,
+                password_attempts: 1,
+                max_age: None,
+                credentials_generation: 0,
             }
         }
     }
@@ -1082,6 +1285,22 @@ pub mod test {
         .unwrap()
     }
 
+    /// Connect to the `pgdog1` database on the test server.
+    /// Used by tests that need a second, distinct database so that
+    /// row locks on the two databases do not share a lock namespace.
+    pub async fn test_server_pgdog1_db() -> Server {
+        Server::connect(
+            &Address {
+                database_name: "pgdog1".into(),
+                ..Address::new_test()
+            },
+            ServerOptions::default(),
+            ConnectReason::Other,
+        )
+        .await
+        .unwrap()
+    }
+
     pub async fn test_replication_server() -> Server {
         Server::connect(
             &Address::new_test(),
@@ -1090,6 +1309,127 @@ pub mod test {
         )
         .await
         .unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_connect_rds_iam_uses_dynamic_token_not_static_password() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let expected_secret = "iam-token-for-test".to_string();
+        let server_task = tokio::spawn({
+            let expected_secret = expected_secret.clone();
+            async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+
+                let startup = Startup::from_stream(&mut socket).await.unwrap();
+                let startup = if matches!(startup, Startup::Ssl) {
+                    socket.write_all(b"N").await.unwrap();
+                    Startup::from_stream(&mut socket).await.unwrap()
+                } else {
+                    startup
+                };
+                assert!(matches!(startup, Startup::Startup { .. }));
+
+                socket
+                    .write_all(&Authentication::ClearTextPassword.to_bytes())
+                    .await
+                    .unwrap();
+
+                let password = read_password_message(&mut socket).await;
+                assert_eq!(password.password(), Some(expected_secret.as_str()));
+
+                socket
+                    .write_all(&Authentication::Ok.to_bytes())
+                    .await
+                    .unwrap();
+                socket
+                    .write_all(&BackendKeyData::random_legacy().to_bytes())
+                    .await
+                    .unwrap();
+                socket
+                    .write_all(&ReadyForQuery::idle().to_bytes())
+                    .await
+                    .unwrap();
+            }
+        });
+
+        let mut addr = Address::new_test();
+        addr.port = port;
+        addr.server_auth = crate::config::ServerAuth::RdsIam;
+        addr.server_iam_region = Some("us-east-1".into());
+        addr.passwords = vec!["wrong-password".into()];
+
+        TokenCache::global().set(
+            &addr,
+            expected_secret,
+            SystemTime::now() + Duration::from_secs(3600),
+        );
+        let result = Server::connect(&addr, ServerOptions::default(), ConnectReason::Other).await;
+        TokenCache::global().evict(&addr);
+
+        let server = result.unwrap();
+        drop(server);
+        server_task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_connect_azure_workload_identity_uses_dynamic_token_not_static_password() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let expected_secret = "token-for-test".to_string();
+        let server_task = tokio::spawn({
+            let expected_secret = expected_secret.clone();
+            async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+
+                let startup = Startup::from_stream(&mut socket).await.unwrap();
+                let startup = if matches!(startup, Startup::Ssl) {
+                    socket.write_all(b"N").await.unwrap();
+                    Startup::from_stream(&mut socket).await.unwrap()
+                } else {
+                    startup
+                };
+                assert!(matches!(startup, Startup::Startup { .. }));
+
+                socket
+                    .write_all(&Authentication::ClearTextPassword.to_bytes())
+                    .await
+                    .unwrap();
+
+                let password = read_password_message(&mut socket).await;
+                assert_eq!(password.password(), Some(expected_secret.as_str()));
+
+                socket
+                    .write_all(&Authentication::Ok.to_bytes())
+                    .await
+                    .unwrap();
+                socket
+                    .write_all(&BackendKeyData::random_legacy().to_bytes())
+                    .await
+                    .unwrap();
+                socket
+                    .write_all(&ReadyForQuery::idle().to_bytes())
+                    .await
+                    .unwrap();
+            }
+        });
+
+        let mut addr = Address::new_test();
+        addr.port = port;
+        addr.server_auth = crate::config::ServerAuth::AzureWorkloadIdentity;
+        addr.passwords = vec!["wrong-password".into()];
+
+        TokenCache::global().set(
+            &addr,
+            expected_secret,
+            SystemTime::now() + Duration::from_secs(3600),
+        );
+        let result = Server::connect(&addr, ServerOptions::default(), ConnectReason::Other).await;
+        TokenCache::global().evict(&addr);
+
+        let server = result.unwrap();
+        drop(server);
+        server_task.await.unwrap();
     }
 
     #[tokio::test]
@@ -1142,6 +1482,19 @@ pub mod test {
         }
 
         assert_eq!(server.prepared_statements.state().len(), 0);
+        assert!(server.done());
+    }
+
+    #[tokio::test]
+    async fn test_execute_batch_simple_query_error_then_success() {
+        let mut server = test_server().await;
+
+        let err = server
+            .execute_batch(&[Query::new("syntax error"), Query::new("SELECT 1")])
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, Error::ExecutionError(_)));
         assert!(server.done());
     }
 
@@ -1532,6 +1885,39 @@ pub mod test {
     }
 
     #[tokio::test]
+    async fn test_out_of_sync_regression() {
+        let mut server = test_server().await;
+        server
+            .send(
+                &vec![
+                    Parse::new_anonymous("SELECT 1").into(),
+                    Bind::new_statement("").into(),
+                    Execute::new().into(),
+                    Sync.into(),
+                ]
+                .into(),
+            )
+            .await
+            .unwrap();
+
+        for c in ['1', '2', 'D', 'C', 'Z'] {
+            let msg = server.read().await.unwrap();
+            assert_eq!(msg.code(), c);
+        }
+
+        let err = server
+            .execute_batch(&[
+                "SET statement_timeout TO null".into(),
+                "SET statement_timeout TO '1s'".into(),
+            ])
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, Error::ExecutionError(_)));
+        assert!(server.done());
+    }
+
+    #[tokio::test]
     async fn test_delete() {
         let mut server = test_server().await;
 
@@ -1772,7 +2158,7 @@ pub mod test {
             let msg = server.read().await.unwrap();
             assert_eq!(c, msg.code());
             if c == 'D' {
-                let data_row = DataRow::from_bytes(msg.to_bytes().unwrap()).unwrap();
+                let data_row = DataRow::from_bytes(msg.to_bytes()).unwrap();
                 let result: i64 = data_row.get(0, Format::Text).unwrap();
                 assert_eq!(result, 1); // We prepared SELECT 1, SELECT 2 is ignored.
             }
@@ -1783,10 +2169,24 @@ pub mod test {
     #[tokio::test]
     async fn test_sync_params() {
         let mut server = test_server().await;
+
+        let is_superuser_before = server
+            .fetch_all::<String>("SHOW is_superuser")
+            .await
+            .unwrap()[0]
+            .clone();
+
+        let opposite = if is_superuser_before == "on" {
+            "off"
+        } else {
+            "on"
+        };
+
         let mut params = Parameters::default();
         params.insert("application_name", "test_sync_params");
+        params.insert("is_superuser", opposite);
         let changed = server
-            .link_client(&BackendKeyData::new(), &params, None)
+            .link_client(FrontendPid::new(), &params, None)
             .await
             .unwrap();
         assert_eq!(changed, 1);
@@ -1797,8 +2197,18 @@ pub mod test {
             .unwrap();
         assert_eq!(app_name[0], "test_sync_params");
 
+        let is_superuser_after = server
+            .fetch_all::<String>("SHOW is_superuser")
+            .await
+            .unwrap()[0]
+            .clone();
+        assert_eq!(
+            is_superuser_before, is_superuser_after,
+            "is_superuser must not be changed by link_client"
+        );
+
         let changed = server
-            .link_client(&BackendKeyData::new(), &params, None)
+            .link_client(FrontendPid::new(), &params, None)
             .await
             .unwrap();
         assert_eq!(changed, 0);
@@ -1816,7 +2226,6 @@ pub mod test {
             if msg.code() == 'Z' {
                 break;
             }
-            println!("{:?}", msg);
         }
     }
 
@@ -1888,12 +2297,12 @@ pub mod test {
         let mut server = test_server().await;
 
         let changed = server
-            .link_client(&BackendKeyData::new(), &params, None)
+            .link_client(FrontendPid::new(), &params, None)
             .await?;
         assert_eq!(changed, 1);
 
         let changed = server
-            .link_client(&BackendKeyData::new(), &params, None)
+            .link_client(FrontendPid::new(), &params, None)
             .await?;
         assert_eq!(changed, 0);
 
@@ -1902,12 +2311,12 @@ pub mod test {
             params.insert("application_name", value);
 
             let changed = server
-                .link_client(&BackendKeyData::new(), &params, None)
+                .link_client(FrontendPid::new(), &params, None)
                 .await?;
             assert_eq!(changed, 2); // RESET, SET.
 
             let changed = server
-                .link_client(&BackendKeyData::new(), &params, None)
+                .link_client(FrontendPid::new(), &params, None)
                 .await?;
             assert_eq!(changed, 0);
         }
@@ -2335,9 +2744,9 @@ pub mod test {
                 };
                 let messages_to_read = rng.random_range(0..expected_messages.len());
 
-                for i in 0..messages_to_read {
+                for expected in expected_messages.iter().take(messages_to_read) {
                     let msg = server.read().await.unwrap();
-                    assert_eq!(msg.code(), expected_messages[i]);
+                    assert_eq!(msg.code(), *expected);
                 }
             }
 
@@ -2485,14 +2894,14 @@ pub mod test {
 
         // Sync params to server
         let changed = server
-            .link_client(&BackendKeyData::new(), &params, None)
+            .link_client(FrontendPid::new(), &params, None)
             .await
             .unwrap();
         assert_eq!(changed, 1);
 
         // Same params should not need re-sync
         let changed = server
-            .link_client(&BackendKeyData::new(), &params, None)
+            .link_client(FrontendPid::new(), &params, None)
             .await
             .unwrap();
         assert_eq!(changed, 0);
@@ -2502,7 +2911,7 @@ pub mod test {
 
         // Now link_client should need to re-sync because client_params was cleared
         let changed = server
-            .link_client(&BackendKeyData::new(), &params, None)
+            .link_client(FrontendPid::new(), &params, None)
             .await
             .unwrap();
         assert!(
@@ -2942,7 +3351,7 @@ pub mod test {
             .iter()
             .find(|m| m.code() == 'D')
             .expect("expected DataRow");
-        let data_row = DataRow::from_bytes(data_row.to_bytes().unwrap()).unwrap();
+        let data_row = DataRow::from_bytes(data_row.to_bytes()).unwrap();
         let value: i32 = data_row.get(0, Format::Text).unwrap();
         assert_eq!(value, expected);
         assert!(server.done());
@@ -3285,5 +3694,430 @@ pub mod test {
         assert!(server.done());
         assert!(!server.needs_drain());
         verify_server_usable(&mut server).await;
+    }
+
+    #[tokio::test]
+    async fn test_fatal_error_sets_force_close() {
+        let mut server = test_server().await;
+
+        // Terminate our own backend — PostgreSQL sends a FATAL error.
+        server
+            .send(
+                &vec![ProtocolMessage::from(Query::new(
+                    "SELECT pg_terminate_backend(pg_backend_pid())",
+                ))]
+                .into(),
+            )
+            .await
+            .unwrap();
+
+        // Read until the FATAL error arrives.
+        let err = loop {
+            match server.read().await {
+                Ok(_) => continue,
+                Err(err) => break err,
+            }
+        };
+        assert!(matches!(err, Error::ExecutionError(_)));
+        assert!(server.force_close());
+        assert_eq!(server.stats().get_state(), State::ForceClose);
+    }
+
+    // -------------------------------------------------------
+    // Extended anonymous mode integration tests
+    // -------------------------------------------------------
+
+    /// Set a server's prepared_statements level to ExtendedAnonymous.
+    fn set_extended_anonymous(server: &mut Server) {
+        use pgdog_config::PreparedStatements as PSLevel;
+        server
+            .prepared_statements_mut()
+            .set_prepared_statements_level(PSLevel::ExtendedAnonymous);
+    }
+
+    #[tokio::test]
+    async fn test_extended_anonymous_parse_bind_execute() {
+        use crate::net::bind::Parameter;
+        let mut server = test_server().await;
+        set_extended_anonymous(&mut server);
+
+        for _ in 0..10 {
+            let parse = Parse::named("stmt1", "SELECT $1::int");
+            let bind = Bind::new_params(
+                "stmt1",
+                &[Parameter {
+                    len: 1,
+                    data: "5".as_bytes().into(),
+                }],
+            );
+
+            server
+                .send(
+                    &vec![
+                        ProtocolMessage::from(parse),
+                        ProtocolMessage::from(bind),
+                        Execute::new().into(),
+                        Sync.into(),
+                    ]
+                    .into(),
+                )
+                .await
+                .unwrap();
+
+            for c in ['1', '2', 'D', 'C', 'Z'] {
+                let msg = server.read().await.unwrap();
+                assert_eq!(msg.code(), c);
+            }
+
+            assert!(server.done());
+            // In extended_anonymous mode, local cache is cleared after each transaction.
+            assert_eq!(
+                server.prepared_statements.len(),
+                0,
+                "cache should be cleared after RFQ in extended_anonymous mode"
+            );
+            // Verify Postgres has no named prepared statements stored.
+            server.sync_prepared_statements().await.unwrap();
+            assert_eq!(
+                server.prepared_statements.len(),
+                0,
+                "Postgres should have no prepared statements in extended_anonymous mode"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_extended_anonymous_describe() {
+        let mut server = test_server().await;
+        set_extended_anonymous(&mut server);
+
+        let parse = Parse::named("desc_stmt", "SELECT 1::int AS num, 'hello'::text AS msg");
+        let describe = Describe::new_statement("desc_stmt");
+        let bind = Bind::new_statement("desc_stmt");
+        let execute = Execute::new();
+
+        server
+            .send(
+                &vec![
+                    ProtocolMessage::from(parse),
+                    describe.into(),
+                    bind.into(),
+                    execute.into(),
+                    Sync.into(),
+                ]
+                .into(),
+            )
+            .await
+            .unwrap();
+
+        for c in ['1', 't', 'T', '2', 'D', 'C', 'Z'] {
+            let msg = server.read().await.unwrap();
+            assert_eq!(msg.code(), c);
+        }
+
+        assert!(server.done());
+        assert_eq!(server.prepared_statements.len(), 0);
+        // Verify Postgres has no named prepared statements stored.
+        server.sync_prepared_statements().await.unwrap();
+        assert_eq!(server.prepared_statements.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_extended_anonymous_repeated_same_statement() {
+        use crate::net::bind::Parameter;
+        let mut server = test_server().await;
+        set_extended_anonymous(&mut server);
+
+        // Using the same statement name repeatedly should work because
+        // in extended_anonymous mode, Parse is always anonymized, so Postgres
+        // never stores a named statement. No "already exists" errors.
+        for i in 0..20 {
+            let parse = Parse::named("repeat_stmt", "SELECT $1::int");
+            let bind = Bind::new_params(
+                "repeat_stmt",
+                &[Parameter {
+                    len: 1,
+                    data: "1".as_bytes().into(),
+                }],
+            );
+
+            server
+                .send(
+                    &vec![
+                        ProtocolMessage::from(parse),
+                        ProtocolMessage::from(bind),
+                        Execute::new().into(),
+                        Sync.into(),
+                    ]
+                    .into(),
+                )
+                .await
+                .unwrap();
+
+            for c in ['1', '2', 'D', 'C', 'Z'] {
+                let msg = server.read().await.unwrap();
+                assert_eq!(
+                    msg.code(),
+                    c,
+                    "iteration {}: expected '{}' got '{}'",
+                    i,
+                    c,
+                    msg.code()
+                );
+            }
+
+            assert!(server.done());
+        }
+        // Verify Postgres has no named prepared statements stored.
+        server.sync_prepared_statements().await.unwrap();
+        assert_eq!(
+            server.prepared_statements.len(),
+            0,
+            "Postgres should have no prepared statements after repeated anonymous usage"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_extended_anonymous_close_is_dropped() {
+        let mut server = test_server().await;
+        set_extended_anonymous(&mut server);
+
+        // Parse + Sync first.
+        server
+            .send(&vec![Parse::named("to_close", "SELECT 1").into(), Sync.into()].into())
+            .await
+            .unwrap();
+
+        for c in ['1', 'Z'] {
+            let msg = server.read().await.unwrap();
+            assert_eq!(msg.code(), c);
+        }
+
+        // Close should be dropped (simulated CloseComplete).
+        server
+            .send(&vec![Close::named("to_close").into(), Sync.into()].into())
+            .await
+            .unwrap();
+
+        for c in ['3', 'Z'] {
+            let msg = server.read().await.unwrap();
+            assert_eq!(msg.code(), c);
+        }
+
+        assert!(server.done());
+        // Verify Postgres has no named prepared statements stored.
+        server.sync_prepared_statements().await.unwrap();
+        assert_eq!(server.prepared_statements.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_extended_anonymous_error_recovery() {
+        let mut server = test_server().await;
+        set_extended_anonymous(&mut server);
+
+        // Send a bad query via extended protocol.
+        server
+            .send(
+                &vec![
+                    Parse::named("bad_stmt", "SELECT * FROM nonexistent_table_xyz").into(),
+                    Bind::new_statement("bad_stmt").into(),
+                    Execute::new().into(),
+                    Sync.into(),
+                ]
+                .into(),
+            )
+            .await
+            .unwrap();
+
+        // Should get error then RFQ.
+        let msg = server.read().await.unwrap();
+        assert_eq!(msg.code(), 'E');
+        let msg = server.read().await.unwrap();
+        assert_eq!(msg.code(), 'Z');
+
+        assert!(server.done());
+
+        // Server should still be usable.
+        verify_server_usable(&mut server).await;
+        // Verify Postgres has no named prepared statements stored.
+        server.sync_prepared_statements().await.unwrap();
+        assert_eq!(server.prepared_statements.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_extended_anonymous_mixed_with_simple_query() {
+        use crate::net::bind::Parameter;
+        let mut server = test_server().await;
+        set_extended_anonymous(&mut server);
+
+        // Extended protocol.
+        server
+            .send(
+                &vec![
+                    Parse::named("mix_stmt", "SELECT $1::int").into(),
+                    Bind::new_params(
+                        "mix_stmt",
+                        &[Parameter {
+                            len: 1,
+                            data: "7".as_bytes().into(),
+                        }],
+                    )
+                    .into(),
+                    Execute::new().into(),
+                    Sync.into(),
+                ]
+                .into(),
+            )
+            .await
+            .unwrap();
+
+        for c in ['1', '2', 'D', 'C', 'Z'] {
+            let msg = server.read().await.unwrap();
+            assert_eq!(msg.code(), c);
+        }
+
+        assert!(server.done());
+
+        // Simple query right after.
+        server
+            .send(&vec![Query::new("SELECT 42").into()].into())
+            .await
+            .unwrap();
+
+        for c in ['T', 'D', 'C', 'Z'] {
+            let msg = server.read().await.unwrap();
+            assert_eq!(msg.code(), c);
+        }
+
+        assert!(server.done());
+        // Verify Postgres has no named prepared statements stored.
+        server.sync_prepared_statements().await.unwrap();
+        assert_eq!(server.prepared_statements.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_extended_anonymous_no_evictions() {
+        use crate::net::bind::Parameter;
+        let mut server = test_server().await;
+        set_extended_anonymous(&mut server);
+        server.prepared_statements_mut().set_capacity(3);
+
+        // Send many different "named" statements.
+        // Because they're all anonymized, no named statements are stored in Postgres,
+        // so there should be no evictions.
+        for i in 0..20 {
+            let name = format!("evict_test_{}", i);
+            let parse = Parse::named(&name, "SELECT $1::int");
+            let bind = Bind::new_params(
+                &name,
+                &[Parameter {
+                    len: 1,
+                    data: "1".as_bytes().into(),
+                }],
+            );
+
+            server
+                .send(
+                    &vec![
+                        ProtocolMessage::from(parse),
+                        ProtocolMessage::from(bind),
+                        Execute::new().into(),
+                        Sync.into(),
+                    ]
+                    .into(),
+                )
+                .await
+                .unwrap();
+
+            for c in ['1', '2', 'D', 'C', 'Z'] {
+                let msg = server.read().await.unwrap();
+                assert_eq!(msg.code(), c);
+            }
+
+            assert!(server.done());
+            // Cache should always be empty after RFQ in extended_anonymous mode.
+            assert!(server.prepared_statements.ensure_capacity().is_empty());
+        }
+        // Verify Postgres has no named prepared statements stored.
+        server.sync_prepared_statements().await.unwrap();
+        assert_eq!(
+            server.prepared_statements.len(),
+            0,
+            "Postgres should have no prepared statements despite many named parses"
+        );
+    }
+
+    #[test]
+    fn test_effective_max_age_default_is_base() {
+        let server = Server::default();
+        let base = Duration::from_secs(60);
+        assert_eq!(base, server.effective_max_age(base));
+    }
+
+    #[test]
+    fn test_effective_max_age_uses_stored_value() {
+        let mut server = Server::default();
+        server.set_max_age(Duration::from_millis(1500));
+        let base = Duration::from_secs(60);
+        // Stored value wins regardless of the supplied base.
+        assert_eq!(Duration::from_millis(1500), server.effective_max_age(base));
+    }
+
+    #[test]
+    fn test_apply_lifetime_jitter_zero_is_noop() {
+        let mut server = Server::default();
+        server.apply_lifetime_jitter(Duration::from_secs(60), Duration::ZERO);
+        assert_eq!(None, server.max_age);
+    }
+
+    #[test]
+    fn test_apply_lifetime_jitter_stays_within_bounds() {
+        let base = Duration::from_secs(60);
+        let jitter = Duration::from_secs(10);
+        let lower = base - jitter;
+        let upper = base + jitter;
+        let mut saw_below_base = false;
+        let mut saw_above_base = false;
+        // Many trials so we exercise both signs and the full range.
+        for _ in 0..1_000 {
+            let mut server = Server::default();
+            server.apply_lifetime_jitter(base, jitter);
+            let sampled = server
+                .max_age
+                .expect("apply_lifetime_jitter with non-zero jitter sets max_age");
+            assert!(
+                sampled >= lower && sampled <= upper,
+                "sampled {sampled:?} outside [{lower:?}, {upper:?}]",
+            );
+            if sampled < base {
+                saw_below_base = true;
+            }
+            if sampled > base {
+                saw_above_base = true;
+            }
+        }
+        // 1000 uniform samples should cover both sides.
+        assert!(saw_below_base, "never sampled below base");
+        assert!(saw_above_base, "never sampled above base");
+    }
+
+    #[test]
+    fn test_apply_lifetime_jitter_saturates_at_zero() {
+        // base < jitter forces the lower bound to clamp at zero
+        // rather than wrap. Run enough trials that we very likely
+        // hit the negative half of the range at least once.
+        let base = Duration::from_millis(10);
+        let jitter = Duration::from_millis(100);
+        for _ in 0..1_000 {
+            let mut server = Server::default();
+            server.apply_lifetime_jitter(base, jitter);
+            let sampled = server.max_age.expect("max_age set");
+            assert!(
+                sampled <= base + jitter,
+                "sampled {sampled:?} above upper bound",
+            );
+            // Must never go below zero (Duration is unsigned anyway,
+            // but saturation must not panic).
+        }
     }
 }

@@ -33,12 +33,14 @@ impl Command for ShowPeers {
         let listener = Listener::get();
         let peers = listener.peers();
 
-        let mut rows = vec![RowDescription::new(&[
-            Field::text("addr"),
-            Field::text("last_seen"),
-            Field::numeric("clients"),
-        ])
-        .message()?];
+        let mut rows = vec![
+            RowDescription::new(&[
+                Field::text("addr"),
+                Field::text("last_seen"),
+                Field::numeric("clients"),
+            ])
+            .message()?,
+        ];
 
         let now = SystemTime::now();
 

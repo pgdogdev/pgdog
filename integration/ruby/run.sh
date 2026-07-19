@@ -1,11 +1,10 @@
 #!/bin/bash
 set -e
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
-source ${SCRIPT_DIR}/../common.sh
+source "${SCRIPT_DIR}/common.sh"
 
-run_pgdog
-wait_for_pgdog
+install_deps
 
-bash ${SCRIPT_DIR}/dev.sh
-
-stop_pgdog
+run_suite
+run_suite "${SCRIPT_DIR}/prepared_disabled"
+run_suite "${SCRIPT_DIR}/prepared_full"

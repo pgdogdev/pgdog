@@ -1,13 +1,17 @@
-use super::super::status::ReplicationSlot as ReplicationSlotTracker;
 use super::super::Error;
+use super::super::status::ReplicationSlot as ReplicationSlotTracker;
+use crate::config::config;
 use crate::{
-    backend::{self, pool::Address, ConnectReason, Server, ServerOptions},
+    backend::{self, ConnectReason, Server, ServerOptions, pool::Address},
+    frontend::client::query_engine::two_pc::TwoPcTransactions,
     net::{
-        replication::{StatusUpdate, XLogData},
         CopyData, CopyDone, DataRow, ErrorResponse, Format, FromBytes, Protocol, Query, ToBytes,
+        replication::{StatusUpdate, XLogData},
     },
     util::random_string,
 };
+
+use pgdog_config::CopyFormat;
 use std::{fmt::Display, str::FromStr, time::Duration};
 use tokio::time::timeout;
 use tracing::{debug, info, trace, warn};
@@ -45,6 +49,9 @@ pub struct ReplicationSlot {
     snapshot: Snapshot,
     lsn: Lsn,
     dropped: bool,
+    /// CopyDone sent — our copy-in half is closed, so no further CopyData
+    /// (status updates included) may be written until the stream restarts.
+    stopped: bool,
     server: Option<Server>,
     kind: SlotKind,
     server_meta: Option<Server>,
@@ -69,6 +76,7 @@ impl ReplicationSlot {
             lsn: Lsn::default(),
             publication: publication.to_string(),
             dropped: false,
+            stopped: false,
             server: None,
             kind: SlotKind::Replication,
             server_meta: None,
@@ -87,6 +95,7 @@ impl ReplicationSlot {
             lsn: Lsn::default(),
             publication: publication.to_string(),
             dropped: true, // Temporary.
+            stopped: false,
             server: None,
             kind: SlotKind::DataSync,
             server_meta: None,
@@ -160,6 +169,16 @@ impl ReplicationSlot {
             "creating replication slot \"{}\" [{}]",
             self.name, self.address
         );
+
+        let two_pc = TwoPcTransactions::load(self.server()?).await?;
+
+        if !two_pc.is_empty() {
+            warn!(
+                "{} open two-phase transactions, this may block replication slot creation [{}]",
+                two_pc.len(),
+                self.server()?.addr()
+            );
+        }
 
         if self.kind == SlotKind::DataSync {
             self.server()?
@@ -282,17 +301,20 @@ impl ReplicationSlot {
 
     /// Start replication.
     pub async fn start_replication(&mut self) -> Result<(), Error> {
+        // Fresh copy stream (including after a reconnect): re-enable status updates.
+        self.stopped = false;
+        let is_binary = config().config.general.resharding_copy_format == CopyFormat::Binary;
         // TODO: This is definitely Postgres version-specific.
         let query = Query::new(format!(
-            r#"START_REPLICATION SLOT "{}" LOGICAL {} ("proto_version" '4', origin 'any', "publication_names" '"{}"')"#,
-            self.name, self.lsn, self.publication
+            r#"START_REPLICATION SLOT "{}" LOGICAL {} ("proto_version" '4', origin 'any', "publication_names" '"{}"', "binary" '{}')"#,
+            self.name, self.lsn, self.publication, is_binary
         ));
         self.server()?.send(&vec![query.into()].into()).await?;
 
         let copy_both = self.server()?.read().await?;
 
         match copy_both.code() {
-            'E' => return Err(ErrorResponse::from_bytes(copy_both.to_bytes()?)?.into()),
+            'E' => return Err(ErrorResponse::from_bytes(copy_both.to_bytes())?.into()),
             'W' => (),
             c => return Err(Error::OutOfSync(c)),
         }
@@ -318,7 +340,7 @@ impl ReplicationSlot {
 
             match message.code() {
                 'd' => {
-                    let copy_data = CopyData::from_bytes(message.to_bytes()?)?;
+                    let copy_data = CopyData::from_bytes(message.to_bytes())?;
                     trace!("{:?} [{}]", copy_data, self.address);
 
                     return Ok(Some(ReplicationData::CopyData(copy_data)));
@@ -329,7 +351,14 @@ impl ReplicationSlot {
                     debug!("slot \"{}\" drained [{}]", self.name, self.address);
                     return Ok(None);
                 }
-                'E' => return Err(ErrorResponse::from_bytes(message.to_bytes()?)?.into()),
+                'E' => {
+                    let error = ErrorResponse::from_bytes(message.to_bytes())?;
+                    if let Some(ref tracker) = self.tracker {
+                        tracker.error(&error);
+                    }
+
+                    return Err(error.into());
+                }
                 c => return Err(Error::OutOfSync(c)),
             }
         }
@@ -337,14 +366,24 @@ impl ReplicationSlot {
 
     /// Update origin on last flushed LSN.
     pub async fn status_update(&mut self, status_update: StatusUpdate) -> Result<(), Error> {
+        // Once CopyDone is sent, our copy-in half is closed and any further
+        // CopyData would violate the copy protocol. The origin resends
+        // unconfirmed WAL on reconnect and our applies are idempotent, so
+        // dropping the confirm during teardown is safe.
+        if self.stopped {
+            return Ok(());
+        }
+
         debug!(
             "confirmed {} flushed [{}]",
             status_update.last_flushed,
             self.server()?.addr()
         );
 
+        let lsn = Lsn::from_i64(status_update.last_flushed);
+        self.lsn = lsn;
         if let Some(tracker) = self.tracker.as_ref() {
-            tracker.update_lsn(&Lsn::from_i64(status_update.last_flushed))
+            tracker.update_lsn(&lsn)
         }
 
         self.server()?
@@ -355,10 +394,19 @@ impl ReplicationSlot {
         Ok(())
     }
 
+    /// Drop the source connection and reconnect, restarting replication from the
+    /// last confirmed position (`self.lsn`, kept in sync by `status_update`).
+    pub async fn reconnect(&mut self) -> Result<(), Error> {
+        self.server = None;
+        self.connect().await?;
+        self.start_replication().await
+    }
+
     /// Ask remote to close stream.
     pub async fn stop_replication(&mut self) -> Result<(), Error> {
         self.server()?.send_one(&CopyDone.into()).await?;
         self.server()?.flush().await?;
+        self.stopped = true;
 
         Ok(())
     }
@@ -435,9 +483,7 @@ mod test {
             .execute("DROP PUBLICATION test_slot_replication")
             .await;
         let _ = server
-            .execute(format!(
-                "SELECT pg_drop_replication_slot(test_slot_replication)"
-            ))
+            .execute("SELECT pg_drop_replication_slot(test_slot_replication)".to_string())
             .await;
         server
             .execute(
@@ -471,14 +517,13 @@ mod test {
 
                 if let Some(message) = message {
                     match message.clone() {
-                        ReplicationData::CopyData(copy_data) => match copy_data.xlog_data() {
-                            Some(xlog_data) => {
-                                if let Some(XLogPayload::Commit(_)) = xlog_data.payload() {
-                                    slot.stop_replication().await?;
-                                }
+                        ReplicationData::CopyData(copy_data) => {
+                            if let Some(xlog_data) = copy_data.xlog_data()
+                                && let Some(XLogPayload::Commit(_)) = xlog_data.payload()
+                            {
+                                slot.stop_replication().await?;
                             }
-                            _ => (),
-                        },
+                        }
                         ReplicationData::CopyDone => (),
                     }
                 } else {
@@ -503,7 +548,9 @@ mod test {
                         assert_eq!(relation.name, "test_slot_replication")
                     }
                     XLogPayload::Insert(insert) => {
-                        assert_eq!(insert.column(0).unwrap().as_str().unwrap(), "1")
+                        let col = insert.column(0).unwrap();
+                        let id = i64::from_be_bytes(col.data[..].try_into().unwrap());
+                        assert_eq!(id, 1);
                     }
                     XLogPayload::Begin(_) => (),
                     XLogPayload::Commit(_) => got_row = true,

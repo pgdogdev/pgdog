@@ -5,7 +5,7 @@ use crate::unique_id::UniqueId;
 
 use super::insert::build_split_requests;
 use super::offset::OffsetPlan;
-use super::{aggregate::AggregateRewritePlan, Error, InsertSplit, ShardingKeyUpdate};
+use super::{Error, InsertSplit, ShardingKeyUpdate, aggregate::AggregateRewritePlan};
 
 /// Statement rewrite plan.
 ///
@@ -59,7 +59,7 @@ impl RewriteResult {
     pub(crate) fn apply_after_parser(&self, request: &mut ClientRequest) -> Result<(), Error> {
         match self {
             Self::InPlace {
-                offset: Some(ref offset),
+                offset: Some(offset),
             } => offset.apply_after_parser(request),
             _ => Ok(()),
         }
@@ -67,6 +67,20 @@ impl RewriteResult {
 }
 
 impl RewritePlan {
+    /// True if the plan would not modify the query or its messages.
+    /// `params` is purely informational (count of original `$N` placeholders)
+    /// and doesn't count as a rewrite.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.unique_ids == 0
+            && self.auto_id_injected == 0
+            && self.stmt.is_none()
+            && self.prepares.is_empty()
+            && self.insert_split.is_empty()
+            && self.aggregates.is_noop()
+            && self.sharding_key_update.is_none()
+            && self.offset.is_none()
+    }
+
     /// Apply the rewrite plan to a Bind message by appending generated unique IDs.
     pub(crate) fn apply_bind(&self, bind: &mut Bind) -> Result<(), Error> {
         let format = bind.default_param_format();
@@ -125,17 +139,20 @@ impl RewritePlan {
             }
         }
 
-        if !self.insert_split.is_empty() {
-            let requests = build_split_requests(&self.insert_split, request);
+        // Only rewrite executable requests. Some clients prepare the statement
+        // separately (e.g. go/pq with Parse, Describe, Sync). We don't need to rewrite
+        // those since insert split will return the same row(s) as multi-tuple insert.
+        if !self.insert_split.is_empty() && request.is_executable() {
+            let requests = build_split_requests(&self.insert_split, request)?;
             return Ok(RewriteResult::InsertSplit(requests));
         }
 
-        if let Some(sharding_key_update) = &self.sharding_key_update {
-            if request.is_executable() {
-                return Ok(RewriteResult::ShardingKeyUpdate(
-                    sharding_key_update.clone(),
-                ));
-            }
+        if let Some(sharding_key_update) = &self.sharding_key_update
+            && request.is_executable()
+        {
+            return Ok(RewriteResult::ShardingKeyUpdate(
+                sharding_key_update.clone(),
+            ));
         }
 
         Ok(RewriteResult::InPlace {
@@ -147,13 +164,12 @@ impl RewritePlan {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_utils::set_env_var;
     use std::collections::HashSet;
 
     #[test]
     fn test_apply_bind_no_unique_ids() {
-        unsafe {
-            std::env::set_var("NODE_ID", "pgdog-1");
-        }
+        let _guard = set_env_var("NODE_ID", "pgdog-1");
         let plan = RewritePlan::default();
         let mut bind = Bind::default();
         plan.apply_bind(&mut bind).unwrap();
@@ -162,9 +178,7 @@ mod tests {
 
     #[test]
     fn test_apply_bind_text_format() {
-        unsafe {
-            std::env::set_var("NODE_ID", "pgdog-1");
-        }
+        let _guard = set_env_var("NODE_ID", "pgdog-1");
         let plan = RewritePlan {
             unique_ids: 1,
             ..Default::default()
@@ -184,9 +198,7 @@ mod tests {
 
     #[test]
     fn test_apply_bind_binary_format_uniform() {
-        unsafe {
-            std::env::set_var("NODE_ID", "pgdog-1");
-        }
+        let _guard = set_env_var("NODE_ID", "pgdog-1");
         let plan = RewritePlan {
             params: 1,
             unique_ids: 1,
@@ -211,9 +223,7 @@ mod tests {
 
     #[test]
     fn test_apply_bind_binary_format_one_to_one() {
-        unsafe {
-            std::env::set_var("NODE_ID", "pgdog-1");
-        }
+        let _guard = set_env_var("NODE_ID", "pgdog-1");
         let plan = RewritePlan {
             params: 2,
             unique_ids: 1,
@@ -240,9 +250,7 @@ mod tests {
 
     #[test]
     fn test_apply_bind_multiple_unique_ids() {
-        unsafe {
-            std::env::set_var("NODE_ID", "pgdog-1");
-        }
+        let _guard = set_env_var("NODE_ID", "pgdog-1");
         let plan = RewritePlan {
             unique_ids: 3,
             ..Default::default()
@@ -262,9 +270,7 @@ mod tests {
 
     #[test]
     fn test_apply_bind_appends_to_existing_params() {
-        unsafe {
-            std::env::set_var("NODE_ID", "pgdog-1");
-        }
+        let _guard = set_env_var("NODE_ID", "pgdog-1");
         let plan = RewritePlan {
             params: 2,
             unique_ids: 2,

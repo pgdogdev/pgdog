@@ -1,13 +1,14 @@
 //! RowDescription (B) message.
 
+use std::collections::BTreeSet;
 use std::ops::Deref;
 use std::sync::Arc;
 
 use crate::net::c_string_buf;
 use crate::stats::memory::MemoryUsage;
 
-use super::{code, DataType};
-use super::{prelude::*, Format};
+use super::{DataType, code};
+use super::{Format, prelude::*};
 
 /// Column field description.
 #[derive(Clone, Debug, PartialEq)]
@@ -174,22 +175,7 @@ impl Field {
     /// Get the column data type.
     #[inline]
     pub fn data_type(&self) -> DataType {
-        match self.type_oid {
-            16 => DataType::Bool,
-            20 => DataType::Bigint,
-            23 => DataType::Integer,
-            21 => DataType::SmallInt,
-            25 => DataType::Text,
-            700 => DataType::Real,
-            701 => DataType::DoublePrecision,
-            1043 => DataType::Text,
-            1114 => DataType::Timestamp,
-            1184 => DataType::TimestampTz,
-            1186 => DataType::Interval,
-            1700 => DataType::Numeric,
-            2950 => DataType::Uuid,
-            _ => DataType::Other(self.type_oid),
-        }
+        DataType::from_oid(self.type_oid)
     }
 
     #[inline]
@@ -241,21 +227,15 @@ impl RowDescription {
     }
 
     /// Return a new row description without the specified columns (0-based indexes).
-    pub fn drop_columns(&self, drop: &[usize]) -> Self {
-        if drop.is_empty() {
-            return self.clone();
-        }
-
-        let mut indices = drop.to_vec();
-        indices.sort_unstable();
-        indices.dedup();
+    pub fn drop_columns(&self, drop: impl IntoIterator<Item = usize>) -> Self {
+        let indices = drop.into_iter().collect::<BTreeSet<_>>();
 
         let fields = self
             .fields
             .iter()
             .enumerate()
             .filter_map(|(idx, field)| {
-                if indices.binary_search(&idx).is_ok() {
+                if indices.contains(&idx) {
                     None
                 } else {
                     Some(field.clone())
@@ -320,7 +300,7 @@ impl FromBytes for RowDescription {
 }
 
 impl ToBytes for RowDescription {
-    fn to_bytes(&self) -> Result<Bytes, Error> {
+    fn to_bytes(&self) -> Bytes {
         let mut payload = Payload::named(self.code());
         payload.put_i16(self.fields.len() as i16);
 
@@ -334,7 +314,7 @@ impl ToBytes for RowDescription {
             payload.put_i16(field.format);
         }
 
-        Ok(payload.freeze())
+        payload.freeze()
     }
 }
 

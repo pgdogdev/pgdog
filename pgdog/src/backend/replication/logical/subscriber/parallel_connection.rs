@@ -6,8 +6,8 @@
 use tokio::select;
 use tokio::spawn;
 use tokio::sync::{
-    mpsc::{channel, Receiver, Sender},
     Notify,
+    mpsc::{Receiver, Sender, channel},
 };
 
 use crate::backend::pool::Address;

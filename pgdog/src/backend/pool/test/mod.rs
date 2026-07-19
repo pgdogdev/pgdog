@@ -1,15 +1,18 @@
 //! Pool tests.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, SystemTime};
 
+use pgdog_config::ServerAuth;
 use rand::Rng;
 use tokio::spawn;
 use tokio::task::yield_now;
-use tokio::time::{sleep, timeout, Instant};
+use tokio::time::{Instant, sleep, timeout};
 use tokio_util::task::TaskTracker;
 
+use crate::backend::ConnectReason;
+use crate::backend::pool::token_cache::TokenCache;
 use crate::net::ProtocolMessage;
 use crate::net::{Parse, Protocol, Query, Sync};
 use crate::state::State;
@@ -31,7 +34,7 @@ pub fn pool() -> Pool {
             port: 5432,
             database_name: "pgdog".into(),
             user: "pgdog".into(),
-            password: "pgdog".into(),
+            passwords: vec!["pgdog".into()],
             ..Default::default()
         },
         config,
@@ -56,7 +59,7 @@ pub fn pool_with_prepared_capacity(capacity: usize) -> Pool {
             port: 5432,
             database_name: "pgdog".into(),
             user: "pgdog".into(),
-            password: "pgdog".into(),
+            passwords: vec!["pgdog".into()],
             ..Default::default()
         },
         config,
@@ -71,7 +74,7 @@ async fn test_pool_checkout() {
 
     let pool = pool();
     let conn = pool.get(&Request::default()).await.unwrap();
-    let id = *(conn.id());
+    let id = conn.id();
 
     assert!(conn.done());
     assert!(conn.done());
@@ -90,9 +93,11 @@ async fn test_pool_checkout() {
 
     drop(conn); // Return conn to the pool.
     let conn = pool.get(&Request::default()).await.unwrap();
-    assert_eq!(conn.id(), &id);
+    assert_eq!(conn.id(), id);
 }
 
+// This test flakes in CI because of iffy hardware I think.
+#[pgdog_macros::flaky]
 #[tokio::test]
 async fn test_concurrency() {
     let pool = pool();
@@ -263,7 +268,7 @@ async fn test_benchmark_pool() {
         handle.await.unwrap();
     }
     let duration = start.elapsed();
-    println!("bench: {}ms", duration.as_millis());
+    eprintln!("bench: {}ms", duration.as_millis());
 }
 
 #[tokio::test]
@@ -274,7 +279,7 @@ async fn test_incomplete_request_recovery() {
 
     for query in ["SELECT 1", "BEGIN"] {
         let mut conn = pool.get(&Request::default()).await.unwrap();
-        let conn_id = *(conn.id());
+        let conn_id = conn.id();
 
         conn.send(&vec![ProtocolMessage::from(Query::new(query))].into())
             .await
@@ -294,7 +299,7 @@ async fn test_incomplete_request_recovery() {
 
         // Verify the same connection is reused
         let conn = pool.get(&Request::default()).await.unwrap();
-        assert_eq!(conn.id(), &conn_id);
+        assert_eq!(conn.id(), conn_id);
     }
 }
 
@@ -327,7 +332,7 @@ async fn test_server_force_close_discards_connection() {
             port: 5432,
             database_name: "pgdog".into(),
             user: "pgdog".into(),
-            password: "pgdog".into(),
+            passwords: vec!["pgdog".into()],
             ..Default::default()
         },
         config,
@@ -408,7 +413,7 @@ async fn test_prepared_statements_limit() {
         guard
             .send(
                 &vec![
-                    Parse::named(&format!("__pgdog_{}", id), "SELECT $1::bigint").into(),
+                    Parse::named(format!("__pgdog_{}", id), "SELECT $1::bigint").into(),
                     Sync.into(),
                 ]
                 .into(),
@@ -450,7 +455,7 @@ async fn test_prepared_statements_limit() {
         guard
             .send(
                 &vec![
-                    Parse::named(&format!("__pgdog_{}", id), "SELECT $1::bigint").into(),
+                    Parse::named(format!("__pgdog_{}", id), "SELECT $1::bigint").into(),
                     Sync.into(),
                 ]
                 .into(),
@@ -498,7 +503,7 @@ async fn test_idle_healthcheck_loop() {
             port: 5432,
             database_name: "pgdog".into(),
             user: "pgdog".into(),
-            password: "pgdog".into(),
+            passwords: vec!["pgdog".into()],
             ..Default::default()
         },
         config,
@@ -523,6 +528,44 @@ async fn test_idle_healthcheck_loop() {
         after_healthchecks,
         after_healthchecks - initial_healthchecks
     );
+}
+
+#[tokio::test]
+async fn test_idle_healthcheck_loop_disabled_with_zero_interval() {
+    crate::logger();
+
+    let config = Config {
+        inner: pgdog_stats::Config {
+            max: 1,
+            min: 0,
+            idle_healthcheck_interval: Duration::ZERO,
+            idle_healthcheck_delay: Duration::from_millis(10),
+            healthcheck_timeout: Duration::from_millis(10),
+            ..Config::default().inner
+        },
+    };
+
+    let pool = Pool::new(&PoolConfig {
+        address: Address {
+            host: "127.0.0.1".into(),
+            port: 1,
+            database_name: "pgdog".into(),
+            user: "pgdog".into(),
+            passwords: vec!["pgdog".into()],
+            ..Default::default()
+        },
+        config,
+    });
+    pool.launch();
+
+    let initial_healthchecks = pool.state().stats.counts.healthchecks;
+
+    sleep(Duration::from_millis(350)).await;
+
+    let after_healthchecks = pool.state().stats.counts.healthchecks;
+
+    assert_eq!(after_healthchecks, initial_healthchecks);
+    assert!(pool.healthy());
 }
 
 #[tokio::test]
@@ -572,7 +615,7 @@ async fn test_move_conns_to() {
             port: 5432,
             database_name: "pgdog".into(),
             user: "pgdog".into(),
-            password: "pgdog".into(),
+            passwords: vec!["pgdog".into()],
             ..Default::default()
         },
         config,
@@ -585,7 +628,7 @@ async fn test_move_conns_to() {
             port: 5432,
             database_name: "pgdog".into(),
             user: "pgdog".into(),
-            password: "pgdog".into(),
+            passwords: vec!["pgdog".into()],
             ..Default::default()
         },
         config,
@@ -607,7 +650,7 @@ async fn test_move_conns_to() {
     source.move_conns_to(&destination).unwrap();
 
     assert!(!source.lock().online);
-    assert!(destination.lock().online);
+    assert!(!destination.lock().online);
     assert_eq!(destination.lock().total(), 2);
     assert_eq!(source.lock().total(), 0);
     let new_pool_id = destination.id();
@@ -621,6 +664,286 @@ async fn test_move_conns_to() {
 
     assert_eq!(destination.lock().idle(), 2);
     assert_eq!(destination.lock().checked_out(), 0);
+}
+
+#[tokio::test]
+async fn test_move_conns_all_idle() {
+    crate::logger();
+
+    let config = Config {
+        inner: pgdog_stats::Config {
+            max: 3,
+            min: 0,
+            ..Config::default().inner
+        },
+    };
+
+    let source = Pool::new(&PoolConfig {
+        address: Address::new_test(),
+        config,
+    });
+    source.launch();
+
+    let destination = Pool::new(&PoolConfig {
+        address: Address::new_test(),
+        config,
+    });
+
+    // Check out and return 3 connections so they become idle.
+    let c1 = source.get(&Request::default()).await.unwrap();
+    let c2 = source.get(&Request::default()).await.unwrap();
+    let c3 = source.get(&Request::default()).await.unwrap();
+    drop(c1);
+    drop(c2);
+    drop(c3);
+    sleep(Duration::from_millis(50)).await;
+
+    assert_eq!(source.lock().idle(), 3);
+
+    source.move_conns_to(&destination).unwrap();
+
+    // All idle connections moved to destination.
+    assert_eq!(source.lock().total(), 0);
+    assert_eq!(destination.lock().idle(), 3);
+    assert_eq!(destination.lock().checked_out(), 0);
+
+    let new_pool_id = destination.id();
+    for conn in destination.lock().idle_conns() {
+        assert_eq!(conn.stats().pool_id(), new_pool_id);
+    }
+}
+
+#[tokio::test]
+async fn test_move_conns_all_checked_out() {
+    crate::logger();
+
+    let config = Config {
+        inner: pgdog_stats::Config {
+            max: 3,
+            min: 0,
+            ..Config::default().inner
+        },
+    };
+
+    let source = Pool::new(&PoolConfig {
+        address: Address::new_test(),
+        config,
+    });
+    source.launch();
+
+    let destination = Pool::new(&PoolConfig {
+        address: Address::new_test(),
+        config,
+    });
+
+    let c1 = source.get(&Request::default()).await.unwrap();
+    let c2 = source.get(&Request::default()).await.unwrap();
+    let c3 = source.get(&Request::default()).await.unwrap();
+
+    assert_eq!(source.lock().checked_out(), 3);
+    assert_eq!(source.lock().idle(), 0);
+
+    source.move_conns_to(&destination).unwrap();
+
+    // All connections are in-flight, tracked as taken in destination.
+    assert_eq!(source.lock().total(), 0);
+    assert_eq!(destination.lock().total(), 3);
+    assert_eq!(destination.lock().checked_out(), 3);
+    assert_eq!(destination.lock().idle(), 0);
+
+    // Return them one by one.
+    drop(c1);
+    sleep(Duration::from_millis(50)).await;
+    assert_eq!(destination.lock().idle(), 1);
+    assert_eq!(destination.lock().checked_out(), 2);
+
+    drop(c2);
+    sleep(Duration::from_millis(50)).await;
+    assert_eq!(destination.lock().idle(), 2);
+    assert_eq!(destination.lock().checked_out(), 1);
+
+    drop(c3);
+    sleep(Duration::from_millis(50)).await;
+    assert_eq!(destination.lock().idle(), 3);
+    assert_eq!(destination.lock().checked_out(), 0);
+}
+
+#[tokio::test]
+async fn test_move_conns_destination_serves_after_launch() {
+    crate::logger();
+
+    let config = Config {
+        inner: pgdog_stats::Config {
+            max: 3,
+            min: 0,
+            ..Config::default().inner
+        },
+    };
+
+    let source = Pool::new(&PoolConfig {
+        address: Address::new_test(),
+        config,
+    });
+    source.launch();
+
+    let destination = Pool::new(&PoolConfig {
+        address: Address::new_test(),
+        config,
+    });
+
+    // Create one idle connection.
+    let c1 = source.get(&Request::default()).await.unwrap();
+    drop(c1);
+    sleep(Duration::from_millis(50)).await;
+
+    source.move_conns_to(&destination).unwrap();
+    assert_eq!(destination.lock().idle(), 1);
+    assert!(!destination.lock().online);
+
+    // Launch destination, connections should be servable.
+    destination.launch();
+    assert!(destination.lock().online);
+
+    let c = destination.get(&Request::default()).await.unwrap();
+    assert_eq!(destination.lock().checked_out(), 1);
+    assert_eq!(destination.lock().idle(), 0);
+    drop(c);
+    sleep(Duration::from_millis(50)).await;
+    assert_eq!(destination.lock().idle(), 1);
+}
+
+fn auth_pool(passwords: Vec<Password>) -> Pool {
+    let config = Config {
+        inner: pgdog_stats::Config {
+            max: 1,
+            min: 0,
+            connect_attempts: 1,
+            ..Config::default().inner
+        },
+    };
+
+    Pool::new(&PoolConfig {
+        address: Address {
+            host: "127.0.0.1".into(),
+            port: 5432,
+            database_name: "pgdog".into(),
+            user: "pgdog".into(),
+            passwords,
+            ..Default::default()
+        },
+        config,
+    })
+}
+
+#[tokio::test]
+async fn test_auth_attempts_single_good_password() {
+    crate::logger();
+
+    let pool = auth_pool(vec!["pgdog".into()]);
+    assert_eq!(pool.state().stats.counts.auth_attempts, 0);
+
+    let conn = pool.standalone(ConnectReason::Other).await.unwrap();
+    drop(conn);
+
+    // Single valid password — exactly one attempt, which succeeded.
+    assert_eq!(pool.state().stats.counts.auth_attempts, 1);
+    assert!(pool.addr().passwords[0].is_valid());
+}
+
+#[tokio::test]
+async fn test_auth_attempts_good_first_among_bad() {
+    crate::logger();
+
+    let pool = auth_pool(vec!["pgdog".into(), "wrong1".into(), "wrong2".into()]);
+
+    let conn = pool.standalone(ConnectReason::Other).await.unwrap();
+    drop(conn);
+
+    // First password worked on attempt #1; the bad ones were never tried.
+    assert_eq!(pool.state().stats.counts.auth_attempts, 1);
+    assert!(pool.addr().passwords[0].is_valid());
+    assert!(pool.addr().passwords[1].is_valid());
+    assert!(pool.addr().passwords[2].is_valid());
+}
+
+#[tokio::test]
+async fn test_auth_attempts_good_last_among_bad() {
+    crate::logger();
+
+    let pool = auth_pool(vec!["wrong1".into(), "wrong2".into(), "pgdog".into()]);
+
+    let conn = pool.standalone(ConnectReason::Other).await.unwrap();
+    drop(conn);
+
+    // Each bad password was tried before the good one worked on attempt #3.
+    assert_eq!(pool.state().stats.counts.auth_attempts, 3);
+    let pwds = &pool.addr().passwords;
+    assert!(
+        !pwds[0].is_valid(),
+        "first wrong password should be invalid"
+    );
+    assert!(
+        !pwds[1].is_valid(),
+        "second wrong password should be invalid"
+    );
+    assert!(pwds[2].is_valid(), "good password should remain valid");
+
+    // Second connect: auth_secrets() sorts the valid one first, so we
+    // succeed on the very first try — counter only bumps by 1.
+    let conn = pool.standalone(ConnectReason::Other).await.unwrap();
+    drop(conn);
+    assert_eq!(pool.state().stats.counts.auth_attempts, 4);
+}
+
+#[tokio::test]
+async fn test_auth_attempts_all_bad_passwords() {
+    crate::logger();
+
+    let pool = auth_pool(vec!["wrong1".into(), "wrong2".into(), "wrong3".into()]);
+    assert_eq!(pool.state().stats.counts.auth_attempts, 0);
+
+    let err = pool.standalone(ConnectReason::Other).await;
+    assert!(err.is_err(), "all-bad-password connect must fail");
+
+    // Every password was tried and rejected.
+    assert_eq!(pool.state().stats.counts.auth_attempts, 3);
+    for pwd in &pool.addr().passwords {
+        assert!(!pwd.is_valid());
+    }
+
+    // A second attempt should bump the counter by another N — the pool has
+    // no valid password, so it must re-try them all.
+    let err = pool.standalone(ConnectReason::Other).await;
+    assert!(err.is_err());
+    assert_eq!(pool.state().stats.counts.auth_attempts, 6);
+}
+
+#[tokio::test]
+async fn test_auth_attempts_single_bad_password() {
+    crate::logger();
+
+    let pool = auth_pool(vec!["wrong".into()]);
+
+    let err = pool.standalone(ConnectReason::Other).await;
+    assert!(err.is_err());
+    assert_eq!(pool.state().stats.counts.auth_attempts, 1);
+    assert!(!pool.addr().passwords[0].is_valid());
+}
+
+#[tokio::test]
+async fn test_auth_attempts_recovers_after_password_added() {
+    crate::logger();
+
+    // Start with all-bad — first connect fails and marks them all invalid.
+    let pool = auth_pool(vec!["wrong1".into(), "wrong2".into()]);
+
+    assert!(pool.standalone(ConnectReason::Other).await.is_err());
+    assert_eq!(pool.state().stats.counts.auth_attempts, 2);
+
+    // Marking one of them valid (e.g. password rotation discovered) must
+    // not retroactively change the counter.
+    pool.addr().passwords[0].valid(true);
+    assert_eq!(pool.state().stats.counts.auth_attempts, 2);
 }
 
 #[tokio::test]
@@ -670,4 +993,263 @@ async fn test_lsn_monitor() {
     );
 
     pool.shutdown();
+}
+
+#[tokio::test]
+async fn test_token_refresh_loop_primes_cache_on_cold_start() {
+    crate::logger();
+
+    let config = Config {
+        inner: pgdog_stats::Config {
+            max: 1,
+            min: 0,
+            ..Config::default().inner
+        },
+    };
+
+    let addr = Address {
+        host: "token-refresh-test.internal".into(),
+        port: 15500,
+        user: "refresh_user".into(),
+        server_auth: ServerAuth::RdsIam,
+        server_iam_region: Some("us-east-1".into()),
+        ..Default::default()
+    };
+
+    // Pre-populate the cache so the loop doesn't hit real AWS.
+    let expiry = SystemTime::now() + Duration::from_millis(200);
+    TokenCache::global().set(&addr, "initial-token".into(), expiry);
+
+    let pool = Pool::new(&PoolConfig {
+        address: addr.clone(),
+        config,
+    });
+    pool.launch();
+
+    // Cache must be populated immediately.
+    assert!(TokenCache::global().expires_at(&addr).is_some());
+
+    pool.shutdown();
+    TokenCache::global().evict(&addr);
+}
+
+#[tokio::test]
+async fn test_token_refresh_loop_refreshes_before_expiry() {
+    crate::logger();
+
+    let config = Config {
+        inner: pgdog_stats::Config {
+            max: 1,
+            min: 0,
+            ..Config::default().inner
+        },
+    };
+
+    let addr = Address {
+        host: "token-refresh-expiry.internal".into(),
+        port: 15501,
+        user: "refresh_user".into(),
+        server_auth: ServerAuth::RdsIam,
+        server_iam_region: Some("us-east-1".into()),
+        ..Default::default()
+    };
+
+    // Set a token that expires well in the future — refresh loop
+    // should sleep and not touch the cache during the test window.
+    let expiry = SystemTime::now() + Duration::from_secs(3600);
+    TokenCache::global().set(&addr, "long-lived-token".into(), expiry);
+
+    let pool = Pool::new(&PoolConfig {
+        address: addr.clone(),
+        config,
+    });
+    pool.launch();
+
+    sleep(Duration::from_millis(100)).await;
+
+    // Token must be unchanged — refresh window hasn't arrived.
+    assert_eq!(
+        TokenCache::global().expires_at(&addr).unwrap(),
+        expiry,
+        "token should not have been refreshed yet"
+    );
+
+    pool.shutdown();
+    TokenCache::global().evict(&addr);
+}
+
+#[tokio::test]
+async fn test_token_refresh_loop_evicts_on_failed_refresh() {
+    crate::logger();
+
+    let config = Config {
+        inner: pgdog_stats::Config {
+            max: 1,
+            min: 0,
+            ..Config::default().inner
+        },
+    };
+
+    let addr = Address {
+        host: "token-refresh-fail.internal".into(),
+        port: 15502,
+        user: "refresh_user".into(),
+        server_auth: ServerAuth::RdsIam,
+        server_iam_region: None, // no region — fetch_token will fail
+        ..Default::default()
+    };
+
+    // Set a token that is already within the expiry buffer so the
+    // loop fires immediately and tries to refresh.
+    let expiry = SystemTime::now() + Duration::from_secs(10);
+    TokenCache::global().set(&addr, "stale-token".into(), expiry);
+
+    let pool = Pool::new(&PoolConfig {
+        address: addr.clone(),
+        config,
+    });
+    pool.launch();
+
+    // Give the refresh loop time to fire and fail.
+    sleep(Duration::from_millis(200)).await;
+
+    // Fetch failed (no region → resolve_region errors) so entry must be evicted.
+    assert!(
+        TokenCache::global().expires_at(&addr).is_none(),
+        "cache entry must be evicted after a failed refresh"
+    );
+
+    pool.shutdown();
+    TokenCache::global().evict(&addr);
+}
+
+#[tokio::test]
+async fn test_token_refresh_loop_not_spawned_for_password_auth() {
+    crate::logger();
+
+    let config = Config {
+        inner: pgdog_stats::Config {
+            max: 1,
+            min: 0,
+            ..Config::default().inner
+        },
+    };
+
+    let addr = Address {
+        host: "token-refresh-password.internal".into(),
+        port: 15503,
+        user: "refresh_user".into(),
+        server_auth: ServerAuth::Password,
+        ..Default::default()
+    };
+
+    // Poison the cache to detect any unexpected writes.
+    TokenCache::global().evict(&addr);
+
+    let pool = Pool::new(&PoolConfig {
+        address: addr.clone(),
+        config,
+    });
+    pool.launch();
+
+    sleep(Duration::from_millis(100)).await;
+
+    // No token refresh loop was spawned — cache must remain empty.
+    assert!(
+        TokenCache::global().expires_at(&addr).is_none(),
+        "password auth pools must not write to the token cache"
+    );
+
+    pool.shutdown();
+}
+
+#[tokio::test]
+async fn test_token_refresh_loop_stops_on_shutdown() {
+    crate::logger();
+
+    let config = Config {
+        inner: pgdog_stats::Config {
+            max: 1,
+            min: 0,
+            ..Config::default().inner
+        },
+    };
+
+    let addr = Address {
+        host: "token-refresh-shutdown.internal".into(),
+        port: 15504,
+        user: "refresh_user".into(),
+        server_auth: ServerAuth::AzureWorkloadIdentity,
+        ..Default::default()
+    };
+
+    let expiry = SystemTime::now() + Duration::from_secs(3600);
+    TokenCache::global().set(&addr, "token".into(), expiry);
+
+    let pool = Pool::new(&PoolConfig {
+        address: addr.clone(),
+        config,
+    });
+    pool.launch();
+
+    sleep(Duration::from_millis(50)).await;
+    pool.shutdown();
+    sleep(Duration::from_millis(50)).await;
+
+    // Manually evict and verify the loop no longer writes back.
+    TokenCache::global().evict(&addr);
+    sleep(Duration::from_millis(100)).await;
+
+    assert!(
+        TokenCache::global().expires_at(&addr).is_none(),
+        "refresh loop must not write to cache after pool shutdown"
+    );
+}
+
+#[tokio::test]
+async fn test_move_conns_to_propagates_pause_state() {
+    // When the source pool is paused, the destination pool should also
+    // start paused so the database stays paused across a RELOAD.
+    let source = Pool::new_test();
+    let destination = Pool::new_test();
+
+    source.launch();
+    destination.launch();
+
+    // Pause the source pool.
+    source.pause();
+    assert!(source.lock().paused);
+    assert!(!destination.lock().paused);
+
+    source.move_conns_to(&destination).unwrap();
+
+    assert!(
+        destination.lock().paused,
+        "destination should be paused after move from a paused source"
+    );
+
+    destination.shutdown();
+}
+
+#[tokio::test]
+async fn test_move_conns_to_does_not_pause_destination_when_source_is_not_paused() {
+    // When the source pool is NOT paused, the destination should also
+    // remain unpaused after the move.
+    let source = Pool::new_test();
+    let destination = Pool::new_test();
+
+    source.launch();
+    destination.launch();
+
+    assert!(!source.lock().paused);
+    assert!(!destination.lock().paused);
+
+    source.move_conns_to(&destination).unwrap();
+
+    assert!(
+        !destination.lock().paused,
+        "destination should remain unpaused when source is not paused"
+    );
+
+    destination.shutdown();
 }

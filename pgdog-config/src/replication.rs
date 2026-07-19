@@ -1,3 +1,4 @@
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -11,9 +12,17 @@ struct RawReplicaLag {
     max_age: Option<u64>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+/// Replica lag banning configuration. When a replica's replication lag exceeds the threshold, it is banned from serving read queries.
+#[derive(Debug, Clone, PartialEq, JsonSchema)]
 pub struct ReplicaLag {
+    /// How often to check replica lag, in milliseconds.
+    ///
+    /// _Default:_ `1000`
     pub check_interval: Duration,
+
+    /// Maximum allowed replication lag before a replica is banned, in milliseconds.
+    ///
+    /// _Default:_ `25`
     pub max_age: Duration,
 }
 
@@ -60,7 +69,7 @@ impl ReplicaLag {
             _ => {
                 return Err(serde::de::Error::custom(
                     "replica_lag: cannot set check_interval without max_age",
-                ))
+                ));
             }
         })
     }
@@ -95,11 +104,15 @@ impl Default for ReplicaLag {
     }
 }
 
-/// Replication configuration.
-#[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
+/// Replication configuration used for online resharding.
+///
+/// https://docs.pgdog.dev/configuration/pgdog.toml/replication/
+#[derive(Serialize, Deserialize, PartialEq, Debug, Clone, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub struct Replication {
-    /// Path to the pg_dump executable.
+    /// Path to the `pg_dump` executable used during online resharding to copy data between shards.
+    ///
+    /// _Default:_ `pg_dump`
     #[serde(default = "Replication::pg_dump_path")]
     pub pg_dump_path: PathBuf,
 }
@@ -118,18 +131,70 @@ impl Default for Replication {
     }
 }
 
-/// Mirroring configuration.
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
+/// [Mirroring](https://docs.pgdog.dev/features/mirroring/) configuration. Database mirroring replicates traffic, byte for byte, from one database to another for testing purposes.
+///
+/// https://docs.pgdog.dev/configuration/pgdog.toml/mirroring/
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Mirroring {
-    /// Source database name to mirror from.
+    /// Name of the source database to mirror traffic from. This should be a `name` configured in the [`databases`](https://docs.pgdog.dev/configuration/pgdog.toml/databases/) section of `pgdog.toml`.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/mirroring/#source_db
     pub source_db: String,
-    /// Destination database name to mirror to.
+
+    /// Name of the destination database to mirror traffic to. This should be a `name` configured in the [`databases`](https://docs.pgdog.dev/configuration/pgdog.toml/databases/) section of `pgdog.toml`.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/mirroring/#destination_db
     pub destination_db: String,
-    /// Queue length for this mirror (overrides global mirror_queue).
+
+    /// The length of the queue to provision for mirrored transactions. See [mirroring](https://docs.pgdog.dev/features/mirroring/) for more details. This overrides the [`mirror_queue`](https://docs.pgdog.dev/configuration/pgdog.toml/general/#mirror_queue) setting.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/mirroring/#queue_depth
     pub queue_length: Option<usize>,
-    /// Exposure for this mirror (overrides global mirror_exposure).
+
+    /// The percentage of transactions to mirror, specified as a floating point number between 0.0 and 1.0. See [mirroring](https://docs.pgdog.dev/features/mirroring/) for more details. This overrides the [`mirror_exposure`](https://docs.pgdog.dev/configuration/pgdog.toml/general/#mirror_exposure) setting.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/mirroring/#exposure
     pub exposure: Option<f32>,
+
+    /// What kind of statements to replicate.
+    #[serde(default)]
+    pub level: MirroringLevel,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema, Copy)]
+#[serde(deny_unknown_fields, rename_all = "lowercase")]
+pub enum MirroringLevel {
+    /// Replicate all statements.
+    #[default]
+    All,
+    /// Only DML (e.g., insert, update, delete, etc),
+    Dml,
+    /// Only DDL (CREATE, DROP, etc.)
+    Ddl,
+}
+
+impl std::fmt::Display for MirroringLevel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::All => write!(f, "all"),
+            Self::Dml => write!(f, "dml"),
+            Self::Ddl => write!(f, "ddl"),
+        }
+    }
+}
+
+impl FromStr for MirroringLevel {
+    type Err = ();
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "all" => Ok(Self::All),
+            "dml" => Ok(Self::Dml),
+            "ddl" => Ok(Self::Ddl),
+            _ => Err(()),
+        }
+    }
 }
 
 impl FromStr for Mirroring {
@@ -140,6 +205,7 @@ impl FromStr for Mirroring {
         let mut destination_db = None;
         let mut queue_length = None;
         let mut exposure = None;
+        let mut level = MirroringLevel::default();
 
         for pair in s.split('&') {
             let parts: Vec<&str> = pair.split('=').collect();
@@ -164,6 +230,7 @@ impl FromStr for Mirroring {
                             .map_err(|_| format!("Invalid exposure: {}", parts[1]))?,
                     );
                 }
+                "level" => level = MirroringLevel::from_str(parts[1]).unwrap_or_default(),
                 _ => return Err(format!("Unknown parameter: {}", parts[0])),
             }
         }
@@ -176,15 +243,18 @@ impl FromStr for Mirroring {
             destination_db,
             queue_length,
             exposure,
+            level,
         })
     }
 }
 
-/// Runtime mirror configuration with resolved values.
-#[derive(Debug, Clone)]
+/// Runtime mirror configuration with defaults resolved from global settings.
+#[derive(Debug, Clone, Default)]
 pub struct MirrorConfig {
-    /// Queue length for this mirror.
+    /// Effective queue length for this mirror.
     pub queue_length: usize,
-    /// Exposure for this mirror.
+    /// Effective exposure fraction for this mirror.
     pub exposure: f32,
+    /// What kind of statements to mirror.
+    pub level: MirroringLevel,
 }

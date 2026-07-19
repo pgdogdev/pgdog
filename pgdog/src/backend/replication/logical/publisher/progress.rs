@@ -1,13 +1,14 @@
-use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
 use std::time::Duration;
 
+use tokio::select;
 use tokio::sync::Notify;
 use tokio::time::sleep;
-use tokio::{select, spawn};
 use tracing::info;
 
 use crate::backend::replication::publisher::{Lsn, PublicationTable};
+use crate::tasks;
 
 #[derive(Debug)]
 struct Inner {
@@ -53,7 +54,7 @@ impl Progress {
 
         let notify = inner.clone();
 
-        spawn(async move {
+        tasks::spawn("logical publisher progress", async move {
             let mut prev = 0;
             let table = if let Some(ref table) = notify.table {
                 format!(" for table \"{}\".\"{}\"", table.schema, table.name)

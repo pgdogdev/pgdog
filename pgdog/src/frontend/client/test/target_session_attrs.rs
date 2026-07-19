@@ -1,58 +1,51 @@
-use super::*;
+use crate::{
+    config::Role,
+    expect_message,
+    net::{ErrorResponse, Parameters, Protocol, Query, ReadyForQuery},
+};
 
-async fn run_target_session_test(property: &str, query: &str) -> Message {
-    let mut params = Parameters::default();
-    params.insert("pgdog.role", property);
-
-    let (mut stream, mut client) = test_client_with_params(params, true).await;
-    let mut engine = QueryEngine::from_client(&client).unwrap();
-
-    let expected = if property == "primary" {
-        Role::Primary
-    } else if property == "replica" {
-        Role::Replica
-    } else {
-        panic!("unexpected property: {}", property);
-    };
-    assert_eq!(client.sticky.role, Some(expected));
-
-    stream
-        .write_all(&Query::new(query).to_bytes().unwrap())
-        .await
-        .unwrap();
-    stream.flush().await.unwrap();
-
-    client.buffer(State::Idle).await.unwrap();
-    client.client_messages(&mut engine).await.unwrap();
-
-    let reply = engine.backend().read().await.unwrap();
-
-    reply
-}
+use super::test_client::TestClient;
 
 #[tokio::test]
 async fn test_target_session_attrs_standby() {
-    let reply = run_target_session_test(
-        "replica",
-        "CREATE TABLE test_target_session_attrs_standby(id BIGINT)",
-    )
-    .await;
-    assert_eq!(reply.code(), 'E');
-    let error = ErrorResponse::from_bytes(reply.to_bytes().unwrap()).unwrap();
+    let mut params = Parameters::default();
+    params.insert("pgdog.role", "replica");
+
+    let mut client = TestClient::new_replicas(params).await;
+    assert_eq!(client.client().sticky.role, Some(Role::Replica));
+
+    client
+        .send_simple(Query::new(
+            "CREATE TABLE test_target_session_attrs_standby(id BIGINT)",
+        ))
+        .await;
+
+    let err = expect_message!(client.read().await, ErrorResponse);
     assert_eq!(
-        error.message,
+        err.message,
         "cannot execute CREATE TABLE in a read-only transaction"
     );
+    expect_message!(client.read().await, ReadyForQuery);
 }
 
 #[tokio::test]
 async fn test_target_session_attrs_primary() {
+    let mut params = Parameters::default();
+    params.insert("pgdog.role", "primary");
+
+    let mut client = TestClient::new_replicas(params).await;
+    assert_eq!(client.client().sticky.role, Some(Role::Primary));
+
     for _ in 0..5 {
-        let reply = run_target_session_test(
-            "primary",
-            "CREATE TABLE IF NOT EXISTS test_target_session_attrs_primary(id BIGINT)",
-        )
-        .await;
-        assert_ne!(reply.code(), 'E');
+        client
+            .send_simple(Query::new(
+                "CREATE TABLE IF NOT EXISTS test_target_session_attrs_primary(id BIGINT)",
+            ))
+            .await;
+
+        // Read until ReadyForQuery — may include NOTICE messages.
+        for msg in client.read_until('Z').await.unwrap() {
+            assert_ne!(msg.code(), 'E');
+        }
     }
 }

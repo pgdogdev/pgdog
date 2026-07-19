@@ -2,7 +2,7 @@ pub use pgdog_vector::{Centroids, Distance};
 
 #[cfg(test)]
 mod test {
-    use crate::net::messages::{data_types::Float, Vector};
+    use crate::net::messages::{Vector, data_types::Float};
 
     use super::*;
 
@@ -14,6 +14,7 @@ mod test {
         assert_eq!(distance, 0.5);
     }
 
+    #[allow(clippy::print_stdout)]
     #[test]
     fn test_simd_features() {
         println!("SIMD features available:");

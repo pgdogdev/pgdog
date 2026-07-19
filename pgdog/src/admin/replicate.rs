@@ -2,7 +2,8 @@
 
 use tracing::info;
 
-use crate::backend::replication::logical::admin::{Task, TaskType};
+use crate::api::replication::ReplicationTask;
+use crate::api::run_task;
 use crate::backend::replication::orchestrator::Orchestrator;
 
 use super::prelude::*;
@@ -30,7 +31,13 @@ impl Command for Replicate {
                 publication: publication.to_owned(),
                 replication_slot: None,
             }),
-            ["replicate", from_database, to_database, publication, replication_slot] => Ok(Self {
+            [
+                "replicate",
+                from_database,
+                to_database,
+                publication,
+                replication_slot,
+            ] => Ok(Self {
                 from_database: from_database.to_owned(),
                 to_database: to_database.to_owned(),
                 publication: publication.to_owned(),
@@ -54,7 +61,7 @@ impl Command for Replicate {
         )?;
 
         let waiter = orchestrator.replicate().await?;
-        let task_id = Task::register(TaskType::Replication(Box::new(waiter)));
+        let task_id = run_task(ReplicationTask::builder().waiter(waiter).build()).id();
 
         let mut dr = DataRow::new();
         dr.add(task_id.to_string());

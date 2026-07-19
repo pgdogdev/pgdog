@@ -6,6 +6,8 @@ use std::time::Duration;
 use super::prelude::*;
 use crate::{net::c_string_buf, state::State};
 
+use crate::frontend::Error as FrontendError;
+
 /// ErrorResponse (B) message.
 #[derive(Debug, Clone)]
 pub struct ErrorResponse {
@@ -33,6 +35,11 @@ impl Default for ErrorResponse {
 }
 
 impl ErrorResponse {
+    /// True if this error response signals an invalid password (SQLSTATE 28P01).
+    pub fn is_bad_password(&self) -> bool {
+        self.code == "28P01"
+    }
+
     /// Authentication error.
     pub fn auth(user: &str, database: &str) -> ErrorResponse {
         ErrorResponse {
@@ -76,6 +83,40 @@ impl ErrorResponse {
             context: None,
             file: None,
             routine: None,
+        }
+    }
+
+    pub fn set_shard_after_connect(name: &str) -> ErrorResponse {
+        ErrorResponse {
+            severity: "ERROR".into(),
+            code: "58000".into(),
+            message: format!(
+                "cannot use \"SET {}\" after connecting to a server; \
+                 set it before running any queries",
+                name
+            ),
+            routine: Some("client::QueryEngine::set".into()),
+            ..Default::default()
+        }
+    }
+
+    pub fn omni_in_direct_to_shard() -> ErrorResponse {
+        ErrorResponse {
+            severity: "ERROR".into(),
+            code: "58000".into(),
+            message: "cannot write to an omnisharded table in a direct-to-shard transaction".into(),
+            routine: Some("client::QueryEngine::route_query".into()),
+            ..Default::default()
+        }
+    }
+
+    pub fn direct_shard_mismatch() -> ErrorResponse {
+        ErrorResponse {
+            severity: "ERROR".into(),
+            code: "58000".into(),
+            message: "cannot switch shards in a direct-to-shard transaction".into(),
+            routine: Some("client::QueryEngine::route_query".into()),
+            ..Default::default()
         }
     }
 
@@ -157,6 +198,18 @@ impl ErrorResponse {
         }
     }
 
+    pub fn protocol_violation(err: &str) -> ErrorResponse {
+        Self {
+            severity: "ERROR".into(),
+            code: "08P01".into(),
+            message: err.into(),
+            detail: None,
+            context: None,
+            file: None,
+            routine: None,
+        }
+    }
+
     pub fn tls_required() -> ErrorResponse {
         Self {
             severity: "FATAL".into(),
@@ -182,6 +235,39 @@ impl ErrorResponse {
         }
     }
 
+    pub fn from_client_err(err: &FrontendError) -> Self {
+        use crate::backend::Error as BackendError;
+        if let FrontendError::Backend(BackendError::ExecutionError(err)) = err {
+            *(err.clone())
+        } else {
+            Self {
+                severity: "FATAL".into(),
+                code: "58000".into(),
+                message: err.to_string(),
+                ..Default::default()
+            }
+        }
+    }
+
+    /// Whether this Postgres error is transient and the operation can be retried.
+    pub fn is_retryable(&self) -> bool {
+        matches!(
+            self.code.as_str(),
+            // Connection exceptions — server unreachable or dropped the connection.
+            // 08P01 (protocol_violation) is intentionally excluded: that signals a
+            // client-side bug and retrying would just repeat the same violation.
+            "08000" | "08001" | "08003" | "08004" | "08006" | "08007"
+            // Serialization conflict / deadlock — Postgres aborts one txn; retry succeeds.
+            | "40001" | "40P01"
+            // Operator-intervention: admin shutdown, crash, or startup not ready.
+            | "57P01" | "57P02" | "57P03"
+            // Too many connections — transient resource limit.
+            | "53300"
+            // Lock timeout — another transaction holds the lock; retry after reconnect.
+            | "55P03"
+        )
+    }
+
     pub fn no_transaction() -> Self {
         Self {
             severity: "WARNING".into(),
@@ -200,6 +286,19 @@ impl ErrorResponse {
             message:
                 "current transaction is aborted, commands ignored until end of transaction block"
                     .into(),
+            ..Default::default()
+        }
+    }
+
+    pub fn query_too_large(size: usize, limit: usize) -> Self {
+        Self {
+            severity: "FATAL".into(),
+            code: "54000".into(),
+            message: "query size exceeds query_size_limit".into(),
+            detail: Some(format!(
+                "message is {} bytes, query_size_limit is {} bytes",
+                size, limit
+            )),
             ..Default::default()
         }
     }
@@ -243,7 +342,7 @@ impl FromBytes for ErrorResponse {
 }
 
 impl ToBytes for ErrorResponse {
-    fn to_bytes(&self) -> Result<Bytes, Error> {
+    fn to_bytes(&self) -> Bytes {
         let mut payload = Payload::named(self.code());
 
         payload.put_u8(b'S');
@@ -280,7 +379,7 @@ impl ToBytes for ErrorResponse {
 
         payload.put_u8(0);
 
-        Ok(payload.freeze())
+        payload.freeze()
     }
 }
 

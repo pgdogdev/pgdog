@@ -1,241 +1,809 @@
+use derive_more::FromStr;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::env;
+use std::fmt;
 use std::net::Ipv4Addr;
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::time::Duration;
 
+use crate::UniqueIdFunction;
 use crate::pooling::ConnectionRecovery;
 use crate::{
     CopyFormat, CutoverTimeoutAction, LoadSchema, QueryParserEngine, QueryParserLevel,
     SystemCatalogsBehavior,
 };
 
-use super::auth::{AuthType, PassthoughAuth};
+use super::auth::{AuthType, PassthroughAuth};
 use super::database::{LoadBalancingStrategy, ReadWriteSplit, ReadWriteStrategy};
 use super::networking::TlsVerifyMode;
 use super::pooling::{PoolerMode, PreparedStatements};
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+/// Format to use for PgDog application logs.
+#[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Eq, Hash, Default, JsonSchema)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub enum LogFormat {
+    /// Human-readable text logs (default).
+    #[default]
+    Text,
+    /// Structured JSON logs suitable for ECS/Datadog ingestion.
+    Json,
+    /// Structured JSON logs with event fields flattened into the root object.
+    JsonFlattened,
+}
+
+impl fmt::Display for LogFormat {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Text => f.write_str("text"),
+            Self::Json => f.write_str("json"),
+            Self::JsonFlattened => f.write_str("json_flattened"),
+        }
+    }
+}
+
+impl FromStr for LogFormat {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_ascii_lowercase().as_str() {
+            "text" => Ok(Self::Text),
+            "json" => Ok(Self::Json),
+            "json_flattened" => Ok(Self::JsonFlattened),
+            _ => Err(()),
+        }
+    }
+}
+
+/// Action to take when a client query message exceeds `query_size_limit`.
+#[derive(
+    Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Eq, Hash, Default, JsonSchema, FromStr,
+)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub enum QuerySizeLimitAction {
+    /// Log a warning with a sample of the query (default).
+    #[default]
+    Warn,
+    /// Reject the message before reading it into memory and disconnect the client.
+    Block,
+}
+
+/// General settings are relevant to the operations of the pooler itself, or apply to all database pools.
+///
+/// https://docs.pgdog.dev/configuration/pgdog.toml/general/
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct General {
-    /// Run on this address.
+    /// The IP address of the local network interface PgDog will bind to listen for connections.
+    ///
+    /// **Note:** This setting cannot be changed at runtime.
+    ///
+    /// _Default:_ `0.0.0.0`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#host
     #[serde(default = "General::host")]
     pub host: String,
-    /// Run on this port.
+
+    /// The TCP port PgDog will bind to listen for connections.
+    ///
+    /// **Note:** This setting cannot be changed at runtime.
+    ///
+    /// _Default:_ `6432`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#port
     #[serde(default = "General::port")]
     pub port: u16,
-    /// Spawn this many Tokio threads.
+
+    /// Number of Tokio threads to spawn at pooler startup. In multi-core systems, the recommended setting is two (2) per virtual CPU. The value `0` means to spawn no threads and use the current thread runtime.
+    ///
+    /// **Note:** This setting cannot be changed at runtime.
+    ///
+    /// _Default:_ `2`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#workers
     #[serde(default = "General::workers")]
     pub workers: usize,
-    /// Default pool size, e.g. 10.
-    #[serde(default = "General::default_pool_size")]
+
+    /// Default maximum number of server connections per database pool.
+    ///
+    /// **Note:** We strongly recommend keeping this value well below the supported connections of the backend database(s) to allow connections for maintenance in high load scenarios.
+    ///
+    /// _Default:_ `10`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#default_pool_size
+    #[serde(default = "General::default_pool_size", alias = "max_pool_size")]
     pub default_pool_size: usize,
-    /// Minimum number of connections to maintain in the pool.
+
+    /// Default minimum number of connections per database pool to keep open at all times.
+    ///
+    /// _Default:_ `1`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#min_pool_size
     #[serde(default = "General::min_pool_size")]
     pub min_pool_size: usize,
-    /// Pooler mode, e.g. transaction.
+
+    /// Default pooler mode to use for database pools.
+    ///
+    /// _Default:_ `transaction`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#pooler_mode
     #[serde(default)]
     pub pooler_mode: PoolerMode,
-    /// How often to check a connection.
+
+    /// Frequency of healthchecks performed by PgDog to ensure connections provided to clients from the pool are working.
+    ///
+    /// _Default:_ `30000`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#healthcheck_interval
     #[serde(default = "General::healthcheck_interval")]
     pub healthcheck_interval: u64,
-    /// How often to issue a healthcheck via an idle connection.
+
+    /// Frequency of healthchecks performed by PgDog on idle connections.
+    /// Set to `0` to disable idle healthchecks.
+    ///
+    /// _Default:_ `30000`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#idle_healthcheck_interval
     #[serde(default = "General::idle_healthcheck_interval")]
     pub idle_healthcheck_interval: u64,
-    /// Delay idle healthchecks by this time at startup.
+
+    /// Delay running idle healthchecks at PgDog startup to give databases (and pools) time to spin up.
+    ///
+    /// _Default:_ `5000`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#idle_healthcheck_delay
     #[serde(default = "General::idle_healthcheck_delay")]
     pub idle_healthcheck_delay: u64,
-    /// Healthcheck timeout.
+
+    /// Maximum amount of time to wait for a healthcheck query to complete.
+    ///
+    /// _Default:_ `5000`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#healthcheck_timeout
     #[serde(default = "General::healthcheck_timeout")]
     pub healthcheck_timeout: u64,
-    /// HTTP health check port.
+
+    /// Enable load balancer HTTP health checks with the HTTP server running on this port.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#healthcheck_port
     pub healthcheck_port: Option<u16>,
-    /// Maximum duration of a ban.
+
+    /// Connection pools blocked from serving traffic due to an error will be placed back into active rotation after this long.
+    ///
+    /// _Default:_ `300000`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#ban_timeout
     #[serde(default = "General::ban_timeout")]
     pub ban_timeout: u64,
-    /// Ban replica lag.
+
+    /// Ban a replica from serving read queries if its replication lag (in milliseconds) exceeds this threshold.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#ban_replica_lag
     #[serde(default = "General::ban_replica_lag")]
     pub ban_replica_lag: u64,
+
+    /// Ban a replica from serving read queries if its replication lag (in bytes) exceeds this threshold.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#ban_replica_lag_bytes
     #[serde(default = "General::ban_replica_lag_bytes")]
     pub ban_replica_lag_bytes: u64,
-    /// Rollback timeout.
+
+    /// How long to allow for `ROLLBACK` queries to run on server connections with unfinished transactions.
+    ///
+    /// _Default:_ `5000`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#rollback_timeout
     #[serde(default = "General::rollback_timeout")]
     pub rollback_timeout: u64,
-    /// Load balancing strategy.
+
+    /// Which strategy to use for load balancing read queries.
+    ///
+    /// _Default:_ `random`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#load_balancing_strategy
     #[serde(default = "General::load_balancing_strategy")]
     pub load_balancing_strategy: LoadBalancingStrategy,
-    /// How aggressive should the query parser be in determining reads.
+
+    /// How aggressive the query parser should be in determining read vs. write queries.
+    ///
+    /// _Default:_ `conservative`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#read_write_strategy
     #[serde(default)]
     pub read_write_strategy: ReadWriteStrategy,
-    /// Read write split.
+
+    /// How to handle the separation of read and write queries.
+    ///
+    /// _Default:_ `include_primary`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#read_write_split
     #[serde(default)]
     pub read_write_split: ReadWriteSplit,
-    /// TLS certificate.
+
+    /// Path to the TLS certificate PgDog will use to setup TLS connections with clients.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#tls_certificate
     pub tls_certificate: Option<PathBuf>,
-    /// TLS private key.
+
+    /// Path to the TLS private key PgDog will use to setup TLS connections with clients.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#tls_private_key
     pub tls_private_key: Option<PathBuf>,
+
+    /// Reject clients that connect without TLS.
+    ///
+    /// _Default:_ `false`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#tls_client_required
     #[serde(default)]
     pub tls_client_required: bool,
-    /// TLS verification mode (for connecting to servers)
+
+    /// How to handle TLS connections to Postgres servers.
+    ///
+    /// _Default:_ `prefer`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#tls_verify
     #[serde(default = "General::default_tls_verify")]
     pub tls_verify: TlsVerifyMode,
-    /// TLS CA certificate (for connecting to servers).
+
+    /// Path to a certificate bundle used to validate the server certificate on TLS connection creation.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#tls_server_ca_certificate
     pub tls_server_ca_certificate: Option<PathBuf>,
-    /// Shutdown timeout.
+
+    /// Path to a certificate bundle used to validate the client certificate on TLS connection creation.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#tls_client_ca_certificate
+    pub tls_client_ca_certificate: Option<PathBuf>,
+
+    /// How long to wait for active clients to finish transactions when shutting down.
+    ///
+    /// _Default:_ `60000`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#shutdown_timeout
     #[serde(default = "General::default_shutdown_timeout")]
     pub shutdown_timeout: u64,
-    /// Shutdown termination timeout (after shutdown_timeout expires, forcibly terminate).
+
+    /// How long to wait for active connections to be forcibly terminated after `shutdown_timeout` expires.
+    ///
+    /// **Note:** If set, PgDog will send `CANCEL` requests to PostgreSQL for any remaining active queries before tearing down connection pools.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#shutdown_termination_timeout
     #[serde(default = "General::default_shutdown_termination_timeout")]
     pub shutdown_termination_timeout: Option<u64>,
-    /// Broadcast IP.
+
+    /// Broadcast IP address used for multi-instance coordination (e.g., schema cache invalidation across nodes).
     pub broadcast_address: Option<Ipv4Addr>,
-    /// Broadcast port.
+
+    /// UDP port used for multi-instance broadcast coordination.
     #[serde(default = "General::broadcast_port")]
     pub broadcast_port: u16,
-    /// Load queries to file (warning: slow, don't use in production).
+
+    /// Path to a file where all queries are logged. Logging every query is slow; do not use in production.
     #[serde(default)]
     pub query_log: Option<PathBuf>,
-    /// Enable OpenMetrics server on this port.
+
+    /// Log queries to stdout. Format: `query [database: db, user: user]`
+    #[serde(default = "General::query_log_stdout")]
+    pub query_log_stdout: bool,
+
+    /// Minimum parse duration in milliseconds that triggers a warning log with the query text.
+    /// Queries whose parsing takes longer than this value are logged at WARN level.
+    /// Set to `0` or omit to disable.
+    ///
+    /// _Default:_ `None` (disabled)
+    pub log_min_duration_parse: Option<u64>,
+
+    /// Maximum number of characters of the query text included in log messages.
+    ///
+    /// _Default:_ `1000`
+    #[serde(default = "General::log_query_sample_length")]
+    pub log_query_sample_length: usize,
+
+    /// Maximum size, in bytes, of a query message (`Query` or `Parse`)
+    /// received from a client, including the 5-byte message header.
+    /// Protects the query parser from very large SQL texts; other
+    /// protocol messages (e.g. `Bind`, `CopyData`) are not affected.
+    /// Depending on the setting `query_size_limit_action` oversized messages are
+    /// either logged or blocked.
+    ///
+    /// _Default:_ `None` (disabled)
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#query_size_limit
+    #[serde(default = "General::default_query_size_limit")]
+    pub query_size_limit: Option<usize>,
+
+    /// Action to take when a client query message exceeds `query_size_limit`.
+    ///
+    /// _Default:_ `warn`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#query_size_limit_action
+    #[serde(default = "General::query_size_limit_action")]
+    pub query_size_limit_action: QuerySizeLimitAction,
+
+    /// The port used for the OpenMetrics HTTP endpoint.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#openmetrics_port
     pub openmetrics_port: Option<u16>,
-    /// OpenMetrics prefix.
+
+    /// Prefix added to all metric names exposed via the OpenMetrics endpoint.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#openmetrics_namespace
     pub openmetrics_namespace: Option<String>,
-    /// Prepared statatements support.
+
+    /// Enables support for prepared statements.
+    ///
+    /// _Default:_ `extended`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#prepared_statements
     #[serde(default)]
     pub prepared_statements: PreparedStatements,
-    /// Parse Queries override.
+
+    /// Deprecated: use [`query_parser`](General::query_parser) set to `"on"` instead.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#query_parser_enabled
     #[serde(default = "General::query_parser_enabled")]
     pub query_parser_enabled: bool,
-    /// Query parser.
+
+    /// Toggle the query parser to enable/disable query parsing and all of its benefits. By default, the query parser is turned on automatically, so only disable it if you know what you're doing.
+    ///
+    /// _Default:_ `auto`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#query_parser
     #[serde(default)]
     pub query_parser: QueryParserLevel,
-    /// Query parser engine.
+
+    /// Limit on the size of the query the regex parser will inspect.
+    #[serde(default = "General::regex_parser_limit")]
+    pub regex_parser_limit: usize,
+
+    /// Underlying parser implementation used to analyze SQL queries.
     #[serde(default)]
     pub query_parser_engine: QueryParserEngine,
-    /// Limit on the number of prepared statements in the server cache.
+
+    /// Number of prepared statements that will be allowed for each server connection.
+    ///
+    /// **Note:** If this limit is reached, the least used statement is closed and replaced with the newest one. Additionally, any unused statements in the global cache above this limit will be removed.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#prepared_statements_limit
     #[serde(default = "General::prepared_statements_limit")]
     pub prepared_statements_limit: usize,
+
+    /// Limit on the number of statements saved in the statement cache used to accelerate query parsing.
+    ///
+    /// _Default:_ `50000`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#query_cache_limit
     #[serde(default = "General::query_cache_limit")]
     pub query_cache_limit: usize,
-    /// Automatically add connection pools for user/database pairs we don't have.
+
+    /// Toggle automatic creation of connection pools given the user name, database and password.
+    ///
+    /// _Default:_ `disabled`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#passthrough_auth
     #[serde(default = "General::default_passthrough_auth")]
-    pub passthrough_auth: PassthoughAuth,
-    /// Server connect timeout.
+    pub passthrough_auth: PassthroughAuth,
+
+    /// Maximum amount of time to allow for PgDog to create a connection to Postgres.
+    ///
+    /// _Default:_ `5000`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#connect_timeout
     #[serde(default = "General::default_connect_timeout")]
     pub connect_timeout: u64,
-    /// Attempt connections multiple times on bad networks.
+
+    /// Maximum number of retries for Postgres server connection attempts.
+    ///
+    /// _Default:_ `1`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#connect_attempts
     #[serde(default = "General::connect_attempts")]
     pub connect_attempts: u64,
-    /// How long to wait between connection attempts.
+
+    /// Amount of time to wait between connection attempt retries.
+    ///
+    /// _Default:_ `0`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#connect_attempt_delay
     #[serde(default = "General::default_connect_attempt_delay")]
     pub connect_attempt_delay: u64,
-    /// How long to wait for a query to return the result before aborting. Dangerous: don't use unless your network is bad.
+
+    /// Maximum amount of time to wait for a Postgres query to finish executing.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#query_timeout
     #[serde(default = "General::default_query_timeout")]
     pub query_timeout: u64,
-    /// Checkout timeout.
+
+    /// Maximum amount of time a client is allowed to wait for a connection from the pool.
+    ///
+    /// _Default:_ `5000`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#checkout_timeout
     #[serde(default = "General::checkout_timeout")]
     pub checkout_timeout: u64,
-    /// Login timeout.
+
+    /// Maximum amount of time new clients have to complete authentication.
+    ///
+    /// _Default:_ `60000`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#client_login_timeout
     #[serde(default = "General::client_login_timeout")]
     pub client_login_timeout: u64,
-    /// Dry run for sharding. Parse the query, route to shard 0.
+
+    /// Enable the query parser in single-shard deployments and record its decisions.
+    ///
+    /// _Default:_ `false`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#dry_run
     #[serde(default)]
     pub dry_run: bool,
-    /// Idle timeout.
+
+    /// Close server connections that have been idle, i.e., haven't served a single client transaction, for this amount of time.
+    ///
+    /// _Default:_ `60000`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#idle_timeout
     #[serde(default = "General::idle_timeout")]
     pub idle_timeout: u64,
-    /// Client idle timeout.
+
+    /// Close client connections that have been idle, i.e., haven't sent any queries, for this amount of time.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#client_idle_timeout
     #[serde(default = "General::default_client_idle_timeout")]
     pub client_idle_timeout: u64,
-    /// Client idle in transaction timeout.
+
+    /// Close client connections that have been idle inside a transaction for this amount of time.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#client_idle_in_transaction_timeout
     #[serde(default = "General::default_client_idle_in_transaction_timeout")]
     pub client_idle_in_transaction_timeout: u64,
-    /// Server lifetime.
+
+    /// Maximum amount of time a server connection is allowed to exist.
+    ///
+    /// _Default:_ `86400000`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#server_lifetime
     #[serde(default = "General::server_lifetime")]
     pub server_lifetime: u64,
-    /// Mirror queue size.
+
+    /// Maximum random adjustment applied to `server_lifetime` per backend
+    /// connection, in milliseconds. Each connection's effective lifetime
+    /// is sampled uniformly from `[server_lifetime - jitter,
+    /// server_lifetime + jitter]` once at creation time, breaking up
+    /// synchronized cohorts that would otherwise expire together.
+    ///
+    /// _Default:_ `0` (no jitter; existing behavior).
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#server_lifetime_jitter
+    #[serde(default = "General::server_lifetime_jitter")]
+    pub server_lifetime_jitter: u64,
+
+    /// How many transactions can wait while the mirror database processes previous requests.
+    ///
+    /// _Default:_ `128`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#mirror_queue
     #[serde(default = "General::mirror_queue")]
     pub mirror_queue: usize,
-    /// Mirror exposure
+
+    /// How many transactions to send to the mirror as a fraction of regular traffic.
+    ///
+    /// _Default:_ `1.0`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#mirror_exposure
     #[serde(default = "General::mirror_exposure")]
     pub mirror_exposure: f32,
+
+    /// What kind of authentication mechanism to use for client connections.
+    ///
+    /// _Default:_ `scram`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#auth_type
     #[serde(default)]
     pub auth_type: AuthType,
-    /// Disable cross-shard queries.
+
+    /// Disable cross-shard queries globally. When enabled, queries touching more than one shard are rejected.
     #[serde(default)]
     pub cross_shard_disabled: bool,
-    /// How often to refresh DNS entries, in ms.
+
+    /// Overrides the TTL set on DNS records received from DNS servers.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#dns_ttl
     #[serde(default)]
     pub dns_ttl: Option<u64>,
-    /// LISTEN/NOTIFY channel size.
+
+    /// Enables support for pub/sub and configures the size of the background task queue.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#pub_sub_channel_size
     #[serde(default)]
     pub pub_sub_channel_size: usize,
-    /// Log client connections.
+
+    /// Format to use for PgDog application logs.
+    ///
+    /// _Default:_ `text`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#log_format
+    #[serde(default = "General::log_format")]
+    pub log_format: LogFormat,
+
+    /// Log filter directives using the same syntax as the `RUST_LOG` environment variable.
+    ///
+    /// _Default:_ `info`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#log_level
+    #[serde(default = "General::log_level")]
+    pub log_level: String,
+
+    /// If enabled, log every time a user creates a new connection to PgDog.
+    ///
+    /// _Default:_ `true`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#log_connections
     #[serde(default = "General::log_connections")]
     pub log_connections: bool,
-    /// Log client disconnections.
+
+    /// If enabled, log every time a user disconnects from PgDog.
+    ///
+    /// _Default:_ `true`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#log_disconnections
     #[serde(default = "General::log_disconnections")]
     pub log_disconnections: bool,
-    /// Two-phase commit.
+
+    /// Window, in milliseconds, over which to deduplicate identical log messages. Set to `0` to disable throttling.
+    ///
+    /// **Note:** When enabled, identical messages (same level, target, and body) that exceed `log_dedup_threshold` within this window are suppressed and replaced with a single summary line at the end of the window.
+    ///
+    /// _Default:_ `0`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#log_dedup_window
+    #[serde(default)]
+    pub log_dedup_window: u64,
+
+    /// Number of identical log messages allowed within `log_dedup_window` before further duplicates are suppressed. Set to `0` to disable throttling.
+    ///
+    /// _Default:_ `0`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#log_dedup_threshold
+    #[serde(default)]
+    pub log_dedup_threshold: u64,
+
+    /// Enable two-phase commit for write, cross-shard transactions and replications.
+    ///
+    /// _Default:_ `false`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#two_phase_commit
     #[serde(default)]
     pub two_phase_commit: bool,
-    /// Two-phase commit automatic transactions.
+
+    /// Enable automatic conversion of single-statement write transactions to use two-phase commit.
+    ///
+    /// _Default:_ `false`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#two_phase_commit_auto
     #[serde(default)]
     pub two_phase_commit_auto: Option<bool>,
-    /// Enable expanded EXPLAIN output.
+
+    /// Directory where the two-phase commit write-ahead log is stored.
+    ///
+    /// **Note:** This setting cannot be changed at runtime. PgDog acquires an exclusive `flock` on `<dir>/.lock` at startup. If the directory cannot be created or written to, or another PgDog process already holds the lock, the WAL is disabled and a warning is logged: 2PC will continue to function but will not be durable across restarts.
+    ///
+    /// _Default:_ `./pgdog_wal`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#two_phase_commit_wal_dir
+    #[serde(default = "General::two_phase_commit_wal_dir")]
+    pub two_phase_commit_wal_dir: Option<PathBuf>,
+
+    /// Maximum size, in bytes, of a single two-phase commit WAL segment file before it is rotated.
+    ///
+    /// _Default:_ `16777216` (16 MiB)
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#two_phase_commit_wal_segment_size
+    #[serde(default = "General::two_phase_commit_wal_segment_size")]
+    pub two_phase_commit_wal_segment_size: u64,
+
+    /// How long, in milliseconds, the two-phase commit WAL writer waits to coalesce concurrent appends into a single fsync.
+    ///
+    /// **Note:** Setting this to `0` disables waiting for additional appends; records already queued in the channel when the writer wakes are still batched into one fsync. Higher values trade per-transaction commit latency for fewer fsyncs under load.
+    ///
+    /// _Default:_ `2`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#two_phase_commit_wal_fsync_interval
+    #[serde(default = "General::two_phase_commit_wal_fsync_interval")]
+    pub two_phase_commit_wal_fsync_interval: u64,
+
+    /// How often, in seconds, to write a checkpoint record to the two-phase commit WAL and garbage-collect old segments.
+    ///
+    /// _Default:_ `60`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#two_phase_commit_wal_checkpoint_interval
+    #[serde(default = "General::two_phase_commit_wal_checkpoint_interval")]
+    pub two_phase_commit_wal_checkpoint_interval: u64,
+
+    /// Enable expanded (`\x`) output for `EXPLAIN` results returned by PgDog's built-in query plan aggregation.
     #[serde(default = "General::expanded_explain")]
     pub expanded_explain: bool,
-    /// Stats averaging period (in milliseconds).
+
+    /// How often to calculate averages shown in `SHOW STATS` admin command and the Prometheus metrics.
+    ///
+    /// _Default:_ `15000`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#stats_period
     #[serde(default = "General::stats_period")]
     pub stats_period: u64,
-    /// Connection cleanup algorithm.
+
+    /// Controls if server connections are recovered or dropped if a client abruptly disconnects.
+    ///
+    /// _Default:_ `recover`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#connection_recovery
     #[serde(default = "General::connection_recovery")]
     pub connection_recovery: ConnectionRecovery,
-    /// Client connection recovery
+
+    /// Controls whether to disconnect clients upon encountering connection pool errors.
+    ///
+    /// **Note:** Set this to `drop` if your clients are async / use pipelining mode.
+    ///
+    /// _Default:_ `recover`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#client_connection_recovery
     #[serde(default = "General::client_connection_recovery")]
     pub client_connection_recovery: ConnectionRecovery,
-    /// LSN check interval.
+
+    /// How frequently to run the replication delay check.
+    ///
+    /// _Default:_ `5000`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#lsn_check_interval
     #[serde(default = "General::lsn_check_interval")]
     pub lsn_check_interval: u64,
-    /// LSN check timeout.
+
+    /// Maximum amount of time allowed for the replication delay query to return a result.
+    ///
+    /// _Default:_ `5000`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#lsn_check_timeout
     #[serde(default = "General::lsn_check_timeout")]
     pub lsn_check_timeout: u64,
-    /// LSN check delay.
+
+    /// For how long to delay checking for replication delay.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#lsn_check_delay
     #[serde(default = "General::lsn_check_delay")]
     pub lsn_check_delay: u64,
+
     /// Minimum ID for unique ID generator.
     #[serde(default)]
     pub unique_id_min: u64,
-    /// System catalogs are omnisharded?
+
+    /// Unique ID generation function.
+    #[serde(default)]
+    pub unique_id_function: UniqueIdFunction,
+
+    /// Changes how system catalog tables (like `pg_database`, `pg_class`, etc.) are treated by the query router.
+    ///
+    /// _Default:_ `omnisharded_sticky`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#system_catalogs
     #[serde(default = "General::default_system_catalogs")]
     pub system_catalogs: SystemCatalogsBehavior,
-    /// Omnisharded queries are sticky by default.
+
+    /// If turned on, queries touching omnisharded tables are always sent to the same shard for any given client connection. The shard is determined at random on connection creation.
+    ///
+    /// _Default:_ `false`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#omnisharded_sticky
     #[serde(default)]
     pub omnisharded_sticky: bool,
-    /// Copy format used for resharding.
+
+    /// Which format to use for `COPY` statements during resharding.
+    ///
+    /// **Note:** Text format is required when migrating from `INTEGER` to `BIGINT` primary keys during resharding.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#resharding_copy_format
     #[serde(default)]
     pub resharding_copy_format: CopyFormat,
-    /// Trigger a schema reload on DDL like CREATE TABLE.
+
+    /// How many parallel copies to launch, irrespective of the number of available replicas.
+    #[serde(default = "General::resharding_parallel_copies")]
+    pub resharding_parallel_copies: usize,
+
+    /// Maximum number of retries for a failed table copy during resharding (per-table).
+    /// Retries use exponential backoff starting at `resharding_copy_retry_min_delay`.
+    /// _Default:_ `5`
+    #[serde(default = "General::resharding_copy_retry_max_attempts")]
+    pub resharding_copy_retry_max_attempts: usize,
+
+    /// Base delay in milliseconds between table copy retries.
+    /// Each successive attempt doubles the delay, capped at 32×.
+    /// _Default:_ `1000`
+    #[serde(default = "General::resharding_copy_retry_min_delay")]
+    pub resharding_copy_retry_min_delay: u64,
+
+    /// Maximum number of consecutive replication-subscriber errors tolerated before
+    /// the source error is propagated. Each failure triggers `slot.reconnect()`,
+    /// after which Postgres re-streams every event since the last acked commit.
+    /// `0` retries indefinitely.
+    ///
+    /// _Default:_ `5`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#resharding_replication_retry_max_attempts
+    #[serde(default = "General::resharding_replication_retry_max_attempts")]
+    pub resharding_replication_retry_max_attempts: usize,
+
+    /// Delay in milliseconds between replication subscriber retry attempts.
+    ///
+    /// _Default:_ `1000`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#resharding_replication_retry_min_delay
+    #[serde(default = "General::resharding_replication_retry_min_delay")]
+    pub resharding_replication_retry_min_delay: u64,
+
+    /// Automatically reload the schema cache used by PgDog to route queries upon detecting DDL statements.
+    ///
+    /// **Note:** This setting requires PgDog Enterprise Edition to work as expected. If using the open source edition, it will only work with single-node PgDog deployments, e.g., in local development or CI.
+    ///
+    /// _Default:_ `true`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#reload_schema_on_ddl
     #[serde(default = "General::reload_schema_on_ddl")]
     pub reload_schema_on_ddl: bool,
-    /// Load database schema.
+
+    /// Controls whether PgDog loads the database schema at startup for query routing.
+    ///
+    /// _Default:_ `auto`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#load_schema
     #[serde(default = "General::load_schema")]
     pub load_schema: LoadSchema,
-    /// Cutover maintenance threshold.
+
+    /// Replication lag threshold (in bytes) at which PgDog will pause traffic automatically during a traffic cutover.
+    ///
+    /// _Default:_ `1000000`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#cutover_traffic_stop_threshold
     #[serde(default = "General::cutover_traffic_stop_threshold")]
     pub cutover_traffic_stop_threshold: u64,
-    /// Cutover lag threshold.
+
+    /// Replication lag (in bytes) that must be reached before PgDog will swap the configuration during a cutover.
+    ///
+    /// _Default:_ `0`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#cutover_replication_lag_threshold
     #[serde(default = "General::cutover_replication_lag_threshold")]
     pub cutover_replication_lag_threshold: u64,
-    /// Cutover last transaction delay.
+
+    /// Time (in milliseconds) since the last transaction on any table in the publication before PgDog will swap the configuration during a cutover.
+    ///
+    /// _Default:_ `1000`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#cutover_last_transaction_delay
     #[serde(default = "General::cutover_last_transaction_delay")]
     pub cutover_last_transaction_delay: u64,
-    /// Cutover timeout: how long to wait before doing a cutover anyway.
+
+    /// Maximum amount of time (in milliseconds) to wait for the cutover thresholds to be met. If exceeded, PgDog will take the action specified by `cutover_timeout_action`.
+    ///
+    /// _Default:_ `30000`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#cutover_timeout
     #[serde(default = "General::cutover_timeout")]
     pub cutover_timeout: u64,
-    /// Cutover abort timeout: if cutover takes longer than this, abort.
+
+    /// Action to take when `cutover_timeout` is exceeded.
+    ///
+    /// _Default:_ `abort`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#cutover_timeout_action
     #[serde(default = "General::cutover_timeout_action")]
     pub cutover_timeout_action: CutoverTimeoutAction,
-    /// Cutover save config to disk.
+
+    /// Save the swapped configuration to disk after a traffic cutover. When enabled, PgDog will backup both configuration files as `pgdog.bak.toml` and `users.bak.toml`, and write the new configuration to `pgdog.toml` and `users.toml`.
+    ///
+    /// _Default:_ `false`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#cutover_save_config
     #[serde(default)]
     pub cutover_save_config: bool,
     /// Maximum number of dynamically-created wildcard pools (0 = unlimited).
@@ -277,16 +845,23 @@ impl Default for General {
             tls_client_required: bool::default(),
             tls_verify: Self::default_tls_verify(),
             tls_server_ca_certificate: Self::tls_server_ca_certificate(),
+            tls_client_ca_certificate: Self::tls_client_ca_certificate(),
             shutdown_timeout: Self::default_shutdown_timeout(),
             shutdown_termination_timeout: Self::default_shutdown_termination_timeout(),
             broadcast_address: Self::broadcast_address(),
             broadcast_port: Self::broadcast_port(),
             query_log: Self::query_log(),
+            query_log_stdout: Self::query_log_stdout(),
+            log_min_duration_parse: Self::default_log_min_duration_parse(),
+            log_query_sample_length: Self::log_query_sample_length(),
+            query_size_limit: Self::default_query_size_limit(),
+            query_size_limit_action: Self::query_size_limit_action(),
             openmetrics_port: Self::openmetrics_port(),
             openmetrics_namespace: Self::openmetrics_namespace(),
             prepared_statements: Self::prepared_statements(),
             query_parser_enabled: Self::query_parser_enabled(),
             query_parser: QueryParserLevel::default(),
+            regex_parser_limit: Self::regex_parser_limit(),
             query_parser_engine: QueryParserEngine::default(),
             prepared_statements_limit: Self::prepared_statements_limit(),
             query_cache_limit: Self::query_cache_limit(),
@@ -307,12 +882,22 @@ impl Default for General {
             cross_shard_disabled: Self::cross_shard_disabled(),
             dns_ttl: Self::default_dns_ttl(),
             pub_sub_channel_size: Self::pub_sub_channel_size(),
+            log_format: Self::log_format(),
+            log_level: Self::log_level(),
             log_connections: Self::log_connections(),
             log_disconnections: Self::log_disconnections(),
+            log_dedup_window: 0,
+            log_dedup_threshold: 0,
             two_phase_commit: bool::default(),
             two_phase_commit_auto: None,
+            two_phase_commit_wal_dir: Self::two_phase_commit_wal_dir(),
+            two_phase_commit_wal_segment_size: Self::two_phase_commit_wal_segment_size(),
+            two_phase_commit_wal_fsync_interval: Self::two_phase_commit_wal_fsync_interval(),
+            two_phase_commit_wal_checkpoint_interval:
+                Self::two_phase_commit_wal_checkpoint_interval(),
             expanded_explain: Self::expanded_explain(),
             server_lifetime: Self::server_lifetime(),
+            server_lifetime_jitter: Self::server_lifetime_jitter(),
             stats_period: Self::stats_period(),
             connection_recovery: Self::connection_recovery(),
             client_connection_recovery: Self::client_connection_recovery(),
@@ -323,6 +908,12 @@ impl Default for General {
             system_catalogs: Self::default_system_catalogs(),
             omnisharded_sticky: bool::default(),
             resharding_copy_format: CopyFormat::default(),
+            resharding_parallel_copies: Self::resharding_parallel_copies(),
+            resharding_copy_retry_max_attempts: Self::resharding_copy_retry_max_attempts(),
+            resharding_copy_retry_min_delay: Self::resharding_copy_retry_min_delay(),
+            resharding_replication_retry_max_attempts:
+                Self::resharding_replication_retry_max_attempts(),
+            resharding_replication_retry_min_delay: Self::resharding_replication_retry_min_delay(),
             reload_schema_on_ddl: Self::reload_schema_on_ddl(),
             load_schema: Self::load_schema(),
             cutover_replication_lag_threshold: Self::cutover_replication_lag_threshold(),
@@ -333,6 +924,7 @@ impl Default for General {
             cutover_save_config: bool::default(),
             max_wildcard_pools: 0,
             wildcard_pool_idle_timeout: 0,
+            unique_id_function: Self::unique_id_function(),
         }
     }
 }
@@ -415,6 +1007,10 @@ impl General {
         Self::env_option("PGDOG_HEALTHCHECK_PORT")
     }
 
+    pub fn regex_parser_limit() -> usize {
+        1_000
+    }
+
     fn ban_timeout() -> u64 {
         Self::env_or_default(
             "PGDOG_BAN_TIMEOUT",
@@ -432,9 +1028,13 @@ impl General {
         Self::env_or_default("PGDOG_BAN_REPLICA_LAG_BYTES", i64::MAX as u64)
     }
 
+    fn unique_id_function() -> UniqueIdFunction {
+        Self::env_enum_or_default("PGDOG_UNIQUE_ID_FUNCTION")
+    }
+
     fn cutover_replication_lag_threshold() -> u64 {
-        Self::env_or_default("PGDOG_CUTOVER_REPLICATION_LAG_THRESHOLD", 1_000)
-        // 1KB
+        Self::env_or_default("PGDOG_CUTOVER_REPLICATION_LAG_THRESHOLD", 0)
+        // 0 bytes
     }
 
     fn cutover_traffic_stop_threshold() -> u64 {
@@ -457,6 +1057,22 @@ impl General {
 
     fn rollback_timeout() -> u64 {
         Self::env_or_default("PGDOG_ROLLBACK_TIMEOUT", 5_000)
+    }
+
+    fn two_phase_commit_wal_dir() -> Option<PathBuf> {
+        Self::env_option_string("PGDOG_TWO_PHASE_COMMIT_WAL_DIR").map(PathBuf::from)
+    }
+
+    fn two_phase_commit_wal_segment_size() -> u64 {
+        Self::env_or_default("PGDOG_TWO_PHASE_COMMIT_WAL_SEGMENT_SIZE", 16 * 1024 * 1024)
+    }
+
+    fn two_phase_commit_wal_fsync_interval() -> u64 {
+        Self::env_or_default("PGDOG_TWO_PHASE_COMMIT_WAL_FSYNC_INTERVAL", 2)
+    }
+
+    fn two_phase_commit_wal_checkpoint_interval() -> u64 {
+        Self::env_or_default("PGDOG_TWO_PHASE_COMMIT_WAL_CHECKPOINT_INTERVAL", 60)
     }
 
     fn idle_timeout() -> u64 {
@@ -533,6 +1149,26 @@ impl General {
         Self::env_enum_or_default("PGDOG_SYSTEM_CATALOGS")
     }
 
+    fn resharding_parallel_copies() -> usize {
+        1
+    }
+
+    fn resharding_copy_retry_max_attempts() -> usize {
+        5
+    }
+
+    fn resharding_copy_retry_min_delay() -> u64 {
+        1000
+    }
+
+    fn resharding_replication_retry_max_attempts() -> usize {
+        Self::env_or_default("PGDOG_RESHARDING_REPLICATION_RETRY_MAX_ATTEMPTS", 5)
+    }
+
+    fn resharding_replication_retry_min_delay() -> u64 {
+        Self::env_or_default("PGDOG_RESHARDING_REPLICATION_RETRY_MIN_DELAY", 1000)
+    }
+
     fn default_shutdown_termination_timeout() -> Option<u64> {
         Self::env_option("PGDOG_SHUTDOWN_TERMINATION_TIMEOUT")
     }
@@ -568,6 +1204,10 @@ impl General {
         )
     }
 
+    pub fn lsn_checks_enabled(&self) -> bool {
+        self.lsn_check_delay < crate::MAX_DURATION.as_millis() as u64
+    }
+
     fn read_write_strategy() -> ReadWriteStrategy {
         Self::env_enum_or_default("PGDOG_READ_WRITE_STRATEGY")
     }
@@ -600,8 +1240,36 @@ impl General {
         Self::env_option_string("PGDOG_TLS_SERVER_CA_CERTIFICATE").map(PathBuf::from)
     }
 
+    fn tls_client_ca_certificate() -> Option<PathBuf> {
+        Self::env_option_string("PGDOG_TLS_CLIENT_CA_CERTIFICATE").map(PathBuf::from)
+    }
+
     fn query_log() -> Option<PathBuf> {
         Self::env_option_string("PGDOG_QUERY_LOG").map(PathBuf::from)
+    }
+
+    fn query_log_stdout() -> bool {
+        Self::env_bool_or_default("PGDOG_QUERY_LOG_STDOUT", false)
+    }
+
+    fn default_log_min_duration_parse() -> Option<u64> {
+        Self::env_option("PGDOG_LOG_MIN_DURATION_PARSE")
+    }
+
+    pub fn log_min_duration_parse(&self) -> Option<Duration> {
+        self.log_min_duration_parse.map(Duration::from_millis)
+    }
+
+    pub fn log_query_sample_length() -> usize {
+        Self::env_or_default("PGDOG_LOG_QUERY_SAMPLE_LENGTH", 1000)
+    }
+
+    fn default_query_size_limit() -> Option<usize> {
+        Self::env_option("PGDOG_QUERY_SIZE_LIMIT")
+    }
+
+    fn query_size_limit_action() -> QuerySizeLimitAction {
+        Self::env_enum_or_default("PGDOG_QUERY_SIZE_LIMIT_ACTION")
     }
 
     pub fn openmetrics_port() -> Option<u16> {
@@ -667,7 +1335,15 @@ impl General {
     }
 
     pub fn query_cache_limit() -> usize {
-        Self::env_or_default("PGDOG_QUERY_CACHE_LIMIT", 50_000)
+        Self::env_or_default("PGDOG_QUERY_CACHE_LIMIT", 1_000)
+    }
+
+    pub fn log_format() -> LogFormat {
+        Self::env_enum_or_default("PGDOG_LOG_FORMAT")
+    }
+
+    pub fn log_level() -> String {
+        env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string())
     }
 
     pub fn log_connections() -> bool {
@@ -689,6 +1365,10 @@ impl General {
         )
     }
 
+    pub fn server_lifetime_jitter() -> u64 {
+        Self::env_or_default("PGDOG_SERVER_LIFETIME_JITTER", 0)
+    }
+
     pub fn connection_recovery() -> ConnectionRecovery {
         Self::env_enum_or_default("PGDOG_CONNECTION_RECOVERY")
     }
@@ -701,17 +1381,17 @@ impl General {
         Self::env_or_default("PGDOG_STATS_PERIOD", 15_000)
     }
 
-    fn default_passthrough_auth() -> PassthoughAuth {
+    fn default_passthrough_auth() -> PassthroughAuth {
         if let Ok(auth) = env::var("PGDOG_PASSTHROUGH_AUTH") {
             // TODO: figure out why toml::from_str doesn't work.
             match auth.as_str() {
-                "enabled" => PassthoughAuth::Enabled,
-                "disabled" => PassthoughAuth::Disabled,
-                "enabled_plain" => PassthoughAuth::EnabledPlain,
-                _ => PassthoughAuth::default(),
+                "enabled" => PassthroughAuth::Enabled,
+                "disabled" => PassthroughAuth::Disabled,
+                "enabled_plain" => PassthroughAuth::EnabledPlain,
+                _ => PassthroughAuth::default(),
             }
         } else {
-            PassthoughAuth::default()
+            PassthroughAuth::default()
         }
     }
 
@@ -726,49 +1406,124 @@ impl General {
 
     /// Get TLS config, if any.
     pub fn tls(&self) -> Option<(&PathBuf, &PathBuf)> {
-        if let Some(cert) = &self.tls_certificate {
-            if let Some(key) = &self.tls_private_key {
-                return Some((cert, key));
-            }
+        if let Some(cert) = &self.tls_certificate
+            && let Some(key) = &self.tls_private_key
+        {
+            return Some((cert, key));
         }
 
         None
     }
 
     pub fn passthrough_auth(&self) -> bool {
-        self.tls().is_some() && self.passthrough_auth == PassthoughAuth::Enabled
-            || self.passthrough_auth == PassthoughAuth::EnabledPlain
+        self.tls().is_some()
+            && matches!(
+                self.passthrough_auth,
+                PassthroughAuth::Enabled | PassthroughAuth::EnabledAllowChange
+            )
+            || matches!(
+                self.passthrough_auth,
+                PassthroughAuth::EnabledPlain | PassthroughAuth::EnabledPlainAllowChange
+            )
     }
 
     /// Support for LISTEN/NOTIFY.
     pub fn pub_sub_enabled(&self) -> bool {
         self.pub_sub_channel_size > 0
     }
+
+    /// The message size limit used to block client messages
+    pub fn frontend_query_size_limit_block(&self) -> Option<usize> {
+        if self.query_size_limit_action == QuerySizeLimitAction::Block {
+            self.query_size_limit
+        } else {
+            None
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::env;
+    use crate::test_utils::*;
+
+    #[test]
+    fn test_frontend_query_size_limit_block() {
+        let mut g = General::default();
+
+        // Disabled: no limit set, action irrelevant.
+        assert_eq!(g.frontend_query_size_limit_block(), None);
+
+        // Limit set but action is warn (default): method returns None.
+        g.query_size_limit = Some(1_000_000);
+        g.query_size_limit_action = QuerySizeLimitAction::Warn;
+        assert_eq!(g.frontend_query_size_limit_block(), None);
+
+        // Limit set and action is block: method returns the limit.
+        g.query_size_limit = Some(1_000_000);
+        g.query_size_limit_action = QuerySizeLimitAction::Block;
+        assert_eq!(g.frontend_query_size_limit_block(), Some(1_000_000));
+
+        // Action is block but no limit: still None.
+        g.query_size_limit = None;
+        g.query_size_limit_action = QuerySizeLimitAction::Block;
+        assert_eq!(g.frontend_query_size_limit_block(), None);
+    }
+
+    #[test]
+    fn test_env_query_size_limit() {
+        let _guard = set_env_var("PGDOG_QUERY_SIZE_LIMIT", "4096");
+        assert_eq!(General::default_query_size_limit(), Some(4096));
+
+        let _guard = remove_env_var("PGDOG_QUERY_SIZE_LIMIT");
+        assert_eq!(General::default_query_size_limit(), None);
+    }
+
+    #[test]
+    fn test_env_query_size_limit_action() {
+        let _guard = set_env_var("PGDOG_QUERY_SIZE_LIMIT_ACTION", "Block");
+        assert_eq!(
+            General::query_size_limit_action(),
+            QuerySizeLimitAction::Block
+        );
+
+        let _guard = set_env_var("PGDOG_QUERY_SIZE_LIMIT_ACTION", "block");
+        assert_eq!(
+            General::query_size_limit_action(),
+            QuerySizeLimitAction::Block
+        );
+
+        let _guard = set_env_var("PGDOG_QUERY_SIZE_LIMIT_ACTION", "BLOCK");
+        assert_eq!(
+            General::query_size_limit_action(),
+            QuerySizeLimitAction::Block
+        );
+
+        let _guard = remove_env_var("PGDOG_QUERY_SIZE_LIMIT_ACTION");
+        assert_eq!(
+            General::query_size_limit_action(),
+            QuerySizeLimitAction::Warn
+        );
+    }
 
     #[test]
     fn test_env_workers() {
-        env::set_var("PGDOG_WORKERS", "8");
+        let _guard = set_env_var("PGDOG_WORKERS", "8");
         assert_eq!(General::workers(), 8);
-        env::remove_var("PGDOG_WORKERS");
+        let _guard = remove_env_var("PGDOG_WORKERS");
         assert_eq!(General::workers(), 2);
     }
 
     #[test]
     fn test_env_pool_sizes() {
-        env::set_var("PGDOG_DEFAULT_POOL_SIZE", "50");
-        env::set_var("PGDOG_MIN_POOL_SIZE", "5");
+        let _guard = set_env_var("PGDOG_DEFAULT_POOL_SIZE", "50");
+        let _guard = set_env_var("PGDOG_MIN_POOL_SIZE", "5");
 
         assert_eq!(General::default_pool_size(), 50);
         assert_eq!(General::min_pool_size(), 5);
 
-        env::remove_var("PGDOG_DEFAULT_POOL_SIZE");
-        env::remove_var("PGDOG_MIN_POOL_SIZE");
+        let _guard = remove_env_var("PGDOG_DEFAULT_POOL_SIZE");
+        let _guard = remove_env_var("PGDOG_MIN_POOL_SIZE");
 
         assert_eq!(General::default_pool_size(), 10);
         assert_eq!(General::min_pool_size(), 1);
@@ -776,11 +1531,11 @@ mod tests {
 
     #[test]
     fn test_env_timeouts() {
-        env::set_var("PGDOG_HEALTHCHECK_INTERVAL", "60000");
-        env::set_var("PGDOG_HEALTHCHECK_TIMEOUT", "10000");
-        env::set_var("PGDOG_CONNECT_TIMEOUT", "10000");
-        env::set_var("PGDOG_CHECKOUT_TIMEOUT", "15000");
-        env::set_var("PGDOG_IDLE_TIMEOUT", "120000");
+        let _guard = set_env_var("PGDOG_HEALTHCHECK_INTERVAL", "60000");
+        let _guard = set_env_var("PGDOG_HEALTHCHECK_TIMEOUT", "10000");
+        let _guard = set_env_var("PGDOG_CONNECT_TIMEOUT", "10000");
+        let _guard = set_env_var("PGDOG_CHECKOUT_TIMEOUT", "15000");
+        let _guard = set_env_var("PGDOG_IDLE_TIMEOUT", "120000");
 
         assert_eq!(General::healthcheck_interval(), 60000);
         assert_eq!(General::healthcheck_timeout(), 10000);
@@ -788,11 +1543,11 @@ mod tests {
         assert_eq!(General::checkout_timeout(), 15000);
         assert_eq!(General::idle_timeout(), 120000);
 
-        env::remove_var("PGDOG_HEALTHCHECK_INTERVAL");
-        env::remove_var("PGDOG_HEALTHCHECK_TIMEOUT");
-        env::remove_var("PGDOG_CONNECT_TIMEOUT");
-        env::remove_var("PGDOG_CHECKOUT_TIMEOUT");
-        env::remove_var("PGDOG_IDLE_TIMEOUT");
+        let _guard = remove_env_var("PGDOG_HEALTHCHECK_INTERVAL");
+        let _guard = remove_env_var("PGDOG_HEALTHCHECK_TIMEOUT");
+        let _guard = remove_env_var("PGDOG_CONNECT_TIMEOUT");
+        let _guard = remove_env_var("PGDOG_CHECKOUT_TIMEOUT");
+        let _guard = remove_env_var("PGDOG_IDLE_TIMEOUT");
 
         assert_eq!(General::healthcheck_interval(), 30000);
         assert_eq!(General::healthcheck_timeout(), 5000);
@@ -803,100 +1558,114 @@ mod tests {
 
     #[test]
     fn test_env_invalid_values() {
-        env::set_var("PGDOG_WORKERS", "invalid");
-        env::set_var("PGDOG_DEFAULT_POOL_SIZE", "not_a_number");
+        let _guard = set_env_var("PGDOG_WORKERS", "invalid");
+        let _guard = set_env_var("PGDOG_DEFAULT_POOL_SIZE", "not_a_number");
 
         assert_eq!(General::workers(), 2);
         assert_eq!(General::default_pool_size(), 10);
-
-        env::remove_var("PGDOG_WORKERS");
-        env::remove_var("PGDOG_DEFAULT_POOL_SIZE");
     }
 
     #[test]
     fn test_env_host_port() {
         // Test existing env var functionality
-        env::set_var("PGDOG_HOST", "192.168.1.1");
-        env::set_var("PGDOG_PORT", "8432");
+        let _guard = set_env_var("PGDOG_HOST", "192.168.1.1");
+        let _guard = set_env_var("PGDOG_PORT", "8432");
 
         assert_eq!(General::host(), "192.168.1.1");
         assert_eq!(General::port(), 8432);
 
-        env::remove_var("PGDOG_HOST");
-        env::remove_var("PGDOG_PORT");
+        let _guard = remove_env_var("PGDOG_HOST");
+        let _guard = remove_env_var("PGDOG_PORT");
 
         assert_eq!(General::host(), "0.0.0.0");
         assert_eq!(General::port(), 6432);
     }
 
     #[test]
+    fn test_lsn_checks_enabled() {
+        let mut general = General::default();
+        assert!(!general.lsn_checks_enabled());
+
+        general.lsn_check_delay = 0;
+        assert!(general.lsn_checks_enabled());
+
+        general.lsn_check_delay = 5_000;
+        assert!(general.lsn_checks_enabled());
+
+        general.lsn_check_delay = crate::MAX_DURATION.as_millis() as u64;
+        assert!(!general.lsn_checks_enabled());
+    }
+
+    #[test]
     fn test_env_enum_fields() {
         // Test pooler mode
-        env::set_var("PGDOG_POOLER_MODE", "session");
+        let _guard = set_env_var("PGDOG_POOLER_MODE", "session");
         assert_eq!(General::pooler_mode(), PoolerMode::Session);
-        env::remove_var("PGDOG_POOLER_MODE");
+        let _guard = remove_env_var("PGDOG_POOLER_MODE");
         assert_eq!(General::pooler_mode(), PoolerMode::Transaction);
 
         // Test load balancing strategy
-        env::set_var("PGDOG_LOAD_BALANCING_STRATEGY", "round_robin");
+        let _guard = set_env_var("PGDOG_LOAD_BALANCING_STRATEGY", "round_robin");
         assert_eq!(
             General::load_balancing_strategy(),
             LoadBalancingStrategy::RoundRobin
         );
-        env::remove_var("PGDOG_LOAD_BALANCING_STRATEGY");
+        let _guard = remove_env_var("PGDOG_LOAD_BALANCING_STRATEGY");
         assert_eq!(
             General::load_balancing_strategy(),
             LoadBalancingStrategy::Random
         );
 
         // Test read-write strategy
-        env::set_var("PGDOG_READ_WRITE_STRATEGY", "aggressive");
+        let _guard = set_env_var("PGDOG_READ_WRITE_STRATEGY", "aggressive");
         assert_eq!(
             General::read_write_strategy(),
             ReadWriteStrategy::Aggressive
         );
-        env::remove_var("PGDOG_READ_WRITE_STRATEGY");
+        let _guard = remove_env_var("PGDOG_READ_WRITE_STRATEGY");
         assert_eq!(
             General::read_write_strategy(),
             ReadWriteStrategy::Conservative
         );
 
         // Test read-write split
-        env::set_var("PGDOG_READ_WRITE_SPLIT", "exclude_primary");
+        let _guard = set_env_var("PGDOG_READ_WRITE_SPLIT", "exclude_primary");
         assert_eq!(General::read_write_split(), ReadWriteSplit::ExcludePrimary);
-        env::remove_var("PGDOG_READ_WRITE_SPLIT");
+        let _guard = set_env_var("PGDOG_READ_WRITE_SPLIT", "prefer_primary");
+        assert_eq!(General::read_write_split(), ReadWriteSplit::PreferPrimary);
+        let _guard = remove_env_var("PGDOG_READ_WRITE_SPLIT");
         assert_eq!(General::read_write_split(), ReadWriteSplit::IncludePrimary);
 
         // Test TLS verify mode
-        env::set_var("PGDOG_TLS_VERIFY", "verify_full");
+        let _guard = set_env_var("PGDOG_TLS_VERIFY", "verify_full");
         assert_eq!(General::default_tls_verify(), TlsVerifyMode::VerifyFull);
-        env::remove_var("PGDOG_TLS_VERIFY");
+        let _guard = remove_env_var("PGDOG_TLS_VERIFY");
         assert_eq!(General::default_tls_verify(), TlsVerifyMode::Prefer);
 
         // Test prepared statements
-        env::set_var("PGDOG_PREPARED_STATEMENTS", "full");
+        let _guard = set_env_var("PGDOG_PREPARED_STATEMENTS", "full");
         assert_eq!(General::prepared_statements(), PreparedStatements::Full);
-        env::remove_var("PGDOG_PREPARED_STATEMENTS");
+        let _guard = remove_env_var("PGDOG_PREPARED_STATEMENTS");
         assert_eq!(General::prepared_statements(), PreparedStatements::Extended);
 
         // Test auth type
-        env::set_var("PGDOG_AUTH_TYPE", "md5");
+        let _guard = set_env_var("PGDOG_AUTH_TYPE", "md5");
         assert_eq!(General::auth_type(), AuthType::Md5);
-        env::remove_var("PGDOG_AUTH_TYPE");
+        let _guard = remove_env_var("PGDOG_AUTH_TYPE");
         assert_eq!(General::auth_type(), AuthType::Scram);
     }
 
     #[test]
     fn test_env_additional_timeouts() {
-        env::set_var("PGDOG_IDLE_HEALTHCHECK_INTERVAL", "45000");
-        env::set_var("PGDOG_IDLE_HEALTHCHECK_DELAY", "10000");
-        env::set_var("PGDOG_BAN_TIMEOUT", "600000");
-        env::set_var("PGDOG_ROLLBACK_TIMEOUT", "10000");
-        env::set_var("PGDOG_SHUTDOWN_TIMEOUT", "120000");
-        env::set_var("PGDOG_SHUTDOWN_TERMINATION_TIMEOUT", "15000");
-        env::set_var("PGDOG_CONNECT_ATTEMPT_DELAY", "1000");
-        env::set_var("PGDOG_QUERY_TIMEOUT", "30000");
-        env::set_var("PGDOG_CLIENT_IDLE_TIMEOUT", "3600000");
+        let _guard = set_env_var("PGDOG_IDLE_HEALTHCHECK_INTERVAL", "45000");
+        let _guard = set_env_var("PGDOG_IDLE_HEALTHCHECK_DELAY", "10000");
+        let _guard = set_env_var("PGDOG_BAN_TIMEOUT", "600000");
+        let _guard = set_env_var("PGDOG_ROLLBACK_TIMEOUT", "10000");
+        let _guard = set_env_var("PGDOG_SHUTDOWN_TIMEOUT", "120000");
+        let _guard = set_env_var("PGDOG_SHUTDOWN_TERMINATION_TIMEOUT", "15000");
+        let _guard = set_env_var("PGDOG_CONNECT_ATTEMPT_DELAY", "1000");
+        let _guard = set_env_var("PGDOG_QUERY_TIMEOUT", "30000");
+        let _guard = set_env_var("PGDOG_CLIENT_IDLE_TIMEOUT", "3600000");
 
         assert_eq!(General::idle_healthcheck_interval(), 45000);
         assert_eq!(General::idle_healthcheck_delay(), 10000);
@@ -911,15 +1680,15 @@ mod tests {
         assert_eq!(General::default_query_timeout(), 30000);
         assert_eq!(General::default_client_idle_timeout(), 3600000);
 
-        env::remove_var("PGDOG_IDLE_HEALTHCHECK_INTERVAL");
-        env::remove_var("PGDOG_IDLE_HEALTHCHECK_DELAY");
-        env::remove_var("PGDOG_BAN_TIMEOUT");
-        env::remove_var("PGDOG_ROLLBACK_TIMEOUT");
-        env::remove_var("PGDOG_SHUTDOWN_TIMEOUT");
-        env::remove_var("PGDOG_SHUTDOWN_TERMINATION_TIMEOUT");
-        env::remove_var("PGDOG_CONNECT_ATTEMPT_DELAY");
-        env::remove_var("PGDOG_QUERY_TIMEOUT");
-        env::remove_var("PGDOG_CLIENT_IDLE_TIMEOUT");
+        let _guard = remove_env_var("PGDOG_IDLE_HEALTHCHECK_INTERVAL");
+        let _guard = remove_env_var("PGDOG_IDLE_HEALTHCHECK_DELAY");
+        let _guard = remove_env_var("PGDOG_BAN_TIMEOUT");
+        let _guard = remove_env_var("PGDOG_ROLLBACK_TIMEOUT");
+        let _guard = remove_env_var("PGDOG_SHUTDOWN_TIMEOUT");
+        let _guard = remove_env_var("PGDOG_SHUTDOWN_TERMINATION_TIMEOUT");
+        let _guard = remove_env_var("PGDOG_CONNECT_ATTEMPT_DELAY");
+        let _guard = remove_env_var("PGDOG_QUERY_TIMEOUT");
+        let _guard = remove_env_var("PGDOG_CLIENT_IDLE_TIMEOUT");
 
         assert_eq!(General::idle_healthcheck_interval(), 30000);
         assert_eq!(General::idle_healthcheck_delay(), 5000);
@@ -932,10 +1701,11 @@ mod tests {
 
     #[test]
     fn test_env_path_fields() {
-        env::set_var("PGDOG_TLS_CERTIFICATE", "/path/to/cert.pem");
-        env::set_var("PGDOG_TLS_PRIVATE_KEY", "/path/to/key.pem");
-        env::set_var("PGDOG_TLS_SERVER_CA_CERTIFICATE", "/path/to/ca.pem");
-        env::set_var("PGDOG_QUERY_LOG", "/var/log/pgdog/queries.log");
+        let _guard = set_env_var("PGDOG_TLS_CERTIFICATE", "/path/to/cert.pem");
+        let _guard = set_env_var("PGDOG_TLS_PRIVATE_KEY", "/path/to/key.pem");
+        let _guard = set_env_var("PGDOG_TLS_SERVER_CA_CERTIFICATE", "/path/to/ca.pem");
+        let _guard = set_env_var("PGDOG_TLS_CLIENT_CA_CERTIFICATE", "/path/to/client-ca.pem");
+        let _guard = set_env_var("PGDOG_QUERY_LOG", "/var/log/pgdog/queries.log");
 
         assert_eq!(
             General::tls_certificate(),
@@ -950,32 +1720,49 @@ mod tests {
             Some(PathBuf::from("/path/to/ca.pem"))
         );
         assert_eq!(
+            General::tls_client_ca_certificate(),
+            Some(PathBuf::from("/path/to/client-ca.pem"))
+        );
+        assert_eq!(
             General::query_log(),
             Some(PathBuf::from("/var/log/pgdog/queries.log"))
         );
 
-        env::remove_var("PGDOG_TLS_CERTIFICATE");
-        env::remove_var("PGDOG_TLS_PRIVATE_KEY");
-        env::remove_var("PGDOG_TLS_SERVER_CA_CERTIFICATE");
-        env::remove_var("PGDOG_QUERY_LOG");
+        let _guard = remove_env_var("PGDOG_TLS_CERTIFICATE");
+        let _guard = remove_env_var("PGDOG_TLS_PRIVATE_KEY");
+        let _guard = remove_env_var("PGDOG_TLS_SERVER_CA_CERTIFICATE");
+        let _guard = remove_env_var("PGDOG_TLS_CLIENT_CA_CERTIFICATE");
+        let _guard = remove_env_var("PGDOG_QUERY_LOG");
 
         assert_eq!(General::tls_certificate(), None);
         assert_eq!(General::tls_private_key(), None);
         assert_eq!(General::tls_server_ca_certificate(), None);
+        assert_eq!(General::tls_client_ca_certificate(), None);
         assert_eq!(General::query_log(), None);
     }
 
     #[test]
+    fn test_query_log_stdout_env() {
+        let _guard = set_env_var("PGDOG_QUERY_LOG_STDOUT", "true");
+        assert!(General::query_log_stdout());
+
+        let _guard = remove_env_var("PGDOG_QUERY_LOG_STDOUT");
+        assert!(!General::query_log_stdout());
+    }
+
+    #[test]
     fn test_env_numeric_fields() {
-        env::set_var("PGDOG_BROADCAST_PORT", "7432");
-        env::set_var("PGDOG_OPENMETRICS_PORT", "9090");
-        env::set_var("PGDOG_PREPARED_STATEMENTS_LIMIT", "1000");
-        env::set_var("PGDOG_QUERY_CACHE_LIMIT", "500");
-        env::set_var("PGDOG_CONNECT_ATTEMPTS", "3");
-        env::set_var("PGDOG_MIRROR_QUEUE", "256");
-        env::set_var("PGDOG_MIRROR_EXPOSURE", "0.5");
-        env::set_var("PGDOG_DNS_TTL", "60000");
-        env::set_var("PGDOG_PUB_SUB_CHANNEL_SIZE", "100");
+        let _guard = set_env_var("PGDOG_BROADCAST_PORT", "7432");
+        let _guard = set_env_var("PGDOG_OPENMETRICS_PORT", "9090");
+        let _guard = set_env_var("PGDOG_PREPARED_STATEMENTS_LIMIT", "1000");
+        let _guard = set_env_var("PGDOG_QUERY_CACHE_LIMIT", "500");
+        let _guard = set_env_var("PGDOG_CONNECT_ATTEMPTS", "3");
+        let _guard = set_env_var("PGDOG_MIRROR_QUEUE", "256");
+        let _guard = set_env_var("PGDOG_MIRROR_EXPOSURE", "0.5");
+        let _guard = set_env_var("PGDOG_DNS_TTL", "60000");
+        let _guard = set_env_var("PGDOG_PUB_SUB_CHANNEL_SIZE", "100");
+        let _guard = set_env_var("PGDOG_LOG_MIN_DURATION_PARSE", "5");
+        let _guard = set_env_var("PGDOG_LOG_QUERY_SAMPLE_LENGTH", "200");
 
         assert_eq!(General::broadcast_port(), 7432);
         assert_eq!(General::openmetrics_port(), Some(9090));
@@ -986,55 +1773,79 @@ mod tests {
         assert_eq!(General::mirror_exposure(), 0.5);
         assert_eq!(General::default_dns_ttl(), Some(60000));
         assert_eq!(General::pub_sub_channel_size(), 100);
+        assert_eq!(General::default_log_min_duration_parse(), Some(5));
+        assert_eq!(General::log_query_sample_length(), 200);
 
-        env::remove_var("PGDOG_BROADCAST_PORT");
-        env::remove_var("PGDOG_OPENMETRICS_PORT");
-        env::remove_var("PGDOG_PREPARED_STATEMENTS_LIMIT");
-        env::remove_var("PGDOG_QUERY_CACHE_LIMIT");
-        env::remove_var("PGDOG_CONNECT_ATTEMPTS");
-        env::remove_var("PGDOG_MIRROR_QUEUE");
-        env::remove_var("PGDOG_MIRROR_EXPOSURE");
-        env::remove_var("PGDOG_DNS_TTL");
-        env::remove_var("PGDOG_PUB_SUB_CHANNEL_SIZE");
+        let _guard = remove_env_var("PGDOG_BROADCAST_PORT");
+        let _guard = remove_env_var("PGDOG_OPENMETRICS_PORT");
+        let _guard = remove_env_var("PGDOG_PREPARED_STATEMENTS_LIMIT");
+        let _guard = remove_env_var("PGDOG_QUERY_CACHE_LIMIT");
+        let _guard = remove_env_var("PGDOG_CONNECT_ATTEMPTS");
+        let _guard = remove_env_var("PGDOG_MIRROR_QUEUE");
+        let _guard = remove_env_var("PGDOG_MIRROR_EXPOSURE");
+        let _guard = remove_env_var("PGDOG_DNS_TTL");
+        let _guard = remove_env_var("PGDOG_PUB_SUB_CHANNEL_SIZE");
+        let _guard = remove_env_var("PGDOG_LOG_MIN_DURATION_PARSE");
+        let _guard = remove_env_var("PGDOG_LOG_QUERY_SAMPLE_LENGTH");
 
         assert_eq!(General::broadcast_port(), General::port() + 1);
         assert_eq!(General::openmetrics_port(), None);
         assert_eq!(General::prepared_statements_limit(), i64::MAX as usize);
-        assert_eq!(General::query_cache_limit(), 50_000);
+        assert_eq!(General::query_cache_limit(), 1_000);
         assert_eq!(General::connect_attempts(), 1);
         assert_eq!(General::mirror_queue(), 128);
         assert_eq!(General::mirror_exposure(), 1.0);
         assert_eq!(General::default_dns_ttl(), None);
         assert_eq!(General::pub_sub_channel_size(), 0);
+        assert_eq!(General::default_log_min_duration_parse(), None);
+        assert_eq!(General::log_query_sample_length(), 1000);
     }
 
     #[test]
     fn test_env_boolean_fields() {
-        env::set_var("PGDOG_DRY_RUN", "true");
-        env::set_var("PGDOG_CROSS_SHARD_DISABLED", "yes");
-        env::set_var("PGDOG_LOG_CONNECTIONS", "false");
-        env::set_var("PGDOG_LOG_DISCONNECTIONS", "0");
+        let _guard = set_env_var("PGDOG_DRY_RUN", "true");
+        let _guard = set_env_var("PGDOG_CROSS_SHARD_DISABLED", "yes");
+        let _guard = set_env_var("PGDOG_LOG_CONNECTIONS", "false");
+        let _guard = set_env_var("PGDOG_LOG_DISCONNECTIONS", "0");
 
-        assert_eq!(General::dry_run(), true);
-        assert_eq!(General::cross_shard_disabled(), true);
-        assert_eq!(General::log_connections(), false);
-        assert_eq!(General::log_disconnections(), false);
+        assert!(General::dry_run());
+        assert!(General::cross_shard_disabled());
+        assert!(!General::log_connections());
+        assert!(!General::log_disconnections());
 
-        env::remove_var("PGDOG_DRY_RUN");
-        env::remove_var("PGDOG_CROSS_SHARD_DISABLED");
-        env::remove_var("PGDOG_LOG_CONNECTIONS");
-        env::remove_var("PGDOG_LOG_DISCONNECTIONS");
+        let _guard = remove_env_var("PGDOG_DRY_RUN");
+        let _guard = remove_env_var("PGDOG_CROSS_SHARD_DISABLED");
+        let _guard = remove_env_var("PGDOG_LOG_CONNECTIONS");
+        let _guard = remove_env_var("PGDOG_LOG_DISCONNECTIONS");
 
-        assert_eq!(General::dry_run(), false);
-        assert_eq!(General::cross_shard_disabled(), false);
-        assert_eq!(General::log_connections(), true);
-        assert_eq!(General::log_disconnections(), true);
+        assert!(!General::dry_run());
+        assert!(!General::cross_shard_disabled());
+        assert!(General::log_connections());
+        assert!(General::log_disconnections());
+    }
+
+    #[test]
+    fn test_env_log_settings() {
+        let _guard = set_env_var("PGDOG_LOG_FORMAT", "json");
+        let _guard = set_env_var("RUST_LOG", "pgdog=debug,info");
+
+        assert_eq!(General::log_format(), LogFormat::Json);
+        assert_eq!(General::log_level(), "pgdog=debug,info");
+
+        let _guard = set_env_var("PGDOG_LOG_FORMAT", "json_flattened");
+        assert_eq!(General::log_format(), LogFormat::JsonFlattened);
+
+        let _guard = remove_env_var("PGDOG_LOG_FORMAT");
+        let _guard = remove_env_var("RUST_LOG");
+
+        assert_eq!(General::log_format(), LogFormat::Text);
+        assert_eq!(General::log_level(), "info");
     }
 
     #[test]
     fn test_env_other_fields() {
-        env::set_var("PGDOG_BROADCAST_ADDRESS", "192.168.1.100");
-        env::set_var("PGDOG_OPENMETRICS_NAMESPACE", "pgdog_metrics");
+        let _guard = set_env_var("PGDOG_BROADCAST_ADDRESS", "192.168.1.100");
+        let _guard = set_env_var("PGDOG_OPENMETRICS_NAMESPACE", "pgdog_metrics");
 
         assert_eq!(
             General::broadcast_address(),
@@ -1045,8 +1856,8 @@ mod tests {
             Some("pgdog_metrics".to_string())
         );
 
-        env::remove_var("PGDOG_BROADCAST_ADDRESS");
-        env::remove_var("PGDOG_OPENMETRICS_NAMESPACE");
+        let _guard = remove_env_var("PGDOG_BROADCAST_ADDRESS");
+        let _guard = remove_env_var("PGDOG_OPENMETRICS_NAMESPACE");
 
         assert_eq!(General::broadcast_address(), None);
         assert_eq!(General::openmetrics_namespace(), None);
@@ -1054,38 +1865,29 @@ mod tests {
 
     #[test]
     fn test_env_invalid_enum_values() {
-        env::set_var("PGDOG_POOLER_MODE", "invalid_mode");
-        env::set_var("PGDOG_AUTH_TYPE", "not_an_auth");
-        env::set_var("PGDOG_TLS_VERIFY", "bad_verify");
+        let _guard = set_env_var("PGDOG_POOLER_MODE", "invalid_mode");
+        let _guard = set_env_var("PGDOG_AUTH_TYPE", "not_an_auth");
+        let _guard = set_env_var("PGDOG_TLS_VERIFY", "bad_verify");
 
         // Should fall back to defaults for invalid values
         assert_eq!(General::pooler_mode(), PoolerMode::Transaction);
         assert_eq!(General::auth_type(), AuthType::Scram);
         assert_eq!(General::default_tls_verify(), TlsVerifyMode::Prefer);
-
-        env::remove_var("PGDOG_POOLER_MODE");
-        env::remove_var("PGDOG_AUTH_TYPE");
-        env::remove_var("PGDOG_TLS_VERIFY");
     }
 
     #[test]
     fn test_general_default_uses_env_vars() {
         // Set some environment variables
-        env::set_var("PGDOG_WORKERS", "8");
-        env::set_var("PGDOG_POOLER_MODE", "session");
-        env::set_var("PGDOG_AUTH_TYPE", "trust");
-        env::set_var("PGDOG_DRY_RUN", "true");
+        let _guard = set_env_var("PGDOG_WORKERS", "8");
+        let _guard = set_env_var("PGDOG_POOLER_MODE", "session");
+        let _guard = set_env_var("PGDOG_AUTH_TYPE", "trust");
+        let _guard = set_env_var("PGDOG_DRY_RUN", "true");
 
         let general = General::default();
 
         assert_eq!(general.workers, 8);
         assert_eq!(general.pooler_mode, PoolerMode::Session);
         assert_eq!(general.auth_type, AuthType::Trust);
-        assert_eq!(general.dry_run, true);
-
-        env::remove_var("PGDOG_WORKERS");
-        env::remove_var("PGDOG_POOLER_MODE");
-        env::remove_var("PGDOG_AUTH_TYPE");
-        env::remove_var("PGDOG_DRY_RUN");
+        assert!(general.dry_run);
     }
 }

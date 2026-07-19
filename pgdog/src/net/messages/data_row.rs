@@ -1,9 +1,10 @@
 //! DataRow (B) message.
 
 use crate::net::Decoder;
+use std::collections::BTreeSet;
 
 use super::{
-    code, prelude::*, Datum, Double, Float, Format, FromDataType, Numeric, RowDescription,
+    Datum, Double, Float, Format, FromDataType, Numeric, RowDescription, code, prelude::*,
 };
 pub use pgdog_postgres_types::{Data, ToDataRowColumn};
 use pgdog_stats::Lsn;
@@ -50,33 +51,14 @@ impl DataRow {
     }
 
     /// Drop columns by 0-based index, ignoring indexes out of bounds.
-    pub fn drop_columns(&mut self, drop: &[usize]) {
-        if drop.is_empty() {
-            return;
-        }
-
-        let mut indices = drop.to_vec();
-        indices.sort_unstable();
-        indices.dedup();
-
-        if indices.is_empty() {
-            return;
-        }
-
-        let mut dropped = indices.into_iter().peekable();
-        let mut retained = Vec::with_capacity(self.columns.len());
-
-        for (idx, column) in self.columns.drain(..).enumerate() {
-            match dropped.peek() {
-                Some(&drop_idx) if drop_idx == idx => {
-                    dropped.next();
-                }
-                _ => retained.push(column),
-            }
-        }
-
-        // Any remaining indexes are beyond the current column count; ignore.
-        self.columns = retained;
+    // FIXME(sage): Fairly certain this is never a disjoint set of indices,
+    // just a number of columns to remove at the end
+    pub fn drop_columns(&mut self, drop: &BTreeSet<usize>) {
+        let mut idx = 0;
+        self.columns.retain(|_| {
+            idx += 1;
+            !drop.contains(&(idx - 1))
+        });
     }
 
     /// Create data row from columns.
@@ -138,21 +120,33 @@ impl DataRow {
         index: usize,
         decoder: &'a Decoder,
     ) -> Result<Option<Column<'a>>, Error> {
-        if let Some(field) = decoder.rd().field(index) {
-            if let Some(data) = self.columns.get(index) {
-                return Ok(Some(Column {
-                    name: field.name.as_str(),
-                    value: Datum::new(
-                        &data.data,
-                        field.data_type(),
-                        decoder.format(index),
-                        data.is_null,
-                    )?,
-                }));
-            }
+        if let Some(field) = decoder.rd().field(index)
+            && let Some(data) = self.columns.get(index)
+        {
+            return Ok(Some(Column {
+                name: field.name.as_str(),
+                value: Datum::new(
+                    &data.data,
+                    field.data_type(),
+                    decoder.format(index),
+                    data.is_null,
+                )?,
+            }));
         }
 
         Ok(None)
+    }
+
+    /// Get the column at index given row description. Error if not present.
+    /// This should only be used when the absence of a column represents a bug
+    /// in pgdog.
+    pub fn get_column_checked<'a>(
+        &self,
+        idx: usize,
+        decoder: &'a Decoder,
+    ) -> Result<Column<'a>, Error> {
+        self.get_column(idx, decoder)?
+            .ok_or(Error::RequiredColumnMissing(idx))
     }
 
     /// Render the data row.
@@ -214,7 +208,7 @@ impl FromBytes for DataRow {
 }
 
 impl ToBytes for DataRow {
-    fn to_bytes(&self) -> Result<Bytes, Error> {
+    fn to_bytes(&self) -> Bytes {
         let mut payload = Payload::named(self.code());
         payload.put_i16(self.columns.len() as i16);
 
@@ -227,7 +221,7 @@ impl ToBytes for DataRow {
             }
         }
 
-        Ok(payload.freeze())
+        payload.freeze()
     }
 }
 
@@ -237,9 +231,18 @@ impl Protocol for DataRow {
     }
 }
 
+impl From<DataRow> for Lsn {
+    fn from(value: DataRow) -> Self {
+        let value = value.get::<Lsn>(0, Format::Text);
+        value.unwrap_or_default()
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::net::{Decoder, Field};
+    use std::assert_matches;
 
     #[test]
     fn test_insert() {
@@ -259,7 +262,7 @@ mod test {
         dr.add(Data::null());
         dr.add("world");
 
-        let serialized = dr.to_bytes().unwrap();
+        let serialized = dr.to_bytes();
         let deserialized = DataRow::from_bytes(serialized).unwrap();
 
         assert_eq!(deserialized.len(), 5);
@@ -285,17 +288,46 @@ mod test {
         dr.add("b");
         dr.add("c");
 
-        dr.drop_columns(&[1, 5]);
+        dr.drop_columns(&[1, 5].into_iter().collect());
 
         assert_eq!(dr.len(), 2);
         assert_eq!(dr.get::<String>(0, Format::Text).unwrap(), "a");
         assert_eq!(dr.get::<String>(1, Format::Text).unwrap(), "c");
     }
-}
 
-impl From<DataRow> for Lsn {
-    fn from(value: DataRow) -> Self {
-        let value = value.get::<Lsn>(0, Format::Text);
-        value.unwrap_or_default()
+    #[test]
+    fn test_array_field_should_not_decode_as_unknown() {
+        let rd = RowDescription::new(&[Field {
+            name: "ints".into(),
+            table_oid: 0,
+            column: 0,
+            type_oid: 1007, // int4[]
+            type_size: -1,
+            type_modifier: -1,
+            format: 0,
+        }]);
+        let decoder = Decoder::from(&rd);
+
+        let row = DataRow::from_columns(vec![Bytes::from_static(b"{1,2,3}")]);
+        let column = row.get_column(0, &decoder).unwrap().unwrap();
+
+        assert_matches!(
+            column.value,
+            Datum::Array(_),
+            "array columns should participate in typed decoding"
+        );
+    }
+
+    #[test]
+    fn get_column_checked_returns_err_on_missing_field() {
+        let rd = RowDescription::new(&[Field::bigint("stuff")]);
+        let decoder = Decoder::from(&rd);
+        let row = DataRow::from_columns(vec![Bytes::from_static(b"1")]);
+
+        let column = row.get_column_checked(0, &decoder);
+        assert_matches!(column, Ok(_));
+
+        let column = row.get_column_checked(1, &decoder);
+        assert_matches!(column, Err(Error::RequiredColumnMissing(1)));
     }
 }

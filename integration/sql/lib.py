@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import re
 from collections import OrderedDict
 from dataclasses import dataclass
@@ -9,6 +10,19 @@ from typing import Dict, Iterable, List, Sequence, Tuple
 import psycopg
 import psycopg.rows
 import sqlparse
+
+
+def _values_equal(a, b) -> bool:
+    """Equality that treats NaN == NaN so float arrays with NaN compare stably."""
+    if isinstance(a, float) and isinstance(b, float):
+        if math.isnan(a) and math.isnan(b):
+            return True
+        return a == b
+    if isinstance(a, (list, tuple)) and isinstance(b, (list, tuple)):
+        if len(a) != len(b):
+            return False
+        return all(_values_equal(x, y) for x, y in zip(a, b))
+    return a == b
 
 
 @dataclass(frozen=True)
@@ -427,7 +441,7 @@ def _assert_pair_equal(
             raise AssertionError(
                 f"{context}: column type mismatch -> {baseline_stmt.type_names} vs {candidate_stmt.type_names}"
             )
-        if tuple(baseline_stmt.rows) != tuple(candidate_stmt.rows):
+        if not _values_equal(tuple(baseline_stmt.rows), tuple(candidate_stmt.rows)):
             raise AssertionError(
                 f"{context}: row payload mismatch\n"
                 f"baseline={baseline_stmt.rows}\n"

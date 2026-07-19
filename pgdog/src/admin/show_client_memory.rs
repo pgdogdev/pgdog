@@ -42,7 +42,7 @@ impl Command for ShowClientMemory {
             let user = client.paramters.get_default("user", "postgres");
             let database = client.paramters.get_default("database", user);
 
-            row.add(client.id.pid as i64)
+            row.add(client.key.pid())
                 .add(database)
                 .add(user)
                 .add(client.addr.ip().to_string().as_str())

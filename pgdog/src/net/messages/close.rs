@@ -65,6 +65,12 @@ impl FromBytes for Close {
     fn from_bytes(mut bytes: Bytes) -> Result<Self, Error> {
         let original = bytes.clone();
         code!(bytes, 'C');
+
+        // Minimum: code(1) + len(4) + kind(1) + null(1) = 7 bytes
+        if original.len() < 7 {
+            return Err(Error::UnexpectedEof);
+        }
+
         from_utf8(&original[6..original.len() - 1])?;
 
         Ok(Self { payload: original })
@@ -72,8 +78,8 @@ impl FromBytes for Close {
 }
 
 impl ToBytes for Close {
-    fn to_bytes(&self) -> Result<Bytes, Error> {
-        Ok(self.payload.clone())
+    fn to_bytes(&self) -> Bytes {
+        self.payload.clone()
     }
 }
 
@@ -90,6 +96,6 @@ mod test {
     #[test]
     fn test_close() {
         let close = Close::named("test");
-        assert_eq!(close.len(), close.to_bytes().unwrap().len());
+        assert_eq!(close.len(), close.to_bytes().len());
     }
 }

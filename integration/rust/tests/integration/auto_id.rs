@@ -1,6 +1,6 @@
 //! Integration tests for auto_id injection of pgdog.unique_id()
 
-use rust::setup::{admin_sqlx, connections_sqlx};
+use crate::setup::{admin_sqlx, connections_sqlx};
 use sqlx::{Executor, Pool, Postgres};
 
 const AUTO_ID_TABLE: &str = "auto_id_test";

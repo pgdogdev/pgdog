@@ -3,9 +3,9 @@ use tracing::debug;
 
 use crate::{
     frontend::{
+        ClientRequest, Command, Router, RouterContext,
         client::query_engine::{QueryEngine, QueryEngineContext},
         router::parser::rewrite::statement::ShardingKeyUpdate,
-        ClientRequest, Command, Router, RouterContext,
     },
     net::{CommandComplete, DataRow, ErrorResponse, Protocol, ReadyForQuery, RowDescription},
 };
@@ -86,7 +86,7 @@ impl<'a> UpdateMulti<'a> {
             // This happens, but the UPDATE's WHERE clause
             // doesn't match any rows, so this whole thing is a no-op.
             self.engine
-                .fake_command_response(context, "UPDATE 0")
+                .fake_command_response(context, "UPDATE 0", None::<Option<_>>)
                 .await?;
         }
 
@@ -99,7 +99,7 @@ impl<'a> UpdateMulti<'a> {
         context: &mut QueryEngineContext<'_>,
         row: Row,
     ) -> Result<(), Error> {
-        let mut request = self.rewrite.insert.build_request(
+        let mut request = self.rewrite.build_insert_request(
             context.client_request,
             &row.row_description,
             &row.data_row,
@@ -135,13 +135,13 @@ impl<'a> UpdateMulti<'a> {
                 return Err(UpdateError::TransactionRequired.into());
             }
 
+            if self.has_destructive_on_delete_reference(context)? {
+                return Err(UpdateError::ForeignKeyOnDelete.into());
+            }
+
             self.delete_row(context).await?;
-            self.execute_request_internal(
-                context,
-                &mut request,
-                self.rewrite.insert.is_returning(),
-            )
-            .await?;
+            self.execute_request_internal(context, &mut request, self.rewrite.is_returning())
+                .await?;
 
             self.engine
                 .process_server_message(context, CommandComplete::new("UPDATE 1").message()?) // We only allow to update one row at a time.
@@ -155,6 +155,29 @@ impl<'a> UpdateMulti<'a> {
 
             Ok(())
         }
+    }
+
+    fn has_destructive_on_delete_reference(
+        &self,
+        context: &QueryEngineContext<'_>,
+    ) -> Result<bool, Error> {
+        let cluster = self.engine.backend.cluster()?;
+        let schema = cluster.schema();
+        let table = self.rewrite.target_table();
+
+        let Some(relation) = schema.table(table, cluster.user(), context.params.search_path())
+        else {
+            return Ok(false);
+        };
+        let Some(sharded_table) = self.rewrite.sharded_table(cluster.sharded_tables()) else {
+            return Ok(false);
+        };
+
+        Ok(schema.has_destructive_on_delete_reference(
+            relation.schema(),
+            &relation.name,
+            &sharded_table.column,
+        ))
     }
 
     /// Execute request and return messages to the client if forward_reply is true.

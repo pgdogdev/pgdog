@@ -44,15 +44,15 @@ impl Command for Pause {
 
     async fn execute(&self) -> Result<Vec<Message>, Error> {
         for (name, cluster) in databases().all() {
-            if let Some(ref user) = self.user {
-                if &name.user != user {
-                    continue;
-                }
+            if let Some(ref user) = self.user
+                && &name.user != user
+            {
+                continue;
             }
-            if let Some(ref database) = self.database {
-                if &name.database != database {
-                    continue;
-                }
+            if let Some(ref database) = self.database
+                && &name.database != database
+            {
+                continue;
             }
             for shard in cluster.shards() {
                 for pool in shard.pools() {

@@ -1,5 +1,5 @@
 #[link(name = "postgres_hash")]
-extern "C" {
+unsafe extern "C" {
     /// Hash any size data using its bytes representation.
     pub(super) fn hash_bytes_extended(k: *const u8, keylen: i64) -> u64;
     /// Special hashing function for BIGINT (i64).

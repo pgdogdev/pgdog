@@ -1,6 +1,6 @@
 use crate::{
     frontend::PreparedStatements,
-    net::{data_row::Data, ToDataRowColumn},
+    net::{ToDataRowColumn, data_row::Data},
     stats::memory::MemoryUsage,
 };
 
@@ -21,14 +21,16 @@ impl Command for ShowPreparedStatements {
 
     async fn execute(&self) -> Result<Vec<Message>, Error> {
         let statements = PreparedStatements::global().read().clone();
-        let mut messages = vec![RowDescription::new(&[
-            Field::text("name"),
-            Field::text("statement"),
-            Field::text("rewrite"),
-            Field::numeric("used_by"),
-            Field::numeric("memory_used"),
-        ])
-        .message()?];
+        let mut messages = vec![
+            RowDescription::new(&[
+                Field::text("name"),
+                Field::text("statement"),
+                Field::text("rewrite"),
+                Field::numeric("used_by"),
+                Field::numeric("memory_used"),
+            ])
+            .message()?,
+        ];
         for (key, stmt) in statements.statements() {
             let name = stmt.name();
             let rewrite = statements.rewritten_parse(&name).ok_or(Error::Empty)?;

@@ -1,15 +1,20 @@
-use std::ops::Add;
+use std::cmp::{Ordering, PartialOrd};
+use std::fmt;
 
 use bytes::Bytes;
 use pgdog_vector::{Float, Vector};
+use rust_decimal::Decimal;
 use uuid::Uuid;
 
 use crate::{
-    Data, Double, Error, Format, FromDataType, Interval, Numeric, Timestamp, TimestampTz,
-    ToDataRowColumn,
+    Array, Data, Double, Error, Format, FromDataType, Interval, Numeric, Oid, Timestamp,
+    TimestampTz, ToDataRowColumn,
 };
 
-#[derive(Debug, Clone, PartialEq)]
+/// Represents a single piece of data in expression position. Trait
+/// implementations for Rust operators match the semantics of that
+/// operator/opclass in expression position in PG
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Datum {
     /// BIGINT.
     Bigint(i64),
@@ -35,6 +40,10 @@ pub enum Datum {
     Double(Double),
     /// Vector
     Vector(Vector),
+    /// OID.
+    Oid(Oid),
+    /// Array.
+    Array(Array),
     /// We don't know.
     Unknown(Bytes),
     /// NULL.
@@ -43,92 +52,44 @@ pub enum Datum {
     Boolean(bool),
 }
 
-impl Eq for Datum {}
-
-impl std::hash::Hash for Datum {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        use Datum::*;
-        std::mem::discriminant(self).hash(state);
-        match self {
-            Bigint(v) => v.hash(state),
-            Integer(v) => v.hash(state),
-            SmallInt(v) => v.hash(state),
-            Interval(v) => v.hash(state),
-            Text(v) => v.hash(state),
-            Timestamp(v) => v.hash(state),
-            TimestampTz(v) => v.hash(state),
-            Uuid(v) => v.hash(state),
-            Numeric(v) => v.hash(state),
-            Float(v) => {
-                if v.0.is_nan() {
-                    0u32.hash(state);
-                } else {
-                    v.0.to_bits().hash(state);
-                }
-            }
-            Double(v) => {
-                if v.0.is_nan() {
-                    0u64.hash(state);
-                } else {
-                    v.0.to_bits().hash(state);
-                }
-            }
-            Vector(v) => v.hash(state),
-            Unknown(v) => v.hash(state),
-            Null => {}
-            Boolean(v) => v.hash(state),
-        }
-    }
-}
-
 impl PartialOrd for Datum {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for Datum {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+    fn partial_cmp(&self, other: &Datum) -> Option<Ordering> {
         use Datum::*;
+
         match (self, other) {
-            (Bigint(a), Bigint(b)) => a.cmp(b),
-            (Integer(a), Integer(b)) => a.cmp(b),
-            (SmallInt(a), SmallInt(b)) => a.cmp(b),
-            (Interval(a), Interval(b)) => a.cmp(b),
-            (Text(a), Text(b)) => a.cmp(b),
-            (Timestamp(a), Timestamp(b)) => a.cmp(b),
-            (TimestampTz(a), TimestampTz(b)) => a.cmp(b),
-            (Uuid(a), Uuid(b)) => a.cmp(b),
-            (Numeric(a), Numeric(b)) => a.cmp(b),
-            (Float(a), Float(b)) => a.cmp(b),
-            (Double(a), Double(b)) => a.cmp(b),
-            (Vector(a), Vector(b)) => a.cmp(b),
-            (Unknown(a), Unknown(b)) => a.cmp(b),
-            (Boolean(a), Boolean(b)) => a.cmp(b),
-            (Null, Null) => std::cmp::Ordering::Equal,
-            // For different variants, compare by their variant index
-            _ => {
-                fn variant_index(datum: &Datum) -> u8 {
-                    match datum {
-                        Datum::Bigint(_) => 0,
-                        Datum::Integer(_) => 1,
-                        Datum::SmallInt(_) => 2,
-                        Datum::Interval(_) => 3,
-                        Datum::Text(_) => 4,
-                        Datum::Timestamp(_) => 5,
-                        Datum::TimestampTz(_) => 6,
-                        Datum::Uuid(_) => 7,
-                        Datum::Numeric(_) => 8,
-                        Datum::Float(_) => 9,
-                        Datum::Double(_) => 10,
-                        Datum::Vector(_) => 11,
-                        Datum::Unknown(_) => 12,
-                        Datum::Null => 13,
-                        Datum::Boolean(_) => 14,
-                    }
-                }
-                variant_index(self).cmp(&variant_index(other))
-            }
+            (Bigint(a), Bigint(b)) => a.partial_cmp(b),
+            (Bigint(_), _) | (_, Bigint(_)) => None,
+            (Integer(a), Integer(b)) => a.partial_cmp(b),
+            (Integer(_), _) | (_, Integer(_)) => None,
+            (SmallInt(a), SmallInt(b)) => a.partial_cmp(b),
+            (SmallInt(_), _) | (_, SmallInt(_)) => None,
+            (Interval(a), Interval(b)) => a.partial_cmp(b),
+            (Interval(_), _) | (_, Interval(_)) => None,
+            (Text(a), Text(b)) => a.partial_cmp(b),
+            (Text(_), _) | (_, Text(_)) => None,
+            (Timestamp(a), Timestamp(b)) => a.partial_cmp(b),
+            (Timestamp(_), _) | (_, Timestamp(_)) => None,
+            (TimestampTz(a), TimestampTz(b)) => a.partial_cmp(b),
+            (TimestampTz(_), _) | (_, TimestampTz(_)) => None,
+            (Uuid(a), Uuid(b)) => a.partial_cmp(b),
+            (Uuid(_), _) | (_, Uuid(_)) => None,
+            (Numeric(a), Numeric(b)) => a.partial_cmp(b),
+            (Numeric(_), _) | (_, Numeric(_)) => None,
+            (Float(a), Float(b)) => a.partial_cmp(b),
+            (Float(_), _) | (_, Float(_)) => None,
+            (Double(a), Double(b)) => a.partial_cmp(b),
+            (Double(_), _) | (_, Double(_)) => None,
+            (Vector(a), Vector(b)) => a.partial_cmp(b),
+            (Vector(_), _) | (_, Vector(_)) => None,
+            (Oid(a), Oid(b)) => a.partial_cmp(b),
+            (Oid(_), _) | (_, Oid(_)) => None,
+            (Array(a), Array(b)) => a.partial_cmp(b),
+            (Array(_), _) | (_, Array(_)) => None,
+            (Unknown(a), Unknown(b)) => a.partial_cmp(b),
+            (Unknown(_), _) | (_, Unknown(_)) => None,
+            (Boolean(a), Boolean(b)) => a.partial_cmp(b),
+            (Boolean(_), _) | (_, Boolean(_)) => None,
+            (Null, _) => None,
         }
     }
 }
@@ -150,6 +111,11 @@ impl ToDataRowColumn for Datum {
             Float(val) => val.to_data_row_column(),
             Double(val) => val.to_data_row_column(),
             Vector(vector) => vector.to_data_row_column(),
+            Oid(oid) => oid.to_data_row_column(),
+            Array(array) => array
+                .encode(Format::Text)
+                .expect("array text encode should succeed for any decoded array")
+                .into(),
             Unknown(bytes) => bytes.clone().into(),
             Null => Data::null(),
             Boolean(val) => val.to_data_row_column(),
@@ -157,24 +123,33 @@ impl ToDataRowColumn for Datum {
     }
 }
 
-impl Add for Datum {
-    type Output = Datum;
-
-    fn add(self, rhs: Self) -> Self::Output {
-        use Datum::*;
-
-        match (self, rhs) {
-            (Bigint(a), Bigint(b)) => Bigint(a + b),
-            (Integer(a), Integer(b)) => Integer(a + b),
-            (SmallInt(a), SmallInt(b)) => SmallInt(a + b),
-            (Interval(a), Interval(b)) => Interval(a + b),
-            (Numeric(a), Numeric(b)) => Numeric(a + b),
-            (Float(a), Float(b)) => Float(crate::Float(a.0 + b.0)),
-            (Double(a), Double(b)) => Double(crate::Double(a.0 + b.0)),
-            (Datum::Null, b) => b,
-            (a, Datum::Null) => a,
-            _ => Datum::Null, // Might be good to raise an error.
+impl<T> From<Option<T>> for Datum
+where
+    Datum: From<T>,
+{
+    fn from(val: Option<T>) -> Self {
+        match val {
+            Some(v) => v.into(),
+            None => Datum::Null,
         }
+    }
+}
+
+impl From<i64> for Datum {
+    fn from(i: i64) -> Self {
+        Datum::Bigint(i)
+    }
+}
+
+impl From<f64> for Datum {
+    fn from(f: f64) -> Self {
+        Datum::Double(f.into())
+    }
+}
+
+impl From<Decimal> for Datum {
+    fn from(d: Decimal) -> Self {
+        Datum::Numeric(d.into())
     }
 }
 
@@ -201,7 +176,15 @@ impl Datum {
             DataType::Timestamp => Ok(Datum::Timestamp(Timestamp::decode(bytes, encoding)?)),
             DataType::TimestampTz => Ok(Datum::TimestampTz(TimestampTz::decode(bytes, encoding)?)),
             DataType::Vector => Ok(Datum::Vector(Vector::decode(bytes, encoding)?)),
+            DataType::SmallInt => Ok(Datum::SmallInt(i16::decode(bytes, encoding)?)),
+            DataType::Oid => Ok(Datum::Oid(Oid::decode(bytes, encoding)?)),
             DataType::Bool => Ok(Datum::Boolean(bool::decode(bytes, encoding)?)),
+            DataType::Array(element_oid) => match Array::decode_typed(bytes, encoding, element_oid)
+            {
+                Ok(array) => Ok(Datum::Array(array)),
+                Err(Error::ArrayDimensions(_)) => Ok(Datum::Unknown(Bytes::copy_from_slice(bytes))),
+                Err(err) => Err(err),
+            },
             _ => Ok(Datum::Unknown(Bytes::copy_from_slice(bytes))),
         }
     }
@@ -222,8 +205,49 @@ impl Datum {
             Datum::Numeric(n) => n.encode(format),
             Datum::Timestamp(t) => t.encode(format),
             Datum::TimestampTz(tz) => tz.encode(format),
+            Datum::SmallInt(i) => i.encode(format),
+            Datum::Interval(i) => i.encode(format),
+            Datum::Vector(v) => v.encode(format),
+            Datum::Oid(o) => o.encode(format),
+            Datum::Array(a) => a.encode(format),
             Datum::Null => Ok(Bytes::new()),
-            _ => Err(Error::UnsupportedDataTypeForEncoding),
+            Datum::Unknown(bytes) => Ok(bytes.clone()),
+        }
+    }
+
+    pub fn data_type(&self) -> DataType {
+        match self {
+            Datum::Bigint(..) => DataType::Bigint,
+            Datum::Integer(..) => DataType::Integer,
+            Datum::Uuid(..) => DataType::Uuid,
+            Datum::Text(..) => DataType::Text,
+            Datum::Boolean(..) => DataType::Bool,
+            Datum::Float(..) => DataType::Real,
+            Datum::Double(..) => DataType::DoublePrecision,
+            Datum::Numeric(..) => DataType::Numeric,
+            Datum::Timestamp(..) => DataType::Timestamp,
+            Datum::TimestampTz(..) => DataType::TimestampTz,
+            Datum::SmallInt(..) => DataType::SmallInt,
+            Datum::Interval(..) => DataType::Interval,
+            Datum::Vector(..) => DataType::Vector,
+            Datum::Oid(..) => DataType::Oid,
+            Datum::Array(a) => DataType::Array(a.element_oid),
+            Datum::Null => DataType::Other(0),
+            Datum::Unknown(..) => DataType::Other(0),
+        }
+    }
+
+    pub fn as_i64(&self) -> Result<i64, Error> {
+        match *self {
+            Datum::Bigint(i) => Ok(i),
+            Datum::Integer(i) => Ok(i.into()),
+            Datum::SmallInt(i) => Ok(i.into()),
+            Datum::Float(f) => Ok(f.0 as i64),
+            Datum::Double(f) => Ok(f.0 as i64),
+            _ => Err(Error::InvalidCast {
+                from: self.data_type(),
+                to: DataType::Bigint,
+            }),
         }
     }
 }
@@ -245,5 +269,113 @@ pub enum DataType {
     Numeric,
     Other(i32),
     Uuid,
+    Oid,
     Vector,
+    /// Array type, carrying the element type OID.
+    Array(i32),
+}
+
+impl DataType {
+    /// Map a PostgreSQL type OID to a DataType.
+    pub fn from_oid(oid: i32) -> Self {
+        match oid {
+            16 => DataType::Bool,
+            20 => DataType::Bigint,
+            21 => DataType::SmallInt,
+            23 => DataType::Integer,
+            25 => DataType::Text,
+            26 => DataType::Oid,
+            700 => DataType::Real,
+            701 => DataType::DoublePrecision,
+            1043 => DataType::Text, // varchar
+            1114 => DataType::Timestamp,
+            1184 => DataType::TimestampTz,
+            1186 => DataType::Interval,
+            1700 => DataType::Numeric,
+            2950 => DataType::Uuid,
+            // Array OIDs → Array(element_oid)
+            1000 => DataType::Array(16),   // bool[]
+            1005 => DataType::Array(21),   // int2[]
+            1007 => DataType::Array(23),   // int4[]
+            1009 => DataType::Array(25),   // text[]
+            1015 => DataType::Array(1043), // varchar[]
+            1016 => DataType::Array(20),   // int8[]
+            1021 => DataType::Array(700),  // float4[]
+            1022 => DataType::Array(701),  // float8[]
+            1028 => DataType::Array(26),   // oid[]
+            1115 => DataType::Array(1114), // timestamp[]
+            1185 => DataType::Array(1184), // timestamptz[]
+            1187 => DataType::Array(1186), // interval[]
+            1231 => DataType::Array(1700), // numeric[]
+            2951 => DataType::Array(2950), // uuid[]
+            _ => DataType::Other(oid),
+        }
+    }
+}
+
+impl fmt::Display for DataType {
+    fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
+        use DataType::*;
+        match self {
+            Bigint => write!(f, "bigint"),
+            Integer => write!(f, "integer"),
+            Text => write!(f, "text"),
+            Interval => write!(f, "interval"),
+            Timestamp => write!(f, "timestamp"),
+            TimestampTz => write!(f, "timestamptz"),
+            Real => write!(f, "real"),
+            DoublePrecision => write!(f, "double precision"),
+            Bool => write!(f, "boolean"),
+            SmallInt => write!(f, "smallint"),
+            TinyInt => write!(f, "tinyint"),
+            Numeric => write!(f, "numeric"),
+            Other(i) => write!(f, "unknown type {i}"),
+            Uuid => write!(f, "uuid"),
+            Oid => write!(f, "oid"),
+            Vector => write!(f, "vector"),
+            Array(i) => write!(f, "{}[]", Self::from_oid(*i)),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bytes::{BufMut, BytesMut};
+    use std::assert_matches;
+
+    #[test]
+    fn test_multidimensional_text_array_falls_back_to_unknown() {
+        let input = b"{{1,2},{3,4}}";
+        let datum = Datum::new(input, DataType::Array(23), Format::Text, false).unwrap();
+
+        assert_matches!(datum, Datum::Unknown(_));
+        assert_eq!(
+            datum.encode(Format::Text).unwrap(),
+            Bytes::from_static(input)
+        );
+    }
+
+    #[test]
+    fn test_multidimensional_binary_array_falls_back_to_unknown() {
+        let mut buf = BytesMut::new();
+        buf.put_i32(2);
+        buf.put_i32(0);
+        buf.put_i32(23);
+        buf.put_i32(2);
+        buf.put_i32(1);
+        buf.put_i32(2);
+        buf.put_i32(1);
+
+        for value in [1_i32, 2, 3, 4] {
+            buf.put_i32(4);
+            buf.put_i32(value);
+        }
+
+        let input = buf.freeze();
+        let datum = Datum::new(&input, DataType::Array(23), Format::Binary, false).unwrap();
+
+        assert_matches!(datum, Datum::Unknown(_));
+        assert_eq!(datum.encode(Format::Binary).unwrap(), input);
+    }
 }

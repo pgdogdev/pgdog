@@ -1,18 +1,18 @@
 use crate::{
     backend::pool::{connection::mirror::Mirror, stats::MemoryStats},
     frontend::{
-        client::{timeouts::Timeouts, Sticky, TransactionType},
-        router::parser::rewrite::statement::plan::RewriteResult,
         Client, ClientRequest, PreparedStatements,
+        client::{Sticky, TransactionType, timeouts::Timeouts},
+        router::parser::rewrite::statement::plan::RewriteResult,
     },
-    net::{BackendKeyData, Parameters, Stream},
+    net::{FrontendPid, Parameters, Stream},
 };
 
 #[allow(dead_code)]
 /// Context passed to the query engine to execute a query.
 pub struct QueryEngineContext<'a> {
     /// Client ID running the query.
-    pub(super) id: &'a BackendKeyData,
+    pub(super) id: FrontendPid,
     /// Prepared statements cache.
     pub(super) prepared_statements: &'a mut PreparedStatements,
     /// Client session parameters.
@@ -39,6 +39,10 @@ pub struct QueryEngineContext<'a> {
     pub(super) sticky: Sticky,
     /// Rewrite result.
     pub(super) rewrite_result: Option<RewriteResult>,
+    /// Log queries to stdout.
+    pub(super) query_log_stdout: bool,
+    /// Maximum query message size before a warning is logged.
+    pub(super) query_size_limit: Option<usize>,
 }
 
 impl<'a> QueryEngineContext<'a> {
@@ -46,7 +50,7 @@ impl<'a> QueryEngineContext<'a> {
         let memory_stats = client.memory_stats();
 
         Self {
-            id: &client.id,
+            id: FrontendPid::from(&client.key),
             prepared_statements: &mut client.prepared_statements,
             params: &mut client.params,
             client_request: &mut client.client_request,
@@ -60,6 +64,8 @@ impl<'a> QueryEngineContext<'a> {
             rollback: false,
             sticky: client.sticky,
             rewrite_result: None,
+            query_log_stdout: client.query_log_stdout,
+            query_size_limit: client.query_size_limit,
         }
     }
 
@@ -72,7 +78,7 @@ impl<'a> QueryEngineContext<'a> {
     /// Create context from mirror.
     pub fn new_mirror(mirror: &'a mut Mirror, buffer: &'a mut ClientRequest) -> Self {
         Self {
-            id: &mirror.id,
+            id: mirror.id,
             prepared_statements: &mut mirror.prepared_statements,
             params: &mut mirror.params,
             client_request: buffer,
@@ -86,6 +92,8 @@ impl<'a> QueryEngineContext<'a> {
             rollback: false,
             sticky: Sticky::new(),
             rewrite_result: None,
+            query_log_stdout: false,
+            query_size_limit: None,
         }
     }
 

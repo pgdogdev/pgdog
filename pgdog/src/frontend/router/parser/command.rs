@@ -1,6 +1,6 @@
 use super::*;
 use crate::{
-    frontend::{client::TransactionType, BufferedQuery},
+    frontend::{BufferedQuery, client::TransactionType},
     net::parameter::ParameterValue,
 };
 use lazy_static::lazy_static;
@@ -8,7 +8,7 @@ use lazy_static::lazy_static;
 #[derive(Debug, Clone, PartialEq)]
 pub struct SetParam {
     pub name: String,
-    pub value: ParameterValue,
+    pub value: Option<ParameterValue>,
     pub local: bool,
 }
 
@@ -20,6 +20,7 @@ pub enum Command {
         query: BufferedQuery,
         transaction_type: TransactionType,
         extended: bool,
+        route: Route,
     },
     CommitTransaction {
         extended: bool,
@@ -31,8 +32,9 @@ pub enum Command {
     Set {
         params: Vec<SetParam>,
         route: Route,
+        behave_like_select: bool,
     },
-    PreparedStatement(Prepare),
+    ResetAll,
     InternalField {
         name: String,
         value: String,
@@ -64,6 +66,7 @@ impl Command {
         match self {
             Self::Query(route) => route,
             Self::Set { route, .. } => route,
+            Self::StartTransaction { route, .. } => route,
             _ => &DEFAULT_ROUTE,
         }
     }
@@ -116,7 +119,7 @@ impl Command {
     pub(crate) fn dry_run(self) -> Self {
         match self {
             Command::Query(mut query) => {
-                query.set_shard_mut(ShardWithPriority::new_override_dry_run(Shard::Direct(0)));
+                query.set_shard(ShardWithPriority::new_override_dry_run(Shard::Direct(0)));
                 Command::Query(query)
             }
 

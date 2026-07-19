@@ -1,10 +1,10 @@
-use crate::backend::replication::logical::admin::{AsyncTasks, TaskKind};
-use crate::net::messages::{ErrorResponse, NoticeResponse};
+use crate::api::async_task::AsyncTaskId;
+use crate::api::tasks_storage;
 
 use super::prelude::*;
 
 pub struct StopTask {
-    task_id: u64,
+    task_id: AsyncTaskId,
 }
 
 #[async_trait]
@@ -26,23 +26,14 @@ impl Command for StopTask {
     }
 
     async fn execute(&self) -> Result<Vec<Message>, Error> {
-        let task_kind = AsyncTasks::remove(self.task_id);
+        let cancelled = tasks_storage().cancel_task(self.task_id);
 
         let mut messages = vec![];
 
-        if task_kind == Some(TaskKind::CopyData) {
-            let notice = NoticeResponse::from(ErrorResponse {
-                severity: "WARNING".into(),
-                code: "01000".into(),
-                message: "replication slot was not dropped and requires manual cleanup".into(),
-                ..Default::default()
-            });
-            messages.push(notice.message()?);
-        }
-
-        let result = match task_kind {
-            Some(_) => "OK",
-            None => "task not found",
+        let result = if cancelled.is_some() {
+            "OK"
+        } else {
+            "task not found"
         };
 
         let mut dr = DataRow::new();

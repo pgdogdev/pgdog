@@ -38,13 +38,12 @@ impl Decoder {
             self.formats = bind.codes().to_vec();
         }
 
-        if self.rd.is_empty() {
-            if let Some(rd) = PreparedStatements::global()
+        if self.rd.is_empty()
+            && let Some(rd) = PreparedStatements::global()
                 .read()
                 .row_description(bind.statement())
-            {
-                self.rd = rd;
-            }
+        {
+            self.rd = rd;
         }
     }
 

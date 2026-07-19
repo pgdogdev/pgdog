@@ -12,7 +12,7 @@ use std::ops::Deref;
 use std::pin::Pin;
 use std::task::Context;
 
-use super::messages::{ErrorResponse, Message, Protocol, ReadyForQuery, Terminate};
+use super::messages::{ErrorResponse, Message, Protocol, ReadyForQuery};
 
 /// Inner stream types.
 #[pin_project(project = StreamInnerProjection)]
@@ -32,6 +32,7 @@ pub struct Stream {
     inner: StreamInner,
     io_in_progress: bool,
     capacity: usize,
+    tls_identity: Option<String>,
 }
 
 impl AsyncRead for Stream {
@@ -100,15 +101,21 @@ impl Stream {
             inner: StreamInner::Plain(BufStream::with_capacity(capacity, capacity, stream)),
             io_in_progress: false,
             capacity,
+            tls_identity: None,
         }
     }
 
     /// Wrap an encrypted TCP stream.
-    pub fn tls(stream: tokio_rustls::TlsStream<TcpStream>, capacity: usize) -> Self {
+    pub fn tls(
+        stream: tokio_rustls::TlsStream<TcpStream>,
+        capacity: usize,
+        tls_identity: Option<String>,
+    ) -> Self {
         Self {
             inner: StreamInner::Tls(BufStream::with_capacity(capacity, capacity, stream)),
             io_in_progress: false,
             capacity,
+            tls_identity,
         }
     }
 
@@ -118,7 +125,14 @@ impl Stream {
             inner: StreamInner::DevNull,
             io_in_progress: false,
             capacity: 0,
+            tls_identity: None,
         }
+    }
+
+    /// Get the hostname identity (SAN dNSName, falling back to Subject CN)
+    /// from the client's TLS certificate, if any.
+    pub fn tls_identity(&self) -> Option<&str> {
+        self.tls_identity.as_deref()
     }
 
     /// This is a TLS stream.
@@ -162,11 +176,11 @@ impl Stream {
     pub async fn send(&mut self, message: &impl Protocol) -> Result<usize, crate::net::Error> {
         self.io_in_progress = true;
         let result = async {
-            let bytes = message.to_bytes()?;
+            let bytes = message.to_bytes();
 
             match &mut self.inner {
-                StreamInner::Plain(ref mut stream) => eof(stream.write_all(&bytes).await)?,
-                StreamInner::Tls(ref mut stream) => eof(stream.write_all(&bytes).await)?,
+                StreamInner::Plain(stream) => eof(stream.write_all(&bytes).await)?,
+                StreamInner::Tls(stream) => eof(stream.write_all(&bytes).await)?,
                 StreamInner::DevNull => (),
             }
 
@@ -269,8 +283,7 @@ impl Stream {
 
     /// Send an error to the client and disconnect gracefully.
     pub async fn fatal(&mut self, error: ErrorResponse) -> Result<(), crate::net::Error> {
-        self.send(&error).await?;
-        self.send_flush(&Terminate).await?;
+        self.send_flush(&error).await?;
 
         Ok(())
     }

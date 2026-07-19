@@ -207,7 +207,7 @@ mod tests {
 
     #[test]
     fn test_float_sorting() {
-        let mut values = vec![
+        let mut values = [
             Float(10.0),
             Float(f32::NAN),
             Float(5.0),

@@ -1,3 +1,5 @@
+use pgdog_postgres_types::Oid;
+
 use crate::net::c_string_buf;
 use crate::net::messages::replication::logical::string::escape;
 
@@ -6,7 +8,7 @@ use super::super::super::prelude::*;
 
 #[derive(Debug, Clone)]
 pub struct Relation {
-    pub oid: i32,
+    pub oid: Oid,
     pub namespace: String,
     pub name: String,
     pub replica_identity: i8,
@@ -41,7 +43,8 @@ impl Relation {
 pub struct Column {
     pub flag: i8,
     pub name: String,
-    pub oid: i32,
+    /// Type OID (`pg_attribute.atttypid`).
+    pub oid: Oid,
     pub type_modifier: i32,
 }
 
@@ -52,9 +55,9 @@ impl Column {
 }
 
 impl ToBytes for Relation {
-    fn to_bytes(&self) -> Result<Bytes, Error> {
+    fn to_bytes(&self) -> Bytes {
         let mut payload = Payload::wrapped('R');
-        payload.put_i32(self.oid);
+        payload.put_u32(self.oid.0);
         payload.put_string(&self.namespace);
         payload.put_string(&self.name);
         payload.put_i8(self.replica_identity);
@@ -63,18 +66,18 @@ impl ToBytes for Relation {
         for column in &self.columns {
             payload.put_i8(column.flag);
             payload.put_string(&column.name);
-            payload.put_i32(column.oid);
+            payload.put_u32(column.oid.0);
             payload.put_i32(column.type_modifier);
         }
 
-        Ok(payload.freeze())
+        payload.freeze()
     }
 }
 
 impl FromBytes for Relation {
     fn from_bytes(mut bytes: Bytes) -> Result<Self, Error> {
         code!(bytes, 'R');
-        let oid = bytes.get_i32();
+        let oid = Oid(bytes.get_u32());
         let namespace = c_string_buf(&mut bytes);
         let name = c_string_buf(&mut bytes);
         let replica_identity = bytes.get_i8();
@@ -85,7 +88,7 @@ impl FromBytes for Relation {
         for _ in 0..num_columns {
             let flag = bytes.get_i8();
             let name = c_string_buf(&mut bytes);
-            let oid = bytes.get_i32();
+            let oid = Oid(bytes.get_u32());
             let type_modifier = bytes.get_i32();
 
             columns.push(Column {

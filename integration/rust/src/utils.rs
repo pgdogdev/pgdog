@@ -1,5 +1,10 @@
 use super::setup::admin_sqlx;
+use bytes::{BufMut, Bytes, BytesMut};
 use sqlx::{Executor, Row};
+use tokio::{
+    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
+    net::TcpStream,
+};
 
 pub async fn assert_setting_str(name: &str, expected: &str) {
     let admin = admin_sqlx().await;
@@ -16,4 +21,108 @@ pub async fn assert_setting_str(name: &str, expected: &str) {
     }
 
     assert!(found);
+}
+
+/// Standard Postgres protocol message.
+#[derive(Debug, Clone)]
+pub struct Message {
+    pub code: char,
+    pub payload: Bytes,
+}
+
+impl Message {
+    pub async fn read(stream: &mut (impl AsyncRead + Unpin)) -> Result<Self, std::io::Error> {
+        let code = stream.read_u8().await? as char;
+        let len = stream.read_i32().await?;
+        let mut payload = vec![0u8; len as usize - 4];
+        stream.read_exact(&mut payload).await?;
+
+        Ok(Self {
+            code,
+            payload: Bytes::from(payload),
+        })
+    }
+
+    pub async fn send(&self, stream: &mut (impl AsyncWrite + Unpin)) -> Result<(), std::io::Error> {
+        let mut payload = BytesMut::new();
+        payload.put_u8(self.code as u8);
+        payload.put_i32(self.payload.len() as i32 + 4);
+        payload.put(self.payload.clone());
+
+        stream.write_all(&payload).await?;
+        stream.flush().await?;
+
+        Ok(())
+    }
+
+    pub fn new_parse(name: &str, sql: &str) -> Self {
+        let mut payload = BytesMut::new();
+        payload.put(name.as_bytes());
+        payload.put_u8(0);
+        payload.put(sql.as_bytes());
+        payload.put_u8(0);
+        payload.put_i16(0);
+
+        Self {
+            payload: payload.freeze(),
+            code: 'P',
+        }
+    }
+
+    pub fn new_flush() -> Self {
+        Self {
+            code: 'H',
+            payload: Bytes::new(),
+        }
+    }
+}
+
+/// Create a startup message.
+pub fn startup(user: &str, database: &str) -> Bytes {
+    startup_with_version(user, database, 196608, &[])
+}
+
+/// Create a startup message with a specific protocol version and extra parameters.
+pub fn startup_with_version(
+    user: &str,
+    database: &str,
+    protocol_version: i32,
+    extra_params: &[(&str, &str)],
+) -> Bytes {
+    let mut payload = BytesMut::new();
+    payload.put_i32(protocol_version);
+    payload.put_slice("user\0".as_bytes());
+    payload.put_slice(user.as_bytes());
+    payload.put_u8(0);
+    payload.put_slice("database\0".as_bytes());
+    payload.put_slice(database.as_bytes());
+    payload.put_u8(0);
+    for (name, value) in extra_params {
+        payload.put_slice(name.as_bytes());
+        payload.put_u8(0);
+        payload.put_slice(value.as_bytes());
+        payload.put_u8(0);
+    }
+    payload.put_u8(0);
+
+    let mut bytes = BytesMut::new();
+    bytes.put_i32(payload.len() as i32 + 4);
+    bytes.put(payload);
+
+    bytes.freeze()
+}
+
+pub async fn connect() -> TcpStream {
+    let mut stream = TcpStream::connect("127.0.0.1:6432").await.unwrap();
+    stream.write_all(&startup("pgdog", "pgdog")).await.unwrap();
+
+    loop {
+        let message = Message::read(&mut stream).await.unwrap();
+
+        if message.code == 'Z' {
+            break;
+        }
+    }
+
+    stream
 }

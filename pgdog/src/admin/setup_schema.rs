@@ -1,5 +1,5 @@
 //! SETUP SHARDS
-use crate::backend::{databases::databases, Schema};
+use crate::backend::{Schema, databases::databases};
 
 use super::prelude::*;
 
@@ -17,8 +17,8 @@ impl Command for SetupSchema {
 
     async fn execute(&self) -> Result<Vec<Message>, Error> {
         let databases = databases();
-        for cluster in databases.all().values() {
-            Schema::install(cluster)
+        for cluster in databases.schema_owners() {
+            Schema::install(&cluster)
                 .await
                 .map_err(|e| Error::Backend(Box::new(e)))?;
         }

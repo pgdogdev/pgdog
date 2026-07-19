@@ -14,7 +14,7 @@ pub(super) enum ConvergeAlgorithm {
 impl QueryParser {
     /// Converge to a single route given multiple shards.
     pub(super) fn converge(shards: &HashSet<Shard>, algorithm: ConvergeAlgorithm) -> Option<Shard> {
-        let shard = if shards.is_empty() {
+        if shards.is_empty() {
             None
         } else if shards.len() == 1 {
             shards.iter().next().cloned()
@@ -46,9 +46,7 @@ impl QueryParser {
             } else {
                 Shard::Multi(multi.into_iter().collect())
             })
-        };
-
-        shard
+        }
     }
 }
 

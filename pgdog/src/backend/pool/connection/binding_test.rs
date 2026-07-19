@@ -4,14 +4,14 @@
 mod tests {
     use crate::{
         backend::{
-            pool::{connection::binding::Binding, Pool, PoolConfig},
+            pool::{Pool, PoolConfig, connection::binding::Binding},
             server::test::test_server,
         },
         frontend::{
             client::query_engine::TwoPcPhase,
             router::{
-                parser::{Shard, ShardWithPriority},
                 Route,
+                parser::{Shard, ShardWithPriority},
             },
         },
     };
@@ -49,7 +49,7 @@ mod tests {
         ];
 
         let route = Route::write(ShardWithPriority::new_default_unset(Shard::All));
-        let multishard = MultiShard::new(3, &route);
+        let multishard = MultiShard::new(vec![0, 1, 2], &route);
 
         let mut binding = Binding::MultiShard(guards, Box::new(multishard));
 
@@ -74,7 +74,7 @@ mod tests {
         });
 
         let guard = crate::backend::pool::Guard::new(pool, server, Instant::now());
-        let mut binding = Binding::Direct(Some(guard));
+        let mut binding = Binding::Direct(guard, 0);
 
         let result = binding.two_pc("test", TwoPcPhase::Phase1).await;
 
@@ -113,7 +113,7 @@ mod tests {
 
         // Should succeed
         if let Err(ref error) = result {
-            println!("Error in test_two_pc_phase1_prepare: {:?}", error);
+            eprintln!("Error in test_two_pc_phase1_prepare: {:?}", error);
         }
         assert!(result.is_ok());
 

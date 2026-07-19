@@ -8,7 +8,12 @@ use crate::frontend::router::sharding;
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("{0}")]
-    PgQuery(pg_query::Error),
+    #[cfg(not(feature = "new_parser"))]
+    PgQuery(#[from] pg_query::Error),
+
+    #[cfg(feature = "new_parser")]
+    #[error("Error parsing query: {0}")]
+    Parse(#[from] pg_raw_parse::Error),
 
     #[error("only CSV is supported for sharded copy")]
     OnlyCsv,
@@ -54,6 +59,9 @@ pub enum Error {
 
     #[error("missing parameter: ${0}")]
     MissingParameter(usize),
+
+    #[error("expected parameter ${0} to be an integer, got \'{1}\' instead")]
+    ParameterNotInteger(usize, String),
 
     #[error("column has no associated table")]
     ColumnNoTable,

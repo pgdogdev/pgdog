@@ -7,14 +7,16 @@ use std::{
 
 use crate::{
     frontend::router::parser::{
-        rewrite::statement::aggregate::AggregateRewritePlan, Aggregate, DistinctBy, DistinctColumn,
-        Limit, OrderBy,
+        Aggregate, DistinctBy, DistinctColumn, Limit, OrderBy,
+        rewrite::statement::aggregate::AggregateRewritePlan,
     },
     net::{
-        messages::{DataRow, FromBytes, Message, Protocol, ToBytes, Vector},
         Decoder,
+        messages::{DataRow, FromBytes, Message, Protocol, ToBytes, Vector},
     },
 };
+
+use pgdog_postgres_types::Datum;
 
 use super::Aggregates;
 
@@ -29,7 +31,7 @@ pub(super) struct Buffer {
 impl Buffer {
     /// Add message to buffer.
     pub(super) fn add(&mut self, message: Message) -> Result<(), super::Error> {
-        let dr = DataRow::from_bytes(message.to_bytes()?)?;
+        let dr = DataRow::from_bytes(message.to_bytes())?;
 
         self.buffer.push_back(dr);
 
@@ -80,48 +82,50 @@ impl Buffer {
 
         // Sort rows.
         let order_by = move |a: &DataRow, b: &DataRow| -> Ordering {
-            for col in cols.iter() {
-                let index = col.index();
-                let asc = col.asc();
-                let index = if let Some(index) = index {
-                    index
-                } else {
-                    continue;
-                };
-                let left = a.get_column(index, decoder);
-                let right = b.get_column(index, decoder);
+            cols.iter()
+                .filter_map(|col| {
+                    let index = col.index();
+                    let asc = col.asc();
+                    let index = index?;
+                    let left = a.get_column(index, decoder);
+                    let right = b.get_column(index, decoder);
 
-                let ordering = match (left, right) {
-                    (Ok(Some(left)), Ok(Some(right))) => {
-                        // Handle the special vector case.
-                        if let OrderBy::AscVectorL2(_, vector) = col {
-                            let left: Option<Vector> = left.value.try_into().ok();
-                            let right: Option<Vector> = right.value.try_into().ok();
+                    match (left, right) {
+                        (Ok(Some(left)), Ok(Some(right))) => {
+                            // Handle the special vector case.
+                            if let OrderBy::AscVectorL2(_, vector) = col {
+                                let left: Option<Vector> = left.value.try_into().ok();
+                                let right: Option<Vector> = right.value.try_into().ok();
 
-                            if let (Some(left), Some(right)) = (left, right) {
-                                let left = left.distance_l2(vector);
-                                let right = right.distance_l2(vector);
+                                if let (Some(left), Some(right)) = (left, right) {
+                                    let left = left.distance_l2(vector);
+                                    let right = right.distance_l2(vector);
 
-                                left.partial_cmp(&right)
+                                    left.partial_cmp(&right)
+                                } else {
+                                    Some(Ordering::Equal)
+                                }
                             } else {
-                                Some(Ordering::Equal)
+                                // FIXME(sage): We don't handle ASC NULLS FIRST or
+                                // DESC NULLS LAST we should either error or add
+                                // support rather than silently do the wrong sorting
+                                match (&left.value, &right.value, asc) {
+                                    (Datum::Null, Datum::Null, _) => Some(Ordering::Equal),
+                                    (Datum::Null, _, true) => Some(Ordering::Greater),
+                                    (_, Datum::Null, true) => Some(Ordering::Less),
+                                    (Datum::Null, _, false) => Some(Ordering::Less),
+                                    (_, Datum::Null, false) => Some(Ordering::Greater),
+                                    (a, b, true) => a.partial_cmp(b),
+                                    (a, b, false) => b.partial_cmp(a),
+                                }
                             }
-                        } else if asc {
-                            left.value.partial_cmp(&right.value)
-                        } else {
-                            right.value.partial_cmp(&left.value)
                         }
+
+                        _ => Some(Ordering::Equal),
                     }
-
-                    _ => Some(Ordering::Equal),
-                };
-
-                if ordering != Some(Ordering::Equal) {
-                    return ordering.unwrap_or(Ordering::Equal);
-                }
-            }
-
-            Ordering::Equal
+                })
+                .reduce(Ordering::then)
+                .unwrap_or(Ordering::Equal)
         };
 
         self.buffer.make_contiguous().sort_by(order_by);
@@ -144,15 +148,10 @@ impl Buffer {
         let buffer: VecDeque<DataRow> = std::mem::take(&mut self.buffer);
         let mut rows = if aggregate.is_empty() {
             buffer
+        } else if let Some(aggregates) = Aggregates::new(&buffer, decoder, aggregate, plan) {
+            aggregates.aggregate()?
         } else {
-            let aggregates = Aggregates::new(&buffer, decoder, aggregate, plan);
-            let result = aggregates.aggregate()?;
-
-            if result.is_empty() {
-                buffer
-            } else {
-                result
-            }
+            buffer
         };
 
         Self::drop_helper_columns(&mut rows, plan);
@@ -162,13 +161,11 @@ impl Buffer {
     }
 
     fn drop_helper_columns(rows: &mut VecDeque<DataRow>, plan: &AggregateRewritePlan) {
-        if plan.drop_columns().is_empty() {
+        if plan.is_noop() {
             return;
         }
 
-        let mut drop = plan.drop_columns().to_vec();
-        drop.sort_unstable();
-        drop.dedup();
+        let drop = plan.drop_columns().collect();
 
         for row in rows.iter_mut() {
             row.drop_columns(&drop);
@@ -182,7 +179,7 @@ impl Buffer {
                     self.buffer.retain(|row| self.distinct.insert(row.clone()));
                 }
 
-                DistinctBy::Columns(ref columns) => {
+                DistinctBy::Columns(columns) => {
                     self.buffer.retain(|row| {
                         let mut dr = DataRow::new();
                         for col in columns {
@@ -194,10 +191,10 @@ impl Buffer {
                                 }
 
                                 DistinctColumn::Name(name) => {
-                                    if let Some(index) = decoder.rd().field_index(name) {
-                                        if let Some(data) = row.column(index) {
-                                            dr.add(data);
-                                        }
+                                    if let Some(index) = decoder.rd().field_index(name)
+                                        && let Some(data) = row.column(index)
+                                    {
+                                        dr.add(data);
                                     }
                                 }
                             }
@@ -264,7 +261,7 @@ mod test {
 
         let mut i = 1;
         while let Some(message) = buf.take() {
-            let dr = DataRow::from_bytes(message.to_bytes().unwrap()).unwrap();
+            let dr = DataRow::from_bytes(message.to_bytes()).unwrap();
             let one = dr.get::<i64>(0, Format::Text).unwrap();
             let two = dr.get::<String>(1, Format::Text).unwrap();
             assert_eq!(one, i);
@@ -293,7 +290,7 @@ mod test {
 
         assert_eq!(buf.len(), 1);
         let row = buf.take().unwrap();
-        let dr = DataRow::from_bytes(row.to_bytes().unwrap()).unwrap();
+        let dr = DataRow::from_bytes(row.to_bytes()).unwrap();
         let count = dr.get::<i64>(0, Format::Text).unwrap();
         assert_eq!(count, 15 * 6);
     }
@@ -321,7 +318,7 @@ mod test {
         assert_eq!(buf.len(), 2);
         for _ in &emails {
             let row = buf.take().unwrap();
-            let dr = DataRow::from_bytes(row.to_bytes().unwrap()).unwrap();
+            let dr = DataRow::from_bytes(row.to_bytes()).unwrap();
             let count = dr.get::<i64>(0, Format::Text).unwrap();
             assert_eq!(count, 15 * 6);
         }
@@ -364,7 +361,7 @@ mod test {
 
         for expected in expected_order {
             let message = buf.take().expect("Should have message");
-            let dr = DataRow::from_bytes(message.to_bytes().unwrap()).unwrap();
+            let dr = DataRow::from_bytes(message.to_bytes()).unwrap();
             let ts = dr.get::<String>(0, Format::Text).unwrap();
             assert_eq!(ts, expected);
         }
@@ -400,7 +397,7 @@ mod test {
 
         for expected in expected_order {
             let message = buf.take().expect("Should have message");
-            let dr = DataRow::from_bytes(message.to_bytes().unwrap()).unwrap();
+            let dr = DataRow::from_bytes(message.to_bytes()).unwrap();
             let price = dr.get::<String>(0, Format::Text).unwrap();
             assert_eq!(price, expected);
         }
@@ -454,7 +451,7 @@ mod test {
 
         for expected in expected_order {
             let message = buf.take().expect("Should have message");
-            let dr = DataRow::from_bytes(message.to_bytes().unwrap()).unwrap();
+            let dr = DataRow::from_bytes(message.to_bytes()).unwrap();
             // Get the numeric value and convert to string for comparison
             let column = dr.get_column(0, &decoder).unwrap().unwrap();
             if let Datum::Numeric(numeric) = column.value {
@@ -506,7 +503,7 @@ mod test {
 
         for expected in expected_order {
             let message = buf.take().expect("Should have message");
-            let dr = DataRow::from_bytes(message.to_bytes().unwrap()).unwrap();
+            let dr = DataRow::from_bytes(message.to_bytes()).unwrap();
             let value = dr.get::<String>(0, Format::Text).unwrap();
             assert_eq!(value, expected);
         }
@@ -547,7 +544,7 @@ mod test {
         b.full();
         assert_eq!(b.len(), 4);
         for expected in 2..6_i64 {
-            let dr = DataRow::from_bytes(b.take().unwrap().to_bytes().unwrap()).unwrap();
+            let dr = DataRow::from_bytes(b.take().unwrap().to_bytes()).unwrap();
             assert_eq!(dr.get::<i64>(0, Format::Text).unwrap(), expected);
         }
 

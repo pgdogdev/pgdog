@@ -5,9 +5,11 @@ edition = "2024"
 
 [dependencies]
 chrono = "0.4"
-bytes = "*"
+bytes.workspace = true
 thiserror = "*"
-uuid = "*"
+uuid.workspace = true
 serde = { version = "*", features = ["derive"]}
+schemars.workspace = true
 pgdog-vector = { path = "../pgdog-vector" }
 rust_decimal = { version = "1.36", features = ["db-postgres"] }
+postgres-types = "0.2.13"

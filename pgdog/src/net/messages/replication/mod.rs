@@ -14,7 +14,7 @@ pub use logical::relation::Relation;
 pub use logical::stream_start::StreamStart;
 pub use logical::truncate::Truncate;
 pub use logical::tuple_data::TupleData;
-pub use logical::update::Update;
+pub use logical::update::{Update, UpdateIdentity};
 pub use status_update::StatusUpdate;
 pub use xlog_data::XLogData;
 
@@ -39,7 +39,7 @@ impl FromBytes for ReplicationMeta {
 }
 
 impl ToBytes for ReplicationMeta {
-    fn to_bytes(&self) -> Result<Bytes, Error> {
+    fn to_bytes(&self) -> Bytes {
         match self {
             Self::HotStandbyFeedback(hot) => hot.to_bytes(),
             Self::StatusUpdate(status) => status.to_bytes(),
@@ -79,7 +79,7 @@ mod tests {
             ReplicationMeta::KeepAlive(keepalive.clone()),
             ReplicationMeta::StatusUpdate(status.clone()),
         ] {
-            let bytes = meta.to_bytes().expect("serialize replication meta");
+            let bytes = meta.to_bytes();
             let decoded = ReplicationMeta::from_bytes(bytes).expect("decode replication meta");
             match (meta, decoded) {
                 (

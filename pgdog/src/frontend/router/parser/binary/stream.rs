@@ -23,11 +23,14 @@ impl BinaryStream {
     pub fn tuple(&mut self) -> Result<Option<Tuple>, Error> {
         loop {
             if let Some(header) = &self.header {
-                if let Some(tuple) = Tuple::read(header, &mut self.buffer.as_slice()) {
-                    self.buffer = Vec::from(&self.buffer[tuple.bytes_read(header)..]);
-                    return Ok(Some(tuple));
-                } else {
-                    return Ok(None);
+                match Tuple::read(header, &mut self.buffer.as_slice()) {
+                    Some(tuple) => {
+                        self.buffer = Vec::from(&self.buffer[tuple.bytes_read(header)..]);
+                        return Ok(Some(tuple));
+                    }
+                    _ => {
+                        return Ok(None);
+                    }
                 }
             } else {
                 match self.header()? {

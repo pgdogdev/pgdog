@@ -90,6 +90,31 @@ after(async function () {
 });
 
 // ---------------------------------------------------------------------------
+// Multi-password user connection (pgdog_multi_pass_server)
+// ---------------------------------------------------------------------------
+
+describe("Prisma ORM multi-password user", function () {
+  // users.toml: pgdog_multi_pass_server has passwords = ["wrong_password", "pgdog"].
+  // Either password should be accepted on the client side.
+  for (const password of ["wrong_password", "pgdog"]) {
+    it(`connects with password '${password}'`, async function () {
+      const url = `postgresql://pgdog_multi_pass_server:${password}@127.0.0.1:6432/pgdog`;
+      const prisma = new PrismaClient({
+        datasources: { db: { url } },
+        log: [],
+      });
+      try {
+        await prisma.$connect();
+        const rows = await prisma.$queryRaw`SELECT 1::int AS one`;
+        assert.strictEqual(rows[0].one, 1);
+      } finally {
+        await prisma.$disconnect();
+      }
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------
 // Basic CRUD using Prisma ORM
 // ---------------------------------------------------------------------------
 

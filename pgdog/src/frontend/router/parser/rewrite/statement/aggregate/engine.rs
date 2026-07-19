@@ -1,8 +1,18 @@
+#[cfg(feature = "new_parser")]
+use crate::frontend::router::parser::Function;
 use crate::frontend::router::parser::aggregate::{Aggregate, AggregateFunction};
-use pg_query::protobuf::{
-    a_const::Val, AConst, FuncCall, Integer, Node, ParseResult, ResTarget, String as PgString,
-};
+#[cfg(not(feature = "new_parser"))]
+use crate::frontend::router::parser::util::pg_string;
+#[cfg(feature = "new_parser")]
+use itertools::*;
+#[cfg(not(feature = "new_parser"))]
 use pg_query::NodeEnum;
+#[cfg(not(feature = "new_parser"))]
+use pg_query::protobuf::{
+    AConst, FuncCall, Integer, Node, ResTarget, SelectStmt, TypeCast, TypeName, a_const::Val,
+};
+#[cfg(feature = "new_parser")]
+use pg_raw_parse::{Node, make, nodes};
 
 use super::{AggregateRewritePlan, HelperKind, HelperMapping, RewriteOutput};
 
@@ -10,42 +20,79 @@ use super::{AggregateRewritePlan, HelperKind, HelperMapping, RewriteOutput};
 /// variance-related functions that require additional helper aggregates when run
 /// across shards.
 #[derive(Default)]
-pub struct AggregatesRewrite;
+pub(crate) struct AggregatesRewrite;
 
 impl AggregatesRewrite {
     /// Rewrite a SELECT query in-place, adding helper aggregates when necessary.
-    pub fn rewrite_select(&self, ast: &mut ParseResult, aggregate: &Aggregate) -> RewriteOutput {
+    #[cfg(feature = "new_parser")]
+    pub(crate) fn rewrite_select<'a>(
+        select: &mut nodes::SelectStmtMut<'a, '_>,
+        mem: make::MemoryToken<'a>,
+        aggregate: &Aggregate,
+    ) -> RewriteOutput {
+        let mut plan = AggregateRewritePlan::new();
+
+        let helper_nodes = aggregate
+            .targets()
+            .iter()
+            .flat_map(|target| {
+                let Some(node) = select.target_list().iter().nth(target.column()) else {
+                    // FIXME: We should make this impossible statically
+                    panic!("SelectStmt did not contain previously parsed column");
+                };
+
+                let Some(func_call) = Function::extract_func_call(node.val()) else {
+                    panic!("Previously parsed function was not a FuncCall");
+                };
+
+                Self::helper_specs(func_call, target.function(), mem)
+                    .into_iter()
+                    .map(move |spec| (target, spec))
+            })
+            .enumerate()
+            .map(|(idx, (target, HelperSpec { func, kind }))| {
+                let helper_alias =
+                    format!("__pgdog_{}_col{}", kind.alias_suffix(), target.column());
+                let node = mem.make_res_target(Some(&helper_alias), mem.empty(), func.uncast());
+
+                plan.add_helper(HelperMapping {
+                    target_column: target.column(),
+                    helper_column: select.target_list().len() + idx,
+                    distinct: target.is_distinct(),
+                    kind,
+                    alias: helper_alias,
+                });
+                node
+            })
+            .collect::<Vec<_>>();
+
+        if helper_nodes.is_empty() {
+            RewriteOutput::default()
+        } else {
+            select
+                .target_list_mut()
+                .extend(mem, mem.make_list(&helper_nodes));
+            RewriteOutput::new(plan)
+        }
+    }
+
+    #[cfg(not(feature = "new_parser"))]
+    pub(crate) fn rewrite_select(
+        &self,
+        ast: &mut SelectStmt,
+        aggregate: &Aggregate,
+    ) -> RewriteOutput {
         self.rewrite_parsed(ast, aggregate)
     }
 
-    fn rewrite_parsed(&self, parsed: &mut ParseResult, aggregate: &Aggregate) -> RewriteOutput {
-        let Some(raw_stmt) = parsed.stmts.first() else {
-            return RewriteOutput::default();
-        };
-
-        let Some(stmt) = raw_stmt.stmt.as_ref() else {
-            return RewriteOutput::default();
-        };
-
-        let Some(NodeEnum::SelectStmt(select)) = stmt.node.as_ref() else {
-            return RewriteOutput::default();
-        };
-
+    #[cfg(not(feature = "new_parser"))]
+    fn rewrite_parsed(&self, select: &mut SelectStmt, aggregate: &Aggregate) -> RewriteOutput {
         let mut plan = AggregateRewritePlan::new();
         let mut helper_nodes: Vec<Node> = Vec::new();
         let mut planned_aliases: Vec<String> = Vec::new();
         let base_len = select.target_list.len();
 
         for target in aggregate.targets() {
-            if aggregate.targets().iter().any(|other| {
-                matches!(other.function(), AggregateFunction::Count)
-                    && other.expr_id() == target.expr_id()
-                    && other.is_distinct() == target.is_distinct()
-            }) && matches!(target.function(), AggregateFunction::Avg)
-            {
-                continue;
-            }
-
             let Some(node) = select.target_list.get(target.column()) else {
                 continue;
             };
@@ -80,26 +127,8 @@ impl AggregatesRewrite {
             for helper in helper_specs {
                 let HelperSpec { func, kind } = helper;
 
-                let helper_alias = format!(
-                    "__pgdog_{}_expr{}_col{}",
-                    kind.alias_suffix(),
-                    target.expr_id(),
-                    target.column()
-                );
-
-                let alias_exists = select.target_list.iter().any(|existing| {
-                    if let Some(NodeEnum::ResTarget(res)) = existing.node.as_ref() {
-                        res.name == helper_alias
-                    } else {
-                        false
-                    }
-                }) || planned_aliases
-                    .iter()
-                    .any(|existing| existing == &helper_alias);
-
-                if alias_exists {
-                    continue;
-                }
+                let helper_alias =
+                    format!("__pgdog_{}_col{}", kind.alias_suffix(), target.column());
 
                 let helper_column = base_len + helper_nodes.len();
 
@@ -117,11 +146,9 @@ impl AggregatesRewrite {
                 });
                 planned_aliases.push(helper_alias.clone());
 
-                plan.add_drop_column(helper_column);
                 plan.add_helper(HelperMapping {
                     target_column: target.column(),
                     helper_column,
-                    expr_id: target.expr_id(),
                     distinct: target.is_distinct(),
                     kind,
                     alias: helper_alias,
@@ -133,23 +160,12 @@ impl AggregatesRewrite {
             return RewriteOutput::default();
         }
 
-        let Some(raw_stmt) = parsed.stmts.first_mut() else {
-            return RewriteOutput::default();
-        };
-
-        let Some(stmt) = raw_stmt.stmt.as_mut() else {
-            return RewriteOutput::default();
-        };
-
-        let Some(NodeEnum::SelectStmt(select)) = stmt.node.as_mut() else {
-            return RewriteOutput::default();
-        };
-
         select.target_list.extend(helper_nodes);
 
         RewriteOutput::new(plan)
     }
 
+    #[cfg(not(feature = "new_parser"))]
     fn extract_func_call(node: &Node) -> Option<&FuncCall> {
         match node.node.as_ref()? {
             NodeEnum::FuncCall(func) => Some(func),
@@ -173,13 +189,10 @@ impl AggregatesRewrite {
         }
     }
 
+    #[cfg(not(feature = "new_parser"))]
     fn build_count_func(original: &FuncCall, distinct: bool) -> FuncCall {
         FuncCall {
-            funcname: vec![Node {
-                node: Some(NodeEnum::String(PgString {
-                    sval: "count".into(),
-                })),
-            }],
+            funcname: vec![pg_string("count")],
             args: original.args.clone(),
             agg_order: original.agg_order.clone(),
             agg_filter: original.agg_filter.clone(),
@@ -193,11 +206,10 @@ impl AggregatesRewrite {
         }
     }
 
+    #[cfg(not(feature = "new_parser"))]
     fn build_sum_func(original: &FuncCall, distinct: bool) -> FuncCall {
         FuncCall {
-            funcname: vec![Node {
-                node: Some(NodeEnum::String(PgString { sval: "sum".into() })),
-            }],
+            funcname: vec![pg_string("sum")],
             args: original.args.clone(),
             agg_order: original.agg_order.clone(),
             agg_filter: original.agg_filter.clone(),
@@ -211,8 +223,60 @@ impl AggregatesRewrite {
         }
     }
 
-    fn build_sum_of_squares_func(original: &FuncCall, distinct: bool) -> Option<FuncCall> {
-        let arg = original.args.first()?.clone();
+    #[cfg(feature = "new_parser")]
+    fn build_sum_of_squares_func<'a>(
+        original: &nodes::FuncCall,
+        mem: make::MemoryToken<'a>,
+    ) -> make::Unique<'a, &'a nodes::FuncCall> {
+        let mut sumsq = Self::copy_and_rename_function(original, "sum", mem);
+        let arg = sumsq
+            .args()
+            .iter()
+            .exactly_one()
+            .expect("Aggregate functions should have exactly one argument");
+
+        // We need to cast to NUMERIC to avoid overflow
+        let mut numeric_type = mem.make_node::<nodes::TypeName>();
+        numeric_type.as_mut().set_names(mem.make_list(&[
+            mem.make_string(Some("pg_catalog")),
+            mem.make_string(Some("numeric")),
+        ]));
+        numeric_type.as_mut().set_type_oid(1700);
+
+        let mut cast_arg = mem.make_node::<nodes::TypeCast>();
+        cast_arg.as_mut().set_type_name(numeric_type.as_option());
+        cast_arg.as_mut().set_arg(mem.make_unique(arg));
+
+        let arg_squared = mem.make_a_expr(
+            nodes::A_Expr_Kind::AEXPR_OP,
+            mem.make_list(&[mem.make_string(Some("*")).uncast()]),
+            mem.make_unique(Node::from(cast_arg.as_ref())),
+            cast_arg.uncast(),
+        );
+        sumsq
+            .as_mut()
+            .set_args(mem.make_list(&[arg_squared.uncast()]));
+        sumsq
+    }
+
+    #[cfg(not(feature = "new_parser"))]
+    fn build_sum_of_squares_func(original: &FuncCall, distinct: bool) -> FuncCall {
+        let arg = original.args.first().cloned();
+        // POWER will return double even when dealing with integer inputs.
+        // For any non float type, functions using this helper return numeric.
+        // We can go from numeric to f64 losslessly, but not the other way,
+        // so we cast here
+        let arg = Node {
+            node: Some(NodeEnum::TypeCast(Box::new(TypeCast {
+                arg: arg.map(Box::new),
+                type_name: Some(TypeName {
+                    names: vec![pg_string("pg_catalog"), pg_string("numeric")],
+                    type_oid: 1700,
+                    ..Default::default()
+                }),
+                location: original.location,
+            }))),
+        };
 
         let two = Node {
             node: Some(NodeEnum::AConst(AConst {
@@ -223,11 +287,7 @@ impl AggregatesRewrite {
         };
 
         let power = FuncCall {
-            funcname: vec![Node {
-                node: Some(NodeEnum::String(PgString {
-                    sval: "power".into(),
-                })),
-            }],
+            funcname: vec![pg_string("power")],
             args: vec![arg, two],
             agg_order: vec![],
             agg_filter: None,
@@ -240,10 +300,8 @@ impl AggregatesRewrite {
             location: original.location,
         };
 
-        Some(FuncCall {
-            funcname: vec![Node {
-                node: Some(NodeEnum::String(PgString { sval: "sum".into() })),
-            }],
+        FuncCall {
+            funcname: vec![pg_string("sum")],
             args: vec![Node {
                 node: Some(NodeEnum::FuncCall(Box::new(power))),
             }],
@@ -256,9 +314,64 @@ impl AggregatesRewrite {
             func_variadic: original.func_variadic,
             funcformat: original.funcformat,
             location: original.location,
-        })
+        }
     }
 
+    #[cfg(feature = "new_parser")]
+    fn helper_specs<'a>(
+        func_call: &nodes::FuncCall,
+        function: &AggregateFunction,
+        mem: make::MemoryToken<'a>,
+    ) -> Vec<HelperSpec<'a>> {
+        match function {
+            AggregateFunction::Avg => {
+                vec![HelperSpec {
+                    func: Self::copy_and_rename_function(func_call, "count", mem),
+                    kind: HelperKind::Count,
+                }]
+            }
+            AggregateFunction::StddevSamp
+            | AggregateFunction::StddevPop
+            | AggregateFunction::VarSamp
+            | AggregateFunction::VarPop => {
+                vec![
+                    HelperSpec {
+                        func: Self::copy_and_rename_function(func_call, "count", mem),
+                        kind: HelperKind::Count,
+                    },
+                    HelperSpec {
+                        func: Self::copy_and_rename_function(func_call, "sum", mem),
+                        kind: HelperKind::Sum,
+                    },
+                    HelperSpec {
+                        func: Self::build_sum_of_squares_func(func_call, mem),
+                        kind: HelperKind::SumSquares,
+                    },
+                ]
+            }
+            // Computable from the original aggregate alone
+            AggregateFunction::Count
+            | AggregateFunction::Sum
+            | AggregateFunction::Max
+            | AggregateFunction::Min => Vec::new(),
+            // We'll error later
+            AggregateFunction::Unrecognized(_) => Vec::new(),
+        }
+    }
+
+    #[cfg(feature = "new_parser")]
+    fn copy_and_rename_function<'a>(
+        func_call: &nodes::FuncCall,
+        name: &str,
+        mem: make::MemoryToken<'a>,
+    ) -> make::Unique<'a, &'a nodes::FuncCall> {
+        let mut func = mem.make_unique(func_call);
+        func.as_mut()
+            .set_funcname(mem.make_list(&[mem.make_string(Some(name)).uncast()]));
+        func
+    }
+
+    #[cfg(not(feature = "new_parser"))]
     fn helper_specs(
         func_call: &FuncCall,
         function: &AggregateFunction,
@@ -273,7 +386,7 @@ impl AggregatesRewrite {
             | AggregateFunction::StddevPop
             | AggregateFunction::VarSamp
             | AggregateFunction::VarPop => {
-                let mut helpers = vec![
+                vec![
                     HelperSpec {
                         func: Self::build_count_func(func_call, distinct),
                         kind: HelperKind::Count,
@@ -282,16 +395,11 @@ impl AggregatesRewrite {
                         func: Self::build_sum_func(func_call, distinct),
                         kind: HelperKind::Sum,
                     },
-                ];
-
-                if let Some(sum_sq) = Self::build_sum_of_squares_func(func_call, distinct) {
-                    helpers.push(HelperSpec {
-                        func: sum_sq,
+                    HelperSpec {
+                        func: Self::build_sum_of_squares_func(func_call, distinct),
                         kind: HelperKind::SumSquares,
-                    });
-                }
-
-                helpers
+                    },
+                ]
             }
             _ => vec![],
         }
@@ -299,78 +407,113 @@ impl AggregatesRewrite {
 }
 
 #[derive(Debug, Clone)]
+#[cfg(not(feature = "new_parser"))]
 struct HelperSpec {
     func: FuncCall,
     kind: HelperKind,
 }
 
+#[cfg(feature = "new_parser")]
+struct HelperSpec<'a> {
+    func: make::Unique<'a, &'a nodes::FuncCall>,
+    kind: HelperKind,
+}
+
 #[cfg(test)]
 mod tests {
+    #![cfg_attr(feature = "new_parser", allow(unused_mut))]
     use super::*;
     use crate::frontend::router::parser::aggregate::Aggregate;
+    #[cfg(not(feature = "new_parser"))]
+    use pg_query::protobuf::ParseResult;
+    #[cfg(feature = "new_parser")]
+    use pg_raw_parse::{Node, Owned, make, nodes};
 
-    fn select(ast: &ParseResult) -> &pg_query::protobuf::SelectStmt {
+    #[cfg(not(feature = "new_parser"))]
+    fn select(ast: &mut ParseResult) -> &mut pg_query::protobuf::SelectStmt {
         match ast
             .stmts
-            .first()
-            .and_then(|stmt| stmt.stmt.as_ref())
-            .and_then(|stmt| stmt.node.as_ref())
+            .first_mut()
+            .and_then(|stmt| stmt.stmt.as_mut())
+            .and_then(|stmt| stmt.node.as_mut())
         {
-            Some(NodeEnum::SelectStmt(select)) => select,
+            Some(NodeEnum::SelectStmt(select)) => &mut *select,
             _ => panic!("not a select"),
         }
     }
 
+    #[cfg(feature = "new_parser")]
+    fn rewrite(sql: &str) -> (Owned<nodes::SelectStmt>, RewriteOutput) {
+        let ast = pg_raw_parse::parse(sql).unwrap();
+
+        let mut output = None;
+        let select = make::owned(|mem| {
+            let Node::SelectStmt(stmt) = ast.stmts().next().unwrap() else {
+                unreachable!("not a select");
+            };
+            let mut stmt = mem.make_unique(stmt);
+
+            let aggregate = Aggregate::parse(&*stmt, &Default::default());
+            output = Some(AggregatesRewrite::rewrite_select(
+                &mut stmt.as_mut(),
+                mem,
+                &aggregate,
+            ));
+            stmt
+        });
+        (select, output.unwrap())
+    }
+
+    #[cfg(not(feature = "new_parser"))]
     fn rewrite(sql: &str) -> (ParseResult, RewriteOutput) {
         let mut parsed = pg_query::parse(sql).unwrap().protobuf;
-        let aggregate = {
-            let stmt = select(&parsed);
-            Aggregate::parse(stmt)
-        };
-        let output = AggregatesRewrite::default().rewrite_select(&mut parsed, &aggregate);
+
+        let stmt_mut = select(&mut parsed);
+        let aggregate = Aggregate::parse(stmt_mut, &Default::default());
+
+        let output = AggregatesRewrite.rewrite_select(stmt_mut, &aggregate);
         (parsed, output)
     }
 
     #[test]
     fn rewrite_engine_noop() {
-        let (ast, output) = rewrite("SELECT COUNT(price) FROM menu");
+        let (mut ast, output) = rewrite("SELECT COUNT(price) FROM menu");
         assert!(output.plan.is_noop());
-        assert_eq!(select(&ast).target_list.len(), 1);
+        #[cfg(feature = "new_parser")]
+        assert_eq!(ast.target_list().len(), 1);
+        #[cfg(not(feature = "new_parser"))]
+        assert_eq!(select(&mut ast).target_list.len(), 1);
     }
 
     #[test]
     fn rewrite_engine_adds_helper() {
-        let (ast, output) = rewrite("SELECT AVG(price) FROM menu");
+        let (mut ast, output) = rewrite("SELECT AVG(price) FROM menu");
         assert!(!output.plan.is_noop());
-        assert_eq!(output.plan.drop_columns(), &[1]);
+        assert_eq!(output.plan.drop_columns().collect::<Vec<_>>(), &[1]);
         assert_eq!(output.plan.helpers().len(), 1);
         let helper = &output.plan.helpers()[0];
         assert_eq!(helper.target_column, 0);
         assert_eq!(helper.helper_column, 1);
-        assert_eq!(helper.expr_id, 0);
         assert!(!helper.distinct);
         assert!(matches!(helper.kind, HelperKind::Count));
 
-        let aggregate = Aggregate::parse(select(&ast));
+        #[cfg(feature = "new_parser")]
+        let aggregate = Aggregate::parse(&ast, &Default::default());
+        #[cfg(not(feature = "new_parser"))]
+        let aggregate = Aggregate::parse(select(&mut ast), &Default::default());
         assert_eq!(aggregate.targets().len(), 2);
-        assert!(aggregate
-            .targets()
-            .iter()
-            .any(|target| matches!(target.function(), AggregateFunction::Count)));
-    }
-
-    #[test]
-    fn rewrite_engine_skips_when_count_exists() {
-        let sql = "SELECT COUNT(price), AVG(price) FROM menu";
-        let (ast, output) = rewrite(sql);
-        assert!(output.plan.is_noop());
-        assert_eq!(select(&ast).target_list.len(), 2);
+        assert!(
+            aggregate
+                .targets()
+                .iter()
+                .any(|target| matches!(target.function(), AggregateFunction::Count))
+        );
     }
 
     #[test]
     fn rewrite_engine_handles_mismatched_pair() {
-        let (ast, output) = rewrite("SELECT COUNT(price::numeric), AVG(price) FROM menu");
-        assert_eq!(output.plan.drop_columns(), &[2]);
+        let (mut ast, output) = rewrite("SELECT COUNT(price::numeric), AVG(price) FROM menu");
+        assert_eq!(output.plan.drop_columns().collect::<Vec<_>>(), &[2]);
         assert_eq!(output.plan.helpers().len(), 1);
         let helper = &output.plan.helpers()[0];
         assert_eq!(helper.target_column, 1);
@@ -378,7 +521,10 @@ mod tests {
         assert!(!helper.distinct);
         assert!(matches!(helper.kind, HelperKind::Count));
 
-        let aggregate = Aggregate::parse(select(&ast));
+        #[cfg(feature = "new_parser")]
+        let aggregate = Aggregate::parse(&ast, &Default::default());
+        #[cfg(not(feature = "new_parser"))]
+        let aggregate = Aggregate::parse(select(&mut ast), &Default::default());
         assert_eq!(aggregate.targets().len(), 3);
         assert!(
             aggregate
@@ -392,8 +538,8 @@ mod tests {
 
     #[test]
     fn rewrite_engine_multiple_avg_helpers() {
-        let (ast, output) = rewrite("SELECT AVG(price), AVG(discount) FROM menu");
-        assert_eq!(output.plan.drop_columns(), &[2, 3]);
+        let (mut ast, output) = rewrite("SELECT AVG(price), AVG(discount) FROM menu");
+        assert_eq!(output.plan.drop_columns().collect::<Vec<_>>(), &[2, 3]);
         assert_eq!(output.plan.helpers().len(), 2);
 
         let helper_price = &output.plan.helpers()[0];
@@ -406,7 +552,10 @@ mod tests {
         assert_eq!(helper_discount.helper_column, 3);
         assert!(matches!(helper_discount.kind, HelperKind::Count));
 
-        let aggregate = Aggregate::parse(select(&ast));
+        #[cfg(feature = "new_parser")]
+        let aggregate = Aggregate::parse(&ast, &Default::default());
+        #[cfg(not(feature = "new_parser"))]
+        let aggregate = Aggregate::parse(select(&mut ast), &Default::default());
         assert_eq!(aggregate.targets().len(), 4);
         assert_eq!(
             aggregate
@@ -420,9 +569,9 @@ mod tests {
 
     #[test]
     fn rewrite_engine_stddev_helpers() {
-        let (ast, output) = rewrite("SELECT STDDEV(price) FROM menu");
+        let (mut ast, output) = rewrite("SELECT STDDEV(price) FROM menu");
         assert!(!output.plan.is_noop());
-        assert_eq!(output.plan.drop_columns(), &[1, 2, 3]);
+        assert_eq!(output.plan.drop_columns().collect::<Vec<_>>(), &[1, 2, 3]);
         assert_eq!(output.plan.helpers().len(), 3);
 
         let kinds: Vec<HelperKind> = output
@@ -440,6 +589,9 @@ mod tests {
         assert!(kinds.contains(&HelperKind::SumSquares));
 
         // Expect original STDDEV plus three helpers.
-        assert_eq!(select(&ast).target_list.len(), 4);
+        #[cfg(feature = "new_parser")]
+        assert_eq!(ast.target_list().len(), 4);
+        #[cfg(not(feature = "new_parser"))]
+        assert_eq!(select(&mut ast).target_list.len(), 4);
     }
 }

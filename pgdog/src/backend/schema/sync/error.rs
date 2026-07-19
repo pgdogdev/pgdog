@@ -1,4 +1,5 @@
 use thiserror::Error;
+use tokio::task::JoinError;
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -24,7 +25,12 @@ pub enum Error {
     PgDump(String),
 
     #[error("{0}")]
+    #[cfg(not(feature = "new_parser"))]
     Syntax(#[from] pg_query::Error),
+
+    #[error("{0}")]
+    #[cfg(feature = "new_parser")]
+    Syntax(#[from] pg_raw_parse::Error),
 
     #[error("parse error, stmt out of bounds")]
     StmtOutOfBounds,
@@ -37,6 +43,9 @@ pub enum Error {
 
     #[error("publication \"{0}\" has no tables")]
     PublicationNoTables(String),
+
+    #[error("tokio task join error")]
+    JoinError(#[from] JoinError),
 }
 
 impl From<crate::backend::replication::logical::Error> for Error {

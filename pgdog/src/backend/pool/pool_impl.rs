@@ -1,28 +1,29 @@
 //! Connection pool.
 
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use futures::future::try_join_all;
 use once_cell::sync::{Lazy, OnceCell};
 use parking_lot::RwLock;
-use parking_lot::{lock_api::MutexGuard, Mutex, RawMutex};
-use tokio::time::{timeout, Instant};
-use tracing::error;
+use parking_lot::{Mutex, RawMutex, lock_api::MutexGuard};
+use tokio::sync::Notify;
+use tokio::time::{Instant, timeout};
+use tracing::{debug, error};
 
 use crate::backend::pool::LsnStats;
 use crate::backend::{ConnectReason, DisconnectReason, Server, ServerOptions};
 use crate::config::PoolerMode;
-use crate::net::messages::BackendKeyData;
+use crate::net::messages::FrontendPid;
 use crate::net::{Parameter, Parameters};
 
 use super::inner::CheckInResult;
 use super::{
-    lb::TargetHealth,
-    lsn_monitor::{LsnMonitor, ReplicaLag},
     Address, Comms, Config, Error, Guard, Healtcheck, Inner, Monitor, Oids, PoolConfig, Request,
     State, Waiting,
+    lb::TargetHealth,
+    lsn_monitor::{LsnMonitor, ReplicaLag},
 };
 
 static ID_COUNTER: Lazy<Arc<AtomicU64>> = Lazy::new(|| Arc::new(AtomicU64::new(0)));
@@ -45,6 +46,7 @@ pub(crate) struct InnerSync {
     pub(super) health: TargetHealth,
     pub(super) params: OnceCell<Parameters>,
     pub(super) lsn_stats: RwLock<LsnStats>,
+    pub(super) lsn_role_change: Notify,
 }
 
 impl std::fmt::Debug for Pool {
@@ -69,6 +71,7 @@ impl Pool {
                 health: TargetHealth::new(id),
                 params: OnceCell::new(),
                 lsn_stats: RwLock::new(LsnStats::default()),
+                lsn_role_change: Notify::new(),
             }),
         }
     }
@@ -152,11 +155,7 @@ impl Pool {
                 self.comms().ready.notified().await;
             }
 
-            let (server, granted_at) = if let Some(mut server) = server {
-                server
-                    .prepared_statements_mut()
-                    .set_capacity(self.inner.config.prepared_statements_limit);
-                server.set_pooler_mode(self.inner.config.pooler_mode);
+            let (mut server, granted_at) = if let Some(server) = server {
                 (Guard::new(pool, server, granted_at), granted_at)
             } else {
                 // Slow path, pool is empty, will create new connection
@@ -164,6 +163,14 @@ impl Pool {
                 let mut waiting = Waiting::new(pool, request)?;
                 waiting.wait().await?
             };
+
+            server
+                .prepared_statements_mut()
+                .set_capacity(self.inner.config.prepared_statements_limit);
+            server
+                .prepared_statements_mut()
+                .set_prepared_statements_level(self.inner.config.prepared_statements_level);
+            server.set_pooler_mode(self.inner.config.pooler_mode);
 
             match self
                 .maybe_healthcheck(
@@ -244,7 +251,7 @@ impl Pool {
         let CheckInResult {
             server_error,
             replenish,
-        } = { self.lock().maybe_check_in(server, now, counts)? };
+        } = { self.lock().maybe_check_in(server, now, counts, false)? };
 
         if server_error {
             error!(
@@ -263,17 +270,13 @@ impl Pool {
         Ok(())
     }
 
-    /// Server connection used by the client.
-    pub fn peer(&self, id: &BackendKeyData) -> Option<BackendKeyData> {
-        self.lock().peer(id)
-    }
-
     /// Send a cancellation request if the client is connected to a server.
-    pub async fn cancel(&self, id: &BackendKeyData) -> Result<(), super::super::Error> {
-        if let Some(server) = self.peer(id) {
-            Server::cancel(self.addr(), &server).await?;
+    pub async fn cancel(&self, id: FrontendPid) -> Result<(), super::super::Error> {
+        // Must NOT hold the lock while doing async I/O.
+        let key = self.lock().cancel_key(id).cloned();
+        if let Some(key) = key {
+            Server::cancel(self.addr(), key).await?;
         }
-
         Ok(())
     }
 
@@ -302,6 +305,11 @@ impl Pool {
             let mut from_guard = self.lock();
             let mut to_guard = destination.lock();
 
+            // Propagate pause state so a paused database stays paused after reload.
+            if from_guard.paused {
+                to_guard.paused = true;
+            }
+
             from_guard.online = false;
             let (idle, taken) = from_guard.move_conns_to(destination);
             for server in idle {
@@ -310,7 +318,6 @@ impl Pool {
             to_guard.set_taken(taken);
         }
 
-        destination.launch();
         self.shutdown();
 
         Ok(())
@@ -318,7 +325,7 @@ impl Pool {
 
     /// The two pools refer to the same database.
     pub(crate) fn can_move_conns_to(&self, destination: &Pool) -> bool {
-        self.addr() == destination.addr()
+        self.addr().compatible(destination.addr())
     }
 
     /// Pause pool, closing all open connections.
@@ -331,13 +338,16 @@ impl Pool {
 
     /// Send a cancellation request for all running queries.
     pub async fn cancel_all(&self) -> Result<(), Error> {
-        let taken = self.lock().checked_out_server_ids();
         let addr = self.addr().clone();
-
-        try_join_all(taken.iter().map(|id| Server::cancel(&addr, id)))
+        // Collect into a Vec to drop the pool lock before awaiting
+        let futures: Vec<_> = self
+            .lock()
+            .cancel_keys()
+            .map(|key| Server::cancel(&addr, key.clone()))
+            .collect();
+        try_join_all(futures)
             .await
             .map_err(|_| Error::FastShutdown)?;
-
         Ok(())
     }
 
@@ -356,14 +366,25 @@ impl Pool {
         Monitor::create_connection(self, reason).await
     }
 
-    /// Shutdown the pool.
+    /// Mark this pool offline and evict idle connections.
+    ///
+    /// Called from two contexts: atomic pool replacement (where a new generation
+    /// is swapped in immediately after) and process shutdown. The operation is the
+    /// same in both cases: set `online = false`, dump idle connections, and notify
+    /// any waiters so they return `Error::Offline` rather than blocking forever.
     pub fn shutdown(&self) {
+        debug!(
+            host = %self.addr().host,
+            port = self.addr().port,
+            database = %self.addr().database_name,
+            user = %self.addr().user,
+            "pool offline"
+        );
         let mut guard = self.lock();
-
         guard.online = false;
         guard.dump_idle();
         guard.close_waiters(Error::Offline);
-        self.comms().shutdown.notify_waiters();
+        self.comms().shutdown.cancel();
         self.comms().ready.notify_waiters();
     }
 
@@ -410,6 +431,13 @@ impl Pool {
             params.push(Parameter {
                 name: "statement_timeout".into(),
                 value: statement_timeout.as_millis().to_string().into(),
+            });
+        }
+
+        if let Some(lock_timeout) = config.lock_timeout {
+            params.push(Parameter {
+                name: "lock_timeout".into(),
+                value: lock_timeout.as_millis().to_string().into(),
             });
         }
 

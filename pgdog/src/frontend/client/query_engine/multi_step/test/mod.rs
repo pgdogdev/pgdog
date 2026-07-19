@@ -5,14 +5,13 @@ use crate::{
     net::{Query, ToBytes},
 };
 
+pub mod insert;
 pub mod prepared;
 pub mod simple;
 pub mod update;
 
 async fn truncate_table(table: &str, stream: &mut TcpStream) {
-    let query = Query::new(format!("TRUNCATE {}", table))
-        .to_bytes()
-        .unwrap();
+    let query = Query::new(format!("TRUNCATE {}", table)).to_bytes();
     stream.write_all(&query).await.unwrap();
     stream.flush().await.unwrap();
 

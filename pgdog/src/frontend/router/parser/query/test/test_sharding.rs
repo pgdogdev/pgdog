@@ -2,12 +2,12 @@ use std::collections::HashSet;
 use std::ops::Deref;
 
 use crate::config::config;
-use crate::frontend::router::parser::{Cache, Shard};
 use crate::frontend::Command;
+use crate::frontend::router::parser::{Cache, Shard};
 
 use super::setup::{QueryParserTest, *};
 
-use pgdog_config::ShardedTable;
+use pgdog_config::ShardedTableConfig;
 
 #[test]
 fn test_show_shards() {
@@ -34,10 +34,9 @@ fn test_close_direct_single_shard() {
 fn test_dry_run_simple() {
     let mut test = QueryParserTest::new_single_shard(&config()).with_dry_run();
 
-    let command = test.execute(vec![Query::new(
-        "/* pgdog_sharding_key: 1234 */ SELECT * FROM sharded",
-    )
-    .into()]);
+    let command = test.execute(vec![
+        Query::new("/* pgdog_sharding_key: 1234 */ SELECT * FROM sharded").into(),
+    ]);
 
     let cache = Cache::queries();
     let stmt = cache.values().next().unwrap();
@@ -55,12 +54,9 @@ fn test_omni_round_robin() {
         let mut test = QueryParserTest::new();
         let command = test.execute(vec![Query::new(q).into()]);
 
-        match command {
-            Command::Query(query) => {
-                assert!(matches!(query.shard(), Shard::Direct(_)));
-                omni_round_robin.insert(query.shard().clone());
-            }
-            _ => {}
+        if let Command::Query(query) = command {
+            assert!(matches!(query.shard(), Shard::Direct(_)));
+            omni_round_robin.insert(query.shard().clone());
         }
     }
 
@@ -78,12 +74,9 @@ fn test_omni_sticky() {
     for _ in 0..10 {
         let command = test.execute(vec![Query::new(q).into()]);
 
-        match command {
-            Command::Query(query) => {
-                assert!(matches!(query.shard(), Shard::Direct(_)));
-                omni_sticky.insert(query.shard().clone());
-            }
-            _ => {}
+        if let Command::Query(query) = command {
+            assert!(matches!(query.shard(), Shard::Direct(_)));
+            omni_sticky.insert(query.shard().clone());
         }
     }
 
@@ -130,7 +123,7 @@ fn test_omni_flag_set_for_select() {
     let mut test = QueryParserTest::new();
     let q = "SELECT * FROM sharded_omni WHERE id = 1";
     let command = test.execute(vec![Query::new(q).into()]);
-    assert!(command.route().is_omni());
+    assert!(command.route().is_omnisharded());
 }
 
 #[test]
@@ -138,7 +131,7 @@ fn test_omni_flag_set_for_update() {
     let mut test = QueryParserTest::new();
     let q = "UPDATE sharded_omni SET value = 'test' WHERE id = 1";
     let command = test.execute(vec![Query::new(q).into()]);
-    assert!(command.route().is_omni());
+    assert!(command.route().is_omnisharded());
 }
 
 #[test]
@@ -146,7 +139,7 @@ fn test_omni_flag_set_for_delete() {
     let mut test = QueryParserTest::new();
     let q = "DELETE FROM sharded_omni WHERE id = 1";
     let command = test.execute(vec![Query::new(q).into()]);
-    assert!(command.route().is_omni());
+    assert!(command.route().is_omnisharded());
 }
 
 #[test]
@@ -154,7 +147,7 @@ fn test_omni_flag_set_for_insert() {
     let mut test = QueryParserTest::new();
     let q = "INSERT INTO sharded_omni (id, value) VALUES (1, 'test')";
     let command = test.execute(vec![Query::new(q).into()]);
-    assert!(command.route().is_omni());
+    assert!(command.route().is_omnisharded());
 }
 
 #[test]
@@ -162,7 +155,7 @@ fn test_omni_flag_not_set_for_regular_sharded() {
     let mut test = QueryParserTest::new();
     let q = "SELECT * FROM sharded WHERE id = 1";
     let command = test.execute(vec![Query::new(q).into()]);
-    assert!(!command.route().is_omni());
+    assert!(!command.route().is_omnisharded());
 }
 
 #[test]
@@ -170,7 +163,7 @@ fn test_omni_flag_not_set_when_joined_with_sharded() {
     let mut test = QueryParserTest::new();
     let q = "SELECT * FROM sharded_omni INNER JOIN sharded ON sharded_omni.id = sharded.id WHERE sharded.id = 5";
     let command = test.execute(vec![Query::new(q).into()]);
-    assert!(!command.route().is_omni());
+    assert!(!command.route().is_omnisharded());
 }
 
 /// Test that omnisharded config overrides sharded table config.
@@ -184,12 +177,15 @@ fn test_omnisharded_overrides_sharded_table_config() {
     // Add "sharded_omni" (which is already in omnisharded config in Cluster::new_test)
     // to sharded_tables config - omnisharded should still take priority
     let mut config_with_both = config().deref().clone();
-    config_with_both.config.sharded_tables.push(ShardedTable {
-        database: "pgdog".into(),
-        name: Some("sharded_omni".into()),
-        column: "id".into(),
-        ..Default::default()
-    });
+    config_with_both
+        .config
+        .sharded_tables
+        .push(ShardedTableConfig {
+            database: "pgdog".into(),
+            name: Some("sharded_omni".into()),
+            column: "id".into(),
+            ..Default::default()
+        });
 
     // Query against "sharded_omni" which is now in BOTH sharded_tables AND omnisharded
     // Should be treated as omnisharded (round-robin), NOT sharded (deterministic)
@@ -203,7 +199,7 @@ fn test_omnisharded_overrides_sharded_table_config() {
         match command {
             Command::Query(route) => {
                 assert!(
-                    route.is_omni(),
+                    route.is_omnisharded(),
                     "Query against table in both configs should have omni flag (omnisharded wins)"
                 );
                 shards_seen.insert(route.shard().clone());

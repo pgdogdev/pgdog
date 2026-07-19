@@ -1,4 +1,4 @@
-use rust::setup::{admin_sqlx, admin_tokio};
+use integration_tests_rust::setup::{admin_sqlx, admin_tokio};
 use serial_test::serial;
 use sqlx::{Executor, Row};
 use std::collections::HashSet;
@@ -97,9 +97,8 @@ async fn pool_cap_no_corruption() {
 
     // 4th should be rejected.
     let overflow = connect_tenant("tenant_nocorr_4").await;
-    match overflow {
-        Ok(c) => assert!(c.simple_query("SELECT 1").await.is_err()),
-        Err(_) => {}
+    if let Ok(c) = overflow {
+        assert!(c.simple_query("SELECT 1").await.is_err());
     }
 
     // Original 3 pools must still function after the rejection.

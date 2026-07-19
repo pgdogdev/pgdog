@@ -28,13 +28,15 @@ impl Command for ShowQueryCache {
 
     async fn execute(&self) -> Result<Vec<Message>, Error> {
         let mut queries: Vec<_> = Cache::queries().into_iter().collect();
-        let mut messages = vec![RowDescription::new(&[
-            Field::text("query"),
-            Field::numeric("hits"),
-            Field::numeric("direct"),
-            Field::numeric("multi"),
-        ])
-        .message()?];
+        let mut messages = vec![
+            RowDescription::new(&[
+                Field::text("query"),
+                Field::numeric("hits"),
+                Field::numeric("direct"),
+                Field::numeric("multi"),
+            ])
+            .message()?,
+        ];
 
         queries.sort_by_cached_key(|v| v.1.stats.lock().hits);
 
@@ -45,7 +47,7 @@ impl Command for ShowQueryCache {
             let mut data_row = DataRow::new();
             let stats = { *query.1.stats.lock() };
             data_row
-                .add(query.0)
+                .add(&*query.0)
                 .add(stats.hits)
                 .add(stats.direct)
                 .add(stats.multi);
@@ -59,7 +61,7 @@ impl Command for ShowQueryCache {
 #[cfg(test)]
 mod test {
     use crate::{
-        frontend::{router::parser::AstContext, BufferedQuery, PreparedStatements},
+        frontend::{BufferedQuery, PreparedStatements, router::parser::AstContext},
         net::{FromBytes, Parse, ToBytes},
     };
 
@@ -94,7 +96,7 @@ mod test {
         for message in show {
             if message.code() == 'D' {
                 total += 1;
-                let data_row = DataRow::from_bytes(message.to_bytes().unwrap()).unwrap();
+                let data_row = DataRow::from_bytes(message.to_bytes()).unwrap();
                 let hits = data_row.get_int(1, true).unwrap();
                 assert_eq!(hits, 1);
             }

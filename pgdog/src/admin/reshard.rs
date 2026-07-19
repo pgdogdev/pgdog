@@ -2,6 +2,8 @@
 
 use tracing::info;
 
+use crate::api::resharding::ReshardTask;
+use crate::api::run_task;
 use crate::backend::replication::orchestrator::Orchestrator;
 
 use super::prelude::*;
@@ -29,7 +31,13 @@ impl Command for Reshard {
                 publication: publication.to_owned(),
                 replication_slot: None,
             }),
-            ["reshard", from_database, to_database, publication, replication_slot] => Ok(Self {
+            [
+                "reshard",
+                from_database,
+                to_database,
+                publication,
+                replication_slot,
+            ] => Ok(Self {
                 from_database: from_database.to_owned(),
                 to_database: to_database.to_owned(),
                 publication: publication.to_owned(),
@@ -44,15 +52,27 @@ impl Command for Reshard {
             r#"resharding "{}" to "{}", publication="{}""#,
             self.from_database, self.to_database, self.publication
         );
-        let mut orchestrator = Orchestrator::new(
+        let orchestrator = Orchestrator::new(
             &self.from_database,
             &self.to_database,
             &self.publication,
             self.replication_slot.clone(),
         )?;
 
-        orchestrator.replicate_and_cutover().await?;
+        let task_id = run_task(
+            ReshardTask::builder()
+                .orchestrator(orchestrator)
+                .auto_cutover(true)
+                .build(),
+        )
+        .id();
 
-        Ok(vec![])
+        let mut dr = DataRow::new();
+        dr.add(task_id.to_string());
+
+        Ok(vec![
+            RowDescription::new(&[Field::text("task_id")]).message()?,
+            dr.message()?,
+        ])
     }
 }

@@ -1,8 +1,27 @@
+use pgdog_config::{DataType, Hasher};
+use pgdog_vector::Vector;
+
 use crate::{
     backend::ShardingSchema,
-    config::ShardedTable,
     frontend::router::parser::{Column, Table},
 };
+
+use super::Mapping;
+
+/// Runtime representation of a sharded table, derived from [`pgdog_config::ShardedTableConfig`].
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct ShardedTable {
+    pub database: String,
+    pub name: Option<String>,
+    pub schema: Option<String>,
+    pub column: String,
+    pub primary: bool,
+    pub centroids: Vec<Vector>,
+    pub data_type: DataType,
+    pub centroid_probes: usize,
+    pub hasher: Hasher,
+    pub mapping: Option<Mapping>,
+}
 
 #[derive(Debug)]
 pub struct Key<'a> {
@@ -22,12 +41,10 @@ impl<'a> Tables<'a> {
     pub(crate) fn sharded(&'a self, table: Table) -> Option<&'a ShardedTable> {
         let tables = self.schema.tables().tables();
 
-        let sharded = tables
+        tables
             .iter()
             .filter(|table| table.name.is_some())
-            .find(|t| t.name.as_deref() == Some(table.name));
-
-        sharded
+            .find(|t| t.name.as_deref() == Some(table.name))
     }
 
     pub(crate) fn key(&'a self, table: Table, columns: &'a [Column]) -> Option<Key<'a>> {
@@ -39,13 +56,13 @@ impl<'a> Tables<'a> {
             .filter(|table| table.name.is_some())
             .find(|t| t.name.as_deref() == Some(table.name));
 
-        if let Some(sharded) = sharded {
-            if let Some(position) = columns.iter().position(|col| col.name == sharded.column) {
-                return Some(Key {
-                    table: sharded,
-                    position,
-                });
-            }
+        if let Some(sharded) = sharded
+            && let Some(position) = columns.iter().position(|col| col.name == sharded.column)
+        {
+            return Some(Key {
+                table: sharded,
+                position,
+            });
         }
 
         // Check tables without name.
@@ -54,13 +71,13 @@ impl<'a> Tables<'a> {
             .filter(|table| table.name.is_none())
             .map(|t| (t, columns.iter().position(|col| col.name == t.column)))
             .find(|t| t.1.is_some());
-        if let Some(key) = key {
-            if let Some(position) = key.1 {
-                return Some(Key {
-                    table: key.0,
-                    position,
-                });
-            }
+        if let Some(key) = key
+            && let Some(position) = key.1
+        {
+            return Some(Key {
+                table: key.0,
+                position,
+            });
         }
 
         None

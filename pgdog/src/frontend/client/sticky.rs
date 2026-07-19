@@ -2,9 +2,9 @@
 //! default routing behavior determined by the query parser.
 
 use pgdog_config::Role;
-use rand::{rng, Rng};
+use rand::{Rng, rng};
 
-use crate::net::{parameter::ParameterValue, Parameters};
+use crate::net::{Parameters, parameter::ParameterValue};
 
 #[derive(Debug, Clone, Copy)]
 pub struct Sticky {

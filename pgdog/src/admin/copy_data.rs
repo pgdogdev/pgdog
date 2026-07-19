@@ -1,11 +1,10 @@
 //! COPY_DATA command.
 
-use tokio::spawn;
 use tracing::info;
 
-use crate::backend::replication::logical::admin::{Task, TaskType};
+use crate::api::resharding::ReshardTask;
+use crate::api::run_task;
 use crate::backend::replication::orchestrator::Orchestrator;
-use crate::backend::replication::AsyncTasks;
 
 use super::prelude::*;
 
@@ -32,7 +31,13 @@ impl Command for CopyData {
                 publication: publication.to_owned(),
                 replication_slot: None,
             }),
-            ["copy_data", from_database, to_database, publication, replication_slot] => Ok(Self {
+            [
+                "copy_data",
+                from_database,
+                to_database,
+                publication,
+                replication_slot,
+            ] => Ok(Self {
                 from_database: from_database.to_owned(),
                 to_database: to_database.to_owned(),
                 publication: publication.to_owned(),
@@ -48,7 +53,7 @@ impl Command for CopyData {
             self.from_database, self.to_database, self.publication
         );
 
-        let mut orchestrator = Orchestrator::new(
+        let orchestrator = Orchestrator::new(
             &self.from_database,
             &self.to_database,
             &self.publication,
@@ -57,15 +62,7 @@ impl Command for CopyData {
 
         let slot_name = orchestrator.replication_slot().to_owned();
 
-        let task_id = Task::register(TaskType::CopyData(spawn(async move {
-            orchestrator.load_schema().await?;
-            orchestrator.data_sync().await?;
-            AsyncTasks::insert(TaskType::Replication(Box::new(
-                orchestrator.replicate().await?,
-            )));
-
-            Ok(())
-        })));
+        let task_id = run_task(ReshardTask::builder().orchestrator(orchestrator).build()).id();
 
         let mut dr = DataRow::new();
         dr.add(task_id.to_string()).add(slot_name);

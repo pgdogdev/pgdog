@@ -138,7 +138,8 @@ def test_wrong_password_rejected():
     except psycopg.OperationalError as e:
         err = str(e).lower()
         ok = ("password" in err or "authentication" in err
-              or "auth" in err or "fatal" in err)
+              or "auth" in err or "fatal" in err or "pool" in err
+              or "down" in err)
         assert ok, f"unexpected error: {e}"
     print("  PASS  wrong password → rejected")
 

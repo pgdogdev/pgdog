@@ -225,10 +225,10 @@ impl GlobalCache {
     /// Client sent a Describe for a prepared statement and received a RowDescription.
     /// We record the RowDescription for later use by the results decoder.
     pub fn insert_row_description(&mut self, name: &str, row_description: &RowDescription) {
-        if let Some(ref mut entry) = self.names.get_mut(name) {
-            if entry.row_description.is_none() {
-                entry.row_description = Some(row_description.clone());
-            }
+        if let Some(ref mut entry) = self.names.get_mut(name)
+            && entry.row_description.is_none()
+        {
+            entry.row_description = Some(row_description.clone());
         }
     }
 
@@ -338,12 +338,12 @@ impl GlobalCache {
 
     /// Decrement usage of prepared statement without removing it.
     pub fn decrement(&mut self, name: &str) {
-        if let Some(stmt) = self.names.get(name) {
-            if let Some(stmt) = self.statements.get_mut(&stmt.cache_key()) {
-                stmt.used = stmt.used.saturating_sub(1);
-                if stmt.used == 0 {
-                    self.unused.insert(stmt.counter);
-                }
+        if let Some(stmt) = self.names.get(name)
+            && let Some(stmt) = self.statements.get_mut(&stmt.cache_key())
+        {
+            stmt.used = stmt.used.saturating_sub(1);
+            if stmt.used == 0 {
+                self.unused.insert(stmt.counter);
             }
         }
     }

@@ -8,9 +8,11 @@ use hyper::service::service_fn;
 use hyper::{Request, Response};
 use hyper_util::rt::TokioIo;
 use tokio::net::TcpListener;
-use tracing::info;
+use tokio::select;
+use tracing::{info, warn};
 
-use super::{Clients, MirrorStatsMetrics, Pools, QueryCache};
+use super::{Clients, Listeners, MirrorStatsMetrics, Pools, QueryCache, TwoPc};
+use crate::tasks;
 
 async fn metrics(_: Request<hyper::body::Incoming>) -> Result<Response<Full<Bytes>>, Infallible> {
     let clients = Clients::load();
@@ -20,19 +22,29 @@ async fn metrics(_: Request<hyper::body::Incoming>) -> Result<Response<Full<Byte
         .map(|m| m.to_string())
         .collect();
     let mirror_stats = mirror_stats.join("\n");
+    let listeners: Vec<_> = Listeners::load()
+        .into_iter()
+        .map(|m| m.to_string())
+        .collect();
+    let listeners = listeners.join("\n");
     let query_cache: Vec<_> = QueryCache::load()
         .metrics()
         .into_iter()
         .map(|m| m.to_string())
         .collect();
     let query_cache = query_cache.join("\n");
+    let two_pc = TwoPc::load();
     let metrics_data = clients.to_string()
         + "\n"
         + &pools.to_string()
         + "\n"
         + &mirror_stats
         + "\n"
-        + &query_cache;
+        + &listeners
+        + "\n"
+        + &query_cache
+        + "\n"
+        + &two_pc.to_string();
     let response = Response::builder()
         .header(
             hyper::header::CONTENT_TYPE,
@@ -48,18 +60,35 @@ pub async fn server(port: u16) -> std::io::Result<()> {
     info!("OpenMetrics endpoint http://0.0.0.0:{}", port);
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
     let listener = TcpListener::bind(addr).await?;
+    let shutdown = tasks::shutdown_signal();
 
     loop {
-        let (stream, _) = listener.accept().await?;
+        let (stream, _) = select! {
+            result = listener.accept() => result?,
+            _ = shutdown.cancelled() => break,
+        };
         let io = TokioIo::new(stream);
+        let shutdown = shutdown.clone();
 
-        tokio::task::spawn(async move {
-            if let Err(err) = http1::Builder::new()
-                .serve_connection(io, service_fn(metrics))
-                .await
-            {
-                eprintln!("OpenMetrics endpoint error: {:?}", err);
+        tasks::spawn("openmetrics http server", async move {
+            let connection = http1::Builder::new().serve_connection(io, service_fn(metrics));
+
+            tokio::select! {
+                result = connection => {
+                    if let Err(err) = result {
+                        // Clients (TCP health probes, scrapers that disconnect
+                        // mid-request, keep-alive teardown) routinely close the socket
+                        // before sending a complete request. That surfaces as
+                        // IncompleteMessage and is benign.
+                        if !err.is_incomplete_message() {
+                            warn!("OpenMetrics endpoint error: {:?}", err);
+                        }
+                    }
+                }
+                _ = shutdown.cancelled() => {}
             }
         });
     }
+
+    Ok(())
 }

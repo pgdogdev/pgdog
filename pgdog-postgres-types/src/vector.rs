@@ -13,21 +13,29 @@ impl FromDataType for Vector {
     fn decode(mut bytes: &[u8], encoding: Format) -> Result<Self, Error> {
         match encoding {
             Format::Binary => {
-                let mut values = vec![];
+                if !bytes.len().is_multiple_of(std::mem::size_of::<f32>()) {
+                    return Err(Error::WrongSizeBinary(bytes.len()));
+                }
+                let mut values = Vec::with_capacity(bytes.len() / std::mem::size_of::<f32>());
                 while bytes.len() >= std::mem::size_of::<f32>() {
                     values.push(Float(bytes.get_f32()));
                 }
                 Ok(Self { values })
             }
             Format::Text => {
+                if bytes.len() < 2 || bytes[0] != b'[' || bytes[bytes.len() - 1] != b']' {
+                    return Err(Error::UnexpectedPayload);
+                }
                 let no_brackets = &bytes[1..bytes.len() - 1];
-                let floats = no_brackets
+                let values = no_brackets
                     .split(|n| n == &b',')
-                    .flat_map(|b| from_utf8(b).map(|n| n.trim().parse::<f32>().ok()))
-                    .flatten()
-                    .map(Float::from)
-                    .collect();
-                Ok(Self { values: floats })
+                    .map(|b| {
+                        let s = from_utf8(b)?;
+                        let f: f32 = s.trim().parse()?;
+                        Ok::<_, Error>(Float::from(f))
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(Self { values })
             }
         }
     }
@@ -137,5 +145,41 @@ mod test {
         assert!(encoded_str.contains("NaN"));
         assert!(encoded_str.contains("Infinity"));
         assert!(encoded_str.contains("-Infinity"));
+    }
+
+    #[test]
+    fn test_vector_text_requires_brackets() {
+        assert!(
+            Vector::decode(b"1,2,3", Format::Text).is_err(),
+            "text vectors without wrapping brackets should be rejected"
+        );
+        assert!(
+            Vector::decode(b"{1,2,3}", Format::Text).is_err(),
+            "non-pgvector delimiters should be rejected"
+        );
+    }
+
+    #[test]
+    fn test_vector_text_rejects_invalid_elements() {
+        assert!(
+            Vector::decode(b"[1,nope,3]", Format::Text).is_err(),
+            "invalid float elements should not be silently dropped"
+        );
+        assert!(
+            Vector::decode(b"[1,\xFF,3]", Format::Text).is_err(),
+            "invalid UTF-8 elements should not be silently dropped"
+        );
+    }
+
+    #[test]
+    fn test_vector_binary_rejects_trailing_bytes() {
+        let mut bytes = vec![];
+        bytes.extend(1.0_f32.to_be_bytes());
+        bytes.push(0);
+
+        assert!(
+            Vector::decode(bytes.as_slice(), Format::Binary).is_err(),
+            "binary vectors should reject trailing non-f32 bytes"
+        );
     }
 }

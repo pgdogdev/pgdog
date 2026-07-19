@@ -21,7 +21,7 @@ impl BufferedQuery {
     }
 
     pub fn prepared(&self) -> bool {
-        if let Self::Prepared(ref parse) = self {
+        if let Self::Prepared(parse) = self {
             !parse.anonymous()
         } else {
             false

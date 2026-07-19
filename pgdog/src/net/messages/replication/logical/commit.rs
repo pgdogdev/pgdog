@@ -24,7 +24,7 @@ impl FromBytes for Commit {
 }
 
 impl ToBytes for Commit {
-    fn to_bytes(&self) -> Result<Bytes, Error> {
+    fn to_bytes(&self) -> Bytes {
         let mut bytes = BytesMut::new();
         bytes.put_u8(self.code() as u8);
         bytes.put_i8(self.flags);
@@ -32,7 +32,7 @@ impl ToBytes for Commit {
         bytes.put_i64(self.end_lsn);
         bytes.put_i64(self.commit_timestamp);
 
-        Ok(bytes.freeze())
+        bytes.freeze()
     }
 }
 

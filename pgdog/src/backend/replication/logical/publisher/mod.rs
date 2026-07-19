@@ -1,22 +1,23 @@
+pub mod non_identity_columns_presence;
+pub use non_identity_columns_presence::*;
+
 pub mod slot;
 pub use slot::*;
-pub mod abort;
 pub mod copy;
 pub mod parallel_sync;
 pub mod progress;
 pub mod publisher_impl;
 pub mod queries;
 pub mod table;
-pub use abort::*;
 pub use copy::*;
 pub use parallel_sync::ParallelSyncManager;
 pub use queries::*;
 pub use table::*;
 
 #[cfg(test)]
-mod test {
+pub mod test {
 
-    use crate::backend::{server::test::test_replication_server, Server};
+    use crate::backend::{Server, server::test::test_replication_server};
 
     pub struct PublicationTest {
         pub server: Server,

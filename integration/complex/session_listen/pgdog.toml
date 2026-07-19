@@ -1,0 +1,14 @@
+[general]
+pub_sub_channel_size = 0
+
+[rewrite]
+enabled = false
+shard_key = "ignore"
+split_inserts = "error"
+
+[[databases]]
+name = "pgdog"
+host = "127.0.0.1"
+
+[admin]
+password = "pgdog"

@@ -4,7 +4,7 @@ use chrono::{DateTime, Local};
 
 use crate::{
     backend::replication::logical::status::ReplicationSlots,
-    net::{data_row::Data, ToDataRowColumn},
+    net::{ToDataRowColumn, data_row::Data},
     util::{format_bytes, format_time},
 };
 

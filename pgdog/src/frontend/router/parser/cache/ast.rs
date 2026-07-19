@@ -1,19 +1,22 @@
-use pg_query::{parse, parse_raw, protobuf::ObjectType, NodeEnum, NodeRef, ParseResult};
+#[cfg(not(feature = "new_parser"))]
+use pg_query::{NodeEnum, ParseResult, parse, parse_raw};
+#[cfg(feature = "new_parser")]
+use pg_raw_parse::{Node, Owned, StmtList, make};
 use pgdog_config::QueryParserEngine;
 use std::fmt::Debug;
+use std::ops::Deref;
 use std::time::Instant;
-use std::{collections::HashSet, ops::Deref};
 
 use parking_lot::Mutex;
 use std::sync::Arc;
+use tracing::warn;
 
-use super::super::{
-    comment::comment, Error, Route, Shard, StatementRewrite, StatementRewriteContext, Table,
-};
-use super::{Fingerprint, Stats};
+use super::super::{Error, Route, Shard, StatementRewrite, StatementRewriteContext};
+use super::Stats;
 use crate::backend::schema::Schema;
+use crate::frontend::PreparedStatements;
+use crate::frontend::router::parser::cache::AstQuery;
 use crate::frontend::router::parser::rewrite::statement::RewritePlan;
-use crate::frontend::{BufferedQuery, PreparedStatements};
 use crate::net::parameter::ParameterValue;
 use crate::{backend::ShardingSchema, config::Role};
 
@@ -23,6 +26,12 @@ use crate::{backend::ShardingSchema, config::Role};
 pub struct Ast {
     /// Was this entry cached?
     pub cached: bool,
+    /// Shard.
+    pub comment_shard: Option<Shard>,
+    /// Role.
+    pub comment_role: Option<Role>,
+    /// Parser query engine used.
+    pub query_parser_engine: QueryParserEngine,
     /// Inner sync.
     inner: Arc<AstInner>,
 }
@@ -30,29 +39,38 @@ pub struct Ast {
 #[derive(Debug)]
 pub struct AstInner {
     /// Cached AST.
-    pub ast: ParseResult,
+    // FIXME(sage): Rename to ast when parser port is done
+    #[cfg(feature = "new_parser")]
+    pub(crate) ast: Owned<StmtList>,
+    #[cfg(not(feature = "new_parser"))]
+    pub(crate) ast: ParseResult,
     /// AST stats.
     pub stats: Mutex<Stats>,
-    /// Shard.
-    pub comment_shard: Option<Shard>,
-    /// Role.
-    pub comment_role: Option<Role>,
     /// Rewrite plan.
     pub rewrite_plan: RewritePlan,
-    /// Fingerprint.
-    pub fingerprint: Fingerprint,
+    /// Original query.
+    pub query_without_comment: Arc<str>,
 }
 
 impl AstInner {
     /// Create new AST record, with no rewrite or comment routing.
-    pub fn new(ast: ParseResult) -> Self {
+    #[cfg(feature = "new_parser")]
+    pub(crate) fn new(ast: Owned<StmtList>) -> Self {
         Self {
             ast,
             stats: Mutex::new(Stats::new()),
-            comment_role: None,
-            comment_shard: None,
             rewrite_plan: RewritePlan::default(),
-            fingerprint: Fingerprint::default(),
+            query_without_comment: "".into(),
+        }
+    }
+
+    #[cfg(not(feature = "new_parser"))]
+    pub(crate) fn old(ast: ParseResult) -> Self {
+        Self {
+            ast,
+            stats: Mutex::new(Stats::new()),
+            rewrite_plan: RewritePlan::default(),
+            query_without_comment: "".into(),
         }
     }
 }
@@ -67,8 +85,8 @@ impl Deref for Ast {
 
 impl Ast {
     /// Parse statement and run the rewrite engine, if necessary.
-    pub fn new(
-        query: &BufferedQuery,
+    pub(super) fn new(
+        query: &AstQuery,
         schema: &ShardingSchema,
         db_schema: &Schema,
         prepared_statements: &mut PreparedStatements,
@@ -76,53 +94,81 @@ impl Ast {
         search_path: Option<&ParameterValue>,
     ) -> Result<Self, Error> {
         let now = Instant::now();
+        #[cfg(not(feature = "new_parser"))]
         let mut ast = match schema.query_parser_engine {
-            QueryParserEngine::PgQueryProtobuf => parse(query),
-            QueryParserEngine::PgQueryRaw => parse_raw(query),
+            QueryParserEngine::PgQueryProtobuf => parse(query.query_without_comment),
+            QueryParserEngine::PgQueryRaw => parse_raw(query.query_without_comment),
         }
         .map_err(Error::PgQuery)?;
-        let (comment_shard, comment_role) = comment(query, schema)?;
-        let fingerprint =
-            Fingerprint::new(query, schema.query_parser_engine).map_err(Error::PgQuery)?;
+        #[cfg(feature = "new_parser")]
+        let ast = pg_raw_parse::parse(query.query_without_comment).map_err(Error::Parse)?;
 
-        // Don't rewrite statements that will be
-        // sent to a direct shard.
-        let rewrite_plan = if comment_shard.is_none() {
-            StatementRewrite::new(StatementRewriteContext {
-                stmt: &mut ast.protobuf,
-                extended: query.extended(),
-                prepared: query.prepared(),
-                prepared_statements,
-                schema,
-                db_schema,
-                user,
-                search_path,
-            })
-            .maybe_rewrite()?
-        } else {
-            RewritePlan::default()
-        };
+        // Run the rewrite unconditionally. Even when a shard comment will
+        // route the query to a specific shard, we need to know whether the
+        // same query body (without the comment) would require a rewrite, so
+        // `Cache::query` can decide whether this entry is safe to cache.
+        let mut rewriter = StatementRewrite::new(StatementRewriteContext {
+            #[cfg(not(feature = "new_parser"))]
+            stmt: &mut ast.protobuf,
+            extended: query.original_query.extended(),
+            prepared: query.original_query.prepared(),
+            prepared_statements,
+            schema,
+            db_schema,
+            user,
+            search_path,
+        });
+        #[cfg(feature = "new_parser")]
+        let mut rewrite_plan = Default::default();
+        #[cfg(feature = "new_parser")]
+        let ast = make::try_owned(|mem| {
+            // FIXME(sage): We should have a parse function on mem so we don't
+            // need to parse and then copy the parsed tree just to throw the
+            // original away
+            let mut copy = mem.make_unique(&*ast.into_inner());
+            if let Some(stmt) = copy.as_mut().into_iter().next() {
+                rewrite_plan = rewriter.maybe_rewrite(stmt, mem)?;
+            }
+            Ok::<_, Error>(copy)
+        })?;
+
+        #[cfg(not(feature = "new_parser"))]
+        let rewrite_plan = rewriter.maybe_rewrite()?;
 
         let elapsed = now.elapsed();
         let mut stats = Stats::new();
         stats.parse_time += elapsed;
 
+        if let Some(threshold) = schema.log_min_duration_parse
+            && elapsed >= threshold
+        {
+            warn!(
+                "[slow_query_parse] parse_time_in_ms={}ms truncated_query=\"{}\"",
+                elapsed.as_millis(),
+                query.truncated_query(schema.log_query_sample_length),
+            );
+        }
+
         Ok(Self {
             cached: true,
+            comment_shard: None,
+            comment_role: None,
+            query_parser_engine: schema.query_parser_engine,
             inner: Arc::new(AstInner {
                 stats: Mutex::new(stats),
-                comment_shard,
-                comment_role,
+                #[cfg(feature = "new_parser")]
+                ast,
+                #[cfg(not(feature = "new_parser"))]
                 ast,
                 rewrite_plan,
-                fingerprint,
+                query_without_comment: query.query_without_comment.into(),
             }),
         })
     }
 
     /// Parse statement using AstContext for schema and user information.
-    pub fn with_context(
-        query: &BufferedQuery,
+    pub(super) fn with_context(
+        query: &AstQuery,
         ctx: &super::AstContext<'_>,
         prepared_statements: &mut PreparedStatements,
     ) -> Result<Self, Error> {
@@ -137,70 +183,71 @@ impl Ast {
     }
 
     /// Record new AST entry, without rewriting or comment-routing.
-    pub fn new_record(query: &str, query_parser_engine: QueryParserEngine) -> Result<Self, Error> {
-        let ast = match query_parser_engine {
-            QueryParserEngine::PgQueryProtobuf => parse(query),
-            QueryParserEngine::PgQueryRaw => parse_raw(query),
-        }
-        .map_err(Error::PgQuery)?;
+    #[cfg(feature = "new_parser")]
+    pub(crate) fn new_record(
+        query: &str,
+        query_parser_engine: QueryParserEngine,
+    ) -> Result<Self, Error> {
+        let ast = pg_raw_parse::parse(query)?;
 
         Ok(Self {
             cached: true,
-            inner: Arc::new(AstInner::new(ast)),
+            comment_role: None,
+            comment_shard: None,
+            query_parser_engine,
+            inner: Arc::new(AstInner::new(ast.into_inner())),
         })
     }
 
+    cfg_select! {
+        not(feature = "new_parser") => {
+            pub fn new_record(query: &str, query_parser_engine: QueryParserEngine) -> Result<Self, Error> {
+                let ast = match query_parser_engine {
+                    QueryParserEngine::PgQueryProtobuf => parse(query),
+                    QueryParserEngine::PgQueryRaw => parse_raw(query),
+                }
+                .map_err(Error::PgQuery)?;
+
+                Ok(Self {
+                    cached: true,
+                    comment_role: None,
+                    comment_shard: None,
+                    query_parser_engine,
+                    inner: Arc::new(AstInner::old(ast)),
+                })
+            }
+        }
+        _ => {}
+    }
+
     /// Create new AST from a parse result.
-    pub fn from_parse_result(parse_result: ParseResult) -> Self {
+    #[cfg(feature = "new_parser")]
+    pub fn from_raw_stmts(stmts: Owned<StmtList>) -> Self {
         Self {
             cached: true,
-            inner: Arc::new(AstInner::new(parse_result)),
+            comment_role: None,
+            comment_shard: None,
+            query_parser_engine: QueryParserEngine::default(),
+            inner: Arc::new(AstInner::new(stmts)),
+        }
+    }
+
+    /// Create new AST from a parse result.
+    #[cfg(not(feature = "new_parser"))]
+    pub(crate) fn from_parse_result(parse_result: ParseResult) -> Self {
+        Self {
+            cached: true,
+            comment_role: None,
+            comment_shard: None,
+            query_parser_engine: QueryParserEngine::default(),
+            inner: Arc::new(AstInner::old(parse_result)),
         }
     }
 
     /// Get the reference to the AST.
-    pub fn parse_result(&self) -> &ParseResult {
+    #[cfg(not(feature = "new_parser"))]
+    pub(crate) fn parse_result(&self) -> &ParseResult {
         &self.ast
-    }
-
-    /// Get a list of tables referenced by the query.
-    ///
-    /// This is better than pg_query's version because we
-    /// also handle `NodeRef::CreateStmt` and we handle identifiers correctly.
-    ///
-    pub fn tables<'a>(&'a self) -> Vec<Table<'a>> {
-        let mut tables = HashSet::new();
-
-        for node in self.ast.protobuf.nodes() {
-            match node.0 {
-                NodeRef::RangeVar(table) => {
-                    let table = Table::from(table);
-                    tables.insert(table);
-                }
-
-                NodeRef::CreateStmt(stmt) => {
-                    if let Some(ref stmt) = stmt.relation {
-                        tables.insert(Table::from(stmt));
-                    }
-                }
-
-                NodeRef::DropStmt(stmt) => {
-                    if stmt.remove_type() == ObjectType::ObjectTable {
-                        for object in &stmt.objects {
-                            if let Some(NodeEnum::List(ref list)) = object.node {
-                                if let Ok(table) = Table::try_from(list) {
-                                    tables.insert(table);
-                                }
-                            }
-                        }
-                    }
-                }
-
-                _ => (),
-            }
-        }
-
-        tables.into_iter().collect()
     }
 
     /// Update stats for this statement, given the route
@@ -214,4 +261,72 @@ impl Ast {
             guard.direct += 1;
         }
     }
+
+    /// Get statement type.
+    #[cfg(feature = "new_parser")]
+    pub(crate) fn statement_type(&self) -> StatementType {
+        let root = self.ast.stmts().next();
+
+        match root {
+            Some(Node::SelectStmt(_))
+            | Some(Node::InsertStmt(_))
+            | Some(Node::UpdateStmt(_))
+            | Some(Node::DeleteStmt(_))
+            | Some(Node::CopyStmt(_))
+            | Some(Node::ExplainStmt(_))
+            | Some(Node::TransactionStmt(_)) => StatementType::Dml,
+
+            Some(Node::VariableSetStmt(_))
+            | Some(Node::VariableShowStmt(_))
+            | Some(Node::DeallocateStmt(_))
+            | Some(Node::ListenStmt(_))
+            | Some(Node::NotifyStmt(_))
+            | Some(Node::UnlistenStmt(_))
+            | Some(Node::DiscardStmt(_)) => StatementType::Session,
+
+            _ => StatementType::Ddl,
+        }
+    }
+
+    cfg_select! {
+        not(feature = "new_parser") => {
+            pub(crate) fn statement_type(&self) -> StatementType {
+                let root = self
+                    .ast
+                    .protobuf
+                    .stmts
+                    .first()
+                    .and_then(|s| s.stmt.as_ref())
+                    .and_then(|s| s.node.as_ref());
+
+                match root {
+                    Some(NodeEnum::SelectStmt(_))
+                    | Some(NodeEnum::InsertStmt(_))
+                    | Some(NodeEnum::UpdateStmt(_))
+                    | Some(NodeEnum::DeleteStmt(_))
+                    | Some(NodeEnum::CopyStmt(_))
+                    | Some(NodeEnum::ExplainStmt(_))
+                    | Some(NodeEnum::TransactionStmt(_)) => StatementType::Dml,
+
+                    Some(NodeEnum::VariableSetStmt(_))
+                    | Some(NodeEnum::VariableShowStmt(_))
+                    | Some(NodeEnum::DeallocateStmt(_))
+                    | Some(NodeEnum::ListenStmt(_))
+                    | Some(NodeEnum::NotifyStmt(_))
+                    | Some(NodeEnum::UnlistenStmt(_))
+                    | Some(NodeEnum::DiscardStmt(_)) => StatementType::Session,
+
+                    _ => StatementType::Ddl,
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum StatementType {
+    Ddl,
+    Dml,
+    Session,
 }

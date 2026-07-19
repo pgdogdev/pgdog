@@ -80,3 +80,80 @@ describe 'mirror crud' do
     conn.exec 'DROP TABLE IF EXISTS mirror_copy_test'
   end
 end
+
+describe 'ddl-only mirror' do
+  conn = PG.connect('postgres://pgdog:pgdog@127.0.0.1:6432/pgdog')
+  ddl_mirror = PG.connect('postgres://pgdog:pgdog@127.0.0.1:6432/pgdog_mirror2')
+
+  before do
+    conn.exec 'DROP TABLE IF EXISTS ddl_mirror_test'
+    ddl_mirror.exec 'DROP TABLE IF EXISTS ddl_mirror_test'
+  end
+
+  it 'replicates DDL to ddl-only mirror' do
+    conn.exec 'CREATE TABLE ddl_mirror_test (id BIGINT PRIMARY KEY, value VARCHAR)'
+    sleep(0.5)
+
+    # DDL should be mirrored
+    result = ddl_mirror.exec "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'ddl_mirror_test')"
+    expect(result[0]['exists']).to eq('t')
+  end
+
+  it 'does not replicate DML to ddl-only mirror' do
+    conn.exec 'CREATE TABLE ddl_mirror_test (id BIGINT PRIMARY KEY, value VARCHAR)'
+    sleep(0.5)
+
+    conn.exec "INSERT INTO ddl_mirror_test VALUES (1, 'should not mirror')"
+    sleep(0.5)
+
+    # Table should exist on ddl mirror (DDL was mirrored)
+    result = ddl_mirror.exec 'SELECT count(*) FROM ddl_mirror_test'
+    # But no rows (DML was not mirrored)
+    expect(result[0]['count'].to_i).to eq(0)
+  end
+
+  it 'does not replicate UPDATE to ddl-only mirror' do
+    conn.exec 'CREATE TABLE ddl_mirror_test (id BIGINT PRIMARY KEY, value VARCHAR)'
+    sleep(0.5)
+
+    # Insert directly into ddl mirror so we can check UPDATE doesn't propagate
+    ddl_mirror.exec "INSERT INTO ddl_mirror_test VALUES (1, 'original')"
+
+    conn.exec "INSERT INTO ddl_mirror_test VALUES (1, 'original')"
+    conn.exec "UPDATE ddl_mirror_test SET value = 'updated' WHERE id = 1"
+    sleep(0.5)
+
+    result = ddl_mirror.exec 'SELECT value FROM ddl_mirror_test WHERE id = 1'
+    expect(result[0]['value']).to eq('original')
+  end
+
+  it 'replicates ALTER TABLE to ddl-only mirror' do
+    conn.exec 'CREATE TABLE ddl_mirror_test (id BIGINT PRIMARY KEY, value VARCHAR)'
+    sleep(0.5)
+
+    conn.exec 'ALTER TABLE ddl_mirror_test ADD COLUMN extra TEXT'
+    sleep(0.5)
+
+    result = ddl_mirror.exec "SELECT column_name FROM information_schema.columns WHERE table_name = 'ddl_mirror_test' AND column_name = 'extra'"
+    expect(result.ntuples).to eq(1)
+  end
+
+  it 'replicates DROP TABLE to ddl-only mirror' do
+    conn.exec 'CREATE TABLE ddl_mirror_test (id BIGINT PRIMARY KEY, value VARCHAR)'
+    sleep(0.5)
+
+    result = ddl_mirror.exec "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'ddl_mirror_test')"
+    expect(result[0]['exists']).to eq('t')
+
+    conn.exec 'DROP TABLE ddl_mirror_test'
+    sleep(0.5)
+
+    result = ddl_mirror.exec "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'ddl_mirror_test')"
+    expect(result[0]['exists']).to eq('f')
+  end
+
+  after do
+    conn.exec 'DROP TABLE IF EXISTS ddl_mirror_test'
+    ddl_mirror.exec 'DROP TABLE IF EXISTS ddl_mirror_test'
+  end
+end

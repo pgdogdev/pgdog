@@ -2,9 +2,9 @@ use crate::{
     backend::pool::{Connection, Request},
     config::config,
     frontend::{
-        client::query_engine::{hooks::QueryEngineHooks, route_query::ClusterCheck},
-        router::{parser::Shard, Route},
         BufferedQuery, Client, ClientComms, Command, Error, Router, RouterContext, Stats,
+        client::query_engine::{hooks::QueryEngineHooks, route_query::ClusterCheck},
+        router::{Route, parser::Shard},
     },
     net::{ErrorResponse, Message, Parameters},
     state::State,
@@ -12,6 +12,7 @@ use crate::{
 
 use tracing::debug;
 
+pub mod advisory_lock;
 pub mod connect;
 pub mod context;
 pub mod deallocate;
@@ -21,14 +22,15 @@ pub mod fake;
 pub mod hooks;
 pub mod incomplete_requests;
 pub mod internal_values;
+pub mod lock;
 pub mod multi_step;
 pub mod notify_buffer;
 pub mod pub_sub;
 pub mod query;
+mod query_log_stdout;
 pub mod rewrite;
 pub mod route_query;
 pub mod set;
-pub mod shard_key_rewrite;
 pub mod start_transaction;
 #[cfg(test)]
 mod test;
@@ -38,33 +40,15 @@ pub mod two_pc;
 pub mod unknown_command;
 
 use self::query::ExplainResponseState;
+use self::query_log_stdout::log_query_stdout;
+pub(crate) use advisory_lock::AdvisoryLocks;
 pub use context::QueryEngineContext;
 use notify_buffer::NotifyBuffer;
-pub use two_pc::phase::TwoPcPhase;
 use two_pc::TwoPc;
+pub use two_pc::phase::TwoPcPhase;
 
-#[derive(Debug)]
-pub struct TestMode {
-    pub enabled: bool,
-}
-
-impl Default for TestMode {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl TestMode {
-    pub fn new() -> Self {
-        Self {
-            #[cfg(test)]
-            enabled: true,
-            #[cfg(not(test))]
-            enabled: false,
-        }
-    }
-}
-
+/// Implements the entire client/server message exchange.
+/// State here is preserved between requests.
 #[derive(Debug)]
 pub struct QueryEngine {
     begin_stmt: Option<BufferedQuery>,
@@ -73,31 +57,29 @@ pub struct QueryEngine {
     stats: Stats,
     backend: Connection,
     streaming: bool,
-    test_mode: TestMode,
     two_pc: TwoPc,
     notify_buffer: NotifyBuffer,
     pending_explain: Option<ExplainResponseState>,
     hooks: QueryEngineHooks,
+    advisory_locks: AdvisoryLocks,
+    // The client requested we disable transaction mode temporarily.
+    // They will remain pinned to their connection until they unpin manually
+    // or disconnect.
+    manual_lock: bool,
 }
 
 impl QueryEngine {
     /// Create new query engine.
-    pub fn new(
-        params: &Parameters,
-        comms: &ClientComms,
-        admin: bool,
-        passthrough_password: &Option<String>,
-    ) -> Result<Self, Error> {
+    pub fn new(params: &Parameters, comms: &ClientComms, admin: bool) -> Result<Self, Error> {
         let user = params.get_required("user")?;
         let database = params.get_default("database", user);
 
-        let backend = Connection::new(user, database, admin, passthrough_password)?;
+        let backend = Connection::new(user, database, admin)?;
 
         Ok(Self {
             backend,
             comms: comms.clone(),
             hooks: QueryEngineHooks::new(),
-            test_mode: TestMode::new(),
             stats: Stats::default(),
             streaming: bool::default(),
             two_pc: TwoPc::default(),
@@ -105,16 +87,13 @@ impl QueryEngine {
             pending_explain: None,
             begin_stmt: None,
             router: Router::default(),
+            advisory_locks: AdvisoryLocks::default(),
+            manual_lock: false,
         })
     }
 
     pub fn from_client(client: &Client) -> Result<Self, Error> {
-        Self::new(
-            &client.params,
-            &client.comms,
-            client.admin,
-            &client.passthrough_password,
-        )
+        Self::new(&client.params, &client.comms, client.admin)
     }
 
     /// Wait for an async message from the backend.
@@ -122,9 +101,9 @@ impl QueryEngine {
         Ok(self.backend.read().await?)
     }
 
-    /// Query engine finished executing.
-    pub fn done(&self) -> bool {
-        !self.backend.connected() && self.begin_stmt.is_none()
+    /// Client can safely disconnect (no active backend connection or pending transaction).
+    pub fn can_disconnect(&self) -> bool {
+        self.begin_stmt.is_none() && self.backend.done()
     }
 
     /// Current state.
@@ -137,6 +116,8 @@ impl QueryEngine {
         self.stats
             .received(context.client_request.total_message_len());
         self.set_state(State::Active); // Client is active.
+
+        log_query_stdout(context);
 
         // Rewrite prepared statements.
         self.rewrite_extended(context)?;
@@ -172,6 +153,12 @@ impl QueryEngine {
 
         self.pending_explain = None;
 
+        // Check if we need to lock the backend in-place.
+        // This is here because ROLLBACK and COMMIT
+        // can be handled by a separate path than [`QueryEngine::execute`],
+        // e.g., if using two-phase commit.
+        self.check_lock();
+
         let command = self.router.command();
 
         if let Some(trace) = context
@@ -179,10 +166,9 @@ impl QueryEngine {
             .route // Admin commands don't have a route.
             .as_mut()
             .and_then(|route| route.take_explain())
+            && config().config.general.expanded_explain
         {
-            if config().config.general.expanded_explain {
-                self.pending_explain = Some(ExplainResponseState::new(trace));
-            }
+            self.pending_explain = Some(ExplainResponseState::new(trace));
         }
 
         match command {
@@ -195,6 +181,7 @@ impl QueryEngine {
                 query,
                 transaction_type,
                 extended,
+                ..
             } => {
                 self.start_transaction(context, query.clone(), *transaction_type, *extended)
                     .await?
@@ -230,6 +217,11 @@ impl QueryEngine {
                 context.params.rollback();
             }
             Command::Query(_) => self.execute(context).await?,
+            Command::Listen { .. } | Command::Notify { .. } | Command::Unlisten(_)
+                if self.backend.session_mode() =>
+            {
+                self.execute(context).await?
+            }
             Command::Listen { channel, shard } => {
                 self.listen(context, &channel.clone(), shard.clone())
                     .await?
@@ -243,9 +235,16 @@ impl QueryEngine {
                     .await?
             }
             Command::Unlisten(channel) => self.unlisten(context, &channel.clone()).await?,
-            Command::Set { params, .. } => {
+            Command::Set {
+                params,
+                behave_like_select,
+                ..
+            } => {
                 let params = params.clone();
-                self.set(context, &params).await?;
+                self.set(context, &params, *behave_like_select).await?;
+            }
+            Command::ResetAll => {
+                self.reset_all(context).await?;
             }
             Command::Copy(_) => self.execute(context).await?,
             Command::Deallocate => self.deallocate(context).await?,

@@ -2,8 +2,8 @@
 
 use std::{
     sync::{
-        atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicI64, AtomicU8, AtomicUsize, Ordering},
     },
     time::{Duration, SystemTime},
 };
@@ -12,7 +12,7 @@ use rand::seq::SliceRandom;
 use tokio::{sync::Notify, time::timeout};
 use tracing::warn;
 
-use crate::net::messages::BackendKeyData;
+use crate::{config::config, net::messages::FrontendPid};
 use crate::{
     config::{LoadBalancingStrategy, ReadWriteSplit, Role},
     net::Parameters,
@@ -25,6 +25,7 @@ pub mod monitor;
 pub mod target_health;
 
 use ban::Ban;
+pub use ban::UnbanReason;
 use monitor::*;
 pub use target_health::*;
 
@@ -36,8 +37,10 @@ mod test;
 pub struct Target {
     pub pool: Pool,
     pub ban: Ban,
-    replica: Arc<AtomicBool>,
+    role: Arc<AtomicU8>,
     pub health: TargetHealth,
+    /// Smooth weighted round-robin current weight tracker.
+    current_weight: Arc<AtomicI64>,
 }
 
 impl Target {
@@ -45,25 +48,23 @@ impl Target {
         let ban = Ban::new(&pool);
         Self {
             ban,
-            replica: Arc::new(AtomicBool::new(role == Role::Replica)),
+            role: Arc::new(AtomicU8::new(role.into())),
             health: pool.inner().health.clone(),
             pool,
+            current_weight: Arc::new(AtomicI64::new(0)),
         }
     }
 
     /// Get role.
     pub(super) fn role(&self) -> Role {
-        if self.replica.load(Ordering::Relaxed) {
-            Role::Replica
-        } else {
-            Role::Primary
-        }
+        let role = self.role.load(Ordering::Relaxed);
+        role.try_into().expect("valid role")
     }
 
     /// Set role.
     pub(super) fn set_role(&self, role: Role) -> bool {
-        let value = role == Role::Replica;
-        let old = self.replica.swap(value, Ordering::Relaxed);
+        let value = u8::from(role);
+        let old = self.role.swap(value, Ordering::Relaxed);
         value != old
     }
 }
@@ -73,14 +74,16 @@ impl Target {
 pub struct LoadBalancer {
     /// Read/write targets.
     pub(super) targets: Vec<Target>,
-    /// Checkout timeout.
-    pub(super) checkout_timeout: Duration,
+    /// Connection checkout timeout.
+    checkout_timeout: Duration,
     /// Round robin atomic counter.
     pub(super) round_robin: Arc<AtomicUsize>,
     /// Chosen load balancing strategy.
     pub(super) lb_strategy: LoadBalancingStrategy,
     /// Maintenance. notification.
     pub(super) maintenance: Arc<Notify>,
+    /// Role detection waiter.
+    pub(super) role_detection: Arc<Notify>,
     /// Read/write split.
     pub(super) rw_split: ReadWriteSplit,
 }
@@ -95,16 +98,19 @@ impl LoadBalancer {
     ) -> LoadBalancer {
         let checkout_timeout = primary
             .as_ref()
-            .map(|primary| primary.config().checkout_timeout)
-            .unwrap_or(Duration::ZERO)
-            + addrs
-                .iter()
-                .map(|c| c.config.checkout_timeout)
-                .sum::<Duration>();
+            .map(|pool| pool.config().checkout_timeout)
+            .unwrap_or(
+                addrs
+                    .first()
+                    .map(|addr| addr.config.checkout_timeout)
+                    .unwrap_or(Duration::from_millis(
+                        config().config.general.checkout_timeout,
+                    )),
+            );
 
         let mut targets: Vec<_> = addrs
             .iter()
-            .map(|config| Target::new(Pool::new(config), Role::Replica))
+            .map(|config| Target::new(Pool::new(config), config.address.configured_role))
             .collect();
 
         let primary_target = primary
@@ -121,6 +127,7 @@ impl LoadBalancer {
             round_robin: Arc::new(AtomicUsize::new(0)),
             lb_strategy,
             maintenance: Arc::new(Notify::new()),
+            role_detection: Arc::new(Notify::new()),
             rw_split,
         }
     }
@@ -145,6 +152,7 @@ impl LoadBalancer {
     /// return new primary (if any), and replicas.
     pub fn redetect_roles(&self) -> bool {
         let mut promoted = false;
+        let roles_detected_before = self.roles_detected();
 
         let mut targets = self
             .targets
@@ -172,16 +180,25 @@ impl LoadBalancer {
 
             if promoted {
                 warn!("new primary chosen: {}", targets[primary].1.pool.addr());
-
-                // Demote everyone else to replicas.
-                targets
-                    .iter()
-                    .enumerate()
-                    .filter(|(i, _)| *i != primary)
-                    .for_each(|(_, target)| {
-                        target.1.set_role(Role::Replica);
-                    });
             }
+
+            // Demote everyone else to replicas.
+            targets
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| *i != primary)
+                .for_each(|(_, target)| {
+                    target.1.set_role(Role::Replica);
+                });
+        } else if targets.iter().all(|target| target.0.valid()) {
+            // All targets are replicas until we get a primary.
+            targets.iter().for_each(|target| {
+                target.1.set_role(Role::Replica);
+            });
+        }
+
+        if promoted || (!roles_detected_before && self.roles_detected()) {
+            self.role_detection.notify_one();
         }
 
         promoted
@@ -193,13 +210,14 @@ impl LoadBalancer {
         Monitor::spawn(self);
     }
 
+    /// Check that the load balancer targets are all launched.
+    pub fn online(&self) -> bool {
+        self.targets.iter().all(|target| target.pool.lock().online)
+    }
+
     /// Get a live connection from the pool.
     pub async fn get(&self, request: &Request) -> Result<Guard, Error> {
-        match timeout(self.checkout_timeout, self.get_internal(request)).await {
-            Ok(Ok(conn)) => Ok(conn),
-            Ok(Err(err)) => Err(err),
-            Err(_) => Err(Error::ReplicaCheckoutTimeout),
-        }
+        self.get_internal(request).await
     }
 
     /// Get parameters from first non-banned connection pool.
@@ -212,35 +230,57 @@ impl LoadBalancer {
     }
 
     /// Move connections from this replica set to another.
+    ///
+    /// Uses address-based matching so existing pools survive replica additions or
+    /// removals: each old target is paired with the new target that shares its
+    /// address. New targets with no matching old target start empty; old targets
+    /// with no match in the new config have their connections dropped.
     pub fn move_conns_to(&self, destination: &LoadBalancer) -> Result<(), Error> {
-        assert_eq!(self.targets.len(), destination.targets.len());
+        for from in &self.targets {
+            if let Some(to) = destination
+                .targets
+                .iter()
+                .find(|to| from.pool.can_move_conns_to(&to.pool))
+            {
+                from.pool.move_conns_to(&to.pool)?;
 
-        for (from, to) in self.targets.iter().zip(destination.targets.iter()) {
-            from.pool.move_conns_to(&to.pool)?;
+                // Carry over detected roles and LSN stats so the new load balancer
+                // doesn't briefly appear read-only before the role detector runs.
+                to.set_role(from.role());
+                *to.pool.inner().lsn_stats.write() = from.pool.lsn_stats();
+            }
         }
 
         Ok(())
     }
 
     /// The two replica sets are referring to the same databases.
+    ///
+    /// Returns `true` when every target in `self` has a matching address in
+    /// `destination`. This allows replica additions (new targets start empty)
+    /// while still preserving connections to unchanged replicas.
     pub fn can_move_conns_to(&self, destination: &LoadBalancer) -> bool {
-        self.targets.len() == destination.targets.len()
-            && self
+        self.targets.iter().all(|from| {
+            destination
                 .targets
                 .iter()
-                .zip(destination.targets.iter())
-                .all(|(a, b)| a.pool.can_move_conns_to(&b.pool))
+                .any(|to| from.pool.can_move_conns_to(&to.pool))
+        })
     }
 
-    /// There are no replicas.
+    /// True if the LB has any target that can serve replica reads.
+    ///
+    /// An `Auto` target counts as a potential replica until role detection
+    /// converges, so callers may briefly route reads to a target that turns
+    /// out to be the primary.
     pub fn has_replicas(&self) -> bool {
         self.targets
             .iter()
-            .any(|target| target.role() == Role::Replica)
+            .any(|target| matches!(target.role(), Role::Replica | Role::Auto))
     }
 
     /// Cancel a query if one is running.
-    pub async fn cancel(&self, id: &BackendKeyData) -> Result<(), super::super::Error> {
+    pub async fn cancel(&self, id: FrontendPid) -> Result<(), super::super::Error> {
         for target in &self.targets {
             target.pool.cancel(id).await?;
         }
@@ -264,6 +304,47 @@ impl LoadBalancer {
         result
     }
 
+    /// Block until role detection has assigned every `Auto` target to
+    /// `Primary` or `Replica`. The wakeup is driven by `pick_primary`, so
+    /// if no primary is ever elected (e.g. LSN stats never populate),
+    /// callers will block until their `checkout_timeout` fires.
+    async fn wait_roles_detected(&self) -> Result<(), Error> {
+        if !self.roles_detected() {
+            if timeout(self.checkout_timeout, self.role_detection.notified())
+                .await
+                .is_err()
+            {
+                return Err(Error::CheckoutTimeout);
+            };
+            // Chain the wakeup so any other waiter that arrived after us
+            // also gets released without needing another promotion event.
+            self.role_detection.notify_one();
+        }
+
+        Ok(())
+    }
+
+    /// True once no target is still in the `Auto` state.
+    pub fn roles_detected(&self) -> bool {
+        !self
+            .targets
+            .iter()
+            .any(|target| target.role() == Role::Auto)
+    }
+
+    pub(super) async fn get_primary(&self, request: &Request) -> Result<Guard, Error> {
+        self.get_primary_internal(request).await
+    }
+
+    async fn get_primary_internal(&self, request: &Request) -> Result<Guard, Error> {
+        self.wait_roles_detected().await?;
+        self.primary_target()
+            .ok_or(Error::NoPrimary)?
+            .pool
+            .get(request)
+            .await
+    }
+
     async fn get_internal(&self, request: &Request) -> Result<Guard, Error> {
         use LoadBalancingStrategy::*;
         use ReadWriteSplit::*;
@@ -276,12 +357,23 @@ impl LoadBalancer {
 
         let primary_reads = match self.rw_split {
             IncludePrimary => true,
-            IncludePrimaryIfReplicaBanned => candidates.iter().any(|target| target.ban.banned()),
-            ExcludePrimary => false,
+            IncludePrimaryIfReplicaBanned => {
+                candidates.iter().any(|target| target.ban.banned()) || candidates.len() == 1 // The second condition is for when there is only the primary (just one target, doesn't matter what role it is).
+            }
+            // we read from the primary if we have no replicas
+            ExcludePrimary => !candidates
+                .iter()
+                .any(|target| matches!(target.role(), Role::Replica | Role::Auto)),
+            // PreferPrimary makes all queries writes. If a query lands here,
+            // it's because of pgdog.role=replica. Let it use the primary only if
+            // no replicas are available.
+            PreferPrimary => !candidates.iter().any(|target| {
+                matches!(target.role(), Role::Replica | Role::Auto) && !target.ban.banned()
+            }),
         };
 
         if !primary_reads {
-            candidates.retain(|target| target.role() == Role::Replica);
+            candidates.retain(|target| matches!(target.role(), Role::Replica | Role::Auto));
         }
 
         if candidates.is_empty() {
@@ -299,6 +391,33 @@ impl LoadBalancer {
             }
             LeastActiveConnections => {
                 candidates.sort_by_cached_key(|target| target.pool.lock().checked_out());
+            }
+            WeightedRoundRobin => {
+                let total_weight: i64 = candidates
+                    .iter()
+                    .map(|target| target.pool.config().lb_weight as i64)
+                    .sum();
+
+                if total_weight > 0 {
+                    for target in &candidates {
+                        target
+                            .current_weight
+                            .fetch_add(target.pool.config().lb_weight as i64, Ordering::Relaxed);
+                    }
+
+                    let max_idx = candidates
+                        .iter()
+                        .enumerate()
+                        .max_by_key(|(_, t)| t.current_weight.load(Ordering::Relaxed))
+                        .map(|(idx, _)| idx)
+                        .unwrap_or_default();
+
+                    candidates[max_idx]
+                        .current_weight
+                        .fetch_sub(total_weight, Ordering::Relaxed);
+
+                    candidates.swap(0, max_idx);
+                }
             }
         }
 
@@ -323,7 +442,9 @@ impl LoadBalancer {
             }
         }
 
-        candidates.iter().for_each(|target| target.ban.unban(true));
+        candidates
+            .iter()
+            .for_each(|target| target.ban.unban(true, UnbanReason::AllTargetsBanned));
 
         Err(Error::AllReplicasDown)
     }

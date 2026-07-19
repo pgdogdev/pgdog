@@ -1,5 +1,5 @@
-use crate::frontend::router::parser::Shard;
 use crate::frontend::Command;
+use crate::frontend::router::parser::Shard;
 use crate::net::messages::Parameter;
 
 use super::setup::{QueryParserTest, *};
@@ -11,7 +11,7 @@ fn test_where_is_null() {
     let mut test = QueryParserTest::new();
 
     let command = test.execute(vec![
-        Query::new("SELECT * FROM sharded WHERE id IS NULL").into()
+        Query::new("SELECT * FROM sharded WHERE id IS NULL").into(),
     ]);
 
     // NULL can be on any shard
@@ -22,10 +22,9 @@ fn test_where_is_null() {
 fn test_where_is_not_null() {
     let mut test = QueryParserTest::new();
 
-    let command = test.execute(vec![Query::new(
-        "SELECT * FROM sharded WHERE id IS NOT NULL",
-    )
-    .into()]);
+    let command = test.execute(vec![
+        Query::new("SELECT * FROM sharded WHERE id IS NOT NULL").into(),
+    ]);
 
     assert_eq!(command.route().shard(), &Shard::All);
 }
@@ -36,10 +35,9 @@ fn test_where_is_not_null() {
 fn test_where_or_same_key() {
     let mut test = QueryParserTest::new();
 
-    let command = test.execute(vec![Query::new(
-        "SELECT * FROM sharded WHERE id = 1 OR id = 2",
-    )
-    .into()]);
+    let command = test.execute(vec![
+        Query::new("SELECT * FROM sharded WHERE id = 1 OR id = 2").into(),
+    ]);
 
     // OR with different values goes to all shards
     assert_eq!(command.route().shard(), &Shard::All);
@@ -49,10 +47,9 @@ fn test_where_or_same_key() {
 fn test_where_in_list() {
     let mut test = QueryParserTest::new();
 
-    let command = test.execute(vec![Query::new(
-        "SELECT * FROM sharded WHERE id IN (1, 2, 3)",
-    )
-    .into()]);
+    let command = test.execute(vec![
+        Query::new("SELECT * FROM sharded WHERE id IN (1, 2, 3)").into(),
+    ]);
 
     // IN list with multiple values routes to Multi shard covering those specific shards
     assert!(matches!(command.route().shard(), Shard::Multi(_)));
@@ -64,10 +61,10 @@ fn test_where_in_list() {
 fn test_case_expression() {
     let mut test = QueryParserTest::new();
 
-    let command = test.execute(vec![Query::new(
-        "SELECT CASE WHEN id = 1 THEN 'one' ELSE 'other' END FROM sharded WHERE id = 1",
-    )
-    .into()]);
+    let command = test.execute(vec![
+        Query::new("SELECT CASE WHEN id = 1 THEN 'one' ELSE 'other' END FROM sharded WHERE id = 1")
+            .into(),
+    ]);
 
     assert!(matches!(command.route().shard(), Shard::Direct(_)));
 }
@@ -78,10 +75,10 @@ fn test_case_expression() {
 fn test_union() {
     let mut test = QueryParserTest::new();
 
-    let command = test.execute(vec![Query::new(
-        "SELECT id FROM sharded WHERE id = 1 UNION SELECT id FROM sharded WHERE id = 2",
-    )
-    .into()]);
+    let command = test.execute(vec![
+        Query::new("SELECT id FROM sharded WHERE id = 1 UNION SELECT id FROM sharded WHERE id = 2")
+            .into(),
+    ]);
 
     assert!(command.route().is_read());
     // UNION finds the first matching shard key - both sides have literals so it picks one
@@ -92,10 +89,12 @@ fn test_union() {
 fn test_union_all() {
     let mut test = QueryParserTest::new();
 
-    let command = test.execute(vec![Query::new(
-        "SELECT id FROM sharded WHERE id = 1 UNION ALL SELECT id FROM sharded WHERE id = 2",
-    )
-    .into()]);
+    let command = test.execute(vec![
+        Query::new(
+            "SELECT id FROM sharded WHERE id = 1 UNION ALL SELECT id FROM sharded WHERE id = 2",
+        )
+        .into(),
+    ]);
 
     assert!(command.route().is_read());
 }
@@ -116,10 +115,9 @@ fn test_count_all() {
 fn test_sum_with_group_by() {
     let mut test = QueryParserTest::new();
 
-    let command = test.execute(vec![Query::new(
-        "SELECT email, SUM(amount) FROM sharded GROUP BY email",
-    )
-    .into()]);
+    let command = test.execute(vec![
+        Query::new("SELECT email, SUM(amount) FROM sharded GROUP BY email").into(),
+    ]);
 
     assert!(command.route().is_read());
     assert_eq!(command.route().shard(), &Shard::All);
@@ -131,10 +129,9 @@ fn test_sum_with_group_by() {
 fn test_window_function() {
     let mut test = QueryParserTest::new();
 
-    let command = test.execute(vec![Query::new(
-        "SELECT id, ROW_NUMBER() OVER (ORDER BY id) FROM sharded WHERE id = 1",
-    )
-    .into()]);
+    let command = test.execute(vec![
+        Query::new("SELECT id, ROW_NUMBER() OVER (ORDER BY id) FROM sharded WHERE id = 1").into(),
+    ]);
 
     assert!(command.route().is_read());
 }
@@ -191,10 +188,9 @@ fn test_update_returning() {
 fn test_coalesce_in_where() {
     let mut test = QueryParserTest::new();
 
-    let command = test.execute(vec![Query::new(
-        "SELECT * FROM sharded WHERE COALESCE(id, 0) = 1",
-    )
-    .into()]);
+    let command = test.execute(vec![
+        Query::new("SELECT * FROM sharded WHERE COALESCE(id, 0) = 1").into(),
+    ]);
 
     assert!(command.route().is_read());
 }
@@ -205,10 +201,9 @@ fn test_coalesce_in_where() {
 fn test_between_on_sharding_key() {
     let mut test = QueryParserTest::new();
 
-    let command = test.execute(vec![Query::new(
-        "SELECT * FROM sharded WHERE id BETWEEN 1 AND 10",
-    )
-    .into()]);
+    let command = test.execute(vec![
+        Query::new("SELECT * FROM sharded WHERE id BETWEEN 1 AND 10").into(),
+    ]);
 
     // BETWEEN can span multiple shards
     assert_eq!(command.route().shard(), &Shard::All);
@@ -220,10 +215,9 @@ fn test_between_on_sharding_key() {
 fn test_like_on_non_sharding_column() {
     let mut test = QueryParserTest::new();
 
-    let command = test.execute(vec![Query::new(
-        "SELECT * FROM sharded WHERE email LIKE '%test%'",
-    )
-    .into()]);
+    let command = test.execute(vec![
+        Query::new("SELECT * FROM sharded WHERE email LIKE '%test%'").into(),
+    ]);
 
     assert_eq!(command.route().shard(), &Shard::All);
 }

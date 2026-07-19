@@ -13,6 +13,7 @@ pub enum DisconnectReason {
     Unhealthy,
     Healthcheck,
     PubSub,
+    CredentialsRefresh,
     #[default]
     Other,
 }
@@ -32,6 +33,7 @@ impl Display for DisconnectReason {
             Self::Unhealthy => "unhealthy",
             Self::Healthcheck => "standalone healthcheck",
             Self::PubSub => "pub/sub",
+            Self::CredentialsRefresh => "credentials refresh",
         };
 
         write!(f, "{}", reason)

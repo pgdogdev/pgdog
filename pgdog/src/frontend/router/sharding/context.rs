@@ -31,14 +31,8 @@ impl Context<'_> {
                 }
             }
 
-            Operator::Range(ranges) => {
-                trace!("sharding using range");
-                return ranges.shard(&self.value);
-            }
-
-            Operator::List(lists) => {
-                trace!("sharding using lists");
-                return lists.shard(&self.value);
+            Operator::Mapping(mapping) => {
+                return mapping.shard(&self.value);
             }
         }
 

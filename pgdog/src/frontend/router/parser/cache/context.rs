@@ -1,10 +1,11 @@
 //! AST parsing context.
 
+use crate::backend::ShardingSchema;
 use crate::backend::pool::Cluster;
 use crate::backend::schema::Schema;
-use crate::backend::ShardingSchema;
-use crate::net::parameter::ParameterValue;
+use crate::frontend::BufferedQuery;
 use crate::net::Parameters;
+use crate::net::parameter::ParameterValue;
 
 /// Context for AST parsing and rewriting.
 ///
@@ -42,5 +43,33 @@ impl<'a> AstContext<'a> {
             user: "",
             search_path: None,
         }
+    }
+}
+
+/// Query passed to the parser.
+pub struct AstQuery<'a> {
+    /// The original request.
+    pub original_query: &'a BufferedQuery,
+    /// Query without comments and other noise.
+    pub query_without_comment: &'a str,
+}
+
+impl<'a> AstQuery<'a> {
+    /// Create an AstQuery using the raw query text as the cache key.
+    pub fn from_query(query: &'a BufferedQuery) -> Self {
+        Self {
+            query_without_comment: query.query(),
+            original_query: query,
+        }
+    }
+
+    /// Return the first `sample_len` characters of the original query, including any comment.
+    pub fn truncated_query(&self, sample_len: usize) -> &str {
+        let query = self.original_query.query();
+        let end = query
+            .char_indices()
+            .nth(sample_len)
+            .map_or(query.len(), |(i, _)| i);
+        &query[..end]
     }
 }

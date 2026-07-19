@@ -1,7 +1,7 @@
 use crate::{
     frontend::{
-        router::parser::{cache::Stats, Cache},
         PreparedStatements,
+        router::parser::{Cache, cache::Stats},
     },
     stats::memory::MemoryUsage,
 };
@@ -76,6 +76,12 @@ impl QueryCache {
                 name: "query_cache_parse_time".into(),
                 help: "Time spent parsing queries due to cache misses".into(),
                 value: self.stats.parse_time.as_millis() as usize,
+                gauge: false,
+            }),
+            Metric::new(QueryCacheMetric {
+                name: "query_cache_fingerprints".into(),
+                help: "Number of query fingerprints calculated".into(),
+                value: self.stats.fingerprints,
                 gauge: false,
             }),
             Metric::new(QueryCacheMetric {
@@ -163,6 +169,7 @@ mod tests {
                 direct: 3,
                 multi: 4,
                 parse_time: Duration::ZERO,
+                fingerprints: 8,
             },
             len: 5,
             prepared_statements: 6,
@@ -180,6 +187,7 @@ mod tests {
                 "query_cache_cross".to_string(),
                 "query_cache_size".to_string(),
                 "query_cache_parse_time".to_string(),
+                "query_cache_fingerprints".to_string(),
                 "prepared_statements".to_string(),
                 "prepared_statements_memory_used".to_string(),
             ]
@@ -196,6 +204,14 @@ mod tests {
             MeasurementType::Integer(value) => assert_eq!(value, 1),
             other => panic!("expected integer measurement, got {:?}", other),
         }
+
+        let fingerprints_metric = metrics
+            .iter()
+            .find(|m| m.name() == "query_cache_fingerprints")
+            .unwrap();
+        assert_eq!(fingerprints_metric.metric_type(), "counter");
+        let rendered = fingerprints_metric.to_string();
+        assert!(rendered.contains("query_cache_fingerprints 8"));
 
         let memory_metric = metrics.last().unwrap();
         assert_eq!(memory_metric.metric_type(), "gauge");

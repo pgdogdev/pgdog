@@ -1,17 +1,17 @@
 //! pgDog plugins.
 
-use std::ops::Deref;
-
 use once_cell::sync::OnceCell;
+use pgdog_config::{Config, LogFormat};
+use pgdog_plugin::libloading;
 use pgdog_plugin::libloading::Library;
-use pgdog_plugin::Plugin;
-use pgdog_plugin::{comp, libloading};
+use pgdog_plugin::{Config as PdConfig, PdStr, PluginVtable};
 use semver::Version;
+use std::collections::HashMap;
 use tokio::time::Instant;
 use tracing::{debug, error, info, warn};
 
 static LIBS: OnceCell<Vec<Library>> = OnceCell::new();
-pub static PLUGINS: OnceCell<Vec<Plugin>> = OnceCell::new();
+pub static PLUGINS: OnceCell<HashMap<String, &'static PluginVtable>> = OnceCell::new();
 
 // Compare semantic versions by major and minor only (ignore patch/bugfix).
 fn same_major_minor(a: &str, b: &str) -> bool {
@@ -30,89 +30,101 @@ fn same_major_minor(a: &str, b: &str) -> bool {
 ///
 /// This should be run before Tokio is loaded since this is not thread-safe.
 ///
-pub fn load(names: &[&str]) -> Result<(), libloading::Error> {
+pub fn load(config: &Config) -> Result<(), libloading::Error> {
     if LIBS.get().is_some() {
         return Ok(());
     };
 
-    let mut libs = vec![];
-    for plugin in names.iter() {
-        match Plugin::library(plugin) {
-            Ok(plugin) => libs.push(plugin),
-            Err(err) => {
-                error!("plugin \"{}\" failed to load: {:#?}", plugin, err);
-            }
-        }
-    }
+    let plugins = &config.plugins;
+
+    let libs = plugins
+        .iter()
+        .filter_map(|plugin| {
+            PluginVtable::library(&plugin.name)
+                .map_err(|err| error!("plugin \"{}\" failed to load: {:#?}", plugin.name, err))
+                .ok()
+        })
+        .collect();
 
     let _ = LIBS.set(libs);
 
-    let rustc_version = comp::rustc_version();
-    let pgdog_plugin_api_version = comp::pgdog_plugin_api_version();
+    let rustc_version = pgdog_plugin::RUSTC_VERSION;
+    let pgdog_plugin_api_version = pgdog_plugin::VERSION;
 
-    let mut plugins = vec![];
-    for (i, name) in names.iter().enumerate() {
+    let plugin_libs = plugins.iter().enumerate().filter_map(|(i, plugin)| {
         if let Some(lib) = LIBS.get().unwrap().get(i) {
             let now = Instant::now();
-            let plugin = Plugin::load(name, lib);
-
-            // Check Rust compiler version.
-            if let Some(plugin_rustc) = plugin.rustc_version() {
-                if rustc_version != plugin_rustc {
-                    warn!("skipping plugin \"{}\" because it was compiled with different compiler version ({})",
-                        plugin.name(),
-                        plugin_rustc.deref()
-                    );
-                    continue;
-                }
-            } else {
+            let Some(plugin_lib) = PluginVtable::load(lib) else {
                 warn!(
-                    "skipping plugin \"{}\" because it doesn't expose its Rust compiler version",
-                    plugin.name()
+                    "skipping plugin \"{}\" because its vtable could not be loaded",
+                    plugin.name,
                 );
-                continue;
-            }
+                return None;
+            };
 
             // Check plugin api version (compare major.minor only)
-            if let Some(plugin_api_version) = plugin.pgdog_plugin_api_version() {
-                if !same_major_minor(plugin_api_version.deref(), pgdog_plugin_api_version.deref()) {
-                    warn!(
-                        "skipping plugin \"{}\" because it was compiled with different plugin API version ({})",
-                        plugin.name(),
-                        plugin_api_version.deref()
-                    );
-                    continue;
-                }
-            } else {
+            if !same_major_minor(&plugin_lib.pgdog_plugin_api_version(), pgdog_plugin_api_version) {
                 warn!(
-                    "plugin {} doesn't expose its plugin API version, please update version of pgdog-plugin crate in your plugin", plugin.name()
+                    "skipping plugin \"{}\" because it was compiled with different plugin API version ({})",
+                    plugin.name,
+                    &*plugin_lib.pgdog_plugin_api_version()
                 );
-
-                // TODO: use this after after some time when we want to force version
-                // compatibility based on pgdog-plugin version
-                // warn!(
-                //     "skipping plugin \"{}\" because it doesn't expose its plugin API version",
-                //     plugin.name()
-                // );
-                // continue;
+                return None;
             }
 
-            if plugin.init() {
-                debug!("plugin \"{}\" initialized", name);
+
+            // Check Rust compiler version.
+            if rustc_version != &*plugin_lib.rustc_version() {
+                warn!(
+                    "skipping plugin \"{}\" because it was compiled with different compiler version ({})",
+                    plugin.name,
+                    &*plugin_lib.rustc_version()
+                );
+                return None;
+            }
+
+            let plugin_config_path = plugin
+                .config
+                .as_ref()
+                .map(|p| p.display().to_string())
+                .unwrap_or_default();
+
+            let pd_config = PdConfig {
+                log_level: PdStr::from(config.general.log_level.as_str()),
+                log_json: matches!(
+                    config.general.log_format,
+                    LogFormat::Json | LogFormat::JsonFlattened
+                ),
+                plugin_config: PdStr::from(plugin_config_path.as_str()),
+            };
+
+            plugin_lib.logging_init(pd_config);
+
+            plugin_lib.init();
+            debug!("plugin \"{}\" initialized", plugin.name);
+
+            if !plugin_lib.config(pd_config) {
+                warn!(
+                    "plugin {} failed to load its configuration, skipping",
+                    plugin.name
+                );
+                return None;
             }
 
             info!(
                 "loaded \"{}\" plugin (v{}) [{:.4}ms]",
-                name,
-                plugin.version().unwrap_or_default().deref(),
+                plugin.name,
+                &*plugin_lib.plugin_version(),
                 now.elapsed().as_secs_f64() * 1000.0
             );
 
-            plugins.push(plugin);
+            Some((plugin.name.to_owned(), plugin_lib))
+        } else {
+            None
         }
-    }
+    }).collect();
 
-    let _ = PLUGINS.set(plugins);
+    let _ = PLUGINS.set(plugin_libs);
 
     Ok(())
 }
@@ -120,23 +132,19 @@ pub fn load(names: &[&str]) -> Result<(), libloading::Error> {
 /// Shutdown plugins.
 pub fn shutdown() {
     if let Some(plugins) = plugins() {
-        for plugin in plugins {
+        for plugin in plugins.values() {
             plugin.fini();
         }
     }
 }
 
 /// Get plugin by name.
-pub fn plugin(name: &str) -> Option<&Plugin<'_>> {
-    PLUGINS
-        .get()
-        .unwrap()
-        .iter()
-        .find(|&plugin| plugin.name() == name)
+pub fn plugin(name: &str) -> Option<&PluginVtable> {
+    PLUGINS.get().unwrap().get(name).copied()
 }
 
 /// Get all loaded plugins.
-pub fn plugins() -> Option<&'static Vec<Plugin<'static>>> {
+pub fn plugins() -> Option<&'static HashMap<String, &'static PluginVtable>> {
     PLUGINS.get()
 }
 
@@ -144,12 +152,5 @@ pub fn plugins() -> Option<&'static Vec<Plugin<'static>>> {
 pub fn load_from_config() -> Result<(), libloading::Error> {
     let config = crate::config::config();
 
-    let plugins = &config
-        .config
-        .plugins
-        .iter()
-        .map(|s| s.name.as_str())
-        .collect::<Vec<_>>();
-
-    load(plugins)
+    load(&config.config)
 }

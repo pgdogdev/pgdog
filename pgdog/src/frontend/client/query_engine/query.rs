@@ -1,4 +1,3 @@
-use tokio::time::timeout;
 use tracing::{info, trace};
 
 use crate::{
@@ -11,6 +10,7 @@ use crate::{
         RowDescription, ToBytes, TransactionState,
     },
     state::State,
+    util::safe_timeout,
 };
 
 use tracing::{debug, error};
@@ -58,7 +58,7 @@ impl QueryEngine {
             }
         }
 
-        match timeout(
+        match safe_timeout(
             context.timeouts.query_timeout(&State::Active),
             self.client_server_exchange(context),
         )
@@ -95,7 +95,6 @@ impl QueryEngine {
                 while self.backend.has_more_messages()
                     && !self.backend.in_copy_mode()
                     && !self.streaming
-                    && !self.test_mode.enabled
                 {
                     let message = self.read_server_message().await?;
                     self.process_server_message(context, message).await?;
@@ -131,11 +130,14 @@ impl QueryEngine {
         };
         let has_more_messages = self.backend.has_more_messages();
 
-        if let Some(bytes) = payload {
-            if let Some(state) = self.pending_explain.as_mut() {
-                if let Ok(row_description) = RowDescription::from_bytes(bytes) {
+        if let Some(bytes) = payload
+            && let Some(state) = self.pending_explain.as_mut()
+        {
+            match RowDescription::from_bytes(bytes) {
+                Ok(row_description) => {
                     state.capture_row_description(row_description);
-                } else {
+                }
+                _ => {
                     state.annotated = true;
                 }
             }
@@ -164,13 +166,15 @@ impl QueryEngine {
             self.stats.query();
 
             let mut two_pc_auto = false;
-            let state = ReadyForQuery::from_bytes(message.to_bytes()?)?.state()?;
+            let state = ReadyForQuery::from_bytes(message.to_bytes())?.state()?;
 
             match state {
                 TransactionState::Error => {
                     let error_state = match context.transaction {
                         Some(TransactionType::ReadOnly) => Some(TransactionType::ErrorReadOnly),
-                        Some(TransactionType::ReadWrite) => Some(TransactionType::ErrorReadWrite),
+                        Some(TransactionType::ReadWrite | TransactionType::Implicit) => {
+                            Some(TransactionType::ErrorReadWrite)
+                        }
                         _ => None,
                     };
                     context.transaction = error_state;
@@ -221,6 +225,11 @@ impl QueryEngine {
             }
 
             self.stats.idle(context.in_transaction());
+            // N.B. Call this before self.cleanup_backend(), since `cleanup_backend()` resets
+            // the router and the command state.
+            self.advisory_locks
+                .merge(self.router.command().route().advisory_locks());
+            self.check_lock();
 
             if !context.in_transaction() {
                 self.stats.transaction(two_pc_auto);
@@ -330,6 +339,11 @@ impl QueryEngine {
         &mut self,
         context: &mut QueryEngineContext<'_>,
     ) -> Result<bool, Error> {
+        // Admin database queries are not checked.
+        if context.admin {
+            return Ok(true);
+        }
+
         // Check for cross-shard queries.
         if context.cross_shard_disabled.is_none() {
             context.cross_shard_disabled = Some(
@@ -342,13 +356,37 @@ impl QueryEngine {
 
         let cross_shard_disabled = context.cross_shard_disabled.unwrap_or_default();
 
-        debug!("cross-shard queries disabled: {}", cross_shard_disabled,);
+        debug!("cross-shard queries disabled: {}", cross_shard_disabled);
 
-        if cross_shard_disabled
-            && context.client_request.route().is_cross_shard()
-            && !context.admin
-            && context.client_request.is_executable()
-        {
+        // This check is disabled.
+        if !cross_shard_disabled {
+            return Ok(true);
+        }
+
+        let query_is_cross_shard = context.client_request.route().is_cross_shard();
+
+        // The query is direct-to-shard, we're good.
+        if !query_is_cross_shard {
+            return Ok(true);
+        }
+
+        let connected_shards = self.backend.connected_servers();
+        let is_executable = context.client_request.is_executable();
+
+        // This is a Parse-only request, so it's safe
+        // to route it to any shard - it won't do any damage
+        // and we need a real response from a server.
+        if !is_executable {
+            return Ok(true);
+        }
+
+        // Only run check if we are not connected yet or we are actually connected
+        // to more than one shard.
+        //
+        // The connected_shards > 1 check is only relevant for session mode - we stay connected
+        // until client disconnects. We don't want this check to trigger on queries that we think
+        // should be cross-shard (e.g. BEGIN, COMMIT) but aren't really.
+        if connected_shards == 0 || connected_shards > 1 {
             let query = context.client_request.query()?;
             let error = ErrorResponse::cross_shard_disabled(query.as_ref().map(|q| q.query()));
 
@@ -358,10 +396,10 @@ impl QueryEngine {
                 self.backend.disconnect();
             }
 
-            Ok(false)
-        } else {
-            Ok(true)
+            return Ok(false);
         }
+
+        Ok(true)
     }
 
     fn two_pc_check(&mut self, context: &mut QueryEngineContext<'_>) {
@@ -387,10 +425,11 @@ impl QueryEngine {
         &mut self,
         context: &mut QueryEngineContext<'_>,
     ) -> Result<bool, Error> {
-        let shards = if let Ok(shards) = self.backend.shards() {
-            shards
-        } else {
-            return Ok(true);
+        let shards = match self.backend.shards() {
+            Ok(shards) => shards,
+            _ => {
+                return Ok(true);
+            }
         };
         if shards > 1 // This check only matters for cross-shard queries
             && context.in_error()

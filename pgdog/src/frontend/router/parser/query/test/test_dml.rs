@@ -43,10 +43,9 @@ fn test_select_for_update() {
     let mut test = QueryParserTest::new();
 
     // Without parameters - goes to all shards
-    let command = test.execute(vec![Query::new(
-        "SELECT * FROM sharded WHERE id = $1 FOR UPDATE",
-    )
-    .into()]);
+    let command = test.execute(vec![
+        Query::new("SELECT * FROM sharded WHERE id = $1 FOR UPDATE").into(),
+    ]);
     assert!(command.route().is_write());
     assert!(matches!(command.route().shard(), Shard::All));
 
@@ -59,6 +58,28 @@ fn test_select_for_update() {
         )
         .into(),
         Bind::new_params("__test_sfu", &[Parameter::new(b"1")]).into(),
+        Execute::new().into(),
+        Sync.into(),
+    ]);
+    assert!(matches!(command.route().shard(), Shard::Direct(_)));
+    assert!(command.route().is_write());
+}
+
+#[test]
+fn test_update_is_not_distinct_from_routes_to_shard() {
+    // IS NOT DISTINCT FROM must route the same as = for shard-key extraction.
+    let mut test = QueryParserTest::new();
+    let command = test.execute(vec![
+        Parse::named(
+            "__test_indf",
+            "UPDATE sharded SET email = $2 WHERE id IS NOT DISTINCT FROM $1",
+        )
+        .into(),
+        Bind::new_params(
+            "__test_indf",
+            &[Parameter::new(b"1"), Parameter::new(b"test@test.com")],
+        )
+        .into(),
         Execute::new().into(),
         Sync.into(),
     ]);

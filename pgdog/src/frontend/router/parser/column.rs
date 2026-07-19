@@ -1,9 +1,9 @@
 //! Column name reference.
 
-use pg_query::{
-    protobuf::{self, String as PgQueryString},
-    Node, NodeEnum,
-};
+#[cfg(not(feature = "new_parser"))]
+use pg_query::{Node, NodeEnum, protobuf::String as PgQueryString};
+#[cfg(feature = "new_parser")]
+use pg_raw_parse::{list, nodes};
 use std::fmt::{Display, Formatter, Result as FmtResult};
 
 use super::{Error, Table};
@@ -11,28 +11,17 @@ use crate::util::escape_identifier;
 
 /// Column name extracted from a query.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub struct Column<'a> {
+pub(crate) struct Column<'a> {
     /// Column name.
-    pub name: &'a str,
+    pub(crate) name: &'a str,
     /// Table name.
-    pub table: Option<&'a str>,
+    pub(crate) table: Option<&'a str>,
     /// Schema name.
-    pub schema: Option<&'a str>,
-}
-
-/// Owned version of Column that owns its string data.
-#[derive(Debug, Clone, PartialEq, Default)]
-pub struct OwnedColumn {
-    /// Column name.
-    pub name: String,
-    /// Table name.
-    pub table: Option<String>,
-    /// Schema name.
-    pub schema: Option<String>,
+    pub(crate) schema: Option<&'a str>,
 }
 
 impl<'a> Column<'a> {
-    pub fn table(&self) -> Option<Table<'a>> {
+    pub(crate) fn table(&self) -> Option<Table<'a>> {
         self.table.map(|table| Table {
             name: table,
             schema: self.schema,
@@ -40,14 +29,10 @@ impl<'a> Column<'a> {
         })
     }
 
-    /// Convert this borrowed Column to an owned OwnedColumn
-    pub fn to_owned(&self) -> OwnedColumn {
-        OwnedColumn::from(*self)
-    }
-
-    pub fn from_string(string: &'a Node) -> Result<Self, ()> {
+    #[cfg(not(feature = "new_parser"))]
+    pub(crate) fn from_string(string: &'a Node) -> Result<Self, ()> {
         match &string.node {
-            Some(NodeEnum::String(protobuf::String { sval })) => Ok(Self {
+            Some(NodeEnum::String(PgQueryString { sval })) => Ok(Self {
                 name: sval.as_str(),
                 ..Default::default()
             }),
@@ -57,7 +42,7 @@ impl<'a> Column<'a> {
     }
 
     /// Fully-qualify this column with a table.
-    pub fn qualify(&mut self, table: Table<'a>) {
+    pub(crate) fn qualify(&mut self, table: Table<'a>) {
         if self.table.is_none() {
             self.table = Some(table.name);
             self.schema = table.schema;
@@ -92,33 +77,68 @@ impl<'a> Display for Column<'a> {
     }
 }
 
-impl Display for OwnedColumn {
-    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
-        let borrowed = Column::from(self);
-        borrowed.fmt(f)
-    }
-}
+#[cfg(feature = "new_parser")]
+impl<'a> TryFrom<pg_raw_parse::Node<'a>> for Column<'a> {
+    type Error = Error;
 
-impl<'a> From<Column<'a>> for OwnedColumn {
-    fn from(column: Column<'a>) -> Self {
-        Self {
-            name: column.name.to_owned(),
-            table: column.table.map(|s| s.to_owned()),
-            schema: column.schema.map(|s| s.to_owned()),
+    fn try_from(value: pg_raw_parse::Node<'a>) -> Result<Self, Self::Error> {
+        use pg_raw_parse::Node;
+        match value {
+            Node::ColumnRef(c) => Self::try_from(c),
+            Node::ResTarget(r) => Self::try_from(r),
+            Node::DefElem(d) if d.defname() == Some("owned_by") => Self::try_from(d.arg()),
+            Node::NodeList(l) => Self::try_from(l),
+            _ => Err(Error::ColumnDecode),
         }
     }
 }
 
-impl<'a> From<&'a OwnedColumn> for Column<'a> {
-    fn from(owned: &'a OwnedColumn) -> Self {
-        Self {
-            name: &owned.name,
-            table: owned.table.as_deref(),
-            schema: owned.schema.as_deref(),
+#[cfg(feature = "new_parser")]
+impl<'a> TryFrom<&'a nodes::ColumnRef> for Column<'a> {
+    type Error = Error;
+
+    fn try_from(value: &'a nodes::ColumnRef) -> Result<Self, Self::Error> {
+        Self::try_from(value.fields())
+    }
+}
+
+#[cfg(feature = "new_parser")]
+impl<'a> TryFrom<&'a nodes::ResTarget> for Column<'a> {
+    type Error = Error;
+
+    fn try_from(value: &'a nodes::ResTarget) -> Result<Self, Self::Error> {
+        Ok(Self {
+            name: value.name().ok_or(Error::ColumnDecode)?,
+            ..Default::default()
+        })
+    }
+}
+
+#[cfg(feature = "new_parser")]
+impl<'a> TryFrom<&'a list::NodeList> for Column<'a> {
+    type Error = Error;
+
+    fn try_from(value: &'a list::NodeList) -> Result<Self, Self::Error> {
+        let mut fields = value
+            .into_iter()
+            .map(|s| s.as_str().ok_or(Error::ColumnDecode));
+        let name = fields.next_back().ok_or(Error::ColumnDecode)??;
+        let table = fields.next_back().transpose()?;
+        let schema = fields.next_back().transpose()?;
+
+        if fields.len() == 0 {
+            Ok(Self {
+                name,
+                table,
+                schema,
+            })
+        } else {
+            Err(Error::ColumnDecode)
         }
     }
 }
 
+#[cfg(not(feature = "new_parser"))]
 impl<'a> TryFrom<&'a Node> for Column<'a> {
     type Error = Error;
 
@@ -127,6 +147,7 @@ impl<'a> TryFrom<&'a Node> for Column<'a> {
     }
 }
 
+#[cfg(not(feature = "new_parser"))]
 impl<'a> TryFrom<&'a Option<NodeEnum>> for Column<'a> {
     type Error = Error;
 
@@ -213,6 +234,7 @@ impl<'a> TryFrom<&'a Option<NodeEnum>> for Column<'a> {
     }
 }
 
+#[cfg(not(feature = "new_parser"))]
 impl<'a> TryFrom<&Option<&'a Node>> for Column<'a> {
     type Error = Error;
 
@@ -237,11 +259,38 @@ impl<'a> From<&'a str> for Column<'a> {
 
 #[cfg(test)]
 mod test {
-    use pg_query::{parse, NodeEnum};
+    #[cfg(feature = "new_parser")]
+    use itertools::*;
+    #[cfg(not(feature = "new_parser"))]
+    use pg_query::{NodeEnum, parse};
+    #[cfg(feature = "new_parser")]
+    use pg_raw_parse::*;
 
-    use super::{Column, Error};
+    use super::Column;
 
     #[test]
+    #[cfg(feature = "new_parser")]
+    fn test_column() {
+        let result = parse("INSERT INTO my_table (id, email) VALUES (1, 'test@test.com')").unwrap();
+        let stmt = result.stmts().exactly_one().ok().unwrap();
+
+        let Node::InsertStmt(i) = stmt else {
+            panic!("{:?} is not an insert stmt", stmt);
+        };
+        let columns = i
+            .cols()
+            .into_iter()
+            .map(Column::try_from)
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        std::assert_matches!(
+            &*columns,
+            &[Column { name: "id", .. }, Column { name: "email", .. }]
+        );
+    }
+
+    #[test]
+    #[cfg(not(feature = "new_parser"))]
     fn test_column() {
         let query = parse("INSERT INTO my_table (id, email) VALUES (1, 'test@test.com')").unwrap();
         let select = query.protobuf.stmts.first().unwrap().stmt.as_ref().unwrap();
@@ -251,7 +300,7 @@ mod test {
                     .cols
                     .iter()
                     .map(Column::try_from)
-                    .collect::<Result<Vec<Column>, Error>>()
+                    .collect::<Result<Vec<_>, _>>()
                     .unwrap();
                 assert_eq!(
                     columns,
@@ -273,6 +322,30 @@ mod test {
     }
 
     #[test]
+    #[cfg(feature = "new_parser")]
+    fn test_column_sequence() {
+        let result =
+            parse("ALTER SEQUENCE public.user_profiles_id_seq OWNED BY public.user_profiles.id")
+                .unwrap();
+        let stmt = result.stmts().exactly_one().ok().unwrap();
+
+        let Node::AlterSeqStmt(stmt) = stmt else {
+            panic!("not an alter sequence");
+        };
+
+        let column = Column::try_from(stmt.options().into_iter().exactly_one().unwrap()).unwrap();
+        assert_eq!(
+            column,
+            Column {
+                name: "id",
+                schema: Some("public"),
+                table: Some("user_profiles")
+            }
+        );
+    }
+
+    #[test]
+    #[cfg(not(feature = "new_parser"))]
     fn test_column_sequence() {
         let query =
             parse("ALTER SEQUENCE public.user_profiles_id_seq OWNED BY public.user_profiles.id")

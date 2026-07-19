@@ -7,10 +7,9 @@ use std::sync::Arc;
 use crate::backend::databases::{databases, reload, shutdown};
 use crate::config::config;
 use crate::frontend::client::query_engine::two_pc::Manager;
-use crate::net::messages::BackendKeyData;
-use crate::net::messages::{hello::SslReply, Startup};
-use crate::net::{self, tls::acceptor};
-use crate::net::{tweak, Stream};
+use crate::net::messages::{FrontendPid, NegotiateProtocolVersion, Startup, hello::SslReply};
+use crate::net::tls::{acceptor, peer_identity};
+use crate::net::{self, Stream, tweak};
 use crate::sighup::Sighup;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::signal::ctrl_c;
@@ -20,7 +19,7 @@ use tokio::{select, spawn};
 
 use tracing::{error, info, warn};
 
-use super::{comms::comms, Client, Error};
+use super::{Client, Error, comms::comms};
 
 /// Client connections listener and handler.
 #[derive(Debug, Clone)]
@@ -134,7 +133,7 @@ impl Listener {
             {
                 // Shutdown timeout elapsed; cancel any still-running queries before tearing pools down.
                 let cancel_futures = comms.clients().into_keys().map(|id| async move {
-                    if let Err(err) = databases().cancel(&id).await {
+                    if let Err(err) = databases().cancel(id).await {
                         error!(?id, "cancel request failed during shutdown: {err}");
                     }
                 });
@@ -142,7 +141,7 @@ impl Listener {
 
                 if timeout(termination_timeout, cancel_all).await.is_err() {
                     error!(
-                        "forced shutdown: abandoning {} outstanding cancel requests after waiting {:.3}s" ,
+                        "forced shutdown: abandoning {} outstanding cancel requests after waiting {:.3}s",
                         comms.clients().len(),
                         termination_timeout.as_secs_f64()
                     );
@@ -154,8 +153,16 @@ impl Listener {
     }
 
     async fn handle_client(stream: TcpStream, addr: SocketAddr) -> Result<(), Error> {
-        tweak(&stream)?;
         let config = config();
+
+        // Not the end of the world if the tweaks are
+        // not applied.
+        if let Err(err) = tweak(&stream, &config.config.tcp) {
+            warn!(
+                "keepalive settings ({}) are not supported on this system, ignoring, error: {} [{}]",
+                config.config.tcp, err, addr
+            );
+        }
 
         let mut stream = Stream::plain(stream, config.config.memory.net_buffer);
 
@@ -181,10 +188,20 @@ impl Listener {
                     if let Some(tls) = tls.as_ref() {
                         stream.send_flush(&SslReply::Yes).await?;
                         let plain = stream.take()?;
-                        let cipher = tls.accept(plain).await?;
+                        let cipher = match tls.accept(plain).await {
+                            Ok(cipher) => cipher,
+                            Err(err) => {
+                                // TLS failure should close the connection
+                                // without telling the client what happened (security).
+                                warn!("TLS handshake failed: {err} [{addr}]");
+                                return Ok(());
+                            }
+                        };
+                        let tls_identity = peer_identity(cipher.get_ref().1);
                         stream = Stream::tls(
                             tokio_rustls::TlsStream::Server(cipher),
                             config.config.memory.net_buffer,
+                            tls_identity,
                         );
                     } else {
                         stream.send_flush(&SslReply::No).await?;
@@ -196,14 +213,35 @@ impl Listener {
                     stream.send_flush(&SslReply::No).await?;
                 }
 
-                Startup::Startup { params } => {
-                    Client::spawn(stream, params, addr, config).await?;
+                Startup::Startup {
+                    version,
+                    params,
+                    unrecognized_options,
+                } => {
+                    let negotiated = version
+                        .negotiated()
+                        .ok_or_else(|| net::Error::UnsupportedStartup(version.as_i32()))?;
+
+                    if negotiated != version || !unrecognized_options.is_empty() {
+                        // Send the negotiated minor version before auth so the
+                        // client can interpret later messages, including
+                        // BackendKeyData / CancelRequest, using the right shape.
+                        stream
+                            .send(&NegotiateProtocolVersion::new(
+                                negotiated,
+                                unrecognized_options,
+                            ))
+                            .await?;
+                    }
+
+                    Client::spawn(stream, params, addr, config, negotiated).await?;
                     break;
                 }
 
-                Startup::Cancel { pid, secret } => {
-                    let id = BackendKeyData { pid, secret };
-                    let _ = databases().cancel(&id).await;
+                Startup::Cancel { ref id } => {
+                    if comms().verify_cancel(id) {
+                        let _ = databases().cancel(FrontendPid::from(id)).await;
+                    }
                     break;
                 }
             }

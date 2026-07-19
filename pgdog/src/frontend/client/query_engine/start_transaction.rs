@@ -1,9 +1,6 @@
 use crate::{
     frontend::client::TransactionType,
-    net::{
-        BackendKeyData, BindComplete, CommandComplete, NoticeResponse, ParseComplete, Protocol,
-        ReadyForQuery,
-    },
+    net::{BindComplete, CommandComplete, NoticeResponse, ParseComplete, Protocol, ReadyForQuery},
 };
 
 use super::*;
@@ -19,23 +16,25 @@ impl QueryEngine {
     ) -> Result<(), Error> {
         context.transaction = Some(transaction_type);
 
-        let bytes_sent = if extended {
-            self.extended_transaction_reply(context, true, false)
-                .await?
+        if self.backend.connected() {
+            self.execute(context).await?;
         } else {
-            context
-                .stream
-                .send_many(&[
-                    CommandComplete::new_begin()
-                        .message()?
-                        .backend(BackendKeyData::default()),
-                    ReadyForQuery::in_transaction(context.in_transaction()).message()?,
-                ])
-                .await?
-        };
+            let bytes_sent = if extended {
+                self.extended_transaction_reply(context, true, false)
+                    .await?
+            } else {
+                context
+                    .stream
+                    .send_many(&[
+                        CommandComplete::new_begin().message()?,
+                        ReadyForQuery::in_transaction(context.in_transaction()).message()?,
+                    ])
+                    .await?
+            };
 
-        self.stats.sent(bytes_sent);
-        self.begin_stmt = Some(begin);
+            self.stats.sent(bytes_sent);
+            self.begin_stmt = Some(begin);
+        }
 
         Ok(())
     }
@@ -53,17 +52,11 @@ impl QueryEngine {
                 'B' => reply.push(BindComplete.message()?),
                 'D' | 'H' => (),
                 'E' => reply.push(if in_transaction {
-                    CommandComplete::new_begin()
-                        .message()?
-                        .backend(BackendKeyData::default())
+                    CommandComplete::new_begin().message()?
                 } else if !rollback {
-                    CommandComplete::new_commit()
-                        .message()?
-                        .backend(BackendKeyData::default())
+                    CommandComplete::new_commit().message()?
                 } else {
-                    CommandComplete::new_rollback()
-                        .message()?
-                        .backend(BackendKeyData::default())
+                    CommandComplete::new_rollback().message()?
                 }),
                 'S' => {
                     if rollback && !context.in_transaction() {

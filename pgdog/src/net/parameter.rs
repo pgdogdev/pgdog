@@ -3,7 +3,7 @@ use bytes::{BufMut, Bytes, BytesMut};
 use tracing::debug;
 
 use std::{
-    collections::{btree_map, BTreeMap},
+    collections::{BTreeMap, btree_map},
     fmt::Display,
     hash::{DefaultHasher, Hash, Hasher},
     ops::{Deref, DerefMut},
@@ -11,16 +11,29 @@ use std::{
 
 use once_cell::sync::Lazy;
 
-use crate::{net::ToBytes, stats::memory::MemoryUsage};
+use crate::{
+    net::{ToBytes, ToDataRowColumn},
+    stats::memory::MemoryUsage,
+};
+use pgdog_postgres_types::Data;
 
-use super::{messages::Query, Error};
+use super::{Error, messages::Query};
 
-static IMMUTABLE_PARAMS: Lazy<Vec<String>> = Lazy::new(|| {
+// Parameters that either cannot be changed
+// or if changed we don't concern ourselves with
+// since they won't be passed to the server connection anyway.
+static UNTRACKED_PARAMS: Lazy<Vec<String>> = Lazy::new(|| {
     Vec::from([
         String::from("database"),
         String::from("user"),
         String::from("client_encoding"),
         String::from("replication"),
+        String::from("is_superuser"),
+        String::from("server_version"),
+        String::from("server_encoding"),
+        String::from("integer_datetimes"),
+        String::from("session_authorization"),
+        String::from("in_hot_standby"),
         String::from("pgdog.role"),
         String::from("pgdog.shard"),
         String::from("pgdog.sharding_key"),
@@ -59,11 +72,11 @@ pub enum ParameterValue {
 }
 
 impl ToBytes for ParameterValue {
-    fn to_bytes(&self) -> Result<Bytes, Error> {
+    fn to_bytes(&self) -> Bytes {
         let mut bytes = BytesMut::new();
         match self {
             Self::String(string) => bytes.put_slice(string.as_bytes()),
-            Self::Tuple(ref values) => {
+            Self::Tuple(values) => {
                 let values = values
                     .iter()
                     .map(|value| value.as_bytes().to_vec())
@@ -75,7 +88,23 @@ impl ToBytes for ParameterValue {
         }
         bytes.put_u8(0);
 
-        Ok(bytes.freeze())
+        bytes.freeze()
+    }
+}
+
+impl ToDataRowColumn for ParameterValue {
+    fn to_data_row_column(&self) -> Data {
+        match self {
+            Self::String(s) => s.to_data_row_column(),
+            Self::Tuple(_) => self.to_bytes().to_data_row_column(),
+            Self::Integer(i) => i.to_data_row_column(),
+        }
+    }
+}
+
+impl ToDataRowColumn for &'_ ParameterValue {
+    fn to_data_row_column(&self) -> Data {
+        (*self).to_data_row_column()
     }
 }
 
@@ -160,6 +189,8 @@ pub struct Parameters {
     transaction_local_params: BTreeMap<String, ParameterValue>,
     /// Hash of `params` to avoid syncing params between clients and servers
     /// when they are the same.
+    /// Reset params. Stored here to support ROLLBACK.
+    reset_params: BTreeMap<String, ParameterValue>,
     hash: u64,
 }
 
@@ -179,18 +210,6 @@ impl MemoryUsage for Parameters {
     #[inline]
     fn memory_usage(&self) -> usize {
         self.params.memory_usage() + self.hash.memory_usage()
-    }
-}
-
-impl From<BTreeMap<String, ParameterValue>> for Parameters {
-    fn from(value: BTreeMap<String, ParameterValue>) -> Self {
-        let hash = Self::compute_hash(&value);
-        Self {
-            params: value,
-            hash,
-            transaction_params: BTreeMap::new(),
-            transaction_local_params: BTreeMap::new(),
-        }
     }
 }
 
@@ -246,21 +265,52 @@ impl Parameters {
         }
     }
 
+    /// Remove parameter from params temporarily. The transaction
+    /// is comitted, it will be removed permanently.
+    pub fn reset(&mut self, name: impl ToString) {
+        let name = name.to_string().to_lowercase();
+
+        if let Some(value) = self.params.remove(&name) {
+            self.reset_params.insert(name.clone(), value);
+            self.hash = Self::compute_hash(&self.params);
+        }
+
+        self.transaction_params.remove(&name);
+        self.transaction_local_params.remove(&name);
+    }
+
+    /// Reset all tracked parameters.
+    pub fn reset_all(&mut self) {
+        let mut keys: Vec<String> = self.params.keys().cloned().collect();
+        keys.extend(self.transaction_params.keys().cloned());
+        keys.extend(self.transaction_local_params.keys().cloned());
+        keys.sort();
+        keys.dedup();
+
+        for key in keys {
+            if !UNTRACKED_PARAMS.contains(&key) {
+                self.reset(&key);
+            }
+        }
+    }
+
     /// Commit params we saved during the transaction.
     pub fn commit(&mut self) -> bool {
         debug!(
             "saved {} in-transaction params",
             self.transaction_params.len()
         );
-        let changed = !self.transaction_params.is_empty();
+        let changed = !self.transaction_params.is_empty() || !self.reset_params.is_empty();
 
         self.params
             .extend(std::mem::take(&mut self.transaction_params));
         self.transaction_local_params.clear();
+        self.reset_params.clear();
 
         if changed {
             self.hash = Self::compute_hash(&self.params);
         }
+
         changed
     }
 
@@ -268,6 +318,16 @@ impl Parameters {
     pub fn rollback(&mut self) {
         self.transaction_params.clear();
         self.transaction_local_params.clear();
+
+        let mut reset = false;
+        for (name, value) in std::mem::take(&mut self.reset_params) {
+            self.params.insert(name, value);
+            reset = true;
+        }
+
+        if reset {
+            self.hash = Self::compute_hash(&self.params);
+        }
     }
 
     fn compute_hash(params: &BTreeMap<String, ParameterValue>) -> u64 {
@@ -275,7 +335,7 @@ impl Parameters {
         let mut entries = 0;
 
         for (k, v) in params {
-            if IMMUTABLE_PARAMS.contains(k) {
+            if UNTRACKED_PARAMS.contains(k) {
                 continue;
             }
             entries += 1;
@@ -284,20 +344,24 @@ impl Parameters {
             v.hash(&mut hasher);
         }
 
-        if entries > 0 {
-            hasher.finish()
-        } else {
-            0
-        }
+        if entries > 0 { hasher.finish() } else { 0 }
     }
 
     pub fn tracked(&self) -> Parameters {
-        self.params
+        let params = self
+            .params
             .iter()
-            .filter(|(k, _)| !IMMUTABLE_PARAMS.contains(k))
+            .filter(|(k, _)| !UNTRACKED_PARAMS.contains(k))
             .map(|(k, v)| (k.clone(), v.clone()))
-            .collect::<BTreeMap<_, _>>()
-            .into()
+            .collect::<BTreeMap<_, _>>();
+
+        let hash = Self::compute_hash(&params);
+
+        Self {
+            params,
+            hash,
+            ..Default::default()
+        }
     }
 
     /// Merge params from self into other, generating the queries
@@ -345,22 +409,6 @@ impl Parameters {
             .keys()
             .map(|name| Query::new(format!(r#"RESET "{}""#, name)))
             .collect()
-    }
-
-    /// Get self-declared shard number.
-    pub fn shard(&self) -> Option<usize> {
-        if let Some(ParameterValue::String(application_name)) = self.get("application_name") {
-            if application_name.starts_with("pgdog_shard_") {
-                application_name
-                    .replace("pgdog_shard_", "")
-                    .parse::<usize>()
-                    .ok()
-            } else {
-                None
-            }
-        } else {
-            None
-        }
     }
 
     /// Get parameter value or returned an error.
@@ -433,6 +481,7 @@ impl From<Vec<Parameter>> for Parameters {
             hash,
             transaction_params: BTreeMap::new(),
             transaction_local_params: BTreeMap::new(),
+            reset_params: BTreeMap::new(),
         }
     }
 }
@@ -454,8 +503,8 @@ impl From<&Parameters> for Vec<Parameter> {
 #[cfg(test)]
 mod test {
     use crate::backend::server::test::test_server;
-    use crate::net::parameter::ParameterValue;
     use crate::net::ToBytes;
+    use crate::net::parameter::ParameterValue;
 
     use super::Parameters;
 
@@ -587,9 +636,11 @@ mod test {
         // Check that we have both SET and SET LOCAL queries
         let query_strings: Vec<String> = queries.iter().map(|q| q.query().to_string()).collect();
 
-        assert!(query_strings
-            .iter()
-            .any(|q| q.contains("SET \"search_path\"") && !q.contains("SET LOCAL")));
+        assert!(
+            query_strings
+                .iter()
+                .any(|q| q.contains("SET \"search_path\"") && !q.contains("SET LOCAL"))
+        );
         assert!(query_strings.iter().any(|q| q.contains("SET LOCAL")));
     }
 
@@ -616,7 +667,7 @@ mod test {
     #[test]
     fn test_parameter_value_to_bytes_string() {
         let value = ParameterValue::String("test".into());
-        let bytes = value.to_bytes().unwrap();
+        let bytes = value.to_bytes();
 
         assert_eq!(&bytes[..], b"test\0");
     }
@@ -624,7 +675,7 @@ mod test {
     #[test]
     fn test_parameter_value_to_bytes_tuple() {
         let value = ParameterValue::Tuple(vec!["a".into(), "b".into()]);
-        let bytes = value.to_bytes().unwrap();
+        let bytes = value.to_bytes();
 
         assert_eq!(&bytes[..], b"a, b\0");
     }
@@ -743,5 +794,276 @@ mod test {
         let param: Vec<String> = server.fetch_all("SHOW application_name").await.unwrap();
         let param = param.first().unwrap();
         assert_eq!(param, "test_set_with_server");
+    }
+
+    #[tokio::test]
+    async fn test_reset_with_server() {
+        let mut server = test_server().await;
+
+        // Set initial params on server
+        let mut params = Parameters::default();
+        params.insert("application_name", "test_reset_app");
+        params.insert("statement_timeout", "5000");
+
+        for query in params.set_queries(false) {
+            server.execute(query).await.unwrap();
+        }
+
+        // Verify params are set
+        let app_name: Vec<String> = server.fetch_all("SHOW application_name").await.unwrap();
+        assert_eq!(app_name.first().unwrap(), "test_reset_app");
+
+        let timeout: Vec<String> = server.fetch_all("SHOW statement_timeout").await.unwrap();
+        assert_eq!(timeout.first().unwrap(), "5s");
+
+        // Get reset queries before resetting (reset_queries uses current params)
+        let reset_queries = params.reset_queries();
+        assert_eq!(reset_queries.len(), 2);
+
+        // Execute reset queries on server
+        for query in reset_queries {
+            server.execute(query).await.unwrap();
+        }
+
+        // Update local tracking
+        params.reset_all();
+
+        // Verify params are reset to defaults on server
+        let timeout: Vec<String> = server.fetch_all("SHOW statement_timeout").await.unwrap();
+        assert_eq!(timeout.first().unwrap(), "0");
+
+        // set_queries should be empty now
+        assert!(params.set_queries(false).is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_reset_all_with_server() {
+        let mut server = test_server().await;
+
+        // Set initial params on server
+        let mut params = Parameters::default();
+        params.insert("application_name", "test_reset_all_app");
+        params.insert("statement_timeout", "5000");
+
+        for query in params.set_queries(false) {
+            server.execute(query).await.unwrap();
+        }
+
+        // Verify params are set
+        let app_name: Vec<String> = server.fetch_all("SHOW application_name").await.unwrap();
+        assert_eq!(app_name.first().unwrap(), "test_reset_all_app");
+
+        let timeout: Vec<String> = server.fetch_all("SHOW statement_timeout").await.unwrap();
+        assert_eq!(timeout.first().unwrap(), "5s");
+
+        // Get reset queries and execute on server
+        let reset_queries = params.reset_queries();
+        for query in reset_queries {
+            server.execute(query).await.unwrap();
+        }
+
+        // Update local tracking
+        params.reset_all();
+
+        // Verify params are reset to defaults on server
+        let timeout: Vec<String> = server.fetch_all("SHOW statement_timeout").await.unwrap();
+        assert_eq!(timeout.first().unwrap(), "0");
+
+        // set_queries should be empty now
+        assert!(params.set_queries(false).is_empty());
+
+        // Set params again using set_queries to verify full cycle
+        params.insert("statement_timeout", "3000");
+        for query in params.set_queries(false) {
+            server.execute(query).await.unwrap();
+        }
+
+        let timeout: Vec<String> = server.fetch_all("SHOW statement_timeout").await.unwrap();
+        assert_eq!(timeout.first().unwrap(), "3s");
+    }
+
+    #[test]
+    fn test_reset_removes_param() {
+        let mut params = Parameters::default();
+        params.insert("search_path", "public");
+        params.insert("timezone", "UTC");
+
+        params.reset("search_path");
+
+        // search_path should be removed
+        assert_eq!(params.get("search_path"), None);
+        // timezone should remain
+        assert_eq!(
+            params.get("timezone"),
+            Some(&ParameterValue::String("UTC".into()))
+        );
+    }
+
+    #[test]
+    fn test_reset_nonexistent_param() {
+        let mut params = Parameters::default();
+        params.insert("timezone", "UTC");
+
+        // Should not panic, just no-op
+        params.reset("nonexistent");
+
+        // timezone should remain
+        assert_eq!(
+            params.get("timezone"),
+            Some(&ParameterValue::String("UTC".into()))
+        );
+    }
+
+    #[test]
+    fn test_reset_rollback_restores_param() {
+        let mut params = Parameters::default();
+        params.insert("search_path", "public");
+
+        params.reset("search_path");
+        assert_eq!(params.get("search_path"), None);
+
+        params.rollback();
+
+        // After rollback, param should be restored
+        assert_eq!(
+            params.get("search_path"),
+            Some(&ParameterValue::String("public".into()))
+        );
+    }
+
+    #[test]
+    fn test_reset_commit_makes_permanent() {
+        let mut params = Parameters::default();
+        params.insert("search_path", "public");
+
+        params.reset("search_path");
+        assert_eq!(params.get("search_path"), None);
+
+        params.commit();
+
+        // After commit, reset is permanent - rollback doesn't restore
+        params.rollback();
+        assert_eq!(params.get("search_path"), None);
+    }
+
+    #[test]
+    fn test_reset_clears_transaction_params() {
+        let mut params = Parameters::default();
+        params.insert("search_path", "base");
+        params.insert_transaction("search_path", "transaction", false);
+
+        // Before reset, transaction value takes priority
+        assert_eq!(
+            params.get("search_path"),
+            Some(&ParameterValue::String("transaction".into()))
+        );
+
+        params.reset("search_path");
+
+        // After reset, both base and transaction values are cleared
+        assert_eq!(params.get("search_path"), None);
+    }
+
+    #[test]
+    fn test_reset_clears_transaction_local_params() {
+        let mut params = Parameters::default();
+        params.insert("search_path", "base");
+        params.insert_transaction("search_path", "local", true);
+
+        // Before reset, local value takes priority
+        assert_eq!(
+            params.get("search_path"),
+            Some(&ParameterValue::String("local".into()))
+        );
+
+        params.reset("search_path");
+
+        // After reset, local params should also be cleared
+        assert_eq!(params.get("search_path"), None);
+    }
+
+    #[test]
+    fn test_reset_all_basic() {
+        let mut params = Parameters::default();
+        params.insert("search_path", "public");
+        params.insert("timezone", "UTC");
+        params.insert("application_name", "myapp");
+
+        params.reset_all();
+
+        // All tracked params should be removed
+        assert_eq!(params.get("search_path"), None);
+        assert_eq!(params.get("timezone"), None);
+        assert_eq!(params.get("application_name"), None);
+    }
+
+    #[test]
+    fn test_reset_all_preserves_untracked() {
+        let mut params = Parameters::default();
+        params.insert("search_path", "public");
+        // "database" is in UNTRACKED_PARAMS
+        params.insert("database", "mydb");
+
+        params.reset_all();
+
+        // Tracked params should be removed
+        assert_eq!(params.get("search_path"), None);
+        // Untracked params should remain
+        assert_eq!(
+            params.get("database"),
+            Some(&ParameterValue::String("mydb".into()))
+        );
+    }
+
+    #[test]
+    fn test_reset_all_rollback_restores_all() {
+        let mut params = Parameters::default();
+        params.insert("search_path", "public");
+        params.insert("timezone", "UTC");
+
+        params.reset_all();
+        assert_eq!(params.get("search_path"), None);
+        assert_eq!(params.get("timezone"), None);
+
+        params.rollback();
+
+        // After rollback, all params should be restored
+        assert_eq!(
+            params.get("search_path"),
+            Some(&ParameterValue::String("public".into()))
+        );
+        assert_eq!(
+            params.get("timezone"),
+            Some(&ParameterValue::String("UTC".into()))
+        );
+    }
+
+    #[test]
+    fn test_reset_all_commit_makes_permanent() {
+        let mut params = Parameters::default();
+        params.insert("search_path", "public");
+        params.insert("timezone", "UTC");
+
+        params.reset_all();
+        params.commit();
+
+        // After commit, rollback should not restore
+        params.rollback();
+        assert_eq!(params.get("search_path"), None);
+        assert_eq!(params.get("timezone"), None);
+    }
+
+    #[test]
+    fn test_reset_all_clears_transaction_params() {
+        let mut params = Parameters::default();
+        params.insert("search_path", "base");
+        params.insert_transaction("search_path", "transaction", false);
+        params.insert_transaction("timezone", "local_tz", true);
+
+        params.reset_all();
+
+        // All scopes should be cleared for tracked params
+        assert_eq!(params.get("search_path"), None);
+        assert_eq!(params.get("timezone"), None);
     }
 }

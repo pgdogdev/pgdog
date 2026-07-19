@@ -6,7 +6,12 @@ pub enum Error {
     UniqueId(#[from] crate::unique_id::Error),
 
     #[error("pg_query: {0}")]
+    #[cfg(not(feature = "new_parser"))]
     PgQuery(#[from] pg_query::Error),
+
+    #[error("parser: {0}")]
+    #[cfg(feature = "new_parser")]
+    Parser(#[from] pg_raw_parse::Error),
 
     #[error("cache: {0}")]
     Cache(String),
@@ -37,4 +42,7 @@ pub enum Error {
 
     #[error("missing AST on request")]
     MissingAst,
+
+    #[error("prepared statement '{0}' does not exist")]
+    ExecuteMissingPrepare(String),
 }

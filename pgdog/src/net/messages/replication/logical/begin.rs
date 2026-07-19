@@ -22,14 +22,14 @@ impl FromBytes for Begin {
 }
 
 impl ToBytes for Begin {
-    fn to_bytes(&self) -> Result<Bytes, Error> {
+    fn to_bytes(&self) -> Bytes {
         let mut bytes = BytesMut::new();
         bytes.put_u8(self.code() as u8);
         bytes.put_i64(self.final_transaction_lsn);
         bytes.put_i64(self.commit_timestamp);
         bytes.put_i32(self.xid);
 
-        Ok(bytes.freeze())
+        bytes.freeze()
     }
 }
 

@@ -1,5 +1,5 @@
+use crate::setup::connections_sqlx;
 use chrono::{Duration, Utc};
-use rust::setup::connections_sqlx;
 use sqlx::{Executor, Row};
 
 #[tokio::test]
@@ -41,7 +41,7 @@ async fn test_timestamp_sorting_across_shards() {
 
     for (id, name, timestamp) in &test_data {
         sqlx::query(
-            "INSERT INTO timestamp_test (id, name, created_at, updated_at) 
+            "INSERT INTO timestamp_test (id, name, created_at, updated_at)
              VALUES ($1, $2, $3, $3)",
         )
         .bind(id)
@@ -120,18 +120,17 @@ async fn test_timestamp_sorting_across_shards() {
     .unwrap();
 
     let rows = sharded_conn
-        .fetch_all(
-            "SELECT id, name, updated_at FROM timestamp_test ORDER BY updated_at DESC NULLS LAST",
-        )
+        .fetch_all("SELECT id, name, updated_at FROM timestamp_test ORDER BY updated_at ASC")
         .await
         .unwrap();
 
-    let last_rows: Vec<Option<chrono::NaiveDateTime>> = rows
+    let last_rows: Vec<Option<chrono::DateTime<chrono::Utc>>> = rows
         .iter()
         .rev()
         .take(2)
-        .map(|row| row.try_get(2).ok())
-        .collect();
+        .map(|row| row.try_get(2))
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
 
     assert!(
         last_rows.iter().any(|v| v.is_none()),
@@ -139,7 +138,7 @@ async fn test_timestamp_sorting_across_shards() {
     );
 
     sqlx::query(
-        "INSERT INTO timestamp_test (id, name, created_at, special_ts) 
+        "INSERT INTO timestamp_test (id, name, created_at, special_ts)
          VALUES ($1, $2, $3, 'infinity'::timestamp)",
     )
     .bind(301i64)
@@ -150,7 +149,7 @@ async fn test_timestamp_sorting_across_shards() {
     .unwrap();
 
     sqlx::query(
-        "INSERT INTO timestamp_test (id, name, created_at, special_ts) 
+        "INSERT INTO timestamp_test (id, name, created_at, special_ts)
          VALUES ($1, $2, $3, '-infinity'::timestamp)",
     )
     .bind(302i64)

@@ -129,3 +129,12 @@ def test_transaction_reads_explicit(conn_reads, conn_writes):
         cursor.execute("ROLLBACK")
 
     admin().execute("SET query_parser TO 'on'")
+
+
+def test_admin_db_connection():
+    conn = psycopg2.connect("host=127.0.0.1 port=6432 user=admin password=pgdog dbname=admin")
+    conn.autocommit = True
+    cur = conn.cursor()
+    cur.execute("SHOW POOLS")
+    rows = cur.fetchall()
+    assert len(rows) > 0

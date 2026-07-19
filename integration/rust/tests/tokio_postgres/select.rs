@@ -1,4 +1,4 @@
-use rust::setup::connections_tokio;
+use crate::setup::connections_tokio;
 
 #[tokio::test]
 async fn select_one() {

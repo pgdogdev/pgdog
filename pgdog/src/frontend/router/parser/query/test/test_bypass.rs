@@ -3,7 +3,7 @@
 //!
 //! QueryParser::query_parser_bypass.
 //!
-use pgdog_config::QueryParserLevel;
+use pgdog_config::{QueryParserLevel, ReadWriteSplit};
 
 use crate::{
     config::config,
@@ -17,6 +17,18 @@ fn setup() -> QueryParserTest {
     let mut config = (*config()).clone();
     config.config.general.query_parser = QueryParserLevel::Off;
     QueryParserTest::new_single_shard(&config)
+}
+
+fn setup_single_primary() -> QueryParserTest {
+    let mut config = (*config()).clone();
+    config.config.general.query_parser = QueryParserLevel::Off;
+    QueryParserTest::new_single_primary(&config)
+}
+
+fn setup_single_replica() -> QueryParserTest {
+    let mut config = (*config()).clone();
+    config.config.general.query_parser = QueryParserLevel::Off;
+    QueryParserTest::new_single_replica(&config)
 }
 
 fn setup_sharded() -> QueryParserTest {
@@ -61,6 +73,61 @@ async fn test_no_hints() {
     for query in QUERIES {
         let result = test.try_execute(vec![Query::new(query).into()]).unwrap();
         assert!(result.route().is_write());
+        assert_eq!(result.route().shard(), &Shard::Direct(0))
+    }
+}
+
+#[tokio::test]
+async fn test_read_only_cluster() {
+    let mut test = setup_single_replica().with_param("pgdog.role", "primary");
+
+    for query in QUERIES {
+        let result = test.try_execute(vec![Query::new(query).into()]).unwrap();
+        assert!(result.route().is_read());
+        assert_eq!(result.route().shard(), &Shard::Direct(0))
+    }
+}
+
+#[tokio::test]
+async fn test_write_only_cluster() {
+    let mut test = setup_single_primary().with_param("pgdog.role", "replica");
+
+    for query in QUERIES {
+        let result = test.try_execute(vec![Query::new(query).into()]).unwrap();
+        assert!(result.route().is_write());
+        assert_eq!(result.route().shard(), &Shard::Direct(0))
+    }
+}
+
+#[tokio::test]
+async fn test_role_auto() {
+    let mut test = setup().with_param("pgdog.role", "auto");
+
+    for query in QUERIES {
+        let result = test.try_execute(vec![Query::new(query).into()]).unwrap();
+        assert!(result.route().is_write());
+        assert_eq!(result.route().shard(), &Shard::Direct(0))
+    }
+}
+
+#[tokio::test]
+async fn test_prefer_primary() {
+    let mut test = setup().with_rw_split(ReadWriteSplit::PreferPrimary);
+
+    for query in QUERIES {
+        let result = test.try_execute(vec![Query::new(query).into()]).unwrap();
+        assert!(result.route().is_write());
+        assert_eq!(result.route().shard(), &Shard::Direct(0))
+    }
+}
+
+#[tokio::test]
+async fn test_prefer_replica() {
+    let mut test = setup().with_rw_split(ReadWriteSplit::ExcludePrimary);
+
+    for query in QUERIES {
+        let result = test.try_execute(vec![Query::new(query).into()]).unwrap();
+        assert!(result.route().is_read());
         assert_eq!(result.route().shard(), &Shard::Direct(0))
     }
 }

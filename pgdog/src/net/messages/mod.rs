@@ -1,6 +1,7 @@
 //! PostgreSQL wire protocol messages.
 pub mod auth;
 pub mod backend_key;
+pub mod backend_pid;
 pub mod bind;
 pub mod bind_complete;
 pub mod buffer;
@@ -16,8 +17,11 @@ pub mod describe;
 pub mod empty_query_response;
 pub mod error_response;
 pub mod execute;
+pub mod fastpath;
 pub mod flush;
+pub mod frontend_pid;
 pub mod hello;
+pub mod negotiate_protocol_version;
 pub mod no_data;
 pub mod notice_response;
 pub mod notification_response;
@@ -27,6 +31,7 @@ pub mod parse;
 pub mod parse_complete;
 pub mod payload;
 pub mod prelude;
+pub mod protocol_version;
 pub mod query;
 pub mod replication;
 pub mod rfq;
@@ -36,6 +41,7 @@ pub mod terminate;
 
 pub use auth::{Authentication, Password};
 pub use backend_key::BackendKeyData;
+pub use backend_pid::BackendPid;
 pub use bind::{Bind, Format, Parameter, ParameterWithFormat};
 pub use bind_complete::BindComplete;
 pub use buffer::MessageBuffer;
@@ -51,8 +57,11 @@ pub use describe::Describe;
 pub use empty_query_response::EmptyQueryResponse;
 pub use error_response::ErrorResponse;
 pub use execute::Execute;
+pub use fastpath::Fastpath;
 pub use flush::Flush;
+pub use frontend_pid::FrontendPid;
 pub use hello::Startup;
+pub use negotiate_protocol_version::NegotiateProtocolVersion;
 pub use no_data::NoData;
 pub use notice_response::NoticeResponse;
 pub use notification_response::NotificationResponse;
@@ -61,6 +70,7 @@ pub use parameter_status::ParameterStatus;
 pub use parse::Parse;
 pub use parse_complete::ParseComplete;
 pub use payload::Payload;
+pub use protocol_version::ProtocolVersion;
 pub use query::Query;
 pub use rfq::{ReadyForQuery, TransactionState};
 pub use row_description::{Field, RowDescription};
@@ -76,7 +86,7 @@ pub trait ToBytes {
     /// Create the protocol message as an array of bytes.
     /// The message must conform to the spec. No additional manipulation
     /// of the data will take place.
-    fn to_bytes(&self) -> Result<Bytes, Error>;
+    fn to_bytes(&self) -> Bytes;
 }
 
 /// Convert a PostgreSQL wire protocol message to a Rust struct.
@@ -92,7 +102,7 @@ pub trait Protocol: ToBytes + FromBytes + std::fmt::Debug {
 
     /// Convert to message.
     fn message(&self) -> Result<Message, Error> {
-        Ok(Message::new(self.to_bytes()?))
+        Ok(Message::new(self.to_bytes()))
     }
 
     /// Message is part of a stream and should not be buffered.
@@ -103,13 +113,18 @@ pub trait Protocol: ToBytes + FromBytes + std::fmt::Debug {
 
 #[derive(Clone, PartialEq, Default, Copy, Debug)]
 pub enum Source {
-    Backend(BackendKeyData),
+    /// Message synthesised by pgdog itself (not from any real connection).
+    /// This is the default: any message constructed without an explicit source is internal.
     #[default]
+    Internal,
+    /// Message received from a PostgreSQL backend connection.
+    Backend(BackendPid),
+    /// Message received from the client (frontend).
     Frontend,
 }
 
 impl Source {
-    pub fn backend_id(&self) -> Option<BackendKeyData> {
+    pub fn backend_id(&self) -> Option<BackendPid> {
         if let Self::Backend(id) = self {
             Some(*id)
         } else {
@@ -138,29 +153,40 @@ impl std::fmt::Debug for Message {
         match self.code() {
             'Q' => Query::from_bytes(self.payload()).unwrap().fmt(f),
             'D' => match self.source {
-                Source::Backend(_) => DataRow::from_bytes(self.payload()).unwrap().fmt(f),
                 Source::Frontend => Describe::from_bytes(self.payload()).unwrap().fmt(f),
+                Source::Backend(_) | Source::Internal => {
+                    DataRow::from_bytes(self.payload()).unwrap().fmt(f)
+                }
             },
             'P' => Parse::from_bytes(self.payload()).unwrap().fmt(f),
             'B' => Bind::from_bytes(self.payload()).unwrap().fmt(f),
             'S' => match self.source {
                 Source::Frontend => f.debug_struct("Sync").finish(),
-                Source::Backend(_) => ParameterStatus::from_bytes(self.payload()).unwrap().fmt(f),
+                Source::Backend(_) | Source::Internal => {
+                    ParameterStatus::from_bytes(self.payload()).unwrap().fmt(f)
+                }
             },
             '1' => ParseComplete::from_bytes(self.payload()).unwrap().fmt(f),
             '2' => BindComplete::from_bytes(self.payload()).unwrap().fmt(f),
             '3' => f.debug_struct("CloseComplete").finish(),
             'E' => match self.source {
                 Source::Frontend => f.debug_struct("Execute").finish(),
-                Source::Backend(_) => ErrorResponse::from_bytes(self.payload()).unwrap().fmt(f),
+                Source::Backend(_) | Source::Internal => {
+                    ErrorResponse::from_bytes(self.payload()).unwrap().fmt(f)
+                }
             },
             'T' => RowDescription::from_bytes(self.payload()).unwrap().fmt(f),
             'Z' => ReadyForQuery::from_bytes(self.payload()).unwrap().fmt(f),
             'C' => match self.source {
-                Source::Backend(_) => CommandComplete::from_bytes(self.payload()).unwrap().fmt(f),
                 Source::Frontend => Close::from_bytes(self.payload()).unwrap().fmt(f),
+                Source::Backend(_) | Source::Internal => {
+                    CommandComplete::from_bytes(self.payload()).unwrap().fmt(f)
+                }
             },
             'd' => CopyData::from_bytes(self.payload()).unwrap().fmt(f),
+            'v' => NegotiateProtocolVersion::from_bytes(self.payload())
+                .unwrap()
+                .fmt(f),
             'W' => f.debug_struct("CopyBothResponse").finish(),
             'I' => f.debug_struct("EmptyQueryResponse").finish(),
             't' => ParameterDescription::from_bytes(self.payload())
@@ -176,8 +202,8 @@ impl std::fmt::Debug for Message {
 }
 
 impl ToBytes for Message {
-    fn to_bytes(&self) -> Result<Bytes, Error> {
-        Ok(self.payload.clone())
+    fn to_bytes(&self) -> Bytes {
+        self.payload.clone()
     }
 }
 
@@ -233,7 +259,7 @@ impl Message {
     }
 
     /// This message is coming from the backend.
-    pub fn backend(mut self, id: BackendKeyData) -> Self {
+    pub fn backend(mut self, id: BackendPid) -> Self {
         self.source = Source::Backend(id);
         self
     }
@@ -241,6 +267,12 @@ impl Message {
     /// This message is coming from the frontend.
     pub fn frontend(mut self) -> Self {
         self.source = Source::Frontend;
+        self
+    }
+
+    /// This message was synthesised by pgdog (not from any real connection).
+    pub fn internal(mut self) -> Self {
+        self.source = Source::Internal;
         self
     }
 
@@ -261,7 +293,7 @@ impl Message {
 /// Check that the message we received is what we expected.
 /// Return an error otherwise.
 macro_rules! code {
-    ($code: expr, $expected: expr) => {{
+    ($code: expr_2021, $expected: expr_2021) => {{
         let code = $code.get_u8() as char;
         let expected = $expected as char;
         if code != expected {
@@ -278,7 +310,7 @@ macro_rules! from_message {
             type Error = crate::net::Error;
 
             fn try_from(message: Message) -> Result<$ty, Self::Error> {
-                <$ty as FromBytes>::from_bytes(message.to_bytes()?)
+                <$ty as FromBytes>::from_bytes(message.to_bytes())
             }
         }
     };
@@ -299,7 +331,9 @@ from_message!(Describe);
 from_message!(EmptyQueryResponse);
 from_message!(ErrorResponse);
 from_message!(Execute);
+from_message!(Fastpath);
 from_message!(Flush);
+from_message!(NegotiateProtocolVersion);
 from_message!(NoData);
 from_message!(NoticeResponse);
 from_message!(NotificationResponse);

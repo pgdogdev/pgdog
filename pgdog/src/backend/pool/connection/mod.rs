@@ -1,26 +1,28 @@
 //! Server connection requested by a frontend.
 
 use mirror::MirrorHandler;
+use pgdog_config::users::PasswordKind;
 use tokio::{select, time::sleep};
 use tracing::debug;
 
 use crate::{
     admin::server::AdminServer,
     backend::{
+        PubSubClient,
         databases::{self, databases},
-        pool, reload_notify, PubSubClient,
+        pool, reload_notify,
     },
-    config::{config, PoolerMode, User},
+    config::{PoolerMode, User, config},
     frontend::{
-        router::{parser::Shard, CopyRow, Route},
-        Router,
+        ClientRequest, Router,
+        router::{CopyRow, Route, parser::Shard},
     },
-    net::{Bind, Message, ParameterStatus, Protocol},
+    net::{Bind, Message, ParameterStatus, Protocol, ProtocolMessage},
     state::State,
 };
 
 use super::{
-    super::{pool::Guard, Error},
+    super::{Error, pool::Guard},
     Address, Cluster, Request,
 };
 
@@ -46,7 +48,6 @@ use multi_shard::MultiShard;
 #[derive(Default, Debug)]
 pub struct Connection {
     user: String,
-    passthrough_password: Option<String>,
     database: String,
     binding: Binding,
     cluster: Option<Cluster>,
@@ -57,24 +58,18 @@ pub struct Connection {
 
 impl Connection {
     /// Create new server connection handler.
-    pub(crate) fn new(
-        user: &str,
-        database: &str,
-        admin: bool,
-        passthrough_password: &Option<String>,
-    ) -> Result<Self, Error> {
+    pub(crate) fn new(user: &str, database: &str, admin: bool) -> Result<Self, Error> {
         let mut conn = Self {
             binding: if admin {
                 Binding::Admin(AdminServer::new())
             } else {
-                Binding::Direct(None)
+                Binding::NotConnected
             },
             cluster: None,
             user: user.to_owned(),
             database: database.to_owned(),
             mirrors: vec![],
             locked: false,
-            passthrough_password: passthrough_password.clone(),
             pub_sub: PubSubClient::new(),
         };
 
@@ -88,7 +83,7 @@ impl Connection {
     /// Create a server connection if one doesn't exist already.
     pub(crate) async fn connect(&mut self, request: &Request, route: &Route) -> Result<(), Error> {
         let connect = match &self.binding {
-            Binding::Direct(None) => true,
+            Binding::NotConnected => true,
             Binding::MultiShard(shards, _) => shards.is_empty(),
             _ => false,
         };
@@ -152,24 +147,15 @@ impl Connection {
                 server.reset = true;
             }
 
-            match &mut self.binding {
-                Binding::Direct(existing) => {
-                    let _ = existing.replace(server);
-                }
-
-                Binding::MultiShard(_, _) => {
-                    self.binding = Binding::Direct(Some(server));
-                }
-
-                _ => (),
-            };
+            self.binding = Binding::Direct(server, *shard);
         } else {
             let mut shards = vec![];
+            let mut shard_indices = vec![];
             for (i, shard) in self.cluster()?.shards().iter().enumerate() {
-                if let Shard::Multi(numbers) = route.shard() {
-                    if !numbers.contains(&i) {
-                        continue;
-                    }
+                if let Shard::Multi(numbers) = route.shard()
+                    && !numbers.contains(&i)
+                {
+                    continue;
                 };
                 let mut server = if route.is_read() {
                     shard.replica(request).await?
@@ -182,11 +168,11 @@ impl Connection {
                 }
 
                 shards.push(server);
+                shard_indices.push(i);
             }
-            let num_shards = shards.len();
 
             self.binding =
-                Binding::MultiShard(shards, Box::new(MultiShard::new(num_shards, route)));
+                Binding::MultiShard(shards, Box::new(MultiShard::new(shard_indices, route)));
         }
 
         Ok(())
@@ -197,27 +183,40 @@ impl Connection {
         &mut self,
         request: &Request,
     ) -> Result<Vec<ParameterStatus>, Error> {
-        match &self.binding {
-            Binding::Admin(_) => Ok(ParameterStatus::fake()),
-            _ => {
-                // Get params from the first database that answers.
-                // Parameters are cached on the pool.
-                for shard in self.cluster()?.shards() {
-                    if let Ok(params) = shard.params(request).await {
-                        let mut result = vec![];
+        if matches!(self.binding, Binding::Admin(_)) {
+            return Ok(ParameterStatus::fake());
+        }
 
-                        for param in params.iter() {
-                            if let Some(value) = param.1.as_str() {
-                                result.push(ParameterStatus::from((param.0.as_str(), value)));
-                            }
-                        }
+        match self.try_parameters(request).await {
+            Ok(params) => Ok(params),
+            // Configuration reload may have left the old pools offline before
+            // the new ones were swapped in. Wait for the reload to settle and
+            // retry once against the refreshed cluster.
+            Err(Error::Pool(pool::Error::AllReplicasDown)) => {
+                self.safe_reload().await?;
+                self.try_parameters(request).await
+            }
+            Err(err) => Err(err),
+        }
+    }
 
-                        return Ok(result);
+    async fn try_parameters(&mut self, request: &Request) -> Result<Vec<ParameterStatus>, Error> {
+        // Get params from the first database that answers.
+        // Parameters are cached on the pool.
+        for shard in self.cluster()?.shards() {
+            if let Ok(params) = shard.params(request).await {
+                let mut result = vec![];
+
+                for param in params.iter() {
+                    if let Some(value) = param.1.as_str() {
+                        result.push(ParameterStatus::from((param.0.as_str(), value)));
                     }
                 }
-                Err(Error::Pool(pool::Error::AllReplicasDown))
+
+                return Ok(result);
             }
         }
+        Err(Error::Pool(pool::Error::AllReplicasDown))
     }
 
     /// Read a message from the server connection or a pub/sub channel.
@@ -247,8 +246,8 @@ impl Connection {
         };
 
         if let Some(shard) = self.cluster()?.shards().get(num) {
-            let rx = shard.listen(channel).await?;
-            self.pub_sub.listen(channel, rx);
+            let listener = shard.listen(channel).await?;
+            self.pub_sub.listen(channel, listener);
         }
 
         Ok(())
@@ -288,7 +287,7 @@ impl Connection {
     /// Send buffer in a potentially sharded context.
     pub(crate) async fn handle_client_request(
         &mut self,
-        client_request: &crate::frontend::ClientRequest,
+        client_request: &ClientRequest,
         router: &mut Router,
         streaming: bool,
     ) -> Result<(), Error> {
@@ -298,11 +297,40 @@ impl Connection {
                 .map_err(|e| Error::Router(e.to_string()))?;
             if !rows.is_empty() {
                 self.send_copy(rows).await?;
-                self.send(&client_request.without_copy_data()).await?;
-            } else {
-                self.send(client_request).await?;
             }
+            // FIXME(lev): There is an assumption of protocol correctness here
+            // from the client. If the client sends partial CopyData rows
+            // and then sends CopyDone, we will send CopyDone to the shards,
+            // causing the COPY to complete prematurely.
+            //
+            // We should assert here that the client request does not contain
+            // _both_ CopyData and CopyDone messages.
+            //
+            self.send(&client_request.without_copy_data()).await?;
         } else {
+            // We split up the extended protocol exhange as soon as we see
+            // a Flush or Sync that doesn't actually execute anything. This
+            // lets us handle drivers that prepare in one round-trip and run
+            // in the next, e.g.:
+            //
+            // 1. Parse, Describe, Flush     (lib/pq uses Sync here)
+            // 2. Bind, Execute, Sync
+            //
+            // without breaking the state by injecting the last Parse we saw
+            // into the second request and ignoring ParseComplete from the
+            // server. The injection has to follow the same route as the
+            // request itself; sending it to extra shards would leave them
+            // with a dangling Ignore expectation that hangs the read loop.
+            if let Some(ref parse) = client_request.last_parse
+                && client_request.needs_parse_injection()
+            {
+                self.send_ignore(
+                    &ProtocolMessage::Parse(parse.clone()),
+                    client_request.route(),
+                )
+                .await?;
+            }
+
             // Send query to server.
             self.send(client_request).await?;
         }
@@ -321,66 +349,91 @@ impl Connection {
 
     /// Fetch the cluster from the global database store.
     fn reload(&mut self) -> Result<(), Error> {
-        match self.binding {
-            Binding::Direct(_) | Binding::MultiShard(_, _) => {
-                let user = (self.user.as_str(), self.database.as_str());
-                // Check passthrough auth.
-                if config().config.general.passthrough_auth() && !databases().exists(user) {
-                    if let Some(ref passthrough_password) = self.passthrough_password {
-                        let new_user = User::new(&self.user, passthrough_password, &self.database);
-                        databases::add(new_user);
+        if matches!(self.binding, Binding::Admin(_)) {
+            return Ok(());
+        }
+
+        let user = (self.user.as_str(), self.database.as_str());
+        let config = config();
+        let passthrough_password = self.cluster.as_ref().and_then(|cluster| {
+            cluster
+                .passwords()
+                .iter()
+                .find_map(|password| match password {
+                    PasswordKind::Plain(password) => Some(password.clone()),
+                    _ => None,
+                })
+        });
+
+        // Check if we need re-configure passthrough auth using our existing password.
+        //
+        // This happens on configuration reload (RELOAD/sighup), because we
+        // only load databases from the config. RELOAD effectively removes all passthrough
+        // connection pools until a client needs to query it and we re-create it.
+        //
+        if config.config.general.passthrough_auth()
+            && databases().passwords(user).is_none()
+            && let Some(ref cluster) = self.cluster
+        {
+            let mut user = User {
+                name: self.user.clone(),
+                database: self.database.clone(),
+                ..Default::default()
+            };
+            for pass in cluster.passwords() {
+                match pass {
+                    PasswordKind::Hashed(hashed) => {
+                        user.password_hash = Some(hashed.clone());
                     }
+
+                    PasswordKind::Plain(plain) => {
+                        user.passwords.push(plain.clone());
+                    }
+
+                    // Vault static roles are for client auth only; skip for passthrough.
+                    PasswordKind::VaultStaticRole(_) => {}
                 }
-
-                let databases = databases();
-                let cluster = match databases.cluster(user) {
-                    Ok(c) => c,
-                    Err(_) => {
-                        // Drop the Arc before mutating global state.
-                        drop(databases);
-                        // Attempt wildcard pool creation.
-                        match databases::add_wildcard_pool(
-                            &self.user,
-                            &self.database,
-                            self.passthrough_password.as_deref(),
-                        ) {
-                            Ok(Some(c)) => c,
-                            Ok(None) => {
-                                return Err(Error::NoDatabase(databases::User {
-                                    user: self.user.clone(),
-                                    database: self.database.clone(),
-                                }));
-                            }
-                            Err(e) => return Err(e),
-                        }
-                    }
-                };
-
-                self.cluster = Some(cluster.clone());
-                let source_db = cluster.name();
-
-                // Re-read databases after potential wildcard pool creation.
-                let databases = databases::databases();
-                self.mirrors = databases
-                    .mirrors(user)
-                    .ok()
-                    .flatten()
-                    .unwrap_or(&[])
-                    .iter()
-                    .map(|dest_cluster: &Cluster| {
-                        let mirror_config = databases.mirror_config(source_db, dest_cluster.name());
-                        Mirror::spawn(source_db, dest_cluster, mirror_config)
-                    })
-                    .collect::<Result<Vec<_>, Error>>()?;
-                debug!(
-                    r#"database "{}" has {} mirrors"#,
-                    self.cluster()?.name(),
-                    self.mirrors.len()
-                );
             }
 
-            _ => (),
+            databases::add(user)?;
         }
+
+        let databases = databases::databases();
+        let cluster = match databases.cluster(user) {
+            Ok(cluster) => cluster,
+            Err(_) => {
+                drop(databases);
+                databases::add_wildcard_pool(
+                    &self.user,
+                    &self.database,
+                    passthrough_password.as_deref(),
+                )?
+                .ok_or_else(|| {
+                    Error::NoDatabase(databases::User {
+                        user: self.user.clone(),
+                        database: self.database.clone(),
+                    })
+                })?
+            }
+        };
+
+        self.cluster = Some(cluster.clone());
+        let source_db = cluster.name();
+        let databases = databases::databases();
+        self.mirrors = databases
+            .mirrors(user)?
+            .unwrap_or(&[])
+            .iter()
+            .map(|dest_cluster| {
+                let mirror_config = databases.mirror_config(source_db, dest_cluster.name());
+                Mirror::spawn(source_db, dest_cluster, mirror_config)
+            })
+            .collect::<Result<Vec<_>, Error>>()?;
+        debug!(
+            r#"database "{}" has {} mirrors"#,
+            self.cluster()?.name(),
+            self.mirrors.len()
+        );
 
         Ok(())
     }
@@ -410,10 +463,16 @@ impl Connection {
         }
     }
 
+    /// Check if this connection is locked to a client.
+    #[cfg(test)]
+    pub(crate) fn locked(&self) -> bool {
+        self.locked
+    }
+
     /// Get connected servers addresses.
     pub(crate) fn addr(&self) -> Result<Vec<&Address>, Error> {
         Ok(match self.binding {
-            Binding::Direct(Some(ref server)) => vec![server.addr()],
+            Binding::Direct(ref server, ..) => vec![server.addr()],
             Binding::MultiShard(ref servers, _) => servers.iter().map(|s| s.addr()).collect(),
             _ => {
                 return Err(Error::NotConnected);

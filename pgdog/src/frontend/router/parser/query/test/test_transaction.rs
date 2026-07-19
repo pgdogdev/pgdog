@@ -65,7 +65,7 @@ fn test_set_in_transaction() {
     match command {
         Command::Set { params, .. } => {
             assert_eq!(params[0].name, "statement_timeout");
-            assert_eq!(params[0].value, ParameterValue::from("3000"));
+            assert_eq!(params[0].value, Some(ParameterValue::from("3000")));
         }
         _ => panic!("expected Set, got {command:?}"),
     }
@@ -80,9 +80,12 @@ fn test_set_application_name_in_transaction() {
     let command = test.execute(vec![Query::new("SET application_name TO 'test'").into()]);
 
     match command.clone() {
-        Command::Set { params, route } => {
+        Command::Set { params, route, .. } => {
             assert_eq!(params[0].name, "application_name");
-            assert_eq!(params[0].value.as_str().unwrap(), "test");
+            assert_eq!(
+                params[0].value.as_ref().and_then(|s| s.as_str()),
+                Some("test")
+            );
             assert!(!params[0].local);
             assert!(!test.cluster().read_only());
             assert!(route.is_write());

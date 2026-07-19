@@ -194,6 +194,126 @@ host = "10.0.0.2"
 role = "auto"
 ```
 
+### Authentication
+
+&#128216; **[Authentication](https://docs.pgdog.dev/features/authentication/)**
+
+PgDog supports five authentication methods:
+
+1. Password-based
+2. AWS RDS IAM
+3. Azure Workload Identity
+4. HashiCorp Vault dynamic credentials
+5. HashiCorp Vault static role credentials
+
+#### Password-based authentication
+
+Password-based authentication allows for clients to authenticate to PgDog and for PgDog to authenticate to PostgreSQL. It currently supports the following password hashing algorithms:
+
+- SCRAM-SHA-256
+- MD5
+- Plain
+
+#### RDS IAM backend authentication
+
+PgDog can keep client-to-PgDog authentication unchanged while using AWS RDS IAM tokens for PgDog-to-PostgreSQL authentication on a per-user basis.
+
+**Example**
+
+```toml
+[[users]]
+name = "alice"
+database = "pgdog"
+password = "client-password"
+server_auth = "rds_iam"
+# Optional; PgDog infers region from *.region.rds.amazonaws.com(.cn) hostnames when omitted.
+# server_iam_region = "us-east-1"
+```
+
+When any user has `server_auth = "rds_iam"`, the following settings must be configured as well:
+
+- `tls_verify` must **not** be `"disabled"`.
+- `passthrough_auth` must be `"disabled"`.
+
+#### Azure Workload Identity authentication
+
+PgDog can also use Azure Workload Identity for PgDog-to-PostgreSQL authentication, while keeping client-to-PgDog authentication unchanged. This is configured on a per-user basis, similarly to RDS IAM:
+
+**Example**
+
+```toml
+[[users]]
+name = "alice"
+database = "pgdog"
+password = "client-password"
+server_auth = "azure_workload_identity"
+```
+
+When any user has `server_auth = "azure_workload_identity"`, the following settings must be configured as well:
+
+- `tls_verify` must **not** be `"disabled"`.
+- `passthrough_auth` must be `"disabled"`.
+
+#### HashiCorp Vault dynamic role authentication
+
+PgDog can fetch dynamic database credentials (username and password) from HashiCorp Vault's database secrets engine, while keeping client-to-PgDog authentication unchanged. Credentials are cached and rotated automatically after a configured percentage of the Vault lease has elapsed.
+
+**Example**
+
+In `users.toml`:
+
+```toml
+[[users]]
+name = "alice"
+database = "pgdog"
+password = "client-password"
+server_auth = "vault_dynamic"
+server_vault_path = "database/creds/pgdog"
+# Refresh credentials after 80% of the lease has elapsed (default).
+# vault_refresh_percent = 80
+```
+
+In `pgdog.toml`:
+
+```toml
+[vault]
+url = "https://vault.internal:8200"
+auth_method = "kubernetes" # or "approle"
+kubernetes_role = "pgdog"
+```
+
+PgDog logs into Vault with Kubernetes auth (using the pod's service account JWT) or AppRole (`approle_role_id` plus `approle_secret_id_file` or the `VAULT_SECRET_ID` environment variable).
+
+When any user has `server_auth = "vault_dynamic"` or `"vault_static"`, the following settings must be configured as well:
+
+- `tls_verify` must **not** be `"disabled"`.
+- `passthrough_auth` must be `"disabled"`.
+
+#### HashiCorp Vault static role authentication
+
+Unlike dynamic credentials, a Vault static database role has a fixed username and only its password rotates, on a schedule Vault manages. PgDog supports two independent uses of a static role, they don't need to point at the same role, and each has its own username setting:
+
+- `vault_path`: verify the password a client sends to PgDog against Vault's current password for the role, instead of a statically configured password.
+- `server_auth = "vault_static"` with `server_vault_path`: use the role's Vault-managed password for PgDog-to-PostgreSQL connections. Unlike `vault_dynamic`, PgDog doesn't take the username from Vault, it connects as `server_user` or `name`, if `server_user` isn't set.
+
+**Example**
+
+In `users.toml`, for a client authenticating as `alice` (verified against a static role registered under that same name) while PgDog connects to Postgres as `pgdog_service` (a separate static role):
+
+```toml
+[[users]]
+name = "alice"
+database = "pgdog"
+vault_path = "database/static-creds/alice"
+server_user = "pgdog_service"
+server_auth = "vault_static"
+server_vault_path = "database/static-creds/pgdog-service"
+```
+
+In `pgdog.toml`, the same `[vault]` section used for dynamic credentials applies.
+
+Both settings are optional and independent: set only `vault_path` to verify client passwords while keeping any other backend authentication method, or only `server_auth = "vault_static"` to use a static role for backend connections while clients authenticate with a regular password.
+
 ### Sharding
 
 &#128216; **[Sharding](https://docs.pgdog.dev/features/sharding/)**
@@ -463,8 +583,8 @@ Cutover can be done atomically with multiple PgDog containers because `RELOAD` d
 
 &#128216; **[Metrics](https://docs.pgdog.dev/features/metrics/)**
 
-PgDog exposes both the standard PgBouncer-style admin database and an OpenMetrics endpoint. The admin database isn't 100% compatible,
-so we recommend you use OpenMetrics for monitoring. Example Datadog configuration and dashboard are [included](examples/datadog).
+PgDog exposes both the standard PgBouncer-style admin database, an OpenMetrics endpoint and can push metrics to an OTEL endpoint. The admin database isn't 100% compatible,
+so we recommend you use either OpenMetrics or OTEL ingestion for monitoring. Example Datadog configuration and dashboard are [included](examples/datadog).
 
 
 ## Running PgDog locally

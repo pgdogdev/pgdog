@@ -7,33 +7,40 @@ pub mod error;
 pub mod general;
 pub mod memory;
 pub mod networking;
+pub mod otel;
 pub mod overrides;
 pub mod pooling;
 pub mod replication;
 pub mod rewrite;
 pub mod sharding;
 pub mod system_catalogs;
+#[cfg(test)]
+#[path = "../../pgdog/src/test_utils.rs"]
+pub(crate) mod test_utils;
 pub mod url;
 pub mod users;
 pub mod util;
+pub mod vault;
 
-pub use auth::{AuthType, PassthoughAuth};
+pub use auth::{AuthType, PassthroughAuth};
 pub use core::{Config, ConfigAndUsers};
 pub use data_types::*;
 pub use database::{
     Database, EnumeratedDatabase, LoadBalancingStrategy, ReadWriteSplit, ReadWriteStrategy, Role,
 };
 pub use error::Error;
-pub use general::General;
+pub use general::{General, LogFormat, QuerySizeLimitAction};
 pub use memory::*;
 pub use networking::{MultiTenant, Tcp, TlsVerifyMode};
+pub use otel::Otel;
 pub use overrides::Overrides;
 pub use pooling::{PoolerMode, PreparedStatements};
 pub use replication::*;
 pub use rewrite::{Rewrite, RewriteMode};
 pub use sharding::*;
 pub use system_catalogs::system_catalogs;
-pub use users::{Admin, Plugin, User, Users};
+pub use users::{Admin, Plugin, ServerAuth, User, Users};
+pub use vault::{Vault, VaultAuthMethod};
 
 use std::time::Duration;
 

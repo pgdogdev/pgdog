@@ -1,6 +1,7 @@
 [general]
 mirror_exposure = 1.0
 openmetrics_port = 9090
+query_parser = "on"
 
 [rewrite]
 enabled = false
@@ -16,9 +17,20 @@ name = "pgdog_mirror"
 host = "127.0.0.1"
 database_name = "pgdog1"
 
+[[databases]]
+name = "pgdog_mirror2"
+host = "127.0.0.1"
+database_name = "pgdog2"
+
 [[mirroring]]
 source_db = "pgdog"
 destination_db = "pgdog_mirror"
+
+
+[[mirroring]]
+source_db = "pgdog"
+destination_db = "pgdog_mirror2"
+level = "ddl"
 
 [admin]
 password = "pgdog"

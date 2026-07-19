@@ -1,6 +1,6 @@
 //! Test cluster with just one sharding function.
 
-use rust::setup::connections_sqlx;
+use crate::setup::connections_sqlx;
 use sqlx::Connection;
 use sqlx::prelude::*;
 
@@ -24,7 +24,7 @@ async fn test_single_sharding_function() {
         let result =
             sqlx::query("INSERT INTO test_single_sharding_function (id, value) VALUES ($1, $2)")
                 .bind(id as i64)
-                .bind(&format!("value_{}", id))
+                .bind(format!("value_{}", id))
                 .execute(&mut conn)
                 .await
                 .unwrap();

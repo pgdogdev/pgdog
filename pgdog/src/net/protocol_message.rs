@@ -2,8 +2,8 @@ use bytes::Buf;
 use std::io::Cursor;
 
 use super::{
-    Bind, Close, CopyData, CopyDone, CopyFail, Describe, Execute, Flush, FromBytes, Message, Parse,
-    Protocol, Query, Sync, ToBytes,
+    Bind, Close, CopyData, CopyDone, CopyFail, Describe, Execute, Fastpath, Flush, FromBytes,
+    Message, Parse, Protocol, Query, Sync, ToBytes,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -19,11 +19,12 @@ pub enum ProtocolMessage {
     CopyData(CopyData),
     CopyFail(CopyFail),
     CopyDone(CopyDone),
+    Fastpath(Fastpath),
     Sync(Sync),
 }
 
 impl ProtocolMessage {
-    pub fn extended(&self) -> bool {
+    pub fn is_extended(&self) -> bool {
         use ProtocolMessage::*;
         matches!(
             self,
@@ -42,6 +43,17 @@ impl ProtocolMessage {
         }
     }
 
+    pub fn anonymize(&mut self) {
+        use ProtocolMessage::*;
+
+        match self {
+            Bind(bind) => bind.anonymize(),
+            Parse(parse) => parse.anonymize(),
+            Describe(describe) => describe.anonymize(),
+            _ => (),
+        }
+    }
+
     pub fn len(&self) -> usize {
         match self {
             Self::Bind(bind) => bind.len(),
@@ -55,6 +67,7 @@ impl ProtocolMessage {
             Self::CopyData(data) => data.len(),
             Self::Sync(sync) => sync.len(),
             Self::CopyDone(copy_done) => copy_done.len(),
+            Self::Fastpath(fp) => fp.len(),
             Self::CopyFail(copy_fail) => copy_fail.len(),
         }
     }
@@ -75,6 +88,7 @@ impl Protocol for ProtocolMessage {
             Self::Sync(sync) => sync.code(),
             Self::CopyFail(copy_fail) => copy_fail.code(),
             Self::CopyDone(copy_done) => copy_done.code(),
+            Self::Fastpath(fp) => fp.code(),
         }
     }
 }
@@ -93,13 +107,14 @@ impl FromBytes for ProtocolMessage {
             'S' => Ok(Self::Sync(Sync::from_bytes(bytes)?)),
             'f' => Ok(Self::CopyFail(CopyFail::from_bytes(bytes)?)),
             'c' => Ok(Self::CopyDone(CopyDone::from_bytes(bytes)?)),
+            'F' => Ok(Self::Fastpath(Fastpath::from_bytes(bytes)?)),
             _ => Ok(Self::Other(Message::from_bytes(bytes)?)),
         }
     }
 }
 
 impl ToBytes for ProtocolMessage {
-    fn to_bytes(&self) -> Result<bytes::Bytes, crate::net::Error> {
+    fn to_bytes(&self) -> bytes::Bytes {
         match self {
             Self::Bind(bind) => bind.to_bytes(),
             Self::Parse(parse) => parse.to_bytes(),
@@ -115,6 +130,7 @@ impl ToBytes for ProtocolMessage {
             Self::Sync(sync) => sync.to_bytes(),
             Self::CopyFail(copy_fail) => copy_fail.to_bytes(),
             Self::CopyDone(copy_done) => copy_done.to_bytes(),
+            Self::Fastpath(fp) => fp.to_bytes(),
         }
     }
 }
@@ -188,5 +204,11 @@ impl From<CopyDone> for ProtocolMessage {
 impl From<CopyFail> for ProtocolMessage {
     fn from(value: CopyFail) -> Self {
         Self::CopyFail(value)
+    }
+}
+
+impl From<Fastpath> for ProtocolMessage {
+    fn from(value: Fastpath) -> Self {
+        Self::Fastpath(value)
     }
 }

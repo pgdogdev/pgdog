@@ -3,7 +3,7 @@ SELECT
     c.table_schema::text,
     c.table_name::text,
     c.column_name::text,
-    c.column_default::text,
+    COALESCE(c.column_default, CASE WHEN c.is_identity = 'YES' THEN 'generated ' || lower(c.identity_generation) || ' as identity' ELSE NULL END)::text AS column_default,
     (c.is_nullable != 'NO')::text AS is_nullable,
     c.data_type::text,
     c.ordinal_position::int,

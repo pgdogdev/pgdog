@@ -1,22 +1,53 @@
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::{fmt::Display, str::FromStr};
 
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
+/// toggle automatic creation of connection pools given the user name, database and password.
+///
+/// See [passthrough authentication](https://docs.pgdog.dev/features/authentication/#passthrough-authentication).
+///
+/// https://docs.pgdog.dev/configuration/pgdog.toml/general/#passthrough_auth
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
-pub enum PassthoughAuth {
+pub enum PassthroughAuth {
+    /// Passthrough auth is disabled (default).
     #[default]
     Disabled,
+    /// Enabled; plaintext passwords are not permitted without TLS.
     Enabled,
+    /// Enabled without TLS requirement; network traffic may expose plaintext passwords.
     EnabledPlain,
+    /// Enabled and allows password changes.
+    EnabledAllowChange,
+    /// Enabled without TLS requirement and allows password changes.
+    EnabledPlainAllowChange,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
+impl PassthroughAuth {
+    pub fn allows_change(&self) -> bool {
+        matches!(
+            self,
+            Self::EnabledPlainAllowChange | Self::EnabledAllowChange
+        )
+    }
+}
+
+/// authentication mechanism for client connections.
+///
+/// See [authentication](https://docs.pgdog.dev/features/authentication/).
+///
+/// https://docs.pgdog.dev/configuration/pgdog.toml/general/#auth_type
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum AuthType {
+    /// MD5 password hashing; very quick but not secure.
     Md5,
+    /// SCRAM-SHA-256 authentication; slow but has better security features (default).
     #[default]
     Scram,
+    /// No authentication required; clients are trusted unconditionally.
     Trust,
+    /// Plaintext password.
     Plain,
 }
 

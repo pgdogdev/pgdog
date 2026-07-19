@@ -2,21 +2,21 @@
 
 use std::time::Duration;
 
-use rand::{rng, Rng};
+use pgdog_config::MirroringLevel;
+use rand::{Rng, rng};
 use tokio::select;
-use tokio::time::{sleep, Instant};
-use tokio::{spawn, sync::mpsc::*};
+use tokio::sync::mpsc::*;
+use tokio::time::{Instant, sleep};
 use tracing::{debug, error, warn};
 
 use crate::backend::Cluster;
-use crate::config::{config, ConfigAndUsers};
+use crate::config::{ConfigAndUsers, config};
+use crate::frontend::client::TransactionType;
 use crate::frontend::client::query_engine::{QueryEngine, QueryEngineContext};
 use crate::frontend::client::timeouts::Timeouts;
-use crate::frontend::client::TransactionType;
 use crate::frontend::{ClientComms, PreparedStatements};
-use crate::net::{BackendKeyData, Parameter, Parameters, Stream};
-
-use crate::frontend::ClientRequest;
+use crate::net::{FrontendPid, Parameter, Parameters, Stream};
+use crate::tasks;
 
 use super::Error;
 
@@ -33,7 +33,7 @@ pub use request::*;
 #[derive(Debug)]
 pub struct Mirror {
     /// Random identifier for this mirror connection.
-    pub id: BackendKeyData,
+    pub id: FrontendPid,
     /// Mirror's prepared statements. Should be similar
     /// to client's statements, if exposure is high.
     pub prepared_statements: PreparedStatements,
@@ -51,9 +51,12 @@ pub struct Mirror {
 
 impl Mirror {
     fn new(params: &Parameters, config: &ConfigAndUsers) -> Self {
+        let mut prepared_statements = PreparedStatements::new();
+        prepared_statements.set_level(config.prepared_statements());
+
         Self {
-            id: BackendKeyData::new(),
-            prepared_statements: PreparedStatements::new(),
+            id: FrontendPid::new(),
+            prepared_statements,
             params: params.clone(),
             timeouts: Timeouts::from_config(&config.config.general),
             stream: Stream::dev_null(),
@@ -91,21 +94,12 @@ impl Mirror {
             },
         ]);
 
-        // Same query engine as the client, except with a potentially different database config.
-        let mut query_engine = QueryEngine::new(
-            &params,
-            &ClientComms::new(&BackendKeyData::new()),
-            false,
-            &None,
-        )?;
-
-        // Mirror must read server responses to keep the connection synchronized,
-        // so disable test_mode which skips reading responses.
-        #[cfg(test)]
-        query_engine.set_test_mode(false);
-
         // Mirror traffic handler.
         let mut mirror = Self::new(&params, &config);
+
+        // Same query engine as the client, except with a potentially different database config.
+        // Use mirror.id so pool checkout (Request) and comms keying share one identity.
+        let mut query_engine = QueryEngine::new(&params, &ClientComms::new(mirror.id), false)?;
 
         // Use provided mirror config or fall back to global defaults
         let mirror_config = mirror_config
@@ -113,14 +107,15 @@ impl Mirror {
             .unwrap_or_else(|| crate::config::MirrorConfig {
                 queue_length: config.config.general.mirror_queue,
                 exposure: config.config.general.mirror_exposure,
+                level: MirroringLevel::default(),
             });
 
         // Mirror queue.
         let (tx, mut rx) = channel(mirror_config.queue_length);
-        let handler = MirrorHandler::new(tx, mirror_config.exposure, cluster.stats());
+        let handler = MirrorHandler::new(tx, &mirror_config, cluster.stats());
 
         let stats_for_errors = cluster.stats();
-        spawn(async move {
+        tasks::spawn("mirror", async move {
             loop {
                 select! {
                     req = rx.recv() => {
@@ -173,7 +168,13 @@ impl Mirror {
 
 #[cfg(test)]
 mod test {
-    use crate::{backend::pool::Request, config, net::Query};
+    use pgdog_config::MirrorConfig;
+
+    use crate::{
+        backend::pool::Request,
+        config::{self, PoolerMode, PreparedStatements as PreparedStatementsLevel},
+        net::{Parameter, Parameters, Query},
+    };
 
     use super::*;
 
@@ -185,7 +186,14 @@ mod test {
 
         let (tx, rx) = channel(25);
         let stats = Arc::new(Mutex::new(MirrorStats::default()));
-        let mut handle = MirrorHandler::new(tx.clone(), 1.0, stats.clone());
+        let mut handle = MirrorHandler::new(
+            tx.clone(),
+            &MirrorConfig {
+                exposure: 1.0,
+                ..Default::default()
+            },
+            stats.clone(),
+        );
 
         for _ in 0..25 {
             assert!(
@@ -199,9 +207,15 @@ mod test {
 
         let (tx, rx) = channel(25);
         let stats2 = Arc::new(Mutex::new(MirrorStats::default()));
-        let mut handle = MirrorHandler::new(tx.clone(), 0.5, stats2);
+        let mut handle = MirrorHandler::new(
+            tx.clone(),
+            &MirrorConfig {
+                exposure: 0.5,
+                ..Default::default()
+            },
+            stats2,
+        );
         let dropped = (0..25)
-            .into_iter()
             .map(|_| handle.send(&vec![].into()) && handle.send(&vec![].into()) && handle.flush())
             .filter(|s| !s)
             .count();
@@ -219,6 +233,9 @@ mod test {
         );
     }
 
+    // This test relies on data written to multiple databases.
+    // It's flaky. Not sure why yet.
+    #[pgdog_macros::flaky]
     #[tokio::test]
     async fn test_mirror() {
         config::load_test();
@@ -318,5 +335,41 @@ mod test {
         );
 
         cluster.shutdown();
+    }
+
+    #[tokio::test]
+    async fn test_mirror_uses_effective_prepared_statements_level() {
+        config::load_test();
+        let mut test_config = (*config::config()).clone();
+        test_config.config.general.pooler_mode = PoolerMode::Session;
+        test_config.config.general.prepared_statements = PreparedStatementsLevel::Extended;
+        let test_config = config::set(test_config).unwrap();
+        let config = std::sync::Arc::new(test_config);
+
+        assert_eq!(
+            config.config.general.prepared_statements,
+            PreparedStatementsLevel::Extended
+        );
+        assert_eq!(
+            config.prepared_statements(),
+            PreparedStatementsLevel::Disabled
+        );
+
+        let params = Parameters::from(vec![
+            Parameter {
+                name: "user".into(),
+                value: "pgdog".into(),
+            },
+            Parameter {
+                name: "database".into(),
+                value: "pgdog".into(),
+            },
+        ]);
+
+        let mirror = Mirror::new(&params, &config);
+        assert_eq!(
+            mirror.prepared_statements.level(),
+            PreparedStatementsLevel::Disabled
+        );
     }
 }

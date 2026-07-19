@@ -2,8 +2,8 @@
 
 use std::time::Duration;
 
-use tokio::time::timeout;
 use tokio::time::Instant;
+use tokio::time::timeout;
 use tracing::error;
 
 use super::{Error, Pool};

@@ -3,7 +3,8 @@ use std::{
     time::Duration,
 };
 
-use pgdog_config::{PoolerMode, pooling::ConnectionRecovery};
+use pgdog_config::{PoolerMode, PreparedStatements, pooling::ConnectionRecovery};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::{LsnStats, ReplicaLag};
@@ -12,7 +13,7 @@ use crate::{LsnStats, ReplicaLag};
 ///
 /// These are updated after each connection check-in.
 ///
-#[derive(Debug, Clone, Default, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Copy, Serialize, Deserialize, JsonSchema)]
 pub struct Counts {
     /// Number of committed transactions.
     pub xact_count: usize,
@@ -60,6 +61,8 @@ pub struct Counts {
     pub reads: usize,
     /// Number of write transactions.
     pub writes: usize,
+    /// Password attempts.
+    pub auth_attempts: usize,
 }
 
 impl Sub for Counts {
@@ -91,6 +94,7 @@ impl Sub for Counts {
             connect_count: self.connect_count.saturating_sub(rhs.connect_count),
             reads: self.reads.saturating_sub(rhs.reads),
             writes: self.writes.saturating_sub(rhs.writes),
+            auth_attempts: self.auth_attempts.saturating_sub(rhs.auth_attempts),
         }
     }
 }
@@ -124,6 +128,7 @@ impl Add for Counts {
             connect_time: self.connect_time.saturating_add(rhs.connect_time),
             reads: self.reads.saturating_add(rhs.reads),
             writes: self.writes.saturating_add(rhs.writes),
+            auth_attempts: self.auth_attempts.saturating_add(rhs.auth_attempts),
         }
     }
 }
@@ -161,11 +166,12 @@ impl Div<usize> for Counts {
             connect_count: self.connect_count.checked_div(rhs).unwrap_or(0),
             reads: self.reads.checked_div(rhs).unwrap_or(0),
             writes: self.writes.checked_div(rhs).unwrap_or(0),
+            auth_attempts: self.auth_attempts.checked_div(rhs).unwrap_or(0),
         }
     }
 }
 
-#[derive(Debug, Clone, Default, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Copy, Serialize, Deserialize, JsonSchema)]
 pub struct Stats {
     // Total counts.
     pub counts: Counts,
@@ -223,7 +229,7 @@ impl Stats {
 
 /// Real-time state of each connection pool.
 /// Pool state.
-#[derive(Debug, Serialize, Deserialize, Clone, Copy)]
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, JsonSchema)]
 pub struct State {
     /// Number of connections checked out.
     pub checked_out: usize,
@@ -283,6 +289,11 @@ pub struct Config {
     pub connect_attempt_delay: Duration,
     /// How long a connection can be open.
     pub max_age: Duration,
+    /// Maximum random adjustment applied to `max_age` per connection.
+    /// Each connection samples a per-connection offset uniformly from
+    /// `[-max_age_jitter, +max_age_jitter]` once at creation, breaking
+    /// up synchronized retirement of cohorts that connect together.
+    pub max_age_jitter: Duration,
     /// Can this pool be banned from serving traffic?
     pub bannable: bool,
     /// Healtheck timeout.
@@ -305,6 +316,8 @@ pub struct Config {
     pub rollback_timeout: Duration,
     /// Statement timeout
     pub statement_timeout: Option<Duration>,
+    /// Lock timeout
+    pub lock_timeout: Option<Duration>,
     /// Replication mode.
     pub replication_mode: bool,
     /// Pooler mode.
@@ -327,6 +340,10 @@ pub struct Config {
     pub role_detection: bool,
     /// Used for resharding only.
     pub resharding_only: bool,
+    /// LB weight.
+    pub lb_weight: u8,
+    /// Prepared statements level.
+    pub prepared_statements_level: PreparedStatements,
 }
 
 impl Default for Config {
@@ -340,6 +357,7 @@ impl Default for Config {
             connect_attempts: 1,
             connect_attempt_delay: Duration::from_millis(10),
             max_age: Duration::from_millis(24 * 3600 * 1000),
+            max_age_jitter: Duration::ZERO,
             bannable: true,
             healthcheck_timeout: Duration::from_millis(5_000),
             healthcheck_interval: Duration::from_millis(30_000),
@@ -351,6 +369,7 @@ impl Default for Config {
             ban_timeout: Duration::from_secs(300),
             rollback_timeout: Duration::from_secs(5),
             statement_timeout: None,
+            lock_timeout: None,
             replication_mode: false,
             pooler_mode: PoolerMode::default(),
             read_only: false,
@@ -363,6 +382,8 @@ impl Default for Config {
             lsn_check_delay: Duration::from_millis(5_000),
             role_detection: false,
             resharding_only: false,
+            lb_weight: 255,
+            prepared_statements_level: PreparedStatements::default(),
         }
     }
 }

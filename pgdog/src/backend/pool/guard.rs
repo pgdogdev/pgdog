@@ -10,7 +10,7 @@ use tracing::{debug, error};
 use crate::backend::{Error, Server};
 use crate::state::State;
 
-use super::{cleanup::Cleanup, Pool};
+use super::{Pool, cleanup::Cleanup};
 
 /// Connection guard.
 pub struct Guard {
@@ -215,12 +215,12 @@ mod test {
     use std::time::Duration;
 
     use pgdog_config::pooling::ConnectionRecovery;
-    use tokio::time::{sleep, timeout, Instant};
+    use tokio::time::{Instant, sleep, timeout};
 
     use crate::{
         backend::{
             pool::{
-                cleanup::Cleanup, test::pool, Address, Config, Guard, Pool, PoolConfig, Request,
+                Address, Config, Guard, Pool, PoolConfig, Request, cleanup::Cleanup, test::pool,
             },
             server::test::test_server,
         },
@@ -408,7 +408,7 @@ mod test {
     #[tokio::test]
     async fn test_cancel_safety_partial_send() {
         let mut server = test_server().await;
-        let select = (0..50_000_000).into_iter().map(|_| 'b').collect::<String>();
+        let select = (0..50_000_000).map(|_| 'b').collect::<String>();
         let select = Query::new(format!("SELECT '{}'", select));
         let res = timeout(
             Duration::from_millis(1),

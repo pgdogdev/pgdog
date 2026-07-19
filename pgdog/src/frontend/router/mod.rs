@@ -14,7 +14,7 @@ pub use copy::CopyRow;
 pub use error::Error;
 use lazy_static::lazy_static;
 use parser::Shard;
-pub use parser::{Ast, Command, QueryParser, Route, SetParam};
+pub use parser::{Ast, AstQuery, Command, QueryParser, Route, SetParam};
 
 use crate::frontend::router::parser::ShardWithPriority;
 
@@ -22,7 +22,6 @@ use super::ClientRequest;
 pub use context::RouterContext;
 pub use parameter_hints::ParameterHints;
 pub use search_path::SearchPath;
-pub use sharding::{Lists, Ranges};
 
 /// Query router.
 #[derive(Debug)]
@@ -63,10 +62,10 @@ impl Router {
         let command = self.query_parser.parse(context)?;
         self.latest_command = command;
 
-        if let Command::Query(ref route) = self.latest_command {
-            if route.is_schema_changed() {
-                self.schema_changed = true;
-            }
+        if let Command::Query(ref route) = self.latest_command
+            && route.is_schema_changed()
+        {
+            self.schema_changed = true;
         }
 
         Ok(&self.latest_command)

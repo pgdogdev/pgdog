@@ -3,10 +3,14 @@ use super::*;
 impl QueryParser {
     pub(super) fn delete(
         &mut self,
-        stmt: &DeleteStmt,
+        #[cfg(not(feature = "new_parser"))] stmt: &DeleteStmt,
+        #[cfg(feature = "new_parser")] stmt: pg_raw_parse::Node<'_>,
         context: &mut QueryParserContext,
     ) -> Result<Command, Error> {
         let mut parser = StatementParser::from_delete(
+            #[cfg(not(feature = "new_parser"))]
+            stmt,
+            #[cfg(feature = "new_parser")]
             stmt,
             context.router_context.bind,
             &context.sharding_schema,
@@ -18,6 +22,7 @@ impl QueryParser {
             context.router_context.cluster.user(),
             context.router_context.parameter_hints.search_path,
         );
+        let omnisharded = parser.is_all_omnisharded();
 
         let shard = parser.shard()?;
 
@@ -46,8 +51,8 @@ impl QueryParser {
             }
         }
 
-        Ok(Command::Query(Route::write(
-            context.shards_calculator.shard(),
-        )))
+        Ok(Command::Query(
+            Route::write(context.shards_calculator.shard()).with_omnisharded(omnisharded),
+        ))
     }
 }

@@ -1,6 +1,11 @@
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, hash::Hash, ops::Deref, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    hash::Hash,
+    ops::Deref,
+    sync::Arc,
+};
 
 /// Schema name -> Table name -> Relation
 pub type Relations = HashMap<String, HashMap<String, Relation>>;
@@ -26,6 +31,10 @@ impl ForeignKeyAction {
             "RESTRICT" => Self::Restrict,
             _ => Self::NoAction,
         }
+    }
+
+    pub fn is_destructive_on_delete(&self) -> bool {
+        matches!(self, Self::Cascade | Self::SetNull | Self::SetDefault)
     }
 }
 
@@ -63,6 +72,10 @@ pub struct Relation {
     pub access_method: String,
     pub description: String,
     pub oid: i32,
+    /// Schema of the parent (partitioned) table, if this is a partition.
+    pub parent_table_schema: Option<String>,
+    /// Name of the parent (partitioned) table, if this is a partition.
+    pub parent_table_name: Option<String>,
     /// Columns indexed by name, ordered by ordinal position.
     pub columns: IndexMap<String, Column>,
 }
@@ -77,6 +90,8 @@ impl Hash for Relation {
         self.access_method.hash(state);
         self.description.hash(state);
         self.oid.hash(state);
+        self.parent_table_schema.hash(state);
+        self.parent_table_name.hash(state);
         for (key, value) in &self.columns {
             key.hash(state);
             value.hash(state);
@@ -128,6 +143,7 @@ impl Relation {
 pub struct SchemaInner {
     pub search_path: Vec<String>,
     pub relations: Relations,
+    pub aggregate_functions: HashSet<String>,
 }
 
 impl Hash for SchemaInner {
@@ -170,6 +186,27 @@ impl Schema {
             .relations
             .get(schema)
             .and_then(|tables| tables.get(name))
+    }
+
+    /// Returns true if a column is referenced by a foreign key whose ON DELETE
+    /// action would be unsafe during a sharding-key row move.
+    pub fn has_destructive_on_delete_reference(
+        &self,
+        schema: &str,
+        table: &str,
+        column: &str,
+    ) -> bool {
+        self.relations
+            .values()
+            .flat_map(|tables| tables.values())
+            .flat_map(|relation| relation.columns.values())
+            .flat_map(|column| column.foreign_keys.iter())
+            .any(|foreign_key| {
+                foreign_key.schema == schema
+                    && foreign_key.table == table
+                    && foreign_key.column == column
+                    && foreign_key.on_delete.is_destructive_on_delete()
+            })
     }
 }
 

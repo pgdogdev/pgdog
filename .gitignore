@@ -63,3 +63,10 @@ integration/pgdog.config
 integration/**/.bundle
 integration/**/vendor
 integration/**/*.test
+
+.rustup
+enterprise/web2/dist
+enterprise/web2/node_modules
+enterprise/web2/.vite/*
+
+.tokensave

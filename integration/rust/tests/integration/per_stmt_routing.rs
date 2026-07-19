@@ -1,4 +1,4 @@
-use rust::setup::{admin_sqlx, connections_sqlx};
+use crate::setup::{admin_sqlx, connections_sqlx};
 use sqlx::{Acquire, Executor, Row};
 
 #[tokio::test]

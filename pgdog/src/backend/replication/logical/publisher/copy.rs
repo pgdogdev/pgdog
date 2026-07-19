@@ -41,7 +41,7 @@ impl Copy {
         server.send(&vec![query.into()].into()).await?;
         let result = server.read().await?;
         match result.code() {
-            'E' => return Err(ErrorResponse::from_bytes(result.to_bytes()?)?.into()),
+            'E' => return Err(ErrorResponse::from_bytes(result.to_bytes())?.into()),
             'H' => (),
             c => return Err(Error::OutOfSync(c)),
         }
@@ -54,14 +54,14 @@ impl Copy {
 
             match msg.code() {
                 'd' => {
-                    let data = CopyData::from_bytes(msg.to_bytes()?)?;
+                    let data = CopyData::from_bytes(msg.to_bytes())?;
                     trace!("[{}] --> {:?}", server.addr().addr().await?, data);
                     return Ok(Some(data));
                 }
                 'C' => (),
                 'c' => (), // CopyDone.
                 'Z' => return Ok(None),
-                'E' => return Err(ErrorResponse::from_bytes(msg.to_bytes()?)?.into()),
+                'E' => return Err(ErrorResponse::from_bytes(msg.to_bytes())?.into()),
                 c => return Err(Error::OutOfSync(c)),
             }
         }

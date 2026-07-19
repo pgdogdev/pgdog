@@ -3,13 +3,13 @@
 use context::Context;
 
 use crate::{
-    frontend::{router::Route, PreparedStatements},
+    frontend::{PreparedStatements, router::Route},
     net::{
+        BackendPid, Decoder, ReadyForQuery,
         messages::{
-            command_complete::CommandComplete, DataRow, FromBytes, Message, Protocol,
-            RowDescription, ToBytes,
+            DataRow, FromBytes, Message, Protocol, RowDescription, ToBytes,
+            command_complete::CommandComplete,
         },
-        BackendKeyData, Decoder, ReadyForQuery,
     },
 };
 
@@ -42,7 +42,7 @@ struct Counters {
     copy_done: usize,
     copy_out: usize,
     copy_data: usize,
-    first_backend_data: Option<BackendKeyData>,
+    first_backend_data: Option<BackendPid>,
 }
 
 /// Multi-shard state.
@@ -52,6 +52,10 @@ pub struct MultiShard {
     shards: usize,
     /// Route the query is taking.
     route: Route,
+    /// Maps positional index in the servers vec to actual shard number.
+    /// When all shards are connected, this is `[0, 1, 2, ...]`.
+    /// When only a subset is connected (e.g. shards 0 and 2), this is `[0, 2]`.
+    shard_indices: Vec<usize>,
 
     /// Counters
     counters: Counters,
@@ -64,14 +68,24 @@ pub struct MultiShard {
 }
 
 impl MultiShard {
-    /// New multi-shard state given the number of shards in the cluster.
-    pub(super) fn new(shards: usize, route: &Route) -> Self {
+    /// New multi-shard state given the actual shard indices connected.
+    pub(super) fn new(shard_indices: Vec<usize>, route: &Route) -> Self {
+        let shards = shard_indices.len();
         Self {
             shards,
+            shard_indices,
             route: route.clone(),
             counters: Counters::default(),
             ..Default::default()
         }
+    }
+
+    /// Map a positional index to the actual shard number.
+    pub(super) fn shard_index(&self, position: usize) -> usize {
+        self.shard_indices
+            .get(position)
+            .copied()
+            .unwrap_or(position)
     }
 
     /// Update multi-shard state.
@@ -126,9 +140,9 @@ impl MultiShard {
             // Once all shards finished executing the command,
             // we can start aggregating and sorting.
             'C' => {
-                let cc = CommandComplete::from_bytes(message.to_bytes()?)?;
+                let cc = CommandComplete::from_bytes(message.to_bytes())?;
                 let has_rows = if let Some(rows) = cc.rows()? {
-                    if self.route.is_omni() {
+                    if self.route.is_omnisharded() {
                         // Only use the first shard's row count for consistency with DataRow.
                         if self.counters.command_complete_count == 0 {
                             self.counters.rows = rows;
@@ -178,7 +192,7 @@ impl MultiShard {
 
             'T' => {
                 self.counters.row_description += 1;
-                let rd = RowDescription::from_bytes(message.to_bytes()?)?;
+                let rd = RowDescription::from_bytes(message.to_bytes())?;
 
                 // Validate row description consistency
                 let is_first = self.validator.validate_row_description(&rd)?;
@@ -193,7 +207,7 @@ impl MultiShard {
                     // Only send it to the client once all shards sent it,
                     // so we don't get early requests from clients.
                     let plan = self.route.aggregate_rewrite_plan();
-                    if plan.drop_columns().is_empty() {
+                    if plan.is_noop() {
                         forward = Some(message);
                     } else {
                         let client_rd = rd.drop_columns(plan.drop_columns());
@@ -216,10 +230,13 @@ impl MultiShard {
             'D' => {
                 if self.shards > 1 {
                     // Validate data row consistency.
-                    let data_row = DataRow::from_bytes(message.to_bytes()?)?;
+                    let data_row = DataRow::from_bytes(message.to_bytes())?;
                     self.validator.validate_data_row(&data_row)?;
                 }
 
+                // INVARIANT: omni dedup relies on Source::Backend carrying a
+                // process-unique BackendPid (see BackendPid::seq). Never tag messages
+                // with a non-unique value; doing so silently corrupts row deduplication.
                 if self.counters.first_backend_data.is_none() {
                     self.counters.first_backend_data = message.source().backend_id();
                 }
@@ -227,7 +244,7 @@ impl MultiShard {
                 if !self.should_buffer()
                     && self.counters.row_description.is_multiple_of(self.shards)
                 {
-                    if self.route.is_omni() {
+                    if self.route.is_omnisharded() {
                         if self.counters.first_backend_data == message.source().backend_id() {
                             forward = Some(message);
                         }
@@ -311,16 +328,21 @@ impl MultiShard {
         Ok(forward)
     }
 
+    /// Return true if we need to buffer [`DataRow`] messages
+    /// received from the servers because we need to post-process them.
     fn should_buffer(&self) -> bool {
-        self.shards > 1 && self.route.should_buffer() && !self.route.is_omni()
+        // 1. We are talking to more than one shard (cross-shard query)
+        // 2. The route contains transformations we need to perform, e.g., aggregates, sorting, etc.
+        // 3. The route does not concern omnisharded tables which have the same data on all shards
+        //    anyway.
+        self.shards > 1 && self.route.should_buffer() && !self.route.is_omnisharded()
     }
 
     /// Multi-shard state is ready to send messages.
     pub(super) fn message(&mut self) -> Option<Message> {
-        if let Some(data_row) = self.buffer.take() {
-            Some(data_row)
-        } else {
-            self.counters.command_complete.take()
+        match self.buffer.take() {
+            Some(data_row) => Some(data_row),
+            _ => self.counters.command_complete.take(),
         }
     }
 
@@ -328,14 +350,14 @@ impl MultiShard {
         let context = message.into();
         match context {
             Context::Bind(bind) => {
-                if self.decoder.rd().fields.is_empty() && !bind.anonymous() {
-                    if let Some(rd) = PreparedStatements::global()
+                if self.decoder.rd().fields.is_empty()
+                    && !bind.anonymous()
+                    && let Some(rd) = PreparedStatements::global()
                         .read()
                         .row_description(bind.statement())
-                    {
-                        self.decoder.row_description(&rd);
-                        self.validator.set_row_description(&rd);
-                    }
+                {
+                    self.decoder.row_description(&rd);
+                    self.validator.set_row_description(&rd);
                 }
                 self.decoder.bind(bind);
             }

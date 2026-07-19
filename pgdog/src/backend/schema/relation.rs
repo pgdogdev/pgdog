@@ -7,7 +7,7 @@ use std::{
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
-use super::{columns::Column, Error};
+use super::{Error, columns::Column};
 use crate::{
     backend::Server,
     net::messages::{DataRow, Format},
@@ -49,6 +49,10 @@ impl From<Relation> for StatsRelation {
 
 impl From<DataRow> for Relation {
     fn from(value: DataRow) -> Self {
+        // get_text returns Some("") for NULL columns (the wire-protocol decoder
+        // produces empty Bytes for nulls). For optional fields like the parent
+        // table info we want None, not Some("").
+        let non_empty = |s: Option<String>| s.filter(|v| !v.is_empty());
         Self {
             inner: StatsRelation {
                 schema: value.get_text(0).unwrap_or_default(),
@@ -59,6 +63,8 @@ impl From<DataRow> for Relation {
                 access_method: value.get_text(5).unwrap_or_default(),
                 description: value.get_text(6).unwrap_or_default(),
                 oid: value.get::<i32>(7, Format::Text).unwrap_or_default(),
+                parent_table_schema: non_empty(value.get_text(8)),
+                parent_table_name: non_empty(value.get_text(9)),
                 columns: IndexMap::new(),
             },
         }
@@ -106,6 +112,8 @@ impl Relation {
             access_method: String::new(),
             description: String::new(),
             oid: 0,
+            parent_table_schema: None,
+            parent_table_name: None,
             columns: columns.into_iter().map(|(k, v)| (k, v.into())).collect(),
         }
         .into()
@@ -114,7 +122,7 @@ impl Relation {
 
 #[cfg(test)]
 mod test {
-    use crate::backend::pool::{test::pool, Request};
+    use crate::backend::pool::{Request, test::pool};
 
     use super::*;
 
@@ -122,7 +130,6 @@ mod test {
     async fn test_load_relations() {
         let pool = pool();
         let mut conn = pool.get(&Request::default()).await.unwrap();
-        let relations = Relation::load(&mut conn).await.unwrap();
-        println!("{:#?}", relations);
+        let _relations = Relation::load(&mut conn).await.unwrap();
     }
 }

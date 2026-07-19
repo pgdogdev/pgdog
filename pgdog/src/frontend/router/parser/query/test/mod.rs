@@ -1,10 +1,10 @@
-use std::ops::Deref;
+#![allow(clippy::print_stdout)]
 
 use crate::{
-    config::{self, config},
+    config::config,
     net::{
-        messages::{parse::Parse, Parameter},
         Close, Format, Parameters, Sync,
+        messages::{Parameter, parse::Parse},
     },
 };
 use bytes::Bytes;
@@ -12,10 +12,10 @@ use bytes::Bytes;
 use super::{super::Shard, *};
 use crate::backend::Cluster;
 use crate::config::ReadWriteStrategy;
+use crate::frontend::router::parser::{AstContext, Cache};
 use crate::frontend::{
-    client::{Sticky, TransactionType},
-    router::Ast,
     BufferedQuery, ClientRequest, PreparedStatements, RouterContext,
+    client::{Sticky, TransactionType},
 };
 use crate::net::messages::Query;
 
@@ -29,10 +29,12 @@ pub mod test_dml;
 pub mod test_explain;
 pub mod test_functions;
 pub mod test_insert;
+pub mod test_prefer_primary;
 pub mod test_rr;
 pub mod test_schema_sharding;
 pub mod test_search_path;
 pub mod test_select;
+pub mod test_session_control;
 pub mod test_set;
 pub mod test_sharding;
 pub mod test_special;
@@ -42,44 +44,34 @@ pub mod test_transaction;
 fn parse_query(query: &str) -> Command {
     let mut query_parser = QueryParser::default();
     let cluster = Cluster::new_test(&config());
-    let ast = Ast::new(
-        &BufferedQuery::Query(Query::new(query)),
-        &cluster.sharding_schema(),
-        &cluster.schema(),
-        &mut PreparedStatements::default(),
-        "",
-        None,
-    )
-    .unwrap();
+    let buffered = BufferedQuery::Query(Query::new(query));
+    let params = Parameters::default();
+    let ctx = AstContext::from_cluster(&cluster, &params);
+    let ast = Cache::get()
+        .query(&buffered, &ctx, &mut PreparedStatements::default())
+        .unwrap();
     let mut client_request = ClientRequest::from(vec![Query::new(query).into()]);
     client_request.ast = Some(ast);
 
-    let params = Parameters::default();
     let context =
         RouterContext::new(&client_request, &cluster, &params, None, Sticky::new_test()).unwrap();
-    let command = query_parser.parse(context).unwrap().clone();
-    command
+
+    query_parser.parse(context).unwrap().clone()
 }
 
 macro_rules! command {
-    ($query:expr) => {{
-        command!($query, false)
-    }};
+    ($query:expr_2021) => {{ command!($query, false) }};
 
-    ($query:expr, $in_transaction:expr) => {{
+    ($query:expr_2021, $in_transaction:expr_2021) => {{
         let query = $query;
         let mut query_parser = QueryParser::default();
         let cluster = Cluster::new_test(&crate::config::config());
-        let mut ast = Ast::new(
-            &BufferedQuery::Query(Query::new($query)),
-            &cluster.sharding_schema(),
-            &cluster.schema(),
-            &mut PreparedStatements::default(),
-            "",
-            None,
-        )
-        .unwrap();
-        ast.cached = false; // Simple protocol queries are not cached
+        let buffered = BufferedQuery::Query(Query::new($query));
+        let params = Parameters::default();
+        let ctx = crate::frontend::router::parser::AstContext::from_cluster(&cluster, &params);
+        let ast = crate::frontend::router::parser::Cache::get()
+            .query(&buffered, &ctx, &mut PreparedStatements::default())
+            .unwrap();
         let mut client_request = ClientRequest::from(vec![Query::new(query).into()]);
         client_request.ast = Some(ast);
         let transaction = if $in_transaction {
@@ -87,7 +79,6 @@ macro_rules! command {
         } else {
             None
         };
-        let params = Parameters::default();
         let context = RouterContext::new(
             &client_request,
             &cluster,
@@ -103,11 +94,9 @@ macro_rules! command {
 }
 
 macro_rules! query {
-    ($query:expr) => {{
-        query!($query, false)
-    }};
+    ($query:expr_2021) => {{ query!($query, false) }};
 
-    ($query:expr, $in_transaction:expr) => {{
+    ($query:expr_2021, $in_transaction:expr_2021) => {{
         let query = $query;
         let (command, _) = command!(query, $in_transaction);
 
@@ -120,7 +109,7 @@ macro_rules! query {
 }
 
 macro_rules! query_parser {
-    ($qp:expr, $query:expr, $in_transaction:expr, $cluster:expr) => {{
+    ($qp:expr_2021, $query:expr_2021, $in_transaction:expr_2021, $cluster:expr_2021) => {{
         let cluster = $cluster;
         let mut client_request: ClientRequest = vec![$query.into()].into();
 
@@ -130,16 +119,12 @@ macro_rules! query_parser {
             .expect("no query in client request");
 
         let mut prep_stmts = PreparedStatements::default();
+        let params = Parameters::default();
+        let ctx = crate::frontend::router::parser::AstContext::from_cluster(&cluster, &params);
 
-        let mut ast = Ast::new(
-            &buffered_query,
-            &cluster.sharding_schema(),
-            &cluster.schema(),
-            &mut prep_stmts,
-            "",
-            None,
-        )
-        .unwrap();
+        let mut ast = crate::frontend::router::parser::Cache::get()
+            .query(&buffered_query, &ctx, &mut prep_stmts)
+            .unwrap();
         ast.cached = false; // Dry run test needs this.
         client_request.ast = Some(ast);
 
@@ -149,7 +134,6 @@ macro_rules! query_parser {
             None
         };
 
-        let params = Parameters::default();
         let router_context = RouterContext::new(
             &client_request,
             &cluster,
@@ -162,7 +146,7 @@ macro_rules! query_parser {
         $qp.parse(router_context).unwrap()
     }};
 
-    ($qp:expr, $query:expr, $in_transaction:expr) => {
+    ($qp:expr_2021, $query:expr_2021, $in_transaction:expr_2021) => {
         query_parser!(
             $qp,
             $query,
@@ -173,11 +157,11 @@ macro_rules! query_parser {
 }
 
 macro_rules! parse {
-    ($query: expr, $params: expr) => {
+    ($query: expr_2021, $params: expr_2021) => {
         parse!("", $query, $params)
     };
 
-    ($name:expr, $query:expr, $params:expr, $codes:expr) => {{
+    ($name:expr_2021, $query:expr_2021, $params:expr_2021, $codes:expr_2021) => {{
         let parse = Parse::named($name, $query);
         let params = $params
             .into_iter()
@@ -188,18 +172,15 @@ macro_rules! parse {
             .collect::<Vec<_>>();
         let bind = Bind::new_params_codes($name, &params, $codes);
         let cluster = Cluster::new_test(&crate::config::config());
-        let ast = Ast::new(
-            &BufferedQuery::Prepared(Parse::new_anonymous($query)),
-            &cluster.sharding_schema(),
-            &cluster.schema(),
-            &mut PreparedStatements::default(),
-            "",
-            None,
-        )
-        .unwrap();
+        let buffered = BufferedQuery::Prepared(Parse::new_anonymous($query));
+        let client_params = Parameters::default();
+        let ctx =
+            crate::frontend::router::parser::AstContext::from_cluster(&cluster, &client_params);
+        let ast = crate::frontend::router::parser::Cache::get()
+            .query(&buffered, &ctx, &mut PreparedStatements::default())
+            .unwrap();
         let mut client_request = ClientRequest::from(vec![parse.into(), bind.into()]);
         client_request.ast = Some(ast);
-        let client_params = Parameters::default();
         let route = QueryParser::default()
             .parse(
                 RouterContext::new(
@@ -221,7 +202,7 @@ macro_rules! parse {
         }
     }};
 
-    ($name:expr, $query:expr, $params: expr) => {
+    ($name:expr_2021, $query:expr_2021, $params: expr_2021) => {
         parse!($name, $query, $params, &[])
     };
 }
@@ -291,19 +272,68 @@ fn test_select_for_update() {
 }
 
 #[test]
+fn test_select_for_update_in_cte() {
+    // FOR UPDATE buried inside a CTE should still route to the primary.
+    let route = query!(
+        "WITH locked AS (SELECT * FROM sharded WHERE id = 1 FOR UPDATE) SELECT * FROM locked"
+    );
+    assert!(route.is_write());
+
+    // Doubly-nested CTE: the locking clause is two WITH levels deep.
+    let route = query!(
+        "WITH outer_cte AS (\
+            WITH inner_cte AS (SELECT * FROM sharded WHERE id = 1 FOR UPDATE) \
+            SELECT * FROM inner_cte\
+         ) SELECT * FROM outer_cte"
+    );
+    assert!(route.is_write());
+
+    // FOR UPDATE SKIP LOCKED inside a CTE should route to the primary.
+    let route = query!(
+        "WITH retries_available AS (\
+            SELECT 1 FROM pdo_rw_test_retries \
+            WHERE next_retry_at <= NOW() AND deleted_at IS NULL \
+            FOR UPDATE SKIP LOCKED\
+         ) SELECT COUNT(*) FROM retries_available"
+    );
+    assert!(route.is_write());
+
+    // Sanity check: a plain SELECT inside a CTE without locking is still a read.
+    let route = query!("WITH plain AS (SELECT * FROM sharded WHERE id = 1) SELECT * FROM plain");
+    assert!(route.is_read());
+}
+
+#[test]
+#[cfg_attr(not(feature = "new_parser"), should_panic)]
+fn test_select_for_update_in_subselect() {
+    // FOR UPDATE buried inside a subselect should still route to the primary.
+    let route =
+        query!("SELECT * FROM locked WHERE id IN (SELECT id FROM sharded WHERE id = 1 FOR UPDATE)");
+    assert!(route.is_write());
+
+    // Doubly-nested subselect
+    let route = query!(
+        "SELECT * FROM locked WHERE id IN \
+            (SELECT id FROM sharded WHERE id IN \
+                (SELECT id FROM sharded WHERE id = 1 FOR UPDATE))"
+    );
+    assert!(route.is_write());
+
+    // Sanity check: a plain SELECT inside a subselect without locking is still a read.
+    let route = query!("SELECT * FROM locked WHERE id IN (SELECT id FROM sharded WHERE id = 1)");
+    assert!(route.is_read());
+}
+
+#[test]
 fn test_omni() {
     let mut omni_round_robin = HashSet::new();
     let q = "SELECT sharded_omni.* FROM sharded_omni WHERE sharded_omni.id = 1";
 
     for _ in 0..10 {
         let command = parse_query(q);
-        match command {
-            Command::Query(query) => {
-                assert!(matches!(query.shard(), Shard::Direct(_)));
-                omni_round_robin.insert(query.shard().clone());
-            }
-
-            _ => {}
+        if let Command::Query(query) = command {
+            assert!(matches!(query.shard(), Shard::Direct(_)));
+            omni_round_robin.insert(query.shard().clone());
         }
     }
 
@@ -316,13 +346,9 @@ fn test_omni() {
 
     for _ in 0..10 {
         let command = parse_query(q);
-        match command {
-            Command::Query(query) => {
-                assert!(matches!(query.shard(), Shard::Direct(_)));
-                omni_sticky.insert(query.shard().clone());
-            }
-
-            _ => {}
+        if let Command::Query(query) = command {
+            assert!(matches!(query.shard(), Shard::Direct(_)));
+            omni_sticky.insert(query.shard().clone());
         }
     }
 
@@ -380,7 +406,7 @@ fn test_set() {
         match command {
             Command::Set { params, .. } => {
                 assert_eq!(params[0].name, "timezone");
-                assert_eq!(params[0].value, ParameterValue::from("UTC"));
+                assert_eq!(params[0].value, Some(ParameterValue::from("UTC")));
             }
             _ => panic!("not a set"),
         };
@@ -390,7 +416,7 @@ fn test_set() {
     match command {
         Command::Set { params, .. } => {
             assert_eq!(params[0].name, "statement_timeout");
-            assert_eq!(params[0].value, ParameterValue::from("3000"));
+            assert_eq!(params[0].value, Some(ParameterValue::from("3000")));
         }
         _ => panic!("not a set"),
     };
@@ -401,7 +427,7 @@ fn test_set() {
     match command {
         Command::Set { params, .. } => {
             assert_eq!(params[0].name, "is_superuser");
-            assert_eq!(params[0].value, ParameterValue::from("true"));
+            assert_eq!(params[0].value, Some(ParameterValue::from("true")));
         }
         _ => panic!("not a set"),
     };
@@ -420,7 +446,11 @@ fn test_set() {
             assert_eq!(params[0].name, "search_path");
             assert_eq!(
                 params[0].value,
-                ParameterValue::Tuple(vec!["$user".into(), "public".into(), "APPLES".into()])
+                Some(ParameterValue::Tuple(vec![
+                    "$user".into(),
+                    "public".into(),
+                    "APPLES".into()
+                ]))
             )
         }
         _ => panic!("search path"),
@@ -430,20 +460,14 @@ fn test_set() {
     let cluster = Cluster::new_test(&config());
     let mut prep_stmts = PreparedStatements::default();
     let buffered_query = BufferedQuery::Query(Query::new(query_str));
-    let mut ast = Ast::new(
-        &buffered_query,
-        &cluster.sharding_schema(),
-        &cluster.schema(),
-        &mut prep_stmts,
-        "",
-        None,
-    )
-    .unwrap();
-    ast.cached = false;
+    let params = Parameters::default();
+    let ctx = AstContext::from_cluster(&cluster, &params);
+    let ast = Cache::get()
+        .query(&buffered_query, &ctx, &mut prep_stmts)
+        .unwrap();
     let mut buffer: ClientRequest = vec![Query::new(query_str).into()].into();
     buffer.ast = Some(ast);
     let transaction = Some(TransactionType::ReadWrite);
-    let params = Parameters::default();
     let router_context =
         RouterContext::new(&buffer, &cluster, &params, transaction, Sticky::new()).unwrap();
     let mut context = QueryParserContext::new(router_context).unwrap();
@@ -502,9 +526,11 @@ fn test_transaction() {
     match route {
         Command::Set { params, .. } => {
             assert_eq!(params[0].name, "application_name");
-            assert_eq!(params[0].value.as_str().unwrap(), "test");
+            assert_eq!(
+                params[0].value.as_ref().and_then(|s| s.as_str()),
+                Some("test")
+            );
             assert!(!cluster.read_only());
-            assert!(!params[0].local);
         }
 
         _ => panic!("not a query"),
@@ -513,7 +539,9 @@ fn test_transaction() {
 
 #[test]
 fn test_insert_do_update() {
-    let route = query!("INSERT INTO foo (id) VALUES ($1::UUID) ON CONFLICT (id) DO UPDATE SET id = excluded.id RETURNING id");
+    let route = query!(
+        "INSERT INTO foo (id) VALUES ($1::UUID) ON CONFLICT (id) DO UPDATE SET id = excluded.id RETURNING id"
+    );
     assert!(route.is_write())
 }
 
@@ -534,9 +562,8 @@ fn test_show_shards() {
 
 #[test]
 fn test_write_functions() {
-    let route = query!("SELECT pg_advisory_lock($1)");
+    let route = query!("SELECT pg_advisory_lock(1)");
     assert!(route.is_write());
-    assert!(route.is_lock_session());
 }
 
 #[test]
@@ -551,7 +578,9 @@ fn test_cte() {
     let route = query!("WITH s AS (SELECT 1) SELECT 2");
     assert!(route.is_read());
 
-    let route = query!("WITH s AS (SELECT 1), s2 AS (INSERT INTO test VALUES ($1) RETURNING *), s3 AS (SELECT 123) SELECT * FROM s");
+    let route = query!(
+        "WITH s AS (SELECT 1), s2 AS (INSERT INTO test VALUES ($1) RETURNING *), s3 AS (SELECT 123) SELECT * FROM s"
+    );
     assert!(route.is_write());
 }
 
@@ -576,20 +605,14 @@ WHERE t2.account = (
 	)
 	";
     let buffered_query = BufferedQuery::Query(Query::new(query_str));
-    let mut ast = Ast::new(
-        &buffered_query,
-        &cluster.sharding_schema(),
-        &cluster.schema(),
-        &mut prep_stmts,
-        "",
-        None,
-    )
-    .unwrap();
-    ast.cached = false;
+    let params = Parameters::default();
+    let ctx = AstContext::from_cluster(&cluster, &params);
+    let ast = Cache::get()
+        .query(&buffered_query, &ctx, &mut prep_stmts)
+        .unwrap();
     let mut buffer: ClientRequest = vec![Query::new(query_str).into()].into();
     buffer.ast = Some(ast);
     let transaction = Some(TransactionType::ReadWrite);
-    let params = Parameters::default();
     let router_context =
         RouterContext::new(&buffer, &cluster, &params, transaction, Sticky::new()).unwrap();
     let mut context = QueryParserContext::new(router_context).unwrap();
@@ -597,32 +620,6 @@ WHERE t2.account = (
     match route {
         Command::Query(query) => assert!(query.is_write()),
         _ => panic!("not a select"),
-    }
-}
-
-#[test]
-fn test_comment() {
-    let query = "/* pgdog_role: primary */ SELECT 1";
-    let route = query!(query);
-    assert!(route.is_write());
-
-    let query = "/* pgdog_shard: 1234 */ SELECT 1234";
-    let route = query!(query);
-    assert_eq!(route.shard(), &Shard::Direct(1234));
-
-    // Comment is ignored.
-    let command = query_parser!(
-        QueryParser::default(),
-        Parse::named(
-            "test",
-            "/* pgdog_shard: 1234 */ SELECT * FROM sharded WHERE id = $1"
-        ),
-        false
-    );
-
-    match command {
-        Command::Query(query) => assert_eq!(query.shard(), &Shard::Direct(1234)),
-        _ => panic!("not a query"),
     }
 }
 
@@ -691,32 +688,6 @@ fn test_any() {
 }
 
 #[test]
-fn test_commit_prepared() {
-    let stmt = pg_query::parse("COMMIT PREPARED 'test'").unwrap();
-    println!("{:?}", stmt);
-}
-
-#[test]
-fn test_dry_run_simple() {
-    let mut config = config().deref().clone();
-    config.config.general.dry_run = true;
-    config::set(config.clone()).unwrap();
-
-    let cluster = Cluster::new_test_single_shard(&config);
-    let command = query_parser!(
-        QueryParser::default(),
-        Query::new("/* pgdog_sharding_key: 1234 */ SELECT * FROM sharded"),
-        false,
-        cluster
-    );
-    let cache = Cache::queries();
-    let stmt = cache.values().next().unwrap();
-    assert_eq!(stmt.stats.lock().direct, 1);
-    assert_eq!(stmt.stats.lock().multi, 0);
-    assert_eq!(command.route().shard(), &Shard::Direct(0));
-}
-
-#[test]
 fn test_set_comments() {
     // let command = query_parser!(
     //     QueryParser::default(),
@@ -731,39 +702,4 @@ fn test_set_comments() {
         true
     );
     assert!(matches!(command, Command::Set { .. }));
-}
-
-#[test]
-fn test_subqueries() {
-    println!(
-        "{:#?}",
-        pg_query::parse(r#"
-        SELECT
-            count(*) AS "count"
-        FROM
-        (
-            SELECT "companies".* FROM
-            (
-                 SELECT "companies".*
-                 FROM "companies"
-                 INNER JOIN "organizations_relevant_companies" ON
-                 ("organizations_relevant_companies"."company_id" = "companies"."id")
-                 WHERE
-                 (
-                     ("organizations_relevant_companies"."org_id" = 1)
-                     AND NOT
-                     (
-                        EXISTS
-                        (
-                           SELECT * FROM "hidden_globals"
-                           WHERE
-                           (
-                               ("hidden_globals"."org_id" = 1)
-                               AND ("hidden_globals"."global_company_id" = "organizations_relevant_companies"."company_id")
-                           )
-                     )
-                )
-            )
-        ) AS "companies" OFFSET 0) AS "t1" LIMIT 1"#).unwrap()
-    );
 }

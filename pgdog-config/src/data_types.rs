@@ -5,9 +5,9 @@ use std::{
 };
 
 use serde::{
+    Deserialize, Serialize,
     de::{self, Visitor},
     ser::SerializeSeq,
-    Deserialize, Serialize,
 };
 
 /// Wrapper type for f32 that implements Ord for PostgreSQL compatibility

@@ -1,19 +1,6 @@
 //! Admin command parser.
 
-use super::{
-    ban::Ban, copy_data::CopyData, cutover::Cutover, healthcheck::Healthcheck,
-    maintenance_mode::MaintenanceMode, pause::Pause, prelude::Message, probe::Probe,
-    reconnect::Reconnect, reload::Reload, replicate::Replicate, reset_query_cache::ResetQueryCache,
-    reshard::Reshard, schema_sync::SchemaSync, set::Set, setup_schema::SetupSchema,
-    show_client_memory::ShowClientMemory, show_clients::ShowClients, show_config::ShowConfig,
-    show_instance_id::ShowInstanceId, show_lists::ShowLists, show_mirrors::ShowMirrors,
-    show_peers::ShowPeers, show_pools::ShowPools, show_prepared_statements::ShowPreparedStatements,
-    show_query_cache::ShowQueryCache, show_replication::ShowReplication,
-    show_replication_slots::ShowReplicationSlots, show_schema_sync::ShowSchemaSync,
-    show_server_memory::ShowServerMemory, show_servers::ShowServers, show_stats::ShowStats,
-    show_table_copies::ShowTableCopies, show_tasks::ShowTasks, show_transactions::ShowTransactions,
-    show_version::ShowVersion, shutdown::Shutdown, stop_task::StopTask, Command, Error,
-};
+use super::*;
 
 use tracing::debug;
 
@@ -24,10 +11,12 @@ pub enum ParseResult {
     ShowClients(ShowClients),
     Reload(Reload),
     ShowPools(ShowPools),
+    ShowBans(ShowBans),
     ShowConfig(ShowConfig),
     ShowServers(ShowServers),
     ShowPeers(ShowPeers),
     ShowQueryCache(ShowQueryCache),
+    ResetPrepared(ResetPrepared),
     ResetQueryCache(ResetQueryCache),
     ShowStats(ShowStats),
     ShowTransactions(ShowTransactions),
@@ -37,6 +26,7 @@ pub enum ParseResult {
     SetupSchema(SetupSchema),
     Shutdown(Shutdown),
     ShowLists(ShowLists),
+    ShowListeners(ShowListeners),
     ShowPrepared(ShowPreparedStatements),
     ShowReplication(ShowReplication),
     ShowServerMemory(ShowServerMemory),
@@ -69,10 +59,12 @@ impl ParseResult {
             ShowClients(show_clients) => show_clients.execute().await,
             Reload(reload) => reload.execute().await,
             ShowPools(show_pools) => show_pools.execute().await,
+            ShowBans(show_bans) => show_bans.execute().await,
             ShowConfig(show_config) => show_config.execute().await,
             ShowServers(show_servers) => show_servers.execute().await,
             ShowPeers(show_peers) => show_peers.execute().await,
             ShowQueryCache(show_query_cache) => show_query_cache.execute().await,
+            ResetPrepared(cmd) => cmd.execute().await,
             ResetQueryCache(reset_query_cache) => reset_query_cache.execute().await,
             ShowStats(show_stats) => show_stats.execute().await,
             ShowTransactions(show_transactions) => show_transactions.execute().await,
@@ -82,6 +74,7 @@ impl ParseResult {
             SetupSchema(setup_schema) => setup_schema.execute().await,
             Shutdown(shutdown) => shutdown.execute().await,
             ShowLists(show_lists) => show_lists.execute().await,
+            ShowListeners(show_listeners) => show_listeners.execute().await,
             ShowPrepared(cmd) => cmd.execute().await,
             ShowReplication(show_replication) => show_replication.execute().await,
             ShowServerMemory(show_server_memory) => show_server_memory.execute().await,
@@ -114,10 +107,12 @@ impl ParseResult {
             ShowClients(show_clients) => show_clients.name(),
             Reload(reload) => reload.name(),
             ShowPools(show_pools) => show_pools.name(),
+            ShowBans(show_bans) => show_bans.name(),
             ShowConfig(show_config) => show_config.name(),
             ShowServers(show_servers) => show_servers.name(),
             ShowPeers(show_peers) => show_peers.name(),
             ShowQueryCache(show_query_cache) => show_query_cache.name(),
+            ResetPrepared(cmd) => cmd.name(),
             ResetQueryCache(reset_query_cache) => reset_query_cache.name(),
             ShowStats(show_stats) => show_stats.name(),
             ShowTransactions(show_transactions) => show_transactions.name(),
@@ -127,6 +122,7 @@ impl ParseResult {
             SetupSchema(setup_schema) => setup_schema.name(),
             Shutdown(shutdown) => shutdown.name(),
             ShowLists(show_lists) => show_lists.name(),
+            ShowListeners(show_listeners) => show_listeners.name(),
             ShowPrepared(show) => show.name(),
             ShowReplication(show_replication) => show_replication.name(),
             ShowServerMemory(show_server_memory) => show_server_memory.name(),
@@ -169,6 +165,7 @@ impl Parser {
             "show" => match iter.next().ok_or(Error::Syntax)?.trim() {
                 "clients" => ParseResult::ShowClients(ShowClients::parse(&sql)?),
                 "pools" => ParseResult::ShowPools(ShowPools::parse(&sql)?),
+                "bans" => ParseResult::ShowBans(ShowBans::parse(&sql)?),
                 "config" => ParseResult::ShowConfig(ShowConfig::parse(&sql)?),
                 "servers" => ParseResult::ShowServers(ShowServers::parse(&sql)?),
                 "server" => match iter.next().ok_or(Error::Syntax)?.trim() {
@@ -193,6 +190,7 @@ impl Parser {
                 "version" => ParseResult::ShowVersion(ShowVersion::parse(&sql)?),
                 "instance_id" => ParseResult::ShowInstanceId(ShowInstanceId::parse(&sql)?),
                 "lists" => ParseResult::ShowLists(ShowLists::parse(&sql)?),
+                "listeners" => ParseResult::ShowListeners(ShowListeners::parse(&sql)?),
                 "prepared" => ParseResult::ShowPrepared(ShowPreparedStatements::parse(&sql)?),
                 "replication" => ParseResult::ShowReplication(ShowReplication::parse(&sql)?),
                 "replication_slots" => {
@@ -207,6 +205,7 @@ impl Parser {
                 }
             },
             "reset" => match iter.next().ok_or(Error::Syntax)?.trim() {
+                "prepared" => ParseResult::ResetPrepared(ResetPrepared::parse(&sql)?),
                 "query_cache" => ParseResult::ResetQueryCache(ResetQueryCache::parse(&sql)?),
                 command => {
                     debug!("unknown admin show command: '{}'", command);
@@ -275,8 +274,26 @@ mod tests {
     }
 
     #[test]
+    fn parses_show_listeners_command() {
+        let result = Parser::parse("SHOW LISTENERS;");
+        assert!(matches!(result, Ok(ParseResult::ShowListeners(_))));
+    }
+
+    #[test]
+    fn parses_show_bans_command() {
+        let result = Parser::parse("SHOW BANS;");
+        assert!(matches!(result, Ok(ParseResult::ShowBans(_))));
+    }
+
+    #[test]
     fn parses_cutover_command() {
-        let result = Parser::parse("CUTOVER");
-        assert!(matches!(result, Ok(ParseResult::Cutover(_))));
+        assert!(matches!(
+            Parser::parse("CUTOVER"),
+            Ok(ParseResult::Cutover(_))
+        ));
+        assert!(matches!(
+            Parser::parse("CUTOVER 1"),
+            Ok(ParseResult::Cutover(_))
+        ));
     }
 }

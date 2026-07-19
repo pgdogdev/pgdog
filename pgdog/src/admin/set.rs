@@ -1,11 +1,14 @@
 use crate::{
     backend::databases,
-    config::{self, config, RewriteMode},
+    config::{self, RewriteMode, config},
     frontend::PreparedStatements,
 };
 
 use super::prelude::*;
-use pg_query::{parse, protobuf::a_const, NodeEnum};
+#[cfg(not(feature = "new_parser"))]
+use pg_query::{NodeEnum, parse, protobuf::a_const};
+#[cfg(feature = "new_parser")]
+use pg_raw_parse::Node;
 use serde::de::DeserializeOwned;
 
 pub struct Set {
@@ -19,30 +22,20 @@ impl Command for Set {
         "SET".into()
     }
 
+    #[cfg(feature = "new_parser")]
     fn parse(sql: &str) -> Result<Self, Error> {
-        let stmt = parse(sql).map_err(|_| Error::Syntax)?;
-        let root = stmt.protobuf.stmts.first().cloned().ok_or(Error::Syntax)?;
-        let stmt = root.stmt.ok_or(Error::Syntax)?;
-        match stmt.node.ok_or(Error::Syntax)? {
-            NodeEnum::VariableSetStmt(stmt) => {
-                let name = stmt.name;
+        let stmt = pg_raw_parse::parse(sql).map_err(|_| Error::Syntax)?;
+        let root = stmt.stmts().next().ok_or(Error::Syntax)?;
+        match root {
+            Node::VariableSetStmt(stmt) => {
+                let name = stmt.name().ok_or(Error::Syntax)?.to_owned();
 
-                let setting = stmt.args.first().ok_or(Error::Syntax)?;
-                let node = setting.node.clone().ok_or(Error::Syntax)?;
-                match node {
-                    NodeEnum::AConst(a_const) => match a_const.val {
-                        Some(a_const::Val::Ival(val)) => Ok(Self {
-                            name,
-                            value: val.ival.to_string(),
-                        }),
-
-                        Some(a_const::Val::Sval(sval)) => Ok(Self {
-                            name,
-                            value: sval.sval.to_string(),
-                        }),
-
-                        _ => Err(Error::Syntax),
-                    },
+                let setting = stmt.args().first().ok_or(Error::Syntax)?;
+                match setting {
+                    Node::A_Const(a_const) if let Some(val) = a_const.val() => Ok(Self {
+                        name,
+                        value: val.to_string(),
+                    }),
 
                     _ => Err(Error::Syntax),
                 }
@@ -50,6 +43,44 @@ impl Command for Set {
 
             _ => Err(Error::Syntax),
         }
+    }
+
+    cfg_select! {
+        not(feature = "new_parser") => {
+            fn parse(sql: &str) -> Result<Self, Error> {
+                let stmt = parse(sql).map_err(|_| Error::Syntax)?;
+                let root = stmt.protobuf.stmts.first().cloned().ok_or(Error::Syntax)?;
+                let stmt = root.stmt.ok_or(Error::Syntax)?;
+                match stmt.node.ok_or(Error::Syntax)? {
+                    NodeEnum::VariableSetStmt(stmt) => {
+                        let name = stmt.name;
+
+                        let setting = stmt.args.first().ok_or(Error::Syntax)?;
+                        let node = setting.node.clone().ok_or(Error::Syntax)?;
+                        match node {
+                            NodeEnum::AConst(a_const) => match a_const.val {
+                                Some(a_const::Val::Ival(val)) => Ok(Self {
+                                    name,
+                                    value: val.ival.to_string(),
+                                }),
+
+                                Some(a_const::Val::Sval(sval)) => Ok(Self {
+                                    name,
+                                    value: sval.sval.to_string(),
+                                }),
+
+                                _ => Err(Error::Syntax),
+                            },
+
+                            _ => Err(Error::Syntax),
+                        }
+                    }
+
+                    _ => Err(Error::Syntax),
+                }
+            }
+        }
+        _ => {}
     }
 
     async fn execute(&self) -> Result<Vec<Message>, Error> {
@@ -188,7 +219,7 @@ impl Command for Set {
                 config.config.general.wildcard_pool_idle_timeout = self.value.parse()?;
             }
 
-            _ => return Err(Error::Syntax),
+            _ => return Ok(vec![]),
         }
 
         config::set(config)?;

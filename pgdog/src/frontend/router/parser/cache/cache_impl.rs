@@ -1,6 +1,9 @@
 use lru::LruCache;
 use once_cell::sync::Lazy;
+#[cfg(not(feature = "new_parser"))]
 use pg_query::normalize;
+#[cfg(feature = "new_parser")]
+use pg_raw_parse::normalize::normalize;
 use pgdog_config::QueryParserEngine;
 use std::collections::HashMap;
 use std::time::Duration;
@@ -10,7 +13,7 @@ use std::sync::Arc;
 use tracing::debug;
 
 use super::super::{Error, Route};
-use super::{Ast, AstContext};
+use super::{super::parse_edge_comment, Ast, AstContext, AstQuery};
 use crate::frontend::{BufferedQuery, PreparedStatements};
 
 static CACHE: Lazy<Cache> = Lazy::new(Cache::new);
@@ -28,6 +31,8 @@ pub struct Stats {
     pub multi: usize,
     /// Parse time.
     pub parse_time: Duration,
+    /// Fingerprints calculated.
+    pub fingerprints: usize,
 }
 
 impl Stats {
@@ -42,11 +47,11 @@ impl Stats {
 
 /// Mutex-protected query cache.
 #[derive(Debug)]
-struct Inner {
+pub(super) struct Inner {
     /// Least-recently-used cache.
-    queries: LruCache<String, Ast>,
+    queries: LruCache<Arc<str>, Ast>,
     /// Cache global stats.
-    stats: Stats,
+    pub(super) stats: Stats,
 }
 
 /// AST cache.
@@ -106,24 +111,49 @@ impl Cache {
         ctx: &AstContext<'_>,
         prepared_statements: &mut PreparedStatements,
     ) -> Result<Ast, Error> {
+        // Separate query from comment, if one is present.
+        let query_and_comment = parse_edge_comment(query.query(), &ctx.sharding_schema)?;
+
         {
             let mut guard = self.inner.lock();
-            let ast = guard.queries.get_mut(query.query()).map(|entry| {
+            let ast = guard.queries.get_mut(query_and_comment.query).map(|entry| {
                 entry.stats.lock().hits += 1; // No contention on this.
                 entry.clone()
             });
-            if let Some(ast) = ast {
+            if let Some(mut ast) = ast {
                 guard.stats.hits += 1;
+                ast.comment_role = query_and_comment.role;
+                ast.comment_shard = query_and_comment.shard.clone();
+
                 return Ok(ast);
             }
         }
 
         // Parse query without holding lock.
-        let entry = Ast::with_context(query, ctx, prepared_statements)?;
+        let mut entry = Ast::with_context(
+            &AstQuery {
+                original_query: query,
+                query_without_comment: query_and_comment.query,
+            },
+            ctx,
+            prepared_statements,
+        )?;
+        entry.comment_role = query_and_comment.role;
+        entry.comment_shard = query_and_comment.shard.clone();
         let parse_time = entry.stats.lock().parse_time;
 
         let mut guard = self.inner.lock();
-        guard.queries.put(query.query().to_string(), entry.clone());
+        // Don't cache when a shard comment routed the query AND a rewrite
+        // was applied: the cache key is the comment-stripped body, so a
+        // subsequent uncommented lookup would hit this entry and receive an
+        // already-rewritten plan that was built against the commented
+        // (direct-shard) variant.
+        let cacheable = entry.comment_shard.is_none() || entry.rewrite_plan.is_empty();
+        if cacheable {
+            guard
+                .queries
+                .put(entry.query_without_comment.clone(), entry.clone());
+        }
         guard.stats.misses += 1;
         guard.stats.parse_time += parse_time;
 
@@ -138,8 +168,19 @@ impl Cache {
         ctx: &AstContext<'_>,
         prepared_statements: &mut PreparedStatements,
     ) -> Result<Ast, Error> {
-        let mut entry = Ast::with_context(query, ctx, prepared_statements)?;
+        let query_and_comment = parse_edge_comment(query.query(), &ctx.sharding_schema)?;
+
+        let mut entry = Ast::with_context(
+            &AstQuery {
+                original_query: query,
+                query_without_comment: query_and_comment.query,
+            },
+            ctx,
+            prepared_statements,
+        )?;
         entry.cached = false;
+        entry.comment_role = query_and_comment.role;
+        entry.comment_shard = query_and_comment.shard.clone();
 
         let parse_time = entry.stats.lock().parse_time;
 
@@ -160,11 +201,11 @@ impl Cache {
         route: &Route,
         query_parser_engine: QueryParserEngine,
     ) -> Result<(), Error> {
-        let normalized = normalize(query).map_err(Error::PgQuery)?;
+        let normalized = normalize(query)?;
 
         {
             let mut guard = self.inner.lock();
-            if let Some(entry) = guard.queries.get(&normalized) {
+            if let Some(entry) = guard.queries.get(normalized.as_str()) {
                 entry.update_stats(route);
                 guard.stats.hits += 1;
                 return Ok(());
@@ -175,7 +216,7 @@ impl Cache {
         entry.update_stats(route);
 
         let mut guard = self.inner.lock();
-        guard.queries.put(normalized, entry);
+        guard.queries.put(normalized.into(), entry);
         guard.stats.misses += 1;
 
         Ok(())
@@ -209,7 +250,7 @@ impl Cache {
     }
 
     /// Get a copy of all queries stored in the cache.
-    pub fn queries() -> HashMap<String, Ast> {
+    pub fn queries() -> HashMap<Arc<str>, Ast> {
         Self::get()
             .inner
             .lock()

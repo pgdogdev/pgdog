@@ -1,18 +1,19 @@
-use std::ops::Deref;
 use std::path::PathBuf;
-use std::time::Duration;
 
 use clap::{Parser, Subcommand};
 use std::fs::read_to_string;
 use thiserror::Error;
-use tokio::time::sleep;
 use tokio::{select, signal::ctrl_c};
 use tracing::{info, warn};
 
+use crate::api::Task;
+use crate::api::resharding::ReshardTask;
+use crate::api::run_task;
+use crate::api::schema_sync::{SchemaSyncPhase, SchemaSyncTask};
+use crate::api::tasks_storage;
 use crate::backend::databases::databases;
 use crate::backend::replication::orchestrator::Orchestrator;
 use crate::backend::schema::sync::config::ShardConfig;
-use crate::backend::schema::sync::pg_dump::SyncState;
 use crate::config::{Config, Users};
 use crate::frontend::router::cli::RouterCli;
 
@@ -51,12 +52,11 @@ pub enum Commands {
         session_mode: Option<bool>,
     },
 
-    /// Fingerprint a query.
-    Fingerprint {
-        #[arg(short, long)]
-        query: Option<String>,
-        #[arg(short, long)]
-        path: Option<PathBuf>,
+    /// Generate a SCRAM-SHA-256 hash from a plaintext password.
+    /// Output can be stored directly in users.toml.
+    Hash {
+        /// The plaintext password to hash.
+        password: String,
     },
 
     /// Execute the router on the queries.
@@ -174,34 +174,17 @@ pub enum Commands {
     },
 }
 
-/// Fingerprint some queries.
+/// Generate and print a SCRAM-SHA-256 hash from a plaintext password.
 #[allow(clippy::print_stdout)]
-pub fn fingerprint(
-    query: Option<String>,
-    path: Option<PathBuf>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    if let Some(query) = query {
-        let fingerprint = pg_query::fingerprint(&query)?;
-        println!("{} [{}]", fingerprint.hex, fingerprint.value);
-    } else if let Some(path) = path {
-        let queries = read_to_string(path)?;
-        for query in queries.split(";") {
-            if query.trim().is_empty() {
-                continue;
-            }
-            tracing::debug!("{}", query);
-            if let Ok(fingerprint) = pg_query::fingerprint(query) {
-                println!(
-                    r#"
-[[manual_query]]
-fingerprint = "{}" #[{}]"#,
-                    fingerprint.hex, fingerprint.value
-                );
-            }
-        }
-    }
+pub fn hash_password(password: &str) {
+    use rand::Rng;
 
-    Ok(())
+    let salt: [u8; 16] = rand::rng().random();
+    let iterations = std::num::NonZeroU32::new(4096).unwrap();
+    println!(
+        "{}",
+        crate::auth::scram::generate_hash(password, iterations, &salt)
+    );
 }
 
 #[derive(Debug, Error)]
@@ -259,6 +242,28 @@ pub fn config_check(
     }
 }
 
+/// Run an api task to completion in the foreground, cancelling it on Ctrl-C so
+/// it can wind down (e.g. stop replication) instead of the process being
+/// hard-killed. Returns the task output, or its error/cancellation outcome.
+async fn run_to_completion<T: Task>(task: T) -> Result<T::Output, Box<dyn std::error::Error>>
+where
+    T::Error: std::error::Error + 'static,
+{
+    let mut waiter = run_task(task);
+    let id = waiter.id();
+
+    loop {
+        select! {
+            result = &mut waiter => return Ok(result?),
+            signal = ctrl_c() => {
+                signal?;
+                warn!("interrupt received, cancelling task {id}");
+                tasks_storage().cancel_task(id);
+            }
+        }
+    }
+}
+
 /// FOR TESTING PURPOSES ONLY.
 pub async fn replicate_and_cutover(commands: Commands) -> Result<(), Box<dyn std::error::Error>> {
     if let Commands::ReplicateAndCutover {
@@ -268,22 +273,26 @@ pub async fn replicate_and_cutover(commands: Commands) -> Result<(), Box<dyn std
         replication_slot,
     } = commands
     {
-        let mut orchestrator = Orchestrator::new(
+        let orchestrator = Orchestrator::new(
             &from_database,
             &to_database,
             &publication,
             replication_slot.clone(),
         )?;
 
-        orchestrator.replicate_and_cutover().await?;
+        run_to_completion(
+            ReshardTask::builder()
+                .orchestrator(orchestrator)
+                .auto_cutover(true)
+                .build(),
+        )
+        .await?;
     }
 
     Ok(())
 }
 
 pub async fn data_sync(commands: Commands) -> Result<(), Box<dyn std::error::Error>> {
-    use crate::backend::replication::logical::Error;
-
     if let Commands::DataSync {
         from_database,
         to_database,
@@ -294,65 +303,23 @@ pub async fn data_sync(commands: Commands) -> Result<(), Box<dyn std::error::Err
         skip_schema_sync,
     } = commands
     {
-        let mut orchestrator = Orchestrator::new(
-            &from_database,
-            &to_database,
-            &publication,
-            replication_slot.clone(),
-        )?;
-        orchestrator.load_schema().await?;
+        let orchestrator =
+            Orchestrator::new(&from_database, &to_database, &publication, replication_slot)?;
 
-        if !skip_schema_sync {
-            orchestrator.schema_sync_pre(true).await?;
-        }
-
-        if !replicate_only {
-            select! {
-                result = orchestrator.data_sync() => {
-                    result?;
-                }
-
-                _ = ctrl_c() => {
-                    warn!("abort signal received, waiting 5 seconds and performing cleanup");
-                    sleep(Duration::from_secs(5)).await;
-
-                    orchestrator.cleanup().await?;
-
-                    return Err(Error::DataSyncAborted.into());
-                }
-            }
-        }
-
-        if !sync_only {
-            let mut waiter = orchestrator.replicate().await?;
-
-            select! {
-                result = waiter.wait() => {
-                    result?;
-                }
-
-                _ = ctrl_c() => {
-                    warn!("abort signal received");
-
-                    orchestrator.request_stop().await;
-
-                    info!("waiting for replication to stop");
-
-                    waiter.wait().await?;
-                    orchestrator.cleanup().await?;
-
-                    return Err(Error::DataSyncAborted.into());
-                }
-            }
-        }
-    } else {
-        return Ok(());
+        run_to_completion(
+            ReshardTask::builder()
+                .orchestrator(orchestrator)
+                .skip_schema_sync(skip_schema_sync)
+                .replicate_only(replicate_only)
+                .sync_only(sync_only)
+                .build(),
+        )
+        .await?;
     }
 
     Ok(())
 }
 
-#[allow(clippy::print_stdout)]
 pub async fn schema_sync(commands: Commands) -> Result<(), Box<dyn std::error::Error>> {
     if let Commands::SchemaSync {
         from_database,
@@ -364,32 +331,25 @@ pub async fn schema_sync(commands: Commands) -> Result<(), Box<dyn std::error::E
         cutover,
     } = commands
     {
-        let mut orchestrator = Orchestrator::new(&from_database, &to_database, &publication, None)?;
-        orchestrator.load_schema().await?;
-
-        if dry_run {
-            let state = if data_sync_complete {
-                SyncState::PostData
-            } else if cutover {
-                SyncState::Cutover
-            } else {
-                SyncState::PreData
-            };
-
-            let schema = orchestrator.schema()?;
-            for statement in schema.statements(state)? {
-                println!("{}", statement.deref());
-            }
-            return Ok(());
-        }
-
-        if data_sync_complete {
-            orchestrator.schema_sync_post(ignore_errors).await?;
+        let phase = if data_sync_complete {
+            SchemaSyncPhase::Post
         } else if cutover {
-            orchestrator.schema_sync_cutover(ignore_errors).await?;
+            SchemaSyncPhase::Cutover
         } else {
-            orchestrator.schema_sync_pre(ignore_errors).await?;
-        }
+            SchemaSyncPhase::Pre
+        };
+
+        let orchestrator = Orchestrator::new(&from_database, &to_database, &publication, None)?;
+
+        run_to_completion(
+            SchemaSyncTask::builder()
+                .orchestrator(orchestrator)
+                .phase(phase)
+                .ignore_errors(ignore_errors)
+                .dry_run(dry_run)
+                .build(),
+        )
+        .await?;
     } else {
         return Ok(());
     }

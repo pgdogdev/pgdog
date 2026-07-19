@@ -20,14 +20,14 @@ impl FromBytes for ParameterDescription {
 }
 
 impl ToBytes for ParameterDescription {
-    fn to_bytes(&self) -> Result<Bytes, Error> {
+    fn to_bytes(&self) -> Bytes {
         let mut payload = Payload::named(self.code());
         payload.put_u16(self.params.len() as u16);
         for param in &self.params {
             payload.put_i32(*param);
         }
 
-        Ok(payload.freeze())
+        payload.freeze()
     }
 }
 
@@ -60,7 +60,7 @@ mod test {
             params: params.clone(),
         };
 
-        let bytes = description.to_bytes().unwrap();
+        let bytes = description.to_bytes();
         let mut buf = bytes.clone();
         assert_eq!(buf.get_u8(), b't');
         let len = buf.get_i32();
@@ -79,7 +79,7 @@ mod test {
             params: params.clone(),
         };
 
-        let bytes = description.to_bytes().unwrap();
+        let bytes = description.to_bytes();
         let mut buf = bytes.clone();
         assert_eq!(buf.get_u8(), b't');
         let len = buf.get_i32();

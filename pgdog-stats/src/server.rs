@@ -52,10 +52,12 @@ impl Add<Counts> for PoolCounts {
             errors: self.errors + rhs.errors,
             cleaned: self.cleaned + rhs.cleaned,
             prepared_sync: self.prepared_sync + rhs.prepared_sync,
+            // These are not counted by each server stats.
             connect_count: self.connect_count,
             connect_time: self.connect_time,
             writes: self.writes,
             reads: self.reads,
+            auth_attempts: self.auth_attempts,
         }
     }
 }

@@ -1,3 +1,5 @@
+use pgdog_postgres_types::Oid;
+
 use super::super::super::code;
 use super::super::super::prelude::*;
 
@@ -5,7 +7,7 @@ use super::super::super::prelude::*;
 pub struct Truncate {
     pub num_relations: i32,
     pub options: i8,
-    pub oid: i32,
+    pub oid: Oid,
 }
 
 impl FromBytes for Truncate {
@@ -14,7 +16,7 @@ impl FromBytes for Truncate {
         Ok(Self {
             num_relations: bytes.get_i32(),
             options: bytes.get_i8(),
-            oid: bytes.get_i32(),
+            oid: Oid(bytes.get_u32()),
         })
     }
 }

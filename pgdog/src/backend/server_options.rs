@@ -1,4 +1,4 @@
-use crate::net::{parameter::ParameterValue, Parameter};
+use crate::net::{Parameter, parameter::ParameterValue};
 
 #[derive(Debug, Clone, Default)]
 pub struct ServerOptions {

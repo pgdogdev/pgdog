@@ -13,7 +13,7 @@ pub(super) struct Waiting {
 impl Drop for Waiting {
     fn drop(&mut self) {
         if self.waiting {
-            self.pool.lock().remove_waiter(&self.request.id);
+            self.pool.lock().remove_waiter(self.request.id);
         }
     }
 }
@@ -31,6 +31,11 @@ impl Waiting {
             let mut guard = pool.lock();
             if !guard.online {
                 return Err(Error::Offline);
+            }
+            if request.read {
+                guard.stats.counts.reads += 1;
+            } else {
+                guard.stats.counts.writes += 1;
             }
             guard.waiting.push_back(Waiter { request, tx });
             guard.full()
@@ -86,8 +91,8 @@ pub(super) struct Waiter {
 mod tests {
     use super::*;
     use crate::backend::pool::Pool;
-    use crate::net::messages::BackendKeyData;
-    use tokio::time::{sleep, timeout, Duration};
+    use crate::net::messages::FrontendPid;
+    use tokio::time::{Duration, sleep, timeout};
 
     #[tokio::test]
     async fn test_cancellation_safety() {
@@ -99,7 +104,7 @@ mod tests {
 
         for i in 0..num_tasks {
             let pool_clone = pool.clone();
-            let request = Request::unrouted(BackendKeyData::new());
+            let request = Request::unrouted(FrontendPid::new());
             let mut waiting = Waiting::new(pool_clone, &request).unwrap();
 
             let wait_task = tokio::spawn(async move { waiting.wait().await });
@@ -151,7 +156,7 @@ mod tests {
                 port: 5432,
                 database_name: "pgdog".into(),
                 user: "pgdog".into(),
-                password: "pgdog".into(),
+                passwords: vec!["pgdog".into()],
                 ..Default::default()
             },
             config,
@@ -162,7 +167,7 @@ mod tests {
 
         let _conn = pool.get(&Request::default()).await.unwrap();
 
-        let request = Request::unrouted(BackendKeyData::new());
+        let request = Request::unrouted(FrontendPid::new());
         let waiter_pool = pool.clone();
         let get_conn = async move {
             let mut waiting = Waiting::new(waiter_pool.clone(), &request).unwrap();

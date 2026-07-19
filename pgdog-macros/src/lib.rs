@@ -4,77 +4,99 @@
 //!
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{ItemFn, parse_macro_input};
+use syn::{ItemFn, LitInt, parse_macro_input};
 
-/// Generates required methods for PgDog to run at plugin load time.
+/// Default number of attempts when `#[flaky]` is used without an explicit count.
+const DEFAULT_FLAKY_ATTEMPTS: usize = 3;
+
+/// Retry a flaky test until it passes or the attempt budget is exhausted.
 ///
-/// ### Methods
+/// Place this **above** the test attribute. It works for both synchronous
+/// (`#[test]`) and asynchronous (`#[tokio::test]`) tests:
 ///
-/// * `pgdog_rustc_version`: Returns the version of the Rust compiler used to build the plugin.
-/// * `pgdog_pg_query_version`: Returns the version of the pg_query library used by the plugin.
-/// * `pgdog_plugin_version`: Returns the version of the plugin itself, taken from Cargo.toml.
+/// ```ignore
+/// #[flaky]            // retries up to 3 times (the default)
+/// #[tokio::test]
+/// async fn sometimes_flaky() {
+///     assert!(roll_the_dice());
+/// }
 ///
-#[proc_macro]
-pub fn plugin(_input: TokenStream) -> TokenStream {
-    let expanded = quote! {
-        #[unsafe(no_mangle)]
-        pub unsafe extern "C" fn pgdog_rustc_version(output: *mut pgdog_plugin::PdStr) {
-            let version = pgdog_plugin::comp::rustc_version();
-            unsafe {
-                *output = version;
-            }
-        }
-
-        #[unsafe(no_mangle)]
-        pub unsafe extern "C" fn pgdog_plugin_version(output: *mut pgdog_plugin::PdStr) {
-            let version: pgdog_plugin::PdStr = env!("CARGO_PKG_VERSION").into();
-            unsafe {
-                *output = version;
-            }
-        }
-
-        #[unsafe(no_mangle)]
-        pub unsafe extern "C" fn pgdog_plugin_api_version(output: *mut pgdog_plugin::PdStr) {
-            let version = pgdog_plugin::comp::pgdog_plugin_api_version();
-            unsafe {
-                *output = version;
-            }
-        }
-    };
-    TokenStream::from(expanded)
-}
-
-/// Generate the `pgdog_init` method that's executed at plugin load time.
+/// #[flaky(5)]         // retries up to 5 times
+/// #[test]
+/// fn also_flaky() {
+///     assert!(roll_the_dice());
+/// }
+/// ```
+///
+/// Each attempt that panics is caught and logged to stderr, then the test is
+/// retried. The final attempt is run uncaught so that a genuine failure
+/// propagates with its original panic message and backtrace.
+///
+/// The async variant relies on `futures` and `std` being available in the
+/// consuming crate (both are present in PgDog).
 #[proc_macro_attribute]
-pub fn init(_attr: TokenStream, item: TokenStream) -> TokenStream {
-    let input_fn = parse_macro_input!(item as ItemFn);
-    let fn_name = &input_fn.sig.ident;
-
-    let expanded = quote! {
-
-        #[unsafe(no_mangle)]
-        pub extern "C" fn pgdog_init() {
-            #input_fn
-
-            #fn_name();
+pub fn flaky(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let attempts: usize = if attr.is_empty() {
+        DEFAULT_FLAKY_ATTEMPTS
+    } else {
+        let lit = parse_macro_input!(attr as LitInt);
+        match lit.base10_parse() {
+            Ok(0) | Ok(1) => 1,
+            Ok(n) => n,
+            Err(err) => return err.to_compile_error().into(),
         }
     };
 
-    TokenStream::from(expanded)
-}
+    let ItemFn {
+        attrs,
+        vis,
+        sig,
+        block,
+    } = parse_macro_input!(item as ItemFn);
 
-/// Generate the `pgdog_fini` method that runs at PgDog shutdown.
-#[proc_macro_attribute]
-pub fn fini(_attr: TokenStream, item: TokenStream) -> TokenStream {
-    let input_fn = parse_macro_input!(item as ItemFn);
-    let fn_name = &input_fn.sig.ident;
+    let test_name = sig.ident.to_string();
+
+    // The last attempt is run uncaught so a real failure keeps its original
+    // panic message and backtrace. Earlier attempts are caught and retried.
+    let retried = attempts.saturating_sub(1);
+
+    let body = if sig.asyncness.is_some() {
+        quote! {
+            use ::futures::future::FutureExt;
+            for __flaky_attempt in 1..=#retried {
+                match ::std::panic::AssertUnwindSafe(async #block).catch_unwind().await {
+                    ::std::result::Result::Ok(__flaky_value) => return __flaky_value,
+                    ::std::result::Result::Err(_) => {
+                        eprintln!(
+                            "[flaky] test `{}` failed on attempt {}/{}, retrying...",
+                            #test_name, __flaky_attempt, #attempts,
+                        );
+                    }
+                }
+            }
+            (async #block).await
+        }
+    } else {
+        quote! {
+            for __flaky_attempt in 1..=#retried {
+                match ::std::panic::catch_unwind(::std::panic::AssertUnwindSafe(|| #block)) {
+                    ::std::result::Result::Ok(__flaky_value) => return __flaky_value,
+                    ::std::result::Result::Err(_) => {
+                        eprintln!(
+                            "[flaky] test `{}` failed on attempt {}/{}, retrying...",
+                            #test_name, __flaky_attempt, #attempts,
+                        );
+                    }
+                }
+            }
+            #block
+        }
+    };
 
     let expanded = quote! {
-        #[unsafe(no_mangle)]
-        pub extern "C" fn pgdog_fini() {
-            #input_fn
-
-            #fn_name();
+        #(#attrs)*
+        #vis #sig {
+            #body
         }
     };
 

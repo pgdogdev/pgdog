@@ -3,9 +3,9 @@ use std::time::SystemTime;
 use crate::{
     backend::databases::databases,
     net::{
+        ToDataRowColumn,
         data_row::Data,
         messages::{DataRow, Field, Protocol, RowDescription},
-        ToDataRowColumn,
     },
 };
 

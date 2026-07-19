@@ -50,6 +50,11 @@ impl Query {
 
 impl FromBytes for Query {
     fn from_bytes(payload: Bytes) -> Result<Self, Error> {
+        // Minimum: code(1) + length(4) + null terminator(1) = 6 bytes
+        if payload.len() < 6 {
+            return Err(Error::UnexpectedEof);
+        }
+
         // Check for UTF-8 so we don't have to later.
         from_utf8(&payload[5..payload.len() - 1])?;
 
@@ -58,8 +63,8 @@ impl FromBytes for Query {
 }
 
 impl ToBytes for Query {
-    fn to_bytes(&self) -> Result<Bytes, Error> {
-        Ok(self.payload.clone())
+    fn to_bytes(&self) -> Bytes {
+        self.payload.clone()
     }
 }
 
@@ -82,7 +87,7 @@ mod test {
     #[test]
     fn test_query() {
         let query = Query::new("SELECT 1, 2, 3");
-        let query = Query::from_bytes(query.to_bytes().unwrap()).unwrap();
+        let query = Query::from_bytes(query.to_bytes()).unwrap();
         assert_eq!(query.query(), "SELECT 1, 2, 3");
     }
 }

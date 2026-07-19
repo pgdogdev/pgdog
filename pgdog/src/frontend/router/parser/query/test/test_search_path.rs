@@ -1,5 +1,5 @@
 use crate::frontend::router::parser::route::RoundRobinReason;
-use crate::frontend::router::parser::{route::ShardSource, Shard};
+use crate::frontend::router::parser::{Shard, route::ShardSource};
 use crate::net::parameter::ParameterValue;
 
 use super::setup::{QueryParserTest, *};
@@ -39,10 +39,9 @@ fn test_search_path_shard_0_routes_insert() {
         ParameterValue::Tuple(vec!["pg_catalog".into(), "shard_0".into()]),
     );
 
-    let command = test.execute(vec![Query::new(
-        "INSERT INTO users (id, name) VALUES (1, 'test')",
-    )
-    .into()]);
+    let command = test.execute(vec![
+        Query::new("INSERT INTO users (id, name) VALUES (1, 'test')").into(),
+    ]);
 
     assert!(command.route().is_write());
     assert_eq!(command.route().shard(), &Shard::Direct(0));
@@ -60,10 +59,9 @@ fn test_search_path_shard_1_routes_insert() {
         ]),
     );
 
-    let command = test.execute(vec![Query::new(
-        "INSERT INTO users (id, name) VALUES (1, 'test')",
-    )
-    .into()]);
+    let command = test.execute(vec![
+        Query::new("INSERT INTO users (id, name) VALUES (1, 'test')").into(),
+    ]);
 
     assert!(command.route().is_write());
     assert_eq!(command.route().shard(), &Shard::Direct(1));
@@ -76,10 +74,9 @@ fn test_search_path_shard_0_routes_update() {
         ParameterValue::Tuple(vec!["shard_0".into(), "pg_catalog".into(), "public".into()]),
     );
 
-    let command = test.execute(vec![Query::new(
-        "UPDATE users SET name = 'updated' WHERE id = 1",
-    )
-    .into()]);
+    let command = test.execute(vec![
+        Query::new("UPDATE users SET name = 'updated' WHERE id = 1").into(),
+    ]);
 
     assert!(command.route().is_write());
     assert_eq!(command.route().shard(), &Shard::Direct(0));
@@ -92,10 +89,9 @@ fn test_search_path_shard_1_routes_update() {
         ParameterValue::Tuple(vec!["information_schema".into(), "shard_1".into()]),
     );
 
-    let command = test.execute(vec![Query::new(
-        "UPDATE users SET name = 'updated' WHERE id = 1",
-    )
-    .into()]);
+    let command = test.execute(vec![
+        Query::new("UPDATE users SET name = 'updated' WHERE id = 1").into(),
+    ]);
 
     assert!(command.route().is_write());
     assert_eq!(command.route().shard(), &Shard::Direct(1));
@@ -231,10 +227,9 @@ fn test_search_path_shard_0_routes_create_table() {
         ParameterValue::Tuple(vec!["$user".into(), "shard_0".into(), "public".into()]),
     );
 
-    let command = test.execute(vec![Query::new(
-        "CREATE TABLE new_table (id SERIAL PRIMARY KEY)",
-    )
-    .into()]);
+    let command = test.execute(vec![
+        Query::new("CREATE TABLE new_table (id SERIAL PRIMARY KEY)").into(),
+    ]);
 
     assert!(command.route().is_write());
     assert_eq!(command.route().shard(), &Shard::Direct(0));
@@ -247,10 +242,9 @@ fn test_search_path_shard_1_routes_create_table() {
         ParameterValue::Tuple(vec!["public".into(), "pg_catalog".into(), "shard_1".into()]),
     );
 
-    let command = test.execute(vec![Query::new(
-        "CREATE TABLE new_table (id SERIAL PRIMARY KEY)",
-    )
-    .into()]);
+    let command = test.execute(vec![
+        Query::new("CREATE TABLE new_table (id SERIAL PRIMARY KEY)").into(),
+    ]);
 
     assert!(command.route().is_write());
     assert_eq!(command.route().shard(), &Shard::Direct(1));
@@ -277,7 +271,7 @@ fn test_search_path_shard_1_routes_alter_table() {
     );
 
     let command = test.execute(vec![
-        Query::new("ALTER TABLE users ADD COLUMN email TEXT").into()
+        Query::new("ALTER TABLE users ADD COLUMN email TEXT").into(),
     ]);
 
     assert!(command.route().is_write());

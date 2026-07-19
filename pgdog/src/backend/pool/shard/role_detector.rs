@@ -20,7 +20,12 @@ impl RoleDetector {
     /// Detect role change in the shard.
     pub(super) fn changed(&mut self) -> bool {
         if self.enabled() {
-            self.shard.redetect_roles()
+            let changed = self.shard.redetect_roles();
+            if changed {
+                // Re-initialize pub/sub channel.
+                self.shard.init_pub_sub();
+            }
+            changed
         } else {
             false
         }
@@ -41,7 +46,7 @@ mod test {
     use crate::backend::pool::lsn_monitor::LsnStats;
     use crate::backend::pool::{Address, Config, PoolConfig};
     use crate::backend::replication::publisher::Lsn;
-    use crate::config::{LoadBalancingStrategy, ReadWriteSplit};
+    use crate::config::{LoadBalancingStrategy, ReadWriteSplit, Role};
     use pgdog_stats::LsnStats as StatsLsnStats;
 
     use super::super::ShardConfig;
@@ -53,8 +58,13 @@ mod test {
                 host: host.into(),
                 port,
                 user: "pgdog".into(),
-                password: "pgdog".into(),
+                passwords: vec!["pgdog".into()],
                 database_name: "pgdog".into(),
+                configured_role: if role_detection {
+                    Role::Auto
+                } else {
+                    Role::Replica
+                },
                 ..Default::default()
             },
             config: Config {
@@ -78,6 +88,7 @@ mod test {
                 database: "pgdog".into(),
             }),
             lsn_check_interval: Duration::MAX,
+            pub_sub_enabled: false,
         })
     }
 

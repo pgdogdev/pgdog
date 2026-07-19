@@ -79,7 +79,7 @@ impl Command for ShowServers {
         let now = Instant::now();
         let now_time = SystemTime::now();
 
-        for (_, server) in stats {
+        for server in stats {
             let age = now.duration_since(server.stats.created_at);
             let request_age = now.duration_since(server.stats.last_used);
             let request_time = now_time - request_age;
@@ -98,11 +98,8 @@ impl Command for ShowServers {
                     format_time(server.stats.created_at_time.into()),
                 )
                 .add("request_time", format_time(request_time.into()))
-                .add("remote_pid", server.stats.id.pid as i64)
-                .add(
-                    "client_id",
-                    server.stats.client_id.map(|client| client.pid as i64),
-                )
+                .add("remote_pid", server.stats.id)
+                .add("client_id", server.stats.client_id)
                 .add("transactions", server.stats.total.transactions)
                 .add("queries", server.stats.total.queries)
                 .add("rollbacks", server.stats.total.rollbacks)

@@ -1,26 +1,42 @@
-use std::{collections::HashMap, ops::Deref, sync::Arc};
+#[cfg(feature = "new_parser")]
+use indexmap::IndexSet;
+#[cfg(not(feature = "new_parser"))]
+use std::collections::HashMap;
+use std::{ops::Deref, sync::Arc};
 
+#[cfg(not(feature = "new_parser"))]
 use pg_query::{
+    Node as PgNode, NodeEnum,
     protobuf::{
         AExpr, AExprKind, AStar, ColumnRef, DeleteStmt, InsertStmt, LimitOption, List,
         OverridingKind, ParamRef, ParseResult, RangeVar, RawStmt, ResTarget, SelectStmt,
         SetOperation, String as PgString, UpdateStmt,
     },
-    Node, NodeEnum,
 };
-use pgdog_config::{QueryParserEngine, RewriteMode};
+#[cfg(feature = "new_parser")]
+use pg_raw_parse::make::{owned, try_owned};
+#[cfg(feature = "new_parser")]
+use pg_raw_parse::{DeparseResult, Node, NodeMut, Owned, deparse, nodes, walk};
+#[cfg(not(feature = "new_parser"))]
+use pgdog_config::QueryParserEngine;
+use pgdog_config::RewriteMode;
 
+#[cfg(not(feature = "new_parser"))]
+use crate::frontend::router::parser::rewrite::statement::visitor::visit_and_mutate_nodes;
+#[cfg(not(feature = "new_parser"))]
+use crate::net::FromDataType;
 use crate::{
     frontend::{
-        router::{
-            parser::{rewrite::statement::visitor::visit_and_mutate_nodes, Column, Table, Value},
-            Ast,
-        },
         BufferedQuery, ClientRequest,
+        router::{
+            Ast,
+            parser::{Column, Table, Value},
+            sharding::ShardedTable,
+        },
     },
     net::{
-        bind::Parameter, Bind, DataRow, Describe, Execute, Flush, Format, FromDataType, Parse,
-        ProtocolMessage, Query, RowDescription, Sync,
+        Bind, DataRow, Describe, Execute, Flush, Format, Parse, ProtocolMessage, Query,
+        RowDescription, Sync, bind::Parameter,
     },
 };
 
@@ -30,6 +46,9 @@ use super::*;
 pub(crate) struct Statement {
     pub(crate) ast: Ast,
     pub(crate) stmt: String,
+    #[cfg(feature = "new_parser")]
+    pub(crate) params: IndexSet<u16>,
+    #[cfg(not(feature = "new_parser"))]
     pub(crate) params: Vec<u16>,
 }
 
@@ -37,7 +56,7 @@ impl Statement {
     /// Create new Bind message for the statement from original Bind.
     pub(crate) fn rewrite_bind(&self, bind: &Bind) -> Result<Bind, Error> {
         let mut new = Bind::new_statement(""); // We use anonymous prepared
-                                               // statements for execution.
+        // statements for execution.
         for param in &self.params {
             let param = bind
                 .parameter(*param as usize - 1)?
@@ -56,7 +75,7 @@ impl Statement {
         let query = request.query()?.ok_or(Error::EmptyQuery)?;
         let params = request.parameters()?;
 
-        let mut request = ClientRequest::new();
+        let mut request = ClientRequest::default();
 
         match query {
             BufferedQuery::Query(_) => {
@@ -96,7 +115,43 @@ impl Deref for ShardingKeyUpdate {
     }
 }
 
-#[derive(Debug, Clone)]
+impl ShardingKeyUpdate {
+    pub(crate) fn sharded_table<'a>(
+        &self,
+        sharded_tables: &'a [ShardedTable],
+    ) -> Option<&'a ShardedTable> {
+        let table = self.target_table();
+
+        sharded_tables.iter().find(|sharded| {
+            if let Some(name) = sharded.name.as_ref()
+                && !table.name_match(name)
+            {
+                return false;
+            }
+
+            if let Some(schema) = sharded.schema.as_ref()
+                && let Some(table_schema) = table.schema
+                && table_schema != schema
+            {
+                return false;
+            }
+
+            #[cfg(feature = "new_parser")]
+            {
+                self.from_update
+                    .target_list()
+                    .iter()
+                    .any(|rt| rt.name() == Some(&*sharded.column))
+            }
+            #[cfg(not(feature = "new_parser"))]
+            {
+                self.insert.mapping.contains_key(&sharded.column)
+            }
+        })
+    }
+}
+
+#[derive(Debug)]
 pub(crate) struct Inner {
     /// Fetch the whole old row.
     pub(crate) select: Statement,
@@ -105,22 +160,155 @@ pub(crate) struct Inner {
     /// Delete old row from shard.
     pub(crate) delete: Statement,
     /// Partial insert statement.
+    #[cfg(not(feature = "new_parser"))]
     pub(crate) insert: Insert,
+    /// Update this is being constructed from
+    #[cfg(feature = "new_parser")]
+    // FIXME(sage): There's no reason we need to own this, but this struct is
+    // ultimately a child of AstInner, where the statement is borrowed from,
+    // so we can't add a lifetime here. We should see if we can pass the update
+    // in later as needed
+    from_update: Owned<nodes::UpdateStmt>,
+}
+
+impl Inner {
+    #[cfg(feature = "new_parser")]
+    pub(crate) fn target_table(&self) -> Table<'_> {
+        Table::from(
+            self.from_update
+                .relation()
+                .expect("UPDATE always has table"),
+        )
+    }
+
+    #[cfg(not(feature = "new_parser"))]
+    pub(crate) fn target_table(&self) -> Table<'_> {
+        Table::from(&self.insert.table)
+    }
+
+    /// Build an INSERT statement built from an existing
+    /// UPDATE statement and a row returned by a SELECT statement.
+    #[cfg(feature = "new_parser")]
+    pub(crate) fn build_insert_request(
+        &self,
+        request: &ClientRequest,
+        row_description: &RowDescription,
+        data_row: &DataRow,
+    ) -> Result<ClientRequest, Error> {
+        let params = request.parameters()?;
+        let mut bind = Bind::new_statement("");
+
+        let insert = try_owned(|mem| -> Result<_, Error> {
+            let mut columns = Vec::new();
+            let mut values = Vec::new();
+            for (idx, field) in row_description.iter().enumerate() {
+                columns.push(
+                    mem.make_res_target(Some(&*field.name), mem.empty(), mem.none())
+                        .uncast(),
+                );
+
+                if let Some(value) = self.from_update.target_list().iter().find_map(|rt| {
+                    if rt.name() == Some(&*field.name) {
+                        Some(rt.val())
+                    } else {
+                        None
+                    }
+                }) {
+                    if let Ok(Value::Placeholder(number)) = Value::try_from(value) {
+                        let param = params
+                            .and_then(|p| p.parameter(number as usize - 1).transpose())
+                            .ok_or(Error::MissingParameter(number as u16))??;
+                        bind.push_param(param.parameter().clone(), param.format());
+                        values.push(mem.make_param_ref(bind.params_raw().len() as _).uncast());
+                    } else {
+                        values.push(mem.make_unique(value));
+                    }
+                } else {
+                    // This column wasn't changed, get the value from the select
+                    let value = data_row.get_raw(idx).ok_or(Error::MissingColumn(idx))?;
+
+                    if value.is_null() {
+                        bind.push_param(Parameter::new_null(), Format::Text);
+                    } else {
+                        bind.push_param(Parameter::new(value), Format::Text);
+                    }
+                    values.push(mem.make_param_ref(bind.params_raw().len() as _).uncast());
+                }
+            }
+
+            let mut insert = mem.make_node::<nodes::InsertStmt>();
+            insert
+                .as_mut()
+                .set_relation(mem.make_unique(self.from_update.relation()));
+            insert.as_mut().set_cols(mem.make_list(&columns));
+            let mut select = mem.make_node::<nodes::SelectStmt>();
+            select
+                .as_mut()
+                .set_values_lists(mem.make_list(&[mem.make_list(&values)]));
+            insert.as_mut().set_select_stmt(select.uncast());
+            insert
+                .as_mut()
+                .set_returning_clause(mem.make_unique(self.from_update.returning_clause()));
+            Ok(mem.make_list(&[mem.make_raw_stmt(insert.uncast())]))
+        })?;
+        let stmt = deparse(insert.first().unwrap())?;
+
+        //// Build the AST to be used with the router.
+        //// It's identical to the string-generated statement above.
+        let ast = Ast::from_raw_stmts(insert);
+
+        let mut req = ClientRequest::from(vec![
+            ProtocolMessage::from(Parse::new_anonymous(stmt.as_str())),
+            Describe::new_statement("").into(), // So we get both T and t,
+            bind.into(),
+            Execute::new().into(),
+            Sync.into(),
+        ]);
+        req.ast = Some(ast);
+        Ok(req)
+    }
+
+    #[cfg(not(feature = "new_parser"))]
+    /// Build an INSERT statement built from an existing
+    /// UPDATE statement and a row returned by a SELECT statement.
+    pub(crate) fn build_insert_request(
+        &self,
+        request: &ClientRequest,
+        row_description: &RowDescription,
+        data_row: &DataRow,
+    ) -> Result<ClientRequest, Error> {
+        self.insert
+            .build_request(request, row_description, data_row)
+    }
+
+    #[cfg(feature = "new_parser")]
+    /// Do we have to return the rows to the client?
+    pub(crate) fn is_returning(&self) -> bool {
+        self.from_update.returning_clause().is_some()
+    }
+
+    #[cfg(not(feature = "new_parser"))]
+    /// Do we have to return the rows to the client?
+    pub(crate) fn is_returning(&self) -> bool {
+        !self.insert.returning_list.is_empty() && self.insert.returnin_list_deparsed.is_some()
+    }
 }
 
 /// Partially built INSERT statement.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
+#[cfg(not(feature = "new_parser"))]
 pub(crate) struct Insert {
-    pub(super) table: Option<RangeVar>,
+    pub(super) table: RangeVar,
     /// Mapping of column name to `column name = value` from
     /// the original UPDATE statement.
     pub(super) mapping: HashMap<String, UpdateValue>,
     /// Return columns.
-    pub(super) returning_list: Vec<Node>,
+    pub(super) returning_list: Vec<PgNode>,
     /// Returning list deparsed.
     pub(super) returnin_list_deparsed: Option<String>,
 }
 
+#[cfg(not(feature = "new_parser"))]
 impl Insert {
     /// Build an INSERT statement built from an existing
     /// UPDATE statement and a row returned by a SELECT statement.
@@ -200,14 +388,14 @@ impl Insert {
                 values_str.push(format!("${}", bind_idx + 1));
             }
 
-            columns.push(Node {
+            columns.push(PgNode {
                 node: Some(NodeEnum::ResTarget(Box::new(ResTarget {
                     name: field.name.clone(),
                     ..Default::default()
                 }))),
             });
 
-            values.push(Node {
+            values.push(PgNode {
                 node: Some(NodeEnum::ParamRef(ParamRef {
                     number: bind_idx + 1,
                     ..Default::default()
@@ -218,16 +406,16 @@ impl Insert {
         }
 
         let insert = InsertStmt {
-            relation: self.table.clone(),
+            relation: Some(self.table.clone()),
             cols: columns,
-            select_stmt: Some(Box::new(Node {
+            select_stmt: Some(Box::new(PgNode {
                 node: Some(NodeEnum::SelectStmt(Box::new(SelectStmt {
                     target_list: vec![],
                     from_clause: vec![],
                     limit_option: LimitOption::Default.into(),
                     where_clause: None,
                     op: SetOperation::SetopNone.into(),
-                    values_lists: vec![Node {
+                    values_lists: vec![PgNode {
                         node: Some(NodeEnum::List(List { items: values })),
                     }],
                     ..Default::default()
@@ -238,7 +426,7 @@ impl Insert {
             ..Default::default()
         };
 
-        let table = self.table.as_ref().map(Table::from).unwrap(); // SAFETY: We check that UPDATE has a table.
+        let table = Table::from(&self.table);
 
         // This is probably one of the few places in the code where
         // we shouldn't use the parser. It's quicker to concatenate strings
@@ -276,31 +464,28 @@ impl Insert {
         req.ast = Some(ast);
         Ok(req)
     }
-
-    /// Do we have to return the rows to the client?
-    pub(crate) fn is_returning(&self) -> bool {
-        !self.returning_list.is_empty() && self.returnin_list_deparsed.is_some()
-    }
 }
 
 impl<'a> StatementRewrite<'a> {
     /// Create a plan for shardking key updates, if we suspect there is one
     /// in the query.
-    pub(super) fn sharding_key_update(&mut self, plan: &mut RewritePlan) -> Result<(), Error> {
+    pub(super) fn sharding_key_update(
+        &mut self,
+        #[cfg(feature = "new_parser")] stmt: &nodes::UpdateStmt,
+        plan: &mut RewritePlan,
+    ) -> Result<(), Error> {
         if self.schema.shards == 1 || self.schema.rewrite.shard_key == RewriteMode::Ignore {
             return Ok(());
         }
 
-        let stmt = self
+        #[cfg(not(feature = "new_parser"))]
+        let Some(NodeEnum::UpdateStmt(stmt)) = self
             .stmt
             .stmts
             .first()
             .and_then(|stmt| stmt.stmt.as_ref().map(|stmt| stmt.node.as_ref()))
-            .flatten();
-
-        let stmt = if let Some(NodeEnum::UpdateStmt(stmt)) = stmt {
-            stmt
-        } else {
+            .flatten()
+        else {
             // TODO: Handle EXPLAIN ANALYZE which needs to execute.
             // We could return a combined plan for all 3 queries
             // we need to execute.
@@ -310,17 +495,66 @@ impl<'a> StatementRewrite<'a> {
         if let Some(value) = self.sharding_key_update_check(stmt)? {
             // Without a WHERE clause, this is a huge
             // cross-shard rewrite.
+            #[cfg(feature = "new_parser")]
+            if let Node::None = stmt.where_clause() {
+                return Err(Error::WhereClauseMissing);
+            }
+            #[cfg(not(feature = "new_parser"))]
             if stmt.where_clause.is_none() {
                 return Err(Error::WhereClauseMissing);
             }
-            plan.sharding_key_update =
-                Some(create_stmts(stmt, value, self.schema.query_parser_engine)?);
+            plan.sharding_key_update = Some(create_stmts(
+                stmt,
+                value,
+                #[cfg(not(feature = "new_parser"))]
+                self.schema.query_parser_engine,
+            )?);
         }
 
         Ok(())
     }
 
     /// Check if the sharding key could be updated.
+    #[cfg(feature = "new_parser")]
+    fn sharding_key_update_check(
+        &'a self,
+        stmt: &'a nodes::UpdateStmt,
+    ) -> Result<Option<&'a nodes::ResTarget>, Error> {
+        let table = stmt
+            .relation()
+            .map(Table::from)
+            .expect("UPDATE always has a table");
+
+        let Some(shard_key_assignment) = stmt.target_list().into_iter().find(|c| {
+            Column::try_from(*c).is_ok_and(|mut c| {
+                c.qualify(table);
+                self.schema.tables().get_table(c).is_some()
+            })
+        }) else {
+            return Ok(None);
+        };
+
+        // Check that it's a value assignment and not something like
+        // id = id + 1
+        if Value::try_from(shard_key_assignment.val()).is_ok() {
+            Ok(Some(shard_key_assignment))
+        } else {
+            let expr = shard_key_assignment.val();
+            let expr = deparse_expr([expr])?;
+            // FIXME:
+            //
+            // We can technically support this. We can inject this into
+            // the `SELECT` statement we use to pull the existing row
+            // and use the computed value for assignment.
+            Err(Error::UnsupportedShardingKeyUpdate(format!(
+                "\"{}\" = {}",
+                shard_key_assignment.name().unwrap_or_default(),
+                expr.as_str().strip_prefix("SELECT ").unwrap_or("<unknown>"),
+            )))
+        }
+    }
+
+    #[cfg(not(feature = "new_parser"))]
     fn sharding_key_update_check(
         &'a self,
         stmt: &'a UpdateStmt,
@@ -334,13 +568,12 @@ impl<'a> StatementRewrite<'a> {
         Ok(stmt
             .target_list
             .iter()
-            .filter(|column| {
-                if let Ok(mut column) = Column::try_from(&column.node) {
+            .filter(|column| match Column::try_from(&column.node) {
+                Ok(mut column) => {
                     column.qualify(table);
                     self.schema.tables().get_table(column).is_some()
-                } else {
-                    false
                 }
+                _ => false,
             })
             .map(|column| {
                 if let Some(NodeEnum::ResTarget(res)) = &column.node {
@@ -365,7 +598,7 @@ impl<'a> StatementRewrite<'a> {
                         let expr = res
                             .val
                             .as_ref()
-                            .map(|node| deparse_expr(node, self.schema.query_parser_engine))
+                            .map(|node| deparse_expr_old(node, self.schema.query_parser_engine))
                             .transpose()?
                             .unwrap_or_else(|| "<unknown>".to_string());
                         Err(Error::UnsupportedShardingKeyUpdate(format!(
@@ -385,10 +618,24 @@ impl<'a> StatementRewrite<'a> {
 
 /// Visit all ParamRef nodes in a ParseResult and renumber them sequentially.
 /// Returns a sorted list of the original parameter numbers.
+#[cfg(feature = "new_parser")]
+fn rewrite_params(node: NodeMut<'_, '_>) -> IndexSet<u16> {
+    let mut params = IndexSet::new();
+    walk::walk_mut(node, |node| match node {
+        NodeMut::ParamRef(param) => {
+            params.insert(param.number as _);
+            param.set_number(params.get_index_of(&(param.number as u16)).unwrap() as i32 + 1)
+        }
+        _ => (),
+    });
+    params
+}
+
+#[cfg(not(feature = "new_parser"))]
 fn rewrite_params(parse_result: &mut ParseResult) -> Result<Vec<u16>, Error> {
     let mut params = HashMap::new();
 
-    visit_and_mutate_nodes(parse_result, |node| -> Result<Option<Node>, Error> {
+    visit_and_mutate_nodes(parse_result, |node| -> Result<Option<PgNode>, Error> {
         if let Some(NodeEnum::ParamRef(ref mut param)) = node.node {
             if let Some(existing) = params.get(&param.number) {
                 param.number = *existing;
@@ -403,7 +650,7 @@ fn rewrite_params(parse_result: &mut ParseResult) -> Result<Vec<u16>, Error> {
     })?;
 
     let mut params: Vec<(i32, i32)> = params.into_iter().collect();
-    params.sort_by(|a, b| a.1.cmp(&b.1));
+    params.sort_by_key(|a| a.1);
 
     Ok(params
         .into_iter()
@@ -412,8 +659,9 @@ fn rewrite_params(parse_result: &mut ParseResult) -> Result<Vec<u16>, Error> {
 }
 
 #[derive(Debug, Clone)]
+#[cfg(not(feature = "new_parser"))]
 pub(super) enum UpdateValue {
-    Value(Box<Node>),
+    Value(Box<PgNode>),
     Expr(String), // We deparse the expression because we can't handle it yet.
 }
 
@@ -432,13 +680,14 @@ pub(super) enum UpdateValue {
 ///
 /// This allows us to build a partial INSERT statement.
 ///
+#[cfg(not(feature = "new_parser"))]
 fn res_targets_to_insert_res_targets(
     stmt: &UpdateStmt,
     query_parser_engine: QueryParserEngine,
 ) -> Result<HashMap<String, UpdateValue>, Error> {
     let mut result = HashMap::new();
     for target in &stmt.target_list {
-        if let Some(NodeEnum::ResTarget(ref target)) = target.node.as_ref() {
+        if let Some(NodeEnum::ResTarget(target)) = target.node.as_ref() {
             let valid = target
                 .val
                 .as_ref()
@@ -447,7 +696,7 @@ fn res_targets_to_insert_res_targets(
             let value = if valid {
                 UpdateValue::Value(target.val.clone().unwrap())
             } else {
-                UpdateValue::Expr(deparse_expr(
+                UpdateValue::Expr(deparse_expr_old(
                     target.val.as_ref().unwrap(),
                     query_parser_engine,
                 )?)
@@ -463,9 +712,10 @@ fn res_targets_to_insert_res_targets(
 ///
 /// Transforms `SET column = value` into `column = value` expression
 /// for use in shard routing validation.
+#[cfg(not(feature = "new_parser"))]
 fn res_target_to_a_expr(res_target: &ResTarget) -> AExpr {
     let column_ref = ColumnRef {
-        fields: vec![Node {
+        fields: vec![PgNode {
             node: Some(NodeEnum::String(PgString {
                 sval: res_target.name.clone(),
             })),
@@ -475,10 +725,10 @@ fn res_target_to_a_expr(res_target: &ResTarget) -> AExpr {
 
     AExpr {
         kind: AExprKind::AexprOp.into(),
-        name: vec![Node {
+        name: vec![PgNode {
             node: Some(NodeEnum::String(PgString { sval: "=".into() })),
         }],
-        lexpr: Some(Box::new(Node {
+        lexpr: Some(Box::new(PgNode {
             node: Some(NodeEnum::ColumnRef(column_ref)),
         })),
         rexpr: res_target.val.clone(),
@@ -486,13 +736,14 @@ fn res_target_to_a_expr(res_target: &ResTarget) -> AExpr {
     }
 }
 
-fn select_star() -> Vec<Node> {
-    vec![Node {
+#[cfg(not(feature = "new_parser"))]
+fn select_star() -> Vec<PgNode> {
+    vec![PgNode {
         node: Some(NodeEnum::ResTarget(Box::new(ResTarget {
             name: "".into(),
-            val: Some(Box::new(Node {
+            val: Some(Box::new(PgNode {
                 node: Some(NodeEnum::ColumnRef(ColumnRef {
-                    fields: vec![Node {
+                    fields: vec![PgNode {
                         node: Some(NodeEnum::AStar(AStar {})),
                     }],
                     ..Default::default()
@@ -503,11 +754,12 @@ fn select_star() -> Vec<Node> {
     }]
 }
 
+#[cfg(not(feature = "new_parser"))]
 fn parse_result(node: NodeEnum) -> ParseResult {
     ParseResult {
         version: pg_query::PG_VERSION_NUM as i32,
         stmts: vec![RawStmt {
-            stmt: Some(Box::new(Node { node: Some(node) })),
+            stmt: Some(Box::new(PgNode { node: Some(node) })),
             stmt_location: 0,
             stmt_len: 0,
         }],
@@ -515,9 +767,30 @@ fn parse_result(node: NodeEnum) -> ParseResult {
 }
 
 /// Deparse an expression node by wrapping it in a SELECT statement.
-fn deparse_expr(node: &Node, query_parser_engine: QueryParserEngine) -> Result<String, Error> {
+#[cfg(feature = "new_parser")]
+fn deparse_expr<'a>(nodes: impl IntoIterator<Item = Node<'a>>) -> Result<DeparseResult, Error> {
+    let node = owned(|mem| {
+        let mut select = mem.make_node::<nodes::SelectStmt>();
+        let res_targets = nodes
+            .into_iter()
+            .map(|node| match node {
+                Node::ResTarget(r) => mem.make_unique(r),
+                _ => mem.make_res_target(None, mem.empty(), mem.make_unique(node)),
+            })
+            .collect::<Vec<_>>();
+        select.as_mut().set_target_list(mem.make_list(&res_targets));
+        mem.make_raw_stmt(select.uncast())
+    });
+    deparse(&*node).map_err(Into::into)
+}
+
+#[cfg(not(feature = "new_parser"))]
+fn deparse_expr_old(
+    node: &PgNode,
+    query_parser_engine: QueryParserEngine,
+) -> Result<String, Error> {
     Ok(deparse_list(
-        &[Node {
+        &[PgNode {
             node: Some(NodeEnum::ResTarget(Box::new(ResTarget {
                 val: Some(Box::new(node.clone())),
                 ..Default::default()
@@ -529,8 +802,9 @@ fn deparse_expr(node: &Node, query_parser_engine: QueryParserEngine) -> Result<S
 }
 
 /// Deparse a list of expressions by wrapping them into a SELECT statement.
+#[cfg(not(feature = "new_parser"))]
 fn deparse_list(
-    list: &[Node],
+    list: &[PgNode],
     query_parser_engine: QueryParserEngine,
 ) -> Result<Option<String>, Error> {
     if list.is_empty() {
@@ -555,6 +829,98 @@ fn deparse_list(
     Ok(Some(string))
 }
 
+#[cfg(feature = "new_parser")]
+fn create_stmts<'a>(
+    stmt: &'a nodes::UpdateStmt,
+    new_value: &'a nodes::ResTarget,
+) -> Result<ShardingKeyUpdate, Error> {
+    let select_star = owned(|mem| {
+        let mut select_stmt = mem.make_node::<nodes::SelectStmt>();
+        select_stmt.as_mut().set_target_list(
+            mem.make_list(&[mem.make_res_target(
+                None,
+                mem.empty(),
+                mem.make_column_ref(mem.make_list(&[mem.make_node::<nodes::A_Star>().uncast()]))
+                    .uncast(),
+            )]),
+        );
+        select_stmt.as_mut().set_from_clause(
+            mem.make_list(&[mem
+                .make_unique(stmt.relation().expect("UPDATE always has a table"))
+                .uncast()]),
+        );
+        select_stmt
+    });
+
+    let mut params = IndexSet::new();
+    let select = owned(|mem| {
+        let mut select_stmt = mem.make_unique(&*select_star);
+        select_stmt
+            .as_mut()
+            .set_where_clause(mem.make_unique(stmt.where_clause()));
+        params = rewrite_params(select_stmt.as_mut().into());
+        mem.make_list(&[mem.make_raw_stmt(select_stmt.uncast())])
+    });
+
+    let select = Statement {
+        stmt: deparse(select.first().unwrap())?.as_str().to_owned(),
+        ast: Ast::from_raw_stmts(select),
+        params,
+    };
+
+    let mut params = IndexSet::new();
+    let delete = owned(|mem| {
+        let mut delete = mem.make_node::<nodes::DeleteStmt>();
+        delete
+            .as_mut()
+            .set_relation(mem.make_unique(stmt.relation()));
+        delete
+            .as_mut()
+            .set_where_clause(mem.make_unique(stmt.where_clause()));
+        params = rewrite_params(delete.as_mut().into());
+        mem.make_list(&[mem.make_raw_stmt(delete.uncast())])
+    });
+
+    let delete = Statement {
+        stmt: deparse(delete.first().unwrap())?.as_str().to_owned(),
+        ast: Ast::from_raw_stmts(delete),
+        params,
+    };
+
+    let mut params = IndexSet::new();
+    let check = owned(|mem| {
+        let mut select_stmt = mem.make_unique(&*select_star);
+        select_stmt.as_mut().set_where_clause(
+            mem.make_a_expr(
+                nodes::A_Expr_Kind::AEXPR_OP,
+                mem.make_list(&[mem.make_string(Some("=")).uncast()]),
+                mem.make_column_ref(mem.make_list(&[mem.make_string(new_value.name()).uncast()]))
+                    .uncast(),
+                mem.make_unique(new_value.val()),
+            )
+            .uncast(),
+        );
+        params = rewrite_params(select_stmt.as_mut().into());
+        mem.make_list(&[mem.make_raw_stmt(select_stmt.uncast())])
+    });
+
+    let check = Statement {
+        stmt: deparse(check.first().unwrap())?.as_str().to_owned(),
+        ast: Ast::from_raw_stmts(check),
+        params,
+    };
+
+    Ok(ShardingKeyUpdate {
+        inner: Arc::new(Inner {
+            select,
+            delete,
+            check,
+            from_update: owned(|mem| mem.make_unique(stmt)),
+        }),
+    })
+}
+
+#[cfg(not(feature = "new_parser"))]
 fn create_stmts(
     stmt: &UpdateStmt,
     new_value: &ResTarget,
@@ -562,7 +928,7 @@ fn create_stmts(
 ) -> Result<ShardingKeyUpdate, Error> {
     let select = SelectStmt {
         target_list: select_star(),
-        from_clause: vec![Node {
+        from_clause: vec![PgNode {
             node: Some(NodeEnum::RangeVar(stmt.relation.clone().unwrap())), // SAFETY: we checked the UPDATE stmt has a table name.
         }],
         limit_option: LimitOption::Default.into(),
@@ -608,11 +974,11 @@ fn create_stmts(
 
     let check = SelectStmt {
         target_list: select_star(),
-        from_clause: vec![Node {
+        from_clause: vec![PgNode {
             node: Some(NodeEnum::RangeVar(stmt.relation.clone().unwrap())), // SAFETY: we checked the UPDATE stmt has a table name.
         }],
         limit_option: LimitOption::Default.into(),
-        where_clause: Some(Box::new(Node {
+        where_clause: Some(Box::new(PgNode {
             node: Some(NodeEnum::AExpr(Box::new(res_target_to_a_expr(new_value)))),
         })),
         op: SetOperation::SetopNone.into(),
@@ -638,7 +1004,7 @@ fn create_stmts(
             delete,
             check,
             insert: Insert {
-                table: stmt.relation.clone(),
+                table: stmt.relation.clone().expect("UPDATE always has table"),
                 mapping: res_targets_to_insert_res_targets(stmt, query_parser_engine)?,
                 returning_list: stmt.returning_list.clone(),
                 returnin_list_deparsed: deparse_list(&stmt.returning_list, query_parser_engine)?,
@@ -649,14 +1015,25 @@ fn create_stmts(
 
 #[cfg(test)]
 mod test {
+    use crate::frontend::router::sharding::ShardedTable;
+    #[cfg(feature = "new_parser")]
+    use indexmap::indexset;
+    #[cfg(not(feature = "new_parser"))]
     use pg_query::parse;
-    use pgdog_config::{Rewrite, ShardedTable};
+    use pgdog_config::Rewrite;
 
     use crate::backend::schema::Schema;
-    use crate::backend::{replication::ShardedSchemas, ShardedTables};
+    use crate::backend::{ShardedTables, replication::ShardedSchemas};
     use crate::net::messages::row_description::Field;
 
     use super::*;
+
+    #[cfg(not(feature = "new_parser"))]
+    macro_rules! indexset {
+        ($($t:tt)*) => {
+            vec![$($t)*]
+        };
+    }
 
     fn default_db_schema() -> Schema {
         Schema::default()
@@ -687,13 +1064,17 @@ mod test {
     }
 
     fn run_test(query: &str) -> Result<Option<ShardingKeyUpdate>, Error> {
-        let mut stmt = parse(query)?;
+        #[cfg(not(feature = "new_parser"))]
+        let mut stmt_old = parse(query)?;
+        #[cfg(feature = "new_parser")]
+        let stmt = pg_raw_parse::parse(query)?;
         let schema = default_schema();
         let db_schema = default_db_schema();
         let mut stmts = PreparedStatements::new();
 
         let ctx = StatementRewriteContext {
-            stmt: &mut stmt.protobuf,
+            #[cfg(not(feature = "new_parser"))]
+            stmt: &mut stmt_old.protobuf,
             schema: &schema,
             db_schema: &db_schema,
             extended: true,
@@ -703,7 +1084,14 @@ mod test {
             search_path: None,
         };
         let mut plan = RewritePlan::default();
-        StatementRewrite::new(ctx).sharding_key_update(&mut plan)?;
+        StatementRewrite::new(ctx).sharding_key_update(
+            #[cfg(feature = "new_parser")]
+            match stmt.stmts().next().unwrap() {
+                Node::UpdateStmt(stmt) => stmt,
+                _ => panic!("Not an update"),
+            },
+            &mut plan,
+        )?;
         Ok(plan.sharding_key_update)
     }
 
@@ -715,7 +1103,12 @@ mod test {
 
         // SELECT should have WHERE clause with param renumbered to $1
         assert_eq!(result.select.stmt, "SELECT * FROM sharded WHERE email = $1");
-        assert_eq!(result.select.params, vec![2]);
+        assert_eq!(result.select.params, indexset![2]);
+
+        let schema = default_schema();
+        let tables = schema.tables.tables();
+        assert_eq!(result.target_table().name, "sharded");
+        assert_eq!(result.sharded_table(tables).unwrap().column, "id");
     }
 
     #[test]
@@ -728,8 +1121,8 @@ mod test {
             result.select.stmt,
             "SELECT * FROM sharded WHERE email = $1 AND name = $2"
         );
-        assert_eq!(result.select.params, vec![2, 3]);
-        assert!(!result.insert.is_returning());
+        assert_eq!(result.select.params, indexset![2, 3]);
+        assert!(!result.is_returning());
     }
 
     #[test]
@@ -745,7 +1138,7 @@ mod test {
             result.select.stmt,
             "SELECT * FROM sharded WHERE email = $1 AND name = $2"
         );
-        assert_eq!(result.select.params, vec![3, 5]);
+        assert_eq!(result.select.params, indexset![3, 5]);
     }
 
     #[test]
@@ -755,7 +1148,7 @@ mod test {
             .unwrap();
 
         assert_eq!(result.select.stmt, "SELECT * FROM sharded WHERE email = $1");
-        assert_eq!(result.select.params, vec![2]);
+        assert_eq!(result.select.params, indexset![2]);
     }
 
     #[test]
@@ -765,6 +1158,26 @@ mod test {
             .unwrap();
 
         assert_eq!(result.delete.stmt, "DELETE FROM sharded WHERE email = $1");
+
+        assert!(result.sharded_table(&[]).is_none());
+        assert!(
+            result
+                .sharded_table(&[ShardedTable {
+                    name: Some("other".into()),
+                    column: "id".into(),
+                    ..Default::default()
+                }])
+                .is_none()
+        );
+        assert!(
+            result
+                .sharded_table(&[ShardedTable {
+                    name: Some("sharded".into()),
+                    column: "user_id".into(),
+                    ..Default::default()
+                }])
+                .is_none()
+        );
     }
 
     #[test]
@@ -789,7 +1202,7 @@ mod test {
             result.select.stmt,
             "SELECT * FROM sharded WHERE email = 'test@example.com'"
         );
-        assert_eq!(result.select.params, Vec::<u16>::new());
+        assert!(result.select.params.is_empty());
     }
 
     #[test]
@@ -802,7 +1215,7 @@ mod test {
             result.select.stmt,
             "SELECT * FROM sharded WHERE email IN ($1, $2, $3)"
         );
-        assert_eq!(result.select.params, vec![2, 3, 4]);
+        assert_eq!(result.select.params, indexset![2, 3, 4]);
     }
 
     #[test]
@@ -815,7 +1228,7 @@ mod test {
             result.select.stmt,
             "SELECT * FROM sharded WHERE count > $1 AND count < $2"
         );
-        assert_eq!(result.select.params, vec![2, 3]);
+        assert_eq!(result.select.params, indexset![2, 3]);
     }
 
     #[test]
@@ -828,7 +1241,7 @@ mod test {
             result.select.stmt,
             "SELECT * FROM sharded WHERE email = $1 OR name = $2"
         );
-        assert_eq!(result.select.params, vec![2, 3]);
+        assert_eq!(result.select.params, indexset![2, 3]);
     }
 
     #[test]
@@ -841,7 +1254,7 @@ mod test {
             result.select.stmt,
             "SELECT * FROM sharded WHERE email = $1 AND name = $2"
         );
-        assert_eq!(result.select.params, vec![20, 30]);
+        assert_eq!(result.select.params, indexset![20, 30]);
     }
 
     #[test]
@@ -861,7 +1274,7 @@ mod test {
             result.select.stmt,
             "SELECT * FROM sharded WHERE email LIKE $1"
         );
-        assert_eq!(result.select.params, vec![2]);
+        assert_eq!(result.select.params, indexset![2]);
     }
 
     #[test]
@@ -874,7 +1287,7 @@ mod test {
             result.select.stmt,
             "SELECT * FROM sharded WHERE email = $1 AND deleted_at IS NULL"
         );
-        assert_eq!(result.select.params, vec![2]);
+        assert_eq!(result.select.params, indexset![2]);
     }
 
     #[test]
@@ -887,7 +1300,7 @@ mod test {
             result.select.stmt,
             "SELECT * FROM sharded WHERE created_at BETWEEN $1 AND $2"
         );
-        assert_eq!(result.select.params, vec![2, 3]);
+        assert_eq!(result.select.params, indexset![2, 3]);
     }
 
     #[test]
@@ -903,7 +1316,7 @@ mod test {
             "SELECT * FROM sharded WHERE email = $1 OR name = $1"
         );
         // Only one unique param in the mapping
-        assert_eq!(result.select.params, vec![2]);
+        assert_eq!(result.select.params, indexset![2]);
     }
 
     #[test]
@@ -917,7 +1330,7 @@ mod test {
             result.select.stmt,
             "SELECT * FROM sharded WHERE a = $1 AND b = $1 AND c = $1"
         );
-        assert_eq!(result.select.params, vec![2]);
+        assert_eq!(result.select.params, indexset![2]);
     }
 
     #[test]
@@ -931,7 +1344,7 @@ mod test {
             result.select.stmt,
             "SELECT * FROM sharded WHERE a = $1 AND b = $2 AND c = $1"
         );
-        assert_eq!(result.select.params, vec![2, 3]);
+        assert_eq!(result.select.params, indexset![2, 3]);
     }
 
     #[test]
@@ -945,7 +1358,7 @@ mod test {
             result.select.stmt,
             "SELECT * FROM sharded WHERE email IN ($1, $2, $1)"
         );
-        assert_eq!(result.select.params, vec![2, 3]);
+        assert_eq!(result.select.params, indexset![2, 3]);
     }
 
     #[test]
@@ -958,7 +1371,7 @@ mod test {
             result.delete.stmt,
             "DELETE FROM sharded WHERE email = $1 OR name = $1"
         );
-        assert_eq!(result.delete.params, vec![2]);
+        assert_eq!(result.delete.params, indexset![2]);
     }
 
     #[test]
@@ -967,111 +1380,112 @@ mod test {
             .unwrap()
             .unwrap();
         assert_eq!(result.check.stmt, "SELECT * FROM sharded WHERE id = $1");
-        assert_eq!(result.check.params, vec![1]);
+        assert_eq!(result.check.params, indexset![1]);
     }
 
     #[test]
     fn test_unsupported_assignment() {
         let result = run_test("UPDATE sharded SET id = random() WHERE id = $1");
-        assert!(matches!(
+        std::assert_matches!(
             result,
             Err(Error::UnsupportedShardingKeyUpdate(msg)) if msg == "\"id\" = random()"
-        ));
+        );
     }
 
     #[test]
     fn test_unsupported_assignment_arithmetic_add() {
         let result = run_test("UPDATE sharded SET id = id + 1 WHERE id = $1");
-        assert!(matches!(
+        std::assert_matches!(
             result,
             Err(Error::UnsupportedShardingKeyUpdate(msg)) if msg == "\"id\" = id + 1"
-        ));
+        );
     }
 
     #[test]
     fn test_unsupported_assignment_arithmetic_multiply() {
         let result = run_test("UPDATE sharded SET id = id * 2 WHERE id = $1");
-        assert!(matches!(
+        std::assert_matches!(
             result,
             Err(Error::UnsupportedShardingKeyUpdate(msg)) if msg == "\"id\" = id * 2"
-        ));
+        );
     }
 
     #[test]
     fn test_unsupported_assignment_arithmetic_with_param() {
         let result = run_test("UPDATE sharded SET id = id + $2 WHERE id = $1");
-        assert!(matches!(
+        std::assert_matches!(
             result,
             Err(Error::UnsupportedShardingKeyUpdate(msg)) if msg == "\"id\" = id + $2"
-        ));
+        );
     }
 
     #[test]
     fn test_unsupported_assignment_now() {
         let result = run_test("UPDATE sharded SET id = now() WHERE id = $1");
-        assert!(matches!(
+        std::assert_matches!(
             result,
             Err(Error::UnsupportedShardingKeyUpdate(msg)) if msg == "\"id\" = now()"
-        ));
+        );
     }
 
     #[test]
     fn test_unsupported_assignment_coalesce() {
         let result = run_test("UPDATE sharded SET id = coalesce(id, 0) WHERE id = $1");
-        assert!(matches!(
+        std::assert_matches!(
             result,
             Err(Error::UnsupportedShardingKeyUpdate(msg)) if msg == "\"id\" = COALESCE(id, 0)"
-        ));
+        );
     }
 
     #[test]
     fn test_unsupported_assignment_case() {
         let result =
             run_test("UPDATE sharded SET id = CASE WHEN id > 0 THEN 1 ELSE 0 END WHERE id = $1");
-        assert!(matches!(
+        std::assert_matches!(
             result,
             Err(Error::UnsupportedShardingKeyUpdate(msg)) if msg == "\"id\" = CASE WHEN id > 0 THEN 1 ELSE 0 END"
-        ));
+        );
     }
 
     #[test]
     fn test_unsupported_assignment_subquery() {
         let result =
             run_test("UPDATE sharded SET id = (SELECT max(id) FROM sharded) WHERE id = $1");
-        assert!(matches!(
+        std::assert_matches!(
             result,
             Err(Error::UnsupportedShardingKeyUpdate(msg)) if msg == "\"id\" = (SELECT max(id) FROM sharded)"
-        ));
+        );
     }
 
     #[test]
     fn test_unsupported_assignment_column_reference() {
         let result = run_test("UPDATE sharded SET id = other_column WHERE id = $1");
-        assert!(matches!(
+        std::assert_matches!(
             result,
             Err(Error::UnsupportedShardingKeyUpdate(msg)) if msg == "\"id\" = other_column"
-        ));
+        );
     }
 
     #[test]
     fn test_unsupported_assignment_concat() {
         let result = run_test("UPDATE sharded SET id = id || '_suffix' WHERE id = $1");
-        assert!(matches!(
+        std::assert_matches!(
             result,
             Err(Error::UnsupportedShardingKeyUpdate(msg)) if msg == "\"id\" = id || '_suffix'"
-        ));
+        );
     }
 
     #[test]
     fn test_unsupported_assignment_negation() {
         let result = run_test("UPDATE sharded SET id = -id WHERE id = $1");
-        assert!(matches!(
+        std::assert_matches!(
             result,
             Err(Error::UnsupportedShardingKeyUpdate(msg)) if msg == "\"id\" = - id"
-        ));
+        );
     }
 
     #[test]
+    #[cfg(not(feature = "new_parser"))]
     fn test_return_rows() {
         let result = run_test("UPDATE sharded SET id = $1 WHERE id = $2 RETURNING *")
             .unwrap()
@@ -1089,6 +1503,7 @@ mod test {
     }
 
     #[test]
+    #[cfg(not(feature = "new_parser"))]
     fn test_res_targets_to_insert_res_targets_expr_branch() {
         // Test that expression assignments (non-simple values) are deparsed correctly
         // and stored as UpdateValue::Expr in the insert mapping.
@@ -1098,7 +1513,7 @@ mod test {
 
         // The id column should be UpdateValue::Value (simple parameter)
         let id_value = result.insert.mapping.get("id").unwrap();
-        assert!(matches!(id_value, UpdateValue::Value(_)));
+        std::assert_matches!(id_value, UpdateValue::Value(_));
 
         // The email column should be UpdateValue::Expr with the deparsed expression
         let email_value = result.insert.mapping.get("email").unwrap();
@@ -1109,6 +1524,7 @@ mod test {
     }
 
     #[test]
+    #[cfg(not(feature = "new_parser"))]
     fn test_res_targets_to_insert_res_targets_expr_arithmetic() {
         // Test arithmetic expressions are deparsed correctly
         let result = run_test("UPDATE sharded SET id = $1, counter = counter + 1 WHERE id = $2")
@@ -1123,6 +1539,7 @@ mod test {
     }
 
     #[test]
+    #[cfg(not(feature = "new_parser"))]
     fn test_res_targets_to_insert_res_targets_expr_coalesce() {
         // Test COALESCE expressions are deparsed correctly
         let result =
@@ -1151,6 +1568,8 @@ mod test {
             Field::bigint("id"),
             Field::text("email"),
             Field::text("other_col"),
+            #[cfg(feature = "new_parser")]
+            Field::text("other_other_col"),
         ]);
 
         // Create a mock data row with values for columns not in the UPDATE SET clause
@@ -1158,6 +1577,8 @@ mod test {
         data_row.add("1"); // id - will be overwritten by mapping
         data_row.add("old@example.com"); // email - will be overwritten by mapping
         data_row.add("other_value"); // other_col - from existing row
+        #[cfg(feature = "new_parser")]
+        data_row.add("other_other_value"); // other_other_col - from existing row
 
         // Create a simple query request (not prepared statement)
         let request = ClientRequest::from(vec![ProtocolMessage::from(Query::new(
@@ -1165,8 +1586,7 @@ mod test {
         ))]);
 
         let insert_request = result
-            .insert
-            .build_request(&request, &row_description, &data_row)
+            .build_insert_request(&request, &row_description, &data_row)
             .unwrap();
 
         // Get the query from the request to verify the INSERT statement

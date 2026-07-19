@@ -1,5 +1,5 @@
 pub(crate) use crate::net::{
-    messages::{FromBytes, Payload, Protocol, ToBytes},
     Error,
+    messages::{FromBytes, Payload, Protocol, ToBytes},
 };
 pub use bytes::{Buf, BufMut, Bytes};

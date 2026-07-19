@@ -1,35 +1,43 @@
 //! Databases behind pgDog.
 
-use std::collections::{hash_map::Entry, HashMap, HashSet};
+use std::collections::{HashMap, HashSet, hash_map::Entry};
 use std::ops::Deref;
 use std::sync::Arc;
 use std::time::Duration;
 
 use arc_swap::ArcSwap;
 use futures::future::try_join_all;
+use indexmap::IndexMap;
 use once_cell::sync::Lazy;
 use parking_lot::lock_api::MutexGuard;
 use parking_lot::{Mutex, RawMutex};
+use pgdog_config::users::PasswordKind;
+use pgdog_config::{
+    QueryParser, ShardedMappingConfig, ShardedMappingKey, ShardedMappingKeyRef,
+    ShardedMappingKindDeprecated, ShardedMappingList, ShardedMappingRange, ShardedTableConfig,
+};
 use tracing::{debug, error, info, warn};
 
+use crate::auth::AuthResult;
 use crate::backend::replication::ShardedSchemas;
 use crate::config::PoolerMode;
+use crate::frontend::PreparedStatements;
 use crate::frontend::client::query_engine::two_pc::Manager;
 use crate::frontend::router::parser::Cache;
-use crate::frontend::router::sharding::mapping::mapping_valid;
-use crate::frontend::router::sharding::Mapping;
-use crate::frontend::PreparedStatements;
+use crate::frontend::router::sharding::{Mapping, ShardedTable};
 use crate::{
     backend::pool::PoolConfig,
-    config::{config, load, ConfigAndUsers, ManualQuery, Role},
-    net::{messages::BackendKeyData, tls},
+    config::{
+        ConfigAndUsers, Role, ShardedMappingDeprecated, User as ConfigUser, config, load, set,
+    },
+    net::{messages::FrontendPid, tls},
 };
 
 use super::{
+    Cluster, ClusterShardConfig, Error, ShardedTables,
     pool::{Address, ClusterConfig, Config},
     reload_notify,
     replication::ReplicationConfig,
-    Cluster, ClusterShardConfig, Error, ShardedTables,
 };
 
 static DATABASES: Lazy<ArcSwap<Databases>> =
@@ -38,13 +46,26 @@ static LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 /// Spawns the wildcard-pool background eviction loop exactly once.
 static WILDCARD_EVICTION: Lazy<()> = Lazy::new(|| {
     tokio::spawn(async {
-        loop {
+        'eviction: loop {
             let timeout_secs = config().config.general.wildcard_pool_idle_timeout;
             if timeout_secs == 0 {
-                tokio::time::sleep(Duration::from_secs(60)).await;
+                tokio::time::sleep(Duration::from_secs(1)).await;
                 continue;
             }
-            tokio::time::sleep(Duration::from_secs(timeout_secs)).await;
+
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(timeout_secs);
+            loop {
+                let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+                if remaining.is_zero() {
+                    break;
+                }
+
+                tokio::time::sleep(remaining.min(Duration::from_secs(1))).await;
+                if config().config.general.wildcard_pool_idle_timeout != timeout_secs {
+                    continue 'eviction;
+                }
+            }
+
             evict_idle_wildcard_pools();
         }
     });
@@ -66,17 +87,23 @@ pub fn databases() -> Arc<Databases> {
 pub fn replace_databases(new_databases: Databases, reload: bool) -> Result<(), Error> {
     // Order of operations is important
     // to ensure zero downtime for clients.
+    //
+    // 1. Prevent concurrent reloads. The guard restores the ready flag and
+    //    wakes waiters on drop, even if a step below errors out.
+    let _guard = reload_notify::started();
+
+    // 2. Move connections from old databases into new ones.
     let old_databases = databases();
     let new_databases = Arc::new(new_databases);
-    reload_notify::started();
     if reload {
         // Move whatever connections we can over to new pools.
         old_databases.move_conns_to(&new_databases)?;
     }
+    // 3. Launch new databases first.
     new_databases.launch();
     DATABASES.store(new_databases);
+    // 4. Shutdown all databases.
     old_databases.shutdown();
-    reload_notify::done();
 
     Ok(())
 }
@@ -85,7 +112,6 @@ pub fn replace_databases(new_databases: Databases, reload: bool) -> Result<(), E
 pub fn reconnect() -> Result<(), Error> {
     let config = config();
     let databases = from_config(&config);
-
     replace_databases(databases, false)?;
     Ok(())
 }
@@ -102,10 +128,8 @@ pub fn reconnect() -> Result<(), Error> {
 /// [`General::max_wildcard_pools`] counter resets to zero.
 pub fn reload_from_existing() -> Result<(), Error> {
     let _lock = lock();
-
     let config = config();
     let databases = from_config(&config);
-
     replace_databases(databases, true)?;
     Ok(())
 }
@@ -127,7 +151,7 @@ pub fn init() -> Result<(), Error> {
     Ok(())
 }
 
-/// Remove dynamically-created wildcard pools that currently have zero connections.
+/// Remove dynamically-created wildcard pools that have no checked-out connections.
 ///
 /// This is called periodically by the background eviction task started in
 /// [`init`], and is also exposed as `pub(crate)` so unit tests can invoke it
@@ -142,7 +166,7 @@ pub(crate) fn evict_idle_wildcard_pools() {
         .filter(|user| {
             dbs.databases
                 .get(*user)
-                .map_or(false, |c| c.total_connections() == 0)
+                .is_some_and(|c| c.checked_out_connections() == 0)
         })
         .cloned()
         .collect();
@@ -216,12 +240,17 @@ pub async fn cancel_all(database: &str) -> Result<(), Error> {
 
 /// Re-create pools from config.
 pub fn reload() -> Result<(), Error> {
+    info!("reloading configuration");
+
+    // Load config from disk.
     let old_config = config();
     let new_config = load(&old_config.config_path, &old_config.users_path)?;
     let databases = from_config(&new_config);
 
+    // Replace databases.
     replace_databases(databases, true)?;
 
+    // Reload TLS connectors.
     tls::reload()?;
 
     // Remove any unused prepared statements.
@@ -229,41 +258,65 @@ pub fn reload() -> Result<(), Error> {
         .write()
         .close_unused(new_config.config.general.prepared_statements_limit);
 
-    // Resize query cache
+    // Resize query cache.
     Cache::resize(new_config.config.general.query_cache_limit);
 
     Ok(())
 }
 
-/// Add new user to pool.
-pub(crate) fn add(mut user: crate::config::User) {
-    // One user at a time.
-    let _lock = lock();
+/// Add new user to pool via passthrough authentication.
+///
+/// Return true if user can login, false otherwise.
+///
+pub(crate) fn add(user: ConfigUser) -> Result<AuthResult, Error> {
+    fn add_user(user: ConfigUser) -> Result<(), Error> {
+        debug!(
+            r#"adding user "{}" to database "{}" via passthrough auth"#,
+            user.name, user.database
+        );
 
-    debug!(
-        "adding user \"{}\" for database \"{}\" via auth passthrough",
-        user.name, user.database
-    );
+        let _lock = lock();
+        let mut config = (*config()).clone();
+        config.users.add_or_replace(user);
+        set(config)?;
+
+        Ok(())
+    }
 
     let config = config();
-    for existing in &config.users.users {
-        if existing.name == user.name && existing.database == user.database {
-            let mut existing = existing.clone();
+    let existing = config.users.find(&user);
+
+    // User already exists in users.toml.
+    if let Some(mut existing) = existing {
+        // Password hasn't been set yet.
+        if existing.password.is_none() {
             existing.password = user.password.clone();
-            user = existing;
+            add_user(existing)?;
+            reload_from_existing()?;
+            Ok(AuthResult::Ok)
+        } else if existing
+            .password
+            .as_deref()
+            .zip(user.password.as_deref())
+            .is_some_and(|(stored, provided)| {
+                crate::util::constant_time_eq(stored.as_bytes(), provided.as_bytes())
+            })
+        {
+            // Passwords match.
+            Ok(AuthResult::Ok)
+        } else if config.config.general.passthrough_auth.allows_change() {
+            // Passwords don't match but we can change it.
+            existing.password = user.password.clone();
+            add_user(user)?;
+            reload_from_existing()?;
+            Ok(AuthResult::Ok)
+        } else {
+            Ok(AuthResult::NoPassthroughPasswordChange)
         }
-    }
-    let pool = new_pool(&user, &config.config);
-    if let Some((user, cluster)) = pool {
-        let databases = (*databases()).clone();
-        let (added, databases) = databases.add(user, cluster);
-        if added {
-            // Launch the new pool (idempotent).
-            databases.launch();
-            // Don't use replace_databases because Arc refers to the same DBs,
-            // and we'll shut them down.
-            DATABASES.store(Arc::new(databases));
-        }
+    } else {
+        add_user(user)?;
+        reload_from_existing()?;
+        Ok(AuthResult::Ok)
     }
 }
 
@@ -489,20 +542,7 @@ pub async fn cutover(source: &str, destination: &str) -> Result<(), Error> {
     Ok(())
 }
 
-/// Database/user pair that identifies a database cluster pool.
-#[derive(Debug, PartialEq, Hash, Eq, Clone, Default)]
-pub struct User {
-    /// User name.
-    pub user: String,
-    /// Database name.
-    pub database: String,
-}
-
-impl std::fmt::Display for User {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}/{}", self.user, self.database)
-    }
-}
+pub use pgdog_stats::User;
 
 /// Convert to a database/user pair.
 pub trait ToUser {
@@ -539,7 +579,6 @@ struct WildcardMatch {
 #[derive(Default, Clone)]
 pub struct Databases {
     databases: HashMap<User, Cluster>,
-    manual_queries: HashMap<String, ManualQuery>,
     mirrors: HashMap<User, Vec<Cluster>>,
     mirror_configs: HashMap<(String, String), crate::config::MirrorConfig>,
     /// Wildcard database templates (databases with name = "*"), organized by shard.
@@ -559,31 +598,40 @@ pub struct Databases {
 }
 
 impl Databases {
-    /// Add new connection pools to the databases.
-    fn add(mut self, user: User, cluster: Cluster) -> (bool, Databases) {
+    /// Add a connection pool unless one already exists for this user/database.
+    fn add(mut self, user: User, cluster: Cluster) -> (bool, Self) {
         match self.databases.entry(user) {
-            Entry::Vacant(e) => {
-                e.insert(cluster);
+            Entry::Vacant(entry) => {
+                entry.insert(cluster);
                 (true, self)
             }
-            Entry::Occupied(mut e) => {
-                if e.get().password().is_empty() {
-                    e.insert(cluster);
-                    (true, self)
-                } else {
-                    (false, self)
-                }
-            }
+            Entry::Occupied(_) => (false, self),
         }
     }
 
-    /// Check if a cluster exists, quickly.
+    /// Check whether a cluster exists for this user/database.
     pub fn exists(&self, user: impl ToUser) -> bool {
+        self.databases.contains_key(&user.to_user())
+    }
+
+    /// Get the database user password, if one is configured.
+    pub fn passwords(&self, user: impl ToUser) -> Option<&[PasswordKind]> {
         if let Some(cluster) = self.databases.get(&user.to_user()) {
-            !cluster.password().is_empty()
+            if cluster.passwords().is_empty() {
+                None
+            } else {
+                Some(cluster.passwords())
+            }
         } else {
-            false
+            None
         }
+    }
+
+    /// Get the user TLS identity.
+    pub fn identity(&self, user: impl ToUser) -> Option<&str> {
+        self.databases
+            .get(&user.to_user())
+            .and_then(|cluster| cluster.identity())
     }
 
     /// Check if any wildcard templates are configured.
@@ -697,6 +745,23 @@ impl Databases {
         Err(Error::NoSchemaOwner(database.to_owned()))
     }
 
+    /// Get all schema owners for all databases,
+    /// one per database.
+    ///
+    /// N.B.: Subsequent entry will override previous entry.
+    ///
+    pub fn schema_owners(&self) -> Vec<Cluster> {
+        let mut schema_owners = HashMap::new();
+
+        for cluster in self.databases.values() {
+            if cluster.schema_admin() {
+                schema_owners.insert(cluster.name().to_string(), cluster.clone());
+            }
+        }
+
+        schema_owners.into_values().collect()
+    }
+
     pub fn mirrors(&self, user: impl ToUser) -> Result<Option<&[Cluster]>, Error> {
         let user = user.to_user();
         if self.databases.contains_key(&user) {
@@ -736,22 +801,12 @@ impl Databases {
     }
 
     /// Cancel a query running on one of the databases proxied by the pooler.
-    pub async fn cancel(&self, id: &BackendKeyData) -> Result<(), Error> {
+    pub async fn cancel(&self, id: FrontendPid) -> Result<(), Error> {
         for cluster in self.databases.values() {
             cluster.cancel(id).await?;
         }
 
         Ok(())
-    }
-
-    /// Get manual query, if exists.
-    pub fn manual_query(&self, fingerprint: &str) -> Option<&ManualQuery> {
-        self.manual_queries.get(fingerprint)
-    }
-
-    /// Manual queries collection, keyed by query fingerprint.
-    pub fn manual_queries(&self) -> &HashMap<String, ManualQuery> {
-        &self.manual_queries
     }
 
     /// Move all connections we can from old databases config to new
@@ -761,11 +816,11 @@ impl Databases {
         for (user, cluster) in &self.databases {
             let dest = destination.databases.get(user);
 
-            if let Some(dest) = dest {
-                if cluster.can_move_conns_to(dest) {
-                    cluster.move_conns_to(dest)?;
-                    moved += 1;
-                }
+            if let Some(dest) = dest
+                && cluster.can_move_conns_to(dest)
+            {
+                cluster.move_conns_to(dest)?;
+                moved += 1;
             }
         }
 
@@ -796,7 +851,15 @@ impl Databases {
 
         // Launch all clusters
         for cluster in self.all().values() {
-            cluster.launch();
+            if cluster.passwords().is_empty() && cluster.identity().is_none() {
+                warn!(
+                    r#"disabling pool for user "{}" and database "{}", password not set"#,
+                    cluster.user(),
+                    cluster.name()
+                );
+            } else {
+                cluster.launch();
+            }
 
             if cluster.pooler_mode() == PoolerMode::Session && cluster.router_needed() {
                 warn!(
@@ -809,8 +872,75 @@ impl Databases {
     }
 }
 
+fn resolve_sharded_table(
+    config: &ShardedTableConfig,
+    mappings: &IndexMap<ShardedMappingKey, Vec<ShardedMappingDeprecated>>,
+    num_shards: usize,
+) -> ShardedTable {
+    let mapping = config
+        .mapping
+        .clone()
+        .or_else(|| resolve_table_mapping_deprecated(config, mappings));
+
+    let mapping = mapping.map(|configs| {
+        let tname = config.name.as_deref().unwrap_or("*");
+        let column = &config.column;
+        for error in crate::backend::validation::validate(&configs, config.data_type, num_shards) {
+            warn!("sharded table name=\"{tname}\", column=\"{column}\": {error}");
+        }
+        Mapping::new(configs)
+    });
+
+    ShardedTable {
+        database: config.database.clone(),
+        name: config.name.clone(),
+        schema: config.schema.clone(),
+        column: config.column.clone(),
+        primary: config.primary,
+        centroids: config.centroids.clone(),
+        data_type: config.data_type,
+        centroid_probes: config.centroid_probes,
+        hasher: config.hasher.clone(),
+        mapping: mapping.flatten(),
+    }
+}
+
+fn resolve_table_mapping_deprecated(
+    table: &ShardedTableConfig,
+    mappings: &IndexMap<ShardedMappingKey, Vec<ShardedMappingDeprecated>>,
+) -> Option<Vec<ShardedMappingConfig>> {
+    let found = mappings.get(&ShardedMappingKeyRef {
+        database: &table.database,
+        column: &table.column,
+        table: table.name.as_ref(),
+    })?;
+
+    Some(
+        found
+            .iter()
+            .map(|map| match map.kind {
+                ShardedMappingKindDeprecated::List => {
+                    ShardedMappingConfig::List(ShardedMappingList {
+                        shard: map.shard,
+                        values: map.values.clone(),
+                    })
+                }
+                ShardedMappingKindDeprecated::Range => {
+                    ShardedMappingConfig::Range(ShardedMappingRange {
+                        shard: map.shard,
+                        start: map.start.clone(),
+                        end: map.end.clone(),
+                    })
+                }
+                ShardedMappingKindDeprecated::Default => {
+                    ShardedMappingConfig::Default { shard: map.shard }
+                }
+            })
+            .collect(),
+    )
+}
+
 fn new_pool(user: &crate::config::User, config: &crate::config::Config) -> Option<(User, Cluster)> {
-    let sharded_tables = config.sharded_tables();
     let omnisharded_tables = config.omnisharded_tables();
     let sharded_mappings = config.sharded_mappings();
     let sharded_schemas = config.sharded_schemas();
@@ -841,36 +971,16 @@ fn new_pool(user: &crate::config::User, config: &crate::config::Config) -> Optio
         shard_configs.push(ClusterShardConfig { primary, replicas });
     }
 
-    let mut sharded_tables = sharded_tables
-        .get(&user.database)
-        .cloned()
-        .unwrap_or_default();
+    let sharded_tables: Vec<_> = config
+        .sharded_tables
+        .iter()
+        .filter(|t| t.database == user.database)
+        .map(|t| resolve_sharded_table(t, &sharded_mappings, shard_configs.len()))
+        .collect();
     let sharded_schemas = sharded_schemas
         .get(&user.database)
         .cloned()
         .unwrap_or_default();
-
-    for sharded_table in &mut sharded_tables {
-        let mappings = sharded_mappings.get(&(
-            sharded_table.database.clone(),
-            sharded_table.column.clone(),
-            sharded_table.name.clone(),
-        ));
-
-        if let Some(mappings) = mappings {
-            sharded_table.mapping = Mapping::new(mappings);
-
-            if let Some(ref mapping) = sharded_table.mapping {
-                if !mapping_valid(mapping) {
-                    warn!(
-                        "sharded table name=\"{}\", column=\"{}\" has overlapping ranges",
-                        sharded_table.name.as_ref().unwrap_or(&String::from("")),
-                        sharded_table.column
-                    );
-                }
-            }
-        }
-    }
 
     let omnisharded_tables = omnisharded_tables
         .get(&user.database)
@@ -883,15 +993,24 @@ fn new_pool(user: &crate::config::User, config: &crate::config::Config) -> Optio
         general.system_catalogs,
     );
     let sharded_schemas = ShardedSchemas::new(sharded_schemas);
+    let query_parser = config
+        .query_parsers
+        .iter()
+        .find(|config| config.database == user.database)
+        .cloned()
+        .unwrap_or(QueryParser {
+            database: user.database.clone(),
+            level: config.general.query_parser,
+            engine: config.general.query_parser_engine,
+        });
 
     let cluster_config = ClusterConfig::new(
-        general,
+        config,
         user,
         &shard_configs,
         sharded_tables,
-        config.multi_tenant(),
         sharded_schemas,
-        &config.rewrite,
+        query_parser,
     );
 
     Some((
@@ -1038,6 +1157,7 @@ pub fn from_config(config: &ConfigAndUsers) -> Databases {
                 exposure: mirror
                     .exposure
                     .unwrap_or(config.config.general.mirror_exposure),
+                level: mirror.level,
             };
             mirror_configs.insert(
                 (mirror.source_db.clone(), mirror.destination_db.clone()),
@@ -1063,7 +1183,6 @@ pub fn from_config(config: &ConfigAndUsers) -> Databases {
 
     Databases {
         databases,
-        manual_queries: config.config.manual_queries(),
         mirrors,
         mirror_configs,
         wildcard_db_templates,
@@ -1076,8 +1195,124 @@ pub fn from_config(config: &ConfigAndUsers) -> Databases {
 
 #[cfg(test)]
 mod tests {
+    use pgdog_config::General;
+
     use super::*;
     use crate::config::{Config, ConfigAndUsers, Database, Role};
+
+    fn setup_config(passthrough_auth: crate::config::PassthroughAuth, users: Vec<ConfigUser>) {
+        let _lock = lock();
+        let config = Config {
+            databases: vec![Database {
+                name: "db1".to_string(),
+                host: "localhost".to_string(),
+                port: 5432,
+                role: Role::Primary,
+                ..Default::default()
+            }],
+            general: General {
+                passthrough_auth,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let users = crate::config::Users {
+            users,
+            ..Default::default()
+        };
+
+        let cu = ConfigAndUsers {
+            config,
+            users,
+            config_path: std::path::PathBuf::new(),
+            users_path: std::path::PathBuf::new(),
+            ..Default::default()
+        };
+
+        crate::config::set(cu).expect("set config");
+        let databases = from_config(&crate::config::config());
+        replace_databases(databases, false).expect("replace databases");
+    }
+
+    fn make_user(name: &str, password: Option<&str>) -> ConfigUser {
+        ConfigUser {
+            name: name.to_string(),
+            database: "db1".to_string(),
+            password: password.map(|p| p.to_string()),
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn test_add_new_user() {
+        setup_config(crate::config::PassthroughAuth::EnabledPlain, vec![]);
+
+        let result = add(make_user("new_user", Some("secret")));
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_ok());
+
+        let config = crate::config::config();
+        let found = config.users.find(&make_user("new_user", None));
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().password, Some("secret".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_add_existing_user_matching_password() {
+        setup_config(
+            crate::config::PassthroughAuth::EnabledPlain,
+            vec![make_user("alice", Some("pass123"))],
+        );
+
+        let result = add(make_user("alice", Some("pass123")));
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_add_existing_user_no_password_set() {
+        setup_config(
+            crate::config::PassthroughAuth::EnabledPlain,
+            vec![make_user("bob", None)],
+        );
+
+        let result = add(make_user("bob", Some("new_pass")));
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_ok());
+
+        let config = crate::config::config();
+        let found = config.users.find(&make_user("bob", None));
+        assert_eq!(found.unwrap().password, Some("new_pass".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_add_existing_user_wrong_password_no_change_allowed() {
+        setup_config(
+            crate::config::PassthroughAuth::EnabledPlain,
+            vec![make_user("charlie", Some("old_pass"))],
+        );
+
+        let result = add(make_user("charlie", Some("wrong_pass")));
+        assert!(result.is_ok());
+        assert!(!result.unwrap().is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_add_existing_user_wrong_password_change_allowed() {
+        setup_config(
+            crate::config::PassthroughAuth::EnabledPlainAllowChange,
+            vec![make_user("dave", Some("old_pass"))],
+        );
+
+        let result = add(make_user("dave", Some("new_pass")));
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_ok());
+
+        let config = crate::config::config();
+        let found = config.users.find(&make_user("dave", None));
+        assert_eq!(found.unwrap().password, Some("new_pass".to_string()));
+    }
 
     #[test]
     fn test_mirror_user_isolation() {
@@ -1106,8 +1341,7 @@ mod tests {
         config.mirroring = vec![crate::config::Mirroring {
             source_db: "db1".to_string(),
             destination_db: "db1_mirror".to_string(),
-            queue_length: None,
-            exposure: None,
+            ..Default::default()
         }];
 
         let users = crate::config::Users {
@@ -1145,6 +1379,7 @@ mod tests {
             users,
             config_path: std::path::PathBuf::new(),
             users_path: std::path::PathBuf::new(),
+            ..Default::default()
         });
 
         let alice_mirrors = databases.mirrors(("alice", "db1")).unwrap().unwrap_or(&[]);
@@ -1186,8 +1421,7 @@ mod tests {
         config.mirroring = vec![crate::config::Mirroring {
             source_db: "source_db".to_string(),
             destination_db: "dest_db".to_string(),
-            queue_length: None,
-            exposure: None,
+            ..Default::default()
         }];
 
         let users = crate::config::Users {
@@ -1220,6 +1454,7 @@ mod tests {
             users,
             config_path: std::path::PathBuf::new(),
             users_path: std::path::PathBuf::new(),
+            ..Default::default()
         });
 
         // Mirrors should be empty due to user mismatch
@@ -1265,6 +1500,7 @@ mod tests {
             destination_db: "dest_db".to_string(),
             queue_length: Some(256),
             exposure: Some(0.5),
+            ..Default::default()
         }];
 
         let users = crate::config::Users {
@@ -1290,6 +1526,7 @@ mod tests {
             users,
             config_path: std::path::PathBuf::new(),
             users_path: std::path::PathBuf::new(),
+            ..Default::default()
         });
 
         // Verify mirror config exists and has custom values
@@ -1341,8 +1578,7 @@ mod tests {
         config.mirroring = vec![crate::config::Mirroring {
             source_db: "db1".to_string(),
             destination_db: "db2".to_string(),
-            queue_length: None,
-            exposure: None,
+            ..Default::default()
         }];
 
         let users = crate::config::Users {
@@ -1368,6 +1604,7 @@ mod tests {
             users,
             config_path: std::path::PathBuf::new(),
             users_path: std::path::PathBuf::new(),
+            ..Default::default()
         });
 
         let mirror_config = databases.mirror_config("db1", "db2");
@@ -1422,13 +1659,13 @@ mod tests {
                 source_db: "primary".to_string(),
                 destination_db: "mirror1".to_string(),
                 queue_length: Some(200), // Override queue only
-                exposure: None,
+                ..Default::default()
             },
             crate::config::Mirroring {
                 source_db: "primary".to_string(),
                 destination_db: "mirror2".to_string(),
-                queue_length: None,
                 exposure: Some(0.25), // Override exposure only
+                ..Default::default()
             },
         ];
 
@@ -1461,6 +1698,7 @@ mod tests {
             users,
             config_path: std::path::PathBuf::new(),
             users_path: std::path::PathBuf::new(),
+            ..Default::default()
         });
 
         // Check mirror1 config - custom queue, default exposure
@@ -1513,6 +1751,7 @@ mod tests {
             destination_db: "dest".to_string(),
             queue_length: Some(256),
             exposure: Some(0.5),
+            ..Default::default()
         }];
 
         // Create user mismatch - user1 for source, user2 for dest
@@ -1539,6 +1778,7 @@ mod tests {
             users,
             config_path: std::path::PathBuf::new(),
             users_path: std::path::PathBuf::new(),
+            ..Default::default()
         });
 
         // Should not have precomputed this invalid config
@@ -1579,6 +1819,7 @@ mod tests {
             destination_db: "dest_db".to_string(),
             queue_length: Some(256),
             exposure: Some(0.5),
+            ..Default::default()
         }];
 
         // No users at all
@@ -1592,6 +1833,7 @@ mod tests {
             users,
             config_path: std::path::PathBuf::new(),
             users_path: std::path::PathBuf::new(),
+            ..Default::default()
         });
 
         // Mirror config should not be precomputed when there are no users
@@ -1620,6 +1862,7 @@ mod tests {
             users: users_partial,
             config_path: std::path::PathBuf::new(),
             users_path: std::path::PathBuf::new(),
+            ..Default::default()
         });
 
         // Mirror config should not be precomputed when destination has no users
@@ -1648,6 +1891,7 @@ mod tests {
             users: users_dest_only,
             config_path: std::path::PathBuf::new(),
             users_path: std::path::PathBuf::new(),
+            ..Default::default()
         });
 
         // Mirror config should not be precomputed when source has no users
@@ -1660,31 +1904,32 @@ mod tests {
 
     #[test]
     fn test_user_all_databases_creates_pools_for_all_dbs() {
-        let mut config = Config::default();
-
-        config.databases = vec![
-            Database {
-                name: "db1".to_string(),
-                host: "localhost".to_string(),
-                port: 5432,
-                role: Role::Primary,
-                ..Default::default()
-            },
-            Database {
-                name: "db2".to_string(),
-                host: "localhost".to_string(),
-                port: 5433,
-                role: Role::Primary,
-                ..Default::default()
-            },
-            Database {
-                name: "db3".to_string(),
-                host: "localhost".to_string(),
-                port: 5434,
-                role: Role::Primary,
-                ..Default::default()
-            },
-        ];
+        let config = Config {
+            databases: vec![
+                Database {
+                    name: "db1".to_string(),
+                    host: "localhost".to_string(),
+                    port: 5432,
+                    role: Role::Primary,
+                    ..Default::default()
+                },
+                Database {
+                    name: "db2".to_string(),
+                    host: "localhost".to_string(),
+                    port: 5433,
+                    role: Role::Primary,
+                    ..Default::default()
+                },
+                Database {
+                    name: "db3".to_string(),
+                    host: "localhost".to_string(),
+                    port: 5434,
+                    role: Role::Primary,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
 
         let users = crate::config::Users {
             users: vec![crate::config::User {
@@ -1701,6 +1946,7 @@ mod tests {
             users,
             config_path: std::path::PathBuf::new(),
             users_path: std::path::PathBuf::new(),
+            ..Default::default()
         });
 
         // User should have pools for all three databases
@@ -1723,31 +1969,32 @@ mod tests {
 
     #[test]
     fn test_user_multiple_databases_creates_pools_for_specified_dbs() {
-        let mut config = Config::default();
-
-        config.databases = vec![
-            Database {
-                name: "db1".to_string(),
-                host: "localhost".to_string(),
-                port: 5432,
-                role: Role::Primary,
-                ..Default::default()
-            },
-            Database {
-                name: "db2".to_string(),
-                host: "localhost".to_string(),
-                port: 5433,
-                role: Role::Primary,
-                ..Default::default()
-            },
-            Database {
-                name: "db3".to_string(),
-                host: "localhost".to_string(),
-                port: 5434,
-                role: Role::Primary,
-                ..Default::default()
-            },
-        ];
+        let config = Config {
+            databases: vec![
+                Database {
+                    name: "db1".to_string(),
+                    host: "localhost".to_string(),
+                    port: 5432,
+                    role: Role::Primary,
+                    ..Default::default()
+                },
+                Database {
+                    name: "db2".to_string(),
+                    host: "localhost".to_string(),
+                    port: 5433,
+                    role: Role::Primary,
+                    ..Default::default()
+                },
+                Database {
+                    name: "db3".to_string(),
+                    host: "localhost".to_string(),
+                    port: 5434,
+                    role: Role::Primary,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
 
         let users = crate::config::Users {
             users: vec![crate::config::User {
@@ -1764,6 +2011,7 @@ mod tests {
             users,
             config_path: std::path::PathBuf::new(),
             users_path: std::path::PathBuf::new(),
+            ..Default::default()
         });
 
         // User should have pools for db1 and db3 only
@@ -1786,31 +2034,32 @@ mod tests {
 
     #[test]
     fn test_all_databases_takes_priority_over_databases_list() {
-        let mut config = Config::default();
-
-        config.databases = vec![
-            Database {
-                name: "db1".to_string(),
-                host: "localhost".to_string(),
-                port: 5432,
-                role: Role::Primary,
-                ..Default::default()
-            },
-            Database {
-                name: "db2".to_string(),
-                host: "localhost".to_string(),
-                port: 5433,
-                role: Role::Primary,
-                ..Default::default()
-            },
-            Database {
-                name: "db3".to_string(),
-                host: "localhost".to_string(),
-                port: 5434,
-                role: Role::Primary,
-                ..Default::default()
-            },
-        ];
+        let config = Config {
+            databases: vec![
+                Database {
+                    name: "db1".to_string(),
+                    host: "localhost".to_string(),
+                    port: 5432,
+                    role: Role::Primary,
+                    ..Default::default()
+                },
+                Database {
+                    name: "db2".to_string(),
+                    host: "localhost".to_string(),
+                    port: 5433,
+                    role: Role::Primary,
+                    ..Default::default()
+                },
+                Database {
+                    name: "db3".to_string(),
+                    host: "localhost".to_string(),
+                    port: 5434,
+                    role: Role::Primary,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
 
         // User has both all_databases=true AND specific databases set
         let users = crate::config::Users {
@@ -1829,6 +2078,7 @@ mod tests {
             users,
             config_path: std::path::PathBuf::new(),
             users_path: std::path::PathBuf::new(),
+            ..Default::default()
         });
 
         // all_databases should take priority - user gets all 3 databases
@@ -1868,24 +2118,25 @@ mod tests {
 
     #[test]
     fn test_user_with_single_database_creates_one_pool() {
-        let mut config = Config::default();
-
-        config.databases = vec![
-            Database {
-                name: "db1".to_string(),
-                host: "localhost".to_string(),
-                port: 5432,
-                role: Role::Primary,
-                ..Default::default()
-            },
-            Database {
-                name: "db2".to_string(),
-                host: "localhost".to_string(),
-                port: 5433,
-                role: Role::Primary,
-                ..Default::default()
-            },
-        ];
+        let config = Config {
+            databases: vec![
+                Database {
+                    name: "db1".to_string(),
+                    host: "localhost".to_string(),
+                    port: 5432,
+                    role: Role::Primary,
+                    ..Default::default()
+                },
+                Database {
+                    name: "db2".to_string(),
+                    host: "localhost".to_string(),
+                    port: 5433,
+                    role: Role::Primary,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
 
         let users = crate::config::Users {
             users: vec![crate::config::User {
@@ -1902,6 +2153,7 @@ mod tests {
             users,
             config_path: std::path::PathBuf::new(),
             users_path: std::path::PathBuf::new(),
+            ..Default::default()
         });
 
         assert!(
@@ -1918,31 +2170,32 @@ mod tests {
 
     #[test]
     fn test_multiple_users_with_different_database_access() {
-        let mut config = Config::default();
-
-        config.databases = vec![
-            Database {
-                name: "db1".to_string(),
-                host: "localhost".to_string(),
-                port: 5432,
-                role: Role::Primary,
-                ..Default::default()
-            },
-            Database {
-                name: "db2".to_string(),
-                host: "localhost".to_string(),
-                port: 5433,
-                role: Role::Primary,
-                ..Default::default()
-            },
-            Database {
-                name: "db3".to_string(),
-                host: "localhost".to_string(),
-                port: 5434,
-                role: Role::Primary,
-                ..Default::default()
-            },
-        ];
+        let config = Config {
+            databases: vec![
+                Database {
+                    name: "db1".to_string(),
+                    host: "localhost".to_string(),
+                    port: 5432,
+                    role: Role::Primary,
+                    ..Default::default()
+                },
+                Database {
+                    name: "db2".to_string(),
+                    host: "localhost".to_string(),
+                    port: 5433,
+                    role: Role::Primary,
+                    ..Default::default()
+                },
+                Database {
+                    name: "db3".to_string(),
+                    host: "localhost".to_string(),
+                    port: 5434,
+                    role: Role::Primary,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
 
         let users = crate::config::Users {
             users: vec![
@@ -1973,6 +2226,7 @@ mod tests {
             users,
             config_path: std::path::PathBuf::new(),
             users_path: std::path::PathBuf::new(),
+            ..Default::default()
         });
 
         // Admin has all 3 databases
@@ -1996,15 +2250,16 @@ mod tests {
 
     #[test]
     fn test_databases_list_with_nonexistent_database_skipped() {
-        let mut config = Config::default();
-
-        config.databases = vec![Database {
-            name: "db1".to_string(),
-            host: "localhost".to_string(),
-            port: 5432,
-            role: Role::Primary,
+        let config = Config {
+            databases: vec![Database {
+                name: "db1".to_string(),
+                host: "localhost".to_string(),
+                port: 5432,
+                role: Role::Primary,
+                ..Default::default()
+            }],
             ..Default::default()
-        }];
+        };
 
         // User requests access to both existing and non-existing databases
         let users = crate::config::Users {
@@ -2022,6 +2277,7 @@ mod tests {
             users,
             config_path: std::path::PathBuf::new(),
             users_path: std::path::PathBuf::new(),
+            ..Default::default()
         });
 
         // Should only create pool for db1, nonexistent is silently skipped
@@ -2043,13 +2299,13 @@ mod tests {
         let original_config = r#"
 [[databases]]
 name = "source_db"
-host = "source-host"
+host = "127.0.0.1"
 port = 5432
 role = "primary"
 
 [[databases]]
 name = "destination_db"
-host = "destination-host"
+host = "127.0.0.2"
 port = 5433
 role = "primary"
 "#;
@@ -2073,54 +2329,54 @@ password = "testpass"
         cutover("source_db", "destination_db").await.unwrap();
 
         // Verify backup files contain original content
-        let backup_config_str = fs::read_to_string(config_path.with_extension("bak.toml"))
+        let backup_config = fs::read_to_string(config_path.with_extension("bak.toml"))
             .await
             .unwrap();
-        let backup_config: crate::config::Config = toml::from_str(&backup_config_str).unwrap();
+        let backup_config: crate::config::Config = toml::from_str(&backup_config).unwrap();
         let backup_source = backup_config
             .databases
             .iter()
             .find(|d| d.name == "source_db")
             .unwrap();
-        assert_eq!(backup_source.host, "source-host");
+        assert_eq!(backup_source.host, "127.0.0.1");
         assert_eq!(backup_source.port, 5432);
         let backup_dest = backup_config
             .databases
             .iter()
             .find(|d| d.name == "destination_db")
             .unwrap();
-        assert_eq!(backup_dest.host, "destination-host");
+        assert_eq!(backup_dest.host, "127.0.0.2");
         assert_eq!(backup_dest.port, 5433);
 
-        let backup_users_str = fs::read_to_string(users_path.with_extension("bak.toml"))
+        let backup_users = fs::read_to_string(users_path.with_extension("bak.toml"))
             .await
             .unwrap();
-        let backup_users: crate::config::Users = toml::from_str(&backup_users_str).unwrap();
+        let backup_users: crate::config::Users = toml::from_str(&backup_users).unwrap();
         assert_eq!(backup_users.users.len(), 1);
         assert_eq!(backup_users.users[0].name, "testuser");
         assert_eq!(backup_users.users[0].database, "source_db");
 
         // Verify new config files have swapped values
-        let new_config_str = fs::read_to_string(&config_path).await.unwrap();
-        let new_config: crate::config::Config = toml::from_str(&new_config_str).unwrap();
+        let new_config = fs::read_to_string(&config_path).await.unwrap();
+        let new_config: crate::config::Config = toml::from_str(&new_config).unwrap();
         let new_source = new_config
             .databases
             .iter()
             .find(|d| d.name == "source_db")
             .unwrap();
-        assert_eq!(new_source.host, "destination-host");
+        assert_eq!(new_source.host, "127.0.0.2");
         assert_eq!(new_source.port, 5433);
         let new_dest = new_config
             .databases
             .iter()
             .find(|d| d.name == "destination_db")
             .unwrap();
-        assert_eq!(new_dest.host, "source-host");
+        assert_eq!(new_dest.host, "127.0.0.1");
         assert_eq!(new_dest.port, 5432);
 
         // Verify users were swapped
-        let new_users_str = fs::read_to_string(&users_path).await.unwrap();
-        let new_users: crate::config::Users = toml::from_str(&new_users_str).unwrap();
+        let new_users = fs::read_to_string(&users_path).await.unwrap();
+        let new_users: crate::config::Users = toml::from_str(&new_users).unwrap();
         assert_eq!(new_users.users.len(), 1);
         assert_eq!(new_users.users[0].name, "testuser");
         assert_eq!(new_users.users[0].database, "destination_db");
@@ -2417,7 +2673,7 @@ password = "testpass"
         let cluster = result.unwrap();
         assert!(cluster.is_some(), "wildcard pool should have been created");
         let cluster = cluster.unwrap();
-        assert_eq!(cluster.password(), "old_pass");
+        assert_eq!(cluster.passwords()[0].as_str(), "old_pass");
 
         assert!(super::databases().exists(("bob", "tenant_1")));
         assert_eq!(super::databases().wildcard_pool_count(), 1);
@@ -2445,7 +2701,7 @@ password = "testpass"
         assert!(cluster.is_some(), "pool should be recreated");
         let cluster = cluster.unwrap();
         assert_eq!(
-            cluster.password(),
+            cluster.passwords()[0].as_str(),
             "new_pass",
             "recreated pool must use the new password"
         );

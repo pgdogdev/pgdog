@@ -27,7 +27,7 @@ impl FromBytes for HotStandbyFeedback {
 }
 
 impl ToBytes for HotStandbyFeedback {
-    fn to_bytes(&self) -> Result<Bytes, Error> {
+    fn to_bytes(&self) -> Bytes {
         let mut payload = BytesMut::new();
         payload.put_u8(b'h');
         payload.put_i64(self.system_clock);
@@ -36,7 +36,7 @@ impl ToBytes for HotStandbyFeedback {
         payload.put_i32(self.catalog_min);
         payload.put_i32(self.epoch_catalog_min);
 
-        Ok(payload.freeze())
+        payload.freeze()
     }
 }
 
@@ -54,7 +54,7 @@ mod tests {
             epoch_catalog_min: 13,
         };
 
-        let bytes = feedback.to_bytes().expect("serialize hot standby feedback");
+        let bytes = feedback.to_bytes();
         let decoded = HotStandbyFeedback::from_bytes(bytes).expect("decode hot standby feedback");
 
         assert_eq!(decoded.system_clock, 1234);

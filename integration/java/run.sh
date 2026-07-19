@@ -9,14 +9,15 @@ if [[ ! -f postgres.jar ]]; then
     curl -L https://jdbc.postgresql.org/download/postgresql-42.7.5.jar > postgres.jar
 fi
 
-CLASS_PATH="$PWD:$PWD/postgres.jar"
+export CLASSPATH="$PWD/out:$PWD/postgres.jar"
 
-javac pgdog.java
+mkdir -p out
+javac -d out pgdog.java
 
 run_pgdog
 wait_for_pgdog
 
-java -cp ${CLASS_PATH} -ea Pgdog
+java -ea Pgdog
 
 popd
 

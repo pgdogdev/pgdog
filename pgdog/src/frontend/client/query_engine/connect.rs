@@ -1,6 +1,5 @@
-use tokio::time::timeout;
-
-use crate::frontend::router::parser::ShardWithPriority;
+use crate::frontend::router::parser::{ShardWithPriority, route::ShardSource};
+use crate::util::safe_timeout;
 
 use super::*;
 
@@ -30,7 +29,7 @@ impl QueryEngine {
 
         let connect_route = connect_route.unwrap_or(context.client_request.route());
 
-        let request = Request::new(*context.id, connect_route.is_read());
+        let request = Request::new(context.id, connect_route.is_read());
 
         self.stats.waiting(request.created_at);
         self.comms.update_stats(self.stats);
@@ -38,24 +37,13 @@ impl QueryEngine {
         let connected = match self.backend.connect(&request, connect_route).await {
             Ok(_) => {
                 self.stats.connected();
-                self.stats
-                    .locked(context.client_request.route().is_lock_session());
-                // This connection will be locked to this client
-                // until they disconnect.
-                //
-                // Used in case the client runs an advisory lock
-                // or another leaky transaction mode abstraction.
-                self.backend
-                    .lock(context.client_request.route().is_lock_session());
-
                 self.debug_connected(context, false);
 
                 let query_timeout = context.timeouts.query_timeout(&self.stats.state);
-
                 let begin_stmt = self.begin_stmt.take();
 
                 // We may need to sync params with the server and that reads from the socket.
-                timeout(
+                safe_timeout(
                     query_timeout,
                     self.backend.link_client(
                         context.id,
@@ -118,6 +106,20 @@ impl QueryEngine {
         self.connect(context, Some(&route)).await
     }
 
+    /// Return a route for the transaction statement.
+    ///
+    /// This determines how many shards we connect to when the transaction is started.
+    /// Typically, that's going to be all shards since we can't determine which shards we
+    /// will need in advance _and_ we don't currently support lazy connect.
+    ///
+    /// TODO(lev): Add support for lazily connecting to shards as needed.
+    ///
+    /// Some notable exceptions:
+    ///
+    /// 1. Deployment is not sharded
+    /// 2. Deployment uses schema-based sharding, and will talk to one shard per transaction, always
+    /// 3. Caller used `SET` to specify shard/sharding key for the transaction
+    ///
     pub(super) fn transaction_route(&mut self, route: &Route) -> Result<Route, Error> {
         let cluster = self.backend.cluster()?;
 
@@ -128,8 +130,11 @@ impl QueryEngine {
                 )))
                 .with_read(route.is_read()),
             )
-        } else if route.is_search_path_driven() {
-            // Schema-based routing will only go to one shard.
+        } else if route.is_search_path_driven()
+            || route.shard_with_priority().source() == &ShardSource::Set
+        {
+            // - Schema-based routing will only go to one shard.
+            // - SET is used to pick one shard, either with pgdog.shard or pgdog.sharding_key.
             Ok(route.clone())
         } else {
             Ok(

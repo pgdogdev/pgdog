@@ -27,6 +27,11 @@ impl FromBytes for Describe {
         let original = bytes.clone();
         code!(bytes, 'D');
 
+        // Minimum: code(1) + len(4) + kind(1) + null(1) = 7 bytes
+        if original.len() < 7 {
+            return Err(Error::UnexpectedEof);
+        }
+
         from_utf8(&original[6..original.len() - 1])?;
 
         Ok(Self {
@@ -37,12 +42,8 @@ impl FromBytes for Describe {
 }
 
 impl ToBytes for Describe {
-    fn to_bytes(&self) -> Result<Bytes, Error> {
-        if let Some(ref original) = self.original {
-            return Ok(original.clone());
-        }
-
-        Ok(self.payload.clone())
+    fn to_bytes(&self) -> Bytes {
+        self.original.as_ref().unwrap_or(&self.payload).clone()
     }
 }
 
@@ -67,6 +68,12 @@ impl Describe {
         payload.put_string(&name.to_string());
         self.payload = payload.freeze();
         self.original = None;
+    }
+
+    pub fn anonymize(&mut self) {
+        if !self.anonymous() {
+            self.rename("");
+        }
     }
 
     pub fn new_statement(name: &str) -> Describe {
@@ -112,8 +119,8 @@ impl Describe {
 mod test {
     use super::*;
     use crate::{
-        backend::pool::{test::pool, Request},
-        net::{messages::ErrorResponse, ProtocolMessage},
+        backend::pool::{Request, test::pool},
+        net::{ProtocolMessage, messages::ErrorResponse},
     };
 
     #[tokio::test]
@@ -125,10 +132,10 @@ mod test {
             .await
             .unwrap();
         let res = conn.read().await.unwrap();
-        let err = ErrorResponse::from_bytes(res.to_bytes().unwrap()).unwrap();
+        let err = ErrorResponse::from_bytes(res.to_bytes()).unwrap();
         assert_eq!(err.code, "34000");
 
         let describe = Describe::new_statement("test");
-        assert_eq!(describe.len(), describe.to_bytes().unwrap().len());
+        assert_eq!(describe.len(), describe.to_bytes().len());
     }
 }

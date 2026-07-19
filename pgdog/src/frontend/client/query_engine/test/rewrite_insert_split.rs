@@ -62,7 +62,7 @@ async fn test_insert_split() {
         );
         match request[1].clone() {
             ProtocolMessage::Bind(bind) => {
-                assert_eq!(bind.params_raw().get(0).unwrap().data, id);
+                assert_eq!(bind.params_raw().first().unwrap().data, id);
                 assert_eq!(bind.params_raw().get(1).unwrap().data, email);
                 assert!(bind.anonymous());
             }
@@ -101,7 +101,7 @@ async fn test_insert_split_prepared() {
         );
         match request[1].clone() {
             ProtocolMessage::Bind(bind) => {
-                assert_eq!(bind.params_raw().get(0).unwrap().data, id);
+                assert_eq!(bind.params_raw().first().unwrap().data, id);
                 assert_eq!(bind.params_raw().get(1).unwrap().data, email);
                 assert_eq!(bind.statement(), "__pgdog_2");
             }

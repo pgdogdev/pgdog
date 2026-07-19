@@ -5,12 +5,13 @@ use super::*;
 use super::interval::bigint;
 use bytes::{Buf, Bytes};
 use chrono::{Datelike, NaiveDate, NaiveDateTime, NaiveTime, Timelike};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 // PostgreSQL epoch is 2000-01-01 00:00:00 UTC, which is 946684800 seconds after Unix epoch
 const POSTGRES_EPOCH_MICROS: i64 = 946684800000000; // microseconds
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Default, Hash, Serialize, Deserialize)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Default, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct Timestamp {
     pub year: i64,
     pub month: i8,
@@ -762,7 +763,7 @@ mod test {
             special: None,
         };
 
-        let datum = Datum::Timestamp(ts.clone());
+        let datum = Datum::Timestamp(ts);
         let encoded = datum.encode(Format::Binary).unwrap();
 
         let decoded = Timestamp::decode(&encoded, Format::Binary).unwrap();

@@ -1,5 +1,6 @@
 //! Network errors.
 
+use crate::datum::DataType;
 use std::array::TryFromSliceError;
 
 use thiserror::Error;
@@ -8,9 +9,6 @@ use thiserror::Error;
 pub enum Error {
     #[error("unexpected payload")]
     UnexpectedPayload,
-
-    #[error("data type not supported for encoding")]
-    UnsupportedDataTypeForEncoding,
 
     #[error("not text encoding")]
     NotTextEncoding,
@@ -50,4 +48,13 @@ pub enum Error {
 
     #[error("lsn decode error")]
     LsnDecode,
+
+    #[error("expected {0}, got {1}")]
+    IncompatibleTypes(DataType, DataType),
+
+    #[error("invalid operation {op} for {ty}")]
+    InvalidOperation { op: &'static str, ty: DataType },
+
+    #[error("cannot cast from {from} to {to}")]
+    InvalidCast { from: DataType, to: DataType },
 }

@@ -7,14 +7,14 @@ use tokio::time::sleep;
 use tracing::debug;
 
 use crate::frontend::ClientRequest;
+use crate::net::ProtocolMessage;
+use crate::net::ToBytes;
 use crate::net::messages::command_complete::CommandComplete;
 use crate::net::messages::{ErrorResponse, FromBytes, Protocol, Query, ReadyForQuery};
-use crate::net::ToBytes;
-use crate::net::{BackendKeyData, ProtocolMessage};
 
+use super::Error;
 use super::parser::Parser;
 use super::prelude::Message;
-use super::Error;
 
 /// Admin backend.
 #[derive(Debug)]
@@ -46,7 +46,7 @@ impl AdminServer {
             return Err(Error::SimpleOnly);
         }
 
-        let query = Query::from_bytes(message.to_bytes()?)?;
+        let query = Query::from_bytes(message.to_bytes())?;
 
         let messages = match Parser::parse(&query.query().to_lowercase()) {
             Ok(command) => {
@@ -55,28 +55,24 @@ impl AdminServer {
 
                 messages
             }
-            Err(err) => vec![ErrorResponse::syntax(err.to_string().as_str()).message()?],
+            Err(err) => {
+                vec![ErrorResponse::protocol_violation(err.to_string().as_str()).message()?]
+            }
         };
 
         self.messages.extend(messages);
         self.messages.push_back(ReadyForQuery::idle().message()?);
-
-        self.messages = std::mem::take(&mut self.messages)
-            .into_iter()
-            .map(|m| m.backend(BackendKeyData::default()))
-            .collect();
 
         Ok(())
     }
 
     /// Receive command result.
     pub async fn read(&mut self) -> Result<Message, Error> {
-        if let Some(message) = self.messages.pop_front() {
-            Ok(message)
-        } else {
-            loop {
+        match self.messages.pop_front() {
+            Some(message) => Ok(message),
+            _ => loop {
                 sleep(Duration::MAX).await;
-            }
+            },
         }
     }
 

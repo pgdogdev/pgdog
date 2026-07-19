@@ -2,3 +2,8 @@
 name = "postgres"
 database = "postgres"
 password = "postgres"
+
+[[users]]
+name = "postgres"
+database = "postgres_auto"
+password = "postgres"

@@ -2,11 +2,11 @@
 use crate::net::c_string_buf_len;
 use uuid::Uuid;
 
-use super::code;
-use super::prelude::*;
 use super::Error;
 use super::FromDataType;
 use super::Vector;
+use super::code;
+use super::prelude::*;
 use bytes::BytesMut;
 
 use std::fmt::Debug;
@@ -69,6 +69,15 @@ impl<'a> ParameterWithFormat<'a> {
     /// Get text representation if it's valid UTF-8.
     pub fn text(&self) -> Option<&str> {
         from_utf8(&self.parameter.data).ok()
+    }
+
+    /// Get the parameter as a textual value for debugging purposes only.
+    pub fn text_debug(&self) -> String {
+        if let Some(text) = self.text() {
+            text.to_string()
+        } else {
+            hex::encode(self.data())
+        }
     }
 
     /// Get BIGINT if one is encoded in the field.
@@ -175,6 +184,13 @@ impl Bind {
     pub fn rename(&mut self, name: impl ToString) {
         self.statement = Bytes::from(name.to_string() + "\0");
         self.original = None;
+    }
+
+    /// Make this an anonymous Bind message.
+    pub fn anonymize(&mut self) {
+        if !self.anonymous() {
+            self.rename("");
+        }
     }
 
     /// Is this Bind message anonymous?
@@ -307,35 +323,74 @@ impl FromBytes for Bind {
     fn from_bytes(mut bytes: Bytes) -> Result<Self, Error> {
         let original = bytes.clone();
         code!(bytes, 'B');
-        let _len = bytes.get_i32();
 
-        let portal = bytes.split_to(c_string_buf_len(&bytes));
-        let statement = bytes.split_to(c_string_buf_len(&bytes));
+        let len = bytes.get_i32() as usize;
+        // Declared length includes itself (4 bytes) but not the code byte.
+        // Verify the remaining buffer has enough data.
+        if bytes.remaining() + 4 < len {
+            return Err(Error::UnexpectedEof);
+        }
+
+        let portal_len = c_string_buf_len(&bytes);
+        if portal_len == 0 {
+            return Err(Error::UnexpectedEof);
+        }
+        let portal = bytes.split_to(portal_len);
+
+        let statement_len = c_string_buf_len(&bytes);
+        if statement_len == 0 {
+            return Err(Error::UnexpectedEof);
+        }
+        let statement = bytes.split_to(statement_len);
+
         from_utf8(&portal[0..portal.len() - 1])?;
         from_utf8(&statement[0..statement.len() - 1])?;
 
+        if bytes.remaining() < 2 {
+            return Err(Error::UnexpectedEof);
+        }
         let num_codes = bytes.get_u16();
+        if bytes.remaining() < num_codes as usize * 2 {
+            return Err(Error::UnexpectedEof);
+        }
         let codes = (0..num_codes as usize)
             .map(|_| match bytes.get_i16() {
                 0 => Format::Text,
                 _ => Format::Binary,
             })
             .collect();
+
+        if bytes.remaining() < 2 {
+            return Err(Error::UnexpectedEof);
+        }
         let num_params = bytes.get_u16();
-        let params = (0..num_params as usize)
-            .map(|_| {
-                let len = bytes.get_i32();
-                let data = if len >= 0 {
-                    bytes.split_to(len as usize)
-                } else {
-                    Bytes::new()
-                };
-                Parameter { len, data }
-            })
-            .collect();
+        let mut params = Vec::with_capacity(num_params as usize);
+        for _ in 0..num_params as usize {
+            if bytes.remaining() < 4 {
+                return Err(Error::UnexpectedEof);
+            }
+            let len = bytes.get_i32();
+            let data = if len >= 0 {
+                if bytes.remaining() < len as usize {
+                    return Err(Error::UnexpectedEof);
+                }
+                bytes.split_to(len as usize)
+            } else {
+                Bytes::new()
+            };
+            params.push(Parameter { len, data });
+        }
+
+        if bytes.remaining() < 2 {
+            return Err(Error::UnexpectedEof);
+        }
         let num_results = bytes.get_i16();
         let results = if num_results > 0 {
-            bytes.split_to((num_results * 2) as usize)
+            let results_len = num_results as usize * 2;
+            if bytes.remaining() < results_len {
+                return Err(Error::UnexpectedEof);
+            }
+            bytes.split_to(results_len)
         } else {
             Bytes::new()
         };
@@ -352,10 +407,10 @@ impl FromBytes for Bind {
 }
 
 impl ToBytes for Bind {
-    fn to_bytes(&self) -> Result<Bytes, Error> {
+    fn to_bytes(&self) -> Bytes {
         // Fast path.
         if let Some(ref original) = self.original {
-            return Ok(original.clone());
+            return original.clone();
         }
 
         let mut payload = Payload::named(self.code());
@@ -377,7 +432,7 @@ impl ToBytes for Bind {
         }
         payload.put_i16((self.results.len() / 2) as i16);
         payload.put(self.results.clone());
-        Ok(payload.freeze())
+        payload.freeze()
     }
 }
 
@@ -392,10 +447,10 @@ mod test {
     use super::*;
     use crate::{
         backend::{
-            pool::{test::pool, Request},
+            pool::{Request, test::pool},
             server::test::test_server,
         },
-        net::{messages::ErrorResponse, DataRow, Execute, Parse, ProtocolMessage, Sync},
+        net::{DataRow, Execute, Parse, ProtocolMessage, Sync, messages::ErrorResponse},
     };
 
     #[tokio::test]
@@ -423,7 +478,7 @@ mod test {
                 buf.freeze()
             },
         };
-        let bytes = bind.to_bytes().unwrap();
+        let bytes = bind.to_bytes();
         let mut original = Bind::from_bytes(bytes.clone()).unwrap();
         original.original = None;
         assert_eq!(original, bind);
@@ -438,7 +493,7 @@ mod test {
             .await
             .unwrap();
         let res = conn.read().await.unwrap();
-        let err = ErrorResponse::from_bytes(res.to_bytes().unwrap()).unwrap();
+        let err = ErrorResponse::from_bytes(res.to_bytes()).unwrap();
         assert_eq!(err.code, "26000");
 
         let anon = Bind::default();
@@ -478,12 +533,12 @@ mod test {
         for c in ['1', '2', 'D', 'C', 'Z'] {
             let msg = server.read().await.unwrap();
             if msg.code() == 'E' {
-                let err = ErrorResponse::from_bytes(msg.to_bytes().unwrap()).unwrap();
+                let err = ErrorResponse::from_bytes(msg.to_bytes()).unwrap();
                 panic!("{:?}", err);
             }
 
             if msg.code() == 'D' {
-                let dr = DataRow::from_bytes(msg.to_bytes().unwrap()).unwrap();
+                let dr = DataRow::from_bytes(msg.to_bytes()).unwrap();
                 let r = dr.get::<String>(0, Format::Binary).unwrap();
                 assert_eq!(r, json);
             }
@@ -511,7 +566,7 @@ mod test {
         let params: Vec<Parameter> = (0..count).map(|_| Parameter::new_null()).collect();
         let bind = Bind::new_params("__pgdog_large", &params);
 
-        let bytes = bind.to_bytes().unwrap();
+        let bytes = bind.to_bytes();
         let decoded = Bind::from_bytes(bytes.clone()).unwrap();
 
         assert_eq!(decoded.params_raw().len(), count);

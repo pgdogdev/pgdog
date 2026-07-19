@@ -74,12 +74,12 @@ impl Header {
 }
 
 impl ToBytes for Header {
-    fn to_bytes(&self) -> Result<bytes::Bytes, crate::net::Error> {
+    fn to_bytes(&self) -> bytes::Bytes {
         let mut payload = BytesMut::new();
         payload.extend(SIGNATURE.iter());
         payload.put_i32(self.flags);
         payload.put_i32(self.header_extension);
 
-        Ok(payload.freeze())
+        payload.freeze()
     }
 }

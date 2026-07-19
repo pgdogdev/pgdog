@@ -2,9 +2,11 @@
 
 use chrono::{DateTime, Local, Utc};
 use once_cell::sync::Lazy;
-use pgdog_plugin::comp;
-use rand::{distr::Alphanumeric, Rng};
-use std::{env, num::ParseIntError, ops::Deref, time::Duration};
+use pgdog_config::MAX_DURATION;
+use rand::{Rng, distr::Alphanumeric};
+#[cfg(feature = "new_parser")]
+use std::ops::ControlFlow;
+use std::{env, future::Future, num::ParseIntError, time::Duration};
 
 use crate::net::Parameters; // 0.8
 
@@ -15,6 +17,20 @@ pub fn format_time(time: DateTime<Local>) -> String {
 /// Convert Duration to milliseconds with 3 decimal places precision.
 pub fn millis(duration: Duration) -> f64 {
     (duration.as_secs_f64() * 1_000_000.0).round() / 1000.0
+}
+
+/// Compare two byte slices in constant time with respect to their contents.
+///
+/// The running time depends only on the input lengths, never on the byte
+/// values, so it cannot leak (via a timing side channel) how many leading
+/// bytes matched. Use this wherever an attacker-supplied value is compared
+/// against a secret (passwords, cancel keys); a short-circuiting `==`/`memcmp`
+/// there is a covert timing channel that lets an attacker recover the secret
+/// byte by byte (cf. PostgreSQL CVE-2026-6478, the MD5 password comparison).
+///
+/// Length is not treated as secret: a length mismatch returns `false` early.
+pub fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    aws_lc_rs::constant_time::verify_slices_are_equal(a, b).is_ok()
 }
 
 pub fn human_duration_optional(duration: Option<Duration>) -> String {
@@ -127,6 +143,16 @@ pub fn node_id() -> Result<u64, ParseIntError> {
     instance_id().split("-").last().unwrap().parse()
 }
 
+static HOSTNAME: Lazy<String> = Lazy::new(|| {
+    let hostname = env::var("HOSTNAME").unwrap_or_default();
+    let host = env::var("HOST").unwrap_or_default();
+    if hostname.is_empty() { host } else { hostname }
+});
+
+pub fn hostname() -> &'static str {
+    &HOSTNAME
+}
+
 /// Escape PostgreSQL identifiers by doubling any embedded quotes.
 pub fn escape_identifier(s: &str) -> String {
     s.replace("\"", "\"\"")
@@ -138,8 +164,8 @@ pub fn pgdog_version() -> String {
         "v{} [main@{}, pgdog-plugin {}, {}]",
         env!("CARGO_PKG_VERSION"),
         env!("GIT_HASH"),
-        comp::pgdog_plugin_api_version().deref(),
-        comp::rustc_version().deref()
+        pgdog_plugin::VERSION,
+        pgdog_plugin::RUSTC_VERSION,
     )
 }
 
@@ -178,6 +204,17 @@ pub fn format_bytes(bytes: u64) -> String {
 }
 
 /// Get user and database parameters.
+///
+/// These parameters are standard and defined by the Postgres protocol.
+///
+/// # Arguments
+///
+/// - `params`: Client parameters extracted from the [`crate::net::Startup`] message.
+///
+/// # Return
+///
+/// Tuple of (user, database).
+///
 pub fn user_database_from_params(params: &Parameters) -> (&str, &str) {
     let user = params.get_default("user", "postgres");
     let database = params.get_default("database", user);
@@ -185,12 +222,108 @@ pub fn user_database_from_params(params: &Parameters) -> (&str, &str) {
     (user, database)
 }
 
+/// Raise the NOFILE soft limit to the hard limit.
+///
+/// Some container runtimes (e.g. containerd v2) set a low soft limit
+/// while keeping a high hard limit. This causes "Too many open files"
+/// errors under load. Raising the soft limit on startup avoids this.
+/// Raise the NOFILE soft limit to the hard limit and return the new value.
+#[cfg(unix)]
+pub fn raise_nofile_limit() -> u64 {
+    use libc::{RLIMIT_NOFILE, getrlimit, rlimit, setrlimit};
+    use tracing::warn;
+
+    let mut rlim = rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+
+    unsafe {
+        if getrlimit(RLIMIT_NOFILE, &mut rlim) != 0 {
+            warn!("failed to get NOFILE limit");
+            return 0;
+        }
+    }
+
+    if rlim.rlim_cur < rlim.rlim_max {
+        let prev = rlim.rlim_cur;
+        rlim.rlim_cur = rlim.rlim_max;
+
+        unsafe {
+            if setrlimit(RLIMIT_NOFILE, &rlim) != 0 {
+                warn!(
+                    "failed to raise NOFILE soft limit from {} to {}",
+                    prev, rlim.rlim_max
+                );
+                return prev;
+            }
+        }
+    }
+
+    rlim.rlim_cur
+}
+
+#[cfg(not(unix))]
+pub fn raise_nofile_limit() -> u64 {
+    0
+}
+
+/// Truncate `s` to at most `limit` bytes, rounding down to the nearest UTF-8
+/// character boundary so the result is always valid UTF-8.
+pub fn truncate_utf8(s: &str, limit: usize) -> &str {
+    &s[..s.floor_char_boundary(limit)]
+}
+
+/// Sanitize a query sample for one-line log output: truncate to at most
+/// `limit` bytes on a UTF-8 character boundary and replace control
+/// characters (including newlines) with spaces so attacker-controlled
+/// bytes can't forge or flood log lines.
+pub fn sanitize_log_sample(s: &str, limit: usize) -> String {
+    truncate_utf8(s, limit).replace(|c: char| c.is_control(), " ")
+}
+
+/// Avoid calling [`tokio::time::timeout`] on [`Duration`] that lasts effectively forever.
+///
+/// The Tokio timers can run hot and, if we can, we should avoid that mutex.
+///
+/// We did switch to the experimental timer that uses thread-locals, so
+/// this shouldn't be a problem anymore, but I still would like to avoid
+/// calling into time runtime if we don't have to.
+///
+pub(crate) async fn safe_timeout<F>(
+    duration: Duration,
+    future: F,
+) -> Result<F::Output, tokio::time::error::Elapsed>
+where
+    F: Future,
+{
+    if duration == Duration::MAX || duration == MAX_DURATION {
+        Ok(future.await)
+    } else {
+        tokio::time::timeout(duration, future).await
+    }
+}
+
+#[cfg(feature = "new_parser")]
+pub(crate) trait ResultControlFlowExt<T, E> {
+    fn break_err<B>(self) -> ControlFlow<Result<B, E>, T>;
+}
+
+#[cfg(feature = "new_parser")]
+impl<T, E> ResultControlFlowExt<T, E> for Result<T, E> {
+    fn break_err<B>(self) -> ControlFlow<Result<B, E>, T> {
+        match self {
+            Ok(t) => ControlFlow::Continue(t),
+            Err(e) => ControlFlow::Break(Err(e)),
+        }
+    }
+}
+
 #[cfg(test)]
 mod test {
 
-    use std::env::{remove_var, set_var};
-
     use super::*;
+    use crate::test_utils::*;
 
     #[test]
     fn test_human_duration() {
@@ -198,6 +331,17 @@ mod test {
         assert_eq!(human_duration(Duration::from_millis(2000)), "2s");
         assert_eq!(human_duration(Duration::from_millis(1000 * 60 * 2)), "2m");
         assert_eq!(human_duration(Duration::from_millis(1000 * 3600)), "1h");
+    }
+
+    #[tokio::test]
+    async fn test_safe_timeout_allows_duration_max() {
+        assert_eq!(safe_timeout(Duration::MAX, async { 42 }).await.unwrap(), 42);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_safe_timeout_times_out() {
+        let result = safe_timeout(Duration::from_millis(1), std::future::pending::<()>()).await;
+        assert!(result.is_err());
     }
 
     #[test]
@@ -226,18 +370,17 @@ mod test {
 
     #[test]
     fn test_instance_id_format() {
-        unsafe {
-            remove_var("NODE_ID");
-        }
+        let _guard = remove_env_var("NODE_ID");
         let id = instance_id();
         assert_eq!(id.len(), 8);
         // All characters should be valid hex digits (0-9, a-f)
         assert!(id.chars().all(|c| c.is_ascii_hexdigit()));
         // All alphabetic characters should be lowercase
-        assert!(id
-            .chars()
-            .filter(|c| c.is_alphabetic())
-            .all(|c| c.is_lowercase()));
+        assert!(
+            id.chars()
+                .filter(|c| c.is_alphabetic())
+                .all(|c| c.is_lowercase())
+        );
     }
 
     #[test]
@@ -249,9 +392,7 @@ mod test {
 
     #[test]
     fn test_node_id_error() {
-        unsafe {
-            remove_var("NODE_ID");
-        }
+        let _guard = remove_env_var("NODE_ID");
         assert!(node_id().is_err());
     }
 
@@ -332,12 +473,59 @@ mod test {
         );
     }
 
-    // These should run in separate processes (if using nextest).
     #[test]
     fn test_node_id_set() {
-        unsafe {
-            set_var("NODE_ID", "pgdog-1");
-        }
+        let _guard = set_env_var("NODE_ID", "pgdog-1");
         assert_eq!(node_id(), Ok(1));
+    }
+
+    #[test]
+    fn test_constant_time_eq() {
+        assert!(constant_time_eq(b"hunter2", b"hunter2"));
+        assert!(!constant_time_eq(b"hunter2", b"hunter3"));
+        // Different lengths must not match.
+        assert!(!constant_time_eq(b"hunter2", b"hunter22"));
+        assert!(!constant_time_eq(b"", b"x"));
+        // Two empty slices are equal.
+        assert!(constant_time_eq(b"", b""));
+    }
+
+    #[test]
+    fn test_truncate_utf8_ascii() {
+        assert_eq!(truncate_utf8("SELECT 1", 4096), "SELECT 1"); // under limit
+        assert_eq!(truncate_utf8("SELECT 1", 6), "SELECT"); // truncated
+    }
+
+    #[test]
+    fn test_truncate_utf8_multibyte() {
+        // Mix of 2-byte (é), 3-byte (€), and 4-byte (𝄞) characters.
+        let s = "é€𝄞é€𝄞"; // 2+3+4+2+3+4 = 18 bytes
+
+        // Every possible byte limit produces valid UTF-8.
+        for limit in 0..=s.len() {
+            assert!(std::str::from_utf8(truncate_utf8(s, limit).as_bytes()).is_ok());
+        }
+
+        assert_eq!(truncate_utf8(s, 0), ""); // empty
+        assert_eq!(truncate_utf8(s, 2), "é"); // exact: end of é
+        assert_eq!(truncate_utf8(s, 3), "é"); // 1 byte into € → walk back
+        assert_eq!(truncate_utf8(s, 5), "é€"); // exact: end of €
+        assert_eq!(truncate_utf8(s, 6), "é€"); // 1 byte into 𝄞 → walk back
+        assert_eq!(truncate_utf8(s, 9), "é€𝄞"); // exact: end of 𝄞
+    }
+
+    #[test]
+    fn test_sanitize_log_sample() {
+        // Truncates to the limit on a char boundary.
+        assert_eq!(sanitize_log_sample("SELECT 1", 6), "SELECT");
+
+        // Newlines, carriage returns, tabs, and escape sequences become spaces.
+        assert_eq!(
+            sanitize_log_sample("SELECT\r\n1\t--\x1b[31mforged\x1b[0m", 4096),
+            "SELECT  1 -- [31mforged [0m"
+        );
+
+        // Truncation happens before sanitization: limit applies to input bytes.
+        assert_eq!(sanitize_log_sample("a\nb\nc", 3), "a b");
     }
 }

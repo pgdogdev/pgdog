@@ -1,9 +1,9 @@
 use bytes::BytesMut;
 
 use crate::backend::replication::publisher::Lsn;
+use crate::net::CopyData;
 use crate::net::replication::KeepAlive;
 use crate::net::replication::ReplicationMeta;
-use crate::net::CopyData;
 use crate::util::postgres_now;
 
 use super::super::code;
@@ -21,7 +21,7 @@ pub struct StatusUpdate {
 impl StatusUpdate {
     pub fn wrapped(self) -> Result<CopyData, Error> {
         Ok(CopyData::new(
-            &ReplicationMeta::StatusUpdate(self).to_bytes()?,
+            &ReplicationMeta::StatusUpdate(self).to_bytes(),
         ))
     }
 
@@ -65,7 +65,7 @@ impl FromBytes for StatusUpdate {
 }
 
 impl ToBytes for StatusUpdate {
-    fn to_bytes(&self) -> Result<Bytes, Error> {
+    fn to_bytes(&self) -> Bytes {
         let mut payload = BytesMut::new();
         payload.put_u8(b'r');
 
@@ -75,7 +75,7 @@ impl ToBytes for StatusUpdate {
         payload.put_i64(self.system_clock);
         payload.put_u8(self.reply);
 
-        Ok(payload.freeze())
+        payload.freeze()
     }
 }
 
@@ -92,7 +92,7 @@ mod test {
             system_clock: 4,
             reply: 5,
         };
-        let su = StatusUpdate::from_bytes(su.to_bytes().unwrap()).unwrap();
+        let su = StatusUpdate::from_bytes(su.to_bytes()).unwrap();
         assert_eq!(su.last_applied, 1);
         assert_eq!(su.last_flushed, 2);
         assert_eq!(su.last_written, 3);

@@ -1,12 +1,24 @@
 use std::ops::{Deref, DerefMut};
 
 use bytes::Bytes;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::*;
 
 #[derive(
-    Debug, Copy, Clone, PartialEq, Ord, PartialOrd, Eq, Default, Hash, Serialize, Deserialize,
+    Debug,
+    Copy,
+    Clone,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Eq,
+    Default,
+    Hash,
+    Serialize,
+    Deserialize,
+    JsonSchema,
 )]
 pub struct TimestampTz {
     timestamp: Timestamp,

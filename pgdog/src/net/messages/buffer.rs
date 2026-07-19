@@ -7,9 +7,12 @@ use bytes::{Buf, BytesMut};
 use pgdog_stats::MessageBufferStats;
 use tokio::io::AsyncReadExt;
 
+use crate::config::config;
 use crate::net::stream::eof;
+use crate::util::sanitize_log_sample;
 
 use super::{Error, Message};
+use tracing::error;
 
 const HEADER_SIZE: usize = 5;
 
@@ -18,12 +21,15 @@ pub struct MessageBuffer {
     buffer: BytesMut,
     capacity: usize,
     stats: MessageBufferStats,
+    /// If specified the messages exceeding this number
+    /// will be rejected and cause fatal abruption.
+    size_limit_block: Option<usize>,
 }
 
 impl MessageBuffer {
     /// Create new cancel-safe
     /// message buffer.
-    pub fn new(capacity: usize) -> Self {
+    pub fn new(capacity: usize, size_limit_block: Option<usize>) -> Self {
         Self {
             buffer: BytesMut::with_capacity(capacity),
             capacity,
@@ -31,7 +37,13 @@ impl MessageBuffer {
                 bytes_alloc: capacity,
                 ..Default::default()
             },
+            size_limit_block,
         }
+    }
+
+    /// Update the size limit used to block oversized query messages.
+    pub fn set_size_limit_block(&mut self, size_limit_block: Option<usize>) {
+        self.size_limit_block = size_limit_block;
     }
 
     /// Buffer capacity.
@@ -44,8 +56,26 @@ impl MessageBuffer {
         stream: &mut (impl Unpin + AsyncReadExt),
     ) -> Result<Message, Error> {
         loop {
-            if let Some(size) = self.message_size() {
-                if self.have_message() {
+            if let Some(size) = self.message_size()? {
+                if let Some(limit) = self.size_limit_block
+                    && size > limit
+                    && self.is_query_message()
+                {
+                    error!(
+                        "[large_query] blocking message: size={}B query_size_limit={}B partial_query='{}...'",
+                        size,
+                        limit,
+                        self.log_sample(size),
+                    );
+                    // Returning here leaves `size - buffer.len()` bytes unread on the
+                    // socket. The caller must be abrupt and reconnect;
+                    // We may actually recover the connection
+                    // instead - drain the remain message from socket
+                    // and return the error.
+                    return Err(Error::MessageTooLarge { size, limit });
+                }
+
+                if self.buffer.len() >= size {
                     return Ok(Message::new(self.buffer.split_to(size).freeze()));
                 }
 
@@ -66,6 +96,33 @@ impl MessageBuffer {
         }
     }
 
+    /// Sample of the (partial) oversized message for log output, bounded
+    /// to the message's own bytes (the buffer may already hold pipelined
+    /// traffic past it); sanitize_log_sample caps it at
+    /// log_query_sample_length and strips control characters.
+    fn log_sample(&self, size: usize) -> String {
+        let sample_size = config().config.general.log_query_sample_length;
+        let sample_end = size
+            .min(self.buffer.len())
+            .clamp(HEADER_SIZE, HEADER_SIZE.saturating_add(sample_size));
+        let sample = &self.buffer[HEADER_SIZE..sample_end];
+        let sample = str::from_utf8(sample)
+            .or_else(|e| str::from_utf8(&sample[..e.valid_up_to()]))
+            .unwrap_or("invalid utf-8");
+        sanitize_log_sample(sample, sample_size)
+    }
+
+    /// Whether the buffered message carries SQL that the query parser
+    /// will see: Query ('Q', simple protocol) or Parse ('P', extended).
+    /// The size limit protects the parser, so only these are subject to it.
+    ///
+    /// Invariant: only called when `message_size()` returned `Ok(Some)`, which
+    /// requires at least the 5-byte header in the buffer, so indexing the
+    /// message code byte can't panic.
+    fn is_query_message(&self) -> bool {
+        matches!(self.buffer[0], b'Q' | b'P')
+    }
+
     // This may or may not allocate memory, depending on how big of
     // a message we are receiving.
     fn ensure_capacity(&mut self, amount: usize) {
@@ -81,20 +138,21 @@ impl MessageBuffer {
         }
     }
 
-    fn have_message(&self) -> bool {
-        self.message_size()
-            .map(|len| self.buffer.len() >= len)
-            .unwrap_or(false)
-    }
-
-    fn message_size(&self) -> Option<usize> {
+    fn message_size(&self) -> Result<Option<usize>, Error> {
         if self.buffer.len() >= HEADER_SIZE {
             let mut cur = Cursor::new(&self.buffer);
             let _code = cur.get_u8();
-            let len = cur.get_i32() as usize + 1;
-            Some(len)
+            let len = cur.get_i32();
+            // The length counts itself but not the message code, so 4 is the
+            // floor. Validating before the `as usize` widening below matters:
+            // it sign-extends a negative length into a huge size, which then
+            // panics the connection task in `reserve`.
+            if len < 4 {
+                return Err(Error::MalformedMessageLength(len));
+            }
+            Ok(Some(len as usize + 1))
         } else {
-            None
+            Ok(None)
         }
     }
 
@@ -139,7 +197,7 @@ impl MessageBuffer {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::net::{FromBytes, Parse, Protocol, Sync, ToBytes};
+    use crate::net::{CopyData, FromBytes, Parse, Protocol, Sync, ToBytes};
     use bytes::BufMut;
     use std::time::Duration;
     use tokio::{
@@ -158,11 +216,11 @@ mod test {
 
         spawn(async move {
             let mut conn = TcpStream::connect(addr).await.unwrap();
-            use rand::{rngs::StdRng, Rng, SeedableRng};
+            use rand::{Rng, SeedableRng, rngs::StdRng};
             let mut rng = StdRng::from_os_rng();
 
             for i in 0..5000 {
-                let msg = Sync.to_bytes().unwrap();
+                let msg = Sync.to_bytes();
                 conn.write_all(&msg).await.unwrap();
 
                 let query_len = rng.random_range(10..=1000);
@@ -170,9 +228,7 @@ mod test {
                     .map(|_| rng.sample(rand::distr::Alphanumeric) as char)
                     .collect();
 
-                let msg = Parse::named(format!("test_{}", i), &query)
-                    .to_bytes()
-                    .unwrap();
+                let msg = Parse::named(format!("test_{}", i), &query).to_bytes();
                 conn.write_all(&msg).await.unwrap();
                 conn.flush().await.unwrap();
             }
@@ -202,7 +258,7 @@ mod test {
                 assert_eq!(msg.code(), 'S');
             } else {
                 assert_eq!(msg.code(), 'P');
-                let parse = Parse::from_bytes(msg.to_bytes().unwrap()).unwrap();
+                let parse = Parse::from_bytes(msg.to_bytes()).unwrap();
                 assert_eq!(parse.name(), format!("test_{}", counter / 2));
             }
 
@@ -229,7 +285,7 @@ mod test {
         assert_eq!(original.len(), 0);
 
         for _ in 0..(5 * 25 * 1000) {
-            original.put_u8('S' as u8);
+            original.put_u8(b'S');
             original.put_i32(4);
 
             let sync = original.split_to(5);
@@ -252,15 +308,15 @@ mod test {
 
         // Create a large message (10KB query)
         let large_query = "SELECT * FROM ".to_string() + &"x".repeat(10_000);
-        let large_msg = Parse::named("large", &large_query).to_bytes().unwrap();
+        let large_msg = Parse::named("large", &large_query).to_bytes();
         stream_data.extend_from_slice(&large_msg);
 
         // Create a small message
-        let small_msg = Sync.to_bytes().unwrap();
+        let small_msg = Sync.to_bytes();
         stream_data.extend_from_slice(&small_msg);
 
         let mut cursor = Cursor::new(stream_data);
-        let mut buf = MessageBuffer::new(4096);
+        let mut buf = MessageBuffer::new(4096, None);
 
         // Read the large message
         let msg = buf.read(&mut cursor).await.unwrap();
@@ -285,7 +341,7 @@ mod test {
     async fn test_shrink_to_fit_preserves_partial_data() {
         use bytes::BufMut;
 
-        let mut buf = MessageBuffer::new(4096);
+        let mut buf = MessageBuffer::new(4096, None);
 
         // Simulate having allocated memory for a large message
         buf.stats.bytes_alloc = 4096 * 3;
@@ -316,14 +372,12 @@ mod test {
         // Create several small messages that won't exceed BUFFER_SIZE
         for i in 0..10 {
             let query = format!("SELECT {}", i);
-            let msg = Parse::named(format!("stmt_{}", i), &query)
-                .to_bytes()
-                .unwrap();
+            let msg = Parse::named(format!("stmt_{}", i), &query).to_bytes();
             stream_data.extend_from_slice(&msg);
         }
 
         let mut cursor = Cursor::new(stream_data);
-        let mut buf = MessageBuffer::new(4096);
+        let mut buf = MessageBuffer::new(4096, None);
 
         // Read all small messages
         for _ in 0..10 {
@@ -348,5 +402,109 @@ mod test {
         assert_eq!(buf.stats.reallocs, reallocs_before);
         assert_eq!(buf.stats.bytes_alloc, bytes_alloc_before);
         assert_eq!(buf.stats.reclaims, frees_before);
+    }
+
+    #[tokio::test]
+    async fn test_size_limit() {
+        let large_query = "SELECT * FROM ".to_string() + &"x".repeat(10_000);
+        let large_msg = Parse::named("large", &large_query).to_bytes();
+
+        // Over the limit: rejected before being read.
+        let mut buf = MessageBuffer::new(4096, Some(1024));
+        let err = buf
+            .read(&mut Cursor::new(large_msg.to_vec()))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, Error::MessageTooLarge { limit: 1024, .. }));
+
+        // Under the limit: passes.
+        let mut buf = MessageBuffer::new(4096, Some(1_000_000));
+        let msg = buf
+            .read(&mut Cursor::new(large_msg.to_vec()))
+            .await
+            .unwrap();
+        assert_eq!(msg.code(), 'P');
+
+        // Small message with a limit: passes.
+        let mut buf = MessageBuffer::new(4096, Some(1024));
+        let msg = buf
+            .read(&mut Cursor::new(Sync.to_bytes().to_vec()))
+            .await
+            .unwrap();
+        assert_eq!(msg.code(), 'S');
+
+        // Non-query messages are exempt: oversized CopyData passes.
+        let copy_msg = CopyData::new(&vec![b'x'; 10_000]).to_bytes();
+        let mut buf = MessageBuffer::new(4096, Some(1024));
+        let msg = buf.read(&mut Cursor::new(copy_msg.to_vec())).await.unwrap();
+        assert_eq!(msg.code(), 'd');
+
+        // Control messages are exempt even when smaller than the limit floor.
+        let mut buf = MessageBuffer::new(4096, Some(3));
+        let msg = buf
+            .read(&mut Cursor::new(Sync.to_bytes().to_vec()))
+            .await
+            .unwrap();
+        assert_eq!(msg.code(), 'S');
+
+        // Smallest legal query header, still over the limit: the log-sample
+        // slice has no payload to read and must not panic.
+        let mut buf = MessageBuffer::new(4096, Some(3));
+        let err = buf
+            .read(&mut Cursor::new(vec![b'Q', 0, 0, 0, 4]))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, Error::MessageTooLarge { limit: 3, .. }));
+    }
+
+    #[tokio::test]
+    async fn test_malformed_message_length_rejected() {
+        // Lengths below 4 are unframable. Before they were validated, the
+        // `as usize` widening turned them into enormous sizes: -1 wrapped to
+        // a size of 0 under the release profile's disabled overflow checks,
+        // yielding empty messages forever, and -2 reserved usize::MAX.
+        for len in [-1_i32, -2, i32::MIN, 0, 3] {
+            let mut data = BytesMut::new();
+            data.put_u8(b'Q');
+            data.put_i32(len);
+
+            let mut buf = MessageBuffer::new(4096, None);
+            let err = buf.read(&mut Cursor::new(data.to_vec())).await.unwrap_err();
+
+            assert!(
+                matches!(err, Error::MalformedMessageLength(got) if got == len),
+                "length {} should be rejected as malformed, got {:?}",
+                len,
+                err
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_minimum_message_length_accepted() {
+        // 4 is legal: the length counts itself and Sync carries no payload.
+        let mut buf = MessageBuffer::new(4096, None);
+        let msg = buf
+            .read(&mut Cursor::new(Sync.to_bytes().to_vec()))
+            .await
+            .unwrap();
+        assert_eq!(msg.code(), 'S');
+        assert_eq!(msg.len(), HEADER_SIZE);
+    }
+
+    #[tokio::test]
+    async fn test_malformed_length_does_not_stall_the_buffer() {
+        // The malformed header used to stay in the buffer and be re-read
+        // forever. It must surface as an error instead of an empty message.
+        let mut data = BytesMut::new();
+        data.put_u8(b'Q');
+        data.put_i32(-1);
+        data.extend_from_slice(&Sync.to_bytes());
+
+        let mut buf = MessageBuffer::new(4096, None);
+        assert!(matches!(
+            buf.read(&mut Cursor::new(data.to_vec())).await,
+            Err(Error::MalformedMessageLength(-1))
+        ));
     }
 }

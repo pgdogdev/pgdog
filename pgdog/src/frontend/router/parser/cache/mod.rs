@@ -5,12 +5,10 @@
 pub mod ast;
 pub mod cache_impl;
 pub mod context;
-pub mod fingerprint;
 
 pub use ast::*;
 pub use cache_impl::*;
 pub use context::*;
-pub use fingerprint::*;
 
 #[cfg(test)]
 pub mod test;

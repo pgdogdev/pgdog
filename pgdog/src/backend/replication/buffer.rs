@@ -1,5 +1,6 @@
 use fnv::FnvHashMap as HashMap;
 use fnv::FnvHashSet as HashSet;
+use pgdog_postgres_types::Oid;
 use std::collections::VecDeque;
 
 use crate::backend::ShardingSchema;
@@ -9,8 +10,8 @@ use crate::net::messages::FromBytes;
 use crate::net::messages::Protocol;
 use crate::net::messages::ToBytes;
 use crate::net::messages::{
-    replication::{xlog_data::XLogPayload, Relation, XLogData},
     CopyData, Message,
+    replication::{Relation, XLogData, xlog_data::XLogPayload},
 };
 
 use super::{Error, ReplicationConfig};
@@ -23,10 +24,10 @@ pub struct Buffer {
     replication_config: ReplicationConfig,
     begin: Option<XLogData>,
     message: Option<XLogData>,
-    relations: HashMap<i32, Relation>,
-    sent_relations: HashSet<i32>,
+    relations: HashMap<Oid, Relation>,
+    sent_relations: HashSet<Oid>,
     shard: Shard,
-    oid: Option<i32>,
+    oid: Option<Oid>,
     buffer: VecDeque<Message>,
     sharding_schema: ShardingSchema,
 }
@@ -56,16 +57,16 @@ impl Buffer {
     /// like Insert/Update/Delete that don't belong to the shard.
     pub fn handle(&mut self, message: Message) -> Result<(), Error> {
         let data = match message.code() {
-            'd' => CopyData::from_bytes(message.to_bytes()?)?,
+            'd' => CopyData::from_bytes(message.to_bytes())?,
             _ => {
                 self.buffer.push_back(message);
                 return Ok(());
             }
         };
 
-        if let Some(xlog_data) = data.xlog_data() {
-            if let Some(payload) = xlog_data.payload() {
-                match &payload {
+        match data.xlog_data() {
+            Some(xlog_data) => match xlog_data.payload() {
+                Some(payload) => match &payload {
                     XLogPayload::Begin(_) => {
                         self.begin = Some(xlog_data);
                     }
@@ -119,12 +120,14 @@ impl Buffer {
                         self.message = Some(xlog_data);
                         return self.flush();
                     }
+                },
+                _ => {
+                    self.buffer.push_back(message);
                 }
-            } else {
+            },
+            _ => {
                 self.buffer.push_back(message);
             }
-        } else {
-            self.buffer.push_back(message);
         }
 
         Ok(())
@@ -163,7 +166,7 @@ impl Buffer {
         Ok(())
     }
 
-    fn sharding_key(&self, oid: i32) -> Result<(&str, Vec<&str>), Error> {
+    fn sharding_key(&self, oid: Oid) -> Result<(&str, Vec<&str>), Error> {
         let relation = self.relations.get(&oid).ok_or(Error::NoRelationMessage)?;
         let columns = relation.columns();
         let name = relation.name();

@@ -1,5 +1,5 @@
-use rust::setup::admin_sqlx;
-use rust::utils::assert_setting_str;
+use crate::setup::admin_sqlx;
+use crate::utils::assert_setting_str;
 use sqlx::{ConnectOptions, Connection, Executor, postgres::PgSslMode};
 
 #[tokio::test]

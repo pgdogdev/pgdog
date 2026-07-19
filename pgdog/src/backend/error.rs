@@ -21,9 +21,6 @@ pub enum Error {
     #[error("unexpected message: {0}")]
     UnexpectedMessage(char),
 
-    #[error("server did not provide key data")]
-    NoBackendKeyData,
-
     #[error("unexpected transaction status: {0}")]
     UnexpectedTransactionStatus(char),
 
@@ -35,9 +32,6 @@ pub enum Error {
 
     #[error("server not connected")]
     NotConnected,
-
-    #[error("direct-to-shard not connected")]
-    DirectToShardNotConnected,
 
     #[error("multi-shard not connected")]
     MultiShardNotConnected,
@@ -117,6 +111,15 @@ pub enum Error {
     #[error("could not resolve to any address for hostname {0}")]
     DnsResolutionFailed(String),
 
+    #[error("RDS IAM token generation failed: {0}")]
+    RdsIamToken(String),
+
+    #[error("Azure Workload Identity token generation failed: {0}")]
+    AzureWorkloadIdentityToken(String),
+
+    #[error("Vault credentials fetch failed: {0}")]
+    VaultCredentials(String),
+
     #[error("pub/sub channel disabled")]
     PubSubDisabled,
 
@@ -137,6 +140,9 @@ pub enum Error {
 
     #[error("toml: {0}")]
     TomlSer(#[from] toml::ser::Error),
+
+    #[error("cannot ignore response for message type: {0}")]
+    UnsupportedHandleIgnore(char),
 }
 
 impl From<crate::frontend::Error> for Error {
@@ -154,6 +160,37 @@ impl Error {
             Error::Pool(PoolError::CheckoutTimeout) => true,
             Error::Pool(PoolError::AllReplicasDown) => true,
             Error::Pool(PoolError::Banned) => true,
+            _ => false,
+        }
+    }
+
+    /// Transient network/pool fault worth retrying.
+    pub fn is_retryable(&self) -> bool {
+        match self {
+            Self::Io(_) => true,
+            Self::Net(inner) => inner.is_retryable(),
+            Self::Pool(inner) => inner.is_retryable(),
+            // Postgres ErrorResponse wrapped at the backend boundary, e.g. a destination shard
+            // returning FATAL 57P01 mid-replication-apply, or a transient connect-time error.
+            // Delegates to the single SQLSTATE retry list in ErrorResponse::is_retryable.
+            Self::ExecutionError(resp)
+            | Self::ConnectionError(resp)
+            | Self::PreparedStatementError(resp) => resp.is_retryable(),
+            // Connection dropped between operations.
+            Self::NotConnected
+            | Self::MultiShardNotConnected
+            | Self::CopyNotConnected
+            | Self::ClusterNotConnected => true,
+            // Server stopped responding mid-stream.
+            Self::ReadTimeout => true,
+            _ => false,
+        }
+    }
+
+    pub fn is_auth(&self) -> bool {
+        match self {
+            Self::Auth(_) => true,
+            Self::ConnectionError(err) => err.code == "28000" || err.is_bad_password(),
             _ => false,
         }
     }

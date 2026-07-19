@@ -1,6 +1,7 @@
 //! Frontend errors.
 
 use std::io::ErrorKind;
+use std::sync::Arc;
 
 use thiserror::Error;
 
@@ -73,6 +74,12 @@ pub enum Error {
     // to reach so deep into a module.
     #[error("{0}")]
     Multi(#[from] Box<crate::frontend::client::query_engine::multi_step::error::Error>),
+
+    /// A 2PC WAL append failed; the operation is refused so the
+    /// caller does not issue PREPARE / COMMIT PREPARED to backends
+    /// without a durable record of it.
+    #[error("2pc wal: {0}")]
+    TwoPcWal(Arc<crate::frontend::client::query_engine::two_pc::wal::Error>),
 }
 
 impl From<crate::frontend::client::query_engine::multi_step::error::Error> for Error {
@@ -84,8 +91,8 @@ impl From<crate::frontend::client::query_engine::multi_step::error::Error> for E
 impl Error {
     /// Checkout timeout.
     pub fn checkout_timeout(&self) -> bool {
-        use crate::backend::pool::Error as PoolError;
         use crate::backend::Error as BackendError;
+        use crate::backend::pool::Error as PoolError;
 
         matches!(
             self,
@@ -94,10 +101,14 @@ impl Error {
     }
 
     pub(crate) fn disconnect(&self) -> bool {
-        if let Error::Net(crate::net::Error::Io(err)) = self {
-            if err.kind() == ErrorKind::UnexpectedEof {
-                return true;
-            }
+        if let Error::Net(crate::net::Error::Io(err)) = self
+            && err.kind() == ErrorKind::UnexpectedEof
+        {
+            return true;
+        }
+
+        if let Error::Net(crate::net::Error::UnexpectedEof) = self {
+            return true;
         }
 
         false

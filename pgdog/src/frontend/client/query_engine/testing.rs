@@ -9,7 +9,7 @@ impl QueryEngine {
         &mut self.stats
     }
 
-    pub fn set_test_mode(&mut self, test_mode: bool) {
-        self.test_mode.enabled = test_mode;
+    pub(crate) fn advisory_locks(&mut self) -> &mut AdvisoryLocks {
+        &mut self.advisory_locks
     }
 }

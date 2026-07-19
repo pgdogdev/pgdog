@@ -32,8 +32,8 @@ impl Command for ShowConfig {
 
         // Reflection using JSON.
         let general = serde_json::to_value(&config.config.general)?;
-        let tcp = serde_json::to_value(config.config.tcp.clone())?;
-        let memory = serde_json::to_value(config.config.memory.clone())?;
+        let tcp = serde_json::to_value(&config.config.tcp)?;
+        let memory = serde_json::to_value(&config.config.memory)?;
         let objects = [
             ("", general.as_object()),
             ("tcp_", tcp.as_object()),

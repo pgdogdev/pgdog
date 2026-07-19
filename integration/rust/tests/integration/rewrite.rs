@@ -1,4 +1,4 @@
-use rust::setup::{admin_sqlx, connections_sqlx};
+use crate::setup::{admin_sqlx, connections_sqlx};
 use sqlx::{Executor, Pool, Postgres};
 
 const TEST_TABLE: &str = "sharded_list";
@@ -295,9 +295,8 @@ async fn test_error_disconnects_and_update_works() -> Result<(), Box<dyn std::er
     admin.execute("SET two_phase_commit TO true").await?;
     admin.execute("SET two_phase_commit_auto TO true").await?;
 
-    // Ensure the table exists (may have been dropped by cleanup_split_table
-    // in a previous test).
     prepare_split_table(&conn).await;
+    conn.execute("TRUNCATE TABLE sharded").await?;
 
     for _ in 0..250 {
         conn.execute("INSERT INTO sharded (id, value) VALUES (pgdog.unique_id(), 'test')")

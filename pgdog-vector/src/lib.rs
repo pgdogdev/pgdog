@@ -1,9 +1,10 @@
 use std::{fmt::Debug, ops::Deref};
 
+use schemars::JsonSchema;
 use serde::{
+    Deserialize, Serialize,
     de::{self, Visitor},
     ser::SerializeSeq,
-    Deserialize, Serialize,
 };
 
 pub mod distance_simd_rust;
@@ -11,7 +12,7 @@ pub mod float;
 
 pub use float::*;
 
-#[derive(Clone, PartialEq, PartialOrd, Ord, Eq, Hash)]
+#[derive(Clone, PartialEq, PartialOrd, Ord, Eq, Hash, JsonSchema)]
 #[repr(C)]
 pub struct Vector {
     pub values: Vec<Float>,
