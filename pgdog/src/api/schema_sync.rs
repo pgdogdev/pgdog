@@ -7,8 +7,6 @@ use crate::api::async_task::AsyncTaskContext;
 use crate::backend::replication::logical::Error;
 use crate::backend::replication::logical::orchestrator::Orchestrator;
 use crate::backend::schema::sync::pg_dump::SyncState;
-use crate::tasks;
-use tokio::select;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Display, FromStr)]
 pub enum SchemaSyncPhase {
@@ -66,44 +64,37 @@ impl Task for SchemaSyncTask {
 
     #[allow(clippy::print_stdout)]
     async fn run(self, ctx: AsyncTaskContext<Self>) -> Result<Orchestrator, Error> {
-        let shutdown = tasks::shutdown_signal();
         let mut orchestrator = self.orchestrator;
-        let shutdown_orchestrator = orchestrator.clone();
 
-        select! {
-            _ = shutdown.cancelled() => Ok(shutdown_orchestrator),
-            res = async {
-                if orchestrator.schema().is_err() {
-                    ctx.set_status(SchemaSyncStatus::LoadingSchema);
-                    orchestrator.load_schema().await?;
-                }
-
-                if self.dry_run {
-                    let schema = orchestrator.schema()?;
-                    for statement in schema.statements(self.phase.into())? {
-                        println!("{}", statement.deref());
-                    }
-                    return Ok(orchestrator);
-                }
-
-                match self.phase {
-                    SchemaSyncPhase::Pre => {
-                        ctx.set_status(SchemaSyncStatus::SyncingTables);
-                        orchestrator.schema_sync_pre(self.ignore_errors).await?;
-                    }
-                    SchemaSyncPhase::Post => {
-                        ctx.set_status(SchemaSyncStatus::CreatingIndexes);
-                        orchestrator.schema_sync_post(self.ignore_errors).await?;
-                    }
-                    SchemaSyncPhase::Cutover => {
-                        ctx.set_status(SchemaSyncStatus::Cutover);
-                        orchestrator.schema_sync_cutover(self.ignore_errors).await?;
-                    }
-                }
-
-                Ok(orchestrator)
-            } => res,
+        if orchestrator.schema().is_err() {
+            ctx.set_status(SchemaSyncStatus::LoadingSchema);
+            orchestrator.load_schema().await?;
         }
+
+        if self.dry_run {
+            let schema = orchestrator.schema()?;
+            for statement in schema.statements(self.phase.into())? {
+                println!("{}", statement.deref());
+            }
+            return Ok(orchestrator);
+        }
+
+        match self.phase {
+            SchemaSyncPhase::Pre => {
+                ctx.set_status(SchemaSyncStatus::SyncingTables);
+                orchestrator.schema_sync_pre(self.ignore_errors).await?;
+            }
+            SchemaSyncPhase::Post => {
+                ctx.set_status(SchemaSyncStatus::CreatingIndexes);
+                orchestrator.schema_sync_post(self.ignore_errors).await?;
+            }
+            SchemaSyncPhase::Cutover => {
+                ctx.set_status(SchemaSyncStatus::Cutover);
+                orchestrator.schema_sync_cutover(self.ignore_errors).await?;
+            }
+        }
+
+        Ok(orchestrator)
     }
 }
 
