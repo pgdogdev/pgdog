@@ -3,6 +3,7 @@
 //! Entrypoint for client/server interactions.
 //!
 
+use std::future::IntoFuture;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -495,12 +496,24 @@ impl Client {
                 }
 
                 buffer = self.buffer(client_state) => {
-                    let event = buffer?;
+                    let mut event = buffer?;
 
                     // Only send requests to the backend if they are complete.
                     if self.client_request.is_complete()
                         && !self.client_request.messages.is_empty() {
-                            self.client_messages(&mut query_engine).await?;
+                            // Hold the request at the door while the database is
+                            // in maintenance mode, before it reaches the query
+                            // engine. If the client gives up and disconnects
+                            // while we're paused, drop the request instead of
+                            // running it once maintenance lifts.
+                            match self.wait_for_maintenance(&mut query_engine).await? {
+                                MaintenanceWait::Proceed => {
+                                    self.client_messages(&mut query_engine).await?;
+                                }
+                                MaintenanceWait::Disconnected => {
+                                    event = BufferEvent::DisconnectAbrupt;
+                                }
+                            }
                         }
 
                     match event {
@@ -529,19 +542,54 @@ impl Client {
         Ok(())
     }
 
-    /// Handle client messages.
-    async fn client_messages(&mut self, query_engine: &mut QueryEngine) -> Result<(), Error> {
-        // Check maintenance mode.
-        if !self.in_transaction()
-            && !self.admin
-            && let Some(waiter) = maintenance_mode::waiter(&self.database)
-        {
-            let state = query_engine.get_state();
-            query_engine.set_state(State::Waiting);
-            waiter.await;
-            query_engine.set_state(state);
+    /// Wait out maintenance mode before a buffered request reaches the backend.
+    ///
+    /// We only park between transactions; a transaction already in flight is
+    /// allowed to finish. While parked we keep watching the client socket, so a
+    /// client that gives up and disconnects during a long maintenance window
+    /// never has its query dispatched once maintenance lifts.
+    async fn wait_for_maintenance(
+        &mut self,
+        query_engine: &mut QueryEngine,
+    ) -> Result<MaintenanceWait, Error> {
+        if self.in_transaction() || self.admin {
+            return Ok(MaintenanceWait::Proceed);
         }
 
+        let Some(waiter) = maintenance_mode::waiter(&self.database) else {
+            return Ok(MaintenanceWait::Proceed);
+        };
+
+        let saved_state = query_engine.get_state();
+        query_engine.set_state(State::Waiting);
+
+        // `Pin<Box<_>>` is `Unpin`, so `&mut waiter` polls the same future
+        // across loop iterations.
+        let mut waiter = waiter.into_future();
+        let outcome = loop {
+            select! {
+                _ = &mut waiter => break MaintenanceWait::Proceed,
+
+                // A client waiting for its response shouldn't be sending
+                // anything, so a readable socket means either a disconnect
+                // (EOF/error) or pipelined traffic. Pipelined bytes stay
+                // buffered for the next request; only a disconnect ends the
+                // wait early.
+                result = self.stream_buffer.read_more(&mut self.stream) => {
+                    if result.is_err() {
+                        break MaintenanceWait::Disconnected;
+                    }
+                }
+            }
+        };
+
+        query_engine.set_state(saved_state);
+
+        Ok(outcome)
+    }
+
+    /// Handle client messages.
+    async fn client_messages(&mut self, query_engine: &mut QueryEngine) -> Result<(), Error> {
         // If client sent multiple requests, split them up and execute individually.
         let spliced = self.client_request.spliced()?;
         if spliced.is_empty() {
@@ -713,4 +761,13 @@ enum BufferEvent {
     DisconnectGraceful,
     DisconnectAbrupt,
     HaveRequest,
+}
+
+/// Outcome of waiting for a database to leave maintenance mode.
+#[derive(Copy, Clone, PartialEq, Debug)]
+enum MaintenanceWait {
+    /// Maintenance isn't on (or has lifted): dispatch the request.
+    Proceed,
+    /// The client disconnected while paused: drop the request.
+    Disconnected,
 }

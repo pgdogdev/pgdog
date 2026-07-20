@@ -192,6 +192,35 @@ impl MessageBuffer {
     ) -> Result<Message, Error> {
         self.read_internal(stream).await
     }
+
+    /// Read whatever is currently available on the stream into the buffer,
+    /// without framing a message. A closed stream (EOF) surfaces as
+    /// `Error::UnexpectedEof`.
+    ///
+    /// This is meant for watching an otherwise-idle client for a disconnect:
+    /// any bytes read stay in the buffer for the next [`read`](Self::read), so
+    /// the read is not observed by the caller and no data is lost.
+    ///
+    /// # Cancellation safety
+    ///
+    /// Cancel-safe: bytes already read remain buffered.
+    pub async fn read_more(
+        &mut self,
+        stream: &mut (impl Unpin + AsyncReadExt),
+    ) -> Result<(), Error> {
+        // Keep some headroom so we reclaim memory frequently, matching
+        // `read_internal`.
+        self.ensure_capacity(self.capacity / 4);
+
+        let read = eof(stream.read_buf(&mut self.buffer).await)?;
+        self.stats.bytes_used += read;
+
+        if read == 0 {
+            return Err(Error::UnexpectedEof);
+        }
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
