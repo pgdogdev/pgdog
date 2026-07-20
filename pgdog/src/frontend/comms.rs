@@ -6,11 +6,13 @@ use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
 };
+use std::time::Duration;
 
 use dashmap::DashMap;
 use fnv::FnvHashMap as HashMap;
 use once_cell::sync::Lazy;
 use tokio::sync::Notify;
+use tokio::time::sleep;
 use tokio_util::task::TaskTracker;
 
 use crate::net::Parameters;
@@ -130,13 +132,37 @@ impl Comms {
     }
 
     /// Wait for shutdown signal.
-    pub fn shutting_down(&self) -> Arc<Notify> {
-        self.global.shutdown.clone()
+    pub fn shutting_down(&self) -> ShutdownSignal {
+        ShutdownSignal {
+            notify: self.global.shutdown.clone(),
+            notified: false,
+        }
     }
 
     /// pgDog is shutting down now.
     pub fn offline(&self) -> bool {
         self.global.offline.load(Ordering::Relaxed)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ShutdownSignal {
+    notify: Arc<Notify>,
+    notified: bool,
+}
+
+impl ShutdownSignal {
+    /// Make sure everyone who listens on this gets notified
+    /// at least once.
+    pub(crate) async fn wait(&mut self) {
+        if !self.notified {
+            self.notify.notified().await;
+            self.notify.notify_one();
+            self.notified = true;
+        } else {
+            // This ensures this feature resolves exactly once.
+            sleep(Duration::MAX).await
+        }
     }
 }
 

@@ -41,7 +41,7 @@ impl Listener {
     pub async fn listen(&mut self) -> Result<(), Error> {
         info!("🐕 PgDog listening on {}", self.addr);
         let listener = TcpListener::bind(&self.addr).await?;
-        let shutdown_signal = comms().shutting_down();
+        let mut shutdown_signal = comms().shutting_down();
         let mut sighup = Sighup::new()?;
 
         loop {
@@ -67,7 +67,7 @@ impl Listener {
                    }
                 }
 
-                _ = shutdown_signal.notified() => {
+                _ = shutdown_signal.wait() => {
                     self.start_shutdown();
                 }
 

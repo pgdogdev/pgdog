@@ -463,7 +463,7 @@ impl Client {
 
     /// Run the client.
     async fn run(&mut self) -> Result<(), Error> {
-        let shutdown = self.comms.shutting_down();
+        let mut shutdown = self.comms.shutting_down();
         let mut query_engine = QueryEngine::from_client(self)?;
 
         loop {
@@ -484,7 +484,7 @@ impl Client {
             let client_state = query_engine.client_state();
 
             select! {
-                _ = shutdown.notified() => {
+                _ = shutdown.wait() => {
                     continue; // Wake up task.
                 }
 
