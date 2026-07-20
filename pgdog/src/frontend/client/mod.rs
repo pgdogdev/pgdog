@@ -484,7 +484,7 @@ impl Client {
             let client_state = query_engine.client_state();
 
             select! {
-                _ = shutdown.cancelled() => {
+                _ = shutdown.notified() => {
                     continue; // Wake up task.
                 }
 

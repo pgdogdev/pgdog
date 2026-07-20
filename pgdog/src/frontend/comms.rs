@@ -2,12 +2,15 @@
 
 use std::net::SocketAddr;
 use std::ops::Deref;
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 
 use dashmap::DashMap;
 use fnv::FnvHashMap as HashMap;
 use once_cell::sync::Lazy;
-use tokio_util::sync::CancellationToken;
+use tokio::sync::Notify;
 use tokio_util::task::TaskTracker;
 
 use crate::net::Parameters;
@@ -25,7 +28,11 @@ pub fn comms() -> Comms {
 /// Sync primitives shared between all clients.
 #[derive(Debug)]
 struct Global {
-    shutdown: CancellationToken,
+    shutdown: Arc<Notify>,
+    offline: AtomicBool,
+    // This uses the FNV hasher, which is safe,
+    // because FrontendPid is monotonically minted by us,
+    // not derived from untrusted client input.
     clients: Arc<DashMap<FrontendPid, ConnectedClient>>,
     tracker: TaskTracker,
 }
@@ -47,7 +54,8 @@ impl Comms {
     fn new() -> Self {
         Self {
             global: Arc::new(Global {
-                shutdown: CancellationToken::new(),
+                shutdown: Arc::new(Notify::new()),
+                offline: AtomicBool::new(false),
                 clients: Arc::new(DashMap::default()),
                 tracker: TaskTracker::new(),
             }),
@@ -116,18 +124,19 @@ impl Comms {
 
     /// Notify clients pgDog is shutting down.
     pub fn shutdown(&self) {
-        self.global.shutdown.cancel();
+        self.global.offline.store(true, Ordering::Relaxed);
+        self.global.shutdown.notify_waiters();
         self.global.tracker.close();
     }
 
     /// Wait for shutdown signal.
-    pub fn shutting_down(&self) -> CancellationToken {
+    pub fn shutting_down(&self) -> Arc<Notify> {
         self.global.shutdown.clone()
     }
 
     /// pgDog is shutting down now.
     pub fn offline(&self) -> bool {
-        self.global.shutdown.is_cancelled()
+        self.global.offline.load(Ordering::Relaxed)
     }
 }
 
