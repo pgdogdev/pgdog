@@ -1,0 +1,19 @@
+#
+# Authentication-plugin integration suite.
+#
+# `auth_type = "plugin"` routes every non-admin login through the loaded
+# authentication plugins. `test_plugin_auth` (see
+# test-plugins/test-plugin-auth) makes the decisions the specs assert on.
+#
+[general]
+auth_type = "plugin"
+# Deny reasons are warn!-logged regardless, but log every connection attempt so
+# the spec can also observe the auth-error line.
+log_connections = true
+
+[[plugins]]
+name = "test_plugin_auth"
+
+[[databases]]
+name = "pgdog"
+host = "127.0.0.1"

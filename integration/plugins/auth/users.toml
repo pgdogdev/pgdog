@@ -1,0 +1,25 @@
+#
+# Users for the authentication-plugin suite.
+#
+# With `auth_type = "plugin"` the client no longer supplies the Postgres
+# password (the plugin authenticates the login), so these entries only define
+# the backend pool: `server_user`/`server_password` are the credentials PgDog
+# uses to connect to PostgreSQL.
+#
+# Impersonation users (e.g. `impersonate:reporting`) are not listed here: the
+# plugin derives them and PgDog auto-provisions their pools.
+
+# Plain allow via `secret-alice`, no derivation, read-write.
+[[users]]
+name = "alice"
+database = "pgdog"
+server_user = "pgdog"
+server_password = "pgdog"
+
+# Read-only pool: `INSERT` must fail with a read-only error.
+[[users]]
+name = "readonly"
+database = "pgdog"
+server_user = "pgdog"
+server_password = "pgdog"
+read_only = true
