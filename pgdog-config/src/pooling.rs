@@ -4,7 +4,7 @@ use std::str::FromStr;
 
 /// prepared statement support mode.
 ///
-/// https://docs.pgdog.dev/configuration/pgdog.toml/general/#prepared_statements
+/// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#prepared_statements>
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Copy, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum PreparedStatements {
@@ -58,7 +58,7 @@ impl FromStr for PreparedStatements {
 
 /// connection pooling mode for database pools.
 ///
-/// https://docs.pgdog.dev/configuration/pgdog.toml/general/#pooler_mode
+/// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#pooler_mode>
 #[derive(
     Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq, Ord, PartialOrd, JsonSchema,
 )]
@@ -101,7 +101,7 @@ impl FromStr for PoolerMode {
 
 /// controls if server connections are recovered or dropped if a client abruptly disconnects.
 ///
-/// https://docs.pgdog.dev/configuration/pgdog.toml/general/#connection_recovery
+/// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#connection_recovery>
 #[derive(
     Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq, Ord, PartialOrd, JsonSchema,
 )]

@@ -71,7 +71,7 @@ pub enum QuerySizeLimitAction {
 
 /// General settings are relevant to the operations of the pooler itself, or apply to all database pools.
 ///
-/// https://docs.pgdog.dev/configuration/pgdog.toml/general/
+/// <https://docs.pgdog.dev/configuration/pgdog.toml/general/>
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct General {
@@ -81,7 +81,7 @@ pub struct General {
     ///
     /// _Default:_ `0.0.0.0`
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#host
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#host>
     #[serde(default = "General::host")]
     pub host: String,
 
@@ -91,7 +91,7 @@ pub struct General {
     ///
     /// _Default:_ `6432`
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#port
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#port>
     #[serde(default = "General::port")]
     pub port: u16,
 
@@ -101,7 +101,7 @@ pub struct General {
     ///
     /// _Default:_ `2`
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#workers
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#workers>
     #[serde(default = "General::workers")]
     pub workers: usize,
 
@@ -111,7 +111,7 @@ pub struct General {
     ///
     /// _Default:_ `10`
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#default_pool_size
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#default_pool_size>
     #[serde(default = "General::default_pool_size", alias = "max_pool_size")]
     pub default_pool_size: usize,
 
@@ -119,7 +119,7 @@ pub struct General {
     ///
     /// _Default:_ `1`
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#min_pool_size
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#min_pool_size>
     #[serde(default = "General::min_pool_size")]
     pub min_pool_size: usize,
 
@@ -127,7 +127,7 @@ pub struct General {
     ///
     /// _Default:_ `transaction`
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#pooler_mode
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#pooler_mode>
     #[serde(default)]
     pub pooler_mode: PoolerMode,
 
@@ -135,7 +135,7 @@ pub struct General {
     ///
     /// _Default:_ `30000`
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#healthcheck_interval
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#healthcheck_interval>
     #[serde(default = "General::healthcheck_interval")]
     pub healthcheck_interval: u64,
 
@@ -144,7 +144,7 @@ pub struct General {
     ///
     /// _Default:_ `30000`
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#idle_healthcheck_interval
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#idle_healthcheck_interval>
     #[serde(default = "General::idle_healthcheck_interval")]
     pub idle_healthcheck_interval: u64,
 
@@ -152,7 +152,7 @@ pub struct General {
     ///
     /// _Default:_ `5000`
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#idle_healthcheck_delay
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#idle_healthcheck_delay>
     #[serde(default = "General::idle_healthcheck_delay")]
     pub idle_healthcheck_delay: u64,
 
@@ -160,32 +160,32 @@ pub struct General {
     ///
     /// _Default:_ `5000`
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#healthcheck_timeout
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#healthcheck_timeout>
     #[serde(default = "General::healthcheck_timeout")]
     pub healthcheck_timeout: u64,
 
     /// Enable load balancer HTTP health checks with the HTTP server running on this port.
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#healthcheck_port
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#healthcheck_port>
     pub healthcheck_port: Option<u16>,
 
     /// Connection pools blocked from serving traffic due to an error will be placed back into active rotation after this long.
     ///
     /// _Default:_ `300000`
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#ban_timeout
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#ban_timeout>
     #[serde(default = "General::ban_timeout")]
     pub ban_timeout: u64,
 
     /// Ban a replica from serving read queries if its replication lag (in milliseconds) exceeds this threshold.
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#ban_replica_lag
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#ban_replica_lag>
     #[serde(default = "General::ban_replica_lag")]
     pub ban_replica_lag: u64,
 
     /// Ban a replica from serving read queries if its replication lag (in bytes) exceeds this threshold.
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#ban_replica_lag_bytes
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#ban_replica_lag_bytes>
     #[serde(default = "General::ban_replica_lag_bytes")]
     pub ban_replica_lag_bytes: u64,
 
@@ -193,7 +193,7 @@ pub struct General {
     ///
     /// _Default:_ `5000`
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#rollback_timeout
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#rollback_timeout>
     #[serde(default = "General::rollback_timeout")]
     pub rollback_timeout: u64,
 
@@ -201,7 +201,7 @@ pub struct General {
     ///
     /// _Default:_ `random`
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#load_balancing_strategy
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#load_balancing_strategy>
     #[serde(default = "General::load_balancing_strategy")]
     pub load_balancing_strategy: LoadBalancingStrategy,
 
@@ -209,7 +209,7 @@ pub struct General {
     ///
     /// _Default:_ `conservative`
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#read_write_strategy
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#read_write_strategy>
     #[serde(default)]
     pub read_write_strategy: ReadWriteStrategy,
 
@@ -217,25 +217,25 @@ pub struct General {
     ///
     /// _Default:_ `include_primary`
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#read_write_split
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#read_write_split>
     #[serde(default)]
     pub read_write_split: ReadWriteSplit,
 
     /// Path to the TLS certificate PgDog will use to setup TLS connections with clients.
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#tls_certificate
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#tls_certificate>
     pub tls_certificate: Option<PathBuf>,
 
     /// Path to the TLS private key PgDog will use to setup TLS connections with clients.
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#tls_private_key
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#tls_private_key>
     pub tls_private_key: Option<PathBuf>,
 
     /// Reject clients that connect without TLS.
     ///
     /// _Default:_ `false`
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#tls_client_required
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#tls_client_required>
     #[serde(default)]
     pub tls_client_required: bool,
 
@@ -243,25 +243,25 @@ pub struct General {
     ///
     /// _Default:_ `prefer`
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#tls_verify
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#tls_verify>
     #[serde(default = "General::default_tls_verify")]
     pub tls_verify: TlsVerifyMode,
 
     /// Path to a certificate bundle used to validate the server certificate on TLS connection creation.
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#tls_server_ca_certificate
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#tls_server_ca_certificate>
     pub tls_server_ca_certificate: Option<PathBuf>,
 
     /// Path to a certificate bundle used to validate the client certificate on TLS connection creation.
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#tls_client_ca_certificate
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#tls_client_ca_certificate>
     pub tls_client_ca_certificate: Option<PathBuf>,
 
     /// How long to wait for active clients to finish transactions when shutting down.
     ///
     /// _Default:_ `60000`
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#shutdown_timeout
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#shutdown_timeout>
     #[serde(default = "General::default_shutdown_timeout")]
     pub shutdown_timeout: u64,
 
@@ -269,7 +269,7 @@ pub struct General {
     ///
     /// **Note:** If set, PgDog will send `CANCEL` requests to PostgreSQL for any remaining active queries before tearing down connection pools.
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#shutdown_termination_timeout
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#shutdown_termination_timeout>
     #[serde(default = "General::default_shutdown_termination_timeout")]
     pub shutdown_termination_timeout: Option<u64>,
 
@@ -310,7 +310,7 @@ pub struct General {
     ///
     /// _Default:_ `None` (disabled)
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#query_size_limit
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#query_size_limit>
     #[serde(default = "General::default_query_size_limit")]
     pub query_size_limit: Option<usize>,
 
@@ -318,31 +318,31 @@ pub struct General {
     ///
     /// _Default:_ `warn`
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#query_size_limit_action
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#query_size_limit_action>
     #[serde(default = "General::query_size_limit_action")]
     pub query_size_limit_action: QuerySizeLimitAction,
 
     /// The port used for the OpenMetrics HTTP endpoint.
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#openmetrics_port
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#openmetrics_port>
     pub openmetrics_port: Option<u16>,
 
     /// Prefix added to all metric names exposed via the OpenMetrics endpoint.
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#openmetrics_namespace
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#openmetrics_namespace>
     pub openmetrics_namespace: Option<String>,
 
     /// Enables support for prepared statements.
     ///
     /// _Default:_ `extended`
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#prepared_statements
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#prepared_statements>
     #[serde(default)]
     pub prepared_statements: PreparedStatements,
 
     /// Deprecated: use [`query_parser`](General::query_parser) set to `"on"` instead.
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#query_parser_enabled
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#query_parser_enabled>
     #[serde(default = "General::query_parser_enabled")]
     pub query_parser_enabled: bool,
 
@@ -350,7 +350,7 @@ pub struct General {
     ///
     /// _Default:_ `auto`
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#query_parser
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#query_parser>
     #[serde(default)]
     pub query_parser: QueryParserLevel,
 
@@ -366,7 +366,7 @@ pub struct General {
     ///
     /// **Note:** If this limit is reached, the least used statement is closed and replaced with the newest one. Additionally, any unused statements in the global cache above this limit will be removed.
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#prepared_statements_limit
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#prepared_statements_limit>
     #[serde(default = "General::prepared_statements_limit")]
     pub prepared_statements_limit: usize,
 
@@ -374,7 +374,7 @@ pub struct General {
     ///
     /// _Default:_ `50000`
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#query_cache_limit
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#query_cache_limit>
     #[serde(default = "General::query_cache_limit")]
     pub query_cache_limit: usize,
 
@@ -382,7 +382,7 @@ pub struct General {
     ///
     /// _Default:_ `disabled`
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#passthrough_auth
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#passthrough_auth>
     #[serde(default = "General::default_passthrough_auth")]
     pub passthrough_auth: PassthroughAuth,
 
@@ -390,7 +390,7 @@ pub struct General {
     ///
     /// _Default:_ `5000`
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#connect_timeout
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#connect_timeout>
     #[serde(default = "General::default_connect_timeout")]
     pub connect_timeout: u64,
 
@@ -398,7 +398,7 @@ pub struct General {
     ///
     /// _Default:_ `1`
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#connect_attempts
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#connect_attempts>
     #[serde(default = "General::connect_attempts")]
     pub connect_attempts: u64,
 
@@ -406,13 +406,13 @@ pub struct General {
     ///
     /// _Default:_ `0`
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#connect_attempt_delay
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#connect_attempt_delay>
     #[serde(default = "General::default_connect_attempt_delay")]
     pub connect_attempt_delay: u64,
 
     /// Maximum amount of time to wait for a Postgres query to finish executing.
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#query_timeout
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#query_timeout>
     #[serde(default = "General::default_query_timeout")]
     pub query_timeout: u64,
 
@@ -420,7 +420,7 @@ pub struct General {
     ///
     /// _Default:_ `5000`
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#checkout_timeout
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#checkout_timeout>
     #[serde(default = "General::checkout_timeout")]
     pub checkout_timeout: u64,
 
@@ -428,7 +428,7 @@ pub struct General {
     ///
     /// _Default:_ `60000`
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#client_login_timeout
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#client_login_timeout>
     #[serde(default = "General::client_login_timeout")]
     pub client_login_timeout: u64,
 
@@ -436,7 +436,7 @@ pub struct General {
     ///
     /// _Default:_ `false`
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#dry_run
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#dry_run>
     #[serde(default)]
     pub dry_run: bool,
 
@@ -444,19 +444,19 @@ pub struct General {
     ///
     /// _Default:_ `60000`
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#idle_timeout
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#idle_timeout>
     #[serde(default = "General::idle_timeout")]
     pub idle_timeout: u64,
 
     /// Close client connections that have been idle, i.e., haven't sent any queries, for this amount of time.
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#client_idle_timeout
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#client_idle_timeout>
     #[serde(default = "General::default_client_idle_timeout")]
     pub client_idle_timeout: u64,
 
     /// Close client connections that have been idle inside a transaction for this amount of time.
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#client_idle_in_transaction_timeout
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#client_idle_in_transaction_timeout>
     #[serde(default = "General::default_client_idle_in_transaction_timeout")]
     pub client_idle_in_transaction_timeout: u64,
 
@@ -464,7 +464,7 @@ pub struct General {
     ///
     /// _Default:_ `86400000`
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#server_lifetime
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#server_lifetime>
     #[serde(default = "General::server_lifetime")]
     pub server_lifetime: u64,
 
@@ -476,7 +476,7 @@ pub struct General {
     ///
     /// _Default:_ `0` (no jitter; existing behavior).
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#server_lifetime_jitter
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#server_lifetime_jitter>
     #[serde(default = "General::server_lifetime_jitter")]
     pub server_lifetime_jitter: u64,
 
@@ -484,7 +484,7 @@ pub struct General {
     ///
     /// _Default:_ `128`
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#mirror_queue
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#mirror_queue>
     #[serde(default = "General::mirror_queue")]
     pub mirror_queue: usize,
 
@@ -492,7 +492,7 @@ pub struct General {
     ///
     /// _Default:_ `1.0`
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#mirror_exposure
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#mirror_exposure>
     #[serde(default = "General::mirror_exposure")]
     pub mirror_exposure: f32,
 
@@ -500,7 +500,7 @@ pub struct General {
     ///
     /// _Default:_ `scram`
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#auth_type
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#auth_type>
     #[serde(default)]
     pub auth_type: AuthType,
 
@@ -510,13 +510,13 @@ pub struct General {
 
     /// Overrides the TTL set on DNS records received from DNS servers.
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#dns_ttl
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#dns_ttl>
     #[serde(default)]
     pub dns_ttl: Option<u64>,
 
     /// Enables support for pub/sub and configures the size of the background task queue.
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#pub_sub_channel_size
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#pub_sub_channel_size>
     #[serde(default)]
     pub pub_sub_channel_size: usize,
 
@@ -524,7 +524,7 @@ pub struct General {
     ///
     /// _Default:_ `text`
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#log_format
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#log_format>
     #[serde(default = "General::log_format")]
     pub log_format: LogFormat,
 
@@ -532,7 +532,7 @@ pub struct General {
     ///
     /// _Default:_ `info`
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#log_level
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#log_level>
     #[serde(default = "General::log_level")]
     pub log_level: String,
 
@@ -540,7 +540,7 @@ pub struct General {
     ///
     /// _Default:_ `true`
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#log_connections
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#log_connections>
     #[serde(default = "General::log_connections")]
     pub log_connections: bool,
 
@@ -548,7 +548,7 @@ pub struct General {
     ///
     /// _Default:_ `true`
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#log_disconnections
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#log_disconnections>
     #[serde(default = "General::log_disconnections")]
     pub log_disconnections: bool,
 
@@ -558,7 +558,7 @@ pub struct General {
     ///
     /// _Default:_ `0`
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#log_dedup_window
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#log_dedup_window>
     #[serde(default)]
     pub log_dedup_window: u64,
 
@@ -566,7 +566,7 @@ pub struct General {
     ///
     /// _Default:_ `0`
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#log_dedup_threshold
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#log_dedup_threshold>
     #[serde(default)]
     pub log_dedup_threshold: u64,
 
@@ -574,7 +574,7 @@ pub struct General {
     ///
     /// _Default:_ `false`
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#two_phase_commit
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#two_phase_commit>
     #[serde(default)]
     pub two_phase_commit: bool,
 
@@ -582,7 +582,7 @@ pub struct General {
     ///
     /// _Default:_ `false`
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#two_phase_commit_auto
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#two_phase_commit_auto>
     #[serde(default)]
     pub two_phase_commit_auto: Option<bool>,
 
@@ -592,7 +592,7 @@ pub struct General {
     ///
     /// _Default:_ `./pgdog_wal`
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#two_phase_commit_wal_dir
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#two_phase_commit_wal_dir>
     #[serde(default = "General::two_phase_commit_wal_dir")]
     pub two_phase_commit_wal_dir: Option<PathBuf>,
 
@@ -600,7 +600,7 @@ pub struct General {
     ///
     /// _Default:_ `16777216` (16 MiB)
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#two_phase_commit_wal_segment_size
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#two_phase_commit_wal_segment_size>
     #[serde(default = "General::two_phase_commit_wal_segment_size")]
     pub two_phase_commit_wal_segment_size: u64,
 
@@ -610,7 +610,7 @@ pub struct General {
     ///
     /// _Default:_ `2`
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#two_phase_commit_wal_fsync_interval
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#two_phase_commit_wal_fsync_interval>
     #[serde(default = "General::two_phase_commit_wal_fsync_interval")]
     pub two_phase_commit_wal_fsync_interval: u64,
 
@@ -618,7 +618,7 @@ pub struct General {
     ///
     /// _Default:_ `60`
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#two_phase_commit_wal_checkpoint_interval
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#two_phase_commit_wal_checkpoint_interval>
     #[serde(default = "General::two_phase_commit_wal_checkpoint_interval")]
     pub two_phase_commit_wal_checkpoint_interval: u64,
 
@@ -630,7 +630,7 @@ pub struct General {
     ///
     /// _Default:_ `15000`
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#stats_period
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#stats_period>
     #[serde(default = "General::stats_period")]
     pub stats_period: u64,
 
@@ -638,7 +638,7 @@ pub struct General {
     ///
     /// _Default:_ `recover`
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#connection_recovery
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#connection_recovery>
     #[serde(default = "General::connection_recovery")]
     pub connection_recovery: ConnectionRecovery,
 
@@ -648,7 +648,7 @@ pub struct General {
     ///
     /// _Default:_ `recover`
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#client_connection_recovery
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#client_connection_recovery>
     #[serde(default = "General::client_connection_recovery")]
     pub client_connection_recovery: ConnectionRecovery,
 
@@ -656,7 +656,7 @@ pub struct General {
     ///
     /// _Default:_ `5000`
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#lsn_check_interval
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#lsn_check_interval>
     #[serde(default = "General::lsn_check_interval")]
     pub lsn_check_interval: u64,
 
@@ -664,13 +664,13 @@ pub struct General {
     ///
     /// _Default:_ `5000`
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#lsn_check_timeout
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#lsn_check_timeout>
     #[serde(default = "General::lsn_check_timeout")]
     pub lsn_check_timeout: u64,
 
     /// For how long to delay checking for replication delay.
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#lsn_check_delay
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#lsn_check_delay>
     #[serde(default = "General::lsn_check_delay")]
     pub lsn_check_delay: u64,
 
@@ -686,7 +686,7 @@ pub struct General {
     ///
     /// _Default:_ `omnisharded_sticky`
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#system_catalogs
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#system_catalogs>
     #[serde(default = "General::default_system_catalogs")]
     pub system_catalogs: SystemCatalogsBehavior,
 
@@ -694,7 +694,7 @@ pub struct General {
     ///
     /// _Default:_ `false`
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#omnisharded_sticky
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#omnisharded_sticky>
     #[serde(default)]
     pub omnisharded_sticky: bool,
 
@@ -702,7 +702,7 @@ pub struct General {
     ///
     /// **Note:** Text format is required when migrating from `INTEGER` to `BIGINT` primary keys during resharding.
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#resharding_copy_format
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#resharding_copy_format>
     #[serde(default)]
     pub resharding_copy_format: CopyFormat,
 
@@ -729,7 +729,7 @@ pub struct General {
     ///
     /// _Default:_ `5`
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#resharding_replication_retry_max_attempts
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#resharding_replication_retry_max_attempts>
     #[serde(default = "General::resharding_replication_retry_max_attempts")]
     pub resharding_replication_retry_max_attempts: usize,
 
@@ -737,7 +737,7 @@ pub struct General {
     ///
     /// _Default:_ `1000`
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#resharding_replication_retry_min_delay
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#resharding_replication_retry_min_delay>
     #[serde(default = "General::resharding_replication_retry_min_delay")]
     pub resharding_replication_retry_min_delay: u64,
 
@@ -747,7 +747,7 @@ pub struct General {
     ///
     /// _Default:_ `true`
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#reload_schema_on_ddl
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#reload_schema_on_ddl>
     #[serde(default = "General::reload_schema_on_ddl")]
     pub reload_schema_on_ddl: bool,
 
@@ -755,7 +755,7 @@ pub struct General {
     ///
     /// _Default:_ `auto`
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#load_schema
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#load_schema>
     #[serde(default = "General::load_schema")]
     pub load_schema: LoadSchema,
 
@@ -763,7 +763,7 @@ pub struct General {
     ///
     /// _Default:_ `1000000`
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#cutover_traffic_stop_threshold
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#cutover_traffic_stop_threshold>
     #[serde(default = "General::cutover_traffic_stop_threshold")]
     pub cutover_traffic_stop_threshold: u64,
 
@@ -771,7 +771,7 @@ pub struct General {
     ///
     /// _Default:_ `0`
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#cutover_replication_lag_threshold
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#cutover_replication_lag_threshold>
     #[serde(default = "General::cutover_replication_lag_threshold")]
     pub cutover_replication_lag_threshold: u64,
 
@@ -779,7 +779,7 @@ pub struct General {
     ///
     /// _Default:_ `1000`
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#cutover_last_transaction_delay
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#cutover_last_transaction_delay>
     #[serde(default = "General::cutover_last_transaction_delay")]
     pub cutover_last_transaction_delay: u64,
 
@@ -787,7 +787,7 @@ pub struct General {
     ///
     /// _Default:_ `30000`
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#cutover_timeout
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#cutover_timeout>
     #[serde(default = "General::cutover_timeout")]
     pub cutover_timeout: u64,
 
@@ -795,7 +795,7 @@ pub struct General {
     ///
     /// _Default:_ `abort`
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#cutover_timeout_action
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#cutover_timeout_action>
     #[serde(default = "General::cutover_timeout_action")]
     pub cutover_timeout_action: CutoverTimeoutAction,
 
@@ -803,7 +803,7 @@ pub struct General {
     ///
     /// _Default:_ `false`
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#cutover_save_config
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#cutover_save_config>
     #[serde(default)]
     pub cutover_save_config: bool,
 }

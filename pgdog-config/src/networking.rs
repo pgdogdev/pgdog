@@ -7,7 +7,7 @@ use schemars::JsonSchema;
 
 /// TLS verification mode for connections to Postgres servers.
 ///
-/// https://docs.pgdog.dev/configuration/pgdog.toml/general/#tls_verify
+/// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#tls_verify>
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Copy)]
 #[serde(rename_all = "snake_case")]
 #[derive(JsonSchema)]
@@ -43,7 +43,7 @@ impl FromStr for TlsVerifyMode {
 ///
 /// **Note:** Not all networks support or play well with TCP keep-alives. If you see an increased number of dropped connections after enabling these settings, you may have to disable them.
 ///
-/// https://docs.pgdog.dev/configuration/pgdog.toml/network/
+/// <https://docs.pgdog.dev/configuration/pgdog.toml/network/>
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
 #[serde(deny_unknown_fields)]
 #[derive(JsonSchema)]
@@ -54,28 +54,28 @@ pub struct Tcp {
     ///
     /// _Default:_ `true`
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/network/#keepalive
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/network/#keepalive>
     #[serde(default = "Tcp::default_keepalive")]
     keepalive: bool,
     /// How long a connection must be idle before keep-alive probes begin. Milliseconds.
     ///
     /// _Default:_ system default (2 hours)
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/network/#time
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/network/#time>
     time: Option<u64>,
     /// Time between successive keep-alive probes. Milliseconds.
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/network/#interval
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/network/#interval>
     interval: Option<u64>,
     /// How many consecutive failed keep-alive probes before the connection is terminated.
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/network/#retries
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/network/#retries>
     retries: Option<u32>,
     /// Close connections with unacknowledged data after this duration (`TCP_USER_TIMEOUT`). Milliseconds.
     ///
     /// **Note:** Linux only.
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/network/#user_timeout
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/network/#user_timeout>
     user_timeout: Option<u64>,
     /// TCP congestion control algorithm (e.g. `"reno"`, `"cubic"`).
     ///

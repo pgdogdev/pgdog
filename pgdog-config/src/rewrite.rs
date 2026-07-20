@@ -5,7 +5,7 @@ use std::str::FromStr;
 
 /// Controls what PgDog does when encountering a query that would require a rewrite.
 ///
-/// https://docs.pgdog.dev/configuration/pgdog.toml/rewrite/
+/// <https://docs.pgdog.dev/configuration/pgdog.toml/rewrite/>
 #[derive(
     Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, JsonSchema,
 )]
@@ -53,7 +53,7 @@ impl FromStr for RewriteMode {
 ///
 /// **Note:** Consider enabling [two-phase commit](https://docs.pgdog.dev/features/sharding/2pc/) when either feature is set to `rewrite`. Without it, rewrites are committed shard-by-shard and can leave partial changes if a transaction fails.
 ///
-/// https://docs.pgdog.dev/configuration/pgdog.toml/rewrite/
+/// <https://docs.pgdog.dev/configuration/pgdog.toml/rewrite/>
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Rewrite {
@@ -61,7 +61,7 @@ pub struct Rewrite {
     ///
     /// _Default:_ `false`
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/rewrite/#enabled
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/rewrite/#enabled>
     #[serde(default)]
     pub enabled: bool,
 
@@ -69,7 +69,7 @@ pub struct Rewrite {
     ///
     /// _Default:_ `error`
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/rewrite/#shard_key
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/rewrite/#shard_key>
     #[serde(default = "Rewrite::default_shard_key")]
     pub shard_key: RewriteMode,
 
@@ -77,7 +77,7 @@ pub struct Rewrite {
     ///
     /// _Default:_ `error`
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/rewrite/#split_inserts
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/rewrite/#split_inserts>
     #[serde(default = "Rewrite::default_split_inserts")]
     pub split_inserts: RewriteMode,
 
@@ -85,7 +85,7 @@ pub struct Rewrite {
     ///
     /// _Default:_ `ignore`
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/rewrite/#primary_key
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/rewrite/#primary_key>
     #[serde(default = "Rewrite::default_primary_key")]
     pub primary_key: RewriteMode,
 }
