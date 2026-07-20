@@ -286,7 +286,7 @@ dns_ttl = 5_000
 # [[write_functions]]
 # database = "pgdog"
 # schema = "partman" # optional
-# functions = ["my_write_fn", "set_customer_balance"]
+# functions = ["my_write_fn", "\"Set_Customer_Balance\""]
 #
 
 #
