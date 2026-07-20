@@ -396,15 +396,8 @@ impl Listener {
     }
 
     fn wake_all(&mut self) {
-        while let Some(op) = self.queue.pop_front() {
-            match op {
-                OpSyncPoint::ParseAcks { done, .. } | OpSyncPoint::ReadyForQuery { done } => {
-                    let _ = done.send(());
-                }
-                OpSyncPoint::DirectDml { .. } => {}
-            }
-        }
-        self.wake_drain();
+        self.queue.clear();
+        drop(self.drain_waiter.take());
     }
 
     fn wake_drain(&mut self) {
