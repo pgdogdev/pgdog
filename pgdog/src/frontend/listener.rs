@@ -67,7 +67,7 @@ impl Listener {
                    }
                 }
 
-                _ = shutdown_signal.notified() => {
+                _ = shutdown_signal.cancelled() => {
                     self.start_shutdown();
                 }
 
