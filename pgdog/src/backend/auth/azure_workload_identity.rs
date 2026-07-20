@@ -59,6 +59,7 @@ mod tests {
             passwords: vec![],
             database_number: 0,
             server_auth: ServerAuth::AzureWorkloadIdentity,
+            server_role: None,
             server_iam_region: None,
             vault_path: Default::default(),
             vault_refresh_percent: None,

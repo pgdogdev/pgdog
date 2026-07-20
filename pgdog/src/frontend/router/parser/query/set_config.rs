@@ -24,6 +24,39 @@ impl QueryParser {
     }
 }
 
+const ROLE_ESCAPE_PARAMS: [&str; 2] = ["role", "session_authorization"];
+
+fn is_role_escape(name: &str) -> bool {
+    ROLE_ESCAPE_PARAMS
+        .iter()
+        .any(|param| name.eq_ignore_ascii_case(param))
+}
+
+pub(super) fn role_escape_target(stmts: &pg_raw_parse::StmtList) -> Option<String> {
+    for node in stmts.stmts() {
+        match node {
+            Node::VariableSetStmt(stmt) => {
+                if let Some(name) = stmt.name()
+                    && is_role_escape(name)
+                {
+                    return Some(name.to_string());
+                }
+            }
+            Node::SelectStmt(stmt) => {
+                if let Some(fcall) = extract_set_config(stmt)
+                    && let Some(name) = fcall.args().first().and_then(Node::as_str)
+                    && is_role_escape(name)
+                {
+                    return Some(name.to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+
+    None
+}
+
 /// Returns None if the arguments could not be parsed
 fn parse_args(fcall: &nodes::FuncCall) -> Option<SetParam> {
     let name = parse_config_name(fcall.args().first()?)?;

@@ -254,6 +254,10 @@ impl QueryEngine {
             Command::Copy(_) => self.execute(context).await?,
             Command::Deallocate => self.deallocate(context).await?,
             Command::Discard { extended } => self.discard(context, *extended).await?,
+            Command::RoleLocked { name } => {
+                self.error_response(context, ErrorResponse::role_locked(name))
+                    .await?;
+            }
         }
 
         self.hooks.after_execution(context)?;

@@ -339,6 +339,12 @@ impl QueryParser {
             .run()?;
         }
 
+        if context.router_context.cluster.server_role().is_some()
+            && let Some(name) = set_config::role_escape_target(&**stmts)
+        {
+            return Ok(Command::RoleLocked { name });
+        }
+
         // Handle multi-statement SET commands (e.g. "SET x TO 1; SET y TO 2").
         if stmts.len() > 1
             && let Some(command) = self.try_multi_set(&**stmts, context)?

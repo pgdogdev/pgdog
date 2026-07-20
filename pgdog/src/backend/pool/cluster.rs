@@ -81,6 +81,7 @@ pub struct Cluster {
     sharding_lookup_timeout: Duration,
     regex_parser: RegexParser,
     identity: Option<String>,
+    server_role: Option<String>,
     tls_client_certificate_required: bool,
     #[debug(skip)]
     schema_loader: Box<dyn SchemaLoader>,
@@ -131,6 +132,7 @@ impl Default for Cluster {
             sharding_lookup_timeout: Duration::from_millis(General::sharding_lookup_timeout()),
             regex_parser: Default::default(),
             identity: Default::default(),
+            server_role: Default::default(),
             tls_client_certificate_required: Default::default(),
             schema_loader: Default::default(),
             canonical_oids: Default::default(),
@@ -222,6 +224,7 @@ pub struct ClusterConfig<'a> {
     regex_parser_limit: usize,
     pub_sub_enabled: bool,
     identity: &'a Option<String>,
+    server_role: Option<String>,
     tls_client_certificate_required: bool,
     schema_cache: SchemaCache,
     canonicalize_oids: bool,
@@ -293,6 +296,7 @@ impl<'a> ClusterConfig<'a> {
             regex_parser_limit: general.regex_parser_limit,
             pub_sub_enabled: general.pub_sub_enabled(),
             identity: &user.identity,
+            server_role: user.server_role.clone(),
             tls_client_certificate_required: user.tls_client_certificate_required.unwrap_or(true),
             schema_cache,
             canonicalize_oids: general.canonicalize_type_information,
@@ -341,6 +345,7 @@ impl Cluster {
             regex_parser_limit,
             pub_sub_enabled,
             identity,
+            server_role,
             tls_client_certificate_required,
             schema_cache,
             canonicalize_oids,
@@ -411,6 +416,7 @@ impl Cluster {
             sharding_lookup_timeout: Duration::from_millis(sharding_lookup_timeout),
             regex_parser: RegexParser::new(regex_parser_limit, query_parser),
             identity: identity.clone(),
+            server_role,
             tls_client_certificate_required,
             schema_loader: Box::new(schema_loader::FromServer),
             canonical_oids,
@@ -481,6 +487,25 @@ impl Cluster {
     /// when connecting.
     pub fn identity(&self) -> Option<&str> {
         self.identity.as_deref()
+    }
+
+    /// PostgreSQL role backend connections impersonate through the `role`
+    /// startup parameter.
+    pub fn server_role(&self) -> Option<&str> {
+        self.server_role.as_deref()
+    }
+
+    /// Whether this cluster can authenticate to PostgreSQL without a stored
+    /// client password.
+    pub fn has_backend_credentials(&self) -> bool {
+        if self.server_role.is_some() {
+            return true;
+        }
+
+        self.shards.iter().flat_map(Shard::pools).any(|pool| {
+            let addr = pool.addr();
+            !addr.passwords.is_empty() || addr.server_auth.is_external_identity()
+        })
     }
 
     /// This user must present a client TLS certificate when connecting over TLS.
@@ -587,6 +612,10 @@ impl Cluster {
 
     /// Use the query parser.
     pub(crate) fn use_query_parser(&self, request: &ClientRequest) -> bool {
+        if self.server_role.is_some() {
+            return true;
+        }
+
         match self.query_parser() {
             QueryParserLevel::Off => false,
             QueryParserLevel::On => true,
@@ -1006,6 +1035,10 @@ mod test {
 
         pub(crate) fn set_rw_split(&mut self, rw_split: ReadWriteSplit) {
             self.rw_split = rw_split;
+        }
+
+        pub fn set_server_role(&mut self, server_role: Option<String>) {
+            self.server_role = server_role;
         }
     }
 
