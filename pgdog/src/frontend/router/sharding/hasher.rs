@@ -38,10 +38,7 @@ impl Hasher {
         hasher.update(bytes);
         let hash = hasher.finalize();
 
-        let hex = format!("{:x}", hash);
-        let key = i64::from_str_radix(&hex[hex.len() - 8..], 16).unwrap();
-
-        key as u64
+        u32::from_be_bytes([hash[16], hash[17], hash[18], hash[19]]) as u64
     }
 }
 
