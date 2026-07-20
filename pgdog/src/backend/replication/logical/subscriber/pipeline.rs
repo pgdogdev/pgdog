@@ -129,6 +129,9 @@ impl PipelinedConnection {
     /// uses `Flush` (must not commit the open implicit transaction); otherwise
     /// uses `Sync`.
     pub async fn prepare(&self, parses: &[Parse], in_transaction: bool) -> Result<(), Error> {
+        if parses.is_empty() {
+            return Ok(());
+        }
         let mut messages: Vec<ProtocolMessage> = parses.iter().map(|p| p.clone().into()).collect();
         let kind = if in_transaction {
             // If in transaction we send flush and wait for the acknowledgements

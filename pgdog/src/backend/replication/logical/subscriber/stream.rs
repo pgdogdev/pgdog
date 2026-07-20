@@ -436,8 +436,15 @@ impl StreamSubscriber {
             for p in parses {
                 debug!("preparing \"{}\" [{}]", p.query(), server.addr());
             }
-            server.prepare(parses, in_txn).await?;
         }
+        // Each prepare targets an independent connection/task — run them
+        // concurrently so the cost is one round-trip, not one per shard.
+        try_join_all(
+            self.connections
+                .iter()
+                .map(|server| server.prepare(parses, in_txn)),
+        )
+        .await?;
         Ok(())
     }
 
