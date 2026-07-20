@@ -13,48 +13,48 @@ use pgdog_vector::Vector;
 
 /// Configuration for sharding databases. Each entry tells PgDog which column to use as the sharding key for a given table.
 ///
-/// https://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/
+/// <https://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/>
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct ShardedTableConfig {
     /// The name of the database in `[[databases]]` section in which the table is located.
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/#database
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/#database>
     pub database: String,
 
     /// The name of the PostgreSQL table. Only columns explicitly referencing that table will be sharded. If not specified, all tables with the specified column are considered sharded.
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/#name
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/#name>
     #[serde(default)]
     pub name: Option<String>,
 
     /// The name of the PostgreSQL schema where the sharded table is located. This is optional.
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/#schema
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/#schema>
     #[serde(default)]
     pub schema: Option<String>,
 
     /// The name of the sharded column.
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/#column
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/#column>
     #[serde(default)]
     pub column: String,
 
     /// Marks this table as the primary sharding anchor (e.g. `users`). PgDog uses the primary table to resolve foreign-key relationships when routing queries.
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/#primary
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/#primary>
     #[serde(default)]
     pub primary: bool,
 
     /// For vector sharding, specify the centroid vectors directly in the configuration.
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/#centroids
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/#centroids>
     #[serde(default)]
     pub centroids: Vec<Vector>,
 
     /// Path to a JSON file containing centroid vectors. This is useful when centroids are large (1000+ dimensions).
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/#centroids_path
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/#centroids_path>
     #[serde(default)]
     pub centroids_path: Option<PathBuf>,
 
@@ -62,13 +62,13 @@ pub struct ShardedTableConfig {
     ///
     /// _Default:_ `bigint`
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/#data_type
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/#data_type>
     #[serde(default)]
     pub data_type: DataType,
 
     /// Number of centroids to probe during vector similarity search. If not specified, defaults to the square root of the number of centroids.
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/#centroid_probes
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/#centroid_probes>
     #[serde(default)]
     pub centroid_probes: usize,
 
@@ -76,7 +76,7 @@ pub struct ShardedTableConfig {
     ///
     /// _Default:_ `postgres`
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/#hasher
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/#hasher>
     #[serde(default)]
     pub hasher: Hasher,
 
@@ -84,7 +84,7 @@ pub struct ShardedTableConfig {
     /// default), PgDog shards by hashing the column value instead. Each entry is
     /// a [`ShardedMappingConfig`]; see it for the list/range/default forms.
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/#shard-by-list-and-range
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/#shard-by-list-and-range>
     pub mapping: Option<Vec<ShardedMappingConfig>>,
 }
 
@@ -124,7 +124,7 @@ impl ShardedTableConfig {
 /// falls back to the default rule. A value matched by nothing, with no default
 /// rule present, is sent to all shards.
 ///
-/// https://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/#shard-by-list-and-range
+/// <https://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/#shard-by-list-and-range>
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash, JsonSchema)]
 #[serde(rename_all = "snake_case", untagged, deny_unknown_fields)]
 pub enum ShardedMappingConfig {
@@ -141,7 +141,7 @@ pub enum ShardedMappingConfig {
 
 /// Hash function used to map a sharding key value to a shard number.
 ///
-/// https://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/#hasher
+/// <https://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/#hasher>
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Hasher {
@@ -154,7 +154,7 @@ pub enum Hasher {
 
 /// Data type of the sharding column.
 ///
-/// https://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/#data_type
+/// <https://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/#data_type>
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone, Default, Copy, Eq, Hash, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum DataType {
@@ -297,7 +297,7 @@ impl From<String> for FlexibleType {
 
 /// A group of tables that are replicated across all shards (omnisharded) for a given database.
 ///
-/// https://docs.pgdog.dev/configuration/pgdog.toml/general/#omnisharded_sticky
+/// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#omnisharded_sticky>
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone, Default, Eq, Hash, JsonSchema)]
 pub struct OmnishardedTables {
     /// Database name from the `[[databases]]` section.
@@ -373,7 +373,7 @@ impl<'a> From<&'a FlexibleType> for FlexibleTypeRef<'a> {
 
 /// Controls when the query parser is active.
 ///
-/// https://docs.pgdog.dev/configuration/pgdog.toml/general/#query_parser
+/// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#query_parser>
 #[derive(
     Serialize,
     Deserialize,
@@ -416,7 +416,7 @@ pub enum QueryParserEngine {
 
 /// Controls how system catalog tables (like `pg_database`, `pg_class`, etc.) are treated by the query router.
 ///
-/// https://docs.pgdog.dev/configuration/pgdog.toml/general/#system_catalogs
+/// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#system_catalogs>
 #[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Eq, Hash, Default, JsonSchema)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum SystemCatalogsBehavior {
@@ -445,7 +445,7 @@ impl FromStr for SystemCatalogsBehavior {
 ///
 /// **Note:** Text format is required when migrating from `INTEGER` to `BIGINT` primary keys during resharding.
 ///
-/// https://docs.pgdog.dev/configuration/pgdog.toml/general/#resharding_copy_format
+/// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#resharding_copy_format>
 #[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Eq, Hash, Default, JsonSchema)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum CopyFormat {
@@ -467,7 +467,7 @@ impl Display for CopyFormat {
 
 /// Controls whether PgDog loads the database schema at startup for query routing.
 ///
-/// https://docs.pgdog.dev/configuration/pgdog.toml/general/#load_schema
+/// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#load_schema>
 #[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Eq, Hash, Default, JsonSchema)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum LoadSchema {

@@ -35,7 +35,7 @@ impl ReplicaLag {
         Duration::from_millis(1000)
     }
 
-    /// Custom "all-or-none" deserializer that returns Option<Self>.
+    /// Custom "all-or-none" deserializer that returns `Option<Self>`.
     pub fn deserialize_optional<'de, D>(de: D) -> Result<Option<Self>, D::Error>
     where
         D: serde::de::Deserializer<'de>,
@@ -106,7 +106,7 @@ impl Default for ReplicaLag {
 
 /// Replication configuration used for online resharding.
 ///
-/// https://docs.pgdog.dev/configuration/pgdog.toml/replication/
+/// <https://docs.pgdog.dev/configuration/pgdog.toml/replication/>
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub struct Replication {
@@ -133,28 +133,28 @@ impl Default for Replication {
 
 /// [Mirroring](https://docs.pgdog.dev/features/mirroring/) configuration. Database mirroring replicates traffic, byte for byte, from one database to another for testing purposes.
 ///
-/// https://docs.pgdog.dev/configuration/pgdog.toml/mirroring/
+/// <https://docs.pgdog.dev/configuration/pgdog.toml/mirroring/>
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Mirroring {
     /// Name of the source database to mirror traffic from. This should be a `name` configured in the [`databases`](https://docs.pgdog.dev/configuration/pgdog.toml/databases/) section of `pgdog.toml`.
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/mirroring/#source_db
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/mirroring/#source_db>
     pub source_db: String,
 
     /// Name of the destination database to mirror traffic to. This should be a `name` configured in the [`databases`](https://docs.pgdog.dev/configuration/pgdog.toml/databases/) section of `pgdog.toml`.
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/mirroring/#destination_db
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/mirroring/#destination_db>
     pub destination_db: String,
 
     /// The length of the queue to provision for mirrored transactions. See [mirroring](https://docs.pgdog.dev/features/mirroring/) for more details. This overrides the [`mirror_queue`](https://docs.pgdog.dev/configuration/pgdog.toml/general/#mirror_queue) setting.
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/mirroring/#queue_depth
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/mirroring/#queue_depth>
     pub queue_length: Option<usize>,
 
     /// The percentage of transactions to mirror, specified as a floating point number between 0.0 and 1.0. See [mirroring](https://docs.pgdog.dev/features/mirroring/) for more details. This overrides the [`mirror_exposure`](https://docs.pgdog.dev/configuration/pgdog.toml/general/#mirror_exposure) setting.
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/mirroring/#exposure
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/mirroring/#exposure>
     pub exposure: Option<f32>,
 
     /// What kind of statements to replicate.

@@ -23,7 +23,8 @@ Because the same text reaches both audiences, comments must be accurate, self-co
 ///
 /// _Default:_ `value`
 ///
-/// https://docs.pgdog.dev/configuration/pgdog.toml/{page}/#{anchor}
+/// <https://docs.pgdog.dev/configuration/pgdog.toml/{page}/#{anchor}>
+
 pub field_name: Type,
 ```
 
@@ -39,7 +40,8 @@ pub field_name: Type,
 ///
 /// **Note:** Any important caveat, if present.
 ///
-/// https://docs.pgdog.dev/configuration/pgdog.toml/{page}/
+/// <https://docs.pgdog.dev/configuration/pgdog.toml/{page}/>
+
 pub struct Foo { ... }
 ```
 
@@ -48,7 +50,8 @@ pub struct Foo { ... }
 ```rust
 /// Noun phrase describing what the enum represents.
 ///
-/// https://docs.pgdog.dev/configuration/pgdog.toml/{page}/#{anchor}
+/// <https://docs.pgdog.dev/configuration/pgdog.toml/{page}/#{anchor}>
+
 pub enum Bar { ... }
 ```
 
