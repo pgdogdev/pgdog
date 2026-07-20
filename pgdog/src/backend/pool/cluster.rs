@@ -63,7 +63,7 @@ pub struct Cluster {
     multi_tenant: Option<MultiTenant>,
     rw_strategy: ReadWriteStrategy,
     rw_split: ReadWriteSplit,
-    write_functions: HashSet<String>,
+    write_functions: HashSet<WriteFunction>,
     schema_admin: bool,
     stats: Arc<Mutex<MirrorStats>>,
     cross_shard_disabled: bool,
@@ -103,7 +103,7 @@ pub struct ShardingSchema {
     pub schemas: ShardedSchemas,
     /// Rewrite config.
     pub rewrite: Rewrite,
-    pub write_functions: HashSet<String>,
+    pub write_functions: HashSet<WriteFunction>,
     /// Query parser engine.
     pub query_parser_engine: QueryParserEngine,
     pub log_min_duration_parse: Option<Duration>,
@@ -113,6 +113,32 @@ pub struct ShardingSchema {
 impl ShardingSchema {
     pub fn tables(&self) -> &ShardedTables {
         &self.tables
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct WriteFunction {
+    pub schema: Option<String>,
+    pub name: String,
+}
+
+impl WriteFunction {
+    /// Normalize one SQL identifier using PostgreSQL rules:
+    /// - unquoted: folded to lowercase
+    /// - quoted: preserve case and unescape doubled quotes
+    fn normalize_identifier(identifier: &str) -> String {
+        if identifier.len() >= 2 && identifier.starts_with('"') && identifier.ends_with('"') {
+            identifier[1..identifier.len() - 1].replace("\"\"", "\"")
+        } else {
+            identifier.to_ascii_lowercase()
+        }
+    }
+
+    fn from_config(schema: Option<&str>, name: &str) -> Self {
+        Self {
+            schema: schema.map(Self::normalize_identifier),
+            name: Self::normalize_identifier(name),
+        }
     }
 }
 
@@ -151,7 +177,7 @@ pub struct ClusterConfig<'a> {
     pub multi_tenant: &'a Option<MultiTenant>,
     pub rw_strategy: ReadWriteStrategy,
     pub rw_split: ReadWriteSplit,
-    pub write_functions: HashSet<String>,
+    pub write_functions: HashSet<WriteFunction>,
     pub schema_admin: bool,
     pub cross_shard_disabled: bool,
     pub two_pc: bool,
@@ -215,8 +241,12 @@ impl<'a> ClusterConfig<'a> {
                 .write_functions
                 .iter()
                 .filter(|entry| entry.database == user.database)
-                .flat_map(|entry| entry.functions.iter())
-                .map(|func| func.to_ascii_lowercase())
+                .flat_map(|entry| {
+                    entry
+                        .functions
+                        .iter()
+                        .map(move |func| WriteFunction::from_config(entry.schema.as_deref(), func))
+                })
                 .collect(),
             schema_admin: user.schema_admin,
             cross_shard_disabled: user
@@ -776,17 +806,21 @@ mod test {
         net::Query,
     };
 
-    use super::{Cluster, DatabaseUser};
+    use super::{Cluster, DatabaseUser, WriteFunction};
 
     impl Cluster {
-        fn test_write_functions(config: &ConfigAndUsers, database: &str) -> HashSet<String> {
+        fn test_write_functions(config: &ConfigAndUsers, database: &str) -> HashSet<WriteFunction> {
             config
                 .config
                 .write_functions
                 .iter()
                 .filter(|entry| entry.database == database)
-                .flat_map(|entry| entry.functions.iter())
-                .map(|func| func.to_ascii_lowercase())
+                .flat_map(|entry| {
+                    entry
+                        .functions
+                        .iter()
+                        .map(move |func| WriteFunction::from_config(entry.schema.as_deref(), func))
+                })
                 .collect()
         }
 
@@ -1025,6 +1059,17 @@ mod test {
         cluster.sharded_schemas = ShardedSchemas::default();
 
         assert!(cluster.load_schema());
+    }
+
+    #[test]
+    fn test_write_function_identifier_normalization() {
+        let wf = WriteFunction::from_config(Some("PartMan"), "Create_Partition");
+        assert_eq!(wf.schema.as_deref(), Some("partman"));
+        assert_eq!(wf.name, "create_partition");
+
+        let wf = WriteFunction::from_config(Some(r#""PartMan""#), r#""Create_Partition""#);
+        assert_eq!(wf.schema.as_deref(), Some("PartMan"));
+        assert_eq!(wf.name, "Create_Partition");
     }
 
     #[test]

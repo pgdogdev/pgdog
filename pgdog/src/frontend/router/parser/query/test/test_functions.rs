@@ -76,6 +76,7 @@ fn test_configured_write_function_routes_to_primary() {
     let mut updated = config().deref().clone();
     updated.config.write_functions = vec![WriteFunctions {
         database: "pgdog".into(),
+        schema: None,
         functions: vec!["my_write_fn".into()],
     }];
 
@@ -87,10 +88,11 @@ fn test_configured_write_function_routes_to_primary() {
 
 #[test]
 #[cfg(feature = "new_parser")]
-fn test_configured_write_function_case_insensitive_and_any_match() {
+fn test_configured_write_function_pg_identifier_semantics() {
     let mut updated = config().deref().clone();
     updated.config.write_functions = vec![WriteFunctions {
         database: "pgdog".into(),
+        schema: None,
         functions: vec!["my_write_fn".into()],
     }];
 
@@ -98,4 +100,36 @@ fn test_configured_write_function_case_insensitive_and_any_match() {
     let command = test.execute(vec![Query::new("SELECT now(), My_Write_Fn(1)").into()]);
 
     assert!(command.route().is_write());
+
+    let command = test.execute(vec![Query::new(r#"SELECT "My_Write_Fn"(1)"#).into()]);
+    assert!(command.route().is_read());
+
+    updated.config.write_functions = vec![WriteFunctions {
+        database: "pgdog".into(),
+        schema: None,
+        functions: vec![r#""My_Write_Fn""#.into()],
+    }];
+    let mut test = QueryParserTest::new_with_config(&updated);
+    let command = test.execute(vec![Query::new(r#"SELECT "My_Write_Fn"(1)"#).into()]);
+    assert!(command.route().is_write());
+}
+
+#[test]
+#[cfg(feature = "new_parser")]
+fn test_configured_write_function_with_schema() {
+    let mut updated = config().deref().clone();
+    updated.config.write_functions = vec![WriteFunctions {
+        database: "pgdog".into(),
+        schema: Some("partman".into()),
+        functions: vec!["create_partition".into()],
+    }];
+
+    let mut test = QueryParserTest::new_with_config(&updated);
+    let command = test.execute(vec![
+        Query::new("SELECT partman.create_partition(1)").into(),
+    ]);
+    assert!(command.route().is_write());
+
+    let command = test.execute(vec![Query::new("SELECT other.create_partition(1)").into()]);
+    assert!(command.route().is_read());
 }

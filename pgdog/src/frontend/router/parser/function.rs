@@ -5,6 +5,9 @@ use pg_raw_parse::{Node, nodes};
 #[cfg(feature = "new_parser")]
 use std::collections::HashSet;
 
+#[cfg(feature = "new_parser")]
+use crate::backend::pool::cluster::WriteFunction;
+
 const WRITE_ONLY: &[&str] = &["nextval", "setval"];
 
 const CROSS_SHARD: &[(Option<&str>, &str)] = &[(Some("pgdog"), "install_sharded_sequence")];
@@ -46,18 +49,16 @@ impl<'a> Function<'a> {
     #[cfg(feature = "new_parser")]
     pub(crate) fn behavior_with_write_functions(
         &self,
-        configured_write_functions: &HashSet<String>,
+        configured_write_functions: &HashSet<WriteFunction>,
     ) -> FunctionBehavior {
         let base = self.behavior();
-        let configured_match = if configured_write_functions.is_empty() {
-            false
-        } else {
-            configured_write_functions.contains(&self.name.to_ascii_lowercase())
-                || self.schema.is_some_and(|schema| {
-                    configured_write_functions
-                        .contains(&format!("{}.{}", schema, self.name).to_ascii_lowercase())
-                })
-        };
+        let configured_match = configured_write_functions.contains(&WriteFunction {
+            schema: self.schema.map(ToOwned::to_owned),
+            name: self.name.to_owned(),
+        }) || configured_write_functions.contains(&WriteFunction {
+            schema: None,
+            name: self.name.to_owned(),
+        });
 
         FunctionBehavior {
             writes: configured_match || base.writes,
@@ -119,6 +120,8 @@ impl<'a> TryFrom<&'a Node> for Function<'a> {
 
 #[cfg(test)]
 mod test {
+    #[cfg(feature = "new_parser")]
+    use crate::backend::pool::cluster::WriteFunction;
     #[cfg(not(feature = "new_parser"))]
     use pg_query::parse;
     #[cfg(feature = "new_parser")]
@@ -222,12 +225,37 @@ mod test {
 
     #[test]
     #[cfg(feature = "new_parser")]
-    fn test_configured_write_function_case_insensitive() {
+    fn test_configured_write_function_pg_identifier_semantics() {
         let mut configured = HashSet::new();
-        configured.insert("my_write_fn".to_string());
+        configured.insert(WriteFunction {
+            schema: None,
+            name: "my_write_fn".to_string(),
+        });
 
         first_func("SELECT My_Write_Fn(1)", |func| {
             assert!(func.behavior_with_write_functions(&configured).writes);
+        });
+
+        first_func(r#"SELECT "My_Write_Fn"(1)"#, |func| {
+            assert!(!func.behavior_with_write_functions(&configured).writes);
+        });
+    }
+
+    #[test]
+    #[cfg(feature = "new_parser")]
+    fn test_configured_write_function_with_schema() {
+        let mut configured = HashSet::new();
+        configured.insert(WriteFunction {
+            schema: Some("partman".to_string()),
+            name: "create_partition".to_string(),
+        });
+
+        first_func("SELECT partman.create_partition('foo')", |func| {
+            assert!(func.behavior_with_write_functions(&configured).writes);
+        });
+
+        first_func("SELECT other.create_partition('foo')", |func| {
+            assert!(!func.behavior_with_write_functions(&configured).writes);
         });
     }
 }

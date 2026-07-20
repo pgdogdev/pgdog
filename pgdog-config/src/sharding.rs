@@ -571,6 +571,8 @@ pub struct QueryParser {
 pub struct WriteFunctions {
     /// Database name.
     pub database: String,
+    /// Optional schema qualifier for all functions in this entry.
+    pub schema: Option<String>,
     /// Functions that should be treated as write-only.
     #[serde(default)]
     pub functions: Vec<String>,
@@ -611,6 +613,7 @@ database = "production"
 
         assert_eq!(config.write_functions.len(), 1);
         assert_eq!(config.write_functions[0].database, "production");
+        assert_eq!(config.write_functions[0].schema, None);
         assert!(config.write_functions[0].functions.is_empty());
     }
 }
