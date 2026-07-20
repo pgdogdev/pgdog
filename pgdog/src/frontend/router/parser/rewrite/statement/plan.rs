@@ -90,7 +90,7 @@ impl RewritePlan {
             let id = generator.next_id();
             let param = match format {
                 Format::Binary => Parameter::new(&id.to_be_bytes()),
-                Format::Text => Parameter::new(id.to_string().as_bytes()),
+                Format::Text => Parameter::new(itoa::Buffer::new().format(id).as_bytes()),
             };
             bind.push_param(param, format);
         }

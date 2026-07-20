@@ -15,7 +15,7 @@ impl Hasher {
     pub fn bigint(&self, value: i64) -> u64 {
         match self {
             Hasher::Postgres => bigint(value),
-            Hasher::Sha1 => Self::sha1(value.to_string().as_bytes()),
+            Hasher::Sha1 => Self::sha1(itoa::Buffer::new().format(value).as_bytes()),
         }
     }
 
@@ -38,10 +38,7 @@ impl Hasher {
         hasher.update(bytes);
         let hash = hasher.finalize();
 
-        let hex = format!("{:x}", hash);
-        let key = i64::from_str_radix(&hex[hex.len() - 8..], 16).unwrap();
-
-        key as u64
+        u32::from_be_bytes([hash[16], hash[17], hash[18], hash[19]]) as u64
     }
 }
 
