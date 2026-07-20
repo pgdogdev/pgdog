@@ -279,10 +279,13 @@ dns_ttl = 5_000
 #
 # Per-database list of functions that should always route to the primary.
 #
-# Function matching is case-insensitive.
+# Function matching follows PostgreSQL identifier semantics:
+# - unquoted identifiers are folded to lowercase
+# - quoted identifiers preserve case
 #
 # [[write_functions]]
 # database = "pgdog"
+# schema = "partman" # optional
 # functions = ["my_write_fn", "set_customer_balance"]
 #
 

@@ -2351,6 +2351,13 @@
           "items": {
             "type": "string"
           }
+        },
+        "schema": {
+          "description": "Optional schema qualifier for all functions in this entry.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "additionalProperties": false,
