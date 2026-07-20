@@ -84,7 +84,9 @@ impl ToBytes for ParameterValue {
                     .join(", ".as_bytes());
                 bytes.put(Bytes::from(values));
             }
-            Self::Integer(integer) => bytes.put_slice(integer.to_string().as_bytes()),
+            Self::Integer(integer) => {
+                bytes.put_slice(itoa::Buffer::new().format(*integer).as_bytes())
+            }
         }
         bytes.put_u8(0);
 

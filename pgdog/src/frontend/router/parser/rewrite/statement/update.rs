@@ -353,15 +353,17 @@ impl Insert {
                         bind.push_param(param.parameter().clone(), param.format())
                     }
 
-                    Value::Integer(int) => {
-                        bind.push_param(Parameter::new(int.to_string().as_bytes()), Format::Text)
-                    }
+                    Value::Integer(int) => bind.push_param(
+                        Parameter::new(itoa::Buffer::new().format(int).as_bytes()),
+                        Format::Text,
+                    ),
 
                     Value::String(s) => bind.push_param(Parameter::new(s.as_bytes()), Format::Text),
 
-                    Value::Float(f) => {
-                        bind.push_param(Parameter::new(f.to_string().as_bytes()), Format::Text)
-                    }
+                    Value::Float(f) => bind.push_param(
+                        Parameter::new(ryu::Buffer::new().format(f).as_bytes()),
+                        Format::Text,
+                    ),
 
                     Value::Boolean(b) => bind.push_param(
                         Parameter::new(if b { "t".as_bytes() } else { "f".as_bytes() }),
