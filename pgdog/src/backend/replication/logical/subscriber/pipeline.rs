@@ -40,11 +40,18 @@ enum SyncPointKind {
 // One entry per command sent to Postgres, in send order. Popped as acks arrive.
 enum OpSyncPoint {
     // Bind/Execute/Flush: resolved by CommandComplete ('C').
-    DirectDml { is_direct: bool },
+    DirectDml {
+        is_direct: bool,
+    },
     // In-transaction prepare (Flush): resolved after `remaining` ParseComplete ('1') acks.
-    ParseAcks { remaining: usize, done: oneshot::Sender<()> },
+    ParseAcks {
+        remaining: usize,
+        done: oneshot::Sender<()>,
+    },
     // Commit or out-of-transaction prepare (Sync): resolved by ReadyForQuery ('Z').
-    ReadyForQuery { done: oneshot::Sender<()> },
+    ReadyForQuery {
+        done: oneshot::Sender<()>,
+    },
 }
 
 // Work sent from the handle to the listener task.
@@ -134,7 +141,8 @@ impl PipelinedConnection {
             messages.push(Sync.into());
             SyncPointKind::ReadyForQuery
         };
-        self.send_command_and_wait_for_sync_point(messages, kind).await
+        self.send_command_and_wait_for_sync_point(messages, kind)
+            .await
     }
 
     /// Send `Sync` and wait for `ReadyForQuery` (commits the open implicit
@@ -187,7 +195,8 @@ impl PipelinedConnection {
     // Resolve a sync point (signaled by the listener task).
     // If the task died before signaling, surface the latched error.
     async fn resolve_sync_point(&self, rx: oneshot::Receiver<()>) -> Result<(), Error> {
-        rx.await.map_err(|_| self.take_error().unwrap_or(Error::PipelineClosed))
+        rx.await
+            .map_err(|_| self.take_error().unwrap_or(Error::PipelineClosed))
     }
 }
 
@@ -207,16 +216,13 @@ impl Listener {
     async fn run(mut self) {
         loop {
             select! {
-                command = self.rx.recv() => {
-                    match command {
-                        Some(command) => {
-                            if self.handle_command(command).await.is_err() {
-                                break;
-                            }
-                        }
-                        None => break,
-                    }
-                }
+                // Read-first, biased: drain responses before issuing more
+                // writes. A fair select can pick the write branch while acks
+                // sit unread, filling the socket buffers in both directions
+                // and deadlocking the full-duplex pipeline. Draining reads
+                // first keeps Postgres's send buffer clear so it keeps reading
+                // our commands, so our writes never block.
+                biased;
 
                 message = self.server.read() => {
                     match message {
@@ -226,6 +232,17 @@ impl Listener {
                             self.wake_all();
                             break;
                         }
+                    }
+                }
+
+                command = self.rx.recv() => {
+                    match command {
+                        Some(command) => {
+                            if self.handle_command(command).await.is_err() {
+                                break;
+                            }
+                        }
+                        None => break,
                     }
                 }
             }
@@ -272,7 +289,8 @@ impl Listener {
                 }
                 match kind {
                     SyncPointKind::ParseAcks(remaining) => {
-                        self.queue.push_back(OpSyncPoint::ParseAcks { remaining, done });
+                        self.queue
+                            .push_back(OpSyncPoint::ParseAcks { remaining, done });
                     }
                     SyncPointKind::ReadyForQuery => {
                         self.queue.push_back(OpSyncPoint::ReadyForQuery { done });
@@ -280,7 +298,10 @@ impl Listener {
                 }
             }
             Command::DrainAcks { done } => {
-                let has_dml = self.queue.iter().any(|op| matches!(op, OpSyncPoint::DirectDml { .. }));
+                let has_dml = self
+                    .queue
+                    .iter()
+                    .any(|op| matches!(op, OpSyncPoint::DirectDml { .. }));
                 if errored || !has_dml {
                     let _ = done.send(());
                 } else {
@@ -311,13 +332,14 @@ impl Listener {
             }
             // ParseComplete: decrement the front ParseSync counter; resolve when it hits 0.
             '1' => {
-                let resolved =
-                    if let Some(OpSyncPoint::ParseAcks { remaining, .. }) = self.queue.front_mut() {
-                        *remaining -= 1;
-                        *remaining == 0
-                    } else {
-                        false
-                    };
+                let resolved = if let Some(OpSyncPoint::ParseAcks { remaining, .. }) =
+                    self.queue.front_mut()
+                {
+                    *remaining -= 1;
+                    *remaining == 0
+                } else {
+                    false
+                };
                 if resolved {
                     if let Some(OpSyncPoint::ParseAcks { done, .. }) = self.queue.pop_front() {
                         let _ = done.send(());
@@ -338,7 +360,11 @@ impl Listener {
                 {
                     self.shared.lock().missed.record(complete.tag());
                 }
-                if !self.queue.iter().any(|op| matches!(op, OpSyncPoint::DirectDml { .. })) {
+                if !self
+                    .queue
+                    .iter()
+                    .any(|op| matches!(op, OpSyncPoint::DirectDml { .. }))
+                {
                     self.wake_drain();
                 }
             }
@@ -475,7 +501,10 @@ mod test {
             .prepare(&[Parse::named("__pipe_bad", "NOT VALID SQL")], false)
             .await
             .unwrap_err();
-        assert!(matches!(err, Error::PgError(_)), "unexpected error: {err:?}");
+        assert!(
+            matches!(err, Error::PgError(_)),
+            "unexpected error: {err:?}"
+        );
         // The error was taken while surfacing, so nothing remains latched.
         assert!(conn.take_error().is_none());
     }
@@ -492,7 +521,10 @@ mod test {
             .prepare(&[Parse::named("__pipe_bad", "NOT VALID SQL")], true)
             .await
             .unwrap_err();
-        assert!(matches!(err, Error::PgError(_)), "unexpected error: {err:?}");
+        assert!(
+            matches!(err, Error::PgError(_)),
+            "unexpected error: {err:?}"
+        );
         assert!(conn.take_error().is_none());
     }
 }
