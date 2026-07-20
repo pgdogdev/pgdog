@@ -455,6 +455,16 @@ impl Pool {
             });
         }
 
+        // Impersonation role from `User.server_role`. Sent as a startup
+        // parameter so it's a session default: `RESET ALL` / `DISCARD ALL`
+        // cleanup restores rather than clears it between checkouts.
+        if let Some(role) = &self.inner.addr.server_role {
+            params.push(Parameter {
+                name: "role".into(),
+                value: role.as_str().into(),
+            });
+        }
+
         ServerOptions {
             params,
             pool_id: self.id(),
