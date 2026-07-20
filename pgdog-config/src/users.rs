@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::env;
 use std::fmt::Display;
 use std::path::PathBuf;
+use std::sync::LazyLock;
 use tracing::warn;
 
 use super::core::Config;
@@ -508,11 +509,10 @@ impl Admin {
 
 fn admin_password() -> String {
     if let Ok(password) = env::var("PGDOG_ADMIN_PASSWORD") {
-        password
-    } else {
-        let pw = random_string(12);
-        format!("_pgdog_{}", pw)
+        return password;
     }
+    static AUTOGEN: LazyLock<String> = LazyLock::new(|| format!("_pgdog_{}", random_string(12)));
+    AUTOGEN.clone()
 }
 
 #[cfg(test)]
@@ -565,6 +565,12 @@ mod tests {
             .find(|u| u.name == "bob" && u.database == "source_db")
             .unwrap();
         assert_eq!(bob_source.password(), "pass4");
+    }
+
+    #[test]
+    fn admin_password_is_stable_within_process() {
+        assert_eq!(Admin::default().password, Admin::default().password);
+        assert_eq!(Admin::password(), Admin::password());
     }
 
     #[test]
