@@ -195,6 +195,7 @@ compile_error!(
     r#"pg-plugin must be built with either default features, or features = "new_parser""#
 );
 
+pub mod auth;
 mod config;
 pub mod context;
 pub mod logging;
@@ -204,6 +205,7 @@ pub mod plugin;
 pub mod prelude;
 pub mod string;
 
+pub use auth::*;
 pub use config::Config;
 pub use context::*;
 pub use parameters::*;

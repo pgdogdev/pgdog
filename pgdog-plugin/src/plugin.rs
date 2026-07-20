@@ -4,10 +4,12 @@
 //! a safe interface to the plugin's methods.
 //!
 
+use std::ffi::c_void;
 use std::path::Path;
 
 use crate::{
     Config, Context, PdStr, Route,
+    auth::{AuthContext, AuthDecision, AuthField, AuthOutcome, AuthSink, read_only_code},
     parameters::{Parameters, RawParameters},
 };
 use libloading::{Library, Symbol, library_filename};
@@ -59,6 +61,9 @@ pub struct PluginVtable {
     ) -> Route,
     /// Logging initialization.
     logging_init: extern "C-unwind" fn(Config<'_>),
+    /// Authenticate a client connection. Streams grant/deny strings to the
+    /// sink callback and returns the decision as POD.
+    authenticate: extern "C-unwind" fn(AuthContext<'_>, *mut c_void, AuthSink) -> AuthOutcome,
 }
 
 pub trait Plugin {
@@ -127,6 +132,67 @@ pub trait Plugin {
     extern "C-unwind" fn logging_init(config: Config<'_>) {
         crate::logging::init(config)
     }
+
+    /// Authenticate a client connection.
+    ///
+    /// Return [`AuthDecision::Skip`] (the default) to defer to the next plugin
+    /// or to PgDog's configured authentication. [`AuthDecision::Allow`] accepts
+    /// the client and may derive a role and provision a pool;
+    /// [`AuthDecision::Deny`] rejects it (the reason is logged, never sent to
+    /// the client).
+    fn authenticate(_context: AuthContext<'_>) -> AuthDecision {
+        AuthDecision::Skip
+    }
+
+    #[doc(hidden)]
+    extern "C-unwind" fn authenticate_raw(
+        context: AuthContext<'_>,
+        sink_ctx: *mut c_void,
+        sink: AuthSink,
+    ) -> AuthOutcome {
+        // Catch a panic here, inside the plugin, before it can unwind across
+        // the FFI boundary. A panic that crosses `extern "C-unwind"` becomes a
+        // "foreign exception" the host cannot catch, which aborts the whole
+        // process; catching it here turns a buggy auth plugin into a denial
+        // instead. `AuthContext` is Copy, so the closure captures it by value.
+        let decision =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| Self::authenticate(context)))
+                .unwrap_or_else(|_| AuthDecision::Deny("authentication plugin panicked".into()));
+
+        // The owned decision lives here, on the plugin's stack, for the whole
+        // call. We stream each field to the host as a borrowed PdStr; nothing
+        // owned crosses the FFI boundary.
+        match decision {
+            AuthDecision::Skip => AuthOutcome::skip(),
+            AuthDecision::Deny(reason) => {
+                sink(sink_ctx, AuthField::Error, PdStr::from(reason.as_str()));
+                AuthOutcome {
+                    tag: crate::auth::AuthDecisionTag::Deny,
+                    read_only: 2,
+                    provision: false,
+                }
+            }
+            AuthDecision::Allow(grant) => {
+                if let Some(value) = grant.derived_user.as_deref() {
+                    sink(sink_ctx, AuthField::DerivedUser, PdStr::from(value));
+                }
+                if let Some(value) = grant.server_role.as_deref() {
+                    sink(sink_ctx, AuthField::ServerRole, PdStr::from(value));
+                }
+                if let Some(value) = grant.server_user.as_deref() {
+                    sink(sink_ctx, AuthField::ServerUser, PdStr::from(value));
+                }
+                if let Some(value) = grant.server_password.as_deref() {
+                    sink(sink_ctx, AuthField::ServerPassword, PdStr::from(value));
+                }
+                AuthOutcome {
+                    tag: crate::auth::AuthDecisionTag::Allow,
+                    read_only: read_only_code(grant.read_only),
+                    provision: grant.provision,
+                }
+            }
+        }
+    }
 }
 
 impl PluginVtable {
@@ -141,6 +207,7 @@ impl PluginVtable {
             plugin_version: T::version,
             pgdog_plugin_api_version: T::plugin_api_version,
             logging_init: T::logging_init,
+            authenticate: T::authenticate_raw,
         }
     }
 
@@ -219,5 +286,32 @@ impl PluginVtable {
 
     pub fn logging_init(&self, config: Config<'_>) {
         (self.logging_init)(config)
+    }
+
+    /// Authenticate a client. `on_field` is invoked with each grant/deny string
+    /// the plugin reports (borrowed for the duration of the call); the caller
+    /// copies what it needs into owned storage.
+    pub fn authenticate<F: FnMut(AuthField, &str)>(
+        &self,
+        context: AuthContext<'_>,
+        mut on_field: F,
+    ) -> AuthOutcome {
+        extern "C-unwind" fn trampoline<F: FnMut(AuthField, &str)>(
+            ctx: *mut c_void,
+            field: AuthField,
+            value: PdStr<'_>,
+        ) {
+            // SAFETY: `ctx` is the `&mut F` passed below. The plugin only calls
+            // this synchronously, on this thread, before `authenticate`
+            // returns, so the borrow is live and unaliased.
+            let on_field = unsafe { &mut *(ctx as *mut F) };
+            on_field(field, &value);
+        }
+
+        (self.authenticate)(
+            context,
+            &mut on_field as *mut F as *mut c_void,
+            trampoline::<F>,
+        )
     }
 }
