@@ -952,6 +952,12 @@ impl MissedRows {
         self.insert > 0 || self.delete > 0 || self.update > 0
     }
 
+    /// Missed-row counts as `(insert, update, delete)`.
+    #[allow(dead_code)]
+    pub(crate) fn counts(&self) -> (usize, usize, usize) {
+        (self.insert, self.update, self.delete)
+    }
+
     /// Count a direct-to-shard DML that touched 0 rows, keyed by command tag.
     pub(crate) fn record(&mut self, tag: &str) {
         match tag {

@@ -253,18 +253,15 @@ impl Listener {
     }
 
     async fn handle_command(&mut self, command: Command) -> Result<(), Error> {
-        let errored = self.shared.lock().error.is_some();
+        if self.shared.lock().error.is_some() {
+            return Ok(());
+        }
 
         match command {
             Command::Execute {
                 messages,
                 is_direct,
             } => {
-                // If any connection has already reported and error in the shared state,
-                // we do not need to enqueue the command as postgres will ignore the command.
-                if errored {
-                    return Ok(());
-                }
                 // If our command fails to be executed, we latch the error to the shared state.
                 // we also wake up all the sync point and resolve all the sync point waiters to
                 // resolve with the error.
@@ -280,13 +277,11 @@ impl Listener {
                 kind,
                 done,
             } => {
-                if errored {
-                    let _ = done.send(());
-                    return Ok(());
-                }
                 if let Err(err) = self.write(&messages).await {
                     self.latch_error(err);
-                    let _ = done.send(());
+                    // Drop the sender (do not send): rx errors, so resolve_sync_point
+                    // surfaces the latched error instead of a false Ok.
+                    drop(done);
                     self.wake_all();
                     return Err(Error::PipelineClosed);
                 }
@@ -305,12 +300,9 @@ impl Listener {
                     .queue
                     .iter()
                     .any(|op| matches!(op, OpSyncPoint::DirectDml { .. }));
-                if errored || !has_dml {
+                if !has_dml {
                     let _ = done.send(());
                 } else {
-                    // At most one drain is outstanding (issued one-at-a-time by
-                    // commit()). Overwriting would drop a prior sender, which
-                    // surfaces as an error on its receiver rather than a hang.
                     self.drain_waiter = Some(done);
                 }
             }
@@ -343,10 +335,10 @@ impl Listener {
                 } else {
                     false
                 };
-                if resolved {
-                    if let Some(OpSyncPoint::ParseAcks { done, .. }) = self.queue.pop_front() {
-                        let _ = done.send(());
-                    }
+                if resolved
+                    && let Some(OpSyncPoint::ParseAcks { done, .. }) = self.queue.pop_front()
+                {
+                    let _ = done.send(());
                 }
             }
             // BindComplete: nothing to account for.
@@ -522,5 +514,187 @@ mod test {
             "unexpected error: {err:?}"
         );
         assert!(conn.take_error().is_none());
+    }
+
+    #[tokio::test]
+    async fn execute_runtime_error_latches_and_does_not_block() {
+        use std::time::Duration;
+        use tokio::time::timeout;
+
+        let server = test_server().await;
+        let conn = PipelinedConnection::new(server).unwrap();
+
+        // Valid prepare (succeeds), then a fire-and-forget execute that errors
+        // only at execution time: division by zero. The ErrorResponse arrives
+        // asynchronously as 'E'.
+        conn.prepare(&[Parse::named("__pipe_div", "SELECT 1 / $1::int")], false)
+            .await
+            .unwrap();
+        conn.execute(
+            &Bind::new_params("__pipe_div", &[Parameter::new(b"0")]),
+            false,
+        )
+        .await
+        .unwrap();
+
+        // Barrier that observes the error. Two benign races:
+        //  - sync point queued before 'E': wake_all drops its `done`, the sync
+        //    resolves as Err(PgError).
+        //  - 'E' latched first: the sync hits the `errored` branch and returns
+        //    Ok, leaving the error latched.
+        // Either way the error is observable; it is never lost.
+        let barrier = conn.sync_and_drain().await;
+        assert!(
+            barrier.is_err() || conn.take_error().is_some(),
+            "error was neither surfaced nor latched: {barrier:?}"
+        );
+
+        // Future calls must not block. Depending on the race the connection is
+        // either still errored (commands short-circuit) or already recovered by
+        // the barrier's Sync (commands run again); either way each call must
+        // resolve promptly. A hang (queue never drained, `done` never resolved)
+        // would elapse the timeout. The Ok/Err of each call is irrelevant here.
+        for _ in 0..3 {
+            let _ = timeout(
+                Duration::from_secs(5),
+                conn.execute(
+                    &Bind::new_params("__pipe_div", &[Parameter::new(b"1")]),
+                    false,
+                ),
+            )
+            .await
+            .expect("execute blocked after error");
+        }
+        let _ = timeout(Duration::from_secs(5), conn.sync_and_drain())
+            .await
+            .expect("sync_and_drain blocked after error");
+    }
+
+    #[tokio::test]
+    async fn errored_connection_drain_acks_returns_error() {
+        use std::time::Duration;
+        use tokio::time::sleep;
+
+        let server = test_server().await;
+        let conn = PipelinedConnection::new(server).unwrap();
+
+        // Fire-and-forget DML that fails at execution time (division by zero).
+        conn.prepare(&[Parse::named("__drain_div", "SELECT 1 / $1::int")], false)
+            .await
+            .unwrap();
+        conn.execute(
+            &Bind::new_params("__drain_div", &[Parameter::new(b"0")]),
+            true,
+        )
+        .await
+        .unwrap();
+
+        // Let the listener read the ErrorResponse and latch it, so the following
+        // drain_acks hits the `errored` branch (the path that used to send `done`
+        // and return a false Ok, swallowing the error at commit time).
+        sleep(Duration::from_millis(300)).await;
+
+        // drain_acks must surface the latched error, not report a clean drain.
+        // This mirrors commit()'s phase 1 `?`, which aborts before any Sync.
+        let err = conn.drain_acks().await.unwrap_err();
+        assert!(
+            matches!(err, Error::PgError(_)),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn direct_dml_zero_rows_counts_missed() {
+        let server = test_server().await;
+        let conn = PipelinedConnection::new(server).unwrap();
+
+        // Scratch table with one row (id = 1).
+        conn.prepare(
+            &[Parse::named(
+                "__miss_create",
+                "CREATE TEMP TABLE __miss (id bigint)",
+            )],
+            false,
+        )
+        .await
+        .unwrap();
+        conn.execute(&Bind::new_statement("__miss_create"), false)
+            .await
+            .unwrap();
+        conn.prepare(
+            &[Parse::named(
+                "__miss_seed",
+                "INSERT INTO __miss (id) VALUES (1)",
+            )],
+            false,
+        )
+        .await
+        .unwrap();
+        conn.execute(&Bind::new_statement("__miss_seed"), false)
+            .await
+            .unwrap();
+
+        // Direct DELETE matching nothing -> "DELETE 0" -> counted.
+        conn.prepare(
+            &[Parse::named(
+                "__miss_del",
+                "DELETE FROM __miss WHERE id = $1",
+            )],
+            false,
+        )
+        .await
+        .unwrap();
+        conn.execute(
+            &Bind::new_params("__miss_del", &[Parameter::new(b"999")]),
+            true,
+        )
+        .await
+        .unwrap();
+
+        // Direct UPDATE matching nothing -> "UPDATE 0" -> counted.
+        conn.prepare(
+            &[Parse::named(
+                "__miss_upd",
+                "UPDATE __miss SET id = id WHERE id = $1",
+            )],
+            false,
+        )
+        .await
+        .unwrap();
+        conn.execute(
+            &Bind::new_params("__miss_upd", &[Parameter::new(b"999")]),
+            true,
+        )
+        .await
+        .unwrap();
+
+        // Negative control 1: same 0-row DELETE but not direct -> not counted.
+        conn.execute(
+            &Bind::new_params("__miss_del", &[Parameter::new(b"999")]),
+            false,
+        )
+        .await
+        .unwrap();
+
+        // Negative control 2: direct DELETE that hits the seeded row (1 row) ->
+        // rows != 0 -> not counted.
+        conn.execute(
+            &Bind::new_params("__miss_del", &[Parameter::new(b"1")]),
+            true,
+        )
+        .await
+        .unwrap();
+
+        // Drain acks so every 'C' (and thus every record()) is processed before
+        // we read the stats, then commit.
+        conn.drain_acks().await.unwrap();
+        conn.sync_and_drain().await.unwrap();
+        assert!(conn.take_error().is_none());
+
+        let missed = conn.take_missed_rows();
+        // (insert, update, delete): one 0-row direct UPDATE and one 0-row direct
+        // DELETE counted; the non-direct DELETE and the 1-row DELETE are not.
+        // Insert never missed here, so it must stay 0 (no spurious counter).
+        assert_eq!(missed.counts(), (0, 1, 1));
     }
 }
