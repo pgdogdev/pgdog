@@ -496,24 +496,12 @@ impl Client {
                 }
 
                 buffer = self.buffer(client_state) => {
-                    let mut event = buffer?;
+                    let event = buffer?;
 
                     // Only send requests to the backend if they are complete.
                     if self.client_request.is_complete()
                         && !self.client_request.messages.is_empty() {
-                            // Hold the request at the door while the database is
-                            // in maintenance mode, before it reaches the query
-                            // engine. If the client gives up and disconnects
-                            // while we're paused, drop the request instead of
-                            // running it once maintenance lifts.
-                            match self.wait_for_maintenance(&mut query_engine).await? {
-                                MaintenanceWait::Proceed => {
-                                    self.client_messages(&mut query_engine).await?;
-                                }
-                                MaintenanceWait::Disconnected => {
-                                    event = BufferEvent::DisconnectAbrupt;
-                                }
-                            }
+                            self.client_messages(&mut query_engine).await?;
                         }
 
                     match event {
@@ -540,52 +528,6 @@ impl Client {
         self.transaction = context.transaction();
 
         Ok(())
-    }
-
-    /// Wait out maintenance mode before a buffered request reaches the backend.
-    ///
-    /// We only park between transactions; a transaction already in flight is
-    /// allowed to finish. While parked we keep watching the client socket, so a
-    /// client that gives up and disconnects during a long maintenance window
-    /// never has its query dispatched once maintenance lifts.
-    async fn wait_for_maintenance(
-        &mut self,
-        query_engine: &mut QueryEngine,
-    ) -> Result<MaintenanceWait, Error> {
-        if self.in_transaction() || self.admin {
-            return Ok(MaintenanceWait::Proceed);
-        }
-
-        let Some(waiter) = maintenance_mode::waiter(&self.database) else {
-            return Ok(MaintenanceWait::Proceed);
-        };
-
-        let saved_state = query_engine.get_state();
-        query_engine.set_state(State::Waiting);
-
-        // `Pin<Box<_>>` is `Unpin`, so `&mut waiter` polls the same future
-        // across loop iterations.
-        let mut waiter = waiter.into_future();
-        let outcome = loop {
-            select! {
-                _ = &mut waiter => break MaintenanceWait::Proceed,
-
-                // A client waiting for its response shouldn't be sending
-                // anything, so a readable socket means either a disconnect
-                // (EOF/error) or pipelined traffic. Pipelined bytes stay
-                // buffered for the next request; only a disconnect ends the
-                // wait early.
-                result = self.stream_buffer.read_more(&mut self.stream) => {
-                    if result.is_err() {
-                        break MaintenanceWait::Disconnected;
-                    }
-                }
-            }
-        };
-
-        query_engine.set_state(saved_state);
-
-        Ok(outcome)
     }
 
     /// Handle client messages.
@@ -704,6 +646,38 @@ impl Client {
             );
         }
 
+        // Hold a complete request at the door while the database is in
+        // maintenance mode. buffer() already owns the client socket, so we
+        // watch it for a disconnect and drop the request instead of
+        // dispatching it once maintenance lifts. Only gate between
+        // transactions; a transaction already in flight is allowed to finish.
+        // Admin connections are never gated.
+        if !self.in_transaction()
+            && !self.admin
+            && let Some(waiter) = maintenance_mode::waiter(&self.database)
+        {
+            // `Pin<Box<_>>` is `Unpin`, so `&mut waiter` polls the same
+            // future across iterations.
+            let mut waiter = waiter.into_future();
+            loop {
+                select! {
+                    _ = &mut waiter => break,
+
+                    // A client waiting for its response shouldn't be sending
+                    // anything, so a readable socket means either a disconnect
+                    // (EOF/error) or pipelined traffic. Pipelined bytes stay
+                    // buffered for the next request; only a disconnect ends the
+                    // wait early.
+                    result = self.stream_buffer.read_more(&mut self.stream) => {
+                        if result.is_err() {
+                            self.client_request.clear();
+                            return Ok(BufferEvent::DisconnectAbrupt);
+                        }
+                    }
+                }
+            }
+        }
+
         Ok(BufferEvent::HaveRequest)
     }
 
@@ -761,13 +735,4 @@ enum BufferEvent {
     DisconnectGraceful,
     DisconnectAbrupt,
     HaveRequest,
-}
-
-/// Outcome of waiting for a database to leave maintenance mode.
-#[derive(Copy, Clone, PartialEq, Debug)]
-enum MaintenanceWait {
-    /// Maintenance isn't on (or has lifted): dispatch the request.
-    Proceed,
-    /// The client disconnected while paused: drop the request.
-    Disconnected,
 }
