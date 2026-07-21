@@ -180,13 +180,13 @@ pub(crate) fn add(user: ConfigUser) -> Result<AuthResult, Error> {
     let existing = config.users.find(&user);
 
     // User already exists in users.toml.
-    if let Some(mut existing) = existing {
+    let result = if let Some(mut existing) = existing {
         // Password hasn't been set yet.
         if existing.password.is_none() {
             existing.password = user.password.clone();
             add_user(existing)?;
             reload_from_existing()?;
-            Ok(AuthResult::Ok)
+            AuthResult::Ok
         } else if existing
             .password
             .as_deref()
@@ -196,21 +196,73 @@ pub(crate) fn add(user: ConfigUser) -> Result<AuthResult, Error> {
             })
         {
             // Passwords match.
-            Ok(AuthResult::Ok)
+            AuthResult::Ok
         } else if config.config.general.passthrough_auth.allows_change() {
             // Passwords don't match but we can change it.
             existing.password = user.password.clone();
-            add_user(user)?;
+            add_user(user.clone())?;
             reload_from_existing()?;
-            Ok(AuthResult::Ok)
+            AuthResult::Ok
         } else {
-            Ok(AuthResult::NoPassthroughPasswordChange)
+            AuthResult::NoPassthroughPasswordChange
         }
     } else {
-        add_user(user)?;
+        add_user(user.clone())?;
         reload_from_existing()?;
-        Ok(AuthResult::Ok)
+        AuthResult::Ok
+    };
+
+    // If the source db is a mirroring source, propagate the same credentials to
+    // each destination so `from_config` can match users on both sides and
+    // provision the mirror pool. Only runs on successful source-side auth.
+    if result.is_ok() {
+        propagate_to_mirror_destinations(&user)?;
     }
+    Ok(result)
+}
+
+/// Add a user record for each mirror destination that lacks one, so
+/// `from_config`'s name-based `source_users == dest_users` check can pass and
+/// provision the mirror pool. Never overwrites an existing destination record
+/// — the operator may deliberately configure per-side credentials — and only
+/// grace-fills entries whose password was left unset (matching the source-side
+/// behaviour of `add()`). Idempotent and safe to call on every successful
+/// passthrough add.
+fn propagate_to_mirror_destinations(source: &ConfigUser) -> Result<(), Error> {
+    let config = config();
+    let mut writes = vec![];
+    for mirror in &config.config.mirroring {
+        if mirror.source_db != source.database {
+            continue;
+        }
+        let mut dest = source.clone();
+        dest.database = mirror.destination_db.clone();
+        match config.users.find(&dest) {
+            None => writes.push(dest),
+            Some(existing) if existing.password.is_none() => writes.push(dest),
+            Some(_) => {}
+        }
+    }
+
+    if writes.is_empty() {
+        return Ok(());
+    }
+
+    debug!(
+        r#"propagating passthrough user "{}" to {} mirror destination(s)"#,
+        source.name,
+        writes.len(),
+    );
+
+    {
+        let _lock = lock();
+        let mut new_config = (*config).clone();
+        for w in writes {
+            new_config.users.add_or_replace(w);
+        }
+        set(new_config)?;
+    }
+    reload_from_existing()
 }
 
 /// Swap database configs between source and destination.
@@ -896,6 +948,197 @@ mod tests {
         let config = crate::config::config();
         let found = config.users.find(&make_user("dave", None));
         assert_eq!(found.unwrap().password, Some("new_pass".to_string()));
+    }
+
+    fn setup_config_with_mirror(
+        passthrough_auth: crate::config::PassthroughAuth,
+        users: Vec<ConfigUser>,
+    ) {
+        let _lock = lock();
+        let config = Config {
+            databases: vec![
+                Database {
+                    name: "db1".to_string(),
+                    host: "localhost".to_string(),
+                    port: 5432,
+                    role: Role::Primary,
+                    ..Default::default()
+                },
+                Database {
+                    name: "db1_mirror".to_string(),
+                    host: "localhost".to_string(),
+                    port: 5433,
+                    role: Role::Primary,
+                    ..Default::default()
+                },
+            ],
+            mirroring: vec![crate::config::Mirroring {
+                source_db: "db1".to_string(),
+                destination_db: "db1_mirror".to_string(),
+                ..Default::default()
+            }],
+            general: General {
+                passthrough_auth,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let cu = ConfigAndUsers {
+            config,
+            users: crate::config::Users {
+                users,
+                ..Default::default()
+            },
+            config_path: std::path::PathBuf::new(),
+            users_path: std::path::PathBuf::new(),
+            ..Default::default()
+        };
+
+        crate::config::set(cu).expect("set config");
+        let databases = from_config(&crate::config::config());
+        replace_databases(databases, false).expect("replace databases");
+    }
+
+    fn mirror_user(name: &str, password: Option<&str>) -> ConfigUser {
+        ConfigUser {
+            name: name.to_string(),
+            database: "db1_mirror".to_string(),
+            password: password.map(|p| p.to_string()),
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn test_passthrough_expands_to_mirror_destination() {
+        setup_config_with_mirror(crate::config::PassthroughAuth::EnabledPlain, vec![]);
+
+        let result = add(make_user("erin", Some("secret"))).expect("add");
+        assert!(result.is_ok());
+
+        let config = crate::config::config();
+
+        let src = config.users.find(&make_user("erin", None)).expect("src");
+        assert_eq!(src.password.as_deref(), Some("secret"));
+
+        let dst = config.users.find(&mirror_user("erin", None)).expect("dst");
+        assert_eq!(dst.password.as_deref(), Some("secret"));
+
+        // With users present on both sides, the mirror cluster is now live.
+        assert!(
+            databases()
+                .mirrors(("erin", "db1"))
+                .unwrap()
+                .is_some_and(|m| m.iter().any(|c| c.name() == "db1_mirror")),
+            "mirror destination pool should be provisioned"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_passthrough_reuses_matching_mirror_password() {
+        setup_config_with_mirror(
+            crate::config::PassthroughAuth::EnabledPlain,
+            vec![
+                make_user("frank", Some("pw")),
+                mirror_user("frank", Some("pw")),
+            ],
+        );
+
+        let before = crate::config::config().users.users.len();
+        add(make_user("frank", Some("pw"))).expect("add");
+        let after = crate::config::config().users.users.len();
+        assert_eq!(
+            before, after,
+            "matching credentials should not touch config"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_passthrough_skips_mirror_with_diverged_password() {
+        // Mirror already has a different password; without allow_change, we mustn't
+        // overwrite the mirror's record just because the source auth succeeded.
+        setup_config_with_mirror(
+            crate::config::PassthroughAuth::EnabledPlain,
+            vec![mirror_user("grace", Some("mirror_pw"))],
+        );
+
+        add(make_user("grace", Some("client_pw"))).expect("add");
+
+        let config = crate::config::config();
+        assert_eq!(
+            config
+                .users
+                .find(&make_user("grace", None))
+                .and_then(|u| u.password),
+            Some("client_pw".to_string()),
+            "source user is added with client's password"
+        );
+        assert_eq!(
+            config
+                .users
+                .find(&mirror_user("grace", None))
+                .and_then(|u| u.password),
+            Some("mirror_pw".to_string()),
+            "mirror record is preserved when password change is disallowed"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_passthrough_preserves_mirror_password_under_allow_change() {
+        // Even when the source is rotated under enabled_allow_change, the mirror
+        // record is left alone. The from_config invariant only requires a name
+        // match, and the operator may have deliberately configured different
+        // credentials per side; propagation must not overwrite that.
+        setup_config_with_mirror(
+            crate::config::PassthroughAuth::EnabledPlainAllowChange,
+            vec![
+                make_user("henry", Some("old")),
+                mirror_user("henry", Some("mirror_pw")),
+            ],
+        );
+
+        add(make_user("henry", Some("new"))).expect("add");
+
+        let config = crate::config::config();
+        assert_eq!(
+            config
+                .users
+                .find(&make_user("henry", None))
+                .and_then(|u| u.password),
+            Some("new".to_string()),
+            "source rotates as usual",
+        );
+        assert_eq!(
+            config
+                .users
+                .find(&mirror_user("henry", None))
+                .and_then(|u| u.password),
+            Some("mirror_pw".to_string()),
+            "mirror record is left alone",
+        );
+    }
+
+    #[tokio::test]
+    async fn test_passthrough_fills_mirror_placeholder_password() {
+        // If the operator wrote a mirror-side [[users]] entry with no password
+        // (e.g. bootstrapped by tooling and waiting to be filled in), the first
+        // passthrough add grace-fills it. Mirrors the source-side add() behaviour
+        // for entries whose password is None.
+        setup_config_with_mirror(
+            crate::config::PassthroughAuth::EnabledPlain,
+            vec![mirror_user("ivan", None)],
+        );
+
+        add(make_user("ivan", Some("secret"))).expect("add");
+
+        let config = crate::config::config();
+        assert_eq!(
+            config
+                .users
+                .find(&mirror_user("ivan", None))
+                .and_then(|u| u.password),
+            Some("secret".to_string()),
+        );
     }
 
     #[test]

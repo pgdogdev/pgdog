@@ -1,0 +1,26 @@
+[general]
+mirror_exposure = 1.0
+openmetrics_port = 9091
+passthrough_auth = "enabled_plain"
+query_parser = "on"
+
+[rewrite]
+enabled = false
+shard_key = "ignore"
+split_inserts = "error"
+
+[[databases]]
+name = "pgdog"
+host = "127.0.0.1"
+
+[[databases]]
+name = "pgdog_mirror"
+host = "127.0.0.1"
+database_name = "pgdog1"
+
+[[mirroring]]
+source_db = "pgdog"
+destination_db = "pgdog_mirror"
+
+[admin]
+password = "pgdog"
