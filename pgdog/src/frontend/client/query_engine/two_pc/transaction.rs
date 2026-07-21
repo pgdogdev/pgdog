@@ -2,6 +2,8 @@ use rand::{Rng, rng};
 use serde::{Deserialize, Serialize};
 use std::{fmt::Display, str::FromStr};
 
+use crate::util::instance_id;
+
 #[derive(Debug, Clone, Copy, PartialEq, Hash, Eq, Serialize, Deserialize)]
 pub struct TwoPcTransaction(usize);
 
@@ -17,7 +19,7 @@ impl TwoPcTransaction {
 
 impl Display for TwoPcTransaction {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{PREFIX}{}", self.0)
+        write!(f, "{PREFIX}_{}_{}", instance_id(), self.0)
     }
 }
 

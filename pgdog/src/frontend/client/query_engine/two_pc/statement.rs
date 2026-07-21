@@ -1,15 +1,17 @@
 //! Per-shard two-phase commit transaction names and control statements.
 
+use crate::frontend::client::query_engine::two_pc::TwoPcTransaction;
+
 use super::TwoPcPhase;
 
 /// Prepared transaction name for a coordinator transaction on one shard.
-pub fn shard_name(transaction: &str, shard: usize) -> String {
+pub fn shard_name(transaction: TwoPcTransaction, shard: usize) -> String {
     format!("{transaction}_{shard}")
 }
 
 /// Build `PREPARE TRANSACTION`, `COMMIT PREPARED`, or `ROLLBACK PREPARED`
 /// for a shard participant.
-pub fn phase_control(transaction: &str, shard: usize, phase: TwoPcPhase) -> String {
+pub fn phase_control(transaction: TwoPcTransaction, shard: usize, phase: TwoPcPhase) -> String {
     let name = shard_name(transaction, shard);
 
     match phase {

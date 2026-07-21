@@ -58,7 +58,7 @@ impl TwoPc {
     pub(super) async fn phase_one(&mut self, cluster: &Arc<User>) -> Result<TwoPcGuard, Error> {
         let transaction = self.transaction();
         self.manager
-            .transaction_state(&transaction, cluster, TwoPcPhase::Phase1)
+            .transaction_state(transaction, cluster, TwoPcPhase::Phase1)
             .await
     }
 
@@ -68,7 +68,7 @@ impl TwoPc {
     pub(super) async fn phase_two(&mut self, cluster: &Arc<User>) -> Result<TwoPcGuard, Error> {
         let transaction = self.transaction();
         self.manager
-            .transaction_state(&transaction, cluster, TwoPcPhase::Phase2)
+            .transaction_state(transaction, cluster, TwoPcPhase::Phase2)
             .await
     }
 
