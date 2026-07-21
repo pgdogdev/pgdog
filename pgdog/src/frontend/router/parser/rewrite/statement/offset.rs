@@ -66,7 +66,9 @@ impl OffsetPlan {
                     let fmt = bind.parameter_format(idx)?;
                     let param = match fmt {
                         Format::Binary => Parameter::new(&(new_limit as i64).to_be_bytes()),
-                        Format::Text => Parameter::new(new_limit.to_string().as_bytes()),
+                        Format::Text => {
+                            Parameter::new(itoa::Buffer::new().format(new_limit).as_bytes())
+                        }
                     };
                     bind.set_param(idx, param);
                 }

@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 
 /// Memory settings manage buffer allocations that PgDog uses during network I/O operations and task execution.
 ///
-/// https://docs.pgdog.dev/configuration/pgdog.toml/memory/
+/// <https://docs.pgdog.dev/configuration/pgdog.toml/memory/>
 #[derive(JsonSchema, Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Memory {
@@ -11,7 +11,7 @@ pub struct Memory {
     ///
     /// _Default:_ `4096`
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/memory/#net_buffer
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/memory/#net_buffer>
     #[serde(default = "default_net_buffer")]
     pub net_buffer: usize,
 
@@ -19,7 +19,7 @@ pub struct Memory {
     ///
     /// _Default:_ `4096`
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/memory/#message_buffer
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/memory/#message_buffer>
     #[serde(default = "default_message_buffer")]
     pub message_buffer: usize,
 
@@ -27,7 +27,7 @@ pub struct Memory {
     ///
     /// _Default:_ `2097152`
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/memory/#stack_size
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/memory/#stack_size>
     #[serde(default = "default_stack_size")]
     pub stack_size: usize,
 }

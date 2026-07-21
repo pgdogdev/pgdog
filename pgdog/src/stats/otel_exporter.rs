@@ -10,7 +10,7 @@ use tracing::{info, warn};
 
 use super::otel;
 use super::{Clients, Listeners, MirrorStatsMetrics, Pools, QueryCache, TwoPc};
-use crate::config::config;
+use crate::{config::config, tasks};
 
 /// Maximum number of metrics per OTLP request to stay under endpoint payload limits.
 const BATCH_SIZE: usize = 10;
@@ -32,8 +32,13 @@ pub async fn run() {
         interval.as_secs_f64(),
     );
 
+    let shutdown = tasks::shutdown_signal();
+
     loop {
-        sleep(interval).await;
+        tokio::select! {
+            _ = sleep(interval) => {}
+            _ = shutdown.cancelled() => break,
+        }
 
         let clients = Clients::load();
         let pools = Pools::load().into_metrics();

@@ -5,7 +5,7 @@
   "type": "object",
   "properties": {
     "admin": {
-      "description": "Admin database settings control access to the [admin](https://docs.pgdog.dev/administration/) database which contains real time statistics about internal operations of PgDog.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/admin/",
+      "description": "Admin database settings control access to the [admin](https://docs.pgdog.dev/administration/) database which contains real time statistics about internal operations of PgDog.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/admin/>",
       "$ref": "#/$defs/Admin",
       "default": {
         "name": "admin",
@@ -14,7 +14,7 @@
       }
     },
     "databases": {
-      "description": "Database settings configure which databases PgDog is managing. This is a TOML list of hosts, ports, and other settings like database roles (primary or replica).\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/databases/",
+      "description": "Database settings configure which databases PgDog is managing. This is a TOML list of hosts, ports, and other settings like database roles (primary or replica).\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/databases/>",
       "type": "array",
       "default": [],
       "items": {
@@ -22,7 +22,7 @@
       }
     },
     "general": {
-      "description": "General settings are relevant to the operations of the pooler itself, or apply to all database pools.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/",
+      "description": "General settings are relevant to the operations of the pooler itself, or apply to all database pools.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/>",
       "$ref": "#/$defs/General",
       "default": {
         "auth_type": "scram",
@@ -127,7 +127,7 @@
       }
     },
     "memory": {
-      "description": "Memory settings control buffer sizes used by PgDog for network I/O and task execution.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/memory/",
+      "description": "Memory settings control buffer sizes used by PgDog for network I/O and task execution.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/memory/>",
       "$ref": "#/$defs/Memory",
       "default": {
         "message_buffer": 4096,
@@ -136,7 +136,7 @@
       }
     },
     "mirroring": {
-      "description": "[Mirroring](https://docs.pgdog.dev/features/mirroring/) settings configure traffic mirroring between two databases. When enabled, query traffic is copied from the source database to the destination database, in real time.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/mirroring/",
+      "description": "[Mirroring](https://docs.pgdog.dev/features/mirroring/) settings configure traffic mirroring between two databases. When enabled, query traffic is copied from the source database to the destination database, in real time.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/mirroring/>",
       "type": "array",
       "default": [],
       "items": {
@@ -155,7 +155,7 @@
       ]
     },
     "omnisharded_tables": {
-      "description": "Omnisharded tables are tables that contain the same data on all shards. This is useful for storing relatively static metadata used in joins or data that doesn't fit the sharding schema of the database, e.g., list of countries, global settings, list of blocked IPs, etc.\n\n**Note:** Unless explicitly configured as sharded tables, all tables default to omnisharded status, which makes configuration simpler, and doesn't require explicitly enumerating all tables in `pgdog.toml`.\n\nhttps://docs.pgdog.dev/features/sharding/omnishards/",
+      "description": "Omnisharded tables are tables that contain the same data on all shards. This is useful for storing relatively static metadata used in joins or data that doesn't fit the sharding schema of the database, e.g., list of countries, global settings, list of blocked IPs, etc.\n\n**Note:** Unless explicitly configured as sharded tables, all tables default to omnisharded status, which makes configuration simpler, and doesn't require explicitly enumerating all tables in `pgdog.toml`.\n\n<https://docs.pgdog.dev/features/sharding/omnishards/>",
       "type": "array",
       "default": [],
       "items": {
@@ -163,7 +163,7 @@
       }
     },
     "otel": {
-      "description": "OpenTelemetry push exporter settings.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/otel/",
+      "description": "OpenTelemetry push exporter settings.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/otel/>",
       "$ref": "#/$defs/Otel",
       "default": {
         "datadog_api_key": null,
@@ -174,7 +174,7 @@
       }
     },
     "plugins": {
-      "description": "[Plugins](https://docs.pgdog.dev/features/plugins/) are dynamically loaded at PgDog startup. These settings control which plugins are loaded.\n\n**Note:** Plugins can only be configured at PgDog startup. They cannot be changed after the process is running.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/plugins/",
+      "description": "[Plugins](https://docs.pgdog.dev/features/plugins/) are dynamically loaded at PgDog startup. These settings control which plugins are loaded.\n\n**Note:** Plugins can only be configured at PgDog startup. They cannot be changed after the process is running.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/plugins/>",
       "type": "array",
       "default": [],
       "items": {
@@ -209,7 +209,7 @@
       }
     },
     "rewrite": {
-      "description": "Controls PgDog's automatic SQL rewrites for sharded databases. It affects sharding key updates and multi-tuple inserts.\n\n**Note:** Consider enabling two-phase commit when either feature is set to `rewrite`. Without it, rewrites are committed shard-by-shard and can leave partial changes if a transaction fails.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/rewrite/",
+      "description": "Controls PgDog's automatic SQL rewrites for sharded databases. It affects sharding key updates and multi-tuple inserts.\n\n**Note:** Consider enabling two-phase commit when either feature is set to `rewrite`. Without it, rewrites are committed shard-by-shard and can leave partial changes if a transaction fails.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/rewrite/>",
       "$ref": "#/$defs/Rewrite",
       "default": {
         "enabled": false,
@@ -227,7 +227,7 @@
       }
     },
     "sharded_schemas": {
-      "description": "[Schema-based sharding](https://docs.pgdog.dev/features/sharding/sharding-functions/#schema-based-sharding) places data from tables in different Postgres schemas on their own shards.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/sharded_schemas/",
+      "description": "[Schema-based sharding](https://docs.pgdog.dev/features/sharding/sharding-functions/#schema-based-sharding) places data from tables in different Postgres schemas on their own shards.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/sharded_schemas/>",
       "type": "array",
       "default": [],
       "items": {
@@ -235,7 +235,7 @@
       }
     },
     "sharded_tables": {
-      "description": "To detect and route queries with sharding keys, PgDog expects the sharded column to be specified in the configuration.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/",
+      "description": "To detect and route queries with sharding keys, PgDog expects the sharded column to be specified in the configuration.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/>",
       "type": "array",
       "default": [],
       "items": {
@@ -243,7 +243,7 @@
       }
     },
     "tcp": {
-      "description": "PgDog speaks the Postgres protocol which, underneath, uses TCP. Optimal TCP settings are necessary to quickly recover from database incidents.\n\n**Note:** Not all networks support or play well with TCP keep-alives. If you see an increased number of dropped connections after enabling these settings, you may have to disable them.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/network/",
+      "description": "PgDog speaks the Postgres protocol which, underneath, uses TCP. Optimal TCP settings are necessary to quickly recover from database incidents.\n\n**Note:** Not all networks support or play well with TCP keep-alives. If you see an increased number of dropped connections after enabling these settings, you may have to disable them.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/network/>",
       "$ref": "#/$defs/Tcp",
       "default": {
         "congestion_control": null,
@@ -277,21 +277,21 @@
   "additionalProperties": false,
   "$defs": {
     "Admin": {
-      "description": "Admin database settings control access to the [admin](https://docs.pgdog.dev/administration/) database which contains real time statistics about internal operations of PgDog.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/admin/",
+      "description": "Admin database settings control access to the [admin](https://docs.pgdog.dev/administration/) database which contains real time statistics about internal operations of PgDog.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/admin/>",
       "type": "object",
       "properties": {
         "name": {
-          "description": "Admin database name.\n\n_Default:_ `admin`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/admin/#name",
+          "description": "Admin database name.\n\n_Default:_ `admin`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/admin/#name>",
           "type": "string",
           "default": "admin"
         },
         "password": {
-          "description": "Password the user needs to provide when connecting to the admin database. By default, this is randomly generated so the admin database is locked out unless this value is set.\n\n**Note:** If this value is not set, admin database access will be restricted.\n\n_Default:_ random\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/admin/#password",
+          "description": "Password the user needs to provide when connecting to the admin database. By default, this is randomly generated so the admin database is locked out unless this value is set.\n\n**Note:** If this value is not set, admin database access will be restricted.\n\n_Default:_ random\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/admin/#password>",
           "type": "string",
           "default": "_autogenerated_password_"
         },
         "user": {
-          "description": "User allowed to connect to the admin database. This user doesn't have to be configured in `users.toml`.\n\n_Default:_ `admin`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/admin/#user",
+          "description": "User allowed to connect to the admin database. This user doesn't have to be configured in `users.toml`.\n\n_Default:_ `admin`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/admin/#user>",
           "type": "string",
           "default": "admin"
         }
@@ -299,7 +299,7 @@
       "additionalProperties": false
     },
     "AuthType": {
-      "description": "authentication mechanism for client connections.\n\nSee [authentication](https://docs.pgdog.dev/features/authentication/).\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#auth_type",
+      "description": "authentication mechanism for client connections.\n\nSee [authentication](https://docs.pgdog.dev/features/authentication/).\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#auth_type>",
       "oneOf": [
         {
           "description": "MD5 password hashing; very quick but not secure.",
@@ -324,7 +324,7 @@
       ]
     },
     "ConnectionRecovery": {
-      "description": "controls if server connections are recovered or dropped if a client abruptly disconnects.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#connection_recovery",
+      "description": "controls if server connections are recovered or dropped if a client abruptly disconnects.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#connection_recovery>",
       "oneOf": [
         {
           "description": "Attempt to recover the connection by rolling back any open transaction and resynchronizing (default).",
@@ -344,7 +344,7 @@
       ]
     },
     "CopyFormat": {
-      "description": "Format used for `COPY` statements during resharding.\n\n**Note:** Text format is required when migrating from `INTEGER` to `BIGINT` primary keys during resharding.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#resharding_copy_format",
+      "description": "Format used for `COPY` statements during resharding.\n\n**Note:** Text format is required when migrating from `INTEGER` to `BIGINT` primary keys during resharding.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#resharding_copy_format>",
       "oneOf": [
         {
           "description": "PostgreSQL text format; required for `INTEGER` → `BIGINT` primary key migrations.",
@@ -374,7 +374,7 @@
       ]
     },
     "DataType": {
-      "description": "Data type of the sharding column.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/#data_type",
+      "description": "Data type of the sharding column.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/#data_type>",
       "oneOf": [
         {
           "description": "64-bit integer (default).",
@@ -399,22 +399,22 @@
       ]
     },
     "Database": {
-      "description": "Database settings configure which databases PgDog is managing. This is a TOML list of hosts, ports, and other settings like database roles (primary or replica).\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/databases/",
+      "description": "Database settings configure which databases PgDog is managing. This is a TOML list of hosts, ports, and other settings like database roles (primary or replica).\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/databases/>",
       "type": "object",
       "properties": {
         "database_name": {
-          "description": "Name of the PostgreSQL database on the server PgDog will connect to. If not set, this defaults to `name`.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/databases/#database_name",
+          "description": "Name of the PostgreSQL database on the server PgDog will connect to. If not set, this defaults to `name`.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/databases/#database_name>",
           "type": [
             "string",
             "null"
           ]
         },
         "host": {
-          "description": "IP address or DNS name of the machine where the PostgreSQL server is running.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/databases/#host",
+          "description": "IP address or DNS name of the machine where the PostgreSQL server is running.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/databases/#host>",
           "type": "string"
         },
         "idle_timeout": {
-          "description": "Overrides the `idle_timeout` setting. Idle server connections exceeding this timeout will be closed automatically.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/databases/#idle_timeout",
+          "description": "Overrides the `idle_timeout` setting. Idle server connections exceeding this timeout will be closed automatically.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/databases/#idle_timeout>",
           "type": [
             "integer",
             "null"
@@ -431,7 +431,7 @@
           "minimum": 0
         },
         "lock_timeout": {
-          "description": "This setting configures the `lock_timeout` connection parameter on all connections to Postgres for this database.\nAborts any statement that waits longer than the specified duration to acquire a lock.\nUnlike `statement_timeout`, this only counts time spent waiting for locks, not execution time.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/databases/#lock_timeout",
+          "description": "This setting configures the `lock_timeout` connection parameter on all connections to Postgres for this database.\nAborts any statement that waits longer than the specified duration to acquire a lock.\nUnlike `statement_timeout`, this only counts time spent waiting for locks, not execution time.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/databases/#lock_timeout>",
           "type": [
             "integer",
             "null"
@@ -440,7 +440,7 @@
           "minimum": 0
         },
         "min_pool_size": {
-          "description": "Overrides the `min_pool_size` setting. The connection pool will maintain at minimum this many connections.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/databases/#min_pool_size",
+          "description": "Overrides the `min_pool_size` setting. The connection pool will maintain at minimum this many connections.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/databases/#min_pool_size>",
           "type": [
             "integer",
             "null"
@@ -449,18 +449,18 @@
           "minimum": 0
         },
         "name": {
-          "description": "Name of your database. Clients that connect to PgDog will need to use this name to refer to the database. For multiple entries that are part of the same cluster, use the same value.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/databases/#name",
+          "description": "Name of your database. Clients that connect to PgDog will need to use this name to refer to the database. For multiple entries that are part of the same cluster, use the same value.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/databases/#name>",
           "type": "string"
         },
         "password": {
-          "description": "Password to use when creating backend connections to PostgreSQL. If not set, this defaults to `password` in users.toml.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/databases/#password",
+          "description": "Password to use when creating backend connections to PostgreSQL. If not set, this defaults to `password` in users.toml.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/databases/#password>",
           "type": [
             "string",
             "null"
           ]
         },
         "pool_size": {
-          "description": "Overrides the [`default_pool_size`](https://docs.pgdog.dev/configuration/pgdog.toml/general/#default_pool_size) setting. All connection pools for this database will open at most this many connections to Postgres.\n\n**Note:** We strongly recommend keeping this value well below the supported connections of the backend database(s) to allow connections for maintenance in high load scenarios.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/databases/#pool_size",
+          "description": "Overrides the [`default_pool_size`](https://docs.pgdog.dev/configuration/pgdog.toml/general/#default_pool_size) setting. All connection pools for this database will open at most this many connections to Postgres.\n\n**Note:** We strongly recommend keeping this value well below the supported connections of the backend database(s) to allow connections for maintenance in high load scenarios.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/databases/#pool_size>",
           "type": [
             "integer",
             "null"
@@ -469,7 +469,7 @@
           "minimum": 0
         },
         "pooler_mode": {
-          "description": "Overrides the `pooler_mode` setting. Connections to this database will use this connection pool mode.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/databases/#pooler_mode",
+          "description": "Overrides the `pooler_mode` setting. Connections to this database will use this connection pool mode.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/databases/#pooler_mode>",
           "anyOf": [
             {
               "$ref": "#/$defs/PoolerMode"
@@ -480,7 +480,7 @@
           ]
         },
         "port": {
-          "description": "The port PostgreSQL is running on. More often than not, this is going to be `5432`.\n\n_Default:_ `5432`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/databases/#port",
+          "description": "The port PostgreSQL is running on. More often than not, this is going to be `5432`.\n\n_Default:_ `5432`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/databases/#port>",
           "type": "integer",
           "format": "uint16",
           "default": 5432,
@@ -488,7 +488,7 @@
           "minimum": 0
         },
         "read_only": {
-          "description": "Sets the `default_transaction_read_only` connection parameter to `on` on all server connections to this database. Clients can still override it with `SET`.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/databases/#read_only",
+          "description": "Sets the `default_transaction_read_only` connection parameter to `on` on all server connections to this database. Clients can still override it with `SET`.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/databases/#read_only>",
           "type": [
             "boolean",
             "null"
@@ -500,12 +500,12 @@
           "default": false
         },
         "role": {
-          "description": "Type of role this host performs in your database cluster. This can be `primary` for primary databases that serve writes (and reads), `replica` for PostgreSQL replicas that can only serve reads, or `auto` to let PgDog decide.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/databases/#role",
+          "description": "Type of role this host performs in your database cluster. This can be `primary` for primary databases that serve writes (and reads), `replica` for PostgreSQL replicas that can only serve reads, or `auto` to let PgDog decide.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/databases/#role>",
           "$ref": "#/$defs/Role",
           "default": "primary"
         },
         "server_lifetime": {
-          "description": "Overrides the `server_lifetime` setting. Server connections older than this will be closed when returned to the pool.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/databases/#server_lifetime",
+          "description": "Overrides the `server_lifetime` setting. Server connections older than this will be closed when returned to the pool.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/databases/#server_lifetime>",
           "type": [
             "integer",
             "null"
@@ -514,7 +514,7 @@
           "minimum": 0
         },
         "server_lifetime_jitter": {
-          "description": "Overrides the `server_lifetime_jitter` setting for this database.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/databases/#server_lifetime_jitter",
+          "description": "Overrides the `server_lifetime_jitter` setting for this database.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/databases/#server_lifetime_jitter>",
           "type": [
             "integer",
             "null"
@@ -523,14 +523,14 @@
           "minimum": 0
         },
         "shard": {
-          "description": "The shard number for this database. Only required if your database contains more than one shard. Shard numbers start at 0.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/databases/#shard",
+          "description": "The shard number for this database. Only required if your database contains more than one shard. Shard numbers start at 0.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/databases/#shard>",
           "type": "integer",
           "format": "uint",
           "default": 0,
           "minimum": 0
         },
         "statement_timeout": {
-          "description": "This setting configures the `statement_timeout` connection parameter on all connections to Postgres for this database.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/databases/#statement_timeout",
+          "description": "This setting configures the `statement_timeout` connection parameter on all connections to Postgres for this database.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/databases/#statement_timeout>",
           "type": [
             "integer",
             "null"
@@ -539,7 +539,7 @@
           "minimum": 0
         },
         "user": {
-          "description": "Name of the PostgreSQL user to connect with when creating backend connections from PgDog to Postgres. If not set, this defaults to `name` in users.toml.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/databases/#user",
+          "description": "Name of the PostgreSQL user to connect with when creating backend connections from PgDog to Postgres. If not set, this defaults to `name` in users.toml.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/databases/#user>",
           "type": [
             "string",
             "null"
@@ -595,30 +595,30 @@
       "format": "float"
     },
     "General": {
-      "description": "General settings are relevant to the operations of the pooler itself, or apply to all database pools.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/",
+      "description": "General settings are relevant to the operations of the pooler itself, or apply to all database pools.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/>",
       "type": "object",
       "properties": {
         "auth_type": {
-          "description": "What kind of authentication mechanism to use for client connections.\n\n_Default:_ `scram`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#auth_type",
+          "description": "What kind of authentication mechanism to use for client connections.\n\n_Default:_ `scram`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#auth_type>",
           "$ref": "#/$defs/AuthType",
           "default": "scram"
         },
         "ban_replica_lag": {
-          "description": "Ban a replica from serving read queries if its replication lag (in milliseconds) exceeds this threshold.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#ban_replica_lag",
+          "description": "Ban a replica from serving read queries if its replication lag (in milliseconds) exceeds this threshold.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#ban_replica_lag>",
           "type": "integer",
           "format": "uint64",
           "default": 9223372036854775807,
           "minimum": 0
         },
         "ban_replica_lag_bytes": {
-          "description": "Ban a replica from serving read queries if its replication lag (in bytes) exceeds this threshold.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#ban_replica_lag_bytes",
+          "description": "Ban a replica from serving read queries if its replication lag (in bytes) exceeds this threshold.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#ban_replica_lag_bytes>",
           "type": "integer",
           "format": "uint64",
           "default": 9223372036854775807,
           "minimum": 0
         },
         "ban_timeout": {
-          "description": "Connection pools blocked from serving traffic due to an error will be placed back into active rotation after this long.\n\n_Default:_ `300000`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#ban_timeout",
+          "description": "Connection pools blocked from serving traffic due to an error will be placed back into active rotation after this long.\n\n_Default:_ `300000`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#ban_timeout>",
           "type": "integer",
           "format": "uint64",
           "default": 300000,
@@ -641,61 +641,61 @@
           "minimum": 0
         },
         "checkout_timeout": {
-          "description": "Maximum amount of time a client is allowed to wait for a connection from the pool.\n\n_Default:_ `5000`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#checkout_timeout",
+          "description": "Maximum amount of time a client is allowed to wait for a connection from the pool.\n\n_Default:_ `5000`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#checkout_timeout>",
           "type": "integer",
           "format": "uint64",
           "default": 5000,
           "minimum": 0
         },
         "client_connection_recovery": {
-          "description": "Controls whether to disconnect clients upon encountering connection pool errors.\n\n**Note:** Set this to `drop` if your clients are async / use pipelining mode.\n\n_Default:_ `recover`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#client_connection_recovery",
+          "description": "Controls whether to disconnect clients upon encountering connection pool errors.\n\n**Note:** Set this to `drop` if your clients are async / use pipelining mode.\n\n_Default:_ `recover`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#client_connection_recovery>",
           "$ref": "#/$defs/ConnectionRecovery",
           "default": "drop"
         },
         "client_idle_in_transaction_timeout": {
-          "description": "Close client connections that have been idle inside a transaction for this amount of time.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#client_idle_in_transaction_timeout",
+          "description": "Close client connections that have been idle inside a transaction for this amount of time.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#client_idle_in_transaction_timeout>",
           "type": "integer",
           "format": "uint64",
           "default": 9223372036854775807,
           "minimum": 0
         },
         "client_idle_timeout": {
-          "description": "Close client connections that have been idle, i.e., haven't sent any queries, for this amount of time.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#client_idle_timeout",
+          "description": "Close client connections that have been idle, i.e., haven't sent any queries, for this amount of time.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#client_idle_timeout>",
           "type": "integer",
           "format": "uint64",
           "default": 9223372036854775807,
           "minimum": 0
         },
         "client_login_timeout": {
-          "description": "Maximum amount of time new clients have to complete authentication.\n\n_Default:_ `60000`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#client_login_timeout",
+          "description": "Maximum amount of time new clients have to complete authentication.\n\n_Default:_ `60000`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#client_login_timeout>",
           "type": "integer",
           "format": "uint64",
           "default": 60000,
           "minimum": 0
         },
         "connect_attempt_delay": {
-          "description": "Amount of time to wait between connection attempt retries.\n\n_Default:_ `0`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#connect_attempt_delay",
+          "description": "Amount of time to wait between connection attempt retries.\n\n_Default:_ `0`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#connect_attempt_delay>",
           "type": "integer",
           "format": "uint64",
           "default": 0,
           "minimum": 0
         },
         "connect_attempts": {
-          "description": "Maximum number of retries for Postgres server connection attempts.\n\n_Default:_ `1`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#connect_attempts",
+          "description": "Maximum number of retries for Postgres server connection attempts.\n\n_Default:_ `1`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#connect_attempts>",
           "type": "integer",
           "format": "uint64",
           "default": 1,
           "minimum": 0
         },
         "connect_timeout": {
-          "description": "Maximum amount of time to allow for PgDog to create a connection to Postgres.\n\n_Default:_ `5000`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#connect_timeout",
+          "description": "Maximum amount of time to allow for PgDog to create a connection to Postgres.\n\n_Default:_ `5000`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#connect_timeout>",
           "type": "integer",
           "format": "uint64",
           "default": 5000,
           "minimum": 0
         },
         "connection_recovery": {
-          "description": "Controls if server connections are recovered or dropped if a client abruptly disconnects.\n\n_Default:_ `recover`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#connection_recovery",
+          "description": "Controls if server connections are recovered or dropped if a client abruptly disconnects.\n\n_Default:_ `recover`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#connection_recovery>",
           "$ref": "#/$defs/ConnectionRecovery",
           "default": "recover"
         },
@@ -705,52 +705,52 @@
           "default": false
         },
         "cutover_last_transaction_delay": {
-          "description": "Time (in milliseconds) since the last transaction on any table in the publication before PgDog will swap the configuration during a cutover.\n\n_Default:_ `1000`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#cutover_last_transaction_delay",
+          "description": "Time (in milliseconds) since the last transaction on any table in the publication before PgDog will swap the configuration during a cutover.\n\n_Default:_ `1000`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#cutover_last_transaction_delay>",
           "type": "integer",
           "format": "uint64",
           "default": 1000,
           "minimum": 0
         },
         "cutover_replication_lag_threshold": {
-          "description": "Replication lag (in bytes) that must be reached before PgDog will swap the configuration during a cutover.\n\n_Default:_ `0`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#cutover_replication_lag_threshold",
+          "description": "Replication lag (in bytes) that must be reached before PgDog will swap the configuration during a cutover.\n\n_Default:_ `0`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#cutover_replication_lag_threshold>",
           "type": "integer",
           "format": "uint64",
           "default": 0,
           "minimum": 0
         },
         "cutover_save_config": {
-          "description": "Save the swapped configuration to disk after a traffic cutover. When enabled, PgDog will backup both configuration files as `pgdog.bak.toml` and `users.bak.toml`, and write the new configuration to `pgdog.toml` and `users.toml`.\n\n_Default:_ `false`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#cutover_save_config",
+          "description": "Save the swapped configuration to disk after a traffic cutover. When enabled, PgDog will backup both configuration files as `pgdog.bak.toml` and `users.bak.toml`, and write the new configuration to `pgdog.toml` and `users.toml`.\n\n_Default:_ `false`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#cutover_save_config>",
           "type": "boolean",
           "default": false
         },
         "cutover_timeout": {
-          "description": "Maximum amount of time (in milliseconds) to wait for the cutover thresholds to be met. If exceeded, PgDog will take the action specified by `cutover_timeout_action`.\n\n_Default:_ `30000`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#cutover_timeout",
+          "description": "Maximum amount of time (in milliseconds) to wait for the cutover thresholds to be met. If exceeded, PgDog will take the action specified by `cutover_timeout_action`.\n\n_Default:_ `30000`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#cutover_timeout>",
           "type": "integer",
           "format": "uint64",
           "default": 30000,
           "minimum": 0
         },
         "cutover_timeout_action": {
-          "description": "Action to take when `cutover_timeout` is exceeded.\n\n_Default:_ `abort`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#cutover_timeout_action",
+          "description": "Action to take when `cutover_timeout` is exceeded.\n\n_Default:_ `abort`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#cutover_timeout_action>",
           "$ref": "#/$defs/CutoverTimeoutAction",
           "default": "abort"
         },
         "cutover_traffic_stop_threshold": {
-          "description": "Replication lag threshold (in bytes) at which PgDog will pause traffic automatically during a traffic cutover.\n\n_Default:_ `1000000`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#cutover_traffic_stop_threshold",
+          "description": "Replication lag threshold (in bytes) at which PgDog will pause traffic automatically during a traffic cutover.\n\n_Default:_ `1000000`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#cutover_traffic_stop_threshold>",
           "type": "integer",
           "format": "uint64",
           "default": 1000000,
           "minimum": 0
         },
         "default_pool_size": {
-          "description": "Default maximum number of server connections per database pool.\n\n**Note:** We strongly recommend keeping this value well below the supported connections of the backend database(s) to allow connections for maintenance in high load scenarios.\n\n_Default:_ `10`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#default_pool_size",
+          "description": "Default maximum number of server connections per database pool.\n\n**Note:** We strongly recommend keeping this value well below the supported connections of the backend database(s) to allow connections for maintenance in high load scenarios.\n\n_Default:_ `10`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#default_pool_size>",
           "type": "integer",
           "format": "uint",
           "default": 10,
           "minimum": 0
         },
         "dns_ttl": {
-          "description": "Overrides the TTL set on DNS records received from DNS servers.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#dns_ttl",
+          "description": "Overrides the TTL set on DNS records received from DNS servers.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#dns_ttl>",
           "type": [
             "integer",
             "null"
@@ -760,7 +760,7 @@
           "minimum": 0
         },
         "dry_run": {
-          "description": "Enable the query parser in single-shard deployments and record its decisions.\n\n_Default:_ `false`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#dry_run",
+          "description": "Enable the query parser in single-shard deployments and record its decisions.\n\n_Default:_ `false`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#dry_run>",
           "type": "boolean",
           "default": false
         },
@@ -770,14 +770,14 @@
           "default": false
         },
         "healthcheck_interval": {
-          "description": "Frequency of healthchecks performed by PgDog to ensure connections provided to clients from the pool are working.\n\n_Default:_ `30000`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#healthcheck_interval",
+          "description": "Frequency of healthchecks performed by PgDog to ensure connections provided to clients from the pool are working.\n\n_Default:_ `30000`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#healthcheck_interval>",
           "type": "integer",
           "format": "uint64",
           "default": 30000,
           "minimum": 0
         },
         "healthcheck_port": {
-          "description": "Enable load balancer HTTP health checks with the HTTP server running on this port.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#healthcheck_port",
+          "description": "Enable load balancer HTTP health checks with the HTTP server running on this port.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#healthcheck_port>",
           "type": [
             "integer",
             "null"
@@ -787,79 +787,79 @@
           "minimum": 0
         },
         "healthcheck_timeout": {
-          "description": "Maximum amount of time to wait for a healthcheck query to complete.\n\n_Default:_ `5000`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#healthcheck_timeout",
+          "description": "Maximum amount of time to wait for a healthcheck query to complete.\n\n_Default:_ `5000`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#healthcheck_timeout>",
           "type": "integer",
           "format": "uint64",
           "default": 5000,
           "minimum": 0
         },
         "host": {
-          "description": "The IP address of the local network interface PgDog will bind to listen for connections.\n\n**Note:** This setting cannot be changed at runtime.\n\n_Default:_ `0.0.0.0`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#host",
+          "description": "The IP address of the local network interface PgDog will bind to listen for connections.\n\n**Note:** This setting cannot be changed at runtime.\n\n_Default:_ `0.0.0.0`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#host>",
           "type": "string",
           "default": "0.0.0.0"
         },
         "idle_healthcheck_delay": {
-          "description": "Delay running idle healthchecks at PgDog startup to give databases (and pools) time to spin up.\n\n_Default:_ `5000`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#idle_healthcheck_delay",
+          "description": "Delay running idle healthchecks at PgDog startup to give databases (and pools) time to spin up.\n\n_Default:_ `5000`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#idle_healthcheck_delay>",
           "type": "integer",
           "format": "uint64",
           "default": 5000,
           "minimum": 0
         },
         "idle_healthcheck_interval": {
-          "description": "Frequency of healthchecks performed by PgDog on idle connections.\nSet to `0` to disable idle healthchecks.\n\n_Default:_ `30000`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#idle_healthcheck_interval",
+          "description": "Frequency of healthchecks performed by PgDog on idle connections.\nSet to `0` to disable idle healthchecks.\n\n_Default:_ `30000`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#idle_healthcheck_interval>",
           "type": "integer",
           "format": "uint64",
           "default": 30000,
           "minimum": 0
         },
         "idle_timeout": {
-          "description": "Close server connections that have been idle, i.e., haven't served a single client transaction, for this amount of time.\n\n_Default:_ `60000`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#idle_timeout",
+          "description": "Close server connections that have been idle, i.e., haven't served a single client transaction, for this amount of time.\n\n_Default:_ `60000`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#idle_timeout>",
           "type": "integer",
           "format": "uint64",
           "default": 60000,
           "minimum": 0
         },
         "load_balancing_strategy": {
-          "description": "Which strategy to use for load balancing read queries.\n\n_Default:_ `random`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#load_balancing_strategy",
+          "description": "Which strategy to use for load balancing read queries.\n\n_Default:_ `random`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#load_balancing_strategy>",
           "$ref": "#/$defs/LoadBalancingStrategy",
           "default": "random"
         },
         "load_schema": {
-          "description": "Controls whether PgDog loads the database schema at startup for query routing.\n\n_Default:_ `auto`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#load_schema",
+          "description": "Controls whether PgDog loads the database schema at startup for query routing.\n\n_Default:_ `auto`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#load_schema>",
           "$ref": "#/$defs/LoadSchema",
           "default": "auto"
         },
         "log_connections": {
-          "description": "If enabled, log every time a user creates a new connection to PgDog.\n\n_Default:_ `true`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#log_connections",
+          "description": "If enabled, log every time a user creates a new connection to PgDog.\n\n_Default:_ `true`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#log_connections>",
           "type": "boolean",
           "default": true
         },
         "log_dedup_threshold": {
-          "description": "Number of identical log messages allowed within `log_dedup_window` before further duplicates are suppressed. Set to `0` to disable throttling.\n\n_Default:_ `0`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#log_dedup_threshold",
+          "description": "Number of identical log messages allowed within `log_dedup_window` before further duplicates are suppressed. Set to `0` to disable throttling.\n\n_Default:_ `0`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#log_dedup_threshold>",
           "type": "integer",
           "format": "uint64",
           "default": 0,
           "minimum": 0
         },
         "log_dedup_window": {
-          "description": "Window, in milliseconds, over which to deduplicate identical log messages. Set to `0` to disable throttling.\n\n**Note:** When enabled, identical messages (same level, target, and body) that exceed `log_dedup_threshold` within this window are suppressed and replaced with a single summary line at the end of the window.\n\n_Default:_ `0`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#log_dedup_window",
+          "description": "Window, in milliseconds, over which to deduplicate identical log messages. Set to `0` to disable throttling.\n\n**Note:** When enabled, identical messages (same level, target, and body) that exceed `log_dedup_threshold` within this window are suppressed and replaced with a single summary line at the end of the window.\n\n_Default:_ `0`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#log_dedup_window>",
           "type": "integer",
           "format": "uint64",
           "default": 0,
           "minimum": 0
         },
         "log_disconnections": {
-          "description": "If enabled, log every time a user disconnects from PgDog.\n\n_Default:_ `true`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#log_disconnections",
+          "description": "If enabled, log every time a user disconnects from PgDog.\n\n_Default:_ `true`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#log_disconnections>",
           "type": "boolean",
           "default": true
         },
         "log_format": {
-          "description": "Format to use for PgDog application logs.\n\n_Default:_ `text`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#log_format",
+          "description": "Format to use for PgDog application logs.\n\n_Default:_ `text`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#log_format>",
           "$ref": "#/$defs/LogFormat",
           "default": "text"
         },
         "log_level": {
-          "description": "Log filter directives using the same syntax as the `RUST_LOG` environment variable.\n\n_Default:_ `info`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#log_level",
+          "description": "Log filter directives using the same syntax as the `RUST_LOG` environment variable.\n\n_Default:_ `info`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#log_level>",
           "type": "string",
           "default": "info"
         },
@@ -880,60 +880,60 @@
           "minimum": 0
         },
         "lsn_check_delay": {
-          "description": "For how long to delay checking for replication delay.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#lsn_check_delay",
+          "description": "For how long to delay checking for replication delay.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#lsn_check_delay>",
           "type": "integer",
           "format": "uint64",
           "default": 9223372036854775807,
           "minimum": 0
         },
         "lsn_check_interval": {
-          "description": "How frequently to run the replication delay check.\n\n_Default:_ `5000`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#lsn_check_interval",
+          "description": "How frequently to run the replication delay check.\n\n_Default:_ `5000`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#lsn_check_interval>",
           "type": "integer",
           "format": "uint64",
           "default": 5000,
           "minimum": 0
         },
         "lsn_check_timeout": {
-          "description": "Maximum amount of time allowed for the replication delay query to return a result.\n\n_Default:_ `5000`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#lsn_check_timeout",
+          "description": "Maximum amount of time allowed for the replication delay query to return a result.\n\n_Default:_ `5000`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#lsn_check_timeout>",
           "type": "integer",
           "format": "uint64",
           "default": 5000,
           "minimum": 0
         },
         "min_pool_size": {
-          "description": "Default minimum number of connections per database pool to keep open at all times.\n\n_Default:_ `1`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#min_pool_size",
+          "description": "Default minimum number of connections per database pool to keep open at all times.\n\n_Default:_ `1`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#min_pool_size>",
           "type": "integer",
           "format": "uint",
           "default": 1,
           "minimum": 0
         },
         "mirror_exposure": {
-          "description": "How many transactions to send to the mirror as a fraction of regular traffic.\n\n_Default:_ `1.0`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#mirror_exposure",
+          "description": "How many transactions to send to the mirror as a fraction of regular traffic.\n\n_Default:_ `1.0`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#mirror_exposure>",
           "type": "number",
           "format": "float",
           "default": 1.0
         },
         "mirror_queue": {
-          "description": "How many transactions can wait while the mirror database processes previous requests.\n\n_Default:_ `128`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#mirror_queue",
+          "description": "How many transactions can wait while the mirror database processes previous requests.\n\n_Default:_ `128`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#mirror_queue>",
           "type": "integer",
           "format": "uint",
           "default": 128,
           "minimum": 0
         },
         "omnisharded_sticky": {
-          "description": "If turned on, queries touching omnisharded tables are always sent to the same shard for any given client connection. The shard is determined at random on connection creation.\n\n_Default:_ `false`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#omnisharded_sticky",
+          "description": "If turned on, queries touching omnisharded tables are always sent to the same shard for any given client connection. The shard is determined at random on connection creation.\n\n_Default:_ `false`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#omnisharded_sticky>",
           "type": "boolean",
           "default": false
         },
         "openmetrics_namespace": {
-          "description": "Prefix added to all metric names exposed via the OpenMetrics endpoint.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#openmetrics_namespace",
+          "description": "Prefix added to all metric names exposed via the OpenMetrics endpoint.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#openmetrics_namespace>",
           "type": [
             "string",
             "null"
           ]
         },
         "openmetrics_port": {
-          "description": "The port used for the OpenMetrics HTTP endpoint.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#openmetrics_port",
+          "description": "The port used for the OpenMetrics HTTP endpoint.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#openmetrics_port>",
           "type": [
             "integer",
             "null"
@@ -943,17 +943,17 @@
           "minimum": 0
         },
         "passthrough_auth": {
-          "description": "Toggle automatic creation of connection pools given the user name, database and password.\n\n_Default:_ `disabled`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#passthrough_auth",
+          "description": "Toggle automatic creation of connection pools given the user name, database and password.\n\n_Default:_ `disabled`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#passthrough_auth>",
           "$ref": "#/$defs/PassthroughAuth",
           "default": "disabled"
         },
         "pooler_mode": {
-          "description": "Default pooler mode to use for database pools.\n\n_Default:_ `transaction`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#pooler_mode",
+          "description": "Default pooler mode to use for database pools.\n\n_Default:_ `transaction`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#pooler_mode>",
           "$ref": "#/$defs/PoolerMode",
           "default": "transaction"
         },
         "port": {
-          "description": "The TCP port PgDog will bind to listen for connections.\n\n**Note:** This setting cannot be changed at runtime.\n\n_Default:_ `6432`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#port",
+          "description": "The TCP port PgDog will bind to listen for connections.\n\n**Note:** This setting cannot be changed at runtime.\n\n_Default:_ `6432`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#port>",
           "type": "integer",
           "format": "uint16",
           "default": 6432,
@@ -961,26 +961,26 @@
           "minimum": 0
         },
         "prepared_statements": {
-          "description": "Enables support for prepared statements.\n\n_Default:_ `extended`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#prepared_statements",
+          "description": "Enables support for prepared statements.\n\n_Default:_ `extended`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#prepared_statements>",
           "$ref": "#/$defs/PreparedStatements",
           "default": "extended"
         },
         "prepared_statements_limit": {
-          "description": "Number of prepared statements that will be allowed for each server connection.\n\n**Note:** If this limit is reached, the least used statement is closed and replaced with the newest one. Additionally, any unused statements in the global cache above this limit will be removed.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#prepared_statements_limit",
+          "description": "Number of prepared statements that will be allowed for each server connection.\n\n**Note:** If this limit is reached, the least used statement is closed and replaced with the newest one. Additionally, any unused statements in the global cache above this limit will be removed.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#prepared_statements_limit>",
           "type": "integer",
           "format": "uint",
           "default": 9223372036854775807,
           "minimum": 0
         },
         "pub_sub_channel_size": {
-          "description": "Enables support for pub/sub and configures the size of the background task queue.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#pub_sub_channel_size",
+          "description": "Enables support for pub/sub and configures the size of the background task queue.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#pub_sub_channel_size>",
           "type": "integer",
           "format": "uint",
           "default": 0,
           "minimum": 0
         },
         "query_cache_limit": {
-          "description": "Limit on the number of statements saved in the statement cache used to accelerate query parsing.\n\n_Default:_ `50000`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#query_cache_limit",
+          "description": "Limit on the number of statements saved in the statement cache used to accelerate query parsing.\n\n_Default:_ `50000`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#query_cache_limit>",
           "type": "integer",
           "format": "uint",
           "default": 1000,
@@ -1000,12 +1000,12 @@
           "default": false
         },
         "query_parser": {
-          "description": "Toggle the query parser to enable/disable query parsing and all of its benefits. By default, the query parser is turned on automatically, so only disable it if you know what you're doing.\n\n_Default:_ `auto`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#query_parser",
+          "description": "Toggle the query parser to enable/disable query parsing and all of its benefits. By default, the query parser is turned on automatically, so only disable it if you know what you're doing.\n\n_Default:_ `auto`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#query_parser>",
           "$ref": "#/$defs/QueryParserLevel",
           "default": "auto"
         },
         "query_parser_enabled": {
-          "description": "Deprecated: use [`query_parser`](General::query_parser) set to `\"on\"` instead.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#query_parser_enabled",
+          "description": "Deprecated: use [`query_parser`](General::query_parser) set to `\"on\"` instead.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#query_parser_enabled>",
           "type": "boolean",
           "default": false
         },
@@ -1015,7 +1015,7 @@
           "default": "pg_query_protobuf"
         },
         "query_size_limit": {
-          "description": "Maximum size, in bytes, of a query message (`Query` or `Parse`)\nreceived from a client, including the 5-byte message header.\nProtects the query parser from very large SQL texts; other\nprotocol messages (e.g. `Bind`, `CopyData`) are not affected.\nDepending on the setting `query_size_limit_action` oversized messages are\neither logged or blocked.\n\n_Default:_ `None` (disabled)\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#query_size_limit",
+          "description": "Maximum size, in bytes, of a query message (`Query` or `Parse`)\nreceived from a client, including the 5-byte message header.\nProtects the query parser from very large SQL texts; other\nprotocol messages (e.g. `Bind`, `CopyData`) are not affected.\nDepending on the setting `query_size_limit_action` oversized messages are\neither logged or blocked.\n\n_Default:_ `None` (disabled)\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#query_size_limit>",
           "type": [
             "integer",
             "null"
@@ -1025,24 +1025,24 @@
           "minimum": 0
         },
         "query_size_limit_action": {
-          "description": "Action to take when a client query message exceeds `query_size_limit`.\n\n_Default:_ `warn`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#query_size_limit_action",
+          "description": "Action to take when a client query message exceeds `query_size_limit`.\n\n_Default:_ `warn`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#query_size_limit_action>",
           "$ref": "#/$defs/QuerySizeLimitAction",
           "default": "warn"
         },
         "query_timeout": {
-          "description": "Maximum amount of time to wait for a Postgres query to finish executing.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#query_timeout",
+          "description": "Maximum amount of time to wait for a Postgres query to finish executing.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#query_timeout>",
           "type": "integer",
           "format": "uint64",
           "default": 9223372036854775807,
           "minimum": 0
         },
         "read_write_split": {
-          "description": "How to handle the separation of read and write queries.\n\n_Default:_ `include_primary`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#read_write_split",
+          "description": "How to handle the separation of read and write queries.\n\n_Default:_ `include_primary`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#read_write_split>",
           "$ref": "#/$defs/ReadWriteSplit",
           "default": "include_primary"
         },
         "read_write_strategy": {
-          "description": "How aggressive the query parser should be in determining read vs. write queries.\n\n_Default:_ `conservative`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#read_write_strategy",
+          "description": "How aggressive the query parser should be in determining read vs. write queries.\n\n_Default:_ `conservative`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#read_write_strategy>",
           "$ref": "#/$defs/ReadWriteStrategy",
           "default": "conservative"
         },
@@ -1054,12 +1054,12 @@
           "minimum": 0
         },
         "reload_schema_on_ddl": {
-          "description": "Automatically reload the schema cache used by PgDog to route queries upon detecting DDL statements.\n\n**Note:** This setting requires PgDog Enterprise Edition to work as expected. If using the open source edition, it will only work with single-node PgDog deployments, e.g., in local development or CI.\n\n_Default:_ `true`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#reload_schema_on_ddl",
+          "description": "Automatically reload the schema cache used by PgDog to route queries upon detecting DDL statements.\n\n**Note:** This setting requires PgDog Enterprise Edition to work as expected. If using the open source edition, it will only work with single-node PgDog deployments, e.g., in local development or CI.\n\n_Default:_ `true`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#reload_schema_on_ddl>",
           "type": "boolean",
           "default": true
         },
         "resharding_copy_format": {
-          "description": "Which format to use for `COPY` statements during resharding.\n\n**Note:** Text format is required when migrating from `INTEGER` to `BIGINT` primary keys during resharding.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#resharding_copy_format",
+          "description": "Which format to use for `COPY` statements during resharding.\n\n**Note:** Text format is required when migrating from `INTEGER` to `BIGINT` primary keys during resharding.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#resharding_copy_format>",
           "$ref": "#/$defs/CopyFormat",
           "default": "binary"
         },
@@ -1085,42 +1085,42 @@
           "minimum": 0
         },
         "resharding_replication_retry_max_attempts": {
-          "description": "Maximum number of consecutive replication-subscriber errors tolerated before\nthe source error is propagated. Each failure triggers `slot.reconnect()`,\nafter which Postgres re-streams every event since the last acked commit.\n`0` retries indefinitely.\n\n_Default:_ `5`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#resharding_replication_retry_max_attempts",
+          "description": "Maximum number of consecutive replication-subscriber errors tolerated before\nthe source error is propagated. Each failure triggers `slot.reconnect()`,\nafter which Postgres re-streams every event since the last acked commit.\n`0` retries indefinitely.\n\n_Default:_ `5`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#resharding_replication_retry_max_attempts>",
           "type": "integer",
           "format": "uint",
           "default": 5,
           "minimum": 0
         },
         "resharding_replication_retry_min_delay": {
-          "description": "Delay in milliseconds between replication subscriber retry attempts.\n\n_Default:_ `1000`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#resharding_replication_retry_min_delay",
+          "description": "Delay in milliseconds between replication subscriber retry attempts.\n\n_Default:_ `1000`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#resharding_replication_retry_min_delay>",
           "type": "integer",
           "format": "uint64",
           "default": 1000,
           "minimum": 0
         },
         "rollback_timeout": {
-          "description": "How long to allow for `ROLLBACK` queries to run on server connections with unfinished transactions.\n\n_Default:_ `5000`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#rollback_timeout",
+          "description": "How long to allow for `ROLLBACK` queries to run on server connections with unfinished transactions.\n\n_Default:_ `5000`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#rollback_timeout>",
           "type": "integer",
           "format": "uint64",
           "default": 5000,
           "minimum": 0
         },
         "server_lifetime": {
-          "description": "Maximum amount of time a server connection is allowed to exist.\n\n_Default:_ `86400000`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#server_lifetime",
+          "description": "Maximum amount of time a server connection is allowed to exist.\n\n_Default:_ `86400000`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#server_lifetime>",
           "type": "integer",
           "format": "uint64",
           "default": 86400000,
           "minimum": 0
         },
         "server_lifetime_jitter": {
-          "description": "Maximum random adjustment applied to `server_lifetime` per backend\nconnection, in milliseconds. Each connection's effective lifetime\nis sampled uniformly from `[server_lifetime - jitter,\nserver_lifetime + jitter]` once at creation time, breaking up\nsynchronized cohorts that would otherwise expire together.\n\n_Default:_ `0` (no jitter; existing behavior).\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#server_lifetime_jitter",
+          "description": "Maximum random adjustment applied to `server_lifetime` per backend\nconnection, in milliseconds. Each connection's effective lifetime\nis sampled uniformly from `[server_lifetime - jitter,\nserver_lifetime + jitter]` once at creation time, breaking up\nsynchronized cohorts that would otherwise expire together.\n\n_Default:_ `0` (no jitter; existing behavior).\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#server_lifetime_jitter>",
           "type": "integer",
           "format": "uint64",
           "default": 0,
           "minimum": 0
         },
         "shutdown_termination_timeout": {
-          "description": "How long to wait for active connections to be forcibly terminated after `shutdown_timeout` expires.\n\n**Note:** If set, PgDog will send `CANCEL` requests to PostgreSQL for any remaining active queries before tearing down connection pools.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#shutdown_termination_timeout",
+          "description": "How long to wait for active connections to be forcibly terminated after `shutdown_timeout` expires.\n\n**Note:** If set, PgDog will send `CANCEL` requests to PostgreSQL for any remaining active queries before tearing down connection pools.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#shutdown_termination_timeout>",
           "type": [
             "integer",
             "null"
@@ -1130,69 +1130,69 @@
           "minimum": 0
         },
         "shutdown_timeout": {
-          "description": "How long to wait for active clients to finish transactions when shutting down.\n\n_Default:_ `60000`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#shutdown_timeout",
+          "description": "How long to wait for active clients to finish transactions when shutting down.\n\n_Default:_ `60000`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#shutdown_timeout>",
           "type": "integer",
           "format": "uint64",
           "default": 60000,
           "minimum": 0
         },
         "stats_period": {
-          "description": "How often to calculate averages shown in `SHOW STATS` admin command and the Prometheus metrics.\n\n_Default:_ `15000`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#stats_period",
+          "description": "How often to calculate averages shown in `SHOW STATS` admin command and the Prometheus metrics.\n\n_Default:_ `15000`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#stats_period>",
           "type": "integer",
           "format": "uint64",
           "default": 15000,
           "minimum": 0
         },
         "system_catalogs": {
-          "description": "Changes how system catalog tables (like `pg_database`, `pg_class`, etc.) are treated by the query router.\n\n_Default:_ `omnisharded_sticky`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#system_catalogs",
+          "description": "Changes how system catalog tables (like `pg_database`, `pg_class`, etc.) are treated by the query router.\n\n_Default:_ `omnisharded_sticky`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#system_catalogs>",
           "$ref": "#/$defs/SystemCatalogsBehavior",
           "default": "omnisharded_sticky"
         },
         "tls_certificate": {
-          "description": "Path to the TLS certificate PgDog will use to setup TLS connections with clients.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#tls_certificate",
+          "description": "Path to the TLS certificate PgDog will use to setup TLS connections with clients.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#tls_certificate>",
           "type": [
             "string",
             "null"
           ]
         },
         "tls_client_ca_certificate": {
-          "description": "Path to a certificate bundle used to validate the client certificate on TLS connection creation.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#tls_client_ca_certificate",
+          "description": "Path to a certificate bundle used to validate the client certificate on TLS connection creation.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#tls_client_ca_certificate>",
           "type": [
             "string",
             "null"
           ]
         },
         "tls_client_required": {
-          "description": "Reject clients that connect without TLS.\n\n_Default:_ `false`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#tls_client_required",
+          "description": "Reject clients that connect without TLS.\n\n_Default:_ `false`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#tls_client_required>",
           "type": "boolean",
           "default": false
         },
         "tls_private_key": {
-          "description": "Path to the TLS private key PgDog will use to setup TLS connections with clients.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#tls_private_key",
+          "description": "Path to the TLS private key PgDog will use to setup TLS connections with clients.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#tls_private_key>",
           "type": [
             "string",
             "null"
           ]
         },
         "tls_server_ca_certificate": {
-          "description": "Path to a certificate bundle used to validate the server certificate on TLS connection creation.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#tls_server_ca_certificate",
+          "description": "Path to a certificate bundle used to validate the server certificate on TLS connection creation.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#tls_server_ca_certificate>",
           "type": [
             "string",
             "null"
           ]
         },
         "tls_verify": {
-          "description": "How to handle TLS connections to Postgres servers.\n\n_Default:_ `prefer`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#tls_verify",
+          "description": "How to handle TLS connections to Postgres servers.\n\n_Default:_ `prefer`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#tls_verify>",
           "$ref": "#/$defs/TlsVerifyMode",
           "default": "prefer"
         },
         "two_phase_commit": {
-          "description": "Enable two-phase commit for write, cross-shard transactions and replications.\n\n_Default:_ `false`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#two_phase_commit",
+          "description": "Enable two-phase commit for write, cross-shard transactions and replications.\n\n_Default:_ `false`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#two_phase_commit>",
           "type": "boolean",
           "default": false
         },
         "two_phase_commit_auto": {
-          "description": "Enable automatic conversion of single-statement write transactions to use two-phase commit.\n\n_Default:_ `false`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#two_phase_commit_auto",
+          "description": "Enable automatic conversion of single-statement write transactions to use two-phase commit.\n\n_Default:_ `false`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#two_phase_commit_auto>",
           "type": [
             "boolean",
             "null"
@@ -1200,14 +1200,14 @@
           "default": null
         },
         "two_phase_commit_wal_checkpoint_interval": {
-          "description": "How often, in seconds, to write a checkpoint record to the two-phase commit WAL and garbage-collect old segments.\n\n_Default:_ `60`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#two_phase_commit_wal_checkpoint_interval",
+          "description": "How often, in seconds, to write a checkpoint record to the two-phase commit WAL and garbage-collect old segments.\n\n_Default:_ `60`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#two_phase_commit_wal_checkpoint_interval>",
           "type": "integer",
           "format": "uint64",
           "default": 60,
           "minimum": 0
         },
         "two_phase_commit_wal_dir": {
-          "description": "Directory where the two-phase commit write-ahead log is stored.\n\n**Note:** This setting cannot be changed at runtime. PgDog acquires an exclusive `flock` on `<dir>/.lock` at startup. If the directory cannot be created or written to, or another PgDog process already holds the lock, the WAL is disabled and a warning is logged: 2PC will continue to function but will not be durable across restarts.\n\n_Default:_ `./pgdog_wal`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#two_phase_commit_wal_dir",
+          "description": "Directory where the two-phase commit write-ahead log is stored.\n\n**Note:** This setting cannot be changed at runtime. PgDog acquires an exclusive `flock` on `<dir>/.lock` at startup. If the directory cannot be created or written to, or another PgDog process already holds the lock, the WAL is disabled and a warning is logged: 2PC will continue to function but will not be durable across restarts.\n\n_Default:_ `./pgdog_wal`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#two_phase_commit_wal_dir>",
           "type": [
             "string",
             "null"
@@ -1215,14 +1215,14 @@
           "default": null
         },
         "two_phase_commit_wal_fsync_interval": {
-          "description": "How long, in milliseconds, the two-phase commit WAL writer waits to coalesce concurrent appends into a single fsync.\n\n**Note:** Setting this to `0` disables waiting for additional appends; records already queued in the channel when the writer wakes are still batched into one fsync. Higher values trade per-transaction commit latency for fewer fsyncs under load.\n\n_Default:_ `2`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#two_phase_commit_wal_fsync_interval",
+          "description": "How long, in milliseconds, the two-phase commit WAL writer waits to coalesce concurrent appends into a single fsync.\n\n**Note:** Setting this to `0` disables waiting for additional appends; records already queued in the channel when the writer wakes are still batched into one fsync. Higher values trade per-transaction commit latency for fewer fsyncs under load.\n\n_Default:_ `2`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#two_phase_commit_wal_fsync_interval>",
           "type": "integer",
           "format": "uint64",
           "default": 2,
           "minimum": 0
         },
         "two_phase_commit_wal_segment_size": {
-          "description": "Maximum size, in bytes, of a single two-phase commit WAL segment file before it is rotated.\n\n_Default:_ `16777216` (16 MiB)\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#two_phase_commit_wal_segment_size",
+          "description": "Maximum size, in bytes, of a single two-phase commit WAL segment file before it is rotated.\n\n_Default:_ `16777216` (16 MiB)\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#two_phase_commit_wal_segment_size>",
           "type": "integer",
           "format": "uint64",
           "default": 16777216,
@@ -1241,7 +1241,7 @@
           "minimum": 0
         },
         "workers": {
-          "description": "Number of Tokio threads to spawn at pooler startup. In multi-core systems, the recommended setting is two (2) per virtual CPU. The value `0` means to spawn no threads and use the current thread runtime.\n\n**Note:** This setting cannot be changed at runtime.\n\n_Default:_ `2`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#workers",
+          "description": "Number of Tokio threads to spawn at pooler startup. In multi-core systems, the recommended setting is two (2) per virtual CPU. The value `0` means to spawn no threads and use the current thread runtime.\n\n**Note:** This setting cannot be changed at runtime.\n\n_Default:_ `2`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#workers>",
           "type": "integer",
           "format": "uint",
           "default": 2,
@@ -1251,7 +1251,7 @@
       "additionalProperties": false
     },
     "Hasher": {
-      "description": "Hash function used to map a sharding key value to a shard number.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/#hasher",
+      "description": "Hash function used to map a sharding key value to a shard number.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/#hasher>",
       "oneOf": [
         {
           "description": "Uses the same hash function as PostgreSQL's `hashint8` / `hashtext` (default).",
@@ -1266,7 +1266,7 @@
       ]
     },
     "LoadBalancingStrategy": {
-      "description": "Which strategy to use for load balancing read queries.\n\nNote: See [load balancer](https://docs.pgdog.dev/features/load-balancer/) for more details.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#load_balancing_strategy",
+      "description": "Which strategy to use for load balancing read queries.\n\nNote: See [load balancer](https://docs.pgdog.dev/features/load-balancer/) for more details.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#load_balancing_strategy>",
       "oneOf": [
         {
           "description": "Select a replica at random (default).",
@@ -1291,7 +1291,7 @@
       ]
     },
     "LoadSchema": {
-      "description": "Controls whether PgDog loads the database schema at startup for query routing.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#load_schema",
+      "description": "Controls whether PgDog loads the database schema at startup for query routing.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#load_schema>",
       "oneOf": [
         {
           "description": "Always load the schema at startup.",
@@ -1331,25 +1331,25 @@
       ]
     },
     "Memory": {
-      "description": "Memory settings manage buffer allocations that PgDog uses during network I/O operations and task execution.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/memory/",
+      "description": "Memory settings manage buffer allocations that PgDog uses during network I/O operations and task execution.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/memory/>",
       "type": "object",
       "properties": {
         "message_buffer": {
-          "description": "Size of the message buffer in bytes. This buffer is used for assembling PostgreSQL protocol messages.\n\n_Default:_ `4096`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/memory/#message_buffer",
+          "description": "Size of the message buffer in bytes. This buffer is used for assembling PostgreSQL protocol messages.\n\n_Default:_ `4096`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/memory/#message_buffer>",
           "type": "integer",
           "format": "uint",
           "default": 4096,
           "minimum": 0
         },
         "net_buffer": {
-          "description": "Size of the network read buffer in bytes. This buffer is used for reading data from client and server connections.\n\n_Default:_ `4096`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/memory/#net_buffer",
+          "description": "Size of the network read buffer in bytes. This buffer is used for reading data from client and server connections.\n\n_Default:_ `4096`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/memory/#net_buffer>",
           "type": "integer",
           "format": "uint",
           "default": 4096,
           "minimum": 0
         },
         "stack_size": {
-          "description": "Stack size for Tokio tasks in bytes. Increase this if you encounter stack overflow errors with complex queries.\n\n_Default:_ `2097152`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/memory/#stack_size",
+          "description": "Stack size for Tokio tasks in bytes. Increase this if you encounter stack overflow errors with complex queries.\n\n_Default:_ `2097152`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/memory/#stack_size>",
           "type": "integer",
           "format": "uint",
           "default": 2097152,
@@ -1359,15 +1359,15 @@
       "additionalProperties": false
     },
     "Mirroring": {
-      "description": "[Mirroring](https://docs.pgdog.dev/features/mirroring/) configuration. Database mirroring replicates traffic, byte for byte, from one database to another for testing purposes.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/mirroring/",
+      "description": "[Mirroring](https://docs.pgdog.dev/features/mirroring/) configuration. Database mirroring replicates traffic, byte for byte, from one database to another for testing purposes.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/mirroring/>",
       "type": "object",
       "properties": {
         "destination_db": {
-          "description": "Name of the destination database to mirror traffic to. This should be a `name` configured in the [`databases`](https://docs.pgdog.dev/configuration/pgdog.toml/databases/) section of `pgdog.toml`.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/mirroring/#destination_db",
+          "description": "Name of the destination database to mirror traffic to. This should be a `name` configured in the [`databases`](https://docs.pgdog.dev/configuration/pgdog.toml/databases/) section of `pgdog.toml`.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/mirroring/#destination_db>",
           "type": "string"
         },
         "exposure": {
-          "description": "The percentage of transactions to mirror, specified as a floating point number between 0.0 and 1.0. See [mirroring](https://docs.pgdog.dev/features/mirroring/) for more details. This overrides the [`mirror_exposure`](https://docs.pgdog.dev/configuration/pgdog.toml/general/#mirror_exposure) setting.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/mirroring/#exposure",
+          "description": "The percentage of transactions to mirror, specified as a floating point number between 0.0 and 1.0. See [mirroring](https://docs.pgdog.dev/features/mirroring/) for more details. This overrides the [`mirror_exposure`](https://docs.pgdog.dev/configuration/pgdog.toml/general/#mirror_exposure) setting.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/mirroring/#exposure>",
           "type": [
             "number",
             "null"
@@ -1380,7 +1380,7 @@
           "default": "all"
         },
         "queue_length": {
-          "description": "The length of the queue to provision for mirrored transactions. See [mirroring](https://docs.pgdog.dev/features/mirroring/) for more details. This overrides the [`mirror_queue`](https://docs.pgdog.dev/configuration/pgdog.toml/general/#mirror_queue) setting.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/mirroring/#queue_depth",
+          "description": "The length of the queue to provision for mirrored transactions. See [mirroring](https://docs.pgdog.dev/features/mirroring/) for more details. This overrides the [`mirror_queue`](https://docs.pgdog.dev/configuration/pgdog.toml/general/#mirror_queue) setting.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/mirroring/#queue_depth>",
           "type": [
             "integer",
             "null"
@@ -1389,7 +1389,7 @@
           "minimum": 0
         },
         "source_db": {
-          "description": "Name of the source database to mirror traffic from. This should be a `name` configured in the [`databases`](https://docs.pgdog.dev/configuration/pgdog.toml/databases/) section of `pgdog.toml`.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/mirroring/#source_db",
+          "description": "Name of the source database to mirror traffic from. This should be a `name` configured in the [`databases`](https://docs.pgdog.dev/configuration/pgdog.toml/databases/) section of `pgdog.toml`.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/mirroring/#source_db>",
           "type": "string"
         }
       },
@@ -1432,7 +1432,7 @@
       ]
     },
     "OmnishardedTables": {
-      "description": "A group of tables that are replicated across all shards (omnisharded) for a given database.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#omnisharded_sticky",
+      "description": "A group of tables that are replicated across all shards (omnisharded) for a given database.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#omnisharded_sticky>",
       "type": "object",
       "properties": {
         "database": {
@@ -1458,7 +1458,7 @@
       ]
     },
     "Otel": {
-      "description": "OpenTelemetry push exporter settings.\n\nWhen `endpoint` is set, PgDog periodically POSTs OTLP JSON metrics\nto the configured URL.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/otel/",
+      "description": "OpenTelemetry push exporter settings.\n\nWhen `endpoint` is set, PgDog periodically POSTs OTLP JSON metrics\nto the configured URL.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/otel/>",
       "type": "object",
       "properties": {
         "datadog_api_key": {
@@ -1486,7 +1486,7 @@
           "default": {}
         },
         "namespace": {
-          "description": "Prefix added to all metric names emitted by the OTEL exporter.\n\n**Note:** Trailing `.` and `_` are stripped before PgDog appends metric names, so\n`pgdog`, `pgdog.`, and `pgdog_` all emit `pgdog.clients`.\n\n_Default:_ `pgdog`\n\nEnv: `PGDOG_OTEL_NAMESPACE`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/otel/#namespace",
+          "description": "Prefix added to all metric names emitted by the OTEL exporter.\n\n**Note:** Trailing `.` and `_` are stripped before PgDog appends metric names, so\n`pgdog`, `pgdog.`, and `pgdog_` all emit `pgdog.clients`.\n\n_Default:_ `pgdog`\n\nEnv: `PGDOG_OTEL_NAMESPACE`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/otel/#namespace>",
           "type": [
             "string",
             "null"
@@ -1504,7 +1504,7 @@
       "additionalProperties": false
     },
     "PassthroughAuth": {
-      "description": "toggle automatic creation of connection pools given the user name, database and password.\n\nSee [passthrough authentication](https://docs.pgdog.dev/features/authentication/#passthrough-authentication).\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#passthrough_auth",
+      "description": "toggle automatic creation of connection pools given the user name, database and password.\n\nSee [passthrough authentication](https://docs.pgdog.dev/features/authentication/#passthrough-authentication).\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#passthrough_auth>",
       "oneOf": [
         {
           "description": "Passthrough auth is disabled (default).",
@@ -1534,7 +1534,7 @@
       ]
     },
     "Plugin": {
-      "description": "Plugins are dynamically loaded at PgDog startup. These settings control which plugins are loaded.\n\nNote: Plugins can only be configured at PgDog startup. They cannot be changed after the process is running.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/plugins/",
+      "description": "Plugins are dynamically loaded at PgDog startup. These settings control which plugins are loaded.\n\nNote: Plugins can only be configured at PgDog startup. They cannot be changed after the process is running.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/plugins/>",
       "type": "object",
       "properties": {
         "config": {
@@ -1545,7 +1545,7 @@
           ]
         },
         "name": {
-          "description": "Name of the plugin to load. This is used by PgDog to look up the shared library object in `LD_LIBRARY_PATH`. For example, if your plugin name is `router`, PgDog will look for `librouter.so` on Linux, `librouter.dll` on Windows, and `librouter.dylib` on Mac OS.\n\n**Note:** Make sure the user running PgDog has read & execute permissions on the library.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/plugins/#name",
+          "description": "Name of the plugin to load. This is used by PgDog to look up the shared library object in `LD_LIBRARY_PATH`. For example, if your plugin name is `router`, PgDog will look for `librouter.so` on Linux, `librouter.dll` on Windows, and `librouter.dylib` on Mac OS.\n\n**Note:** Make sure the user running PgDog has read & execute permissions on the library.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/plugins/#name>",
           "type": "string"
         }
       },
@@ -1555,7 +1555,7 @@
       ]
     },
     "PoolerMode": {
-      "description": "connection pooling mode for database pools.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#pooler_mode",
+      "description": "connection pooling mode for database pools.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#pooler_mode>",
       "oneOf": [
         {
           "description": "Server connections are checked out only for the duration of a transaction (default).\n\nSee [transaction mode](https://docs.pgdog.dev/features/transaction-mode/).",
@@ -1575,7 +1575,7 @@
       ]
     },
     "PreparedStatements": {
-      "description": "prepared statement support mode.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#prepared_statements",
+      "description": "prepared statement support mode.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#prepared_statements>",
       "oneOf": [
         {
           "description": "Prepared statements are disabled.",
@@ -1639,7 +1639,7 @@
       ]
     },
     "QueryParserLevel": {
-      "description": "Controls when the query parser is active.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#query_parser",
+      "description": "Controls when the query parser is active.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#query_parser>",
       "oneOf": [
         {
           "description": "Always enable the query parser.",
@@ -1684,7 +1684,7 @@
       ]
     },
     "ReadWriteSplit": {
-      "description": "How to handle the separation of read and write queries.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#read_write_split",
+      "description": "How to handle the separation of read and write queries.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#read_write_split>",
       "oneOf": [
         {
           "description": "Uses the primary database as well as the replicas to serve read queries (default).",
@@ -1709,7 +1709,7 @@
       ]
     },
     "ReadWriteStrategy": {
-      "description": "How aggressive the query parser should be in determining read vs. write queries.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#read_write_strategy",
+      "description": "How aggressive the query parser should be in determining read vs. write queries.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#read_write_strategy>",
       "oneOf": [
         {
           "description": "Transactions are writes, standalone `SELECT` are reads (default).",
@@ -1742,7 +1742,7 @@
       ]
     },
     "Replication": {
-      "description": "Replication configuration used for online resharding.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/replication/",
+      "description": "Replication configuration used for online resharding.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/replication/>",
       "type": "object",
       "properties": {
         "pg_dump_path": {
@@ -1753,26 +1753,26 @@
       }
     },
     "Rewrite": {
-      "description": "Controls PgDog's automatic SQL rewrites for sharded databases. It affects sharding key updates and multi-tuple inserts.\n\n**Note:** Consider enabling [two-phase commit](https://docs.pgdog.dev/features/sharding/2pc/) when either feature is set to `rewrite`. Without it, rewrites are committed shard-by-shard and can leave partial changes if a transaction fails.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/rewrite/",
+      "description": "Controls PgDog's automatic SQL rewrites for sharded databases. It affects sharding key updates and multi-tuple inserts.\n\n**Note:** Consider enabling [two-phase commit](https://docs.pgdog.dev/features/sharding/2pc/) when either feature is set to `rewrite`. Without it, rewrites are committed shard-by-shard and can leave partial changes if a transaction fails.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/rewrite/>",
       "type": "object",
       "properties": {
         "enabled": {
-          "description": "Enables/disables the query rewrite engine.\n\n_Default:_ `false`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/rewrite/#enabled",
+          "description": "Enables/disables the query rewrite engine.\n\n_Default:_ `false`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/rewrite/#enabled>",
           "type": "boolean",
           "default": false
         },
         "primary_key": {
-          "description": "Behavior for `INSERT` missing a `BIGINT` primary key: `error` rejects, `rewrite` auto-injects `pgdog.unique_id()`, `ignore` allows without modification.\n\n_Default:_ `ignore`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/rewrite/#primary_key",
+          "description": "Behavior for `INSERT` missing a `BIGINT` primary key: `error` rejects, `rewrite` auto-injects `pgdog.unique_id()`, `ignore` allows without modification.\n\n_Default:_ `ignore`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/rewrite/#primary_key>",
           "$ref": "#/$defs/RewriteMode",
           "default": "ignore"
         },
         "shard_key": {
-          "description": "Behavior for `UPDATE` statements changing sharding keys: `error` rejects, `rewrite` migrates rows between shards, `ignore` forwards unchanged.\n\n_Default:_ `error`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/rewrite/#shard_key",
+          "description": "Behavior for `UPDATE` statements changing sharding keys: `error` rejects, `rewrite` migrates rows between shards, `ignore` forwards unchanged.\n\n_Default:_ `error`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/rewrite/#shard_key>",
           "$ref": "#/$defs/RewriteMode",
           "default": "error"
         },
         "split_inserts": {
-          "description": "Behavior for multi-row `INSERT` on sharded tables: `error` rejects, `rewrite` distributes rows to their shards, `ignore` forwards unchanged.\n\n_Default:_ `error`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/rewrite/#split_inserts",
+          "description": "Behavior for multi-row `INSERT` on sharded tables: `error` rejects, `rewrite` distributes rows to their shards, `ignore` forwards unchanged.\n\n_Default:_ `error`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/rewrite/#split_inserts>",
           "$ref": "#/$defs/RewriteMode",
           "default": "error"
         }
@@ -1780,7 +1780,7 @@
       "additionalProperties": false
     },
     "RewriteMode": {
-      "description": "Controls what PgDog does when encountering a query that would require a rewrite.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/rewrite/",
+      "description": "Controls what PgDog does when encountering a query that would require a rewrite.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/rewrite/>",
       "oneOf": [
         {
           "description": "Forward the query unchanged.",
@@ -1805,7 +1805,7 @@
       ]
     },
     "Role": {
-      "description": "Role a PostgreSQL server performs in a cluster.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/databases/#role",
+      "description": "Role a PostgreSQL server performs in a cluster.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/databases/#role>",
       "oneOf": [
         {
           "description": "Primary database that serves writes (and reads) (default).",
@@ -1825,7 +1825,7 @@
       ]
     },
     "ShardedMappingConfig": {
-      "description": "A single value-to-shard routing rule within a table's `mapping`.\n\nWhen routing a value, PgDog matches list rules first, then range rules, then\nfalls back to the default rule. A value matched by nothing, with no default\nrule present, is sent to all shards.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/#shard-by-list-and-range",
+      "description": "A single value-to-shard routing rule within a table's `mapping`.\n\nWhen routing a value, PgDog matches list rules first, then range rules, then\nfalls back to the default rule. A value matched by nothing, with no default\nrule present, is sent to all shards.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/#shard-by-list-and-range>",
       "anyOf": [
         {
           "description": "Catch-all fallback for any value not matched by a list or range rule.",
@@ -2041,18 +2041,18 @@
       ]
     },
     "ShardedTableConfig": {
-      "description": "Configuration for sharding databases. Each entry tells PgDog which column to use as the sharding key for a given table.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/",
+      "description": "Configuration for sharding databases. Each entry tells PgDog which column to use as the sharding key for a given table.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/>",
       "type": "object",
       "properties": {
         "centroid_probes": {
-          "description": "Number of centroids to probe during vector similarity search. If not specified, defaults to the square root of the number of centroids.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/#centroid_probes",
+          "description": "Number of centroids to probe during vector similarity search. If not specified, defaults to the square root of the number of centroids.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/#centroid_probes>",
           "type": "integer",
           "format": "uint",
           "default": 0,
           "minimum": 0
         },
         "centroids": {
-          "description": "For vector sharding, specify the centroid vectors directly in the configuration.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/#centroids",
+          "description": "For vector sharding, specify the centroid vectors directly in the configuration.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/#centroids>",
           "type": "array",
           "default": [],
           "items": {
@@ -2060,7 +2060,7 @@
           }
         },
         "centroids_path": {
-          "description": "Path to a JSON file containing centroid vectors. This is useful when centroids are large (1000+ dimensions).\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/#centroids_path",
+          "description": "Path to a JSON file containing centroid vectors. This is useful when centroids are large (1000+ dimensions).\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/#centroids_path>",
           "type": [
             "string",
             "null"
@@ -2068,26 +2068,26 @@
           "default": null
         },
         "column": {
-          "description": "The name of the sharded column.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/#column",
+          "description": "The name of the sharded column.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/#column>",
           "type": "string",
           "default": ""
         },
         "data_type": {
-          "description": "The data type of the column. Currently supported options are: `bigint`, `uuid`, `varchar`, `vector`.\n\n_Default:_ `bigint`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/#data_type",
+          "description": "The data type of the column. Currently supported options are: `bigint`, `uuid`, `varchar`, `vector`.\n\n_Default:_ `bigint`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/#data_type>",
           "$ref": "#/$defs/DataType",
           "default": "bigint"
         },
         "database": {
-          "description": "The name of the database in `[[databases]]` section in which the table is located.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/#database",
+          "description": "The name of the database in `[[databases]]` section in which the table is located.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/#database>",
           "type": "string"
         },
         "hasher": {
-          "description": "The hash function to use for sharding.\n\n_Default:_ `postgres`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/#hasher",
+          "description": "The hash function to use for sharding.\n\n_Default:_ `postgres`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/#hasher>",
           "$ref": "#/$defs/Hasher",
           "default": "postgres"
         },
         "mapping": {
-          "description": "Explicit value-to-shard routing rules for the column. When omitted (the\ndefault), PgDog shards by hashing the column value instead. Each entry is\na [`ShardedMappingConfig`]; see it for the list/range/default forms.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/#shard-by-list-and-range",
+          "description": "Explicit value-to-shard routing rules for the column. When omitted (the\ndefault), PgDog shards by hashing the column value instead. Each entry is\na [`ShardedMappingConfig`]; see it for the list/range/default forms.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/#shard-by-list-and-range>",
           "type": [
             "array",
             "null"
@@ -2097,7 +2097,7 @@
           }
         },
         "name": {
-          "description": "The name of the PostgreSQL table. Only columns explicitly referencing that table will be sharded. If not specified, all tables with the specified column are considered sharded.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/#name",
+          "description": "The name of the PostgreSQL table. Only columns explicitly referencing that table will be sharded. If not specified, all tables with the specified column are considered sharded.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/#name>",
           "type": [
             "string",
             "null"
@@ -2105,12 +2105,12 @@
           "default": null
         },
         "primary": {
-          "description": "Marks this table as the primary sharding anchor (e.g. `users`). PgDog uses the primary table to resolve foreign-key relationships when routing queries.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/#primary",
+          "description": "Marks this table as the primary sharding anchor (e.g. `users`). PgDog uses the primary table to resolve foreign-key relationships when routing queries.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/#primary>",
           "type": "boolean",
           "default": false
         },
         "schema": {
-          "description": "The name of the PostgreSQL schema where the sharded table is located. This is optional.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/#schema",
+          "description": "The name of the PostgreSQL schema where the sharded table is located. This is optional.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/#schema>",
           "type": [
             "string",
             "null"
@@ -2124,7 +2124,7 @@
       ]
     },
     "SystemCatalogsBehavior": {
-      "description": "Controls how system catalog tables (like `pg_database`, `pg_class`, etc.) are treated by the query router.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#system_catalogs",
+      "description": "Controls how system catalog tables (like `pg_database`, `pg_class`, etc.) are treated by the query router.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#system_catalogs>",
       "oneOf": [
         {
           "description": "Send catalog queries to all shards and merge the results.",
@@ -2144,7 +2144,7 @@
       ]
     },
     "Tcp": {
-      "description": "TCP settings for client and server connections.\n\nOptimal TCP settings are necessary to quickly recover from database incidents.\n\n**Note:** Not all networks support or play well with TCP keep-alives. If you see an increased number of dropped connections after enabling these settings, you may have to disable them.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/network/",
+      "description": "TCP settings for client and server connections.\n\nOptimal TCP settings are necessary to quickly recover from database incidents.\n\n**Note:** Not all networks support or play well with TCP keep-alives. If you see an increased number of dropped connections after enabling these settings, you may have to disable them.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/network/>",
       "type": "object",
       "properties": {
         "congestion_control": {
@@ -2155,7 +2155,7 @@
           ]
         },
         "interval": {
-          "description": "Time between successive keep-alive probes. Milliseconds.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/network/#interval",
+          "description": "Time between successive keep-alive probes. Milliseconds.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/network/#interval>",
           "type": [
             "integer",
             "null"
@@ -2164,12 +2164,12 @@
           "minimum": 0
         },
         "keepalive": {
-          "description": "Enable TCP keep-alive probing on idle client and server connections.\n\n**Note:** Not all networks support TCP keep-alive. Disable if you observe increased connection drops.\n\n_Default:_ `true`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/network/#keepalive",
+          "description": "Enable TCP keep-alive probing on idle client and server connections.\n\n**Note:** Not all networks support TCP keep-alive. Disable if you observe increased connection drops.\n\n_Default:_ `true`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/network/#keepalive>",
           "type": "boolean",
           "default": true
         },
         "retries": {
-          "description": "How many consecutive failed keep-alive probes before the connection is terminated.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/network/#retries",
+          "description": "How many consecutive failed keep-alive probes before the connection is terminated.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/network/#retries>",
           "type": [
             "integer",
             "null"
@@ -2178,7 +2178,7 @@
           "minimum": 0
         },
         "time": {
-          "description": "How long a connection must be idle before keep-alive probes begin. Milliseconds.\n\n_Default:_ system default (2 hours)\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/network/#time",
+          "description": "How long a connection must be idle before keep-alive probes begin. Milliseconds.\n\n_Default:_ system default (2 hours)\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/network/#time>",
           "type": [
             "integer",
             "null"
@@ -2187,7 +2187,7 @@
           "minimum": 0
         },
         "user_timeout": {
-          "description": "Close connections with unacknowledged data after this duration (`TCP_USER_TIMEOUT`). Milliseconds.\n\n**Note:** Linux only.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/network/#user_timeout",
+          "description": "Close connections with unacknowledged data after this duration (`TCP_USER_TIMEOUT`). Milliseconds.\n\n**Note:** Linux only.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/network/#user_timeout>",
           "type": [
             "integer",
             "null"
@@ -2199,7 +2199,7 @@
       "additionalProperties": false
     },
     "TlsVerifyMode": {
-      "description": "TLS verification mode for connections to Postgres servers.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#tls_verify",
+      "description": "TLS verification mode for connections to Postgres servers.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#tls_verify>",
       "oneOf": [
         {
           "description": "TLS is disabled.",

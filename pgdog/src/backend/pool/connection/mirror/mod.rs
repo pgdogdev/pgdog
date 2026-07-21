@@ -5,8 +5,8 @@ use std::time::Duration;
 use pgdog_config::MirroringLevel;
 use rand::{Rng, rng};
 use tokio::select;
+use tokio::sync::mpsc::*;
 use tokio::time::{Instant, sleep};
-use tokio::{spawn, sync::mpsc::*};
 use tracing::{debug, error, warn};
 
 use crate::backend::Cluster;
@@ -16,6 +16,7 @@ use crate::frontend::client::query_engine::{QueryEngine, QueryEngineContext};
 use crate::frontend::client::timeouts::Timeouts;
 use crate::frontend::{ClientComms, PreparedStatements};
 use crate::net::{FrontendPid, Parameter, Parameters, Stream};
+use crate::tasks;
 
 use super::Error;
 
@@ -114,7 +115,7 @@ impl Mirror {
         let handler = MirrorHandler::new(tx, &mirror_config, cluster.stats());
 
         let stats_for_errors = cluster.stats();
-        spawn(async move {
+        tasks::spawn("mirror", async move {
             loop {
                 select! {
                     req = rx.recv() => {

@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 /// When `endpoint` is set, PgDog periodically POSTs OTLP JSON metrics
 /// to the configured URL.
 ///
-/// https://docs.pgdog.dev/configuration/pgdog.toml/otel/
+/// <https://docs.pgdog.dev/configuration/pgdog.toml/otel/>
 #[derive(JsonSchema, Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 #[serde(deny_unknown_fields)]
 pub struct Otel {
@@ -30,7 +30,7 @@ pub struct Otel {
     ///
     /// Env: `PGDOG_OTEL_NAMESPACE`
     ///
-    /// https://docs.pgdog.dev/configuration/pgdog.toml/otel/#namespace
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/otel/#namespace>
     #[serde(default = "Otel::namespace")]
     pub namespace: Option<String>,
 

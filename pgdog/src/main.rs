@@ -121,15 +121,19 @@ async fn pgdog(command: Option<Commands>) -> Result<(), Box<dyn std::error::Erro
     }
 
     if let Some(openmetrics_port) = general.openmetrics_port {
-        tokio::spawn(async move { stats::http_server::server(openmetrics_port).await });
+        pgdog::tasks::spawn("openmetrics server", async move {
+            stats::http_server::server(openmetrics_port).await
+        });
     }
 
     if config::config().config.otel.endpoint.is_some() {
-        tokio::spawn(stats::otel_exporter::run());
+        pgdog::tasks::spawn("otel publisher", stats::otel_exporter::run());
     }
 
     if let Some(healthcheck_port) = general.healthcheck_port {
-        tokio::spawn(async move { healthcheck::server(healthcheck_port).await });
+        pgdog::tasks::spawn("http healthcheck server", async move {
+            healthcheck::server(healthcheck_port).await
+        });
     }
 
     let stats_logger = stats::StatsLogger::new();
@@ -164,6 +168,8 @@ async fn pgdog(command: Option<Commands>) -> Result<(), Box<dyn std::error::Erro
                 // Wait for the 2PC monitor to drain any in-flight cleanup
                 // before the process exits, even on error.
                 Manager::get().shutdown().await;
+                databases::shutdown();
+
                 if let Err(err) = result {
                     error!("{}", err);
                     return Err(err);
@@ -172,7 +178,14 @@ async fn pgdog(command: Option<Commands>) -> Result<(), Box<dyn std::error::Erro
 
             if let Commands::SchemaSync { .. } = command {
                 info!("🔄 entering schema sync mode");
-                if let Err(err) = cli::schema_sync(command.clone()).await {
+                let result = cli::schema_sync(command.clone()).await;
+
+                // Wait for the 2PC monitor to drain any in-flight cleanup
+                // before the process exits, even on error.
+                Manager::get().shutdown().await;
+                databases::shutdown();
+
+                if let Err(err) = result {
                     error!("{}", err);
                     return Err(err);
                 }
@@ -180,28 +193,45 @@ async fn pgdog(command: Option<Commands>) -> Result<(), Box<dyn std::error::Erro
 
             if let Commands::Setup { database } = command {
                 info!("🔄 entering setup mode");
-                cli::setup(database).await?;
+                let result = cli::setup(database).await;
+
+                Manager::get().shutdown().await;
+                databases::shutdown();
+
+                result?;
             }
 
             if let Commands::ReplicateAndCutover { .. } = command {
                 info!("🔄 entering test mode");
-                cli::replicate_and_cutover(command.clone()).await?;
+                let result = cli::replicate_and_cutover(command.clone()).await;
+
+                Manager::get().shutdown().await;
+                databases::shutdown();
+
+                result?;
             }
 
-            if let Commands::Route { .. } = command
-                && let Err(err) = cli::route(command.clone()).await
-            {
-                error!("{}", err);
-                return Err(err);
+            if let Commands::Route { .. } = command {
+                let result = cli::route(command.clone()).await;
+
+                Manager::get().shutdown().await;
+                databases::shutdown();
+
+                if let Err(err) = result {
+                    error!("{}", err);
+                    return Err(err);
+                }
             }
         }
     }
 
-    info!("🐕 PgDog is shutting down");
     stats_logger.shutdown();
+    pgdog::tasks::shutdown().await;
 
     // Any shutdown routines go below.
     plugin::shutdown();
+
+    info!("🐕 PgDog is shutting down");
 
     Ok(())
 }
@@ -212,11 +242,17 @@ fn build_runtime(workers: usize, stack_size: usize) -> std::io::Result<tokio::ru
             .enable_all()
             .thread_stack_size(stack_size)
             .build(),
-        workers => Builder::new_multi_thread()
-            .worker_threads(workers)
-            .enable_all()
-            .thread_stack_size(stack_size)
-            .build(),
+        workers => {
+            let mut builder = Builder::new_multi_thread();
+            builder.worker_threads(workers);
+
+            if workers > 2 {
+                info!("🚀 using alternative Tokio timer");
+                builder.enable_alt_timer();
+            }
+
+            builder.enable_all().thread_stack_size(stack_size).build()
+        }
     }
 }
 

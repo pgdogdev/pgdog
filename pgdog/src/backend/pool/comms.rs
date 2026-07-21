@@ -1,4 +1,5 @@
 use tokio::sync::Notify;
+use tokio_util::sync::CancellationToken;
 
 /// Internal pool notifications.
 pub(super) struct Comms {
@@ -8,7 +9,7 @@ pub(super) struct Comms {
     /// or waiting for one to be returned to the pool.
     pub(super) request: Notify,
     /// Pool is shutting down.
-    pub(super) shutdown: Notify,
+    pub(super) shutdown: CancellationToken,
 }
 
 impl Comms {
@@ -17,7 +18,7 @@ impl Comms {
         Self {
             ready: Notify::new(),
             request: Notify::new(),
-            shutdown: Notify::new(),
+            shutdown: CancellationToken::new(),
         }
     }
 }

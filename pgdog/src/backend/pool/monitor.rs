@@ -51,9 +51,10 @@ use crate::backend::pool::inner::ShouldCreate;
 use crate::backend::pool::token_cache::TokenCache;
 use crate::backend::{ConnectReason, DisconnectReason, Server};
 use crate::config::ServerAuth;
+use crate::tasks;
 
+use tokio::select;
 use tokio::time::{Instant, interval, sleep, timeout};
-use tokio::{select, task::spawn};
 use tracing::{debug, error, info, warn};
 
 static MAINTENANCE: Duration = Duration::from_millis(333);
@@ -73,7 +74,7 @@ impl Monitor {
     pub(super) fn run(pool: &Pool) {
         let monitor = Self { pool: pool.clone() };
 
-        spawn(async move {
+        tasks::spawn("pool monitor", async move {
             monitor.spawn().await;
         });
     }
@@ -84,9 +85,12 @@ impl Monitor {
 
         // Maintenance loop.
         let pool = self.pool.clone();
-        spawn(async move { Self::maintenance(pool).await });
+        tasks::spawn(
+            "pool maintenance",
+            async move { Self::maintenance(pool).await },
+        );
         let pool = self.pool.clone();
-        spawn(async move { Self::stats(pool).await });
+        tasks::spawn("pool stats", async move { Self::stats(pool).await });
 
         // Delay starting health checks to give
         // time for the pool to spin up.
@@ -102,8 +106,11 @@ impl Monitor {
         };
 
         if !replication_mode && interval > Duration::ZERO {
-            spawn(async move {
-                sleep(delay).await;
+            tasks::spawn("pool healthchecks", async move {
+                select! {
+                    _ = sleep(delay) => {}
+                    _ = pool.comms().shutdown.cancelled() => return,
+                }
                 Self::healthchecks(pool).await
             });
         }
@@ -112,7 +119,9 @@ impl Monitor {
         // Only spawned for pools that use an external identity provider.
         if self.pool.addr().server_auth.is_external_identity() {
             let pool = self.pool.clone();
-            spawn(async move { Self::token_refresh(pool).await });
+            tasks::spawn("pool token refresh", async move {
+                Self::token_refresh(pool).await
+            });
         }
 
         loop {
@@ -159,7 +168,7 @@ impl Monitor {
                 }
 
                 // Pool is shutting down.
-                _ = comms.shutdown.notified() => {
+                _ = comms.shutdown.cancelled() => {
                     break;
                 }
             }
@@ -235,7 +244,7 @@ impl Monitor {
                     }
                 }
 
-                _ = comms.shutdown.notified() => break,
+                _ = comms.shutdown.cancelled() => break,
             }
         }
 
@@ -272,7 +281,7 @@ impl Monitor {
                 }
 
 
-                _ = comms.shutdown.notified() => break,
+                _ = comms.shutdown.cancelled() => break,
             }
         }
 
@@ -313,7 +322,7 @@ impl Monitor {
                     guard.close_old(now);
                 }
 
-                _ = comms.shutdown.notified() => break,
+                _ = comms.shutdown.cancelled() => break,
             }
         }
 
@@ -423,7 +432,7 @@ impl Monitor {
                     }
                 }
 
-                _ = comms.shutdown.notified() => {
+                _ = comms.shutdown.cancelled() => {
                     break;
                 }
             }

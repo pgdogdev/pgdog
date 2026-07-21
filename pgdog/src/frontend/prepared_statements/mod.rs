@@ -4,7 +4,7 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use once_cell::sync::Lazy;
 use parking_lot::RwLock;
-use tokio::{spawn, time::sleep};
+use tokio::time::sleep;
 use tracing::debug;
 
 use crate::{
@@ -171,10 +171,14 @@ impl PreparedStatements {
 /// Run prepared statements maintenance task
 /// every second.
 pub fn start_maintenance() {
-    spawn(async move {
+    crate::tasks::spawn("prepared statements cache", async move {
         debug!("prepared statements cache maintenance started");
+        let shutdown = crate::tasks::shutdown_signal();
         loop {
-            sleep(Duration::from_secs(1)).await;
+            tokio::select! {
+                _ = sleep(Duration::from_secs(1)) => {}
+                _ = shutdown.cancelled() => break,
+            }
             run_maintenance();
         }
     });

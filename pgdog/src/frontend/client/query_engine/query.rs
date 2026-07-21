@@ -1,4 +1,3 @@
-use tokio::time::timeout;
 use tracing::{info, trace};
 
 use crate::{
@@ -11,6 +10,7 @@ use crate::{
         RowDescription, ToBytes, TransactionState,
     },
     state::State,
+    util::safe_timeout,
 };
 
 use tracing::{debug, error};
@@ -58,7 +58,7 @@ impl QueryEngine {
             }
         }
 
-        match timeout(
+        match safe_timeout(
             context.timeouts.query_timeout(&State::Active),
             self.client_server_exchange(context),
         )

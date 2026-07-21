@@ -384,7 +384,7 @@ impl Pool {
         guard.online = false;
         guard.dump_idle();
         guard.close_waiters(Error::Offline);
-        self.comms().shutdown.notify_waiters();
+        self.comms().shutdown.cancel();
         self.comms().ready.notify_waiters();
     }
 

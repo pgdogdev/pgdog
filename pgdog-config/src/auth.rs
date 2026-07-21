@@ -6,7 +6,7 @@ use std::{fmt::Display, str::FromStr};
 ///
 /// See [passthrough authentication](https://docs.pgdog.dev/features/authentication/#passthrough-authentication).
 ///
-/// https://docs.pgdog.dev/configuration/pgdog.toml/general/#passthrough_auth
+/// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#passthrough_auth>
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum PassthroughAuth {
@@ -36,7 +36,7 @@ impl PassthroughAuth {
 ///
 /// See [authentication](https://docs.pgdog.dev/features/authentication/).
 ///
-/// https://docs.pgdog.dev/configuration/pgdog.toml/general/#auth_type
+/// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#auth_type>
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum AuthType {

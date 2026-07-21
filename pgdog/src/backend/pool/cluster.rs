@@ -18,6 +18,7 @@ use tokio::spawn;
 use tracing::{error, warn};
 
 use crate::frontend::router::sharding::ShardedTable;
+use crate::tasks;
 use crate::{
     backend::{
         Schema, ShardedTables,
@@ -722,7 +723,7 @@ impl Cluster {
             let identifier = self.identifier();
             let shard = shard.clone();
 
-            spawn(async move {
+            tasks::spawn("cluster schema sync", async move {
                 use tokio::time::sleep;
 
                 loop {

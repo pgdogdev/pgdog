@@ -18,6 +18,7 @@ pub mod plugin;
 pub mod sighup;
 pub mod state;
 pub mod stats;
+pub mod tasks;
 #[cfg(test)]
 pub mod test_utils;
 #[cfg(feature = "tui")]

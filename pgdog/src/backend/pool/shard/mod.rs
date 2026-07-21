@@ -4,8 +4,9 @@ use arc_swap::ArcSwap;
 use std::ops::Deref;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::OnceCell;
-use tokio::{select, spawn, sync::Notify};
+use tokio::select;
+use tokio::sync::{Notify, OnceCell};
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, info};
 
 use crate::backend::PubSubListener;
@@ -230,7 +231,7 @@ impl Shard {
 
     /// Shutdown every pool and maintenance task in this shard.
     pub fn shutdown(&self) {
-        self.comms.shutdown.notify_waiters();
+        self.comms.shutdown.cancel();
         self.shutdown_pub_sub();
         self.lb.shutdown();
     }
@@ -329,7 +330,7 @@ impl ShardInner {
         let primary = primary.as_ref().map(Pool::new);
         let lb = LoadBalancer::new(&primary, replicas, lb_strategy, rw_split);
         let comms = Arc::new(ShardComms {
-            shutdown: Notify::new(),
+            shutdown: CancellationToken::new(),
             lsn_check_interval,
         });
 
