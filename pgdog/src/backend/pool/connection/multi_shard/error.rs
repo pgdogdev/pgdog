@@ -37,6 +37,9 @@ pub enum Error {
 
     #[error("unsupported aggregation {function}: {reason}")]
     UnsupportedAggregation { function: String, reason: String },
+
+    #[error("ORDER BY column \"{0}\" not found in row description")]
+    OrderByColumnNotFound(String),
 }
 
 impl From<crate::backend::Error> for Error {

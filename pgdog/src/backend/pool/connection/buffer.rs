@@ -50,7 +50,11 @@ impl Buffer {
     }
 
     /// Sort the buffer.
-    pub(super) fn sort(&mut self, columns: &[OrderBy], decoder: &Decoder) {
+    pub(super) fn sort(
+        &mut self,
+        columns: &[OrderBy],
+        decoder: &Decoder,
+    ) -> Result<(), super::multi_shard::Error> {
         // Calculate column indices once, since
         // fetching indices by name is O(number of columns).
         let mut cols = vec![];
@@ -60,22 +64,31 @@ impl Buffer {
                 OrderBy::AscColumn(name) => {
                     if let Some(index) = decoder.rd().field_index(name) {
                         cols.push(OrderBy::Asc(index + 1));
+                    } else {
+                        return Err(super::multi_shard::Error::OrderByColumnNotFound(
+                            name.clone(),
+                        ));
                     }
-                    // TODO: Error out instead of silently not sorting.
                 }
                 OrderBy::Desc(_) => cols.push(column.clone()),
                 OrderBy::DescColumn(name) => {
                     if let Some(index) = decoder.rd().field_index(name) {
                         cols.push(OrderBy::Desc(index + 1));
+                    } else {
+                        return Err(super::multi_shard::Error::OrderByColumnNotFound(
+                            name.clone(),
+                        ));
                     }
-                    // TODO: Error out instead of silently not sorting.
                 }
                 OrderBy::AscVectorL2(_, _) => cols.push(column.clone()),
                 OrderBy::AscVectorL2Column(name, vector) => {
                     if let Some(index) = decoder.rd().field_index(name) {
                         cols.push(OrderBy::AscVectorL2(index + 1, vector.clone()));
+                    } else {
+                        return Err(super::multi_shard::Error::OrderByColumnNotFound(
+                            name.clone(),
+                        ));
                     }
-                    // TODO: Error out instead of silently not sorting.
                 }
             };
         }
@@ -129,6 +142,8 @@ impl Buffer {
         };
 
         self.buffer.make_contiguous().sort_by(order_by);
+
+        Ok(())
     }
 
     /// Execute aggregate functions.
@@ -256,7 +271,7 @@ mod test {
 
         let decoder = Decoder::from(&rd);
 
-        buf.sort(&columns, &decoder);
+        buf.sort(&columns, &decoder).unwrap();
         buf.full();
 
         let mut i = 1;
@@ -270,6 +285,56 @@ mod test {
         }
 
         assert_eq!(i, 26);
+    }
+
+    #[test]
+    fn test_sort_buffer_missing_order_by_column_errors() {
+        let mut buf = Buffer::default();
+        let rd = RowDescription::new(&[Field::bigint("one")]);
+        let decoder = Decoder::from(&rd);
+
+        let mut dr = DataRow::new();
+        dr.add(1_i64);
+        buf.add(dr.message().unwrap()).unwrap();
+
+        for columns in [
+            vec![OrderBy::AscColumn("missing".to_string())],
+            vec![OrderBy::DescColumn("missing".to_string())],
+            vec![OrderBy::AscVectorL2Column(
+                "missing".to_string(),
+                Vector::from(&[1.0, 2.0][..]),
+            )],
+        ] {
+            let err = buf.sort(&columns, &decoder).unwrap_err();
+            assert!(matches!(
+                err,
+                super::super::multi_shard::Error::OrderByColumnNotFound(name)
+                    if name == "missing"
+            ));
+        }
+    }
+
+    #[test]
+    fn test_sort_buffer_with_order_by_column_name() {
+        let mut buf = Buffer::default();
+        let rd = RowDescription::new(&[Field::bigint("one"), Field::text("two")]);
+        let columns = [OrderBy::AscColumn("one".to_string())];
+
+        for i in [3_i64, 1, 2] {
+            let mut dr = DataRow::new();
+            dr.add(i).add(i.to_string());
+            buf.add(dr.message().unwrap()).unwrap();
+        }
+
+        let decoder = Decoder::from(&rd);
+
+        buf.sort(&columns, &decoder).unwrap();
+        buf.full();
+
+        for expected in 1..=3_i64 {
+            let dr = DataRow::from_bytes(buf.take().unwrap().to_bytes()).unwrap();
+            assert_eq!(dr.get::<i64>(0, Format::Text).unwrap(), expected);
+        }
     }
 
     #[test]
@@ -347,7 +412,7 @@ mod test {
 
         let decoder = Decoder::from(&rd);
 
-        buf.sort(&columns, &decoder);
+        buf.sort(&columns, &decoder).unwrap();
         buf.full();
 
         // Verify timestamps are sorted
@@ -387,7 +452,7 @@ mod test {
 
         let decoder = Decoder::from(&rd);
 
-        buf.sort(&columns, &decoder);
+        buf.sort(&columns, &decoder).unwrap();
         buf.full();
 
         // Verify numeric values are sorted in descending order
@@ -442,7 +507,7 @@ mod test {
         }
 
         let decoder = Decoder::from(&rd);
-        buf.sort(&columns, &decoder);
+        buf.sort(&columns, &decoder).unwrap();
         buf.full();
 
         let expected_order = [
@@ -486,7 +551,7 @@ mod test {
         }
 
         let decoder = Decoder::from(&rd);
-        buf.sort(&columns, &decoder);
+        buf.sort(&columns, &decoder).unwrap();
         buf.full();
 
         // Expected order: ascending numeric sort
