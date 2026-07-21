@@ -14,7 +14,6 @@ use std::{
     },
     time::Duration,
 };
-use tokio::spawn;
 use tracing::{error, warn};
 
 use crate::frontend::router::sharding::ShardedTable;
