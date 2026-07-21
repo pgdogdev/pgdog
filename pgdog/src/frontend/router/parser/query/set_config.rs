@@ -1,6 +1,8 @@
 #[cfg(not(feature = "new_parser"))]
 use super::String as PgString;
 use super::*;
+#[cfg(feature = "new_parser")]
+use pg_raw_parse::{Owned, StmtList};
 #[cfg(not(feature = "new_parser"))]
 use std::string::String;
 
@@ -46,6 +48,79 @@ impl QueryParser {
         }
         _ => {}
     }
+}
+
+/// Session variables whose modification lets a client escape a `server_role`
+/// impersonation.
+const ROLE_ESCAPE_PARAMS: [&str; 2] = ["role", "session_authorization"];
+
+fn is_role_escape(name: &str) -> bool {
+    ROLE_ESCAPE_PARAMS
+        .iter()
+        .any(|param| name.eq_ignore_ascii_case(param))
+}
+
+/// Find a client-issued attempt to change the backend role in any of the
+/// parsed statements, so impersonation pools can reject every form uniformly:
+/// `SET ROLE`, `SET SESSION ROLE`, `SET LOCAL ROLE`, `RESET ROLE`,
+/// `SET SESSION AUTHORIZATION`, `RESET SESSION AUTHORIZATION`, and
+/// `set_config('role'|'session_authorization', ...)` (including non-constant
+/// values). Returns the offending variable name, matched case-insensitively.
+///
+/// `RESET ALL` / `DISCARD ALL` are intentionally not matched: they restore
+/// session defaults (the startup-parameter role) rather than clearing it.
+#[cfg(feature = "new_parser")]
+pub(super) fn role_escape_target(stmts: &Owned<StmtList>) -> Option<String> {
+    for node in stmts.stmts() {
+        match node {
+            // SET ROLE / RESET ROLE / SET SESSION AUTHORIZATION, and their
+            // SESSION/LOCAL spellings, all land here with the same `name`.
+            Node::VariableSetStmt(stmt) => {
+                if let Some(name) = stmt.name()
+                    && is_role_escape(name)
+                {
+                    return Some(name.to_string());
+                }
+            }
+            // SELECT set_config('role', <anything>, ...) — including a
+            // non-constant value that would otherwise pass through verbatim.
+            Node::SelectStmt(stmt) => {
+                if let Some(fcall) = extract_set_config(stmt)
+                    && let Some(name) = fcall.args().first().and_then(Node::as_str)
+                    && is_role_escape(name)
+                {
+                    return Some(name.to_string());
+                }
+            }
+            _ => (),
+        }
+    }
+
+    None
+}
+
+/// See the `new_parser` variant above for what this matches and why.
+#[cfg(not(feature = "new_parser"))]
+pub(super) fn role_escape_target(stmts: &[RawStmt]) -> Option<String> {
+    for raw in stmts {
+        match raw.stmt.as_ref().and_then(|stmt| stmt.node.as_ref()) {
+            Some(NodeEnum::VariableSetStmt(stmt)) if is_role_escape(&stmt.name) => {
+                return Some(stmt.name.clone());
+            }
+            Some(NodeEnum::SelectStmt(stmt)) => {
+                if let Some(fcall) = extract_set_config(stmt)
+                    && let Some(name_arg) = fcall.args.first()
+                    && let Some(name) = parse_config_name(name_arg)
+                    && is_role_escape(&name)
+                {
+                    return Some(name);
+                }
+            }
+            _ => (),
+        }
+    }
+
+    None
 }
 
 /// Returns None if the arguments could not be parsed

@@ -19,6 +19,11 @@ pub enum AuthResult {
     NoUserOrDatabase,
     /// Client didn't provide password message.
     NoPasswordMessage,
+    /// An authentication plugin explicitly denied the client.
+    PluginDenied,
+    /// No authentication plugin made a decision (all skipped). Treated as a
+    /// denial: `auth_type = "plugin"` is explicit, there is no password fallback.
+    PluginNoDecision,
 }
 
 impl AuthResult {
@@ -46,6 +51,8 @@ impl Display for AuthResult {
             }
             Self::NoUserOrDatabase => write!(f, "no user or database in config"),
             Self::NoPasswordMessage => write!(f, "client did not send password message"),
+            Self::PluginDenied => write!(f, "authentication plugin denied the client"),
+            Self::PluginNoDecision => write!(f, "no authentication plugin accepted the client"),
         }
     }
 }

@@ -105,6 +105,18 @@ pub struct General {
     #[serde(default = "General::workers")]
     pub workers: usize,
 
+    /// Maximum number of authentication-plugin calls allowed to run concurrently.
+    /// Authentication plugins run on a blocking thread pool (auth happens once per
+    /// connection and may block on I/O); this bounds how many run at the same time.
+    ///
+    /// **Note:** Only relevant when `auth_type = "plugin"`.
+    ///
+    /// _Default:_ `4`
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#background_workers
+    #[serde(default = "General::background_workers")]
+    pub background_workers: usize,
+
     /// Default maximum number of server connections per database pool.
     ///
     /// **Note:** We strongly recommend keeping this value well below the supported connections of the backend database(s) to allow connections for maintenance in high load scenarios.
@@ -814,6 +826,7 @@ impl Default for General {
             host: Self::host(),
             port: Self::port(),
             workers: Self::workers(),
+            background_workers: Self::background_workers(),
             default_pool_size: Self::default_pool_size(),
             min_pool_size: Self::min_pool_size(),
             pooler_mode: Self::pooler_mode(),
@@ -964,6 +977,10 @@ impl General {
 
     fn workers() -> usize {
         Self::env_or_default("PGDOG_WORKERS", 2)
+    }
+
+    fn background_workers() -> usize {
+        Self::env_or_default("PGDOG_BACKGROUND_WORKERS", 4)
     }
 
     fn default_pool_size() -> usize {
@@ -1499,6 +1516,35 @@ mod tests {
         assert_eq!(General::workers(), 8);
         let _guard = remove_env_var("PGDOG_WORKERS");
         assert_eq!(General::workers(), 2);
+    }
+
+    #[test]
+    fn test_env_background_workers() {
+        let _guard = set_env_var("PGDOG_BACKGROUND_WORKERS", "16");
+        assert_eq!(General::background_workers(), 16);
+        let _guard = remove_env_var("PGDOG_BACKGROUND_WORKERS");
+        assert_eq!(General::background_workers(), 4);
+    }
+
+    #[test]
+    fn test_background_workers_default() {
+        let _guard = remove_env_var("PGDOG_BACKGROUND_WORKERS");
+        assert_eq!(General::default().background_workers, 4);
+    }
+
+    #[test]
+    fn test_background_workers_serde_round_trip() {
+        let _guard = remove_env_var("PGDOG_BACKGROUND_WORKERS");
+
+        // Omitted: falls back to the default.
+        let general: General = toml::from_str("").unwrap();
+        assert_eq!(general.background_workers, 4);
+
+        // Explicit value is parsed and re-serialized.
+        let general: General = toml::from_str("background_workers = 8").unwrap();
+        assert_eq!(general.background_workers, 8);
+        let serialized = toml::to_string(&general).unwrap();
+        assert!(serialized.contains("background_workers = 8"));
     }
 
     #[test]

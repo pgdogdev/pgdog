@@ -268,6 +268,13 @@
             "null"
           ]
         },
+        "server_role": {
+          "description": "PostgreSQL role this user's backend connections assume via the `role` startup\nparameter, used for impersonation with `auth_type = \"plugin\"`.\n\n**Note:** The user config no longer supplies the Postgres password when a plugin\nderives the login, so a working backend credential must be provided via\n`server_password` or a non-default `server_auth`. `SET ROLE`, `RESET ROLE`, and\n`SET SESSION AUTHORIZATION` are rejected on pools that set this.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "server_user": {
           "description": "Which user to connect with when creating backend connections from PgDog to PostgreSQL. By default, the user configured in `name` is used. This setting allows you to override this configuration and use a different user.\n\n**Note:** Values specified in `pgdog.toml` take priority over this configuration.\n\n<https://docs.pgdog.dev/configuration/users.toml/users/#server_user>",
           "type": [

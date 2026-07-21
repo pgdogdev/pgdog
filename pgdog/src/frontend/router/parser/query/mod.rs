@@ -290,6 +290,18 @@ impl QueryParser {
             .run()?;
         }
 
+        // Reject any client attempt to escape a `server_role` impersonation
+        // before routing. Single chokepoint over every statement form we
+        // forward (single SET, multi-statement batches, set_config with a
+        // non-constant value). Normal pools have no `server_role`, so this
+        // short-circuits. The engine turns `RoleLocked` into a 42501 error and
+        // keeps the session alive.
+        if context.router_context.cluster.server_role().is_some()
+            && let Some(name) = set_config::role_escape_target(stmts)
+        {
+            return Ok(Command::RoleLocked { name });
+        }
+
         // Handle multi-statement SET commands (e.g. "SET x TO 1; SET y TO 2").
         if stmts.len() > 1
             && let Some(command) = self.try_multi_set(&**stmts, context)?
@@ -554,6 +566,14 @@ impl QueryParser {
                 }
 
                 let stmts = &statement.parse_result().protobuf.stmts;
+
+                // Reject any client attempt to escape a `server_role`
+                // impersonation before routing (see the new_parser variant).
+                if context.router_context.cluster.server_role().is_some()
+                    && let Some(name) = set_config::role_escape_target(stmts)
+                {
+                    return Ok(Command::RoleLocked { name });
+                }
 
                 // Handle multi-statement SET commands (e.g. "SET x TO 1; SET y TO 2").
                 if stmts.len() > 1

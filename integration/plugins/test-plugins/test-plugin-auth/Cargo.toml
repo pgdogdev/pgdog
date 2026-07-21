@@ -1,0 +1,16 @@
+[package]
+name = "test-plugin-auth"
+version = "0.1.0"
+edition = "2024"
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+pgdog-plugin = { path = "../../../../pgdog-plugin", default-features = false }
+
+[features]
+default = ["pgdog-plugin/pg_query"]
+new_parser = ["pgdog-plugin/new_parser"]

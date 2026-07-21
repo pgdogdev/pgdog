@@ -30,6 +30,10 @@ pub struct Address {
     /// Server auth mode for backend connections.
     #[serde(default)]
     pub server_auth: ServerAuth,
+    /// PostgreSQL role backend connections assume via the `role` startup
+    /// parameter, from `User.server_role` (plugin-auth impersonation).
+    #[serde(default)]
+    pub server_role: Option<String>,
     /// Optional IAM region override.
     pub server_iam_region: Option<String>,
     /// Vault path to fetch dynamic credentials from.
@@ -94,6 +98,7 @@ impl Address {
                     .collect()
             },
             server_auth,
+            server_role: user.server_role.clone(),
             server_iam_region: user.server_iam_region.clone(),
             vault_path: user.server_vault_path.clone(),
             vault_refresh_percent: user.vault_refresh_percent,
@@ -208,6 +213,7 @@ impl Address {
             passwords: vec!["pgdog".into()],
             database_name: "pgdog".into(),
             server_auth: ServerAuth::Password,
+            server_role: None,
             server_iam_region: None,
             vault_path: None,
             vault_refresh_percent: None,
