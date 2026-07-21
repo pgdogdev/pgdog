@@ -2345,19 +2345,12 @@
           "type": "string"
         },
         "functions": {
-          "description": "Functions that should be treated as write-only.",
+          "description": "Functions that should be treated as write-only.\nEach entry can be schema-qualified.",
           "type": "array",
           "default": [],
           "items": {
             "type": "string"
           }
-        },
-        "schema": {
-          "description": "Optional schema qualifier for all functions in this entry.",
-          "type": [
-            "string",
-            "null"
-          ]
         }
       },
       "additionalProperties": false,

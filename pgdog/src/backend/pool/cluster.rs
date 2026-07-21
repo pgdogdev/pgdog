@@ -15,7 +15,7 @@ use std::{
     time::Duration,
 };
 use tokio::spawn;
-use tracing::error;
+use tracing::{error, warn};
 
 use crate::frontend::router::sharding::ShardedTable;
 use crate::{
@@ -134,11 +134,33 @@ impl WriteFunction {
         }
     }
 
-    fn from_config(schema: Option<&str>, name: &str) -> Self {
-        Self {
-            schema: schema.map(Self::normalize_identifier),
-            name: Self::normalize_identifier(name),
+    fn from_config(entry: &str) -> Option<Self> {
+        fn split_qualified(entry: &str) -> impl Iterator<Item = &str> {
+            let mut parts = Vec::new();
+            let mut start = 0;
+            let mut in_quotes = false;
+            for (i, c) in entry.char_indices() {
+                match c {
+                    '"' => in_quotes = !in_quotes,
+                    '.' if !in_quotes => {
+                        parts.push(&entry[start..i]);
+                        start = i + 1;
+                    }
+                    _ => (),
+                }
+            }
+            parts.push(&entry[start..]);
+            parts.into_iter().rev()
         }
+        let mut parts = split_qualified(entry);
+        let name = Self::normalize_identifier(parts.next()?);
+        let schema = match parts.next() {
+            Some(schema) if parts.next().is_none() => Some(Self::normalize_identifier(schema)),
+            Some(_) => return None,
+            None => None,
+        };
+
+        Some(Self { schema, name })
     }
 }
 
@@ -241,11 +263,13 @@ impl<'a> ClusterConfig<'a> {
                 .write_functions
                 .iter()
                 .filter(|entry| entry.database == user.database)
-                .flat_map(|entry| {
-                    entry
-                        .functions
-                        .iter()
-                        .map(move |func| WriteFunction::from_config(entry.schema.as_deref(), func))
+                .flat_map(|entry| entry.functions.iter())
+                .filter_map(|func| {
+                    let parsed = WriteFunction::from_config(func);
+                    if parsed.is_none() {
+                        warn!("ignoring invalid write_functions entry: \"{}\"", func);
+                    }
+                    parsed
                 })
                 .collect(),
             schema_admin: user.schema_admin,
@@ -815,12 +839,8 @@ mod test {
                 .write_functions
                 .iter()
                 .filter(|entry| entry.database == database)
-                .flat_map(|entry| {
-                    entry
-                        .functions
-                        .iter()
-                        .map(move |func| WriteFunction::from_config(entry.schema.as_deref(), func))
-                })
+                .flat_map(|entry| entry.functions.iter())
+                .filter_map(|func| WriteFunction::from_config(func))
                 .collect()
         }
 
@@ -1063,13 +1083,25 @@ mod test {
 
     #[test]
     fn test_write_function_identifier_normalization() {
-        let wf = WriteFunction::from_config(Some("PartMan"), "Create_Partition");
+        let wf = WriteFunction::from_config("Create_Partition").unwrap();
+        assert_eq!(wf.schema, None);
+        assert_eq!(wf.name, "create_partition");
+
+        let wf = WriteFunction::from_config("PartMan.Create_Partition").unwrap();
         assert_eq!(wf.schema.as_deref(), Some("partman"));
         assert_eq!(wf.name, "create_partition");
 
-        let wf = WriteFunction::from_config(Some(r#""PartMan""#), r#""Create_Partition""#);
+        let wf = WriteFunction::from_config(r#""PartMan"."Create_Partition""#).unwrap();
         assert_eq!(wf.schema.as_deref(), Some("PartMan"));
         assert_eq!(wf.name, "Create_Partition");
+
+        // Dots inside quoted identifiers are not separators.
+        let wf = WriteFunction::from_config(r#""my.schema".my_fn"#).unwrap();
+        assert_eq!(wf.schema.as_deref(), Some("my.schema"));
+        assert_eq!(wf.name, "my_fn");
+
+        // More than two parts is invalid.
+        assert_eq!(WriteFunction::from_config("a.b.c"), None);
     }
 
     #[test]

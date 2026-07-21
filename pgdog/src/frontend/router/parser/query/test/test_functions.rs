@@ -76,7 +76,6 @@ fn test_configured_write_function_routes_to_primary() {
     let mut updated = config().deref().clone();
     updated.config.write_functions = vec![WriteFunctions {
         database: "pgdog".into(),
-        schema: None,
         functions: vec!["my_write_fn".into()],
     }];
 
@@ -92,7 +91,6 @@ fn test_configured_write_function_pg_identifier_semantics() {
     let mut updated = config().deref().clone();
     updated.config.write_functions = vec![WriteFunctions {
         database: "pgdog".into(),
-        schema: None,
         functions: vec!["my_write_fn".into()],
     }];
 
@@ -106,7 +104,6 @@ fn test_configured_write_function_pg_identifier_semantics() {
 
     updated.config.write_functions = vec![WriteFunctions {
         database: "pgdog".into(),
-        schema: None,
         functions: vec![r#""My_Write_Fn""#.into()],
     }];
     let mut test = QueryParserTest::new_with_config(&updated);
@@ -120,8 +117,7 @@ fn test_configured_write_function_with_schema() {
     let mut updated = config().deref().clone();
     updated.config.write_functions = vec![WriteFunctions {
         database: "pgdog".into(),
-        schema: Some("partman".into()),
-        functions: vec!["create_partition".into()],
+        functions: vec!["partman.create_partition".into()],
     }];
 
     let mut test = QueryParserTest::new_with_config(&updated);
