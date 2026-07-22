@@ -40,7 +40,7 @@ pub use monitor::Monitor;
 pub use password::Password;
 pub use pool_impl::Pool;
 pub use request::Request;
-pub use shard::Shard;
+pub(crate) use shard::{CanonicalOids, OidMappings, Oids, Shard};
 pub use state::State;
 pub use stats::Stats;
 

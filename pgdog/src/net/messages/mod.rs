@@ -288,6 +288,10 @@ impl Message {
     pub fn transaction_error(&self) -> bool {
         self.code() == 'Z' && self.payload[5] as char == 'E'
     }
+
+    pub fn replace_payload(&mut self, bytes: Bytes) {
+        self.payload = bytes;
+    }
 }
 
 /// Check that the message we received is what we expected.

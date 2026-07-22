@@ -150,17 +150,20 @@ mod tests {
             },
         };
 
-        let pool = Pool::new(&crate::backend::pool::PoolConfig {
-            address: crate::backend::pool::Address {
-                host: "127.0.0.1".into(),
-                port: 5432,
-                database_name: "pgdog".into(),
-                user: "pgdog".into(),
-                passwords: vec!["pgdog".into()],
-                ..Default::default()
+        let pool = Pool::new(
+            &crate::backend::pool::PoolConfig {
+                address: crate::backend::pool::Address {
+                    host: "127.0.0.1".into(),
+                    port: 5432,
+                    database_name: "pgdog".into(),
+                    user: "pgdog".into(),
+                    passwords: vec!["pgdog".into()],
+                    ..Default::default()
+                },
+                config,
             },
-            config,
-        });
+            Default::default(),
+        );
         pool.launch();
 
         sleep(Duration::from_millis(100)).await;

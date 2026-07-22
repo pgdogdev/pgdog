@@ -23,7 +23,9 @@ use crate::{
     net::{Query, messages::FrontendPid},
 };
 
-use super::{Address, Config, Error, Guard, MirrorStats, Request, Shard, ShardConfig};
+use super::{
+    Address, CanonicalOids, Config, Error, Guard, MirrorStats, Request, Shard, ShardConfig,
+};
 use crate::config::LoadBalancingStrategy;
 use launch::Readiness;
 
@@ -85,6 +87,10 @@ pub struct Cluster {
     tls_client_certificate_required: bool,
     #[debug(skip)]
     schema_loader: Box<dyn SchemaLoader>,
+<<<<<<< HEAD
+=======
+    canonical_oids: Arc<CanonicalOids>,
+>>>>>>> 303395b9 (WIP: Handle OID drift between shards)
 }
 
 /// Sharding configuration from the cluster.
@@ -299,6 +305,7 @@ impl Cluster {
             user: user.to_owned(),
             database: name.to_owned(),
         });
+        let canonical_oids = schema_cache.canonical_oids(name);
 
         Self {
             identifier: identifier.clone(),
@@ -357,6 +364,10 @@ impl Cluster {
             identity: identity.clone(),
             tls_client_certificate_required,
             schema_loader: Box::new(schema_loader::FromServer),
+<<<<<<< HEAD
+=======
+            canonical_oids,
+>>>>>>> 303395b9 (WIP: Handle OID drift between shards)
         }
     }
 
@@ -411,7 +422,7 @@ impl Cluster {
     }
 
     /// Get all shards.
-    pub fn shards(&self) -> &[Shard] {
+    pub(crate) fn shards(&self) -> &[Shard] {
         &self.shards
     }
 
@@ -905,6 +916,12 @@ mod test {
             });
 
             cluster
+        }
+
+        pub(crate) fn force_dummy_schema(&self) {
+            for shard in &self.shards {
+                shard.schema_not_needed();
+            }
         }
 
         pub(crate) fn set_read_write_strategy(&mut self, rw_strategy: ReadWriteStrategy) {

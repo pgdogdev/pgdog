@@ -143,6 +143,9 @@ pub enum Error {
 
     #[error("cannot ignore response for message type: {0}")]
     UnsupportedHandleIgnore(char),
+
+    #[error("missing canonical oid for type {0}")]
+    MissingCanonicalOid(String),
 }
 
 impl From<crate::frontend::Error> for Error {

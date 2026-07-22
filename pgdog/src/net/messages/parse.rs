@@ -1,8 +1,10 @@
 //! Parse (F) message.
 use crate::net::c_string_buf_len;
+use bytes::BytesMut;
+use std::collections::HashMap;
 use std::fmt::Debug;
 use std::io::Cursor;
-use std::mem::size_of;
+use std::mem;
 use std::str::from_utf8;
 use std::str::from_utf8_unchecked;
 
@@ -101,13 +103,6 @@ impl Parse {
         }
     }
 
-    pub fn data_types(&self) -> DataTypesIter<'_> {
-        DataTypesIter {
-            data_types: &self.data_types,
-            offset: 0,
-        }
-    }
-
     pub fn data_types_ref(&self) -> Bytes {
         self.data_types.clone()
     }
@@ -117,34 +112,44 @@ impl Parse {
         self.query = Bytes::from(query.to_string() + "\0");
         self.original = None;
     }
-}
 
-#[derive(Debug)]
-pub struct DataTypesIter<'a> {
-    data_types: &'a Bytes,
-    offset: usize,
-}
-
-impl DataTypesIter<'_> {
-    pub fn len(&self) -> usize {
-        (self.data_types.len() - size_of::<i16>()) / size_of::<i32>()
-    }
-}
-
-impl Iterator for DataTypesIter<'_> {
-    type Item = i32;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let pos = self.offset * size_of::<i32>() + size_of::<i16>();
-        self.offset += 1;
-        let mut cursor = Cursor::new(self.data_types);
-        cursor.advance(pos);
-
-        if cursor.remaining() >= size_of::<i32>() {
-            Some(cursor.get_i32())
-        } else {
-            None
+    /// Rewrite the data types of this message using the given mapping.
+    /// Returns whether any data types were changed.
+    pub(crate) fn rewrite_data_types(&mut self, mapping: &HashMap<u32, u32>) -> bool {
+        if mapping.is_empty() {
+            return false;
         }
+
+        let mut rewritten = false;
+        // FIXME: This will always copy the bytes, we should only copy on write
+        let mut bytes = Cursor::new(BytesMut::from(mem::take(&mut self.data_types)));
+        for _ in 0..bytes.get_u16() {
+            let canonical_oid = bytes.get_u32();
+            if let Some(&shard_oid) = mapping.get(&canonical_oid) {
+                // Note: We can't use BufMut here, as that writes to the end of the
+                // buffer, which will allocate. We just want to write to the
+                // existing bytes.
+                let pos = bytes.position() as usize;
+                let oid_bytes = &mut bytes.get_mut()[(pos - 4)..pos];
+                oid_bytes.copy_from_slice(&shard_oid.to_be_bytes());
+                rewritten = true;
+            }
+        }
+        self.data_types = bytes.into_inner().freeze();
+        rewritten
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_data_types(&self, data_types: &[u32]) -> Self {
+        let mut bytes = BytesMut::new();
+        bytes.put_u16(data_types.len() as _);
+        for &oid in data_types {
+            bytes.put_u32(oid);
+        }
+
+        let mut this = self.clone();
+        this.data_types = bytes.freeze();
+        this
     }
 }
 
@@ -210,8 +215,6 @@ impl Protocol for Parse {
 
 #[cfg(test)]
 mod test {
-    use bytes::BytesMut;
-
     use super::*;
 
     #[test]
@@ -223,19 +226,7 @@ mod test {
 
     #[test]
     fn test_parse_from_bytes() {
-        let mut parse = Parse::named("__pgdog_1", "SELECT * FROM users");
-        let mut data_types = BytesMut::new();
-        data_types.put_i16(3);
-        data_types.put_i32(1);
-        data_types.put_i32(2);
-        data_types.put_i32(3);
-        parse.data_types = data_types.freeze();
-
-        let iter = parse.data_types();
-        assert_eq!(iter.len(), 3);
-        for (i, v) in iter.enumerate() {
-            assert_eq!(i as i32 + 1, v);
-        }
+        let parse = Parse::named("__pgdog_1", "SELECT * FROM users");
 
         assert_eq!(parse.name(), "__pgdog_1");
         assert_eq!(parse.query(), "SELECT * FROM users");
@@ -252,8 +243,31 @@ mod test {
         let parse = Parse::from_bytes(b.freeze()).unwrap();
         assert_eq!(parse.name(), "__pgdog_1");
         assert_eq!(parse.query(), "SELECT * FROM users");
-        assert_eq!(parse.data_types().len(), 0);
+        assert_eq!(parse.data_types_ref().get_i16(), 0);
 
         assert!(Parse::new_anonymous("SELECT 1").anonymous());
+    }
+
+    #[test]
+    fn test_parse_rewrite_oids() {
+        let mut parse = Parse::named("", "");
+        let mut data_types = BytesMut::new();
+        data_types.put_u16(3);
+        data_types.put_u32(10_001);
+        data_types.put_u32(10_011);
+        data_types.put_u32(10_091);
+        parse.data_types = data_types.freeze();
+
+        let mapping = [(10_001, 10_001), (10_011, 10_002), (10_091, 10_003)]
+            .into_iter()
+            .collect();
+        parse.rewrite_data_types(&mapping);
+
+        let mut expected = BytesMut::new();
+        expected.put_u16(3);
+        expected.put_u32(10_001);
+        expected.put_u32(10_002);
+        expected.put_u32(10_003);
+        assert_eq!(parse.data_types, expected.freeze());
     }
 }

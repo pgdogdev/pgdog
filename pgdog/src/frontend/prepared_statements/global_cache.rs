@@ -224,11 +224,11 @@ impl GlobalCache {
 
     /// Client sent a Describe for a prepared statement and received a RowDescription.
     /// We record the RowDescription for later use by the results decoder.
-    pub fn insert_row_description(&mut self, name: &str, row_description: &RowDescription) {
+    pub fn insert_row_description(&mut self, name: &str, row_description: RowDescription) {
         if let Some(ref mut entry) = self.names.get_mut(name)
             && entry.row_description.is_none()
         {
-            entry.row_description = Some(row_description.clone());
+            entry.row_description = Some(row_description);
         }
     }
 

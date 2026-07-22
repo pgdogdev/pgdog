@@ -1,6 +1,6 @@
 //! RowDescription (B) message.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::ops::Deref;
 use std::sync::Arc;
 
@@ -265,6 +265,18 @@ impl RowDescription {
         }
 
         true
+    }
+
+    pub(crate) fn rewrite_data_types(&mut self, mapping: &HashMap<u32, u32>) {
+        if mapping.is_empty() {
+            return;
+        }
+
+        for field in Arc::make_mut(&mut self.fields) {
+            if let Some(&canonical) = mapping.get(&(field.type_oid as u32)) {
+                field.type_oid = canonical as i32;
+            }
+        }
     }
 }
 

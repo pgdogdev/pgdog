@@ -20,8 +20,8 @@ use crate::net::{Parameter, Parameters};
 
 use super::inner::CheckInResult;
 use super::{
-    Address, Comms, Config, Error, Guard, Healtcheck, Inner, Monitor, PoolConfig, Request, State,
-    Waiting,
+    Address, Comms, Config, Error, Guard, Healtcheck, Inner, Monitor, Oids, PoolConfig, Request,
+    State, Waiting,
     lb::TargetHealth,
     lsn_monitor::{LsnMonitor, ReplicaLag},
 };
@@ -48,6 +48,7 @@ pub(crate) struct InnerSync {
     pub(super) params: OnceCell<Parameters>,
     pub(super) lsn_stats: RwLock<LsnStats>,
     pub(super) lsn_role_change: Notify,
+    pub(super) oids: Arc<Oids>,
 }
 
 impl std::fmt::Debug for Pool {
@@ -60,7 +61,7 @@ impl std::fmt::Debug for Pool {
 
 impl Pool {
     /// Create new connection pool.
-    pub fn new(config: &PoolConfig) -> Self {
+    pub(crate) fn new(config: &PoolConfig, oids: Arc<Oids>) -> Self {
         let id = next_pool_id();
         Self {
             inner: Arc::new(InnerSync {
@@ -73,6 +74,7 @@ impl Pool {
                 params: OnceCell::new(),
                 lsn_stats: RwLock::new(LsnStats::default()),
                 lsn_role_change: Notify::new(),
+                oids,
             }),
         }
     }
@@ -85,7 +87,7 @@ impl Pool {
             config: Config::default(),
         };
 
-        Self::new(&config)
+        Self::new(&config, Default::default())
     }
 
     pub(crate) fn inner(&self) -> &InnerSync {

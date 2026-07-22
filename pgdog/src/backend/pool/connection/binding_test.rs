@@ -26,20 +26,29 @@ mod tests {
         let server3 = Box::new(test_server().await);
 
         // Create pools for each server using their addresses
-        let pool1 = Pool::new(&PoolConfig {
-            address: server1.addr().clone(),
-            config: crate::backend::pool::Config::default(),
-        });
+        let pool1 = Pool::new(
+            &PoolConfig {
+                address: server1.addr().clone(),
+                config: crate::backend::pool::Config::default(),
+            },
+            Default::default(),
+        );
 
-        let pool2 = Pool::new(&PoolConfig {
-            address: server2.addr().clone(),
-            config: crate::backend::pool::Config::default(),
-        });
+        let pool2 = Pool::new(
+            &PoolConfig {
+                address: server2.addr().clone(),
+                config: crate::backend::pool::Config::default(),
+            },
+            Default::default(),
+        );
 
-        let pool3 = Pool::new(&PoolConfig {
-            address: server3.addr().clone(),
-            config: crate::backend::pool::Config::default(),
-        });
+        let pool3 = Pool::new(
+            &PoolConfig {
+                address: server3.addr().clone(),
+                config: crate::backend::pool::Config::default(),
+            },
+            Default::default(),
+        );
 
         let now = Instant::now();
         let guards = vec![
@@ -68,10 +77,13 @@ mod tests {
 
         // Create a Direct binding instead of MultiShard
         let server = Box::new(test_server().await);
-        let pool = Pool::new(&PoolConfig {
-            address: server.addr().clone(),
-            config: crate::backend::pool::Config::default(),
-        });
+        let pool = Pool::new(
+            &PoolConfig {
+                address: server.addr().clone(),
+                config: crate::backend::pool::Config::default(),
+            },
+            Default::default(),
+        );
 
         let guard = crate::backend::pool::Guard::new(pool, server, Instant::now());
         let mut binding = Binding::Direct(guard, 0);
