@@ -264,6 +264,14 @@
           "type": "null"
         }
       ]
+    },
+    "write_functions": {
+      "description": "Per-database functions treated as writes by the query parser.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/WriteFunctions"
+      }
     }
   },
   "additionalProperties": false,
@@ -2326,6 +2334,28 @@
       },
       "required": [
         "values"
+      ]
+    },
+    "WriteFunctions": {
+      "description": "Per-database write function classification.",
+      "type": "object",
+      "properties": {
+        "database": {
+          "description": "Database name.",
+          "type": "string"
+        },
+        "functions": {
+          "description": "Functions that should be treated as write-only.\nEach entry can be schema-qualified.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "database"
       ]
     }
   }

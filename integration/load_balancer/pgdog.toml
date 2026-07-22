@@ -72,6 +72,10 @@ database_name = "postgres"
 role = "auto"
 port = 45002
 
+[[write_functions]]
+database = "postgres"
+functions = ["Lb_Write_Fn"]
+
 
 [[plugins]]
 name = "pgdog_primary_only_tables"

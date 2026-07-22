@@ -277,6 +277,19 @@ cross_shard_disabled = false
 dns_ttl = 5_000
 
 #
+# Per-database list of functions that should always route to the primary.
+#
+# Each function can be schema-qualified. Matching follows PostgreSQL
+# identifier semantics:
+# - unquoted identifiers are folded to lowercase
+# - quoted identifiers preserve case
+#
+# [[write_functions]]
+# database = "pgdog"
+# functions = ["my_write_fn", "partman.create_partition", '"Set_Customer_Balance"']
+#
+
+#
 # Admin database used for stats and system admin.
 #
 [admin]

@@ -565,6 +565,18 @@ pub struct QueryParser {
     pub engine: QueryParserEngine,
 }
 
+/// Per-database write function classification.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash, Default, JsonSchema)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub struct WriteFunctions {
+    /// Database name.
+    pub database: String,
+    /// Functions that should be treated as write-only.
+    /// Each entry can be schema-qualified.
+    #[serde(default)]
+    pub functions: Vec<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use crate::Config;
@@ -587,5 +599,19 @@ database = "production"
             config.query_parsers[0].engine,
             QueryParserEngine::PgQueryProtobuf
         );
+    }
+
+    #[test]
+    fn write_functions_reads_default_values_from_config() {
+        let source = r#"
+[[write_functions]]
+database = "production"
+"#;
+
+        let config: Config = toml::from_str(source).unwrap();
+
+        assert_eq!(config.write_functions.len(), 1);
+        assert_eq!(config.write_functions[0].database, "production");
+        assert!(config.write_functions[0].functions.is_empty());
     }
 }

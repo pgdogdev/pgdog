@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -149,6 +151,39 @@ func TestWriteFunctions(t *testing.T) {
 
 	calls := LoadStatsForPrimary("SELECT pg_advisory_lock")
 	assert.Equal(t, int64(25), calls.Calls)
+}
+
+func TestConfiguredWriteFunctionsRouteToPrimary(t *testing.T) {
+	if !strings.Contains(os.Getenv("PGDOG_PLUGIN_FEATURES"), "new_parser") {
+		t.Skip("write_functions routing is implemented in the new parser path only")
+	}
+
+	pool := GetPool()
+	defer pool.Close()
+
+	_, err := pool.Exec(context.Background(), `
+		CREATE OR REPLACE FUNCTION lb_write_fn(val bigint)
+		RETURNS bigint
+		LANGUAGE sql
+		AS $$ SELECT $1; $$`)
+	assert.NoError(t, err)
+
+	// DDL replication can lag briefly.
+	time.Sleep(2 * time.Second)
+	ResetStats()
+
+	for i := range 20 {
+		_, err = pool.Exec(context.Background(), "SELECT lb_write_fn($1)", int64(i))
+		assert.NoError(t, err)
+	}
+
+	primaryCalls := LoadStatsForPrimary("SELECT lb_write_fn")
+	assert.Equal(t, int64(20), primaryCalls.Calls)
+
+	replicaCalls := LoadStatsForReplicas("SELECT lb_write_fn")
+	for _, call := range replicaCalls {
+		assert.Equal(t, int64(0), call.Calls)
+	}
 }
 
 func withTransaction(t *testing.T, pool *pgxpool.Pool, f func(t pgx.Tx) error) error {
