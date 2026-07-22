@@ -397,7 +397,7 @@ impl Binding {
     }
 
     /// Execute two-phase commit transaction control statements.
-    pub async fn two_pc(
+    pub(crate) async fn two_pc(
         &mut self,
         transaction: TwoPcTransaction,
         phase: TwoPcPhase,
