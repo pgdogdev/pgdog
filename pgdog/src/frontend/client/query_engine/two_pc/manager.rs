@@ -1,6 +1,7 @@
 //! Global two-phase commit transaction manager.
 use arc_swap::ArcSwapOption;
 use fnv::FnvHashMap as HashMap;
+use futures::future::try_join_all;
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 use std::{
@@ -394,6 +395,8 @@ impl Manager {
     /// will cause data loss.
     ///
     pub async fn cleanup_abandoned(&self) -> Result<(), Error> {
+        info!("[2pc] rolling back abandoned transactions");
+
         let mut cleaned_up = 0;
         for cluster in databases().all().values() {
             cleaned_up += self.cleanup_abandoned_for_cluster(cluster).await?;
@@ -409,36 +412,50 @@ impl Manager {
     }
 
     async fn cleanup_abandoned_for_cluster(&self, cluster: &Cluster) -> Result<usize, Error> {
+        let cleaned_up = try_join_all(
+            cluster
+                .shards()
+                .iter()
+                .enumerate()
+                .map(|(number, shard)| Self::cleanup_abandoned_for_shard(number, shard)),
+        )
+        .await?;
+
+        Ok(cleaned_up.into_iter().sum())
+    }
+
+    async fn cleanup_abandoned_for_shard(
+        number: usize,
+        shard: &crate::backend::pool::Shard,
+    ) -> Result<usize, Error> {
         use crate::backend::Error as BackendError;
         use crate::backend::pool::Error as PoolError;
         let mut cleaned_up = 0;
 
-        for (number, shard) in cluster.shards().iter().enumerate() {
-            let mut conn = match shard.primary(&Request::default()).await {
-                Ok(conn) => conn,
-                Err(PoolError::NoPrimary) => continue,
-                Err(err) => return Err(BackendError::Pool(err).into()),
-            };
+        let mut conn = match shard.primary(&Request::default()).await {
+            Ok(conn) => conn,
+            Err(PoolError::NoPrimary) => return Ok(cleaned_up),
+            Err(err) => return Err(BackendError::Pool(err).into()),
+        };
 
-            let txns = TwoPcTransactions::load(&mut conn).await?;
+        let txns = TwoPcTransactions::load(&mut conn).await?;
 
-            for txn in txns.iter() {
-                if let TwoPcServerTransaction::Ours { txn, user, .. } = txn {
-                    // Postgres transactions can be only be rolled back by their owners.
-                    if user == cluster.user() && txn.is_mine() {
-                        match conn
-                            .execute(phase_control(*txn, number, TwoPcPhase::Rollback))
-                            .await
-                        {
-                            Ok(_) => cleaned_up += 1,
-                            Err(BackendError::ExecutionError(err)) => {
-                                warn!(
-                                    "[2pc] error cleaning abandoned transaction \"{}\": {}",
-                                    txn, err
-                                );
-                            }
-                            Err(err) => return Err(err.into()),
+        for txn in txns.iter() {
+            if let TwoPcServerTransaction::Ours { txn, .. } = txn {
+                // Postgres transactions can be only be rolled back by their owners.
+                if txn.is_created_by_this_process() {
+                    match conn
+                        .execute(phase_control(*txn, number, TwoPcPhase::Rollback))
+                        .await
+                    {
+                        Ok(_) => cleaned_up += 1,
+                        Err(BackendError::ExecutionError(err)) => {
+                            warn!(
+                                "[2pc] error cleaning abandoned transaction \"{}\": {}",
+                                txn, err
+                            );
                         }
+                        Err(err) => return Err(err.into()),
                     }
                 }
             }

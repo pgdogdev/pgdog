@@ -17,7 +17,7 @@ impl TwoPcTransaction {
     }
 
     /// This transaction was created by this process.
-    pub(crate) fn is_mine(&self) -> bool {
+    pub(crate) fn is_created_by_this_process(&self) -> bool {
         self.to_string().starts_with(&Self::global_prefix())
     }
 
@@ -74,7 +74,7 @@ mod test {
     fn test_instance_id() {
         for id in [1024, 11111111, usize::MAX, usize::MIN] {
             let transaction = TwoPcTransaction(id);
-            let instance_id = instance_id(); // Generate it, it's a singleton.
+            let instance_id = instance_id(); // It's a singleton.
             assert_eq!(
                 format!("__pgdog_2pc_{instance_id}_{id}"),
                 transaction.to_string()
@@ -86,7 +86,7 @@ mod test {
     fn test_deployment_id() {
         let _guard = set_env_var("DEPLOYMENT_ID", "1");
         let txn = TwoPcTransaction(1678);
-        let instance_id = instance_id(); // Generate it, it's a singleton.
+        let instance_id = instance_id(); // It's a singleton.
         assert_eq!(format!("__pgdog_2pc_1_{instance_id}_1678"), txn.to_string());
     }
 }

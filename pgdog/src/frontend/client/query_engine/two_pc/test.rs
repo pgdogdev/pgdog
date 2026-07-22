@@ -1,5 +1,6 @@
 use crate::{
     backend::{
+        Server,
         databases::databases,
         pool::{Connection, Request},
     },
@@ -13,6 +14,76 @@ use crate::{
 };
 
 use super::*;
+use super::{server_transactions::TwoPcServerTransaction, statement::phase_control};
+
+async fn server_has_transaction(server: &mut Server, transaction: TwoPcTransaction) -> bool {
+    TwoPcTransactions::load(server)
+        .await
+        .unwrap()
+        .iter()
+        .any(|server_transaction| {
+            matches!(
+                server_transaction,
+                TwoPcServerTransaction::Ours { txn, .. } if *txn == transaction
+            )
+        })
+}
+
+#[tokio::test]
+async fn test_cleanup_abandoned() {
+    config::load_test_with_user("pgdog");
+    let cluster = databases().all().iter().next().unwrap().1.clone();
+    let transaction = TwoPcTransaction::new();
+    let mut conn = cluster.shards()[0]
+        .primary(&Request::default())
+        .await
+        .unwrap();
+
+    conn.execute("BEGIN").await.unwrap();
+    conn.execute(phase_control(transaction, 0, TwoPcPhase::Phase1))
+        .await
+        .unwrap();
+
+    assert!(server_has_transaction(&mut conn, transaction).await);
+
+    Manager::get().cleanup_abandoned().await.unwrap();
+
+    assert!(!server_has_transaction(&mut conn, transaction).await);
+}
+
+#[tokio::test]
+async fn test_cleanup_abandoned_different_user() {
+    config::load_test_with_user("pgdog1");
+    let cluster = databases().all().iter().next().unwrap().1.clone();
+    let transaction = TwoPcTransaction::new();
+    let mut conn = cluster.shards()[0]
+        .primary(&Request::default())
+        .await
+        .unwrap();
+
+    conn.execute("BEGIN").await.unwrap();
+    conn.execute(phase_control(transaction, 0, TwoPcPhase::Phase1))
+        .await
+        .unwrap();
+    assert!(server_has_transaction(&mut conn, transaction).await);
+    drop(conn);
+
+    config::load_test_with_user("pgdog2");
+    Manager::get().cleanup_abandoned().await.unwrap();
+
+    config::load_test_with_user("pgdog1");
+    let cluster = databases().all().iter().next().unwrap().1.clone();
+    let mut conn = cluster.shards()[0]
+        .primary(&Request::default())
+        .await
+        .unwrap();
+    let was_preserved = server_has_transaction(&mut conn, transaction).await;
+    conn.execute(phase_control(transaction, 0, TwoPcPhase::Rollback))
+        .await
+        .unwrap();
+
+    assert!(was_preserved);
+}
 
 #[tokio::test]
 async fn test_cleanup_transaction_phase_one() {
