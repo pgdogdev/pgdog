@@ -63,6 +63,9 @@ pub struct Counts {
     pub writes: usize,
     /// Password attempts.
     pub auth_attempts: usize,
+    /// Number of clients disconnected because they idled in a transaction
+    /// past `client_idle_in_transaction_timeout` while holding a server connection.
+    pub client_idle_xact_timeouts: usize,
 }
 
 impl Sub for Counts {
@@ -95,6 +98,9 @@ impl Sub for Counts {
             reads: self.reads.saturating_sub(rhs.reads),
             writes: self.writes.saturating_sub(rhs.writes),
             auth_attempts: self.auth_attempts.saturating_sub(rhs.auth_attempts),
+            client_idle_xact_timeouts: self
+                .client_idle_xact_timeouts
+                .saturating_sub(rhs.client_idle_xact_timeouts),
         }
     }
 }
@@ -129,6 +135,9 @@ impl Add for Counts {
             reads: self.reads.saturating_add(rhs.reads),
             writes: self.writes.saturating_add(rhs.writes),
             auth_attempts: self.auth_attempts.saturating_add(rhs.auth_attempts),
+            client_idle_xact_timeouts: self
+                .client_idle_xact_timeouts
+                .saturating_add(rhs.client_idle_xact_timeouts),
         }
     }
 }
@@ -167,6 +176,7 @@ impl Div<usize> for Counts {
             reads: self.reads.checked_div(rhs).unwrap_or(0),
             writes: self.writes.checked_div(rhs).unwrap_or(0),
             auth_attempts: self.auth_attempts.checked_div(rhs).unwrap_or(0),
+            client_idle_xact_timeouts: self.client_idle_xact_timeouts.checked_div(rhs).unwrap_or(0),
         }
     }
 }

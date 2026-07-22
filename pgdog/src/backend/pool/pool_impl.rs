@@ -400,6 +400,12 @@ impl Pool {
         &self.inner.comms
     }
 
+    /// Record a client disconnected for idling in a transaction
+    /// while holding a connection from this pool.
+    pub fn record_client_idle_xact_timeout(&self) {
+        self.lock().stats.counts.client_idle_xact_timeouts += 1;
+    }
+
     /// Pool address.
     #[inline]
     pub fn addr(&self) -> &Address {

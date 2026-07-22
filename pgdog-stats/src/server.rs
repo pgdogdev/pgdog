@@ -58,6 +58,7 @@ impl Add<Counts> for PoolCounts {
             writes: self.writes,
             reads: self.reads,
             auth_attempts: self.auth_attempts,
+            client_idle_xact_timeouts: self.client_idle_xact_timeouts,
         }
     }
 }

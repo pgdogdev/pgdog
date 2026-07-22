@@ -506,6 +506,12 @@ impl Client {
                     match event {
                         // Client disconnected, we're done.
                         BufferEvent::DisconnectAbrupt | BufferEvent::DisconnectGraceful => break,
+                        // Client sat idle in a transaction for too long
+                        // while hogging a server connection. Count it, then disconnect.
+                        BufferEvent::IdleXactTimeout => {
+                            query_engine.record_client_idle_xact_timeout();
+                            break;
+                        }
                         BufferEvent::HaveRequest => (),
                     }
                 }
@@ -613,7 +619,11 @@ impl Client {
                         self.stream
                             .fatal(ErrorResponse::client_idle_timeout(idle_timeout, &state))
                             .await?;
-                        return Ok(BufferEvent::DisconnectAbrupt);
+                        return Ok(if state == State::IdleInTransaction {
+                            BufferEvent::IdleXactTimeout
+                        } else {
+                            BufferEvent::DisconnectAbrupt
+                        });
                     }
 
                     Ok(Ok(message)) => message.stream(self.streaming).frontend(),
@@ -712,5 +722,7 @@ pub mod test;
 enum BufferEvent {
     DisconnectGraceful,
     DisconnectAbrupt,
+    /// Client disconnected by the idle-in-transaction timeout.
+    IdleXactTimeout,
     HaveRequest,
 }

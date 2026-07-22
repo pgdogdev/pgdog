@@ -54,6 +54,20 @@ impl Binding {
         self.disconnect();
     }
 
+    /// Record an idle-in-transaction timeout on every pool
+    /// we're currently holding a connection from.
+    pub fn record_client_idle_xact_timeout(&self) {
+        match self {
+            Binding::Direct(guard, _) => guard.pool.record_client_idle_xact_timeout(),
+            Binding::MultiShard(guards, _) => {
+                for guard in guards {
+                    guard.pool.record_client_idle_xact_timeout();
+                }
+            }
+            _ => (),
+        }
+    }
+
     /// Are we connected to a backend?
     pub fn connected(&self) -> bool {
         match self {

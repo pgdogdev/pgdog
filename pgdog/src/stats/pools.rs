@@ -86,6 +86,8 @@ impl Pools {
         let mut total_sv_xact_idle = vec![];
         let mut total_auth_attempts = vec![];
         let mut avg_auth_attempts = vec![];
+        let mut total_client_idle_xact_timeouts = vec![];
+        let mut avg_client_idle_xact_timeouts = vec![];
 
         let general = &crate::config::config().config.general;
 
@@ -314,6 +316,16 @@ impl Pools {
                     avg_auth_attempts.push(Measurement {
                         labels: labels.clone(),
                         measurement: averages.auth_attempts.into(),
+                    });
+
+                    total_client_idle_xact_timeouts.push(Measurement {
+                        labels: labels.clone(),
+                        measurement: totals.client_idle_xact_timeouts.into(),
+                    });
+
+                    avg_client_idle_xact_timeouts.push(Measurement {
+                        labels: labels.clone(),
+                        measurement: averages.client_idle_xact_timeouts.into(),
                     });
                 }
             }
@@ -680,6 +692,22 @@ impl Pools {
             name: "avg_auth_attempts".into(),
             measurements: avg_auth_attempts,
             help: "Average number of server authentication attempts per statistics period.".into(),
+            unit: None,
+            metric_type: None,
+        }));
+
+        metrics.push(Metric::new(PoolMetric {
+            name: "total_client_idle_xact_timeouts".into(),
+            measurements: total_client_idle_xact_timeouts,
+            help: "Total number of clients disconnected for idling in a transaction.".into(),
+            unit: None,
+            metric_type: Some("counter".into()),
+        }));
+
+        metrics.push(Metric::new(PoolMetric {
+            name: "avg_client_idle_xact_timeouts".into(),
+            measurements: avg_client_idle_xact_timeouts,
+            help: "Average number of clients disconnected for idling in a transaction per statistics period.".into(),
             unit: None,
             metric_type: None,
         }));
