@@ -772,6 +772,44 @@ column = "tenant_id"
     }
 
     #[test]
+    fn test_upstream_client_cert_config_parses() {
+        let source = r#"
+[general]
+tls_verify = "verify_full"
+tls_server_ca_certificate = "/certs/ca.pem"
+tls_server_certificate = "/certs/client.pem"
+tls_server_private_key = "/certs/client.key"
+
+[[databases]]
+name = "production"
+host = "127.0.0.1"
+database_name = "postgres"
+"#;
+
+        let config: Config = toml::from_str(source).unwrap();
+        assert_eq!(config.general.tls_verify, TlsVerifyMode::VerifyFull);
+        assert_eq!(
+            config.general.tls_server_certificate.as_deref(),
+            Some(std::path::Path::new("/certs/client.pem"))
+        );
+        assert_eq!(
+            config.general.tls_server_private_key.as_deref(),
+            Some(std::path::Path::new("/certs/client.key"))
+        );
+
+        // Both keys are optional: omitting them leaves the fields unset.
+        let without = r#"
+[[databases]]
+name = "production"
+host = "127.0.0.1"
+database_name = "postgres"
+"#;
+        let config: Config = toml::from_str(without).unwrap();
+        assert!(config.general.tls_server_certificate.is_none());
+        assert!(config.general.tls_server_private_key.is_none());
+    }
+
+    #[test]
     fn test_prepared_statements_disabled_in_session_mode() {
         let mut config = ConfigAndUsers::default();
 
