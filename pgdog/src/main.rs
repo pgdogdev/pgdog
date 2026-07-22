@@ -11,10 +11,10 @@ use pgdog::config::{self, config};
 use pgdog::frontend::client::query_engine::two_pc::Manager;
 use pgdog::frontend::listener::Listener;
 use pgdog::frontend::prepared_statements;
-use pgdog::plugin;
 use pgdog::stats;
 use pgdog::util::pgdog_version;
 use pgdog::{healthcheck, net};
+use pgdog::{plugin, tasks};
 use tokio::runtime::Builder;
 use tracing::{error, info, warn};
 
@@ -155,6 +155,14 @@ async fn pgdog(command: Option<Commands>) -> Result<(), Box<dyn std::error::Erro
                 } else {
                     warn!("[2pc] wal disabled, 2pc will run without durability")
                 }
+            }
+
+            if general.two_phase_commit_rollback_abandoned {
+                tasks::spawn("2pc cleanup abandoned", async move {
+                    if let Err(err) = Manager::get().cleanup_abandoned().await {
+                        error!("[2pc] abandoned transactions cleanup error: {}", err);
+                    }
+                });
             }
 
             let mut listener = Listener::new(format!("{}:{}", general.host, general.port));

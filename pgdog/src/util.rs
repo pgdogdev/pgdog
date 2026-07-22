@@ -138,9 +138,25 @@ pub fn instance_id() -> &'static str {
 
 /// Get an externally assigned, unique, node identifier
 /// for this instance of PgDog.
+///
+/// This assumes the NODE ID follows the following format:
+///
+/// <something we don't care about>-<number between 0 and 1023 inclusively>
+///
 pub fn node_id() -> Result<u64, ParseIntError> {
     // split always returns at least one element.
     instance_id().split("-").last().unwrap().parse()
+}
+
+static DEPLOYMENT_ID: Lazy<Option<String>> = Lazy::new(|| env::var("DEPLOYMENT_ID").ok());
+
+/// Get the ID of this PgDog deployment.
+///
+/// This should be _globally_ unique
+/// and is used to differentiate 2pc transactions.
+///
+pub fn deployment_id() -> Option<&'static str> {
+    DEPLOYMENT_ID.as_deref()
 }
 
 static HOSTNAME: Lazy<String> = Lazy::new(|| {

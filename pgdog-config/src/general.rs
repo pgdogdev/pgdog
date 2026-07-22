@@ -622,6 +622,13 @@ pub struct General {
     #[serde(default = "General::two_phase_commit_wal_checkpoint_interval")]
     pub two_phase_commit_wal_checkpoint_interval: u64,
 
+    /// Rollback abandoned transactions.
+    ///
+    /// WARNING: Data loss will occur, enable this only if you don't care about consistency
+    /// and are not using the 2pc WAL.
+    #[serde(default = "General::two_phase_commit_rollback_abandoned")]
+    pub two_phase_commit_rollback_abandoned: bool,
+
     /// Enable expanded (`\x`) output for `EXPLAIN` results returned by PgDog's built-in query plan aggregation.
     #[serde(default = "General::expanded_explain")]
     pub expanded_explain: bool,
@@ -884,6 +891,7 @@ impl Default for General {
             two_phase_commit_wal_fsync_interval: Self::two_phase_commit_wal_fsync_interval(),
             two_phase_commit_wal_checkpoint_interval:
                 Self::two_phase_commit_wal_checkpoint_interval(),
+            two_phase_commit_rollback_abandoned: Self::two_phase_commit_rollback_abandoned(),
             expanded_explain: Self::expanded_explain(),
             server_lifetime: Self::server_lifetime(),
             server_lifetime_jitter: Self::server_lifetime_jitter(),
@@ -1060,6 +1068,10 @@ impl General {
 
     fn two_phase_commit_wal_checkpoint_interval() -> u64 {
         Self::env_or_default("PGDOG_TWO_PHASE_COMMIT_WAL_CHECKPOINT_INTERVAL", 60)
+    }
+
+    fn two_phase_commit_rollback_abandoned() -> bool {
+        Self::env_bool_or_default("PGDOG_TWO_PHASE_COMMIT_ROLLBACK_ABANDONED", false)
     }
 
     fn idle_timeout() -> u64 {

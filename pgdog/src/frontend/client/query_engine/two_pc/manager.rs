@@ -21,14 +21,15 @@ use tracing::{debug, error, info, warn};
 
 use crate::{
     backend::{
-        databases::User,
+        Cluster,
+        databases::{User, databases},
         pool::{Connection, Request},
     },
     config::config,
     frontend::{
         client::query_engine::{
             TwoPcPhase,
-            two_pc::{TwoPcGuard, TwoPcStats, TwoPcTransaction, wal::Wal},
+            two_pc::{TwoPcGuard, TwoPcStats, TwoPcTransaction, TwoPcTransactions, wal::Wal},
         },
         router::{
             Route,
@@ -38,7 +39,7 @@ use crate::{
     tasks,
 };
 
-use super::Error;
+use super::{Error, server_transactions::TwoPcServerTransaction, statement::phase_control};
 
 static MANAGER: Lazy<Manager> = Lazy::new(Manager::init);
 static MAINTENANCE: Duration = Duration::from_millis(333);
@@ -295,6 +296,8 @@ impl Manager {
 
         debug!("[2pc] monitor started");
 
+        // Cleanup orphaned transactions.
+
         loop {
             // Wake up either because it's time to check
             // or manager told us to.
@@ -383,6 +386,67 @@ impl Manager {
         connection.disconnect();
 
         Ok(())
+    }
+
+    /// Drop abandoned two-phase commit transactions.
+    ///
+    /// WARNING: This only happens if durability for 2pc is off. Running this
+    /// will cause data loss.
+    ///
+    pub async fn cleanup_abandoned(&self) -> Result<(), Error> {
+        let mut cleaned_up = 0;
+        for cluster in databases().all().values() {
+            cleaned_up += self.cleanup_abandoned_for_cluster(cluster).await?;
+        }
+
+        if cleaned_up > 0 {
+            warn!("[2pc] rolled back up {} abandoned transactions", cleaned_up);
+        } else {
+            info!("[2pc] no abandoned transactions found");
+        }
+
+        Ok(())
+    }
+
+    async fn cleanup_abandoned_for_cluster(&self, cluster: &Cluster) -> Result<usize, Error> {
+        use crate::backend::Error as BackendError;
+        use crate::backend::pool::Error as PoolError;
+        let mut cleaned_up = 0;
+
+        for (number, shard) in cluster.shards().iter().enumerate() {
+            let mut conn = match shard.primary(&Request::default()).await {
+                Ok(conn) => conn,
+                Err(PoolError::NoPrimary) => continue,
+                Err(err) => return Err(BackendError::Pool(err).into()),
+            };
+
+            let txns = TwoPcTransactions::load(&mut conn).await?;
+
+            for txn in txns.iter() {
+                if let TwoPcServerTransaction::Ours { txn, user, .. } = txn {
+                    // Postgres transactions can be only be rolled back by their owners.
+                    if user == cluster.user() {
+                        if txn.is_mine() {
+                            match conn
+                                .execute(phase_control(*txn, number, TwoPcPhase::Rollback))
+                                .await
+                            {
+                                Ok(_) => cleaned_up += 1,
+                                Err(BackendError::ExecutionError(err)) => {
+                                    warn!(
+                                        "[2pc] error cleaning abandoned transaction \"{}\": {}",
+                                        txn, err
+                                    );
+                                }
+                                Err(err) => return Err(err.into()),
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(cleaned_up)
     }
 
     /// Shutdown manager and wait for all transactions to be cleaned up.

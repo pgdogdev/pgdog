@@ -2,7 +2,7 @@ use rand::{Rng, rng};
 use serde::{Deserialize, Serialize};
 use std::{fmt::Display, str::FromStr};
 
-use crate::util::instance_id;
+use crate::util::{deployment_id, instance_id};
 
 #[derive(Debug, Clone, Copy, PartialEq, Hash, Eq, Serialize, Deserialize)]
 pub struct TwoPcTransaction(usize);
@@ -15,11 +15,30 @@ impl TwoPcTransaction {
         // so multiple instances of PgDog don't create an identical transaction.
         Self(rng().random_range(0..usize::MAX))
     }
+
+    /// This transaction was created by this process.
+    pub(crate) fn is_mine(&self) -> bool {
+        self.to_string().starts_with(&Self::global_prefix())
+    }
+
+    /// A prefix to identify two-phase commit transactions generated
+    /// by this PgDog process.
+    pub(crate) fn global_prefix() -> String {
+        format!(
+            "{PREFIX}{}{}_",
+            if let Some(cluster_id) = deployment_id() {
+                format!("{}_", cluster_id)
+            } else {
+                "".into()
+            },
+            instance_id(),
+        )
+    }
 }
 
 impl Display for TwoPcTransaction {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{PREFIX}{}_{}", instance_id(), self.0)
+        write!(f, "{}{}", Self::global_prefix(), self.0)
     }
 }
 
@@ -39,6 +58,8 @@ impl FromStr for TwoPcTransaction {
 
 #[cfg(test)]
 mod test {
+    use crate::test_utils::set_env_var;
+
     use super::*;
 
     #[test]
@@ -59,5 +80,13 @@ mod test {
                 transaction.to_string()
             );
         }
+    }
+
+    #[test]
+    fn test_deployment_id() {
+        let _guard = set_env_var("DEPLOYMENT_ID", "1");
+        let txn = TwoPcTransaction(1678);
+        let instance_id = instance_id(); // Generate it, it's a singleton.
+        assert_eq!(format!("__pgdog_2pc_1_{instance_id}_1678"), txn.to_string());
     }
 }
