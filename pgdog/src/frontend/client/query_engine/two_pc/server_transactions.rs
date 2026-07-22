@@ -1,11 +1,11 @@
-use std::{ops::Deref, str::FromStr};
+use std::ops::Deref;
 
 use crate::{
     backend::{Error, Server},
     net::DataRow,
 };
 
-use super::TwoPcTransaction;
+use super::{TwoPcTransaction, TwoPcTransactionOnShard};
 
 #[derive(Debug, Clone)]
 pub enum TwoPcServerTransaction {
@@ -49,13 +49,9 @@ impl TwoPcTransactions {
             let database = record.get_text(2).unwrap_or_default();
 
             if let Some(gid) = gid {
-                let transaction = gid
-                    .rsplit_once('_')
-                    .map(|(transaction, _)| transaction)
-                    .unwrap_or(&gid);
-                let txn = if let Ok(txn) = TwoPcTransaction::from_str(transaction) {
+                let txn = if let Ok(txn) = gid.parse::<TwoPcTransactionOnShard>() {
                     TwoPcServerTransaction::Ours {
-                        txn,
+                        txn: txn.transaction(),
                         user,
                         database,
                     }

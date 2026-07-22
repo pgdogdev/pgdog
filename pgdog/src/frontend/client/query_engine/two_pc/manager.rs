@@ -397,10 +397,16 @@ impl Manager {
     pub async fn cleanup_abandoned(&self) -> Result<(), Error> {
         info!("[2pc] rolling back abandoned transactions");
 
-        let mut cleaned_up = 0;
-        for cluster in databases().all().values() {
-            cleaned_up += self.cleanup_abandoned_for_cluster(cluster).await?;
-        }
+        let databases = databases();
+        let cleaned_up = try_join_all(
+            databases
+                .all()
+                .values()
+                .map(|cluster| self.cleanup_abandoned_for_cluster(cluster)),
+        )
+        .await?
+        .into_iter()
+        .sum::<usize>();
 
         if cleaned_up > 0 {
             warn!("[2pc] rolled back up {} abandoned transactions", cleaned_up);
