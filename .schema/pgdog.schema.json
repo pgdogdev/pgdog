@@ -117,6 +117,7 @@
         "tls_verify": "prefer",
         "two_phase_commit": false,
         "two_phase_commit_auto": null,
+        "two_phase_commit_rollback_abandoned": false,
         "two_phase_commit_wal_checkpoint_interval": 60,
         "two_phase_commit_wal_dir": null,
         "two_phase_commit_wal_fsync_interval": 2,
@@ -1190,6 +1191,11 @@
             "null"
           ],
           "default": null
+        },
+        "two_phase_commit_rollback_abandoned": {
+          "description": "Rollback abandoned transactions.\n\nWARNING: Data loss will occur, enable this only if you don't care about consistency\nand are not using the 2pc WAL.",
+          "type": "boolean",
+          "default": false
         },
         "two_phase_commit_wal_checkpoint_interval": {
           "description": "How often, in seconds, to write a checkpoint record to the two-phase commit WAL and garbage-collect old segments.\n\n_Default:_ `60`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#two_phase_commit_wal_checkpoint_interval>",
