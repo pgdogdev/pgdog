@@ -155,7 +155,7 @@ static DEPLOYMENT_ID: Lazy<Option<String>> = Lazy::new(|| env::var("DEPLOYMENT_I
 /// This should be _globally_ unique
 /// and is used to differentiate 2pc transactions.
 ///
-pub fn deployment_id() -> Option<&'static str> {
+pub(crate) fn deployment_id() -> Option<&'static str> {
     DEPLOYMENT_ID.as_deref()
 }
 
