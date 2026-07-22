@@ -83,9 +83,13 @@ async fn test_maintenance_mode_drops_disconnected_client_query() {
     });
 
     // Fire the write. It blocks inside PgDog, parked on maintenance mode.
+    // Use simple_query so the INSERT travels as a single Query message and is
+    // buffered as one complete request. execute() would use the extended
+    // protocol and park on the statement-prepare round-trip instead, leaving
+    // no INSERT buffered to dispatch, so it can't tell the fix from the bug.
     let query = tokio::spawn(async move {
         let _ = client
-            .execute("INSERT INTO maintenance_probe VALUES (1)", &[])
+            .simple_query("INSERT INTO maintenance_probe VALUES (1)")
             .await;
         drop(client);
     });
