@@ -5,7 +5,7 @@ use crate::frontend::client::query_engine::two_pc::TwoPcTransaction;
 use super::TwoPcPhase;
 
 /// Prepared transaction name for a coordinator transaction on one shard.
-pub fn shard_name(transaction: TwoPcTransaction, shard: usize) -> String {
+pub(crate) fn shard_name(transaction: TwoPcTransaction, shard: usize) -> String {
     format!("{transaction}_{shard}")
 }
 
