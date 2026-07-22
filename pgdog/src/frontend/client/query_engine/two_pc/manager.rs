@@ -425,21 +425,19 @@ impl Manager {
             for txn in txns.iter() {
                 if let TwoPcServerTransaction::Ours { txn, user, .. } = txn {
                     // Postgres transactions can be only be rolled back by their owners.
-                    if user == cluster.user() {
-                        if txn.is_mine() {
-                            match conn
-                                .execute(phase_control(*txn, number, TwoPcPhase::Rollback))
-                                .await
-                            {
-                                Ok(_) => cleaned_up += 1,
-                                Err(BackendError::ExecutionError(err)) => {
-                                    warn!(
-                                        "[2pc] error cleaning abandoned transaction \"{}\": {}",
-                                        txn, err
-                                    );
-                                }
-                                Err(err) => return Err(err.into()),
+                    if user == cluster.user() && txn.is_mine() {
+                        match conn
+                            .execute(phase_control(*txn, number, TwoPcPhase::Rollback))
+                            .await
+                        {
+                            Ok(_) => cleaned_up += 1,
+                            Err(BackendError::ExecutionError(err)) => {
+                                warn!(
+                                    "[2pc] error cleaning abandoned transaction \"{}\": {}",
+                                    txn, err
+                                );
                             }
+                            Err(err) => return Err(err.into()),
                         }
                     }
                 }
