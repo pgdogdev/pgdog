@@ -157,8 +157,6 @@ async fn pgdog(command: Option<Commands>) -> Result<(), Box<dyn std::error::Erro
                 }
             }
 
-            // Abandoned two-phase commit transactions are cleaned up
-            // by each cluster on launch, before it serves traffic.
             let mut listener = Listener::new(format!("{}:{}", general.host, general.port));
             listener.listen().await?;
         }
