@@ -58,7 +58,7 @@ pub fn databases() -> Arc<Databases> {
 
 /// Replace databases pooler-wide.
 pub fn replace_databases(new_databases: Databases, reload: bool) -> Result<(), Error> {
-    // Bust the schema cache before launchiung pools.
+    // Bust the schema cache before launching pools.
     SchemaCache::global().clear();
 
     // Order of operations is important
@@ -98,7 +98,6 @@ pub fn reload_from_existing() -> Result<(), Error> {
     let _lock = lock();
     let config = config();
     let databases = from_config(&config);
-
     replace_databases(databases, true)?;
     Ok(())
 }
