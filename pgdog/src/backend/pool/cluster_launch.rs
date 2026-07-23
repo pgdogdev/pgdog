@@ -7,12 +7,11 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use tokio::time::{sleep, timeout};
+use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info, warn};
+use tracing::error;
 
 use crate::backend::pool::ee::schema_changed_hook;
-use crate::frontend::client::query_engine::two_pc::Manager;
 use crate::tasks;
 
 use super::Cluster;
@@ -27,7 +26,6 @@ use super::Cluster;
 pub(super) struct Readiness {
     online: AtomicBool,
     launch_waiter: CancellationToken,
-    two_pc_waiter: CancellationToken,
 }
 
 impl Readiness {
@@ -51,14 +49,6 @@ impl Readiness {
     async fn wait_ready(&self) {
         self.launch_waiter.cancelled().await;
     }
-
-    fn mark_two_pc_cleaned_up(&self) {
-        self.two_pc_waiter.cancel();
-    }
-
-    async fn wait_two_pc_cleaned_up(&self) {
-        self.two_pc_waiter.cancelled().await;
-    }
 }
 
 impl Cluster {
@@ -70,7 +60,6 @@ impl Cluster {
 
         self.readiness.set_online(true);
 
-        self.launch_two_pc_cleanup();
         self.launch_schema_sync();
         self.launch_readiness_monitor();
     }
@@ -113,28 +102,11 @@ impl Cluster {
         self.readiness.mark_ready();
     }
 
-    /// Rollback abandoned two-phase commit transactions before
-    /// serving traffic. Queries wait on [`Cluster::wait_ready`]
-    /// until this is done.
-    fn launch_two_pc_cleanup(&self) {
-        if !self.two_pc_rollback_abandoned() {
-            self.readiness.mark_two_pc_cleaned_up();
-            return;
-        }
-
-        let cluster = self.clone();
-        tasks::spawn("two-pc abandoned transactions cleanup", async move {
-            cluster.rollback_abandoned_two_pc().await;
-            cluster.readiness.mark_two_pc_cleaned_up();
-        });
-    }
-
     /// Mark the cluster ready once two-phase commit cleanup
     /// and schema loading are done.
     fn launch_readiness_monitor(&self) {
         let cluster = self.clone();
         tasks::spawn("cluster readiness monitor", async move {
-            cluster.readiness.wait_two_pc_cleaned_up().await;
             cluster.wait_schema_loaded().await;
             cluster.mark_ready();
         });
@@ -165,7 +137,7 @@ impl Cluster {
             let identifier = self.identifier();
             let shard = shard.clone();
 
-            tasks::spawn("cluster schema sync", async move {
+            tasks::spawn("shard schema sync", async move {
                 loop {
                     match shard.load_schema().await {
                         Ok(true) => {
@@ -191,45 +163,6 @@ impl Cluster {
                     }
                 }
             });
-        }
-    }
-
-    /// Rollback abandoned two-phase commit transactions on all shards.
-    ///
-    /// Bounded by `two_phase_commit_rollback_abandoned_timeout`.
-    async fn rollback_abandoned_two_pc(&self) {
-        let result = timeout(
-            self.two_pc_rollback_abandoned_timeout(),
-            Manager::get().cleanup_abandoned_for_cluster(self),
-        )
-        .await;
-
-        let identifier = self.identifier();
-
-        match result {
-            Ok(Ok(cleaned_up)) => {
-                if cleaned_up > 0 {
-                    warn!(
-                        "[2pc] rolled back {} abandoned transactions [{}]",
-                        cleaned_up, identifier,
-                    );
-                } else {
-                    info!("[2pc] no abandoned transactions found [{}]", identifier,);
-                }
-            }
-            Ok(Err(err)) => {
-                error!(
-                    "[2pc] abandoned transactions cleanup error: {} [{}]",
-                    err, identifier
-                );
-            }
-            Err(_) => {
-                error!(
-                    "[2pc] abandoned transactions cleanup timed out after {}ms [{}]",
-                    self.two_pc_rollback_abandoned_timeout().as_millis(),
-                    identifier,
-                );
-            }
         }
     }
 }

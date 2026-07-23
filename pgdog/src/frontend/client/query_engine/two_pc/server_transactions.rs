@@ -37,9 +37,7 @@ impl TwoPcTransactions {
     /// Load two phase transactions from the server.
     pub(crate) async fn load(server: &mut Server) -> Result<Self, Error> {
         let records: Vec<DataRow> = server
-            .fetch_all(
-                "SELECT gid, owner, database FROM pg_prepared_xacts WHERE owner = current_user",
-            )
+            .fetch_all("SELECT gid, owner, database FROM pg_prepared_xacts")
             .await?;
         let mut transactions = vec![];
 

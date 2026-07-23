@@ -16,11 +16,6 @@ impl TwoPcTransaction {
         Self(rng().random_range(0..usize::MAX))
     }
 
-    /// This transaction was created by this process.
-    pub(crate) fn is_created_by_this_process(&self) -> bool {
-        self.to_string().starts_with(&Self::global_prefix())
-    }
-
     /// A prefix to identify two-phase commit transactions generated
     /// by this PgDog process.
     fn global_prefix() -> String {

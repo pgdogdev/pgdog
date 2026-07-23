@@ -56,8 +56,6 @@ pub struct Cluster {
     cross_shard_disabled: bool,
     two_phase_commit: bool,
     two_phase_commit_auto: bool,
-    two_pc_rollback_abandoned: bool,
-    two_pc_rollback_abandoned_timeout: Duration,
     pub(super) readiness: Arc<Readiness>,
     rewrite: Rewrite,
     prepared_statements: PreparedStatements,
@@ -143,8 +141,6 @@ pub struct ClusterConfig<'a> {
     pub cross_shard_disabled: bool,
     pub two_pc: bool,
     pub two_pc_auto: bool,
-    pub two_pc_rollback_abandoned: bool,
-    pub two_pc_rollback_abandoned_timeout: u64,
     pub sharded_schemas: ShardedSchemas,
     pub rewrite: &'a Rewrite,
     pub prepared_statements: &'a PreparedStatements,
@@ -208,8 +204,6 @@ impl<'a> ClusterConfig<'a> {
             two_pc_auto: user
                 .two_phase_commit_auto
                 .unwrap_or(general.two_phase_commit_auto.unwrap_or(false)), // Disable by default.
-            two_pc_rollback_abandoned: general.two_phase_commit_rollback_abandoned,
-            two_pc_rollback_abandoned_timeout: general.two_phase_commit_rollback_abandoned_timeout,
             sharded_schemas,
             rewrite,
             prepared_statements: &general.prepared_statements,
@@ -257,8 +251,6 @@ impl Cluster {
             cross_shard_disabled,
             two_pc,
             two_pc_auto,
-            two_pc_rollback_abandoned,
-            two_pc_rollback_abandoned_timeout,
             sharded_schemas,
             rewrite,
             prepared_statements,
@@ -320,10 +312,6 @@ impl Cluster {
             cross_shard_disabled,
             two_phase_commit: two_pc && shards.len() > 1,
             two_phase_commit_auto: two_pc_auto && shards.len() > 1,
-            two_pc_rollback_abandoned,
-            two_pc_rollback_abandoned_timeout: Duration::from_millis(
-                two_pc_rollback_abandoned_timeout,
-            ),
             readiness: Arc::new(Readiness::default()),
             rewrite: rewrite.clone(),
             prepared_statements: *prepared_statements,
@@ -609,16 +597,7 @@ impl Cluster {
         self.two_phase_commit_auto && self.two_pc_enabled()
     }
 
-    /// Rollback abandoned two-phase commit transactions on launch.
-    pub(crate) fn two_pc_rollback_abandoned(&self) -> bool {
-        self.two_pc_rollback_abandoned
-    }
-
     /// Maximum time abandoned transactions cleanup can take on launch
-    /// before traffic is allowed through.
-    pub(crate) fn two_pc_rollback_abandoned_timeout(&self) -> Duration {
-        self.two_pc_rollback_abandoned_timeout
-    }
 
     /// How many parallel COPY commands can we
     /// run to re-shard this cluster.
@@ -1028,31 +1007,6 @@ mod test {
     }
 
     #[tokio::test]
-    async fn test_wait_ready_waits_for_two_pc_cleanup() {
-        use tokio::time::{Duration, timeout};
-
-        let config = ConfigAndUsers::default();
-        let mut cluster = Cluster::new_test(&config);
-        cluster.two_pc_rollback_abandoned = true;
-        // Expire immediately, don't touch a real database.
-        cluster.two_pc_rollback_abandoned_timeout = Duration::ZERO;
-
-        // Pre-populate per-shard schemas, same reason.
-        for shard in &cluster.shards {
-            shard.schema_not_needed();
-        }
-
-        cluster.launch();
-
-        // Cleanup runs in the background, readiness can't be set yet.
-        assert!(!cluster.ready());
-
-        let result = timeout(Duration::from_millis(500), cluster.wait_ready()).await;
-        assert!(result.is_ok());
-        assert!(cluster.ready());
-    }
-
-    #[tokio::test]
     async fn test_shutdown_releases_readiness_waiters() {
         use tokio::time::{Duration, timeout};
 
@@ -1096,6 +1050,33 @@ mod test {
         cluster.launch();
         sleep(Duration::from_millis(50)).await;
         cluster.wait_ready().await;
+    }
+
+    #[tokio::test]
+    async fn test_wait_ready_waits_for_schema_notification() {
+        use tokio::time::{Duration, sleep, timeout};
+
+        let config = ConfigAndUsers::default();
+        let cluster = Cluster::new_test(&config);
+
+        cluster.launch();
+
+        // Schemas not loaded yet, readiness is pending.
+        assert!(!cluster.ready());
+
+        // Simulate schema load finishing on each shard: the readiness
+        // monitor wakes up via the per-shard schema_waiter notification.
+        let shards: Vec<_> = cluster.shards.to_vec();
+        tokio::spawn(async move {
+            sleep(Duration::from_millis(10)).await;
+            for shard in &shards {
+                shard.schema_not_needed();
+            }
+        });
+
+        let result = timeout(Duration::from_millis(500), cluster.wait_ready()).await;
+        assert!(result.is_ok());
+        assert!(cluster.ready());
     }
 
     #[tokio::test]
