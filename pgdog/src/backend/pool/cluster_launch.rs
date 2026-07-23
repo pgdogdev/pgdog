@@ -16,11 +16,6 @@ use crate::tasks;
 use super::Cluster;
 
 /// Cluster readiness state.
-///
-/// `online` is set once the pools are launched and cleared on shutdown.
-/// `launch_waiter` is cancelled once boot-time maintenance — two-phase
-/// commit cleanup and schema loading — is done and the cluster can
-/// serve traffic.
 #[derive(Default, Debug)]
 pub(super) struct Readiness {
     online: AtomicBool,

@@ -295,8 +295,6 @@ impl Manager {
 
         debug!("[2pc] monitor started");
 
-        // Cleanup orphaned transactions.
-
         loop {
             // Wake up either because it's time to check
             // or manager told us to.

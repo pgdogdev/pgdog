@@ -1087,8 +1087,7 @@ mod test {
 
         cluster.launch();
 
-        // Should return without waiting: no schema to load,
-        // two-pc cleanup disabled.
+        // Should return without waiting: no schema to load.
         cluster.wait_ready().await;
         assert!(cluster.ready());
     }
