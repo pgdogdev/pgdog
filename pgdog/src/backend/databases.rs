@@ -99,9 +99,6 @@ pub fn reload_from_existing() -> Result<(), Error> {
     let config = config();
     let databases = from_config(&config);
 
-    // Bust the schema cache before relaunchiung pools.
-    SchemaCache::global().clear();
-
     replace_databases(databases, true)?;
     Ok(())
 }
