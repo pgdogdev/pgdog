@@ -19,6 +19,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::auth::AuthResult;
 use crate::backend::replication::ShardedSchemas;
+use crate::backend::schema::SchemaCache;
 use crate::config::PoolerMode;
 use crate::frontend::PreparedStatements;
 use crate::frontend::client::query_engine::two_pc::Manager;
@@ -57,6 +58,9 @@ pub fn databases() -> Arc<Databases> {
 
 /// Replace databases pooler-wide.
 pub fn replace_databases(new_databases: Databases, reload: bool) -> Result<(), Error> {
+    // Bust the schema cache before launchiung pools.
+    SchemaCache::global().clear();
+
     // Order of operations is important
     // to ensure zero downtime for clients.
     //
@@ -94,6 +98,10 @@ pub fn reload_from_existing() -> Result<(), Error> {
     let _lock = lock();
     let config = config();
     let databases = from_config(&config);
+
+    // Bust the schema cache before relaunchiung pools.
+    SchemaCache::global().clear();
+
     replace_databases(databases, true)?;
     Ok(())
 }

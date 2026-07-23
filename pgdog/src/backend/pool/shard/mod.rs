@@ -14,6 +14,7 @@ use crate::backend::Schema;
 use crate::backend::databases::User;
 use crate::backend::pool::lb::ban::Ban;
 use crate::backend::pub_sub::listener::Listener;
+use crate::backend::schema::SchemaCache;
 use crate::config::{LoadBalancingStrategy, ReadWriteSplit, Role};
 use crate::net::Parameters;
 use crate::net::messages::FrontendPid;
@@ -37,7 +38,7 @@ pub(super) struct ShardConfig<'a> {
     pub(super) lb_strategy: LoadBalancingStrategy,
     /// Primary/replica read/write split strategy.
     pub(super) rw_split: ReadWriteSplit,
-    /// Cluster identifier (user/password).
+    /// Cluster identifier (user/database).
     pub(super) identifier: Arc<User>,
     /// LSN check interval
     pub(super) lsn_check_interval: Duration,
@@ -120,23 +121,41 @@ impl Shard {
         }
     }
 
-    /// Load schema from the shard's primary.
-    pub async fn load_schema(&self) -> Result<bool, crate::backend::Error> {
+    /// Load schema from the shard's primary database.
+    ///
+    /// Uses the global schema cache, so most requests will not actually touch
+    /// the database.
+    ///
+    pub(crate) async fn load_schema(&self) -> Result<bool, crate::backend::Error> {
         if self.schema.initialized() {
             return Ok(false);
         }
 
+        // This is syncrhonized by database/shard number, so this prevents
+        // a thundering herd with 100s of users, for example, all fetching
+        // the same schema.
+        let schema = SchemaCache::global().get(self).await?;
+        let _ = self.schema.set(schema);
+        self.schema_waiter.notify_one();
+
+        Ok(true)
+    }
+
+    /// Fetch schema from the shard. This does not use the
+    /// cache and returns the freshed schema available.
+    ///
+    pub(crate) async fn fetch_schema(&self) -> Result<Schema, crate::backend::Error> {
         let mut server = self.primary_or_replica(&Request::default()).await?;
         let schema = Schema::load(&mut server).await?;
+
         info!(
             "loaded schema for {} tables on shard {} [{}]",
             schema.tables().len(),
             self.number(),
             server.addr()
         );
-        let _ = self.schema.set(schema);
-        self.schema_waiter.notify_one();
-        Ok(true)
+
+        Ok(schema)
     }
 
     /// Set the schema to its default value.
