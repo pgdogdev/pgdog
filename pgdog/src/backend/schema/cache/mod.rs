@@ -10,7 +10,7 @@ use crate::backend::{Schema, Shard};
 
 type Entry = Arc<Mutex<Schema>>;
 
-static CACHE: Lazy<SchemaCache> = Lazy::new(|| SchemaCache::default());
+static CACHE: Lazy<SchemaCache> = Lazy::new(SchemaCache::default);
 
 /// Schema cache.
 #[derive(Debug, Default)]
