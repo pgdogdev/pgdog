@@ -46,8 +46,8 @@ pub enum Error {
     #[error("query timeout")]
     Timeout(#[from] tokio::time::error::Elapsed),
 
-    #[error("schema load timeout")]
-    SchemaLoad,
+    #[error("cluster start timeout")]
+    ClusterStart,
 
     #[error("join error")]
     Join(#[from] tokio::task::JoinError),
