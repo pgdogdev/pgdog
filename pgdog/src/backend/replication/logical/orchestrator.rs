@@ -121,7 +121,7 @@ impl Orchestrator {
 
         self.destination = databases().schema_owner(&self.destination.identifier().database)?;
         self.source = databases().schema_owner(&self.source.identifier().database)?;
-        self.destination.wait_schema_loaded().await;
+        self.destination.wait_ready().await;
 
         self.refresh_publisher();
 

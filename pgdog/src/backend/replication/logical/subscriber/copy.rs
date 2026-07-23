@@ -296,14 +296,14 @@ impl CopySubscriber {
 
         async {
             let _guard_phase_1 = manager
-                .transaction_state(&txn, &identifier, TwoPcPhase::Phase1)
+                .transaction_state(txn, &identifier, TwoPcPhase::Phase1)
                 .await?;
-            self.two_pc_on_shards(&txn, TwoPcPhase::Phase1).await?;
+            self.two_pc_on_shards(txn, TwoPcPhase::Phase1).await?;
 
             let _guard_phase_2 = manager
-                .transaction_state(&txn, &identifier, TwoPcPhase::Phase2)
+                .transaction_state(txn, &identifier, TwoPcPhase::Phase2)
                 .await?;
-            self.two_pc_on_shards(&txn, TwoPcPhase::Phase2).await?;
+            self.two_pc_on_shards(txn, TwoPcPhase::Phase2).await?;
 
             manager.done(&txn).await?;
             Ok(())
@@ -317,7 +317,7 @@ impl CopySubscriber {
 
     async fn two_pc_on_shards(
         &mut self,
-        txn: &TwoPcTransaction,
+        txn: TwoPcTransaction,
         phase: TwoPcPhase,
     ) -> Result<(), Error> {
         let mut futures = Vec::new();
@@ -329,7 +329,7 @@ impl CopySubscriber {
             // via binding.rs using the same phase_control() helper.
             let query = match phase {
                 TwoPcPhase::Rollback => unreachable!(),
-                phase => phase_control(&txn.to_string(), shard, phase),
+                phase => phase_control(txn, shard, phase),
             };
             futures.push(Self::send_and_confirm(server, Query::new(query).into()));
         }

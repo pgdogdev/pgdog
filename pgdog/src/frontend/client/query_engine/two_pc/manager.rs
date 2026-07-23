@@ -201,14 +201,14 @@ impl Manager {
     /// the WAL exists to prevent.
     pub(crate) async fn transaction_state(
         &self,
-        transaction: &TwoPcTransaction,
+        transaction: TwoPcTransaction,
         identifier: &Arc<User>,
         phase: TwoPcPhase,
     ) -> Result<TwoPcGuard, Error> {
         let prior = {
             let mut guard = self.inner.lock();
-            let prior = guard.transactions.get(transaction).cloned();
-            let entry = guard.transactions.entry(*transaction).or_default();
+            let prior = guard.transactions.get(&transaction).cloned();
+            let entry = guard.transactions.entry(transaction).or_default();
             entry.identifier = identifier.clone();
             entry.phase = phase;
             prior
@@ -218,13 +218,13 @@ impl Manager {
             let result = match phase {
                 TwoPcPhase::Phase1 => {
                     wal.append_begin(
-                        *transaction,
+                        transaction,
                         identifier.user.clone(),
                         identifier.database.clone(),
                     )
                     .await
                 }
-                TwoPcPhase::Phase2 => wal.append_committing(*transaction).await,
+                TwoPcPhase::Phase2 => wal.append_committing(transaction).await,
                 TwoPcPhase::Rollback => {
                     unreachable!("rollback is not a state transition; it's the cleanup direction")
                 }
@@ -233,10 +233,10 @@ impl Manager {
                 let mut guard = self.inner.lock();
                 match prior {
                     Some(prior) => {
-                        guard.transactions.insert(*transaction, prior);
+                        guard.transactions.insert(transaction, prior);
                     }
                     None => {
-                        guard.transactions.remove(transaction);
+                        guard.transactions.remove(&transaction);
                     }
                 }
                 warn!(
@@ -248,7 +248,7 @@ impl Manager {
         }
 
         Ok(TwoPcGuard {
-            transaction: *transaction,
+            transaction,
             manager: Self::get(),
         })
     }
@@ -309,7 +309,7 @@ impl Manager {
                     r#"[2pc] cleaning up transaction "{}""#,
                     transaction.to_string()
                 );
-                match manager.cleanup_phase(&transaction).await {
+                match manager.cleanup_phase(transaction).await {
                     Err(err) => {
                         error!(
                             r#"[2pc] error cleaning up "{}" transaction: {}"#,
@@ -345,8 +345,8 @@ impl Manager {
     }
 
     /// Reconnect to cluster if available and rollback the two-phase transaction.
-    async fn cleanup_phase(&self, transaction: &TwoPcTransaction) -> Result<(), Error> {
-        let state = match self.inner.lock().transactions.get(transaction).cloned() {
+    async fn cleanup_phase(&self, transaction: TwoPcTransaction) -> Result<(), Error> {
+        let state = match self.inner.lock().transactions.get(&transaction).cloned() {
             Some(state) => state,
             _ => {
                 return Ok(());
@@ -379,7 +379,7 @@ impl Manager {
                 &Route::write(ShardWithPriority::new_override_transaction(Shard::All)),
             )
             .await?;
-        connection.two_pc(&transaction.to_string(), phase).await?;
+        connection.two_pc(transaction, phase).await?;
         connection.disconnect();
 
         Ok(())

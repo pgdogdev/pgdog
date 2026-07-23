@@ -467,6 +467,9 @@ impl Databases {
                     cluster.user(),
                     cluster.name()
                 );
+                // No boot-time maintenance will run, don't block
+                // readiness waiters. Checkouts will fail instead.
+                cluster.mark_ready();
             } else {
                 cluster.launch();
             }
