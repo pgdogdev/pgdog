@@ -180,6 +180,7 @@ mod tests {
             reads: 25,
             writes: 50,
             auth_attempts: 30,
+            client_idle_xact_timeouts: 0,
         }
         .into();
 
@@ -207,6 +208,7 @@ mod tests {
             reads: 10,
             writes: 20,
             auth_attempts: 20,
+            client_idle_xact_timeouts: 0,
         }
         .into();
 
@@ -263,6 +265,7 @@ mod tests {
             reads: 25,
             writes: 50,
             auth_attempts: 50,
+            client_idle_xact_timeouts: 0,
         }
         .into();
 
@@ -290,6 +293,7 @@ mod tests {
             reads: 10,
             writes: 20,
             auth_attempts: 30,
+            client_idle_xact_timeouts: 0,
         }
         .into();
 
@@ -368,6 +372,7 @@ mod tests {
             reads: 10,
             writes: 20,
             auth_attempts: 10,
+            client_idle_xact_timeouts: 0,
         }
         .into();
 
@@ -439,6 +444,7 @@ mod tests {
             reads: 10,
             writes: 25,
             auth_attempts: 100,
+            client_idle_xact_timeouts: 0,
         }
         .into();
 

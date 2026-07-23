@@ -428,6 +428,12 @@ impl Connection {
         self.binding.done() && !self.locked
     }
 
+    /// Record that the client holding this connection was disconnected
+    /// because it idled inside a transaction for too long.
+    pub(crate) fn record_client_idle_xact_timeout(&self) {
+        self.binding.record_client_idle_xact_timeout();
+    }
+
     /// Lock this connection to the client, preventing it's
     /// release back into the pool.
     pub(crate) fn lock(&mut self, lock: bool) {
