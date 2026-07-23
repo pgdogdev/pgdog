@@ -60,11 +60,11 @@ impl Cluster {
 
     /// Shutdown the connection pools.
     pub(crate) fn shutdown(&self) {
+        self.readiness.set_online(false);
+
         for shard in self.shards() {
             shard.shutdown();
         }
-
-        self.readiness.set_online(false);
 
         // Release readiness waiters, the cluster is going away.
         self.mark_ready();
