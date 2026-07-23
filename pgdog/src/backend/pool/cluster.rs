@@ -903,6 +903,10 @@ mod test {
         pub(crate) fn set_rw_split(&mut self, rw_split: ReadWriteSplit) {
             self.rw_split = rw_split;
         }
+
+        pub(crate) fn set_sharded_tables(&mut self, sharded_tables: ShardedTables) {
+            self.sharded_tables = sharded_tables;
+        }
     }
 
     #[test]
