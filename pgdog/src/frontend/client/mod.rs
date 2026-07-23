@@ -3,6 +3,7 @@
 //! Entrypoint for client/server interactions.
 //!
 
+use std::future::IntoFuture;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -531,17 +532,6 @@ impl Client {
 
     /// Handle client messages.
     async fn client_messages(&mut self, query_engine: &mut QueryEngine) -> Result<(), Error> {
-        // Check maintenance mode.
-        if !self.in_transaction()
-            && !self.admin
-            && let Some(waiter) = maintenance_mode::waiter(&self.database)
-        {
-            let state = query_engine.get_state();
-            query_engine.set_state(State::Waiting);
-            waiter.await;
-            query_engine.set_state(state);
-        }
-
         // If client sent multiple requests, split them up and execute individually.
         let spliced = self.client_request.spliced()?;
         if spliced.is_empty() {
@@ -654,6 +644,38 @@ impl Client {
                 timer.unwrap().elapsed().as_secs_f64() * 1000.0,
                 self.client_request,
             );
+        }
+
+        // Hold a complete request at the door while the database is in
+        // maintenance mode. buffer() already owns the client socket, so we
+        // watch it for a disconnect and drop the request instead of
+        // dispatching it once maintenance lifts. Only gate between
+        // transactions; a transaction already in flight is allowed to finish.
+        // Admin connections are never gated.
+        if !self.in_transaction()
+            && !self.admin
+            && let Some(waiter) = maintenance_mode::waiter(&self.database)
+        {
+            // `Pin<Box<_>>` is `Unpin`, so `&mut waiter` polls the same
+            // future across iterations.
+            let mut waiter = waiter.into_future();
+            loop {
+                select! {
+                    _ = &mut waiter => break,
+
+                    // A client waiting for its response shouldn't be sending
+                    // anything, so a readable socket means either a disconnect
+                    // (EOF/error) or pipelined traffic. Pipelined bytes stay
+                    // buffered for the next request; only a disconnect ends the
+                    // wait early.
+                    result = self.stream_buffer.read_more(&mut self.stream) => {
+                        if result.is_err() {
+                            self.client_request.clear();
+                            return Ok(BufferEvent::DisconnectAbrupt);
+                        }
+                    }
+                }
+            }
         }
 
         Ok(BufferEvent::HaveRequest)
