@@ -597,8 +597,6 @@ impl Cluster {
         self.two_phase_commit_auto && self.two_pc_enabled()
     }
 
-    /// Maximum time abandoned transactions cleanup can take on launch
-
     /// How many parallel COPY commands can we
     /// run to re-shard this cluster.
     pub fn resharding_parallel_copies(&self) -> usize {

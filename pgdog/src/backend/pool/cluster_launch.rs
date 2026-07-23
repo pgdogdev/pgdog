@@ -1,13 +1,12 @@
 //! Cluster startup and shutdown primitives.
 //!
 //! Launching and shutting down the connection pools, and gating
-//! traffic until boot-time maintenance (two-phase commit cleanup,
-//! schema sync) has completed.
+//! traffic until boot-time maintenance has completed.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use tokio::time::sleep;
+use tokio::{select, time::sleep};
 use tokio_util::sync::CancellationToken;
 use tracing::error;
 
@@ -81,12 +80,7 @@ impl Cluster {
         self.readiness.online()
     }
 
-    /// Wait until boot-time maintenance — two-phase commit cleanup
-    /// and schema loading — is done and the cluster can serve traffic.
-    ///
-    /// Two-phase commit cleanup is bounded by
-    /// `two_phase_commit_rollback_abandoned_timeout`; schema loading
-    /// retries until success, so callers should apply their own timeout.
+    /// Wait until boot-time maintenance is done and the cluster can serve traffic.
     pub(crate) async fn wait_ready(&self) {
         self.readiness.wait_ready().await;
     }
@@ -102,12 +96,15 @@ impl Cluster {
         self.readiness.mark_ready();
     }
 
-    /// Mark the cluster ready once two-phase commit cleanup
-    /// and schema loading are done.
+    /// Mark the cluster ready schema loading is done.
     fn launch_readiness_monitor(&self) {
         let cluster = self.clone();
         tasks::spawn("cluster readiness monitor", async move {
-            cluster.wait_schema_loaded().await;
+            let shutdown = tasks::shutdown_signal();
+            select! {
+                _ = cluster.wait_schema_loaded() => {}
+                _ = shutdown.cancelled() => {}
+            }
             cluster.mark_ready();
         });
     }
@@ -136,10 +133,17 @@ impl Cluster {
         for shard in self.shards() {
             let identifier = self.identifier();
             let shard = shard.clone();
+            let shutdown = tasks::shutdown_signal();
 
             tasks::spawn("shard schema sync", async move {
                 loop {
-                    match shard.load_schema().await {
+                    let loader = shard.load_schema();
+                    let result = select! {
+                        _ = shutdown.cancelled() => break,
+                        result = loader => { result },
+                    };
+
+                    match result {
                         Ok(true) => {
                             schema_changed_hook(&shard.schema(), &identifier, &shard);
                             return;
