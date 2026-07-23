@@ -629,8 +629,8 @@ pub struct General {
     #[serde(default = "General::two_phase_commit_rollback_abandoned")]
     pub two_phase_commit_rollback_abandoned: bool,
 
-    /// Maximum amount of time to block startup in order to rollback abandoned
-    /// transactions.
+    /// Maximum amount of time, in milliseconds, each cluster waits for abandoned
+    /// transactions rollback on boot before allowing traffic.
     #[serde(default = "General::two_phase_commit_rollback_abandoned_timeout")]
     pub two_phase_commit_rollback_abandoned_timeout: u64,
 

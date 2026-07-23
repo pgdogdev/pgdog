@@ -50,12 +50,12 @@ impl QueryEngine {
         };
 
         if let Ok(ClusterCheck::Ok) = res {
-            // Make sure schema is loaded before we throw traffic
-            // at it. This matters for sharded deployments only.
+            // Wait for boot-time maintenance (two-phase commit cleanup,
+            // schema load) before we throw traffic at the cluster.
             if let Ok(cluster) = self.backend.cluster() {
                 safe_timeout(
                     context.timeouts.query_timeout(&State::Active),
-                    cluster.wait_schema_loaded(),
+                    cluster.wait_ready(),
                 )
                 .await
                 .map_err(|_| Error::SchemaLoad)?;

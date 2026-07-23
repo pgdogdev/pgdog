@@ -467,6 +467,9 @@ impl Databases {
                     cluster.user(),
                     cluster.name()
                 );
+                // No boot-time maintenance will run, don't block
+                // readiness waiters. Checkouts will fail instead.
+                cluster.mark_ready();
             } else {
                 cluster.launch();
             }
@@ -1483,6 +1486,50 @@ mod tests {
         assert!(
             mirror_config_dest_only.is_none(),
             "Mirror config should not be precomputed when source has no users"
+        );
+    }
+
+    #[test]
+    fn test_two_pc_rollback_abandoned_config_passed_to_cluster() {
+        let config = Config {
+            databases: vec![Database {
+                name: "db1".to_string(),
+                host: "localhost".to_string(),
+                port: 5432,
+                role: Role::Primary,
+                ..Default::default()
+            }],
+            general: General {
+                two_phase_commit_rollback_abandoned: true,
+                two_phase_commit_rollback_abandoned_timeout: 1234,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let users = crate::config::Users {
+            users: vec![crate::config::User {
+                name: "user".to_string(),
+                database: "db1".to_string(),
+                password: Some("pass".to_string()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let databases = from_config(&ConfigAndUsers {
+            config,
+            users,
+            config_path: std::path::PathBuf::new(),
+            users_path: std::path::PathBuf::new(),
+            ..Default::default()
+        });
+
+        let cluster = databases.cluster(("user", "db1")).unwrap();
+        assert!(cluster.two_pc_rollback_abandoned());
+        assert_eq!(
+            cluster.two_pc_rollback_abandoned_timeout(),
+            std::time::Duration::from_millis(1234)
         );
     }
 

@@ -6,22 +6,13 @@ use pgdog_config::{
     LoadSchema, PreparedStatements, QueryParser, QueryParserEngine, QueryParserLevel, Rewrite,
     RewriteMode, users::PasswordKind,
 };
-use std::{
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
-    time::Duration,
-};
-use tracing::error;
+use std::{sync::Arc, time::Duration};
 
 use crate::frontend::router::sharding::ShardedTable;
-use crate::tasks;
 use crate::{
     backend::{
         Schema, ShardedTables,
         databases::{User as DatabaseUser, databases},
-        pool::ee::schema_changed_hook,
         replication::{ReplicationConfig, ShardedSchemas},
     },
     config::{
@@ -31,7 +22,10 @@ use crate::{
     net::{Query, messages::FrontendPid},
 };
 
-use super::{Address, Config, Error, Guard, MirrorStats, Request, Shard, ShardConfig};
+use super::{
+    Address, Config, Error, Guard, MirrorStats, Request, Shard, ShardConfig,
+    cluster_launch::Readiness,
+};
 use crate::config::LoadBalancingStrategy;
 
 #[derive(Clone, Debug, Default)]
@@ -41,11 +35,6 @@ pub struct PoolConfig {
     pub(crate) address: Address,
     /// Pool settings.
     pub(crate) config: Config,
-}
-
-#[derive(Default, Debug)]
-struct Readiness {
-    online: AtomicBool,
 }
 
 /// A collection of sharded replicas and primaries
@@ -67,7 +56,9 @@ pub struct Cluster {
     cross_shard_disabled: bool,
     two_phase_commit: bool,
     two_phase_commit_auto: bool,
-    readiness: Arc<Readiness>,
+    two_pc_rollback_abandoned: bool,
+    two_pc_rollback_abandoned_timeout: Duration,
+    pub(super) readiness: Arc<Readiness>,
     rewrite: Rewrite,
     prepared_statements: PreparedStatements,
     dry_run: bool,
@@ -152,6 +143,8 @@ pub struct ClusterConfig<'a> {
     pub cross_shard_disabled: bool,
     pub two_pc: bool,
     pub two_pc_auto: bool,
+    pub two_pc_rollback_abandoned: bool,
+    pub two_pc_rollback_abandoned_timeout: u64,
     pub sharded_schemas: ShardedSchemas,
     pub rewrite: &'a Rewrite,
     pub prepared_statements: &'a PreparedStatements,
@@ -215,6 +208,8 @@ impl<'a> ClusterConfig<'a> {
             two_pc_auto: user
                 .two_phase_commit_auto
                 .unwrap_or(general.two_phase_commit_auto.unwrap_or(false)), // Disable by default.
+            two_pc_rollback_abandoned: general.two_phase_commit_rollback_abandoned,
+            two_pc_rollback_abandoned_timeout: general.two_phase_commit_rollback_abandoned_timeout,
             sharded_schemas,
             rewrite,
             prepared_statements: &general.prepared_statements,
@@ -262,6 +257,8 @@ impl Cluster {
             cross_shard_disabled,
             two_pc,
             two_pc_auto,
+            two_pc_rollback_abandoned,
+            two_pc_rollback_abandoned_timeout,
             sharded_schemas,
             rewrite,
             prepared_statements,
@@ -323,6 +320,10 @@ impl Cluster {
             cross_shard_disabled,
             two_phase_commit: two_pc && shards.len() > 1,
             two_phase_commit_auto: two_pc_auto && shards.len() > 1,
+            two_pc_rollback_abandoned,
+            two_pc_rollback_abandoned_timeout: Duration::from_millis(
+                two_pc_rollback_abandoned_timeout,
+            ),
             readiness: Arc::new(Readiness::default()),
             rewrite: rewrite.clone(),
             prepared_statements: *prepared_statements,
@@ -561,7 +562,7 @@ impl Cluster {
         self.reload_schema_on_ddl && self.load_schema()
     }
 
-    fn load_schema(&self) -> bool {
+    pub(super) fn load_schema(&self) -> bool {
         match self.load_schema {
             LoadSchema::On => true,
             LoadSchema::Off => false,
@@ -608,6 +609,17 @@ impl Cluster {
         self.two_phase_commit_auto && self.two_pc_enabled()
     }
 
+    /// Rollback abandoned two-phase commit transactions on launch.
+    pub(crate) fn two_pc_rollback_abandoned(&self) -> bool {
+        self.two_pc_rollback_abandoned
+    }
+
+    /// Maximum time abandoned transactions cleanup can take on launch
+    /// before traffic is allowed through.
+    pub(crate) fn two_pc_rollback_abandoned_timeout(&self) -> Duration {
+        self.two_pc_rollback_abandoned_timeout
+    }
+
     /// How many parallel COPY commands can we
     /// run to re-shard this cluster.
     pub fn resharding_parallel_copies(&self) -> usize {
@@ -635,65 +647,6 @@ impl Cluster {
         self.resharding_replication_retry_min_delay
     }
 
-    /// Launch the connection pools.
-    pub(crate) fn launch(&self) {
-        for shard in self.shards() {
-            shard.launch();
-        }
-
-        self.readiness.online.store(true, Ordering::Relaxed);
-
-        if !self.load_schema() {
-            for shard in &self.shards {
-                shard.schema_not_needed();
-            }
-            return;
-        }
-
-        for shard in self.shards() {
-            let identifier = self.identifier();
-            let shard = shard.clone();
-
-            tasks::spawn("cluster schema sync", async move {
-                use tokio::time::sleep;
-
-                loop {
-                    match shard.load_schema().await {
-                        Ok(true) => {
-                            schema_changed_hook(&shard.schema(), &identifier, &shard);
-                            return;
-                        }
-                        Ok(false) => return,
-                        Err(err) => {
-                            if shard.online() {
-                                error!(
-                                    "error loading schema for shard {}: {}",
-                                    shard.number(),
-                                    err
-                                );
-                                sleep(Duration::from_millis(100)).await;
-                            } else {
-                                // Cluster is shutting down: unblock any
-                                // wait_schema_loaded callers.
-                                shard.schema_not_needed();
-                                return;
-                            }
-                        }
-                    }
-                }
-            });
-        }
-    }
-
-    /// Shutdown the connection pools.
-    pub(crate) fn shutdown(&self) {
-        for shard in self.shards() {
-            shard.shutdown();
-        }
-
-        self.readiness.online.store(false, Ordering::Relaxed);
-    }
-
     /// Send a cancellation request for all running queries.
     pub(crate) async fn cancel_all(&self) -> Result<(), Error> {
         let pools: Vec<_> = self
@@ -707,22 +660,6 @@ impl Cluster {
             .map_err(|_| Error::FastShutdown)?;
 
         Ok(())
-    }
-
-    /// Is the cluster online?
-    pub(crate) fn online(&self) -> bool {
-        self.readiness.online.load(Ordering::Relaxed)
-    }
-
-    /// Schema loaded for all shards?
-    pub(crate) async fn wait_schema_loaded(&self) {
-        if !self.load_schema() {
-            return;
-        }
-
-        for shard in &self.shards {
-            shard.wait_schema_loaded().await;
-        }
     }
 
     /// Execute a query on every primary in the cluster.
@@ -1075,6 +1012,67 @@ mod test {
     }
 
     #[tokio::test]
+    async fn test_launch_marks_ready() {
+        let config = ConfigAndUsers::default();
+        let cluster = Cluster::new_test(&config);
+
+        // Pre-populate per-shard schemas so launch doesn't touch a real database.
+        for shard in &cluster.shards {
+            shard.schema_not_needed();
+        }
+
+        assert!(!cluster.ready());
+        cluster.launch();
+        cluster.wait_ready().await;
+        assert!(cluster.ready());
+    }
+
+    #[tokio::test]
+    async fn test_wait_ready_waits_for_two_pc_cleanup() {
+        use tokio::time::{Duration, timeout};
+
+        let config = ConfigAndUsers::default();
+        let mut cluster = Cluster::new_test(&config);
+        cluster.two_pc_rollback_abandoned = true;
+        // Expire immediately, don't touch a real database.
+        cluster.two_pc_rollback_abandoned_timeout = Duration::ZERO;
+
+        // Pre-populate per-shard schemas, same reason.
+        for shard in &cluster.shards {
+            shard.schema_not_needed();
+        }
+
+        cluster.launch();
+
+        // Cleanup runs in the background, readiness can't be set yet.
+        assert!(!cluster.ready());
+
+        let result = timeout(Duration::from_millis(500), cluster.wait_ready()).await;
+        assert!(result.is_ok());
+        assert!(cluster.ready());
+    }
+
+    #[tokio::test]
+    async fn test_shutdown_releases_readiness_waiters() {
+        use tokio::time::{Duration, timeout};
+
+        let config = ConfigAndUsers::default();
+        let cluster = Cluster::new_test(&config);
+
+        assert!(!cluster.ready());
+
+        let waiter = cluster.clone();
+        let handle = tokio::spawn(async move {
+            waiter.wait_ready().await;
+        });
+
+        cluster.shutdown();
+
+        let result = timeout(Duration::from_millis(200), handle).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
     async fn test_launch_schema_loading_idempotent() {
         use tokio::time::{Duration, sleep};
 
@@ -1092,66 +1090,28 @@ mod test {
         }
 
         cluster.launch();
-        cluster.wait_schema_loaded().await;
+        cluster.wait_ready().await;
 
         // Second launch must be safe: per-shard OnceCell prevents any reload.
         cluster.launch();
         sleep(Duration::from_millis(50)).await;
-        cluster.wait_schema_loaded().await;
+        cluster.wait_ready().await;
     }
 
     #[tokio::test]
-    async fn test_wait_schema_loaded_returns_immediately_when_not_needed() {
+    async fn test_wait_ready_returns_immediately_when_schema_not_needed() {
         let config = ConfigAndUsers::default();
         let cluster = Cluster::new_test_single_shard(&config);
 
         // load_schema() returns false for single shard without multi_tenant
         assert!(!cluster.load_schema());
 
-        // Should return immediately without waiting
-        cluster.wait_schema_loaded().await;
-    }
+        cluster.launch();
 
-    #[tokio::test]
-    async fn test_wait_schema_loaded_fast_path_when_already_loaded() {
-        let config = ConfigAndUsers::default();
-        let mut cluster = Cluster::new_test(&config);
-        cluster.sharded_schemas = ShardedSchemas::default();
-
-        assert!(cluster.load_schema());
-
-        // Mark every shard's schema as already loaded.
-        for shard in &cluster.shards {
-            shard.schema_not_needed();
-        }
-
-        // Each shard's wait_schema_loaded() takes the fast path and returns
-        // immediately because schema.initialized() is true.
-        cluster.wait_schema_loaded().await;
-    }
-
-    #[tokio::test]
-    async fn test_wait_schema_loaded_waits_for_notification() {
-        use tokio::time::{Duration, timeout};
-
-        let config = ConfigAndUsers::default();
-        let mut cluster = Cluster::new_test(&config);
-        cluster.sharded_schemas = ShardedSchemas::default();
-
-        assert!(cluster.load_schema());
-
-        // Trigger schema_not_needed on each shard after a short delay so the
-        // waiter wakes up via the per-shard schema_waiter notification.
-        let shards: Vec<_> = cluster.shards.to_vec();
-        tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_millis(10)).await;
-            for shard in &shards {
-                shard.schema_not_needed();
-            }
-        });
-
-        let result = timeout(Duration::from_millis(200), cluster.wait_schema_loaded()).await;
-        assert!(result.is_ok());
+        // Should return without waiting: no schema to load,
+        // two-pc cleanup disabled.
+        cluster.wait_ready().await;
+        assert!(cluster.ready());
     }
 
     #[test]

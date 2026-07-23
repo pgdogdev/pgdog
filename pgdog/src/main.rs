@@ -3,7 +3,6 @@
 use std::fs::read_to_string;
 use std::path::Path;
 use std::process::exit;
-use std::time::Duration;
 
 use clap::Parser;
 use pgdog::backend::databases;
@@ -17,7 +16,6 @@ use pgdog::stats;
 use pgdog::util::pgdog_version;
 use pgdog::{healthcheck, net};
 use tokio::runtime::Builder;
-use tokio::time::timeout;
 use tracing::{error, info, warn};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -159,29 +157,8 @@ async fn pgdog(command: Option<Commands>) -> Result<(), Box<dyn std::error::Erro
                 }
             }
 
-            if general.two_phase_commit_rollback_abandoned {
-                // This blocks startup on purpose.
-                //
-                // We should not create 2pc transactions until we cleaned up the abandonned ones.
-                //
-                let abandoned_timeout =
-                    Duration::from_millis(general.two_phase_commit_rollback_abandoned_timeout);
-                match timeout(abandoned_timeout, Manager::get().cleanup_abandoned()).await {
-                    Err(_) => {
-                        error!(
-                            "[2pc] abandoned transactions cleanup timed out after {}ms",
-                            abandoned_timeout.as_millis()
-                        );
-                    }
-
-                    Ok(Err(err)) => {
-                        error!("[2pc] abandoned transactions cleanup error: {}", err);
-                    }
-
-                    Ok(_) => (),
-                };
-            }
-
+            // Abandoned two-phase commit transactions are cleaned up
+            // by each cluster on launch, before it serves traffic.
             let mut listener = Listener::new(format!("{}:{}", general.host, general.port));
             listener.listen().await?;
         }

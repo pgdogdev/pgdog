@@ -417,7 +417,10 @@ impl Manager {
         Ok(())
     }
 
-    async fn cleanup_abandoned_for_cluster(&self, cluster: &Cluster) -> Result<usize, Error> {
+    pub(crate) async fn cleanup_abandoned_for_cluster(
+        &self,
+        cluster: &Cluster,
+    ) -> Result<usize, Error> {
         let cleaned_up = try_join_all(
             cluster
                 .shards()
