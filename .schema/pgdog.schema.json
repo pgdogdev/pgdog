@@ -1199,7 +1199,7 @@
           "default": false
         },
         "two_phase_commit_rollback_abandoned_timeout": {
-          "description": "Maximum amount of time to block startup in order to rollback abandoned\ntransactions.",
+          "description": "Maximum amount of time, in milliseconds, each cluster waits for abandoned\ntransactions rollback on boot before allowing traffic.",
           "type": "integer",
           "format": "uint64",
           "default": 15000,

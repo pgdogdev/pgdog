@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use tokio::time::{sleep, timeout};
 use tokio_util::sync::CancellationToken;
-use tracing::{error, warn};
+use tracing::{error, info, warn};
 
 use crate::backend::pool::ee::schema_changed_hook;
 use crate::frontend::client::query_engine::two_pc::Manager;
@@ -204,28 +204,30 @@ impl Cluster {
         )
         .await;
 
+        let identifier = self.identifier();
+
         match result {
             Ok(Ok(cleaned_up)) => {
                 if cleaned_up > 0 {
                     warn!(
-                        r#"[2pc] rolled back {} abandoned transactions on database "{}""#,
-                        cleaned_up,
-                        self.name(),
+                        "[2pc] rolled back {} abandoned transactions [{}]",
+                        cleaned_up, identifier,
                     );
+                } else {
+                    info!("[2pc] no abandoned transactions found [{}]", identifier,);
                 }
             }
             Ok(Err(err)) => {
                 error!(
-                    r#"[2pc] abandoned transactions cleanup error on database "{}": {}"#,
-                    self.name(),
-                    err
+                    "[2pc] abandoned transactions cleanup error: {} [{}]",
+                    err, identifier
                 );
             }
             Err(_) => {
                 error!(
-                    r#"[2pc] abandoned transactions cleanup on database "{}" timed out after {}ms"#,
-                    self.name(),
-                    self.two_pc_rollback_abandoned_timeout().as_millis()
+                    "[2pc] abandoned transactions cleanup timed out after {}ms [{}]",
+                    self.two_pc_rollback_abandoned_timeout().as_millis(),
+                    identifier,
                 );
             }
         }
