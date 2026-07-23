@@ -155,8 +155,21 @@ pub enum Hasher {
 /// Data type of the sharding column.
 ///
 /// <https://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/#data_type>
-#[derive(Serialize, Deserialize, PartialEq, Debug, Clone, Default, Copy, Eq, Hash, JsonSchema)]
+#[derive(
+    Serialize,
+    Deserialize,
+    PartialEq,
+    Debug,
+    Clone,
+    Default,
+    Copy,
+    Eq,
+    Hash,
+    JsonSchema,
+    derive_more::Display,
+)]
 #[serde(rename_all = "snake_case")]
+#[display(rename_all = "snake_case")]
 pub enum DataType {
     /// 64-bit integer (default).
     #[default]
@@ -253,8 +266,24 @@ pub struct ShardedMappingList {
 }
 
 /// A range rule: routes values in `[start, end)` to `shard` (`PARTITION BY RANGE`).
-#[derive(Serialize, Deserialize, PartialEq, Debug, Clone, Default, Hash, Eq, JsonSchema)]
+#[derive(
+    Serialize,
+    Deserialize,
+    PartialEq,
+    Debug,
+    Clone,
+    Default,
+    Hash,
+    Eq,
+    JsonSchema,
+    derive_more::Display,
+)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
+#[display(
+    "[{}, {}) -> shard={shard}",
+    match start { Some(v) => v.to_string(), None => "-inf".to_string() },
+    match end { Some(v) => v.to_string(), None => "+inf".to_string() }
+)]
 pub struct ShardedMappingRange {
     /// Target shard number for matched queries.
     pub shard: usize,
@@ -265,7 +294,9 @@ pub struct ShardedMappingRange {
 }
 
 /// A sharding key value that can be an integer, UUID, or string.
-#[derive(Serialize, Deserialize, PartialEq, Debug, Clone, Eq, Hash, JsonSchema)]
+#[derive(
+    Serialize, Deserialize, PartialEq, Debug, Clone, Eq, Hash, JsonSchema, derive_more::Display,
+)]
 #[serde(untagged)]
 pub enum FlexibleType {
     /// 64-bit signed integer.
@@ -274,6 +305,7 @@ pub enum FlexibleType {
     #[schemars(with = "String")]
     Uuid(Uuid),
     /// Text string.
+    #[display("'{_0}'")]
     String(String),
 }
 
