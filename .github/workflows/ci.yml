@@ -7,8 +7,25 @@ on:
     types: [opened, synchronize, reopened]
 
 jobs:
+  # Build both pgdog artifacts in parallel:
+  #   - release: plain release binary
+  #   - coverage: llvm-cov instrumented debug binary used by the
+  #     integration suites to produce line coverage for Codecov
   build:
     runs-on: blacksmith-4vcpu-ubuntu-2404
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - artifact: release
+            path: target/release/pgdog
+            rust_prefix: build-v1
+          - artifact: coverage
+            path: target/llvm-cov-target/debug/pgdog
+            # Separate prefix: instrumented artifacts live in
+            # target/llvm-cov-target and must not race with the plain
+            # build's cache.
+            rust_prefix: build-cov-debug-v1
     steps:
       - uses: actions/checkout@v6
       - name: Install CI deps
@@ -17,35 +34,31 @@ jobs:
       # target/ build outputs that would otherwise change the key. Use the
       # split cache actions so pgdog binaries are saved immediately after the
       # build, before rust-cache's post-job cleanup prunes workspace binaries
-      # from target/{debug,release}.
+      # from target/.
       - name: Compute cache key
         id: cache-key
-        run: echo "key=pgdog-bin-${{ runner.os }}-$(bash integration/ci/cache-key.sh)" >> "$GITHUB_OUTPUT"
-      - name: Restore pgdog binaries
+        run: echo "key=pgdog-bin-${{ runner.os }}-${{ matrix.artifact }}-$(bash integration/ci/cache-key.sh)" >> "$GITHUB_OUTPUT"
+      - name: Restore pgdog binary
         id: pgdog-bin
         uses: actions/cache/restore@v5
         with:
-          path: |
-            target/debug/pgdog
-            target/release/pgdog
+          path: ${{ matrix.path }}
           key: ${{ steps.cache-key.outputs.key }}
       - uses: Swatinem/rust-cache@v2
         if: steps.pgdog-bin.outputs.cache-hit != 'true'
         with:
-          prefix-key: build-v1
-      - name: Build (debug)
-        if: steps.pgdog-bin.outputs.cache-hit != 'true'
-        run: cargo build --bin pgdog
+          prefix-key: ${{ matrix.rust_prefix }}
       - name: Build (release)
-        if: steps.pgdog-bin.outputs.cache-hit != 'true'
+        if: steps.pgdog-bin.outputs.cache-hit != 'true' && matrix.artifact == 'release'
         run: cargo build --release --bin pgdog
-      - name: Save pgdog binaries
+      - name: Build (instrumented debug, for coverage)
+        if: steps.pgdog-bin.outputs.cache-hit != 'true' && matrix.artifact == 'coverage'
+        run: bash integration/ci/prepare-instrumented-pgdog.sh debug
+      - name: Save pgdog binary
         if: steps.pgdog-bin.outputs.cache-hit != 'true'
         uses: actions/cache/save@v5
         with:
-          path: |
-            target/debug/pgdog
-            target/release/pgdog
+          path: ${{ matrix.path }}
           key: ${{ steps.cache-key.outputs.key }}
 
   ci:
@@ -79,30 +92,39 @@ jobs:
           # cached pgdog binary.
           - { name: plugins,       script: integration/plugins/run.sh, needs_rust_cache: true, continue_on_error: true }
     env:
-      PGDOG_BIN: ${{ github.workspace }}/target/release/pgdog
+      # All suites run against the llvm-cov instrumented debug binary so we
+      # get line coverage from integration tests, not just unit tests.
+      PGDOG_BIN: ${{ github.workspace }}/target/llvm-cov-target/debug/pgdog
+      # NB: cargo llvm-cov report only globs profraw files at the top of
+      # target/llvm-cov-target, so LLVM_PROFILE_FILE must point there.
+      LLVM_PROFILE_FILE: ${{ github.workspace }}/target/llvm-cov-target/${{ matrix.name }}-%p-%m.profraw
     steps:
       - uses: actions/checkout@v6
       - name: Install CI deps
         run: bash integration/ci/install-deps.sh
       - name: Compute cache key
         id: cache-key
-        run: echo "key=pgdog-bin-${{ runner.os }}-$(bash integration/ci/cache-key.sh)" >> "$GITHUB_OUTPUT"
+        run: echo "key=pgdog-bin-${{ runner.os }}-coverage-$(bash integration/ci/cache-key.sh)" >> "$GITHUB_OUTPUT"
       # rust-cache must run before the binary restore: it lays down a
-      # stale target/ that can otherwise wipe target/release/pgdog when
-      # cargo reconciles fingerprints during plugin builds.
+      # stale target/ that can otherwise wipe target binaries when cargo
+      # reconciles fingerprints during plugin builds.
       - name: Restore Rust cache for plugin builds
         if: matrix.needs_rust_cache
         uses: Swatinem/rust-cache@v2
         with:
           prefix-key: build-v1
-      - name: Restore pgdog binaries
+      - name: Restore instrumented pgdog binary
         uses: actions/cache/restore@v5
         with:
-          path: |
-            target/debug/pgdog
-            target/release/pgdog
+          path: target/llvm-cov-target/debug/pgdog
           key: ${{ steps.cache-key.outputs.key }}
           fail-on-cache-miss: true
+      # The Rust cache (plugins job) can lay down stale .profraw files that
+      # don't match the restored instrumented binary; start clean.
+      - name: Prepare coverage profile dir
+        run: |
+          mkdir -p target/llvm-cov-target
+          rm -f target/llvm-cov-target/*.profraw target/llvm-cov-target/*.profdata
       - name: Setup dependencies
         run: bash integration/ci/setup.sh --with-toxi
       - name: Run ${{ matrix.name }}
@@ -110,3 +132,18 @@ jobs:
       - name: Ensure PgDog stopped
         if: always()
         run: bash integration/ci/ensure-pgdog-stopped.sh
+      - name: Generate coverage report
+        if: always()
+        run: cargo llvm-cov report --package pgdog --lcov --output-path ${{ matrix.name }}.lcov
+      # Codecov merges uploads per flag server-side, so each suite uploads
+      # its own lcov under the shared "integration" flag.
+      - name: Upload coverage to Codecov
+        if: always()
+        uses: codecov/codecov-action@v4
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+        with:
+          files: ${{ matrix.name }}.lcov
+          flags: integration
+          name: integration-${{ matrix.name }}
+          fail_ci_if_error: false
