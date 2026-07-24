@@ -2,7 +2,6 @@
 //! it for each [`crate::backend::pool::Cluster`].
 
 use dashmap::DashMap;
-use once_cell::sync::Lazy;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -10,13 +9,11 @@ use crate::backend::{Schema, Shard};
 
 type Entry = Arc<Mutex<Schema>>;
 
-static CACHE: Lazy<SchemaCache> = Lazy::new(SchemaCache::default);
-
 /// Schema cache.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub(crate) struct SchemaCache {
     // Database => shard => Schema
-    cache: DashMap<String, DashMap<usize, Entry>>,
+    cache: Arc<DashMap<String, DashMap<usize, Entry>>>,
 }
 
 impl SchemaCache {
@@ -48,15 +45,5 @@ impl SchemaCache {
         *guard = schema.clone();
 
         Ok(schema)
-    }
-
-    /// Remove all entries from the schema cache.
-    pub(crate) fn clear(&self) {
-        self.cache.clear();
-    }
-
-    /// Get a reference the the global schema cache.
-    pub(crate) fn global() -> &'static SchemaCache {
-        &CACHE
     }
 }

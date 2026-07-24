@@ -44,6 +44,8 @@ pub(super) struct ShardConfig<'a> {
     pub(super) lsn_check_interval: Duration,
     /// Pub/sub enabled
     pub(super) pub_sub_enabled: bool,
+    /// Global schema cache.
+    pub(super) schema_cache: SchemaCache,
 }
 
 /// Connection pools for a single database shard.
@@ -134,7 +136,7 @@ impl Shard {
         // This is syncrhonized by database/shard number, so this prevents
         // a thundering herd with 100s of users, for example, all fetching
         // the same schema.
-        let schema = SchemaCache::global().get(self).await?;
+        let schema = self.schema_cache.get(self).await?;
         let _ = self.schema.set(schema);
         self.schema_waiter.notify_one();
 
@@ -332,6 +334,7 @@ pub struct ShardInner {
     schema: Arc<OnceCell<Schema>>,
     schema_waiter: Notify,
     pub_sub_enabled: bool,
+    schema_cache: SchemaCache,
 }
 
 impl ShardInner {
@@ -345,6 +348,7 @@ impl ShardInner {
             identifier,
             lsn_check_interval,
             pub_sub_enabled,
+            schema_cache,
         } = shard;
         let primary = primary.as_ref().map(Pool::new);
         let lb = LoadBalancer::new(&primary, replicas, lb_strategy, rw_split);
@@ -362,6 +366,7 @@ impl ShardInner {
             schema: Arc::new(OnceCell::new()),
             schema_waiter: Notify::new(),
             pub_sub_enabled,
+            schema_cache,
         }
     }
 }
@@ -403,6 +408,7 @@ mod test {
             }),
             lsn_check_interval: Duration::MAX,
             pub_sub_enabled: false,
+            schema_cache: SchemaCache::default(),
         });
         shard.launch();
 
@@ -442,6 +448,7 @@ mod test {
             }),
             lsn_check_interval: Duration::MAX,
             pub_sub_enabled: false,
+            schema_cache: SchemaCache::default(),
         });
         shard.launch();
         let mut ids = BTreeSet::new();
