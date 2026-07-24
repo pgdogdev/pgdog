@@ -15,6 +15,7 @@ use tokio_util::task::TaskTracker;
 
 use crate::net::Parameters;
 use crate::net::messages::{BackendKeyData, FrontendPid};
+use crate::state::State;
 
 use super::{ConnectedClient, Stats};
 
@@ -155,23 +156,51 @@ impl Deref for ClientComms {
 }
 
 impl ClientComms {
-    pub fn disconnect(&self) {
+    /// Client has disconnected, remove it from the global state.
+    pub(crate) fn disconnect(&self) {
         self.comms.disconnect(self.id);
     }
 
-    pub fn update_stats(&self, stats: Stats) {
+    /// Update global client stats with the latest stats the caller knows about.
+    /// The caller must maintain up-to-date stats, or this will overwrite with bad
+    /// info.
+    pub(crate) fn update_stats(&self, stats: Stats) {
         self.comms.update_stats(self.id, stats);
     }
 
-    pub fn new(id: FrontendPid) -> Self {
+    /// Update the client state quickly.
+    ///
+    /// Use only when you're not updating other stats. If updating other stats,
+    /// use [`Self::update_stats`] instead.
+    ///
+    pub(crate) fn set_state(&self, state: State) {
+        if let Some(mut client) = self.comms.global.clients.get_mut(&self.id) {
+            client.stats.state = state;
+        }
+    }
+
+    /// Create new comms reference for a new client.
+    ///
+    /// Makes it easy to update globals without constantly reaching for the key.
+    pub(crate) fn new(id: FrontendPid) -> Self {
         Self { id, comms: comms() }
     }
 
-    pub fn connect(&self, key: BackendKeyData, addr: SocketAddr, params: &Parameters) {
+    /// Mark the client as connected to the proxy
+    /// and save some of its identifying information.
+    ///
+    /// # Parameters
+    ///
+    /// - `key`: The query cancellation key we gave to the client.
+    /// - `addr`: The client's IP address.
+    /// - `params`: The client's startup parameters.
+    ///
+    pub(crate) fn connect(&self, key: BackendKeyData, addr: SocketAddr, params: &Parameters) {
         self.comms.connect(key, addr, params)
     }
 
-    pub fn update_params(&self, params: &Parameters) {
+    /// Update the params the client has in its session state.
+    pub(crate) fn update_params(&self, params: &Parameters) {
         self.comms.update_params(self.id, params.clone());
     }
 }
