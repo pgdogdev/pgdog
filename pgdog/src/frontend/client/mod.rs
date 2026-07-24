@@ -531,43 +531,46 @@ impl Client {
 
     /// Handle client messages.
     async fn client_messages(&mut self, query_engine: &mut QueryEngine) -> Result<(), Error> {
-        // Check maintenance mode.
-        if !self.in_transaction()
-            && !self.admin
-            && let Some(waiter) = maintenance_mode::waiter(&self.database)
-        {
-            let state = query_engine.get_state();
-            query_engine.set_state(State::Waiting);
-            waiter.await;
-            query_engine.set_state(state);
-        }
-
         // If client sent multiple requests, split them up and execute individually.
         let spliced = self.client_request.spliced()?;
         if spliced.is_empty() {
+            // Execute the original request as-is.
             let mut context = QueryEngineContext::new(self);
             query_engine.handle(&mut context).await?;
             self.transaction = context.transaction();
         } else {
+            // Execute the spliced requests one at a time.
             let total = spliced.len();
             let mut reqs = spliced.into_iter().enumerate();
+
+            // Pipeliend requests are executed inside the same Postgres transaction.
             self.transaction.get_or_insert(TransactionType::Implicit);
+
             while let Some((num, mut req)) = reqs.next() {
                 debug!("processing spliced request {}/{}", num + 1, total);
+
                 let mut context = QueryEngineContext::new(self).spliced(&mut req, reqs.len());
                 query_engine.handle(&mut context).await?;
+
+                // Save transaction state after each request.
                 self.transaction = context.transaction();
 
                 // If pipeline is aborted due to error, skip to Sync to complete the pipeline.
-                // Postgres ignores all commands after an error until it receives Sync.
+                // Postgres ignores all commands after an error until it receives a Sync.
                 if query_engine.out_of_sync() && !req.is_sync_only() {
                     debug!("pipeline aborted, skipping to Sync");
+
                     for (_, mut next_req) in reqs.by_ref() {
+                        // The splicer (called above) leaves
+                        // the Sync in its own request. This is by design
+                        // to handle this exact scenario.
                         if next_req.is_sync_only() {
                             debug!("processing Sync to complete aborted pipeline");
+
                             let mut ctx = QueryEngineContext::new(self).spliced(&mut next_req, 0);
                             query_engine.handle(&mut ctx).await?;
                             self.transaction = ctx.transaction();
+
                             break;
                         }
                     }
@@ -582,12 +585,28 @@ impl Client {
         Ok(())
     }
 
-    /// Buffer extended protocol messages until client requests a sync.
+    /// Buffer protocol messages until client requests a sync or a flush.
     ///
     /// This ensures we don't check out a connection from the pool until the client
-    /// sent a complete request.
+    /// sends a complete request.
+    ///
     async fn buffer(&mut self, state: State) -> Result<BufferEvent, Error> {
         self.client_request.clear();
+
+        // Check maintenance mode.
+        //
+        // This will pause the client until the maintenance mode is off
+        // without checking any timeouts or reading data off of the socket
+        // so if the client disconnects while we wait, we won't send
+        // its pending query to the database.
+        if !self.in_transaction()
+            && !self.admin
+            && let Some(waiter) = maintenance_mode::waiter(&self.database)
+        {
+            self.comms.set_state(State::Waiting);
+            waiter.await;
+            self.comms.set_state(state);
+        }
 
         // Only start timer once we receive the first message.
         let mut timer = None;
