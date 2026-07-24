@@ -349,13 +349,17 @@ impl Parameters {
         if entries > 0 { hasher.finish() } else { 0 }
     }
 
+    /// Iterate over parameters that we track with SET queries.
+    pub(crate) fn tracked_iter(&self) -> impl Iterator<Item = (&String, &ParameterValue)> {
+        self.params
+            .iter()
+            .filter(|(k, _)| !UNTRACKED_PARAMS.contains(k))
+    }
+
     /// Filter our parameters that we would track with SET queries.
     pub(crate) fn tracked(&self) -> Parameters {
         let params = self
-            .params
-            .iter()
-            // Ignore untracked parameters.
-            .filter(|(k, _)| !UNTRACKED_PARAMS.contains(k))
+            .tracked_iter()
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect::<BTreeMap<_, _>>();
 
@@ -378,10 +382,7 @@ impl Parameters {
     ///
     pub(crate) fn tracked_and_different(&self, other: &Self) -> Parameters {
         let params = self
-            .params
-            .iter()
-            // Ignore untracked parameters.
-            .filter(|(k, _)| !UNTRACKED_PARAMS.contains(k))
+            .tracked_iter()
             // Ignore parameters that have identical values, they don't need to be updated.
             .filter(|(k, v)| other.get(k).map(|other| other != *v).unwrap_or(true))
             .map(|(k, v)| (k.clone(), v.clone()))
