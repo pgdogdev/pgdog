@@ -1,6 +1,6 @@
 use crate::{
-    frontend::router::parser::{Shard, ShardWithPriority},
-    net::{DataRow, Field},
+    frontend::router::parser::{DistinctBy, Limit, OrderBy, Shard, ShardWithPriority},
+    net::{DataRow, Field, Format},
 };
 
 use super::*;
@@ -266,4 +266,143 @@ fn test_omni_data_rows_only_from_first_server() {
         .forward(dr3.message().unwrap().backend(backend1))
         .unwrap();
     assert!(result.is_some()); // Should be forwarded
+}
+
+#[test]
+fn test_order_by_k_way_merge_streams_before_command_complete() {
+    let route = Route::select(
+        ShardWithPriority::new_table(Shard::All),
+        vec![OrderBy::Asc(1)],
+        Default::default(),
+        Limit::default(),
+        None,
+    );
+    let mut multi_shard = MultiShard::new(vec![0, 1], &route);
+
+    let rd = RowDescription::new(&[Field::bigint("id")]);
+    let backend1 = BackendPid::for_test(1);
+    let backend2 = BackendPid::for_test(2);
+
+    let rd_result = multi_shard
+        .forward_from(0, rd.message().unwrap().backend(backend1))
+        .unwrap();
+    assert!(rd_result.is_none());
+    let rd_result = multi_shard
+        .forward_from(1, rd.message().unwrap().backend(backend2))
+        .unwrap();
+    assert!(rd_result.is_some());
+
+    let mut shard0_first = DataRow::new();
+    shard0_first.add(1_i64);
+    multi_shard
+        .forward_from(0, shard0_first.message().unwrap().backend(backend1))
+        .unwrap();
+    assert!(multi_shard.message().is_none());
+
+    let mut shard1_first = DataRow::new();
+    shard1_first.add(2_i64);
+    multi_shard
+        .forward_from(1, shard1_first.message().unwrap().backend(backend2))
+        .unwrap();
+    let next = DataRow::from_bytes(multi_shard.message().unwrap().to_bytes()).unwrap();
+    assert_eq!(next.get::<i64>(0, Format::Text).unwrap(), 1_i64);
+
+    let mut shard0_second = DataRow::new();
+    shard0_second.add(3_i64);
+    multi_shard
+        .forward_from(0, shard0_second.message().unwrap().backend(backend1))
+        .unwrap();
+    let next = DataRow::from_bytes(multi_shard.message().unwrap().to_bytes()).unwrap();
+    assert_eq!(next.get::<i64>(0, Format::Text).unwrap(), 2_i64);
+
+    multi_shard
+        .forward_from(
+            1,
+            CommandComplete::from_str("SELECT 1")
+                .message()
+                .unwrap()
+                .backend(backend2),
+        )
+        .unwrap();
+    let next = DataRow::from_bytes(multi_shard.message().unwrap().to_bytes()).unwrap();
+    assert_eq!(next.get::<i64>(0, Format::Text).unwrap(), 3_i64);
+
+    multi_shard
+        .forward_from(
+            0,
+            CommandComplete::from_str("SELECT 2")
+                .message()
+                .unwrap()
+                .backend(backend1),
+        )
+        .unwrap();
+
+    let cc = CommandComplete::from_bytes(multi_shard.message().unwrap().to_bytes()).unwrap();
+    assert_eq!(cc.rows().unwrap(), Some(3));
+}
+
+#[test]
+fn test_order_by_with_distinct_uses_buffered_path() {
+    let route = Route::select(
+        ShardWithPriority::new_table(Shard::All),
+        vec![OrderBy::Asc(1)],
+        Default::default(),
+        Limit::default(),
+        Some(DistinctBy::Row),
+    );
+    let mut multi_shard = MultiShard::new(vec![0, 1], &route);
+
+    let rd = RowDescription::new(&[Field::bigint("id")]);
+    let backend1 = BackendPid::for_test(1);
+    let backend2 = BackendPid::for_test(2);
+
+    multi_shard
+        .forward_from(0, rd.message().unwrap().backend(backend1))
+        .unwrap();
+    let rd_result = multi_shard
+        .forward_from(1, rd.message().unwrap().backend(backend2))
+        .unwrap();
+    assert!(rd_result.is_some());
+
+    let mut dup0 = DataRow::new();
+    dup0.add(1_i64);
+    multi_shard
+        .forward_from(0, dup0.message().unwrap().backend(backend1))
+        .unwrap();
+
+    let mut dup1 = DataRow::new();
+    dup1.add(1_i64);
+    multi_shard
+        .forward_from(1, dup1.message().unwrap().backend(backend2))
+        .unwrap();
+
+    // DISTINCT should keep us on the buffered path: no rows stream early.
+    assert!(multi_shard.message().is_none());
+
+    multi_shard
+        .forward_from(
+            0,
+            CommandComplete::from_str("SELECT 1")
+                .message()
+                .unwrap()
+                .backend(backend1),
+        )
+        .unwrap();
+    assert!(multi_shard.message().is_none());
+
+    multi_shard
+        .forward_from(
+            1,
+            CommandComplete::from_str("SELECT 1")
+                .message()
+                .unwrap()
+                .backend(backend2),
+        )
+        .unwrap();
+
+    let row = DataRow::from_bytes(multi_shard.message().unwrap().to_bytes()).unwrap();
+    assert_eq!(row.get::<i64>(0, Format::Text).unwrap(), 1_i64);
+
+    let cc = CommandComplete::from_bytes(multi_shard.message().unwrap().to_bytes()).unwrap();
+    assert_eq!(cc.rows().unwrap(), Some(1));
 }
