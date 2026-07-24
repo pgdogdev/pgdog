@@ -1751,6 +1751,15 @@ mod tests {
     }
 
     #[test]
+    fn test_jemalloc_background_thread_env() {
+        let _guard = set_env_var("PGDOG_JEMALLOC_BACKGROUND_THREAD", "true");
+        assert!(General::jemalloc_background_thread());
+
+        let _guard = remove_env_var("PGDOG_JEMALLOC_BACKGROUND_THREAD");
+        assert!(!General::jemalloc_background_thread());
+    }
+
+    #[test]
     fn test_env_numeric_fields() {
         let _guard = set_env_var("PGDOG_BROADCAST_PORT", "7432");
         let _guard = set_env_var("PGDOG_OPENMETRICS_PORT", "9090");
