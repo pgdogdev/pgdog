@@ -58,6 +58,7 @@
         "idle_healthcheck_delay": 5000,
         "idle_healthcheck_interval": 30000,
         "idle_timeout": 60000,
+        "jemalloc_background_thread": false,
         "load_balancing_strategy": "random",
         "load_schema": "auto",
         "log_connections": true,
@@ -810,6 +811,11 @@
           "format": "uint64",
           "default": 60000,
           "minimum": 0
+        },
+        "jemalloc_background_thread": {
+          "description": "Enable jemalloc's background purge threads so freed memory is returned to the OS after allocation bursts. Equivalent to `_RJEM_MALLOC_CONF=background_thread:true`.\n\n_Default:_ `false`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#jemalloc_background_thread>",
+          "type": "boolean",
+          "default": false
         },
         "load_balancing_strategy": {
           "description": "Which strategy to use for load balancing read queries.\n\n_Default:_ `random`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#load_balancing_strategy>",

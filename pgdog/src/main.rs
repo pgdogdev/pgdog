@@ -82,6 +82,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     config::overrides(overrides);
 
+    pgdog::set_jemalloc_background_thread(config.config.general.jemalloc_background_thread);
+
     plugin::load_from_config()?;
 
     let runtime = build_runtime(
