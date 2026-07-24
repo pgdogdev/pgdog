@@ -806,6 +806,14 @@ pub struct General {
     /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#cutover_save_config>
     #[serde(default)]
     pub cutover_save_config: bool,
+
+    /// Enable jemalloc's background purge threads so freed memory is returned to the OS after allocation bursts. Equivalent to `_RJEM_MALLOC_CONF=background_thread:true`.
+    ///
+    /// _Default:_ `false`
+    ///
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#jemalloc_background_thread>
+    #[serde(default = "General::jemalloc_background_thread")]
+    pub jemalloc_background_thread: bool,
 }
 
 impl Default for General {
@@ -911,6 +919,7 @@ impl Default for General {
             cutover_timeout: Self::cutover_timeout(),
             cutover_timeout_action: Self::cutover_timeout_action(),
             cutover_save_config: bool::default(),
+            jemalloc_background_thread: Self::jemalloc_background_thread(),
             unique_id_function: Self::unique_id_function(),
         }
     }
@@ -980,6 +989,10 @@ impl General {
 
     fn reload_schema_on_ddl() -> bool {
         Self::env_bool_or_default("PGDOG_SCHEMA_RELOAD_ON_DDL", true)
+    }
+
+    fn jemalloc_background_thread() -> bool {
+        Self::env_bool_or_default("PGDOG_JEMALLOC_BACKGROUND_THREAD", false)
     }
 
     fn idle_healthcheck_interval() -> u64 {
@@ -1735,6 +1748,15 @@ mod tests {
 
         let _guard = remove_env_var("PGDOG_QUERY_LOG_STDOUT");
         assert!(!General::query_log_stdout());
+    }
+
+    #[test]
+    fn test_jemalloc_background_thread_env() {
+        let _guard = set_env_var("PGDOG_JEMALLOC_BACKGROUND_THREAD", "true");
+        assert!(General::jemalloc_background_thread());
+
+        let _guard = remove_env_var("PGDOG_JEMALLOC_BACKGROUND_THREAD");
+        assert!(!General::jemalloc_background_thread());
     }
 
     #[test]
