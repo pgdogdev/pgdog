@@ -383,7 +383,7 @@ impl Parameters {
             // Ignore untracked parameters.
             .filter(|(k, _)| !UNTRACKED_PARAMS.contains(k))
             // Ignore parameters that have identical values, they don't need to be updated.
-            .filter(|(k, v)| other.get(k).map(|other| other == *v).unwrap_or(true))
+            .filter(|(k, v)| other.get(k).map(|other| other != *v).unwrap_or(true))
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect::<BTreeMap<_, _>>();
 
@@ -566,6 +566,30 @@ mod test {
         assert!(!same);
 
         assert!(Parameters::default().identical(&Parameters::default()));
+    }
+
+    #[test]
+    fn test_tracked_and_different() {
+        let mut client = Parameters::default();
+        client.insert("application_name", "client");
+        client.insert("statement_timeout", "1001ms");
+        client.insert("search_path", "public");
+
+        let mut server = Parameters::default();
+        server.insert("application_name", "server");
+        server.insert("statement_timeout", "1001ms");
+
+        let different = client.tracked_and_different(&server);
+
+        assert_eq!(
+            different.get("application_name"),
+            Some(&ParameterValue::String("client".into()))
+        );
+        assert_eq!(
+            different.get("search_path"),
+            Some(&ParameterValue::String("public".into()))
+        );
+        assert!(!different.contains_key("statement_timeout"));
     }
 
     #[test]
