@@ -302,6 +302,7 @@ mod test {
             // wakes on the role-change notification we fire below.
             lsn_check_interval: Duration::MAX,
             pub_sub_enabled: false,
+            schema_cache: SchemaCache::default(),
         });
 
         // index 0 = replica target, index 1 = primary target.

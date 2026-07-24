@@ -14,6 +14,7 @@ use crate::backend::Schema;
 use crate::backend::databases::User;
 use crate::backend::pool::lb::ban::Ban;
 use crate::backend::pub_sub::listener::Listener;
+use crate::backend::schema::SchemaCache;
 use crate::config::{LoadBalancingStrategy, ReadWriteSplit, Role};
 use crate::net::Parameters;
 use crate::net::messages::FrontendPid;
@@ -37,12 +38,14 @@ pub(super) struct ShardConfig<'a> {
     pub(super) lb_strategy: LoadBalancingStrategy,
     /// Primary/replica read/write split strategy.
     pub(super) rw_split: ReadWriteSplit,
-    /// Cluster identifier (user/password).
+    /// Cluster identifier (user/database).
     pub(super) identifier: Arc<User>,
     /// LSN check interval
     pub(super) lsn_check_interval: Duration,
     /// Pub/sub enabled
     pub(super) pub_sub_enabled: bool,
+    /// Global schema cache.
+    pub(super) schema_cache: SchemaCache,
 }
 
 /// Connection pools for a single database shard.
@@ -120,23 +123,41 @@ impl Shard {
         }
     }
 
-    /// Load schema from the shard's primary.
-    pub async fn load_schema(&self) -> Result<bool, crate::backend::Error> {
+    /// Load schema from the shard's primary database.
+    ///
+    /// Uses the global schema cache, so most requests will not actually touch
+    /// the database.
+    ///
+    pub(crate) async fn load_schema(&self) -> Result<bool, crate::backend::Error> {
         if self.schema.initialized() {
             return Ok(false);
         }
 
+        // This is syncrhonized by database/shard number, so this prevents
+        // a thundering herd with 100s of users, for example, all fetching
+        // the same schema.
+        let schema = self.schema_cache.get(self).await?;
+        let _ = self.schema.set(schema);
+        self.schema_waiter.notify_one();
+
+        Ok(true)
+    }
+
+    /// Fetch schema from the shard. This does not use the
+    /// cache and returns the freshed schema available.
+    ///
+    pub(crate) async fn fetch_schema(&self) -> Result<Schema, crate::backend::Error> {
         let mut server = self.primary_or_replica(&Request::default()).await?;
         let schema = Schema::load(&mut server).await?;
+
         info!(
             "loaded schema for {} tables on shard {} [{}]",
             schema.tables().len(),
             self.number(),
             server.addr()
         );
-        let _ = self.schema.set(schema);
-        self.schema_waiter.notify_one();
-        Ok(true)
+
+        Ok(schema)
     }
 
     /// Set the schema to its default value.
@@ -313,6 +334,7 @@ pub struct ShardInner {
     schema: Arc<OnceCell<Schema>>,
     schema_waiter: Notify,
     pub_sub_enabled: bool,
+    schema_cache: SchemaCache,
 }
 
 impl ShardInner {
@@ -326,6 +348,7 @@ impl ShardInner {
             identifier,
             lsn_check_interval,
             pub_sub_enabled,
+            schema_cache,
         } = shard;
         let primary = primary.as_ref().map(Pool::new);
         let lb = LoadBalancer::new(&primary, replicas, lb_strategy, rw_split);
@@ -343,6 +366,7 @@ impl ShardInner {
             schema: Arc::new(OnceCell::new()),
             schema_waiter: Notify::new(),
             pub_sub_enabled,
+            schema_cache,
         }
     }
 }
@@ -384,6 +408,7 @@ mod test {
             }),
             lsn_check_interval: Duration::MAX,
             pub_sub_enabled: false,
+            schema_cache: SchemaCache::default(),
         });
         shard.launch();
 
@@ -423,6 +448,7 @@ mod test {
             }),
             lsn_check_interval: Duration::MAX,
             pub_sub_enabled: false,
+            schema_cache: SchemaCache::default(),
         });
         shard.launch();
         let mut ids = BTreeSet::new();

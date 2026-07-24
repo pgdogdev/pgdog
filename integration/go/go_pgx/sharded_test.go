@@ -119,7 +119,9 @@ func rangeCases() []shardCase {
 }
 
 // TestShardedListDeprecated tests list mapping via the legacy [[sharded_mappings]] config format.
-func TestShardedListDeprecated(t *testing.T) { runShardingTest(t, "sharded_list_deprecated", listCases()) }
+func TestShardedListDeprecated(t *testing.T) {
+	runShardingTest(t, "sharded_list_deprecated", listCases())
+}
 
 // TestShardedList tests list mapping via the inline mapping = [...] config format.
 func TestShardedList(t *testing.T) { runShardingTest(t, "sharded_list", listCases()) }
@@ -228,11 +230,13 @@ func TestShardedTwoPc(t *testing.T) {
 		assert.NoError(t, err)
 	}
 
-	// +5 is for schema sync
 	assertShowField(t, "SHOW STATS", "total_xact_2pc_count", 200, "pgdog_2pc", "pgdog_sharded", 0, "primary")
 	assertShowField(t, "SHOW STATS", "total_xact_2pc_count", 200, "pgdog_2pc", "pgdog_sharded", 1, "primary")
-	assertShowField(t, "SHOW STATS", "total_xact_count", 401+5, "pgdog_2pc", "pgdog_sharded", 0, "primary") // PREPARE, COMMIT for each transaction + TRUNCATE
-	assertShowField(t, "SHOW STATS", "total_xact_count", 401+5, "pgdog_2pc", "pgdog_sharded", 1, "primary")
+	// The schema cache is shared across users. If pgdog_2pc wins the cache-fill
+	// race after RELOAD, the five schema queries are counted in its pool stats.
+	expectedXactCounts := []int64{401, 406}
+	assertShowFieldOneOf(t, "SHOW STATS", "total_xact_count", expectedXactCounts, "pgdog_2pc", "pgdog_sharded", 0, "primary")
+	assertShowFieldOneOf(t, "SHOW STATS", "total_xact_count", expectedXactCounts, "pgdog_2pc", "pgdog_sharded", 1, "primary")
 
 	for i := range 200 {
 		rows, err := conn.Query(

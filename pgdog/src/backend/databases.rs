@@ -19,6 +19,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::auth::AuthResult;
 use crate::backend::replication::ShardedSchemas;
+use crate::backend::schema::SchemaCache;
 use crate::config::PoolerMode;
 use crate::frontend::PreparedStatements;
 use crate::frontend::client::query_engine::two_pc::Manager;
@@ -553,7 +554,20 @@ fn resolve_table_mapping_deprecated(
     )
 }
 
-fn new_pool(user: &crate::config::User, config: &crate::config::Config) -> Option<(User, Cluster)> {
+// Create new Cluster from user and databases in `pgdog.toml`.
+//
+// # Arguments
+//
+// - `user`: `[[users]]` entry in `users.toml`
+// - `config`: all of `pgdog.toml`
+// - `schema_cache`: A cache of database tables, shared between all clusters. This is passed here
+//                   to ensure all clusters share the same schema cache, and to make sure a new one
+//                   is created on each config reload.
+fn new_pool(
+    user: &crate::config::User,
+    config: &crate::config::Config,
+    schema_cache: SchemaCache,
+) -> Option<(User, Cluster)> {
     let omnisharded_tables = config.omnisharded_tables();
     let sharded_mappings = config.sharded_mappings();
     let sharded_schemas = config.sharded_schemas();
@@ -624,6 +638,7 @@ fn new_pool(user: &crate::config::User, config: &crate::config::Config) -> Optio
         sharded_tables,
         sharded_schemas,
         query_parser,
+        schema_cache,
     );
 
     Some((
@@ -638,6 +653,8 @@ fn new_pool(user: &crate::config::User, config: &crate::config::Config) -> Optio
 /// Load databases from config.
 pub fn from_config(config: &ConfigAndUsers) -> Databases {
     let mut databases = HashMap::new();
+    // The schema cache is shared between all databases.
+    let schema_cache = SchemaCache::default();
 
     for user in &config.users.users {
         let users = if user.databases.is_empty() && !user.all_databases {
@@ -673,7 +690,7 @@ pub fn from_config(config: &ConfigAndUsers) -> Databases {
         };
 
         for user in users {
-            if let Some((user, cluster)) = new_pool(&user, &config.config) {
+            if let Some((user, cluster)) = new_pool(&user, &config.config, schema_cache.clone()) {
                 databases.insert(user, cluster);
             }
         }
@@ -1696,7 +1713,7 @@ mod tests {
             ..Default::default()
         };
 
-        let result = new_pool(&user, &config);
+        let result = new_pool(&user, &config, SchemaCache::default());
         assert!(
             result.is_none(),
             "new_pool should return None when database doesn't exist"

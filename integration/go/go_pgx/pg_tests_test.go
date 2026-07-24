@@ -15,8 +15,16 @@ import (
 )
 
 func assertShowField(t *testing.T, query string, field string, value int64, user string, database string, shard int64, role string) {
-	expected_value := value
+	actualValue := showField(t, query, field, user, database, shard, role)
+	assert.Equal(t, value, actualValue, fmt.Sprintf("\"%s\" in %s is not %d", field, query, value))
+}
 
+func assertShowFieldOneOf(t *testing.T, query string, field string, values []int64, user string, database string, shard int64, role string) {
+	actualValue := showField(t, query, field, user, database, shard, role)
+	assert.Contains(t, values, actualValue, fmt.Sprintf("\"%s\" in %s is not one of %v", field, query, values))
+}
+
+func showField(t *testing.T, query string, field string, user string, database string, shard int64, role string) int64 {
 	conn, err := pgx.Connect(context.Background(), "postgres://admin:pgdog@127.0.0.1:6432/admin")
 	if err != nil {
 		panic(err)
@@ -41,10 +49,9 @@ func assertShowField(t *testing.T, query string, field string, value int64, user
 		if row_db == database && row_user == user && row_shard.Int.Int64() == shard && row_role == role {
 			for i, description := range rows.FieldDescriptions() {
 				if description.Name == field {
-					actual_value, err := values[i].(pgtype.Numeric).Int64Value()
+					actualValue, err := values[i].(pgtype.Numeric).Int64Value()
 					assert.NoError(t, err)
-					assert.Equal(t, expected_value, actual_value.Int64, fmt.Sprintf("\"%s\" in %s is not %d", field, query, value))
-					return
+					return actualValue.Int64
 				}
 			}
 		}
