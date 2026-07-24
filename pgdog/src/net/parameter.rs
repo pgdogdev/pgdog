@@ -349,6 +349,25 @@ impl Parameters {
         if entries > 0 { hasher.finish() } else { 0 }
     }
 
+    /// Filter our parameters that we would track with SET queries.
+    pub(crate) fn tracked(&self) -> Parameters {
+        let params = self
+            .params
+            .iter()
+            // Ignore untracked parameters.
+            .filter(|(k, _)| !UNTRACKED_PARAMS.contains(k))
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect::<BTreeMap<_, _>>();
+
+        let hash = Self::compute_hash(&params);
+
+        Self {
+            params,
+            hash,
+            ..Default::default()
+        }
+    }
+
     /// Calculate the parameters we need to update on the server,
     /// excluding the parameters we do not track because they have no effect, e.g., "pgdog"."role",
     ///  or which cannot be changed, e.g., "user".
@@ -357,7 +376,7 @@ impl Parameters {
     ///
     /// - `other`: Parameters stored on the server.
     ///
-    pub(crate) fn tracked(&self, other: &Self) -> Parameters {
+    pub(crate) fn tracked_and_different(&self, other: &Self) -> Parameters {
         let params = self
             .params
             .iter()
