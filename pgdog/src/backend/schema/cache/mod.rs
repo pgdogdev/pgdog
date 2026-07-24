@@ -25,7 +25,6 @@ impl SchemaCache {
     ///
     /// The loading is synchronized with a mutex, so only one user
     /// can load a schema at a time, preventing a thundering herd situtation.
-    ///
     pub(crate) async fn get(&self, shard: &Shard) -> Result<Schema, super::Error> {
         // This is synchronized.
         let entry = self
