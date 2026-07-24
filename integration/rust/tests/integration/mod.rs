@@ -13,6 +13,7 @@ pub mod cross_shard_disabled;
 pub mod distinct;
 pub mod explain;
 pub mod fake_transactions;
+pub mod having;
 pub mod idle_in_transaction;
 pub mod limit;
 pub mod maintenance_mode;
