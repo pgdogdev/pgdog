@@ -22,7 +22,7 @@ impl TwoPcTransactionOnShard {
 
     /// Get the coordinator transaction.
     pub(crate) fn transaction(&self) -> TwoPcTransaction {
-        self.transaction
+        self.transaction.clone()
     }
 }
 
@@ -48,11 +48,11 @@ impl FromStr for TwoPcTransactionOnShard {
 /// Build `PREPARE TRANSACTION`, `COMMIT PREPARED`, or `ROLLBACK PREPARED`
 /// for a shard participant.
 pub(crate) fn phase_control(
-    transaction: TwoPcTransaction,
+    transaction: &TwoPcTransaction,
     shard: usize,
     phase: TwoPcPhase,
 ) -> String {
-    let txn = TwoPcTransactionOnShard::new(transaction, shard);
+    let txn = TwoPcTransactionOnShard::new(transaction.clone(), shard);
 
     match phase {
         TwoPcPhase::Phase1 => format!("PREPARE TRANSACTION '{txn}'"),
@@ -70,11 +70,11 @@ mod test {
         let transaction = TwoPcTransaction::new();
 
         assert_eq!(
-            TwoPcTransactionOnShard::new(transaction, 0).to_string(),
+            TwoPcTransactionOnShard::new(transaction.clone(), 0).to_string(),
             format!("{transaction}_0")
         );
         assert_eq!(
-            TwoPcTransactionOnShard::new(transaction, 3).to_string(),
+            TwoPcTransactionOnShard::new(transaction.clone(), 3).to_string(),
             format!("{transaction}_3")
         );
     }
@@ -106,16 +106,31 @@ mod test {
         let transaction = TwoPcTransaction::new();
 
         assert_eq!(
-            phase_control(transaction, 1, TwoPcPhase::Phase1),
+            phase_control(&transaction, 1, TwoPcPhase::Phase1),
             format!("PREPARE TRANSACTION '{transaction}_1'")
         );
         assert_eq!(
-            phase_control(transaction, 1, TwoPcPhase::Phase2),
+            phase_control(&transaction, 1, TwoPcPhase::Phase2),
             format!("COMMIT PREPARED '{transaction}_1'")
         );
         assert_eq!(
-            phase_control(transaction, 1, TwoPcPhase::Rollback),
+            phase_control(&transaction, 1, TwoPcPhase::Rollback),
             format!("ROLLBACK PREPARED '{transaction}_1'")
+        );
+    }
+
+    #[test]
+    fn phase_control_uses_recovered_gid_verbatim() {
+        // A transaction recovered from the WAL carries a gid that no longer
+        // matches this process's rendering (different instance_id). The
+        // control statement must use it exactly as stored, with the per-shard
+        // suffix appended.
+        let recovered = "__pgdog_2pc_oldnode_42"
+            .parse::<TwoPcTransaction>()
+            .expect("valid recovered gid");
+        assert_eq!(
+            phase_control(&recovered, 3, TwoPcPhase::Rollback),
+            "ROLLBACK PREPARED '__pgdog_2pc_oldnode_42_3'"
         );
     }
 }

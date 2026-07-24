@@ -365,7 +365,7 @@ impl Binding {
 
     pub(crate) async fn two_pc_on_guards(
         servers: &mut [Guard],
-        transaction: TwoPcTransaction,
+        transaction: &TwoPcTransaction,
         phase: TwoPcPhase,
         ignore_missing: bool,
     ) -> Result<(), Error> {
@@ -399,7 +399,7 @@ impl Binding {
     /// Execute two-phase commit transaction control statements.
     pub(crate) async fn two_pc(
         &mut self,
-        transaction: TwoPcTransaction,
+        transaction: &TwoPcTransaction,
         phase: TwoPcPhase,
         ignore_missing: bool,
     ) -> Result<(), Error> {
