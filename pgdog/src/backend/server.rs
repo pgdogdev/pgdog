@@ -608,7 +608,7 @@ impl Server {
             let tracked = params.tracked_and_different(&self.client_params);
             // Construct RESET queries to reset any current params
             // to their default values.
-            let mut queries = self.client_params.reset_queries(&params);
+            let mut queries = self.client_params.reset_queries(params);
 
             // Combine both to create a new, fresh session state
             // on this connection.
@@ -2313,7 +2313,7 @@ pub mod test {
             let changed = server
                 .link_client(FrontendPid::new(), &params, None)
                 .await?;
-            assert_eq!(changed, 2); // RESET, SET.
+            assert_eq!(changed, 1); // SET only; the parameter already exists.
 
             let changed = server
                 .link_client(FrontendPid::new(), &params, None)
