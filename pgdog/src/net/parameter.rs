@@ -349,11 +349,41 @@ impl Parameters {
         if entries > 0 { hasher.finish() } else { 0 }
     }
 
-    pub fn tracked(&self) -> Parameters {
+    /// Filter our parameters that we would track with SET queries.
+    pub(crate) fn tracked(&self) -> Parameters {
         let params = self
             .params
             .iter()
+            // Ignore untracked parameters.
             .filter(|(k, _)| !UNTRACKED_PARAMS.contains(k))
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect::<BTreeMap<_, _>>();
+
+        let hash = Self::compute_hash(&params);
+
+        Self {
+            params,
+            hash,
+            ..Default::default()
+        }
+    }
+
+    /// Calculate the parameters we need to update on the server,
+    /// excluding the parameters we do not track because they have no effect, e.g., "pgdog"."role",
+    ///  or which cannot be changed, e.g., "user".
+    ///
+    /// # Arguments
+    ///
+    /// - `other`: Parameters stored on the server.
+    ///
+    pub(crate) fn tracked_and_different(&self, other: &Self) -> Parameters {
+        let params = self
+            .params
+            .iter()
+            // Ignore untracked parameters.
+            .filter(|(k, _)| !UNTRACKED_PARAMS.contains(k))
+            // Ignore parameters that have identical values, they don't need to be updated.
+            .filter(|(k, v)| other.get(k).map(|other| other != *v).unwrap_or(true))
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect::<BTreeMap<_, _>>();
 
@@ -406,9 +436,18 @@ impl Parameters {
         }
     }
 
-    pub fn reset_queries(&self) -> Vec<Query> {
+    /// Create a list of `RESET` queries that will reset parameters
+    /// back to their default value.
+    ///
+    /// This will ignore all parameters that are about to be SET
+    /// by incoming parameters. It will only reset parameters
+    /// that are currently set on the server and which do not
+    /// have a value on the incoming client.
+    ///
+    pub(crate) fn reset_queries(&self, other: &Self) -> Vec<Query> {
         self.params
             .keys()
+            .filter(|name| !other.contains_key(*name))
             .map(|name| Query::new(format!(r#"RESET "{}""#, name)))
             .collect()
     }
@@ -527,6 +566,30 @@ mod test {
         assert!(!same);
 
         assert!(Parameters::default().identical(&Parameters::default()));
+    }
+
+    #[test]
+    fn test_tracked_and_different() {
+        let mut client = Parameters::default();
+        client.insert("application_name", "client");
+        client.insert("statement_timeout", "1001ms");
+        client.insert("search_path", "public");
+
+        let mut server = Parameters::default();
+        server.insert("application_name", "server");
+        server.insert("statement_timeout", "1001ms");
+
+        let different = client.tracked_and_different(&server);
+
+        assert_eq!(
+            different.get("application_name"),
+            Some(&ParameterValue::String("client".into()))
+        );
+        assert_eq!(
+            different.get("search_path"),
+            Some(&ParameterValue::String("public".into()))
+        );
+        assert!(!different.contains_key("statement_timeout"));
     }
 
     #[test]
@@ -819,7 +882,7 @@ mod test {
         assert_eq!(timeout.first().unwrap(), "5s");
 
         // Get reset queries before resetting (reset_queries uses current params)
-        let reset_queries = params.reset_queries();
+        let reset_queries = params.reset_queries(&Parameters::default());
         assert_eq!(reset_queries.len(), 2);
 
         // Execute reset queries on server
@@ -859,7 +922,7 @@ mod test {
         assert_eq!(timeout.first().unwrap(), "5s");
 
         // Get reset queries and execute on server
-        let reset_queries = params.reset_queries();
+        let reset_queries = params.reset_queries(&Parameters::default());
         for query in reset_queries {
             server.execute(query).await.unwrap();
         }

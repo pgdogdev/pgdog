@@ -605,10 +605,10 @@ impl Server {
         // Compare client and server params.
         let mut executed = if !params.identical(&self.client_params) {
             // Construct client parameter SET queries.
-            let tracked = params.tracked();
+            let tracked = params.tracked_and_different(&self.client_params);
             // Construct RESET queries to reset any current params
             // to their default values.
-            let mut queries = self.client_params.reset_queries();
+            let mut queries = self.client_params.reset_queries(&params);
 
             // Combine both to create a new, fresh session state
             // on this connection.
@@ -624,7 +624,7 @@ impl Server {
             }
 
             // Update params on this connection.
-            self.client_params = tracked;
+            self.client_params = params.tracked();
 
             queries.len()
         } else {
