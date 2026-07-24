@@ -145,6 +145,9 @@ pub enum Error {
     #[error("parallel connection error")]
     ParallelConnection,
 
+    #[error("pipelined connection task closed")]
+    PipelineClosed,
+
     #[error("no replicas available for table sync")]
     NoReplicas,
 
@@ -275,6 +278,10 @@ impl Error {
             // either the ParallelConnection wrapper should be removed or
             // the proper error should be propagated
             Self::ParallelConnection => true,
+            // A pipelined shard task closed (write failed, socket died, or the
+            // handle was dropped). The transaction is torn down; retry from a
+            // fresh connection.
+            Self::PipelineClosed => true,
             _ => false,
         }
     }
