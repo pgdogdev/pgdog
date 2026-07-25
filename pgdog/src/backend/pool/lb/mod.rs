@@ -348,8 +348,9 @@ impl LoadBalancer {
     async fn get_internal(&self, request: &Request) -> Result<Guard, Error> {
         use LoadBalancingStrategy::*;
         use ReadWriteSplit::*;
+        use smallvec::SmallVec;
 
-        let mut candidates: Vec<&Target> = self
+        let mut candidates: SmallVec<[&Target; 32]> = self
             .targets
             .iter()
             .filter(|target| !target.pool.config().resharding_only) // Don't let reads on resharding-only replicas.
@@ -384,7 +385,7 @@ impl LoadBalancer {
             Random => candidates.shuffle(&mut rand::rng()),
             RoundRobin => {
                 let first = self.round_robin.fetch_add(1, Ordering::Relaxed) % candidates.len();
-                let mut reshuffled = vec![];
+                let mut reshuffled = SmallVec::with_capacity(candidates.len());
                 reshuffled.extend_from_slice(&candidates[first..]);
                 reshuffled.extend_from_slice(&candidates[..first]);
                 candidates = reshuffled;
