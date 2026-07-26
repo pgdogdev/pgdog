@@ -84,6 +84,72 @@ async fn test_cleanup_transaction_phase_one() {
 }
 
 #[tokio::test]
+async fn test_cleanup_transaction_foreign_prefix() {
+    config::load_test();
+    logger();
+    let cluster = databases().all().iter().next().unwrap().1.clone();
+
+    // A transaction restored from the WAL after a restart. The GIDs on
+    // the shards carry the previous process's prefix, which the current
+    // process can't reconstruct.
+    let transaction: TwoPcTransaction = "__pgdog_2pc_314159265358979".parse().unwrap();
+
+    let mut conn = Connection::new(cluster.user(), cluster.name(), false).unwrap();
+    conn.connect(
+        &Request::default(),
+        &Route::write(ShardWithPriority::new_default_unset(Shard::All)),
+    )
+    .await
+    .unwrap();
+    conn.execute("BEGIN").await.unwrap();
+    conn.execute("CREATE TABLE test_cleanup_foreign_prefix(id BIGINT)")
+        .await
+        .unwrap();
+    conn.execute("PREPARE TRANSACTION '__pgdog_2pc_previousinstance_314159265358979_0'")
+        .await
+        .unwrap();
+    conn.disconnect();
+
+    let manager = Manager::get();
+    manager.restore_transaction(
+        transaction,
+        cluster.user().to_string(),
+        cluster.name().to_string(),
+        TwoPcPhase::Phase1,
+    );
+
+    manager.wait_until_cleaned_up(transaction).await;
+    assert!(manager.transaction(&transaction).is_none());
+
+    conn.connect(
+        &Request::default(),
+        &Route::write(ShardWithPriority::new_default_unset(Shard::All)),
+    )
+    .await
+    .unwrap();
+
+    let leftover = conn
+        .execute(
+            "SELECT gid FROM pg_prepared_xacts \
+             WHERE gid LIKE '__pgdog_2pc_previousinstance_%'",
+        )
+        .await
+        .unwrap();
+    assert!(
+        leftover.iter().find(|p| p.code() == 'D').is_none(),
+        "prepared transactions with the previous process's prefix were not cleaned up"
+    );
+
+    // Phase 1 transactions are rolled back: the table doesn't exist.
+    let table = conn
+        .execute("SELECT * FROM test_cleanup_foreign_prefix")
+        .await
+        .err()
+        .unwrap();
+    assert!(table.to_string().contains("does not exist"));
+}
+
+#[tokio::test]
 async fn test_cleanup_transaction_phase_two() {
     config::load_test();
     logger();

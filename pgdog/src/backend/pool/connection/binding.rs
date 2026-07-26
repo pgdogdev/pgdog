@@ -5,10 +5,13 @@ use crate::{
         ClientRequest,
         client::query_engine::{
             TwoPcPhase,
-            two_pc::{TwoPcTransaction, statement::phase_control},
+            two_pc::{
+                TwoPcTransaction, TwoPcTransactionOnShard,
+                statement::{phase_control, phase_control_gid},
+            },
         },
     },
-    net::{FrontendPid, ProtocolMessage, Query, parameter::Parameters},
+    net::{DataRow, FrontendPid, ProtocolMessage, Query, parameter::Parameters},
     state::State,
 };
 
@@ -405,6 +408,60 @@ impl Binding {
         match self {
             Binding::MultiShard(servers, _) => {
                 Self::two_pc_on_guards(servers, transaction, phase).await
+            }
+
+            _ => Err(Error::TwoPcMultiShardOnly),
+        }
+    }
+
+    /// Resolve a two-phase transaction whose exact GIDs may have been
+    /// created by another PgDog process, e.g. during crash recovery.
+    ///
+    /// GID prefixes embed the identity of the process that created the
+    /// transaction, which changes across restarts, so each shard is
+    /// scanned for prepared transactions matching the durable numeric
+    /// transaction ID and shard index, and the phase statement runs
+    /// against the exact GIDs found. A shard with no matching GID is
+    /// already resolved and is skipped.
+    pub(crate) async fn two_pc_cleanup(
+        &mut self,
+        transaction: TwoPcTransaction,
+        phase: TwoPcPhase,
+    ) -> Result<(), Error> {
+        match self {
+            Binding::MultiShard(servers, _) => {
+                let futures = servers
+                    .iter_mut()
+                    .enumerate()
+                    .map(|(shard, server)| async move {
+                        let target = TwoPcTransactionOnShard::new(transaction, shard);
+                        let rows: Vec<DataRow> = server
+                        .fetch_all(
+                            "SELECT gid FROM pg_prepared_xacts WHERE database = current_database()",
+                        )
+                        .await?;
+
+                        for row in rows {
+                            let Some(gid) = row.get_text(0) else {
+                                continue;
+                            };
+                            if !target.matches_gid(&gid) {
+                                continue;
+                            }
+                            server.execute(phase_control_gid(&gid, phase)).await?;
+                            if phase == TwoPcPhase::Phase2 {
+                                server.stats_mut().transaction_2pc();
+                            }
+                        }
+
+                        Ok::<(), Error>(())
+                    });
+
+                for result in join_all(futures).await {
+                    result?;
+                }
+
+                Ok(())
             }
 
             _ => Err(Error::TwoPcMultiShardOnly),

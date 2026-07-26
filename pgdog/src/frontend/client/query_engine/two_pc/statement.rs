@@ -24,6 +24,18 @@ impl TwoPcTransactionOnShard {
     pub(crate) fn transaction(&self) -> TwoPcTransaction {
         self.transaction
     }
+
+    /// Whether `gid`, as listed in `pg_prepared_xacts`, refers to this
+    /// transaction on this shard. GID prefixes embed the identity of the
+    /// PgDog process that created the transaction, which changes across
+    /// restarts, so matching uses the durable numeric transaction ID and
+    /// the shard index.
+    pub(crate) fn matches_gid(&self, gid: &str) -> bool {
+        match gid.parse::<Self>() {
+            Ok(parsed) => parsed.transaction == self.transaction && parsed.shard == self.shard,
+            Err(()) => false,
+        }
+    }
 }
 
 impl Display for TwoPcTransactionOnShard {
@@ -54,10 +66,19 @@ pub(crate) fn phase_control(
 ) -> String {
     let txn = TwoPcTransactionOnShard::new(transaction, shard);
 
+    phase_control_gid(&txn.to_string(), phase)
+}
+
+/// Build `PREPARE TRANSACTION`, `COMMIT PREPARED`, or `ROLLBACK PREPARED`
+/// for a prepared transaction identified by its exact GID. The GID is
+/// embedded as a quoted literal with any single quotes doubled.
+pub(crate) fn phase_control_gid(gid: &str, phase: TwoPcPhase) -> String {
+    let gid = gid.replace('\'', "''");
+
     match phase {
-        TwoPcPhase::Phase1 => format!("PREPARE TRANSACTION '{txn}'"),
-        TwoPcPhase::Phase2 => format!("COMMIT PREPARED '{txn}'"),
-        TwoPcPhase::Rollback => format!("ROLLBACK PREPARED '{txn}'"),
+        TwoPcPhase::Phase1 => format!("PREPARE TRANSACTION '{gid}'"),
+        TwoPcPhase::Phase2 => format!("COMMIT PREPARED '{gid}'"),
+        TwoPcPhase::Rollback => format!("ROLLBACK PREPARED '{gid}'"),
     }
 }
 
@@ -98,6 +119,40 @@ mod test {
             "__pgdog_2pc_1_invalid"
                 .parse::<TwoPcTransactionOnShard>()
                 .is_err()
+        );
+    }
+
+    #[test]
+    fn matches_gid_ignores_prefix() {
+        let transaction: TwoPcTransaction = "__pgdog_2pc_123".parse().unwrap();
+        let target = TwoPcTransactionOnShard::new(transaction, 1);
+
+        // Rendered by this process.
+        assert!(target.matches_gid(&target.to_string()));
+        // Rendered by a process with a different instance ID.
+        assert!(target.matches_gid("__pgdog_2pc_deadbeef_123_1"));
+        // Rendered by a process with a deployment ID.
+        assert!(target.matches_gid("__pgdog_2pc_prod_deadbeef_123_1"));
+
+        // Wrong shard.
+        assert!(!target.matches_gid("__pgdog_2pc_deadbeef_123_0"));
+        // Wrong transaction ID.
+        assert!(!target.matches_gid("__pgdog_2pc_deadbeef_9123_1"));
+        // Prepared transactions from other applications.
+        assert!(!target.matches_gid("app_txn_123_1"));
+        assert!(!target.matches_gid("123_1"));
+        assert!(!target.matches_gid(""));
+    }
+
+    #[test]
+    fn phase_control_gid_escapes_quotes() {
+        assert_eq!(
+            phase_control_gid("it's", TwoPcPhase::Rollback),
+            "ROLLBACK PREPARED 'it''s'"
+        );
+        assert_eq!(
+            phase_control_gid("__pgdog_2pc_a_1_0", TwoPcPhase::Phase2),
+            "COMMIT PREPARED '__pgdog_2pc_a_1_0'"
         );
     }
 
