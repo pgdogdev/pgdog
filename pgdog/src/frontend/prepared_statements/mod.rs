@@ -9,6 +9,7 @@ use tracing::debug;
 use crate::util::safe_sleep;
 use crate::{
     config::{PreparedStatements as PreparedStatementsLevel, config},
+    frontend::router::parser::Cache,
     net::{Parse, ProtocolMessage},
 };
 
@@ -190,6 +191,8 @@ pub fn start_maintenance() {
 pub fn run_maintenance() {
     let capacity = config().config.general.prepared_statements_limit;
     PreparedStatements::global().write().close_unused(capacity);
+    // Drop AST cache entries idle beyond their time-to-idle (no-op when disabled).
+    Cache::sweep();
 }
 
 #[cfg(test)]

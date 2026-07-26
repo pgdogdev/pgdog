@@ -48,12 +48,12 @@ pub struct AstInner {
 
 impl AstInner {
     /// Create new AST record, with no rewrite or comment routing.
-    pub(crate) fn new(ast: Owned<StmtList>) -> Self {
+    pub(crate) fn new(ast: Owned<StmtList>, query_without_comment: Arc<str>) -> Self {
         Self {
             ast,
             stats: Mutex::new(Stats::new()),
             rewrite_plan: RewritePlan::default(),
-            query_without_comment: "".into(),
+            query_without_comment,
         }
     }
 }
@@ -67,6 +67,14 @@ impl Deref for Ast {
 }
 
 impl Ast {
+    /// Rough byte footprint of this cache entry, used as a fallback when the
+    /// jemalloc allocation measurement is unavailable. The query text length
+    /// tracks entry weight well enough for the memory budget: a wide report
+    /// query has a long body, `SELECT 1` a short one.
+    pub fn approx_size(&self) -> usize {
+        self.query_without_comment.len()
+    }
+
     /// Parse statement and run the rewrite engine, if necessary.
     pub(super) fn new(
         query: &AstQuery,
@@ -160,7 +168,7 @@ impl Ast {
             comment_role: None,
             comment_shard: None,
             query_parser_engine,
-            inner: Arc::new(AstInner::new(ast.into_inner())),
+            inner: Arc::new(AstInner::new(ast.into_inner(), query.into())),
         })
     }
 
@@ -171,7 +179,7 @@ impl Ast {
             comment_role: None,
             comment_shard: None,
             query_parser_engine: QueryParserEngine::default(),
-            inner: Arc::new(AstInner::new(stmts)),
+            inner: Arc::new(AstInner::new(stmts, "".into())),
         }
     }
 
