@@ -378,6 +378,24 @@ pub struct General {
     #[serde(default = "General::query_cache_limit")]
     pub query_cache_limit: usize,
 
+    /// Approximate memory budget (bytes) for the query (AST) cache; entries are evicted (LRU) once the sum of their sizes exceeds it. Bounds RAM regardless of query complexity, unlike the count-based `query_cache_limit`. `0` disables the memory cap.
+    ///
+    /// **Note:** Entry sizes are measured with jemalloc; on builds without it the budget is approximated from query text length.
+    ///
+    /// _Default:_ `0`
+    ///
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#query_cache_memory_limit>
+    #[serde(default = "General::query_cache_memory_limit")]
+    pub query_cache_memory_limit: usize,
+
+    /// Time-to-idle (seconds) for query (AST) cache entries; an entry not accessed within this window is dropped by the maintenance sweep. `0` disables idle expiry.
+    ///
+    /// _Default:_ `0`
+    ///
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#query_cache_ttl>
+    #[serde(default = "General::query_cache_ttl")]
+    pub query_cache_ttl: usize,
+
     /// Toggle automatic creation of connection pools given the user name, database and password.
     ///
     /// _Default:_ `disabled`
@@ -854,6 +872,8 @@ impl Default for General {
             query_parser_engine: QueryParserEngine::default(),
             prepared_statements_limit: Self::prepared_statements_limit(),
             query_cache_limit: Self::query_cache_limit(),
+            query_cache_memory_limit: Self::query_cache_memory_limit(),
+            query_cache_ttl: Self::query_cache_ttl(),
             passthrough_auth: Self::default_passthrough_auth(),
             connect_timeout: Self::default_connect_timeout(),
             connect_attempt_delay: Self::default_connect_attempt_delay(),
@@ -1325,6 +1345,14 @@ impl General {
         Self::env_or_default("PGDOG_QUERY_CACHE_LIMIT", 1_000)
     }
 
+    pub fn query_cache_memory_limit() -> usize {
+        Self::env_or_default("PGDOG_QUERY_CACHE_MEMORY_LIMIT", 0)
+    }
+
+    pub fn query_cache_ttl() -> usize {
+        Self::env_or_default("PGDOG_QUERY_CACHE_TTL", 0)
+    }
+
     pub fn log_format() -> LogFormat {
         Self::env_enum_or_default("PGDOG_LOG_FORMAT")
     }
@@ -1743,6 +1771,8 @@ mod tests {
         let _guard = set_env_var("PGDOG_OPENMETRICS_PORT", "9090");
         let _guard = set_env_var("PGDOG_PREPARED_STATEMENTS_LIMIT", "1000");
         let _guard = set_env_var("PGDOG_QUERY_CACHE_LIMIT", "500");
+        let _guard = set_env_var("PGDOG_QUERY_CACHE_MEMORY_LIMIT", "1048576");
+        let _guard = set_env_var("PGDOG_QUERY_CACHE_TTL", "600");
         let _guard = set_env_var("PGDOG_CONNECT_ATTEMPTS", "3");
         let _guard = set_env_var("PGDOG_MIRROR_QUEUE", "256");
         let _guard = set_env_var("PGDOG_MIRROR_EXPOSURE", "0.5");
@@ -1755,6 +1785,8 @@ mod tests {
         assert_eq!(General::openmetrics_port(), Some(9090));
         assert_eq!(General::prepared_statements_limit(), 1000);
         assert_eq!(General::query_cache_limit(), 500);
+        assert_eq!(General::query_cache_memory_limit(), 1048576);
+        assert_eq!(General::query_cache_ttl(), 600);
         assert_eq!(General::connect_attempts(), 3);
         assert_eq!(General::mirror_queue(), 256);
         assert_eq!(General::mirror_exposure(), 0.5);
@@ -1767,6 +1799,8 @@ mod tests {
         let _guard = remove_env_var("PGDOG_OPENMETRICS_PORT");
         let _guard = remove_env_var("PGDOG_PREPARED_STATEMENTS_LIMIT");
         let _guard = remove_env_var("PGDOG_QUERY_CACHE_LIMIT");
+        let _guard = remove_env_var("PGDOG_QUERY_CACHE_MEMORY_LIMIT");
+        let _guard = remove_env_var("PGDOG_QUERY_CACHE_TTL");
         let _guard = remove_env_var("PGDOG_CONNECT_ATTEMPTS");
         let _guard = remove_env_var("PGDOG_MIRROR_QUEUE");
         let _guard = remove_env_var("PGDOG_MIRROR_EXPOSURE");
@@ -1779,6 +1813,8 @@ mod tests {
         assert_eq!(General::openmetrics_port(), None);
         assert_eq!(General::prepared_statements_limit(), i64::MAX as usize);
         assert_eq!(General::query_cache_limit(), 1_000);
+        assert_eq!(General::query_cache_memory_limit(), 0);
+        assert_eq!(General::query_cache_ttl(), 0);
         assert_eq!(General::connect_attempts(), 1);
         assert_eq!(General::mirror_queue(), 128);
         assert_eq!(General::mirror_exposure(), 1.0);
