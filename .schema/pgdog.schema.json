@@ -88,6 +88,8 @@
         "prepared_statements_ttl_jitter": 30000,
         "pub_sub_channel_size": 0,
         "query_cache_limit": 1000,
+        "query_cache_memory_limit": 0,
+        "query_cache_ttl": 0,
         "query_log": null,
         "query_log_stdout": false,
         "query_parser": "auto",
@@ -1066,6 +1068,20 @@
           "type": "integer",
           "format": "uint",
           "default": 1000,
+          "minimum": 0
+        },
+        "query_cache_memory_limit": {
+          "description": "Approximate memory budget (bytes) for the query (AST) cache; entries are evicted (LRU) once the sum of their sizes exceeds it. Bounds RAM regardless of query complexity, unlike the count-based `query_cache_limit`. `0` disables the memory cap.\n\n**Note:** Entry sizes are measured with jemalloc; on builds without it the budget is approximated from query text length.\n\n_Default:_ `0`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#query_cache_memory_limit>",
+          "type": "integer",
+          "format": "uint",
+          "default": 0,
+          "minimum": 0
+        },
+        "query_cache_ttl": {
+          "description": "Time-to-idle (seconds) for query (AST) cache entries; an entry not accessed within this window is dropped by the maintenance sweep. `0` disables idle expiry.\n\n_Default:_ `0`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#query_cache_ttl>",
+          "type": "integer",
+          "format": "uint",
+          "default": 0,
           "minimum": 0
         },
         "query_log": {

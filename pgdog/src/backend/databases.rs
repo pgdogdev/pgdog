@@ -104,8 +104,12 @@ pub fn init() -> Result<(), Error> {
     let config = config();
     replace_databases(from_config(&config), false)?;
 
-    // Resize query cache
-    Cache::resize(config.config.general.query_cache_limit);
+    // Configure query cache limits
+    Cache::configure(
+        config.config.general.query_cache_limit,
+        config.config.general.query_cache_memory_limit,
+        config.config.general.query_cache_ttl,
+    );
 
     // Start two-pc manager.
     let _monitor = Manager::get();
@@ -152,8 +156,12 @@ pub fn reload() -> Result<(), Error> {
         .write()
         .close_unused(new_config.config.general.prepared_statements_limit);
 
-    // Resize query cache.
-    Cache::resize(new_config.config.general.query_cache_limit);
+    // Configure query cache limits.
+    Cache::configure(
+        new_config.config.general.query_cache_limit,
+        new_config.config.general.query_cache_memory_limit,
+        new_config.config.general.query_cache_ttl,
+    );
 
     Ok(())
 }
