@@ -49,6 +49,8 @@ pub enum AuthType {
     Trust,
     /// Plaintext password.
     Plain,
+    /// Delegate client authentication to a loaded plugin exposing the `pgdog_authenticate` hook.
+    Plugin,
 }
 
 impl Display for AuthType {
@@ -58,6 +60,7 @@ impl Display for AuthType {
             Self::Scram => write!(f, "scram"),
             Self::Trust => write!(f, "trust"),
             Self::Plain => write!(f, "plain"),
+            Self::Plugin => write!(f, "plugin"),
         }
     }
 }
@@ -74,6 +77,10 @@ impl AuthType {
     pub fn trust(&self) -> bool {
         matches!(self, Self::Trust)
     }
+
+    pub fn plugin(&self) -> bool {
+        matches!(self, Self::Plugin)
+    }
 }
 
 impl FromStr for AuthType {
@@ -85,7 +92,67 @@ impl FromStr for AuthType {
             "scram" => Ok(Self::Scram),
             "trust" => Ok(Self::Trust),
             "plain" => Ok(Self::Plain),
+            "plugin" => Ok(Self::Plugin),
             _ => Err(format!("Invalid auth type: {}", s)),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_auth_type_default_is_scram() {
+        assert_eq!(AuthType::default(), AuthType::Scram);
+    }
+
+    #[test]
+    fn test_auth_type_display() {
+        assert_eq!(AuthType::Md5.to_string(), "md5");
+        assert_eq!(AuthType::Scram.to_string(), "scram");
+        assert_eq!(AuthType::Trust.to_string(), "trust");
+        assert_eq!(AuthType::Plain.to_string(), "plain");
+        assert_eq!(AuthType::Plugin.to_string(), "plugin");
+    }
+
+    #[test]
+    fn test_auth_type_from_str() {
+        assert_eq!("md5".parse::<AuthType>().unwrap(), AuthType::Md5);
+        assert_eq!("scram".parse::<AuthType>().unwrap(), AuthType::Scram);
+        assert_eq!("trust".parse::<AuthType>().unwrap(), AuthType::Trust);
+        assert_eq!("plain".parse::<AuthType>().unwrap(), AuthType::Plain);
+        assert_eq!("plugin".parse::<AuthType>().unwrap(), AuthType::Plugin);
+        // Case-insensitive.
+        assert_eq!("PLUGIN".parse::<AuthType>().unwrap(), AuthType::Plugin);
+        assert!("nonsense".parse::<AuthType>().is_err());
+    }
+
+    #[test]
+    fn test_auth_type_predicates() {
+        assert!(AuthType::Plugin.plugin());
+        assert!(!AuthType::Scram.plugin());
+        assert!(!AuthType::Plugin.scram());
+        assert!(!AuthType::Plugin.md5());
+        assert!(!AuthType::Plugin.trust());
+    }
+
+    #[test]
+    fn test_auth_type_serde_round_trip() {
+        // serde uses snake_case renaming; "plugin" is a single lowercase word.
+        #[derive(Serialize, Deserialize, PartialEq, Debug)]
+        struct Wrapper {
+            auth_type: AuthType,
+        }
+
+        let source = r#"auth_type = "plugin""#;
+        let parsed: Wrapper = toml::from_str(source).unwrap();
+        assert_eq!(parsed.auth_type, AuthType::Plugin);
+
+        let serialized = toml::to_string(&parsed).unwrap();
+        assert!(serialized.contains(r#"auth_type = "plugin""#));
+
+        let round_tripped: Wrapper = toml::from_str(&serialized).unwrap();
+        assert_eq!(round_tripped, parsed);
     }
 }

@@ -249,6 +249,12 @@ impl QueryEngine {
             Command::Copy(_) => self.execute(context).await?,
             Command::Deallocate => self.deallocate(context).await?,
             Command::Discard { extended } => self.discard(context, *extended).await?,
+            Command::RoleLocked { name } => {
+                // Client tried to escape a `server_role` impersonation. Reject
+                // the statement but keep the session alive.
+                self.error_response(context, ErrorResponse::role_locked(name))
+                    .await?;
+            }
             command => self.unknown_command(context, command.clone()).await?,
         }
 

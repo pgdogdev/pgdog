@@ -213,6 +213,66 @@ pub(crate) fn add(user: ConfigUser) -> Result<AuthResult, Error> {
     }
 }
 
+/// Provision or complete a user during plugin authentication.
+///
+/// Unlike [`add`], this does not compare a client password: the plugin has
+/// already authenticated the client, and the credential (e.g. a JWT) differs
+/// on every login. A configured `users.toml` entry is never overwritten —
+/// only missing backend credentials are filled in.
+pub fn add_authenticated(user: ConfigUser) -> Result<AuthResult, Error> {
+    fn store(user: ConfigUser) -> Result<(), Error> {
+        let _lock = lock();
+        let mut config = (*config()).clone();
+        config.users.add_or_replace(user);
+        set(config)?;
+        Ok(())
+    }
+
+    let config = config();
+    let existing = config.users.find(&user);
+
+    if let Some(mut existing) = existing {
+        // Never overwrite a configured entry; only fill gaps so a partially
+        // configured user still gets usable backend credentials.
+        let mut changed = false;
+        if existing.server_user.is_none() && user.server_user.is_some() {
+            existing.server_user = user.server_user.clone();
+            changed = true;
+        }
+        if existing.server_password.is_none() && user.server_password.is_some() {
+            existing.server_password = user.server_password.clone();
+            changed = true;
+        }
+        if existing.server_role.is_none() && user.server_role.is_some() {
+            existing.server_role = user.server_role.clone();
+            changed = true;
+        }
+        if existing.read_only.is_none() && user.read_only.is_some() {
+            existing.read_only = user.read_only;
+            changed = true;
+        }
+
+        if changed {
+            debug!(
+                r#"filling backend-credential gaps for user "{}" on database "{}""#,
+                existing.name, existing.database
+            );
+            store(existing)?;
+            reload_from_existing()?;
+        }
+
+        Ok(AuthResult::Ok)
+    } else {
+        debug!(
+            r#"provisioning user "{}" on database "{}" via plugin authentication"#,
+            user.name, user.database
+        );
+        store(user)?;
+        reload_from_existing()?;
+        Ok(AuthResult::Ok)
+    }
+}
+
 /// Swap database configs between source and destination.
 /// Both databases keep their names, but their configs (host, port, etc.) are exchanged.
 /// User database references are also swapped.
@@ -461,7 +521,17 @@ impl Databases {
 
         // Launch all clusters
         for cluster in self.all().values() {
-            if cluster.passwords().is_empty() && cluster.identity().is_none() {
+            // A cluster is only useful if a client can authenticate to it and it
+            // can authenticate to Postgres. The empty client-password case is
+            // still allowed when the cluster carries its own backend credentials
+            // (server password, external identity, or an impersonation
+            // `server_role`): that is how plugin auth and auto-provisioned
+            // impersonation pools work — they authenticate each login via a
+            // plugin rather than a stored client password.
+            if cluster.passwords().is_empty()
+                && cluster.identity().is_none()
+                && !cluster.has_backend_credentials()
+            {
                 warn!(
                     r#"disabling pool for user "{}" and database "{}", password not set"#,
                     cluster.user(),

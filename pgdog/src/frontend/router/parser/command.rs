@@ -54,6 +54,13 @@ pub enum Command {
     },
     Unlisten(String),
     UniqueId,
+    /// A client tried to change the backend role (`SET ROLE`, `RESET ROLE`,
+    /// `SET SESSION AUTHORIZATION`, `set_config('role', ...)`, ...) on a pool
+    /// that impersonates a fixed `server_role`. Rejected with a 42501 error;
+    /// the session stays alive. `name` is the offending variable.
+    RoleLocked {
+        name: String,
+    },
 }
 
 impl Command {

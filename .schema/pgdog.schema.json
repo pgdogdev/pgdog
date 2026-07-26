@@ -26,6 +26,7 @@
       "$ref": "#/$defs/General",
       "default": {
         "auth_type": "scram",
+        "background_workers": 4,
         "ban_replica_lag": 9223372036854775807,
         "ban_replica_lag_bytes": 9223372036854775807,
         "ban_timeout": 300000,
@@ -312,6 +313,11 @@
           "description": "Plaintext password.",
           "type": "string",
           "const": "plain"
+        },
+        {
+          "description": "Delegate client authentication to a loaded plugin exposing the `pgdog_authenticate` hook.",
+          "type": "string",
+          "const": "plugin"
         }
       ]
     },
@@ -594,6 +600,13 @@
           "description": "What kind of authentication mechanism to use for client connections.\n\n_Default:_ `scram`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#auth_type>",
           "$ref": "#/$defs/AuthType",
           "default": "scram"
+        },
+        "background_workers": {
+          "description": "Maximum number of authentication-plugin calls allowed to run concurrently.\nAuthentication plugins run on a blocking thread pool (auth happens once per\nconnection and may block on I/O); this bounds how many run at the same time.\n\n**Note:** Only relevant when `auth_type = \"plugin\"`.\n\n_Default:_ `4`\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#background_workers",
+          "type": "integer",
+          "format": "uint",
+          "default": 4,
+          "minimum": 0
         },
         "ban_replica_lag": {
           "description": "Ban a replica from serving read queries if its replication lag (in milliseconds) exceeds this threshold.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#ban_replica_lag>",

@@ -3,6 +3,7 @@
 pub mod auth_result;
 pub mod error;
 pub mod md5;
+pub mod plugin;
 pub mod scram;
 pub mod vault;
 

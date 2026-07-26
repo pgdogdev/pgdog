@@ -77,6 +77,7 @@ pub struct Cluster {
     resharding_replication_retry_min_delay: Duration,
     regex_parser: RegexParser,
     identity: Option<String>,
+    server_role: Option<String>,
 }
 
 /// Sharding configuration from the cluster.
@@ -164,6 +165,7 @@ pub struct ClusterConfig<'a> {
     pub regex_parser_limit: usize,
     pub pub_sub_enabled: bool,
     pub identity: &'a Option<String>,
+    pub server_role: Option<String>,
 }
 
 impl<'a> ClusterConfig<'a> {
@@ -228,6 +230,7 @@ impl<'a> ClusterConfig<'a> {
             regex_parser_limit: general.regex_parser_limit,
             pub_sub_enabled: general.pub_sub_enabled(),
             identity: &user.identity,
+            server_role: user.server_role.clone(),
         }
     }
 }
@@ -274,6 +277,7 @@ impl Cluster {
             regex_parser_limit,
             pub_sub_enabled,
             identity,
+            server_role,
         } = config;
 
         let identifier = Arc::new(DatabaseUser {
@@ -335,6 +339,7 @@ impl Cluster {
             ),
             regex_parser: RegexParser::new(regex_parser_limit, query_parser),
             identity: identity.clone(),
+            server_role,
         }
     }
 
@@ -401,6 +406,33 @@ impl Cluster {
     /// when connecting.
     pub fn identity(&self) -> Option<&str> {
         self.identity.as_deref()
+    }
+
+    /// PostgreSQL role backend connections impersonate via the `role` startup
+    /// parameter. When set, client-issued `SET ROLE` / `RESET ROLE` /
+    /// `SET SESSION AUTHORIZATION` are rejected to prevent role escape.
+    pub fn server_role(&self) -> Option<&str> {
+        self.server_role.as_deref()
+    }
+
+    /// Whether this cluster carries backend credentials to authenticate to
+    /// Postgres on its own, independent of any stored client password: an
+    /// impersonation `server_role`, a server password, or an external-identity
+    /// mechanism (RDS IAM, Azure, Vault). Pools like these must launch even
+    /// when no client password is configured, e.g. under `auth_type = "plugin"`
+    /// where plugins authenticate each login.
+    pub fn has_backend_credentials(&self) -> bool {
+        if self.server_role.is_some() {
+            return true;
+        }
+
+        self.shards
+            .iter()
+            .flat_map(|shard| shard.pools())
+            .any(|pool| {
+                let addr = pool.addr();
+                !addr.passwords.is_empty() || addr.server_auth.is_external_identity()
+            })
     }
 
     /// User name.
@@ -505,6 +537,15 @@ impl Cluster {
 
     /// Use the query parser.
     pub(crate) fn use_query_parser(&self, request: &ClientRequest) -> bool {
+        // Impersonation pools must parse every statement so the role-escape
+        // guard can inspect it. Otherwise the regex fast-path would forward
+        // e.g. `SELECT 1; SET ROLE ...` or `SELECT set_config('role', ...)`
+        // verbatim, escaping the fixed `server_role`. Normal pools are
+        // unaffected — this is a single `Option` check.
+        if self.server_role.is_some() {
+            return true;
+        }
+
         match self.query_parser() {
             QueryParserLevel::Off => false,
             QueryParserLevel::On => true,
@@ -902,6 +943,10 @@ mod test {
 
         pub(crate) fn set_rw_split(&mut self, rw_split: ReadWriteSplit) {
             self.rw_split = rw_split;
+        }
+
+        pub fn set_server_role(&mut self, server_role: Option<String>) {
+            self.server_role = server_role;
         }
     }
 

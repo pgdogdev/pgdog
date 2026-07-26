@@ -26,6 +26,12 @@ port = 6432
 # Default: 2
 # Recommended: 2 per CPU
 workers = 2
+# Maximum number of authentication-plugin calls allowed to run concurrently.
+# Auth plugins run on a blocking thread pool; this caps how many run at once.
+# Only relevant when auth_type = "plugin".
+#
+# Default: 4
+background_workers = 4
 # Maximum number of Postgres connections per user/database connection pool.
 #
 # Default: 10
@@ -265,6 +271,13 @@ mirror_queue = 128
 # - scram
 # - md5
 # - trust
+# - plain
+# - plugin: delegate client authentication to a loaded plugin exposing the
+#   `pgdog_authenticate` hook (see the [[plugins]] section). When set, every
+#   plugin returning Skip results in a denied login (there is no password
+#   fallback), so a capable plugin must be loaded. Use `background_workers`
+#   to cap concurrent plugin calls.
+# auth_type = "plugin"
 auth_type = "scram"
 # Disable cross-shard queries.
 #

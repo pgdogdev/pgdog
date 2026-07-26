@@ -43,3 +43,19 @@ password = "pgdog"
 # server_user = "pgdog_service"
 # server_auth = "vault_static"
 # server_vault_path = "database/static-creds/pgdog-service"
+
+# Example: role impersonation with plugin authentication (`auth_type = "plugin"`
+# in pgdog.toml). Backend connections for this user assume `server_role` via the
+# `role` startup parameter, and `SET ROLE` / `RESET ROLE` / `SET SESSION
+# AUTHORIZATION` are rejected on the resulting pools.
+#
+# NOTE: the client no longer supplies the Postgres password (the plugin derives
+# the login), so a working backend credential MUST be provided here via
+# `server_password` (or a non-default `server_auth`). Without one, PgDog cannot
+# open server connections and warns at config load time.
+# [[users]]
+# name = "analytics"
+# database = "pgdog"
+# server_role = "analytics_ro"
+# server_user = "pgdog"
+# server_password = "pgdog"
