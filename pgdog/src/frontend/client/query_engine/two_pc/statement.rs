@@ -37,12 +37,13 @@ impl TwoPcTransactionOnShard {
 
     /// Whether `gid`, as listed in `pg_prepared_xacts`, refers to this
     /// transaction on this shard. GID prefixes embed the identity of the
-    /// PgDog process that created the transaction, which changes across
-    /// restarts, so matching uses the durable numeric transaction ID and
-    /// the shard index. This is the fallback for transactions restored
-    /// from WAL records that did not store the coordinator GID prefix;
-    /// with a recorded prefix, cleanup matches the exact GID from
-    /// [`Self::gid`] instead.
+    /// PgDog process that created the transaction, which can change
+    /// across restarts, so matching uses the durable numeric transaction
+    /// ID and the shard index. This is the fallback for transactions
+    /// restored from WAL records that did not store the coordinator GID
+    /// prefix, and for recorded prefixes that fail the identifier
+    /// alphabet check; with a recorded prefix, cleanup matches the exact
+    /// GID from [`Self::gid`] instead.
     ///
     /// A matched GID is guaranteed to contain only [`safe_identifier`]
     /// characters, so it can be embedded verbatim in a quoted SQL literal.
