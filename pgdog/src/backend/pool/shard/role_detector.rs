@@ -46,6 +46,7 @@ mod test {
     use crate::backend::pool::lsn_monitor::LsnStats;
     use crate::backend::pool::{Address, Config, PoolConfig};
     use crate::backend::replication::publisher::Lsn;
+    use crate::backend::schema::SchemaCache;
     use crate::config::{LoadBalancingStrategy, ReadWriteSplit, Role};
     use pgdog_stats::LsnStats as StatsLsnStats;
 
@@ -89,6 +90,7 @@ mod test {
             }),
             lsn_check_interval: Duration::MAX,
             pub_sub_enabled: false,
+            schema_cache: SchemaCache::default(),
         })
     }
 

@@ -8,6 +8,7 @@ use pgdog_config::{
 };
 use std::{sync::Arc, time::Duration};
 
+use crate::backend::schema::SchemaCache;
 use crate::frontend::router::sharding::ShardedTable;
 use crate::{
     backend::{
@@ -126,47 +127,52 @@ impl ClusterShardConfig {
 /// Cluster creation config.
 #[derive(Debug)]
 pub struct ClusterConfig<'a> {
-    pub name: &'a str,
-    pub shards: &'a [ClusterShardConfig],
-    pub lb_strategy: LoadBalancingStrategy,
-    pub user: &'a str,
-    pub passwords: Vec<PasswordKind>,
-    pub pooler_mode: PoolerMode,
-    pub sharded_tables: ShardedTables,
-    pub replication_sharding: Option<String>,
-    pub multi_tenant: &'a Option<MultiTenant>,
-    pub rw_strategy: ReadWriteStrategy,
-    pub rw_split: ReadWriteSplit,
-    pub schema_admin: bool,
-    pub cross_shard_disabled: bool,
-    pub two_pc: bool,
-    pub two_pc_auto: bool,
-    pub sharded_schemas: ShardedSchemas,
-    pub rewrite: &'a Rewrite,
-    pub prepared_statements: &'a PreparedStatements,
-    pub dry_run: bool,
-    pub expanded_explain: bool,
-    pub pub_sub_channel_size: usize,
-    pub query_parser: QueryParserLevel,
-    pub query_parser_engine: QueryParserEngine,
-    pub log_min_duration_parse: Option<Duration>,
-    pub log_query_sample_length: usize,
-    pub connection_recovery: ConnectionRecovery,
-    pub client_connection_recovery: ConnectionRecovery,
-    pub lsn_check_interval: Duration,
-    pub reload_schema_on_ddl: bool,
-    pub load_schema: LoadSchema,
-    pub resharding_parallel_copies: usize,
-    pub resharding_copy_retry_max_attempts: usize,
-    pub resharding_copy_retry_min_delay: u64,
-    pub resharding_replication_retry_max_attempts: usize,
-    pub resharding_replication_retry_min_delay: u64,
-    pub regex_parser_limit: usize,
-    pub pub_sub_enabled: bool,
-    pub identity: &'a Option<String>,
+    name: &'a str,
+    shards: &'a [ClusterShardConfig],
+    lb_strategy: LoadBalancingStrategy,
+    user: &'a str,
+    passwords: Vec<PasswordKind>,
+    pooler_mode: PoolerMode,
+    sharded_tables: ShardedTables,
+    replication_sharding: Option<String>,
+    multi_tenant: &'a Option<MultiTenant>,
+    rw_strategy: ReadWriteStrategy,
+    rw_split: ReadWriteSplit,
+    schema_admin: bool,
+    cross_shard_disabled: bool,
+    two_pc: bool,
+    two_pc_auto: bool,
+    sharded_schemas: ShardedSchemas,
+    rewrite: &'a Rewrite,
+    prepared_statements: &'a PreparedStatements,
+    dry_run: bool,
+    expanded_explain: bool,
+    pub_sub_channel_size: usize,
+    query_parser: QueryParserLevel,
+    query_parser_engine: QueryParserEngine,
+    log_min_duration_parse: Option<Duration>,
+    log_query_sample_length: usize,
+    connection_recovery: ConnectionRecovery,
+    client_connection_recovery: ConnectionRecovery,
+    lsn_check_interval: Duration,
+    reload_schema_on_ddl: bool,
+    load_schema: LoadSchema,
+    resharding_parallel_copies: usize,
+    resharding_copy_retry_max_attempts: usize,
+    resharding_copy_retry_min_delay: u64,
+    resharding_replication_retry_max_attempts: usize,
+    resharding_replication_retry_min_delay: u64,
+    regex_parser_limit: usize,
+    pub_sub_enabled: bool,
+    identity: &'a Option<String>,
+    schema_cache: SchemaCache,
 }
 
 impl<'a> ClusterConfig<'a> {
+    /// Dependencies for creating a Cluster.
+    ///
+    /// TODO(lev): This is getting unruly. We may need a struct for a struct :)
+    ///
     pub(crate) fn new(
         config: &'a crate::config::Config,
         user: &'a User,
@@ -174,6 +180,7 @@ impl<'a> ClusterConfig<'a> {
         sharded_tables: ShardedTables,
         sharded_schemas: ShardedSchemas,
         query_parser: QueryParser,
+        schema_cache: SchemaCache,
     ) -> Self {
         let general = &config.general;
         let multi_tenant = config.multi_tenant();
@@ -228,6 +235,7 @@ impl<'a> ClusterConfig<'a> {
             regex_parser_limit: general.regex_parser_limit,
             pub_sub_enabled: general.pub_sub_enabled(),
             identity: &user.identity,
+            schema_cache,
         }
     }
 }
@@ -274,6 +282,7 @@ impl Cluster {
             regex_parser_limit,
             pub_sub_enabled,
             identity,
+            schema_cache,
         } = config;
 
         let identifier = Arc::new(DatabaseUser {
@@ -296,6 +305,7 @@ impl Cluster {
                         identifier: identifier.clone(),
                         lsn_check_interval,
                         pub_sub_enabled,
+                        schema_cache: schema_cache.clone(),
                     })
                 })
                 .collect(),
@@ -661,6 +671,7 @@ mod test {
         ConfigAndUsers, OmnishardedTable, PoolerMode, QueryParserLevel, ShardedSchema,
     };
 
+    use crate::backend::schema::SchemaCache;
     use crate::frontend::router::sharding::ShardedTable;
     use crate::{
         backend::{
@@ -707,6 +718,7 @@ mod test {
                         identifier: identifier.clone(),
                         lsn_check_interval: Duration::MAX,
                         pub_sub_enabled: false,
+                        schema_cache: SchemaCache::default(),
                     })
                 })
                 .collect::<Vec<_>>();
@@ -834,6 +846,7 @@ mod test {
                 identifier: cluster.identifier.clone(),
                 lsn_check_interval: Duration::MAX,
                 pub_sub_enabled: false,
+                schema_cache: SchemaCache::default(),
             });
             cluster
         }
@@ -857,6 +870,7 @@ mod test {
                     identifier: identifier.clone(),
                     lsn_check_interval: Duration::default(),
                     pub_sub_enabled: false,
+                    schema_cache: SchemaCache::default(),
                 })],
                 prepared_statements: config.config.general.prepared_statements,
                 dry_run: config.config.general.dry_run,
@@ -891,6 +905,7 @@ mod test {
                 identifier,
                 lsn_check_interval: Duration::default(),
                 pub_sub_enabled: false,
+                schema_cache: SchemaCache::default(),
             });
 
             cluster
