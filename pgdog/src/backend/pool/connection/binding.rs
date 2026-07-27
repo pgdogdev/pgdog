@@ -488,7 +488,7 @@ impl Binding {
                                     unreachable!("cleanup resolves transactions; it never prepares")
                                 }
                             };
-                            match server.execute(&statement[..]).await {
+                            match server.execute(&statement).await {
                                 Ok(_) => {
                                     if phase == TwoPcPhase::Phase2 {
                                         server.stats_mut().transaction_2pc();
