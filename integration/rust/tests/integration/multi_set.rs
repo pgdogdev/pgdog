@@ -46,17 +46,31 @@ async fn test_multi_set_with_timezone_interval() {
 }
 
 #[tokio::test]
-async fn test_multi_set_mixed_returns_error() {
+async fn test_multi_set_mixed_succeeds() {
     for conn in connections_tokio().await {
-        let err = conn
-            .batch_execute("SET statement_timeout TO '10s'; SELECT 1")
+        conn.batch_execute("SET statement_timeout TO '10s'; SELECT 1")
             .await
-            .unwrap_err();
-        let db_err = err.as_db_error().expect("Expected a DbError");
-        let msg = db_err.message();
-        assert!(
-            msg.contains("multi-statement queries cannot mix SET with other commands"),
-            "unexpected error: {msg}",
-        );
+            .unwrap();
+
+        let rows = conn.simple_query("SHOW statement_timeout").await.unwrap();
+        assert_eq!(extract_simple_query_value(&rows), "10s");
+    }
+}
+
+#[tokio::test]
+async fn test_multi_statement_select() {
+    for conn in connections_tokio().await {
+        let msgs = conn.simple_query("SELECT 1; SELECT 2").await.unwrap();
+        let values: Vec<String> = msgs
+            .iter()
+            .filter_map(|m| {
+                if let tokio_postgres::SimpleQueryMessage::Row(row) = m {
+                    row.get(0).map(|s| s.to_string())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(values, vec!["1", "2"]);
     }
 }
