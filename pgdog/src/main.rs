@@ -19,6 +19,8 @@ use tokio::runtime::Builder;
 use tracing::{error, info, warn};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    pgdog::enable_jemalloc_background_thread();
+
     let args = cli::Cli::parse();
     let command = args.command.clone();
     let mut overrides = pgdog::config::Overrides::default();

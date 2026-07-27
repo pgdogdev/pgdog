@@ -52,6 +52,17 @@ static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 #[global_allocator]
 static GLOBAL: &stats_alloc::StatsAlloc<System> = &stats_alloc::INSTRUMENTED_SYSTEM;
 
+/// Enable jemalloc's background purge threads so freed memory is returned to
+/// the OS after allocation bursts.
+#[cfg(all(not(test), not(target_env = "msvc")))]
+pub fn enable_jemalloc_background_thread() {
+    let _ = tikv_jemalloc_ctl::background_thread::write(true);
+}
+
+/// No-op fallback where jemalloc is not the active allocator.
+#[cfg(any(test, target_env = "msvc"))]
+pub fn enable_jemalloc_background_thread() {}
+
 /// Filter that dynamically installs or removes an inner
 /// [`TracingRateLimitLayer`] at runtime.
 ///
