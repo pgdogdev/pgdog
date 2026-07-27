@@ -96,6 +96,12 @@ pub struct BeginPayload {
     pub txn: TwoPcTransaction,
     pub user: String,
     pub database: String,
+    /// Coordinator GID prefix the transaction's prepared names are
+    /// rendered with. Recovery combines it with `txn` to reconstruct
+    /// the exact GIDs on the shards. Empty when the record was written
+    /// by a version that did not store it.
+    #[serde(default)]
+    pub prefix: String,
 }
 
 /// Payload for records that carry only a transaction id
@@ -118,6 +124,11 @@ pub struct CheckpointEntry {
     pub database: String,
     /// `true` iff a [`Record::Committing`] had been fsynced for this txn.
     pub decided: bool,
+    /// Coordinator GID prefix, carried over from the transaction's
+    /// [`BeginPayload`]. Empty when the originating record did not
+    /// store it.
+    #[serde(default)]
+    pub prefix: String,
 }
 
 /// A successfully decoded record and the number of bytes it consumed.
@@ -227,7 +238,48 @@ mod tests {
             txn: TwoPcTransaction::new(),
             user: "alice".into(),
             database: "shop".into(),
+            prefix: "__pgdog_2pc_prod_deadbeef_".into(),
         }));
+    }
+
+    #[test]
+    fn begin_without_prefix_decodes_with_empty_prefix() {
+        // The on-disk shape written by versions that predate the
+        // `prefix` field: same tag, payload lacking the key.
+        #[derive(Serialize)]
+        struct OldBeginPayload {
+            txn: TwoPcTransaction,
+            user: String,
+            database: String,
+        }
+
+        let txn = TwoPcTransaction::new();
+        let payload = rmp_serde::to_vec_named(&OldBeginPayload {
+            txn,
+            user: "alice".into(),
+            database: "shop".into(),
+        })
+        .unwrap();
+
+        let mut buf = Vec::new();
+        let tag = Tag::Begin as u8;
+        let mut crc = crc32c::crc32c(&[tag]);
+        crc = crc32c::crc32c_append(crc, &payload);
+        buf.put_u32_le(1 + payload.len() as u32);
+        buf.put_u32_le(crc);
+        buf.put_u8(tag);
+        buf.put_slice(&payload);
+
+        let decoded = Record::decode(&buf).unwrap().unwrap();
+        assert_eq!(
+            decoded.record,
+            Record::Begin(BeginPayload {
+                txn,
+                user: "alice".into(),
+                database: "shop".into(),
+                prefix: String::new(),
+            })
+        );
     }
 
     #[test]
@@ -253,12 +305,14 @@ mod tests {
                     user: "u1".into(),
                     database: "d1".into(),
                     decided: false,
+                    prefix: String::new(),
                 },
                 CheckpointEntry {
                     txn: TwoPcTransaction::new(),
                     user: "u2".into(),
                     database: "d2".into(),
                     decided: true,
+                    prefix: "__pgdog_2pc_prod_a_".into(),
                 },
             ],
         }));
@@ -313,6 +367,7 @@ mod tests {
             txn: TwoPcTransaction::new(),
             user: "u".into(),
             database: "d".into(),
+            prefix: "__pgdog_2pc_".into(),
         });
         let b = Record::Committing(TxnPayload {
             txn: TwoPcTransaction::new(),

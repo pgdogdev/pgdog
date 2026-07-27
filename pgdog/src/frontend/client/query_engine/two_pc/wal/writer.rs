@@ -181,18 +181,20 @@ impl Wal {
     }
 
     /// Log that `txn` is about to issue PREPARE TRANSACTION on its
-    /// participants. Must complete before any PREPARE leaves the
-    /// coordinator.
+    /// participants under GIDs rendered with `prefix`. Must complete
+    /// before any PREPARE leaves the coordinator.
     pub async fn append_begin(
         &self,
         txn: TwoPcTransaction,
         user: String,
         database: String,
+        prefix: String,
     ) -> Result<u64, Arc<Error>> {
         self.append(Record::Begin(BeginPayload {
             txn,
             user,
             database,
+            prefix,
         }))
         .await
     }
@@ -455,6 +457,7 @@ fn apply_to_snapshot(
                     user: p.user.clone(),
                     database: p.database.clone(),
                     decided: false,
+                    prefix: p.prefix.clone(),
                 },
             );
             undo.push(Undo { txn: p.txn, prior });

@@ -26,6 +26,9 @@ struct Entry {
     user: String,
     database: String,
     decided: bool,
+    /// Coordinator GID prefix from the Begin record; empty for records
+    /// written by versions that did not store it.
+    prefix: String,
 }
 
 /// What [`recover_transactions`] hands back to the WAL setup path.
@@ -129,9 +132,10 @@ pub(super) async fn recover_transactions(
                 user: entry.user.clone(),
                 database: entry.database.clone(),
                 decided: entry.decided,
+                prefix: entry.prefix.clone(),
             },
         );
-        manager.restore_transaction(txn, entry.user, entry.database, phase);
+        manager.restore_transaction(txn, entry.user, entry.database, entry.prefix, phase);
     }
     if corruption {
         tracing::warn!(
@@ -184,6 +188,7 @@ fn apply(working: &mut HashMap<TwoPcTransaction, Entry>, record: Record) {
                     user: p.user,
                     database: p.database,
                     decided: false,
+                    prefix: p.prefix,
                 },
             );
         }
@@ -202,6 +207,7 @@ fn apply(working: &mut HashMap<TwoPcTransaction, Entry>, record: Record) {
                 user,
                 database,
                 decided,
+                prefix,
                 ..
             } in p.active
             {
@@ -211,6 +217,7 @@ fn apply(working: &mut HashMap<TwoPcTransaction, Entry>, record: Record) {
                         user,
                         database,
                         decided,
+                        prefix,
                     },
                 );
             }
@@ -238,11 +245,13 @@ mod tests {
                 txn: txn(1),
                 user: "alice".into(),
                 database: "shop".into(),
+                prefix: "__pgdog_2pc_a_".into(),
             }),
         );
         let entry = w.get(&txn(1)).unwrap();
         assert_eq!(entry.user, "alice");
         assert_eq!(entry.database, "shop");
+        assert_eq!(entry.prefix, "__pgdog_2pc_a_");
         assert!(!entry.decided);
     }
 
@@ -255,6 +264,7 @@ mod tests {
                 txn: txn(1),
                 user: "u".into(),
                 database: "d".into(),
+                prefix: "__pgdog_2pc_a_".into(),
             }),
         );
         apply(&mut w, Record::Committing(TxnPayload { txn: txn(1) }));
@@ -277,6 +287,7 @@ mod tests {
                 txn: txn(1),
                 user: "u".into(),
                 database: "d".into(),
+                prefix: "__pgdog_2pc_a_".into(),
             }),
         );
         apply(&mut w, Record::End(TxnPayload { txn: txn(1) }));
@@ -292,6 +303,7 @@ mod tests {
                 txn: txn(1),
                 user: "u1".into(),
                 database: "d1".into(),
+                prefix: "__pgdog_2pc_a_".into(),
             }),
         );
         apply(
@@ -300,6 +312,7 @@ mod tests {
                 txn: txn(2),
                 user: "u2".into(),
                 database: "d2".into(),
+                prefix: "__pgdog_2pc_a_".into(),
             }),
         );
         apply(
@@ -310,12 +323,14 @@ mod tests {
                     user: "u99".into(),
                     database: "d99".into(),
                     decided: true,
+                    prefix: "__pgdog_2pc_b_".into(),
                 }],
             }),
         );
         assert_eq!(w.len(), 1);
         let entry = w.get(&txn(99)).unwrap();
         assert_eq!(entry.user, "u99");
+        assert_eq!(entry.prefix, "__pgdog_2pc_b_");
         assert!(entry.decided);
     }
 }

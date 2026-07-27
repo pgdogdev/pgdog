@@ -119,6 +119,7 @@ async fn test_cleanup_transaction_foreign_prefix() {
         transaction,
         cluster.user().to_string(),
         cluster.name().to_string(),
+        "__pgdog_2pc_previousinstance_".to_string(),
         TwoPcPhase::Phase1,
     );
 

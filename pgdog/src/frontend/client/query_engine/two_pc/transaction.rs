@@ -18,7 +18,7 @@ impl TwoPcTransaction {
 
     /// A prefix to identify two-phase commit transactions generated
     /// by this PgDog process.
-    fn global_prefix() -> String {
+    pub(super) fn global_prefix() -> String {
         format!(
             "{PREFIX}{}{}_",
             if let Some(cluster_id) = deployment_id() {

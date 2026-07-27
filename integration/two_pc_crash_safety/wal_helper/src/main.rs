@@ -33,10 +33,14 @@ async fn main() {
     let mut segment = Segment::create(&dir, 0).await.expect("create segment");
 
     let mut buf = BytesMut::new();
+    // The prefix is left empty to produce the record shape written by
+    // versions that did not store it, so recovery of such WALs (via the
+    // numeric-ID fallback) stays covered end to end.
     Record::Begin(BeginPayload {
         txn,
         user,
         database,
+        prefix: String::new(),
     })
     .encode(&mut buf)
     .expect("encode begin");
