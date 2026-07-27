@@ -208,7 +208,6 @@ fn apply(working: &mut HashMap<TwoPcTransaction, Entry>, record: Record) {
                 database,
                 decided,
                 prefix,
-                ..
             } in p.active
             {
                 working.insert(
