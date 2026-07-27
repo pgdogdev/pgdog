@@ -114,6 +114,8 @@
         "tls_client_required": false,
         "tls_private_key": null,
         "tls_server_ca_certificate": null,
+        "tls_server_certificate": null,
+        "tls_server_private_key": null,
         "tls_verify": "prefer",
         "two_phase_commit": false,
         "two_phase_commit_auto": null,
@@ -1168,6 +1170,20 @@
         },
         "tls_server_ca_certificate": {
           "description": "Path to a certificate bundle used to validate the server certificate on TLS connection creation.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#tls_server_ca_certificate>",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tls_server_certificate": {
+          "description": "Path to the TLS certificate PgDog presents to upstream Postgres servers,\nenabling mutual TLS (client authentication) on the server connection.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#tls_server_certificate",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tls_server_private_key": {
+          "description": "Path to the TLS private key for the certificate configured in\n`tls_server_certificate`.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#tls_server_private_key",
           "type": [
             "string",
             "null"

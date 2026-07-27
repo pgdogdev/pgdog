@@ -124,6 +124,12 @@ tls_verify = "disabled"
 # Path to PEM-encoded certificate bundle to use for Postgres server
 # certificate validation.
 # tls_server_ca_certificate = "relative/or/absolute/path/to/certificate.pem"
+# Path to PEM-encoded TLS certificate PgDog presents to Postgres servers for
+# mutual TLS (client authentication on the server connection). Requires
+# tls_server_private_key to also be set.
+# tls_server_certificate = "relative/or/absolute/path/to/certificate.pem"
+# Path to the PEM-encoded private key for tls_server_certificate.
+# tls_server_private_key = "relative/or/absolute/path/to/private_key.pem"
 # How long to wait for active connections to finish transactions
 # when shutting down PgDog.
 #
