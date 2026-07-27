@@ -447,20 +447,19 @@ impl Binding {
                         // it is embedded in a quoted literal; a prefix
                         // outside the alphabet falls back to numeric-ID
                         // matching, which performs the same check.
-                        let expected = match prefix.is_empty() {
-                            true => None,
-                            false => {
-                                let gid = target.gid(prefix);
-                                if safe_identifier(&gid) {
-                                    Some(gid)
-                                } else {
-                                    warn!(
-                                        "[2pc] recorded gid {:?} contains characters \
-                                         PgDog never generates; matching by numeric ID",
-                                        gid
-                                    );
-                                    None
-                                }
+                        let expected = if prefix.is_empty() {
+                            None
+                        } else {
+                            let gid = target.gid(prefix);
+                            if safe_identifier(&gid) {
+                                Some(gid)
+                            } else {
+                                warn!(
+                                    "[2pc] recorded gid {:?} contains characters \
+                                     PgDog never generates; matching by numeric ID",
+                                    gid
+                                );
+                                None
                             }
                         };
                         let rows: Vec<DataRow> = server
