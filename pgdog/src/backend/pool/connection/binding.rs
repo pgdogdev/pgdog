@@ -442,10 +442,11 @@ impl Binding {
                     .enumerate()
                     .map(|(shard, server)| async move {
                         let target = TwoPcTransactionOnShard::new(transaction, shard);
-                        // The recorded GID is trusted to be a quotable
-                        // literal because identifier alphabets are
-                        // validated at startup; anything else on disk
-                        // gets the alphabet-checked numeric fallback.
+                        // A GID rendered from the recorded prefix is
+                        // checked against the identifier alphabet before
+                        // it is embedded in a quoted literal; a prefix
+                        // outside the alphabet falls back to numeric-ID
+                        // matching, which performs the same check.
                         let expected = match prefix.is_empty() {
                             true => None,
                             false => {
