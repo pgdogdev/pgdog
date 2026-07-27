@@ -463,10 +463,10 @@ impl Binding {
                             }
                         };
                         let rows: Vec<DataRow> = server
-                        .fetch_all(
-                            "SELECT gid FROM pg_prepared_xacts WHERE database = current_database()",
-                        )
-                        .await?;
+                            .fetch_all(
+                                "SELECT gid FROM pg_prepared_xacts WHERE database = current_database()",
+                            )
+                            .await?;
 
                         for row in rows {
                             let Some(gid) = row.get_text(0) else {
