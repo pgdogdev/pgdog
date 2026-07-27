@@ -118,8 +118,7 @@ impl QueryParser {
     /// Try to handle multi-statement queries containing SET commands.
     ///
     /// - All SETs → returns `Ok(Some(Command::Set { .. }))`
-    /// - No SETs → returns `Ok(None)`, caller falls through to default parsing
-    /// - Mix of SET + non-SET → returns `Err(MultiStatementMixedSet)`
+    /// - No SETs or mixed SET + non-SET → returns `Ok(None)`, caller routes to write primary
     ///
     /// In session mode, returns `Ok(Some(Command::Query(..)))` immediately so that
     /// all multi-statement queries are forwarded to the server verbatim.
@@ -151,10 +150,8 @@ impl QueryParser {
             })
             .collect::<Result<Vec<_>, _>>()?;
 
-        if params.is_empty() {
+        if params.is_empty() || has_other {
             Ok(None)
-        } else if has_other {
-            Err(Error::MultiStatementMixedSet)
         } else {
             Ok(Some(Command::Set {
                 params,
@@ -204,7 +201,7 @@ impl QueryParser {
                     }
 
                     if has_set && has_other {
-                        return Err(Error::MultiStatementMixedSet);
+                        return Ok(None);
                     }
                 }
 

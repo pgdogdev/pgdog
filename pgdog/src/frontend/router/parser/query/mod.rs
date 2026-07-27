@@ -290,19 +290,18 @@ impl QueryParser {
             .run()?;
         }
 
-        // Handle multi-statement SET commands (e.g. "SET x TO 1; SET y TO 2").
-        if stmts.len() > 1
-            && let Some(command) = self.try_multi_set(&**stmts, context)?
-        {
-            return Ok(command);
+        // Handle multi-statement queries.
+        if stmts.len() > 1 {
+            // All-SET batch: intercepted for parameter tracking.
+            if let Some(command) = self.try_multi_set(&**stmts, context)? {
+                return Ok(command);
+            }
+            // Mixed or non-SET batch: forward the full query to the write primary.
+            return Ok(Command::Query(Route::write(
+                context.shards_calculator.shard(),
+            )));
         }
 
-        //
-        // Get the root AST node.
-        //
-        // We don't expect clients to send multiple queries. If they do
-        // only the first one is used for routing.
-        //
         let root = stmts.first();
 
         let Some(root) = root else {
@@ -555,19 +554,18 @@ impl QueryParser {
 
                 let stmts = &statement.parse_result().protobuf.stmts;
 
-                // Handle multi-statement SET commands (e.g. "SET x TO 1; SET y TO 2").
-                if stmts.len() > 1
-                    && let Some(command) = self.try_multi_set(stmts, context)?
-                {
-                    return Ok(command);
+                // Handle multi-statement queries.
+                if stmts.len() > 1 {
+                    // All-SET batch: intercepted for parameter tracking.
+                    if let Some(command) = self.try_multi_set(stmts, context)? {
+                        return Ok(command);
+                    }
+                    // Mixed or non-SET batch: forward the full query to the write primary.
+                    return Ok(Command::Query(Route::write(
+                        context.shards_calculator.shard(),
+                    )));
                 }
 
-                //
-                // Get the root AST node.
-                //
-                // We don't expect clients to send multiple queries. If they do
-                // only the first one is used for routing.
-                //
                 let root = stmts.first();
 
                 let root = if let Some(root) = root {
