@@ -28,9 +28,9 @@ impl TwoPcTransactionOnShard {
         self.transaction
     }
 
-    /// The exact GID this transaction was prepared under on this shard,
-    /// rendered from the coordinator GID prefix recorded when the
-    /// transaction was created.
+    /// The GID this transaction is prepared under on this shard when
+    /// rendered with `prefix`, the coordinator GID prefix recorded at
+    /// transaction creation.
     pub(crate) fn gid(&self, prefix: &str) -> String {
         format!("{}{}_{}", prefix, self.transaction.number(), self.shard)
     }
