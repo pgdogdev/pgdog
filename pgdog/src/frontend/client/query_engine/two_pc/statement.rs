@@ -2,7 +2,10 @@
 
 use std::{fmt::Display, str::FromStr};
 
+use tracing::warn;
+
 use crate::frontend::client::query_engine::two_pc::TwoPcTransaction;
+use crate::util::safe_identifier;
 
 use super::TwoPcPhase;
 
@@ -30,11 +33,29 @@ impl TwoPcTransactionOnShard {
     /// PgDog process that created the transaction, which changes across
     /// restarts, so matching uses the durable numeric transaction ID and
     /// the shard index.
+    ///
+    /// A matched GID is guaranteed to contain only [`safe_identifier`]
+    /// characters, so it can be embedded verbatim in a quoted SQL literal.
+    /// PgDog only generates such GIDs (`NODE_ID` and `DEPLOYMENT_ID` are
+    /// validated at startup); a GID that matches the numeric ID but not
+    /// the alphabet was not created by PgDog and is refused with a
+    /// warning.
     pub(crate) fn matches_gid(&self, gid: &str) -> bool {
-        match gid.parse::<Self>() {
+        let matches = match gid.parse::<Self>() {
             Ok(parsed) => parsed.transaction == self.transaction && parsed.shard == self.shard,
             Err(()) => false,
+        };
+
+        if matches && !safe_identifier(gid) {
+            warn!(
+                "[2pc] prepared transaction {:?} matches transaction {} on shard {} \
+                 but contains characters PgDog never generates; refusing to resolve it",
+                gid, self.transaction, self.shard
+            );
+            return false;
         }
+
+        matches
     }
 }
 
@@ -142,6 +163,11 @@ mod test {
         assert!(!target.matches_gid("app_txn_123_1"));
         assert!(!target.matches_gid("123_1"));
         assert!(!target.matches_gid(""));
+        // Matching ID but characters PgDog never generates: such GIDs
+        // are refused so they can never reach a quoted SQL literal.
+        assert!(!target.matches_gid("__pgdog_2pc_it's_123_1"));
+        assert!(!target.matches_gid("__pgdog_2pc_a\\'b_123_1"));
+        assert!(!target.matches_gid("__pgdog_2pc_a b_123_1"));
     }
 
     #[test]
