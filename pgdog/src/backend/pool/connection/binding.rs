@@ -13,6 +13,7 @@ use crate::{
 };
 
 use futures::future::join_all;
+use tracing::warn;
 
 use super::*;
 
@@ -454,9 +455,25 @@ impl Binding {
                                     unreachable!("cleanup resolves transactions; it never prepares")
                                 }
                             };
-                            server.execute(statement).await?;
-                            if phase == TwoPcPhase::Phase2 {
-                                server.stats_mut().transaction_2pc();
+                            match server.execute(&statement[..]).await {
+                                Ok(_) => {
+                                    if phase == TwoPcPhase::Phase2 {
+                                        server.stats_mut().transaction_2pc();
+                                    }
+                                }
+                                // Insufficient privilege: the prepared transaction
+                                // is owned by a role the configured user can't act
+                                // for. Retrying can't succeed until an operator
+                                // intervenes, so leave the transaction to them
+                                // rather than retrying forever.
+                                Err(Error::ExecutionError(err)) if err.code == "42501" => {
+                                    warn!(
+                                        "[2pc] insufficient privilege to run {}; \
+                                         resolve the prepared transaction manually",
+                                        statement
+                                    );
+                                }
+                                Err(err) => return Err(err),
                             }
                         }
 
