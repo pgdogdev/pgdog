@@ -594,6 +594,23 @@ mod test {
     }
 
     #[test]
+    fn test_reset_queries_only_resets_missing_parameters() {
+        let mut server = Parameters::default();
+        server.insert("application_name", "server");
+        server.insert("search_path", "private");
+        server.insert("statement_timeout", "1001ms");
+
+        let mut client = Parameters::default();
+        client.insert("application_name", "client");
+        client.insert("statement_timeout", "1001ms");
+
+        let queries = server.reset_queries(&client);
+
+        assert_eq!(queries.len(), 1);
+        assert_eq!(queries[0].query(), r#"RESET "search_path""#);
+    }
+
+    #[test]
     fn test_insert_transaction_non_local() {
         let mut params = Parameters::default();
         params.insert("application_name", "test");
