@@ -366,20 +366,25 @@ impl Binding {
 
     pub(crate) async fn two_pc_on_guards(
         servers: &mut [Guard],
+        state: &MultiShard,
         transaction: TwoPcTransaction,
         phase: TwoPcPhase,
     ) -> Result<(), Error> {
         let skip_missing = matches!(phase, TwoPcPhase::Phase2 | TwoPcPhase::Rollback);
 
         let mut futures = Vec::new();
-        for (shard, server) in servers.iter_mut().enumerate() {
+        for (position, server) in servers.iter_mut().enumerate() {
+            // Map positional index to actual shard number.
+            // When only a subset of shards is connected (Shard::Multi binding),
+            // positional indices don't match actual shard numbers.
+            let shard = state.shard_index(position);
             let query = phase_control(transaction, shard, phase);
             futures.push(server.execute(query));
         }
 
         let results = join_all(futures).await;
 
-        for (shard, result) in results.into_iter().enumerate() {
+        for (position, result) in results.into_iter().enumerate() {
             match result {
                 Err(Error::ExecutionError(err)) => {
                     if !(skip_missing && err.code == "42704") {
@@ -389,7 +394,7 @@ impl Binding {
                 Err(err) => return Err(err),
                 Ok(_) => {
                     if phase == TwoPcPhase::Phase2 {
-                        servers[shard].stats_mut().transaction_2pc();
+                        servers[position].stats_mut().transaction_2pc();
                     }
                 }
             }
@@ -405,8 +410,8 @@ impl Binding {
         phase: TwoPcPhase,
     ) -> Result<(), Error> {
         match self {
-            Binding::MultiShard(servers, _) => {
-                Self::two_pc_on_guards(servers, transaction, phase).await
+            Binding::MultiShard(servers, state) => {
+                Self::two_pc_on_guards(servers, state, transaction, phase).await
             }
 
             _ => Err(Error::TwoPcMultiShardOnly),
