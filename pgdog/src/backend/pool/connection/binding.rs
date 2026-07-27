@@ -10,7 +10,7 @@ use crate::{
     },
     net::{DataRow, FrontendPid, ProtocolMessage, Query, parameter::Parameters},
     state::State,
-    util::safe_identifier,
+    util::is_safe_identifier,
 };
 
 use futures::future::join_all;
@@ -451,7 +451,7 @@ impl Binding {
                             None
                         } else {
                             let gid = target.gid(prefix);
-                            if safe_identifier(&gid) {
+                            if is_safe_identifier(&gid) {
                                 Some(gid)
                             } else {
                                 warn!(

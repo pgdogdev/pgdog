@@ -5,7 +5,7 @@ use std::{fmt::Display, str::FromStr};
 use tracing::warn;
 
 use crate::frontend::client::query_engine::two_pc::TwoPcTransaction;
-use crate::util::safe_identifier;
+use crate::util::is_safe_identifier;
 
 use super::TwoPcPhase;
 
@@ -45,7 +45,7 @@ impl TwoPcTransactionOnShard {
     /// alphabet check; with a recorded prefix, cleanup matches the exact
     /// GID from [`Self::gid`] instead.
     ///
-    /// A matched GID is guaranteed to contain only [`safe_identifier`]
+    /// A matched GID is guaranteed to contain only [`is_safe_identifier`]
     /// characters, so it can be embedded verbatim in a quoted SQL literal.
     /// PgDog only generates such GIDs (`NODE_ID` and `DEPLOYMENT_ID` are
     /// validated at startup); a GID that matches the numeric ID but not
@@ -57,7 +57,7 @@ impl TwoPcTransactionOnShard {
             Err(()) => false,
         };
 
-        if matches && !safe_identifier(gid) {
+        if matches && !is_safe_identifier(gid) {
             warn!(
                 "[2pc] prepared transaction {:?} matches transaction {} on shard {} \
                  but contains characters PgDog never generates; refusing to resolve it",

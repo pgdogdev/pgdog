@@ -132,7 +132,7 @@ static INSTANCE_ID: Lazy<String> = Lazy::new(|| match env::var("NODE_ID") {
 /// Get the instance ID for this pgdog instance.
 /// This is generated once at startup and persists for the lifetime of the process.
 /// An unset or empty `NODE_ID` auto-generates a random ID; otherwise the value
-/// is restricted to [`safe_identifier`] characters, which
+/// is restricted to [`is_safe_identifier`] characters, which
 /// [`validate_instance_identity`] enforces at startup.
 pub fn instance_id() -> &'static str {
     &INSTANCE_ID
@@ -141,7 +141,7 @@ pub fn instance_id() -> &'static str {
 /// True if `s` contains only ASCII alphanumerics, underscores and hyphens:
 /// the alphabet PgDog allows in instance identifiers and, by extension, in
 /// the two-phase commit GIDs they are embedded in.
-pub fn safe_identifier(s: &str) -> bool {
+pub fn is_safe_identifier(s: &str) -> bool {
     s.bytes()
         .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
 }
@@ -168,7 +168,7 @@ pub struct IdentityError {
 pub fn validate_instance_identity() -> Result<(), IdentityError> {
     for var in ["NODE_ID", "DEPLOYMENT_ID"] {
         if let Ok(value) = env::var(var)
-            && !safe_identifier(&value)
+            && !is_safe_identifier(&value)
         {
             return Err(IdentityError { var, value });
         }
@@ -197,7 +197,7 @@ static DEPLOYMENT_ID: Lazy<Option<String>> =
 /// This should be _globally_ unique
 /// and is used to differentiate 2pc transactions.
 /// An unset or empty `DEPLOYMENT_ID` means no deployment ID; otherwise the
-/// value is restricted to [`safe_identifier`] characters, which
+/// value is restricted to [`is_safe_identifier`] characters, which
 /// [`validate_instance_identity`] enforces at startup.
 ///
 pub(crate) fn deployment_id() -> Option<&'static str> {
@@ -387,14 +387,14 @@ mod test {
     use crate::test_utils::*;
 
     #[test]
-    fn test_safe_identifier() {
-        assert!(safe_identifier("pgdog-node-1"));
-        assert!(safe_identifier("prod_us_east_2"));
-        assert!(safe_identifier("deadbeef"));
-        assert!(!safe_identifier("it's"));
-        assert!(!safe_identifier("node\\1"));
-        assert!(!safe_identifier("node 1"));
-        assert!(!safe_identifier("nöde"));
+    fn test_is_safe_identifier() {
+        assert!(is_safe_identifier("pgdog-node-1"));
+        assert!(is_safe_identifier("prod_us_east_2"));
+        assert!(is_safe_identifier("deadbeef"));
+        assert!(!is_safe_identifier("it's"));
+        assert!(!is_safe_identifier("node\\1"));
+        assert!(!is_safe_identifier("node 1"));
+        assert!(!is_safe_identifier("nöde"));
     }
 
     #[test]
