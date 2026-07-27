@@ -87,19 +87,10 @@ pub(crate) fn phase_control(
 ) -> String {
     let txn = TwoPcTransactionOnShard::new(transaction, shard);
 
-    phase_control_gid(&txn.to_string(), phase)
-}
-
-/// Build `PREPARE TRANSACTION`, `COMMIT PREPARED`, or `ROLLBACK PREPARED`
-/// for a prepared transaction identified by its exact GID. The GID is
-/// embedded as a quoted literal with any single quotes doubled.
-pub(crate) fn phase_control_gid(gid: &str, phase: TwoPcPhase) -> String {
-    let gid = gid.replace('\'', "''");
-
     match phase {
-        TwoPcPhase::Phase1 => format!("PREPARE TRANSACTION '{gid}'"),
-        TwoPcPhase::Phase2 => format!("COMMIT PREPARED '{gid}'"),
-        TwoPcPhase::Rollback => format!("ROLLBACK PREPARED '{gid}'"),
+        TwoPcPhase::Phase1 => format!("PREPARE TRANSACTION '{txn}'"),
+        TwoPcPhase::Phase2 => format!("COMMIT PREPARED '{txn}'"),
+        TwoPcPhase::Rollback => format!("ROLLBACK PREPARED '{txn}'"),
     }
 }
 
@@ -168,18 +159,6 @@ mod test {
         assert!(!target.matches_gid("__pgdog_2pc_it's_123_1"));
         assert!(!target.matches_gid("__pgdog_2pc_a\\'b_123_1"));
         assert!(!target.matches_gid("__pgdog_2pc_a b_123_1"));
-    }
-
-    #[test]
-    fn phase_control_gid_escapes_quotes() {
-        assert_eq!(
-            phase_control_gid("it's", TwoPcPhase::Rollback),
-            "ROLLBACK PREPARED 'it''s'"
-        );
-        assert_eq!(
-            phase_control_gid("__pgdog_2pc_a_1_0", TwoPcPhase::Phase2),
-            "COMMIT PREPARED '__pgdog_2pc_a_1_0'"
-        );
     }
 
     #[test]

@@ -5,10 +5,7 @@ use crate::{
         ClientRequest,
         client::query_engine::{
             TwoPcPhase,
-            two_pc::{
-                TwoPcTransaction, TwoPcTransactionOnShard,
-                statement::{phase_control, phase_control_gid},
-            },
+            two_pc::{TwoPcTransaction, TwoPcTransactionOnShard, statement::phase_control},
         },
     },
     net::{DataRow, FrontendPid, ProtocolMessage, Query, parameter::Parameters},
@@ -448,7 +445,16 @@ impl Binding {
                             if !target.matches_gid(&gid) {
                                 continue;
                             }
-                            server.execute(phase_control_gid(&gid, phase)).await?;
+                            // matches_gid guarantees the gid contains no
+                            // characters that need quoting.
+                            let statement = match phase {
+                                TwoPcPhase::Phase2 => format!("COMMIT PREPARED '{gid}'"),
+                                TwoPcPhase::Rollback => format!("ROLLBACK PREPARED '{gid}'"),
+                                TwoPcPhase::Phase1 => {
+                                    unreachable!("cleanup resolves transactions; it never prepares")
+                                }
+                            };
+                            server.execute(statement).await?;
                             if phase == TwoPcPhase::Phase2 {
                                 server.stats_mut().transaction_2pc();
                             }
