@@ -10,6 +10,7 @@ use crate::{
     },
     net::{DataRow, FrontendPid, ProtocolMessage, Query, parameter::Parameters},
     state::State,
+    util::safe_identifier,
 };
 
 use futures::future::join_all;
@@ -412,18 +413,21 @@ impl Binding {
         }
     }
 
-    /// Resolve a two-phase transaction whose exact GIDs may have been
-    /// created by another PgDog process, e.g. during crash recovery.
+    /// Resolve a two-phase transaction on every shard during cleanup
+    /// and crash recovery.
     ///
-    /// GID prefixes embed the identity of the process that created the
-    /// transaction, which changes across restarts, so each shard is
-    /// scanned for prepared transactions matching the durable numeric
-    /// transaction ID and shard index, and the phase statement runs
-    /// against the exact GIDs found. A shard with no matching GID is
-    /// already resolved and is skipped.
+    /// `prefix` is the coordinator GID prefix recorded when the
+    /// transaction was created; combined with the transaction's numeric
+    /// ID it names the exact prepared transaction on each shard, and the
+    /// phase statement runs against the GIDs found in
+    /// `pg_prepared_xacts`. An empty `prefix` means the transaction was
+    /// restored from a WAL record that did not store it; matching then
+    /// falls back to the durable numeric transaction ID and shard index.
+    /// A shard with no matching GID is already resolved and is skipped.
     pub(crate) async fn two_pc_cleanup(
         &mut self,
         transaction: TwoPcTransaction,
+        prefix: &str,
         phase: TwoPcPhase,
     ) -> Result<(), Error> {
         match self {
@@ -433,6 +437,26 @@ impl Binding {
                     .enumerate()
                     .map(|(shard, server)| async move {
                         let target = TwoPcTransactionOnShard::new(transaction, shard);
+                        // The recorded GID is trusted to be a quotable
+                        // literal because identifier alphabets are
+                        // validated at startup; anything else on disk
+                        // gets the alphabet-checked numeric fallback.
+                        let expected = match prefix.is_empty() {
+                            true => None,
+                            false => {
+                                let gid = target.gid(prefix);
+                                if safe_identifier(&gid) {
+                                    Some(gid)
+                                } else {
+                                    warn!(
+                                        "[2pc] recorded gid {:?} contains characters \
+                                         PgDog never generates; matching by numeric ID",
+                                        gid
+                                    );
+                                    None
+                                }
+                            }
+                        };
                         let rows: Vec<DataRow> = server
                         .fetch_all(
                             "SELECT gid FROM pg_prepared_xacts WHERE database = current_database()",
@@ -443,11 +467,15 @@ impl Binding {
                             let Some(gid) = row.get_text(0) else {
                                 continue;
                             };
-                            if !target.matches_gid(&gid) {
+                            let matched = match &expected {
+                                Some(expected) => &gid == expected,
+                                None => target.matches_gid(&gid),
+                            };
+                            if !matched {
                                 continue;
                             }
-                            // matches_gid guarantees the gid contains no
-                            // characters that need quoting.
+                            // Both match paths guarantee the gid contains
+                            // no characters that need quoting.
                             let statement = match phase {
                                 TwoPcPhase::Phase2 => format!("COMMIT PREPARED '{gid}'"),
                                 TwoPcPhase::Rollback => format!("ROLLBACK PREPARED '{gid}'"),

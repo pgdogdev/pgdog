@@ -16,6 +16,11 @@ impl TwoPcTransaction {
         Self(rng().random_range(0..usize::MAX))
     }
 
+    /// The durable numeric ID, unique per transaction.
+    pub(super) fn number(&self) -> usize {
+        self.0
+    }
+
     /// A prefix to identify two-phase commit transactions generated
     /// by this PgDog process.
     pub(super) fn global_prefix() -> String {

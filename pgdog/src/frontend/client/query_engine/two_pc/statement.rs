@@ -28,11 +28,21 @@ impl TwoPcTransactionOnShard {
         self.transaction
     }
 
+    /// The exact GID this transaction was prepared under on this shard,
+    /// rendered from the coordinator GID prefix recorded when the
+    /// transaction was created.
+    pub(crate) fn gid(&self, prefix: &str) -> String {
+        format!("{}{}_{}", prefix, self.transaction.number(), self.shard)
+    }
+
     /// Whether `gid`, as listed in `pg_prepared_xacts`, refers to this
     /// transaction on this shard. GID prefixes embed the identity of the
     /// PgDog process that created the transaction, which changes across
     /// restarts, so matching uses the durable numeric transaction ID and
-    /// the shard index.
+    /// the shard index. This is the fallback for transactions restored
+    /// from WAL records that did not store the coordinator GID prefix;
+    /// with a recorded prefix, cleanup matches the exact GID from
+    /// [`Self::gid`] instead.
     ///
     /// A matched GID is guaranteed to contain only [`safe_identifier`]
     /// characters, so it can be embedded verbatim in a quoted SQL literal.
@@ -159,6 +169,20 @@ mod test {
         assert!(!target.matches_gid("__pgdog_2pc_it's_123_1"));
         assert!(!target.matches_gid("__pgdog_2pc_a\\'b_123_1"));
         assert!(!target.matches_gid("__pgdog_2pc_a b_123_1"));
+    }
+
+    #[test]
+    fn gid_renders_recorded_prefix() {
+        let transaction: TwoPcTransaction = "__pgdog_2pc_123".parse().unwrap();
+        let target = TwoPcTransactionOnShard::new(transaction, 1);
+
+        assert_eq!(
+            target.gid("__pgdog_2pc_prod_deadbeef_"),
+            "__pgdog_2pc_prod_deadbeef_123_1"
+        );
+        // The recorded prefix names one exact GID; the same number
+        // under a different prefix is a different transaction.
+        assert_ne!(target.gid("__pgdog_2pc_a_"), target.gid("__pgdog_2pc_b_"));
     }
 
     #[test]

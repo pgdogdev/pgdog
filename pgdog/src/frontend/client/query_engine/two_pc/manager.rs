@@ -356,9 +356,11 @@ impl Manager {
     /// Reconnect to cluster if available and rollback the two-phase transaction.
     ///
     /// The transaction may have been created by an earlier PgDog
-    /// process, whose GID prefix can't be reconstructed, so cleanup
-    /// scans each shard for prepared transactions matching the durable
-    /// numeric transaction ID and acts on the exact GIDs found.
+    /// process; the GID prefix recorded when it was created names the
+    /// exact prepared transactions on the shards. Cleanup scans each
+    /// shard's prepared transactions and acts on the GIDs that match,
+    /// falling back to the durable numeric transaction ID for WAL
+    /// records that did not store the prefix.
     async fn cleanup_phase(&self, transaction: TwoPcTransaction) -> Result<(), Error> {
         let state = match self.inner.lock().transactions.get(&transaction).cloned() {
             Some(state) => state,
@@ -393,7 +395,9 @@ impl Manager {
                 &Route::write(ShardWithPriority::new_override_transaction(Shard::All)),
             )
             .await?;
-        connection.two_pc_cleanup(transaction, phase).await?;
+        connection
+            .two_pc_cleanup(transaction, &state.prefix, phase)
+            .await?;
         connection.disconnect();
 
         Ok(())
