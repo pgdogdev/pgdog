@@ -105,6 +105,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 async fn pgdog(command: Option<Commands>) -> Result<(), Box<dyn std::error::Error>> {
+    // Fail fast on identifiers that would produce malformed 2pc GIDs.
+    pgdog::util::validate_instance_identity()?;
+
     // Run atexit handlers on SIGTERM (e.g. llvm-cov profile flushing).
     #[cfg(unix)]
     install_sigterm_handler();

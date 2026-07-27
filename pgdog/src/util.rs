@@ -116,10 +116,9 @@ pub fn random_string(n: usize) -> String {
 }
 
 // Generate a unique 8-character hex instance ID on first access
-static INSTANCE_ID: Lazy<String> = Lazy::new(|| {
-    if let Ok(node_id) = env::var("NODE_ID") {
-        node_id
-    } else {
+static INSTANCE_ID: Lazy<String> = Lazy::new(|| match env::var("NODE_ID") {
+    Ok(node_id) if !node_id.is_empty() => node_id,
+    _ => {
         let mut rng = rand::rng();
         (0..8)
             .map(|_| {
@@ -132,8 +131,50 @@ static INSTANCE_ID: Lazy<String> = Lazy::new(|| {
 
 /// Get the instance ID for this pgdog instance.
 /// This is generated once at startup and persists for the lifetime of the process.
+/// An unset or empty `NODE_ID` auto-generates a random ID; otherwise the value
+/// is restricted to [`safe_identifier`] characters, which
+/// [`validate_instance_identity`] enforces at startup.
 pub fn instance_id() -> &'static str {
     &INSTANCE_ID
+}
+
+/// True if `s` contains only ASCII alphanumerics, underscores and hyphens:
+/// the alphabet PgDog allows in instance identifiers and, by extension, in
+/// the two-phase commit GIDs they are embedded in.
+pub fn safe_identifier(s: &str) -> bool {
+    s.bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+}
+
+/// Environment-provided instance identifier rejected by
+/// [`validate_instance_identity`].
+#[derive(Debug, thiserror::Error)]
+#[error(
+    "{var} may only contain ASCII letters, digits, '_' and '-' \
+     (it is embedded in two-phase commit transaction identifiers), got: {value:?}"
+)]
+pub struct IdentityError {
+    pub var: &'static str,
+    pub value: String,
+}
+
+/// Validate the environment-provided identifiers that end up embedded in
+/// two-phase commit GIDs. Called at startup so a misconfigured `NODE_ID`
+/// or `DEPLOYMENT_ID` fails fast; GIDs built from validated identifiers
+/// contain no characters that need quoting, which cleanup relies on when
+/// it embeds recovered GIDs into transaction control statements.
+///
+/// Unset and empty values are valid: both mean the identifier is absent.
+pub fn validate_instance_identity() -> Result<(), IdentityError> {
+    for var in ["NODE_ID", "DEPLOYMENT_ID"] {
+        if let Ok(value) = env::var(var)
+            && !safe_identifier(&value)
+        {
+            return Err(IdentityError { var, value });
+        }
+    }
+
+    Ok(())
 }
 
 /// Get an externally assigned, unique, node identifier
@@ -148,12 +189,16 @@ pub fn node_id() -> Result<u64, ParseIntError> {
     instance_id().split("-").last().unwrap().parse()
 }
 
-static DEPLOYMENT_ID: Lazy<Option<String>> = Lazy::new(|| env::var("DEPLOYMENT_ID").ok());
+static DEPLOYMENT_ID: Lazy<Option<String>> =
+    Lazy::new(|| env::var("DEPLOYMENT_ID").ok().filter(|id| !id.is_empty()));
 
 /// Get the ID of this PgDog deployment.
 ///
 /// This should be _globally_ unique
 /// and is used to differentiate 2pc transactions.
+/// An unset or empty `DEPLOYMENT_ID` means no deployment ID; otherwise the
+/// value is restricted to [`safe_identifier`] characters, which
+/// [`validate_instance_identity`] enforces at startup.
 ///
 pub(crate) fn deployment_id() -> Option<&'static str> {
     DEPLOYMENT_ID.as_deref()
@@ -340,6 +385,42 @@ mod test {
 
     use super::*;
     use crate::test_utils::*;
+
+    #[test]
+    fn test_safe_identifier() {
+        assert!(safe_identifier("pgdog-node-1"));
+        assert!(safe_identifier("prod_us_east_2"));
+        assert!(safe_identifier("deadbeef"));
+        assert!(!safe_identifier("it's"));
+        assert!(!safe_identifier("node\\1"));
+        assert!(!safe_identifier("node 1"));
+        assert!(!safe_identifier("nöde"));
+    }
+
+    #[test]
+    fn test_validate_instance_identity() {
+        let _node = set_env_var("NODE_ID", "pgdog-node-1");
+        let _deployment = set_env_var("DEPLOYMENT_ID", "prod");
+        assert!(validate_instance_identity().is_ok());
+
+        {
+            let _bad = set_env_var("NODE_ID", "it's");
+            assert!(matches!(
+                validate_instance_identity(),
+                Err(IdentityError { var: "NODE_ID", .. })
+            ));
+        }
+
+        // Empty means absent, like unset.
+        let _empty = set_env_var("NODE_ID", "");
+        assert!(validate_instance_identity().is_ok());
+    }
+
+    #[test]
+    fn test_empty_deployment_id_is_absent() {
+        let _empty = set_env_var("DEPLOYMENT_ID", "");
+        assert_eq!(deployment_id(), None);
+    }
 
     #[test]
     fn test_human_duration() {
