@@ -91,8 +91,12 @@ async fn test_cleanup_transaction_foreign_prefix() {
 
     // A transaction restored from the WAL after a restart. The GIDs on
     // the shards carry the previous process's prefix, which the current
-    // process can't reconstruct.
-    let transaction: TwoPcTransaction = "__pgdog_2pc_314159265358979".parse().unwrap();
+    // process can't reconstruct. The numeric ID is random so a failed
+    // run's leftover prepared transaction can't block reruns.
+    let number: u64 = rand::random();
+    let transaction: TwoPcTransaction = format!("__pgdog_2pc_{number}").parse().unwrap();
+    let foreign_gid = format!("__pgdog_2pc_previousinstance_{number}_0");
+    let table = format!("test_cleanup_foreign_prefix_{number}");
 
     let mut conn = Connection::new(cluster.user(), cluster.name(), false).unwrap();
     conn.connect(
@@ -102,10 +106,10 @@ async fn test_cleanup_transaction_foreign_prefix() {
     .await
     .unwrap();
     conn.execute("BEGIN").await.unwrap();
-    conn.execute("CREATE TABLE test_cleanup_foreign_prefix(id BIGINT)")
+    conn.execute(format!("CREATE TABLE {table}(id BIGINT)"))
         .await
         .unwrap();
-    conn.execute("PREPARE TRANSACTION '__pgdog_2pc_previousinstance_314159265358979_0'")
+    conn.execute(format!("PREPARE TRANSACTION '{foreign_gid}'"))
         .await
         .unwrap();
     conn.disconnect();
@@ -129,24 +133,23 @@ async fn test_cleanup_transaction_foreign_prefix() {
     .unwrap();
 
     let leftover = conn
-        .execute(
-            "SELECT gid FROM pg_prepared_xacts \
-             WHERE gid LIKE '__pgdog_2pc_previousinstance_%'",
-        )
+        .execute(format!(
+            "SELECT gid FROM pg_prepared_xacts WHERE gid = '{foreign_gid}'"
+        ))
         .await
         .unwrap();
     assert!(
         leftover.iter().find(|p| p.code() == 'D').is_none(),
-        "prepared transactions with the previous process's prefix were not cleaned up"
+        "prepared transaction with the previous process's prefix was not cleaned up"
     );
 
     // Phase 1 transactions are rolled back: the table doesn't exist.
-    let table = conn
-        .execute("SELECT * FROM test_cleanup_foreign_prefix")
+    let missing = conn
+        .execute(format!("SELECT * FROM {table}"))
         .await
         .err()
         .unwrap();
-    assert!(table.to_string().contains("does not exist"));
+    assert!(missing.to_string().contains("does not exist"));
 }
 
 #[tokio::test]
