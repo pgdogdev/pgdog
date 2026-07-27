@@ -297,6 +297,57 @@ mod tests {
     }
 
     #[test]
+    fn checkpoint_without_prefix_decodes_with_empty_prefix() {
+        // The on-disk shape written by versions that predate the
+        // `prefix` field on checkpoint entries.
+        #[derive(Serialize)]
+        struct OldCheckpointEntry {
+            txn: TwoPcTransaction,
+            user: String,
+            database: String,
+            decided: bool,
+        }
+        #[derive(Serialize)]
+        struct OldCheckpointPayload {
+            active: Vec<OldCheckpointEntry>,
+        }
+
+        let txn = TwoPcTransaction::new();
+        let payload = rmp_serde::to_vec_named(&OldCheckpointPayload {
+            active: vec![OldCheckpointEntry {
+                txn,
+                user: "alice".into(),
+                database: "shop".into(),
+                decided: true,
+            }],
+        })
+        .unwrap();
+
+        let mut buf = Vec::new();
+        let tag = Tag::Checkpoint as u8;
+        let mut crc = crc32c::crc32c(&[tag]);
+        crc = crc32c::crc32c_append(crc, &payload);
+        buf.put_u32_le(1 + payload.len() as u32);
+        buf.put_u32_le(crc);
+        buf.put_u8(tag);
+        buf.put_slice(&payload);
+
+        let decoded = Record::decode(&buf).unwrap().unwrap();
+        assert_eq!(
+            decoded.record,
+            Record::Checkpoint(CheckpointPayload {
+                active: vec![CheckpointEntry {
+                    txn,
+                    user: "alice".into(),
+                    database: "shop".into(),
+                    decided: true,
+                    prefix: String::new(),
+                }],
+            })
+        );
+    }
+
+    #[test]
     fn round_trip_checkpoint() {
         round_trip(Record::Checkpoint(CheckpointPayload {
             active: vec![
