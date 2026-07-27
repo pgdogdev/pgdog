@@ -4,7 +4,6 @@ exclude = ["fuzz"]
 members = [
   "examples/demo",
   "integration/rust",
-  "integration/two_pc_crash_safety/wal_helper",
   "pgdog",
   "pgdog-config",
   "pgdog-macros",

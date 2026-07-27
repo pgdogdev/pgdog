@@ -154,11 +154,7 @@ async fn pgdog(command: Option<Commands>) -> Result<(), Box<dyn std::error::Erro
             }
 
             if general.two_phase_commit {
-                if let Some(ref wal_dir) = general.two_phase_commit_wal_dir {
-                    Manager::get().enable_wal(wal_dir).await;
-                } else {
-                    warn!("[2pc] wal disabled, 2pc will run without durability")
-                }
+                warn!("[2pc] wal disabled, 2pc will run without durability")
             }
 
             let mut listener = Listener::new(format!("{}:{}", general.host, general.port));
