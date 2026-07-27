@@ -45,6 +45,9 @@ pub struct QueryParserContext<'a> {
     pub(super) expanded_explain: bool,
     /// Shards calculator.
     pub(super) shards_calculator: ShardsWithPriority,
+    /// Lookup tables written to by this statement. Their cached sharding
+    /// key translations are flushed when the write completes.
+    pub(super) written_lookups: Vec<String>,
 }
 
 impl<'a> QueryParserContext<'a> {
@@ -71,6 +74,7 @@ impl<'a> QueryParserContext<'a> {
             expanded_explain: router_context.cluster.expanded_explain(),
             router_context,
             shards_calculator,
+            written_lookups: Vec::new(),
         })
     }
 

@@ -120,6 +120,29 @@ impl ErrorResponse {
         }
     }
 
+    pub fn sharding_key_lookup(lookup: &str, reason: &str) -> ErrorResponse {
+        ErrorResponse {
+            severity: "ERROR".into(),
+            code: "58000".into(),
+            message: format!("sharding key lookup on \"{}\" failed: {}", lookup, reason),
+            routine: Some("client::QueryEngine::route_query".into()),
+            ..Default::default()
+        }
+    }
+
+    pub fn lookup_writes_paused(lookup: &str) -> ErrorResponse {
+        ErrorResponse {
+            severity: "ERROR".into(),
+            code: "57014".into(),
+            message: format!(
+                "writes to sharding lookup table \"{}\" are paused, e.g. while resharding",
+                lookup
+            ),
+            routine: Some("client::QueryEngine::route_query".into()),
+            ..Default::default()
+        }
+    }
+
     pub fn transaction_statement_mode() -> ErrorResponse {
         ErrorResponse {
             severity: "ERROR".into(),

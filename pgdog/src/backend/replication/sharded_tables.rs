@@ -21,6 +21,8 @@ struct Inner {
     common_mapping: Option<CommonMapping>,
     omnisharded_sticky: bool,
     system_catalogs: SystemCatalogsBehavior,
+    /// At least one table translates sharding keys through a lookup table.
+    has_lookups: bool,
 }
 
 #[derive(Debug)]
@@ -85,6 +87,8 @@ impl ShardedTables {
             _ => None,
         };
 
+        let has_lookups = tables.iter().any(|table| table.lookup.is_some());
+
         Self {
             inner: Arc::new(Inner {
                 tables,
@@ -95,12 +99,18 @@ impl ShardedTables {
                 common_mapping,
                 omnisharded_sticky,
                 system_catalogs,
+                has_lookups,
             }),
         }
     }
 
     pub fn tables(&self) -> &[ShardedTable] {
         &self.inner.tables
+    }
+
+    /// At least one table translates sharding keys through a lookup table.
+    pub fn has_lookups(&self) -> bool {
+        self.inner.has_lookups
     }
 
     pub fn omnishards(&self) -> &HashMap<String, bool> {

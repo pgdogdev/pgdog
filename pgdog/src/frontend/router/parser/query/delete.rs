@@ -25,6 +25,13 @@ impl QueryParser {
         let omnisharded = parser.is_all_omnisharded();
 
         let shard = parser.shard()?;
+        let pending_lookups = parser.take_pending_lookups();
+        Self::record_lookup_writes(
+            &mut parser,
+            &context.sharding_schema,
+            &mut context.written_lookups,
+        );
+        self.pending_lookups.extend(pending_lookups);
 
         if let Some(shard) = shard {
             if let Some(recorder) = self.recorder_mut() {

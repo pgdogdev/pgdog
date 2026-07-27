@@ -233,6 +233,12 @@ impl QueryEngine {
 
             if !context.in_transaction() {
                 self.stats.transaction(two_pc_auto);
+
+                // The statement or transaction is complete on all shards.
+                // Invalidate lookup tables it wrote to before the client
+                // learns the write is done, so every query routed after
+                // that reads the new mapping.
+                self.settle_lookup_invalidations();
             }
         }
 

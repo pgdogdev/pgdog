@@ -120,6 +120,49 @@ impl ConfigAndUsers {
         self.config.check();
         self.users.check(&self.config);
         self.validate_server_auth()?;
+        self.validate_sharded_tables()?;
+        Ok(())
+    }
+
+    fn validate_sharded_tables(&self) -> Result<(), Error> {
+        for table in &self.config.sharded_tables {
+            let name = table.name.as_deref().unwrap_or("*");
+            match (&table.lookup, &table.query) {
+                (Some(_), None) | (None, Some(_)) => {
+                    return Err(Error::ParseError(format!(
+                        "sharded table \"{}\", column \"{}\": \"lookup\" and \"query\" must be set together",
+                        name, table.column,
+                    )));
+                }
+                (Some(lookup), Some(query)) => {
+                    if query.contains("$1") {
+                        return Err(Error::ParseError(format!(
+                            "sharded table \"{}\", column \"{}\": lookup \"query\" takes no parameters; it loads the whole lookup table (two columns: sharding key value, translated value)",
+                            name, table.column,
+                        )));
+                    }
+
+                    // Lookup queries run on a single shard picked round-robin,
+                    // so the lookup table must have the same data on all shards.
+                    let lookup_name = lookup.rsplit('.').next().unwrap_or(lookup);
+                    let omnisharded = self
+                        .config
+                        .omnisharded_tables
+                        .iter()
+                        .filter(|tables| tables.database == table.database)
+                        .flat_map(|tables| tables.tables.iter())
+                        .any(|t| t == lookup || t == lookup_name);
+                    if !omnisharded {
+                        return Err(Error::ParseError(format!(
+                            "sharded table \"{}\", column \"{}\": lookup table \"{}\" must be listed in [[omnisharded_tables]] for database \"{}\"",
+                            name, table.column, lookup, table.database,
+                        )));
+                    }
+                }
+                (None, None) => (),
+            }
+        }
+
         Ok(())
     }
 

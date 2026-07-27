@@ -1,6 +1,7 @@
 #[cfg(feature = "new_parser")]
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 #[cfg(feature = "new_parser")]
 use crate::util::ResultControlFlowExt;
@@ -434,9 +435,12 @@ use crate::{
     frontend::router::{
         parser::{Shard, ee::ParserHooks},
         round_robin,
-        sharding::{ContextBuilder, SchemaSharder, ShardedTable, Tables},
+        sharding::{
+            ContextBuilder, LookupCache, MapLookup, PendingLookup, SchemaSharder, ShardedTable,
+            Tables,
+        },
     },
-    net::{Bind, parameter::ParameterValue},
+    net::{Bind, messages::Format, parameter::ParameterValue},
 };
 
 /// Context for searching a SELECT statement, tracking table aliases.
@@ -668,6 +672,8 @@ pub struct StatementParser<'a, 'b, 'c> {
     cached_walk: Option<Walk<'a>>,
     /// Cached result of all_omnisharded check (None = not yet computed)
     all_omnisharded: Option<bool>,
+    /// Sharding key lookups that missed the cache and need to be resolved.
+    pending_lookups: Vec<PendingLookup>,
 }
 
 impl<'a, 'b: 'a, 'c> StatementParser<'a, 'b, 'c> {
@@ -690,6 +696,7 @@ impl<'a, 'b: 'a, 'c> StatementParser<'a, 'b, 'c> {
             hooks: ParserHooks::default(),
             cached_walk: None,
             all_omnisharded: None,
+            pending_lookups: Vec::new(),
         }
     }
 
@@ -701,7 +708,7 @@ impl<'a, 'b: 'a, 'c> StatementParser<'a, 'b, 'c> {
     }
 
     /// Get extracted tables, caching the result.
-    fn tables(&mut self) -> &[Table<'a>] {
+    pub(crate) fn tables(&mut self) -> &[Table<'a>] {
         &self.walk().tables
     }
 
@@ -1312,7 +1319,7 @@ impl<'a, 'b: 'a, 'c> StatementParser<'a, 'b, 'c> {
     /// Find sharded table config for a column.
     /// Named configs (with explicit table names) match specific table+column.
     /// Column-only configs match any table with that column name.
-    fn get_sharded_table(&self, column: Column<'a>) -> Option<&ShardedTable> {
+    fn get_sharded_table(&self, column: Column<'a>) -> Option<&'b ShardedTable> {
         self.get_sharded_table_by_name(column.name, column.table, column.schema)
     }
 
@@ -1322,7 +1329,7 @@ impl<'a, 'b: 'a, 'c> StatementParser<'a, 'b, 'c> {
         column_name: &str,
         table_name: Option<&str>,
         schema: Option<&str>,
-    ) -> Option<&ShardedTable> {
+    ) -> Option<&'b ShardedTable> {
         // Try named table configs first
         if let Some(table_name) = table_name {
             let column = Column {
@@ -1356,22 +1363,26 @@ impl<'a, 'b: 'a, 'c> StatementParser<'a, 'b, 'c> {
 
     /// Compute shard for a given sharded table config and value.
     fn compute_shard_for_table(
-        &self,
+        &mut self,
         sharded_table: Option<&ShardedTable>,
         value: Value<'a>,
     ) -> Result<Option<Shard>, Error> {
         if let Some(table) = sharded_table {
+            // Own the extracted values so the context can borrow them
+            // past the match arms below.
+            let translated: Option<Arc<str>>;
+            let param;
             let context = ContextBuilder::new(table);
-            let shard = match value {
+            let context = match value {
                 Value::Placeholder(pos) => {
-                    let param = self
+                    let bound = self
                         .bind
                         .map(|bind| bind.parameter(pos as usize - 1))
                         .transpose()?
                         .flatten();
                     // Expect params to be accurate.
-                    let param = if let Some(param) = param {
-                        param
+                    param = if let Some(bound) = bound {
+                        bound
                     } else {
                         return Ok(None);
                     };
@@ -1379,39 +1390,72 @@ impl<'a, 'b: 'a, 'c> StatementParser<'a, 'b, 'c> {
                     if param.is_null() {
                         return Ok(Some(Shard::All));
                     }
-                    let value = ShardingValue::from_param(&param, table.data_type)?;
-                    Some(
-                        context
-                            .value(value)
-                            .shards(self.schema.shards)
-                            .build()?
-                            .apply()?,
-                    )
+                    translated = match param.format() {
+                        Format::Text => param
+                            .text()
+                            .and_then(|text| self.translate_sharding_key(table, text)),
+                        // TODO: binary-format parameters are not translated.
+                        Format::Binary => None,
+                    };
+                    match translated.as_deref() {
+                        Some(translated) => context.data(translated),
+                        None => context.value(ShardingValue::from_param(&param, table.data_type)?),
+                    }
                 }
 
-                Value::String(val) => Some(
-                    context
-                        .data(val)
-                        .shards(self.schema.shards)
-                        .build()?
-                        .apply()?,
-                ),
+                Value::String(val) => {
+                    translated = self.translate_sharding_key(table, val);
+                    context.data(translated.as_deref().unwrap_or(val))
+                }
 
-                Value::Integer(val) => Some(
-                    context
-                        .data(val)
-                        .shards(self.schema.shards)
-                        .build()?
-                        .apply()?,
-                ),
+                Value::Integer(val) => {
+                    // Don't allocate the text form unless a lookup is configured.
+                    translated = if table.lookup.is_some() {
+                        self.translate_sharding_key(table, &val.to_string())
+                    } else {
+                        None
+                    };
+                    match translated.as_deref() {
+                        Some(translated) => context.data(translated),
+                        None => context.data(val),
+                    }
+                }
                 Value::Null => return Ok(Some(Shard::All)),
-                _ => None,
+                _ => return Ok(None),
             };
 
-            Ok(shard)
+            Ok(Some(context.shards(self.schema.shards).build()?.apply()?))
         } else {
             Ok(None)
         }
+    }
+
+    /// Translate a sharding key value through the table's lookup, if one
+    /// is configured. Returns the translated value on a cache hit. On a
+    /// cache miss, records a pending lookup and returns `None`, routing
+    /// the query by the original value until the lookup is resolved.
+    fn translate_sharding_key(&mut self, table: &ShardedTable, value: &str) -> Option<Arc<str>> {
+        let lookup = table.lookup.as_deref()?;
+        let query = table.query.as_deref()?;
+
+        match LookupCache::get().lookup(query, value) {
+            MapLookup::Hit(translated) => Some(translated),
+            // Not loaded, or missing from the map: the query engine
+            // loads or verifies before the statement executes.
+            MapLookup::NotLoaded | MapLookup::Missing | MapLookup::Stale => {
+                self.pending_lookups.push(PendingLookup {
+                    lookup: lookup.to_owned(),
+                    query: query.to_owned(),
+                    value: Some(value.to_owned()),
+                });
+                None
+            }
+        }
+    }
+
+    /// Take the pending sharding key lookups recorded while parsing.
+    pub(crate) fn take_pending_lookups(&mut self) -> Vec<PendingLookup> {
+        std::mem::take(&mut self.pending_lookups)
     }
 
     #[cfg(not(feature = "new_parser"))]
@@ -2194,7 +2238,7 @@ impl<'a, 'b: 'a, 'c> StatementParser<'a, 'b, 'c> {
 mod test {
     use crate::frontend::router::sharding::{Mapping, ShardedTable};
     use pgdog_config::{
-        FlexibleType, ShardedMappingConfig, ShardedMappingList, SystemCatalogsBehavior,
+        DataType, FlexibleType, ShardedMappingConfig, ShardedMappingList, SystemCatalogsBehavior,
     };
 
     use crate::backend::ShardedTables;
@@ -2202,8 +2246,8 @@ mod test {
 
     use super::*;
 
-    fn run_test(stmt: &str, bind: Option<&Bind>) -> Result<Option<Shard>, Error> {
-        let schema = ShardingSchema {
+    fn test_schema() -> ShardingSchema {
+        ShardingSchema {
             shards: 3,
             tables: ShardedTables::new(
                 vec![
@@ -2239,7 +2283,11 @@ mod test {
                 SystemCatalogsBehavior::default(),
             ),
             ..Default::default()
-        };
+        }
+    }
+
+    fn run_test(stmt: &str, bind: Option<&Bind>) -> Result<Option<Shard>, Error> {
+        let schema = test_schema();
         #[cfg(not(feature = "new_parser"))]
         let raw = pg_query::parse(stmt)
             .unwrap()
@@ -2264,10 +2312,229 @@ mod test {
         parser.shard()
     }
 
+    /// Run the parser on a statement and return the computed shard along
+    /// with the sharding key lookups that couldn't be translated.
+    fn run_lookup_test(
+        stmt: &str,
+        bind: Option<&Bind>,
+        schema: &ShardingSchema,
+    ) -> (Option<Shard>, Vec<PendingLookup>) {
+        #[cfg(not(feature = "new_parser"))]
+        let raw = pg_query::parse(stmt)
+            .unwrap()
+            .protobuf
+            .stmts
+            .first()
+            .cloned()
+            .unwrap();
+        #[cfg(feature = "new_parser")]
+        let raw = pg_raw_parse::parse(stmt).unwrap();
+        #[cfg(feature = "new_parser")]
+        let stmt = raw.stmts().next().unwrap();
+        let mut parser = StatementParser::from_raw(
+            #[cfg(not(feature = "new_parser"))]
+            &raw,
+            #[cfg(feature = "new_parser")]
+            stmt,
+            bind,
+            schema,
+            None,
+        )
+        .unwrap();
+        let shard = parser.shard().unwrap();
+        (shard, parser.take_pending_lookups())
+    }
+
+    /// Schema with a single lookup-configured table. The lookup maps are
+    /// global and keyed by query, and tests run in parallel: every test
+    /// uses its own table and lookup names so maps don't clobber each
+    /// other.
+    fn lookup_schema(
+        table: &str,
+        column: &str,
+        lookup: &str,
+        data_type: DataType,
+    ) -> (ShardingSchema, std::string::String) {
+        let query = format!("SELECT {}, root_{} FROM {}", column, column, lookup);
+        let schema = ShardingSchema {
+            shards: 3,
+            tables: ShardedTables::new(
+                vec![ShardedTable {
+                    column: column.into(),
+                    name: Some(table.into()),
+                    data_type,
+                    lookup: Some(lookup.into()),
+                    query: Some(query.clone()),
+                    ..Default::default()
+                }],
+                vec![],
+                false,
+                SystemCatalogsBehavior::default(),
+            ),
+            ..Default::default()
+        };
+        (schema, query)
+    }
+
+    fn load_map(query: &str, lookup: &str, entries: &[(&str, &str)]) {
+        let cache = LookupCache::get();
+        let entries = entries
+            .iter()
+            .map(|(key, value)| ((*key).to_string(), Arc::from(*value)))
+            .collect();
+        assert!(cache.insert_map(query, lookup, entries, cache.generation(lookup)));
+    }
+
+    fn varchar_shard(value: &str) -> Shard {
+        crate::frontend::router::sharding::shard_value(value, &DataType::Varchar, 3, &vec![], 0)
+    }
+
     #[test]
     fn test_simple_select() {
         let result = run_test("SELECT * FROM sharded WHERE id = 1", None);
         assert!(result.unwrap().is_some());
+    }
+
+    #[test]
+    fn test_lookup_map_hit_translates_key() {
+        let (schema, query) = lookup_schema(
+            "sharded_lookup_hit",
+            "org_id",
+            "org_family_roots_hit",
+            DataType::Varchar,
+        );
+        load_map(
+            &query,
+            "org_family_roots_hit",
+            &[("org_child_hit", "org_root_hit")],
+        );
+
+        let (shard, pending) = run_lookup_test(
+            "SELECT * FROM sharded_lookup_hit WHERE org_id = 'org_child_hit'",
+            None,
+            &schema,
+        );
+
+        // The translated value picks the shard, not the original.
+        assert_ne!(
+            varchar_shard("org_root_hit"),
+            varchar_shard("org_child_hit")
+        );
+        assert_eq!(shard, Some(varchar_shard("org_root_hit")));
+        assert!(pending.is_empty());
+    }
+
+    #[test]
+    fn test_lookup_map_hit_bind_parameter() {
+        let (schema, query) = lookup_schema(
+            "sharded_lookup_bind",
+            "org_id",
+            "org_family_roots_bind",
+            DataType::Varchar,
+        );
+        load_map(
+            &query,
+            "org_family_roots_bind",
+            &[("org_child_bind", "org_root_bind")],
+        );
+
+        let bind = Bind::new_params("", &[Parameter::new(b"org_child_bind")]);
+        let (shard, pending) = run_lookup_test(
+            "SELECT * FROM sharded_lookup_bind WHERE org_id = $1",
+            Some(&bind),
+            &schema,
+        );
+
+        assert_eq!(shard, Some(varchar_shard("org_root_bind")));
+        assert!(pending.is_empty());
+    }
+
+    #[test]
+    fn test_lookup_map_hit_integer_key() {
+        let (schema, query) = lookup_schema(
+            "sharded_lookup_bigint",
+            "customer_id",
+            "customer_roots",
+            DataType::Bigint,
+        );
+        load_map(&query, "customer_roots", &[("42", "1000")]);
+
+        let (shard, pending) = run_lookup_test(
+            "SELECT * FROM sharded_lookup_bigint WHERE customer_id = 42",
+            None,
+            &schema,
+        );
+
+        let expected = crate::frontend::router::sharding::shard_value(
+            "1000",
+            &DataType::Bigint,
+            3,
+            &vec![],
+            0,
+        );
+        assert_eq!(shard, Some(expected));
+        assert!(pending.is_empty());
+    }
+
+    #[test]
+    fn test_lookup_map_not_loaded_records_pending() {
+        let (schema, query) = lookup_schema(
+            "sharded_lookup_cold",
+            "org_id",
+            "org_family_roots_cold",
+            DataType::Varchar,
+        );
+
+        let (shard, pending) = run_lookup_test(
+            "SELECT * FROM sharded_lookup_cold WHERE org_id = 'org_child_cold'",
+            None,
+            &schema,
+        );
+
+        // Provisional identity routing; the query engine loads the map
+        // and re-routes (or errors) before the statement executes.
+        assert_eq!(shard, Some(varchar_shard("org_child_cold")));
+        assert_eq!(
+            pending,
+            vec![PendingLookup {
+                lookup: "org_family_roots_cold".into(),
+                query,
+                value: Some("org_child_cold".into()),
+            }]
+        );
+    }
+
+    #[test]
+    fn test_lookup_map_missing_key_records_pending() {
+        let (schema, query) = lookup_schema(
+            "sharded_lookup_absent",
+            "org_id",
+            "org_family_roots_absent",
+            DataType::Varchar,
+        );
+        load_map(
+            &query,
+            "org_family_roots_absent",
+            &[("someone_else", "root")],
+        );
+
+        let (shard, pending) = run_lookup_test(
+            "SELECT * FROM sharded_lookup_absent WHERE org_id = 'org_child_absent'",
+            None,
+            &schema,
+        );
+
+        // The lookup table must have a row for every routed value;
+        // the query engine verifies the miss and errors the statement.
+        assert_eq!(shard, Some(varchar_shard("org_child_absent")));
+        assert_eq!(
+            pending,
+            vec![PendingLookup {
+                lookup: "org_family_roots_absent".into(),
+                query,
+                value: Some("org_child_absent".into()),
+            }]
+        );
     }
 
     #[test]

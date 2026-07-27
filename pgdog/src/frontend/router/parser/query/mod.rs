@@ -10,7 +10,7 @@ use crate::{
         context::RouterContext,
         parser::{OrderBy, Shard},
         round_robin,
-        sharding::{Centroids, ContextBuilder},
+        sharding::{Centroids, ContextBuilder, PendingLookup, lookup},
     },
     net::{
         messages::{Bind, Vector},
@@ -66,6 +66,11 @@ pub struct QueryParser {
     write_override: bool,
     // Plugin read override.
     plugin_output: PluginOutput,
+    // Sharding key lookups that missed the cache.
+    pending_lookups: Vec<PendingLookup>,
+    // Lookup tables written to by the last statement; flushed from
+    // the cache when the write completes.
+    written_lookups: Vec<std::string::String>,
     // Record explain output.
     explain_recorder: Option<ExplainRecorder>,
 }
@@ -73,6 +78,57 @@ pub struct QueryParser {
 impl QueryParser {
     fn recorder_mut(&mut self) -> Option<&mut ExplainRecorder> {
         self.explain_recorder.as_mut()
+    }
+
+    /// Take the sharding key lookups that missed the cache while parsing.
+    pub(crate) fn take_pending_lookups(&mut self) -> Vec<PendingLookup> {
+        std::mem::take(&mut self.pending_lookups)
+    }
+
+    /// Take the lookup tables the last statement writes to. The caller
+    /// flushes their cached translations when the write completes.
+    pub(crate) fn take_written_lookups(&mut self) -> Vec<std::string::String> {
+        std::mem::take(&mut self.written_lookups)
+    }
+
+    /// Record that the statement needs the lookup map for the given
+    /// table loaded before it executes, if the table translates its
+    /// sharding keys.
+    fn ensure_lookup_loaded(&mut self, schema: &ShardingSchema, table_name: &str) {
+        if !schema.tables.has_lookups() {
+            return;
+        }
+
+        for table in schema.tables.tables() {
+            if let (Some(lookup), Some(query)) = (&table.lookup, &table.query)
+                && (table.name.is_none() || table.name.as_deref() == Some(table_name))
+            {
+                self.pending_lookups.push(PendingLookup {
+                    lookup: lookup.clone(),
+                    query: query.clone(),
+                    value: None,
+                });
+            }
+        }
+    }
+
+    /// Record lookup tables referenced by this write statement. Their
+    /// cached sharding key translations are flushed by the query engine
+    /// when the write completes.
+    fn record_lookup_writes<'a, 'b: 'a, 'c>(
+        parser: &mut StatementParser<'a, 'b, 'c>,
+        schema: &ShardingSchema,
+        written_lookups: &mut Vec<std::string::String>,
+    ) {
+        // written_lookup_tables checks this too, but bailing out here
+        // avoids forcing the AST walk in parser.tables().
+        if !schema.tables.has_lookups() {
+            return;
+        }
+
+        for table in parser.tables() {
+            lookup::written_lookup_tables(schema, table.name, written_lookups);
+        }
     }
 
     #[cfg(feature = "new_parser")]
@@ -120,6 +176,11 @@ impl QueryParser {
 
     /// Parse a query and return a command.
     pub fn parse(&mut self, context: RouterContext) -> Result<Command, Error> {
+        // Pending lookups and lookup writes are per-statement; don't
+        // leak them into the next statement if this parser is reused.
+        self.pending_lookups.clear();
+        self.written_lookups.clear();
+
         let mut context = QueryParserContext::new(context)?;
 
         let mut command = if context.query().is_ok() {
@@ -157,6 +218,8 @@ impl QueryParser {
         debug!("query router decision: {:#?}", command);
 
         self.attach_explain(&mut command);
+
+        self.written_lookups = std::mem::take(&mut context.written_lookups);
 
         Ok(command)
     }
@@ -334,7 +397,7 @@ impl QueryParser {
 
             Node::SelectStmt(stmt) => self.select(&statement, stmt, context),
 
-            Node::CopyStmt(stmt) => Self::copy(stmt, context),
+            Node::CopyStmt(stmt) => self.copy(stmt, context),
 
             Node::InsertStmt(stmt) => self.insert(stmt.into(), context),
             Node::UpdateStmt(stmt) => self.update(stmt.into(), context),
@@ -610,7 +673,7 @@ impl QueryParser {
                         context,
                     ),
                     // COPY statements.
-                    Some(NodeEnum::CopyStmt(ref stmt)) => Self::copy(stmt, context),
+                    Some(NodeEnum::CopyStmt(ref stmt)) => self.copy(stmt, context),
                     // INSERT statements.
                     Some(NodeEnum::InsertStmt(ref stmt)) => self.insert(
                         stmt,
@@ -769,7 +832,11 @@ impl QueryParser {
 
     /// Handle COPY command.
     #[cfg(feature = "new_parser")]
-    fn copy(stmt: &nodes::CopyStmt, context: &mut QueryParserContext) -> Result<Command, Error> {
+    fn copy(
+        &mut self,
+        stmt: &nodes::CopyStmt,
+        context: &mut QueryParserContext,
+    ) -> Result<Command, Error> {
         // Schema-based routing.
         //
         // We do this here as well because COPY <table> TO STDOUT
@@ -781,6 +848,23 @@ impl QueryParser {
         // phase of data-sync.
         //
         let table = stmt.relation().map(Table::from);
+
+        // COPY ... FROM writes to the table; invalidate cached sharding
+        // key lookups if it's a lookup table.
+        if stmt.is_from
+            && let Some(table) = table
+        {
+            lookup::written_lookup_tables(
+                &context.sharding_schema,
+                table.name,
+                &mut context.written_lookups,
+            );
+
+            // COPY rows are sharded synchronously; the lookup map has to
+            // be in memory before the data starts flowing.
+            self.ensure_lookup_loaded(&context.sharding_schema, table.name);
+        }
+
         if let Some(table) = table
             && let Some(schema) = context.sharding_schema.schemas.get(table.schema())
         {
@@ -814,7 +898,7 @@ impl QueryParser {
 
     cfg_select! {
         not(feature = "new_parser") => {
-            fn copy(stmt: &CopyStmt, context: &mut QueryParserContext) -> Result<Command, Error> {
+            fn copy(&mut self, stmt: &CopyStmt, context: &mut QueryParserContext) -> Result<Command, Error> {
                 // Schema-based routing.
                 //
                 // We do this here as well because COPY <table> TO STDOUT
@@ -826,6 +910,23 @@ impl QueryParser {
                 // phase of data-sync.
                 //
                 let table = stmt.relation.as_ref().map(Table::from);
+
+                // COPY ... FROM writes to the table; invalidate cached sharding
+                // key lookups if it's a lookup table.
+                if stmt.is_from
+                    && let Some(table) = table
+                {
+                    lookup::written_lookup_tables(
+                        &context.sharding_schema,
+                        table.name,
+                        &mut context.written_lookups,
+                    );
+
+                    // COPY rows are sharded synchronously; the lookup map has to
+                    // be in memory before the data starts flowing.
+                    self.ensure_lookup_loaded(&context.sharding_schema, table.name);
+                }
+
                 if let Some(table) = table
                     && let Some(schema) = context.sharding_schema.schemas.get(table.schema())
                 {
@@ -897,6 +998,13 @@ impl QueryParser {
         let omnisharded = parser.is_all_omnisharded();
 
         let shard = parser.shard()?.unwrap_or(Shard::All);
+        let pending_lookups = parser.take_pending_lookups();
+        Self::record_lookup_writes(
+            &mut parser,
+            &context.sharding_schema,
+            &mut context.written_lookups,
+        );
+        self.pending_lookups.extend(pending_lookups);
 
         context.shards_calculator.push(if is_sharded {
             ShardWithPriority::new_table(shard.clone())

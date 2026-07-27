@@ -17,6 +17,7 @@ use parser::Shard;
 pub use parser::{Ast, AstQuery, Command, QueryParser, Route, SetParam};
 
 use crate::frontend::router::parser::ShardWithPriority;
+use crate::frontend::router::sharding::PendingLookup;
 
 use super::ClientRequest;
 pub use context::RouterContext;
@@ -69,6 +70,19 @@ impl Router {
         }
 
         Ok(&self.latest_command)
+    }
+
+    /// Take the sharding key lookups that missed the cache during
+    /// the last query. Non-empty only for tables configured with a
+    /// `lookup` table.
+    pub fn take_pending_lookups(&mut self) -> Vec<PendingLookup> {
+        self.query_parser.take_pending_lookups()
+    }
+
+    /// Take the lookup tables the last query writes to. Their cached
+    /// sharding key translations must be flushed when the write completes.
+    pub fn take_written_lookups(&mut self) -> Vec<String> {
+        self.query_parser.take_written_lookups()
     }
 
     /// Parse CopyData messages and shard them.

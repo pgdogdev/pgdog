@@ -35,7 +35,25 @@ impl QueryParser {
         walk::walk(stmt.into(), |node| match node {
             Node::CommonTableExpr(expr) => match expr.ctequery() {
                 Node::SelectStmt(_) => (),
-                _ => writes = true,
+                write => {
+                    writes = true;
+                    // A data-modifying CTE writes to its target table;
+                    // invalidate cached sharding key lookups if it's a
+                    // lookup table.
+                    let relation = match write {
+                        Node::InsertStmt(stmt) => stmt.relation(),
+                        Node::UpdateStmt(stmt) => stmt.relation(),
+                        Node::DeleteStmt(stmt) => stmt.relation(),
+                        _ => None,
+                    };
+                    if let Some(relation) = relation {
+                        lookup::written_lookup_tables(
+                            &context.sharding_schema,
+                            Table::from(relation).name,
+                            &mut context.written_lookups,
+                        );
+                    }
+                }
             },
             Node::LockingClause(_) => writes = true,
             Node::FuncCall(f) => {
@@ -80,7 +98,7 @@ impl QueryParser {
 
         let mut shards = HashSet::new();
 
-        let (shard, is_sharded, tables) = {
+        let (shard, is_sharded, tables, pending_lookups) = {
             let mut statement_parser = StatementParser::from_select(
                 stmt.into(),
                 context.router_context.bind,
@@ -89,9 +107,10 @@ impl QueryParser {
             );
 
             let shard = statement_parser.shard()?;
+            let pending_lookups = statement_parser.take_pending_lookups();
 
             if shard.is_some() {
-                (shard, true, vec![])
+                (shard, true, vec![], pending_lookups)
             } else {
                 (
                     None,
@@ -101,9 +120,12 @@ impl QueryParser {
                         context.router_context.parameter_hints.search_path,
                     ),
                     statement_parser.extract_tables(),
+                    pending_lookups,
                 )
             }
         };
+
+        self.pending_lookups.extend(pending_lookups);
 
         if let Some(shard) = shard {
             shards.insert(shard);
@@ -266,6 +288,13 @@ impl QueryParser {
                 context: &mut QueryParserContext,
             ) -> Result<Command, Error> {
                 let cte_writes = Self::cte_writes(stmt_old);
+                if cte_writes {
+                    Self::record_cte_lookup_writes(
+                        stmt_old,
+                        &context.sharding_schema,
+                        &mut context.written_lookups,
+                    );
+                }
                 let has_locking = Self::has_locking_clause(stmt_old);
                 let FunctionBehavior {
                     writes,
@@ -306,7 +335,7 @@ impl QueryParser {
 
                 let mut shards = HashSet::new();
 
-                let (shard, is_sharded, tables) = {
+                let (shard, is_sharded, tables, pending_lookups) = {
                     let mut statement_parser = StatementParser::from_select(
                         stmt_old,
                         context.router_context.bind,
@@ -315,9 +344,10 @@ impl QueryParser {
                     );
 
                     let shard = statement_parser.shard()?;
+                    let pending_lookups = statement_parser.take_pending_lookups();
 
                     if shard.is_some() {
-                        (shard, true, vec![])
+                        (shard, true, vec![], pending_lookups)
                     } else {
                         (
                             None,
@@ -327,9 +357,12 @@ impl QueryParser {
                                 context.router_context.parameter_hints.search_path,
                             ),
                             statement_parser.extract_tables(),
+                            pending_lookups,
                         )
                     }
                 };
+
+                self.pending_lookups.extend(pending_lookups);
 
                 if let Some(shard) = shard {
                     shards.insert(shard);
@@ -703,6 +736,49 @@ impl QueryParser {
         }
 
         false
+    }
+
+    /// Record lookup tables written to by data-modifying CTEs,
+    /// recursing into SELECT CTEs the same way `cte_writes` does.
+    /// Their cached translations are flushed when the write completes.
+    #[cfg(not(feature = "new_parser"))]
+    fn record_cte_lookup_writes(
+        stmt: &SelectStmt,
+        schema: &ShardingSchema,
+        written_lookups: &mut Vec<std::string::String>,
+    ) {
+        if !schema.tables.has_lookups() {
+            return;
+        }
+
+        let Some(ref with_clause) = stmt.with_clause else {
+            return;
+        };
+
+        for cte in &with_clause.ctes {
+            if let Some(NodeEnum::CommonTableExpr(ref expr)) = cte.node
+                && let Some(ref query) = expr.ctequery
+                && let Some(ref node) = query.node
+            {
+                let relation = match node {
+                    NodeEnum::SelectStmt(inner) => {
+                        Self::record_cte_lookup_writes(inner, schema, written_lookups);
+                        continue;
+                    }
+                    NodeEnum::InsertStmt(stmt) => stmt.relation.as_ref(),
+                    NodeEnum::UpdateStmt(stmt) => stmt.relation.as_ref(),
+                    NodeEnum::DeleteStmt(stmt) => stmt.relation.as_ref(),
+                    _ => None,
+                };
+                if let Some(relation) = relation {
+                    lookup::written_lookup_tables(
+                        schema,
+                        Table::from(relation).name,
+                        written_lookups,
+                    );
+                }
+            }
+        }
     }
 
     /// Check for CTEs that could trigger this query to go to a primary.

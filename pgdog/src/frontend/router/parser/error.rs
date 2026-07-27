@@ -21,6 +21,15 @@ pub enum Error {
     #[error("no sharding column in CSV")]
     NoShardingColumn,
 
+    #[error("sharding key lookup table not loaded for COPY")]
+    LookupNotLoaded,
+
+    #[error("sharding key value missing from lookup table")]
+    LookupKeyMissing,
+
+    #[error("binary COPY into a table with a sharding key lookup is not supported")]
+    LookupBinaryCopy,
+
     #[error("{0}")]
     Net(#[from] crate::net::Error),
 

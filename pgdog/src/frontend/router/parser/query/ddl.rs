@@ -12,6 +12,7 @@ impl QueryParser {
             node,
             &context.sharding_schema,
             &mut context.shards_calculator,
+            &mut context.written_lookups,
         )?;
 
         Ok(command)
@@ -22,6 +23,7 @@ impl QueryParser {
         node: Node<'_>,
         schema: &ShardingSchema,
         calculator: &mut ShardsWithPriority,
+        written_lookups: &mut Vec<std::string::String>,
     ) -> Result<Command, Error> {
         use nodes::ObjectType;
         let mut shard = Shard::All;
@@ -166,7 +168,12 @@ impl QueryParser {
                             // to avoid pollution from statements that don't match
                             // any DDL pattern (like BEGIN, END, etc.)
                             let mut inner_calculator = ShardsWithPriority::default();
-                            let command = Self::shard_ddl(node, schema, &mut inner_calculator)?;
+                            let command = Self::shard_ddl(
+                                node,
+                                schema,
+                                &mut inner_calculator,
+                                written_lookups,
+                            )?;
                             if let Command::Query(query) = command
                                 && !query.is_cross_shard()
                             {
@@ -182,6 +189,13 @@ impl QueryParser {
                 let mut shards = HashSet::new();
                 for relation in stmt.relations() {
                     if let Node::RangeVar(relation) = relation {
+                        // TRUNCATE on a lookup table invalidates cached
+                        // sharding key lookups when it completes.
+                        lookup::written_lookup_tables(
+                            schema,
+                            Table::from(relation).name,
+                            written_lookups,
+                        );
                         shards.insert(
                             Self::shard_ddl_table(Some(relation), schema)?.unwrap_or(Shard::All),
                         );
@@ -215,6 +229,7 @@ impl QueryParser {
                 node: &Option<NodeEnum>,
                 schema: &ShardingSchema,
                 calculator: &mut ShardsWithPriority,
+                written_lookups: &mut Vec<std::string::String>,
             ) -> Result<Command, Error> {
                 let mut shard = Shard::All;
                 let mut schema_changed = false;
@@ -368,8 +383,12 @@ impl QueryParser {
                                     // to avoid pollution from statements that don't match
                                     // any DDL pattern (like BEGIN, END, etc.)
                                     let mut inner_calculator = ShardsWithPriority::default();
-                                    let command =
-                                        Self::shard_ddl(&node.node, schema, &mut inner_calculator)?;
+                                    let command = Self::shard_ddl(
+                                        &node.node,
+                                        schema,
+                                        &mut inner_calculator,
+                                        written_lookups,
+                                    )?;
                                     if let Command::Query(query) = command
                                         && !query.is_cross_shard()
                                     {
@@ -385,6 +404,13 @@ impl QueryParser {
                         let mut shards = HashSet::new();
                         for relation in &stmt.relations {
                             if let Some(NodeEnum::RangeVar(ref relation)) = relation.node {
+                                // TRUNCATE on a lookup table invalidates cached
+                                // sharding key lookups when it completes.
+                                lookup::written_lookup_tables(
+                                    schema,
+                                    Table::from(relation).name,
+                                    written_lookups,
+                                );
                                 shards.insert(
                                     Self::shard_ddl_table(&Some(relation.clone()), schema)?
                                         .unwrap_or(Shard::All),
@@ -481,7 +507,7 @@ mod test {
         let ast = pg_raw_parse::parse(query).unwrap();
         let root = ast.stmts().next().unwrap();
         let mut calculator = ShardsWithPriority::default();
-        QueryParser::shard_ddl(root, &test_schema(), &mut calculator).unwrap()
+        QueryParser::shard_ddl(root, &test_schema(), &mut calculator, &mut Vec::new()).unwrap()
     }
 
     cfg_select! {
@@ -498,7 +524,7 @@ mod test {
                     .unwrap()
                     .node;
                 let mut calculator = ShardsWithPriority::default();
-                QueryParser::shard_ddl(&root, &test_schema(), &mut calculator).unwrap()
+                QueryParser::shard_ddl(&root, &test_schema(), &mut calculator, &mut Vec::new()).unwrap()
             }
         }
         _ => {}

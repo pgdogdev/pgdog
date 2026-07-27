@@ -5,12 +5,14 @@ use pg_query::{NodeEnum, protobuf::CopyStmt};
 #[cfg(feature = "new_parser")]
 use pg_raw_parse::nodes;
 
+use std::sync::Arc;
+
 use crate::{
     backend::{Cluster, ShardingSchema},
     frontend::router::{
         CopyRow,
         parser::Shard,
-        sharding::{ContextBuilder, ShardedTable, Tables},
+        sharding::{ContextBuilder, LookupCache, MapLookup, ShardedTable, Tables},
     },
     net::messages::{CopyData, ToBytes},
 };
@@ -296,6 +298,23 @@ impl CopyParser {
 
     /// Split CopyData (F) messages into multiple CopyData (F) messages
     /// with shard numbers.
+    /// Translate a sharding key through the table's lookup map, if one
+    /// is configured. Rows are sharded synchronously, so the map must
+    /// already be in memory — routing by the untranslated value would
+    /// put the row on the wrong shard.
+    fn translate_key(table: &ShardedTable, key: &str) -> Result<Option<Arc<str>>, Error> {
+        let (Some(_), Some(query)) = (&table.lookup, &table.query) else {
+            return Ok(None);
+        };
+
+        match LookupCache::get().lookup(query, key) {
+            MapLookup::Hit(translated) => Ok(Some(translated)),
+            // The lookup table must have a row for every sharded value.
+            MapLookup::Missing | MapLookup::Stale => Err(Error::LookupKeyMissing),
+            MapLookup::NotLoaded => Err(Error::LookupNotLoaded),
+        }
+    }
+
     pub fn shard(&mut self, data: &[CopyData]) -> Result<Vec<CopyRow>, Error> {
         let mut rows = vec![];
 
@@ -335,6 +354,8 @@ impl CopyParser {
                             if key == self.null_string {
                                 Shard::All
                             } else {
+                                let translated = Self::translate_key(table, key)?;
+                                let key = translated.as_deref().unwrap_or(key);
                                 let ctx = ContextBuilder::new(table)
                                     .data(key)
                                     .shards(self.sharding_schema.shards)
@@ -374,6 +395,11 @@ impl CopyParser {
                             break;
                         }
                         let shard = if let Some(table) = &self.sharded_table {
+                            // TODO: binary values aren't translated through
+                            // lookup maps; fail instead of misrouting.
+                            if table.lookup.is_some() {
+                                return Err(Error::LookupBinaryCopy);
+                            }
                             let key = tuple
                                 .get(self.sharded_column)
                                 .ok_or(Error::NoShardingColumn)?;

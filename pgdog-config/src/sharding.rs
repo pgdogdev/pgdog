@@ -86,6 +86,29 @@ pub struct ShardedTableConfig {
     ///
     /// <https://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/#shard-by-list-and-range>
     pub mapping: Option<Vec<ShardedMappingConfig>>,
+
+    /// Name of the table used to translate sharding key values before hashing.
+    /// The table is loaded into PgDog's memory using `query`; writes to it
+    /// observed by PgDog invalidate and reload the in-memory copy.
+    ///
+    /// **Note:** The table must be listed in `[[omnisharded_tables]]` for the
+    /// same database: it's loaded from a single shard picked round-robin, so
+    /// every shard must have the same data. Must be set together with `query`.
+    #[serde(default)]
+    pub lookup: Option<String>,
+
+    /// Query loading the lookup table into memory, returning two columns:
+    /// the sharding key value, and the value that's hashed to pick a shard,
+    /// e.g. `SELECT id, COALESCE(parent_organization_id, id) FROM organizations`.
+    /// Takes no parameters.
+    ///
+    /// **Note:** The query must return a row for every value that will ever
+    /// route through the sharded column — including values that translate to
+    /// themselves. Values without a row fail with an error: absence can't be
+    /// told apart from a row added after the table was loaded, so it's never
+    /// used for routing. Must be set together with `lookup`.
+    #[serde(default)]
+    pub query: Option<String>,
 }
 
 impl ShardedTableConfig {
@@ -599,9 +622,143 @@ pub struct QueryParser {
 
 #[cfg(test)]
 mod tests {
-    use crate::Config;
+    use crate::{Config, ConfigAndUsers};
 
-    use super::{QueryParserEngine, QueryParserLevel};
+    use super::{DataType, QueryParserEngine, QueryParserLevel};
+
+    #[test]
+    fn sharded_table_reads_lookup_from_config() {
+        let source = r#"
+[[sharded_tables]]
+database = "houston"
+column = "organization_id"
+data_type = "varchar"
+lookup = "org_family_roots"
+query = "SELECT organization_id, root_organization_id FROM org_family_roots"
+
+[[omnisharded_tables]]
+database = "houston"
+tables = ["org_family_roots"]
+"#;
+
+        let config: Config = toml::from_str(source).unwrap();
+
+        assert_eq!(config.sharded_tables.len(), 1);
+        let table = &config.sharded_tables[0];
+        assert_eq!(table.database, "houston");
+        assert_eq!(table.column, "organization_id");
+        assert_eq!(table.data_type, DataType::Varchar);
+        assert_eq!(table.lookup.as_deref(), Some("org_family_roots"));
+        assert_eq!(
+            table.query.as_deref(),
+            Some("SELECT organization_id, root_organization_id FROM org_family_roots")
+        );
+
+        let mut config = ConfigAndUsers {
+            config,
+            ..Default::default()
+        };
+        config.check().unwrap();
+    }
+
+    #[test]
+    fn sharded_table_lookup_requires_query() {
+        let source = r#"
+[[sharded_tables]]
+database = "houston"
+column = "organization_id"
+lookup = "org_family_roots"
+"#;
+
+        let mut config = ConfigAndUsers {
+            config: toml::from_str(source).unwrap(),
+            ..Default::default()
+        };
+        let err = config.check().unwrap_err();
+        assert!(err.to_string().contains("must be set together"));
+    }
+
+    #[test]
+    fn sharded_table_query_requires_lookup() {
+        let source = r#"
+[[sharded_tables]]
+database = "houston"
+column = "organization_id"
+query = "SELECT organization_id, root_organization_id FROM org_family_roots"
+"#;
+
+        let mut config = ConfigAndUsers {
+            config: toml::from_str(source).unwrap(),
+            ..Default::default()
+        };
+        let err = config.check().unwrap_err();
+        assert!(err.to_string().contains("must be set together"));
+    }
+
+    #[test]
+    fn sharded_table_lookup_query_rejects_parameters() {
+        let source = r#"
+[[sharded_tables]]
+database = "houston"
+column = "organization_id"
+lookup = "org_family_roots"
+query = "SELECT root_organization_id FROM org_family_roots WHERE organization_id = $1"
+
+[[omnisharded_tables]]
+database = "houston"
+tables = ["org_family_roots"]
+"#;
+
+        let mut config = ConfigAndUsers {
+            config: toml::from_str(source).unwrap(),
+            ..Default::default()
+        };
+        let err = config.check().unwrap_err();
+        assert!(err.to_string().contains("takes no parameters"));
+    }
+
+    #[test]
+    fn sharded_table_lookup_requires_omnisharded() {
+        let source = r#"
+[[sharded_tables]]
+database = "houston"
+column = "organization_id"
+lookup = "org_family_roots"
+query = "SELECT organization_id, root_organization_id FROM org_family_roots"
+
+[[omnisharded_tables]]
+database = "other_database"
+tables = ["org_family_roots"]
+"#;
+
+        let mut config = ConfigAndUsers {
+            config: toml::from_str(source).unwrap(),
+            ..Default::default()
+        };
+        let err = config.check().unwrap_err();
+        assert!(err.to_string().contains("omnisharded_tables"));
+    }
+
+    #[test]
+    fn sharded_table_lookup_omnisharded_matches_qualified_name() {
+        let source = r#"
+[[sharded_tables]]
+database = "houston"
+column = "organization_id"
+lookup = "app.org_family_roots"
+query = "SELECT organization_id, root_organization_id FROM app.org_family_roots"
+
+[[omnisharded_tables]]
+database = "houston"
+tables = ["org_family_roots"]
+"#;
+
+        let mut config = ConfigAndUsers {
+            config: toml::from_str(source).unwrap(),
+            ..Default::default()
+        };
+        config.check().unwrap();
+    }
 
     #[test]
     fn query_parser_reads_default_values_from_config() {

@@ -9,6 +9,11 @@ impl QueryEngine {
         rollback: bool,
         extended: bool,
     ) -> Result<(), Error> {
+        // The transaction is over on all shards (2PC transactions land
+        // here after phase 2). Invalidate lookup tables it wrote to
+        // before the client learns the transaction is done.
+        self.settle_lookup_invalidations();
+
         let bytes_sent = if extended {
             self.extended_transaction_reply(context, false, rollback)
                 .await?

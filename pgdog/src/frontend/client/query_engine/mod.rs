@@ -4,7 +4,7 @@ use crate::{
     frontend::{
         BufferedQuery, Client, ClientComms, Command, Error, Router, RouterContext, Stats,
         client::query_engine::{hooks::QueryEngineHooks, route_query::ClusterCheck},
-        router::{Route, parser::Shard},
+        router::{Route, parser::Shard, sharding::LookupCache},
     },
     net::{ErrorResponse, Message, Parameters},
     state::State,
@@ -66,6 +66,10 @@ pub struct QueryEngine {
     // They will remain pinned to their connection until they unpin manually
     // or disconnect.
     manual_lock: bool,
+    // Lookup tables written to by the current statement or transaction.
+    // Their cached sharding key translations are flushed when the write
+    // completes, before the client sees the result.
+    lookup_invalidations: Vec<String>,
 }
 
 impl QueryEngine {
@@ -89,9 +93,30 @@ impl QueryEngine {
             router: Router::default(),
             advisory_locks: AdvisoryLocks::default(),
             manual_lock: false,
+            lookup_invalidations: Vec::new(),
         })
     }
 
+    /// Flush cached sharding key translations for lookup tables written
+    /// to by the statement or transaction that just completed. Called
+    /// before the client is told the write is done, so every query routed
+    /// after that reads the new mapping.
+    fn settle_lookup_invalidations(&mut self) {
+        for lookup in self.lookup_invalidations.drain(..) {
+            LookupCache::get().flush_lookup_table(&lookup);
+        }
+    }
+}
+
+impl Drop for QueryEngine {
+    fn drop(&mut self) {
+        // The client disconnected with a lookup table write whose outcome
+        // we never observed; invalidate conservatively.
+        self.settle_lookup_invalidations();
+    }
+}
+
+impl QueryEngine {
     pub fn from_client(client: &Client) -> Result<Self, Error> {
         Self::new(&client.params, &client.comms, client.admin)
     }

@@ -21,6 +21,8 @@ pub struct ShardedTable {
     pub centroid_probes: usize,
     pub hasher: Hasher,
     pub mapping: Option<Mapping>,
+    pub lookup: Option<String>,
+    pub query: Option<String>,
 }
 
 #[derive(Debug)]

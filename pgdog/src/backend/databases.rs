@@ -24,7 +24,7 @@ use crate::config::PoolerMode;
 use crate::frontend::PreparedStatements;
 use crate::frontend::client::query_engine::two_pc::Manager;
 use crate::frontend::router::parser::Cache;
-use crate::frontend::router::sharding::{Mapping, ShardedTable};
+use crate::frontend::router::sharding::{LookupCache, Mapping, ShardedTable};
 use crate::{
     backend::pool::PoolConfig,
     config::{
@@ -74,6 +74,20 @@ pub fn replace_databases(new_databases: Databases, reload: bool) -> Result<(), E
     }
     // 3. Launch new databases first.
     new_databases.launch();
+
+    // Drop loaded sharding key lookup maps if the lookup configuration
+    // changed; they reload cold under the new config on next use.
+    let mut lookups = Vec::new();
+    for cluster in new_databases.all().values() {
+        let schema = cluster.sharding_schema();
+        for table in schema.tables.tables() {
+            if let (Some(lookup), Some(query)) = (&table.lookup, &table.query) {
+                lookups.push((lookup.clone(), query.clone()));
+            }
+        }
+    }
+    LookupCache::get().update_config(lookups);
+
     DATABASES.store(new_databases);
     // 4. Shutdown all databases.
     old_databases.shutdown();
@@ -516,6 +530,8 @@ fn resolve_sharded_table(
         centroid_probes: config.centroid_probes,
         hasher: config.hasher.clone(),
         mapping: mapping.flatten(),
+        lookup: config.lookup.clone(),
+        query: config.query.clone(),
     }
 }
 
