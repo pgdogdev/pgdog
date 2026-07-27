@@ -91,8 +91,8 @@ impl Manager {
     }
 
     /// Two-pc transaction finished.
-    pub(crate) async fn done(&self, transaction: &TwoPcTransaction) -> Result<(), Error> {
-        self.remove(transaction).await;
+    pub(crate) async fn done(&self, transaction: TwoPcTransaction) -> Result<(), Error> {
+        self.remove(transaction);
 
         Ok(())
     }
@@ -138,6 +138,20 @@ impl Manager {
         identifier: &Arc<User>,
         phase: TwoPcPhase,
     ) -> Result<TwoPcGuard, Error> {
+        self.transaction_state_manual(transaction, identifier, phase);
+
+        Ok(TwoPcGuard {
+            transaction,
+            manager: Self::get(),
+        })
+    }
+
+    pub(super) fn transaction_state_manual(
+        &self,
+        transaction: TwoPcTransaction,
+        identifier: &Arc<User>,
+        phase: TwoPcPhase,
+    ) {
         self.inner
             .lock()
             .transactions
@@ -149,11 +163,6 @@ impl Manager {
                 identifier: identifier.clone(),
                 phase,
             });
-
-        Ok(TwoPcGuard {
-            transaction,
-            manager: Self::get(),
-        })
     }
 
     pub(super) fn return_guard(&self, guard: &TwoPcGuard) {
@@ -201,7 +210,7 @@ impl Manager {
                         manager.inner.lock().queue.push_back(transaction);
                     }
                     _ => {
-                        manager.remove(&transaction).await;
+                        manager.done(transaction).await.unwrap();
                     }
                 }
 
@@ -215,8 +224,8 @@ impl Manager {
         }
     }
 
-    async fn remove(&self, transaction: &TwoPcTransaction) {
-        self.inner.lock().transactions.remove(transaction);
+    pub(super) fn remove(&self, transaction: TwoPcTransaction) {
+        self.inner.lock().transactions.remove(&transaction);
     }
 
     /// Reconnect to cluster if available and rollback the two-phase transaction.
@@ -279,7 +288,7 @@ impl Manager {
     }
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct TransactionInfo {
     pub phase: TwoPcPhase,
     pub identifier: Arc<User>,

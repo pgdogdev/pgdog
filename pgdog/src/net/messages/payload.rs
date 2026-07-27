@@ -48,6 +48,14 @@ impl Payload {
         }
     }
 
+    pub fn raw() -> Self {
+        Self {
+            bytes: BytesMut::new(),
+            name: None,
+            with_len: false,
+        }
+    }
+
     /// Finish assembly and return final bytes array.
     pub fn freeze(self) -> Bytes {
         use super::ToBytes;

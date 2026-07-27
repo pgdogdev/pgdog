@@ -15,7 +15,7 @@ pub mod transaction;
 pub mod wal;
 
 pub use guard::TwoPcGuard;
-pub use manager::Manager;
+pub use manager::{Manager, TransactionInfo};
 pub use phase::TwoPcPhase;
 pub(crate) use server_transactions::TwoPcTransactions;
 pub(crate) use statement::TwoPcTransactionOnShard;
@@ -78,7 +78,7 @@ impl TwoPc {
     /// This is just a cleanup step, to avoid unnecessary checks during crash recovery.
     pub(super) async fn done(&mut self) -> Result<(), Error> {
         let transaction = self.transaction();
-        self.manager.done(&transaction).await?;
+        self.manager.done(transaction).await?;
         self.transaction = None;
         self.auto = false;
         Ok(())

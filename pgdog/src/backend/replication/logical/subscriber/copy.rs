@@ -305,7 +305,7 @@ impl CopySubscriber {
                 .await?;
             self.two_pc_on_shards(txn, TwoPcPhase::Phase2).await?;
 
-            manager.done(&txn).await?;
+            manager.done(txn).await?;
             Ok(())
         }
         .await
