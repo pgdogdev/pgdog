@@ -3226,6 +3226,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "paste"
+version = "1.0.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "57c0d7b74b563b49d38dae00a0c37d4d6de9b432382b2892f0574ddcae73fd0a"
+
+[[package]]
 name = "pem-rfc7468"
 version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3313,7 +3319,7 @@ dependencies = [
 [[package]]
 name = "pg_raw_parse"
 version = "0.1.0"
-source = "git+https://github.com/pgdogdev/pg_raw_parse.git?rev=457b7c9#457b7c91b72b2d4b55be991707dbdf0e784127a4"
+source = "git+https://github.com/pgdogdev/pg_raw_parse.git?rev=4843f8bb01c1b7f844d2b8c43de551d3a493d333#4843f8bb01c1b7f844d2b8c43de551d3a493d333"
 dependencies = [
  "bindgen 0.72.1",
  "cc",
@@ -3329,7 +3335,7 @@ dependencies = [
 
 [[package]]
 name = "pgdog"
-version = "0.1.49"
+version = "0.1.50"
 dependencies = [
  "arc-swap",
  "async-trait",
@@ -3396,6 +3402,7 @@ dependencies = [
  "stats_alloc",
  "tempfile",
  "thiserror 2.0.18",
+ "tikv-jemalloc-ctl",
  "tikv-jemallocator",
  "tokio",
  "tokio-rustls",
@@ -5282,6 +5289,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f60246a4944f24f6e018aa17cdeffb7818b76356965d03b07d6a9886e8962185"
 dependencies = [
  "cfg-if",
+]
+
+[[package]]
+name = "tikv-jemalloc-ctl"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "661f1f6a57b3a36dc9174a2c10f19513b4866816e13425d3e418b11cc37bc24c"
+dependencies = [
+ "libc",
+ "paste",
+ "tikv-jemalloc-sys",
 ]
 
 [[package]]

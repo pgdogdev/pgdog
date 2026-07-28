@@ -154,6 +154,16 @@ pub fn load_test() {
 
 #[cfg(test)]
 pub fn load_test_with_pooler_mode(pooler_mode: PoolerMode) {
+    load_test_with_user_and_pooler_mode("pgdog", pooler_mode, Role::default())
+}
+
+#[cfg(test)]
+pub fn load_test_with_user(user: &str) {
+    load_test_with_user_and_pooler_mode(user, PoolerMode::Transaction, Role::Primary)
+}
+
+#[cfg(test)]
+fn load_test_with_user_and_pooler_mode(user: &str, pooler_mode: PoolerMode, role: Role) {
     use crate::backend::databases::init;
 
     let mut config = ConfigAndUsers::default();
@@ -162,10 +172,11 @@ pub fn load_test_with_pooler_mode(pooler_mode: PoolerMode) {
         host: "127.0.0.1".into(),
         port: 5432,
         pooler_mode: Some(pooler_mode),
+        role,
         ..Default::default()
     }];
     config.users.users = vec![User {
-        name: "pgdog".into(),
+        name: user.into(),
         database: "pgdog".into(),
         password: Some("pgdog".into()),
         pooler_mode: Some(pooler_mode),

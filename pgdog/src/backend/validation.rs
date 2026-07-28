@@ -13,15 +13,17 @@ use crate::frontend::router::sharding::mapping::compare_flexible_type;
 #[derive(Debug, Display)]
 pub enum ValidationError {
     /// A shard number in a mapping entry exceeds the available shard count.
-    #[display("shard {shard} is out of range (num_shards={num_shards})")]
+    #[display("shard={shard} exceeds the configured shard count ({num_shards})")]
     ShardOutOfRange { shard: usize, num_shards: usize },
 
     /// A range entry has neither `start` nor `end` defined.
-    #[display("range for shard {shard} has neither start nor end defined")]
+    #[display("shard={shard} range must define a start, an end, or both")]
     RangeNoBounds { shard: usize },
 
     /// A range entry's `start` bound is greater than its `end` bound.
-    #[display("range for shard {shard} is inverted: start {start:?} > end {end:?}")]
+    #[display(
+        "shard={shard} range is invalid: start ({start}) must not be greater than end ({end})"
+    )]
     RangeInverted {
         shard: usize,
         start: FlexibleType,
@@ -29,14 +31,14 @@ pub enum ValidationError {
     },
 
     /// Two or more range entries overlap.
-    #[display("ranges: {range1:?} & {range2:?} overlap")]
+    #[display("shard ranges overlap: {range1} and {range2}")]
     RangesOverlap {
         range1: ShardedMappingRange,
         range2: ShardedMappingRange,
     },
 
     /// A value in a list entry or range bound does not match the column's `data_type`.
-    #[display("value {value:?} is incompatible with data_type {data_type:?}")]
+    #[display("value {value} is not a valid {data_type} value")]
     IncompatibleType {
         value: FlexibleType,
         data_type: DataType,
@@ -181,7 +183,6 @@ fn type_compatible(value: &FlexibleType, data_type: DataType) -> bool {
 mod tests {
     use super::*;
     use pgdog_config::{FlexibleType, ShardedMappingList, ShardedMappingRange};
-    use std::assert_matches;
 
     fn range(shard: usize, start: Option<i64>, end: Option<i64>) -> ShardedMappingConfig {
         ShardedMappingConfig::Range(ShardedMappingRange {
@@ -215,26 +216,21 @@ mod tests {
         #[test]
         fn out_of_bounds() {
             // shard == num_shards is out of range (0-indexed); all three variants
-            assert_matches!(
-                check_shard_range(&range(5, Some(0), Some(100)), 3),
-                Some(ValidationError::ShardOutOfRange {
-                    shard: 5,
-                    num_shards: 3
-                })
+            assert_eq!(
+                check_shard_range(&range(5, Some(0), Some(100)), 3)
+                    .unwrap()
+                    .to_string(),
+                "shard=5 exceeds the configured shard count (3)"
             );
-            assert_matches!(
-                check_shard_range(&list(10, vec![FlexibleType::Integer(1)]), 3),
-                Some(ValidationError::ShardOutOfRange {
-                    shard: 10,
-                    num_shards: 3
-                })
+            assert_eq!(
+                check_shard_range(&list(10, vec![FlexibleType::Integer(1)]), 3)
+                    .unwrap()
+                    .to_string(),
+                "shard=10 exceeds the configured shard count (3)"
             );
-            assert_matches!(
-                check_shard_range(&default_shard(3), 3),
-                Some(ValidationError::ShardOutOfRange {
-                    shard: 3,
-                    num_shards: 3
-                })
+            assert_eq!(
+                check_shard_range(&default_shard(3), 3).unwrap().to_string(),
+                "shard=3 exceeds the configured shard count (3)"
             );
         }
     }
@@ -251,17 +247,21 @@ mod tests {
 
         #[test]
         fn both_none() {
-            assert_matches!(
-                check_range_bounds(&range(0, None, None)),
-                Some(ValidationError::RangeNoBounds { shard: 0 })
+            assert_eq!(
+                check_range_bounds(&range(0, None, None))
+                    .unwrap()
+                    .to_string(),
+                "shard=0 range must define a start, an end, or both"
             );
         }
 
         #[test]
         fn inverted() {
-            assert_matches!(
-                check_range_bounds(&range(0, Some(200), Some(100))),
-                Some(ValidationError::RangeInverted { shard: 0, .. })
+            assert_eq!(
+                check_range_bounds(&range(0, Some(200), Some(100)))
+                    .unwrap()
+                    .to_string(),
+                "shard=0 range is invalid: start (200) must not be greater than end (100)"
             );
             // start == end is a degenerate empty range, but not inverted.
             assert!(check_range_bounds(&range(0, Some(100), Some(100))).is_none());
@@ -311,7 +311,10 @@ mod tests {
                 DataType::Bigint,
             );
             assert_eq!(errors.len(), 1);
-            assert_matches!(errors[0], ValidationError::IncompatibleType { .. });
+            assert_eq!(
+                errors[0].to_string(),
+                "value 'foo' is not a valid bigint value"
+            );
         }
 
         #[test]
@@ -319,6 +322,8 @@ mod tests {
             // Integer bounds but data_type = Uuid → both start and end are wrong.
             let errors = check_type_compatibility(&range(0, Some(0), Some(100)), DataType::Uuid);
             assert_eq!(errors.len(), 2);
+            assert_eq!(errors[0].to_string(), "value 0 is not a valid uuid value");
+            assert_eq!(errors[1].to_string(), "value 100 is not a valid uuid value");
         }
 
         #[test]
@@ -330,6 +335,10 @@ mod tests {
             });
             let errors = check_type_compatibility(&config, DataType::Varchar);
             assert_eq!(errors.len(), 1);
+            assert_eq!(
+                errors[0].to_string(),
+                "value 100 is not a valid varchar value"
+            );
         }
 
         #[test]
@@ -356,9 +365,9 @@ mod tests {
         #[test]
         fn detected() {
             let configs = vec![range(0, Some(0), Some(150)), range(1, Some(100), Some(200))];
-            assert_matches!(
-                check_range_overlap(&configs).as_slice(),
-                [ValidationError::RangesOverlap { .. }]
+            assert_eq!(
+                check_range_overlap(&configs)[0].to_string(),
+                "shard ranges overlap: [0, 150) -> shard=0 and [100, 200) -> shard=1"
             );
         }
 
@@ -367,18 +376,18 @@ mod tests {
             // `(-inf, 50)` and `(-inf, 100)` overlap on `(-inf, 50)` yet share no
             // explicit bound that falls strictly inside the other.
             let configs = vec![range(0, None, Some(50)), range(1, None, Some(100))];
-            assert_matches!(
-                check_range_overlap(&configs).as_slice(),
-                [ValidationError::RangesOverlap { .. }]
+            assert_eq!(
+                check_range_overlap(&configs)[0].to_string(),
+                "shard ranges overlap: [-inf, 50) -> shard=0 and [-inf, 100) -> shard=1"
             );
         }
 
         #[test]
         fn unbounded_above_overlap() {
             let configs = vec![range(0, Some(0), None), range(1, Some(100), None)];
-            assert_matches!(
-                check_range_overlap(&configs).as_slice(),
-                [ValidationError::RangesOverlap { .. }]
+            assert_eq!(
+                check_range_overlap(&configs)[0].to_string(),
+                "shard ranges overlap: [0, +inf) -> shard=0 and [100, +inf) -> shard=1"
             );
         }
 
@@ -409,9 +418,18 @@ mod tests {
                 range(0, None, None),
             ];
             let errors = validate(&configs, DataType::Bigint, 3);
-            assert_matches!(errors[0], ValidationError::ShardOutOfRange { .. });
-            assert_matches!(errors[1], ValidationError::IncompatibleType { .. });
-            assert_matches!(errors[2], ValidationError::RangeNoBounds { .. });
+            assert_eq!(
+                errors[0].to_string(),
+                "shard=9 exceeds the configured shard count (3)"
+            );
+            assert_eq!(
+                errors[1].to_string(),
+                "value 'x' is not a valid bigint value"
+            );
+            assert_eq!(
+                errors[2].to_string(),
+                "shard=0 range must define a start, an end, or both"
+            );
         }
     }
 }

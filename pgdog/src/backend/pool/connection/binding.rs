@@ -3,7 +3,10 @@
 use crate::{
     frontend::{
         ClientRequest,
-        client::query_engine::{TwoPcPhase, two_pc::statement::phase_control},
+        client::query_engine::{
+            TwoPcPhase,
+            two_pc::{TwoPcTransaction, statement::phase_control},
+        },
     },
     net::{FrontendPid, ProtocolMessage, Query, parameter::Parameters},
     state::State,
@@ -361,14 +364,14 @@ impl Binding {
 
     pub(crate) async fn two_pc_on_guards(
         servers: &mut [Guard],
-        name: &str,
+        transaction: TwoPcTransaction,
         phase: TwoPcPhase,
     ) -> Result<(), Error> {
         let skip_missing = matches!(phase, TwoPcPhase::Phase2 | TwoPcPhase::Rollback);
 
         let mut futures = Vec::new();
         for (shard, server) in servers.iter_mut().enumerate() {
-            let query = phase_control(name, shard, phase);
+            let query = phase_control(transaction, shard, phase);
             futures.push(server.execute(query));
         }
 
@@ -394,9 +397,15 @@ impl Binding {
     }
 
     /// Execute two-phase commit transaction control statements.
-    pub async fn two_pc(&mut self, name: &str, phase: TwoPcPhase) -> Result<(), Error> {
+    pub(crate) async fn two_pc(
+        &mut self,
+        transaction: TwoPcTransaction,
+        phase: TwoPcPhase,
+    ) -> Result<(), Error> {
         match self {
-            Binding::MultiShard(servers, _) => Self::two_pc_on_guards(servers, name, phase).await,
+            Binding::MultiShard(servers, _) => {
+                Self::two_pc_on_guards(servers, transaction, phase).await
+            }
 
             _ => Err(Error::TwoPcMultiShardOnly),
         }

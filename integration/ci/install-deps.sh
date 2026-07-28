@@ -54,3 +54,10 @@ if ! command -v cargo-llvm-cov >/dev/null; then
     curl -LsSf "https://github.com/taiki-e/cargo-llvm-cov/releases/download/v${LLVM_COV_VERSION}/cargo-llvm-cov-x86_64-unknown-linux-gnu.tar.gz" \
         | tar zxf - -C "$CARGO_BIN"
 fi
+
+# cargo llvm-cov report needs llvm-profdata/llvm-cov from llvm-tools-preview.
+if command -v rustup >/dev/null 2>&1; then
+    if ! rustup component list --installed 2>/dev/null | grep -q llvm-tools; then
+        rustup component add llvm-tools-preview || true
+    fi
+fi

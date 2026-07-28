@@ -3,6 +3,7 @@
 pub mod address;
 pub mod cleanup;
 pub mod cluster;
+pub mod cluster_launch;
 pub mod comms;
 pub mod config;
 pub mod connection;

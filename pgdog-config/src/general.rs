@@ -252,6 +252,18 @@ pub struct General {
     /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#tls_server_ca_certificate>
     pub tls_server_ca_certificate: Option<PathBuf>,
 
+    /// Path to the TLS certificate PgDog presents to upstream Postgres servers,
+    /// enabling mutual TLS (client authentication) on the server connection.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#tls_server_certificate
+    pub tls_server_certificate: Option<PathBuf>,
+
+    /// Path to the TLS private key for the certificate configured in
+    /// `tls_server_certificate`.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#tls_server_private_key
+    pub tls_server_private_key: Option<PathBuf>,
+
     /// Path to a certificate bundle used to validate the client certificate on TLS connection creation.
     ///
     /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#tls_client_ca_certificate>
@@ -834,6 +846,8 @@ impl Default for General {
             tls_client_required: bool::default(),
             tls_verify: Self::default_tls_verify(),
             tls_server_ca_certificate: Self::tls_server_ca_certificate(),
+            tls_server_certificate: Self::tls_server_certificate(),
+            tls_server_private_key: Self::tls_server_private_key(),
             tls_client_ca_certificate: Self::tls_client_ca_certificate(),
             shutdown_timeout: Self::default_shutdown_timeout(),
             shutdown_termination_timeout: Self::default_shutdown_termination_timeout(),
@@ -1225,6 +1239,14 @@ impl General {
 
     fn tls_server_ca_certificate() -> Option<PathBuf> {
         Self::env_option_string("PGDOG_TLS_SERVER_CA_CERTIFICATE").map(PathBuf::from)
+    }
+
+    fn tls_server_certificate() -> Option<PathBuf> {
+        Self::env_option_string("PGDOG_TLS_SERVER_CERTIFICATE").map(PathBuf::from)
+    }
+
+    fn tls_server_private_key() -> Option<PathBuf> {
+        Self::env_option_string("PGDOG_TLS_SERVER_PRIVATE_KEY").map(PathBuf::from)
     }
 
     fn tls_client_ca_certificate() -> Option<PathBuf> {

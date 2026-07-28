@@ -1,4 +1,5 @@
 //! Schema operations.
+pub mod cache;
 pub mod columns;
 pub mod relation;
 pub mod sync;
@@ -11,6 +12,7 @@ use std::ops::DerefMut;
 use std::{collections::HashMap, ops::Deref};
 use tracing::info;
 
+pub(crate) use cache::SchemaCache;
 pub use relation::Relation;
 
 use super::{Cluster, Error, Server, pool::Request};

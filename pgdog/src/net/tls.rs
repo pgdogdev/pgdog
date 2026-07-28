@@ -34,13 +34,22 @@ static CONNECTOR: ArcSwapOption<ConnectorCacheEntry> = ArcSwapOption::const_empt
 struct ConnectorConfigKey {
     mode: TlsVerifyMode,
     ca_path: Option<PathBuf>,
+    client_cert_path: Option<PathBuf>,
+    client_key_path: Option<PathBuf>,
 }
 
 impl ConnectorConfigKey {
-    fn new(mode: TlsVerifyMode, ca_path: Option<&PathBuf>) -> Self {
+    fn new(
+        mode: TlsVerifyMode,
+        ca_path: Option<&PathBuf>,
+        client_cert_path: Option<&PathBuf>,
+        client_key_path: Option<&PathBuf>,
+    ) -> Self {
         Self {
             mode,
             ca_path: ca_path.cloned(),
+            client_cert_path: client_cert_path.cloned(),
+            client_key_path: client_key_path.cloned(),
         }
     }
 }
@@ -113,9 +122,12 @@ pub(crate) fn identity_from_certs(certs: &[CertificateDer<'_>]) -> Option<String
 /// Create new TLS connector using the current configuration.
 pub fn connector() -> Result<TlsConnector, Error> {
     let config = config();
+    let general = &config.config.general;
     connector_with_verify_mode(
-        config.config.general.tls_verify,
-        config.config.general.tls_server_ca_certificate.as_ref(),
+        general.tls_verify,
+        general.tls_server_ca_certificate.as_ref(),
+        general.tls_server_certificate.as_ref(),
+        general.tls_server_private_key.as_ref(),
     )
 }
 
@@ -134,10 +146,13 @@ pub fn reload() -> Result<(), Error> {
     let config = config();
     let general = &config.config.general;
 
-    // Always validate upstream TLS settings so we surface CA issues early.
+    // Always validate upstream TLS settings so we surface CA and client
+    // certificate issues early.
     let _ = connector_with_verify_mode(
         general.tls_verify,
         general.tls_server_ca_certificate.as_ref(),
+        general.tls_server_certificate.as_ref(),
+        general.tls_server_private_key.as_ref(),
     )?;
 
     let tls_paths = general.tls();
@@ -287,22 +302,40 @@ fn build_connector(config_key: &ConnectorConfigKey) -> Result<Arc<ClientConfig>,
         rustls::RootCertStore::empty()
     };
 
+    // Optional client certificate PgDog presents to the upstream server (mTLS).
+    let client_auth = match (
+        config_key.client_cert_path.as_deref(),
+        config_key.client_key_path.as_deref(),
+    ) {
+        (Some(cert), Some(key)) => Some((cert, key)),
+        (None, None) => None,
+        _ => {
+            return Err(invalid_data(
+                "tls_server_certificate and tls_server_private_key must both be set to present a client certificate to upstream servers",
+            ));
+        }
+    };
+
     let config = match config_key.mode {
-        TlsVerifyMode::Disabled => ClientConfig::builder()
-            .with_root_certificates(roots)
-            .with_no_client_auth(),
+        TlsVerifyMode::Disabled => build_client_config(
+            ClientConfig::builder().with_root_certificates(roots),
+            client_auth,
+        )?,
         TlsVerifyMode::Prefer => {
             let verifier = AllowAllVerifier;
-            ClientConfig::builder()
-                .dangerous()
-                .with_custom_certificate_verifier(Arc::new(verifier))
-                .with_no_client_auth()
+            build_client_config(
+                ClientConfig::builder()
+                    .dangerous()
+                    .with_custom_certificate_verifier(Arc::new(verifier)),
+                client_auth,
+            )?
         }
         TlsVerifyMode::VerifyCa => {
             let verifier = NoHostnameVerifier::new(roots.clone());
-            let mut config = ClientConfig::builder()
-                .with_root_certificates(roots)
-                .with_no_client_auth();
+            let mut config = build_client_config(
+                ClientConfig::builder().with_root_certificates(roots),
+                client_auth,
+            )?;
 
             config
                 .dangerous()
@@ -310,14 +343,33 @@ fn build_connector(config_key: &ConnectorConfigKey) -> Result<Arc<ClientConfig>,
 
             config
         }
-        TlsVerifyMode::VerifyFull => ClientConfig::builder()
-            .with_root_certificates(roots)
-            .with_no_client_auth(),
+        TlsVerifyMode::VerifyFull => build_client_config(
+            ClientConfig::builder().with_root_certificates(roots),
+            client_auth,
+        )?,
     };
 
     increment_connector_build_count();
 
     Ok(Arc::new(config))
+}
+
+/// Build the client TLS config, attaching the client certificate PgDog presents
+/// to upstream servers for mTLS when one is configured.
+fn build_client_config(
+    builder: rustls::ConfigBuilder<ClientConfig, rustls::client::WantsClientCert>,
+    client_auth: Option<(&Path, &Path)>,
+) -> Result<ClientConfig, Error> {
+    match client_auth {
+        // Load the leaf certificate and key the same way `build_acceptor`
+        // loads PgDog's own server certificate.
+        Some((cert_path, key_path)) => {
+            let cert = CertificateDer::from_pem_file(cert_path)?;
+            let key = PrivateKeyDer::from_pem_file(key_path)?;
+            Ok(builder.with_client_auth_cert(vec![cert], key)?)
+        }
+        None => Ok(builder.with_no_client_auth()),
+    }
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -403,8 +455,10 @@ impl ServerCertVerifier for AllowAllVerifier {
 pub fn connector_with_verify_mode(
     mode: TlsVerifyMode,
     ca_cert_path: Option<&PathBuf>,
+    client_cert_path: Option<&PathBuf>,
+    client_key_path: Option<&PathBuf>,
 ) -> Result<TlsConnector, Error> {
-    let config_key = ConnectorConfigKey::new(mode, ca_cert_path);
+    let config_key = ConnectorConfigKey::new(mode, ca_cert_path, client_cert_path, client_key_path);
 
     if let Some(entry) = CONNECTOR.load_full()
         && entry.key == config_key
@@ -584,9 +638,9 @@ mod tests {
     async fn test_connector_with_verify_mode() {
         crate::logger();
 
-        let prefer = connector_with_verify_mode(TlsVerifyMode::Prefer, None);
-        let certificate = connector_with_verify_mode(TlsVerifyMode::VerifyCa, None);
-        let full = connector_with_verify_mode(TlsVerifyMode::VerifyFull, None);
+        let prefer = connector_with_verify_mode(TlsVerifyMode::Prefer, None, None, None);
+        let certificate = connector_with_verify_mode(TlsVerifyMode::VerifyCa, None, None, None);
+        let full = connector_with_verify_mode(TlsVerifyMode::VerifyFull, None, None, None);
 
         // All should succeed
         assert!(prefer.is_ok());
@@ -613,14 +667,24 @@ mod tests {
 
         crate::config::set(cfg).unwrap();
 
-        let _first = super::connector_with_verify_mode(TlsVerifyMode::VerifyFull, Some(&ca_path))
-            .expect("first connector builds");
+        let _first = super::connector_with_verify_mode(
+            TlsVerifyMode::VerifyFull,
+            Some(&ca_path),
+            None,
+            None,
+        )
+        .expect("first connector builds");
         let first_cache = super::CONNECTOR
             .load_full()
             .expect("connector cached after first build");
 
-        let _second = super::connector_with_verify_mode(TlsVerifyMode::VerifyFull, Some(&ca_path))
-            .expect("second connector reuses cache");
+        let _second = super::connector_with_verify_mode(
+            TlsVerifyMode::VerifyFull,
+            Some(&ca_path),
+            None,
+            None,
+        )
+        .expect("second connector reuses cache");
         let second_cache = super::CONNECTOR
             .load_full()
             .expect("connector cached after second build");
@@ -659,8 +723,13 @@ mod tests {
             "reload retains client config"
         );
 
-        let _third = super::connector_with_verify_mode(TlsVerifyMode::VerifyFull, Some(&ca_path))
-            .expect("third connector still reuses cache");
+        let _third = super::connector_with_verify_mode(
+            TlsVerifyMode::VerifyFull,
+            Some(&ca_path),
+            None,
+            None,
+        )
+        .expect("third connector still reuses cache");
         let third_cache = super::CONNECTOR
             .load_full()
             .expect("connector cached after third build");
@@ -685,7 +754,8 @@ mod tests {
         crate::logger();
 
         let bad_ca_path = PathBuf::from("/tmp/test_ca.pem");
-        let result = connector_with_verify_mode(TlsVerifyMode::VerifyFull, Some(&bad_ca_path));
+        let result =
+            connector_with_verify_mode(TlsVerifyMode::VerifyFull, Some(&bad_ca_path), None, None);
 
         // This should fail because the file doesn't exist
         assert!(result.is_err(), "Should fail with non-existent cert file");
@@ -701,9 +771,69 @@ mod tests {
         // check that the file exists
         assert!(good_ca_path.exists(), "Test CA file should exist");
 
-        let result = connector_with_verify_mode(TlsVerifyMode::VerifyFull, Some(&good_ca_path));
+        let result =
+            connector_with_verify_mode(TlsVerifyMode::VerifyFull, Some(&good_ca_path), None, None);
 
         assert!(result.is_ok(), "Should succeed with valid cert file");
+    }
+
+    #[tokio::test]
+    async fn connector_requires_both_client_cert_and_key() {
+        crate::logger();
+        super::test_reset_connector();
+
+        let cert = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/tls/cert.pem");
+        let key = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/tls/key.pem");
+
+        // Certificate without a key is a misconfiguration and must be rejected.
+        let cert_only =
+            connector_with_verify_mode(TlsVerifyMode::VerifyFull, None, Some(&cert), None);
+        assert!(
+            cert_only.is_err(),
+            "client certificate without a private key should fail"
+        );
+
+        // ...and so is a key without a certificate.
+        let key_only =
+            connector_with_verify_mode(TlsVerifyMode::VerifyFull, None, None, Some(&key));
+        assert!(
+            key_only.is_err(),
+            "client private key without a certificate should fail"
+        );
+
+        super::test_reset_connector();
+    }
+
+    #[tokio::test]
+    async fn client_cert_is_part_of_connector_cache_key() {
+        crate::logger();
+        super::test_reset_connector();
+
+        let cert = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/tls/cert.pem");
+        let key = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/tls/key.pem");
+
+        // First build without a client cert.
+        connector_with_verify_mode(TlsVerifyMode::Prefer, None, None, None).unwrap();
+        assert_eq!(super::test_connector_build_count(), 1);
+
+        // Adding a client cert must rebuild rather than serve the cached
+        // no-client-auth connector.
+        connector_with_verify_mode(TlsVerifyMode::Prefer, None, Some(&cert), Some(&key)).unwrap();
+        assert_eq!(
+            super::test_connector_build_count(),
+            2,
+            "adding a client certificate rebuilds the connector"
+        );
+
+        // Same inputs reuse the cache.
+        connector_with_verify_mode(TlsVerifyMode::Prefer, None, Some(&cert), Some(&key)).unwrap();
+        assert_eq!(
+            super::test_connector_build_count(),
+            2,
+            "identical client cert reuses the cached connector"
+        );
+
+        super::test_reset_connector();
     }
 
     #[test]
