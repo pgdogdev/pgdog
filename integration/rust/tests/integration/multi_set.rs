@@ -74,3 +74,36 @@ async fn test_multi_statement_select() {
         assert_eq!(values, vec!["1", "2"]);
     }
 }
+
+#[tokio::test]
+async fn test_multi_statement_transaction_batch() {
+    for conn in connections_tokio().await {
+        conn.batch_execute(
+            "CREATE TEMP TABLE IF NOT EXISTS locks (
+                key  TEXT PRIMARY KEY,
+                owner TEXT NOT NULL,
+                ttl  TIMESTAMPTZ NOT NULL
+            )",
+        )
+        .await
+        .unwrap();
+
+        conn.batch_execute(
+            "BEGIN;\
+             DELETE FROM locks WHERE ttl < CURRENT_TIMESTAMP AT TIME ZONE 'UTC';\
+             INSERT INTO locks (key, owner, ttl) \
+               VALUES ('test-key', 'test-owner', NOW() + INTERVAL '1 hour') \
+               ON CONFLICT DO NOTHING;\
+             COMMIT;",
+        )
+        .await
+        .unwrap();
+
+        let rows = conn
+            .simple_query("SELECT owner FROM locks WHERE key = 'test-key'")
+            .await
+            .unwrap();
+        let owner = extract_simple_query_value(&rows);
+        assert_eq!(owner, "test-owner");
+    }
+}
