@@ -10,7 +10,7 @@ use crate::net::messages::{BackendKeyData, FrontendPid};
 
 use tokio::time::Instant;
 
-use super::{Config, Error, Oids, Pool, Request, Stats, Taken, Waiter, lsn_monitor::ReplicaLag};
+use super::{Config, Error, Pool, Request, Stats, Taken, Waiter, lsn_monitor::ReplicaLag};
 
 /// Pool internals protected by a mutex.
 #[derive(Default)]
@@ -39,8 +39,6 @@ pub(super) struct Inner {
     pub(super) errors: usize,
     /// Stats
     pub(super) stats: Stats,
-    /// OIDs.
-    pub(super) oids: Option<Oids>,
     /// The pool has been changed and connections should be returned
     /// to the new pool.
     moved: Option<Pool>,
@@ -80,7 +78,6 @@ impl Inner {
             re_synced: 0,
             errors: 0,
             stats: Stats::default(),
-            oids: None,
             moved: None,
             id,
             replica_lag: ReplicaLag::default(),
