@@ -27,11 +27,12 @@ pub mod role_detector;
 use monitor::*;
 use role_detector::*;
 
+#[derive(Default)]
 pub(super) struct ShardConfig<'a> {
     /// Shard number.
     pub(super) number: usize,
     /// Shard primary database, if any.
-    pub(super) primary: &'a Option<PoolConfig>,
+    pub(super) primary: Option<&'a PoolConfig>,
     /// Shard replica databases.
     pub(super) replicas: &'a [PoolConfig],
     /// Load balancing strategy for replicas.
@@ -343,7 +344,7 @@ impl ShardInner {
             pub_sub_enabled,
             schema_cache,
         } = shard;
-        let primary = primary.as_ref().map(Pool::new);
+        let primary = primary.map(Pool::new);
         let lb = LoadBalancer::new(&primary, replicas, lb_strategy, rw_split);
         let comms = Arc::new(ShardComms {
             shutdown: CancellationToken::new(),
@@ -375,7 +376,7 @@ mod test {
     async fn test_exclude_primary() {
         crate::logger();
 
-        let primary = &Some(PoolConfig {
+        let primary = Some(&PoolConfig {
             address: Address::new_test(),
             ..Default::default()
         });
@@ -389,18 +390,15 @@ mod test {
         }];
 
         let shard = Shard::new(ShardConfig {
-            number: 0,
             primary,
             replicas,
-            lb_strategy: LoadBalancingStrategy::Random,
             rw_split: ReadWriteSplit::ExcludePrimary,
             identifier: Arc::new(User {
                 user: "pgdog".into(),
                 database: "pgdog".into(),
             }),
             lsn_check_interval: Duration::MAX,
-            pub_sub_enabled: false,
-            schema_cache: SchemaCache::default(),
+            ..Default::default()
         });
         shard.launch();
 
@@ -418,7 +416,7 @@ mod test {
     async fn test_include_primary() {
         crate::logger();
 
-        let primary = &Some(PoolConfig {
+        let primary = Some(&PoolConfig {
             address: Address::new_test(),
             ..Default::default()
         });
@@ -429,18 +427,15 @@ mod test {
         }];
 
         let shard = Shard::new(ShardConfig {
-            number: 0,
             primary,
             replicas,
-            lb_strategy: LoadBalancingStrategy::Random,
             rw_split: ReadWriteSplit::IncludePrimary,
             identifier: Arc::new(User {
                 user: "pgdog".into(),
                 database: "pgdog".into(),
             }),
             lsn_check_interval: Duration::MAX,
-            pub_sub_enabled: false,
-            schema_cache: SchemaCache::default(),
+            ..Default::default()
         });
         shard.launch();
         let mut ids = BTreeSet::new();

@@ -46,8 +46,7 @@ mod test {
     use crate::backend::pool::lsn_monitor::LsnStats;
     use crate::backend::pool::{Address, Config, PoolConfig};
     use crate::backend::replication::publisher::Lsn;
-    use crate::backend::schema::SchemaCache;
-    use crate::config::{LoadBalancingStrategy, ReadWriteSplit, Role};
+    use crate::config::{ReadWriteSplit, Role};
     use pgdog_stats::LsnStats as StatsLsnStats;
 
     use super::super::ShardConfig;
@@ -77,20 +76,17 @@ mod test {
         }
     }
 
-    fn create_test_shard(primary: &Option<PoolConfig>, replicas: &[PoolConfig]) -> Shard {
+    fn create_test_shard(primary: Option<&PoolConfig>, replicas: &[PoolConfig]) -> Shard {
         Shard::new(ShardConfig {
-            number: 0,
             primary,
             replicas,
-            lb_strategy: LoadBalancingStrategy::Random,
             rw_split: ReadWriteSplit::ExcludePrimary,
             identifier: Arc::new(User {
                 user: "pgdog".into(),
                 database: "pgdog".into(),
             }),
             lsn_check_interval: Duration::MAX,
-            pub_sub_enabled: false,
-            schema_cache: SchemaCache::default(),
+            ..Default::default()
         })
     }
 
@@ -111,7 +107,7 @@ mod test {
     fn test_changed_returns_false_when_lsn_stats_invalid() {
         let primary = Some(create_test_pool_config("127.0.0.1", 5432, true));
         let replicas = [create_test_pool_config("localhost", 5432, true)];
-        let shard = create_test_shard(&primary, &replicas);
+        let shard = create_test_shard(primary.as_ref(), &replicas);
 
         let mut detector = RoleDetector::new(&shard);
 
@@ -123,7 +119,7 @@ mod test {
     fn test_changed_returns_false_when_roles_unchanged() {
         let primary = Some(create_test_pool_config("127.0.0.1", 5432, true));
         let replicas = [create_test_pool_config("localhost", 5432, true)];
-        let shard = create_test_shard(&primary, &replicas);
+        let shard = create_test_shard(primary.as_ref(), &replicas);
 
         set_lsn_stats(&shard, 0, true, 100);
         set_lsn_stats(&shard, 1, false, 200);
@@ -138,7 +134,7 @@ mod test {
     fn test_changed_returns_true_on_failover() {
         let primary = Some(create_test_pool_config("127.0.0.1", 5432, true));
         let replicas = [create_test_pool_config("localhost", 5432, true)];
-        let shard = create_test_shard(&primary, &replicas);
+        let shard = create_test_shard(primary.as_ref(), &replicas);
 
         set_lsn_stats(&shard, 0, true, 100);
         set_lsn_stats(&shard, 1, false, 200);
@@ -158,7 +154,7 @@ mod test {
     fn test_changed_returns_false_after_roles_stabilize() {
         let primary = Some(create_test_pool_config("127.0.0.1", 5432, true));
         let replicas = [create_test_pool_config("localhost", 5432, true)];
-        let shard = create_test_shard(&primary, &replicas);
+        let shard = create_test_shard(primary.as_ref(), &replicas);
 
         set_lsn_stats(&shard, 0, true, 100);
         set_lsn_stats(&shard, 1, false, 200);
@@ -179,7 +175,7 @@ mod test {
     fn test_disabled_when_not_all_roles_auto() {
         let primary = Some(create_test_pool_config("127.0.0.1", 5432, false));
         let replicas = [create_test_pool_config("localhost", 5432, true)];
-        let shard = create_test_shard(&primary, &replicas);
+        let shard = create_test_shard(primary.as_ref(), &replicas);
 
         set_lsn_stats(&shard, 0, true, 100);
         set_lsn_stats(&shard, 1, false, 200);
