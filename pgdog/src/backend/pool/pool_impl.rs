@@ -20,8 +20,8 @@ use crate::net::{Parameter, Parameters};
 
 use super::inner::CheckInResult;
 use super::{
-    Address, Comms, Config, Error, Guard, Healtcheck, Inner, Monitor, Oids, PoolConfig, Request,
-    State, Waiting,
+    Address, Comms, Config, Error, Guard, Healtcheck, Inner, Monitor, PoolConfig, Request, State,
+    Waiting,
     lb::TargetHealth,
     lsn_monitor::{LsnMonitor, ReplicaLag},
 };
@@ -480,10 +480,5 @@ impl Pool {
     #[cfg(test)]
     pub(crate) fn update_config(&self, config: Config) {
         self.lock().config = config;
-    }
-
-    /// Fetch OIDs for user-defined data types.
-    pub fn oids(&self) -> Option<Oids> {
-        self.lock().oids
     }
 }

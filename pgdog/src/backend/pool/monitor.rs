@@ -45,7 +45,7 @@
 
 use std::time::Duration;
 
-use super::{Error, Guard, Healtcheck, Oids, Pool, Request};
+use super::{Error, Guard, Healtcheck, Pool, Request};
 use crate::backend::auth::{azure_workload_identity, rds_iam, vault};
 use crate::backend::pool::inner::ShouldCreate;
 use crate::backend::pool::token_cache::TokenCache;
@@ -343,20 +343,6 @@ impl Monitor {
             }
             _ => Ok(false),
         }
-    }
-
-    #[allow(dead_code)]
-    async fn fetch_oids(pool: &Pool) -> Result<(), Error> {
-        if pool.lock().oids.is_none() {
-            let oids = Oids::load(&mut pool.get(&Request::default()).await?)
-                .await
-                .ok();
-            if let Some(oids) = oids {
-                pool.lock().oids = Some(oids);
-            }
-        }
-
-        Ok(())
     }
 
     pub async fn healthcheck(pool: &Pool) -> Result<bool, Error> {
