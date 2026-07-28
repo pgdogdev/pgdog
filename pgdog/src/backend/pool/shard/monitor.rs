@@ -163,7 +163,7 @@ mod test {
     use crate::backend::pool::lsn_monitor::LsnStats;
     use crate::backend::pool::{Address, Config, PoolConfig};
     use crate::backend::replication::publisher::Lsn;
-    use crate::config::{LoadBalancingStrategy, ReadWriteSplit, Role};
+    use crate::config::{ReadWriteSplit, Role};
     use pgdog_postgres_types::{Format, FromDataType, TimestampTz};
     use pgdog_stats::LsnStats as StatsLsnStats;
     use tokio::time::sleep;
@@ -282,17 +282,15 @@ mod test {
     async fn test_monitor_updates_roles_on_failover() {
         crate::logger();
 
-        let primary = Some(pool_config(Address::new_test()));
+        let primary = Some(&pool_config(Address::new_test()));
         let replicas = [pool_config(Address {
             configured_role: Role::Auto,
             ..Address::new_test()
         })];
 
         let shard = Shard::new(ShardConfig {
-            number: 0,
-            primary: &primary,
+            primary,
             replicas: &replicas,
-            lb_strategy: LoadBalancingStrategy::Random,
             rw_split: ReadWriteSplit::ExcludePrimary,
             identifier: Arc::new(User {
                 user: "pgdog".into(),
@@ -301,8 +299,7 @@ mod test {
             // Disable the maintenance tick (interval → MAX) so the monitor only
             // wakes on the role-change notification we fire below.
             lsn_check_interval: Duration::MAX,
-            pub_sub_enabled: false,
-            schema_cache: SchemaCache::default(),
+            ..Default::default()
         });
 
         // index 0 = replica target, index 1 = primary target.

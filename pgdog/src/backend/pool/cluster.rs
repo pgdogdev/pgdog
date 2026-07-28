@@ -298,7 +298,7 @@ impl Cluster {
                 .map(|(number, config)| {
                     Shard::new(ShardConfig {
                         number,
-                        primary: &config.primary,
+                        primary: config.primary.as_ref(),
                         replicas: &config.replicas,
                         lb_strategy,
                         rw_split,
@@ -671,7 +671,6 @@ mod test {
         ConfigAndUsers, OmnishardedTable, PoolerMode, QueryParserLevel, ShardedSchema,
     };
 
-    use crate::backend::schema::SchemaCache;
     use crate::frontend::router::sharding::ShardedTable;
     use crate::{
         backend::{
@@ -679,10 +678,7 @@ mod test {
             pool::{Address, Config, PoolConfig, ShardConfig},
             replication::ShardedSchemas,
         },
-        config::{
-            DataType, Hasher, LoadBalancingStrategy, MultiTenant, ReadWriteSplit,
-            ReadWriteStrategy, Role, config,
-        },
+        config::{DataType, Hasher, MultiTenant, ReadWriteSplit, ReadWriteStrategy, Role, config},
         frontend::ClientRequest,
         net::Query,
     };
@@ -695,7 +691,7 @@ mod test {
                 user: "pgdog".into(),
                 database: "pgdog".into(),
             });
-            let primary = &Some(PoolConfig {
+            let primary = Some(&PoolConfig {
                 address: Address::new_test(),
                 config: Config::default(),
             });
@@ -713,12 +709,9 @@ mod test {
                         number,
                         primary,
                         replicas,
-                        lb_strategy: LoadBalancingStrategy::Random,
-                        rw_split: ReadWriteSplit::IncludePrimary,
                         identifier: identifier.clone(),
                         lsn_check_interval: Duration::MAX,
-                        pub_sub_enabled: false,
-                        schema_cache: SchemaCache::default(),
+                        ..Default::default()
                     })
                 })
                 .collect::<Vec<_>>();
@@ -826,7 +819,7 @@ mod test {
             let shard1 = cluster.shards.last_mut().unwrap();
             *shard1 = Shard::new(ShardConfig {
                 number: 1,
-                primary: &Some(PoolConfig {
+                primary: Some(&PoolConfig {
                     address: Address {
                         database_name: "pgdog1".into(),
                         ..Address::new_test()
@@ -841,12 +834,9 @@ mod test {
                     },
                     config: Config::default(),
                 }],
-                lb_strategy: LoadBalancingStrategy::Random,
-                rw_split: ReadWriteSplit::IncludePrimary,
                 identifier: cluster.identifier.clone(),
                 lsn_check_interval: Duration::MAX,
-                pub_sub_enabled: false,
-                schema_cache: SchemaCache::default(),
+                ..Default::default()
             });
             cluster
         }
@@ -859,18 +849,12 @@ mod test {
 
             Cluster {
                 shards: vec![Shard::new(ShardConfig {
-                    number: 0,
-                    primary: &Some(PoolConfig {
+                    primary: Some(&PoolConfig {
                         address: Address::new_test(),
                         config: Config::default(),
                     }),
-                    replicas: &[],
-                    lb_strategy: LoadBalancingStrategy::default(),
-                    rw_split: ReadWriteSplit::default(),
                     identifier: identifier.clone(),
-                    lsn_check_interval: Duration::default(),
-                    pub_sub_enabled: false,
-                    schema_cache: SchemaCache::default(),
+                    ..Default::default()
                 })],
                 prepared_statements: config.config.general.prepared_statements,
                 dry_run: config.config.general.dry_run,
@@ -891,8 +875,6 @@ mod test {
             let mut cluster = Self::new_test_single_shard(config);
             let identifier = cluster.identifier.clone();
             cluster.shards[0] = Shard::new(ShardConfig {
-                number: 0,
-                primary: &None,
                 replicas: &[PoolConfig {
                     address: Address {
                         configured_role: Role::Replica,
@@ -900,12 +882,8 @@ mod test {
                     },
                     config: Config::default(),
                 }],
-                lb_strategy: LoadBalancingStrategy::default(),
-                rw_split: ReadWriteSplit::default(),
                 identifier,
-                lsn_check_interval: Duration::default(),
-                pub_sub_enabled: false,
-                schema_cache: SchemaCache::default(),
+                ..Default::default()
             });
 
             cluster
