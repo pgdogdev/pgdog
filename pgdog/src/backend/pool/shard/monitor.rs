@@ -289,7 +289,7 @@ mod test {
         })];
 
         let shard = Shard::new(ShardConfig {
-            primary: primary,
+            primary,
             replicas: &replicas,
             rw_split: ReadWriteSplit::ExcludePrimary,
             identifier: Arc::new(User {

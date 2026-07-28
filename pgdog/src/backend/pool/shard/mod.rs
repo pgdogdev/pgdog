@@ -27,7 +27,7 @@ pub mod role_detector;
 use monitor::*;
 use role_detector::*;
 
-#[derive(Default)]
+#[cfg_attr(test, derive(Default))]
 pub(super) struct ShardConfig<'a> {
     /// Shard number.
     pub(super) number: usize,
