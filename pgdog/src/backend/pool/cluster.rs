@@ -6,11 +6,7 @@ use pgdog_config::{
     LoadSchema, PreparedStatements, QueryParser, QueryParserEngine, QueryParserLevel, Rewrite,
     RewriteMode, users::PasswordKind,
 };
-use std::{
-    collections::HashSet,
-    sync::Arc,
-    time::Duration,
-};
+use std::{collections::HashSet, sync::Arc, time::Duration};
 
 use crate::backend::schema::SchemaCache;
 use crate::frontend::router::sharding::ShardedTable;
