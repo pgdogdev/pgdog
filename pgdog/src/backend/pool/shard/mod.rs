@@ -5,7 +5,7 @@ use std::ops::Deref;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::select;
-use tokio::sync::{Notify, OnceCell};
+use tokio::sync::SetOnce;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info};
 
@@ -137,8 +137,7 @@ impl Shard {
         // a thundering herd with 100s of users, for example, all fetching
         // the same schema.
         let schema = self.schema_cache.get(self).await?;
-        let _ = self.schema.set(schema);
-        self.schema_waiter.notify_one();
+        self.schema.set(schema).expect("schema was not initialized");
 
         Ok(true)
     }
@@ -164,18 +163,12 @@ impl Shard {
     /// We don't need it for this shard.
     pub(super) fn schema_not_needed(&self) {
         let _ = self.schema.set(Schema::default());
-        self.schema_waiter.notify_one();
     }
 
     /// Wait for the shard to load the schema.
     /// If the schema is loaded already, this returns immediately.
     pub(super) async fn wait_schema_loaded(&self) {
-        if self.schema.initialized() {
-            return;
-        }
-        // Once the schema is loaded, ensure there is always a permit available.
-        self.schema_waiter.notified().await;
-        self.schema_waiter.notify_one();
+        self.schema.wait().await;
     }
 
     /// Check that the shard LB targets are all launched.
@@ -269,7 +262,8 @@ impl Shard {
         &self.identifier
     }
 
-    /// Get currently loaded schema for this shard.
+    /// Get currently loaded schema for this shard, or an empty schema if
+    /// the schema was not yet loaded.
     pub fn schema(&self) -> Schema {
         self.schema.get().cloned().unwrap_or_default()
     }
@@ -331,8 +325,7 @@ pub struct ShardInner {
     comms: Arc<ShardComms>,
     pub_sub: Arc<ArcSwap<Option<PubSubListener>>>,
     identifier: Arc<User>,
-    schema: Arc<OnceCell<Schema>>,
-    schema_waiter: Notify,
+    schema: SetOnce<Schema>,
     pub_sub_enabled: bool,
     schema_cache: SchemaCache,
 }
@@ -363,8 +356,7 @@ impl ShardInner {
             comms,
             pub_sub: Arc::new(ArcSwap::new(Arc::new(None))),
             identifier,
-            schema: Arc::new(OnceCell::new()),
-            schema_waiter: Notify::new(),
+            schema: SetOnce::new(),
             pub_sub_enabled,
             schema_cache,
         }
