@@ -205,12 +205,14 @@ impl Manager {
         identifier: &Arc<User>,
         phase: TwoPcPhase,
     ) -> Result<TwoPcGuard, Error> {
+        let prefix = TwoPcTransaction::global_prefix();
         let prior = {
             let mut guard = self.inner.lock();
             let prior = guard.transactions.get(&transaction).cloned();
             let entry = guard.transactions.entry(transaction).or_default();
             entry.identifier = identifier.clone();
             entry.phase = phase;
+            entry.prefix = prefix.clone();
             prior
         };
 
@@ -221,6 +223,7 @@ impl Manager {
                         transaction,
                         identifier.user.clone(),
                         identifier.database.clone(),
+                        prefix,
                     )
                     .await
                 }
@@ -262,14 +265,20 @@ impl Manager {
         transaction: TwoPcTransaction,
         user: String,
         database: String,
+        prefix: String,
         phase: TwoPcPhase,
     ) {
         let identifier = Arc::new(User { user, database });
         {
             let mut guard = self.inner.lock();
-            guard
-                .transactions
-                .insert(transaction, TransactionInfo { phase, identifier });
+            guard.transactions.insert(
+                transaction,
+                TransactionInfo {
+                    phase,
+                    identifier,
+                    prefix,
+                },
+            );
             guard.queue.push_back(transaction);
         }
         self.stats.incr_recovered();
@@ -345,6 +354,13 @@ impl Manager {
     }
 
     /// Reconnect to cluster if available and rollback the two-phase transaction.
+    ///
+    /// The transaction may have been created by an earlier PgDog
+    /// process; the GID prefix recorded when it was created names the
+    /// exact prepared transactions on the shards. Cleanup scans each
+    /// shard's prepared transactions and acts on the GIDs that match,
+    /// falling back to the durable numeric transaction ID for WAL
+    /// records that did not store the prefix.
     async fn cleanup_phase(&self, transaction: TwoPcTransaction) -> Result<(), Error> {
         let state = match self.inner.lock().transactions.get(&transaction).cloned() {
             Some(state) => state,
@@ -379,7 +395,9 @@ impl Manager {
                 &Route::write(ShardWithPriority::new_override_transaction(Shard::All)),
             )
             .await?;
-        connection.two_pc(transaction, phase).await?;
+        connection
+            .two_pc_cleanup(transaction, &state.prefix, phase)
+            .await?;
         connection.disconnect();
 
         Ok(())
@@ -412,6 +430,10 @@ impl Manager {
 pub struct TransactionInfo {
     pub phase: TwoPcPhase,
     pub identifier: Arc<User>,
+    /// Coordinator GID prefix the transaction's prepared names were
+    /// rendered with. Empty when restored from a WAL record written by
+    /// a version that did not store it.
+    pub prefix: String,
 }
 
 #[derive(Default, Debug)]

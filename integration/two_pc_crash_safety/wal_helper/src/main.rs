@@ -33,10 +33,13 @@ async fn main() {
     let mut segment = Segment::create(&dir, 0).await.expect("create segment");
 
     let mut buf = BytesMut::new();
+    // The prefix is left empty so recovery takes the numeric-ID
+    // fallback path, keeping that path covered end to end.
     Record::Begin(BeginPayload {
         txn,
         user,
         database,
+        prefix: String::new(),
     })
     .encode(&mut buf)
     .expect("encode begin");

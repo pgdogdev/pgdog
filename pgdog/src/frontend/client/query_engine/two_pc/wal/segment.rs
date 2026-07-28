@@ -410,6 +410,7 @@ mod tests {
             txn: TwoPcTransaction::new(),
             user: "u".into(),
             database: "d".into(),
+            prefix: "__pgdog_2pc_".into(),
         });
         let r2 = Record::End(TxnPayload {
             txn: TwoPcTransaction::new(),
@@ -442,6 +443,7 @@ mod tests {
                 txn: TwoPcTransaction::new(),
                 user: "u".into(),
                 database: "d".into(),
+                prefix: "__pgdog_2pc_".into(),
             })
             .encode(&mut buf)
             .unwrap();
@@ -489,6 +491,7 @@ mod tests {
             txn: TwoPcTransaction::new(),
             user: "u".into(),
             database: "d".into(),
+            prefix: "__pgdog_2pc_".into(),
         });
         let mut buf = BytesMut::new();
         r1.encode(&mut buf).unwrap();
@@ -556,6 +559,7 @@ mod tests {
                 txn: TwoPcTransaction::new(),
                 user: payload.clone(),
                 database: "d".into(),
+                prefix: "__pgdog_2pc_".into(),
             });
             r.encode(&mut buf).unwrap();
             expected.push(r);

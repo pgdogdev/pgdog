@@ -5,14 +5,16 @@ use crate::{
         ClientRequest,
         client::query_engine::{
             TwoPcPhase,
-            two_pc::{TwoPcTransaction, statement::phase_control},
+            two_pc::{TwoPcTransaction, TwoPcTransactionOnShard, statement::phase_control},
         },
     },
-    net::{FrontendPid, ProtocolMessage, Query, parameter::Parameters},
+    net::{DataRow, FrontendPid, ProtocolMessage, Query, parameter::Parameters},
     state::State,
+    util::is_safe_identifier,
 };
 
 use futures::future::join_all;
+use tracing::warn;
 
 use super::*;
 
@@ -364,20 +366,25 @@ impl Binding {
 
     pub(crate) async fn two_pc_on_guards(
         servers: &mut [Guard],
+        state: &MultiShard,
         transaction: TwoPcTransaction,
         phase: TwoPcPhase,
     ) -> Result<(), Error> {
         let skip_missing = matches!(phase, TwoPcPhase::Phase2 | TwoPcPhase::Rollback);
 
         let mut futures = Vec::new();
-        for (shard, server) in servers.iter_mut().enumerate() {
+        for (position, server) in servers.iter_mut().enumerate() {
+            // Map positional index to actual shard number.
+            // When only a subset of shards is connected (Shard::Multi binding),
+            // positional indices don't match actual shard numbers.
+            let shard = state.shard_index(position);
             let query = phase_control(transaction, shard, phase);
             futures.push(server.execute(query));
         }
 
         let results = join_all(futures).await;
 
-        for (shard, result) in results.into_iter().enumerate() {
+        for (position, result) in results.into_iter().enumerate() {
             match result {
                 Err(Error::ExecutionError(err)) => {
                     if !(skip_missing && err.code == "42704") {
@@ -387,7 +394,7 @@ impl Binding {
                 Err(err) => return Err(err),
                 Ok(_) => {
                     if phase == TwoPcPhase::Phase2 {
-                        servers[shard].stats_mut().transaction_2pc();
+                        servers[position].stats_mut().transaction_2pc();
                     }
                 }
             }
@@ -403,8 +410,114 @@ impl Binding {
         phase: TwoPcPhase,
     ) -> Result<(), Error> {
         match self {
+            Binding::MultiShard(servers, state) => {
+                Self::two_pc_on_guards(servers, state, transaction, phase).await
+            }
+
+            _ => Err(Error::TwoPcMultiShardOnly),
+        }
+    }
+
+    /// Resolve a two-phase transaction on every shard during cleanup
+    /// and crash recovery.
+    ///
+    /// `prefix` is the coordinator GID prefix recorded when the
+    /// transaction was created; combined with the transaction's numeric
+    /// ID it names the exact prepared transaction on each shard, and the
+    /// phase statement runs against the GIDs found in
+    /// `pg_prepared_xacts`. An empty `prefix` means the transaction was
+    /// restored from a WAL record that did not store it; matching then
+    /// falls back to the durable numeric transaction ID and shard index.
+    /// A shard with no matching GID is already resolved and is skipped.
+    pub(crate) async fn two_pc_cleanup(
+        &mut self,
+        transaction: TwoPcTransaction,
+        prefix: &str,
+        phase: TwoPcPhase,
+    ) -> Result<(), Error> {
+        match self {
             Binding::MultiShard(servers, _) => {
-                Self::two_pc_on_guards(servers, transaction, phase).await
+                let futures = servers
+                    .iter_mut()
+                    .enumerate()
+                    .map(|(shard, server)| async move {
+                        let target = TwoPcTransactionOnShard::new(transaction, shard);
+                        // A GID rendered from the recorded prefix is
+                        // checked against the identifier alphabet before
+                        // it is embedded in a quoted literal; a prefix
+                        // outside the alphabet falls back to numeric-ID
+                        // matching, which performs the same check.
+                        let expected = if prefix.is_empty() {
+                            None
+                        } else {
+                            let gid = target.gid(prefix);
+                            if is_safe_identifier(&gid) {
+                                Some(gid)
+                            } else {
+                                warn!(
+                                    "[2pc] recorded gid {:?} contains characters \
+                                     PgDog never generates; matching by numeric ID",
+                                    gid
+                                );
+                                None
+                            }
+                        };
+                        let rows: Vec<DataRow> = server
+                            .fetch_all(
+                                "SELECT gid FROM pg_prepared_xacts WHERE database = current_database()",
+                            )
+                            .await?;
+
+                        for row in rows {
+                            let Some(gid) = row.get_text(0) else {
+                                continue;
+                            };
+                            let matched = match &expected {
+                                Some(expected) => &gid == expected,
+                                None => target.matches_gid(&gid),
+                            };
+                            if !matched {
+                                continue;
+                            }
+                            // Both match paths guarantee the gid contains
+                            // no characters that need quoting.
+                            let statement = match phase {
+                                TwoPcPhase::Phase2 => format!("COMMIT PREPARED '{gid}'"),
+                                TwoPcPhase::Rollback => format!("ROLLBACK PREPARED '{gid}'"),
+                                TwoPcPhase::Phase1 => {
+                                    unreachable!("cleanup resolves transactions; it never prepares")
+                                }
+                            };
+                            match server.execute(&statement).await {
+                                Ok(_) => {
+                                    if phase == TwoPcPhase::Phase2 {
+                                        server.stats_mut().transaction_2pc();
+                                    }
+                                }
+                                // Insufficient privilege: the prepared transaction
+                                // is owned by a role the configured user can't act
+                                // for. Retrying can't succeed until an operator
+                                // intervenes, so leave the transaction to them
+                                // rather than retrying forever.
+                                Err(Error::ExecutionError(err)) if err.code == "42501" => {
+                                    warn!(
+                                        "[2pc] insufficient privilege to run {}; \
+                                         resolve the prepared transaction manually",
+                                        statement
+                                    );
+                                }
+                                Err(err) => return Err(err),
+                            }
+                        }
+
+                        Ok::<(), Error>(())
+                    });
+
+                for result in join_all(futures).await {
+                    result?;
+                }
+
+                Ok(())
             }
 
             _ => Err(Error::TwoPcMultiShardOnly),
