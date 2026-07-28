@@ -24,7 +24,7 @@ pub(crate) struct WalWriter {
     inner: Arc<Inner>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 struct Inner {
     number: AtomicU64,
     written: AtomicUsize,
@@ -77,5 +77,19 @@ impl WalWriter {
         current.shutdown();
 
         Ok(())
+    }
+
+    pub(crate) async fn new(path: &PathBuf, counter: u64) -> Result<Self, Error> {
+        // Create the first segment.
+        let segment = LiveSegment::new(path, counter).await?;
+
+        Ok(Self {
+            path: path.clone(),
+            segment: Arc::new(ArcSwap::new(Arc::new(segment))),
+            inner: Arc::new(Inner {
+                number: AtomicU64::new(counter + 1),
+                ..Default::default()
+            }),
+        })
     }
 }

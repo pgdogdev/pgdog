@@ -1,20 +1,18 @@
 //! Two-phase commit WAL segment.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use crate::net::{Error, FromBytes};
-use bytes::{Buf, Bytes};
+use crate::net::Error;
+use bytes::Bytes;
 use tokio::{
     fs::File,
-    io::{AsyncReadExt, BufReader, ReadBuf},
+    io::{AsyncReadExt, BufReader},
 };
+use tracing::debug;
 
-use super::{
-    super::Manager,
-    Record,
-    record::{Records, TwoPcRecordAction, TwoPcRecordAdd, TwoPcRecordRemove},
-};
+use super::{super::Manager, Record, record::Records};
 
+#[derive(Debug, Clone)]
 pub(crate) struct Segment {
     pub(super) counter: u64,
     version: u32,
@@ -35,31 +33,57 @@ impl Segment {
 
     /// Load segment from file.
     pub(super) async fn load(path: &PathBuf) -> Result<Self, Error> {
+        use std::io::ErrorKind;
+        debug!(r#"[2pc] opening segment "{}""#, path.display());
+
         let segment = File::open(path).await?;
+        let file_len = segment.metadata().await?.len() as usize;
         let mut buffer = BufReader::new(segment);
 
         let counter = buffer.read_u64().await?;
         let version = buffer.read_u32().await?;
         let mut records = vec![];
+        let mut consumed = size_of::<u64>() + size_of::<u32>();
 
         // This can safely read incomplete segments,
         // which is expected if PgDog crashed during a 2pc write.
         loop {
-            if let Ok(code) = buffer.read_u8().await {
-                if let Ok(len) = buffer.read_u64().await {
-                    let mut data = vec![0u8; len as usize - 4];
-                    if let Ok(_) = buffer.read_exact(&mut data).await {
-                        records.push(Record {
-                            code: code as char,
-                            data: Bytes::from(data),
-                        });
-                    }
-                } else {
-                    break;
-                }
-            } else {
+            let code = match buffer.read_u8().await {
+                Ok(code) => code,
+                Err(err) if err.kind() == ErrorKind::UnexpectedEof => break,
+                Err(err) => return Err(err.into()),
+            };
+            consumed += size_of::<u8>();
+
+            let len = match buffer.read_i32().await {
+                Ok(len) => len,
+                Err(err) if err.kind() == ErrorKind::UnexpectedEof => break,
+                Err(err) => return Err(err.into()),
+            };
+            consumed += size_of::<i32>();
+
+            if len < 4 {
+                return Err(Error::MalformedMessageLength(len));
+            }
+
+            let data_len = len as usize - size_of::<i32>();
+            if data_len > file_len.saturating_sub(consumed) {
                 break;
             }
+
+            let mut data = vec![0u8; data_len];
+            match buffer.read_exact(&mut data).await {
+                Ok(_) => (),
+                Err(err) if err.kind() == ErrorKind::UnexpectedEof => break,
+                Err(err) => return Err(err.into()),
+            }
+
+            consumed += data_len;
+
+            records.push(Record {
+                code: code as char,
+                data: Bytes::from(data),
+            });
         }
 
         Ok(Self {
@@ -72,143 +96,15 @@ impl Segment {
     pub(crate) fn size(&self) -> usize {
         self.records.iter().map(|record| record.len()).sum()
     }
-}
 
-impl FromBytes for Segment {
-    fn from_bytes(mut bytes: Bytes) -> Result<Self, Error> {
-        let mut records = vec![];
+    // Path to the segment.
+    pub(super) fn path(path: &Path, number: u64) -> PathBuf {
+        use super::EXTENSION;
 
-        if bytes.remaining() < 8 {
-            return Err(Error::UnexpectedEof);
-        }
-
-        // Finally, 64-bit xids :)
-        // That's a joke, this is not an XID, this is just
-        // the segment number.
-        let counter = bytes.get_u64();
-
-        if bytes.remaining() < 4 {
-            return Err(Error::UnexpectedEof);
-        }
-
-        let version = bytes.get_u32();
-
-        while bytes.has_remaining() {
-            if bytes.remaining() < 5 {
-                return Err(Error::UnexpectedEof);
-            }
-
-            let mut header = bytes.clone();
-            header.advance(1);
-            let len = header.get_i32();
-            if len < 4 {
-                return Err(Error::UnexpectedEof);
-            }
-
-            let record_len = len as usize + 1;
-            if bytes.remaining() < record_len {
-                return Err(Error::UnexpectedEof);
-            }
-
-            records.push(Record::from_bytes(bytes.split_to(record_len))?);
-        }
-
-        Ok(Self {
-            counter,
-            records,
-            version,
-        })
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use std::sync::Arc;
-
-    use bytes::{BufMut, BytesMut};
-    use pgdog_stats::User;
-
-    use crate::frontend::client::query_engine::two_pc::{
-        TransactionInfo, TwoPcPhase, TwoPcTransaction,
-    };
-    use crate::net::ToBytes;
-
-    use super::*;
-
-    #[test]
-    fn test_multiple_records() {
-        let expected = [
-            TwoPcRecordAdd {
-                transaction: TwoPcTransaction(123456),
-                info: TransactionInfo {
-                    phase: TwoPcPhase::Phase1,
-                    identifier: Arc::new(User {
-                        user: "pgdog".into(),
-                        database: "prod".into(),
-                    }),
-                },
-            },
-            TwoPcRecordAdd {
-                transaction: TwoPcTransaction(654321),
-                info: TransactionInfo {
-                    phase: TwoPcPhase::Phase2,
-                    identifier: Arc::new(User {
-                        user: "admin".into(),
-                        database: "postgres".into(),
-                    }),
-                },
-            },
-        ];
-        let mut bytes = BytesMut::new();
-        bytes.put_u64(42);
-        for record in &expected {
-            bytes.put(Record::from(record.clone()).to_bytes());
-        }
-
-        let segment = Segment::from_bytes(bytes.freeze()).unwrap();
-        assert_eq!(segment.counter, 42);
-        let records = segment
-            .records
-            .into_iter()
-            .map(TwoPcRecordAdd::try_from)
-            .collect::<Result<Vec<_>, _>>()
-            .unwrap();
-
-        assert_eq!(records, expected);
+        path.join(format!("{}.{}", number, EXTENSION))
     }
 
-    #[test]
-    fn test_empty_segment() {
-        let mut bytes = BytesMut::new();
-        bytes.put_u64(42);
-
-        let segment = Segment::from_bytes(bytes.freeze()).unwrap();
-
-        assert_eq!(segment.counter, 42);
-        assert!(segment.records.is_empty());
-    }
-
-    #[test]
-    fn test_invalid_record_length() {
-        let mut bytes = BytesMut::new();
-        bytes.put_u64(42);
-        bytes.put_slice(&[b'1', 0, 0, 0, 3]);
-
-        assert!(matches!(
-            Segment::from_bytes(bytes.freeze()),
-            Err(Error::UnexpectedEof)
-        ));
-    }
-
-    #[test]
-    fn test_truncated_record() {
-        let mut bytes = BytesMut::new();
-        bytes.put_u64(42);
-        bytes.put_slice(&[b'1', 0, 0, 0, 5]);
-
-        assert!(matches!(
-            Segment::from_bytes(bytes.freeze()),
-            Err(Error::UnexpectedEof)
-        ));
+    pub(super) fn records(&self) -> &[Record] {
+        &self.records
     }
 }

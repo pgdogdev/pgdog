@@ -1,7 +1,7 @@
 //! Handle recovering the state
 //! of the 2pc manager from WAL segments.
 
-use super::{super::Manager, EXTENSION, Segment};
+use super::{super::Manager, EXTENSION, Segment, WalWriter};
 use crate::net::Error;
 use std::path::PathBuf;
 use tokio::fs::read_dir;
@@ -66,12 +66,12 @@ impl Recovery {
         })
     }
 
-    pub(crate) async fn run(self, manager: &Manager) -> Result<u64, Error> {
+    pub(crate) async fn run(self, manager: &Manager) -> Result<WalWriter, Error> {
         let mut counter = 0;
         let mut size = 0;
+        let start = Instant::now();
 
         info!("[2pc] recovery replaying {} WAL segments", self.files.len());
-        let start = Instant::now();
 
         for file in &self.files {
             let segment = Segment::load(&file).await?;
@@ -91,6 +91,6 @@ impl Recovery {
         // in its state.
         manager.cleanup_all();
 
-        Ok(counter)
+        WalWriter::new(&self.path, counter + 1).await
     }
 }

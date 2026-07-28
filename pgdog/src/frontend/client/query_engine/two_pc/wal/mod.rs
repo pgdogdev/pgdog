@@ -7,5 +7,9 @@ pub(crate) mod writer;
 
 pub(crate) use live_segment::*;
 pub(crate) use record::*;
+pub(crate) use recovery::Recovery;
 pub(crate) use segment::*;
 pub(crate) use writer::WalWriter;
+
+#[cfg(test)]
+mod tests;

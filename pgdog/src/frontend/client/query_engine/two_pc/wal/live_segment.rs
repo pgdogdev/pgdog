@@ -4,7 +4,7 @@ use std::{
     sync::Arc,
 };
 
-use super::Record;
+use super::{Record, Segment};
 use crate::{
     net::{Error, ToBytes},
     tasks,
@@ -21,7 +21,7 @@ use tracing::debug;
 // WAL data format version.
 const VERSION: u32 = 0;
 // WAL filename extension
-pub(super) const EXTENSION: &str = ".2pc";
+pub(super) const EXTENSION: &str = "2pc";
 
 #[derive(Debug)]
 struct LiveSegmentRecord {
@@ -39,7 +39,12 @@ pub(crate) struct LiveSegment {
 
 impl LiveSegment {
     pub(super) async fn new(path: &Path, number: u64) -> Result<Self, Error> {
-        let filename = path.join(number.to_string()).join(EXTENSION);
+        let filename = Segment::path(path, number);
+
+        debug!(
+            r#"[2pc] creating new WAL segment at "{}""#,
+            filename.display()
+        );
 
         let mut file = OpenOptions::new()
             .append(true)

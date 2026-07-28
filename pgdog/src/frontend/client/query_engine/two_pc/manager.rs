@@ -6,6 +6,7 @@ use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 use std::{
     collections::VecDeque,
+    path::PathBuf,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -33,7 +34,7 @@ use crate::{
 
 use super::{
     Error, TwoPcGuard, TwoPcPhase, TwoPcStats, TwoPcTransaction,
-    wal::{TwoPcRecordAction, TwoPcRecordAdd, TwoPcRecordRemove, WalWriter},
+    wal::{Recovery, TwoPcRecordAction, TwoPcRecordAdd, TwoPcRecordRemove, WalWriter},
 };
 
 static MANAGER: Lazy<Manager> = Lazy::new(Manager::init);
@@ -54,7 +55,7 @@ impl Manager {
         MANAGER.clone()
     }
 
-    fn init() -> Self {
+    pub(super) fn init() -> Self {
         let manager = Self {
             inner: Arc::new(Mutex::new(Inner::default())),
             notify: Arc::new(InnerNotify {
@@ -73,6 +74,19 @@ impl Manager {
         });
 
         manager
+    }
+
+    /// Run recovery and enable the 2pc WAL writer.
+    ///
+    /// # Arguments
+    ///
+    /// - `path`: WAL directory.
+    ///
+    pub(crate) async fn enable_wal(&self, path: &PathBuf) -> Result<(), Error> {
+        let writer = Recovery::new(path).await?.run(self).await?;
+        self.wal.store(Some(Arc::new(writer)));
+
+        Ok(())
     }
 
     #[cfg(test)]
