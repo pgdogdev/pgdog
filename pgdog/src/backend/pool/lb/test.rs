@@ -547,7 +547,7 @@ async fn test_read_write_split_exclude_primary_no_primary() {
 
     // Should work normally with just replicas
     let mut replica_ids = HashSet::new();
-    for _ in 0..10 {
+    for _ in 0..100 {
         let conn = replicas.get(&request).await.unwrap();
         replica_ids.insert(conn.pool.id());
     }
@@ -577,7 +577,7 @@ async fn test_read_write_split_include_primary_no_primary() {
 
     // Should work normally with just replicas
     let mut replica_ids = HashSet::new();
-    for _ in 0..10 {
+    for _ in 0..100 {
         let conn = replicas.get(&request).await.unwrap();
         replica_ids.insert(conn.pool.id());
     }
