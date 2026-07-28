@@ -1,37 +1,76 @@
 //! Two-phase commit WAL segment.
 
+use std::path::PathBuf;
+
 use crate::net::{Error, FromBytes};
 use bytes::{Buf, Bytes};
+use tokio::{
+    fs::File,
+    io::{AsyncReadExt, BufReader, ReadBuf},
+};
 
-use super::{super::Manager, Record, TwoPcRecord, TwoPcRecordAction};
+use super::{
+    super::Manager,
+    Record,
+    record::{Records, TwoPcRecordAction, TwoPcRecordAdd, TwoPcRecordRemove},
+};
 
-pub(super) struct Segment {
-    counter: u64,
+pub(crate) struct Segment {
+    pub(super) counter: u64,
+    version: u32,
     records: Vec<Record>,
 }
 
 impl Segment {
     /// Replay segment against the 2pc manager to
     /// restore in-memory state.
-    pub(super) async fn replay(&self, manager: &Manager) -> Result<(), Error> {
+    pub(super) fn replay(&self, manager: &Manager) -> Result<(), Error> {
         for record in &self.records {
-            let record = TwoPcRecord::try_from(record.clone()).unwrap();
-            match record.action {
-                TwoPcRecordAction::Add => {
-                    manager.transaction_state_manual(
-                        record.transaction,
-                        &record.info.identifier,
-                        record.info.phase,
-                    );
-                }
-
-                TwoPcRecordAction::Remove => {
-                    manager.remove(record.transaction);
-                }
-            }
+            let record = Records::try_from(record.clone()).expect("invalid record");
+            record.replay(manager);
         }
 
         Ok(())
+    }
+
+    /// Load segment from file.
+    pub(super) async fn load(path: &PathBuf) -> Result<Self, Error> {
+        let segment = File::open(path).await?;
+        let mut buffer = BufReader::new(segment);
+
+        let counter = buffer.read_u64().await?;
+        let version = buffer.read_u32().await?;
+        let mut records = vec![];
+
+        // This can safely read incomplete segments,
+        // which is expected if PgDog crashed during a 2pc write.
+        loop {
+            if let Ok(code) = buffer.read_u8().await {
+                if let Ok(len) = buffer.read_u64().await {
+                    let mut data = vec![0u8; len as usize - 4];
+                    if let Ok(_) = buffer.read_exact(&mut data).await {
+                        records.push(Record {
+                            code: code as char,
+                            data: Bytes::from(data),
+                        });
+                    }
+                } else {
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+
+        Ok(Self {
+            counter,
+            version,
+            records,
+        })
+    }
+
+    pub(crate) fn size(&self) -> usize {
+        self.records.iter().map(|record| record.len()).sum()
     }
 }
 
@@ -47,6 +86,12 @@ impl FromBytes for Segment {
         // That's a joke, this is not an XID, this is just
         // the segment number.
         let counter = bytes.get_u64();
+
+        if bytes.remaining() < 4 {
+            return Err(Error::UnexpectedEof);
+        }
+
+        let version = bytes.get_u32();
 
         while bytes.has_remaining() {
             if bytes.remaining() < 5 {
@@ -68,7 +113,11 @@ impl FromBytes for Segment {
             records.push(Record::from_bytes(bytes.split_to(record_len))?);
         }
 
-        Ok(Self { counter, records })
+        Ok(Self {
+            counter,
+            records,
+            version,
+        })
     }
 }
 
@@ -84,13 +133,12 @@ mod test {
     };
     use crate::net::ToBytes;
 
-    use super::super::{TwoPcRecord, TwoPcRecordAction};
     use super::*;
 
     #[test]
     fn test_multiple_records() {
         let expected = [
-            TwoPcRecord {
+            TwoPcRecordAdd {
                 transaction: TwoPcTransaction(123456),
                 info: TransactionInfo {
                     phase: TwoPcPhase::Phase1,
@@ -99,9 +147,8 @@ mod test {
                         database: "prod".into(),
                     }),
                 },
-                action: TwoPcRecordAction::Add,
             },
-            TwoPcRecord {
+            TwoPcRecordAdd {
                 transaction: TwoPcTransaction(654321),
                 info: TransactionInfo {
                     phase: TwoPcPhase::Phase2,
@@ -110,7 +157,6 @@ mod test {
                         database: "postgres".into(),
                     }),
                 },
-                action: TwoPcRecordAction::Remove,
             },
         ];
         let mut bytes = BytesMut::new();
@@ -124,7 +170,7 @@ mod test {
         let records = segment
             .records
             .into_iter()
-            .map(TwoPcRecord::try_from)
+            .map(TwoPcRecordAdd::try_from)
             .collect::<Result<Vec<_>, _>>()
             .unwrap();
 

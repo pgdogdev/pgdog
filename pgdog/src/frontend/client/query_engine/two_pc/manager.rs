@@ -1,5 +1,6 @@
 //! Global two-phase commit transaction manager.
 
+use arc_swap::ArcSwapOption;
 use fnv::FnvHashMap as HashMap;
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
@@ -23,20 +24,17 @@ use crate::{
         databases::User,
         pool::{Connection, Request},
     },
-    frontend::{
-        client::query_engine::{
-            TwoPcPhase,
-            two_pc::{TwoPcGuard, TwoPcStats, TwoPcTransaction},
-        },
-        router::{
-            Route,
-            parser::{Shard, ShardWithPriority},
-        },
+    frontend::router::{
+        Route,
+        parser::{Shard, ShardWithPriority},
     },
     tasks,
 };
 
-use super::Error;
+use super::{
+    Error, TwoPcGuard, TwoPcPhase, TwoPcStats, TwoPcTransaction,
+    wal::{TwoPcRecordAction, TwoPcRecordAdd, TwoPcRecordRemove, WalWriter},
+};
 
 static MANAGER: Lazy<Manager> = Lazy::new(Manager::init);
 static MAINTENANCE: Duration = Duration::from_millis(333);
@@ -47,6 +45,7 @@ pub struct Manager {
     inner: Arc<Mutex<Inner>>,
     notify: Arc<InnerNotify>,
     stats: Arc<TwoPcStats>,
+    wal: Arc<ArcSwapOption<WalWriter>>,
 }
 
 impl Manager {
@@ -65,6 +64,7 @@ impl Manager {
                 done: Notify::new(),
             }),
             stats: Arc::new(TwoPcStats::default()),
+            wal: Arc::new(ArcSwapOption::empty()),
         };
 
         let monitor = manager.clone();
@@ -92,7 +92,11 @@ impl Manager {
 
     /// Two-pc transaction finished.
     pub(crate) async fn done(&self, transaction: TwoPcTransaction) -> Result<(), Error> {
-        self.remove(transaction);
+        if let Some(_) = self.remove(transaction) {
+            if let Some(wal) = self.wal.load_full() {
+                wal.add(TwoPcRecordRemove { transaction }).await?;
+            }
+        }
 
         Ok(())
     }
@@ -140,6 +144,17 @@ impl Manager {
     ) -> Result<TwoPcGuard, Error> {
         self.transaction_state_manual(transaction, identifier, phase);
 
+        if let Some(wal) = self.wal.load_full() {
+            wal.add(TwoPcRecordAdd {
+                transaction,
+                info: TransactionInfo {
+                    phase,
+                    identifier: identifier.clone(),
+                },
+            })
+            .await?;
+        }
+
         Ok(TwoPcGuard {
             transaction,
             manager: Self::get(),
@@ -163,6 +178,19 @@ impl Manager {
                 identifier: identifier.clone(),
                 phase,
             });
+    }
+
+    /// Enqueue all transactions into the cleanup manager.
+    ///
+    /// This is called by recovery only.
+    ///
+    pub(super) fn cleanup_all(&self) {
+        let mut guard = self.inner.lock();
+        for transaction in guard.transactions.keys().cloned().collect::<Vec<_>>() {
+            guard.queue.push_back(transaction);
+        }
+
+        self.notify.notify.notify_one();
     }
 
     pub(super) fn return_guard(&self, guard: &TwoPcGuard) {
@@ -224,8 +252,8 @@ impl Manager {
         }
     }
 
-    pub(super) fn remove(&self, transaction: TwoPcTransaction) {
-        self.inner.lock().transactions.remove(&transaction);
+    pub(super) fn remove(&self, transaction: TwoPcTransaction) -> Option<TransactionInfo> {
+        self.inner.lock().transactions.remove(&transaction)
     }
 
     /// Reconnect to cluster if available and rollback the two-phase transaction.

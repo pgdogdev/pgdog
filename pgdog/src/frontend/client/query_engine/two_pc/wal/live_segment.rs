@@ -1,10 +1,7 @@
 use std::{
     collections::VecDeque,
     path::{Path, PathBuf},
-    sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
-    },
+    sync::Arc,
 };
 
 use super::Record;
@@ -12,7 +9,6 @@ use crate::{
     net::{Error, ToBytes},
     tasks,
 };
-use once_cell::sync::Lazy;
 use tokio::{
     fs::{File, OpenOptions},
     io::AsyncWriteExt,
@@ -22,7 +18,10 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
-static SEGMENT_COUNTER: Lazy<AtomicU64> = Lazy::new(|| AtomicU64::new(0));
+// WAL data format version.
+const VERSION: u32 = 0;
+// WAL filename extension
+pub(super) const EXTENSION: &str = ".2pc";
 
 #[derive(Debug)]
 struct LiveSegmentRecord {
@@ -31,8 +30,7 @@ struct LiveSegmentRecord {
 }
 
 #[derive(Debug, Clone)]
-pub(super) struct LiveSegment {
-    counter: u64,
+pub(crate) struct LiveSegment {
     queue: Arc<Mutex<VecDeque<LiveSegmentRecord>>>,
     notify: Arc<Notify>,
     shutdown: CancellationToken,
@@ -40,9 +38,8 @@ pub(super) struct LiveSegment {
 }
 
 impl LiveSegment {
-    pub(super) async fn new(path: &Path) -> Result<Self, Error> {
-        let number = SEGMENT_COUNTER.fetch_add(1, Ordering::Relaxed) + 1;
-        let filename = path.join(number.to_string());
+    pub(super) async fn new(path: &Path, number: u64) -> Result<Self, Error> {
+        let filename = path.join(number.to_string()).join(EXTENSION);
 
         let mut file = OpenOptions::new()
             .append(true)
@@ -50,10 +47,10 @@ impl LiveSegment {
             .open(&filename)
             .await?;
         file.write_all(&number.to_be_bytes()).await?;
+        file.write_all(&VERSION.to_be_bytes()).await?;
         file.flush().await?;
 
         let segment = Self {
-            counter: number,
             queue: Arc::new(Mutex::new(VecDeque::new())),
             notify: Arc::new(Notify::new()),
             shutdown: CancellationToken::new(),
@@ -71,7 +68,9 @@ impl LiveSegment {
 
     /// Write a record to the WAL and wait for it
     /// to be flushed to disk.
-    pub(super) async fn add(&self, record: Record) {
+    pub(super) async fn add(&self, record: Record) -> usize {
+        let len = record.len();
+
         let record = LiveSegmentRecord {
             record,
             flushed: CancellationToken::new(),
@@ -82,7 +81,15 @@ impl LiveSegment {
         self.queue.lock().await.push_back(record);
         self.notify.notify_one(); // Tell the writer that we are waiting for it to write the record.
 
-        flushed.cancelled().await
+        flushed.cancelled().await;
+
+        len
+    }
+
+    /// Flush all writes to this segment and stop
+    /// the writer.
+    pub(crate) fn shutdown(&self) {
+        self.shutdown.cancel();
     }
 
     async fn writer(self, mut file: File) {

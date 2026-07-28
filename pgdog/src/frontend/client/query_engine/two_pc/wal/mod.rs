@@ -1,6 +1,11 @@
 //! Two-phase commit write-ahead log.
-pub(super) mod live_segment;
-pub(super) mod record;
-pub(super) mod segment;
+pub(crate) mod live_segment;
+pub(crate) mod record;
+pub(crate) mod recovery;
+pub(crate) mod segment;
+pub(crate) mod writer;
 
-pub(super) use record::*;
+pub(crate) use live_segment::*;
+pub(crate) use record::*;
+pub(crate) use segment::*;
+pub(crate) use writer::WalWriter;

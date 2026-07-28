@@ -23,7 +23,7 @@ impl From<TwoPcPhase> for char {
         match value {
             TwoPcPhase::Phase1 => '1',
             TwoPcPhase::Phase2 => '2',
-            TwoPcPhase::Rollback => 'r',
+            TwoPcPhase::Rollback => '3',
         }
     }
 }
@@ -35,7 +35,7 @@ impl TryFrom<char> for TwoPcPhase {
         match value {
             '1' => Ok(Self::Phase1),
             '2' => Ok(Self::Phase2),
-            'r' => Ok(Self::Rollback),
+            '3' => Ok(Self::Rollback),
             _ => Err(()),
         }
     }
