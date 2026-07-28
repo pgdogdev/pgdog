@@ -9,6 +9,7 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use crate::UniqueIdFunction;
+use crate::duration;
 use crate::pooling::ConnectionRecovery;
 use crate::{
     CopyFormat, CutoverTimeoutAction, LoadSchema, QueryParserEngine, QueryParserLevel,
@@ -136,7 +137,11 @@ pub struct General {
     /// _Default:_ `30000`
     ///
     /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#healthcheck_interval>
-    #[serde(default = "General::healthcheck_interval")]
+    #[serde(
+        default = "General::healthcheck_interval",
+        deserialize_with = "crate::duration::millis"
+    )]
+    #[schemars(with = "crate::duration::TimeValue")]
     pub healthcheck_interval: u64,
 
     /// Frequency of healthchecks performed by PgDog on idle connections.
@@ -145,7 +150,11 @@ pub struct General {
     /// _Default:_ `30000`
     ///
     /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#idle_healthcheck_interval>
-    #[serde(default = "General::idle_healthcheck_interval")]
+    #[serde(
+        default = "General::idle_healthcheck_interval",
+        deserialize_with = "crate::duration::millis"
+    )]
+    #[schemars(with = "crate::duration::TimeValue")]
     pub idle_healthcheck_interval: u64,
 
     /// Delay running idle healthchecks at PgDog startup to give databases (and pools) time to spin up.
@@ -153,7 +162,11 @@ pub struct General {
     /// _Default:_ `5000`
     ///
     /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#idle_healthcheck_delay>
-    #[serde(default = "General::idle_healthcheck_delay")]
+    #[serde(
+        default = "General::idle_healthcheck_delay",
+        deserialize_with = "crate::duration::millis"
+    )]
+    #[schemars(with = "crate::duration::TimeValue")]
     pub idle_healthcheck_delay: u64,
 
     /// Maximum amount of time to wait for a healthcheck query to complete.
@@ -161,7 +174,11 @@ pub struct General {
     /// _Default:_ `5000`
     ///
     /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#healthcheck_timeout>
-    #[serde(default = "General::healthcheck_timeout")]
+    #[serde(
+        default = "General::healthcheck_timeout",
+        deserialize_with = "crate::duration::millis"
+    )]
+    #[schemars(with = "crate::duration::TimeValue")]
     pub healthcheck_timeout: u64,
 
     /// Enable load balancer HTTP health checks with the HTTP server running on this port.
@@ -174,13 +191,21 @@ pub struct General {
     /// _Default:_ `300000`
     ///
     /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#ban_timeout>
-    #[serde(default = "General::ban_timeout")]
+    #[serde(
+        default = "General::ban_timeout",
+        deserialize_with = "crate::duration::millis"
+    )]
+    #[schemars(with = "crate::duration::TimeValue")]
     pub ban_timeout: u64,
 
     /// Ban a replica from serving read queries if its replication lag (in milliseconds) exceeds this threshold.
     ///
     /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#ban_replica_lag>
-    #[serde(default = "General::ban_replica_lag")]
+    #[serde(
+        default = "General::ban_replica_lag",
+        deserialize_with = "crate::duration::millis"
+    )]
+    #[schemars(with = "crate::duration::TimeValue")]
     pub ban_replica_lag: u64,
 
     /// Ban a replica from serving read queries if its replication lag (in bytes) exceeds this threshold.
@@ -194,7 +219,11 @@ pub struct General {
     /// _Default:_ `5000`
     ///
     /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#rollback_timeout>
-    #[serde(default = "General::rollback_timeout")]
+    #[serde(
+        default = "General::rollback_timeout",
+        deserialize_with = "crate::duration::millis"
+    )]
+    #[schemars(with = "crate::duration::TimeValue")]
     pub rollback_timeout: u64,
 
     /// Which strategy to use for load balancing read queries.
@@ -274,7 +303,11 @@ pub struct General {
     /// _Default:_ `60000`
     ///
     /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#shutdown_timeout>
-    #[serde(default = "General::default_shutdown_timeout")]
+    #[serde(
+        default = "General::default_shutdown_timeout",
+        deserialize_with = "crate::duration::millis"
+    )]
+    #[schemars(with = "crate::duration::TimeValue")]
     pub shutdown_timeout: u64,
 
     /// How long to wait for active connections to be forcibly terminated after `shutdown_timeout` expires.
@@ -282,7 +315,11 @@ pub struct General {
     /// **Note:** If set, PgDog will send `CANCEL` requests to PostgreSQL for any remaining active queries before tearing down connection pools.
     ///
     /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#shutdown_termination_timeout>
-    #[serde(default = "General::default_shutdown_termination_timeout")]
+    #[serde(
+        default = "General::default_shutdown_termination_timeout",
+        deserialize_with = "crate::duration::millis_optional"
+    )]
+    #[schemars(with = "Option<crate::duration::TimeValue>")]
     pub shutdown_termination_timeout: Option<u64>,
 
     /// Broadcast IP address used for multi-instance coordination (e.g., schema cache invalidation across nodes).
@@ -305,6 +342,8 @@ pub struct General {
     /// Set to `0` or omit to disable.
     ///
     /// _Default:_ `None` (disabled)
+    #[serde(default, deserialize_with = "crate::duration::millis_optional")]
+    #[schemars(with = "Option<crate::duration::TimeValue>")]
     pub log_min_duration_parse: Option<u64>,
 
     /// Maximum number of characters of the query text included in log messages.
@@ -403,7 +442,11 @@ pub struct General {
     /// _Default:_ `5000`
     ///
     /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#connect_timeout>
-    #[serde(default = "General::default_connect_timeout")]
+    #[serde(
+        default = "General::default_connect_timeout",
+        deserialize_with = "crate::duration::millis"
+    )]
+    #[schemars(with = "crate::duration::TimeValue")]
     pub connect_timeout: u64,
 
     /// Maximum number of retries for Postgres server connection attempts.
@@ -419,13 +462,21 @@ pub struct General {
     /// _Default:_ `0`
     ///
     /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#connect_attempt_delay>
-    #[serde(default = "General::default_connect_attempt_delay")]
+    #[serde(
+        default = "General::default_connect_attempt_delay",
+        deserialize_with = "crate::duration::millis"
+    )]
+    #[schemars(with = "crate::duration::TimeValue")]
     pub connect_attempt_delay: u64,
 
     /// Maximum amount of time to wait for a Postgres query to finish executing.
     ///
     /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#query_timeout>
-    #[serde(default = "General::default_query_timeout")]
+    #[serde(
+        default = "General::default_query_timeout",
+        deserialize_with = "crate::duration::millis"
+    )]
+    #[schemars(with = "crate::duration::TimeValue")]
     pub query_timeout: u64,
 
     /// Maximum amount of time a client is allowed to wait for a connection from the pool.
@@ -433,7 +484,11 @@ pub struct General {
     /// _Default:_ `5000`
     ///
     /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#checkout_timeout>
-    #[serde(default = "General::checkout_timeout")]
+    #[serde(
+        default = "General::checkout_timeout",
+        deserialize_with = "crate::duration::millis"
+    )]
+    #[schemars(with = "crate::duration::TimeValue")]
     pub checkout_timeout: u64,
 
     /// Maximum amount of time new clients have to complete authentication.
@@ -441,7 +496,11 @@ pub struct General {
     /// _Default:_ `60000`
     ///
     /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#client_login_timeout>
-    #[serde(default = "General::client_login_timeout")]
+    #[serde(
+        default = "General::client_login_timeout",
+        deserialize_with = "crate::duration::millis"
+    )]
+    #[schemars(with = "crate::duration::TimeValue")]
     pub client_login_timeout: u64,
 
     /// Enable the query parser in single-shard deployments and record its decisions.
@@ -457,19 +516,31 @@ pub struct General {
     /// _Default:_ `60000`
     ///
     /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#idle_timeout>
-    #[serde(default = "General::idle_timeout")]
+    #[serde(
+        default = "General::idle_timeout",
+        deserialize_with = "crate::duration::millis"
+    )]
+    #[schemars(with = "crate::duration::TimeValue")]
     pub idle_timeout: u64,
 
     /// Close client connections that have been idle, i.e., haven't sent any queries, for this amount of time.
     ///
     /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#client_idle_timeout>
-    #[serde(default = "General::default_client_idle_timeout")]
+    #[serde(
+        default = "General::default_client_idle_timeout",
+        deserialize_with = "crate::duration::millis"
+    )]
+    #[schemars(with = "crate::duration::TimeValue")]
     pub client_idle_timeout: u64,
 
     /// Close client connections that have been idle inside a transaction for this amount of time.
     ///
     /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#client_idle_in_transaction_timeout>
-    #[serde(default = "General::default_client_idle_in_transaction_timeout")]
+    #[serde(
+        default = "General::default_client_idle_in_transaction_timeout",
+        deserialize_with = "crate::duration::millis"
+    )]
+    #[schemars(with = "crate::duration::TimeValue")]
     pub client_idle_in_transaction_timeout: u64,
 
     /// Maximum amount of time a server connection is allowed to exist.
@@ -477,7 +548,11 @@ pub struct General {
     /// _Default:_ `86400000`
     ///
     /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#server_lifetime>
-    #[serde(default = "General::server_lifetime")]
+    #[serde(
+        default = "General::server_lifetime",
+        deserialize_with = "crate::duration::millis"
+    )]
+    #[schemars(with = "crate::duration::TimeValue")]
     pub server_lifetime: u64,
 
     /// Maximum random adjustment applied to `server_lifetime` per backend
@@ -489,7 +564,11 @@ pub struct General {
     /// _Default:_ `0` (no jitter; existing behavior).
     ///
     /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#server_lifetime_jitter>
-    #[serde(default = "General::server_lifetime_jitter")]
+    #[serde(
+        default = "General::server_lifetime_jitter",
+        deserialize_with = "crate::duration::millis"
+    )]
+    #[schemars(with = "crate::duration::TimeValue")]
     pub server_lifetime_jitter: u64,
 
     /// How many transactions can wait while the mirror database processes previous requests.
@@ -523,7 +602,8 @@ pub struct General {
     /// Overrides the TTL set on DNS records received from DNS servers.
     ///
     /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#dns_ttl>
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::duration::millis_optional")]
+    #[schemars(with = "Option<crate::duration::TimeValue>")]
     pub dns_ttl: Option<u64>,
 
     /// Enables support for pub/sub and configures the size of the background task queue.
@@ -571,7 +651,8 @@ pub struct General {
     /// _Default:_ `0`
     ///
     /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#log_dedup_window>
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::duration::millis")]
+    #[schemars(with = "crate::duration::TimeValue")]
     pub log_dedup_window: u64,
 
     /// Number of identical log messages allowed within `log_dedup_window` before further duplicates are suppressed. Set to `0` to disable throttling.
@@ -619,7 +700,11 @@ pub struct General {
     /// _Default:_ `0`
     ///
     /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#two_phase_commit_wal_fsync_interval>
-    #[serde(default = "General::two_phase_commit_wal_fsync_interval")]
+    #[serde(
+        default = "General::two_phase_commit_wal_fsync_interval",
+        deserialize_with = "crate::duration::millis"
+    )]
+    #[schemars(with = "crate::duration::TimeValue")]
     pub two_phase_commit_wal_fsync_interval: u64,
 
     /// How often, in milliseconds, to write a checkpoint record to the two-phase commit WAL and garbage-collect old segments.
@@ -627,7 +712,11 @@ pub struct General {
     /// _Default:_ `15_000`
     ///
     /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#two_phase_commit_wal_checkpoint_interval>
-    #[serde(default = "General::two_phase_commit_wal_checkpoint_interval")]
+    #[serde(
+        default = "General::two_phase_commit_wal_checkpoint_interval",
+        deserialize_with = "crate::duration::millis"
+    )]
+    #[schemars(with = "crate::duration::TimeValue")]
     pub two_phase_commit_wal_checkpoint_interval: u64,
 
     /// Enable expanded (`\x`) output for `EXPLAIN` results returned by PgDog's built-in query plan aggregation.
@@ -639,7 +728,11 @@ pub struct General {
     /// _Default:_ `15000`
     ///
     /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#stats_period>
-    #[serde(default = "General::stats_period")]
+    #[serde(
+        default = "General::stats_period",
+        deserialize_with = "crate::duration::millis"
+    )]
+    #[schemars(with = "crate::duration::TimeValue")]
     pub stats_period: u64,
 
     /// Controls if server connections are recovered or dropped if a client abruptly disconnects.
@@ -665,7 +758,11 @@ pub struct General {
     /// _Default:_ `5000`
     ///
     /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#lsn_check_interval>
-    #[serde(default = "General::lsn_check_interval")]
+    #[serde(
+        default = "General::lsn_check_interval",
+        deserialize_with = "crate::duration::millis"
+    )]
+    #[schemars(with = "crate::duration::TimeValue")]
     pub lsn_check_interval: u64,
 
     /// Maximum amount of time allowed for the replication delay query to return a result.
@@ -673,13 +770,21 @@ pub struct General {
     /// _Default:_ `5000`
     ///
     /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#lsn_check_timeout>
-    #[serde(default = "General::lsn_check_timeout")]
+    #[serde(
+        default = "General::lsn_check_timeout",
+        deserialize_with = "crate::duration::millis"
+    )]
+    #[schemars(with = "crate::duration::TimeValue")]
     pub lsn_check_timeout: u64,
 
     /// For how long to delay checking for replication delay.
     ///
     /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#lsn_check_delay>
-    #[serde(default = "General::lsn_check_delay")]
+    #[serde(
+        default = "General::lsn_check_delay",
+        deserialize_with = "crate::duration::millis"
+    )]
+    #[schemars(with = "crate::duration::TimeValue")]
     pub lsn_check_delay: u64,
 
     /// Minimum ID for unique ID generator.
@@ -727,7 +832,11 @@ pub struct General {
     /// Base delay in milliseconds between table copy retries.
     /// Each successive attempt doubles the delay, capped at 32×.
     /// _Default:_ `1000`
-    #[serde(default = "General::resharding_copy_retry_min_delay")]
+    #[serde(
+        default = "General::resharding_copy_retry_min_delay",
+        deserialize_with = "crate::duration::millis"
+    )]
+    #[schemars(with = "crate::duration::TimeValue")]
     pub resharding_copy_retry_min_delay: u64,
 
     /// Maximum number of consecutive replication-subscriber errors tolerated before
@@ -746,7 +855,11 @@ pub struct General {
     /// _Default:_ `1000`
     ///
     /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#resharding_replication_retry_min_delay>
-    #[serde(default = "General::resharding_replication_retry_min_delay")]
+    #[serde(
+        default = "General::resharding_replication_retry_min_delay",
+        deserialize_with = "crate::duration::millis"
+    )]
+    #[schemars(with = "crate::duration::TimeValue")]
     pub resharding_replication_retry_min_delay: u64,
 
     /// Automatically reload the schema cache used by PgDog to route queries upon detecting DDL statements.
@@ -788,7 +901,11 @@ pub struct General {
     /// _Default:_ `1000`
     ///
     /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#cutover_last_transaction_delay>
-    #[serde(default = "General::cutover_last_transaction_delay")]
+    #[serde(
+        default = "General::cutover_last_transaction_delay",
+        deserialize_with = "crate::duration::millis"
+    )]
+    #[schemars(with = "crate::duration::TimeValue")]
     pub cutover_last_transaction_delay: u64,
 
     /// Maximum amount of time (in milliseconds) to wait for the cutover thresholds to be met. If exceeded, PgDog will take the action specified by `cutover_timeout_action`.
@@ -796,7 +913,11 @@ pub struct General {
     /// _Default:_ `30000`
     ///
     /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#cutover_timeout>
-    #[serde(default = "General::cutover_timeout")]
+    #[serde(
+        default = "General::cutover_timeout",
+        deserialize_with = "crate::duration::millis"
+    )]
+    #[schemars(with = "crate::duration::TimeValue")]
     pub cutover_timeout: u64,
 
     /// Action to take when `cutover_timeout` is exceeded.
@@ -934,6 +1055,12 @@ impl General {
             .unwrap_or(default)
     }
 
+    fn env_millis(env_var: &str) -> Option<u64> {
+        env::var(env_var)
+            .ok()
+            .and_then(|value| duration::parse_millis(&value).ok())
+    }
+
     fn env_string_or_default(env_var: &str, default: &str) -> String {
         env::var(env_var).unwrap_or_else(|_| default.to_string())
     }
@@ -985,7 +1112,7 @@ impl General {
     }
 
     fn healthcheck_interval() -> u64 {
-        Self::env_or_default("PGDOG_HEALTHCHECK_INTERVAL", 30_000)
+        Self::env_millis("PGDOG_HEALTHCHECK_INTERVAL").unwrap_or(30_000)
     }
 
     fn reload_schema_on_ddl() -> bool {
@@ -993,11 +1120,11 @@ impl General {
     }
 
     fn idle_healthcheck_interval() -> u64 {
-        Self::env_or_default("PGDOG_IDLE_HEALTHCHECK_INTERVAL", 30_000)
+        Self::env_millis("PGDOG_IDLE_HEALTHCHECK_INTERVAL").unwrap_or(30_000)
     }
 
     fn idle_healthcheck_delay() -> u64 {
-        Self::env_or_default("PGDOG_IDLE_HEALTHCHECK_DELAY", 5_000)
+        Self::env_millis("PGDOG_IDLE_HEALTHCHECK_DELAY").unwrap_or(5_000)
     }
 
     fn healthcheck_port() -> Option<u16> {
@@ -1009,15 +1136,12 @@ impl General {
     }
 
     fn ban_timeout() -> u64 {
-        Self::env_or_default(
-            "PGDOG_BAN_TIMEOUT",
-            Duration::from_secs(300).as_millis() as u64,
-        )
+        Self::env_millis("PGDOG_BAN_TIMEOUT").unwrap_or(Duration::from_secs(300).as_millis() as u64)
     }
 
     fn ban_replica_lag() -> u64 {
         // Use i64::MAX to ensure TOML serialization compatibility (TOML only supports i64)
-        Self::env_or_default("PGDOG_BAN_REPLICA_LAG", i64::MAX as u64)
+        Self::env_millis("PGDOG_BAN_REPLICA_LAG").unwrap_or(i64::MAX as u64)
     }
 
     fn ban_replica_lag_bytes() -> u64 {
@@ -1040,11 +1164,11 @@ impl General {
     }
 
     fn cutover_last_transaction_delay() -> u64 {
-        Self::env_or_default("PGDOG_CUTOVER_LAST_TRANSACTION_DELAY", 1_000) // 1 second
+        Self::env_millis("PGDOG_CUTOVER_LAST_TRANSACTION_DELAY").unwrap_or(1_000) // 1 second
     }
 
     fn cutover_timeout() -> u64 {
-        Self::env_or_default("PGDOG_CUTOVER_TIMEOUT", 30_000)
+        Self::env_millis("PGDOG_CUTOVER_TIMEOUT").unwrap_or(30_000)
         // 30 seconds
     }
 
@@ -1053,7 +1177,7 @@ impl General {
     }
 
     fn rollback_timeout() -> u64 {
-        Self::env_or_default("PGDOG_ROLLBACK_TIMEOUT", 5_000)
+        Self::env_millis("PGDOG_ROLLBACK_TIMEOUT").unwrap_or(5_000)
     }
 
     fn two_phase_commit_wal_dir() -> Option<PathBuf> {
@@ -1065,46 +1189,34 @@ impl General {
     }
 
     fn two_phase_commit_wal_fsync_interval() -> u64 {
-        Self::env_or_default("PGDOG_TWO_PHASE_COMMIT_WAL_FSYNC_INTERVAL", 0)
+        Self::env_millis("PGDOG_TWO_PHASE_COMMIT_WAL_FSYNC_INTERVAL").unwrap_or(0)
     }
 
     fn two_phase_commit_wal_checkpoint_interval() -> u64 {
-        Self::env_or_default("PGDOG_TWO_PHASE_COMMIT_WAL_CHECKPOINT_INTERVAL", 15_000)
+        Self::env_millis("PGDOG_TWO_PHASE_COMMIT_WAL_CHECKPOINT_INTERVAL").unwrap_or(15_000)
     }
 
     fn idle_timeout() -> u64 {
-        Self::env_or_default(
-            "PGDOG_IDLE_TIMEOUT",
-            Duration::from_secs(60).as_millis() as u64,
-        )
+        Self::env_millis("PGDOG_IDLE_TIMEOUT").unwrap_or(Duration::from_secs(60).as_millis() as u64)
     }
 
     fn client_login_timeout() -> u64 {
-        Self::env_or_default(
-            "PGDOG_CLIENT_LOG_TIMEOUT",
-            Duration::from_secs(60).as_millis() as u64,
-        )
+        Self::env_millis("PGDOG_CLIENT_LOG_TIMEOUT")
+            .unwrap_or(Duration::from_secs(60).as_millis() as u64)
     }
 
     fn default_client_idle_timeout() -> u64 {
-        Self::env_or_default(
-            "PGDOG_CLIENT_IDLE_TIMEOUT",
-            crate::MAX_DURATION.as_millis() as u64,
-        )
+        Self::env_millis("PGDOG_CLIENT_IDLE_TIMEOUT")
+            .unwrap_or(crate::MAX_DURATION.as_millis() as u64)
     }
 
     fn default_client_idle_in_transaction_timeout() -> u64 {
-        Self::env_or_default(
-            "PGDOG_CLIENT_IDLE_IN_TRANSACTION_TIMEOUT",
-            crate::MAX_DURATION.as_millis() as u64,
-        )
+        Self::env_millis("PGDOG_CLIENT_IDLE_IN_TRANSACTION_TIMEOUT")
+            .unwrap_or(crate::MAX_DURATION.as_millis() as u64)
     }
 
     fn default_query_timeout() -> u64 {
-        Self::env_or_default(
-            "PGDOG_QUERY_TIMEOUT",
-            crate::MAX_DURATION.as_millis() as u64,
-        )
+        Self::env_millis("PGDOG_QUERY_TIMEOUT").unwrap_or(crate::MAX_DURATION.as_millis() as u64)
     }
 
     pub fn query_timeout(&self) -> Duration {
@@ -1139,7 +1251,7 @@ impl General {
     }
 
     fn default_shutdown_timeout() -> u64 {
-        Self::env_or_default("PGDOG_SHUTDOWN_TIMEOUT", 60_000)
+        Self::env_millis("PGDOG_SHUTDOWN_TIMEOUT").unwrap_or(60_000)
     }
 
     fn default_system_catalogs() -> SystemCatalogsBehavior {
@@ -1163,19 +1275,19 @@ impl General {
     }
 
     fn resharding_replication_retry_min_delay() -> u64 {
-        Self::env_or_default("PGDOG_RESHARDING_REPLICATION_RETRY_MIN_DELAY", 1000)
+        Self::env_millis("PGDOG_RESHARDING_REPLICATION_RETRY_MIN_DELAY").unwrap_or(1000)
     }
 
     fn default_shutdown_termination_timeout() -> Option<u64> {
-        Self::env_option("PGDOG_SHUTDOWN_TERMINATION_TIMEOUT")
+        Self::env_millis("PGDOG_SHUTDOWN_TERMINATION_TIMEOUT")
     }
 
     fn default_connect_timeout() -> u64 {
-        Self::env_or_default("PGDOG_CONNECT_TIMEOUT", 5_000)
+        Self::env_millis("PGDOG_CONNECT_TIMEOUT").unwrap_or(5_000)
     }
 
     fn default_connect_attempt_delay() -> u64 {
-        Self::env_or_default("PGDOG_CONNECT_ATTEMPT_DELAY", 0)
+        Self::env_millis("PGDOG_CONNECT_ATTEMPT_DELAY").unwrap_or(0)
     }
 
     fn connect_attempts() -> u64 {
@@ -1187,18 +1299,15 @@ impl General {
     }
 
     fn lsn_check_timeout() -> u64 {
-        Self::env_or_default("PGDOG_LSN_CHECK_TIMEOUT", 5_000)
+        Self::env_millis("PGDOG_LSN_CHECK_TIMEOUT").unwrap_or(5_000)
     }
 
     fn lsn_check_interval() -> u64 {
-        Self::env_or_default("PGDOG_LSN_CHECK_INTERVAL", 5_000)
+        Self::env_millis("PGDOG_LSN_CHECK_INTERVAL").unwrap_or(5_000)
     }
 
     fn lsn_check_delay() -> u64 {
-        Self::env_or_default(
-            "PGDOG_LSN_CHECK_DELAY",
-            crate::MAX_DURATION.as_millis() as u64,
-        )
+        Self::env_millis("PGDOG_LSN_CHECK_DELAY").unwrap_or(crate::MAX_DURATION.as_millis() as u64)
     }
 
     pub fn lsn_checks_enabled(&self) -> bool {
@@ -1258,7 +1367,7 @@ impl General {
     }
 
     fn default_log_min_duration_parse() -> Option<u64> {
-        Self::env_option("PGDOG_LOG_MIN_DURATION_PARSE")
+        Self::env_millis("PGDOG_LOG_MIN_DURATION_PARSE")
     }
 
     pub fn log_min_duration_parse(&self) -> Option<Duration> {
@@ -1286,7 +1395,7 @@ impl General {
     }
 
     fn default_dns_ttl() -> Option<u64> {
-        Self::env_option("PGDOG_DNS_TTL")
+        Self::env_millis("PGDOG_DNS_TTL")
     }
 
     pub fn pub_sub_channel_size() -> usize {
@@ -1310,17 +1419,13 @@ impl General {
     }
 
     fn healthcheck_timeout() -> u64 {
-        Self::env_or_default(
-            "PGDOG_HEALTHCHECK_TIMEOUT",
-            Duration::from_secs(5).as_millis() as u64,
-        )
+        Self::env_millis("PGDOG_HEALTHCHECK_TIMEOUT")
+            .unwrap_or(Duration::from_secs(5).as_millis() as u64)
     }
 
     fn checkout_timeout() -> u64 {
-        Self::env_or_default(
-            "PGDOG_CHECKOUT_TIMEOUT",
-            Duration::from_secs(5).as_millis() as u64,
-        )
+        Self::env_millis("PGDOG_CHECKOUT_TIMEOUT")
+            .unwrap_or(Duration::from_secs(5).as_millis() as u64)
     }
 
     fn load_schema() -> LoadSchema {
@@ -1364,14 +1469,12 @@ impl General {
     }
 
     pub fn server_lifetime() -> u64 {
-        Self::env_or_default(
-            "PGDOG_SERVER_LIFETIME",
-            Duration::from_secs(3600 * 24).as_millis() as u64,
-        )
+        Self::env_millis("PGDOG_SERVER_LIFETIME")
+            .unwrap_or(Duration::from_secs(3600 * 24).as_millis() as u64)
     }
 
     pub fn server_lifetime_jitter() -> u64 {
-        Self::env_or_default("PGDOG_SERVER_LIFETIME_JITTER", 0)
+        Self::env_millis("PGDOG_SERVER_LIFETIME_JITTER").unwrap_or(0)
     }
 
     pub fn connection_recovery() -> ConnectionRecovery {
@@ -1383,7 +1486,7 @@ impl General {
     }
 
     fn stats_period() -> u64 {
-        Self::env_or_default("PGDOG_STATS_PERIOD", 15_000)
+        Self::env_millis("PGDOG_STATS_PERIOD").unwrap_or(15_000)
     }
 
     fn default_passthrough_auth() -> PassthroughAuth {
@@ -1451,6 +1554,27 @@ impl General {
 mod tests {
     use super::*;
     use crate::test_utils::*;
+
+    #[test]
+    fn test_env_human_durations() {
+        let _guard = set_env_var("PGDOG_BAN_TIMEOUT", "5m");
+        assert_eq!(General::ban_timeout(), 300_000);
+
+        let _guard = set_env_var("PGDOG_BAN_TIMEOUT", "300000");
+        assert_eq!(General::ban_timeout(), 300_000);
+
+        let _guard = set_env_var("PGDOG_BAN_TIMEOUT", "not a duration");
+        assert_eq!(General::ban_timeout(), 300_000);
+
+        let _guard = remove_env_var("PGDOG_BAN_TIMEOUT");
+        assert_eq!(General::ban_timeout(), 300_000);
+
+        let _guard = set_env_var("PGDOG_TWO_PHASE_COMMIT_WAL_CHECKPOINT_INTERVAL", "2m");
+        assert_eq!(General::two_phase_commit_wal_checkpoint_interval(), 120_000);
+
+        let _guard = set_env_var("PGDOG_DNS_TTL", "1h");
+        assert_eq!(General::default_dns_ttl(), Some(3_600_000));
+    }
 
     #[test]
     fn test_frontend_query_size_limit_block() {

@@ -59,7 +59,11 @@ pub struct Otel {
     /// _Default:_ `10000`
     ///
     /// Env: `OTEL_METRIC_EXPORT_INTERVAL`
-    #[serde(default = "Otel::push_interval")]
+    #[serde(
+        default = "Otel::push_interval",
+        deserialize_with = "crate::duration::millis"
+    )]
+    #[schemars(with = "crate::duration::TimeValue")]
     pub push_interval: u64,
 }
 

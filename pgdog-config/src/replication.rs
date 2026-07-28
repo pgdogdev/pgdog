@@ -6,9 +6,9 @@ use std::time::Duration;
 
 #[derive(Deserialize)]
 struct RawReplicaLag {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::duration::millis_optional")]
     check_interval: Option<u64>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::duration::millis_optional")]
     max_age: Option<u64>,
 }
 
@@ -18,11 +18,13 @@ pub struct ReplicaLag {
     /// How often to check replica lag, in milliseconds.
     ///
     /// _Default:_ `1000`
+    #[schemars(with = "crate::duration::TimeValue")]
     pub check_interval: Duration,
 
     /// Maximum allowed replication lag before a replica is banned, in milliseconds.
     ///
     /// _Default:_ `25`
+    #[schemars(with = "crate::duration::TimeValue")]
     pub max_age: Duration,
 }
 

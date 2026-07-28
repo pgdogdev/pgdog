@@ -701,6 +701,106 @@ mod tests {
     use tempfile::NamedTempFile;
 
     #[test]
+    fn test_human_durations() {
+        let source = r#"
+[general]
+ban_timeout = "5m"
+checkout_timeout = "2s500ms"
+query_timeout = "1h5m15s"
+shutdown_termination_timeout = "30s"
+idle_timeout = 60000
+two_phase_commit_wal_checkpoint_interval = "2m"
+
+[[databases]]
+name = "production"
+host = "127.0.0.1"
+database_name = "postgres"
+statement_timeout = "1m30s"
+
+[tcp]
+time = "1s"
+interval = "500ms"
+user_timeout = 1000
+
+[replica_lag]
+check_interval = "1s"
+max_age = "25ms"
+
+[otel]
+push_interval = "10s"
+
+[vault]
+url = "http://127.0.0.1:8200"
+auth_method = "kubernetes"
+client_token_ttl = "5m"
+"#;
+
+        let config: Config = toml::from_str(source).unwrap();
+        let general = &config.general;
+
+        assert_eq!(general.ban_timeout, 300_000);
+        assert_eq!(general.checkout_timeout, 2_500);
+        assert_eq!(general.query_timeout, 3_915_000);
+        assert_eq!(general.shutdown_termination_timeout, Some(30_000));
+        assert_eq!(general.idle_timeout, 60_000);
+        assert_eq!(general.two_phase_commit_wal_checkpoint_interval, 120_000);
+
+        assert_eq!(config.databases[0].statement_timeout, Some(90_000));
+        assert_eq!(config.tcp.time(), Some(Duration::from_secs(1)));
+        assert_eq!(config.tcp.interval(), Some(Duration::from_millis(500)));
+        assert_eq!(config.tcp.user_timeout(), Some(Duration::from_secs(1)));
+
+        let replica_lag = config.replica_lag.unwrap();
+        assert_eq!(replica_lag.check_interval, Duration::from_secs(1));
+        assert_eq!(replica_lag.max_age, Duration::from_millis(25));
+
+        assert_eq!(config.otel.push_interval, 10_000);
+        assert_eq!(config.vault.unwrap().client_token_ttl, Some(300));
+    }
+
+    #[test]
+    fn test_human_durations_users() {
+        let source = r#"
+[[users]]
+name = "alice"
+database = "production"
+statement_timeout = "10s"
+idle_timeout = "1h"
+server_lifetime = "1d"
+server_lifetime_jitter = 5000
+"#;
+
+        let users: Users = toml::from_str(source).unwrap();
+        let user = &users.users[0];
+
+        assert_eq!(user.statement_timeout, Some(10_000));
+        assert_eq!(user.idle_timeout, Some(3_600_000));
+        assert_eq!(user.server_lifetime, Some(86_400_000));
+        assert_eq!(user.server_lifetime_jitter, Some(5_000));
+    }
+
+    #[test]
+    fn test_human_durations_invalid() {
+        let source = r#"
+[general]
+ban_timeout = "5 minutes"
+"#;
+
+        let err = toml::from_str::<Config>(source).unwrap_err().to_string();
+        assert!(err.contains("is not a valid duration"), "{}", err);
+
+        let source = r#"
+[vault]
+url = "http://127.0.0.1:8200"
+auth_method = "kubernetes"
+client_token_ttl = "1500ms"
+"#;
+
+        let err = toml::from_str::<Config>(source).unwrap_err().to_string();
+        assert!(err.contains("whole number of seconds"), "{}", err);
+    }
+
+    #[test]
     fn test_basic() {
         let pgdog_source = r#"
 [general]

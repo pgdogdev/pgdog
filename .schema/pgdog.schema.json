@@ -409,12 +409,15 @@
         },
         "idle_timeout": {
           "description": "Overrides the `idle_timeout` setting. Idle server connections exceeding this timeout will be closed automatically.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/databases/#idle_timeout>",
-          "type": [
-            "integer",
-            "null"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TimeValue"
+            },
+            {
+              "type": "null"
+            }
           ],
-          "format": "uint64",
-          "minimum": 0
+          "default": null
         },
         "lb_weight": {
           "description": "Used for weighted load balancing.",
@@ -426,12 +429,15 @@
         },
         "lock_timeout": {
           "description": "This setting configures the `lock_timeout` connection parameter on all connections to Postgres for this database.\nAborts any statement that waits longer than the specified duration to acquire a lock.\nUnlike `statement_timeout`, this only counts time spent waiting for locks, not execution time.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/databases/#lock_timeout>",
-          "type": [
-            "integer",
-            "null"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TimeValue"
+            },
+            {
+              "type": "null"
+            }
           ],
-          "format": "uint64",
-          "minimum": 0
+          "default": null
         },
         "min_pool_size": {
           "description": "Overrides the `min_pool_size` setting. The connection pool will maintain at minimum this many connections.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/databases/#min_pool_size>",
@@ -500,21 +506,27 @@
         },
         "server_lifetime": {
           "description": "Overrides the `server_lifetime` setting. Server connections older than this will be closed when returned to the pool.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/databases/#server_lifetime>",
-          "type": [
-            "integer",
-            "null"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TimeValue"
+            },
+            {
+              "type": "null"
+            }
           ],
-          "format": "uint64",
-          "minimum": 0
+          "default": null
         },
         "server_lifetime_jitter": {
           "description": "Overrides the `server_lifetime_jitter` setting for this database.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/databases/#server_lifetime_jitter>",
-          "type": [
-            "integer",
-            "null"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TimeValue"
+            },
+            {
+              "type": "null"
+            }
           ],
-          "format": "uint64",
-          "minimum": 0
+          "default": null
         },
         "shard": {
           "description": "The shard number for this database. Only required if your database contains more than one shard. Shard numbers start at 0.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/databases/#shard>",
@@ -525,12 +537,15 @@
         },
         "statement_timeout": {
           "description": "This setting configures the `statement_timeout` connection parameter on all connections to Postgres for this database.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/databases/#statement_timeout>",
-          "type": [
-            "integer",
-            "null"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TimeValue"
+            },
+            {
+              "type": "null"
+            }
           ],
-          "format": "uint64",
-          "minimum": 0
+          "default": null
         },
         "user": {
           "description": "Name of the PostgreSQL user to connect with when creating backend connections from PgDog to Postgres. If not set, this defaults to `name` in users.toml.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/databases/#user>",
@@ -544,25 +559,6 @@
       "required": [
         "name",
         "host"
-      ]
-    },
-    "Duration": {
-      "type": "object",
-      "properties": {
-        "nanos": {
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0
-        },
-        "secs": {
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0
-        }
-      },
-      "required": [
-        "secs",
-        "nanos"
       ]
     },
     "FlexibleType": {
@@ -599,10 +595,8 @@
         },
         "ban_replica_lag": {
           "description": "Ban a replica from serving read queries if its replication lag (in milliseconds) exceeds this threshold.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#ban_replica_lag>",
-          "type": "integer",
-          "format": "uint64",
-          "default": 9223372036854775807,
-          "minimum": 0
+          "$ref": "#/$defs/TimeValue",
+          "default": 9223372036854775807
         },
         "ban_replica_lag_bytes": {
           "description": "Ban a replica from serving read queries if its replication lag (in bytes) exceeds this threshold.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#ban_replica_lag_bytes>",
@@ -613,10 +607,8 @@
         },
         "ban_timeout": {
           "description": "Connection pools blocked from serving traffic due to an error will be placed back into active rotation after this long.\n\n_Default:_ `300000`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#ban_timeout>",
-          "type": "integer",
-          "format": "uint64",
-          "default": 300000,
-          "minimum": 0
+          "$ref": "#/$defs/TimeValue",
+          "default": 300000
         },
         "broadcast_address": {
           "description": "Broadcast IP address used for multi-instance coordination (e.g., schema cache invalidation across nodes).",
@@ -636,10 +628,8 @@
         },
         "checkout_timeout": {
           "description": "Maximum amount of time a client is allowed to wait for a connection from the pool.\n\n_Default:_ `5000`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#checkout_timeout>",
-          "type": "integer",
-          "format": "uint64",
-          "default": 5000,
-          "minimum": 0
+          "$ref": "#/$defs/TimeValue",
+          "default": 5000
         },
         "client_connection_recovery": {
           "description": "Controls whether to disconnect clients upon encountering connection pool errors.\n\n**Note:** Set this to `drop` if your clients are async / use pipelining mode.\n\n_Default:_ `recover`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#client_connection_recovery>",
@@ -648,31 +638,23 @@
         },
         "client_idle_in_transaction_timeout": {
           "description": "Close client connections that have been idle inside a transaction for this amount of time.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#client_idle_in_transaction_timeout>",
-          "type": "integer",
-          "format": "uint64",
-          "default": 9223372036854775807,
-          "minimum": 0
+          "$ref": "#/$defs/TimeValue",
+          "default": 9223372036854775807
         },
         "client_idle_timeout": {
           "description": "Close client connections that have been idle, i.e., haven't sent any queries, for this amount of time.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#client_idle_timeout>",
-          "type": "integer",
-          "format": "uint64",
-          "default": 9223372036854775807,
-          "minimum": 0
+          "$ref": "#/$defs/TimeValue",
+          "default": 9223372036854775807
         },
         "client_login_timeout": {
           "description": "Maximum amount of time new clients have to complete authentication.\n\n_Default:_ `60000`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#client_login_timeout>",
-          "type": "integer",
-          "format": "uint64",
-          "default": 60000,
-          "minimum": 0
+          "$ref": "#/$defs/TimeValue",
+          "default": 60000
         },
         "connect_attempt_delay": {
           "description": "Amount of time to wait between connection attempt retries.\n\n_Default:_ `0`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#connect_attempt_delay>",
-          "type": "integer",
-          "format": "uint64",
-          "default": 0,
-          "minimum": 0
+          "$ref": "#/$defs/TimeValue",
+          "default": 0
         },
         "connect_attempts": {
           "description": "Maximum number of retries for Postgres server connection attempts.\n\n_Default:_ `1`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#connect_attempts>",
@@ -683,10 +665,8 @@
         },
         "connect_timeout": {
           "description": "Maximum amount of time to allow for PgDog to create a connection to Postgres.\n\n_Default:_ `5000`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#connect_timeout>",
-          "type": "integer",
-          "format": "uint64",
-          "default": 5000,
-          "minimum": 0
+          "$ref": "#/$defs/TimeValue",
+          "default": 5000
         },
         "connection_recovery": {
           "description": "Controls if server connections are recovered or dropped if a client abruptly disconnects.\n\n_Default:_ `recover`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#connection_recovery>",
@@ -700,10 +680,8 @@
         },
         "cutover_last_transaction_delay": {
           "description": "Time (in milliseconds) since the last transaction on any table in the publication before PgDog will swap the configuration during a cutover.\n\n_Default:_ `1000`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#cutover_last_transaction_delay>",
-          "type": "integer",
-          "format": "uint64",
-          "default": 1000,
-          "minimum": 0
+          "$ref": "#/$defs/TimeValue",
+          "default": 1000
         },
         "cutover_replication_lag_threshold": {
           "description": "Replication lag (in bytes) that must be reached before PgDog will swap the configuration during a cutover.\n\n_Default:_ `0`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#cutover_replication_lag_threshold>",
@@ -719,10 +697,8 @@
         },
         "cutover_timeout": {
           "description": "Maximum amount of time (in milliseconds) to wait for the cutover thresholds to be met. If exceeded, PgDog will take the action specified by `cutover_timeout_action`.\n\n_Default:_ `30000`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#cutover_timeout>",
-          "type": "integer",
-          "format": "uint64",
-          "default": 30000,
-          "minimum": 0
+          "$ref": "#/$defs/TimeValue",
+          "default": 30000
         },
         "cutover_timeout_action": {
           "description": "Action to take when `cutover_timeout` is exceeded.\n\n_Default:_ `abort`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#cutover_timeout_action>",
@@ -745,13 +721,15 @@
         },
         "dns_ttl": {
           "description": "Overrides the TTL set on DNS records received from DNS servers.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#dns_ttl>",
-          "type": [
-            "integer",
-            "null"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TimeValue"
+            },
+            {
+              "type": "null"
+            }
           ],
-          "format": "uint64",
-          "default": null,
-          "minimum": 0
+          "default": null
         },
         "dry_run": {
           "description": "Enable the query parser in single-shard deployments and record its decisions.\n\n_Default:_ `false`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#dry_run>",
@@ -765,10 +743,8 @@
         },
         "healthcheck_interval": {
           "description": "Frequency of healthchecks performed by PgDog to ensure connections provided to clients from the pool are working.\n\n_Default:_ `30000`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#healthcheck_interval>",
-          "type": "integer",
-          "format": "uint64",
-          "default": 30000,
-          "minimum": 0
+          "$ref": "#/$defs/TimeValue",
+          "default": 30000
         },
         "healthcheck_port": {
           "description": "Enable load balancer HTTP health checks with the HTTP server running on this port.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#healthcheck_port>",
@@ -782,10 +758,8 @@
         },
         "healthcheck_timeout": {
           "description": "Maximum amount of time to wait for a healthcheck query to complete.\n\n_Default:_ `5000`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#healthcheck_timeout>",
-          "type": "integer",
-          "format": "uint64",
-          "default": 5000,
-          "minimum": 0
+          "$ref": "#/$defs/TimeValue",
+          "default": 5000
         },
         "host": {
           "description": "The IP address of the local network interface PgDog will bind to listen for connections.\n\n**Note:** This setting cannot be changed at runtime.\n\n_Default:_ `0.0.0.0`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#host>",
@@ -794,24 +768,18 @@
         },
         "idle_healthcheck_delay": {
           "description": "Delay running idle healthchecks at PgDog startup to give databases (and pools) time to spin up.\n\n_Default:_ `5000`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#idle_healthcheck_delay>",
-          "type": "integer",
-          "format": "uint64",
-          "default": 5000,
-          "minimum": 0
+          "$ref": "#/$defs/TimeValue",
+          "default": 5000
         },
         "idle_healthcheck_interval": {
           "description": "Frequency of healthchecks performed by PgDog on idle connections.\nSet to `0` to disable idle healthchecks.\n\n_Default:_ `30000`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#idle_healthcheck_interval>",
-          "type": "integer",
-          "format": "uint64",
-          "default": 30000,
-          "minimum": 0
+          "$ref": "#/$defs/TimeValue",
+          "default": 30000
         },
         "idle_timeout": {
           "description": "Close server connections that have been idle, i.e., haven't served a single client transaction, for this amount of time.\n\n_Default:_ `60000`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#idle_timeout>",
-          "type": "integer",
-          "format": "uint64",
-          "default": 60000,
-          "minimum": 0
+          "$ref": "#/$defs/TimeValue",
+          "default": 60000
         },
         "load_balancing_strategy": {
           "description": "Which strategy to use for load balancing read queries.\n\n_Default:_ `random`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#load_balancing_strategy>",
@@ -837,10 +805,8 @@
         },
         "log_dedup_window": {
           "description": "Window, in milliseconds, over which to deduplicate identical log messages. Set to `0` to disable throttling.\n\n**Note:** When enabled, identical messages (same level, target, and body) that exceed `log_dedup_threshold` within this window are suppressed and replaced with a single summary line at the end of the window.\n\n_Default:_ `0`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#log_dedup_window>",
-          "type": "integer",
-          "format": "uint64",
-          "default": 0,
-          "minimum": 0
+          "$ref": "#/$defs/TimeValue",
+          "default": 0
         },
         "log_disconnections": {
           "description": "If enabled, log every time a user disconnects from PgDog.\n\n_Default:_ `true`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#log_disconnections>",
@@ -859,12 +825,15 @@
         },
         "log_min_duration_parse": {
           "description": "Minimum parse duration in milliseconds that triggers a warning log with the query text.\nQueries whose parsing takes longer than this value are logged at WARN level.\nSet to `0` or omit to disable.\n\n_Default:_ `None` (disabled)",
-          "type": [
-            "integer",
-            "null"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TimeValue"
+            },
+            {
+              "type": "null"
+            }
           ],
-          "format": "uint64",
-          "minimum": 0
+          "default": null
         },
         "log_query_sample_length": {
           "description": "Maximum number of characters of the query text included in log messages.\n\n_Default:_ `1000`",
@@ -875,24 +844,18 @@
         },
         "lsn_check_delay": {
           "description": "For how long to delay checking for replication delay.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#lsn_check_delay>",
-          "type": "integer",
-          "format": "uint64",
-          "default": 9223372036854775807,
-          "minimum": 0
+          "$ref": "#/$defs/TimeValue",
+          "default": 9223372036854775807
         },
         "lsn_check_interval": {
           "description": "How frequently to run the replication delay check.\n\n_Default:_ `5000`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#lsn_check_interval>",
-          "type": "integer",
-          "format": "uint64",
-          "default": 5000,
-          "minimum": 0
+          "$ref": "#/$defs/TimeValue",
+          "default": 5000
         },
         "lsn_check_timeout": {
           "description": "Maximum amount of time allowed for the replication delay query to return a result.\n\n_Default:_ `5000`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#lsn_check_timeout>",
-          "type": "integer",
-          "format": "uint64",
-          "default": 5000,
-          "minimum": 0
+          "$ref": "#/$defs/TimeValue",
+          "default": 5000
         },
         "min_pool_size": {
           "description": "Default minimum number of connections per database pool to keep open at all times.\n\n_Default:_ `1`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#min_pool_size>",
@@ -1025,10 +988,8 @@
         },
         "query_timeout": {
           "description": "Maximum amount of time to wait for a Postgres query to finish executing.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#query_timeout>",
-          "type": "integer",
-          "format": "uint64",
-          "default": 9223372036854775807,
-          "minimum": 0
+          "$ref": "#/$defs/TimeValue",
+          "default": 9223372036854775807
         },
         "read_write_split": {
           "description": "How to handle the separation of read and write queries.\n\n_Default:_ `include_primary`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#read_write_split>",
@@ -1066,10 +1027,8 @@
         },
         "resharding_copy_retry_min_delay": {
           "description": "Base delay in milliseconds between table copy retries.\nEach successive attempt doubles the delay, capped at 32×.\n_Default:_ `1000`",
-          "type": "integer",
-          "format": "uint64",
-          "default": 1000,
-          "minimum": 0
+          "$ref": "#/$defs/TimeValue",
+          "default": 1000
         },
         "resharding_parallel_copies": {
           "description": "How many parallel copies to launch, irrespective of the number of available replicas.",
@@ -1087,55 +1046,45 @@
         },
         "resharding_replication_retry_min_delay": {
           "description": "Delay in milliseconds between replication subscriber retry attempts.\n\n_Default:_ `1000`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#resharding_replication_retry_min_delay>",
-          "type": "integer",
-          "format": "uint64",
-          "default": 1000,
-          "minimum": 0
+          "$ref": "#/$defs/TimeValue",
+          "default": 1000
         },
         "rollback_timeout": {
           "description": "How long to allow for `ROLLBACK` queries to run on server connections with unfinished transactions.\n\n_Default:_ `5000`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#rollback_timeout>",
-          "type": "integer",
-          "format": "uint64",
-          "default": 5000,
-          "minimum": 0
+          "$ref": "#/$defs/TimeValue",
+          "default": 5000
         },
         "server_lifetime": {
           "description": "Maximum amount of time a server connection is allowed to exist.\n\n_Default:_ `86400000`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#server_lifetime>",
-          "type": "integer",
-          "format": "uint64",
-          "default": 86400000,
-          "minimum": 0
+          "$ref": "#/$defs/TimeValue",
+          "default": 86400000
         },
         "server_lifetime_jitter": {
           "description": "Maximum random adjustment applied to `server_lifetime` per backend\nconnection, in milliseconds. Each connection's effective lifetime\nis sampled uniformly from `[server_lifetime - jitter,\nserver_lifetime + jitter]` once at creation time, breaking up\nsynchronized cohorts that would otherwise expire together.\n\n_Default:_ `0` (no jitter; existing behavior).\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#server_lifetime_jitter>",
-          "type": "integer",
-          "format": "uint64",
-          "default": 0,
-          "minimum": 0
+          "$ref": "#/$defs/TimeValue",
+          "default": 0
         },
         "shutdown_termination_timeout": {
           "description": "How long to wait for active connections to be forcibly terminated after `shutdown_timeout` expires.\n\n**Note:** If set, PgDog will send `CANCEL` requests to PostgreSQL for any remaining active queries before tearing down connection pools.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#shutdown_termination_timeout>",
-          "type": [
-            "integer",
-            "null"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TimeValue"
+            },
+            {
+              "type": "null"
+            }
           ],
-          "format": "uint64",
-          "default": null,
-          "minimum": 0
+          "default": null
         },
         "shutdown_timeout": {
           "description": "How long to wait for active clients to finish transactions when shutting down.\n\n_Default:_ `60000`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#shutdown_timeout>",
-          "type": "integer",
-          "format": "uint64",
-          "default": 60000,
-          "minimum": 0
+          "$ref": "#/$defs/TimeValue",
+          "default": 60000
         },
         "stats_period": {
           "description": "How often to calculate averages shown in `SHOW STATS` admin command and the Prometheus metrics.\n\n_Default:_ `15000`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#stats_period>",
-          "type": "integer",
-          "format": "uint64",
-          "default": 15000,
-          "minimum": 0
+          "$ref": "#/$defs/TimeValue",
+          "default": 15000
         },
         "system_catalogs": {
           "description": "Changes how system catalog tables (like `pg_database`, `pg_class`, etc.) are treated by the query router.\n\n_Default:_ `omnisharded_sticky`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#system_catalogs>",
@@ -1209,10 +1158,8 @@
         },
         "two_phase_commit_wal_checkpoint_interval": {
           "description": "How often, in milliseconds, to write a checkpoint record to the two-phase commit WAL and garbage-collect old segments.\n\n_Default:_ `15_000`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#two_phase_commit_wal_checkpoint_interval>",
-          "type": "integer",
-          "format": "uint64",
-          "default": 15000,
-          "minimum": 0
+          "$ref": "#/$defs/TimeValue",
+          "default": 15000
         },
         "two_phase_commit_wal_dir": {
           "description": "Directory where the two-phase commit write-ahead log is stored.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#two_phase_commit_wal_dir>",
@@ -1224,10 +1171,8 @@
         },
         "two_phase_commit_wal_fsync_interval": {
           "description": "How long, in milliseconds, the two-phase commit WAL writer waits to coalesce concurrent appends into a single fsync.\n\n**Note:** Setting this to `0` disables waiting for additional appends; records already queued in the channel when the writer wakes are still batched into one fsync. Higher values trade per-transaction commit latency for fewer fsyncs under load.\n\n_Default:_ `0`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#two_phase_commit_wal_fsync_interval>",
-          "type": "integer",
-          "format": "uint64",
-          "default": 0,
-          "minimum": 0
+          "$ref": "#/$defs/TimeValue",
+          "default": 0
         },
         "two_phase_commit_wal_segment_size": {
           "description": "Maximum size, in bytes, of a single two-phase commit WAL segment file before it is rotated.\n\n_Default:_ `16777216` (16 MiB)\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#two_phase_commit_wal_segment_size>",
@@ -1503,10 +1448,8 @@
         },
         "push_interval": {
           "description": "How often, in milliseconds, to push metrics to the OTLP endpoint.\n\n_Default:_ `10000`\n\nEnv: `OTEL_METRIC_EXPORT_INTERVAL`",
-          "type": "integer",
-          "format": "uint64",
-          "default": 10000,
-          "minimum": 0
+          "$ref": "#/$defs/TimeValue",
+          "default": 10000
         }
       },
       "additionalProperties": false
@@ -1737,11 +1680,11 @@
       "properties": {
         "check_interval": {
           "description": "How often to check replica lag, in milliseconds.\n\n_Default:_ `1000`",
-          "$ref": "#/$defs/Duration"
+          "$ref": "#/$defs/TimeValue"
         },
         "max_age": {
           "description": "Maximum allowed replication lag before a replica is banned, in milliseconds.\n\n_Default:_ `25`",
-          "$ref": "#/$defs/Duration"
+          "$ref": "#/$defs/TimeValue"
         }
       },
       "required": [
@@ -2164,12 +2107,15 @@
         },
         "interval": {
           "description": "Time between successive keep-alive probes. Milliseconds.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/network/#interval>",
-          "type": [
-            "integer",
-            "null"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TimeValue"
+            },
+            {
+              "type": "null"
+            }
           ],
-          "format": "uint64",
-          "minimum": 0
+          "default": null
         },
         "keepalive": {
           "description": "Enable TCP keep-alive probing on idle client and server connections.\n\n**Note:** Not all networks support TCP keep-alive. Disable if you observe increased connection drops.\n\n_Default:_ `true`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/network/#keepalive>",
@@ -2187,24 +2133,45 @@
         },
         "time": {
           "description": "How long a connection must be idle before keep-alive probes begin. Milliseconds.\n\n_Default:_ system default (2 hours)\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/network/#time>",
-          "type": [
-            "integer",
-            "null"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TimeValue"
+            },
+            {
+              "type": "null"
+            }
           ],
-          "format": "uint64",
-          "minimum": 0
+          "default": null
         },
         "user_timeout": {
           "description": "Close connections with unacknowledged data after this duration (`TCP_USER_TIMEOUT`). Milliseconds.\n\n**Note:** Linux only.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/network/#user_timeout>",
-          "type": [
-            "integer",
-            "null"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TimeValue"
+            },
+            {
+              "type": "null"
+            }
           ],
-          "format": "uint64",
-          "minimum": 0
+          "default": null
         }
       },
       "additionalProperties": false
+    },
+    "TimeValue": {
+      "description": "Time value: a number, in the unit documented on the field, or a duration\nstring built from `ms`, `s`, `m`, `h` and `d` components, e.g. `\"1h5m15s\"`.",
+      "anyOf": [
+        {
+          "description": "Number of milliseconds, or seconds for fields documented in seconds.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        {
+          "description": "Duration string, e.g. `\"250ms\"`, `\"5s\"`, `\"1h5m15s\"`.",
+          "type": "string"
+        }
+      ]
     },
     "TlsVerifyMode": {
       "description": "TLS verification mode for connections to Postgres servers.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#tls_verify>",
@@ -2276,12 +2243,15 @@
         },
         "client_token_ttl": {
           "description": "Seconds before the Vault client token expires to trigger a re-login.\n\n_Default:_ `60`",
-          "type": [
-            "integer",
-            "null"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TimeValue"
+            },
+            {
+              "type": "null"
+            }
           ],
-          "format": "uint64",
-          "minimum": 0
+          "default": null
         },
         "kubernetes_jwt_path": {
           "description": "Kubernetes auth: path to the service account JWT.\n\n_Default:_ `/var/run/secrets/kubernetes.io/serviceaccount/token`",

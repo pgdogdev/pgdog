@@ -60,6 +60,8 @@ pub struct Vault {
     /// Seconds before the Vault client token expires to trigger a re-login.
     ///
     /// _Default:_ `60`
+    #[serde(default, deserialize_with = "crate::duration::seconds_optional")]
+    #[schemars(with = "Option<crate::duration::TimeValue>")]
     pub client_token_ttl: Option<u64>,
 }
 

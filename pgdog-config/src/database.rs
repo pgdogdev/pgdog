@@ -178,16 +178,22 @@ pub struct Database {
     /// This setting configures the `statement_timeout` connection parameter on all connections to Postgres for this database.
     ///
     /// <https://docs.pgdog.dev/configuration/pgdog.toml/databases/#statement_timeout>
+    #[serde(default, deserialize_with = "crate::duration::millis_optional")]
+    #[schemars(with = "Option<crate::duration::TimeValue>")]
     pub statement_timeout: Option<u64>,
     /// This setting configures the `lock_timeout` connection parameter on all connections to Postgres for this database.
     /// Aborts any statement that waits longer than the specified duration to acquire a lock.
     /// Unlike `statement_timeout`, this only counts time spent waiting for locks, not execution time.
     ///
     /// <https://docs.pgdog.dev/configuration/pgdog.toml/databases/#lock_timeout>
+    #[serde(default, deserialize_with = "crate::duration::millis_optional")]
+    #[schemars(with = "Option<crate::duration::TimeValue>")]
     pub lock_timeout: Option<u64>,
     /// Overrides the `idle_timeout` setting. Idle server connections exceeding this timeout will be closed automatically.
     ///
     /// <https://docs.pgdog.dev/configuration/pgdog.toml/databases/#idle_timeout>
+    #[serde(default, deserialize_with = "crate::duration::millis_optional")]
+    #[schemars(with = "Option<crate::duration::TimeValue>")]
     pub idle_timeout: Option<u64>,
     /// Sets the `default_transaction_read_only` connection parameter to `on` on all server connections to this database. Clients can still override it with `SET`.
     ///
@@ -196,10 +202,14 @@ pub struct Database {
     /// Overrides the `server_lifetime` setting. Server connections older than this will be closed when returned to the pool.
     ///
     /// <https://docs.pgdog.dev/configuration/pgdog.toml/databases/#server_lifetime>
+    #[serde(default, deserialize_with = "crate::duration::millis_optional")]
+    #[schemars(with = "Option<crate::duration::TimeValue>")]
     pub server_lifetime: Option<u64>,
     /// Overrides the `server_lifetime_jitter` setting for this database.
     ///
     /// <https://docs.pgdog.dev/configuration/pgdog.toml/databases/#server_lifetime_jitter>
+    #[serde(default, deserialize_with = "crate::duration::millis_optional")]
+    #[schemars(with = "Option<crate::duration::TimeValue>")]
     pub server_lifetime_jitter: Option<u64>,
     /// Used for resharding only; this database will not serve regular traffic.
     #[serde(default)]
