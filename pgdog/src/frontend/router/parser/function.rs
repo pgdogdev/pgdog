@@ -52,12 +52,11 @@ impl<'a> Function<'a> {
         configured_write_functions: &HashSet<WriteFunction>,
     ) -> FunctionBehavior {
         let base = self.behavior();
-        let configured_match = configured_write_functions.contains(&WriteFunction {
-            schema: self.schema.map(ToOwned::to_owned),
-            name: self.name.to_owned(),
-        }) || configured_write_functions.contains(&WriteFunction {
-            schema: None,
-            name: self.name.to_owned(),
+        let configured_match = self.schema.is_some_and(|schema| {
+            configured_write_functions.contains(&WriteFunction {
+                schema: schema.to_owned(),
+                name: self.name.to_owned(),
+            })
         });
 
         FunctionBehavior {
@@ -228,15 +227,15 @@ mod test {
     fn test_configured_write_function_pg_identifier_semantics() {
         let mut configured = HashSet::new();
         configured.insert(WriteFunction {
-            schema: None,
+            schema: "public".to_string(),
             name: "my_write_fn".to_string(),
         });
 
-        first_func("SELECT My_Write_Fn(1)", |func| {
+        first_func("SELECT PUBLIC.My_Write_Fn(1)", |func| {
             assert!(func.behavior_with_write_functions(&configured).writes);
         });
 
-        first_func(r#"SELECT "My_Write_Fn"(1)"#, |func| {
+        first_func(r#"SELECT public."My_Write_Fn"(1)"#, |func| {
             assert!(!func.behavior_with_write_functions(&configured).writes);
         });
     }
@@ -246,7 +245,7 @@ mod test {
     fn test_configured_write_function_with_schema() {
         let mut configured = HashSet::new();
         configured.insert(WriteFunction {
-            schema: Some("partman".to_string()),
+            schema: "partman".to_string(),
             name: "create_partition".to_string(),
         });
 
@@ -255,6 +254,10 @@ mod test {
         });
 
         first_func("SELECT other.create_partition('foo')", |func| {
+            assert!(!func.behavior_with_write_functions(&configured).writes);
+        });
+
+        first_func("SELECT create_partition('foo')", |func| {
             assert!(!func.behavior_with_write_functions(&configured).writes);
         });
     }

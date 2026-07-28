@@ -571,10 +571,10 @@ pub struct QueryParser {
 pub struct WriteFunctions {
     /// Database name.
     pub database: String,
-    /// Functions that should be treated as write-only.
-    /// Each entry can be schema-qualified.
-    #[serde(default)]
-    pub functions: Vec<String>,
+    /// Schema containing the function.
+    pub schema: String,
+    /// Function that should be treated as write-only.
+    pub name: String,
 }
 
 #[cfg(test)]
@@ -602,16 +602,36 @@ database = "production"
     }
 
     #[test]
-    fn write_functions_reads_default_values_from_config() {
+    fn write_functions_reads_from_config() {
         let source = r#"
 [[write_functions]]
 database = "production"
+schema = "partman"
+name = "create_partition"
 "#;
 
         let config: Config = toml::from_str(source).unwrap();
 
         assert_eq!(config.write_functions.len(), 1);
         assert_eq!(config.write_functions[0].database, "production");
-        assert!(config.write_functions[0].functions.is_empty());
+        assert_eq!(config.write_functions[0].schema, "partman");
+        assert_eq!(config.write_functions[0].name, "create_partition");
+    }
+
+    #[test]
+    fn write_functions_requires_schema_and_name() {
+        let missing_schema = r#"
+[[write_functions]]
+database = "production"
+name = "create_partition"
+"#;
+        assert!(toml::from_str::<Config>(missing_schema).is_err());
+
+        let missing_name = r#"
+[[write_functions]]
+database = "production"
+schema = "partman"
+"#;
+        assert!(toml::from_str::<Config>(missing_name).is_err());
     }
 }

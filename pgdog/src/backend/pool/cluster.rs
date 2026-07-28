@@ -14,7 +14,7 @@ use std::{
     },
     time::Duration,
 };
-use tracing::{error, warn};
+use tracing::error;
 
 use crate::frontend::router::sharding::ShardedTable;
 use crate::tasks;
@@ -118,7 +118,7 @@ impl ShardingSchema {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct WriteFunction {
-    pub schema: Option<String>,
+    pub schema: String,
     pub name: String,
 }
 
@@ -134,33 +134,11 @@ impl WriteFunction {
         }
     }
 
-    fn from_config(entry: &str) -> Option<Self> {
-        fn split_qualified(entry: &str) -> impl Iterator<Item = &str> {
-            let mut parts = Vec::new();
-            let mut start = 0;
-            let mut in_quotes = false;
-            for (i, c) in entry.char_indices() {
-                match c {
-                    '"' => in_quotes = !in_quotes,
-                    '.' if !in_quotes => {
-                        parts.push(&entry[start..i]);
-                        start = i + 1;
-                    }
-                    _ => (),
-                }
-            }
-            parts.push(&entry[start..]);
-            parts.into_iter().rev()
+    fn from_config(schema: &str, name: &str) -> Self {
+        Self {
+            schema: Self::normalize_identifier(schema),
+            name: Self::normalize_identifier(name),
         }
-        let mut parts = split_qualified(entry);
-        let name = Self::normalize_identifier(parts.next()?);
-        let schema = match parts.next() {
-            Some(schema) if parts.next().is_none() => Some(Self::normalize_identifier(schema)),
-            Some(_) => return None,
-            None => None,
-        };
-
-        Some(Self { schema, name })
     }
 }
 
@@ -263,14 +241,7 @@ impl<'a> ClusterConfig<'a> {
                 .write_functions
                 .iter()
                 .filter(|entry| entry.database == user.database)
-                .flat_map(|entry| entry.functions.iter())
-                .filter_map(|func| {
-                    let parsed = WriteFunction::from_config(func);
-                    if parsed.is_none() {
-                        warn!("ignoring invalid write_functions entry: \"{}\"", func);
-                    }
-                    parsed
-                })
+                .map(|entry| WriteFunction::from_config(&entry.schema, &entry.name))
                 .collect(),
             schema_admin: user.schema_admin,
             cross_shard_disabled: user
@@ -839,8 +810,7 @@ mod test {
                 .write_functions
                 .iter()
                 .filter(|entry| entry.database == database)
-                .flat_map(|entry| entry.functions.iter())
-                .filter_map(|func| WriteFunction::from_config(func))
+                .map(|entry| WriteFunction::from_config(&entry.schema, &entry.name))
                 .collect()
         }
 
@@ -1083,25 +1053,17 @@ mod test {
 
     #[test]
     fn test_write_function_identifier_normalization() {
-        let wf = WriteFunction::from_config("Create_Partition").unwrap();
-        assert_eq!(wf.schema, None);
+        let wf = WriteFunction::from_config("PartMan", "Create_Partition");
+        assert_eq!(wf.schema, "partman");
         assert_eq!(wf.name, "create_partition");
 
-        let wf = WriteFunction::from_config("PartMan.Create_Partition").unwrap();
-        assert_eq!(wf.schema.as_deref(), Some("partman"));
-        assert_eq!(wf.name, "create_partition");
-
-        let wf = WriteFunction::from_config(r#""PartMan"."Create_Partition""#).unwrap();
-        assert_eq!(wf.schema.as_deref(), Some("PartMan"));
+        let wf = WriteFunction::from_config(r#""PartMan""#, r#""Create_Partition""#);
+        assert_eq!(wf.schema, "PartMan");
         assert_eq!(wf.name, "Create_Partition");
 
-        // Dots inside quoted identifiers are not separators.
-        let wf = WriteFunction::from_config(r#""my.schema".my_fn"#).unwrap();
-        assert_eq!(wf.schema.as_deref(), Some("my.schema"));
+        let wf = WriteFunction::from_config(r#""my.schema""#, "my_fn");
+        assert_eq!(wf.schema, "my.schema");
         assert_eq!(wf.name, "my_fn");
-
-        // More than two parts is invalid.
-        assert_eq!(WriteFunction::from_config("a.b.c"), None);
     }
 
     #[test]

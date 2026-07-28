@@ -74,7 +74,8 @@ port = 45002
 
 [[write_functions]]
 database = "postgres"
-functions = ["Lb_Write_Fn"]
+schema = "public"
+name = "Lb_Write_Fn"
 
 
 [[plugins]]

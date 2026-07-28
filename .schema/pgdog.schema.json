@@ -2344,18 +2344,20 @@
           "description": "Database name.",
           "type": "string"
         },
-        "functions": {
-          "description": "Functions that should be treated as write-only.\nEach entry can be schema-qualified.",
-          "type": "array",
-          "default": [],
-          "items": {
-            "type": "string"
-          }
+        "name": {
+          "description": "Function that should be treated as write-only.",
+          "type": "string"
+        },
+        "schema": {
+          "description": "Schema containing the function.",
+          "type": "string"
         }
       },
       "additionalProperties": false,
       "required": [
-        "database"
+        "database",
+        "schema",
+        "name"
       ]
     }
   }

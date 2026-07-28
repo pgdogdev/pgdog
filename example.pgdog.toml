@@ -277,16 +277,16 @@ cross_shard_disabled = false
 dns_ttl = 5_000
 
 #
-# Per-database list of functions that should always route to the primary.
+# Per-database function that should always route to the primary.
 #
-# Each function can be schema-qualified. Matching follows PostgreSQL
-# identifier semantics:
+# Matching follows PostgreSQL identifier semantics:
 # - unquoted identifiers are folded to lowercase
 # - quoted identifiers preserve case
 #
 # [[write_functions]]
 # database = "pgdog"
-# functions = ["my_write_fn", "partman.create_partition", '"Set_Customer_Balance"']
+# schema = "partman"
+# name = "create_partition"
 #
 
 #

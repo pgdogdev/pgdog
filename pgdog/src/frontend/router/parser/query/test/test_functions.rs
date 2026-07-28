@@ -76,11 +76,12 @@ fn test_configured_write_function_routes_to_primary() {
     let mut updated = config().deref().clone();
     updated.config.write_functions = vec![WriteFunctions {
         database: "pgdog".into(),
-        functions: vec!["my_write_fn".into()],
+        schema: "public".into(),
+        name: "my_write_fn".into(),
     }];
 
     let mut test = QueryParserTest::new_with_config(&updated);
-    let command = test.execute(vec![Query::new("SELECT my_write_fn(1)").into()]);
+    let command = test.execute(vec![Query::new("SELECT public.my_write_fn(1)").into()]);
 
     assert!(command.route().is_write());
 }
@@ -91,24 +92,35 @@ fn test_configured_write_function_pg_identifier_semantics() {
     let mut updated = config().deref().clone();
     updated.config.write_functions = vec![WriteFunctions {
         database: "pgdog".into(),
-        functions: vec!["my_write_fn".into()],
+        schema: "public".into(),
+        name: "my_write_fn".into(),
     }];
 
     let mut test = QueryParserTest::new_with_config(&updated);
-    let command = test.execute(vec![Query::new("SELECT now(), My_Write_Fn(1)").into()]);
+    let command = test.execute(vec![
+        Query::new("SELECT now(), PUBLIC.My_Write_Fn(1)").into(),
+    ]);
 
     assert!(command.route().is_write());
 
-    let command = test.execute(vec![Query::new(r#"SELECT "My_Write_Fn"(1)"#).into()]);
+    let command = test.execute(vec![Query::new(r#"SELECT public."My_Write_Fn"(1)"#).into()]);
     assert!(command.route().is_read());
 
     updated.config.write_functions = vec![WriteFunctions {
         database: "pgdog".into(),
-        functions: vec![r#""My_Write_Fn""#.into()],
+        schema: r#""AppSchema""#.into(),
+        name: r#""My_Write_Fn""#.into(),
     }];
     let mut test = QueryParserTest::new_with_config(&updated);
-    let command = test.execute(vec![Query::new(r#"SELECT "My_Write_Fn"(1)"#).into()]);
+    let command = test.execute(vec![
+        Query::new(r#"SELECT "AppSchema"."My_Write_Fn"(1)"#).into(),
+    ]);
     assert!(command.route().is_write());
+
+    let command = test.execute(vec![
+        Query::new(r#"SELECT "appschema"."My_Write_Fn"(1)"#).into(),
+    ]);
+    assert!(command.route().is_read());
 }
 
 #[test]
@@ -117,7 +129,8 @@ fn test_configured_write_function_with_schema() {
     let mut updated = config().deref().clone();
     updated.config.write_functions = vec![WriteFunctions {
         database: "pgdog".into(),
-        functions: vec!["partman.create_partition".into()],
+        schema: "partman".into(),
+        name: "create_partition".into(),
     }];
 
     let mut test = QueryParserTest::new_with_config(&updated);
@@ -127,5 +140,8 @@ fn test_configured_write_function_with_schema() {
     assert!(command.route().is_write());
 
     let command = test.execute(vec![Query::new("SELECT other.create_partition(1)").into()]);
+    assert!(command.route().is_read());
+
+    let command = test.execute(vec![Query::new("SELECT create_partition(1)").into()]);
     assert!(command.route().is_read());
 }
