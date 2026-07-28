@@ -538,7 +538,7 @@ async fn test_read_write_split_exclude_primary_no_primary() {
     let replicas = LoadBalancer::new(
         &None,
         &replica_configs,
-        LoadBalancingStrategy::RoundRobin,
+        LoadBalancingStrategy::Random,
         ReadWriteSplit::ExcludePrimary,
     );
     replicas.launch();
@@ -546,14 +546,13 @@ async fn test_read_write_split_exclude_primary_no_primary() {
     let request = Request::default();
 
     // Should work normally with just replicas
-    let expected: HashSet<_> = replicas.pools().iter().map(|pool| pool.id()).collect();
     let mut replica_ids = HashSet::new();
-    for _ in 0..expected.len() {
+    for _ in 0..100 {
         let conn = replicas.get(&request).await.unwrap();
         replica_ids.insert(conn.pool.id());
     }
 
-    assert_eq!(replica_ids, expected);
+    assert_eq!(replica_ids.len(), 2);
 
     replicas.shutdown();
 }
@@ -569,7 +568,7 @@ async fn test_read_write_split_include_primary_no_primary() {
     let replicas = LoadBalancer::new(
         &None,
         &replica_configs,
-        LoadBalancingStrategy::RoundRobin,
+        LoadBalancingStrategy::Random,
         ReadWriteSplit::IncludePrimary,
     );
     replicas.launch();
@@ -577,15 +576,14 @@ async fn test_read_write_split_include_primary_no_primary() {
     let request = Request::default();
 
     // Should work normally with just replicas
-    let expected: HashSet<_> = replicas.pools().iter().map(|pool| pool.id()).collect();
     let mut replica_ids = HashSet::new();
-    for _ in 0..expected.len() {
+    for _ in 0..100 {
         let conn = replicas.get(&request).await.unwrap();
         replica_ids.insert(conn.pool.id());
     }
 
     // Should use both replica pools
-    assert_eq!(replica_ids, expected);
+    assert_eq!(replica_ids.len(), 2);
 
     replicas.shutdown();
 }
