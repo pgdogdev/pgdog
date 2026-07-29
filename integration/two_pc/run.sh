@@ -1,8 +1,17 @@
 #!/bin/bash
-export PGPASSWORD=pgdog
-export PGHOST=127.0.0.1
-export PGPORT=6432
-export PGUSER=pgdog
-export PGDATABASE=pgdog
+set -euo pipefail
 
-pgbench -f script.sql -c 10 -t 1000 -P 1
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)
+
+bash "${SCRIPT_DIR}/../ci/apt.sh" python3-virtualenv
+
+pushd "${SCRIPT_DIR}"
+
+virtualenv venv
+source venv/bin/activate
+pip install -r requirements.txt
+
+python crash_recovery.py
+
+deactivate
+popd
