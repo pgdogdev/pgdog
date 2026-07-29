@@ -63,6 +63,7 @@ impl WalWriter {
         let segment = LiveSegment::new(&self.wal_directory, number).await?;
         let current = self.segment.swap(Arc::new(segment));
 
+        SegmentRegistry::get().record(number, SegmentStatus::Active);
         current.shutdown();
 
         Ok(())
