@@ -7,14 +7,19 @@ use std::ops::{Deref, DerefMut};
 use lazy_static::lazy_static;
 use regex::Regex;
 
+#[cfg(feature = "new_parser")]
+use pg_raw_parse;
+
 use crate::{
     frontend::router::Ast,
     net::{
         Error, Flush, Parse, ProtocolMessage,
-        messages::{Bind, CopyData, Protocol, Query},
+        messages::{Bind, CopyData, Protocol},
     },
     stats::memory::MemoryUsage,
 };
+#[cfg(feature = "new_parser")]
+use crate::net::messages::Query;
 
 use super::{PreparedStatements, router::Route};
 
@@ -22,18 +27,19 @@ pub use super::BufferedQuery;
 
 /// Split a multi-statement simple query string into individual statement slices.
 /// Returns an empty vec if parsing fails or the query contains only one statement.
+#[cfg(feature = "new_parser")]
 fn split_statements(query: &str) -> Vec<&str> {
-    let Ok(parsed) = pg_query::parse(query) else {
+    let Ok(parsed) = pg_raw_parse::parse(query) else {
         return vec![];
     };
-    let stmts = parsed.protobuf.stmts;
+    let stmts = parsed.into_inner();
     if stmts.len() <= 1 {
         return vec![];
     }
     stmts
         .iter()
         .filter_map(|stmt| {
-            let loc = stmt.stmt_location.max(0) as usize;
+            let loc = stmt.stmt_location as usize;
             let end = if stmt.stmt_len == 0 {
                 query.len()
             } else {
@@ -399,6 +405,7 @@ impl ClientRequest {
     /// Analogous to `spliced()` for extended protocol. Returns empty vec when
     /// the request is not a simple Query, contains only one statement, or parsing fails.
     /// In all those cases the caller falls through to the normal query engine path.
+    #[cfg(feature = "new_parser")]
     pub fn spliced_simple(&self) -> Vec<Self> {
         let Some(ProtocolMessage::Query(q)) = self.messages.iter().find(|m| m.code() == 'Q')
         else {
@@ -413,6 +420,11 @@ impl ClientRequest {
                 last_parse: None,
             })
             .collect()
+    }
+
+    #[cfg(not(feature = "new_parser"))]
+    pub fn spliced_simple(&self) -> Vec<Self> {
+        vec![]
     }
 }
 
@@ -453,6 +465,7 @@ mod test {
 
     use super::*;
 
+    #[cfg(feature = "new_parser")]
     #[test]
     fn test_spliced_simple_two_selects() {
         let req = ClientRequest::from(vec![Query::new("SELECT 1; SELECT 2").into()]);
@@ -469,12 +482,14 @@ mod test {
         assert!(texts[1].contains("SELECT 2"), "second: {}", texts[1]);
     }
 
+    #[cfg(feature = "new_parser")]
     #[test]
     fn test_spliced_simple_single_statement_no_split() {
         let req = ClientRequest::from(vec![Query::new("SELECT 1").into()]);
         assert!(req.spliced_simple().is_empty());
     }
 
+    #[cfg(feature = "new_parser")]
     #[test]
     fn test_spliced_simple_non_query_no_split() {
         let req = ClientRequest::from(vec![
@@ -486,6 +501,7 @@ mod test {
         assert!(req.spliced_simple().is_empty());
     }
 
+    #[cfg(feature = "new_parser")]
     #[test]
     fn test_spliced_simple_transaction_batch() {
         let req = ClientRequest::from(vec![
