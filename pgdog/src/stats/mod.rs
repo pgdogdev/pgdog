@@ -1,5 +1,6 @@
 //! Statistics.
 pub mod clients;
+pub mod clients_locked;
 pub mod http_server;
 pub mod mirror_stats;
 pub mod open_metric;

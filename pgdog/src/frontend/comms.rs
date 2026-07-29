@@ -71,6 +71,15 @@ impl Comms {
             .collect()
     }
 
+    /// Get number of clients who are currently locked.
+    pub fn clients_locked_count(&self) -> usize {
+        self.global
+            .clients
+            .iter()
+            .filter(|client| client.stats.locked)
+            .count()
+    }
+
     /// Number of connected clients.
     pub fn clients_len(&self) -> usize {
         self.global.clients.len()
