@@ -79,5 +79,4 @@ pub(super) async fn recovery_cleans_up_aborted_clients(
     recovered.shutdown().await;
 
     assert_eq!(client.prepared_transactions().await, 0);
-    client.shutdown().await;
 }

@@ -31,7 +31,7 @@ struct LiveSegmentRecord {
 }
 
 #[derive(Debug, Default)]
-struct Inner {
+struct Queue {
     queue: VecDeque<LiveSegmentRecord>,
     written: usize,
 }
@@ -50,7 +50,7 @@ impl Waiter {
 
 #[derive(Debug, Clone)]
 pub(crate) struct LiveSegment {
-    queue: Arc<Mutex<Inner>>,
+    queue: Arc<Mutex<Queue>>,
     writer_signal: Arc<Notify>,
     shutdown: CancellationToken,
     path: PathBuf,
@@ -78,7 +78,7 @@ impl LiveSegment {
         file.flush().await?;
 
         let segment = Self {
-            queue: Arc::new(Mutex::new(Inner::default())),
+            queue: Arc::new(Mutex::new(Queue::default())),
             writer_signal: Arc::new(Notify::new()),
             shutdown: CancellationToken::new(),
             path: filename,
@@ -120,6 +120,11 @@ impl LiveSegment {
             segment_size,
             waiter,
         }
+    }
+
+    /// How big is this segment in bytes.
+    pub(super) fn size(&self) -> usize {
+        self.queue.lock().written
     }
 
     /// Flush all writes to this segment and stop

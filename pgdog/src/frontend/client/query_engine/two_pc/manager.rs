@@ -34,7 +34,7 @@ use crate::{
 
 use super::{
     Error, TwoPcGuard, TwoPcPhase, TwoPcStats, TwoPcTransaction,
-    wal::{Checkpointer, Recovery, TwoPcRecordAdd, TwoPcRecordRemove, WalWriter},
+    wal::{Recovery, TwoPcRecordAdd, TwoPcRecordRemove, WalWriter},
 };
 
 static MANAGER: Lazy<Manager> = Lazy::new(Manager::init);
@@ -95,11 +95,12 @@ impl Manager {
             .await?
             .run(self, segment_size)
             .await?;
-        self.wal.store(Some(Arc::new(writer)));
 
         if let Some(checkpoint_interval) = checkpoint_interval {
-            Checkpointer::spawn(wal_directory.clone(), self.clone(), checkpoint_interval);
+            writer.enable_checkpointer(self.clone(), checkpoint_interval);
         }
+
+        self.wal.store(Some(Arc::new(writer)));
 
         Ok(())
     }
@@ -223,6 +224,8 @@ impl Manager {
             guard.queue.push_back(transaction);
         }
 
+        guard.in_recovery = true;
+
         self.notify.notify.notify_one();
     }
 
@@ -253,7 +256,17 @@ impl Manager {
                 _ = notify.notify.notified() => (),
             }
 
-            let transaction = manager.inner.lock().queue.pop_front();
+            let transaction = {
+                let mut guard = manager.inner.lock();
+                let txn = guard.queue.pop_front();
+
+                if txn.is_none() && guard.in_recovery {
+                    guard.in_recovery = false; // Recovery is done.
+                }
+
+                txn
+            };
+
             if let Some(transaction) = transaction {
                 debug!(
                     r#"[2pc] cleaning up transaction "{}""#,
@@ -280,6 +293,11 @@ impl Manager {
                 // No more transactions to cleanup.
                 notify.done_flag.store(true, Ordering::Relaxed);
                 notify.done.notify_waiters();
+
+                if let Some(wal) = manager.wal.load_full() {
+                    wal.shutdown();
+                }
+
                 break;
             }
         }
@@ -289,11 +307,15 @@ impl Manager {
         self.inner.lock().transactions.remove(&transaction)
     }
 
-    /// Reconnect to cluster if available and rollback the two-phase transaction.
+    /// Reconnect to cluster if available and close the two-phase transaction.
     async fn cleanup_phase(&self, transaction: TwoPcTransaction) -> Result<(), Error> {
-        let state = match self.inner.lock().transactions.get(&transaction).cloned() {
-            Some(state) => state,
-            _ => {
+        let (state, in_recovery) = {
+            let guard = self.inner.lock();
+            let state = guard.transactions.get(&transaction).cloned();
+
+            if let Some(state) = state {
+                (state, guard.in_recovery)
+            } else {
                 return Ok(());
             }
         };
@@ -304,6 +326,17 @@ impl Manager {
             // Phase 2 gets committed.
             phase => phase,
         };
+
+        info!(
+            "[2pc] {} {} transaction {}",
+            if in_recovery { "recovery" } else { "manager" },
+            if phase == TwoPcPhase::Rollback {
+                "rolling back"
+            } else {
+                "comitting"
+            },
+            transaction
+        );
 
         let mut connection =
             match Connection::new(&state.identifier.user, &state.identifier.database, false) {
@@ -343,9 +376,11 @@ impl Manager {
         self.notify.notify.notify_one();
         let transactions = self.inner.lock().queue.len();
 
-        info!("cleaning up {} two-phase transactions", transactions);
+        info!("[2pc] cleaning up {} two-phase transactions", transactions);
 
         waiter.await;
+
+        info!("[2pc] manager shutdown successful");
     }
 }
 
@@ -359,6 +394,7 @@ pub struct TransactionInfo {
 struct Inner {
     transactions: HashMap<TwoPcTransaction, TransactionInfo>,
     queue: VecDeque<TwoPcTransaction>,
+    in_recovery: bool,
 }
 
 #[derive(Debug)]

@@ -7,13 +7,18 @@ use std::{io::ErrorKind, path::PathBuf};
 use tokio::fs::remove_file;
 use tokio::select;
 use tokio::time::{Instant, sleep};
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info};
 
 use super::super::{Manager, TwoPcTransaction};
 use super::*;
 
+#[derive(Debug, Clone)]
 pub(crate) struct Checkpointer {
     wal_directory: PathBuf,
+    manager: Manager,
+    checkpoint_interval: Duration,
+    shutdown: CancellationToken,
 }
 
 impl Checkpointer {
@@ -23,41 +28,46 @@ impl Checkpointer {
     ///
     /// - `wal_directory`: WAL directory.
     ///
-    pub(crate) fn new(wal_directory: &PathBuf) -> Self {
+    pub(crate) fn new(
+        wal_directory: &PathBuf,
+        manager: Manager,
+        checkpoint_interval: Duration,
+    ) -> Self {
         Self {
             wal_directory: wal_directory.clone(),
+            manager,
+            checkpoint_interval,
+            shutdown: CancellationToken::new(),
         }
     }
 
-    pub(crate) fn spawn(wal_directory: PathBuf, manager: Manager, checkpoint_interval: Duration) {
-        tasks::spawn("2pc wal checkpointer", async move {
-            let shutdown = tasks::shutdown_signal();
+    pub(crate) fn spawn(&self) {
+        let checkpointer = self.clone();
 
-            debug!("[2pc] checkpointer started");
+        tasks::spawn("2pc wal checkpointer", async move {
+            info!("[2pc] checkpointer started");
 
             loop {
-                let checkpointer = Self::new(&wal_directory);
-
                 select! {
-                    result = checkpointer.run_once(&manager) => {
+                    result = checkpointer.run_once() => {
                         if let Err(err) = result {
                             error!("[2pc] checkpoint error: {err}");
                         }
                     },
-                    _ = shutdown.cancelled() => { break; },
+                    _ = checkpointer.shutdown.cancelled() => { break; }
                 }
 
                 select! {
-                    _ = sleep(checkpoint_interval) => {},
-                    _ = shutdown.cancelled() => { break; },
+                    _ = sleep(checkpointer.checkpoint_interval) => {},
+                    _ = checkpointer.shutdown.cancelled() => { break; },
                 }
             }
 
-            debug!("[2pc] checkpointer shut down");
+            info!("[2pc] checkpointer shut down");
         });
     }
 
-    pub(super) async fn run_once(&self, manager: &Manager) -> Result<(), Error> {
+    pub(super) async fn run_once(&self) -> Result<(), Error> {
         let segments = SegmentRegistry::get()
             .inactive()
             .into_iter()
@@ -70,7 +80,7 @@ impl Checkpointer {
             let transactions = Self::read_tids(path).await?;
             let can_remove = transactions
                 .iter()
-                .all(|transaction| manager.transaction(&transaction).is_none());
+                .all(|transaction| self.manager.transaction(&transaction).is_none());
 
             if can_remove {
                 debug!(
@@ -96,6 +106,10 @@ impl Checkpointer {
         }
 
         Ok(())
+    }
+
+    pub(super) fn shutdown(&self) {
+        self.shutdown.cancel();
     }
 
     async fn read_tids(path: &PathBuf) -> Result<Vec<TwoPcTransaction>, Error> {
