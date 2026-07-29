@@ -465,6 +465,13 @@ mod test {
 
     use super::*;
 
+    #[cfg(not(feature = "new_parser"))]
+    #[test]
+    fn test_spliced_simple_returns_empty_without_new_parser() {
+        let req = ClientRequest::from(vec![Query::new("SELECT 1; SELECT 2").into()]);
+        assert!(req.spliced_simple().is_empty());
+    }
+
     #[cfg(feature = "new_parser")]
     #[test]
     fn test_spliced_simple_two_selects() {
