@@ -349,7 +349,7 @@ impl GlobalCache {
         const MIN_CAPACITY: usize = 4096;
 
         if self.statements.capacity() > MIN_CAPACITY
-            && self.statements.capacity() / SHRINK_FACTOR > self.statements.len()
+            && self.statements.capacity() > self.statements.len() * SHRINK_FACTOR
         {
             self.statements.shrink_to(self.statements.len() * 2);
             self.names.shrink_to(self.names.len() * 2);
