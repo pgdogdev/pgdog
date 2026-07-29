@@ -78,6 +78,7 @@ pub struct Cluster {
     resharding_replication_retry_min_delay: Duration,
     regex_parser: RegexParser,
     identity: Option<String>,
+    tls_client_certificate_required: bool,
 }
 
 /// Sharding configuration from the cluster.
@@ -165,6 +166,7 @@ pub struct ClusterConfig<'a> {
     regex_parser_limit: usize,
     pub_sub_enabled: bool,
     identity: &'a Option<String>,
+    tls_client_certificate_required: bool,
     schema_cache: SchemaCache,
 }
 
@@ -235,6 +237,7 @@ impl<'a> ClusterConfig<'a> {
             regex_parser_limit: general.regex_parser_limit,
             pub_sub_enabled: general.pub_sub_enabled(),
             identity: &user.identity,
+            tls_client_certificate_required: user.tls_client_certificate_required.unwrap_or(true),
             schema_cache,
         }
     }
@@ -282,6 +285,7 @@ impl Cluster {
             regex_parser_limit,
             pub_sub_enabled,
             identity,
+            tls_client_certificate_required,
             schema_cache,
         } = config;
 
@@ -345,6 +349,7 @@ impl Cluster {
             ),
             regex_parser: RegexParser::new(regex_parser_limit, query_parser),
             identity: identity.clone(),
+            tls_client_certificate_required,
         }
     }
 
@@ -411,6 +416,11 @@ impl Cluster {
     /// when connecting.
     pub fn identity(&self) -> Option<&str> {
         self.identity.as_deref()
+    }
+
+    /// This user must present a client TLS certificate when connecting over TLS.
+    pub fn tls_client_certificate_required(&self) -> bool {
+        self.tls_client_certificate_required
     }
 
     /// User name.

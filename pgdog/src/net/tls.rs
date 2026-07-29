@@ -90,6 +90,16 @@ pub fn peer_identity(conn: &ServerConnection) -> Option<String> {
     identity_from_certs(conn.peer_certificates()?)
 }
 
+/// The peer presented a client certificate during the handshake.
+///
+/// Distinct from [`peer_identity`], which returns `None` both when no
+/// certificate was presented and when one was presented but carries no
+/// `dNSName` SAN or Subject CN to derive an identity from.
+pub fn peer_certificate_present(conn: &ServerConnection) -> bool {
+    conn.peer_certificates()
+        .is_some_and(|certs| !certs.is_empty())
+}
+
 /// Extract a hostname identity from the first certificate in the chain.
 ///
 /// Prefers the first `dNSName` in the Subject Alternative Name extension and
@@ -207,10 +217,20 @@ fn build_acceptor(cert: &Path, key: &Path, client_ca: Option<&Path>) -> Result<T
     Ok(TlsAcceptor::from(Arc::new(config)))
 }
 
+/// Build a client certificate verifier that accepts anonymous clients.
+///
+/// A certificate presented by the client is still verified against the CA
+/// bundle, and an untrusted one still fails the handshake. Clients that present
+/// no certificate are allowed through so that the per-user
+/// `tls_client_certificate_required` setting can be applied during
+/// authentication, once the startup packet has told us which user is
+/// connecting. The TLS handshake completes before that packet arrives, so it is
+/// not a layer that can make a per-user decision.
 fn build_client_cert_verifier(ca_path: &Path) -> Result<Arc<dyn ClientCertVerifier>, Error> {
     let roots = load_ca_bundle(ca_path, "client CA")?;
 
     WebPkiClientVerifier::builder(Arc::new(roots))
+        .allow_unauthenticated()
         .build()
         .map_err(|e| invalid_data(format!("failed to build client certificate verifier: {e}")))
 }
@@ -632,6 +652,23 @@ mod tests {
 
         super::test_reset_acceptor();
         crate::config::set(crate::config::ConfigAndUsers::default()).unwrap();
+    }
+
+    #[test]
+    fn client_cert_verifier_allows_anonymous_clients() {
+        let client_ca = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/tls/cert.pem");
+
+        let verifier =
+            super::build_client_cert_verifier(&client_ca).expect("verifier builds from CA bundle");
+
+        // A certificate is still requested, so clients that have one send it
+        // and it gets verified against the bundle.
+        assert!(verifier.offer_client_auth());
+        // Clients that present none still complete the handshake. The per-user
+        // `tls_client_certificate_required` check rejects them during
+        // authentication instead, once the startup packet says who is
+        // connecting.
+        assert!(!verifier.client_auth_mandatory());
     }
 
     #[tokio::test]

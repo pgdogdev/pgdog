@@ -33,6 +33,7 @@ pub struct Stream {
     io_in_progress: bool,
     capacity: usize,
     tls_identity: Option<String>,
+    tls_client_certificate: bool,
 }
 
 impl AsyncRead for Stream {
@@ -102,6 +103,7 @@ impl Stream {
             io_in_progress: false,
             capacity,
             tls_identity: None,
+            tls_client_certificate: false,
         }
     }
 
@@ -110,12 +112,14 @@ impl Stream {
         stream: tokio_rustls::TlsStream<TcpStream>,
         capacity: usize,
         tls_identity: Option<String>,
+        tls_client_certificate: bool,
     ) -> Self {
         Self {
             inner: StreamInner::Tls(BufStream::with_capacity(capacity, capacity, stream)),
             io_in_progress: false,
             capacity,
             tls_identity,
+            tls_client_certificate,
         }
     }
 
@@ -126,6 +130,7 @@ impl Stream {
             io_in_progress: false,
             capacity: 0,
             tls_identity: None,
+            tls_client_certificate: false,
         }
     }
 
@@ -133,6 +138,14 @@ impl Stream {
     /// from the client's TLS certificate, if any.
     pub fn tls_identity(&self) -> Option<&str> {
         self.tls_identity.as_deref()
+    }
+
+    /// The client presented a TLS certificate during the handshake.
+    ///
+    /// Unlike [`Stream::tls_identity`], this is true even when the certificate
+    /// carries no name we can derive an identity from.
+    pub fn tls_client_certificate(&self) -> bool {
+        self.tls_client_certificate
     }
 
     /// This is a TLS stream.

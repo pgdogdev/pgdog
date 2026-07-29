@@ -43,3 +43,11 @@ password = "pgdog"
 # server_user = "pgdog_service"
 # server_auth = "vault_static"
 # server_vault_path = "database/static-creds/pgdog-service"
+
+# Example: let this user authenticate with a password over TLS without
+# presenting a client certificate, while other users on the same listener still
+# authenticate with mTLS. Only meaningful when `tls_client_ca_certificate` is
+# configured in pgdog.toml; defaults to true, which requires a certificate from
+# every user connecting over TLS. Plaintext connections are governed by
+# `tls_client_required` instead.
+# tls_client_certificate_required = false

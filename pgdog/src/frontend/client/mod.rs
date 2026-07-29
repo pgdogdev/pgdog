@@ -239,6 +239,9 @@ impl Client {
         let key = BackendKeyData::new_frontend(protocol_version, id);
         let comms = ClientComms::new(id);
         let log_connections = config.config.general.log_connections;
+        // Without a client CA no certificate is ever requested during the
+        // handshake, so requiring one could never be satisfied.
+        let client_ca_configured = config.config.general.tls_client_ca_certificate.is_some();
 
         // Check if we need to ask the client for its password in plaintext
         // because we don't actually have it configured.
@@ -279,6 +282,17 @@ impl Client {
                         } else {
                             AuthResult::NoIdentity
                         }
+                    } else if client_ca_configured
+                        && stream.is_tls()
+                        && cluster.tls_client_certificate_required()
+                        && !stream.tls_client_certificate()
+                    {
+                        // The client negotiated TLS while a client CA is
+                        // configured, so it was asked for a certificate and
+                        // declined. Users that opt out with
+                        // `tls_client_certificate_required = false` fall
+                        // through to password authentication instead.
+                        AuthResult::NoClientCertificate
                     } else {
                         // Resolve Vault static role
                         // entries to plaintext before the auth exchange
