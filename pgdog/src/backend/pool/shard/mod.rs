@@ -287,7 +287,9 @@ impl Shard {
             // This is useful if we promoted a primary
             // from a replica.
             let primary = self.lb.primary().cloned();
-            let pub_sub = primary.as_ref().map(PubSubListener::new);
+            let pub_sub = primary
+                .as_ref()
+                .map(|primary| PubSubListener::new(primary, self.identifier(), self.number()));
 
             // Launch the new listener first!
             if let Some(ref pub_sub) = pub_sub {

@@ -22,7 +22,7 @@ use tracing::{debug, error, info};
 
 use super::{Stats, StatsSnapshot, channel_size};
 use crate::{
-    backend::{self, ConnectReason, DisconnectReason, Pool, pool::Error},
+    backend::{self, ConnectReason, DisconnectReason, Pool, databases::User, pool::Error},
     config::config,
     net::{
         FromBytes, FrontendPid, NotificationResponse, Parameter, Parameters, Protocol,
@@ -50,16 +50,59 @@ impl From<Request> for ProtocolMessage {
     }
 }
 
-type Channels = Arc<Mutex<HashMap<String, Channel>>>;
+/// Pool a set of channels belongs to. `NOTIFY` is scoped to a database, so
+/// channels have to be scoped the same way.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct PoolKey {
+    /// Database name, as configured in pgdog.
+    pub database: String,
+    /// User, as configured in pgdog.
+    pub user: String,
+    /// Shard number.
+    pub shard: usize,
+}
+
+impl PoolKey {
+    fn new(identifier: &User, shard: usize) -> Self {
+        Self {
+            database: identifier.database.clone(),
+            user: identifier.user.clone(),
+            shard,
+        }
+    }
+
+    /// Key for one of this pool's channels.
+    fn channel(&self, channel: &str) -> ChannelKey {
+        ChannelKey {
+            pool: self.clone(),
+            channel: channel.to_owned(),
+        }
+    }
+}
+
+/// One channel on one pool.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ChannelKey {
+    /// Pool the channel belongs to.
+    pub pool: PoolKey,
+    /// Channel name used by `LISTEN`/`NOTIFY`.
+    pub channel: String,
+}
+
+type Channels = Arc<Mutex<HashMap<PoolKey, HashMap<String, Channel>>>>;
 
 static CHANNELS: Lazy<Channels> = Lazy::new(|| Arc::new(Mutex::new(HashMap::new())));
 
 /// Get stats for all channels.
-pub fn stats() -> HashMap<String, StatsSnapshot> {
+pub fn stats() -> HashMap<ChannelKey, StatsSnapshot> {
     CHANNELS
         .lock()
         .iter()
-        .map(|(name, channel)| (name.to_string(), channel.stats.get()))
+        .flat_map(|(pool, channels)| {
+            channels
+                .iter()
+                .map(|(channel, state)| (pool.channel(channel), state.stats.get()))
+        })
         .collect()
 }
 
@@ -160,6 +203,7 @@ struct Comms {
 pub struct PubSubListener {
     id: FrontendPid,
     pool: Pool,
+    pool_key: PoolKey,
     tx: mpsc::Sender<Request>,
     channels: Channels,
     comms: Arc<Comms>,
@@ -167,7 +211,11 @@ pub struct PubSubListener {
 
 impl PubSubListener {
     /// Create new listener on the server connection.
-    pub fn new(pool: &Pool) -> Self {
+    ///
+    /// `identifier` and `shard` scope the channels this listener owns. They are
+    /// the pgdog-side identity of the pool, so they survive a primary being
+    /// promoted underneath us, which the server address would not.
+    pub fn new(pool: &Pool, identifier: &User, shard: usize) -> Self {
         let (tx, mut rx) = mpsc::channel(channel_size());
 
         let pool = pool.clone();
@@ -176,6 +224,7 @@ impl PubSubListener {
         let listener = Self {
             id: FrontendPid::new(),
             pool: pool.clone(),
+            pool_key: PoolKey::new(identifier, shard),
             tx,
             channels,
             comms: Arc::new(Comms {
@@ -186,6 +235,7 @@ impl PubSubListener {
 
         let id = listener.id;
         let channels = listener.channels.clone();
+        let pool_key = listener.pool_key.clone();
         let pool = listener.pool.clone();
         let comms = listener.comms.clone();
         tasks::spawn("pub sub", async move {
@@ -206,7 +256,7 @@ impl PubSubListener {
                         rx.close(); // Drain remaining messages.
                     }
 
-                    result = Self::run(id, &pool, &mut rx, channels.clone()) => {
+                    result = Self::run(id, &pool, &pool_key, &mut rx, channels.clone()) => {
                         if let Err(err) = result {
                             error!("pub/sub error: {} [{}]", err, pool.addr());
                             // Don't reconnect for another connect attempt delay
@@ -242,8 +292,9 @@ impl PubSubListener {
     pub async fn listen(&self, channel_name: &str) -> Result<Listener, Error> {
         let listener = {
             let mut guard = self.channels.lock();
+            let channels = guard.entry(self.pool_key.clone()).or_default();
 
-            if let Some(channel) = guard.get(channel_name) {
+            if let Some(channel) = channels.get(channel_name) {
                 return Ok(Listener::new(channel));
             }
 
@@ -256,7 +307,7 @@ impl PubSubListener {
             };
             let listener = Listener::new(&channel);
 
-            guard.insert(channel_name.to_string(), channel);
+            channels.insert(channel_name.to_string(), channel);
 
             listener
         };
@@ -284,6 +335,7 @@ impl PubSubListener {
     async fn run(
         id: FrontendPid,
         pool: &Pool,
+        pool_key: &PoolKey,
         rx: &mut mpsc::Receiver<Request>,
         channels: Channels,
     ) -> Result<(), backend::Error> {
@@ -302,13 +354,18 @@ impl PubSubListener {
             )
             .await?;
 
-        // Re-listen on all channels when re-starting the task.
+        // Re-listen on this pool's channels when re-starting the task.
         // We don't lose LISTEN commands.
         let resub = channels
             .lock()
-            .keys()
-            .map(|channel| Request::Subscribe(channel.to_string()).into())
-            .collect::<Vec<ProtocolMessage>>();
+            .get(pool_key)
+            .map(|channels| {
+                channels
+                    .keys()
+                    .map(|channel| Request::Subscribe(channel.clone()).into())
+                    .collect::<Vec<ProtocolMessage>>()
+            })
+            .unwrap_or_default();
 
         if !resub.is_empty() {
             server.send(&resub.into()).await?;
@@ -323,7 +380,11 @@ impl PubSubListener {
                     if message.code() == 'A' {
                         let notification = NotificationResponse::from_bytes(message.to_bytes())?;
                         let mut unsub = None;
-                        if let Some(channel) = channels.lock().get(notification.channel()) {
+                        if let Some(channel) = channels
+                            .lock()
+                            .get(pool_key)
+                            .and_then(|channels| channels.get(notification.channel()))
+                        {
                             match channel.tx.send(notification) {
                                 Ok(_) => (),
                                 Err(err) => unsub = Some(err.0.channel().to_string()),
@@ -331,7 +392,9 @@ impl PubSubListener {
                         }
 
                         if let Some(unsub) = unsub {
-                            channels.lock().remove(&unsub);
+                            if let Some(channels) = channels.lock().get_mut(pool_key) {
+                                channels.remove(&unsub);
+                            }
                             server.send(&vec![Request::Unsubscribe(unsub).into()].into()).await?;
                         }
                     }
@@ -367,15 +430,37 @@ mod test {
 
     use super::{test_support::TestChannel, *};
 
+    fn test_user(user: &str, database: &str) -> User {
+        User {
+            user: user.into(),
+            database: database.into(),
+        }
+    }
+
     fn test_pub_sub_listener() -> (PubSubListener, mpsc::Receiver<Request>) {
+        test_pub_sub_listener_on(
+            Arc::new(Mutex::new(HashMap::new())),
+            &test_user("pgdog", "pgdog"),
+            0,
+        )
+    }
+
+    /// A listener for `identifier`/`shard`, sharing `channels` with any other
+    /// listener built from the same map.
+    fn test_pub_sub_listener_on(
+        channels: Channels,
+        identifier: &User,
+        shard: usize,
+    ) -> (PubSubListener, mpsc::Receiver<Request>) {
         let (tx, rx) = mpsc::channel(4);
 
         (
             PubSubListener {
                 id: FrontendPid::new(),
                 pool: Pool::new_test(),
+                pool_key: PoolKey::new(identifier, shard),
                 tx,
-                channels: Arc::new(Mutex::new(HashMap::new())),
+                channels,
                 comms: Arc::new(Comms {
                     start: Notify::new(),
                     shutdown: CancellationToken::new(),
@@ -383,6 +468,16 @@ mod test {
             },
             rx,
         )
+    }
+
+    /// Assert a Subscribe request is already queued. Deliberately non-blocking:
+    /// the sender is alive, so an `await` here would hang rather than fail if a
+    /// regression stopped the request being sent.
+    fn expect_subscribe_now(rx: &mut mpsc::Receiver<Request>, expected: &str) {
+        match rx.try_recv() {
+            Ok(Request::Subscribe(channel)) => assert_eq!(channel, expected),
+            other => panic!("expected subscribe request for {expected}, got {other:?}"),
+        }
     }
 
     fn assert_snapshot(snapshot: StatsSnapshot, recv: u64, dropped: u64, listeners: u64) {
@@ -479,11 +574,86 @@ mod test {
         let stats = pub_sub
             .channels
             .lock()
-            .get("events")
+            .get(&pub_sub.pool_key)
+            .and_then(|channels| channels.get("events"))
             .expect("events channel")
             .stats
             .get();
         assert_snapshot(stats, 0, 0, 0);
+    }
+
+    /// Two listeners sharing the registry must not share a channel just because
+    /// they were handed the same name. Each has to be sent its own LISTEN,
+    /// otherwise the one that misses out never receives its own database's
+    /// notifications.
+    async fn assert_channels_not_shared(
+        left: &User,
+        left_shard: usize,
+        right: &User,
+        right_shard: usize,
+    ) {
+        let channels: Channels = Arc::new(Mutex::new(HashMap::new()));
+        let (first, mut first_rx) = test_pub_sub_listener_on(channels.clone(), left, left_shard);
+        let (second, mut second_rx) =
+            test_pub_sub_listener_on(channels.clone(), right, right_shard);
+
+        let _first = first.listen("events").await.expect("first listen");
+        let _second = second.listen("events").await.expect("second listen");
+
+        expect_subscribe_now(&mut first_rx, "events");
+        expect_subscribe_now(&mut second_rx, "events");
+
+        let guard = channels.lock();
+        assert_eq!(guard.len(), 2, "each pool needs its own channel set");
+        for pool_key in [&first.pool_key, &second.pool_key] {
+            let channel = guard
+                .get(pool_key)
+                .and_then(|channels| channels.get("events"))
+                .expect("channel for pool");
+            assert_snapshot(channel.stats.get(), 0, 0, 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn channels_are_not_shared_between_databases() {
+        assert_channels_not_shared(
+            &test_user("pgdog", "first_database"),
+            0,
+            &test_user("pgdog", "second_database"),
+            0,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn channels_are_not_shared_between_users() {
+        assert_channels_not_shared(
+            &test_user("alice", "pgdog"),
+            0,
+            &test_user("bob", "pgdog"),
+            0,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn channels_are_not_shared_between_shards() {
+        let user = test_user("pgdog", "pgdog");
+        assert_channels_not_shared(&user, 0, &user, 1).await;
+    }
+
+    #[test]
+    fn pool_key_is_built_from_the_pgdog_side_identity() {
+        let key = PoolKey::new(&test_user("alice", "shop"), 2);
+
+        assert_eq!(key.database, "shop");
+        assert_eq!(key.user, "alice");
+        assert_eq!(key.shard, 2);
+
+        // Every component discriminates.
+        assert_ne!(key, PoolKey::new(&test_user("alice", "other"), 2));
+        assert_ne!(key, PoolKey::new(&test_user("bob", "shop"), 2));
+        assert_ne!(key, PoolKey::new(&test_user("alice", "shop"), 3));
     }
 
     #[tokio::test]
